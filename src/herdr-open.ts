@@ -1,8 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { PaneEntrypoint } from "./pane-control";
+import { setTimeout as sleep } from "node:timers/promises";
+import { OutlinerClient } from "./client";
+import { type PaneEntrypoint, resolvePluginPaneId } from "./pane-control";
 import { resolvePaths } from "./paths";
+import { OUTLINER_PROTOCOL_VERSION, type OutlinerServiceStatus } from "./types";
 
 interface OpenPaneResponse {
   result?: { plugin_pane?: { pane?: { pane_id?: string } } };
@@ -27,24 +30,25 @@ if (currentPaneId) {
 const paths = resolvePaths({ ...process.env, OUTLINER_WORKSPACE_ROOT: workspaceRoot });
 mkdirSync(paths.stateDir, { recursive: true });
 
-function readLivePane(entrypoint: PaneEntrypoint): string | null {
+function rememberPane(entrypoint: PaneEntrypoint, paneId: string): void {
   const statePath = join(paths.stateDir, `${entrypoint}-pane.json`);
-  if (!existsSync(statePath)) return null;
+  let terminalId: string | undefined;
   try {
-    const saved = JSON.parse(readFileSync(statePath, "utf8")) as { paneId?: string };
-    if (!saved.paneId) return null;
-    execFileSync(herdr, ["pane", "get", saved.paneId], { stdio: "ignore" });
-    return saved.paneId;
+    const existing = JSON.parse(readFileSync(statePath, "utf8")) as {
+      paneId?: string;
+      terminalId?: string;
+    };
+    if (existing.paneId === paneId) terminalId = existing.terminalId;
   } catch {
-    rmSync(statePath, { force: true });
-    return null;
+    // No usable state exists yet.
   }
+  const state = { paneId, terminalId, workspaceRoot };
+  writeFileSync(statePath, `${JSON.stringify(state)}\n`);
 }
 
 function openPane(
   entrypoint: PaneEntrypoint,
-  targetPane: string | undefined,
-  direction: "right" | "down",
+  options: { placement: "split" | "tab"; targetPane?: string; direction?: "right" | "down" },
 ): string {
   const args = [
     "plugin",
@@ -55,24 +59,45 @@ function openPane(
     "--entrypoint",
     entrypoint,
     "--placement",
-    "split",
-    "--direction",
-    direction,
+    options.placement,
     "--cwd",
     workspaceRoot,
     "--no-focus",
   ];
-  if (targetPane) args.push("--target-pane", targetPane);
+  if (options.direction) args.push("--direction", options.direction);
+  if (options.targetPane) args.push("--target-pane", options.targetPane);
   const output = execFileSync(herdr, args, { encoding: "utf8" });
   const paneId = (JSON.parse(output) as OpenPaneResponse).result?.plugin_pane?.pane?.pane_id;
   if (!paneId) throw new Error(`Herdr did not return a pane id for ${entrypoint}`);
-  writeFileSync(join(paths.stateDir, `${entrypoint}-pane.json`), `${JSON.stringify({ paneId })}\n`);
+  rememberPane(entrypoint, paneId);
   return paneId;
 }
 
-const outlinerPane = readLivePane("outliner") ?? openPane("outliner", currentPaneId, "right");
-const detailPane = readLivePane("detail") ?? openPane("detail", outlinerPane, "down");
+async function waitForService(): Promise<void> {
+  const client = new OutlinerClient(paths.socket);
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    try {
+      const service = await client.request<OutlinerServiceStatus>({ action: "ping" }, 300);
+      if (service.protocolVersion === OUTLINER_PROTOCOL_VERSION) return;
+    } catch {
+      // Retry until the startup deadline.
+    }
+    await sleep(100);
+  }
+  throw new Error(`Compatible outliner service did not become ready at ${paths.socket}`);
+}
+const servicePane =
+  resolvePluginPaneId(paths.stateDir, "service", herdr) ??
+  openPane("service", { placement: "tab" });
+await waitForService();
+const outlinerPane =
+  resolvePluginPaneId(paths.stateDir, "outliner", herdr) ??
+  openPane("outliner", { placement: "split", targetPane: currentPaneId, direction: "right" });
+const detailPane =
+  resolvePluginPaneId(paths.stateDir, "detail", herdr) ??
+  openPane("detail", { placement: "split", targetPane: outlinerPane, direction: "down" });
 if (process.env.OUTLINER_FOCUS !== "0") {
   execFileSync(herdr, ["plugin", "pane", "focus", outlinerPane], { stdio: "ignore" });
 }
-process.stdout.write(`${JSON.stringify({ outlinerPane, detailPane, workspaceRoot })}\n`);
+process.stdout.write(`${JSON.stringify({ servicePane, outlinerPane, detailPane, workspaceRoot })}\n`);

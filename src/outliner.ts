@@ -1,15 +1,15 @@
 import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { emitKeypressEvents } from "node:readline";
+import { setTimeout as sleep } from "node:timers/promises";
+import { OutlinerClient, type OutlinerWatcher } from "./client";
 import { completionTargetAtCursor, completionWindow } from "./completion";
 import { completeReferencedPaths, readReferencedFile } from "./files";
-import { focusPluginPane, registerPaneState, requestDetailEdit } from "./pane-control";
+import { focusPluginPane, registerPaneState } from "./pane-control";
 import { resolvePaths } from "./paths";
 import { parseFilter } from "./properties";
 import { quickInsertionPoint } from "./quick-edit";
 import { blockDisplayTitle } from "./references";
-import { OutlinerServer } from "./server";
-import { OutlinerStore } from "./store";
 import { layoutExpandedBlock } from "./tree-layout";
 import {
   TerminalInputDecoder,
@@ -20,7 +20,14 @@ import {
   type TerminalKey,
 } from "./terminal";
 import { TextBuffer } from "./text-buffer";
-import type { Block, VisibleBlock } from "./types";
+import {
+  OUTLINER_PROTOCOL_VERSION,
+  type Block,
+  type OutlinerEvent,
+  type OutlinerServiceStatus,
+  type VisibleBlock,
+  type WorkspaceSnapshot,
+} from "./types";
 
 type InputMode = "edit" | "add-child" | "add-sibling" | "filter";
 type Mode = "browse" | "delete" | "viewer" | InputMode;
@@ -44,13 +51,12 @@ const AUTHOR_MARKERS: Record<Block["author"], string> = {
 
 const ESC = "\x1b[";
 const paths = resolvePaths();
-const store = new OutlinerStore(paths.database);
-const server = new OutlinerServer(store, paths.socket);
-await server.start();
+const client = new OutlinerClient(paths.socket);
 const paneStatePath = join(paths.stateDir, "outliner-pane.json");
 registerPaneState(paths.stateDir, "outliner", paths.workspaceRoot);
 
 let rows: VisibleBlock[] = [];
+let allBlocksById = new Map<string, VisibleBlock>();
 let selectedIndex = 0;
 let scrollStartEntryIndex = 0;
 let activeFilter = "";
@@ -61,22 +67,57 @@ let viewerLines: string[] = [];
 let viewerPath = "";
 let viewerOffset = 0;
 let lastSelectionId: string | null = null;
-let lastSequence = -1;
 let status = "";
 let stopping = false;
+let watcher: OutlinerWatcher | null = null;
+let refreshPending = false;
+let workQueue = Promise.resolve();
 const inputDecoder = new TerminalInputDecoder();
 
 emitKeypressEvents(process.stdin);
 if (process.stdin.isTTY) process.stdin.setRawMode(true);
 process.stdout.write("\x1b[?1049h\x1b[?25l");
 
-function reload(preferredSelectedId?: string | null): void {
-  let selectedId: string | null | undefined = rows[selectedIndex]?.id ?? store.getSelection().selected?.id;
-  if (preferredSelectedId !== undefined) selectedId = preferredSelectedId;
-  rows = store.list({ filters: parseFilter(activeFilter) });
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function waitForService(): Promise<void> {
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    try {
+      const service = await client.request<OutlinerServiceStatus>({ action: "ping" }, 300);
+      if (service.protocolVersion === OUTLINER_PROTOCOL_VERSION) return;
+    } catch {
+      // Retry until the startup deadline.
+    }
+    await sleep(100);
+  }
+  throw new Error("Compatible outliner service is not available");
+}
+
+async function reload(preferredSelectedId?: string | null): Promise<void> {
+  const currentSelectedId = rows[selectedIndex]?.id;
+  const snapshot = await client.request<WorkspaceSnapshot>({
+    action: "workspace.snapshot",
+    query: { filters: parseFilter(activeFilter) },
+  });
+  refreshPending = false;
+  rows = snapshot.blocks;
+  allBlocksById = new Map(snapshot.allBlocks.map((block) => [block.id, block]));
+  const selectedId =
+    preferredSelectedId !== undefined
+      ? preferredSelectedId
+      : currentSelectedId ?? snapshot.selection.selected?.id;
   const nextIndex = selectedId ? rows.findIndex((block) => block.id === selectedId) : -1;
   selectedIndex = Math.max(0, Math.min(nextIndex >= 0 ? nextIndex : selectedIndex, rows.length - 1));
-  lastSequence = store.sequence;
+}
+
+function enqueueWork(task: () => void | Promise<void>): void {
+  workQueue = workQueue.then(task).catch((error) => {
+    status = errorMessage(error);
+    draw();
+  });
 }
 
 function quickInputText(): string {
@@ -84,10 +125,10 @@ function quickInputText(): string {
 }
 
 function isCanonicalDescendant(candidateId: string, ancestorId: string): boolean {
-  let candidate = store.get(candidateId);
+  let candidate = allBlocksById.get(candidateId);
   while (candidate?.parentId) {
     if (candidate.parentId === ancestorId) return true;
-    candidate = store.get(candidate.parentId);
+    candidate = allBlocksById.get(candidate.parentId);
   }
   return false;
 }
@@ -168,9 +209,8 @@ function draw(): void {
     if (cached) return cached;
 
     const block = rows[index];
-    const hasChildren = store.children(block.id).length > 0;
     let marker = "•";
-    if (hasChildren) marker = block.collapsed ? "▸" : "▾";
+    if (block.hasChildren) marker = block.collapsed ? "▸" : "▾";
     const author = AUTHOR_MARKERS[block.author];
     const editingInline = mode === "edit" && index === selectedIndex;
     if (editingInline) {
@@ -182,10 +222,9 @@ function draw(): void {
       return result;
     }
 
-    const displayText = store.resolveBlockReferences(block.text);
     const result = block.multilineExpanded
       ? layoutExpandedBlock({
-          text: displayText,
+          text: block.displayText,
           width,
           depth: block.depth,
           marker,
@@ -196,7 +235,7 @@ function draw(): void {
         })
       : [
           truncate(
-            `${"  ".repeat(block.depth)}${marker} ${displayText.replace(/\r?\n/g, " ↵ ")}  ${author}`,
+            `${"  ".repeat(block.depth)}${marker} ${block.displayText.replace(/\r?\n/g, " ↵ ")}  ${author}`,
             width,
           ),
         ];
@@ -272,11 +311,11 @@ function resetQuickEditor(): void {
   quickCompletion = null;
 }
 
-function beginInput(nextMode: InputMode, initial = ""): void {
+async function beginInput(nextMode: InputMode, initial = ""): Promise<void> {
   const selected = rows[selectedIndex];
   if (nextMode === "add-child" && selected?.collapsed) {
-    store.toggle(selected.id);
-    reload(selected.id);
+    await client.request({ action: "toggle", blockId: selected.id });
+    await reload(selected.id);
   }
   mode = nextMode;
   quickBuffer = new TextBuffer(initial);
@@ -285,67 +324,84 @@ function beginInput(nextMode: InputMode, initial = ""): void {
   draw();
 }
 
-function commitQuickBlock(): string | null {
+async function commitQuickBlock(): Promise<string | null> {
   const selected = rows[selectedIndex];
   if (!selected) return null;
   const text = quickInputText();
   if (!text.trim()) return mode === "edit" ? selected.id : null;
 
   if (mode === "edit") {
-    store.update(selected.id, text);
+    await client.request<Block>({
+      action: "update",
+      blockId: selected.id,
+      text,
+      expectedUpdatedAt: selected.updatedAt,
+    });
     return selected.id;
   }
   if (mode === "add-child") {
-    const created = store.create(text, selected.id, "user");
-    store.move(created.id, selected.id, 0);
+    const created = await client.request<Block>({
+      action: "create",
+      parentId: selected.id,
+      text,
+      author: "user",
+    });
+    await client.request({ action: "move", blockId: created.id, parentId: selected.id, position: 0 });
     return created.id;
   }
   if (mode === "add-sibling") {
-    const canonical = store.require(selected.id);
-    const created = store.create(text, canonical.parentId, "user");
-    store.move(created.id, canonical.parentId, canonical.position + 1);
+    const canonical = await client.request<Block>({ action: "get", blockId: selected.id });
+    const created = await client.request<Block>({
+      action: "create",
+      parentId: canonical.parentId,
+      text,
+      author: "user",
+    });
+    await client.request({
+      action: "move",
+      blockId: created.id,
+      parentId: canonical.parentId,
+      position: canonical.position + 1,
+    });
     return created.id;
   }
   return null;
 }
 
-function syncVisibleSelection(preferredId: string | null): void {
-  reload(preferredId);
+async function selectVisibleBlock(preferredId: string | null): Promise<void> {
+  await reload(preferredId);
   if (preferredId && !rows.some((row) => row.id === preferredId)) {
     activeFilter = "";
-    reload(preferredId);
+    await reload(preferredId);
     status = "Filter cleared to show saved block";
   }
   const visibleId = rows[selectedIndex]?.id ?? null;
   lastSelectionId = visibleId;
-  store.setSelection(visibleId);
+  await client.request({ action: "selection.set", blockId: visibleId });
 }
 
-function finishInput(): void {
+async function finishInput(): Promise<void> {
   if (mode === "filter") {
     activeFilter = quickInputText().trim();
     mode = "browse";
     resetQuickEditor();
-    reload();
-    const visibleId = rows[selectedIndex]?.id ?? null;
-    lastSelectionId = visibleId;
-    store.setSelection(visibleId);
+    await selectVisibleBlock(null);
     draw();
     return;
   }
 
-  const committedBlockId = commitQuickBlock();
+  const committedBlockId = await commitQuickBlock();
   const fallbackId = rows[selectedIndex]?.id ?? null;
   mode = "browse";
   resetQuickEditor();
-  syncVisibleSelection(committedBlockId ?? fallbackId);
+  await selectVisibleBlock(committedBlockId ?? fallbackId);
   draw();
 }
 
-function handoffToDetail(): void {
+async function handoffToDetail(): Promise<void> {
   const selected = rows[selectedIndex];
   if (!selected) return;
-  const committedBlockId = commitQuickBlock();
+  const committedBlockId = await commitQuickBlock();
   if ((mode === "add-child" || mode === "add-sibling") && !committedBlockId) {
     status = "Type a title before opening multiline detail";
     draw();
@@ -354,18 +410,21 @@ function handoffToDetail(): void {
   const targetId = committedBlockId ?? selected.id;
   mode = "browse";
   resetQuickEditor();
-  syncVisibleSelection(targetId);
-  requestDetailEdit(paths.stateDir, targetId);
+  await selectVisibleBlock(targetId);
+  await client.request({
+    action: "ui.command.send",
+    command: { target: "detail", command: "edit", blockId: targetId },
+  });
   try {
     focusPluginPane(paths.stateDir, "detail");
     status = "Multiline editor opened in detail pane";
   } catch (error) {
-    status = error instanceof Error ? error.message : String(error);
+    status = errorMessage(error);
   }
   draw();
 }
 
-function openQuickCompletion(): void {
+async function openQuickCompletion(): Promise<void> {
   if (mode === "filter") return;
   const line = quickInputText();
   const target = completionTargetAtCursor(line, quickBuffer.column);
@@ -376,27 +435,27 @@ function openQuickCompletion(): void {
 
   let items: QuickCompletionState["items"];
   if (target.kind === "file") {
-    try {
-      items = completeReferencedPaths(target.query, paths.workspaceRoot).map((candidate) => ({
-        label: candidate.sourcePath,
-        insertion: `[file::${candidate.sourcePath}${candidate.isDirectory ? "" : "]"}`,
-      }));
-    } catch (error) {
-      quickCompletion = null;
-      status = error instanceof Error ? error.message : String(error);
-      return;
-    }
+    items = completeReferencedPaths(target.query, paths.workspaceRoot).map((candidate) => ({
+      label: candidate.sourcePath,
+      insertion: `[file::${candidate.sourcePath}${candidate.isDirectory ? "" : "]"}`,
+    }));
   } else {
     let blocks: VisibleBlock[] = [];
     if (target.kind === "page") {
-      blocks = store.list({
-        text: target.query || undefined,
-        filters: [{ key: "type", value: "page" }],
-        limit: 20,
+      blocks = await client.request<VisibleBlock[]>({
+        action: "list",
+        query: {
+          text: target.query || undefined,
+          filters: [{ key: "type", value: "page" }],
+          limit: 20,
+        },
       });
     }
     if (blocks.length === 0) {
-      blocks = store.list({ text: target.query || undefined, limit: 20, includeCollapsed: true });
+      blocks = await client.request<VisibleBlock[]>({
+        action: "list",
+        query: { text: target.query || undefined, limit: 20, includeCollapsed: true },
+      });
     }
     items = blocks.map((block) => {
       const title = blockDisplayTitle(block);
@@ -437,31 +496,37 @@ function openReferencedFile(block: Block): void {
     mode = "viewer";
     status = "";
   } catch (error) {
-    status = error instanceof Error ? error.message : String(error);
+    status = errorMessage(error);
   }
 }
 
-function indent(selected: VisibleBlock): void {
+async function indent(selected: VisibleBlock): Promise<void> {
   for (let index = selectedIndex - 1; index >= 0; index--) {
     const candidate = rows[index];
     if (candidate.depth < selected.depth) break;
     if (candidate.depth === selected.depth) {
-      store.move(selected.id, candidate.id);
+      await client.request({ action: "move", blockId: selected.id, parentId: candidate.id });
       return;
     }
   }
   status = "No previous sibling to indent beneath";
 }
 
-function outdent(selected: VisibleBlock): void {
-  if (!selected.parentId) return;
-  const parent = store.require(selected.parentId);
-  store.move(selected.id, parent.parentId, parent.position + 1);
+async function outdent(selected: VisibleBlock): Promise<void> {
+  const canonical = await client.request<Block>({ action: "get", blockId: selected.id });
+  if (!canonical.parentId) return;
+  const parent = await client.request<Block>({ action: "get", blockId: canonical.parentId });
+  await client.request({
+    action: "move",
+    blockId: canonical.id,
+    parentId: parent.parentId,
+    position: parent.position + 1,
+  });
 }
 
-function moveSibling(selected: VisibleBlock, offset: -1 | 1): string {
-  const canonical = store.require(selected.id);
-  const siblings = store.children(canonical.parentId);
+async function moveSibling(selected: VisibleBlock, offset: -1 | 1): Promise<string> {
+  const canonical = await client.request<Block>({ action: "get", blockId: selected.id });
+  const siblings = await client.request<Block[]>({ action: "children", parentId: canonical.parentId });
   const currentIndex = siblings.findIndex((sibling) => sibling.id === canonical.id);
   const targetIndex = currentIndex + offset;
   if (currentIndex < 0 || targetIndex < 0) {
@@ -469,53 +534,100 @@ function moveSibling(selected: VisibleBlock, offset: -1 | 1): string {
   } else if (targetIndex >= siblings.length) {
     status = "Already last sibling";
   } else {
-    store.move(canonical.id, canonical.parentId, targetIndex);
+    await client.request({
+      action: "move",
+      blockId: canonical.id,
+      parentId: canonical.parentId,
+      position: targetIndex,
+    });
     status = offset < 0 ? "Moved up among siblings" : "Moved down among siblings";
   }
   return canonical.id;
 }
 
-async function stop(): Promise<void> {
+function stop(): void {
   if (stopping) return;
   stopping = true;
-  clearInterval(refreshTimer);
+  watcher?.stop();
   if (process.stdin.isTTY) process.stdin.setRawMode(false);
   process.stdout.write("\x1b[?25h\x1b[?1049l");
-  await server.close();
   rmSync(paneStatePath, { force: true });
-  store.close();
   process.exit(0);
 }
 
-process.on("SIGINT", () => void stop());
-process.on("SIGTERM", () => void stop());
-process.on("SIGHUP", () => void stop());
+async function handleServiceEvent(event: OutlinerEvent): Promise<void> {
+  if (event.domain === "ui") {
+    if (event.command?.target !== "tree") return;
+    if (event.command.blockId) {
+      activeFilter = "";
+      await selectVisibleBlock(event.command.blockId);
+    }
+    if (event.command.command === "focus") focusPluginPane(paths.stateDir, "outliner");
+    draw();
+    return;
+  }
+  if (mode !== "browse") {
+    refreshPending = true;
+    return;
+  }
+  if (event.domain === "selection") {
+    lastSelectionId = event.blockId ?? null;
+    await reload(lastSelectionId);
+  } else {
+    await reload();
+  }
+  draw();
+}
 
-process.stdin.on("keypress", (str: string, key: TerminalKey) => {
-  const inputAction = inputDecoder.consume(str, key);
+function startWatcher(): void {
+  watcher = client.watch({
+    onConnect: () =>
+      enqueueWork(async () => {
+        status = "";
+        if (mode === "browse") await reload();
+        else refreshPending = true;
+        draw();
+      }),
+    onDisconnect: () =>
+      enqueueWork(() => {
+        status = "Workspace service disconnected; reconnecting…";
+        draw();
+      }),
+    onError: (error) =>
+      enqueueWork(() => {
+        status = errorMessage(error);
+        draw();
+      }),
+    onEvent: (event) => enqueueWork(() => handleServiceEvent(event)),
+  });
+}
+
+async function handleKeypress(str: string, key: TerminalKey, inputAction: ReturnType<TerminalInputDecoder["consume"]>): Promise<void> {
   if (inputAction === "suppress") return;
   if (key.ctrl && key.name === "q") {
-    void stop();
+    stop();
     return;
   }
   if (key.ctrl && key.name === "c") {
     if (mode !== "browse") {
       mode = "browse";
       resetQuickEditor();
+      if (refreshPending) await reload();
     } else {
       status = "Ctrl+Q closes the outliner pane";
     }
     draw();
     return;
   }
-  const detailHandoffRequested =
-    inputAction === "modified-enter" || (key.name === "e" && key.ctrl);
+  const detailHandoffRequested = inputAction === "modified-enter" || (key.name === "e" && key.ctrl);
 
   if (mode === "viewer") {
     const page = Math.max(1, (process.stdout.rows ?? 30) - 4);
     const maxOffset = Math.max(0, viewerLines.length - 1);
-    if (key.name === "escape" || key.name === "q") mode = "browse";
-    else if (key.name === "up") viewerOffset = Math.max(0, viewerOffset - 1);
+    if (key.name === "escape" || key.name === "q") {
+      mode = "browse";
+      if (refreshPending) await reload();
+    } else if (key.name === "up") viewerOffset = Math.max(0, viewerOffset - 1);
     else if (key.name === "down") viewerOffset = Math.min(maxOffset, viewerOffset + 1);
     else if (key.name === "pageup") viewerOffset = Math.max(0, viewerOffset - page);
     else if (key.name === "pagedown") viewerOffset = Math.min(maxOffset, viewerOffset + page);
@@ -526,11 +638,14 @@ process.stdin.on("keypress", (str: string, key: TerminalKey) => {
   }
 
   if (mode === "delete") {
-    if (str.toLowerCase() === "y" && rows[selectedIndex]) store.delete(rows[selectedIndex].id);
+    if (str.toLowerCase() === "y" && rows[selectedIndex]) {
+      await client.request({ action: "delete", blockId: rows[selectedIndex].id });
+    }
     mode = "browse";
-    reload();
-    lastSelectionId = rows[selectedIndex]?.id ?? null;
-    store.setSelection(lastSelectionId);
+    await reload();
+    const visibleId = rows[selectedIndex]?.id ?? null;
+    lastSelectionId = visibleId;
+    await client.request({ action: "selection.set", blockId: visibleId });
     draw();
     return;
   }
@@ -547,17 +662,18 @@ process.stdin.on("keypress", (str: string, key: TerminalKey) => {
     }
 
     if (mode !== "filter" && detailHandoffRequested) {
-      handoffToDetail();
+      await handoffToDetail();
       return;
     }
     if (key.name === "escape") {
       mode = "browse";
       resetQuickEditor();
+      if (refreshPending) await reload();
     } else if (key.name === "return") {
-      finishInput();
+      await finishInput();
       return;
     } else if (key.name === "tab" && mode !== "filter") {
-      openQuickCompletion();
+      await openQuickCompletion();
     } else if (key.name === "backspace") quickBuffer.backspace();
     else if (key.name === "delete") quickBuffer.deleteForward();
     else if (key.name === "left") quickBuffer.moveLeft();
@@ -571,69 +687,100 @@ process.stdin.on("keypress", (str: string, key: TerminalKey) => {
 
   const selected = rows[selectedIndex];
   let preferredSelectedId: string | undefined;
+  let reloadRequired = false;
   if (key.name === "q") {
     status = "Outliner remains open; Ctrl+Q closes this pane";
   } else if (isDetailToggle(str, key)) {
     if (!selected) {
       status = "No block selected";
     } else {
-      const detailExpanded = store.toggleMultilineExpanded(selected.id);
-      status = detailExpanded ? "Block detail expanded" : "Block detail collapsed";
+      const result = await client.request<{ expanded: boolean }>({
+        action: "view.toggleMultiline",
+        blockId: selected.id,
+      });
+      status = result.expanded ? "Block detail expanded" : "Block detail collapsed";
+      reloadRequired = true;
     }
   } else if (detailHandoffRequested) {
-    handoffToDetail();
+    await handoffToDetail();
     return;
   } else if (key.shift && key.name === "up") {
-    if (selected) preferredSelectedId = moveSibling(selected, -1);
+    if (selected) {
+      preferredSelectedId = await moveSibling(selected, -1);
+      reloadRequired = true;
+    }
   } else if (key.shift && key.name === "down") {
-    if (selected) preferredSelectedId = moveSibling(selected, 1);
+    if (selected) {
+      preferredSelectedId = await moveSibling(selected, 1);
+      reloadRequired = true;
+    }
   } else if (key.name === "up") selectedIndex = Math.max(0, selectedIndex - 1);
   else if (key.name === "down") selectedIndex = Math.min(rows.length - 1, selectedIndex + 1);
   else if (key.name === "left" && selected) {
-    if (!selected.collapsed && store.children(selected.id).length) store.toggle(selected.id);
-    else if (selected.parentId) selectedIndex = Math.max(0, rows.findIndex((block) => block.id === selected.parentId));
+    if (!selected.collapsed && selected.hasChildren) {
+      await client.request({ action: "toggle", blockId: selected.id });
+      reloadRequired = true;
+    } else if (selected.parentId) {
+      selectedIndex = Math.max(0, rows.findIndex((block) => block.id === selected.parentId));
+    }
   } else if (key.name === "right" && selected) {
-    if (selected.collapsed) store.toggle(selected.id);
-    else if (store.children(selected.id).length) selectedIndex = Math.min(rows.length - 1, selectedIndex + 1);
+    if (selected.collapsed) {
+      await client.request({ action: "toggle", blockId: selected.id });
+      reloadRequired = true;
+    } else if (selected.hasChildren) selectedIndex = Math.min(rows.length - 1, selectedIndex + 1);
   } else if (key.name === "return" && selected) {
     if (selected.text.includes("\n")) {
-      handoffToDetail();
+      await handoffToDetail();
       return;
     }
-    beginInput("edit", selected.text);
+    await beginInput("edit", selected.text);
+    return;
   } else if (key.name === "tab" && selected) {
-    if (key.shift) outdent(selected);
-    else indent(selected);
-  } else if (key.name === "space" && selected) store.toggle(selected.id);
-  else if (str === "a" && selected) beginInput("add-child");
-  else if (str === "s" && selected) beginInput("add-sibling");
-  else if (str === "/") beginInput("filter", activeFilter);
-  else if (str === "d" && selected) mode = "delete";
+    if (key.shift) await outdent(selected);
+    else await indent(selected);
+    preferredSelectedId = selected.id;
+    reloadRequired = true;
+  } else if (key.name === "space" && selected) {
+    await client.request({ action: "toggle", blockId: selected.id });
+    reloadRequired = true;
+  } else if (str === "a" && selected) {
+    await beginInput("add-child");
+    return;
+  } else if (str === "s" && selected) {
+    await beginInput("add-sibling");
+    return;
+  } else if (str === "/") {
+    await beginInput("filter", activeFilter);
+    return;
+  } else if (str === "d" && selected) mode = "delete";
   else if (str === "f" && selected) openReferencedFile(selected);
-  else if (key.name === "escape" && activeFilter) activeFilter = "";
+  else if (key.name === "escape" && activeFilter) {
+    activeFilter = "";
+    reloadRequired = true;
+  }
 
-  reload(preferredSelectedId);
-  if (rows[selectedIndex]) {
-    lastSelectionId = rows[selectedIndex].id;
-    store.setSelection(lastSelectionId);
+  if (reloadRequired) await reload(preferredSelectedId);
+  const visibleId = rows[selectedIndex]?.id ?? null;
+  if (visibleId !== lastSelectionId) {
+    lastSelectionId = visibleId;
+    await client.request({ action: "selection.set", blockId: visibleId });
   }
   draw();
+}
+
+process.on("SIGINT", stop);
+process.on("SIGTERM", stop);
+process.on("SIGHUP", stop);
+
+process.stdin.on("keypress", (str: string, key: TerminalKey) => {
+  const inputAction = inputDecoder.consume(str, key);
+  enqueueWork(() => handleKeypress(str, key, inputAction));
 });
 
 process.stdout.on("resize", draw);
-const refreshTimer = setInterval(() => {
-  if (mode !== "browse") return;
-  const sharedSelectionId = store.getSelection().selected?.id ?? null;
-  if (sharedSelectionId !== lastSelectionId) {
-    lastSelectionId = sharedSelectionId;
-    reload(sharedSelectionId);
-    draw();
-  } else if (store.sequence !== lastSequence) {
-    reload();
-    draw();
-  }
-}, 250);
-
-lastSelectionId = store.getSelection().selected?.id ?? null;
-reload(lastSelectionId);
+await waitForService();
+await reload();
+lastSelectionId = rows[selectedIndex]?.id ?? null;
+await client.request({ action: "selection.set", blockId: lastSelectionId });
+startWatcher();
 draw();

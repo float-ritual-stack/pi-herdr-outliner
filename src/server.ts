@@ -2,10 +2,19 @@ import { existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
 import { dirname } from "node:path";
 import { OutlinerStore } from "./store";
-import type { OutlinerRequest, OutlinerResponse } from "./types";
+import {
+  OUTLINER_PROTOCOL_VERSION,
+  type Block,
+  type OutlinerEvent,
+  type OutlinerEventEnvelope,
+  type OutlinerRequest,
+  type OutlinerResponse,
+  type WorkspaceSnapshot,
+} from "./types";
 
 export class OutlinerServer {
   private server: Server | null = null;
+  private readonly subscribers = new Set<Socket>();
 
   constructor(
     readonly store: OutlinerStore,
@@ -26,12 +35,19 @@ export class OutlinerServer {
       server.off("error", started.reject);
       started.resolve();
     });
-    await started.promise;
+    try {
+      await started.promise;
+    } catch (error) {
+      this.server = null;
+      throw error;
+    }
   }
 
   async close(): Promise<void> {
     const server = this.server;
     if (!server) return;
+    for (const subscriber of this.subscribers) subscriber.destroy();
+    this.subscribers.clear();
     const closed = Promise.withResolvers<void>();
     server.close((error) => (error ? closed.reject(error) : closed.resolve()));
     await closed.promise;
@@ -63,10 +79,27 @@ export class OutlinerServer {
       let result: unknown;
       switch (request.action) {
         case "ping":
-          result = { status: "ready" };
+          result = { status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION };
           break;
         case "list":
           result = this.store.list(request.query);
+          break;
+        case "children":
+          result = this.store.children(request.parentId);
+          break;
+        case "workspace.snapshot":
+          result = {
+            blocks: this.store.list(request.query),
+            allBlocks: this.store.list({ includeCollapsed: true, limit: 100_000 }),
+            selection: this.store.getSelection(),
+            sequence: this.store.sequence,
+          } satisfies WorkspaceSnapshot;
+          break;
+        case "events.subscribe":
+          result = { subscribed: true };
+          break;
+        case "ui.command.send":
+          result = { accepted: true, command: request.command };
           break;
         case "get":
           result = this.store.require(request.blockId);
@@ -121,8 +154,62 @@ export class OutlinerServer {
     }
   }
 
+  private eventFor(request: OutlinerRequest, response: Extract<OutlinerResponse, { ok: true }>): OutlinerEvent | null {
+    let domain: OutlinerEvent["domain"];
+    let blockId: string | undefined;
+    let command: OutlinerEvent["command"];
+
+    switch (request.action) {
+      case "create":
+        domain = "content";
+        blockId = (response.result as Block).id;
+        break;
+      case "update":
+      case "move":
+      case "delete":
+      case "properties.patch":
+        domain = "content";
+        blockId = request.blockId;
+        break;
+      case "toggle":
+      case "view.toggleMultiline":
+        domain = "view";
+        blockId = request.blockId;
+        break;
+      case "selection.set":
+        domain = "selection";
+        blockId = request.blockId ?? undefined;
+        break;
+      case "ui.command.send":
+        domain = "ui";
+        blockId = request.command.blockId;
+        command = request.command;
+        break;
+      default:
+        return null;
+    }
+
+    return {
+      id: crypto.randomUUID(),
+      domain,
+      action: request.action,
+      sequence: response.sequence,
+      blockId,
+      command,
+    };
+  }
+
+  private broadcast(event: OutlinerEvent): void {
+    const envelope: OutlinerEventEnvelope = { event };
+    const line = `${JSON.stringify(envelope)}\n`;
+    for (const subscriber of this.subscribers) {
+      if (!subscriber.destroyed) subscriber.write(line);
+    }
+  }
+
   private accept(socket: Socket): void {
     socket.setEncoding("utf8");
+    socket.once("close", () => this.subscribers.delete(socket));
     let buffer = "";
     socket.on("data", (chunk: string) => {
       buffer += chunk;
@@ -131,9 +218,11 @@ export class OutlinerServer {
         const line = buffer.slice(0, newline);
         buffer = buffer.slice(newline + 1);
         if (line.trim()) {
+          let request: OutlinerRequest | undefined;
           let response: OutlinerResponse;
           try {
-            const request = JSON.parse(line) as OutlinerRequest;
+            request = JSON.parse(line) as OutlinerRequest;
+            if (request.action === "events.subscribe") this.subscribers.add(socket);
             response = this.handle(request);
           } catch (error) {
             response = {
@@ -144,6 +233,10 @@ export class OutlinerServer {
             };
           }
           socket.write(`${JSON.stringify(response)}\n`);
+          if (request && response.ok) {
+            const event = this.eventFor(request, response);
+            if (event) this.broadcast(event);
+          }
         }
         newline = buffer.indexOf("\n");
       }

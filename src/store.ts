@@ -206,6 +206,7 @@ export class OutlinerStore {
   list(query: BlockQuery = {}): VisibleBlock[] {
     const rows = this.database.query("SELECT * FROM blocks ORDER BY position, created_at").all() as BlockRow[];
     const blocks = rows.map((row) => this.hydrate(row));
+    const byId = new Map(blocks.map((block) => [block.id, block]));
     const byParent = new Map<string | null, Block[]>();
     for (const block of blocks) {
       const siblings = byParent.get(block.parentId) ?? [];
@@ -227,7 +228,16 @@ export class OutlinerStore {
       const matches =
         (!query.filters?.length || matchesFilters(block.properties, query.filters)) &&
         (!filterText || block.text.toLowerCase().includes(filterText));
-      if (matches) result.push({ ...block, depth, multilineExpanded: expandedIds.has(block.id) });
+      if (matches) {
+        const children = byParent.get(block.id) ?? [];
+        result.push({
+          ...block,
+          depth,
+          multilineExpanded: expandedIds.has(block.id),
+          hasChildren: children.length > 0,
+          displayText: resolveBlockReferenceText(block.text, (blockId) => byId.get(blockId) ?? null),
+        });
+      }
       if (!block.collapsed || shouldTraverseCollapsed) {
         for (const child of byParent.get(block.id) ?? []) visit(child, depth + 1);
       }

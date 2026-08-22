@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { Type, type Static } from "typebox";
 import { Parse } from "typebox/value";
 
-export type PaneEntrypoint = "outliner" | "detail";
+export type PaneEntrypoint = "service" | "outliner" | "detail";
 
 const PaneStateSchema = Type.Object({
   paneId: Type.String(),
@@ -34,15 +34,8 @@ const PaneListResponseSchema = Type.Object({
   result: Type.Object({ panes: Type.Array(HerdrPaneSchema) }),
 });
 
-const DetailEditCommandSchema = Type.Object({
-  id: Type.String(),
-  action: Type.Literal("edit"),
-  blockId: Type.String(),
-  createdAt: Type.Number(),
-});
-export type DetailEditCommand = Static<typeof DetailEditCommandSchema>;
-
 const LABEL_BY_ENTRYPOINT: Record<PaneEntrypoint, string> = {
+  service: "Outliner Service",
   outliner: "Outliner",
   detail: "Outliner Detail",
 };
@@ -120,43 +113,37 @@ function recoverMovedPane(
   return null;
 }
 
+export function resolvePluginPaneId(
+  stateDir: string,
+  entrypoint: PaneEntrypoint,
+  herdr = process.env.HERDR_BIN_PATH ?? "herdr",
+): string | null {
+  const state = readPaneState(stateDir, entrypoint);
+  if (!state) return null;
+
+  try {
+    const output = execFileSync(herdr, ["pane", "get", state.paneId], { encoding: "utf8" });
+    const pane = Parse(PaneGetResponseSchema, JSON.parse(output)).result.pane;
+    const stateHasIdentity = Boolean(state.terminalId || state.workspaceRoot);
+    if (!stateHasIdentity || paneMatchesState(pane, state, entrypoint)) return pane.pane_id;
+  } catch {
+    // Search by stable pane identity below.
+  }
+
+  const movedPane = recoverMovedPane(state, entrypoint, herdr);
+  if (!movedPane) return null;
+  state.paneId = movedPane.pane_id;
+  state.terminalId = movedPane.terminal_id;
+  writeJsonAtomic(join(stateDir, `${entrypoint}-pane.json`), state);
+  return state.paneId;
+}
+
 export function focusPluginPane(
   stateDir: string,
   entrypoint: PaneEntrypoint,
   herdr = process.env.HERDR_BIN_PATH ?? "herdr",
 ): void {
-  const state = readPaneState(stateDir, entrypoint);
-  if (!state) throw new Error(`${entrypoint} pane is not open`);
-  try {
-    execFileSync(herdr, ["plugin", "pane", "focus", state.paneId], { stdio: "ignore" });
-    return;
-  } catch {
-    const movedPane = recoverMovedPane(state, entrypoint, herdr);
-    if (!movedPane) throw new Error(`${entrypoint} pane moved or closed and could not be located`);
-    state.paneId = movedPane.pane_id;
-    state.terminalId = movedPane.terminal_id;
-    writeJsonAtomic(join(stateDir, `${entrypoint}-pane.json`), state);
-    execFileSync(herdr, ["plugin", "pane", "focus", state.paneId], { stdio: "ignore" });
-  }
-}
-
-export function requestDetailEdit(stateDir: string, blockId: string): DetailEditCommand {
-  const command: DetailEditCommand = {
-    id: crypto.randomUUID(),
-    action: "edit",
-    blockId,
-    createdAt: Date.now(),
-  };
-  writeJsonAtomic(join(stateDir, "detail-command.json"), command);
-  return command;
-}
-
-export function readDetailEditCommand(stateDir: string): DetailEditCommand | null {
-  const path = join(stateDir, "detail-command.json");
-  if (!existsSync(path)) return null;
-  try {
-    return Parse(DetailEditCommandSchema, JSON.parse(readFileSync(path, "utf8")));
-  } catch {
-    return null;
-  }
+  const paneId = resolvePluginPaneId(stateDir, entrypoint, herdr);
+  if (!paneId) throw new Error(`${entrypoint} pane is not open`);
+  execFileSync(herdr, ["plugin", "pane", "focus", paneId], { stdio: "ignore" });
 }

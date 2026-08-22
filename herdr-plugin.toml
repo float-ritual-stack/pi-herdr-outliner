@@ -6,6 +6,12 @@ description = "Persistent block workspace shared by Pi agents and the user"
 platforms = ["linux", "macos"]
 
 [[panes]]
+id = "service"
+title = "Outliner Service"
+placement = "tab"
+command = ["bun", "run", "src/server-main.ts"]
+
+[[panes]]
 id = "outliner"
 title = "Outliner"
 placement = "split"
