@@ -1,0 +1,24 @@
+id = "float.pi-outliner"
+name = "Pi Outliner"
+version = "0.1.0"
+min_herdr_version = "0.8.0"
+description = "Persistent block workspace shared by Pi agents and the user"
+platforms = ["linux", "macos"]
+
+[[panes]]
+id = "outliner"
+title = "Outliner"
+placement = "split"
+command = ["bun", "run", "src/outliner.ts"]
+
+[[panes]]
+id = "detail"
+title = "Outliner Detail"
+placement = "split"
+command = ["bun", "run", "src/detail.ts"]
+
+[[actions]]
+id = "open"
+title = "Open or focus outliner workspace"
+contexts = ["workspace", "tab", "pane"]
+command = ["bun", "run", "src/herdr-open.ts"]

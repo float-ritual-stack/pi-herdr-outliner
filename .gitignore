@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+
+# Build and coverage output
+dist/
+coverage/
+*.tsbuildinfo
+
+# Local runtime state
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.sock
+*.log
+
+# Environment and credentials
+.env
+.env.*
+!.env.example
+
+# Editor and operating-system files
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# Local session exports
+omp-session-*.html

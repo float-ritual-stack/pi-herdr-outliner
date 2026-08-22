@@ -1,0 +1,249 @@
+import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { dirname, join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
+import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
+import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
+import { formatFileAnnotation } from "../src/annotations";
+import { OutlinerClient } from "../src/client";
+import { resolvePaths } from "../src/paths";
+import { getProperty } from "../src/properties";
+import type { Block, SelectionContext, VisibleBlock } from "../src/types";
+
+const execFileAsync = promisify(execFile);
+const extensionRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+const paths = resolvePaths();
+const client = new OutlinerClient(paths.socket);
+let headlessServer: ChildProcess | null = null;
+
+function toolResult(value: unknown): AgentToolResult<Record<string, never>> {
+  const text = JSON.stringify(value, null, 2);
+  return {
+    content: [{ type: "text", text: text.length > 12_000 ? `${text.slice(0, 12_000)}\n…` : text }],
+    details: {},
+  };
+}
+
+async function waitForService(timeoutMs = 5000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let lastError: unknown;
+  while (Date.now() < deadline) {
+    try {
+      await client.request({ action: "ping" }, 400);
+      return;
+    } catch (error) {
+      lastError = error;
+      await sleep(100);
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("Outliner service did not start");
+}
+
+async function ensureService(focus: boolean): Promise<void> {
+  try {
+    await client.request({ action: "ping" }, 300);
+    if (!focus || process.env.HERDR_ENV !== "1") return;
+  } catch {
+    // A failed ping falls through to service startup.
+  }
+
+  if (process.env.HERDR_ENV === "1") {
+    await execFileAsync("bun", ["run", join(extensionRoot, "src", "herdr-open.ts")], {
+      cwd: paths.workspaceRoot,
+      env: {
+        ...process.env,
+        HERDR_PLUGIN_ID: "float.pi-outliner",
+        OUTLINER_FOCUS: focus ? "1" : "0",
+        OUTLINER_WORKSPACE_ROOT: paths.workspaceRoot,
+      },
+    });
+  } else if (!headlessServer) {
+    headlessServer = spawn("bun", ["run", join(extensionRoot, "src", "server-main.ts")], {
+      cwd: extensionRoot,
+      stdio: "ignore",
+      env: { ...process.env, OUTLINER_WORKSPACE_ROOT: paths.workspaceRoot },
+    });
+  }
+  await waitForService();
+}
+
+function formatSelection(context: SelectionContext): string {
+  if (!context.selected) return "";
+  const path = [...context.ancestors, context.selected].map((block) => block.text).join(" > ");
+  const children = context.children.slice(0, 20).map((block) => `- ${block.text}`).join("\n");
+  return [
+    "Outliner workspace context:",
+    `Selected path: ${path}`,
+    children ? `Selected block children:\n${children}` : "Selected block has no children.",
+    "Use the outliner tools for durable progress, questions, decisions, and notes when useful.",
+  ].join("\n");
+}
+
+export default function outlinerExtension(pi: ExtensionAPI): void {
+  pi.registerCommand("outliner", {
+    description: "Open or focus the persistent Herdr outliner pane",
+    handler: async (_args, ctx) => {
+      try {
+        await ensureService(true);
+        ctx.ui.notify("Outliner ready", "info");
+      } catch (error) {
+        ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+      }
+    },
+  });
+
+  pi.registerCommand("outliner-filter", {
+    description: "Preview blocks matching property filters such as type=question status=open",
+    handler: async (args, ctx) => {
+      await ensureService(false);
+      const filters = args
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean)
+        .map((token) => {
+          const separator = token.includes("::") ? "::" : "=";
+          const index = token.indexOf(separator);
+          return index < 0
+            ? { key: token }
+            : { key: token.slice(0, index), value: token.slice(index + separator.length) };
+        });
+      const blocks = await client.request<VisibleBlock[]>({ action: "list", query: { filters, limit: 20 } });
+      ctx.ui.setWidget(
+        "pi-outliner-filter",
+        blocks.length ? blocks.map((block) => `${"  ".repeat(block.depth)}• ${block.text}`) : ["No matching blocks"],
+        { placement: "belowEditor" },
+      );
+    },
+  });
+
+  pi.registerTool({
+    name: "outliner_create",
+    label: "Outliner Create",
+    description: "Create a durable outliner block for a note, progress update, open question, decision, or artifact",
+    promptSnippet: "Create a durable block in the shared outliner workspace",
+    parameters: Type.Object({
+      text: Type.String({ description: "Block text, optionally containing [property::value] markers" }),
+      parentId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+      author: Type.Optional(Type.Union([Type.Literal("agent"), Type.Literal("user"), Type.Literal("system")])),
+    }),
+    async execute(_id, params) {
+      await ensureService(false);
+      const block = await client.request<Block>({
+        action: "create",
+        text: params.text,
+        parentId: params.parentId,
+        author: params.author ?? "agent",
+      });
+      return toolResult(block);
+    },
+  });
+
+  pi.registerTool({
+    name: "outliner_annotate_file",
+    label: "Outliner Annotate File",
+    description: "Attach a durable line-range comment beneath a file-reference block",
+    promptSnippet: "Annotate specific lines of a referenced text or Markdown file",
+    parameters: Type.Object({
+      sourceBlockId: Type.String({ description: "Block containing the [file::path] property" }),
+      startLine: Type.Integer({ minimum: 1 }),
+      endLine: Type.Integer({ minimum: 1 }),
+      comment: Type.String(),
+    }),
+    async execute(_id, params) {
+      await ensureService(false);
+      const source = await client.request<Block>({ action: "get", blockId: params.sourceBlockId });
+      const filePath = getProperty(source.properties, "file");
+      if (!filePath) throw new Error(`Block has no [file::path] property: ${source.id}`);
+      const text = formatFileAnnotation({ ...params, filePath });
+      const annotation = await client.request<Block>({
+        action: "create",
+        parentId: source.id,
+        text,
+        author: "agent",
+      });
+      return toolResult(annotation);
+    },
+  });
+
+  pi.registerTool({
+    name: "outliner_update",
+    label: "Outliner Update",
+    description: "Update an existing outliner block and re-index its inline properties",
+    promptSnippet: "Update a block in the shared outliner workspace",
+    parameters: Type.Object({ blockId: Type.String(), text: Type.String() }),
+    async execute(_id, params) {
+      await ensureService(false);
+      return toolResult(await client.request<Block>({ action: "update", blockId: params.blockId, text: params.text }));
+    },
+  });
+
+  pi.registerTool({
+    name: "outliner_query",
+    label: "Outliner Query",
+    description: "Query blocks by text and indexed inline properties; all supplied property filters must match",
+    promptSnippet: "Query shared blocks by text or [property::value]",
+    parameters: Type.Object({
+      text: Type.Optional(Type.String()),
+      filters: Type.Optional(
+        Type.Array(
+          Type.Object({
+            key: Type.String(),
+            value: Type.Optional(Type.String()),
+          }),
+        ),
+      ),
+      subtreeRootId: Type.Optional(Type.String()),
+      limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+    }),
+    async execute(_id, params) {
+      await ensureService(false);
+      return toolResult(await client.request<VisibleBlock[]>({ action: "list", query: params }));
+    },
+  });
+
+  pi.registerTool({
+    name: "outliner_move",
+    label: "Outliner Move",
+    description: "Move a block to another parent and optional sibling position",
+    promptSnippet: "Move a shared outliner block",
+    parameters: Type.Object({
+      blockId: Type.String(),
+      parentId: Type.Union([Type.String(), Type.Null()]),
+      position: Type.Optional(Type.Integer({ minimum: 0 })),
+    }),
+    async execute(_id, params) {
+      await ensureService(false);
+      return toolResult(await client.request<Block>({ action: "move", ...params }));
+    },
+  });
+
+  pi.registerTool({
+    name: "outliner_selection",
+    label: "Outliner Selection",
+    description: "Read the user's selected block with its ancestors and children",
+    promptSnippet: "Read the current shared outliner selection",
+    parameters: Type.Object({}),
+    async execute() {
+      await ensureService(false);
+      return toolResult(await client.request<SelectionContext>({ action: "selection.get" }));
+    },
+  });
+
+  pi.on("before_agent_start", async (event) => {
+    try {
+      const selection = await client.request<SelectionContext>({ action: "selection.get" }, 250);
+      const context = formatSelection(selection);
+      if (context) return { systemPrompt: `${event.systemPrompt}\n\n${context}` };
+    } catch {
+      // The outliner is optional until explicitly opened.
+    }
+  });
+
+  pi.on("session_shutdown", async () => {
+    if (headlessServer) {
+      headlessServer.kill("SIGTERM");
+      headlessServer = null;
+    }
+  });
+}
