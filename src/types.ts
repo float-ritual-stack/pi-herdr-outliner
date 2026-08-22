@@ -56,12 +56,25 @@ export interface BlockQuery {
 export interface VisibleBlock extends Block {
   depth: number;
   multilineExpanded: boolean;
+  hasChildren: boolean;
+  displayText: string;
+}
+
+export const OUTLINER_PROTOCOL_VERSION = 2;
+
+export interface OutlinerServiceStatus {
+  status: "ready";
+  protocolVersion: typeof OUTLINER_PROTOCOL_VERSION;
 }
 
 export type OutlinerRequest =
   | { id: string; action: "ping" }
   | { id: string; action: "list"; query?: BlockQuery }
   | { id: string; action: "get"; blockId: string }
+  | { id: string; action: "children"; parentId: string | null }
+  | { id: string; action: "workspace.snapshot"; query?: BlockQuery }
+  | { id: string; action: "events.subscribe" }
+  | { id: string; action: "ui.command.send"; command: OutlinerUiCommand }
   | { id: string; action: "create"; parentId?: string | null; text: string; author?: BlockAuthor }
   | { id: string; action: "update"; blockId: string; text: string; expectedUpdatedAt?: string }
   | { id: string; action: "move"; blockId: string; parentId: string | null; position?: number }
@@ -88,4 +101,32 @@ export interface SelectionContext {
   selected: Block | null;
   ancestors: Block[];
   children: Block[];
+}
+
+export interface WorkspaceSnapshot {
+  blocks: VisibleBlock[];
+  allBlocks: VisibleBlock[];
+  selection: SelectionContext;
+  sequence: number;
+}
+
+export interface OutlinerUiCommand {
+  target: "tree" | "detail";
+  command: "edit" | "reveal" | "focus";
+  blockId?: string;
+}
+
+export type OutlinerEventDomain = "content" | "selection" | "view" | "ui";
+
+export interface OutlinerEvent {
+  id: string;
+  domain: OutlinerEventDomain;
+  action: string;
+  sequence: number;
+  blockId?: string;
+  command?: OutlinerUiCommand;
+}
+
+export interface OutlinerEventEnvelope {
+  event: OutlinerEvent;
 }

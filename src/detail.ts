@@ -3,11 +3,11 @@ import { join } from "node:path";
 import { emitKeypressEvents } from "node:readline";
 import { setTimeout as sleep } from "node:timers/promises";
 import { extractFileAnnotationComment, formatFileAnnotation } from "./annotations";
-import { OutlinerClient } from "./client";
+import { OutlinerClient, type OutlinerWatcher } from "./client";
 import { completionTargetAtCursor, completionWindow } from "./completion";
 import { completeReferencedPaths, readReferencedFile, type ReferencedFile } from "./files";
+import { focusPluginPane, registerPaneState } from "./pane-control";
 import { resolvePaths } from "./paths";
-import { focusPluginPane, readDetailEditCommand, registerPaneState } from "./pane-control";
 import { getProperty } from "./properties";
 import { blockDisplayTitle } from "./references";
 import {
@@ -20,7 +20,14 @@ import {
   type TerminalKey,
 } from "./terminal";
 import { TextBuffer } from "./text-buffer";
-import type { Block, SelectionContext, VisibleBlock } from "./types";
+import {
+  OUTLINER_PROTOCOL_VERSION,
+  type Block,
+  type OutlinerEvent,
+  type OutlinerServiceStatus,
+  type SelectionContext,
+  type VisibleBlock,
+} from "./types";
 
 type Mode = "preview" | "file" | "annotation" | "edit" | "comment";
 
@@ -40,7 +47,6 @@ const ESC = "\x1b[";
 const paths = resolvePaths();
 const client = new OutlinerClient(paths.socket);
 const paneStatePath = join(paths.stateDir, "detail-pane.json");
-registerPaneState(paths.stateDir, "detail", paths.workspaceRoot);
 
 let context: SelectionContext = { selected: null, ancestors: [], children: [] };
 let resolvedSelectedText = "";
@@ -57,9 +63,11 @@ let annotationRange: LineRange | null = null;
 let completion: CompletionState | null = null;
 let status = "";
 let stopping = false;
-let polling = false;
 let busy = false;
-let lastDetailCommandId: string | null = null;
+let watcher: OutlinerWatcher | null = null;
+let refreshPending = false;
+let serviceQueue = Promise.resolve();
+
 function insertPastedText(text: string): void {
   if (!isBufferMode()) return;
   completion = null;
@@ -73,13 +81,14 @@ async function waitForService(): Promise<void> {
   const deadline = Date.now() + 5000;
   while (Date.now() < deadline) {
     try {
-      await client.request({ action: "ping" }, 300);
-      return;
+      const service = await client.request<OutlinerServiceStatus>({ action: "ping" }, 300);
+      if (service.protocolVersion === OUTLINER_PROTOCOL_VERSION) return;
     } catch {
-      await sleep(100);
+      // Retry until the startup deadline.
     }
+    await sleep(100);
   }
-  throw new Error("Outliner service is not available");
+  throw new Error("Compatible outliner service is not available");
 }
 
 function errorMessage(error: unknown): string {
@@ -147,6 +156,7 @@ function refreshResolvedBreadcrumb(): void {
 
 async function loadSelection(force = false): Promise<void> {
   const next = await client.request<SelectionContext>({ action: "selection.get" });
+  refreshPending = false;
   const changed =
     next.selected?.id !== context.selected?.id ||
     next.selected?.updatedAt !== context.selected?.updatedAt;
@@ -281,30 +291,65 @@ function focusOutliner(): void {
   }
 }
 
-async function processDetailEditCommand(): Promise<boolean> {
-  const command = readDetailEditCommand(paths.stateDir);
-  if (!command || command.id === lastDetailCommandId) return false;
-  lastDetailCommandId = command.id;
-  if (Date.now() - command.createdAt > 10_000) return false;
-  await loadSelection(true);
-  if (context.selected?.id !== command.blockId) return false;
-  beginEdit();
-  return true;
-}
-
-async function refresh(): Promise<void> {
-  if (polling || isBufferMode()) return;
-  polling = true;
-  try {
-    const openedEditor = await processDetailEditCommand();
-    if (!openedEditor) await loadSelection();
-    draw();
-  } catch (error) {
+function enqueueServiceTask(task: () => void | Promise<void>): void {
+  serviceQueue = serviceQueue.then(task).catch((error) => {
     status = errorMessage(error);
     draw();
-  } finally {
-    polling = false;
+  });
+}
+
+async function handleServiceEvent(event: OutlinerEvent): Promise<void> {
+  if (event.domain === "ui") {
+    const command = event.command;
+    if (!command || command.target !== "detail") return;
+    if (isBufferMode()) {
+      refreshPending = true;
+      return;
+    }
+    if (command.blockId && context.selected?.id !== command.blockId) {
+      await client.request({ action: "selection.set", blockId: command.blockId });
+    }
+    await loadSelection(true);
+    if (command.command === "edit") beginEdit();
+    draw();
+    return;
   }
+  if (isBufferMode()) {
+    refreshPending = true;
+    return;
+  }
+  await loadSelection(event.domain === "selection");
+  draw();
+}
+
+function startWatcher(): void {
+  watcher = client.watch({
+    onConnect: () =>
+      enqueueServiceTask(async () => {
+        status = "";
+        if (isBufferMode()) refreshPending = true;
+        else await loadSelection(true);
+        draw();
+      }),
+    onDisconnect: () =>
+      enqueueServiceTask(() => {
+        status = "Workspace service disconnected; reconnecting…";
+        draw();
+      }),
+    onError: (error) =>
+      enqueueServiceTask(() => {
+        status = errorMessage(error);
+        draw();
+      }),
+    onEvent: (event) => enqueueServiceTask(() => handleServiceEvent(event)),
+  });
+}
+function refreshAfterBufferExit(): void {
+  if (!refreshPending) return;
+  enqueueServiceTask(async () => {
+    await loadSelection(true);
+    draw();
+  });
 }
 
 function beginComment(): void {
@@ -348,6 +393,7 @@ async function saveBuffer(): Promise<void> {
       selectionAnchor = null;
       status = `Annotation added for lines ${annotationRange.startLine}-${annotationRange.endLine}`;
     }
+    if (!isBufferMode() && refreshPending) await loadSelection(true);
   } catch (error) {
     status = errorMessage(error);
   } finally {
@@ -440,6 +486,7 @@ function handleBufferKey(str: string, key: TerminalKey, modifiedEnter: boolean):
     mode = displayModeForBlock(context.selected);
     status = "Edit cancelled";
     focusOutliner();
+    refreshAfterBufferExit();
   } else if (key.name === "return" || modifiedEnter) buffer.newline();
   else if (key.name === "backspace") buffer.backspace();
   else if (key.name === "delete") buffer.deleteForward();
@@ -456,20 +503,34 @@ function handleBufferKey(str: string, key: TerminalKey, modifiedEnter: boolean):
 function stop(): void {
   if (stopping) return;
   stopping = true;
-  clearInterval(refreshTimer);
+  watcher?.stop();
   if (process.stdin.isTTY) process.stdin.setRawMode(false);
   process.stdout.write(`${BRACKETED_PASTE_DISABLE}\x1b[?25h\x1b[?1049l`);
   rmSync(paneStatePath, { force: true });
   process.exit(0);
 }
 
-process.on("SIGINT", stop);
-process.on("SIGTERM", stop);
-process.on("SIGHUP", stop);
+async function initialize(): Promise<void> {
+  await waitForService();
+  await loadSelection(true);
+  registerPaneState(paths.stateDir, "detail", paths.workspaceRoot);
+}
+
+try {
+  await initialize();
+} catch (error) {
+  rmSync(paneStatePath, { force: true });
+  console.error(errorMessage(error));
+  process.exit(1);
+}
 
 emitKeypressEvents(process.stdin);
 if (process.stdin.isTTY) process.stdin.setRawMode(true);
 process.stdout.write(`\x1b[?1049h\x1b[?25l${BRACKETED_PASTE_ENABLE}`);
+
+process.on("SIGINT", stop);
+process.on("SIGTERM", stop);
+process.on("SIGHUP", stop);
 
 process.stdin.on("keypress", (str: string, key: TerminalKey) => {
   const inputAction = inputDecoder.consume(str, key);
@@ -482,6 +543,7 @@ process.stdin.on("keypress", (str: string, key: TerminalKey) => {
     if (isBufferMode()) {
       mode = displayModeForBlock(context.selected);
       status = "Edit cancelled";
+      refreshAfterBufferExit();
     }
     focusOutliner();
     draw();
@@ -538,9 +600,5 @@ process.stdin.on("keypress", (str: string, key: TerminalKey) => {
 });
 
 process.stdout.on("resize", draw);
-const refreshTimer = setInterval(() => void refresh(), 250);
-
-await waitForService();
-await loadSelection(true);
-await processDetailEditCommand();
+startWatcher();
 draw();
