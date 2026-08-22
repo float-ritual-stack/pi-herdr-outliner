@@ -77,7 +77,8 @@ export class OutlinerServer {
   handle(request: OutlinerRequest): OutlinerResponse {
     try {
       let result: unknown;
-      switch (request.action) {
+      const action = request.action;
+      switch (action) {
         case "ping":
           result = { status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION };
           break;
@@ -142,6 +143,10 @@ export class OutlinerServer {
         case "selection.set":
           result = this.store.setSelection(request.blockId);
           break;
+        default: {
+          const unsupportedAction: never = action;
+          throw new Error(`Unsupported action: ${String(unsupportedAction)}`);
+        }
       }
       return { id: request.id, ok: true, result, sequence: this.store.sequence };
     } catch (error) {

@@ -11,9 +11,9 @@ import type {
   Block,
   OutlinerEvent,
   OutlinerRequest,
+  OutlinerServiceStatus,
   PropertyCatalogItem,
   VisibleBlock,
-  OutlinerServiceStatus,
   WorkspaceSnapshot,
 } from "../src/types";
 
@@ -65,6 +65,12 @@ test("serves mutations and property queries over the local socket", async () => 
   } as unknown as OutlinerRequest);
   expect(invalidPatch.ok).toBe(false);
   expect(store.require(block.id).text).toBe(block.text);
+  const unsupported = server.handle({
+    id: "unsupported-action",
+    action: "future.action",
+  } as unknown as OutlinerRequest);
+  expect(unsupported.ok).toBe(false);
+  if (!unsupported.ok) expect(unsupported.error).toBe("Unsupported action: future.action");
   const patched = await client.request<Block>({
     action: "properties.patch",
     blockId: block.id,
@@ -190,4 +196,88 @@ test("watchers reconnect and resubscribe after the service restarts", async () =
   await reconnected.promise;
 
   expect(connectionCount).toBe(2);
+});
+
+test("watchers reconnect when a subscription is not acknowledged", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-outliner-stuck-subscription-"));
+  const socketPath = join(directory, "outliner.sock");
+  let connectionCount = 0;
+  const reconnected = Promise.withResolvers<void>();
+  const server = createServer((socket) => {
+    const connectionNumber = ++connectionCount;
+    let buffer = "";
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk: string) => {
+      buffer += chunk;
+      const newline = buffer.indexOf("\n");
+      if (newline < 0 || connectionNumber === 1) return;
+      const request = JSON.parse(buffer.slice(0, newline)) as OutlinerRequest;
+      socket.write(`${JSON.stringify({ id: request.id, ok: true, result: { subscribed: true } })}\n`);
+    });
+  });
+  const listening = Promise.withResolvers<void>();
+  server.once("error", listening.reject);
+  server.listen(socketPath, listening.resolve);
+  await listening.promise;
+
+  const watcher = new OutlinerClient(socketPath).watch({
+    onConnect: reconnected.resolve,
+    onEvent: () => {},
+  });
+  cleanups.push(async () => {
+    watcher.stop();
+    const closed = Promise.withResolvers<void>();
+    server.close((error) => (error ? closed.reject(error) : closed.resolve()));
+    await closed.promise;
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  await reconnected.promise;
+
+  expect(connectionCount).toBe(2);
+}, 6_000);
+
+test("stopping a connected watcher does not report a disconnect", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-outliner-stop-watcher-"));
+  const socketPath = join(directory, "outliner.sock");
+  const connected = Promise.withResolvers<void>();
+  const connectionClosed = Promise.withResolvers<void>();
+  let disconnectCount = 0;
+  const server = createServer((socket) => {
+    let buffer = "";
+    socket.setEncoding("utf8");
+    socket.once("close", connectionClosed.resolve);
+    socket.on("data", (chunk: string) => {
+      buffer += chunk;
+      const newline = buffer.indexOf("\n");
+      if (newline < 0) return;
+      const request = JSON.parse(buffer.slice(0, newline)) as OutlinerRequest;
+      socket.write(`${JSON.stringify({ id: request.id, ok: true, result: { subscribed: true } })}\n`);
+    });
+  });
+  const listening = Promise.withResolvers<void>();
+  server.once("error", listening.reject);
+  server.listen(socketPath, listening.resolve);
+  await listening.promise;
+
+  const watcher = new OutlinerClient(socketPath).watch({
+    onConnect: connected.resolve,
+    onDisconnect: () => {
+      disconnectCount += 1;
+    },
+    onEvent: () => {},
+  });
+  cleanups.push(async () => {
+    watcher.stop();
+    const closed = Promise.withResolvers<void>();
+    server.close((error) => (error ? closed.reject(error) : closed.resolve()));
+    await closed.promise;
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  await connected.promise;
+  watcher.stop();
+  await connectionClosed.promise;
+
+  expect(disconnectCount).toBe(0);
 });

@@ -47,7 +47,6 @@ const ESC = "\x1b[";
 const paths = resolvePaths();
 const client = new OutlinerClient(paths.socket);
 const paneStatePath = join(paths.stateDir, "detail-pane.json");
-registerPaneState(paths.stateDir, "detail", paths.workspaceRoot);
 
 let context: SelectionContext = { selected: null, ancestors: [], children: [] };
 let resolvedSelectedText = "";
@@ -301,12 +300,17 @@ function enqueueServiceTask(task: () => void | Promise<void>): void {
 
 async function handleServiceEvent(event: OutlinerEvent): Promise<void> {
   if (event.domain === "ui") {
-    if (event.command?.target !== "detail") return;
-    if (event.command.blockId && context.selected?.id !== event.command.blockId) {
-      await client.request({ action: "selection.set", blockId: event.command.blockId });
+    const command = event.command;
+    if (!command || command.target !== "detail") return;
+    if (isBufferMode()) {
+      refreshPending = true;
+      return;
+    }
+    if (command.blockId && context.selected?.id !== command.blockId) {
+      await client.request({ action: "selection.set", blockId: command.blockId });
     }
     await loadSelection(true);
-    if (event.command.command === "edit") beginEdit();
+    if (command.command === "edit") beginEdit();
     draw();
     return;
   }
@@ -506,13 +510,27 @@ function stop(): void {
   process.exit(0);
 }
 
-process.on("SIGINT", stop);
-process.on("SIGTERM", stop);
-process.on("SIGHUP", stop);
+async function initialize(): Promise<void> {
+  await waitForService();
+  await loadSelection(true);
+  registerPaneState(paths.stateDir, "detail", paths.workspaceRoot);
+}
+
+try {
+  await initialize();
+} catch (error) {
+  rmSync(paneStatePath, { force: true });
+  console.error(errorMessage(error));
+  process.exit(1);
+}
 
 emitKeypressEvents(process.stdin);
 if (process.stdin.isTTY) process.stdin.setRawMode(true);
 process.stdout.write(`\x1b[?1049h\x1b[?25l${BRACKETED_PASTE_ENABLE}`);
+
+process.on("SIGINT", stop);
+process.on("SIGTERM", stop);
+process.on("SIGHUP", stop);
 
 process.stdin.on("keypress", (str: string, key: TerminalKey) => {
   const inputAction = inputDecoder.consume(str, key);
@@ -582,7 +600,5 @@ process.stdin.on("keypress", (str: string, key: TerminalKey) => {
 });
 
 process.stdout.on("resize", draw);
-await waitForService();
-await loadSelection(true);
 startWatcher();
 draw();

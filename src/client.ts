@@ -43,10 +43,19 @@ export class OutlinerWatcher {
     let buffer = "";
     let subscribed = false;
     const subscriptionId = crypto.randomUUID();
+    let acknowledgementTimer: Timer | null = null;
+
+    function clearAcknowledgementTimer(): void {
+      clearTimeout(acknowledgementTimer ?? undefined);
+      acknowledgementTimer = null;
+    }
 
     socket.once("connect", () => {
       const request: OutlinerRequest = { id: subscriptionId, action: "events.subscribe" };
       socket.write(`${JSON.stringify(request)}\n`);
+      acknowledgementTimer = setTimeout(() => {
+        socket.destroy(new Error("Outliner subscription was not acknowledged"));
+      }, 3_000);
     });
     socket.on("data", (chunk: string) => {
       buffer += chunk;
@@ -66,6 +75,7 @@ export class OutlinerWatcher {
               continue;
             }
             subscribed = true;
+            clearAcknowledgementTimer();
             this.retryDelayMs = 250;
             if (this.handlers.onConnect) this.invoke(this.handlers.onConnect);
           }
@@ -76,8 +86,9 @@ export class OutlinerWatcher {
     });
     socket.once("error", (error) => this.reportError(error));
     socket.once("close", () => {
+      clearAcknowledgementTimer();
       if (this.socket === socket) this.socket = null;
-      if (subscribed) this.handlers.onDisconnect?.();
+      if (subscribed && !this.stopped) this.handlers.onDisconnect?.();
       this.scheduleReconnect();
     });
   }

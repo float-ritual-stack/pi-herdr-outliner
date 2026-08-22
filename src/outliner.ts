@@ -53,7 +53,6 @@ const ESC = "\x1b[";
 const paths = resolvePaths();
 const client = new OutlinerClient(paths.socket);
 const paneStatePath = join(paths.stateDir, "outliner-pane.json");
-registerPaneState(paths.stateDir, "outliner", paths.workspaceRoot);
 
 let rows: VisibleBlock[] = [];
 let allBlocksById = new Map<string, VisibleBlock>();
@@ -73,10 +72,6 @@ let watcher: OutlinerWatcher | null = null;
 let refreshPending = false;
 let workQueue = Promise.resolve();
 const inputDecoder = new TerminalInputDecoder();
-
-emitKeypressEvents(process.stdin);
-if (process.stdin.isTTY) process.stdin.setRawMode(true);
-process.stdout.write("\x1b[?1049h\x1b[?25l");
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -557,12 +552,17 @@ function stop(): void {
 
 async function handleServiceEvent(event: OutlinerEvent): Promise<void> {
   if (event.domain === "ui") {
-    if (event.command?.target !== "tree") return;
-    if (event.command.blockId) {
-      activeFilter = "";
-      await selectVisibleBlock(event.command.blockId);
+    const command = event.command;
+    if (!command || command.target !== "tree") return;
+    if (mode !== "browse") {
+      refreshPending = true;
+      return;
     }
-    if (event.command.command === "focus") focusPluginPane(paths.stateDir, "outliner");
+    if (command.blockId) {
+      activeFilter = "";
+      await selectVisibleBlock(command.blockId);
+    }
+    if (command.command === "focus") focusPluginPane(paths.stateDir, "outliner");
     draw();
     return;
   }
@@ -768,6 +768,26 @@ async function handleKeypress(str: string, key: TerminalKey, inputAction: Return
   draw();
 }
 
+async function initialize(): Promise<void> {
+  await waitForService();
+  await reload();
+  lastSelectionId = rows[selectedIndex]?.id ?? null;
+  await client.request({ action: "selection.set", blockId: lastSelectionId });
+  registerPaneState(paths.stateDir, "outliner", paths.workspaceRoot);
+}
+
+try {
+  await initialize();
+} catch (error) {
+  rmSync(paneStatePath, { force: true });
+  console.error(errorMessage(error));
+  process.exit(1);
+}
+
+emitKeypressEvents(process.stdin);
+if (process.stdin.isTTY) process.stdin.setRawMode(true);
+process.stdout.write("\x1b[?1049h\x1b[?25l");
+
 process.on("SIGINT", stop);
 process.on("SIGTERM", stop);
 process.on("SIGHUP", stop);
@@ -778,9 +798,5 @@ process.stdin.on("keypress", (str: string, key: TerminalKey) => {
 });
 
 process.stdout.on("resize", draw);
-await waitForService();
-await reload();
-lastSelectionId = rows[selectedIndex]?.id ?? null;
-await client.request({ action: "selection.set", blockId: lastSelectionId });
 startWatcher();
 draw();

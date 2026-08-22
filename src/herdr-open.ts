@@ -75,7 +75,7 @@ function openPane(
 
 async function waitForService(): Promise<void> {
   const client = new OutlinerClient(paths.socket);
-  const deadline = Date.now() + 5000;
+  const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
     try {
       const service = await client.request<OutlinerServiceStatus>({ action: "ping" }, 300);
