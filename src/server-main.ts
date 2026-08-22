@@ -1,5 +1,7 @@
 import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { HerdrRuntimeRegistry } from "./herdr-registry";
+import { HerdrRegistryRunner } from "./herdr-runtime";
 import { registerPaneState } from "./pane-control";
 import { resolvePaths } from "./paths";
 import { OutlinerServer } from "./server";
@@ -10,11 +12,15 @@ mkdirSync(paths.stateDir, { recursive: true });
 const paneStatePath = join(paths.stateDir, "service-pane.json");
 const store = new OutlinerStore(paths.database);
 const server = new OutlinerServer(store, paths.socket);
+const herdrRegistry = new HerdrRuntimeRegistry();
+const herdrSocketPath = process.env.HERDR_SOCKET_PATH;
+const herdrRunner = herdrSocketPath === undefined ? null : new HerdrRegistryRunner(herdrRegistry, herdrSocketPath);
 let ownsPaneState = false;
 try {
   await server.start();
   ownsPaneState = true;
   registerPaneState(paths.stateDir, "service", paths.workspaceRoot);
+  herdrRunner?.start();
 } catch (error) {
   try {
     await server.close();
@@ -32,6 +38,14 @@ async function stop(): Promise<void> {
   if (stopping) return;
   stopping = true;
   let exitCode = 0;
+  if (herdrRunner !== null) {
+    try {
+      await herdrRunner.stop();
+    } catch (error) {
+      exitCode = 1;
+      console.error(`Failed to stop Herdr registry: ${String(error)}`);
+    }
+  }
   try {
     await server.close();
   } catch (error) {
