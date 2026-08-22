@@ -4,13 +4,15 @@ import { emitKeypressEvents } from "node:readline";
 import { setTimeout as sleep } from "node:timers/promises";
 import { extractFileAnnotationComment, formatFileAnnotation } from "./annotations";
 import { OutlinerClient } from "./client";
-import { completionWindow } from "./completion";
-import { readReferencedFile, type ReferencedFile } from "./files";
+import { completionTargetAtCursor, completionWindow } from "./completion";
+import { completeReferencedPaths, readReferencedFile, type ReferencedFile } from "./files";
 import { resolvePaths } from "./paths";
 import { focusPluginPane, readDetailEditCommand, registerPaneState } from "./pane-control";
 import { getProperty } from "./properties";
 import { blockDisplayTitle } from "./references";
 import {
+  BRACKETED_PASTE_DISABLE,
+  BRACKETED_PASTE_ENABLE,
   TerminalInputDecoder,
   isPrintableInput,
   renderMarkdownLine,
@@ -58,7 +60,14 @@ let stopping = false;
 let polling = false;
 let busy = false;
 let lastDetailCommandId: string | null = null;
-const inputDecoder = new TerminalInputDecoder();
+function insertPastedText(text: string): void {
+  if (!isBufferMode()) return;
+  completion = null;
+  buffer.insert(text);
+  draw();
+}
+
+const inputDecoder = new TerminalInputDecoder(insertPastedText);
 
 async function waitForService(): Promise<void> {
   const deadline = Date.now() + 5000;
@@ -348,42 +357,52 @@ async function saveBuffer(): Promise<void> {
 }
 
 async function openCompletion(): Promise<void> {
-  const line = buffer.lines[buffer.row].slice(0, buffer.column);
-  const pageMatch = line.match(/\[\[([^\]]*)$/);
-  const blockMatch = line.match(/\(\(([^)]*)$/);
-  const match = pageMatch ?? blockMatch;
-  if (!match) {
-    status = "Type [[page or ((block before requesting completion";
+  const line = buffer.lines[buffer.row];
+  const target = completionTargetAtCursor(line, buffer.column);
+  if (!target) {
+    status = "Type [[page, ((block, or [file::path before requesting completion";
     return;
   }
 
-  const prefix = match[1];
-  let blocks: VisibleBlock[] = [];
-  if (pageMatch) {
-    blocks = await client.request<VisibleBlock[]>({
-      action: "list",
-      query: { text: prefix || undefined, filters: [{ key: "type", value: "page" }], limit: 20 },
-    });
-  }
-  if (blocks.length === 0) {
-    blocks = await client.request<VisibleBlock[]>({ action: "list", query: { text: prefix || undefined, limit: 20 } });
-  }
-  const tokenStart = buffer.column - match[0].length;
-  completion = {
-    start: tokenStart,
-    end: buffer.column,
-    index: 0,
-    items: blocks.map((block) => {
+  let items: CompletionState["items"];
+  if (target.kind === "file") {
+    const candidates = completeReferencedPaths(target.query, paths.workspaceRoot);
+    items = candidates.map((candidate) => ({
+      label: candidate.sourcePath,
+      insertion: `[file::${candidate.sourcePath}${candidate.isDirectory ? "" : "]"}`,
+    }));
+  } else {
+    let blocks: VisibleBlock[] = [];
+    if (target.kind === "page") {
+      blocks = await client.request<VisibleBlock[]>({
+        action: "list",
+        query: { text: target.query || undefined, filters: [{ key: "type", value: "page" }], limit: 20 },
+      });
+    }
+    if (blocks.length === 0) {
+      blocks = await client.request<VisibleBlock[]>({
+        action: "list",
+        query: { text: target.query || undefined, limit: 20 },
+      });
+    }
+    items = blocks.map((block) => {
       const title = blockDisplayTitle(block);
       return {
         label: title,
-        insertion: pageMatch ? `[[${title}]]` : `((${block.id}))`,
+        insertion: target.kind === "page" ? `[[${title}]]` : `((${block.id}))`,
       };
-    }),
+    });
+  }
+  completion = {
+    start: target.start,
+    end: target.end,
+    index: 0,
+    items,
   };
+
   if (completion.items.length === 0) {
     completion = null;
-    status = "No matching blocks";
+    status = target.kind === "file" ? "No matching files" : "No matching blocks";
   } else {
     status = "";
   }
@@ -400,7 +419,7 @@ function handleBufferKey(str: string, key: TerminalKey, modifiedEnter: boolean):
   if (completion) {
     if (key.name === "up") completion.index = Math.max(0, completion.index - 1);
     else if (key.name === "down") completion.index = Math.min(completion.items.length - 1, completion.index + 1);
-    else if (key.name === "return") applyCompletion();
+    else if (key.name === "return" || key.name === "tab") applyCompletion();
     else if (key.name === "escape") completion = null;
     draw();
     return;
@@ -439,7 +458,7 @@ function stop(): void {
   stopping = true;
   clearInterval(refreshTimer);
   if (process.stdin.isTTY) process.stdin.setRawMode(false);
-  process.stdout.write("\x1b[?25h\x1b[?1049l");
+  process.stdout.write(`${BRACKETED_PASTE_DISABLE}\x1b[?25h\x1b[?1049l`);
   rmSync(paneStatePath, { force: true });
   process.exit(0);
 }
@@ -450,7 +469,7 @@ process.on("SIGHUP", stop);
 
 emitKeypressEvents(process.stdin);
 if (process.stdin.isTTY) process.stdin.setRawMode(true);
-process.stdout.write("\x1b[?1049h\x1b[?25l");
+process.stdout.write(`\x1b[?1049h\x1b[?25l${BRACKETED_PASTE_ENABLE}`);
 
 process.stdin.on("keypress", (str: string, key: TerminalKey) => {
   const inputAction = inputDecoder.consume(str, key);

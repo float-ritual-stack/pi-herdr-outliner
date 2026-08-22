@@ -7,6 +7,7 @@ import { resolvePaths } from "./paths";
 import { focusPluginPane, registerPaneState, requestDetailEdit } from "./pane-control";
 import { OutlinerServer } from "./server";
 import { OutlinerStore } from "./store";
+import { layoutExpandedBlock } from "./tree-layout";
 import {
   TerminalInputDecoder,
   isDetailToggle,
@@ -60,19 +61,12 @@ if (process.stdin.isTTY) process.stdin.setRawMode(true);
 process.stdout.write("\x1b[?1049h\x1b[?25l");
 
 function reload(preferredSelectedId?: string | null): void {
-  const selectedId =
-    preferredSelectedId !== undefined
-      ? preferredSelectedId
-      : rows[selectedIndex]?.id ?? store.getSelection().selected?.id;
+  let selectedId: string | null | undefined = rows[selectedIndex]?.id ?? store.getSelection().selected?.id;
+  if (preferredSelectedId !== undefined) selectedId = preferredSelectedId;
   rows = store.list({ filters: parseFilter(activeFilter) });
   const nextIndex = selectedId ? rows.findIndex((block) => block.id === selectedId) : -1;
   selectedIndex = Math.max(0, Math.min(nextIndex >= 0 ? nextIndex : selectedIndex, rows.length - 1));
   lastSequence = store.sequence;
-}
-
-function blockRenderHeight(block: VisibleBlock, index: number): number {
-  if ((mode === "edit" && index === selectedIndex) || !block.multilineExpanded) return 1;
-  return block.text.split(/\r?\n/).length;
 }
 
 function draw(): void {
@@ -97,16 +91,51 @@ function draw(): void {
   const filterLabel = activeFilter ? `  \x1b[33mfilter: ${activeFilter}\x1b[0m` : "";
   output.push(`\x1b[2m${rows.length} blocks${filterLabel}\x1b[0m`);
   output.push("─".repeat(width));
+  const physicalRows: Array<string[] | undefined> = [];
+  function getPhysicalRows(index: number): string[] {
+    const cached = physicalRows[index];
+    if (cached) return cached;
+
+    const block = rows[index];
+    const hasChildren = store.children(block.id).length > 0;
+    let marker = "•";
+    if (hasChildren) marker = block.collapsed ? "▸" : "▾";
+    const author = AUTHOR_MARKERS[block.author];
+    const editingInline = mode === "edit" && index === selectedIndex;
+    const displayText = editingInline ? block.text : store.resolveBlockReferences(block.text);
+    const expanded = block.multilineExpanded && displayText.includes("\n") && !editingInline;
+    const result = expanded
+      ? layoutExpandedBlock({
+          text: displayText,
+          width,
+          depth: block.depth,
+          marker,
+          author,
+        }).map((row, rowIndex) => {
+          const text = rowIndex === 0 ? row.text : renderMarkdownLine(row.text);
+          return `${row.prefix}${text}${row.suffix}`;
+        })
+      : [
+          truncate(
+            `${"  ".repeat(block.depth)}${marker} ${
+              editingInline ? `${input}▏` : displayText.replace(/\r?\n/g, " ↵ ")
+            }  ${author}`,
+            width,
+          ),
+        ];
+    physicalRows[index] = result;
+    return result;
+  }
 
   const bodyHeight = Math.max(1, height - 6);
   if (selectedIndex < scrollStartIndex) scrollStartIndex = selectedIndex;
   if (scrollStartIndex < selectedIndex) {
     let requiredHeight = 0;
     for (let index = scrollStartIndex; index <= selectedIndex; index++) {
-      requiredHeight += blockRenderHeight(rows[index], index);
+      requiredHeight += getPhysicalRows(index).length;
     }
     while (requiredHeight > bodyHeight && scrollStartIndex < selectedIndex) {
-      requiredHeight -= blockRenderHeight(rows[scrollStartIndex], scrollStartIndex);
+      requiredHeight -= getPhysicalRows(scrollStartIndex).length;
       scrollStartIndex += 1;
     }
   }
@@ -114,37 +143,16 @@ function draw(): void {
   let renderedBodyLines = 0;
   for (let absoluteIndex = scrollStartIndex; absoluteIndex < rows.length; absoluteIndex++) {
     if (renderedBodyLines >= bodyHeight) break;
-    const block = rows[absoluteIndex];
-    const hasChildren = store.children(block.id).length > 0;
-    let marker = "•";
-    if (hasChildren) marker = block.collapsed ? "▸" : "▾";
-    const author = AUTHOR_MARKERS[block.author];
-    const editingInline = mode === "edit" && absoluteIndex === selectedIndex;
-    const displayText = editingInline ? block.text : store.resolveBlockReferences(block.text);
-    const textLines = displayText.split(/\r?\n/);
-    const expanded = block.multilineExpanded && textLines.length > 1 && !editingInline;
-    let blockText: string;
-    if (editingInline) {
-      blockText = `${input}▏`;
-    } else if (expanded) {
-      blockText = textLines[0];
-    } else {
-      blockText = displayText.replace(/\r?\n/g, " ↵ ");
-    }
-    const line = truncate(`${"  ".repeat(block.depth)}${marker} ${blockText}  ${author}`, width);
-    output.push(
-      absoluteIndex === selectedIndex ? `\x1b[48;5;238m\x1b[1m${line}\x1b[0m` : line,
-    );
-    renderedBodyLines += 1;
-
-    if (expanded) {
-      const continuationPrefix = `${"  ".repeat(block.depth + 1)}│ `;
-      for (const continuation of textLines.slice(1)) {
-        if (renderedBodyLines >= bodyHeight) break;
-        const availableWidth = Math.max(1, width - continuationPrefix.length);
-        output.push(`${continuationPrefix}${renderMarkdownLine(truncate(continuation || " ", availableWidth))}`);
-        renderedBodyLines += 1;
-      }
+    const blockLines = getPhysicalRows(absoluteIndex);
+    for (let lineIndex = 0; lineIndex < blockLines.length; lineIndex++) {
+      if (renderedBodyLines >= bodyHeight) break;
+      const line = blockLines[lineIndex];
+      output.push(
+        absoluteIndex === selectedIndex && lineIndex === 0
+          ? `\x1b[48;5;238m\x1b[1m${line}\x1b[0m`
+          : line,
+      );
+      renderedBodyLines += 1;
     }
   }
   while (output.length < height - 2) output.push("");
@@ -159,7 +167,7 @@ function draw(): void {
   } else {
     output.push(truncate(status, width));
   }
-  const help = "↑↓ navigate  . / ⌘. detail  Enter inline  Shift+Enter/Ctrl+E multiline  Ctrl+Q close";
+  const help = "↑↓ navigate  Shift+↑↓ reorder  . / ⌘. detail  Enter inline  Ctrl+Q close";
   output.push(`\x1b[2m${truncate(help, width)}\x1b[0m`);
   process.stdout.write(output.join("\n"));
 }
@@ -240,6 +248,22 @@ function outdent(selected: VisibleBlock): void {
   if (!selected.parentId) return;
   const parent = store.require(selected.parentId);
   store.move(selected.id, parent.parentId, parent.position + 1);
+}
+
+function moveSibling(selected: VisibleBlock, offset: -1 | 1): string {
+  const canonical = store.require(selected.id);
+  const siblings = store.children(canonical.parentId);
+  const currentIndex = siblings.findIndex((sibling) => sibling.id === canonical.id);
+  const targetIndex = currentIndex + offset;
+  if (currentIndex < 0 || targetIndex < 0) {
+    status = "Already first sibling";
+  } else if (targetIndex >= siblings.length) {
+    status = "Already last sibling";
+  } else {
+    store.move(canonical.id, canonical.parentId, targetIndex);
+    status = offset < 0 ? "Moved up among siblings" : "Moved down among siblings";
+  }
+  return canonical.id;
 }
 
 async function stop(): Promise<void> {
@@ -324,6 +348,7 @@ process.stdin.on("keypress", (str: string, key: TerminalKey) => {
   }
 
   const selected = rows[selectedIndex];
+  let preferredSelectedId: string | undefined;
   if (key.name === "q") {
     status = "Outliner remains open; Ctrl+Q closes this pane";
   } else if (isDetailToggle(str, key)) {
@@ -336,6 +361,10 @@ process.stdin.on("keypress", (str: string, key: TerminalKey) => {
   } else if (detailHandoffRequested) {
     handoffToDetail();
     return;
+  } else if (key.shift && key.name === "up") {
+    if (selected) preferredSelectedId = moveSibling(selected, -1);
+  } else if (key.shift && key.name === "down") {
+    if (selected) preferredSelectedId = moveSibling(selected, 1);
   } else if (key.name === "up") selectedIndex = Math.max(0, selectedIndex - 1);
   else if (key.name === "down") selectedIndex = Math.min(rows.length - 1, selectedIndex + 1);
   else if (key.name === "left" && selected) {
@@ -361,7 +390,7 @@ process.stdin.on("keypress", (str: string, key: TerminalKey) => {
   else if (str === "f" && selected) openReferencedFile(selected);
   else if (key.name === "escape" && activeFilter) activeFilter = "";
 
-  reload();
+  reload(preferredSelectedId);
   if (rows[selectedIndex]) {
     lastSelectionId = rows[selectedIndex].id;
     store.setSelection(lastSelectionId);

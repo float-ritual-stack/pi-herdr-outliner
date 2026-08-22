@@ -1,4 +1,4 @@
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { getProperty } from "./properties";
@@ -14,6 +14,11 @@ export interface ReferencedFile {
   firstLine: number;
 }
 
+export interface ReferencedPathCandidate {
+  sourcePath: string;
+  isDirectory: boolean;
+}
+
 export function resolveReferencedPath(
   sourcePath: string,
   workspaceRoot: string,
@@ -25,6 +30,47 @@ export function resolveReferencedPath(
     throw new Error(`Only current-user home paths using ~/ are supported: ${sourcePath}`);
   }
   return isAbsolute(sourcePath) ? resolve(sourcePath) : resolve(workspaceRoot, sourcePath);
+}
+
+export function completeReferencedPaths(
+  prefix: string,
+  workspaceRoot: string,
+  homeDirectory = homedir(),
+  limit = 20,
+): ReferencedPathCandidate[] {
+  if (prefix.startsWith("~") && prefix !== "~" && !prefix.startsWith("~/")) {
+    resolveReferencedPath(prefix, workspaceRoot, homeDirectory);
+  }
+  const slash = prefix.lastIndexOf("/");
+  const directoryPrefix =
+    prefix === "~" ? "~/" : slash >= 0 ? prefix.slice(0, slash + 1) : "";
+  const basenamePrefix = prefix === "~" ? "" : prefix.slice(slash + 1);
+  const directoryPath = resolveReferencedPath(
+    directoryPrefix || ".",
+    workspaceRoot,
+    homeDirectory,
+  );
+
+  return readdirSync(directoryPath, { withFileTypes: true })
+    .filter((entry) => entry.name.startsWith(basenamePrefix))
+    .flatMap((entry) => {
+      try {
+        const stat = statSync(join(directoryPath, entry.name));
+        if (!stat.isDirectory() && !stat.isFile()) return [];
+        const isDirectory = stat.isDirectory();
+        return [{
+          sourcePath: `${directoryPrefix}${entry.name}${isDirectory ? "/" : ""}`,
+          isDirectory,
+        }];
+      } catch {
+        return [];
+      }
+    })
+    .sort((left, right) => {
+      if (left.isDirectory !== right.isDirectory) return left.isDirectory ? -1 : 1;
+      return left.sourcePath.localeCompare(right.sourcePath);
+    })
+    .slice(0, Math.max(0, limit));
 }
 
 export function readReferencedFile(block: Block, workspaceRoot: string): ReferencedFile {

@@ -1,3 +1,65 @@
+export type CompletionTargetKind = "page" | "block" | "file";
+
+export interface CompletionTarget {
+  kind: CompletionTargetKind;
+  start: number;
+  end: number;
+  query: string;
+}
+
+const TARGET_SYNTAX: ReadonlyArray<{
+  kind: CompletionTargetKind;
+  opening: string;
+  closing: string;
+}> = [
+  { kind: "page", opening: "[[", closing: "]]" },
+  { kind: "block", opening: "((", closing: "))" },
+  { kind: "file", opening: "[file::", closing: "]" },
+];
+
+export function completionTargetAtCursor(
+  line: string,
+  column: number,
+): CompletionTarget | null {
+  const end = Math.max(0, Math.min(column, line.length));
+  const beforeCursor = line.slice(0, end);
+  let target: CompletionTarget | null = null;
+
+  for (const syntax of TARGET_SYNTAX) {
+    let searchFrom = beforeCursor.length;
+    let closedDepth = 0;
+    let start = -1;
+
+    while (searchFrom > 0) {
+      const opening = beforeCursor.lastIndexOf(syntax.opening, searchFrom - 1);
+      const closing = beforeCursor.lastIndexOf(syntax.closing, searchFrom - 1);
+      if (opening < 0) break;
+      if (closing > opening) {
+        closedDepth += 1;
+        searchFrom = closing;
+      } else if (closedDepth > 0) {
+        closedDepth -= 1;
+        searchFrom = opening;
+      } else {
+        start = opening;
+        break;
+      }
+    }
+
+    if (start < 0) continue;
+    if (!target || start > target.start) {
+      target = {
+        kind: syntax.kind,
+        start,
+        end,
+        query: beforeCursor.slice(start + syntax.opening.length),
+      };
+    }
+  }
+
+  return target;
+}
+
 export interface CompletionWindow {
   start: number;
   end: number;

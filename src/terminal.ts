@@ -6,6 +6,11 @@ export interface TerminalKey {
   sequence?: string;
 }
 
+export const BRACKETED_PASTE_ENABLE = "\x1b[?2004h";
+export const BRACKETED_PASTE_DISABLE = "\x1b[?2004l";
+const BRACKETED_PASTE_START = "\x1b[200~";
+const BRACKETED_PASTE_END = "\x1b[201~";
+
 const MODIFIED_ENTER_SEQUENCES: Record<string, true> = {
   "13~": true,
   "[13;2u": true,
@@ -26,8 +31,33 @@ export type TerminalInputAction = "pass" | "suppress" | "modified-enter";
 
 export class TerminalInputDecoder {
   #modifiedEnterSuffix: string | null = null;
+  #paste: string | null = null;
+
+  constructor(private readonly onPaste?: (text: string) => void) {}
 
   consume(str: string, key: TerminalKey): TerminalInputAction {
+    const sequence = key.sequence ?? str;
+    const isPasteStart =
+      key.name === "paste-start" || sequence === BRACKETED_PASTE_START;
+    const isPasteEnd =
+      key.name === "paste-end" || sequence === BRACKETED_PASTE_END;
+
+    if (isPasteStart) {
+      this.#paste = "";
+      return "suppress";
+    }
+    if (this.#paste !== null) {
+      if (isPasteEnd) {
+        const text = this.#paste;
+        this.#paste = null;
+        this.onPaste?.(text);
+      } else {
+        this.#paste += sequence;
+      }
+      return "suppress";
+    }
+    if (isPasteEnd) return "suppress";
+
     if (key.sequence === "\x1b[27;2;") {
       this.#modifiedEnterSuffix = "";
       return "suppress";

@@ -100,6 +100,46 @@ Second paragraph`;
     expect(() => store.move(root.id, sibling.id)).toThrow("beneath itself");
   });
 
+  test("reorders root siblings at final zero-based positions", () => {
+    const store = makeStore();
+    const first = store.create("First root");
+    const second = store.create("Second root");
+    const third = store.create("Third root");
+
+    const original = store.children(null);
+    store.move(third.id, null, original.findIndex((block) => block.id === second.id));
+    expect(
+      store
+        .children(null)
+        .filter((block) => [first.id, second.id, third.id].includes(block.id))
+        .map((block) => block.id),
+    ).toEqual([first.id, third.id, second.id]);
+
+    const reordered = store.children(null);
+    store.move(first.id, null, reordered.findIndex((block) => block.id === first.id) + 1);
+    expect(
+      store
+        .children(null)
+        .filter((block) => [first.id, second.id, third.id].includes(block.id))
+        .map((block) => block.id),
+    ).toEqual([third.id, first.id, second.id]);
+  });
+
+  test("reorders nested siblings without changing their parent", () => {
+    const store = makeStore();
+    const parent = store.create("Parent");
+    const first = store.create("First child", parent.id);
+    const second = store.create("Second child", parent.id);
+    const third = store.create("Third child", parent.id);
+
+    store.move(second.id, parent.id, 0);
+    store.move(first.id, parent.id, 2);
+
+    const children = store.children(parent.id);
+    expect(children.map((block) => block.id)).toEqual([second.id, third.id, first.id]);
+    expect(children.every((block) => block.parentId === parent.id)).toBe(true);
+  });
+
   test("returns selected block context", () => {
     const store = makeStore();
     const root = store.create("Task [type::task]");

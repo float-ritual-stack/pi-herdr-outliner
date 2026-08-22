@@ -38,6 +38,15 @@ describe("TextBuffer", () => {
   test("strips indexed properties from page completion labels", () => {
     expect(stripProperties("Release Notes [type::page] [status::active]")).toBe("Release Notes");
   });
+
+  test("bulk insertion normalizes newline forms and leaves the cursor after pasted text", () => {
+    const buffer = new TextBuffer("before-after");
+    buffer.column = 7;
+    buffer.insert("one\r\ntwo\rthree\nfour");
+
+    expect(buffer.text).toBe("before-one\ntwo\nthree\nfourafter");
+    expect({ row: buffer.row, column: buffer.column }).toEqual({ row: 3, column: 4 });
+  });
 });
 
 describe("terminal input", () => {
@@ -60,6 +69,21 @@ describe("terminal input", () => {
     expect(decoder.consume("3", { name: "3", sequence: "3" })).toBe("suppress");
     expect(decoder.consume("~", { sequence: "~" })).toBe("modified-enter");
     expect(decoder.consume("x", { name: "x", sequence: "x" })).toBe("pass");
+  });
+
+  test("suppresses bracketed paste events and emits one exact payload", () => {
+    const payloads: string[] = [];
+    const decoder = new TerminalInputDecoder((text) => payloads.push(text));
+
+    expect(decoder.consume("", { name: "paste-start", sequence: "\x1b[200~" })).toBe("suppress");
+    expect(decoder.consume("line one\r\n", { sequence: "line one\r\n" })).toBe("suppress");
+    expect(decoder.consume("\x13", { name: "s", ctrl: true, sequence: "\x13" })).toBe("suppress");
+    expect(decoder.consume("\rline three", { sequence: "\rline three" })).toBe("suppress");
+    expect(decoder.consume("", { name: "paste-end", sequence: "\x1b[201~" })).toBe("suppress");
+
+    expect(payloads).toEqual(["line one\r\n\x13\rline three"]);
+    expect(decoder.consume("x", { name: "x", sequence: "x" })).toBe("pass");
+    expect(decoder.consume("", { name: "return", shift: true })).toBe("modified-enter");
   });
 });
 
