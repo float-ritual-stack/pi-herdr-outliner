@@ -9,6 +9,7 @@ import { formatFileAnnotation } from "../src/annotations";
 import { OutlinerClient } from "../src/client";
 import { resolvePaths } from "../src/paths";
 import { getProperty } from "../src/properties";
+import { blockDisplayTitle } from "../src/references";
 import type { Block, PropertyCatalogItem, SelectionContext, VisibleBlock } from "../src/types";
 
 const execFileAsync = promisify(execFile);
@@ -86,16 +87,32 @@ async function ensureService(focus: boolean): Promise<void> {
   await waitForService();
 }
 
-function formatSelection(context: SelectionContext): string {
-  if (!context.selected) return "";
-  const path = [...context.ancestors, context.selected].map((block) => block.text).join(" > ");
-  const children = context.children.slice(0, 20).map((block) => `- ${block.text}`).join("\n");
-  return [
+const MAX_SELECTION_CONTEXT_CHARS = 4_000;
+
+export function formatSelection(context: SelectionContext): string {
+  const { selected } = context;
+  if (!selected) return "";
+  const selectedTitle = `[${selected.id}] ${blockDisplayTitle(selected)}`;
+  const path = [...context.ancestors, selected].map(blockDisplayTitle).join(" > ");
+  const properties = selected.properties
+    .slice(0, 20)
+    .map((property) => `${property.key}=${property.value}`)
+    .join(", ");
+  const children = context.children
+    .slice(0, 20)
+    .map((block) => `- [${block.id}] ${blockDisplayTitle(block)}`)
+    .join("\n");
+  const content = [
     "Outliner workspace context:",
-    `Selected path: ${path}`,
-    children ? `Selected block children:\n${children}` : "Selected block has no children.",
-    "Use the outliner tools for durable progress, questions, decisions, and notes when useful.",
+    `Selected: ${selectedTitle}`,
+    `Path: ${path}`,
+    properties ? `Properties: ${properties}` : "Properties: none",
+    children ? `Children:\n${children}` : "Children: none",
+    "Use outliner_selection/get/query for full block text.",
   ].join("\n");
+  if (content.length <= MAX_SELECTION_CONTEXT_CHARS) return content;
+  const suffix = "\n… context truncated; use outliner tools for full text.";
+  return content.slice(0, MAX_SELECTION_CONTEXT_CHARS - suffix.length) + suffix;
 }
 
 export default function outlinerExtension(pi: ExtensionAPI): void {
@@ -143,7 +160,6 @@ export default function outlinerExtension(pi: ExtensionAPI): void {
     parameters: Type.Object({
       text: Type.String({ description: "Block text, optionally containing [property::value] markers" }),
       parentId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
-      author: Type.Optional(Type.Union([Type.Literal("agent"), Type.Literal("user"), Type.Literal("system")])),
     }),
     async execute(_id, params) {
       await ensureService(false);
@@ -151,7 +167,7 @@ export default function outlinerExtension(pi: ExtensionAPI): void {
         action: "create",
         text: params.text,
         parentId: params.parentId,
-        author: params.author ?? "agent",
+        author: "agent",
       });
       return toolResult(block);
     },
@@ -187,12 +203,23 @@ export default function outlinerExtension(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "outliner_update",
     label: "Outliner Update",
-    description: "Update an existing outliner block and re-index its inline properties",
-    promptSnippet: "Update a block in the shared outliner workspace",
-    parameters: Type.Object({ blockId: Type.String(), text: Type.String() }),
+    description: "Update an existing outliner block only if it is still the version the agent read",
+    promptSnippet: "Optimistically update a shared outliner block using its updatedAt version",
+    parameters: Type.Object({
+      blockId: Type.String(),
+      text: Type.String(),
+      expectedUpdatedAt: Type.String(),
+    }),
     async execute(_id, params) {
       await ensureService(false);
-      return toolResult(await client.request<Block>({ action: "update", blockId: params.blockId, text: params.text }));
+      return toolResult(
+        await client.request<Block>({
+          action: "update",
+          blockId: params.blockId,
+          text: params.text,
+          expectedUpdatedAt: params.expectedUpdatedAt,
+        }),
+      );
     },
   });
 
