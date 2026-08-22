@@ -21,6 +21,18 @@ describe("layoutExpandedBlock", () => {
     expect(rows.every((row) => rendered(row).length <= 14)).toBe(true);
   });
 
+  test("keeps short single-line detail on one row", () => {
+    const rows = layoutExpandedBlock({
+      text: "short",
+      width: 30,
+      depth: 1,
+      marker: "•",
+      author: "A",
+    });
+
+    expect(rows).toEqual([{ prefix: "  • ", text: "short", suffix: "  A" }]);
+  });
+
   test("preserves explicit blank and trailing lines", () => {
     const rows = layoutExpandedBlock({
       text: "first\n\nlast\n",

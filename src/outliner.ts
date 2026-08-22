@@ -183,8 +183,7 @@ function draw(): void {
     }
 
     const displayText = store.resolveBlockReferences(block.text);
-    const expanded = block.multilineExpanded && displayText.includes("\n");
-    const result = expanded
+    const result = block.multilineExpanded
       ? layoutExpandedBlock({
           text: displayText,
           width,
@@ -575,11 +574,11 @@ process.stdin.on("keypress", (str: string, key: TerminalKey) => {
   if (key.name === "q") {
     status = "Outliner remains open; Ctrl+Q closes this pane";
   } else if (isDetailToggle(str, key)) {
-    if (!selected || !selected.text.includes("\n")) {
-      status = "Selected block has no multiline detail";
+    if (!selected) {
+      status = "No block selected";
     } else {
-      const expanded = store.toggleMultilineExpanded(selected.id);
-      status = expanded ? "Multiline detail expanded" : "Multiline detail collapsed";
+      const detailExpanded = store.toggleMultilineExpanded(selected.id);
+      status = detailExpanded ? "Block detail expanded" : "Block detail collapsed";
     }
   } else if (detailHandoffRequested) {
     handoffToDetail();
