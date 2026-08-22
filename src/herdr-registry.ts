@@ -9,6 +9,8 @@ interface ExitedPaneIdentity {
   workspace_id: string;
 }
 
+const EXITED_PANE_LIMIT = 512;
+
 export interface HerdrWorkspace extends HerdrRecord {
   workspace_id: string;
   active_tab_id: string;
@@ -594,6 +596,10 @@ export class HerdrRuntimeRegistry {
           terminal_id: pane.terminal_id,
           workspace_id: pane.workspace_id,
         });
+        if (state.exitedPanes.size > EXITED_PANE_LIMIT) {
+          const oldestPaneId = state.exitedPanes.keys().next().value;
+          if (oldestPaneId !== undefined) state.exitedPanes.delete(oldestPaneId);
+        }
         removePane(state, paneId);
         return;
       }

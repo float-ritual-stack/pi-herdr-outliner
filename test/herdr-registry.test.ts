@@ -207,6 +207,51 @@ test("pane exits remove topology idempotently while unknown exits request resync
   })).kind).toBe("resync");
 });
 
+test("pane exit tombstones retain only Herdr's 512-event history window", () => {
+  const registry = new HerdrRuntimeRegistry();
+  const initial = snapshot();
+  const retainedEventLimit = 512;
+  for (let index = 2; index <= retainedEventLimit + 1; index += 1) {
+    initial.panes.push({
+      pane_id: `p${index}`,
+      terminal_id: `term-${index}`,
+      workspace_id: "w1",
+      tab_id: "t1",
+    });
+    initial.agents.push({
+      terminal_id: `term-${index}`,
+      workspace_id: "w1",
+      tab_id: "t1",
+      pane_id: `p${index}`,
+    });
+  }
+  initial.layouts[0] = {
+    ...initial.layouts[0],
+    panes: initial.panes.map(({ pane_id }) => ({ pane_id })),
+  };
+  registry.replaceSnapshot(initial);
+
+  for (const pane of initial.panes) {
+    expect(registry.applyEvent(event("pane_exited", {
+      pane_id: pane.pane_id,
+      workspace_id: pane.workspace_id,
+    }))).toEqual({ kind: "applied", topologyChanged: true });
+  }
+
+  expect(registry.applyEvent(event("pane_exited", {
+    pane_id: "p2",
+    workspace_id: "w1",
+  }))).toEqual({ kind: "applied", topologyChanged: false });
+  expect(registry.applyEvent(event("pane_exited", {
+    pane_id: `p${retainedEventLimit + 1}`,
+    workspace_id: "w1",
+  }))).toEqual({ kind: "applied", topologyChanged: false });
+  expect(registry.applyEvent(event("pane_exited", {
+    pane_id: "p1",
+    workspace_id: "w1",
+  })).kind).toBe("resync");
+});
+
 test("malformed, unknown, and invariant-breaking events request resync without mutation", () => {
   const registry = new HerdrRuntimeRegistry();
   registry.replaceSnapshot(snapshot());
