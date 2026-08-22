@@ -9,13 +9,31 @@ import { formatFileAnnotation } from "../src/annotations";
 import { OutlinerClient } from "../src/client";
 import { resolvePaths } from "../src/paths";
 import { getProperty } from "../src/properties";
-import type { Block, SelectionContext, VisibleBlock } from "../src/types";
+import type { Block, PropertyCatalogItem, SelectionContext, VisibleBlock } from "../src/types";
 
 const execFileAsync = promisify(execFile);
 const extensionRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const paths = resolvePaths();
 const client = new OutlinerClient(paths.socket);
 let headlessServer: ChildProcess | null = null;
+
+const propertyPatchOperationSchema = Type.Union([
+  Type.Object({
+    op: Type.Literal("replace"),
+    ordinal: Type.Integer({ minimum: 0 }),
+    key: Type.Optional(Type.String()),
+    value: Type.String(),
+  }),
+  Type.Object({
+    op: Type.Literal("remove"),
+    ordinal: Type.Integer({ minimum: 0 }),
+  }),
+  Type.Object({
+    op: Type.Literal("append"),
+    key: Type.String(),
+    value: Type.String(),
+  }),
+]);
 
 function toolResult(value: unknown): AgentToolResult<Record<string, never>> {
   const text = JSON.stringify(value, null, 2);
@@ -175,6 +193,50 @@ export default function outlinerExtension(pi: ExtensionAPI): void {
     async execute(_id, params) {
       await ensureService(false);
       return toolResult(await client.request<Block>({ action: "update", blockId: params.blockId, text: params.text }));
+    },
+  });
+
+  pi.registerTool({
+    name: "outliner_property_patch",
+    label: "Outliner Property Patch",
+    description: "Replace, remove, or append property tokens without rewriting unrelated block prose",
+    promptSnippet: "Patch indexed outliner properties with optimistic concurrency",
+    parameters: Type.Object({
+      blockId: Type.String(),
+      expectedUpdatedAt: Type.String(),
+      operations: Type.Array(propertyPatchOperationSchema, { minItems: 1 }),
+    }),
+    async execute(_id, params) {
+      await ensureService(false);
+      return toolResult(
+        await client.request<Block>({
+          action: "properties.patch",
+          blockId: params.blockId,
+          expectedUpdatedAt: params.expectedUpdatedAt,
+          operations: params.operations,
+        }),
+      );
+    },
+  });
+
+  pi.registerTool({
+    name: "outliner_property_catalog",
+    label: "Outliner Property Catalog",
+    description: "List observed property key/value pairs with occurrence counts",
+    promptSnippet: "Inspect observed outliner property keys and values",
+    parameters: Type.Object({
+      key: Type.Optional(Type.String()),
+      prefix: Type.Optional(Type.String()),
+      limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+    }),
+    async execute(_id, params) {
+      await ensureService(false);
+      return toolResult(
+        await client.request<PropertyCatalogItem[]>({
+          action: "properties.catalog",
+          ...params,
+        }),
+      );
     },
   });
 

@@ -1,13 +1,15 @@
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { matchesFilters, parseProperties } from "./properties";
+import { matchesFilters, parseProperties, patchPropertyText } from "./properties";
 import { resolveBlockReferences as resolveBlockReferenceText } from "./references";
 import type {
   Block,
   BlockAuthor,
   BlockProperty,
   BlockQuery,
+  PropertyCatalogItem,
+  PropertyPatchOperation,
   SelectionContext,
   VisibleBlock,
 } from "./types";
@@ -84,6 +86,41 @@ export class OutlinerStore {
       this.bumpSequence();
     })();
     return this.require(id);
+  }
+
+  patchProperties(
+    id: string,
+    expectedUpdatedAt: string,
+    operations: PropertyPatchOperation[],
+  ): Block {
+    if (operations.length === 0) throw new Error("Property patch requires at least one operation");
+    const existing = this.require(id);
+    if (existing.updatedAt !== expectedUpdatedAt) {
+      throw new Error(`Block changed since editing began: ${id}`);
+    }
+    const text = patchPropertyText(existing.text, operations);
+    return this.update(id, text, expectedUpdatedAt);
+  }
+
+  propertyCatalog(
+    key?: string,
+    prefix = "",
+    requestedLimit = 50,
+  ): PropertyCatalogItem[] {
+    const limit = Math.max(1, Math.min(100, Math.floor(requestedLimit)));
+    const normalizedPrefix = prefix.toLowerCase();
+    if (key) {
+      return this.database
+        .query(
+          "SELECT key, value, COUNT(*) AS count FROM block_properties WHERE key = ? AND SUBSTR(LOWER(value), 1, LENGTH(?)) = ? GROUP BY key, value ORDER BY count DESC, LOWER(value), value LIMIT ?",
+        )
+        .all(key.toLowerCase(), normalizedPrefix, normalizedPrefix, limit) as PropertyCatalogItem[];
+    }
+    return this.database
+      .query(
+        "SELECT key, value, COUNT(*) AS count FROM block_properties WHERE SUBSTR(key, 1, LENGTH(?)) = ? GROUP BY key, value ORDER BY count DESC, key, LOWER(value), value LIMIT ?",
+      )
+      .all(normalizedPrefix, normalizedPrefix, limit) as PropertyCatalogItem[];
   }
 
   move(id: string, parentId: string | null, requestedPosition?: number): Block {

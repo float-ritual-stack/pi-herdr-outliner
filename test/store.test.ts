@@ -88,6 +88,39 @@ Second paragraph`;
     expect(store.require(source.id).text).toBe(rawText);
   });
 
+  test("patches properties optimistically and catalogs observed values", () => {
+    const store = makeStore();
+    const first = store.create("First [status::open] [type::task]");
+    store.create("Second [status::open] [type::task]");
+    store.create("Third [status::done] [type::task]");
+    expect(() => store.patchProperties(first.id, first.updatedAt, [])).toThrow(
+      "requires at least one operation",
+    );
+    expect(store.require(first.id).updatedAt).toBe(first.updatedAt);
+
+    const patched = store.patchProperties(first.id, first.updatedAt, [
+      { op: "replace", ordinal: 0, value: "doing" },
+      { op: "append", key: "owner", value: "evan" },
+    ]);
+    expect(patched.text).toBe("First [status::doing] [type::task]\n[owner::evan]");
+    expect(store.propertyCatalog("status")).toEqual([
+      { key: "status", value: "open", count: 2 },
+      { key: "status", value: "doing", count: 1 },
+      { key: "status", value: "done", count: 1 },
+    ]);
+    expect(store.propertyCatalog("status", "do")).toEqual([
+      { key: "status", value: "doing", count: 1 },
+      { key: "status", value: "done", count: 1 },
+    ]);
+    store.create("Percent [status::100%]");
+    expect(store.propertyCatalog("status", "100%")).toEqual([
+      { key: "status", value: "100%", count: 1 },
+    ]);
+    expect(() =>
+      store.patchProperties(first.id, first.updatedAt, [{ op: "append", key: "late", value: "no" }]),
+    ).toThrow("Block changed since editing began");
+  });
+
   test("rejects a stale editor save instead of overwriting a newer change", () => {
     const store = makeStore();
     const original = store.create("Original");

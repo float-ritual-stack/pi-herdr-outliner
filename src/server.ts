@@ -93,6 +93,16 @@ export class OutlinerServer {
         case "references.resolve":
           result = { text: this.store.resolveBlockReferences(request.text) };
           break;
+        case "properties.patch":
+          result = this.store.patchProperties(
+            request.blockId,
+            request.expectedUpdatedAt,
+            request.operations,
+          );
+          break;
+        case "properties.catalog":
+          result = this.store.propertyCatalog(request.key, request.prefix, request.limit);
+          break;
         case "selection.get":
           result = this.store.getSelection();
           break;

@@ -5,6 +5,29 @@ export interface BlockProperty {
   value: string;
 }
 
+export type PropertyPlacement = "inline" | "trailing-metadata" | "metadata-line";
+
+export interface PropertyToken extends BlockProperty {
+  ordinal: number;
+  raw: string;
+  start: number;
+  end: number;
+  line: number;
+  column: number;
+  placement: PropertyPlacement;
+}
+
+export type PropertyPatchOperation =
+  | { op: "replace"; ordinal: number; key?: string; value: string }
+  | { op: "remove"; ordinal: number }
+  | { op: "append"; key: string; value: string };
+
+export interface PropertyCatalogItem {
+  key: string;
+  value: string;
+  count: number;
+}
+
 export interface Block {
   id: string;
   parentId: string | null;
@@ -46,6 +69,14 @@ export type OutlinerRequest =
   | { id: string; action: "toggle"; blockId: string }
   | { id: string; action: "view.toggleMultiline"; blockId: string }
   | { id: string; action: "references.resolve"; text: string }
+  | {
+      id: string;
+      action: "properties.patch";
+      blockId: string;
+      expectedUpdatedAt: string;
+      operations: PropertyPatchOperation[];
+    }
+  | { id: string; action: "properties.catalog"; key?: string; prefix?: string; limit?: number }
   | { id: string; action: "selection.get" }
   | { id: string; action: "selection.set"; blockId: string | null };
 

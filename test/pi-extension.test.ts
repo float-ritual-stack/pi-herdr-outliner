@@ -22,6 +22,8 @@ test("registers the workspace commands and annotation-aware tools", () => {
     "outliner_create",
     "outliner_annotate_file",
     "outliner_update",
+    "outliner_property_patch",
+    "outliner_property_catalog",
     "outliner_query",
     "outliner_move",
     "outliner_selection",

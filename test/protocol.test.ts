@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { OutlinerClient } from "../src/client";
 import { OutlinerServer } from "../src/server";
 import { OutlinerStore } from "../src/store";
-import type { Block, VisibleBlock } from "../src/types";
+import type { Block, OutlinerRequest, PropertyCatalogItem, VisibleBlock } from "../src/types";
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -45,6 +45,33 @@ test("serves mutations and property queries over the local socket", async () => 
     text: `See ((${block.id}))`,
   });
   expect(resolved.text).toBe("See ((Waiting for user))");
+  const invalidPatch = server.handle({
+    id: "invalid-patch",
+    action: "properties.patch",
+    blockId: block.id,
+    expectedUpdatedAt: block.updatedAt,
+    operations: [{ op: "bogus", ordinal: 0 }],
+  } as unknown as OutlinerRequest);
+  expect(invalidPatch.ok).toBe(false);
+  expect(store.require(block.id).text).toBe(block.text);
+  const patched = await client.request<Block>({
+    action: "properties.patch",
+    blockId: block.id,
+    expectedUpdatedAt: block.updatedAt,
+    operations: [
+      { op: "replace", ordinal: 1, value: "doing" },
+      { op: "append", key: "priority", value: "high" },
+    ],
+  });
+  expect(patched.text).toBe(
+    "Waiting for user [type::question] [status::doing]\n[priority::high]",
+  );
+  const catalog = await client.request<PropertyCatalogItem[]>({
+    action: "properties.catalog",
+    key: "status",
+    prefix: "do",
+  });
+  expect(catalog).toEqual([{ key: "status", value: "doing", count: 1 }]);
 });
 
 test("rejects malformed socket responses instead of crashing the client", async () => {
