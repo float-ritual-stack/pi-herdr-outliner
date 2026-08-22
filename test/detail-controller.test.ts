@@ -68,7 +68,11 @@ interface Harness {
   setFocusError(error: Error | null): void;
 }
 
-function createHarness(initial: Block, referencedFile: ReferencedFile | null = null): Harness {
+function createHarness(
+  initial: Block,
+  referencedFile: ReferencedFile | null = null,
+  resolveReferences: DetailEffects["resolveReferences"] = async (text) => `resolved:${text}`,
+): Harness {
   let selection: SelectionContext = { selected: initial, ancestors: [], children: [] };
   let update: DetailEffects["updateBlock"] = async (input) => makeBlock({
     id: input.blockId,
@@ -94,9 +98,7 @@ function createHarness(initial: Block, referencedFile: ReferencedFile | null = n
     async setSelection(blockId) {
       calls.setSelections.push(blockId);
     },
-    async resolveReferences(text) {
-      return `resolved:${text}`;
-    },
+    resolveReferences,
     async updateBlock(input) {
       calls.updates.push(input);
       return update(input);
@@ -180,6 +182,22 @@ describe("detail controller projection and deferred refresh", () => {
 
     expect(fileHarness.controller.state.mode).toBe("file");
     expect(previewHarness.controller.state.mode).toBe("preview");
+  });
+
+  test("navigates every line introduced by resolved references", async () => {
+    const resolvedLines = ["Reference", "expanded line one", "expanded line two", "expanded line three"];
+    const harness = createHarness(
+      makeBlock({ text: "((reference))" }),
+      null,
+      async () => resolvedLines.join("\n"),
+    );
+    await harness.controller.initialize();
+
+    expect(harness.controller.state.context.selected?.text.split(/\r?\n/)).toHaveLength(1);
+    for (let line = 1; line < resolvedLines.length; line += 1) {
+      await harness.controller.dispatch({ type: "preview.navigate", direction: "down" }, viewport);
+      expect(harness.controller.state.previewOffset).toBe(line);
+    }
   });
 
   test("defers content and detail UI commands while editing, then refreshes after cancel", async () => {

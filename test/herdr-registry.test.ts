@@ -104,11 +104,114 @@ test("focused and closed tabs preserve the workspace active-tab invariant", () =
   expect(registry.workspaces.get("w1")?.active_tab_id).toBe("t2");
 });
 
+test("agent detection creates and updates a projection using the pane terminal identity", () => {
+  const registry = new HerdrRuntimeRegistry();
+  const initial = snapshot();
+  initial.agents = [];
+  registry.replaceSnapshot(initial);
+  const detected = event("pane_agent_detected", {
+    pane_id: "p1",
+    workspace_id: "w1",
+    agent: "claude",
+  });
+
+  expect(registry.applyEvent(detected)).toEqual({ kind: "applied", topologyChanged: false });
+  expect(registry.agents.get("term-1")).toMatchObject({
+    terminal_id: "term-1",
+    workspace_id: "w1",
+    tab_id: "t1",
+    pane_id: "p1",
+    agent: "claude",
+  });
+  expect(registry.paneIdForTerminal("term-1")).toBe("p1");
+  expect(registry.applyEvent(detected)).toEqual({ kind: "applied", topologyChanged: false });
+  expect(registry.applyEvent(event("pane_agent_detected", {
+    pane_id: "missing",
+    workspace_id: "w1",
+    agent: "claude",
+  })).kind).toBe("resync");
+  expect(registry.agents.get("term-1")?.agent).toBe("claude");
+});
+
+test("agent release removes its projection and only patches supplied pane presentation", () => {
+  const registry = new HerdrRuntimeRegistry();
+  const initial = snapshot();
+  initial.panes[0] = {
+    ...initial.panes[0],
+    agent: "claude",
+    display_agent: "Claude",
+    title: "Working",
+  };
+  initial.agents[0] = {
+    ...initial.agents[0],
+    agent: "claude",
+    display_agent: "Claude",
+    title: "Working",
+  };
+  registry.replaceSnapshot(initial);
+  const released = event("pane_agent_detected", {
+    pane_id: "p1",
+    workspace_id: "w1",
+    agent: null,
+    released: true,
+    final_status: "done",
+  });
+
+  expect(registry.applyEvent(released)).toEqual({ kind: "applied", topologyChanged: false });
+  expect(registry.agents.has("term-1")).toBe(false);
+  expect(registry.panes.get("p1")).toMatchObject({
+    terminal_id: "term-1",
+    agent: null,
+    agent_status: "done",
+    display_agent: "Claude",
+    title: "Working",
+  });
+  expect(registry.paneIdForTerminal("term-1")).toBe("p1");
+  expect(registry.applyEvent(released)).toEqual({ kind: "applied", topologyChanged: false });
+});
+
+test("pane exits remove topology idempotently while unknown exits request resync", () => {
+  const registry = new HerdrRuntimeRegistry();
+  const initial = snapshot();
+  initial.panes.push({
+    pane_id: "p2",
+    terminal_id: "term-2",
+    workspace_id: "w1",
+    tab_id: "t1",
+    focused: false,
+    agent_status: "idle",
+  });
+  initial.agents.push({
+    terminal_id: "term-2",
+    workspace_id: "w1",
+    tab_id: "t1",
+    pane_id: "p2",
+    agent_status: "idle",
+  });
+  initial.layouts[0] = {
+    ...initial.layouts[0],
+    panes: [{ pane_id: "p1" }, { pane_id: "p2" }],
+  };
+  registry.replaceSnapshot(initial);
+  const exited = event("pane_exited", { pane_id: "p2", workspace_id: "w1" });
+
+  expect(registry.applyEvent(exited)).toEqual({ kind: "applied", topologyChanged: true });
+  expect(registry.panes.has("p2")).toBe(false);
+  expect(registry.agents.has("term-2")).toBe(false);
+  expect(registry.paneIdForTerminal("term-2")).toBeUndefined();
+  expect(registry.panes.get("p1")?.terminal_id).toBe("term-1");
+  expect(registry.applyEvent(exited)).toEqual({ kind: "applied", topologyChanged: false });
+  expect(registry.applyEvent(event("pane_exited", {
+    pane_id: "missing",
+    workspace_id: "w1",
+  })).kind).toBe("resync");
+});
+
 test("malformed, unknown, and invariant-breaking events request resync without mutation", () => {
   const registry = new HerdrRuntimeRegistry();
   registry.replaceSnapshot(snapshot());
   expect(registry.applyEvent({ nope: true }).kind).toBe("resync");
-  expect(registry.applyEvent(event("pane_exited", { pane_id: "p1", workspace_id: "w1" })).kind).toBe("resync");
+  expect(registry.applyEvent(event("pane_exited", { pane_id: "missing", workspace_id: "w1" })).kind).toBe("resync");
   expect(registry.applyEvent(event("pane_updated", { pane: { pane_id: "p1", terminal_id: "term-1", workspace_id: "missing", tab_id: "t1" } })).kind).toBe("resync");
   expect(registry.panes.get("p1")?.workspace_id).toBe("w1");
 });

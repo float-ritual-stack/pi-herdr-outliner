@@ -27,10 +27,16 @@ const STRUCTURAL_SUBSCRIPTIONS = [
   "layout.updated",
 ] as const;
 
-export type HerdrSocketFactory = (path: string) => Promise<Duplex>;
+export type HerdrSocketFactory = (
+  path: string,
+  onSocket?: (socket: Duplex) => void,
+) => Promise<Duplex>;
+
+const socketHandoffErrorListeners = new WeakMap<Duplex, (error: Error) => void>();
 
 export interface HerdrRegistryRunnerOptions {
   socketFactory?: HerdrSocketFactory;
+  connectTimeoutMs?: number;
   requestTimeoutMs?: number;
   ackTimeoutMs?: number;
   replayQuietMs?: number;
@@ -48,15 +54,17 @@ function isRecord(value: unknown): value is WireRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function defaultSocketFactory(path: string): Promise<Duplex> {
+function defaultSocketFactory(
+  path: string,
+  onSocket?: (socket: Duplex) => void,
+): Promise<Duplex> {
   const { promise, resolve, reject } = Promise.withResolvers<Duplex>();
   const socket = createConnection(path);
   const onError = (error: Error): void => reject(error);
   socket.once("error", onError);
-  socket.once("connect", () => {
-    socket.off("error", onError);
-    resolve(socket);
-  });
+  socketHandoffErrorListeners.set(socket, onError);
+  onSocket?.(socket);
+  socket.once("connect", () => resolve(socket));
   return promise;
 }
 
@@ -176,6 +184,7 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
 export class HerdrRegistryRunner {
   private readonly socketFactory: HerdrSocketFactory;
   private readonly requestTimeoutMs: number;
+  private readonly connectTimeoutMs: number;
   private readonly ackTimeoutMs: number;
   private readonly replayQuietMs: number;
   private readonly replayMaxMs: number;
@@ -194,6 +203,7 @@ export class HerdrRegistryRunner {
   ) {
     this.socketFactory = options.socketFactory ?? defaultSocketFactory;
     this.requestTimeoutMs = options.requestTimeoutMs ?? 1_000;
+    this.connectTimeoutMs = options.connectTimeoutMs ?? 1_000;
     this.ackTimeoutMs = options.ackTimeoutMs ?? 1_000;
     this.replayQuietMs = options.replayQuietMs ?? 250;
     this.replayMaxMs = options.replayMaxMs ?? 60_000;
@@ -326,21 +336,53 @@ export class HerdrRegistryRunner {
 
   private async open(): Promise<NdjsonConnection> {
     if (this.abort.signal.aborted) throw new Error("Herdr runner stopped");
-    const pending = this.socketFactory(this.socketPath);
-    const stopped = Promise.withResolvers<never>();
-    const onAbort = (): void => stopped.reject(new Error("Herdr runner stopped"));
+    let discardPendingSocket = false;
+    let connectingSocket: Duplex | null = null;
+    let pendingSocketError: Error | null = null;
+    let captureError: ((error: Error) => void) | null = null;
+    const captureSocket = (socket: Duplex): void => {
+      if (connectingSocket === socket) return;
+      connectingSocket = socket;
+      captureError = (error): void => {
+        pendingSocketError ??= error;
+      };
+      socket.on("error", captureError);
+      if (discardPendingSocket || this.abort.signal.aborted) socket.destroy();
+    };
+    const pendingSocket = this.socketFactory(this.socketPath, captureSocket).then((socket) => {
+      captureSocket(socket);
+      return socket;
+    });
+    const interrupted = Promise.withResolvers<never>();
+    const interrupt = (error: Error): void => {
+      discardPendingSocket = true;
+      interrupted.reject(error);
+    };
+    const onAbort = (): void => interrupt(new Error("Herdr runner stopped"));
+    const timeout = setTimeout(
+      () => interrupt(new Error("Herdr connect timeout")),
+      this.connectTimeoutMs,
+    );
     this.abort.signal.addEventListener("abort", onAbort, { once: true });
-    void pending.then((socket) => {
-      if (this.abort.signal.aborted) socket.destroy();
-    }).catch(() => {});
+    void pendingSocket.catch(() => {});
     try {
-      const connection = new NdjsonConnection(await Promise.race([pending, stopped.promise]));
+      const socket = await Promise.race([pendingSocket, interrupted.promise]);
+      const connection = new NdjsonConnection(socket);
+      const factoryErrorListener = socketHandoffErrorListeners.get(socket);
+      if (factoryErrorListener !== undefined) {
+        socket.off("error", factoryErrorListener);
+        socketHandoffErrorListeners.delete(socket);
+      }
+      if (captureError !== null) socket.off("error", captureError);
+      if (pendingSocketError !== null) connection.messages.fail(pendingSocketError);
       this.active.add(connection);
       return connection;
     } finally {
+      clearTimeout(timeout);
       this.abort.signal.removeEventListener("abort", onAbort);
     }
   }
+
   private close(connection: NdjsonConnection): void {
     connection.destroy();
     this.active.delete(connection);

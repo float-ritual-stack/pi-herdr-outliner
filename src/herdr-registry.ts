@@ -4,6 +4,11 @@ interface HerdrRecord {
   [key: string]: unknown;
 }
 
+interface ExitedPaneIdentity {
+  terminal_id: string;
+  workspace_id: string;
+}
+
 export interface HerdrWorkspace extends HerdrRecord {
   workspace_id: string;
   active_tab_id: string;
@@ -72,6 +77,7 @@ interface RegistryState {
   layouts: Map<string, HerdrLayout>;
   agents: Map<string, HerdrAgent>;
   terminalIndex: Map<string, string>;
+  exitedPanes: Map<string, ExitedPaneIdentity>;
   focusedWorkspaceId: string | null;
   focusedTabId: string | null;
   focusedPaneId: string | null;
@@ -230,7 +236,10 @@ function validateState(state: RegistryState): void {
   }
 }
 
-function cloneState(registry: HerdrRuntimeRegistry): RegistryState {
+function cloneState(
+  registry: HerdrRuntimeRegistry,
+  exitedPanes: ReadonlyMap<string, ExitedPaneIdentity>,
+): RegistryState {
   return {
     workspaces: new Map(registry.workspaces),
     tabs: new Map(registry.tabs),
@@ -238,6 +247,7 @@ function cloneState(registry: HerdrRuntimeRegistry): RegistryState {
     layouts: new Map(registry.layouts),
     agents: new Map(registry.agents),
     terminalIndex: new Map(registry.terminalIndex),
+    exitedPanes: new Map(exitedPanes),
     focusedWorkspaceId: registry.focusedWorkspaceId,
     focusedTabId: registry.focusedTabId,
     focusedPaneId: registry.focusedPaneId,
@@ -340,6 +350,48 @@ function mergeStatus<T extends HerdrPane | HerdrAgent>(record: T, data: Record<s
   return { ...record, ...patch };
 }
 
+function paneForDetection(
+  state: RegistryState,
+  data: Record<string, unknown>,
+): HerdrPane {
+  const pane = state.panes.get(stringField(data, "pane_id"));
+  if (pane === undefined || stringField(data, "workspace_id") !== pane.workspace_id) {
+    throw new HerdrSnapshotError("detection references an unknown pane");
+  }
+  return pane;
+}
+
+function storePane(state: RegistryState, pane: HerdrPane): void {
+  state.panes.set(pane.pane_id, pane);
+  state.exitedPanes.delete(pane.pane_id);
+  const agent = state.agents.get(pane.terminal_id);
+  if (agent !== undefined) {
+    state.agents.set(pane.terminal_id, {
+      ...agent,
+      pane_id: pane.pane_id,
+      tab_id: pane.tab_id,
+      workspace_id: pane.workspace_id,
+    });
+  }
+}
+
+function agentDetectionPatch(data: Record<string, unknown>): Record<string, unknown> {
+  const patch: Record<string, unknown> = {};
+  if ("agent" in data) {
+    if (data.agent !== null && typeof data.agent !== "string") {
+      throw new HerdrSnapshotError("invalid agent");
+    }
+    patch.agent = data.agent;
+  }
+  if ("final_status" in data) {
+    if (data.final_status !== null && typeof data.final_status !== "string") {
+      throw new HerdrSnapshotError("invalid final_status");
+    }
+    if (data.final_status !== null) patch.agent_status = data.final_status;
+  }
+  return patch;
+}
+
 export class HerdrRuntimeRegistry {
   phase: HerdrRegistryPhase = "empty";
   generation = 0;
@@ -354,6 +406,7 @@ export class HerdrRuntimeRegistry {
   focusedWorkspaceId: string | null = null;
   focusedTabId: string | null = null;
   focusedPaneId: string | null = null;
+  private exitedPanes = new Map<string, ExitedPaneIdentity>();
 
   replaceSnapshot(snapshot: HerdrSessionSnapshot): void {
     if (!isRecord(snapshot) || typeof snapshot.version !== "string" || typeof snapshot.protocol !== "number") {
@@ -366,6 +419,7 @@ export class HerdrRuntimeRegistry {
       layouts: recordMap(snapshot.layouts, "tab_id", layoutRecord),
       agents: recordMap(snapshot.agents, "terminal_id", agentRecord),
       terminalIndex: new Map(),
+      exitedPanes: new Map(),
       focusedWorkspaceId: optionalId(snapshot.focused_workspace_id, "focused_workspace_id"),
       focusedTabId: optionalId(snapshot.focused_tab_id, "focused_tab_id"),
       focusedPaneId: optionalId(snapshot.focused_pane_id, "focused_pane_id"),
@@ -399,7 +453,7 @@ export class HerdrRuntimeRegistry {
         throw new HerdrSnapshotError(`unsupported dedicated event ${message.event}`);
       }
 
-      const state = cloneState(this);
+      const state = cloneState(this, this.exitedPanes);
       const panesBefore = new Set(state.panes.keys());
       this.reduce(state, event, data);
       validateState(state);
@@ -471,16 +525,7 @@ export class HerdrRuntimeRegistry {
         if (existing !== undefined && !hasTerminalIdentity(existing, pane.terminal_id)) {
           throw new HerdrSnapshotError("pane create changed terminal identity");
         }
-        state.panes.set(pane.pane_id, pane);
-        const agent = state.agents.get(pane.terminal_id);
-        if (agent !== undefined) {
-          state.agents.set(pane.terminal_id, {
-            ...agent,
-            pane_id: pane.pane_id,
-            tab_id: pane.tab_id,
-            workspace_id: pane.workspace_id,
-          });
-        }
+        storePane(state, pane);
         return;
       }
       case "pane_updated": {
@@ -489,16 +534,7 @@ export class HerdrRuntimeRegistry {
         if (!hasTerminalIdentity(existing, pane.terminal_id)) {
           throw new HerdrSnapshotError("pane update changed or omitted terminal identity");
         }
-        state.panes.set(pane.pane_id, pane);
-        const agent = state.agents.get(pane.terminal_id);
-        if (agent !== undefined) {
-          state.agents.set(pane.terminal_id, {
-            ...agent,
-            pane_id: pane.pane_id,
-            tab_id: pane.tab_id,
-            workspace_id: pane.workspace_id,
-          });
-        }
+        storePane(state, pane);
         return;
       }
       case "pane_closed":
@@ -529,13 +565,60 @@ export class HerdrRuntimeRegistry {
         if (previousPaneId !== pane.pane_id) state.panes.delete(previousPaneId);
         state.layouts.delete(stringField(data, "previous_tab_id"));
         state.layouts.delete(pane.tab_id);
-        state.panes.set(pane.pane_id, pane);
-        if (agent !== undefined) state.agents.set(pane.terminal_id, { ...agent, pane_id: pane.pane_id, tab_id: pane.tab_id, workspace_id: pane.workspace_id });
+        storePane(state, pane);
+        if (agent !== undefined) {
+          state.agents.set(pane.terminal_id, {
+            ...agent,
+            pane_id: pane.pane_id,
+            tab_id: pane.tab_id,
+            workspace_id: pane.workspace_id,
+          });
+        }
         if (wasFocused) {
           state.focusedWorkspaceId = pane.workspace_id;
           state.focusedTabId = pane.tab_id;
           state.focusedPaneId = pane.pane_id;
         }
+        return;
+      }
+      case "pane_exited": {
+        const paneId = stringField(data, "pane_id");
+        const workspaceId = stringField(data, "workspace_id");
+        const pane = state.panes.get(paneId);
+        const identity = pane ?? state.exitedPanes.get(paneId);
+        if (identity?.workspace_id !== workspaceId) {
+          throw new HerdrSnapshotError("exit references an unknown pane");
+        }
+        if (pane === undefined) return;
+        state.exitedPanes.set(paneId, {
+          terminal_id: pane.terminal_id,
+          workspace_id: pane.workspace_id,
+        });
+        removePane(state, paneId);
+        return;
+      }
+      case "pane_agent_detected": {
+        const pane = paneForDetection(state, data);
+        if (data.released !== undefined && typeof data.released !== "boolean") {
+          throw new HerdrSnapshotError("invalid released");
+        }
+        const patch = agentDetectionPatch(data);
+        if (Object.keys(patch).length > 0) {
+          state.panes.set(pane.pane_id, { ...pane, ...patch });
+        }
+        if (data.released === true) {
+          state.agents.delete(pane.terminal_id);
+          return;
+        }
+        const existing = state.agents.get(pane.terminal_id);
+        state.agents.set(pane.terminal_id, {
+          ...existing,
+          terminal_id: pane.terminal_id,
+          workspace_id: pane.workspace_id,
+          tab_id: pane.tab_id,
+          pane_id: pane.pane_id,
+          ...patch,
+        });
         return;
       }
       case "layout_updated": {
@@ -568,6 +651,7 @@ export class HerdrRuntimeRegistry {
     this.panes = state.panes;
     this.layouts = state.layouts;
     this.agents = state.agents;
+    this.exitedPanes = state.exitedPanes;
     this.terminalIndex = state.terminalIndex;
     this.focusedWorkspaceId = state.focusedWorkspaceId;
     this.focusedTabId = state.focusedTabId;

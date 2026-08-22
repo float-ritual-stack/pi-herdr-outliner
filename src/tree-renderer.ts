@@ -77,7 +77,7 @@ export function renderTreeFrame(
     for (const line of view.viewerLines.slice(view.viewerOffset, view.viewerOffset + bodyHeight)) {
       output.push(renderMarkdownLine(truncate(line, width)));
     }
-    while (output.length < height) output.push("");
+    while (output.length < height - 1) output.push("");
     output.push(
       `\x1b[2m↑↓ scroll  g/G ends  Esc close  ${view.viewerOffset + 1}/${Math.max(1, view.viewerLines.length)}\x1b[0m`,
     );

@@ -79,17 +79,17 @@ describe("detail ANSI renderer", () => {
     ].join("\n"));
   });
 
-  test("renders editor cursor and completion without mutating controller-owned offsets", () => {
-    const selected = block("alpha\nbeta");
-    const buffer = new TextBuffer("alpha\nbeta");
-    buffer.row = 1;
+  test("fits the cursor and completion inside the exact viewport height", () => {
+    const selected = block("one\ntwo\nthree\nfour\nfive\nsix\nseven");
+    const buffer = new TextBuffer(selected.text);
+    buffer.row = 3;
     buffer.column = 4;
     const detail = state({
       context: { selected, ancestors: [], children: [] },
       resolvedBreadcrumb: "Block",
       mode: "edit",
       buffer,
-      editorOffset: 1,
+      editorOffset: 3,
       completion: {
         start: 0,
         end: 4,
@@ -109,15 +109,53 @@ describe("detail ANSI renderer", () => {
 
     const rendered = renderDetailAnsi(detail, { width: 32, height: 9 });
 
-    expect(rendered).toContain("   2 beta▏");
-    expect(rendered).toContain("\x1b[2mCompletions 2/2\x1b[0m");
-    expect(rendered).toContain("\x1b[7m› Second\x1b[0m");
+    expect(rendered).toBe([
+      "\x1b[H\x1b[2J",
+      "\x1b[1;36mDetail\x1b[0m  \x1b[2mBlock\x1b[0m",
+      "─".repeat(32),
+      "   4 four▏",
+      "\x1b[2mCompletions 2/2\x1b[0m",
+      "  First",
+      "\x1b[7m› Second\x1b[0m",
+      "",
+      "\x1b[2mEnter newline  Ctrl+S save  Tab…\x1b[0m",
+    ].join("\n"));
+    expect(rendered.split("\n")).toHaveLength(9);
     expect({
       editorOffset: detail.editorOffset,
       row: detail.buffer.row,
       column: detail.buffer.column,
       completionIndex: detail.completion?.index,
     }).toEqual(before);
+  });
+
+  test("omits completion output when the viewport has no completion item row", () => {
+    const selected = block("alpha");
+    const buffer = new TextBuffer(selected.text);
+    buffer.column = 5;
+
+    const rendered = renderDetailAnsi(state({
+      context: { selected, ancestors: [], children: [] },
+      resolvedBreadcrumb: "Block",
+      mode: "edit",
+      buffer,
+      completion: {
+        start: 0,
+        end: 5,
+        index: 0,
+        items: [{ label: "First", insertion: "first" }],
+      },
+    }), { width: 32, height: 6 });
+
+    expect(rendered).toBe([
+      "\x1b[H\x1b[2J",
+      "\x1b[1;36mDetail\x1b[0m  \x1b[2mBlock\x1b[0m",
+      "─".repeat(32),
+      "   1 alpha▏",
+      "",
+      "\x1b[2mEnter newline  Ctrl+S save  Tab…\x1b[0m",
+    ].join("\n"));
+    expect(rendered.split("\n")).toHaveLength(6);
   });
 
   test("renders file range selection and annotation source/comment frames", () => {

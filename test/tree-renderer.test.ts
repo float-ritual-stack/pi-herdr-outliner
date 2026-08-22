@@ -156,7 +156,6 @@ describe("renderTreeFrame", () => {
       "\x1b[1;36m# Heading\x1b[0m",
       "\x1b[33m-\x1b[0m item",
       "",
-      "",
       "\x1b[2m↑↓ scroll  g/G ends  Esc close  1/2\x1b[0m",
     ].join("\n"));
   });

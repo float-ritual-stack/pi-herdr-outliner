@@ -2,6 +2,7 @@ import { extractFileAnnotationComment } from "./annotations";
 import { completionWindow } from "./completion";
 import {
   detailHelpText,
+  detailVisibleEditorHeight,
   selectedDetailFileRange,
   type DetailState,
   type DetailViewport,
@@ -31,7 +32,8 @@ function appendCompletion(
 ): void {
   const completion = state.completion;
   if (!completion) return;
-  const available = Math.max(1, Math.min(6, height - output.length - 1));
+  const available = Math.min(6, height - output.length - 3);
+  if (available < 1) return;
   const window = completionWindow(completion.items.length, completion.index, available);
   const title = `Completions ${completion.index + 1}/${completion.items.length}`;
   output.push(`\x1b[2m${truncate(title, width)}\x1b[0m`);
@@ -88,7 +90,8 @@ export function renderDetailAnsi(
   if (!state.context.selected) {
     output.push("Select a block in the outliner pane.");
   } else if (state.mode === "edit" || state.mode === "comment") {
-    const lines = state.buffer.lines.slice(state.editorOffset, state.editorOffset + bodyHeight);
+    const editorHeight = detailVisibleEditorHeight(state, viewport);
+    const lines = state.buffer.lines.slice(state.editorOffset, state.editorOffset + editorHeight);
     for (const [index, line] of lines.entries()) {
       const row = state.editorOffset + index;
       const prefix = `${String(row + 1).padStart(4)} `;

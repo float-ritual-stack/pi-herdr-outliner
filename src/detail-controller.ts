@@ -146,6 +146,16 @@ export function detailAnnotationLineCount(state: Readonly<DetailState>): number 
   return sourceLines + 1 + comment.split(/\r?\n/).length;
 }
 
+export function detailVisibleEditorHeight(
+  state: Pick<DetailState, "completion">,
+  viewport: DetailViewport,
+): number {
+  const completionRows = state.completion
+    ? 1 + Math.min(6, state.completion.items.length)
+    : 0;
+  return Math.max(1, viewport.height - 5 - completionRows);
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -222,10 +232,10 @@ export function createDetailController(
   };
 
   const ensureEditorCursorVisible = (viewport: DetailViewport): void => {
-    const bodyHeight = Math.max(1, viewport.height - 5);
+    const visibleHeight = detailVisibleEditorHeight(state, viewport);
     state.editorOffset = Math.max(0, Math.min(state.editorOffset, state.buffer.row));
-    if (state.buffer.row >= state.editorOffset + bodyHeight) {
-      state.editorOffset = state.buffer.row - bodyHeight + 1;
+    if (state.buffer.row >= state.editorOffset + visibleHeight) {
+      state.editorOffset = state.buffer.row - visibleHeight + 1;
     }
   };
 
@@ -378,7 +388,7 @@ export function createDetailController(
   ): void => {
     const lineCount = state.mode === "annotation"
       ? detailAnnotationLineCount(state)
-      : state.context.selected?.text.split(/\r?\n/).length ?? 0;
+      : state.resolvedSelectedText.split(/\r?\n/).length;
     const maximum = Math.max(0, lineCount - 1);
     const amount = direction === "pageup" || direction === "pagedown" ? pageSize(viewport) : 1;
     const delta = direction === "up" || direction === "pageup" ? -amount : amount;
@@ -446,6 +456,7 @@ export function createDetailController(
       case "completion.open":
         try {
           await openCompletion();
+          ensureEditorCursorVisible(viewport);
         } catch (error) {
           state.status = errorMessage(error);
         }

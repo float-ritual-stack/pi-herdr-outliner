@@ -126,3 +126,82 @@ test("EOF reconnect replaces prior registry state from a fresh snapshot", async 
   expect(registry.paneIdForTerminal("term-new")).toBe("p-new");
   await runner.stop();
 });
+
+test("connect timeout retries without waiting for the socket factory and destroys a late socket", async () => {
+  const registry = new HerdrRuntimeRegistry();
+  const late = Promise.withResolvers<Duplex>();
+  const stale = Promise.withResolvers<void>();
+  let attempts = 0;
+  const runner = new HerdrRegistryRunner(registry, "fake", {
+    socketFactory: async () => {
+      attempts += 1;
+      return late.promise;
+    },
+    connectTimeoutMs: 0,
+    minBackoffMs: 10_000,
+    diagnostic: (record) => {
+      if (record.status === "herdr_registry_stale" && record.reason === "Herdr connect timeout") stale.resolve();
+    },
+  });
+  runner.start();
+  await stale.promise;
+  const socket = new FakeSocket(() => {});
+  late.resolve(socket);
+  await flushUntil(() => socket.destroyed);
+  expect(attempts).toBe(1);
+  await runner.stop();
+});
+
+test("stop interrupts a pending connect and destroys its socket if it resolves later", async () => {
+  const registry = new HerdrRuntimeRegistry();
+  const late = Promise.withResolvers<Duplex>();
+  const connecting = Promise.withResolvers<void>();
+  const runner = new HerdrRegistryRunner(registry, "fake", {
+    socketFactory: async () => {
+      connecting.resolve();
+      return late.promise;
+    },
+    connectTimeoutMs: 60_000,
+  });
+  runner.start();
+  await connecting.promise;
+  await runner.stop();
+  const socket = new FakeSocket(() => {});
+  late.resolve(socket);
+  await flushUntil(() => socket.destroyed);
+});
+
+test("socket errors stay handled while ownership passes from the factory to NDJSON", async () => {
+  const registry = new HerdrRuntimeRegistry();
+  const first = Promise.withResolvers<Duplex>();
+  const nextConnect = Promise.withResolvers<void>();
+  const never = Promise.withResolvers<Duplex>();
+  let connects = 0;
+  const diagnostics: Record<string, unknown>[] = [];
+  const socket = new FakeSocket(() => {});
+  const runner = new HerdrRegistryRunner(registry, "fake", {
+    socketFactory: async (_path, onSocket) => {
+      connects += 1;
+      if (connects === 1) {
+        const connected = await first.promise;
+        onSocket?.(connected);
+        return connected;
+      }
+      nextConnect.resolve();
+      return never.promise;
+    },
+    connectTimeoutMs: 60_000,
+    diagnostic: (record) => {
+      diagnostics.push(record);
+    },
+  });
+  runner.start();
+  first.resolve(socket);
+  queueMicrotask(() => socket.emit("error", new Error("handoff failure")));
+  await nextConnect.promise;
+  expect(diagnostics).toContainEqual(expect.objectContaining({
+    status: "herdr_registry_stale",
+    reason: "handoff failure",
+  }));
+  await runner.stop();
+});
