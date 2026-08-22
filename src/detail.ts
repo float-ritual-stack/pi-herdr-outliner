@@ -382,7 +382,7 @@ async function openCompletion(): Promise<void> {
     if (blocks.length === 0) {
       blocks = await client.request<VisibleBlock[]>({
         action: "list",
-        query: { text: target.query || undefined, limit: 20 },
+        query: { text: target.query || undefined, limit: 20, includeCollapsed: true },
       });
     }
     items = blocks.map((block) => {

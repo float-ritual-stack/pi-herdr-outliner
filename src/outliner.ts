@@ -1,10 +1,13 @@
 import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { emitKeypressEvents } from "node:readline";
-import { readReferencedFile } from "./files";
-import { parseFilter } from "./properties";
-import { resolvePaths } from "./paths";
+import { completionTargetAtCursor, completionWindow } from "./completion";
+import { completeReferencedPaths, readReferencedFile } from "./files";
 import { focusPluginPane, registerPaneState, requestDetailEdit } from "./pane-control";
+import { resolvePaths } from "./paths";
+import { parseFilter } from "./properties";
+import { quickInsertionPoint } from "./quick-edit";
+import { blockDisplayTitle } from "./references";
 import { OutlinerServer } from "./server";
 import { OutlinerStore } from "./store";
 import { layoutExpandedBlock } from "./tree-layout";
@@ -16,21 +19,27 @@ import {
   truncate,
   type TerminalKey,
 } from "./terminal";
+import { TextBuffer } from "./text-buffer";
 import type { Block, VisibleBlock } from "./types";
 
 type InputMode = "edit" | "add-child" | "add-sibling" | "filter";
 type Mode = "browse" | "delete" | "viewer" | InputMode;
 
+interface QuickCompletionState {
+  start: number;
+  end: number;
+  index: number;
+  items: Array<{ label: string; insertion: string }>;
+}
+
+type TreeRenderEntry =
+  | { kind: "block"; blockIndex: number }
+  | { kind: "quick"; depth: number };
+
 const AUTHOR_MARKERS: Record<Block["author"], string> = {
   agent: "A",
   system: "S",
   user: " ",
-};
-const INPUT_LABELS: Record<InputMode, string> = {
-  edit: "Edit",
-  "add-child": "Add",
-  "add-sibling": "Add",
-  filter: "Filter",
 };
 
 const ESC = "\x1b[";
@@ -43,10 +52,11 @@ registerPaneState(paths.stateDir, "outliner", paths.workspaceRoot);
 
 let rows: VisibleBlock[] = [];
 let selectedIndex = 0;
-let scrollStartIndex = 0;
+let scrollStartEntryIndex = 0;
 let activeFilter = "";
 let mode: Mode = "browse";
-let input = "";
+let quickBuffer = new TextBuffer();
+let quickCompletion: QuickCompletionState | null = null;
 let viewerLines: string[] = [];
 let viewerPath = "";
 let viewerOffset = 0;
@@ -67,6 +77,57 @@ function reload(preferredSelectedId?: string | null): void {
   const nextIndex = selectedId ? rows.findIndex((block) => block.id === selectedId) : -1;
   selectedIndex = Math.max(0, Math.min(nextIndex >= 0 ? nextIndex : selectedIndex, rows.length - 1));
   lastSequence = store.sequence;
+}
+
+function quickInputText(): string {
+  return quickBuffer.lines[0] ?? "";
+}
+
+function isCanonicalDescendant(candidateId: string, ancestorId: string): boolean {
+  let candidate = store.get(candidateId);
+  while (candidate?.parentId) {
+    if (candidate.parentId === ancestorId) return true;
+    candidate = store.get(candidate.parentId);
+  }
+  return false;
+}
+
+function renderQuickInputRow(
+  depth: number,
+  marker: string,
+  author: string,
+  width: number,
+): string {
+  const prefix = `${"  ".repeat(depth)}${marker} `;
+  const suffix = `  ${author}`;
+  const available = Math.max(1, width - prefix.length - suffix.length);
+  const textWidth = Math.max(0, available - 1);
+  const line = quickInputText();
+  const horizontalOffset = Math.max(0, quickBuffer.column - textWidth);
+  const visible = line.slice(horizontalOffset, horizontalOffset + textWidth);
+  const cursor = Math.max(0, quickBuffer.column - horizontalOffset);
+  const content = `${visible.slice(0, cursor)}▏${visible.slice(cursor)}`;
+  return truncate(`${prefix}${content}${suffix}`, width);
+}
+
+function quickCompletionRows(depth: number, width: number): string[] {
+  if (!quickCompletion) return [];
+  const prefix = `${"  ".repeat(depth)}  `;
+  const window = completionWindow(quickCompletion.items.length, quickCompletion.index, 6);
+  const completionRows = [
+    `${prefix}\x1b[2m${truncate(
+      `Completions ${quickCompletion.index + 1}/${quickCompletion.items.length}`,
+      Math.max(1, width - prefix.length),
+    )}\x1b[0m`,
+  ];
+  for (let index = window.start; index < window.end; index++) {
+    const item = quickCompletion.items[index];
+    const label = truncate(item.label, Math.max(1, width - prefix.length - 2));
+    completionRows.push(
+      index === quickCompletion.index ? `${prefix}\x1b[7m› ${label}\x1b[0m` : `${prefix}  ${label}`,
+    );
+  }
+  return completionRows;
 }
 
 function draw(): void {
@@ -91,8 +152,18 @@ function draw(): void {
   const filterLabel = activeFilter ? `  \x1b[33mfilter: ${activeFilter}\x1b[0m` : "";
   output.push(`\x1b[2m${rows.length} blocks${filterLabel}\x1b[0m`);
   output.push("─".repeat(width));
+  const insertionPoint =
+    mode === "add-child" || mode === "add-sibling"
+      ? quickInsertionPoint(rows, selectedIndex, mode, isCanonicalDescendant)
+      : null;
+  const entries: TreeRenderEntry[] = [];
+  for (let index = 0; index <= rows.length; index++) {
+    if (insertionPoint?.gap === index) entries.push({ kind: "quick", depth: insertionPoint.depth });
+    if (index < rows.length) entries.push({ kind: "block", blockIndex: index });
+  }
+
   const physicalRows: Array<string[] | undefined> = [];
-  function getPhysicalRows(index: number): string[] {
+  function getBlockRows(index: number): string[] {
     const cached = physicalRows[index];
     if (cached) return cached;
 
@@ -102,8 +173,17 @@ function draw(): void {
     if (hasChildren) marker = block.collapsed ? "▸" : "▾";
     const author = AUTHOR_MARKERS[block.author];
     const editingInline = mode === "edit" && index === selectedIndex;
-    const displayText = editingInline ? block.text : store.resolveBlockReferences(block.text);
-    const expanded = block.multilineExpanded && displayText.includes("\n") && !editingInline;
+    if (editingInline) {
+      const result = [
+        renderQuickInputRow(block.depth, marker, author, width),
+        ...quickCompletionRows(block.depth + 1, width),
+      ];
+      physicalRows[index] = result;
+      return result;
+    }
+
+    const displayText = store.resolveBlockReferences(block.text);
+    const expanded = block.multilineExpanded && displayText.includes("\n");
     const result = expanded
       ? layoutExpandedBlock({
           text: displayText,
@@ -117,9 +197,7 @@ function draw(): void {
         })
       : [
           truncate(
-            `${"  ".repeat(block.depth)}${marker} ${
-              editingInline ? `${input}▏` : displayText.replace(/\r?\n/g, " ↵ ")
-            }  ${author}`,
+            `${"  ".repeat(block.depth)}${marker} ${displayText.replace(/\r?\n/g, " ↵ ")}  ${author}`,
             width,
           ),
         ];
@@ -127,28 +205,46 @@ function draw(): void {
     return result;
   }
 
+  function getEntryRows(entry: TreeRenderEntry): string[] {
+    return entry.kind === "block"
+      ? getBlockRows(entry.blockIndex)
+      : [
+          renderQuickInputRow(entry.depth, "•", AUTHOR_MARKERS.user, width),
+          ...quickCompletionRows(entry.depth + 1, width),
+        ];
+  }
+
+  const targetEntryIndex = Math.max(
+    0,
+    entries.findIndex((entry) =>
+      insertionPoint
+        ? entry.kind === "quick"
+        : entry.kind === "block" && entry.blockIndex === selectedIndex,
+    ),
+  );
   const bodyHeight = Math.max(1, height - 6);
-  if (selectedIndex < scrollStartIndex) scrollStartIndex = selectedIndex;
-  if (scrollStartIndex < selectedIndex) {
+  if (targetEntryIndex < scrollStartEntryIndex) scrollStartEntryIndex = targetEntryIndex;
+  if (scrollStartEntryIndex < targetEntryIndex) {
     let requiredHeight = 0;
-    for (let index = scrollStartIndex; index <= selectedIndex; index++) {
-      requiredHeight += getPhysicalRows(index).length;
+    for (let index = scrollStartEntryIndex; index <= targetEntryIndex; index++) {
+      requiredHeight += getEntryRows(entries[index]).length;
     }
-    while (requiredHeight > bodyHeight && scrollStartIndex < selectedIndex) {
-      requiredHeight -= getPhysicalRows(scrollStartIndex).length;
-      scrollStartIndex += 1;
+    while (requiredHeight > bodyHeight && scrollStartEntryIndex < targetEntryIndex) {
+      requiredHeight -= getEntryRows(entries[scrollStartEntryIndex]).length;
+      scrollStartEntryIndex += 1;
     }
   }
 
   let renderedBodyLines = 0;
-  for (let absoluteIndex = scrollStartIndex; absoluteIndex < rows.length; absoluteIndex++) {
+  for (let entryIndex = scrollStartEntryIndex; entryIndex < entries.length; entryIndex++) {
     if (renderedBodyLines >= bodyHeight) break;
-    const blockLines = getPhysicalRows(absoluteIndex);
-    for (let lineIndex = 0; lineIndex < blockLines.length; lineIndex++) {
+    const entry = entries[entryIndex];
+    const entryRows = getEntryRows(entry);
+    for (let lineIndex = 0; lineIndex < entryRows.length; lineIndex++) {
       if (renderedBodyLines >= bodyHeight) break;
-      const line = blockLines[lineIndex];
+      const line = entryRows[lineIndex];
       output.push(
-        absoluteIndex === selectedIndex && lineIndex === 0
+        entryIndex === targetEntryIndex && lineIndex === 0
           ? `\x1b[48;5;238m\x1b[1m${line}\x1b[0m`
           : line,
       );
@@ -157,11 +253,11 @@ function draw(): void {
   }
   while (output.length < height - 2) output.push("");
 
-  if (mode === "edit") {
-    output.push("Inline edit: Enter save  Shift+Enter/Ctrl+E multiline  Esc cancel");
-  } else if (mode === "add-child" || mode === "add-sibling" || mode === "filter") {
-    const label = INPUT_LABELS[mode];
-    output.push(`\x1b[1m${label}:\x1b[0m ${truncate(`${input}▏`, Math.max(1, width - label.length - 3))}`);
+  if (mode === "edit" || mode === "add-child" || mode === "add-sibling") {
+    output.push("Quick edit: ←→ cursor  Tab complete  Enter save  Shift+Enter/Ctrl+E multiline  Esc cancel");
+  } else if (mode === "filter") {
+    const label = "Filter";
+    output.push(`\x1b[1m${label}:\x1b[0m ${truncate(`${quickInputText()}▏`, Math.max(1, width - label.length - 3))}`);
   } else if (mode === "delete") {
     output.push("\x1b[31;1mDelete this block and all descendants? y/N\x1b[0m");
   } else {
@@ -172,53 +268,167 @@ function draw(): void {
   process.stdout.write(output.join("\n"));
 }
 
+function resetQuickEditor(): void {
+  quickBuffer = new TextBuffer();
+  quickCompletion = null;
+}
+
 function beginInput(nextMode: InputMode, initial = ""): void {
+  const selected = rows[selectedIndex];
+  if (nextMode === "add-child" && selected?.collapsed) {
+    store.toggle(selected.id);
+    reload(selected.id);
+  }
   mode = nextMode;
-  input = initial;
+  quickBuffer = new TextBuffer(initial);
+  quickBuffer.moveEnd();
+  quickCompletion = null;
   draw();
 }
 
-function finishInput(): void {
+function commitQuickBlock(): string | null {
   const selected = rows[selectedIndex];
-  const value = input.trim();
-  switch (mode) {
-    case "edit":
-      if (selected && value) store.update(selected.id, input);
-      break;
-    case "add-child":
-      if (selected && value) store.create(input, selected.id, "user");
-      break;
-    case "add-sibling":
-      if (selected && value) store.create(input, selected.parentId, "user");
-      break;
-    case "filter":
-      activeFilter = value;
-      break;
+  if (!selected) return null;
+  const text = quickInputText();
+  if (!text.trim()) return mode === "edit" ? selected.id : null;
+
+  if (mode === "edit") {
+    store.update(selected.id, text);
+    return selected.id;
   }
+  if (mode === "add-child") {
+    const created = store.create(text, selected.id, "user");
+    store.move(created.id, selected.id, 0);
+    return created.id;
+  }
+  if (mode === "add-sibling") {
+    const canonical = store.require(selected.id);
+    const created = store.create(text, canonical.parentId, "user");
+    store.move(created.id, canonical.parentId, canonical.position + 1);
+    return created.id;
+  }
+  return null;
+}
+
+function syncVisibleSelection(preferredId: string | null): void {
+  reload(preferredId);
+  if (preferredId && !rows.some((row) => row.id === preferredId)) {
+    activeFilter = "";
+    reload(preferredId);
+    status = "Filter cleared to show saved block";
+  }
+  const visibleId = rows[selectedIndex]?.id ?? null;
+  lastSelectionId = visibleId;
+  store.setSelection(visibleId);
+}
+
+function finishInput(): void {
+  if (mode === "filter") {
+    activeFilter = quickInputText().trim();
+    mode = "browse";
+    resetQuickEditor();
+    reload();
+    const visibleId = rows[selectedIndex]?.id ?? null;
+    lastSelectionId = visibleId;
+    store.setSelection(visibleId);
+    draw();
+    return;
+  }
+
+  const committedBlockId = commitQuickBlock();
+  const fallbackId = rows[selectedIndex]?.id ?? null;
   mode = "browse";
-  input = "";
-  reload();
+  resetQuickEditor();
+  syncVisibleSelection(committedBlockId ?? fallbackId);
   draw();
 }
 
 function handoffToDetail(): void {
   const selected = rows[selectedIndex];
   if (!selected) return;
-  if (mode === "edit" && input.trim()) store.update(selected.id, input);
+  const committedBlockId = commitQuickBlock();
+  if ((mode === "add-child" || mode === "add-sibling") && !committedBlockId) {
+    status = "Type a title before opening multiline detail";
+    draw();
+    return;
+  }
+  const targetId = committedBlockId ?? selected.id;
   mode = "browse";
-  input = "";
-  lastSelectionId = selected.id;
-  store.setSelection(selected.id);
-  requestDetailEdit(paths.stateDir, selected.id);
+  resetQuickEditor();
+  syncVisibleSelection(targetId);
+  requestDetailEdit(paths.stateDir, targetId);
   try {
     focusPluginPane(paths.stateDir, "detail");
     status = "Multiline editor opened in detail pane";
   } catch (error) {
     status = error instanceof Error ? error.message : String(error);
   }
-  reload(selected.id);
   draw();
 }
+
+function openQuickCompletion(): void {
+  if (mode === "filter") return;
+  const line = quickInputText();
+  const target = completionTargetAtCursor(line, quickBuffer.column);
+  if (!target) {
+    status = "Type [[page, ((block, or [file::path before requesting completion";
+    return;
+  }
+
+  let items: QuickCompletionState["items"];
+  if (target.kind === "file") {
+    try {
+      items = completeReferencedPaths(target.query, paths.workspaceRoot).map((candidate) => ({
+        label: candidate.sourcePath,
+        insertion: `[file::${candidate.sourcePath}${candidate.isDirectory ? "" : "]"}`,
+      }));
+    } catch (error) {
+      quickCompletion = null;
+      status = error instanceof Error ? error.message : String(error);
+      return;
+    }
+  } else {
+    let blocks: VisibleBlock[] = [];
+    if (target.kind === "page") {
+      blocks = store.list({
+        text: target.query || undefined,
+        filters: [{ key: "type", value: "page" }],
+        limit: 20,
+      });
+    }
+    if (blocks.length === 0) {
+      blocks = store.list({ text: target.query || undefined, limit: 20, includeCollapsed: true });
+    }
+    items = blocks.map((block) => {
+      const title = blockDisplayTitle(block);
+      return {
+        label: title,
+        insertion: target.kind === "page" ? `[[${title}]]` : `((${block.id}))`,
+      };
+    });
+  }
+
+  if (items.length === 0) {
+    quickCompletion = null;
+    status = target.kind === "file" ? "No matching files" : "No matching blocks";
+    return;
+  }
+  quickCompletion = {
+    start: target.start,
+    end: target.end,
+    index: 0,
+    items,
+  };
+  status = "";
+}
+
+function applyQuickCompletion(): void {
+  if (!quickCompletion) return;
+  const item = quickCompletion.items[quickCompletion.index];
+  quickBuffer.replaceCurrentLine(quickCompletion.start, quickCompletion.end, item.insertion);
+  quickCompletion = null;
+}
+
 function openReferencedFile(block: Block): void {
   try {
     const file = readReferencedFile(block, paths.workspaceRoot);
@@ -292,7 +502,7 @@ process.stdin.on("keypress", (str: string, key: TerminalKey) => {
   if (key.ctrl && key.name === "c") {
     if (mode !== "browse") {
       mode = "browse";
-      input = "";
+      resetQuickEditor();
     } else {
       status = "Ctrl+Q closes the outliner pane";
     }
@@ -327,22 +537,35 @@ process.stdin.on("keypress", (str: string, key: TerminalKey) => {
   }
 
   if (mode !== "browse") {
-    const multilineHandoff = mode === "edit" && detailHandoffRequested;
-    if (multilineHandoff) {
+    if (quickCompletion) {
+      if (key.name === "up") quickCompletion.index = Math.max(0, quickCompletion.index - 1);
+      else if (key.name === "down") {
+        quickCompletion.index = Math.min(quickCompletion.items.length - 1, quickCompletion.index + 1);
+      } else if (key.name === "return" || key.name === "tab") applyQuickCompletion();
+      else if (key.name === "escape") quickCompletion = null;
+      draw();
+      return;
+    }
+
+    if (mode !== "filter" && detailHandoffRequested) {
       handoffToDetail();
       return;
     }
     if (key.name === "escape") {
       mode = "browse";
-      input = "";
+      resetQuickEditor();
     } else if (key.name === "return") {
       finishInput();
       return;
-    } else if (key.name === "backspace") {
-      input = input.slice(0, -1);
-    } else if (isPrintableInput(str, key)) {
-      input += str;
-    }
+    } else if (key.name === "tab" && mode !== "filter") {
+      openQuickCompletion();
+    } else if (key.name === "backspace") quickBuffer.backspace();
+    else if (key.name === "delete") quickBuffer.deleteForward();
+    else if (key.name === "left") quickBuffer.moveLeft();
+    else if (key.name === "right") quickBuffer.moveRight();
+    else if (key.name === "home") quickBuffer.moveHome();
+    else if (key.name === "end") quickBuffer.moveEnd();
+    else if (isPrintableInput(str, key)) quickBuffer.insert(str);
     draw();
     return;
   }

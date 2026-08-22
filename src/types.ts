@@ -27,6 +27,7 @@ export interface BlockQuery {
   text?: string;
   subtreeRootId?: string;
   limit?: number;
+  includeCollapsed?: boolean;
 }
 
 export interface VisibleBlock extends Block {

@@ -35,6 +35,20 @@ describe("TextBuffer", () => {
     expect(buffer.column).toBe(21);
   });
 
+  test("supports cursor-aware single-line insertion and deletion", () => {
+    const buffer = new TextBuffer("abcd");
+    buffer.moveEnd();
+    buffer.moveLeft();
+    buffer.moveLeft();
+    buffer.insert("X");
+    expect(buffer.text).toBe("abXcd");
+
+    buffer.moveLeft();
+    buffer.deleteForward();
+    expect(buffer.text).toBe("abcd");
+    expect(buffer.column).toBe(2);
+  });
+
   test("strips indexed properties from page completion labels", () => {
     expect(stripProperties("Release Notes [type::page] [status::active]")).toBe("Release Notes");
   });

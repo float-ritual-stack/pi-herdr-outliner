@@ -68,6 +68,16 @@ Second paragraph`;
     expect(store.toggleMultilineExpanded(block.id)).toBe(false);
   });
 
+  test("can include descendants of collapsed blocks for completion queries", () => {
+    const store = makeStore();
+    const parent = store.create("Collapsed parent");
+    const child = store.create("Hidden child", parent.id);
+    store.toggle(parent.id);
+
+    expect(store.list().some((block) => block.id === child.id)).toBe(false);
+    expect(store.list({ includeCollapsed: true }).some((block) => block.id === child.id)).toBe(true);
+  });
+
   test("resolves references for display without changing canonical block text", () => {
     const store = makeStore();
     const target = store.create("Decision title [type::decision]");

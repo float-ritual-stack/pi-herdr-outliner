@@ -183,13 +183,15 @@ export class OutlinerStore {
 
     const result: VisibleBlock[] = [];
     const filterText = query.text?.toLowerCase();
-    const hasQuery = Boolean(query.filters?.length || filterText);
+    const shouldTraverseCollapsed = Boolean(
+      query.includeCollapsed || query.filters?.length || filterText,
+    );
     const visit = (block: Block, depth: number): void => {
       const matches =
         (!query.filters?.length || matchesFilters(block.properties, query.filters)) &&
         (!filterText || block.text.toLowerCase().includes(filterText));
       if (matches) result.push({ ...block, depth, multilineExpanded: expandedIds.has(block.id) });
-      if (!block.collapsed || hasQuery) {
+      if (!block.collapsed || shouldTraverseCollapsed) {
         for (const child of byParent.get(block.id) ?? []) visit(child, depth + 1);
       }
     };
