@@ -1,3 +1,9 @@
+import {
+  sliceByColumn,
+  stripTerminalSequences,
+  truncateToWidth,
+  visibleWidth,
+} from "@earendil-works/pi-tui";
 import { extractFileAnnotationComment } from "./annotations";
 import { completionWindow } from "./completion";
 import {
@@ -7,9 +13,24 @@ import {
   type DetailState,
   type DetailViewport,
 } from "./detail-controller";
-import { renderMarkdownLine, truncate } from "./terminal";
+import { renderMarkdownLine } from "./terminal";
 
 const ESC = "\x1b[";
+
+function sanitizeDynamicText(value: string): string {
+  return stripTerminalSequences(value)
+    .replace(/\t/g, "    ")
+    .replace(/[\x00-\x1f\x7f]/g, "");
+}
+
+function fitToWidth(value: string, width: number): string {
+  const fitted = truncateToWidth(value, Math.max(0, width), "…");
+  return value.includes("\x1b") ? fitted : fitted.replaceAll("\x1b[0m", "");
+}
+
+function fitDynamicText(value: string, width: number): string {
+  return fitToWidth(sanitizeDynamicText(value), width);
+}
 
 function renderEditorLine(
   state: Readonly<DetailState>,
@@ -17,11 +38,26 @@ function renderEditorLine(
   row: number,
   width: number,
 ): string {
-  if (row !== state.buffer.row) return truncate(line, width);
-  const horizontalOffset = Math.max(0, state.buffer.column - width + 1);
-  const visible = line.slice(horizontalOffset, horizontalOffset + width);
-  const cursor = state.buffer.column - horizontalOffset;
-  return `${visible.slice(0, cursor)}▏${visible.slice(cursor)}`;
+  const safeLine = sanitizeDynamicText(line);
+  if (row !== state.buffer.row) return fitToWidth(safeLine, width);
+
+  const textWidth = Math.max(0, width - 1);
+  const cursorIndex = Math.min(state.buffer.column, line.length);
+  const cursorColumn = visibleWidth(sanitizeDynamicText(line.slice(0, cursorIndex)));
+  const horizontalOffset = Math.max(0, cursorColumn - textWidth);
+  const before = sliceByColumn(
+    safeLine,
+    horizontalOffset,
+    cursorColumn - horizontalOffset,
+    true,
+  );
+  const after = sliceByColumn(
+    safeLine,
+    cursorColumn,
+    textWidth - visibleWidth(before),
+    true,
+  );
+  return `${before}▏${after}`;
 }
 
 function appendCompletion(
@@ -36,9 +72,9 @@ function appendCompletion(
   if (available < 1) return;
   const window = completionWindow(completion.items.length, completion.index, available);
   const title = `Completions ${completion.index + 1}/${completion.items.length}`;
-  output.push(`\x1b[2m${truncate(title, width)}\x1b[0m`);
+  output.push(`\x1b[2m${fitToWidth(title, width)}\x1b[0m`);
   for (let index = window.start; index < window.end; index++) {
-    const label = truncate(completion.items[index].label, Math.max(1, width - 2));
+    const label = fitDynamicText(completion.items[index].label, Math.max(1, width - 2));
     output.push(index === completion.index ? `\x1b[7m› ${label}\x1b[0m` : `  ${label}`);
   }
 }
@@ -53,34 +89,37 @@ export function buildDetailAnnotationView(
     const file = state.referencedFile;
     const lastLine = file.firstLine + Math.max(0, file.lines.length - 1);
     output.push(
-      `\x1b[2m${truncate(`Source: ${file.sourcePath}:${file.firstLine}-${lastLine}`, width)}\x1b[0m`,
+      `\x1b[2m${fitDynamicText(
+        `Source: ${file.sourcePath}:${file.firstLine}-${lastLine}`,
+        width,
+      )}\x1b[0m`,
     );
     const lineNumberWidth = String(lastLine).length;
     for (const [index, line] of file.lines.entries()) {
       const lineNumber = file.firstLine + index;
       const prefix = `${String(lineNumber).padStart(lineNumberWidth)} │ `;
-      output.push(`${prefix}${truncate(line, Math.max(1, width - prefix.length))}`);
+      output.push(`${prefix}${fitDynamicText(line, Math.max(1, width - prefix.length))}`);
     }
     output.push("─".repeat(width));
   }
   output.push("\x1b[1mComment\x1b[0m");
   const comment = extractFileAnnotationComment(state.resolvedSelectedText);
   for (const line of (comment || "(No comment text)").split(/\r?\n/)) {
-    output.push(renderMarkdownLine(truncate(line, width)));
+    output.push(renderMarkdownLine(fitDynamicText(line, width)));
   }
   return output;
 }
 
-export function renderDetailAnsi(
+export function renderDetailLines(
   state: Readonly<DetailState>,
   viewport: DetailViewport,
-): string {
+): string[] {
   const width = viewport.width;
   const height = viewport.height;
   const bodyHeight = Math.max(1, height - 5);
-  const output: string[] = [`${ESC}H${ESC}2J`];
+  const output: string[] = [""];
   output.push(
-    `\x1b[1;36mDetail\x1b[0m  \x1b[2m${truncate(
+    `\x1b[1;36mDetail\x1b[0m  \x1b[2m${fitDynamicText(
       state.resolvedBreadcrumb || "No block selected",
       Math.max(1, width - 8),
     )}\x1b[0m`,
@@ -118,19 +157,33 @@ export function renderDetailAnsi(
       const inRange = range !== null && lineNumber >= range.startLine && lineNumber <= range.endLine;
       const current = localIndex === state.fileCursor;
       const prefix = `${current ? ">" : " "}${String(lineNumber).padStart(lineNumberWidth)} ${inRange ? "│" : " "} `;
-      const rendered = renderMarkdownLine(truncate(line, Math.max(1, width - prefix.length)));
+      const rendered = renderMarkdownLine(
+        fitDynamicText(line, Math.max(1, width - prefix.length)),
+      );
       output.push(current ? `\x1b[48;5;238m${prefix}${rendered}\x1b[0m` : `${prefix}${rendered}`);
     }
   } else {
     for (const line of state.resolvedSelectedText
       .split(/\r?\n/)
       .slice(state.previewOffset, state.previewOffset + bodyHeight)) {
-      output.push(renderMarkdownLine(truncate(line, width)));
+      output.push(renderMarkdownLine(fitDynamicText(line, width)));
     }
   }
 
   while (output.length < height - 2) output.push("");
-  output.push(truncate(state.status, width));
-  output.push(`\x1b[2m${truncate(detailHelpText(state.mode), width)}\x1b[0m`);
-  return output.join("\n");
+  output.push(fitDynamicText(state.status, width));
+  output.push(`\x1b[2m${fitToWidth(detailHelpText(state.mode), width)}\x1b[0m`);
+  if (output.length <= height) return output;
+  if (height <= 1) return output.slice(0, Math.max(0, height));
+  const footerCount = Math.min(2, height - 1);
+  return [...output.slice(0, height - footerCount), ...output.slice(-footerCount)];
+}
+
+export function renderDetailAnsi(
+  state: Readonly<DetailState>,
+  viewport: DetailViewport,
+): string {
+  const lines = renderDetailLines(state, viewport);
+  lines[0] = `${ESC}H${ESC}2J`;
+  return lines.join("\n");
 }

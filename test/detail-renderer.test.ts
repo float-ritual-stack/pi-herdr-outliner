@@ -1,6 +1,7 @@
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "bun:test";
 import type { DetailState } from "../src/detail-controller";
-import { renderDetailAnsi } from "../src/detail-renderer";
+import { renderDetailAnsi, renderDetailLines } from "../src/detail-renderer";
 import { TextBuffer } from "../src/text-buffer";
 import type { Block } from "../src/types";
 
@@ -202,4 +203,39 @@ describe("detail ANSI renderer", () => {
     expect(annotationFrame).toContain("\x1b[1mComment\x1b[0m\nNeeds a guard.");
     expect(annotationState.previewOffset).toBe(beforeOffset);
   });
+});
+
+test("sanitizes dynamic terminal controls and respects compact viewport heights", () => {
+  const selected = block("safe\x1b[2Jtext\x07");
+  const detail = state({
+    context: { selected, ancestors: [], children: [] },
+    resolvedSelectedText: selected.text,
+    resolvedBreadcrumb: "Title\x1b[?1049l\nnext",
+    status: "Status\x1b[2J\x07",
+  });
+
+  const lines = renderDetailLines(detail, { width: 20, height: 8 });
+  expect(lines.join("\n")).not.toContain("\x1b[2J");
+  expect(lines.join("\n")).not.toContain("\x1b[?1049l");
+  expect(lines.every((line) => visibleWidth(line) <= 20)).toBe(true);
+  expect(lines.every((line) => !/[\n\r\x07]/.test(line))).toBe(true);
+
+  for (let height = 1; height <= 5; height += 1) {
+    expect(renderDetailLines(detail, { width: 20, height })).toHaveLength(height);
+  }
+});
+
+test("reserves one cell for the software cursor on wide edit text", () => {
+  const selected = block("\t界界");
+  const buffer = new TextBuffer(selected.text);
+  buffer.moveEnd();
+  const lines = renderDetailLines(state({
+    context: { selected, ancestors: [], children: [] },
+    mode: "edit",
+    buffer,
+  }), { width: 10, height: 8 });
+
+  expect(lines.every((line) => visibleWidth(line) <= 10)).toBe(true);
+  expect(lines.some((line) => line.includes("▏"))).toBe(true);
+  expect(lines[3]).toBe("   1 界界▏");
 });

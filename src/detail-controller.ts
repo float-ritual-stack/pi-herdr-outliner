@@ -494,13 +494,15 @@ export function createDetailController(
         }
         break;
       case "view.block":
-        state.mode = state.mode === "annotation" ? "preview" : detailDisplayMode(state.context.selected);
+        state.mode = "preview";
+        state.previewOffset = 0;
         break;
       case "focus.outliner":
         focusOutliner(intent.announce ?? false);
         break;
       case "viewport.changed":
         if (isBufferMode()) ensureEditorCursorVisible(viewport);
+        else if (state.mode === "file" && state.referencedFile) ensureFileCursorVisible(viewport);
         break;
       case "redraw":
         break;

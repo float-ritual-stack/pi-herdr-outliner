@@ -6,6 +6,7 @@
       "name": "pi-herdr-outliner",
       "dependencies": {
         "@earendil-works/pi-coding-agent": "^0.84.2",
+        "@earendil-works/pi-tui": "^0.84.2",
         "typebox": "^1.0.44",
       },
       "devDependencies": {

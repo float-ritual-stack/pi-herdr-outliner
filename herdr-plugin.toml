@@ -21,7 +21,7 @@ command = ["bun", "run", "src/outliner.ts"]
 id = "detail"
 title = "Outliner Detail"
 placement = "split"
-command = ["bun", "run", "src/detail.ts"]
+command = ["bun", "run", "src/detail-main.ts"]
 
 [[actions]]
 id = "open"
