@@ -6,10 +6,10 @@ import { blockDisplayTitle } from "./references";
 import { TextBuffer } from "./text-buffer";
 import type {
   Block,
-  BlockQuery,
+  BlockSearchQuery,
   OutlinerEvent,
   SelectionContext,
-  VisibleBlock,
+  VisibleBlockCollection,
 } from "./types";
 
 export type DetailMode = "preview" | "file" | "annotation" | "edit" | "comment";
@@ -69,7 +69,7 @@ export interface DetailEffects {
     text: string;
     author: "user";
   }): Promise<Block>;
-  listBlocks(query: BlockQuery): Promise<VisibleBlock[]>;
+  queryBlocks(query: BlockSearchQuery): Promise<VisibleBlockCollection>;
   readFile(block: Block): ReferencedFile;
   completeFiles(query: string): ReferencedPathCandidate[];
   focusOutliner(): void;
@@ -336,34 +336,37 @@ export function createDetailController(
     }
 
     let items: DetailCompletionItem[];
+    let completionStatus = "";
     if (target.kind === "file") {
       items = effects.completeFiles(target.query).map((candidate) => ({
         label: candidate.sourcePath,
         insertion: `[file::${candidate.sourcePath}${candidate.isDirectory ? "" : "]"}`,
       }));
     } else {
-      let blocks: VisibleBlock[] = [];
+      let collection: VisibleBlockCollection | undefined;
       if (target.kind === "page") {
-        blocks = await effects.listBlocks({
+        collection = await effects.queryBlocks({
           text: target.query || undefined,
           filters: [{ key: "type", value: "page" }],
           limit: 20,
         });
       }
-      if (blocks.length === 0) {
-        blocks = await effects.listBlocks({
+      if (!collection || collection.blocks.length === 0) {
+        collection = await effects.queryBlocks({
           text: target.query || undefined,
           limit: 20,
-          includeCollapsed: true,
         });
       }
-      items = blocks.map((block) => {
+      items = collection.blocks.map((block) => {
         const title = blockDisplayTitle(block);
         return {
           label: title,
           insertion: target.kind === "page" ? `[[${title}]]` : `((${block.id}))`,
         };
       });
+      if (collection.completeness.kind === "truncated") {
+        completionStatus = `Showing first ${collection.completeness.limit} matches`;
+      }
     }
 
     if (items.length === 0) {
@@ -372,7 +375,7 @@ export function createDetailController(
       return;
     }
     state.completion = { start: target.start, end: target.end, index: 0, items };
-    state.status = "";
+    state.status = completionStatus;
   };
 
   const applyCompletion = (): void => {
@@ -380,6 +383,7 @@ export function createDetailController(
     const item = state.completion.items[state.completion.index];
     state.buffer.replaceCurrentLine(state.completion.start, state.completion.end, item.insertion);
     state.completion = null;
+    state.status = "";
   };
 
   const navigatePreview = (
@@ -474,6 +478,7 @@ export function createDetailController(
         ensureEditorCursorVisible(viewport);
         break;
       case "completion.dismiss":
+        if (state.completion) state.status = "";
         state.completion = null;
         break;
       case "preview.navigate":

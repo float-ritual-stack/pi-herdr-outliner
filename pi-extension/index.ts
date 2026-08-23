@@ -10,7 +10,14 @@ import { OutlinerClient } from "../src/client";
 import { resolvePaths } from "../src/paths";
 import { getProperty } from "../src/properties";
 import { blockDisplayTitle } from "../src/references";
-import type { Block, PropertyCatalogItem, SelectionContext, VisibleBlock } from "../src/types";
+import {
+  OUTLINER_PROTOCOL_VERSION,
+  type Block,
+  type OutlinerServiceStatus,
+  type PropertyCatalogItem,
+  type SelectionContext,
+  type VisibleBlockCollection,
+} from "../src/types";
 
 const execFileAsync = promisify(execFile);
 const extensionRoot = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -36,12 +43,69 @@ const propertyPatchOperationSchema = Type.Union([
   }),
 ]);
 
-function toolResult(value: unknown): AgentToolResult<Record<string, never>> {
-  const text = JSON.stringify(value, null, 2);
+const MAX_TOOL_RESULT_CHARS = 12_000;
+
+function textToolResult(text: string): AgentToolResult<Record<string, never>> {
   return {
-    content: [{ type: "text", text: text.length > 12_000 ? `${text.slice(0, 12_000)}\n…` : text }],
+    content: [{ type: "text", text }],
     details: {},
   };
+}
+
+function toolResult(value: unknown): AgentToolResult<Record<string, never>> {
+  const text = JSON.stringify(value, null, 2);
+  return textToolResult(
+    text.length > MAX_TOOL_RESULT_CHARS ? `${text.slice(0, MAX_TOOL_RESULT_CHARS)}\n…` : text,
+  );
+}
+
+function serializeQueryResult(
+  collection: VisibleBlockCollection,
+  blocks: VisibleBlockCollection["blocks"],
+): string {
+  return JSON.stringify(
+    {
+      blocks,
+      completeness: collection.completeness,
+      presentation: {
+        returned: collection.blocks.length,
+        presented: blocks.length,
+        omitted: collection.blocks.length - blocks.length,
+      },
+    },
+    null,
+    2,
+  );
+}
+
+function queryToolResult(
+  collection: VisibleBlockCollection,
+): AgentToolResult<Record<string, never>> {
+  const blocks: VisibleBlockCollection["blocks"] = [];
+  let text = serializeQueryResult(collection, blocks);
+  for (const block of collection.blocks) {
+    blocks.push(block);
+    const candidate = serializeQueryResult(collection, blocks);
+    if (candidate.length > MAX_TOOL_RESULT_CHARS) {
+      blocks.pop();
+      break;
+    }
+    text = candidate;
+  }
+  return textToolResult(text);
+}
+
+function assertCompatibleProtocol(service: OutlinerServiceStatus): void {
+  if (service.protocolVersion !== OUTLINER_PROTOCOL_VERSION) {
+    throw new Error(
+      `Incompatible outliner protocol ${service.protocolVersion}; expected ${OUTLINER_PROTOCOL_VERSION}`,
+    );
+  }
+}
+
+async function pingService(timeoutMs: number): Promise<void> {
+  const service = await client.request<OutlinerServiceStatus>({ action: "ping" }, timeoutMs);
+  assertCompatibleProtocol(service);
 }
 
 async function waitForService(timeoutMs = 5000): Promise<void> {
@@ -49,7 +113,7 @@ async function waitForService(timeoutMs = 5000): Promise<void> {
   let lastError: unknown;
   while (Date.now() < deadline) {
     try {
-      await client.request({ action: "ping" }, 400);
+      await pingService(400);
       return;
     } catch (error) {
       lastError = error;
@@ -60,11 +124,12 @@ async function waitForService(timeoutMs = 5000): Promise<void> {
 }
 
 async function ensureService(focus: boolean): Promise<void> {
-  try {
-    await client.request({ action: "ping" }, 300);
+  const service = await client
+    .request<OutlinerServiceStatus>({ action: "ping" }, 300)
+    .catch(() => null);
+  if (service) {
+    assertCompatibleProtocol(service);
     if (!focus || process.env.HERDR_ENV !== "1") return;
-  } catch {
-    // A failed ping falls through to service startup.
   }
 
   if (process.env.HERDR_ENV === "1") {
@@ -143,12 +208,17 @@ export default function outlinerExtension(pi: ExtensionAPI): void {
             ? { key: token }
             : { key: token.slice(0, index), value: token.slice(index + separator.length) };
         });
-      const blocks = await client.request<VisibleBlock[]>({ action: "list", query: { filters, limit: 20 } });
-      ctx.ui.setWidget(
-        "pi-outliner-filter",
-        blocks.length ? blocks.map((block) => `${"  ".repeat(block.depth)}• ${block.text}`) : ["No matching blocks"],
-        { placement: "belowEditor" },
-      );
+      const { blocks, completeness } = await client.request<VisibleBlockCollection>({
+        action: "blocks.query",
+        query: { filters, limit: 20 },
+      });
+      const lines = blocks.length
+        ? blocks.map((block) => `${"  ".repeat(block.depth)}• ${block.text}`)
+        : ["No matching blocks"];
+      if (completeness.kind === "truncated") {
+        lines.push(`Results truncated at ${completeness.limit} blocks`);
+      }
+      ctx.ui.setWidget("pi-outliner-filter", lines, { placement: "belowEditor" });
     },
   });
 
@@ -270,7 +340,8 @@ export default function outlinerExtension(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "outliner_query",
     label: "Outliner Query",
-    description: "Query blocks by text and indexed inline properties; all supplied property filters must match",
+    description:
+      "Query blocks by text and indexed inline properties; returns completeness metadata for bounded results",
     promptSnippet: "Query shared blocks by text or [property::value]",
     parameters: Type.Object({
       text: Type.Optional(Type.String()),
@@ -287,7 +358,11 @@ export default function outlinerExtension(pi: ExtensionAPI): void {
     }),
     async execute(_id, params) {
       await ensureService(false);
-      return toolResult(await client.request<VisibleBlock[]>({ action: "list", query: params }));
+      const collection = await client.request<VisibleBlockCollection>({
+        action: "blocks.query",
+        query: { ...params, limit: params.limit ?? 100 },
+      });
+      return queryToolResult(collection);
     },
   });
 

@@ -48,9 +48,11 @@ function renderQuickCompletionRows(
   if (!completion) return [];
   const prefix = `${"  ".repeat(depth)}  `;
   const window = completionWindow(completion.items.length, completion.index, 6);
+  const truncationLabel =
+    completion.truncatedLimit === null ? "" : ` · Showing first ${completion.truncatedLimit} matches`;
   const rows = [
     `${prefix}\x1b[2m${truncate(
-      `Completions ${completion.index + 1}/${completion.items.length}`,
+      `Completions ${completion.index + 1}/${completion.items.length}${truncationLabel}`,
       Math.max(1, width - prefix.length),
     )}\x1b[0m`,
   ];
@@ -88,14 +90,18 @@ export function renderTreeFrame(
     `\x1b[1;36mOutliner\x1b[0m  \x1b[2m${truncate(view.workspaceRoot, Math.max(10, width - 20))}\x1b[0m`,
   );
   const filterLabel = view.activeFilter ? `  \x1b[33mfilter: ${view.activeFilter}\x1b[0m` : "";
-  output.push(`\x1b[2m${view.rows.length} blocks${filterLabel}\x1b[0m`);
+  const truncationLabel =
+    view.visibleCompleteness.kind === "truncated"
+      ? `  \x1b[33mWARNING: truncated at ${view.visibleCompleteness.limit}\x1b[0m`
+      : "";
+  output.push(`\x1b[2m${view.rows.length} blocks${filterLabel}\x1b[0m${truncationLabel}`);
   output.push("─".repeat(width));
 
   function isCanonicalDescendant(candidateId: string, ancestorId: string): boolean {
-    let candidate = view.allBlocksById.get(candidateId);
+    let candidate = view.physicalBlocksById.get(candidateId);
     while (candidate?.parentId) {
       if (candidate.parentId === ancestorId) return true;
-      candidate = view.allBlocksById.get(candidate.parentId);
+      candidate = view.physicalBlocksById.get(candidate.parentId);
     }
     return false;
   }

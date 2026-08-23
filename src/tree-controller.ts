@@ -5,7 +5,14 @@ import { parseFilter } from "./properties";
 import { blockDisplayTitle } from "./references";
 import { isDetailToggle, isPrintableInput, type TerminalInputAction, type TerminalKey } from "./terminal";
 import { TextBuffer } from "./text-buffer";
-import type { Block, OutlinerEvent, VisibleBlock, WorkspaceSnapshot } from "./types";
+import type {
+  Block,
+  BlockCollectionCompleteness,
+  OutlinerEvent,
+  VisibleBlock,
+  VisibleBlockCollection,
+  WorkspaceSnapshot,
+} from "./types";
 
 export type TreeInputMode = "edit" | "add-child" | "add-sibling" | "filter";
 export type TreeMode = "browse" | "delete" | "viewer" | TreeInputMode;
@@ -19,13 +26,15 @@ export interface TreeQuickCompletion {
   readonly start: number;
   readonly end: number;
   readonly index: number;
+  readonly truncatedLimit: number | null;
   readonly items: readonly TreeQuickCompletionItem[];
 }
 
 export interface TreeView {
   readonly workspaceRoot: string;
   readonly rows: readonly VisibleBlock[];
-  readonly allBlocksById: ReadonlyMap<string, VisibleBlock>;
+  readonly physicalBlocksById: ReadonlyMap<string, VisibleBlock>;
+  readonly visibleCompleteness: BlockCollectionCompleteness;
   readonly selectedIndex: number;
   readonly activeFilter: string;
   readonly mode: TreeMode;
@@ -69,6 +78,7 @@ interface MutableQuickCompletion {
   end: number;
   index: number;
   items: TreeQuickCompletionItem[];
+  truncatedLimit: number | null;
 }
 
 function errorMessage(error: unknown): string {
@@ -77,7 +87,8 @@ function errorMessage(error: unknown): string {
 
 export function createTreeController(effects: TreeControllerEffects): TreeController {
   let rows: VisibleBlock[] = [];
-  let allBlocksById = new Map<string, VisibleBlock>();
+  let physicalBlocksById = new Map<string, VisibleBlock>();
+  let visibleCompleteness: BlockCollectionCompleteness = { kind: "complete" };
   let selectedIndex = 0;
   let activeFilter = "";
   let mode: TreeMode = "browse";
@@ -98,7 +109,8 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     return {
       workspaceRoot: effects.workspaceRoot,
       rows,
-      allBlocksById,
+      physicalBlocksById,
+      visibleCompleteness,
       selectedIndex,
       activeFilter,
       mode,
@@ -113,19 +125,41 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     };
   }
 
-  async function reload(preferredSelectedId?: string | null): Promise<void> {
+  async function reload(preferredSelectedId?: string | null): Promise<boolean> {
     const currentSelectedId = rows[selectedIndex]?.id;
     const snapshot = await effects.request<WorkspaceSnapshot>({
       action: "workspace.snapshot",
-      query: { filters: parseFilter(activeFilter) },
+      view: { filters: parseFilter(activeFilter) },
     });
+    if (snapshot.physical.completeness.kind === "truncated") {
+      throw new Error(
+        `Workspace snapshot physical blocks are truncated at ${snapshot.physical.completeness.limit}; canonical ancestry is unavailable`,
+      );
+    }
+
+    const nextRows = snapshot.visible.blocks;
+    const nextPhysicalBlocksById = new Map(snapshot.physical.blocks.map((block) => [block.id, block]));
+    const serviceSelectedId = snapshot.selection.selected?.id ?? null;
+    let selectedId: string | null | undefined = serviceSelectedId;
+    if (currentSelectedId && nextPhysicalBlocksById.has(currentSelectedId)) {
+      selectedId = currentSelectedId;
+    }
+    if (preferredSelectedId !== undefined) {
+      selectedId = preferredSelectedId;
+    }
+    const nextIndex = selectedId ? nextRows.findIndex((block) => block.id === selectedId) : -1;
+    const nextSelectedIndex = Math.max(
+      0,
+      Math.min(nextIndex >= 0 ? nextIndex : selectedIndex, nextRows.length - 1),
+    );
+
+    rows = nextRows;
+    physicalBlocksById = nextPhysicalBlocksById;
+    visibleCompleteness = snapshot.visible.completeness;
+    selectedIndex = nextSelectedIndex;
+    lastSelectionId = rows[selectedIndex]?.id ?? null;
     refreshPending = false;
-    rows = snapshot.blocks;
-    allBlocksById = new Map(snapshot.allBlocks.map((block) => [block.id, block]));
-    let selectedId: string | null | undefined = currentSelectedId ?? snapshot.selection.selected?.id;
-    if (preferredSelectedId !== undefined) selectedId = preferredSelectedId;
-    const nextIndex = selectedId ? rows.findIndex((block) => block.id === selectedId) : -1;
-    selectedIndex = Math.max(0, Math.min(nextIndex >= 0 ? nextIndex : selectedIndex, rows.length - 1));
+    return serviceSelectedId !== null;
   }
 
   function resetQuickEditor(): void {
@@ -192,14 +226,35 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
 
   async function selectVisibleBlock(preferredId: string | null): Promise<void> {
     await reload(preferredId);
-    if (preferredId && !rows.some((row) => row.id === preferredId)) {
-      activeFilter = "";
+    let visibilityChanged = false;
+    if (preferredId && rows[selectedIndex]?.id !== preferredId) {
+      const target = physicalBlocksById.get(preferredId);
+      if (!target) throw new Error(`Block not found: ${preferredId}`);
+      if (activeFilter) {
+        activeFilter = "";
+        visibilityChanged = true;
+      }
+      const collapsedAncestorIds: string[] = [];
+      let parentId = target.parentId;
+      while (parentId) {
+        const parent = physicalBlocksById.get(parentId);
+        if (!parent) throw new Error(`Block ancestry is incomplete at ${parentId}`);
+        if (parent.collapsed) collapsedAncestorIds.push(parent.id);
+        parentId = parent.parentId;
+      }
+      for (const blockId of collapsedAncestorIds.reverse()) {
+        await effects.request({ action: "toggle", blockId });
+        visibilityChanged = true;
+      }
       await reload(preferredId);
-      status = "Filter cleared to show saved block";
     }
     const visibleId = rows[selectedIndex]?.id ?? null;
+    if (preferredId && visibleId !== preferredId) {
+      throw new Error(`Block ${preferredId} could not be revealed`);
+    }
     lastSelectionId = visibleId;
     await effects.request({ action: "selection.set", blockId: visibleId });
+    if (visibilityChanged) status = "Filter cleared or collapsed ancestors expanded to reveal block";
   }
 
   async function finishInput(): Promise<void> {
@@ -256,16 +311,17 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     }
 
     let items: MutableQuickCompletion["items"];
+    let truncatedLimit: number | null = null;
     if (target.kind === "file") {
       items = effects.filesystem.completeReferencedPaths(target.query).map((candidate) => ({
         label: candidate.sourcePath,
         insertion: `[file::${candidate.sourcePath}${candidate.isDirectory ? "" : "]"}`,
       }));
     } else {
-      let blocks: VisibleBlock[] = [];
+      let collection: VisibleBlockCollection | undefined;
       if (target.kind === "page") {
-        blocks = await effects.request<VisibleBlock[]>({
-          action: "list",
+        collection = await effects.request<VisibleBlockCollection>({
+          action: "blocks.query",
           query: {
             text: target.query || undefined,
             filters: [{ key: "type", value: "page" }],
@@ -273,13 +329,16 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
           },
         });
       }
-      if (blocks.length === 0) {
-        blocks = await effects.request<VisibleBlock[]>({
-          action: "list",
-          query: { text: target.query || undefined, limit: 20, includeCollapsed: true },
+      if (!collection || collection.blocks.length === 0) {
+        collection = await effects.request<VisibleBlockCollection>({
+          action: "blocks.query",
+          query: { text: target.query || undefined, limit: 20 },
         });
       }
-      items = blocks.map((block) => {
+      if (collection.completeness.kind === "truncated") {
+        truncatedLimit = collection.completeness.limit;
+      }
+      items = collection.blocks.map((block) => {
         const title = blockDisplayTitle(block);
         return {
           label: title,
@@ -298,6 +357,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       end: target.end,
       index: 0,
       items,
+      truncatedLimit,
     };
     status = "";
   }
@@ -326,7 +386,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     for (let index = selectedIndex - 1; index >= 0; index--) {
       const candidate = rows[index];
       if (candidate.depth < selected.depth) break;
-      if (candidate.depth === selected.depth) {
+      if (candidate.depth === selected.depth && candidate.parentId === selected.parentId) {
         await effects.request({ action: "move", blockId: selected.id, parentId: candidate.id });
         return;
       }
@@ -388,8 +448,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       return;
     }
     if (event.domain === "selection") {
-      lastSelectionId = event.blockId ?? null;
-      await reload(lastSelectionId);
+      await reload(event.blockId ?? null);
     } else {
       await reload();
     }
@@ -584,9 +643,10 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   }
 
   async function initialize(): Promise<void> {
-    await reload();
-    lastSelectionId = rows[selectedIndex]?.id ?? null;
-    await effects.request({ action: "selection.set", blockId: lastSelectionId });
+    const hasServiceSelection = await reload();
+    if (!hasServiceSelection && lastSelectionId !== null) {
+      await effects.request({ action: "selection.set", blockId: lastSelectionId });
+    }
   }
 
   return {

@@ -24,7 +24,7 @@ import {
   type Block,
   type OutlinerServiceStatus,
   type SelectionContext,
-  type VisibleBlock,
+  type VisibleBlockCollection,
 } from "./types";
 
 const paths = resolvePaths();
@@ -63,8 +63,8 @@ const effects: DetailEffects = {
   async createBlock(input) {
     return client.request<Block>({ action: "create", ...input });
   },
-  async listBlocks(query) {
-    return client.request<VisibleBlock[]>({ action: "list", query });
+  async queryBlocks(query) {
+    return client.request<VisibleBlockCollection>({ action: "blocks.query", query });
   },
   readFile(block) {
     return readReferencedFile(block, paths.workspaceRoot);

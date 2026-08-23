@@ -7,11 +7,15 @@ import type {
   Block,
   BlockAuthor,
   BlockProperty,
-  BlockQuery,
+  BlockSearchQuery,
+  BlockTraversalOptions,
   PropertyCatalogItem,
   PropertyPatchOperation,
   SelectionContext,
   VisibleBlock,
+  VisibleBlockCollection,
+  WorkspaceSnapshot,
+  WorkspaceSnapshotView,
 } from "./types";
 
 interface BlockRow {
@@ -29,6 +33,17 @@ interface PropertyRow {
   block_id: string;
   key: string;
   value: string;
+}
+
+interface LoadedGraph {
+  byId: Map<string, Block>;
+  byParent: Map<string | null, Block[]>;
+  expandedIds: Set<string>;
+}
+
+interface LoadedGraphTraversalOptions extends BlockTraversalOptions {
+  text?: string;
+  stopAfterMatches?: number;
 }
 
 export class OutlinerStore {
@@ -203,53 +218,50 @@ export class OutlinerStore {
     return rows.map((row) => this.hydrate(row));
   }
 
-  list(query: BlockQuery = {}): VisibleBlock[] {
-    const rows = this.database.query("SELECT * FROM blocks ORDER BY position, created_at").all() as BlockRow[];
-    const blocks = rows.map((row) => this.hydrate(row));
-    const byId = new Map(blocks.map((block) => [block.id, block]));
-    const byParent = new Map<string | null, Block[]>();
-    for (const block of blocks) {
-      const siblings = byParent.get(block.parentId) ?? [];
-      siblings.push(block);
-      byParent.set(block.parentId, siblings);
-    }
-    for (const siblings of byParent.values()) siblings.sort((a, b) => a.position - b.position);
-    const expandedRows = this.database
-      .query("SELECT block_id FROM block_view_state WHERE multiline_expanded = 1")
-      .all() as Array<{ block_id: string }>;
-    const expandedIds = new Set(expandedRows.map((row) => row.block_id));
+  traversePreorder(options: BlockTraversalOptions): VisibleBlock[] {
+    return this.traverseLoadedGraph(this.loadGraph(), options);
+  }
 
-    const result: VisibleBlock[] = [];
-    const filterText = query.text?.toLowerCase();
-    const shouldTraverseCollapsed = Boolean(
-      query.includeCollapsed || query.filters?.length || filterText,
-    );
-    const visit = (block: Block, depth: number): void => {
-      const matches =
-        (!query.filters?.length || matchesFilters(block.properties, query.filters)) &&
-        (!filterText || block.text.toLowerCase().includes(filterText));
-      if (matches) {
-        const children = byParent.get(block.id) ?? [];
-        result.push({
-          ...block,
-          depth,
-          multilineExpanded: expandedIds.has(block.id),
-          hasChildren: children.length > 0,
-          displayText: resolveBlockReferenceText(block.text, (blockId) => byId.get(blockId) ?? null),
-        });
-      }
-      if (!block.collapsed || shouldTraverseCollapsed) {
-        for (const child of byParent.get(block.id) ?? []) visit(child, depth + 1);
-      }
+  queryBlocks(query: BlockSearchQuery): VisibleBlockCollection {
+    const limit = query?.limit;
+    if (typeof limit !== "number" || !Number.isInteger(limit) || limit <= 0) {
+      throw new Error("Block search limit must be a positive integer");
+    }
+
+    const blocks = this.traverseLoadedGraph(this.loadGraph(), {
+      filters: query.filters,
+      subtreeRootId: query.subtreeRootId,
+      collapsedDescendants: "traverse",
+      text: query.text,
+      stopAfterMatches: limit + 1,
+    });
+    if (blocks.length <= limit) {
+      return { blocks, completeness: { kind: "complete" } };
+    }
+    return {
+      blocks: blocks.slice(0, limit),
+      completeness: { kind: "truncated", limit },
     };
+  }
 
-    if (query.subtreeRootId) {
-      const root = blocks.find((block) => block.id === query.subtreeRootId);
-      if (root) visit(root, 0);
-    } else {
-      for (const root of byParent.get(null) ?? []) visit(root, 0);
-    }
-    return result.slice(0, query.limit ?? 500);
+  readWorkspaceSnapshot(view: WorkspaceSnapshotView = {}): WorkspaceSnapshot {
+    return this.database.transaction((): WorkspaceSnapshot => {
+      const graph = this.loadGraph();
+      const visible = this.traverseLoadedGraph(graph, {
+        filters: view.filters,
+        collapsedDescendants: view.filters?.length ? "traverse" : "prune",
+      });
+      const physical = this.traverseLoadedGraph(graph, {
+        collapsedDescendants: "traverse",
+      });
+
+      return {
+        visible: { blocks: visible, completeness: { kind: "complete" } },
+        physical: { blocks: physical, completeness: { kind: "complete" } },
+        selection: this.selectionFromGraph(graph),
+        sequence: this.sequence,
+      };
+    })();
   }
 
   getSelection(): SelectionContext {
@@ -274,6 +286,110 @@ export class OutlinerStore {
     if (blockId !== null) this.require(blockId);
     this.database.query("UPDATE selection SET block_id = ? WHERE singleton = 1").run(blockId);
     return this.getSelection();
+  }
+
+  private loadGraph(): LoadedGraph {
+    const rows = this.database.query("SELECT * FROM blocks ORDER BY position, created_at").all() as BlockRow[];
+    const propertyRows = this.database
+      .query("SELECT block_id, key, value FROM block_properties ORDER BY block_id, ordinal")
+      .all() as PropertyRow[];
+    const propertiesByBlock = new Map<string, BlockProperty[]>();
+    for (const { block_id: blockId, key, value } of propertyRows) {
+      const properties = propertiesByBlock.get(blockId);
+      if (properties) {
+        properties.push({ key, value });
+      } else {
+        propertiesByBlock.set(blockId, [{ key, value }]);
+      }
+    }
+
+    const blocks = rows.map((row) => this.hydrate(row, propertiesByBlock.get(row.id) ?? []));
+    const byId = new Map<string, Block>();
+    const byParent = new Map<string | null, Block[]>();
+    for (const block of blocks) {
+      byId.set(block.id, block);
+      const siblings = byParent.get(block.parentId);
+      if (siblings) {
+        siblings.push(block);
+      } else {
+        byParent.set(block.parentId, [block]);
+      }
+    }
+    const expandedRows = this.database
+      .query("SELECT block_id FROM block_view_state WHERE multiline_expanded = 1")
+      .all() as Array<{ block_id: string }>;
+    const expandedIds = new Set<string>();
+    for (const row of expandedRows) expandedIds.add(row.block_id);
+
+    return { byId, byParent, expandedIds };
+  }
+
+  private traverseLoadedGraph(
+    graph: LoadedGraph,
+    options: LoadedGraphTraversalOptions,
+  ): VisibleBlock[] {
+    const blocks: VisibleBlock[] = [];
+    const filterText = options.text?.toLowerCase();
+    const visit = (block: Block, depth: number): boolean => {
+      const matches =
+        (!options.filters?.length || matchesFilters(block.properties, options.filters)) &&
+        (!filterText || block.text.toLowerCase().includes(filterText));
+      if (matches) {
+        const children = graph.byParent.get(block.id) ?? [];
+        blocks.push({
+          ...block,
+          depth,
+          multilineExpanded: graph.expandedIds.has(block.id),
+          hasChildren: children.length > 0,
+          displayText: resolveBlockReferenceText(
+            block.text,
+            (blockId) => graph.byId.get(blockId) ?? null,
+          ),
+        });
+        if (options.stopAfterMatches !== undefined && blocks.length >= options.stopAfterMatches) {
+          return true;
+        }
+      }
+
+      if (!block.collapsed || options.collapsedDescendants === "traverse") {
+        for (const child of graph.byParent.get(block.id) ?? []) {
+          if (visit(child, depth + 1)) return true;
+        }
+      }
+      return false;
+    };
+
+    if (options.subtreeRootId) {
+      const root = graph.byId.get(options.subtreeRootId);
+      if (root) visit(root, 0);
+    } else {
+      for (const root of graph.byParent.get(null) ?? []) {
+        if (visit(root, 0)) break;
+      }
+    }
+    return blocks;
+  }
+
+  private selectionFromGraph(graph: LoadedGraph): SelectionContext {
+    const row = this.database.query("SELECT block_id FROM selection WHERE singleton = 1").get() as
+      | { block_id: string | null }
+      | null;
+    const selected = row?.block_id ? graph.byId.get(row.block_id) ?? null : null;
+    if (!selected) return { selected: null, ancestors: [], children: [] };
+
+    const ancestors: Block[] = [];
+    let parentId = selected.parentId;
+    while (parentId) {
+      const parent = graph.byId.get(parentId);
+      if (!parent) break;
+      ancestors.unshift(parent);
+      parentId = parent.parentId;
+    }
+    return {
+      selected,
+      ancestors,
+      children: graph.byParent.get(selected.id) ?? [],
+    };
   }
 
   private migrate(): void {
@@ -322,10 +438,14 @@ export class OutlinerStore {
     this.setSelection(workspace.id);
   }
 
-  private hydrate(row: BlockRow): Block {
-    const properties = this.database
-      .query("SELECT block_id, key, value FROM block_properties WHERE block_id = ? ORDER BY ordinal")
-      .all(row.id) as PropertyRow[];
+  private hydrate(row: BlockRow, properties?: BlockProperty[]): Block {
+    const hydratedProperties =
+      properties ??
+      (
+        this.database
+          .query("SELECT block_id, key, value FROM block_properties WHERE block_id = ? ORDER BY ordinal")
+          .all(row.id) as PropertyRow[]
+      ).map(({ key, value }) => ({ key, value }));
     return {
       id: row.id,
       parentId: row.parent_id,
@@ -335,7 +455,7 @@ export class OutlinerStore {
       collapsed: row.collapsed === 1,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
-      properties: properties.map(({ key, value }) => ({ key, value })),
+      properties: hydratedProperties,
     };
   }
 

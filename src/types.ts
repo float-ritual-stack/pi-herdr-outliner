@@ -45,13 +45,24 @@ export interface PropertyFilter {
   value?: string;
 }
 
-export interface BlockQuery {
+export type CollapsedDescendantPolicy = "prune" | "traverse";
+
+export interface BlockTraversalOptions {
+  filters?: PropertyFilter[];
+  subtreeRootId?: string;
+  collapsedDescendants: CollapsedDescendantPolicy;
+}
+
+export interface BlockSearchQuery {
   filters?: PropertyFilter[];
   text?: string;
   subtreeRootId?: string;
-  limit?: number;
-  includeCollapsed?: boolean;
+  limit: number;
 }
+
+export type BlockCollectionCompleteness =
+  | { kind: "complete" }
+  | { kind: "truncated"; limit: number };
 
 export interface VisibleBlock extends Block {
   depth: number;
@@ -60,7 +71,12 @@ export interface VisibleBlock extends Block {
   displayText: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 2;
+export interface VisibleBlockCollection {
+  blocks: VisibleBlock[];
+  completeness: BlockCollectionCompleteness;
+}
+
+export const OUTLINER_PROTOCOL_VERSION = 3;
 
 export interface OutlinerServiceStatus {
   status: "ready";
@@ -69,10 +85,10 @@ export interface OutlinerServiceStatus {
 
 export type OutlinerRequest =
   | { id: string; action: "ping" }
-  | { id: string; action: "list"; query?: BlockQuery }
+  | { id: string; action: "blocks.query"; query: BlockSearchQuery }
   | { id: string; action: "get"; blockId: string }
   | { id: string; action: "children"; parentId: string | null }
-  | { id: string; action: "workspace.snapshot"; query?: BlockQuery }
+  | { id: string; action: "workspace.snapshot"; view?: WorkspaceSnapshotView }
   | { id: string; action: "events.subscribe" }
   | { id: string; action: "ui.command.send"; command: OutlinerUiCommand }
   | { id: string; action: "create"; parentId?: string | null; text: string; author?: BlockAuthor }
@@ -103,9 +119,13 @@ export interface SelectionContext {
   children: Block[];
 }
 
+export interface WorkspaceSnapshotView {
+  filters?: PropertyFilter[];
+}
+
 export interface WorkspaceSnapshot {
-  blocks: VisibleBlock[];
-  allBlocks: VisibleBlock[];
+  visible: VisibleBlockCollection;
+  physical: VisibleBlockCollection;
   selection: SelectionContext;
   sequence: number;
 }
