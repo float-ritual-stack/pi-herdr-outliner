@@ -206,19 +206,19 @@ describe("detail ANSI renderer", () => {
 });
 
 test("sanitizes dynamic terminal controls and respects compact viewport heights", () => {
-  const selected = block("safe\x1b[2Jtext\x07");
+  const selected = block("safe\x1b[2Jtext\x07\x9b2J");
   const detail = state({
     context: { selected, ancestors: [], children: [] },
     resolvedSelectedText: selected.text,
-    resolvedBreadcrumb: "Title\x1b[?1049l\nnext",
-    status: "Status\x1b[2J\x07",
+    resolvedBreadcrumb: "Title\x1b[?1049l\nnext\x9dtitle",
+    status: "Status\x1b[2J\x07\x9b?1049l",
   });
 
   const lines = renderDetailLines(detail, { width: 20, height: 8 });
   expect(lines.join("\n")).not.toContain("\x1b[2J");
   expect(lines.join("\n")).not.toContain("\x1b[?1049l");
   expect(lines.every((line) => visibleWidth(line) <= 20)).toBe(true);
-  expect(lines.every((line) => !/[\n\r\x07]/.test(line))).toBe(true);
+  expect(lines.every((line) => !/[\n\r\x07\x80-\x9f]/.test(line))).toBe(true);
 
   for (let height = 1; height <= 5; height += 1) {
     expect(renderDetailLines(detail, { width: 20, height })).toHaveLength(height);

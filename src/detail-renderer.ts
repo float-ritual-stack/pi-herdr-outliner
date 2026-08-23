@@ -20,7 +20,7 @@ const ESC = "\x1b[";
 function sanitizeDynamicText(value: string): string {
   return stripTerminalSequences(value)
     .replace(/\t/g, "    ")
-    .replace(/[\x00-\x1f\x7f]/g, "");
+    .replace(/[\x00-\x1f\x7f-\x9f]/g, "");
 }
 
 function fitToWidth(value: string, width: number): string {
