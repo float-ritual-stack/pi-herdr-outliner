@@ -23,6 +23,26 @@ describe("block reference rendering", () => {
     expect(blockDisplayTitle(target)).toBe("Referenced decision");
   });
 
+  test("chooses a title after whole-block indexed-span stripping", () => {
+    const literalTitle = {
+      ...target,
+      text: "[status::open]\n`[example::literal title]`",
+      properties: [{ key: "status", value: "open" }],
+    };
+
+    expect(blockDisplayTitle(literalTitle)).toBe("`[example::literal title]`");
+  });
+
+  test("preserves fenced property-shaped source in display titles", () => {
+    const fenced = {
+      ...target,
+      text: "[status::open]\n```ts [example::literal]\n```",
+      properties: [{ key: "status", value: "open" }],
+    };
+
+    expect(blockDisplayTitle(fenced)).toBe("```ts [example::literal]");
+  });
+
   test("keeps unresolved IDs intact so broken references remain diagnosable", () => {
     const missing = "22222222-2222-4222-8222-222222222222";
     const text = `Missing ((${missing}))`;

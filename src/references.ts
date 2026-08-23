@@ -1,14 +1,11 @@
-import { stripProperties } from "./properties";
+import { firstLineWithoutPropertyTokens } from "./properties";
 import type { Block } from "./types";
 
 const BLOCK_REFERENCE_PATTERN = /\(\(([A-Za-z0-9_-]{8,})\)\)/g;
 
 export function blockDisplayTitle(block: Block): string {
-  for (const line of block.text.split(/\r?\n/)) {
-    const title = stripProperties(line);
-    if (title) return title;
-  }
-  return block.id;
+  const firstContentLine = firstLineWithoutPropertyTokens(block.text);
+  return firstContentLine?.replace(/\s{2,}/g, " ").trim() || block.id;
 }
 
 export function blockReferenceIds(text: string): string[] {

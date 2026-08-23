@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PROPERTY_PARSER_VERSION } from "../src/properties";
 import { OutlinerStore } from "../src/store";
 
 const stores: Array<{ store: OutlinerStore; directory: string }> = [];
@@ -41,6 +42,30 @@ describe("OutlinerStore", () => {
     expect(matches).toHaveLength(1);
     expect(matches[0].text).toContain("Choose protocol");
     expect(matches[0].author).toBe("agent");
+  });
+
+  test("keeps literal property examples out of indexed queries", () => {
+    const store = makeStore();
+    const block = store.create([
+      "Examples `[status::inline]`",
+      String.raw`Escaped \[status::escaped]`,
+      "```text",
+      "[status::fenced]",
+      "```",
+      "[status::real]",
+    ].join("\n"));
+
+    expect(store.require(block.id).properties).toEqual([{ key: "status", value: "real" }]);
+    for (const value of ["inline", "escaped", "fenced"]) {
+      expect(store.queryBlocks({
+        filters: [{ key: "status", value }],
+        limit: 10,
+      }).blocks).toEqual([]);
+    }
+    expect(store.queryBlocks({
+      filters: [{ key: "status", value: "real" }],
+      limit: 10,
+    }).blocks.map(({ id }) => id)).toContain(block.id);
   });
 
   test("preserves multiline block content and indexes properties across lines", () => {
@@ -327,4 +352,97 @@ Second paragraph`;
     expect(context.ancestors.at(-1)?.id).toBe(root.id);
     expect(context.children.map((block) => block.text)).toEqual(["Option A"]);
   });
+
+  test("rebuilds property indexes once when the parser schema version is stale", () => {
+    const originalStore = makeStore();
+    const directory = stores[stores.length - 1].directory;
+    const path = join(directory, "outliner.sqlite");
+    const block = originalStore.create([
+      "Migration target",
+      "```ts",
+      "[obsolete::literal]",
+      "```",
+      "[status::current]",
+    ].join("\n"));
+    const updatedAt = block.updatedAt;
+
+    originalStore.database.query("DELETE FROM block_properties WHERE block_id = ?").run(block.id);
+    originalStore.database
+      .query(
+        "INSERT INTO block_properties (block_id, key, value, ordinal) VALUES (?, 'obsolete', 'literal', 0)",
+      )
+      .run(block.id);
+    originalStore.database
+      .query(
+        "INSERT INTO metadata (key, value) VALUES ('property_parser_version', '0') ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+      )
+      .run();
+    originalStore.database
+      .query("UPDATE metadata SET value = '41' WHERE key = 'sequence'")
+      .run();
+    originalStore.close();
+
+    const reopened = new OutlinerStore(path);
+    stores[stores.length - 1].store = reopened;
+    expect(reopened.sequence).toBe(42);
+    expect(reopened.require(block.id)).toEqual(
+      expect.objectContaining({
+        updatedAt,
+        properties: [{ key: "status", value: "current" }],
+      }),
+    );
+    expect(reopened.queryBlocks({
+      filters: [{ key: "obsolete", value: "literal" }],
+      limit: 10,
+    }).blocks).toEqual([]);
+    expect(reopened.queryBlocks({
+      filters: [{ key: "status", value: "current" }],
+      limit: 10,
+    }).blocks.map(({ id }) => id)).toContain(block.id);
+    const versionRow = reopened.database
+      .query("SELECT value FROM metadata WHERE key = 'property_parser_version'")
+      .get() as { value: string };
+    expect(versionRow.value).toBe(String(PROPERTY_PARSER_VERSION));
+
+    reopened.close();
+    const reopenedAgain = new OutlinerStore(path);
+    stores[stores.length - 1].store = reopenedAgain;
+    expect(reopenedAgain.sequence).toBe(42);
+    expect(reopenedAgain.require(block.id).updatedAt).toBe(updatedAt);
+  });
+
+  test("reindexes existing blocks when the parser version metadata is missing", () => {
+    const store = makeStore();
+    const directory = stores[stores.length - 1].directory;
+    const path = join(directory, "outliner.sqlite");
+    const block = store.create("Existing [status::open]");
+    store.database.query("DELETE FROM metadata WHERE key = 'property_parser_version'").run();
+    store.database.query("UPDATE metadata SET value = '9' WHERE key = 'sequence'").run();
+    store.close();
+
+    const reopened = new OutlinerStore(path);
+    stores[stores.length - 1].store = reopened;
+    expect(reopened.sequence).toBe(10);
+    expect(reopened.require(block.id)).toEqual(
+      expect.objectContaining({
+        updatedAt: block.updatedAt,
+        properties: [{ key: "status", value: "open" }],
+      }),
+    );
+  });
+
+  test("rejects databases from a newer property parser schema", () => {
+    const store = makeStore();
+    const directory = stores[stores.length - 1].directory;
+    const path = join(directory, "outliner.sqlite");
+    store.database
+      .query("UPDATE metadata SET value = ? WHERE key = 'property_parser_version'")
+      .run(String(PROPERTY_PARSER_VERSION + 1));
+    store.close();
+
+    expect(() => new OutlinerStore(path)).toThrow("newer than supported");
+    stores.pop();
+    rmSync(directory, { recursive: true, force: true });
+  });
+
 });

@@ -53,6 +53,13 @@ describe("TextBuffer", () => {
     expect(stripProperties("Release Notes [type::page] [status::active]")).toBe("Release Notes");
   });
 
+  test("keeps literal property-shaped text in page completion labels", () => {
+    expect(stripProperties("API `[type::example]` [type::page]")).toBe("API `[type::example]`");
+    expect(parseProperties(String.raw`Escaped \[type::example] [type::page]`)).toEqual([
+      { key: "type", value: "page" },
+    ]);
+  });
+
   test("bulk insertion normalizes newline forms and leaves the cursor after pasted text", () => {
     const buffer = new TextBuffer("before-after");
     buffer.column = 7;
