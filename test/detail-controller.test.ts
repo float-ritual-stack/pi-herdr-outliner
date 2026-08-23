@@ -7,10 +7,11 @@ import {
 import type { ReferencedFile } from "../src/files";
 import type {
   Block,
-  BlockQuery,
+  BlockSearchQuery,
   OutlinerEvent,
   SelectionContext,
   VisibleBlock,
+  VisibleBlockCollection,
 } from "../src/types";
 
 const viewport: DetailViewport = { width: 60, height: 12 };
@@ -59,12 +60,12 @@ interface Harness {
     setSelections: string[];
     updates: Array<{ blockId: string; text: string; expectedUpdatedAt: string }>;
     creates: Array<{ parentId: string; text: string; author: "user" }>;
-    queries: BlockQuery[];
+    queries: BlockSearchQuery[];
     focuses: number;
   };
   setSelection(selection: SelectionContext): void;
   setUpdate(implementation: DetailEffects["updateBlock"]): void;
-  setLists(lists: VisibleBlock[][]): void;
+  setQueryResults(results: VisibleBlockCollection[]): void;
   setFocusError(error: Error | null): void;
 }
 
@@ -80,7 +81,7 @@ function createHarness(
     updatedAt: "version-2",
     properties: initial.properties,
   });
-  let lists: VisibleBlock[][] = [];
+  let queryResults: VisibleBlockCollection[] = [];
   let focusError: Error | null = null;
   const calls: Harness["calls"] = {
     selections: 0,
@@ -107,9 +108,9 @@ function createHarness(
       calls.creates.push(input);
       return makeBlock({ id: "annotation-1" });
     },
-    async listBlocks(query) {
+    async queryBlocks(query) {
       calls.queries.push(query);
-      return lists.shift() ?? [];
+      return queryResults.shift() ?? { blocks: [], completeness: { kind: "complete" } };
     },
     readFile() {
       if (!referencedFile) throw new Error("file unavailable");
@@ -137,8 +138,8 @@ function createHarness(
     setUpdate(implementation) {
       update = implementation;
     },
-    setLists(next) {
-      lists = [...next];
+    setQueryResults(next) {
+      queryResults = [...next];
     },
     setFocusError(error) {
       focusError = error;
@@ -331,11 +332,14 @@ describe("detail controller saves and annotations", () => {
 });
 
 describe("detail controller completion, navigation, and focus", () => {
-  test("queries pages first, falls back to all blocks, and applies the selected completion", async () => {
+  test("queries pages first, uses a truncated fallback collection, and applies a candidate", async () => {
     const harness = createHarness(makeBlock({ text: "See [[rel" }));
-    harness.setLists([
-      [],
-      [makeVisibleBlock({ id: "release-id", text: "Release Notes [type::page]" })],
+    harness.setQueryResults([
+      { blocks: [], completeness: { kind: "complete" } },
+      {
+        blocks: [makeVisibleBlock({ id: "release-id", text: "Release Notes [type::page]" })],
+        completeness: { kind: "truncated", limit: 20 },
+      },
     ]);
     await harness.controller.initialize();
     await harness.controller.dispatch({ type: "edit.begin" }, viewport);
@@ -343,11 +347,13 @@ describe("detail controller completion, navigation, and focus", () => {
 
     expect(harness.calls.queries).toEqual([
       { text: "rel", filters: [{ key: "type", value: "page" }], limit: 20 },
-      { text: "rel", limit: 20, includeCollapsed: true },
+      { text: "rel", limit: 20 },
     ]);
+    expect(harness.controller.state.status).toBe("Showing first 20 matches");
     await harness.controller.dispatch({ type: "completion.accept" }, viewport);
     expect(harness.controller.state.buffer.text).toBe("See [[Release Notes]]");
     expect(harness.controller.state.completion).toBeNull();
+    expect(harness.controller.state.status).toBe("");
   });
 
   test("completes directories without closing and files with a closing bracket", async () => {

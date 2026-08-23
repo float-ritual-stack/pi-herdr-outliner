@@ -9,7 +9,6 @@ import {
   type OutlinerEventEnvelope,
   type OutlinerRequest,
   type OutlinerResponse,
-  type WorkspaceSnapshot,
 } from "./types";
 
 export class OutlinerServer {
@@ -82,19 +81,14 @@ export class OutlinerServer {
         case "ping":
           result = { status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION };
           break;
-        case "list":
-          result = this.store.list(request.query);
+        case "blocks.query":
+          result = this.store.queryBlocks(request.query);
           break;
         case "children":
           result = this.store.children(request.parentId);
           break;
         case "workspace.snapshot":
-          result = {
-            blocks: this.store.list(request.query),
-            allBlocks: this.store.list({ includeCollapsed: true, limit: 100_000 }),
-            selection: this.store.getSelection(),
-            sequence: this.store.sequence,
-          } satisfies WorkspaceSnapshot;
+          result = this.store.readWorkspaceSnapshot(request.view);
           break;
         case "events.subscribe":
           result = { subscribed: true };

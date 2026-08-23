@@ -26,7 +26,8 @@ function view(rows: VisibleBlock[], overrides: Partial<TreeView> = {}): TreeView
   return {
     workspaceRoot: "/w",
     rows,
-    allBlocksById: new Map(rows.map((row) => [row.id, row])),
+    physicalBlocksById: new Map(rows.map((row) => [row.id, row])),
+    visibleCompleteness: { kind: "complete" },
     selectedIndex: 0,
     activeFilter: "",
     mode: "browse",
@@ -109,6 +110,7 @@ describe("renderTreeFrame", () => {
           end: 3,
           index: 0,
           items: [{ label: "Home", insertion: "[[Home]]" }],
+          truncatedLimit: null,
         },
       }),
       80,
@@ -125,6 +127,30 @@ describe("renderTreeFrame", () => {
     expect(rendered.at(-2)).toBe(
       "Quick edit: ←→ cursor  Tab complete  Enter save  Shift+Enter/Ctrl+E multiline  Esc cancel",
     );
+  });
+
+  test("renders explicit snapshot and completion truncation warnings", () => {
+    const selected = block("selected");
+    const rendered = renderTreeFrame(
+      view([selected], {
+        visibleCompleteness: { kind: "truncated", limit: 500 },
+        mode: "edit",
+        quickInput: "[[s",
+        quickColumn: 3,
+        quickCompletion: {
+          start: 0,
+          end: 3,
+          index: 0,
+          truncatedLimit: 20,
+          items: [{ label: "Selected", insertion: "[[Selected]]" }],
+        },
+      }),
+      100,
+      10,
+    ).frame;
+
+    expect(rendered).toContain("1 blocks\u001b[0m  \u001b[33mWARNING: truncated at 500\u001b[0m");
+    expect(rendered).toContain("Completions 1/1 · Showing first 20 matches");
   });
 
   test("renders filter, delete, and viewer mode-specific frames", () => {

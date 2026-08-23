@@ -23,18 +23,21 @@ afterEach(() => {
 describe("OutlinerStore", () => {
   test("indexes inline properties and combines filters", () => {
     const store = makeStore();
-    const workspace = store.list().find((block) => block.properties.some((property) => property.value === "workspace"));
+    const workspace = store
+      .traversePreorder({ collapsedDescendants: "prune" })
+      .find((block) => block.properties.some((property) => property.value === "workspace"));
     expect(workspace).toBeDefined();
 
     store.create("Choose protocol [type::question] [status::open]", workspace!.id, "agent");
     store.create("Resolved question [type::question] [status::answered]", workspace!.id, "user");
 
-    const matches = store.list({
+    const matches = store.queryBlocks({
       filters: [
         { key: "type", value: "question" },
         { key: "status", value: "open" },
       ],
-    });
+      limit: 10,
+    }).blocks;
     expect(matches).toHaveLength(1);
     expect(matches[0].text).toContain("Choose protocol");
     expect(matches[0].author).toBe("agent");
@@ -49,12 +52,13 @@ Second paragraph`;
 
     expect(store.require(block.id).text).toBe(text);
     expect(
-      store.list({
+      store.queryBlocks({
         filters: [
           { key: "type", value: "progress" },
           { key: "status", value: "active" },
         ],
-      })[0].id,
+        limit: 10,
+      }).blocks[0].id,
     ).toBe(block.id);
   });
 
@@ -62,9 +66,17 @@ Second paragraph`;
     const store = makeStore();
     const block = store.create("First line\nSecond line");
 
-    expect(store.list().find((candidate) => candidate.id === block.id)?.multilineExpanded).toBe(false);
+    expect(
+      store
+        .traversePreorder({ collapsedDescendants: "prune" })
+        .find((candidate) => candidate.id === block.id)?.multilineExpanded,
+    ).toBe(false);
     expect(store.toggleMultilineExpanded(block.id)).toBe(true);
-    expect(store.list().find((candidate) => candidate.id === block.id)?.multilineExpanded).toBe(true);
+    expect(
+      store
+        .traversePreorder({ collapsedDescendants: "prune" })
+        .find((candidate) => candidate.id === block.id)?.multilineExpanded,
+    ).toBe(true);
     expect(store.toggleMultilineExpanded(block.id)).toBe(false);
   });
 
@@ -74,8 +86,128 @@ Second paragraph`;
     const child = store.create("Hidden child", parent.id);
     store.toggle(parent.id);
 
-    expect(store.list().some((block) => block.id === child.id)).toBe(false);
-    expect(store.list({ includeCollapsed: true }).some((block) => block.id === child.id)).toBe(true);
+    expect(
+      store
+        .traversePreorder({ collapsedDescendants: "prune" })
+        .some((block) => block.id === child.id),
+    ).toBe(false);
+    expect(
+      store
+        .traversePreorder({ collapsedDescendants: "traverse" })
+        .some((block) => block.id === child.id),
+    ).toBe(true);
+  });
+
+  test("traverses a subtree with physical depth and hydrated display metadata", () => {
+    const store = makeStore();
+    const target = store.create("Referenced title");
+    const root = store.create("Subtree root");
+    const child = store.create(`See ((${target.id}))`, root.id);
+
+    const rows = store.traversePreorder({
+      subtreeRootId: root.id,
+      collapsedDescendants: "traverse",
+    });
+    expect(rows).toEqual([
+      expect.objectContaining({
+        id: root.id,
+        depth: 0,
+        hasChildren: true,
+      }),
+      expect.objectContaining({
+        id: child.id,
+        depth: 1,
+        hasChildren: false,
+        displayText: "See ((Referenced title))",
+      }),
+    ]);
+  });
+
+  test("bounds search explicitly and reports when more matching blocks exist", () => {
+    const store = makeStore();
+    const parent = store.create("Collapsed parent");
+    const first = store.create("Matching child one", parent.id);
+    const second = store.create("Matching child two", parent.id);
+    store.toggle(parent.id);
+
+    expect(store.queryBlocks({ text: "matching child", limit: 1 })).toEqual({
+      blocks: [
+        expect.objectContaining({
+          id: first.id,
+          depth: 1,
+        }),
+      ],
+      completeness: { kind: "truncated", limit: 1 },
+    });
+    expect(store.queryBlocks({ text: "matching child", limit: 2 })).toEqual({
+      blocks: [
+        expect.objectContaining({ id: first.id }),
+        expect.objectContaining({ id: second.id }),
+      ],
+      completeness: { kind: "complete" },
+    });
+    for (const limit of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => store.queryBlocks({ text: "matching", limit })).toThrow(
+        "Block search limit must be a positive integer",
+      );
+    }
+    expect(() =>
+      store.queryBlocks({ text: "matching" } as Parameters<OutlinerStore["queryBlocks"]>[0]),
+    ).toThrow("Block search limit must be a positive integer");
+  });
+
+  test("reads complete visible and physical snapshots without a row cap", () => {
+    const store = makeStore();
+    store.database.exec(`
+      WITH RECURSIVE roots(n) AS (
+        SELECT 1
+        UNION ALL
+        SELECT n + 1 FROM roots WHERE n < 501
+      )
+      INSERT INTO blocks (
+        id, parent_id, position, text, author, collapsed, created_at, updated_at
+      )
+      SELECT
+        'bulk-root-' || n,
+        NULL,
+        1000 + n,
+        'Bulk root ' || n,
+        'user',
+        0,
+        '2026-01-01T00:00:00.000Z',
+        '2026-01-01T00:00:00.000Z'
+      FROM roots;
+    `);
+
+    const snapshot = store.readWorkspaceSnapshot();
+    expect(snapshot.visible.completeness).toEqual({ kind: "complete" });
+    expect(snapshot.physical.completeness).toEqual({ kind: "complete" });
+    expect(snapshot.visible.blocks).toHaveLength(506);
+    expect(snapshot.physical.blocks).toHaveLength(506);
+    expect(snapshot.visible.blocks.some((block) => block.id === "bulk-root-501")).toBe(true);
+    expect(snapshot.physical.blocks.some((block) => block.id === "bulk-root-501")).toBe(true);
+  });
+
+  test("filtered snapshots traverse collapsed ancestors while preserving physical depth", () => {
+    const store = makeStore();
+    const parent = store.create("Collapsed parent");
+    const child = store.create("Filtered child [kind::snapshot-target]", parent.id);
+    store.toggle(parent.id);
+
+    const unfiltered = store.readWorkspaceSnapshot();
+    expect(unfiltered.visible.blocks.some((block) => block.id === child.id)).toBe(false);
+    expect(unfiltered.physical.blocks.find((block) => block.id === child.id)?.depth).toBe(1);
+
+    const filtered = store.readWorkspaceSnapshot({
+      filters: [{ key: "kind", value: "snapshot-target" }],
+    });
+    expect(filtered.visible.blocks).toEqual([
+      expect.objectContaining({
+        id: child.id,
+        depth: 1,
+      }),
+    ]);
+    expect(filtered.physical.blocks.find((block) => block.id === child.id)?.depth).toBe(1);
   });
 
   test("resolves references for display without changing canonical block text", () => {

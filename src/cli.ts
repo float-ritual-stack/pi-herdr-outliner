@@ -1,7 +1,7 @@
 import { parseArgs } from "node:util";
 import { OutlinerClient, type RequestInput } from "./client";
 import { resolvePaths } from "./paths";
-import type { BlockQuery, PropertyFilter } from "./types";
+import type { BlockSearchQuery, PropertyFilter } from "./types";
 
 function parsePropertyFilter(item: string): PropertyFilter {
   const separator = item.includes("::") ? "::" : "=";
@@ -29,12 +29,16 @@ switch (command) {
       strict: true,
     });
     const filters = values.filter?.map(parsePropertyFilter);
-    const query: BlockQuery = {
+    const limit = values.limit === undefined ? 500 : Number(values.limit);
+    if (!Number.isInteger(limit) || limit <= 0) {
+      throw new Error("--limit must be a positive integer");
+    }
+    const query: BlockSearchQuery = {
       filters,
       text: values.text,
-      limit: values.limit ? Number(values.limit) : undefined,
+      limit,
     };
-    request = { action: "list", query };
+    request = { action: "blocks.query", query };
     break;
   }
   case "create": {

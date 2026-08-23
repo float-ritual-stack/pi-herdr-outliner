@@ -13,7 +13,7 @@ import type {
   OutlinerRequest,
   OutlinerServiceStatus,
   PropertyCatalogItem,
-  VisibleBlock,
+  VisibleBlockCollection,
   WorkspaceSnapshot,
 } from "../src/types";
 
@@ -37,17 +37,23 @@ test("serves mutations and property queries over the local socket", async () => 
   const client = new OutlinerClient(socket);
   const service = await client.request<OutlinerServiceStatus>({ action: "ping" });
   expect(service).toEqual({ status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION });
+  expect(service.protocolVersion).toBe(3);
   const block = await client.request<Block>({
     action: "create",
     text: "Waiting for user [type::question] [status::open]",
     author: "agent",
   });
-  const matches = await client.request<VisibleBlock[]>({
-    action: "list",
-    query: { filters: [{ key: "type", value: "question" }] },
+  await client.request<Block>({
+    action: "create",
+    text: "Another question [type::question] [status::open]",
+  });
+  const matches = await client.request<VisibleBlockCollection>({
+    action: "blocks.query",
+    query: { filters: [{ key: "type", value: "question" }], limit: 1 },
   });
 
-  expect(matches.some((candidate) => candidate.id === block.id)).toBe(true);
+  expect(matches.blocks.some((candidate) => candidate.id === block.id)).toBe(true);
+  expect(matches.completeness).toEqual({ kind: "truncated", limit: 1 });
   await client.request({ action: "selection.set", blockId: block.id });
   const context = await client.request<{ selected: Block }>({ action: "selection.get" });
   expect(context.selected.id).toBe(block.id);
@@ -71,6 +77,21 @@ test("serves mutations and property queries over the local socket", async () => 
   } as unknown as OutlinerRequest);
   expect(unsupported.ok).toBe(false);
   if (!unsupported.ok) expect(unsupported.error).toBe("Unsupported action: future.action");
+  const oldList = server.handle({
+    id: "old-list",
+    action: "list",
+  } as unknown as OutlinerRequest);
+  expect(oldList.ok).toBe(false);
+  if (!oldList.ok) expect(oldList.error).toBe("Unsupported action: list");
+  const invalidLimit = server.handle({
+    id: "invalid-query-limit",
+    action: "blocks.query",
+    query: { limit: 0 },
+  });
+  expect(invalidLimit.ok).toBe(false);
+  if (!invalidLimit.ok) {
+    expect(invalidLimit.error).toBe("Block search limit must be a positive integer");
+  }
   const patched = await client.request<Block>({
     action: "properties.patch",
     blockId: block.id,
@@ -156,7 +177,10 @@ test("streams workspace mutations and transient UI commands to subscribers", asy
   const children = await client.request<Block[]>({ action: "children", parentId: null });
   expect(children.some((candidate) => candidate.id === block.id)).toBe(true);
   const snapshot = await client.request<WorkspaceSnapshot>({ action: "workspace.snapshot" });
-  expect(snapshot.blocks.some((candidate) => candidate.id === block.id)).toBe(true);
+  expect(snapshot.visible.blocks.some((candidate) => candidate.id === block.id)).toBe(true);
+  expect(snapshot.visible.completeness).toEqual({ kind: "complete" });
+  expect(snapshot.physical.blocks.some((candidate) => candidate.id === block.id)).toBe(true);
+  expect(snapshot.physical.completeness).toEqual({ kind: "complete" });
   expect(snapshot.selection.selected?.id).toBe(block.id);
 });
 

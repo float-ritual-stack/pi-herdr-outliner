@@ -48,7 +48,9 @@ in `setup`. JSON Schema input instead of typebox:
 - Tools to register (same semantics as pi):
   1. `outliner.create` — text (+ `[prop::value]` markers), optional parentId, author.
   2. `outliner.update` — blockId, text, optional optimistic-concurrency `expectedUpdatedAt`.
-  3. `outliner.query` — text / property filters / subtreeRootId / limit → VisibleBlock[] with depth.
+  3. `outliner.query` — text / property filters / subtreeRootId / optional caller limit.
+     The executor must send `blocks.query` with `limit ?? 100` and return the complete
+     `VisibleBlockCollection` (`{ blocks, completeness }`), not a bare block array.
   4. `outliner.move` — blockId, parentId, position (with descendant-cycle guard from store).
   5. `outliner.annotate_file` — line-range comment under a `[file::path]` block.
   6. `outliner.selection` — read user's selected block + ancestors + children.
@@ -56,6 +58,12 @@ in `setup`. JSON Schema input instead of typebox:
   `content` that the pi version uses.
 - Keep `ensureService(false)` at the top of every executor (ping → spawn headless server
   → wait). This makes the `/outliner` command mostly unnecessary; see §4.
+
+The shared socket protocol is v3. There is no `list` action: every search uses
+`blocks.query`, whose `query.limit` is a required positive integer. Its
+`VisibleBlockCollection.completeness` is either `{ kind: "complete" }` or
+`{ kind: "truncated", limit }`. Plugin and command output must preserve that envelope so
+agents and users can tell when they have only a bounded prefix.
 
 ## 3. Selection-context injection into every prompt
 
@@ -123,10 +131,11 @@ equivalent of pi's command handler + `ctx.ui.notify`.
 
 - Reuse existing tests (`test/store.test.ts`, `protocol.test.ts`, `files.test.ts`,
   `editor.test.ts`) unchanged — they test host-free layers.
-- Add: plugin loads (`/api/plugin` lists `float.opencode-outliner`); each tool round-trips
-  against a live store; `context` hook injects selection and fails open when the service
-  is down; cleanup kills headless server; end-to-end inside herdr opens both panes and
-  focuses the outliner.
+- Add: plugin loads (`/api/plugin` lists `float.opencode-outliner`); every query sends an
+  explicit positive limit, returns `{ blocks, completeness }`, and preserves truncated
+  completeness in agent-visible output; each tool round-trips against a live store;
+  `context` hook injects selection and fails open when the service is down; cleanup kills
+  the headless server; end-to-end inside herdr opens both panes and focuses the outliner.
 
 ## Suggested layout
 
