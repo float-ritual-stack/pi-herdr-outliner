@@ -1,7 +1,13 @@
 import { rmSync } from "node:fs";
 import { join } from "node:path";
-import { emitKeypressEvents } from "node:readline";
 import { setTimeout as sleep } from "node:timers/promises";
+import {
+  KeybindingsManager,
+  ProcessTerminal,
+  setKeybindings,
+  TUI_KEYBINDINGS,
+  TuiAltScreen,
+} from "@earendil-works/pi-tui";
 import { OutlinerClient, type OutlinerWatcher } from "./client";
 import {
   createDetailController,
@@ -9,16 +15,11 @@ import {
   type DetailViewport,
 } from "./detail-controller";
 import { createDetailKeyHandler } from "./detail-keymap";
-import { renderDetailAnsi } from "./detail-renderer";
+import { decodePiDetailInput } from "./detail-pi-input";
+import { DetailPiComponent } from "./detail-pi-renderer";
 import { completeReferencedPaths, readReferencedFile } from "./files";
 import { focusPluginPane, registerPaneState } from "./pane-control";
 import { resolvePaths } from "./paths";
-import {
-  BRACKETED_PASTE_DISABLE,
-  BRACKETED_PASTE_ENABLE,
-  TerminalInputDecoder,
-  type TerminalKey,
-} from "./terminal";
 import {
   OUTLINER_PROTOCOL_VERSION,
   type Block,
@@ -27,18 +28,28 @@ import {
   type VisibleBlock,
 } from "./types";
 
+setKeybindings(
+  new KeybindingsManager(TUI_KEYBINDINGS, {
+    "tui.altScreen.pageUp": [],
+    "tui.altScreen.pageDown": [],
+    "tui.altScreen.top": [],
+    "tui.altScreen.bottom": [],
+  }),
+);
+
 const paths = resolvePaths();
 const client = new OutlinerClient(paths.socket);
 const paneStatePath = join(paths.stateDir, "detail-pane.json");
+const terminal = new ProcessTerminal();
+const tui = new TuiAltScreen(terminal, false, undefined, { mouse: false });
 let stopping = false;
 let watcher: OutlinerWatcher | null = null;
 let workQueue = Promise.resolve();
-let pendingPaste: string | null = null;
 
 function viewport(): DetailViewport {
   return {
-    width: process.stdout.columns ?? 100,
-    height: process.stdout.rows ?? 30,
+    width: terminal.columns,
+    height: terminal.rows,
   };
 }
 
@@ -77,21 +88,13 @@ const effects: DetailEffects = {
   },
 };
 
-function draw(): void {
-  process.stdout.write(renderDetailAnsi(controller.state, viewport()));
-}
-
-const controller = createDetailController(effects, draw);
+const controller = createDetailController(effects, () => tui.requestRender());
 
 function enqueueWork(task: () => void | Promise<void>): void {
   workQueue = workQueue.then(task).catch((error) => {
     controller.onServiceError(error);
   });
 }
-
-const inputDecoder = new TerminalInputDecoder((text) => {
-  pendingPaste = text;
-});
 
 async function waitForService(): Promise<void> {
   const deadline = Date.now() + 5000;
@@ -116,17 +119,53 @@ function startWatcher(): void {
   });
 }
 
-function stop(): void {
+async function stop(exitCode = 0): Promise<void> {
   if (stopping) return;
   stopping = true;
   watcher?.stop();
-  if (process.stdin.isTTY) process.stdin.setRawMode(false);
-  process.stdout.write(`${BRACKETED_PASTE_DISABLE}\x1b[?25h\x1b[?1049l`);
+  process.stdout.off("resize", handleResize);
+  try {
+    await terminal.drainInput(100, 20);
+  } catch {
+    // Best effort during terminal shutdown.
+  }
+  tui.stop({ preserveScreen: true });
   rmSync(paneStatePath, { force: true });
-  process.exit(0);
+  process.exit(exitCode);
 }
 
-const handleKeypress = createDetailKeyHandler({ controller, viewport, stop });
+const handleKeypress = createDetailKeyHandler({
+  controller,
+  viewport,
+  stop: () => void stop(),
+});
+
+async function handleInput(data: string): Promise<void> {
+  const input = decodePiDetailInput(data);
+  if (input.kind === "paste") {
+    if (controller.isBufferMode()) {
+      await controller.dispatch({ type: "buffer.insert", text: input.text }, viewport());
+    }
+    return;
+  }
+  await handleKeypress(input.str, input.key, input.inputAction);
+}
+
+const component = new DetailPiComponent({
+  state: controller.state,
+  height: () => terminal.rows,
+  onInput(data) {
+    if (stopping) return;
+    enqueueWork(() => handleInput(data));
+  },
+});
+
+tui.setLayoutRoot(component);
+tui.setFocus(component);
+
+function handleResize(): void {
+  enqueueWork(() => controller.dispatch({ type: "viewport.changed" }, viewport()));
+}
 
 async function initialize(): Promise<void> {
   await waitForService();
@@ -142,32 +181,10 @@ try {
   process.exit(1);
 }
 
-emitKeypressEvents(process.stdin);
-if (process.stdin.isTTY) process.stdin.setRawMode(true);
-process.stdout.write(`\x1b[?1049h\x1b[?25l${BRACKETED_PASTE_ENABLE}`);
+process.on("SIGINT", () => void stop());
+process.on("SIGTERM", () => void stop());
+process.on("SIGHUP", () => void stop());
+process.stdout.on("resize", handleResize);
 
-process.on("SIGINT", stop);
-process.on("SIGTERM", stop);
-process.on("SIGHUP", stop);
-
-async function handleInput(str: string, key: TerminalKey): Promise<void> {
-  const inputAction = inputDecoder.consume(str, key);
-  if (pendingPaste !== null) {
-    const text = pendingPaste;
-    pendingPaste = null;
-    if (controller.isBufferMode()) {
-      await controller.dispatch({ type: "buffer.insert", text }, viewport());
-    }
-  }
-  await handleKeypress(str, key, inputAction);
-}
-
-process.stdin.on("keypress", (str: string, key: TerminalKey) => {
-  enqueueWork(() => handleInput(str, key));
-});
-
-process.stdout.on("resize", () => {
-  enqueueWork(() => controller.dispatch({ type: "viewport.changed" }, viewport()));
-});
+tui.start();
 startWatcher();
-draw();

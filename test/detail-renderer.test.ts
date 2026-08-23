@@ -1,6 +1,7 @@
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "bun:test";
 import type { DetailState } from "../src/detail-controller";
-import { renderDetailAnsi } from "../src/detail-renderer";
+import { renderDetailAnsi, renderDetailLines } from "../src/detail-renderer";
 import { TextBuffer } from "../src/text-buffer";
 import type { Block } from "../src/types";
 
@@ -202,4 +203,52 @@ describe("detail ANSI renderer", () => {
     expect(annotationFrame).toContain("\x1b[1mComment\x1b[0m\nNeeds a guard.");
     expect(annotationState.previewOffset).toBe(beforeOffset);
   });
+});
+
+test("sanitizes dynamic terminal controls and respects compact viewport heights", () => {
+  const selected = block(
+    "safe\x1b[2Jtext\x9b?1049lrest\x1b]0;owned\x07done\x90payload\x1b\\tail",
+  );
+  const detail = state({
+    context: { selected, ancestors: [], children: [] },
+    resolvedSelectedText: selected.text,
+    resolvedBreadcrumb: "Title\x1b[?1049lnext\x9dwindow title\x9cafter",
+    status: "Status\x9b2Jdone\x1b_apc payload\x1b\\tail",
+  });
+
+  const lines = renderDetailLines(detail, { width: 80, height: 8 });
+  const rendered = lines.join("\n");
+  expect(rendered).toContain("safetextrestdonetail");
+  expect(rendered).toContain("Titlenextafter");
+  expect(rendered).toContain("Statusdonetail");
+  expect(rendered).not.toContain("\x1b[2J");
+  expect(rendered).not.toContain("[2J");
+  expect(rendered).not.toContain("2J");
+  expect(rendered).not.toContain("\x1b[?1049l");
+  expect(rendered).not.toContain("[?1049l");
+  expect(rendered).not.toContain("?1049l");
+  expect(rendered).not.toContain("owned");
+  expect(rendered).not.toContain("payload");
+  expect(rendered).not.toContain("window title");
+  expect(lines.every((line) => visibleWidth(line) <= 80)).toBe(true);
+  expect(lines.every((line) => !/[\n\r\x07\x80-\x9f]/.test(line))).toBe(true);
+
+  for (let height = 1; height <= 5; height += 1) {
+    expect(renderDetailLines(detail, { width: 80, height })).toHaveLength(height);
+  }
+});
+
+test("reserves one cell for the software cursor on wide edit text", () => {
+  const selected = block("\t界界");
+  const buffer = new TextBuffer(selected.text);
+  buffer.moveEnd();
+  const lines = renderDetailLines(state({
+    context: { selected, ancestors: [], children: [] },
+    mode: "edit",
+    buffer,
+  }), { width: 10, height: 8 });
+
+  expect(lines.every((line) => visibleWidth(line) <= 10)).toBe(true);
+  expect(lines.some((line) => line.includes("▏"))).toBe(true);
+  expect(lines[3]).toBe("   1 界界▏");
 });

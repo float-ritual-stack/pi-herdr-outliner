@@ -361,7 +361,7 @@ describe("detail controller completion, navigation, and focus", () => {
     ]);
   });
 
-  test("keeps file cursor and offset within page bounds", async () => {
+  test("keeps the file cursor visible when the viewport shrinks", async () => {
     const block = makeBlock({ properties: [{ key: "file", value: "src/example.ts" }] });
     const harness = createHarness(block, filePreview());
     const shortViewport = { width: 40, height: 9 };
@@ -373,8 +373,20 @@ describe("detail controller completion, navigation, and focus", () => {
     expect(harness.controller.state.fileCursor).toBe(7);
     expect(harness.controller.state.fileOffset).toBe(5);
     expect(harness.controller.state.selectionAnchor).toBe(3);
-    await harness.controller.dispatch({ type: "view.block" }, shortViewport);
-    expect(harness.controller.state.mode).toBe("file");
+
+    await harness.controller.dispatch({ type: "viewport.changed" }, { width: 40, height: 6 });
+    expect(harness.controller.state.fileOffset).toBe(7);
+  });
+
+  test("opens the raw block preview from file mode", async () => {
+    const block = makeBlock({ properties: [{ key: "file", value: "src/example.ts" }] });
+    const harness = createHarness(block, filePreview());
+    await harness.controller.initialize();
+
+    await harness.controller.dispatch({ type: "view.block" }, viewport);
+
+    expect(harness.controller.state.mode).toBe("preview");
+    expect(harness.controller.state.previewOffset).toBe(0);
   });
 
   test("preserves the established focus-status precedence", async () => {
