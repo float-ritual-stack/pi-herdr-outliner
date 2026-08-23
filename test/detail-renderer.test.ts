@@ -206,22 +206,35 @@ describe("detail ANSI renderer", () => {
 });
 
 test("sanitizes dynamic terminal controls and respects compact viewport heights", () => {
-  const selected = block("safe\x1b[2Jtext\x07\x9b2J");
+  const selected = block(
+    "safe\x1b[2Jtext\x9b?1049lrest\x1b]0;owned\x07done\x90payload\x1b\\tail",
+  );
   const detail = state({
     context: { selected, ancestors: [], children: [] },
     resolvedSelectedText: selected.text,
-    resolvedBreadcrumb: "Title\x1b[?1049l\nnext\x9dtitle",
-    status: "Status\x1b[2J\x07\x9b?1049l",
+    resolvedBreadcrumb: "Title\x1b[?1049lnext\x9dwindow title\x9cafter",
+    status: "Status\x9b2Jdone\x1b_apc payload\x1b\\tail",
   });
 
-  const lines = renderDetailLines(detail, { width: 20, height: 8 });
-  expect(lines.join("\n")).not.toContain("\x1b[2J");
-  expect(lines.join("\n")).not.toContain("\x1b[?1049l");
-  expect(lines.every((line) => visibleWidth(line) <= 20)).toBe(true);
+  const lines = renderDetailLines(detail, { width: 80, height: 8 });
+  const rendered = lines.join("\n");
+  expect(rendered).toContain("safetextrestdonetail");
+  expect(rendered).toContain("Titlenextafter");
+  expect(rendered).toContain("Statusdonetail");
+  expect(rendered).not.toContain("\x1b[2J");
+  expect(rendered).not.toContain("[2J");
+  expect(rendered).not.toContain("2J");
+  expect(rendered).not.toContain("\x1b[?1049l");
+  expect(rendered).not.toContain("[?1049l");
+  expect(rendered).not.toContain("?1049l");
+  expect(rendered).not.toContain("owned");
+  expect(rendered).not.toContain("payload");
+  expect(rendered).not.toContain("window title");
+  expect(lines.every((line) => visibleWidth(line) <= 80)).toBe(true);
   expect(lines.every((line) => !/[\n\r\x07\x80-\x9f]/.test(line))).toBe(true);
 
   for (let height = 1; height <= 5; height += 1) {
-    expect(renderDetailLines(detail, { width: 20, height })).toHaveLength(height);
+    expect(renderDetailLines(detail, { width: 80, height })).toHaveLength(height);
   }
 });
 
