@@ -1,7 +1,12 @@
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { matchesFilters, parseProperties, patchPropertyText } from "./properties";
+import {
+  matchesFilters,
+  parseProperties,
+  patchPropertyText,
+  PROPERTY_PARSER_VERSION,
+} from "./properties";
 import { resolveBlockReferences as resolveBlockReferenceText } from "./references";
 import type {
   Block,
@@ -201,8 +206,7 @@ export class OutlinerStore {
   }
 
   get(id: string): Block | null {
-    const row = this.database.query("SELECT * FROM blocks WHERE id = ?").get(id) as BlockRow | null;
-    return row ? this.hydrate(row) : null;
+    return this.database.transaction(() => this.getFromCurrentRead(id))();
   }
 
   require(id: string): Block {
@@ -212,15 +216,15 @@ export class OutlinerStore {
   }
 
   children(parentId: string | null): Block[] {
-    const rows = this.database
-      .query("SELECT * FROM blocks WHERE parent_id IS ? ORDER BY position, created_at")
-      .all(parentId) as BlockRow[];
-    return rows.map((row) => this.hydrate(row));
+    return this.database.transaction(() => this.childrenFromCurrentRead(parentId))();
   }
 
   traversePreorder(options: BlockTraversalOptions): VisibleBlock[] {
-    return this.traverseLoadedGraph(this.loadGraph(), options);
+    return this.database.transaction(() =>
+      this.traverseLoadedGraph(this.loadGraph(), options)
+    )();
   }
+
 
   queryBlocks(query: BlockSearchQuery): VisibleBlockCollection {
     const limit = query?.limit;
@@ -228,20 +232,22 @@ export class OutlinerStore {
       throw new Error("Block search limit must be a positive integer");
     }
 
-    const blocks = this.traverseLoadedGraph(this.loadGraph(), {
-      filters: query.filters,
-      subtreeRootId: query.subtreeRootId,
-      collapsedDescendants: "traverse",
-      text: query.text,
-      stopAfterMatches: limit + 1,
-    });
-    if (blocks.length <= limit) {
-      return { blocks, completeness: { kind: "complete" } };
-    }
-    return {
-      blocks: blocks.slice(0, limit),
-      completeness: { kind: "truncated", limit },
-    };
+    return this.database.transaction((): VisibleBlockCollection => {
+      const blocks = this.traverseLoadedGraph(this.loadGraph(), {
+        filters: query.filters,
+        subtreeRootId: query.subtreeRootId,
+        collapsedDescendants: "traverse",
+        text: query.text,
+        stopAfterMatches: limit + 1,
+      });
+      if (blocks.length <= limit) {
+        return { blocks, completeness: { kind: "complete" } };
+      }
+      return {
+        blocks: blocks.slice(0, limit),
+        completeness: { kind: "truncated", limit },
+      };
+    })();
   }
 
   readWorkspaceSnapshot(view: WorkspaceSnapshotView = {}): WorkspaceSnapshot {
@@ -265,27 +271,47 @@ export class OutlinerStore {
   }
 
   getSelection(): SelectionContext {
+    return this.database.transaction(() => this.selectionFromCurrentRead())();
+  }
+
+  setSelection(blockId: string | null): SelectionContext {
+    return this.database.transaction(() => {
+      if (blockId !== null && !this.getFromCurrentRead(blockId)) {
+        throw new Error(`Block not found: ${blockId}`);
+      }
+      this.database.query("UPDATE selection SET block_id = ? WHERE singleton = 1").run(blockId);
+      return this.selectionFromCurrentRead();
+    })();
+  }
+
+  private getFromCurrentRead(id: string): Block | null {
+    const row = this.database.query("SELECT * FROM blocks WHERE id = ?").get(id) as BlockRow | null;
+    return row ? this.hydrate(row) : null;
+  }
+
+  private childrenFromCurrentRead(parentId: string | null): Block[] {
+    const rows = this.database
+      .query("SELECT * FROM blocks WHERE parent_id IS ? ORDER BY position, created_at")
+      .all(parentId) as BlockRow[];
+    return rows.map((row) => this.hydrate(row));
+  }
+
+  private selectionFromCurrentRead(): SelectionContext {
     const row = this.database.query("SELECT block_id FROM selection WHERE singleton = 1").get() as
       | { block_id: string | null }
       | null;
-    const selected = row?.block_id ? this.get(row.block_id) : null;
+    const selected = row?.block_id ? this.getFromCurrentRead(row.block_id) : null;
     if (!selected) return { selected: null, ancestors: [], children: [] };
 
     const ancestors: Block[] = [];
     let parentId = selected.parentId;
     while (parentId) {
-      const parent = this.get(parentId);
+      const parent = this.getFromCurrentRead(parentId);
       if (!parent) break;
       ancestors.unshift(parent);
       parentId = parent.parentId;
     }
-    return { selected, ancestors, children: this.children(selected.id) };
-  }
-
-  setSelection(blockId: string | null): SelectionContext {
-    if (blockId !== null) this.require(blockId);
-    this.database.query("UPDATE selection SET block_id = ? WHERE singleton = 1").run(blockId);
-    return this.getSelection();
+    return { selected, ancestors, children: this.childrenFromCurrentRead(selected.id) };
   }
 
   private loadGraph(): LoadedGraph {
@@ -425,6 +451,40 @@ export class OutlinerStore {
         multiline_expanded INTEGER NOT NULL DEFAULT 0
       );
     `);
+    this.migratePropertyIndex();
+  }
+
+  private migratePropertyIndex(): void {
+    this.database.transaction(() => {
+      const versionRow = this.database
+        .query("SELECT value FROM metadata WHERE key = 'property_parser_version'")
+        .get() as { value: string } | null;
+      const storedVersion = versionRow ? Number(versionRow.value) : 0;
+      if (!Number.isInteger(storedVersion) || storedVersion < 0) {
+        throw new Error(`Invalid property parser version: ${versionRow?.value}`);
+      }
+      if (storedVersion > PROPERTY_PARSER_VERSION) {
+        throw new Error(
+          `Database property parser version ${storedVersion} is newer than supported version ${PROPERTY_PARSER_VERSION}`,
+        );
+      }
+      if (storedVersion === PROPERTY_PARSER_VERSION) return;
+
+      const existingBlocks = this.database.query("SELECT id, text FROM blocks ORDER BY id").all() as Array<{
+        id: string;
+        text: string;
+      }>;
+      this.database.query("DELETE FROM block_properties").run();
+      for (const block of existingBlocks) {
+        this.replaceProperties(block.id, parseProperties(block.text));
+      }
+      this.database
+        .query(
+          "INSERT INTO metadata (key, value) VALUES ('property_parser_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        )
+        .run(String(PROPERTY_PARSER_VERSION));
+      if (existingBlocks.length > 0) this.bumpSequence();
+    })();
   }
 
   private seed(): void {
@@ -468,18 +528,20 @@ export class OutlinerStore {
   }
 
   private normalizePositions(parentId: string | null): void {
-    const siblings = this.children(parentId);
+    const siblings = this.childrenFromCurrentRead(parentId);
     const update = this.database.query("UPDATE blocks SET position = ? WHERE id = ?");
     siblings.forEach((sibling, index) => update.run(index, sibling.id));
   }
 
   private isDescendant(candidateId: string, ancestorId: string): boolean {
-    let current = this.get(candidateId);
-    while (current?.parentId) {
-      if (current.parentId === ancestorId) return true;
-      current = this.get(current.parentId);
-    }
-    return false;
+    return this.database.transaction(() => {
+      let current = this.getFromCurrentRead(candidateId);
+      while (current?.parentId) {
+        if (current.parentId === ancestorId) return true;
+        current = this.getFromCurrentRead(current.parentId);
+      }
+      return false;
+    })();
   }
 
   private bumpSequence(): void {
