@@ -1,14 +1,27 @@
 import {
   decodeKittyPrintable,
+  isKeyRelease,
   Key,
   matchesKey,
   parseKey,
   type KeyId,
+  type TuiInputListener,
 } from "@earendil-works/pi-tui";
 import type { TerminalInputAction, TerminalKey } from "./terminal";
 
 const BRACKETED_PASTE_START = "\x1b[200~";
 const BRACKETED_PASTE_END = "\x1b[201~";
+
+export function createPiDetailInputListener(
+  onInput: (data: string) => void,
+  shouldPassThrough?: () => boolean,
+): TuiInputListener {
+  return (data) => {
+    if (shouldPassThrough?.()) return undefined;
+    if (!isKeyRelease(data)) onInput(data);
+    return { consume: true };
+  };
+}
 
 export type PiDetailInput =
   | { kind: "paste"; text: string }

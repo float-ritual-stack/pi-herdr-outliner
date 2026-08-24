@@ -1,6 +1,7 @@
 import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { getMarkdownTheme, initTheme } from "@earendil-works/pi-coding-agent";
 import {
   KeybindingsManager,
   ProcessTerminal,
@@ -15,7 +16,8 @@ import {
   type DetailViewport,
 } from "./detail-controller";
 import { createDetailKeyHandler } from "./detail-keymap";
-import { decodePiDetailInput } from "./detail-pi-input";
+import { createPiDetailInputListener, decodePiDetailInput } from "./detail-pi-input";
+import { DetailPiPreviewLayout } from "./detail-pi-preview";
 import { DetailPiComponent } from "./detail-pi-renderer";
 import { completeReferencedPaths, readReferencedFile } from "./files";
 import { focusPluginPane, registerPaneState } from "./pane-control";
@@ -28,6 +30,7 @@ import {
   type VisibleBlockCollection,
 } from "./types";
 
+initTheme(undefined, false);
 setKeybindings(
   new KeybindingsManager(TUI_KEYBINDINGS, {
     "tui.altScreen.pageUp": [],
@@ -41,7 +44,7 @@ const paths = resolvePaths();
 const client = new OutlinerClient(paths.socket);
 const paneStatePath = join(paths.stateDir, "detail-pane.json");
 const terminal = new ProcessTerminal();
-const tui = new TuiAltScreen(terminal, false, undefined, { mouse: false });
+const tui = new TuiAltScreen(terminal, false, undefined, { mouse: true });
 let stopping = false;
 let watcher: OutlinerWatcher | null = null;
 let workQueue = Promise.resolve();
@@ -88,7 +91,11 @@ const effects: DetailEffects = {
   },
 };
 
-const controller = createDetailController(effects, () => tui.requestRender());
+let synchronizeLayout: (() => void) | undefined;
+const controller = createDetailController(effects, () => {
+  if (synchronizeLayout) synchronizeLayout();
+  else tui.requestRender();
+});
 
 function enqueueWork(task: () => void | Promise<void>): void {
   workQueue = workQueue.then(task).catch((error) => {
@@ -141,6 +148,11 @@ const handleKeypress = createDetailKeyHandler({
 });
 
 async function handleInput(data: string): Promise<void> {
+  if (preview.handleInput(data)) {
+    tui.requestRender();
+    return;
+  }
+
   const input = decodePiDetailInput(data);
   if (input.kind === "paste") {
     if (controller.isBufferMode()) {
@@ -151,17 +163,33 @@ async function handleInput(data: string): Promise<void> {
   await handleKeypress(input.str, input.key, input.inputAction);
 }
 
-const component = new DetailPiComponent({
+const customFrame = new DetailPiComponent({
   state: controller.state,
   height: () => terminal.rows,
-  onInput(data) {
-    if (stopping) return;
-    enqueueWork(() => handleInput(data));
-  },
 });
+const preview = new DetailPiPreviewLayout(controller.state, getMarkdownTheme());
+let layoutRoot: DetailPiComponent | DetailPiPreviewLayout | undefined;
 
-tui.setLayoutRoot(component);
-tui.setFocus(component);
+synchronizeLayout = () => {
+  const previewActive = controller.state.mode === "preview";
+  preview.setActive(previewActive);
+  const nextRoot = previewActive ? preview : customFrame;
+  if (nextRoot !== layoutRoot) {
+    layoutRoot = nextRoot;
+    tui.setLayoutRoot(nextRoot);
+  }
+  tui.requestRender();
+};
+synchronizeLayout();
+
+tui.addInputListener(
+  createPiDetailInputListener(
+    (data) => {
+      if (!stopping) enqueueWork(() => handleInput(data));
+    },
+    () => tui.hasOverlay(),
+  ),
+);
 
 function handleResize(): void {
   enqueueWork(() => controller.dispatch({ type: "viewport.changed" }, viewport()));
