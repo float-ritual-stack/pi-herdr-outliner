@@ -43,6 +43,7 @@ class DetailPreviewFooter implements Component {
 export class DetailPiPreviewLayout extends VStack {
   readonly markdown: Markdown;
   readonly scrollView: ScrollView;
+  private sourceText: string | undefined;
 
   private renderedText: string | undefined;
   private previousSelectionId: string | null | undefined;
@@ -104,13 +105,16 @@ export class DetailPiPreviewLayout extends VStack {
     const selectionId = this.state.context.selected?.id ?? null;
     const selectionChanged = selectionId !== this.previousSelectionId;
     this.previousSelectionId = selectionId;
-
-    const text = this.state.context.selected
-      ? sanitizeMarkdownDocument(this.state.resolvedSelectedText)
+    const sourceText = this.state.context.selected
+      ? this.state.resolvedSelectedText
       : "Select a block in the outliner pane.";
-    if (text !== this.renderedText) {
-      this.renderedText = text;
-      this.markdown.setText(text);
+    if (sourceText !== this.sourceText) {
+      this.sourceText = sourceText;
+      // Preserve the complete document; source and Markdown render caches avoid repeated full-text work.
+      this.renderedText = this.state.context.selected
+        ? sanitizeMarkdownDocument(sourceText)
+        : sourceText;
+      this.markdown.setText(this.renderedText);
     }
     if (this.resetScroll || selectionChanged) this.scrollView.scrollToStart();
     this.resetScroll = false;

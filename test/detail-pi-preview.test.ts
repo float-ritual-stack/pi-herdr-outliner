@@ -189,4 +189,26 @@ describe("Pi Markdown detail preview", () => {
     layout.render(20);
     expect(layout.scrollView.scrollTop).toBe(0);
   });
+
+  test("sanitizes and updates Markdown only when the resolved source changes", () => {
+    const detail = state("Initial **document**");
+    const layout = previewLayout(detail);
+    const originalSetText = layout.markdown.setText.bind(layout.markdown);
+    let updates = 0;
+    layout.markdown.setText = (text: string): void => {
+      updates += 1;
+      originalSetText(text);
+    };
+
+    layout.render(40);
+    layout.render(40);
+    detail.status = "status-only change";
+    layout.render(40);
+    expect(updates).toBe(1);
+
+    detail.resolvedSelectedText = `${"word ".repeat(10_000)}complete ending`;
+    const lines = renderedDocument(layout, 80);
+    expect(updates).toBe(2);
+    expect(lines.map((line) => line.trim()).join(" ")).toContain("complete ending");
+  });
 });
