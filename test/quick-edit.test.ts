@@ -11,10 +11,13 @@ const parents: Record<string, string | undefined> = {
   child: "parent",
   grandchild: "child",
 };
-function isDescendant(candidateId: string, ancestorId: string): boolean {
-  let parentId = parents[candidateId];
+function isDescendant(
+  candidate: { id: string },
+  ancestor: { id: string },
+): boolean {
+  let parentId = parents[candidate.id];
   while (parentId) {
-    if (parentId === ancestorId) return true;
+    if (parentId === ancestor.id) return true;
     parentId = parents[parentId];
   }
   return false;
@@ -36,6 +39,36 @@ test("does not treat a filtered deeper row from another subtree as a descendant"
   ];
   expect(quickInsertionPoint(filteredRows, 0, "add-sibling", () => false)).toEqual({
     gap: 1,
+    depth: 1,
+  });
+});
+
+test("uses row-aware visual ancestry to skip occurrences nested below a physical ancestor", () => {
+  type Row =
+    | { kind: "physical"; id: string; depth: number; parentId?: string }
+    | { kind: "occurrence"; id: string; depth: number; viewId: string };
+  const projectedRows: Row[] = [
+    { kind: "physical", id: "ancestor", depth: 0 },
+    { kind: "physical", id: "definition", depth: 1, parentId: "ancestor" },
+    { kind: "occurrence", id: "projected-card", depth: 2, viewId: "definition" },
+    { kind: "physical", id: "sibling", depth: 0 },
+  ];
+  const visuallyDescends = (candidate: Row, ancestor: Row): boolean => {
+    if (ancestor.kind === "occurrence") return false;
+    if (candidate.kind === "occurrence") {
+      if (candidate.viewId === ancestor.id) return true;
+      const definition = projectedRows.find((row) => row.id === candidate.viewId);
+      return definition?.kind === "physical" && definition.parentId === ancestor.id;
+    }
+    return candidate.parentId === ancestor.id;
+  };
+
+  expect(quickInsertionPoint(projectedRows, 0, "add-sibling", visuallyDescends)).toEqual({
+    gap: 3,
+    depth: 0,
+  });
+  expect(quickInsertionPoint(projectedRows, 1, "add-sibling", visuallyDescends)).toEqual({
+    gap: 3,
     depth: 1,
   });
 });

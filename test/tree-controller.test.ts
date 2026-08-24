@@ -97,6 +97,10 @@ function event(domain: OutlinerEvent["domain"], blockId?: string): OutlinerEvent
   return { id: "event", domain, action: "changed", sequence: 2, blockId };
 }
 
+function lastCall(calls: readonly RequestInput[], action: RequestInput["action"]): RequestInput | undefined {
+  return [...calls].reverse().find((call) => call.action === action);
+}
+
 describe("createTreeController", () => {
   test("uses snapshot selection initially and preserves the current visible selection on refresh", async () => {
     const first = block("first");
@@ -114,11 +118,11 @@ describe("createTreeController", () => {
     const controller = createTreeController(fake.effects);
 
     await controller.initialize();
-    expect(controller.view().rows[controller.view().selectedIndex]?.id).toBe("second");
+    expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe("second");
     expect(fake.calls.some((call) => call.action === "selection.set")).toBe(false);
 
     await controller.handleServiceEvent(event("content"));
-    expect(controller.view().rows[controller.view().selectedIndex]?.id).toBe("second");
+    expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe("second");
     expect(fake.calls.some((call) => call.action === "selection.set")).toBe(false);
   });
 
@@ -141,7 +145,7 @@ describe("createTreeController", () => {
     expect(controller.view().rows).toHaveLength(501);
     expect(controller.view().physicalBlocksById.size).toBe(501);
     expect(controller.view().visibleCompleteness).toEqual({ kind: "complete" });
-    expect(controller.view().rows[controller.view().selectedIndex]?.id).toBe("block-500");
+    expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe("block-500");
     expect(fake.calls.some((call) => call.action === "selection.set")).toBe(false);
   });
 
@@ -160,7 +164,7 @@ describe("createTreeController", () => {
 
     await controller.initialize();
 
-    expect(controller.view().rows.map((row) => row.id)).toEqual(["visible"]);
+    expect(controller.view().rows.map((row) => row.canonicalId)).toEqual(["visible"]);
     expect([...controller.view().physicalBlocksById.keys()]).toEqual(["visible", "hidden"]);
     expect(controller.view().visibleCompleteness).toEqual({ kind: "truncated", limit: 1 });
   });
@@ -190,7 +194,7 @@ describe("createTreeController", () => {
     await controller.initialize();
     await controller.handleServiceEvent(event("content"));
 
-    expect(controller.view().rows[controller.view().selectedIndex]?.id).toBe("parent");
+    expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe("parent");
     expect(fake.calls.some((call) => call.action === "selection.set")).toBe(false);
   });
 
@@ -225,7 +229,7 @@ describe("createTreeController", () => {
       { action: "toggle", blockId: "parent" },
     ]);
     expect(fake.calls.at(-1)).toEqual({ action: "selection.set", blockId: "hidden" });
-    expect(controller.view().rows[controller.view().selectedIndex]?.id).toBe("hidden");
+    expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe("hidden");
   });
 
   test("indents only beneath a canonical sibling in a filtered projection", async () => {
@@ -291,7 +295,7 @@ describe("createTreeController", () => {
 
     expect(controller.view().rows).toBe(completeView.rows);
     expect(controller.view().physicalBlocksById).toBe(completeView.physicalBlocksById);
-    expect(controller.view().rows[controller.view().selectedIndex]?.id).toBe("stable");
+    expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe("stable");
   });
 
   test("commits a quick child before selection handoff, command dispatch, and detail focus", async () => {
@@ -417,5 +421,396 @@ describe("createTreeController", () => {
     expect(fake.calls.some((call) => call.action === "view.toggleMultiline")).toBe(true);
     expect(fake.calls.some((call) => call.action === "ui.command.send")).toBe(false);
     expect(controller.view().status).toBe("Block detail expanded");
+  });
+
+  test("projects generic Next, Doing, and Done branches and requeries on content and connect", async () => {
+    const nextView = block("next-view", {
+      properties: [
+        { key: "type", value: "virtual-branch" },
+        { key: "query", value: "status=Next" },
+      ],
+    });
+    const doingView = block("doing-view", {
+      properties: [
+        { key: "type", value: "virtual-branch" },
+        { key: "query", value: "status=Doing" },
+      ],
+    });
+    const doneView = block("done-view", {
+      properties: [
+        { key: "type", value: "virtual-branch" },
+        { key: "query", value: "status=Done" },
+      ],
+    });
+    const next = block("next", { properties: [{ key: "status", value: "Next" }] });
+    const doing = block("doing", { properties: [{ key: "status", value: "Doing" }] });
+    const done = block("done", { properties: [{ key: "status", value: "Done" }] });
+    const physical = [nextView, doingView, doneView, next, doing, done];
+    let queryCount = 0;
+    const fake = harness((input) => {
+      if (input.action === "workspace.snapshot") return snapshot(physical, nextView);
+      if (input.action === "blocks.query") {
+        queryCount += 1;
+        const status = input.query.filters?.[0]?.value;
+        const match = physical.find((candidate) =>
+          candidate.properties.some((property) => property.key === "status" && property.value === status)
+        );
+        return { blocks: match ? [match] : [], completeness: { kind: "complete" } };
+      }
+      return undefined;
+    });
+    const controller = createTreeController(fake.effects);
+
+    await controller.initialize();
+
+    expect(controller.view().rows.map((row) => row.rowId)).toEqual([
+      "next-view",
+      "occurrence:next-view:next",
+      "doing-view",
+      "occurrence:doing-view:doing",
+      "done-view",
+      "occurrence:done-view:done",
+      "next",
+      "doing",
+      "done",
+    ]);
+    expect(controller.view().branchStates.get("doing-view")).toEqual(expect.objectContaining({
+      queried: true,
+      count: 1,
+      queryError: null,
+      completeness: { kind: "complete" },
+    }));
+    expect(controller.view().physicalBlocksById.size).toBe(6);
+
+    await controller.handleServiceEvent(event("content"));
+    await controller.handleConnect();
+    expect(queryCount).toBe(9);
+  });
+
+  test("creates one property-aware canonical child beneath the configured parent", async () => {
+    const parent = block("cards");
+    const definition = block("doing-view", {
+      properties: [
+        { key: "type", value: "virtual-branch" },
+        { key: "query", value: "status=Doing" },
+        { key: "create", value: "status=Doing" },
+        { key: "create-parent", value: parent.id },
+      ],
+    });
+    let created: VisibleBlock | null = null;
+    const effectOrder: string[] = [];
+    const fake = harness((input) => {
+      effectOrder.push(input.action);
+      if (input.action === "workspace.snapshot") {
+        const physical = created ? [definition, parent, created] : [definition, parent];
+        return snapshot(physical, definition);
+      }
+      if (input.action === "blocks.query") {
+        return {
+          blocks: created ? [created] : [],
+          completeness: { kind: "complete" },
+        };
+      }
+      if (input.action === "create") {
+        created = block("created", {
+          parentId: input.parentId,
+          text: input.text,
+          displayText: input.text,
+          properties: [{ key: "status", value: "Doing" }],
+        });
+        return created;
+      }
+      return undefined;
+    });
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+    effectOrder.length = 0;
+
+    await controller.handleKeypress("a", { name: "a" }, "pass");
+    await controller.handleKeypress("Task [status::Next]", { sequence: "Task [status::Next]" }, "pass");
+    await controller.handleKeypress("", { name: "return" }, "pass");
+
+    expect(fake.calls.filter((call) => call.action === "create")).toEqual([{
+      action: "create",
+      parentId: "cards",
+      text: "Task [status::Doing]",
+      author: "user",
+    }]);
+    expect(effectOrder).toEqual([
+      "create",
+      "workspace.snapshot",
+      "blocks.query",
+      "selection.set",
+    ]);
+    expect(fake.calls.some((call) => call.action === "move")).toBe(false);
+    expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe("created");
+  });
+
+  test("keeps occurrence identity while editing and routes allowed effects to the canonical block", async () => {
+    const definition = block("view", {
+      properties: [
+        { key: "type", value: "virtual-branch" },
+        { key: "query", value: "status=Doing" },
+      ],
+    });
+    let card: VisibleBlock | null = block("card", {
+      text: "Card",
+      displayText: "Card",
+      properties: [{ key: "status", value: "Doing" }],
+    });
+    let openedFileId = "";
+    const fake = harness((input) => {
+      const physical = card ? [definition, card] : [definition];
+      if (input.action === "workspace.snapshot") return snapshot(physical, definition);
+      if (input.action === "blocks.query") {
+        return { blocks: card ? [card] : [], completeness: { kind: "complete" } };
+      }
+      if (input.action === "update" && card) {
+        card = { ...card, text: input.text, displayText: input.text };
+        return card;
+      }
+      if (input.action === "view.toggleMultiline" && card) {
+        card = { ...card, multilineExpanded: true };
+        return { expanded: true };
+      }
+      if (input.action === "delete") {
+        card = null;
+        return undefined;
+      }
+      return undefined;
+    });
+    fake.effects.filesystem.readReferencedFile = (selected) => {
+      openedFileId = selected.id;
+      return {
+        absolutePath: "/workspace/card.txt",
+        displayPath: "card.txt",
+        sourcePath: "card.txt",
+        firstLine: 1,
+        lines: ["card"],
+      };
+    };
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+    await controller.handleKeypress("", { name: "down" }, "pass");
+
+    await controller.handleKeypress(".", { name: "." }, "modified-enter");
+    expect(lastCall(fake.calls, "view.toggleMultiline")).toEqual({
+      action: "view.toggleMultiline",
+      blockId: "card",
+    });
+    expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe(
+      "occurrence:view:card",
+    );
+    expect(controller.view().rows[controller.view().selectedIndex]?.multilineExpanded).toBe(true);
+
+    await controller.handleKeypress("f", { name: "f" }, "pass");
+    expect(openedFileId).toBe("card");
+    await controller.handleKeypress("", { name: "escape" }, "pass");
+
+    await controller.handleKeypress("", { name: "return" }, "pass");
+    await controller.handleKeypress("!", { sequence: "!" }, "pass");
+    await controller.handleKeypress("", { name: "return" }, "pass");
+    expect(lastCall(fake.calls, "update")).toEqual({
+      action: "update",
+      blockId: "card",
+      text: "Card!",
+      expectedUpdatedAt: "2026-08-22T00:00:00.000Z",
+    });
+    expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe(
+      "occurrence:view:card",
+    );
+
+    await controller.handleKeypress("", { name: "e", ctrl: true }, "pass");
+    expect(lastCall(fake.calls, "ui.command.send")).toEqual({
+      action: "ui.command.send",
+      command: { target: "detail", command: "edit", blockId: "card" },
+    });
+    await controller.handleKeypress("", { name: "up" }, "pass");
+    expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe(
+      "occurrence:view:card",
+    );
+
+    await controller.handleKeypress("d", { name: "d" }, "pass");
+    await controller.handleKeypress("y", { name: "y" }, "pass");
+    expect(lastCall(fake.calls, "delete")).toEqual({
+      action: "delete",
+      blockId: "card",
+    });
+    expect(JSON.stringify(fake.calls)).not.toContain("occurrence:");
+  });
+
+  test("falls back from a disappeared occurrence to its still-visible canonical row", async () => {
+    const definition = block("view", {
+      properties: [
+        { key: "type", value: "virtual-branch" },
+        { key: "query", value: "status=Doing" },
+      ],
+    });
+    const card = block("card", { properties: [{ key: "status", value: "Doing" }] });
+    let matches = true;
+    const fake = harness((input) => {
+      if (input.action === "workspace.snapshot") return snapshot([definition, card], definition);
+      if (input.action === "blocks.query") {
+        return { blocks: matches ? [card] : [], completeness: { kind: "complete" } };
+      }
+      return undefined;
+    });
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+    await controller.handleKeypress("", { name: "down" }, "pass");
+    expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe(
+      "occurrence:view:card",
+    );
+
+    matches = false;
+    await controller.handleServiceEvent(event("content"));
+
+    expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe("card");
+    expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe("card");
+  });
+
+  test("prefers the physical row when one of several occurrences disappears", async () => {
+    const firstView = block("first-view", {
+      properties: [
+        { key: "type", value: "virtual-branch" },
+        { key: "query", value: "lane=first" },
+      ],
+    });
+    const secondView = block("second-view", {
+      properties: [
+        { key: "type", value: "virtual-branch" },
+        { key: "query", value: "lane=second" },
+      ],
+    });
+    const card = block("card");
+    let secondMatches = true;
+    const fake = harness((input) => {
+      if (input.action === "workspace.snapshot") {
+        return snapshot([firstView, secondView, card], firstView);
+      }
+      if (input.action === "blocks.query") {
+        const lane = input.query.filters?.[0]?.value;
+        return {
+          blocks: lane === "first" || secondMatches ? [card] : [],
+          completeness: { kind: "complete" },
+        };
+      }
+      return undefined;
+    });
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+    await controller.handleKeypress("", { name: "down" }, "pass");
+    await controller.handleKeypress("", { name: "down" }, "pass");
+    await controller.handleKeypress("", { name: "down" }, "pass");
+    expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe(
+      "occurrence:second-view:card",
+    );
+
+    secondMatches = false;
+    await controller.handleServiceEvent(event("content"));
+
+    expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe("card");
+  });
+
+  test("exposes truncated, failed, read-only, and invalid branch state with explicit status", async () => {
+    const parent = block("parent");
+    const limited = block("limited", {
+      properties: [
+        { key: "type", value: "virtual-branch" },
+        { key: "query", value: "status=Doing" },
+        { key: "limit", value: "2" },
+      ],
+    });
+    const failed = block("failed", {
+      properties: [
+        { key: "type", value: "virtual-branch" },
+        { key: "query", value: "status=Next" },
+      ],
+    });
+    const readOnly = block("readonly", {
+      properties: [
+        { key: "type", value: "virtual-branch" },
+        { key: "query", value: "status=Done" },
+      ],
+    });
+    const invalid = block("invalid", {
+      properties: [
+        { key: "type", value: "virtual-branch" },
+        { key: "query", value: "status=Next" },
+        { key: "query", value: "status=Doing" },
+      ],
+    });
+    const matches = [block("one"), block("two"), block("three")];
+    const physical = [limited, failed, readOnly, invalid, parent, ...matches];
+    const fake = harness((input) => {
+      if (input.action === "workspace.snapshot") return snapshot(physical, readOnly);
+      if (input.action === "blocks.query") {
+        const status = input.query.filters?.[0]?.value;
+        if (status === "Next") throw new Error("query unavailable");
+        return {
+          blocks: status === "Doing" ? matches : [],
+          completeness: { kind: "complete" },
+        };
+      }
+      return undefined;
+    });
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+
+    expect(controller.view().branchStates.get("limited")).toEqual(expect.objectContaining({
+      count: 2,
+      completeness: { kind: "truncated", limit: 2 },
+    }));
+    expect(controller.view().branchStates.get("failed")?.queryError).toBe("query unavailable");
+    expect(controller.view().branchStates.get("invalid")?.queried).toBe(false);
+
+    await controller.handleKeypress("a", { name: "a" }, "pass");
+    expect(controller.view().status).toBe(
+      "Virtual branch is read-only: configure create and create-parent",
+    );
+    await controller.handleServiceEvent(event("selection", "invalid"));
+    await controller.handleKeypress("a", { name: "a" }, "pass");
+    expect(controller.view().status).toContain("Virtual branch is invalid:");
+  });
+
+  test("disables occurrence hierarchy effects and left selects its definition", async () => {
+    const definition = block("view", {
+      properties: [
+        { key: "type", value: "virtual-branch" },
+        { key: "query", value: "status=Doing" },
+      ],
+    });
+    const card = block("card", { properties: [{ key: "status", value: "Doing" }] });
+    const fake = harness((input) => {
+      if (input.action === "workspace.snapshot") return snapshot([definition, card], definition);
+      if (input.action === "blocks.query") {
+        return { blocks: [card], completeness: { kind: "complete" } };
+      }
+      return undefined;
+    });
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+    await controller.handleKeypress("", { name: "down" }, "pass");
+    fake.calls.length = 0;
+
+    await controller.handleKeypress("", { name: "right" }, "pass");
+    await controller.handleKeypress("", { name: "space" }, "pass");
+    await controller.handleKeypress("a", { name: "a" }, "pass");
+    await controller.handleKeypress("s", { name: "s" }, "pass");
+    await controller.handleKeypress("", { name: "tab" }, "pass");
+    await controller.handleKeypress("", { name: "tab", shift: true }, "pass");
+    await controller.handleKeypress("", { name: "up", shift: true }, "pass");
+    await controller.handleKeypress("", { name: "down", shift: true }, "pass");
+
+    expect(controller.view().status).toBe(
+      "Virtual occurrence sibling reorder is disabled; canonical hierarchy unchanged",
+    );
+    expect(fake.calls.some((call) =>
+      ["toggle", "move", "create", "get", "children"].includes(call.action)
+    )).toBe(false);
+
+    await controller.handleKeypress("", { name: "left" }, "pass");
+    expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe("view");
+    expect(fake.calls.at(-1)).toEqual({ action: "selection.set", blockId: "view" });
   });
 });
