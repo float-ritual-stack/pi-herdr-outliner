@@ -47,7 +47,7 @@ function consumeEscapeSequence(value: string, start: number): number {
   return index;
 }
 
-function sanitizeDynamicText(value: string): string {
+export function sanitizeDynamicText(value: string, preserveLineBreaks = false): string {
   let safe = "";
   for (let index = 0; index < value.length;) {
     const code = value.charCodeAt(index);
@@ -74,6 +74,8 @@ function sanitizeDynamicText(value: string): string {
     }
     if (code === 0x09) {
       safe += "    ";
+    } else if (code === 0x0a && preserveLineBreaks) {
+      safe += "\n";
     } else if (code > 0x1f && (code < 0x7f || code > 0x9f)) {
       safe += value[index];
     }
@@ -89,6 +91,46 @@ function fitToWidth(value: string, width: number): string {
 
 function fitDynamicText(value: string, width: number): string {
   return fitToWidth(sanitizeDynamicText(value), width);
+}
+
+function fitBreadcrumb(value: string, width: number): string {
+  const safe = sanitizeDynamicText(value || "No block selected");
+  if (visibleWidth(safe) <= width) return safe;
+  const segments = safe.split(" › ");
+  let suffix = segments.pop() ?? safe;
+  while (segments.length > 0) {
+    const candidate = `${segments.at(-1)} › ${suffix}`;
+    if (visibleWidth(`… › ${candidate}`) > width) break;
+    suffix = candidate;
+    segments.pop();
+  }
+  return fitToWidth(`… › ${suffix}`, width);
+}
+
+export function renderDetailHeader(
+  state: Readonly<DetailState>,
+  width: number,
+): string[] {
+  return [
+    "",
+    `\x1b[1;36mDetail\x1b[0m  \x1b[2m${fitBreadcrumb(
+      state.resolvedBreadcrumb,
+      Math.max(1, width - 8),
+    )}\x1b[0m`,
+    "─".repeat(width),
+  ];
+}
+
+export function renderDetailFooter(
+  state: Readonly<DetailState>,
+  width: number,
+  mode: DetailState["mode"] = state.mode,
+  helpText = detailHelpText(mode),
+): string[] {
+  return [
+    fitDynamicText(state.status, width),
+    `\x1b[2m${fitToWidth(helpText, width)}\x1b[0m`,
+  ];
 }
 
 function renderEditorLine(
@@ -176,14 +218,7 @@ export function renderDetailLines(
   const width = viewport.width;
   const height = viewport.height;
   const bodyHeight = Math.max(1, height - 5);
-  const output: string[] = [""];
-  output.push(
-    `\x1b[1;36mDetail\x1b[0m  \x1b[2m${fitDynamicText(
-      state.resolvedBreadcrumb || "No block selected",
-      Math.max(1, width - 8),
-    )}\x1b[0m`,
-  );
-  output.push("─".repeat(width));
+  const output = renderDetailHeader(state, width);
 
   if (!state.context.selected) {
     output.push("Select a block in the outliner pane.");
@@ -230,8 +265,7 @@ export function renderDetailLines(
   }
 
   while (output.length < height - 2) output.push("");
-  output.push(fitDynamicText(state.status, width));
-  output.push(`\x1b[2m${fitToWidth(detailHelpText(state.mode), width)}\x1b[0m`);
+  output.push(...renderDetailFooter(state, width));
   if (output.length <= height) return output;
   if (height <= 1) return output.slice(0, Math.max(0, height));
   const footerCount = Math.min(2, height - 1);

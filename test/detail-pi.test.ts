@@ -1,8 +1,23 @@
 import { describe, expect, test } from "bun:test";
 import type { DetailState } from "../src/detail-controller";
-import { decodePiDetailInput } from "../src/detail-pi-input";
+import { createPiDetailInputListener, decodePiDetailInput } from "../src/detail-pi-input";
 import { DetailPiComponent } from "../src/detail-pi-renderer";
 import { TextBuffer } from "../src/text-buffer";
+import type { Block } from "../src/types";
+
+function block(text: string): Block {
+  return {
+    id: "block-1",
+    parentId: null,
+    position: 0,
+    text,
+    author: "user",
+    collapsed: false,
+    createdAt: "created",
+    updatedAt: "updated",
+    properties: [],
+  };
+}
 
 function state(overrides: Partial<DetailState> = {}): DetailState {
   return {
@@ -59,13 +74,11 @@ describe("Pi TUI Detail input", () => {
 });
 
 describe("Pi TUI Detail component", () => {
-  test("returns fixed-height component lines without terminal-control escapes", () => {
+  test("returns fixed-height custom-frame lines without terminal-control escapes", () => {
     const detailState = state();
-    const inputs: string[] = [];
     const component = new DetailPiComponent({
       state: detailState,
       height: () => 8,
-      onInput: (data) => inputs.push(data),
     });
 
     const lines = component.render(64);
@@ -74,7 +87,38 @@ describe("Pi TUI Detail component", () => {
     expect(lines[0]).toBe("");
     expect(lines.some((line) => line.includes("\x1b[2J"))).toBe(false);
     expect(lines[1]).toContain("Detail");
-    component.handleInput("q");
-    expect(inputs).toEqual(["q"]);
+  });
+
+  test("keeps edit mode on the custom frame and raw buffer source", () => {
+    const selected = block("raw ((block-id)) source");
+    const detailState = state({
+      context: { selected, ancestors: [], children: [] },
+      resolvedSelectedText: "resolved display source",
+      mode: "edit",
+      buffer: new TextBuffer(selected.text),
+    });
+    const component = new DetailPiComponent({
+      state: detailState,
+      height: () => 8,
+    });
+
+    const rendered = component.render(64).join("\n");
+    expect(rendered).toContain("raw ((block-id)) source");
+    expect(rendered).not.toContain("resolved display source");
+  });
+
+  test("global input consumes presses, filters releases, and permits Pi overlays", () => {
+    const enqueued: string[] = [];
+    let overlay = false;
+    const listener = createPiDetailInputListener(
+      (data) => enqueued.push(data),
+      () => overlay,
+    );
+
+    expect(listener("x")).toEqual({ consume: true });
+    expect(listener("\x1b[103;1:3u")).toEqual({ consume: true });
+    overlay = true;
+    expect(listener("search")).toBeUndefined();
+    expect(enqueued).toEqual(["x"]);
   });
 });
