@@ -2,6 +2,13 @@ import { describe, expect, test } from "bun:test";
 import type { TreeView } from "../src/tree-controller";
 import { renderTreeFrame } from "../src/tree-renderer";
 import type { VisibleBlock } from "../src/types";
+import type {
+  PhysicalTreeRow,
+  TreeRow,
+  VirtualBranchConfig,
+  VirtualBranchOccurrenceRow,
+  VirtualBranchState,
+} from "../src/virtual-branches";
 
 function block(id: string, overrides: Partial<VisibleBlock> = {}): VisibleBlock {
   return {
@@ -22,12 +29,78 @@ function block(id: string, overrides: Partial<VisibleBlock> = {}): VisibleBlock 
   };
 }
 
-function view(rows: VisibleBlock[], overrides: Partial<TreeView> = {}): TreeView {
+function physical(block: VisibleBlock): PhysicalTreeRow {
+  return {
+    kind: "physical",
+    rowId: block.id,
+    canonicalId: block.id,
+    block,
+    depth: block.depth,
+    hasChildren: block.hasChildren,
+    multilineExpanded: block.multilineExpanded,
+  };
+}
+
+function occurrence(
+  viewId: string,
+  canonical: VisibleBlock,
+  depth = 1,
+): VirtualBranchOccurrenceRow {
+  return {
+    kind: "occurrence",
+    rowId: `occurrence:${viewId}:${canonical.id}`,
+    canonicalId: canonical.id,
+    viewId,
+    block: canonical,
+    depth,
+    hasChildren: false,
+    multilineExpanded: canonical.multilineExpanded,
+  };
+}
+
+function isTreeRow(row: VisibleBlock | TreeRow): row is TreeRow {
+  return "rowId" in row;
+}
+
+const branchConfig: VirtualBranchConfig = {
+  viewId: "definition",
+  query: "",
+  filters: [],
+  limit: 200,
+  create: null,
+  createParentId: null,
+  readOnly: false,
+};
+
+function branchState(overrides: Partial<VirtualBranchState> = {}): VirtualBranchState {
+  return {
+    config: branchConfig,
+    configurationErrors: [],
+    creationErrors: [],
+    queryError: null,
+    count: 0,
+    completeness: { kind: "complete" },
+    queried: true,
+    ...overrides,
+  };
+}
+
+function view(
+  inputRows: ReadonlyArray<VisibleBlock | TreeRow>,
+  overrides: Partial<TreeView> = {},
+): TreeView {
+  const rows = inputRows.map((row) => (isTreeRow(row) ? row : physical(row)));
   return {
     workspaceRoot: "/w",
     rows,
-    physicalBlocksById: new Map(rows.map((row) => [row.id, row])),
+    physicalBlocksById: new Map(
+      rows.filter((row): row is PhysicalTreeRow => row.kind === "physical").map((row) => [
+        row.canonicalId,
+        row.block,
+      ]),
+    ),
     visibleCompleteness: { kind: "complete" },
+    branchStates: new Map(),
     selectedIndex: 0,
     activeFilter: "",
     mode: "browse",
@@ -64,7 +137,7 @@ describe("renderTreeFrame", () => {
       frame: [
         "\x1b[H\x1b[2J",
         "\x1b[1;36mOutliner\x1b[0m  \x1b[2m/w\x1b[0m",
-        "\x1b[2m2 blocks\x1b[0m",
+        "\x1b[2m2 physical blocks · 0 projected occurrences\x1b[0m",
         "─".repeat(80),
         "\x1b[48;5;238m\x1b[1m▾ Root   \x1b[0m",
         "  • Child  A",
@@ -149,8 +222,223 @@ describe("renderTreeFrame", () => {
       10,
     ).frame;
 
-    expect(rendered).toContain("1 blocks\u001b[0m  \u001b[33mWARNING: truncated at 500\u001b[0m");
+    expect(rendered).toContain(
+      "1 physical block · 0 projected occurrences\u001b[0m  \u001b[33mWARNING: truncated at 500\u001b[0m",
+    );
     expect(rendered).toContain("Completions 1/1 · Showing first 20 matches");
+  });
+
+  test("renders virtual definition states and projected counts without changing canonical text", () => {
+    const valid = block("valid", {
+      text: "Valid",
+      displayText: "Valid",
+      hasChildren: true,
+    });
+    const card = block("card", {
+      text: "Card",
+      displayText: "Card",
+      hasChildren: true,
+      collapsed: true,
+    });
+    const limited = block("limited", { text: "Limited", displayText: "Limited" });
+    const invalid = block("invalid", { text: "Invalid", displayText: "Invalid" });
+    const failed = block("failed", { text: "Failed", displayText: "Failed" });
+    const readOnly = block("read-only", { text: "Read only", displayText: "Read only" });
+    const rows: TreeRow[] = [
+      physical(valid),
+      occurrence("valid", card),
+      physical(limited),
+      physical(invalid),
+      physical(failed),
+      physical(readOnly),
+    ];
+    const branchStates = new Map<string, VirtualBranchState>([
+      ["valid", branchState({ count: 1 })],
+      [
+        "limited",
+        branchState({ count: 2, completeness: { kind: "truncated", limit: 2 } }),
+      ],
+      [
+        "invalid",
+        branchState({
+          config: null,
+          configurationErrors: ["missing [view::query]"],
+          completeness: null,
+          queried: false,
+        }),
+      ],
+      [
+        "failed",
+        branchState({ queryError: "query unavailable", completeness: null }),
+      ],
+      [
+        "read-only",
+        branchState({ config: { ...branchConfig, readOnly: true } }),
+      ],
+    ]);
+
+    const rendered = renderTreeFrame(view(rows, { branchStates }), 200, 12);
+
+    expect(rendered).toEqual({
+      scrollStartEntryIndex: 0,
+      frame: [
+        "\x1b[H\x1b[2J",
+        "\x1b[1;36mOutliner\x1b[0m  \x1b[2m/w\x1b[0m",
+        "\x1b[2m5 physical blocks · 1 projected occurrence\x1b[0m",
+        "─".repeat(200),
+        "\x1b[48;5;238m\x1b[1m▾ Valid [V:1]   \x1b[0m",
+        "  ◇ Card   ",
+        "• Limited [V:2 · TRUNCATED]   ",
+        "• Invalid [V:0 · CONFIG ERROR]   ",
+        "• Failed [V:0 · QUERY ERROR]   ",
+        "• Read only [V:0 · READ-ONLY]   ",
+        "ready",
+        `\x1b[2m${HELP}\x1b[0m`,
+      ].join("\n"),
+    });
+    expect(valid.displayText).toBe("Valid");
+  });
+
+  test("highlights an occurrence as a leaf with a distinct marker", () => {
+    const definition = block("definition", {
+      text: "Definition",
+      displayText: "Definition",
+      hasChildren: true,
+    });
+    const canonical = block("canonical", {
+      text: "Canonical",
+      displayText: "Canonical",
+      hasChildren: true,
+      collapsed: true,
+    });
+    const rows = [physical(definition), occurrence(definition.id, canonical)];
+    const rendered = renderTreeFrame(
+      view(rows, {
+        selectedIndex: 1,
+        branchStates: new Map([["definition", branchState({ count: 1 })]]),
+      }),
+      80,
+      8,
+    );
+
+    expect(rendered).toEqual({
+      scrollStartEntryIndex: 0,
+      frame: [
+        "\x1b[H\x1b[2J",
+        "\x1b[1;36mOutliner\x1b[0m  \x1b[2m/w\x1b[0m",
+        "\x1b[2m1 physical block · 1 projected occurrence\x1b[0m",
+        "─".repeat(80),
+        "▾ Definition [V:1]   ",
+        "\x1b[48;5;238m\x1b[1m  ◇ Canonical   \x1b[0m",
+        "ready",
+        "\x1b[2m◇ projected occurrence  ← definition  Enter edit canonical  d delete canonical …\x1b[0m",
+      ].join("\n"),
+    });
+    expect(rendered.frame).not.toContain("▸ Canonical");
+    expect(rendered.frame).not.toContain("▾ Canonical");
+  });
+
+  test("makes canonical deletion scope explicit for an occurrence", () => {
+    const definition = block("definition", { text: "Next", displayText: "Next" });
+    const canonical = block("canonical", { text: "Card", displayText: "Card" });
+    const rows = [physical(definition), occurrence(definition.id, canonical)];
+    const frame = renderTreeFrame(view(rows, {
+      selectedIndex: 1,
+      mode: "delete",
+    }), 120, 8).frame;
+
+    expect(frame).toContain(
+      "Delete canonical block “Card” and its physical descendants? Removes it everywhere. y/N",
+    );
+  });
+
+  test("explains property-aware creation destination and mutation", () => {
+    const parent = block("parent", { text: "Inbox", displayText: "Inbox" });
+    const definition = block("definition", { text: "Doing", displayText: "Doing" });
+    const writable: VirtualBranchConfig = {
+      ...branchConfig,
+      viewId: definition.id,
+      create: { key: "status", value: "active" },
+      createParentId: parent.id,
+      readOnly: false,
+    };
+    const frame = renderTreeFrame(view([physical(parent), physical(definition)], {
+      selectedIndex: 1,
+      mode: "add-child",
+      branchStates: new Map([
+        [definition.id, branchState({ config: writable })],
+      ]),
+    }), 120, 8).frame;
+
+    expect(frame).toContain(
+      "Create canonical under Inbox · sets [status::active] · Enter save · Esc cancel",
+    );
+  });
+
+  test("reserves compact branch state and exposes full selected error", () => {
+    const definition = block("definition", {
+      text: "A very long virtual branch title that would otherwise hide its state",
+      displayText: "A very long virtual branch title that would otherwise hide its state",
+    });
+    const state = branchState({
+      config: null,
+      configurationErrors: ["missing [query::status=next]"],
+      completeness: null,
+      queried: false,
+    });
+    const frame = renderTreeFrame(view([physical(definition)], {
+      status: "",
+      branchStates: new Map([[definition.id, state]]),
+    }), 60, 8).frame;
+    expect(frame).toContain("[V:0 · CONFIG ERROR]");
+    const wideFrame = renderTreeFrame(view([physical(definition)], {
+      status: "",
+      branchStates: new Map([[definition.id, state]]),
+    }), 120, 8).frame;
+    expect(wideFrame).toContain("CONFIG ERROR: missing [query::status=next]");
+  });
+
+  test("places a physical sibling editor after projected rows nested under its ancestor", () => {
+    const ancestor = block("ancestor", {
+      text: "Ancestor",
+      displayText: "Ancestor",
+      hasChildren: true,
+    });
+    const definition = block("definition", {
+      parentId: ancestor.id,
+      text: "Definition",
+      displayText: "Definition",
+      depth: 1,
+      hasChildren: true,
+    });
+    const card = block("card", { text: "Card", displayText: "Card" });
+    const sibling = block("sibling", {
+      text: "Sibling",
+      displayText: "Sibling",
+      position: 1,
+    });
+    const rows = [
+      physical(ancestor),
+      physical(definition),
+      occurrence(definition.id, card, 2),
+      physical(sibling),
+    ];
+    const rendered = renderTreeFrame(
+      view(rows, {
+        mode: "add-sibling",
+        branchStates: new Map([["definition", branchState({ count: 1 })]]),
+      }),
+      100,
+      11,
+    ).frame.split("\n");
+
+    expect(rendered.slice(4, 9)).toEqual([
+      "▾ Ancestor   ",
+      "  ▾ Definition [V:1]   ",
+      "    ◇ Card   ",
+      "\x1b[48;5;238m\x1b[1m• ▏   \x1b[0m",
+      "• Sibling   ",
+    ]);
   });
 
   test("renders filter, delete, and viewer mode-specific frames", () => {

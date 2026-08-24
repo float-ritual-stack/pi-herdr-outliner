@@ -13,6 +13,14 @@ import type {
   VisibleBlockCollection,
   WorkspaceSnapshot,
 } from "./types";
+import {
+  buildVirtualBranchCreationText,
+  isVirtualBranchOccurrence,
+  projectVirtualBranches,
+  type PhysicalTreeRow,
+  type TreeRow,
+  type VirtualBranchState,
+} from "./virtual-branches";
 
 export type TreeInputMode = "edit" | "add-child" | "add-sibling" | "filter";
 export type TreeMode = "browse" | "delete" | "viewer" | TreeInputMode;
@@ -32,9 +40,10 @@ export interface TreeQuickCompletion {
 
 export interface TreeView {
   readonly workspaceRoot: string;
-  readonly rows: readonly VisibleBlock[];
+  readonly rows: readonly TreeRow[];
   readonly physicalBlocksById: ReadonlyMap<string, VisibleBlock>;
   readonly visibleCompleteness: BlockCollectionCompleteness;
+  readonly branchStates: ReadonlyMap<string, VirtualBranchState>;
   readonly selectedIndex: number;
   readonly activeFilter: string;
   readonly mode: TreeMode;
@@ -85,10 +94,25 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function rowIndexForIdentity(
+  rows: readonly TreeRow[],
+  rowId: string,
+  canonicalId = rowId,
+): number {
+  const exactIndex = rows.findIndex((row) => row.rowId === rowId);
+  if (exactIndex >= 0) return exactIndex;
+  const physicalIndex = rows.findIndex(
+    (row) => row.kind === "physical" && row.canonicalId === canonicalId,
+  );
+  if (physicalIndex >= 0) return physicalIndex;
+  return rows.findIndex((row) => row.canonicalId === canonicalId);
+}
+
 export function createTreeController(effects: TreeControllerEffects): TreeController {
-  let rows: VisibleBlock[] = [];
+  let rows: TreeRow[] = [];
   let physicalBlocksById = new Map<string, VisibleBlock>();
   let visibleCompleteness: BlockCollectionCompleteness = { kind: "complete" };
+  let branchStates = new Map<string, VirtualBranchState>();
   let selectedIndex = 0;
   let activeFilter = "";
   let mode: TreeMode = "browse";
@@ -111,6 +135,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       rows,
       physicalBlocksById,
       visibleCompleteness,
+      branchStates,
       selectedIndex,
       activeFilter,
       mode,
@@ -126,7 +151,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   }
 
   async function reload(preferredSelectedId?: string | null): Promise<boolean> {
-    const currentSelectedId = rows[selectedIndex]?.id;
+    const currentSelected = rows[selectedIndex];
     const snapshot = await effects.request<WorkspaceSnapshot>({
       action: "workspace.snapshot",
       view: { filters: parseFilter(activeFilter) },
@@ -137,17 +162,29 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       );
     }
 
-    const nextRows = snapshot.visible.blocks;
+    const projection = await projectVirtualBranches(
+      snapshot.visible.blocks,
+      snapshot.physical.blocks,
+      (query) => effects.request<VisibleBlockCollection>({ action: "blocks.query", query }),
+    );
+    const nextRows = projection.rows;
     const nextPhysicalBlocksById = new Map(snapshot.physical.blocks.map((block) => [block.id, block]));
     const serviceSelectedId = snapshot.selection.selected?.id ?? null;
-    let selectedId: string | null | undefined = serviceSelectedId;
-    if (currentSelectedId && nextPhysicalBlocksById.has(currentSelectedId)) {
-      selectedId = currentSelectedId;
-    }
+    let nextIndex = -1;
     if (preferredSelectedId !== undefined) {
-      selectedId = preferredSelectedId;
+      if (preferredSelectedId) {
+        nextIndex = rowIndexForIdentity(nextRows, preferredSelectedId);
+      }
+    } else if (currentSelected) {
+      nextIndex = rowIndexForIdentity(
+        nextRows,
+        currentSelected.rowId,
+        currentSelected.canonicalId,
+      );
     }
-    const nextIndex = selectedId ? nextRows.findIndex((block) => block.id === selectedId) : -1;
+    if (nextIndex < 0 && preferredSelectedId === undefined && serviceSelectedId) {
+      nextIndex = nextRows.findIndex((row) => row.canonicalId === serviceSelectedId);
+    }
     const nextSelectedIndex = Math.max(
       0,
       Math.min(nextIndex >= 0 ? nextIndex : selectedIndex, nextRows.length - 1),
@@ -156,8 +193,9 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     rows = nextRows;
     physicalBlocksById = nextPhysicalBlocksById;
     visibleCompleteness = snapshot.visible.completeness;
+    branchStates = projection.branchStates;
     selectedIndex = nextSelectedIndex;
-    lastSelectionId = rows[selectedIndex]?.id ?? null;
+    lastSelectionId = rows[selectedIndex]?.canonicalId ?? null;
     refreshPending = false;
     return serviceSelectedId !== null;
   }
@@ -169,9 +207,9 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
 
   async function beginInput(nextMode: TreeInputMode, initial = ""): Promise<void> {
     const selected = rows[selectedIndex];
-    if (nextMode === "add-child" && selected?.collapsed) {
-      await effects.request({ action: "toggle", blockId: selected.id });
-      await reload(selected.id);
+    if (nextMode === "add-child" && selected?.block.collapsed) {
+      await effects.request({ action: "toggle", blockId: selected.canonicalId });
+      await reload(selected.rowId);
     }
     mode = nextMode;
     quickBuffer = new TextBuffer(initial);
@@ -184,29 +222,51 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     const selected = rows[selectedIndex];
     if (!selected) return null;
     const text = quickInputText();
-    if (!text.trim()) return mode === "edit" ? selected.id : null;
+    if (!text.trim()) return mode === "edit" ? selected.canonicalId : null;
 
     if (mode === "edit") {
       await effects.request<Block>({
         action: "update",
-        blockId: selected.id,
+        blockId: selected.canonicalId,
         text,
-        expectedUpdatedAt: selected.updatedAt,
+        expectedUpdatedAt: selected.block.updatedAt,
       });
-      return selected.id;
+      return selected.canonicalId;
     }
     if (mode === "add-child") {
+      const branchState = branchStates.get(selected.canonicalId);
+      if (branchState) {
+        const config = branchState.config;
+        if (!config || config.readOnly) {
+          throw new Error("Virtual branch is read-only");
+        }
+        const created = await effects.request<Block>({
+          action: "create",
+          parentId: config.createParentId,
+          text: buildVirtualBranchCreationText(text, config),
+          author: "user",
+        });
+        return created.id;
+      }
       const created = await effects.request<Block>({
         action: "create",
-        parentId: selected.id,
+        parentId: selected.canonicalId,
         text,
         author: "user",
       });
-      await effects.request({ action: "move", blockId: created.id, parentId: selected.id, position: 0 });
+      await effects.request({
+        action: "move",
+        blockId: created.id,
+        parentId: selected.canonicalId,
+        position: 0,
+      });
       return created.id;
     }
     if (mode === "add-sibling") {
-      const canonical = await effects.request<Block>({ action: "get", blockId: selected.id });
+      const canonical = await effects.request<Block>({
+        action: "get",
+        blockId: selected.canonicalId,
+      });
       const created = await effects.request<Block>({
         action: "create",
         parentId: canonical.parentId,
@@ -224,10 +284,13 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     return null;
   }
 
-  async function selectVisibleBlock(preferredId: string | null): Promise<void> {
-    await reload(preferredId);
+  async function selectVisibleBlock(
+    preferredId: string | null,
+    preferredRowId?: string,
+  ): Promise<void> {
+    await reload(preferredRowId ?? preferredId);
     let visibilityChanged = false;
-    if (preferredId && rows[selectedIndex]?.id !== preferredId) {
+    if (preferredId && rows[selectedIndex]?.canonicalId !== preferredId) {
       const target = physicalBlocksById.get(preferredId);
       if (!target) throw new Error(`Block not found: ${preferredId}`);
       if (activeFilter) {
@@ -248,7 +311,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       }
       await reload(preferredId);
     }
-    const visibleId = rows[selectedIndex]?.id ?? null;
+    const visibleId = rows[selectedIndex]?.canonicalId ?? null;
     if (preferredId && visibleId !== preferredId) {
       throw new Error(`Block ${preferredId} could not be revealed`);
     }
@@ -267,11 +330,13 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       return;
     }
 
+    const selected = rows[selectedIndex];
+    const editingRowId = mode === "edit" ? selected?.rowId : undefined;
     const committedBlockId = await commitQuickBlock();
-    const fallbackId = rows[selectedIndex]?.id ?? null;
+    const fallbackId = selected?.canonicalId ?? null;
     mode = "browse";
     resetQuickEditor();
-    await selectVisibleBlock(committedBlockId ?? fallbackId);
+    await selectVisibleBlock(committedBlockId ?? fallbackId, editingRowId);
     effects.invalidate();
   }
 
@@ -284,10 +349,11 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       effects.invalidate();
       return;
     }
-    const targetId = committedBlockId ?? selected.id;
+    const targetId = committedBlockId ?? selected.canonicalId;
+    const targetRowId = mode === "edit" ? selected.rowId : undefined;
     mode = "browse";
     resetQuickEditor();
-    await selectVisibleBlock(targetId);
+    await selectVisibleBlock(targetId, targetRowId);
     await effects.request({
       action: "ui.command.send",
       command: { target: "detail", command: "edit", blockId: targetId },
@@ -382,20 +448,31 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     }
   }
 
-  async function indent(selected: VisibleBlock): Promise<void> {
+  async function indent(selected: PhysicalTreeRow): Promise<void> {
     for (let index = selectedIndex - 1; index >= 0; index--) {
       const candidate = rows[index];
       if (candidate.depth < selected.depth) break;
-      if (candidate.depth === selected.depth && candidate.parentId === selected.parentId) {
-        await effects.request({ action: "move", blockId: selected.id, parentId: candidate.id });
+      if (
+        candidate.kind === "physical" &&
+        candidate.depth === selected.depth &&
+        candidate.block.parentId === selected.block.parentId
+      ) {
+        await effects.request({
+          action: "move",
+          blockId: selected.canonicalId,
+          parentId: candidate.canonicalId,
+        });
         return;
       }
     }
     status = "No previous sibling to indent beneath";
   }
 
-  async function outdent(selected: VisibleBlock): Promise<void> {
-    const canonical = await effects.request<Block>({ action: "get", blockId: selected.id });
+  async function outdent(selected: PhysicalTreeRow): Promise<void> {
+    const canonical = await effects.request<Block>({
+      action: "get",
+      blockId: selected.canonicalId,
+    });
     if (!canonical.parentId) return;
     const parent = await effects.request<Block>({ action: "get", blockId: canonical.parentId });
     await effects.request({
@@ -406,9 +483,15 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     });
   }
 
-  async function moveSibling(selected: VisibleBlock, offset: -1 | 1): Promise<string> {
-    const canonical = await effects.request<Block>({ action: "get", blockId: selected.id });
-    const siblings = await effects.request<Block[]>({ action: "children", parentId: canonical.parentId });
+  async function moveSibling(selected: PhysicalTreeRow, offset: -1 | 1): Promise<string> {
+    const canonical = await effects.request<Block>({
+      action: "get",
+      blockId: selected.canonicalId,
+    });
+    const siblings = await effects.request<Block[]>({
+      action: "children",
+      parentId: canonical.parentId,
+    });
     const currentIndex = siblings.findIndex((sibling) => sibling.id === canonical.id);
     const targetIndex = currentIndex + offset;
     if (currentIndex < 0 || targetIndex < 0) {
@@ -425,6 +508,25 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       status = offset < 0 ? "Moved up among siblings" : "Moved down among siblings";
     }
     return canonical.id;
+  }
+
+  function occurrenceMutationDisabled(action: string): void {
+    status = `Virtual occurrence ${action} is disabled; canonical hierarchy unchanged`;
+  }
+
+  function virtualBranchCreationProblem(selected: PhysicalTreeRow): string | null {
+    const state = branchStates.get(selected.canonicalId);
+    if (!state) return null;
+    if (state.configurationErrors.length > 0) {
+      return `Virtual branch is invalid: ${state.configurationErrors.join("; ")}`;
+    }
+    if (!state.config || state.config.readOnly) {
+      const reason = state.creationErrors.join("; ");
+      return reason
+        ? `Virtual branch is read-only: ${reason}`
+        : "Virtual branch is read-only: configure create and create-parent";
+    }
+    return null;
   }
 
   async function handleServiceEvent(event: OutlinerEvent): Promise<void> {
@@ -512,12 +614,13 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     }
 
     if (mode === "delete") {
-      if (str.toLowerCase() === "y" && rows[selectedIndex]) {
-        await effects.request({ action: "delete", blockId: rows[selectedIndex].id });
+      const selected = rows[selectedIndex];
+      if (str.toLowerCase() === "y" && selected) {
+        await effects.request({ action: "delete", blockId: selected.canonicalId });
       }
       mode = "browse";
       await reload();
-      const visibleId = rows[selectedIndex]?.id ?? null;
+      const visibleId = rows[selectedIndex]?.canonicalId ?? null;
       lastSelectionId = visibleId;
       await effects.request({ action: "selection.set", blockId: visibleId });
       effects.invalidate();
@@ -570,7 +673,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       } else {
         const result = await effects.request<{ expanded: boolean }>({
           action: "view.toggleMultiline",
-          blockId: selected.id,
+          blockId: selected.canonicalId,
         });
         status = result.expanded ? "Block detail expanded" : "Block detail collapsed";
         reloadRequired = true;
@@ -579,62 +682,93 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       await handoffToDetail();
       return;
     } else if (key.shift && key.name === "up") {
-      if (selected) {
+      if (selected && isVirtualBranchOccurrence(selected)) {
+        occurrenceMutationDisabled("sibling reorder");
+      } else if (selected) {
         preferredSelectedId = await moveSibling(selected, -1);
         reloadRequired = true;
       }
     } else if (key.shift && key.name === "down") {
-      if (selected) {
+      if (selected && isVirtualBranchOccurrence(selected)) {
+        occurrenceMutationDisabled("sibling reorder");
+      } else if (selected) {
         preferredSelectedId = await moveSibling(selected, 1);
         reloadRequired = true;
       }
     } else if (key.name === "up") selectedIndex = Math.max(0, selectedIndex - 1);
     else if (key.name === "down") selectedIndex = Math.min(rows.length - 1, selectedIndex + 1);
     else if (key.name === "left" && selected) {
-      if (!selected.collapsed && selected.hasChildren) {
-        await effects.request({ action: "toggle", blockId: selected.id });
+      if (isVirtualBranchOccurrence(selected)) {
+        selectedIndex = Math.max(0, rows.findIndex((row) => row.rowId === selected.viewId));
+      } else if (!selected.block.collapsed && selected.hasChildren) {
+        await effects.request({ action: "toggle", blockId: selected.canonicalId });
         reloadRequired = true;
-      } else if (selected.parentId) {
-        selectedIndex = Math.max(0, rows.findIndex((block) => block.id === selected.parentId));
+      } else if (selected.block.parentId) {
+        selectedIndex = Math.max(
+          0,
+          rows.findIndex((row) => row.rowId === selected.block.parentId),
+        );
       }
     } else if (key.name === "right" && selected) {
-      if (selected.collapsed) {
-        await effects.request({ action: "toggle", blockId: selected.id });
+      if (isVirtualBranchOccurrence(selected)) {
+        occurrenceMutationDisabled("hierarchy expansion");
+      } else if (selected.block.collapsed) {
+        await effects.request({ action: "toggle", blockId: selected.canonicalId });
         reloadRequired = true;
       } else if (selected.hasChildren) selectedIndex = Math.min(rows.length - 1, selectedIndex + 1);
     } else if (key.name === "return" && selected) {
-      if (selected.text.includes("\n")) {
+      if (selected.block.text.includes("\n")) {
         await handoffToDetail();
         return;
       }
-      await beginInput("edit", selected.text);
+      await beginInput("edit", selected.block.text);
       return;
     } else if (key.name === "tab" && selected) {
-      if (key.shift) await outdent(selected);
-      else await indent(selected);
-      preferredSelectedId = selected.id;
-      reloadRequired = true;
+      if (isVirtualBranchOccurrence(selected)) {
+        occurrenceMutationDisabled(key.shift ? "outdent" : "indent");
+      } else {
+        if (key.shift) await outdent(selected);
+        else await indent(selected);
+        preferredSelectedId = selected.canonicalId;
+        reloadRequired = true;
+      }
     } else if (key.name === "space" && selected) {
-      await effects.request({ action: "toggle", blockId: selected.id });
-      reloadRequired = true;
+      if (isVirtualBranchOccurrence(selected)) {
+        occurrenceMutationDisabled("collapse");
+      } else {
+        await effects.request({ action: "toggle", blockId: selected.canonicalId });
+        reloadRequired = true;
+      }
     } else if (str === "a" && selected) {
-      await beginInput("add-child");
-      return;
+      if (isVirtualBranchOccurrence(selected)) {
+        occurrenceMutationDisabled("add-child");
+      } else {
+        const problem = virtualBranchCreationProblem(selected);
+        if (problem) status = problem;
+        else {
+          await beginInput("add-child");
+          return;
+        }
+      }
     } else if (str === "s" && selected) {
-      await beginInput("add-sibling");
-      return;
+      if (isVirtualBranchOccurrence(selected)) {
+        occurrenceMutationDisabled("add-sibling");
+      } else {
+        await beginInput("add-sibling");
+        return;
+      }
     } else if (str === "/") {
       await beginInput("filter", activeFilter);
       return;
     } else if (str === "d" && selected) mode = "delete";
-    else if (str === "f" && selected) openReferencedFile(selected);
+    else if (str === "f" && selected) openReferencedFile(selected.block);
     else if (key.name === "escape" && activeFilter) {
       activeFilter = "";
       reloadRequired = true;
     }
 
     if (reloadRequired) await reload(preferredSelectedId);
-    const visibleId = rows[selectedIndex]?.id ?? null;
+    const visibleId = rows[selectedIndex]?.canonicalId ?? null;
     if (visibleId !== lastSelectionId) {
       lastSelectionId = visibleId;
       await effects.request({ action: "selection.set", blockId: visibleId });
