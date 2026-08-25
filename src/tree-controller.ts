@@ -8,6 +8,7 @@ import { completionTargetAtCursor } from "./completion";
 import type { ReferencedFile, ReferencedPathCandidate } from "./files";
 import { parseFilter } from "./properties";
 import { blockDisplayTitle } from "./references";
+import { layoutExpandedBlock } from "./tree-layout";
 import { isDetailToggle, isPrintableInput, type TerminalInputAction, type TerminalKey } from "./terminal";
 import { TextBuffer } from "./text-buffer";
 import type {
@@ -20,6 +21,7 @@ import type {
 } from "./types";
 import {
   buildVirtualBranchCreationText,
+  decorateVirtualBranchDefinitionText,
   isVirtualBranchOccurrence,
   projectVirtualBranches,
   type PhysicalTreeRow,
@@ -59,6 +61,7 @@ export interface TreeView {
   readonly viewerLines: readonly string[];
   readonly viewerPath: string;
   readonly viewerOffset: number;
+  readonly expandedBlockOffset: number;
   readonly status: string;
   readonly refreshPending: boolean;
 }
@@ -73,6 +76,7 @@ export interface TreeControllerEffects {
   request<T>(input: RequestInput): Promise<T>;
   readonly filesystem: TreeFilesystem;
   focusPane(pane: "detail" | "outliner"): void;
+  terminalWidth(): number;
   terminalHeight(): number;
   stop(): void;
   invalidate(): void;
@@ -129,6 +133,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   let viewerLines: string[] = [];
   let viewerPath = "";
   let viewerOffset = 0;
+  let expandedBlockOffset = 0;
   let lastSelectionId: string | null = null;
   let status = "";
   let refreshPending = false;
@@ -153,6 +158,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       viewerLines,
       viewerPath,
       viewerOffset,
+      expandedBlockOffset,
       status,
       refreshPending,
     };
@@ -197,6 +203,11 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       0,
       Math.min(nextIndex >= 0 ? nextIndex : selectedIndex, nextRows.length - 1),
     );
+    const nextSelectedRow = nextRows[nextSelectedIndex];
+    const selectedRowChanged = currentSelected?.rowId !== nextSelectedRow?.rowId;
+    const selectedExpansionChanged =
+      currentSelected?.multilineExpanded !== nextSelectedRow?.multilineExpanded;
+    if (selectedRowChanged || selectedExpansionChanged) resetExpandedBlockPaging();
 
     rows = nextRows;
     physicalBlocksById = nextPhysicalBlocksById;
@@ -206,6 +217,52 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     lastSelectionId = rows[selectedIndex]?.canonicalId ?? null;
     refreshPending = false;
     return serviceSelectedId !== null;
+  }
+
+  function expandedBlockRowCount(row: TreeRow): number {
+    let marker = row.kind === "occurrence" ? "◇" : "•";
+    if (row.kind === "physical" && row.hasChildren) {
+      marker = row.block.collapsed ? "▸" : "▾";
+    }
+    const branchState = row.kind === "physical" ? branchStates.get(row.canonicalId) : undefined;
+    const displayText = decorateVirtualBranchDefinitionText(row.block.displayText, branchState);
+    return layoutExpandedBlock({
+      text: displayText,
+      width: effects.terminalWidth(),
+      depth: row.depth,
+      marker,
+      author: " ",
+    }).length;
+  }
+
+  function scrollSelectedExpandedBlock(direction: "pageup" | "pagedown"): void {
+    const selected = rows[selectedIndex];
+    if (!selected?.multilineExpanded) {
+      expandedBlockOffset = 0;
+      status = "Expand the selected block before paging within it";
+      return;
+    }
+    const totalRows = expandedBlockRowCount(selected);
+    const pageSize = Math.max(1, effects.terminalHeight() - 6);
+    const maxOffset = Math.max(0, totalRows - pageSize);
+    if (maxOffset === 0) {
+      expandedBlockOffset = 0;
+      status = `Expanded block fits in ${totalRows} visual row${totalRows === 1 ? "" : "s"}`;
+      return;
+    }
+    const currentOffset = Math.min(expandedBlockOffset, maxOffset);
+    expandedBlockOffset = direction === "pageup"
+      ? Math.max(0, currentOffset - pageSize)
+      : Math.min(maxOffset, currentOffset + pageSize);
+    const end = Math.min(totalRows, expandedBlockOffset + pageSize);
+    status = `Expanded block rows ${expandedBlockOffset + 1}-${end}/${totalRows}`;
+  }
+
+  function resetExpandedBlockPaging(): void {
+    expandedBlockOffset = 0;
+    if (status.startsWith("Expanded block") || status.startsWith("Expand the selected")) {
+      status = "";
+    }
   }
 
   function resetQuickEditor(): void {
@@ -649,6 +706,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   }
 
   async function handleConnect(): Promise<void> {
+    resetExpandedBlockPaging();
     status = "";
     if (mode === "browse") await reload();
     else refreshPending = true;
@@ -782,6 +840,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       if (!selected) {
         status = "No block selected";
       } else {
+        resetExpandedBlockPaging();
         const result = await effects.request<{ expanded: boolean }>({
           action: "view.toggleMultiline",
           blockId: selected.canonicalId,
@@ -792,6 +851,8 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     } else if (detailHandoffRequested) {
       await handoffToDetail();
       return;
+    } else if (key.name === "pageup" || key.name === "pagedown") {
+      scrollSelectedExpandedBlock(key.name);
     } else if (key.shift && key.name === "up") {
       if (selected && isVirtualBranchOccurrence(selected)) {
         occurrenceMutationDisabled("sibling reorder");
@@ -882,6 +943,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       reloadRequired = true;
     }
 
+    if (rows[selectedIndex]?.rowId !== selected?.rowId) resetExpandedBlockPaging();
     if (reloadRequired) await reload(preferredSelectedId);
     const visibleId = rows[selectedIndex]?.canonicalId ?? null;
     if (visibleId !== lastSelectionId) {

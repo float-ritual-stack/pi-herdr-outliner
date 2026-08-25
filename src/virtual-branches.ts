@@ -66,6 +66,25 @@ export type VirtualBranchQueryEffect = (
   query: BlockSearchQuery,
 ) => Promise<VisibleBlockCollection>;
 
+export function virtualBranchStateLabel(state: VirtualBranchState): string {
+  const indicators = [`V:${state.count}`];
+  if (state.completeness?.kind === "truncated") indicators.push("TRUNCATED");
+  if (state.configurationErrors.length > 0) indicators.push("CONFIG ERROR");
+  if (state.queryError) indicators.push("QUERY ERROR");
+  if (state.config?.readOnly) indicators.push("READ-ONLY");
+  return ` [${indicators.join(" · ")}]`;
+}
+
+export function decorateVirtualBranchDefinitionText(
+  text: string,
+  state: VirtualBranchState | undefined,
+): string {
+  if (!state) return text;
+  const newlineIndex = text.search(/\r?\n/);
+  if (newlineIndex < 0) return `${text}${virtualBranchStateLabel(state)}`;
+  return `${text.slice(0, newlineIndex)}${virtualBranchStateLabel(state)}${text.slice(newlineIndex)}`;
+}
+
 function propertiesNamed(block: Block, key: string): BlockProperty[] {
   return block.properties.filter((property) => property.key.toLowerCase() === key);
 }

@@ -40,6 +40,8 @@ The service is the only process that opens the workspace SQLite database. It log
 
 Tree holds no canonical block state. It reconstructs from a service snapshot and events.
 
+Tree keeps an ephemeral visual-row offset for the selected multiline-expanded block. PageUp/PageDown move that offset by one Tree body viewport and clamp to the wrapped row count; Up/Down continue to change canonical block selection. Selection, reveal, collapse/expansion, and reconnect changes reset the offset.
+
 ### Detail client
 
 [`src/detail-main.ts`](../src/detail-main.ts) selects the Pi TUI Detail implementation, which separates:
@@ -253,7 +255,6 @@ pi-extension/index.ts         Pi/OMP commands, tools, context hook
 
 The durable roadmap lives in the outliner workboard. Current accepted designs include:
 
-- selected expanded Tree block paging,
 - branch-local virtual occurrence ordering,
 - safe canonical block deletion,
 - reference navigation and back history,
