@@ -30,6 +30,7 @@ The project started as a small Friday-night experiment and grew into a durable w
 - Indexed `[property::value]` metadata with optimistic property patching and catalog queries.
 - Exact block references using `((block-id))`, resolved to display titles in read mode while raw text remains editable.
 - Property-driven virtual branches with canonical projected occurrences and property-aware creation.
+- Selected multiline-expanded Tree blocks support viewport-sized intra-block PageUp/PageDown without changing block selection.
 - Pi Markdown preview with line, page, endpoint, and mouse/trackpad scrolling.
 - Grapheme-safe wrapped Detail editing, word motion, selection, deletion, bounded per-session undo/redo, completion, optimistic save, and whole-session Esc cancellation.
 - Referenced text/Markdown file viewing and durable line-range annotations.
@@ -104,6 +105,7 @@ The footer in each pane is authoritative and context-sensitive. These are the pr
 | Key | Action |
 | --- | --- |
 | `Up` / `Down` | Move selection |
+| `PageUp` / `PageDown` | Scroll within the selected multiline-expanded block |
 | `Left` / `Right` | Collapse/go to parent; expand/go to first child |
 | `Shift+Up` / `Shift+Down` | Reorder canonical siblings |
 | `Enter` | Inline edit a single-line block; hand multiline blocks to Detail |

@@ -110,6 +110,7 @@ function view(
     viewerLines: [],
     viewerPath: "",
     viewerOffset: 0,
+    expandedBlockOffset: 0,
     status: "ready",
     refreshPending: false,
     ...overrides,
@@ -163,6 +164,32 @@ describe("renderTreeFrame", () => {
       "  │ \x1b[33m-\x1b[0m item",
     ]);
     expect(rendered.at(-2)).toBe("ready");
+  });
+
+  test("renders a selected expanded block from its intra-block offset", () => {
+    const text = Array.from({ length: 12 }, (_, index) => `line ${index + 1}`).join("\n");
+    const expanded = block("expanded", {
+      text,
+      displayText: text,
+      multilineExpanded: true,
+    });
+
+    const rendered = renderTreeFrame(
+      view([expanded], { expandedBlockOffset: 4, status: "" }),
+      40,
+      10,
+    ).frame.split("\n");
+
+    expect(rendered.slice(4, 8)).toEqual([
+      "\x1b[48;5;238m\x1b[1m  │ line 5\x1b[0m",
+      "  │ line 6",
+      "  │ line 7",
+      "  │ line 8",
+    ]);
+    expect(rendered.at(-2)).toBe("Expanded block rows 5-8/12");
+    expect(rendered.at(-1)).toBe(
+      "\x1b[2mPgUp/PgDn scroll selected block  ↑↓ nav…\x1b[0m",
+    );
   });
 
   test("places an add-child editor before existing descendants and renders completion rows", () => {

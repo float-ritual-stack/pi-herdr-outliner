@@ -61,6 +61,9 @@ const controller = createTreeController({
   focusPane(pane) {
     focusPluginPane(paths.stateDir, pane);
   },
+  terminalWidth() {
+    return process.stdout.columns ?? 100;
+  },
   terminalHeight() {
     return process.stdout.rows ?? 30;
   },

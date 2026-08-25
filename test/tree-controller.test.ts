@@ -81,6 +81,7 @@ function harness(respond: (input: RequestInput) => unknown | Promise<unknown>): 
         },
       },
       focusPane: (pane: "detail" | "outliner") => result.focused.push(pane),
+      terminalWidth: () => 80,
       terminalHeight: () => 12,
       stop: () => {
         result.stops += 1;
@@ -490,6 +491,40 @@ describe("createTreeController", () => {
     expect(fake.calls.some((call) => call.action === "view.toggleMultiline")).toBe(true);
     expect(fake.calls.some((call) => call.action === "ui.command.send")).toBe(false);
     expect(controller.view().status).toBe("Block detail expanded");
+  });
+
+  test("pages within one expanded block and resets paging when selection changes", async () => {
+    const text = Array.from({ length: 20 }, (_, index) => `line ${index + 1}`).join("\n");
+    const expanded = block("expanded", {
+      text,
+      displayText: text,
+      multilineExpanded: true,
+    });
+    const next = block("next", { position: 1 });
+    const fake = harness((input) =>
+      input.action === "workspace.snapshot"
+        ? snapshot([expanded, next], expanded)
+        : undefined,
+    );
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+
+    await controller.handleKeypress("", { name: "pagedown" }, "pass");
+    expect(controller.view().expandedBlockOffset).toBe(6);
+    expect(controller.view().status).toBe("Expanded block rows 7-12/20");
+    await controller.handleKeypress("", { name: "pagedown" }, "pass");
+    await controller.handleKeypress("", { name: "pagedown" }, "pass");
+    expect(controller.view().expandedBlockOffset).toBe(14);
+    expect(controller.view().status).toBe("Expanded block rows 15-20/20");
+
+    await controller.handleKeypress("", { name: "pageup" }, "pass");
+    expect(controller.view().expandedBlockOffset).toBe(8);
+    expect(controller.view().status).toBe("Expanded block rows 9-14/20");
+
+    await controller.handleKeypress("", { name: "down" }, "pass");
+    expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe("next");
+    expect(controller.view().expandedBlockOffset).toBe(0);
+    expect(controller.view().status).toBe("");
   });
 
   test("projects generic Next, Doing, and Done branches and requeries on content and connect", async () => {

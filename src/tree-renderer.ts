@@ -181,6 +181,10 @@ export function renderTreeFrame(
     )}${filterLabel}\x1b[0m${truncationLabel}`,
   );
   output.push("─".repeat(width));
+  const bodyHeight = Math.max(1, height - 6);
+  const selectedExpandedInfo = {
+    current: null as { offset: number; end: number; total: number } | null,
+  };
 
   function rowIsVisualDescendant(candidate: TreeRow, ancestor: TreeRow): boolean {
     return isVisualDescendant(candidate, ancestor, view.physicalBlocksById);
@@ -230,23 +234,38 @@ export function renderTreeFrame(
       result = [truncate(`${prefix}${title}${badge}${suffix}`, width)];
     } else {
       const displayText = decorateDefinitionText(block.displayText, branchState);
-      result = row.multilineExpanded
-        ? layoutExpandedBlock({
-            text: displayText,
+      if (row.multilineExpanded) {
+        const expandedRows = layoutExpandedBlock({
+          text: displayText,
+          width,
+          depth: row.depth,
+          marker,
+          author,
+        }).map((renderedRow, rowIndex) => {
+          const text = rowIndex === 0 ? renderedRow.text : renderMarkdownLine(renderedRow.text);
+          return `${renderedRow.prefix}${text}${renderedRow.suffix}`;
+        });
+        if (index === view.selectedIndex) {
+          const maxOffset = Math.max(0, expandedRows.length - bodyHeight);
+          const offset = Math.min(view.expandedBlockOffset, maxOffset);
+          const end = Math.min(expandedRows.length, offset + bodyHeight);
+          selectedExpandedInfo.current = {
+            offset,
+            end,
+            total: expandedRows.length,
+          };
+          result = expandedRows.slice(offset, end);
+        } else {
+          result = expandedRows;
+        }
+      } else {
+        result = [
+          truncate(
+            `${"  ".repeat(row.depth)}${marker} ${displayText.replace(/\r?\n/g, " ↵ ")}  ${author}`,
             width,
-            depth: row.depth,
-            marker,
-            author,
-          }).map((renderedRow, rowIndex) => {
-            const text = rowIndex === 0 ? renderedRow.text : renderMarkdownLine(renderedRow.text);
-            return `${renderedRow.prefix}${text}${renderedRow.suffix}`;
-          })
-        : [
-            truncate(
-              `${"  ".repeat(row.depth)}${marker} ${displayText.replace(/\r?\n/g, " ↵ ")}  ${author}`,
-              width,
-            ),
-          ];
+          ),
+        ];
+      }
     }
     renderedRows[index] = result;
     return result;
@@ -265,7 +284,6 @@ export function renderTreeFrame(
     return entry.kind === "block" && entry.blockIndex === view.selectedIndex;
   }
   const targetEntryIndex = Math.max(0, entries.findIndex(isTargetEntry));
-  const bodyHeight = Math.max(1, height - 6);
   let scrollStartEntryIndex = initialScrollStartEntryIndex;
   if (targetEntryIndex < scrollStartEntryIndex) scrollStartEntryIndex = targetEntryIndex;
   if (scrollStartEntryIndex < targetEntryIndex) {
@@ -301,6 +319,11 @@ export function renderTreeFrame(
     selectedRow?.kind === "physical"
       ? view.branchStates.get(selectedRow.canonicalId)
       : undefined;
+  const selectedInfo = selectedExpandedInfo.current;
+  const expandedScrollable = selectedInfo !== null && selectedInfo.total > bodyHeight;
+  const expandedStatus = expandedScrollable
+    ? `Expanded block rows ${selectedInfo.offset + 1}-${selectedInfo.end}/${selectedInfo.total}`
+    : "";
   const creationHelp =
     view.mode === "add-child"
       ? virtualBranchCreationHelp(selectedBranchState, view.physicalBlocksById)
@@ -341,12 +364,15 @@ export function renderTreeFrame(
   } else {
     const contextualStatus =
       view.status ||
+      expandedStatus ||
       (selectedBranchState ? branchStatusText(selectedBranchState) : "");
     output.push(truncate(contextualStatus, width));
   }
   let help: string;
   if (view.mode === "goto") {
     help = "type ID/text  ↑↓ choose  Tab cycle  Enter jump  Esc cancel";
+  } else if (expandedScrollable) {
+    help = "PgUp/PgDn scroll selected block  ↑↓ navigate blocks  g goto  . / ⌘. detail";
   } else if (selectedRow?.kind === "occurrence") {
     help = "◇ projected occurrence  ← definition  Enter edit canonical  d delete canonical  hierarchy disabled";
   } else {
