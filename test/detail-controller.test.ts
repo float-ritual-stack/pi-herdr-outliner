@@ -331,6 +331,38 @@ describe("detail controller saves and annotations", () => {
   });
 });
 
+describe("detail controller wrapped editor scrolling", () => {
+  test("tracks the cursor by wrapped visual rows across movement and resize", async () => {
+    const text = Array.from({ length: 18 }, (_, index) => `item-${index + 1}`).join(" ");
+    const harness = createHarness(makeBlock({ text }));
+    const narrowViewport = { width: 20, height: 8 };
+    await harness.controller.initialize();
+
+    await harness.controller.dispatch({ type: "edit.begin" }, narrowViewport);
+    const endOffset = harness.controller.state.editorVisualOffset;
+    expect(endOffset).toBeGreaterThan(0);
+
+    await harness.controller.dispatch(
+      { type: "buffer.move", direction: "home" },
+      narrowViewport,
+    );
+    expect(harness.controller.state.editorVisualOffset).toBe(0);
+
+    await harness.controller.dispatch(
+      { type: "buffer.move", direction: "end" },
+      narrowViewport,
+    );
+    expect(harness.controller.state.editorVisualOffset).toBe(endOffset);
+
+    await harness.controller.dispatch(
+      { type: "viewport.changed" },
+      { width: 14, height: 8 },
+    );
+    expect(harness.controller.state.editorVisualOffset).toBeGreaterThan(endOffset);
+    expect(harness.controller.state.buffer.text).toBe(text);
+  });
+});
+
 describe("detail controller completion, navigation, and focus", () => {
   test("queries pages first, uses a truncated fallback collection, and applies a candidate", async () => {
     const harness = createHarness(makeBlock({ text: "See [[rel" }));

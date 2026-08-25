@@ -11,6 +11,90 @@ export const BRACKETED_PASTE_DISABLE = "\x1b[?2004l";
 const BRACKETED_PASTE_START = "\x1b[200~";
 const BRACKETED_PASTE_END = "\x1b[201~";
 
+function consumeCsi(value: string, start: number): number {
+  for (let index = start; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code === 0x1b || (code >= 0x80 && code <= 0x9f)) return index;
+    if (code >= 0x40 && code <= 0x7e) return index + 1;
+  }
+  return value.length;
+}
+
+function consumeStringControl(
+  value: string,
+  start: number,
+  acceptsBellTerminator: boolean,
+): number {
+  for (let index = start; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code === 0x9c || (acceptsBellTerminator && code === 0x07)) return index + 1;
+    if (code === 0x1b && value.charCodeAt(index + 1) === 0x5c) return index + 2;
+  }
+  return value.length;
+}
+
+function consumeEscapeSequence(value: string, start: number): number {
+  let index = start;
+  while (index < value.length) {
+    const code = value.charCodeAt(index);
+    if (code >= 0x20 && code <= 0x2f) {
+      index += 1;
+      continue;
+    }
+    return code >= 0x30 && code <= 0x7e ? index + 1 : index;
+  }
+  return index;
+}
+
+export function sanitizeDynamicText(value: string, preserveLineBreaks = false): string {
+  let sanitized = "";
+  for (let index = 0; index < value.length; ) {
+    const code = value.charCodeAt(index);
+
+    if (code === 0x1b) {
+      const introducer = value.charCodeAt(index + 1);
+      if (introducer === 0x5b) {
+        index = consumeCsi(value, index + 2);
+      } else if (
+        introducer === 0x5d ||
+        introducer === 0x50 ||
+        introducer === 0x58 ||
+        introducer === 0x5e ||
+        introducer === 0x5f
+      ) {
+        index = consumeStringControl(value, index + 2, introducer === 0x5d);
+      } else {
+        index = consumeEscapeSequence(value, index + 1);
+      }
+      continue;
+    }
+
+    if (code === 0x9b) {
+      index = consumeCsi(value, index + 1);
+      continue;
+    }
+    if (
+      code === 0x90 ||
+      code === 0x98 ||
+      code === 0x9d ||
+      code === 0x9e ||
+      code === 0x9f
+    ) {
+      index = consumeStringControl(value, index + 1, code === 0x9d);
+      continue;
+    }
+    if (code === 0x09) {
+      sanitized += "    ";
+    } else if (code === 0x0a && preserveLineBreaks) {
+      sanitized += "\n";
+    } else if (code > 0x1f && (code < 0x7f || code > 0x9f)) {
+      sanitized += value[index];
+    }
+    index += 1;
+  }
+  return sanitized;
+}
+
 const MODIFIED_ENTER_SEQUENCES: Record<string, true> = {
   "13~": true,
   "[13;2u": true,
