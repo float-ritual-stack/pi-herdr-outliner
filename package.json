@@ -1,6 +1,11 @@
 {
   "name": "pi-herdr-outliner",
   "version": "0.1.0",
+  "description": "Persistent local-first block outliner shared by Herdr users and Pi agents",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/float-ritual-stack/pi-herdr-outliner.git"
+  },
   "private": true,
   "type": "module",
   "scripts": {

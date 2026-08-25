@@ -1,4 +1,8 @@
-## little bits of feedbakc / ideas
+# Archived Early Feedback
+
+> Preserved as source material from the initial prototype. Current roadmap and completion state live in the outliner workboard.
+
+## Little bits of feedback / ideas
 
 ### ability to move blocks up/down
 
