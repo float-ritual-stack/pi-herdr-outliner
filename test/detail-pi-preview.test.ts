@@ -74,6 +74,17 @@ function renderedDocument(layout: DetailPiPreviewLayout, width: number): string[
   return layout.markdown.render(width).map(stripTerminalSequences);
 }
 
+
+  test("synchronizes Markdown before the viewport layout renders child nodes directly", () => {
+    const detail = state("Body rendered by the child Markdown component");
+    const layout = previewLayout(detail);
+
+    layout.syncState();
+
+    expect(
+      layout.markdown.render(40).map(stripTerminalSequences).join(" ").replace(/\s+/g, " "),
+    ).toContain("Body rendered by the child Markdown component");
+  });
 describe("Pi Markdown detail preview", () => {
   test("wraps long document lines without ellipsizing and hangs list continuations", () => {
     const detail = state([

@@ -99,7 +99,7 @@ export class DetailPiPreviewLayout extends VStack {
     return true;
   }
 
-  private syncState(): void {
+  syncState(): void {
     if (!this.active) return;
 
     const selectionId = this.state.context.selected?.id ?? null;
