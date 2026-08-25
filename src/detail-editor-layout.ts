@@ -2,6 +2,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { sanitizeDynamicText } from "./terminal";
 
 const MIN_LINE_NUMBER_WIDTH = 4;
+const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 export interface DetailEditorVisualRow {
   logicalRow: number;
@@ -24,12 +25,8 @@ interface Segment {
   width: number;
 }
 
-function nextCodePointEnd(value: string, start: number): number {
-  const codePoint = value.codePointAt(start);
-  return start + (codePoint !== undefined && codePoint > 0xffff ? 2 : 1);
-}
-
 function takeSegment(
+  graphemes: Intl.Segments,
   value: string,
   start: number,
   maxWidth: number,
@@ -40,14 +37,15 @@ function takeSegment(
   let lastWhitespaceWidth = 0;
 
   while (index < value.length) {
-    const end = nextCodePointEnd(value, index);
-    const character = value.slice(index, end);
-    const characterWidth = visibleWidth(character);
+    const grapheme = graphemes.containing(index);
+    if (!grapheme) break;
+    const end = grapheme.index + grapheme.segment.length;
+    const characterWidth = visibleWidth(grapheme.segment);
     if (width > 0 && width + characterWidth > maxWidth) break;
 
     width += characterWidth;
     index = end;
-    if (/\s/u.test(character)) {
+    if (/\s/u.test(grapheme.segment)) {
       lastWhitespaceEnd = index;
       lastWhitespaceWidth = width;
     }
@@ -62,11 +60,12 @@ function takeSegment(
 function wrapLine(line: string, maxWidth: number): Segment[] {
   const sanitizedLine = sanitizeDynamicText(line);
   if (!sanitizedLine) return [{ text: "", width: 0 }];
+  const graphemes = graphemeSegmenter.segment(sanitizedLine);
 
   const segments: Segment[] = [];
   let start = 0;
   while (start < sanitizedLine.length) {
-    const segment = takeSegment(sanitizedLine, start, maxWidth);
+    const segment = takeSegment(graphemes, sanitizedLine, start, maxWidth);
     segments.push({
       text: sanitizedLine.slice(start, segment.end),
       width: segment.width,

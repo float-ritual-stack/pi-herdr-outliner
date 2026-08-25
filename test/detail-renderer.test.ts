@@ -253,6 +253,22 @@ test("wraps wide edit text while reserving one cell for the software cursor", ()
   expect(lines[4]).toBe("     界界▏");
 });
 
+test("keeps a joined emoji intact when its grapheme exactly fills a wrapped row", () => {
+  const family = "👨‍👩‍👧‍👦";
+  const selected = block(`${family}x`);
+  const buffer = new TextBuffer(selected.text);
+  buffer.moveEnd();
+  const lines = renderDetailLines(state({
+    context: { selected, ancestors: [], children: [] },
+    mode: "edit",
+    buffer,
+  }), { width: 8, height: 8 });
+
+  expect(lines[3]).toBe(`   1 ${family}`);
+  expect(lines[4]).toBe("     x▏");
+  expect(lines.slice(3, 5).every((line) => visibleWidth(line) <= 8)).toBe(true);
+});
+
 test("wraps a long physical editor line without ellipsizing or changing its source", () => {
   const selected = block("alpha beta gamma delta epsilon");
   const buffer = new TextBuffer(selected.text);
