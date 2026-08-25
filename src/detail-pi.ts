@@ -173,6 +173,7 @@ let layoutRoot: DetailPiComponent | DetailPiPreviewLayout | undefined;
 synchronizeLayout = () => {
   const previewActive = controller.state.mode === "preview";
   preview.setActive(previewActive);
+  if (previewActive) preview.syncState();
   const nextRoot = previewActive ? preview : customFrame;
   if (nextRoot !== layoutRoot) {
     layoutRoot = nextRoot;
