@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import type { RequestInput } from "../src/client";
 import { createTreeController, type TreeControllerEffects } from "../src/tree-controller";
+import { layoutExpandedBlock } from "../src/tree-layout";
+import { decorateVirtualBranchDefinitionText } from "../src/virtual-branches";
 import type {
   Block,
   BlockCollectionCompleteness,
@@ -493,7 +495,7 @@ describe("createTreeController", () => {
     expect(controller.view().status).toBe("Block detail expanded");
   });
 
-  test("pages within one expanded block and resets paging when selection changes", async () => {
+  test("pages within one expanded block and resets on reconnect or selection change", async () => {
     const text = Array.from({ length: 20 }, (_, index) => `line ${index + 1}`).join("\n");
     const expanded = block("expanded", {
       text,
@@ -521,10 +523,65 @@ describe("createTreeController", () => {
     expect(controller.view().expandedBlockOffset).toBe(8);
     expect(controller.view().status).toBe("Expanded block rows 9-14/20");
 
+    await controller.handleConnect();
+    expect(controller.view().expandedBlockOffset).toBe(0);
+    expect(controller.view().status).toBe("");
+    await controller.handleKeypress("", { name: "pagedown" }, "pass");
+    expect(controller.view().expandedBlockOffset).toBe(6);
+
     await controller.handleKeypress("", { name: "down" }, "pass");
     expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe("next");
     expect(controller.view().expandedBlockOffset).toBe(0);
     expect(controller.view().status).toBe("");
+  });
+
+  test("pages through the decorated rows of an expanded virtual branch", async () => {
+    const text = [
+      "A".repeat(70),
+      ...Array.from({ length: 10 }, (_, index) => `detail ${index + 1}`),
+      "[type::virtual-branch] [query::status=Next]",
+    ].join("\n");
+    const definition = block("view", {
+      text,
+      displayText: text,
+      multilineExpanded: true,
+      properties: [
+        { key: "type", value: "virtual-branch" },
+        { key: "query", value: "status=Next" },
+      ],
+    });
+    const match = block("match", {
+      properties: [{ key: "status", value: "Next" }],
+    });
+    const fake = harness((input) => {
+      if (input.action === "workspace.snapshot") return snapshot([definition], definition);
+      if (input.action === "blocks.query") {
+        return { blocks: [match], completeness: { kind: "complete" } };
+      }
+      return undefined;
+    });
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+    const branchState = controller.view().branchStates.get("view")!;
+    const decoratedText = decorateVirtualBranchDefinitionText(text, branchState);
+    const totalRows = layoutExpandedBlock({
+      text: decoratedText,
+      width: 80,
+      depth: 0,
+      marker: "•",
+      author: " ",
+    }).length;
+    const pageSize = 6;
+
+    for (let index = 0; index < 10; index += 1) {
+      await controller.handleKeypress("", { name: "pagedown" }, "pass");
+    }
+
+    const expectedOffset = totalRows - pageSize;
+    expect(controller.view().expandedBlockOffset).toBe(expectedOffset);
+    expect(controller.view().status).toBe(
+      `Expanded block rows ${expectedOffset + 1}-${totalRows}/${totalRows}`,
+    );
   });
 
   test("projects generic Next, Doing, and Done branches and requeries on content and connect", async () => {

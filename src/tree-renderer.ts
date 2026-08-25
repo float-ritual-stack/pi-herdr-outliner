@@ -5,20 +5,17 @@ import { layoutExpandedBlock } from "./tree-layout";
 import { renderMarkdownLine, truncate } from "./terminal";
 import type { Block, VisibleBlock } from "./types";
 import type { TreeQuickCompletion, TreeView } from "./tree-controller";
-import type { TreeRow, VirtualBranchState } from "./virtual-branches";
+import {
+  decorateVirtualBranchDefinitionText,
+  virtualBranchStateLabel,
+  type TreeRow,
+  type VirtualBranchState,
+} from "./virtual-branches";
 
 function countLabel(count: number, singular: string): string {
   return `${count} ${singular}${count === 1 ? "" : "s"}`;
 }
 
-function branchStateLabel(state: VirtualBranchState): string {
-  const indicators = [`V:${state.count}`];
-  if (state.completeness?.kind === "truncated") indicators.push("TRUNCATED");
-  if (state.configurationErrors.length > 0) indicators.push("CONFIG ERROR");
-  if (state.queryError) indicators.push("QUERY ERROR");
-  if (state.config?.readOnly) indicators.push("READ-ONLY");
-  return ` [${indicators.join(" · ")}]`;
-}
 
 function branchStatusText(state: VirtualBranchState): string {
   const details = [countLabel(state.count, "projected occurrence")];
@@ -37,12 +34,6 @@ function branchStatusText(state: VirtualBranchState): string {
   return `Virtual branch · ${details.join(" · ")}`;
 }
 
-function decorateDefinitionText(text: string, state: VirtualBranchState | undefined): string {
-  if (!state) return text;
-  const newlineIndex = text.search(/\r?\n/);
-  if (newlineIndex < 0) return `${text}${branchStateLabel(state)}`;
-  return `${text.slice(0, newlineIndex)}${branchStateLabel(state)}${text.slice(newlineIndex)}`;
-}
 
 function virtualBranchCreationHelp(
   state: VirtualBranchState | undefined,
@@ -226,14 +217,14 @@ export function renderTreeFrame(
       const prefix = `${"  ".repeat(row.depth)}${marker} `;
       const suffix = `  ${author}`;
       const badge = truncate(
-        branchStateLabel(branchState),
+        virtualBranchStateLabel(branchState),
         Math.max(1, width - prefix.length - suffix.length),
       );
       const titleWidth = Math.max(1, width - prefix.length - suffix.length - badge.length);
       const title = truncate(block.displayText.replace(/\r?\n/g, " ↵ "), titleWidth);
       result = [truncate(`${prefix}${title}${badge}${suffix}`, width)];
     } else {
-      const displayText = decorateDefinitionText(block.displayText, branchState);
+      const displayText = decorateVirtualBranchDefinitionText(block.displayText, branchState);
       if (row.multilineExpanded) {
         const expandedRows = layoutExpandedBlock({
           text: displayText,

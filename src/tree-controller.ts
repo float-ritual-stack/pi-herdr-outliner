@@ -21,6 +21,7 @@ import type {
 } from "./types";
 import {
   buildVirtualBranchCreationText,
+  decorateVirtualBranchDefinitionText,
   isVirtualBranchOccurrence,
   projectVirtualBranches,
   type PhysicalTreeRow,
@@ -223,8 +224,10 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     if (row.kind === "physical" && row.hasChildren) {
       marker = row.block.collapsed ? "▸" : "▾";
     }
+    const branchState = row.kind === "physical" ? branchStates.get(row.canonicalId) : undefined;
+    const displayText = decorateVirtualBranchDefinitionText(row.block.displayText, branchState);
     return layoutExpandedBlock({
-      text: row.block.displayText,
+      text: displayText,
       width: effects.terminalWidth(),
       depth: row.depth,
       marker,
@@ -703,6 +706,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   }
 
   async function handleConnect(): Promise<void> {
+    resetExpandedBlockPaging();
     status = "";
     if (mode === "browse") await reload();
     else refreshPending = true;
