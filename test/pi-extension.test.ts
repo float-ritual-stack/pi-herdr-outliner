@@ -19,7 +19,7 @@ test("registers the workspace commands and annotation-aware tools", () => {
 
   outlinerExtension(pi);
 
-  expect(commands).toEqual(["outliner", "outliner-filter"]);
+  expect(commands).toEqual(["outliner", "outliner-goto", "outliner-filter"]);
   expect(registeredTools.map((definition) => definition.name)).toEqual([
     "outliner_create",
     "outliner_annotate_file",

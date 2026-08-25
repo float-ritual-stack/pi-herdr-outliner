@@ -6,6 +6,10 @@ import { fileURLToPath } from "node:url";
 import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { formatFileAnnotation } from "../src/annotations";
+import {
+  focusBlockByQuery,
+  formatBlockFocusMatch,
+} from "../src/block-focus";
 import { OutlinerClient } from "../src/client";
 import { resolvePaths } from "../src/paths";
 import { getProperty } from "../src/properties";
@@ -187,6 +191,37 @@ export default function outlinerExtension(pi: ExtensionAPI): void {
       try {
         await ensureService(true);
         ctx.ui.notify("Outliner ready", "info");
+      } catch (error) {
+        ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+      }
+    },
+  });
+
+  pi.registerCommand("outliner-goto", {
+    description: "Focus a block by full ID, short ID prefix, or fuzzy text",
+    handler: async (args, ctx) => {
+      const query = args.trim();
+      if (!query) {
+        ctx.ui.notify("Usage: /outliner-goto <block-id, short prefix, or text>", "warning");
+        return;
+      }
+      try {
+        await ensureService(true);
+        const result = await focusBlockByQuery(client, query, 10);
+        if (result.resolution.kind === "none") {
+          ctx.ui.notify(`No block matches: ${query}`, "warning");
+          return;
+        }
+        if (result.resolution.kind === "ambiguous") {
+          const candidates = result.resolution.matches
+            .slice(0, 5)
+            .map((match) => formatBlockFocusMatch(match, match.block.id))
+            .join("\n");
+          ctx.ui.notify(`Ambiguous block query; retry with a full UUID:\n${candidates}`, "warning");
+          return;
+        }
+        const match = result.resolution.match;
+        ctx.ui.notify(`Focused ${formatBlockFocusMatch(match)}`, "info");
       } catch (error) {
         ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
       }

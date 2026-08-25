@@ -12,6 +12,7 @@
     "outliner": "bun run src/outliner.ts",
     "server": "bun run src/server-main.ts",
     "cli": "bun run src/cli.ts",
+    "goto": "bun run src/cli.ts goto",
     "check": "tsc --noEmit",
     "test": "bun test"
   },

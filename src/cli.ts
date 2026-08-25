@@ -1,4 +1,8 @@
 import { parseArgs } from "node:util";
+import {
+  focusBlockByQuery,
+  formatBlockFocusMatch,
+} from "./block-focus";
 import { OutlinerClient, type RequestInput } from "./client";
 import { resolvePaths } from "./paths";
 import type { BlockSearchQuery, PropertyFilter } from "./types";
@@ -13,9 +17,18 @@ function parsePropertyFilter(item: string): PropertyFilter {
   };
 }
 
+function parseLimit(value: string | undefined, fallback: number): number {
+  const limit = value === undefined ? fallback : Number(value);
+  if (!Number.isInteger(limit) || limit <= 0) {
+    throw new Error("--limit must be a positive integer");
+  }
+  return limit;
+}
+
 const [command = "list", ...rest] = process.argv.slice(2);
 const client = new OutlinerClient(resolvePaths().socket);
-let request: RequestInput;
+let request: RequestInput | null = null;
+let directResult: unknown;
 
 switch (command) {
   case "list": {
@@ -29,10 +42,7 @@ switch (command) {
       strict: true,
     });
     const filters = values.filter?.map(parsePropertyFilter);
-    const limit = values.limit === undefined ? 500 : Number(values.limit);
-    if (!Number.isInteger(limit) || limit <= 0) {
-      throw new Error("--limit must be a positive integer");
-    }
+    const limit = parseLimit(values.limit, 500);
     const query: BlockSearchQuery = {
       filters,
       text: values.text,
@@ -115,6 +125,44 @@ switch (command) {
     request = { action: "selection.set", blockId: values.id };
     break;
   }
+  case "goto": {
+    const { values, positionals } = parseArgs({
+      args: rest,
+      options: {
+        query: { type: "string" },
+        limit: { type: "string" },
+      },
+      allowPositionals: true,
+      strict: true,
+    });
+    const query = values.query ?? positionals.join(" ");
+    if (!query.trim()) throw new Error("goto requires a block ID, short prefix, or text query");
+    const limit = parseLimit(values.limit, 10);
+    const focused = await focusBlockByQuery(client, query, limit);
+    if (focused.resolution.kind === "none") {
+      throw new Error(`No block matches: ${query}`);
+    }
+    if (focused.resolution.kind === "ambiguous") {
+      directResult = {
+        focused: false,
+        query,
+        candidates: focused.resolution.matches.map((match) => ({
+          id: match.block.id,
+          label: formatBlockFocusMatch(match, match.block.id),
+          kind: match.kind,
+        })),
+      };
+      process.exitCode = 2;
+      break;
+    }
+    directResult = {
+      focused: true,
+      id: focused.resolution.match.block.id,
+      title: focused.resolution.match.title,
+      kind: focused.resolution.match.kind,
+    };
+    break;
+  }
   case "selection":
     request = { action: "selection.get" };
     break;
@@ -122,4 +170,5 @@ switch (command) {
     throw new Error(`Unknown command: ${command}`);
 }
 
-console.log(JSON.stringify(await client.request(request), null, 2));
+const result = request ? await client.request(request) : directResult;
+console.log(JSON.stringify(result, null, 2));
