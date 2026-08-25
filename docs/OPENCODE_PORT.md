@@ -1,6 +1,8 @@
-# OpenCode Port Requirements — `opencode-herdr-outliner`
+# OpenCode Port Requirements
 
-Port of the pi outliner extension (`pi-extension/index.ts` + `herdr-plugin.toml`) to an
+> Historical/future-port assessment. This is not the current Pi Herdr Outliner architecture contract. See [`../README.md`](../README.md) and [`ARCHITECTURE.md`](ARCHITECTURE.md) for shipped behavior.
+
+Port of the Pi outliner extension (`pi-extension/index.ts` + `herdr-plugin.toml`) to an
 OpenCode V2 plugin. Everything below is based on the V2 docs (`opencode.ai/v2/docs`),
 which note the plugin API is **beta** — pin to a specific OpenCode release and expect
 breakage between betas.
