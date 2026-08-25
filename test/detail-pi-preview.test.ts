@@ -36,7 +36,7 @@ function state(text: string): DetailState {
     buffer: new TextBuffer(),
     referencedFile: null,
     previewOffset: 0,
-    editorOffset: 0,
+    editorVisualOffset: 0,
     fileOffset: 0,
     fileCursor: 0,
     selectionAnchor: null,

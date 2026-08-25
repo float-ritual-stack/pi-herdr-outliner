@@ -12,77 +12,14 @@ import {
   type DetailState,
   type DetailViewport,
 } from "./detail-controller";
-import { renderMarkdownLine } from "./terminal";
+import {
+  layoutDetailEditor,
+  type DetailEditorLayout,
+  type DetailEditorVisualRow,
+} from "./detail-editor-layout";
+import { renderMarkdownLine, sanitizeDynamicText } from "./terminal";
 
 const ESC = "\x1b[";
-
-function consumeCsi(value: string, start: number): number {
-  for (let index = start; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code === 0x1b || (code >= 0x80 && code <= 0x9f)) return index;
-    if (code >= 0x40 && code <= 0x7e) return index + 1;
-  }
-  return value.length;
-}
-
-function consumeStringControl(value: string, start: number, osc: boolean): number {
-  for (let index = start; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code === 0x9c || (osc && code === 0x07)) return index + 1;
-    if (code === 0x1b && value.charCodeAt(index + 1) === 0x5c) return index + 2;
-  }
-  return value.length;
-}
-
-function consumeEscapeSequence(value: string, start: number): number {
-  let index = start;
-  while (index < value.length) {
-    const code = value.charCodeAt(index);
-    if (code >= 0x20 && code <= 0x2f) {
-      index += 1;
-      continue;
-    }
-    return code >= 0x30 && code <= 0x7e ? index + 1 : index;
-  }
-  return index;
-}
-
-export function sanitizeDynamicText(value: string, preserveLineBreaks = false): string {
-  let safe = "";
-  for (let index = 0; index < value.length;) {
-    const code = value.charCodeAt(index);
-
-    if (code === 0x1b) {
-      const next = value.charCodeAt(index + 1);
-      if (next === 0x5b) {
-        index = consumeCsi(value, index + 2);
-      } else if (next === 0x5d || next === 0x50 || next === 0x58 || next === 0x5e || next === 0x5f) {
-        index = consumeStringControl(value, index + 2, next === 0x5d);
-      } else {
-        index = consumeEscapeSequence(value, index + 1);
-      }
-      continue;
-    }
-
-    if (code === 0x9b) {
-      index = consumeCsi(value, index + 1);
-      continue;
-    }
-    if (code === 0x90 || code === 0x98 || code === 0x9d || code === 0x9e || code === 0x9f) {
-      index = consumeStringControl(value, index + 1, code === 0x9d);
-      continue;
-    }
-    if (code === 0x09) {
-      safe += "    ";
-    } else if (code === 0x0a && preserveLineBreaks) {
-      safe += "\n";
-    } else if (code > 0x1f && (code < 0x7f || code > 0x9f)) {
-      safe += value[index];
-    }
-    index += 1;
-  }
-  return safe;
-}
 
 function fitToWidth(value: string, width: number): string {
   const fitted = truncateToWidth(value, Math.max(0, width), "…");
@@ -133,32 +70,24 @@ export function renderDetailFooter(
   ];
 }
 
-function renderEditorLine(
-  state: Readonly<DetailState>,
-  line: string,
-  row: number,
-  width: number,
+function renderEditorRow(
+  layout: DetailEditorLayout,
+  row: DetailEditorVisualRow,
+  visualRowIndex: number,
 ): string {
-  const safeLine = sanitizeDynamicText(line);
-  if (row !== state.buffer.row) return fitToWidth(safeLine, width);
+  const prefix = row.continuation
+    ? " ".repeat(layout.lineNumberWidth + 1)
+    : `${String(row.logicalRow + 1).padStart(layout.lineNumberWidth)} `;
+  if (visualRowIndex !== layout.cursorRow) return `${prefix}${row.text}`;
 
-  const textWidth = Math.max(0, width - 1);
-  const cursorIndex = Math.min(state.buffer.column, line.length);
-  const cursorColumn = visibleWidth(sanitizeDynamicText(line.slice(0, cursorIndex)));
-  const horizontalOffset = Math.max(0, cursorColumn - textWidth);
-  const before = sliceByColumn(
-    safeLine,
-    horizontalOffset,
-    cursorColumn - horizontalOffset,
-    true,
-  );
+  const before = sliceByColumn(row.text, 0, layout.cursorColumn, true);
   const after = sliceByColumn(
-    safeLine,
-    cursorColumn,
-    textWidth - visibleWidth(before),
+    row.text,
+    layout.cursorColumn,
+    Math.max(0, layout.contentWidth - visibleWidth(before) - 1),
     true,
   );
-  return `${before}▏${after}`;
+  return `${prefix}${before}▏${after}`;
 }
 
 function appendCompletion(
@@ -224,14 +153,19 @@ export function renderDetailLines(
     output.push("Select a block in the outliner pane.");
   } else if (state.mode === "edit" || state.mode === "comment") {
     const editorHeight = detailVisibleEditorHeight(state, viewport);
-    const lines = state.buffer.lines.slice(state.editorOffset, state.editorOffset + editorHeight);
-    for (const [index, line] of lines.entries()) {
-      const row = state.editorOffset + index;
-      const prefix = `${String(row + 1).padStart(4)} `;
-      output.push(
-        `${prefix}${renderEditorLine(state, line, row, Math.max(1, width - prefix.length))}`,
-      );
-    }
+    const layout = layoutDetailEditor(
+      state.buffer.lines,
+      state.buffer.row,
+      state.buffer.column,
+      width,
+    );
+    const visibleRows = layout.rows.slice(
+      state.editorVisualOffset,
+      state.editorVisualOffset + editorHeight,
+    );
+    visibleRows.forEach((row, index) => {
+      output.push(renderEditorRow(layout, row, state.editorVisualOffset + index));
+    });
     appendCompletion(output, state, width, height);
   } else if (state.mode === "annotation") {
     for (const line of buildDetailAnnotationView(state, width).slice(

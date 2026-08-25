@@ -11,8 +11,8 @@ import type { DetailState } from "./detail-controller";
 import {
   renderDetailFooter,
   renderDetailHeader,
-  sanitizeDynamicText,
 } from "./detail-renderer";
+import { sanitizeDynamicText } from "./terminal";
 
 export function sanitizeMarkdownDocument(value: string): string {
   return sanitizeDynamicText(value, true);

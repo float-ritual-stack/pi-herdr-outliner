@@ -28,7 +28,7 @@ function state(overrides: Partial<DetailState> = {}): DetailState {
     buffer: new TextBuffer(),
     referencedFile: null,
     previewOffset: 0,
-    editorOffset: 0,
+    editorVisualOffset: 0,
     fileOffset: 0,
     fileCursor: 0,
     selectionAnchor: null,
@@ -90,7 +90,7 @@ describe("detail ANSI renderer", () => {
       resolvedBreadcrumb: "Block",
       mode: "edit",
       buffer,
-      editorOffset: 3,
+      editorVisualOffset: 3,
       completion: {
         start: 0,
         end: 4,
@@ -102,7 +102,7 @@ describe("detail ANSI renderer", () => {
       },
     });
     const before = {
-      editorOffset: detail.editorOffset,
+      editorVisualOffset: detail.editorVisualOffset,
       row: detail.buffer.row,
       column: detail.buffer.column,
       completionIndex: detail.completion?.index,
@@ -123,7 +123,7 @@ describe("detail ANSI renderer", () => {
     ].join("\n"));
     expect(rendered.split("\n")).toHaveLength(9);
     expect({
-      editorOffset: detail.editorOffset,
+      editorVisualOffset: detail.editorVisualOffset,
       row: detail.buffer.row,
       column: detail.buffer.column,
       completionIndex: detail.completion?.index,
@@ -238,7 +238,7 @@ test("sanitizes dynamic terminal controls and respects compact viewport heights"
   }
 });
 
-test("reserves one cell for the software cursor on wide edit text", () => {
+test("wraps wide edit text while reserving one cell for the software cursor", () => {
   const selected = block("\t界界");
   const buffer = new TextBuffer(selected.text);
   buffer.moveEnd();
@@ -249,6 +249,42 @@ test("reserves one cell for the software cursor on wide edit text", () => {
   }), { width: 10, height: 8 });
 
   expect(lines.every((line) => visibleWidth(line) <= 10)).toBe(true);
-  expect(lines.some((line) => line.includes("▏"))).toBe(true);
-  expect(lines[3]).toBe("   1 界界▏");
+  expect(lines[3]).toBe("   1     ");
+  expect(lines[4]).toBe("     界界▏");
+});
+
+test("keeps a joined emoji intact when its grapheme exactly fills a wrapped row", () => {
+  const family = "👨‍👩‍👧‍👦";
+  const selected = block(`${family}x`);
+  const buffer = new TextBuffer(selected.text);
+  buffer.moveEnd();
+  const lines = renderDetailLines(state({
+    context: { selected, ancestors: [], children: [] },
+    mode: "edit",
+    buffer,
+  }), { width: 8, height: 8 });
+
+  expect(lines[3]).toBe(`   1 ${family}`);
+  expect(lines[4]).toBe("     x▏");
+  expect(lines.slice(3, 5).every((line) => visibleWidth(line) <= 8)).toBe(true);
+});
+
+test("wraps a long physical editor line without ellipsizing or changing its source", () => {
+  const selected = block("alpha beta gamma delta epsilon");
+  const buffer = new TextBuffer(selected.text);
+  buffer.moveEnd();
+  const lines = renderDetailLines(state({
+    context: { selected, ancestors: [], children: [] },
+    mode: "edit",
+    buffer,
+  }), { width: 18, height: 10 });
+
+  const editorLines = lines.slice(3, 6);
+  expect(editorLines).toEqual([
+    "   1 alpha beta ",
+    "     gamma delta ",
+    "     epsilon▏",
+  ]);
+  expect(editorLines.join("\n")).not.toContain("…");
+  expect(buffer.text).toBe(selected.text);
 });

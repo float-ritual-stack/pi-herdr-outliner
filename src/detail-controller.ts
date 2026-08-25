@@ -1,5 +1,6 @@
 import { extractFileAnnotationComment, formatFileAnnotation } from "./annotations";
 import { completionTargetAtCursor } from "./completion";
+import { layoutDetailEditor } from "./detail-editor-layout";
 import type { ReferencedFile, ReferencedPathCandidate } from "./files";
 import { getProperty } from "./properties";
 import { blockDisplayTitle } from "./references";
@@ -44,7 +45,7 @@ export interface DetailState {
   buffer: TextBuffer;
   referencedFile: ReferencedFile | null;
   previewOffset: number;
-  editorOffset: number;
+  editorVisualOffset: number;
   fileOffset: number;
   fileCursor: number;
   selectionAnchor: number | null;
@@ -176,7 +177,7 @@ export function createDetailController(
     buffer: new TextBuffer(),
     referencedFile: null,
     previewOffset: 0,
-    editorOffset: 0,
+    editorVisualOffset: 0,
     fileOffset: 0,
     fileCursor: 0,
     selectionAnchor: null,
@@ -233,9 +234,24 @@ export function createDetailController(
 
   const ensureEditorCursorVisible = (viewport: DetailViewport): void => {
     const visibleHeight = detailVisibleEditorHeight(state, viewport);
-    state.editorOffset = Math.max(0, Math.min(state.editorOffset, state.buffer.row));
-    if (state.buffer.row >= state.editorOffset + visibleHeight) {
-      state.editorOffset = state.buffer.row - visibleHeight + 1;
+    const layout = layoutDetailEditor(
+      state.buffer.lines,
+      state.buffer.row,
+      state.buffer.column,
+      viewport.width,
+    );
+    const maxOffset = Math.max(0, layout.rows.length - visibleHeight);
+    state.editorVisualOffset = Math.max(
+      0,
+      Math.min(state.editorVisualOffset, maxOffset),
+    );
+    if (layout.cursorRow < state.editorVisualOffset) {
+      state.editorVisualOffset = layout.cursorRow;
+    } else if (layout.cursorRow >= state.editorVisualOffset + visibleHeight) {
+      state.editorVisualOffset = Math.min(
+        maxOffset,
+        layout.cursorRow - visibleHeight + 1,
+      );
     }
   };
 
@@ -252,11 +268,11 @@ export function createDetailController(
     state.buffer = new TextBuffer(state.context.selected.text);
     state.buffer.row = state.buffer.lines.length - 1;
     state.buffer.moveEnd();
-    state.editorOffset = Math.max(0, state.buffer.row - viewport.height + 7);
-    ensureEditorCursorVisible(viewport);
+    state.editorVisualOffset = 0;
     state.completion = null;
     state.mode = "edit";
     state.status = "";
+    ensureEditorCursorVisible(viewport);
   };
 
   const beginComment = (): void => {
@@ -264,7 +280,7 @@ export function createDetailController(
     if (!range || !state.referencedFile) return;
     state.annotationRange = range;
     state.buffer = new TextBuffer();
-    state.editorOffset = 0;
+    state.editorVisualOffset = 0;
     state.completion = null;
     state.mode = "comment";
     state.status = `Commenting on ${state.referencedFile.sourcePath}:${range.startLine}-${range.endLine}`;
@@ -480,6 +496,7 @@ export function createDetailController(
       case "completion.dismiss":
         if (state.completion) state.status = "";
         state.completion = null;
+        ensureEditorCursorVisible(viewport);
         break;
       case "preview.navigate":
         navigatePreview(intent.direction, viewport);
