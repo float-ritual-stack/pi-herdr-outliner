@@ -168,6 +168,33 @@ describe("createTreeController", () => {
     });
   });
 
+  test("cycles goto candidates across both Tab boundaries", async () => {
+    const review = block("40bd0864-913a-4537-9535-8f96e1b63ef7", {
+      text: "Roadmap review",
+      displayText: "Roadmap review",
+    });
+    const triage = block("a089afe5-6535-40ca-8164-25f8a299ac5e", {
+      position: 1,
+      text: "Roadmap triage",
+      displayText: "Roadmap triage",
+    });
+    const fake = harness((input) =>
+      input.action === "workspace.snapshot"
+        ? snapshot([review, triage], review)
+        : undefined,
+    );
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+    await controller.handleKeypress("g", { name: "g" }, "pass");
+    await controller.handleKeypress("roadmap", { sequence: "roadmap" }, "pass");
+
+    expect(controller.view().quickCompletion?.index).toBe(0);
+    await controller.handleKeypress("", { name: "tab", shift: true }, "pass");
+    expect(controller.view().quickCompletion?.index).toBe(1);
+    await controller.handleKeypress("", { name: "tab" }, "pass");
+    expect(controller.view().quickCompletion?.index).toBe(0);
+  });
+
   test("installs a complete 501-block snapshot and selects its last block", async () => {
     const blocks = Array.from({ length: 501 }, (_, index) =>
       block(`block-${index}`, { position: index }),

@@ -215,9 +215,9 @@ export default function outlinerExtension(pi: ExtensionAPI): void {
         if (result.resolution.kind === "ambiguous") {
           const candidates = result.resolution.matches
             .slice(0, 5)
-            .map(formatBlockFocusMatch)
+            .map((match) => formatBlockFocusMatch(match, match.block.id))
             .join("\n");
-          ctx.ui.notify(`Ambiguous block query; retry with a short ID:\n${candidates}`, "warning");
+          ctx.ui.notify(`Ambiguous block query; retry with a full UUID:\n${candidates}`, "warning");
           return;
         }
         const match = result.resolution.match;

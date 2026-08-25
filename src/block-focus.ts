@@ -99,12 +99,10 @@ function scoreBlock(
   return null;
 }
 
-export function rankBlockFocusMatches(
+function rankAllBlockFocusMatches(
   blocks: readonly Block[],
   query: string,
-  limit = 20,
 ): BlockFocusMatch[] {
-  if (!Number.isInteger(limit) || limit <= 0) throw new Error("Focus match limit must be positive");
   const normalizedQuery = normalize(query);
   if (!normalizedQuery) return [];
   const terms = normalizedQuery.split(" ").filter(Boolean);
@@ -112,9 +110,19 @@ export function rankBlockFocusMatches(
     .map((block) => scoreBlock(block, normalizedQuery, terms))
     .filter((match): match is BlockFocusMatch => match !== null)
     .sort((left, right) =>
-      right.score - left.score || left.title.localeCompare(right.title) || left.block.id.localeCompare(right.block.id)
-    )
-    .slice(0, limit);
+      right.score - left.score ||
+      left.title.localeCompare(right.title) ||
+      left.block.id.localeCompare(right.block.id)
+    );
+}
+
+export function rankBlockFocusMatches(
+  blocks: readonly Block[],
+  query: string,
+  limit = 20,
+): BlockFocusMatch[] {
+  if (!Number.isInteger(limit) || limit <= 0) throw new Error("Focus match limit must be positive");
+  return rankAllBlockFocusMatches(blocks, query).slice(0, limit);
 }
 
 export function resolveBlockFocus(
@@ -122,13 +130,15 @@ export function resolveBlockFocus(
   query: string,
   limit = 20,
 ): BlockFocusResolution {
-  const matches = rankBlockFocusMatches(blocks, query, limit);
-  if (matches.length === 0) return { kind: "none", matches: [] };
-  const [first, second] = matches;
+  if (!Number.isInteger(limit) || limit <= 0) throw new Error("Focus match limit must be positive");
+  const allMatches = rankAllBlockFocusMatches(blocks, query);
+  if (allMatches.length === 0) return { kind: "none", matches: [] };
+  const [first, second] = allMatches;
+  const matches = allMatches.slice(0, limit);
   const isDirectMatch =
     first.kind === "exact-id" ||
     first.kind === "exact-title" ||
-    matches.length === 1 ||
+    allMatches.length === 1 ||
     (first.kind === "id-prefix" && second?.kind !== "id-prefix") ||
     (second !== undefined && first.score - second.score >= 10_000);
   return isDirectMatch
@@ -140,8 +150,26 @@ export function shortBlockId(blockId: string): string {
   return blockId.slice(0, 8);
 }
 
-export function formatBlockFocusMatch(match: BlockFocusMatch): string {
-  return `${shortBlockId(match.block.id)} · ${match.title}`;
+export function uniqueBlockFocusIdentifier(
+  blockId: string,
+  matches: readonly BlockFocusMatch[],
+  minimumLength = 8,
+): string {
+  const startLength = Math.max(1, Math.min(minimumLength, blockId.length));
+  for (let length = startLength; length < blockId.length; length += 1) {
+    const prefix = blockId.slice(0, length);
+    if (matches.filter((match) => match.block.id.startsWith(prefix)).length === 1) {
+      return prefix;
+    }
+  }
+  return blockId;
+}
+
+export function formatBlockFocusMatch(
+  match: BlockFocusMatch,
+  identifier = shortBlockId(match.block.id),
+): string {
+  return `${identifier} · ${match.title}`;
 }
 
 export async function focusBlockByQuery(

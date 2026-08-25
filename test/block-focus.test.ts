@@ -4,6 +4,7 @@ import {
   formatBlockFocusMatch,
   rankBlockFocusMatches,
   resolveBlockFocus,
+  uniqueBlockFocusIdentifier,
 } from "../src/block-focus";
 import type { RequestInput } from "../src/client";
 import type { VisibleBlock, WorkspaceSnapshot } from "../src/types";
@@ -53,15 +54,30 @@ describe("block focus resolution", () => {
     });
   });
 
-  test("reports ambiguous shared prefixes instead of guessing", () => {
+  test("reports ambiguous shared prefixes before applying the display limit", () => {
     const resolution = resolveBlockFocus(blocks, "40bd");
     expect(resolution.kind).toBe("ambiguous");
     expect(resolution.matches.map((match) => match.block.id).sort()).toEqual([
       roadmap.id,
       other.id,
     ]);
+
+    const limited = resolveBlockFocus(blocks, "40bd", 1);
+    expect(limited.kind).toBe("ambiguous");
+    expect(limited.matches).toHaveLength(1);
   });
 
+  test("extends colliding convenience IDs until each candidate is unique", () => {
+    const collisions = [
+      block("deadbeef-1111-4222-8333-444455556666", "First"),
+      block("deadbeef-2222-4333-8444-555566667777", "Second"),
+    ];
+    const matches = rankBlockFocusMatches(collisions, "deadbeef");
+    expect(matches.map((match) => uniqueBlockFocusIdentifier(match.block.id, matches))).toEqual([
+      "deadbeef-1",
+      "deadbeef-2",
+    ]);
+  });
   test("ranks token and subsequence fuzzy content matches", () => {
     expect(rankBlockFocusMatches(blocks, "graveyard roadmap")[0]).toMatchObject({
       block: { id: roadmap.id },

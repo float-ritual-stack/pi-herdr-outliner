@@ -93,7 +93,7 @@ bun run goto 40bd0864
 bun run goto --query "roadmap review"
 ```
 
-The CLI resolves the same workspace-scoped socket and database as the service. `goto` accepts a full UUID, unique short prefix, or unambiguous fuzzy title/content query; ambiguous queries return candidate short IDs without changing selection.
+The CLI resolves the same workspace-scoped socket and database as the service. `goto` accepts a full UUID, unique short prefix, or unambiguous fuzzy title/content query. Eight-character IDs are convenience labels, not a uniqueness guarantee; ambiguous queries return full-UUID candidates without changing selection.
 
 ## Keyboard controls
 

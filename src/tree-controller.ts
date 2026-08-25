@@ -2,6 +2,7 @@ import type { RequestInput } from "./client";
 import {
   formatBlockFocusMatch,
   rankBlockFocusMatches,
+  uniqueBlockFocusIdentifier,
 } from "./block-focus";
 import { completionTargetAtCursor } from "./completion";
 import type { ReferencedFile, ReferencedPathCandidate } from "./files";
@@ -212,12 +213,12 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     quickCompletion = null;
   }
 
-  function moveQuickCompletion(delta: number): void {
+  function moveQuickCompletion(delta: number, wrap = false): void {
     if (!quickCompletion) return;
-    quickCompletion.index = Math.max(
-      0,
-      Math.min(quickCompletion.items.length - 1, quickCompletion.index + delta),
-    );
+    const itemCount = quickCompletion.items.length;
+    quickCompletion.index = wrap
+      ? (quickCompletion.index + delta + itemCount) % itemCount
+      : Math.max(0, Math.min(itemCount - 1, quickCompletion.index + delta));
   }
 
   function updateQuickBuffer(str: string, key: TerminalKey): boolean {
@@ -281,7 +282,10 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       end: quickInputText().length,
       index: 0,
       items: matches.map((match) => ({
-        label: formatBlockFocusMatch(match),
+        label: formatBlockFocusMatch(
+          match,
+          uniqueBlockFocusIdentifier(match.block.id, matches),
+        ),
         insertion: match.block.id,
         blockId: match.block.id,
       })),
@@ -726,7 +730,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         moveQuickCompletion(1);
       } else if (key.name === "tab") {
         if (!quickCompletion) refreshGotoCompletion();
-        else moveQuickCompletion(key.shift ? -1 : 1);
+        else moveQuickCompletion(key.shift ? -1 : 1, true);
       } else if (key.name === "return") {
         if (!quickCompletion) refreshGotoCompletion();
         if (quickCompletion) await acceptGotoCompletion();

@@ -148,7 +148,7 @@ switch (command) {
         query,
         candidates: focused.resolution.matches.map((match) => ({
           id: match.block.id,
-          label: formatBlockFocusMatch(match),
+          label: formatBlockFocusMatch(match, match.block.id),
           kind: match.kind,
         })),
       };
