@@ -1,4 +1,5 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
+import type { TextBufferRange } from "./text-buffer";
 import { sanitizeDynamicText } from "./terminal";
 
 const MIN_LINE_NUMBER_WIDTH = 4;
@@ -10,6 +11,8 @@ export interface DetailEditorVisualRow {
   text: string;
   startColumn: number;
   endColumn: number;
+  selectionStartColumn: number | null;
+  selectionEndColumn: number | null;
 }
 
 export interface DetailEditorLayout {
@@ -75,11 +78,29 @@ function wrapLine(line: string, maxWidth: number): Segment[] {
   return segments;
 }
 
+function selectionDisplayColumns(
+  line: string,
+  logicalRow: number,
+  selection: TextBufferRange | null,
+): { start: number; end: number } | null {
+  if (!selection || logicalRow < selection.start.row || logicalRow > selection.end.row) {
+    return null;
+  }
+  const sourceStart = logicalRow === selection.start.row ? selection.start.column : 0;
+  const sourceEnd = logicalRow === selection.end.row ? selection.end.column : line.length;
+  if (sourceEnd <= sourceStart) return null;
+  return {
+    start: visibleWidth(sanitizeDynamicText(line.slice(0, sourceStart))),
+    end: visibleWidth(sanitizeDynamicText(line.slice(0, sourceEnd))),
+  };
+}
+
 export function layoutDetailEditor(
   lines: readonly string[],
   logicalCursorRow: number,
   logicalCursorColumn: number,
   viewportWidth: number,
+  selection: TextBufferRange | null = null,
 ): DetailEditorLayout {
   const lineNumberWidth = Math.max(
     MIN_LINE_NUMBER_WIDTH,
@@ -108,9 +129,11 @@ export function layoutDetailEditor(
   let cursorColumn = 0;
 
   for (let logicalRow = 0; logicalRow < lines.length; logicalRow += 1) {
-    const segments = wrapLine(lines[logicalRow] ?? "", wrapWidth);
+    const line = lines[logicalRow] ?? "";
+    const segments = wrapLine(line, wrapWidth);
     let startColumn = 0;
     const firstVisualRow = rows.length;
+    const selectionColumns = selectionDisplayColumns(line, logicalRow, selection);
 
     for (
       let segmentIndex = 0;
@@ -119,12 +142,24 @@ export function layoutDetailEditor(
     ) {
       const segment = segments[segmentIndex];
       const endColumn = startColumn + segment.width;
+      const selectionStartColumn = selectionColumns
+        ? Math.max(0, selectionColumns.start - startColumn)
+        : null;
+      const selectionEndColumn = selectionColumns
+        ? Math.min(segment.width, selectionColumns.end - startColumn)
+        : null;
+      const hasSelection =
+        selectionStartColumn !== null &&
+        selectionEndColumn !== null &&
+        selectionEndColumn > selectionStartColumn;
       rows.push({
         logicalRow,
         continuation: segmentIndex > 0,
         text: segment.text,
         startColumn,
         endColumn,
+        selectionStartColumn: hasSelection ? selectionStartColumn : null,
+        selectionEndColumn: hasSelection ? selectionEndColumn : null,
       });
       startColumn = endColumn;
     }

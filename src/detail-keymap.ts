@@ -1,4 +1,5 @@
 import type {
+  DetailBufferMoveDirection,
   DetailController,
   DetailIntent,
   DetailViewport,
@@ -47,6 +48,13 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
     else await dispatch({ type: "redraw" });
   }
 
+  function wordMotionDirection(key: TerminalKey): DetailBufferMoveDirection | null {
+    if (!key.ctrl && !key.meta) return null;
+    if (key.name === "left" || key.name === "b") return "word-left";
+    if (key.name === "right" || key.name === "f") return "word-right";
+    return null;
+  }
+
   async function handleBufferKey(str: string, key: TerminalKey, modifiedEnter: boolean): Promise<void> {
     if (controller.state.completion) {
       await handleCompletionKey(key);
@@ -67,6 +75,23 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
       await cancelBuffer();
       return;
     }
+    if ((key.meta && key.name === "a") || (key.ctrl && key.shift && key.name === "a")) {
+      await dispatch({ type: "buffer.select-all" });
+      return;
+    }
+    if (key.ctrl && key.name === "a") {
+      await dispatch({ type: "buffer.move", direction: "home", extend: key.shift });
+      return;
+    }
+    if (key.ctrl && key.name === "e") {
+      await dispatch({ type: "buffer.move", direction: "end", extend: key.shift });
+      return;
+    }
+    const wordDirection = wordMotionDirection(key);
+    if (wordDirection) {
+      await dispatch({ type: "buffer.move", direction: wordDirection, extend: key.shift });
+      return;
+    }
     if (key.name === "return" || modifiedEnter) await dispatch({ type: "buffer.newline" });
     else if (key.name === "backspace") await dispatch({ type: "buffer.backspace" });
     else if (key.name === "delete") await dispatch({ type: "buffer.delete" });
@@ -78,7 +103,7 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
       key.name === "home" ||
       key.name === "end"
     ) {
-      await dispatch({ type: "buffer.move", direction: key.name });
+      await dispatch({ type: "buffer.move", direction: key.name, extend: key.shift });
     } else if (isPrintableInput(str, key)) await dispatch({ type: "buffer.insert", text: str });
     else await dispatch({ type: "redraw" });
   }
