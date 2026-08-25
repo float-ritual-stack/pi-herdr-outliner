@@ -95,6 +95,8 @@ export type DetailIntent =
   | { type: "buffer.delete" }
   | { type: "buffer.move"; direction: DetailBufferMoveDirection; extend?: boolean }
   | { type: "buffer.select-all" }
+  | { type: "buffer.undo" }
+  | { type: "buffer.redo" }
   | { type: "buffer.save" }
   | { type: "buffer.cancel" }
   | { type: "completion.open" }
@@ -131,9 +133,9 @@ export function detailDisplayMode(block: Block | null): "preview" | "file" | "an
 export function detailHelpText(mode: DetailMode): string {
   switch (mode) {
     case "edit":
-      return "⌥←→ word  Home/End line  ⇧Arrows select  Del selection  ^S save  Tab complete  Esc cancel";
+      return "^Z/⌘Z undo  ^⇧Z/^Y redo  ⌥←→ word  Home/End line  ⇧Arrows select  Del  ^S save  Tab complete  Esc cancel";
     case "comment":
-      return "⌥←→ word  Home/End line  ⇧Arrows select  Del selection  ^S add annotation  Esc cancel";
+      return "^Z/⌘Z undo  ^⇧Z/^Y redo  ⌥←→ word  Home/End line  ⇧Arrows select  Del  ^S add annotation  Esc cancel";
     case "annotation":
       return "↑↓ scroll  e edit annotation  f source file  b raw block  q tree";
     case "file":
@@ -454,19 +456,23 @@ export function createDetailController(
         if (isBufferMode()) {
           state.completion = null;
           state.buffer.insert(intent.text);
+          state.status = "";
           ensureEditorCursorVisible(viewport);
         }
         break;
       case "buffer.newline":
         state.buffer.newline();
+        state.status = "";
         ensureEditorCursorVisible(viewport);
         break;
       case "buffer.backspace":
         state.buffer.backspace();
+        state.status = "";
         ensureEditorCursorVisible(viewport);
         break;
       case "buffer.delete":
         state.buffer.deleteForward();
+        state.status = "";
         ensureEditorCursorVisible(viewport);
         break;
       case "buffer.move": {
@@ -502,6 +508,16 @@ export function createDetailController(
       }
       case "buffer.select-all":
         state.buffer.selectAll();
+        ensureEditorCursorVisible(viewport);
+        break;
+      case "buffer.undo":
+        state.completion = null;
+        state.status = state.buffer.undo() ? "Undo" : "Nothing to undo";
+        ensureEditorCursorVisible(viewport);
+        break;
+      case "buffer.redo":
+        state.completion = null;
+        state.status = state.buffer.redo() ? "Redo" : "Nothing to redo";
         ensureEditorCursorVisible(viewport);
         break;
       case "buffer.save":

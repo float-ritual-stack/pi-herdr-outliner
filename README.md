@@ -31,12 +31,12 @@ The project started as a small Friday-night experiment and grew into a durable w
 - Exact block references using `((block-id))`, resolved to display titles in read mode while raw text remains editable.
 - Property-driven virtual branches with canonical projected occurrences and property-aware creation.
 - Pi Markdown preview with line, page, endpoint, and mouse/trackpad scrolling.
-- Grapheme-safe wrapped Detail editing, word motion, selection, deletion, completion, optimistic save, and whole-session Esc cancellation.
+- Grapheme-safe wrapped Detail editing, word motion, selection, deletion, bounded per-session undo/redo, completion, optimistic save, and whole-session Esc cancellation.
 - Referenced text/Markdown file viewing and durable line-range annotations.
 - Herdr pane discovery, restart reconstruction, and a disposable runtime registry.
 - Pi/OMP commands, tools, and selection-context injection.
 
-Planned work is tracked inside the outliner itself. Notable accepted designs include branch-local ordering for virtual occurrences, `PIE-NNN` work IDs, symbolic `[[page]]` addresses, backlinks, pinned reference panes, and bounded editor undo/redo.
+Planned work is tracked inside the outliner itself. Notable accepted designs include branch-local ordering for virtual occurrences, `PIE-NNN` work IDs, symbolic `[[page]]` addresses, backlinks, and pinned reference panes.
 
 ## Quick start
 
@@ -143,12 +143,16 @@ Projected virtual occurrences deliberately constrain hierarchy, collapse, and si
 | `Home` / `End`, `Ctrl+A` / `Ctrl+E` | Physical line start / end |
 | `Shift` + a supported motion | Extend selection |
 | `Command+A` or `Ctrl+Shift+A` | Select all |
+| `Ctrl/Command+Z` | Undo the previous edit group |
+| `Ctrl+Shift+Z` or `Ctrl+Y` | Redo |
 | `Backspace` / `Delete` | Delete selection or one grapheme |
 | `Tab` or `Ctrl+Space` | Open completion in block edit mode |
 | `Ctrl+S` | Save block or add annotation |
 | `Esc` | Cancel the complete edit session and return to Tree |
 
 Long physical lines wrap without changing raw text. Continuation rows remain associated with one physical line number, and the viewport follows the active cursor edge.
+
+Undo history is bounded to the current edit/comment session. Consecutive typing and deletion coalesce; cursor/selection state is restored; a divergent edit clears redo. Save or Esc-cancel ends the history.
 
 ## Blocks, properties, and references
 

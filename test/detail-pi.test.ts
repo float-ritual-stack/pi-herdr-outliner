@@ -51,6 +51,14 @@ describe("Pi TUI Detail input", () => {
       kind: "key",
       key: { name: "s", ctrl: true },
     });
+    expect(decodePiDetailInput("\x1a")).toMatchObject({
+      kind: "key",
+      key: { name: "z", ctrl: true },
+    });
+    expect(decodePiDetailInput("\x19")).toMatchObject({
+      kind: "key",
+      key: { name: "y", ctrl: true },
+    });
     expect(decodePiDetailInput("\x1b[A")).toMatchObject({
       kind: "key",
       key: { name: "up" },

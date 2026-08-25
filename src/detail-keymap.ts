@@ -56,6 +56,14 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
   }
 
   async function handleBufferKey(str: string, key: TerminalKey, modifiedEnter: boolean): Promise<void> {
+    if ((key.ctrl || key.meta) && key.name === "z") {
+      await dispatch({ type: key.shift ? "buffer.redo" : "buffer.undo" });
+      return;
+    }
+    if (key.ctrl && key.name === "y") {
+      await dispatch({ type: "buffer.redo" });
+      return;
+    }
     if (controller.state.completion) {
       await handleCompletionKey(key);
       return;
