@@ -206,7 +206,7 @@ Accepted future behavior stores order as `(virtual-branch ID, canonical block ID
 - Completion replaces raw line ranges and does not resolve block references into saved text.
 - Ctrl+S uses optimistic concurrency. Esc discards the complete edit session.
 
-Bounded per-session undo/redo is planned. Modal editing, registers, macros, and programmable operator systems are explicit non-goals for the custom buffer.
+Editor undo/redo stores at most 100 per-session snapshots. Consecutive typing, backspace, and forward delete coalesce; cursor and selection state restore with text; divergent edits invalidate redo. New edit/comment sessions start with empty history. Modal editing, registers, macros, and programmable operator systems remain explicit non-goals for the custom buffer.
 
 ## File annotations
 
@@ -260,7 +260,6 @@ The durable roadmap lives in the outliner workboard. Current accepted designs in
 - symbolic page addresses and create-on-follow stubs,
 - project-scoped `PIE-NNN` work IDs,
 - backlinks,
-- pinned reference panes, and
-- bounded editor undo/redo.
+- pinned reference panes.
 
 Do not describe these as shipped behavior until their roadmap items are Complete on main.

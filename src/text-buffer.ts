@@ -1,5 +1,8 @@
 const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 const wordSegmenter = new Intl.Segmenter(undefined, { granularity: "word" });
+const MAX_HISTORY_ENTRIES = 100;
+
+type HistoryGroup = "typing" | "backspace" | "delete" | null;
 
 export interface TextBufferPoint {
   row: number;
@@ -9,6 +12,13 @@ export interface TextBufferPoint {
 export interface TextBufferRange {
   start: TextBufferPoint;
   end: TextBufferPoint;
+}
+
+interface TextBufferSnapshot {
+  lines: string[];
+  row: number;
+  column: number;
+  selectionAnchor: TextBufferPoint | null;
 }
 
 function comparePoints(left: TextBufferPoint, right: TextBufferPoint): number {
@@ -30,6 +40,13 @@ function clampToGraphemeStart(line: string, column: number): number {
   const clamped = Math.max(0, Math.min(column, line.length));
   if (clamped === line.length) return clamped;
   return graphemeSegmenter.segment(line).containing(clamped)?.index ?? clamped;
+}
+
+function isSingleGrapheme(value: string): boolean {
+  if (!value) return false;
+  const segments = graphemeSegmenter.segment(value)[Symbol.iterator]();
+  const first = segments.next();
+  return !first.done && segments.next().done === true;
 }
 
 function firstWordStart(line: string): number | null {
@@ -71,6 +88,9 @@ export class TextBuffer {
   row = 0;
   column = 0;
   #selectionAnchor: TextBufferPoint | null = null;
+  readonly #undoHistory: TextBufferSnapshot[] = [];
+  readonly #redoHistory: TextBufferSnapshot[] = [];
+  #historyGroup: HistoryGroup = null;
 
   constructor(text = "") {
     this.lines = text.split(/\r?\n/);
@@ -96,18 +116,27 @@ export class TextBuffer {
   }
 
   clearSelection(): void {
-    this.#selectionAnchor = null;
+    this.clearSelectionAnchor();
+    this.breakHistoryGroup();
   }
 
   selectAll(): void {
+    this.breakHistoryGroup();
     this.#selectionAnchor = { row: 0, column: 0 };
     this.row = this.lines.length - 1;
     this.column = this.lines[this.row].length;
   }
 
   insert(value: string): void {
-    this.deleteSelection();
     const normalized = value.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    if (!normalized) return;
+    const selection = this.selectionRange;
+    const historyGroup = !selection && !normalized.includes("\n") && isSingleGrapheme(normalized)
+      ? "typing"
+      : null;
+    this.recordEdit(historyGroup);
+    if (selection) this.deleteRange(selection);
+
     const parts = normalized.split("\n");
     const line = this.lines[this.row];
     const before = line.slice(0, this.column);
@@ -127,10 +156,11 @@ export class TextBuffer {
   }
 
   replaceCurrentLine(start: number, end: number, value: string): void {
-    this.clearSelection();
     const line = this.lines[this.row];
     const safeStart = Math.max(0, Math.min(start, line.length));
     const safeEnd = Math.max(safeStart, Math.min(end, line.length));
+    this.recordEdit(null);
+    this.clearSelectionAnchor();
     this.lines[this.row] = line.slice(0, safeStart) + value + line.slice(safeEnd);
     this.column = safeStart + value.length;
   }
@@ -142,6 +172,7 @@ export class TextBuffer {
   backspace(): void {
     if (this.deleteSelection()) return;
     if (this.column > 0) {
+      this.recordEdit("backspace");
       const line = this.lines[this.row];
       const start = previousGraphemeStart(line, this.column);
       this.lines[this.row] = line.slice(0, start) + line.slice(this.column);
@@ -150,6 +181,7 @@ export class TextBuffer {
     }
     if (this.row === 0) return;
 
+    this.recordEdit(null);
     const previousLength = this.lines[this.row - 1].length;
     this.lines[this.row - 1] += this.lines[this.row];
     this.lines.splice(this.row, 1);
@@ -161,11 +193,14 @@ export class TextBuffer {
     if (this.deleteSelection()) return;
     const line = this.lines[this.row];
     if (this.column < line.length) {
+      this.recordEdit("delete");
       const end = nextGraphemeEnd(line, this.column);
       this.lines[this.row] = line.slice(0, this.column) + line.slice(end);
       return;
     }
     if (this.row >= this.lines.length - 1) return;
+
+    this.recordEdit(null);
     this.lines[this.row] += this.lines[this.row + 1];
     this.lines.splice(this.row + 1, 1);
   }
@@ -173,17 +208,26 @@ export class TextBuffer {
   deleteSelection(): boolean {
     const range = this.selectionRange;
     if (!range) return false;
+    this.recordEdit(null);
+    this.deleteRange(range);
+    return true;
+  }
 
-    const before = this.lines[range.start.row].slice(0, range.start.column);
-    const after = this.lines[range.end.row].slice(range.end.column);
-    this.lines.splice(
-      range.start.row,
-      range.end.row - range.start.row + 1,
-      before + after,
-    );
-    this.row = range.start.row;
-    this.column = range.start.column;
-    this.clearSelection();
+  undo(): boolean {
+    const snapshot = this.#undoHistory.pop();
+    if (!snapshot) return false;
+    this.pushHistory(this.#redoHistory, this.snapshot());
+    this.restore(snapshot);
+    this.breakHistoryGroup();
+    return true;
+  }
+
+  redo(): boolean {
+    const snapshot = this.#redoHistory.pop();
+    if (!snapshot) return false;
+    this.pushHistory(this.#undoHistory, this.snapshot());
+    this.restore(snapshot);
+    this.breakHistoryGroup();
     return true;
   }
 
@@ -266,19 +310,70 @@ export class TextBuffer {
     this.moveTo(row, this.lines[row].length, extend);
   }
 
+  private snapshot(): TextBufferSnapshot {
+    return {
+      lines: [...this.lines],
+      row: this.row,
+      column: this.column,
+      selectionAnchor: this.#selectionAnchor ? { ...this.#selectionAnchor } : null,
+    };
+  }
+
+  private restore(snapshot: TextBufferSnapshot): void {
+    this.lines.splice(0, this.lines.length, ...snapshot.lines);
+    this.row = snapshot.row;
+    this.column = snapshot.column;
+    this.#selectionAnchor = snapshot.selectionAnchor ? { ...snapshot.selectionAnchor } : null;
+  }
+
+  private recordEdit(group: HistoryGroup): void {
+    const coalesced = group !== null && group === this.#historyGroup && this.#redoHistory.length === 0;
+    if (!coalesced) this.pushHistory(this.#undoHistory, this.snapshot());
+    this.#redoHistory.length = 0;
+    this.#historyGroup = group;
+  }
+
+  private pushHistory(history: TextBufferSnapshot[], snapshot: TextBufferSnapshot): void {
+    history.push(snapshot);
+    if (history.length > MAX_HISTORY_ENTRIES) history.shift();
+  }
+
+  private breakHistoryGroup(): void {
+    this.#historyGroup = null;
+  }
+
+  private clearSelectionAnchor(): void {
+    this.#selectionAnchor = null;
+  }
+
+  private deleteRange(range: TextBufferRange): void {
+    const before = this.lines[range.start.row].slice(0, range.start.column);
+    const after = this.lines[range.end.row].slice(range.end.column);
+    this.lines.splice(
+      range.start.row,
+      range.end.row - range.start.row + 1,
+      before + after,
+    );
+    this.row = range.start.row;
+    this.column = range.start.column;
+    this.clearSelectionAnchor();
+  }
+
   private cursorPoint(): TextBufferPoint {
     return { row: this.row, column: this.column };
   }
 
   private moveTo(row: number, column: number, extend: boolean): void {
+    this.breakHistoryGroup();
     if (extend && !this.#selectionAnchor) this.#selectionAnchor = this.cursorPoint();
-    if (!extend) this.clearSelection();
+    if (!extend) this.clearSelectionAnchor();
     this.row = row;
     this.column = column;
-    if (!this.hasSelection) this.clearSelection();
+    if (!this.hasSelection) this.clearSelectionAnchor();
   }
 
   private finishMotion(extend: boolean): void {
-    if (!extend) this.clearSelection();
+    this.breakHistoryGroup();
+    if (!extend) this.clearSelectionAnchor();
   }
 }

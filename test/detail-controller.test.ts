@@ -359,6 +359,35 @@ describe("detail controller saves and annotations", () => {
   });
 });
 
+describe("detail controller undo and redo", () => {
+  test("restores edit groups and resets history across cancel boundaries", async () => {
+    const harness = createHarness(makeBlock({ text: "base" }));
+    await harness.controller.initialize();
+    await harness.controller.dispatch({ type: "edit.begin" }, viewport);
+    await harness.controller.dispatch({ type: "buffer.insert", text: " one" }, viewport);
+    await harness.controller.dispatch({ type: "buffer.insert", text: "!" }, viewport);
+    expect(harness.controller.state.buffer.text).toBe("base one!");
+
+    await harness.controller.dispatch({ type: "buffer.undo" }, viewport);
+    expect(harness.controller.state.buffer.text).toBe("base one");
+    expect(harness.controller.state.status).toBe("Undo");
+    await harness.controller.dispatch({ type: "buffer.undo" }, viewport);
+    expect(harness.controller.state.buffer.text).toBe("base");
+
+    await harness.controller.dispatch({ type: "buffer.redo" }, viewport);
+    expect(harness.controller.state.buffer.text).toBe("base one");
+    await harness.controller.dispatch({ type: "buffer.redo" }, viewport);
+    expect(harness.controller.state.buffer.text).toBe("base one!");
+    expect(harness.controller.state.status).toBe("Redo");
+
+    await harness.controller.dispatch({ type: "buffer.cancel" }, viewport);
+    await harness.controller.dispatch({ type: "edit.begin" }, viewport);
+    await harness.controller.dispatch({ type: "buffer.undo" }, viewport);
+    expect(harness.controller.state.buffer.text).toBe("base");
+    expect(harness.controller.state.status).toBe("Nothing to undo");
+  });
+});
+
 describe("detail controller wrapped editor scrolling", () => {
   test("tracks the cursor by wrapped visual rows across movement and resize", async () => {
     const text = Array.from({ length: 18 }, (_, index) => `item-${index + 1}`).join(" ");

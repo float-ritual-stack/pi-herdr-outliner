@@ -63,3 +63,85 @@ describe("TextBuffer word motion and selection", () => {
     expect(buffer.selectionRange).toBeNull();
   });
 });
+
+describe("TextBuffer undo and redo", () => {
+  test("coalesces consecutive grapheme typing and restores it with one undo", () => {
+    const buffer = new TextBuffer();
+    buffer.insert("a");
+    buffer.insert("👨‍👩‍👧‍👦");
+    buffer.insert("b");
+
+    expect(buffer.text).toBe("a👨‍👩‍👧‍👦b");
+    expect(buffer.undo()).toBe(true);
+    expect(buffer.text).toBe("");
+    expect({ row: buffer.row, column: buffer.column }).toEqual({ row: 0, column: 0 });
+
+    expect(buffer.redo()).toBe(true);
+    expect(buffer.text).toBe("a👨‍👩‍👧‍👦b");
+    expect(buffer.column).toBe(buffer.text.length);
+  });
+
+  test("breaks typing coalescence after cursor movement", () => {
+    const buffer = new TextBuffer();
+    buffer.insert("a");
+    buffer.insert("b");
+    buffer.insert("c");
+    buffer.moveLeft();
+    buffer.insert("X");
+    expect(buffer.text).toBe("abXc");
+
+    expect(buffer.undo()).toBe(true);
+    expect(buffer.text).toBe("abc");
+    expect(buffer.column).toBe(2);
+    expect(buffer.undo()).toBe(true);
+    expect(buffer.text).toBe("");
+  });
+
+  test("restores selection and cursor around selection deletion", () => {
+    const buffer = new TextBuffer("alpha beta");
+    buffer.moveWordRight();
+    buffer.moveEnd(true);
+    expect(buffer.selectionRange).toEqual({
+      start: { row: 0, column: 6 },
+      end: { row: 0, column: 10 },
+    });
+
+    buffer.deleteForward();
+    expect(buffer.text).toBe("alpha ");
+    expect(buffer.undo()).toBe(true);
+    expect(buffer.text).toBe("alpha beta");
+    expect(buffer.selectionRange).toEqual({
+      start: { row: 0, column: 6 },
+      end: { row: 0, column: 10 },
+    });
+
+    expect(buffer.redo()).toBe(true);
+    expect(buffer.text).toBe("alpha ");
+    expect(buffer.selectionRange).toBeNull();
+  });
+
+  test("invalidates redo after a divergent edit", () => {
+    const buffer = new TextBuffer();
+    buffer.insert("a");
+    buffer.insert("b");
+    expect(buffer.undo()).toBe(true);
+
+    buffer.insert("x");
+    expect(buffer.redo()).toBe(false);
+    expect(buffer.text).toBe("x");
+  });
+
+  test("bounds history to the most recent one hundred edit groups", () => {
+    const buffer = new TextBuffer();
+    for (let index = 0; index < 101; index += 1) {
+      buffer.insert("x");
+      buffer.moveHome();
+      buffer.moveEnd();
+    }
+
+    let undoCount = 0;
+    while (buffer.undo()) undoCount += 1;
+    expect(undoCount).toBe(100);
+    expect(buffer.text).toBe("x");
+  });
+});

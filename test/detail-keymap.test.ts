@@ -77,6 +77,24 @@ test("maps word, line, selection, and select-all controls to explicit intents", 
   ]);
 });
 
+test("maps platform undo and redo shortcuts", async () => {
+  const detail = harness();
+
+  await detail.press({ name: "z", ctrl: true });
+  await detail.press({ name: "z", ctrl: true, shift: true });
+  await detail.press({ name: "y", ctrl: true });
+  await detail.press({ name: "z", meta: true });
+  await detail.press({ name: "z", meta: true, shift: true });
+
+  expect(detail.intents).toEqual([
+    { type: "buffer.undo" },
+    { type: "buffer.redo" },
+    { type: "buffer.redo" },
+    { type: "buffer.undo" },
+    { type: "buffer.redo" },
+  ]);
+});
+
 test("retains save, completion, insertion, and delete bindings", async () => {
   const detail = harness();
 

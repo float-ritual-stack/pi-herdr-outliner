@@ -119,7 +119,7 @@ describe("detail ANSI renderer", () => {
       "  First",
       "\x1b[7m› Second\x1b[0m",
       "",
-      "\x1b[2m⌥←→ word  Home/End line  ⇧Arrow…\x1b[0m",
+      "\x1b[2m^Z/⌘Z undo  ^⇧Z/^Y redo  ⌥←→ wo…\x1b[0m",
     ].join("\n"));
     expect(rendered.split("\n")).toHaveLength(9);
     expect({
@@ -154,7 +154,7 @@ describe("detail ANSI renderer", () => {
       "─".repeat(32),
       "   1 alpha▏",
       "",
-      "\x1b[2m⌥←→ word  Home/End line  ⇧Arrow…\x1b[0m",
+      "\x1b[2m^Z/⌘Z undo  ^⇧Z/^Y redo  ⌥←→ wo…\x1b[0m",
     ].join("\n"));
     expect(rendered.split("\n")).toHaveLength(6);
   });
