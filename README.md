@@ -89,9 +89,11 @@ bun run cli list
 bun run cli list --filter work-stage=next --limit 20
 bun run cli create --text "A durable note [type::note]"
 bun run cli selection
+bun run goto 40bd0864
+bun run goto --query "roadmap review"
 ```
 
-The CLI resolves the same workspace-scoped socket and database as the service.
+The CLI resolves the same workspace-scoped socket and database as the service. `goto` accepts a full UUID, unique short prefix, or unambiguous fuzzy title/content query; ambiguous queries return candidate short IDs without changing selection.
 
 ## Keyboard controls
 
@@ -110,6 +112,7 @@ The footer in each pane is authoritative and context-sensitive. These are the pr
 | `Space` | Toggle collapse |
 | `.` or `Command+.` | Expand/collapse multiline block detail in Tree |
 | `Ctrl+E` or modified Enter | Open the selected block in Detail |
+| `g` | Fuzzy goto by UUID, short prefix, title, or content |
 | `/` | Filter visible blocks |
 | `f` | Open a referenced file |
 | `d` | Enter delete confirmation |
@@ -187,6 +190,8 @@ Current behavior intentionally rejects projected sibling reorder rather than mut
 The project Pi extension is auto-discovered through [`.pi/extensions/outliner.ts`](.pi/extensions/outliner.ts). It registers:
 
 - `/outliner`
+- `/outliner-goto <query>`
+- `/goto <query>` through the project command
 - `/outliner-filter`
 - `outliner_create`
 - `outliner_update`

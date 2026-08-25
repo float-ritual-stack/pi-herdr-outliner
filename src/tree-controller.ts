@@ -1,4 +1,8 @@
 import type { RequestInput } from "./client";
+import {
+  formatBlockFocusMatch,
+  rankBlockFocusMatches,
+} from "./block-focus";
 import { completionTargetAtCursor } from "./completion";
 import type { ReferencedFile, ReferencedPathCandidate } from "./files";
 import { parseFilter } from "./properties";
@@ -22,12 +26,13 @@ import {
   type VirtualBranchState,
 } from "./virtual-branches";
 
-export type TreeInputMode = "edit" | "add-child" | "add-sibling" | "filter";
+export type TreeInputMode = "edit" | "add-child" | "add-sibling" | "filter" | "goto";
 export type TreeMode = "browse" | "delete" | "viewer" | TreeInputMode;
 
 export interface TreeQuickCompletionItem {
   readonly label: string;
   readonly insertion: string;
+  readonly blockId?: string;
 }
 
 export interface TreeQuickCompletion {
@@ -89,6 +94,8 @@ interface MutableQuickCompletion {
   items: TreeQuickCompletionItem[];
   truncatedLimit: number | null;
 }
+
+const GOTO_PROMPT = "Type a block ID, short prefix, or fuzzy text";
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -205,6 +212,40 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     quickCompletion = null;
   }
 
+  function moveQuickCompletion(delta: number): void {
+    if (!quickCompletion) return;
+    quickCompletion.index = Math.max(
+      0,
+      Math.min(quickCompletion.items.length - 1, quickCompletion.index + delta),
+    );
+  }
+
+  function updateQuickBuffer(str: string, key: TerminalKey): boolean {
+    switch (key.name) {
+      case "backspace":
+        quickBuffer.backspace();
+        return true;
+      case "delete":
+        quickBuffer.deleteForward();
+        return true;
+      case "left":
+        quickBuffer.moveLeft();
+        return false;
+      case "right":
+        quickBuffer.moveRight();
+        return false;
+      case "home":
+        quickBuffer.moveHome();
+        return false;
+      case "end":
+        quickBuffer.moveEnd();
+        return false;
+    }
+    if (!isPrintableInput(str, key)) return false;
+    quickBuffer.insert(str);
+    return true;
+  }
+
   async function beginInput(nextMode: TreeInputMode, initial = ""): Promise<void> {
     const selected = rows[selectedIndex];
     if (nextMode === "add-child" && selected?.block.collapsed) {
@@ -215,6 +256,52 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     quickBuffer = new TextBuffer(initial);
     quickBuffer.moveEnd();
     quickCompletion = null;
+    effects.invalidate();
+  }
+
+  function refreshGotoCompletion(): void {
+    const query = quickInputText().trim();
+    if (!query) {
+      quickCompletion = null;
+      status = GOTO_PROMPT;
+      return;
+    }
+    const matches = rankBlockFocusMatches(
+      [...physicalBlocksById.values()],
+      query,
+      20,
+    );
+    if (matches.length === 0) {
+      quickCompletion = null;
+      status = `No block matches: ${query}`;
+      return;
+    }
+    quickCompletion = {
+      start: 0,
+      end: quickInputText().length,
+      index: 0,
+      items: matches.map((match) => ({
+        label: formatBlockFocusMatch(match),
+        insertion: match.block.id,
+        blockId: match.block.id,
+      })),
+      truncatedLimit: null,
+    };
+    status = "";
+  }
+
+  async function acceptGotoCompletion(): Promise<void> {
+    const item = quickCompletion?.items[quickCompletion.index];
+    if (!item?.blockId) {
+      status = "No matching block selected";
+      return;
+    }
+    const blockId = item.blockId;
+    const label = item.label;
+    mode = "browse";
+    resetQuickEditor();
+    await selectVisibleBlock(blockId);
+    status = `Focused ${label}`;
     effects.invalidate();
   }
 
@@ -627,12 +714,36 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       return;
     }
 
+    if (mode === "goto") {
+      if (key.name === "escape") {
+        mode = "browse";
+        resetQuickEditor();
+        status = "";
+        if (refreshPending) await reload();
+      } else if (key.name === "up") {
+        moveQuickCompletion(-1);
+      } else if (key.name === "down") {
+        moveQuickCompletion(1);
+      } else if (key.name === "tab") {
+        if (!quickCompletion) refreshGotoCompletion();
+        else moveQuickCompletion(key.shift ? -1 : 1);
+      } else if (key.name === "return") {
+        if (!quickCompletion) refreshGotoCompletion();
+        if (quickCompletion) await acceptGotoCompletion();
+        return;
+      } else {
+        const queryChanged = updateQuickBuffer(str, key);
+        if (queryChanged) refreshGotoCompletion();
+      }
+      effects.invalidate();
+      return;
+    }
+
     if (mode !== "browse") {
       if (quickCompletion) {
-        if (key.name === "up") quickCompletion.index = Math.max(0, quickCompletion.index - 1);
-        else if (key.name === "down") {
-          quickCompletion.index = Math.min(quickCompletion.items.length - 1, quickCompletion.index + 1);
-        } else if (key.name === "return" || key.name === "tab") applyQuickCompletion();
+        if (key.name === "up") moveQuickCompletion(-1);
+        else if (key.name === "down") moveQuickCompletion(1);
+        else if (key.name === "return" || key.name === "tab") applyQuickCompletion();
         else if (key.name === "escape") quickCompletion = null;
         effects.invalidate();
         return;
@@ -651,13 +762,9 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         return;
       } else if (key.name === "tab" && mode !== "filter") {
         await openQuickCompletion();
-      } else if (key.name === "backspace") quickBuffer.backspace();
-      else if (key.name === "delete") quickBuffer.deleteForward();
-      else if (key.name === "left") quickBuffer.moveLeft();
-      else if (key.name === "right") quickBuffer.moveRight();
-      else if (key.name === "home") quickBuffer.moveHome();
-      else if (key.name === "end") quickBuffer.moveEnd();
-      else if (isPrintableInput(str, key)) quickBuffer.insert(str);
+      } else {
+        updateQuickBuffer(str, key);
+      }
       effects.invalidate();
       return;
     }
@@ -757,6 +864,10 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         await beginInput("add-sibling");
         return;
       }
+    } else if (str === "g") {
+      status = GOTO_PROMPT;
+      await beginInput("goto");
+      return;
     } else if (str === "/") {
       await beginInput("filter", activeFilter);
       return;

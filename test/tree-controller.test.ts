@@ -126,6 +126,48 @@ describe("createTreeController", () => {
     expect(fake.calls.some((call) => call.action === "selection.set")).toBe(false);
   });
 
+  test("fuzzy goto previews candidates and reveals the selected block", async () => {
+    const first = block("first", { text: "Inbox", displayText: "Inbox" });
+    const target = block("40bd0864-913a-4537-9535-8f96e1b63ef7", {
+      position: 1,
+      text: "Roadmap review after the graveyard walk",
+      displayText: "Roadmap review after the graveyard walk",
+    });
+    const other = block("other", {
+      position: 2,
+      text: "Unrelated note",
+      displayText: "Unrelated note",
+    });
+    const fake = harness((input) =>
+      input.action === "workspace.snapshot"
+        ? snapshot([first, target, other], first)
+        : undefined,
+    );
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+
+    await controller.handleKeypress("g", { name: "g" }, "pass");
+    await controller.handleKeypress(
+      "rdmp reviw",
+      { sequence: "rdmp reviw" },
+      "pass",
+    );
+
+    expect(controller.view().mode).toBe("goto");
+    expect(controller.view().quickCompletion?.items[0]).toMatchObject({
+      blockId: target.id,
+      label: `40bd0864 · Roadmap review after the graveyard walk`,
+    });
+
+    await controller.handleKeypress("", { name: "return" }, "pass");
+    expect(controller.view().mode).toBe("browse");
+    expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe(target.id);
+    expect(lastCall(fake.calls, "selection.set")).toEqual({
+      action: "selection.set",
+      blockId: target.id,
+    });
+  });
+
   test("installs a complete 501-block snapshot and selects its last block", async () => {
     const blocks = Array.from({ length: 501 }, (_, index) =>
       block(`block-${index}`, { position: index }),

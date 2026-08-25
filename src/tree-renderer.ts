@@ -311,10 +311,21 @@ export function renderTreeFrame(
         ? truncate(creationHelp, width)
         : "Quick edit: ←→ cursor  Tab complete  Enter save  Shift+Enter/Ctrl+E multiline  Esc cancel",
     );
-  } else if (view.mode === "filter") {
-    const label = "Filter";
+  } else if (view.mode === "filter" || view.mode === "goto") {
+    const label = view.mode === "goto" ? "Goto" : "Filter";
+    const completion = view.quickCompletion;
+    const selectedCompletion = completion?.items[completion.index];
+    let completionSuffix = "";
+    if (completion && selectedCompletion) {
+      completionSuffix = `  ${completion.index + 1}/${completion.items.length} ${selectedCompletion.label}`;
+    } else if (view.mode === "goto" && view.status) {
+      completionSuffix = `  ${view.status}`;
+    }
     output.push(
-      `\x1b[1m${label}:\x1b[0m ${truncate(`${view.quickInput}▏`, Math.max(1, width - label.length - 3))}`,
+      `\x1b[1m${label}:\x1b[0m ${truncate(
+        `${view.quickInput}▏${completionSuffix}`,
+        Math.max(1, width - label.length - 3),
+      )}`,
     );
   } else if (view.mode === "delete") {
     if (selectedRow?.kind === "occurrence") {
@@ -333,9 +344,14 @@ export function renderTreeFrame(
       (selectedBranchState ? branchStatusText(selectedBranchState) : "");
     output.push(truncate(contextualStatus, width));
   }
-  const help = selectedRow?.kind === "occurrence"
-    ? "◇ projected occurrence  ← definition  Enter edit canonical  d delete canonical  hierarchy disabled"
-    : "↑↓ navigate  Shift+↑↓ reorder  . / ⌘. detail  Enter inline  Ctrl+Q close";
+  let help: string;
+  if (view.mode === "goto") {
+    help = "type ID/text  ↑↓ choose  Tab cycle  Enter jump  Esc cancel";
+  } else if (selectedRow?.kind === "occurrence") {
+    help = "◇ projected occurrence  ← definition  Enter edit canonical  d delete canonical  hierarchy disabled";
+  } else {
+    help = "↑↓ navigate  Shift+↑↓ reorder  g goto  . / ⌘. detail  Enter inline  Ctrl+Q close";
+  }
   output.push(`\x1b[2m${truncate(help, width)}\x1b[0m`);
   return { frame: output.join("\n"), scrollStartEntryIndex };
 }

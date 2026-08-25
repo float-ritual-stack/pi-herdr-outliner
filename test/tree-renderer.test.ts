@@ -116,7 +116,7 @@ function view(
   };
 }
 
-const HELP = "↑↓ navigate  Shift+↑↓ reorder  . / ⌘. detail  Enter inline  Ctrl+Q close";
+const HELP = "↑↓ navigate  Shift+↑↓ reorder  g goto  . / ⌘. detail  Enter inline  Ctrl+Q close";
 
 describe("renderTreeFrame", () => {
   test("renders a representative browse frame exactly", () => {
@@ -449,6 +449,35 @@ describe("renderTreeFrame", () => {
       8,
     ).frame.split("\n");
     expect(filterFrame.at(-2)).toBe("\x1b[1mFilter:\x1b[0m type=page▏");
+
+    const gotoFrame = renderTreeFrame(
+      view([selected], {
+        mode: "goto",
+        quickInput: "road rev",
+        quickColumn: 8,
+        quickCompletion: {
+          start: 0,
+          end: 8,
+          index: 0,
+          truncatedLimit: null,
+          items: [
+            {
+              label: "40bd0864 · Roadmap review after the graveyard walk",
+              insertion: "40bd0864-913a-4537-9535-8f96e1b63ef7",
+              blockId: "40bd0864-913a-4537-9535-8f96e1b63ef7",
+            },
+          ],
+        },
+      }),
+      100,
+      8,
+    ).frame.split("\n");
+    expect(gotoFrame.at(-2)).toContain(
+      "Goto:\x1b[0m road rev▏  1/1 40bd0864 · Roadmap review after the graveyard walk",
+    );
+    expect(gotoFrame.at(-1)).toBe(
+      "\x1b[2mtype ID/text  ↑↓ choose  Tab cycle  Enter jump  Esc cancel\x1b[0m",
+    );
 
     const deleteFrame = renderTreeFrame(view([selected], { mode: "delete" }), 80, 8).frame.split("\n");
     expect(deleteFrame.at(-2)).toBe("\x1b[31;1mDelete this block and all descendants? y/N\x1b[0m");
