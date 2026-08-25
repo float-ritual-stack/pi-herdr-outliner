@@ -54,6 +54,16 @@ describe("block focus resolution", () => {
     });
   });
 
+  test("keeps duplicate exact titles ambiguous", () => {
+    const duplicates = [
+      block("11111111-1111-4111-8111-111111111111", "Same title"),
+      block("22222222-2222-4222-8222-222222222222", "Same title"),
+    ];
+    const resolution = resolveBlockFocus(duplicates, "Same title");
+    expect(resolution.kind).toBe("ambiguous");
+    expect(resolution.matches).toHaveLength(2);
+  });
+
   test("reports ambiguous shared prefixes before applying the display limit", () => {
     const resolution = resolveBlockFocus(blocks, "40bd");
     expect(resolution.kind).toBe("ambiguous");
@@ -78,6 +88,7 @@ describe("block focus resolution", () => {
       "deadbeef-2",
     ]);
   });
+
   test("ranks token and subsequence fuzzy content matches", () => {
     expect(rankBlockFocusMatches(blocks, "graveyard roadmap")[0]).toMatchObject({
       block: { id: roadmap.id },

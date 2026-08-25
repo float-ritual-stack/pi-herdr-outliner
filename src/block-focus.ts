@@ -137,7 +137,7 @@ export function resolveBlockFocus(
   const matches = allMatches.slice(0, limit);
   const isDirectMatch =
     first.kind === "exact-id" ||
-    first.kind === "exact-title" ||
+    (first.kind === "exact-title" && second?.kind !== "exact-title") ||
     allMatches.length === 1 ||
     (first.kind === "id-prefix" && second?.kind !== "id-prefix") ||
     (second !== undefined && first.score - second.score >= 10_000);
