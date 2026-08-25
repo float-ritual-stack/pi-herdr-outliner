@@ -70,6 +70,29 @@ export function renderDetailFooter(
   ];
 }
 
+function renderEditorText(
+  row: DetailEditorVisualRow,
+  startColumn: number,
+  endColumn: number,
+): string {
+  const { selectionStartColumn, selectionEndColumn } = row;
+  if (
+    selectionStartColumn === null ||
+    selectionEndColumn === null ||
+    selectionEndColumn <= startColumn ||
+    selectionStartColumn >= endColumn
+  ) {
+    return sliceByColumn(row.text, startColumn, endColumn - startColumn, true);
+  }
+
+  const selectedStart = Math.max(startColumn, selectionStartColumn);
+  const selectedEnd = Math.min(endColumn, selectionEndColumn);
+  const before = sliceByColumn(row.text, startColumn, selectedStart - startColumn, true);
+  const selected = sliceByColumn(row.text, selectedStart, selectedEnd - selectedStart, true);
+  const after = sliceByColumn(row.text, selectedEnd, endColumn - selectedEnd, true);
+  return `${before}\x1b[7m${selected}\x1b[0m${after}`;
+}
+
 function renderEditorRow(
   layout: DetailEditorLayout,
   row: DetailEditorVisualRow,
@@ -78,14 +101,17 @@ function renderEditorRow(
   const prefix = row.continuation
     ? " ".repeat(layout.lineNumberWidth + 1)
     : `${String(row.logicalRow + 1).padStart(layout.lineNumberWidth)} `;
-  if (visualRowIndex !== layout.cursorRow) return `${prefix}${row.text}`;
+  const rowWidth = row.endColumn - row.startColumn;
+  if (visualRowIndex !== layout.cursorRow) {
+    return `${prefix}${renderEditorText(row, 0, rowWidth)}`;
+  }
 
-  const before = sliceByColumn(row.text, 0, layout.cursorColumn, true);
-  const after = sliceByColumn(
-    row.text,
+  const before = renderEditorText(row, 0, layout.cursorColumn);
+  const afterWidth = Math.max(0, layout.contentWidth - visibleWidth(before) - 1);
+  const after = renderEditorText(
+    row,
     layout.cursorColumn,
-    Math.max(0, layout.contentWidth - visibleWidth(before) - 1),
-    true,
+    Math.min(rowWidth, layout.cursorColumn + afterWidth),
   );
   return `${prefix}${before}▏${after}`;
 }
@@ -158,6 +184,7 @@ export function renderDetailLines(
       state.buffer.row,
       state.buffer.column,
       width,
+      state.buffer.selectionRange,
     );
     const visibleRows = layout.rows.slice(
       state.editorVisualOffset,

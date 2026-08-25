@@ -76,6 +76,16 @@ export interface DetailEffects {
   focusOutliner(): void;
 }
 
+export type DetailBufferMoveDirection =
+  | "left"
+  | "right"
+  | "up"
+  | "down"
+  | "home"
+  | "end"
+  | "word-left"
+  | "word-right";
+
 export type DetailIntent =
   | { type: "edit.begin" }
   | { type: "comment.begin" }
@@ -83,7 +93,8 @@ export type DetailIntent =
   | { type: "buffer.newline" }
   | { type: "buffer.backspace" }
   | { type: "buffer.delete" }
-  | { type: "buffer.move"; direction: "left" | "right" | "up" | "down" | "home" | "end" }
+  | { type: "buffer.move"; direction: DetailBufferMoveDirection; extend?: boolean }
+  | { type: "buffer.select-all" }
   | { type: "buffer.save" }
   | { type: "buffer.cancel" }
   | { type: "completion.open" }
@@ -120,9 +131,9 @@ export function detailDisplayMode(block: Block | null): "preview" | "file" | "an
 export function detailHelpText(mode: DetailMode): string {
   switch (mode) {
     case "edit":
-      return "Enter newline  Ctrl+S save  Tab complete  Esc cancel → tree";
+      return "⌥←→ word  Home/End line  ⇧Arrows select  Del selection  ^S save  Tab complete  Esc cancel";
     case "comment":
-      return "Enter newline  Ctrl+S add annotation  Esc cancel → tree";
+      return "⌥←→ word  Home/End line  ⇧Arrows select  Del selection  ^S add annotation  Esc cancel";
     case "annotation":
       return "↑↓ scroll  e edit annotation  f source file  b raw block  q tree";
     case "file":
@@ -458,13 +469,39 @@ export function createDetailController(
         state.buffer.deleteForward();
         ensureEditorCursorVisible(viewport);
         break;
-      case "buffer.move":
-        if (intent.direction === "left") state.buffer.moveLeft();
-        else if (intent.direction === "right") state.buffer.moveRight();
-        else if (intent.direction === "up") state.buffer.moveUp();
-        else if (intent.direction === "down") state.buffer.moveDown();
-        else if (intent.direction === "home") state.buffer.moveHome();
-        else state.buffer.moveEnd();
+      case "buffer.move": {
+        const extend = intent.extend ?? false;
+        switch (intent.direction) {
+          case "left":
+            state.buffer.moveLeft(extend);
+            break;
+          case "right":
+            state.buffer.moveRight(extend);
+            break;
+          case "up":
+            state.buffer.moveUp(extend);
+            break;
+          case "down":
+            state.buffer.moveDown(extend);
+            break;
+          case "home":
+            state.buffer.moveHome(extend);
+            break;
+          case "end":
+            state.buffer.moveEnd(extend);
+            break;
+          case "word-left":
+            state.buffer.moveWordLeft(extend);
+            break;
+          case "word-right":
+            state.buffer.moveWordRight(extend);
+            break;
+        }
+        ensureEditorCursorVisible(viewport);
+        break;
+      }
+      case "buffer.select-all":
+        state.buffer.selectAll();
         ensureEditorCursorVisible(viewport);
         break;
       case "buffer.save":

@@ -119,7 +119,7 @@ describe("detail ANSI renderer", () => {
       "  First",
       "\x1b[7m› Second\x1b[0m",
       "",
-      "\x1b[2mEnter newline  Ctrl+S save  Tab…\x1b[0m",
+      "\x1b[2m⌥←→ word  Home/End line  ⇧Arrow…\x1b[0m",
     ].join("\n"));
     expect(rendered.split("\n")).toHaveLength(9);
     expect({
@@ -154,7 +154,7 @@ describe("detail ANSI renderer", () => {
       "─".repeat(32),
       "   1 alpha▏",
       "",
-      "\x1b[2mEnter newline  Ctrl+S save  Tab…\x1b[0m",
+      "\x1b[2m⌥←→ word  Home/End line  ⇧Arrow…\x1b[0m",
     ].join("\n"));
     expect(rendered.split("\n")).toHaveLength(6);
   });
@@ -287,4 +287,21 @@ test("wraps a long physical editor line without ellipsizing or changing its sour
   ]);
   expect(editorLines.join("\n")).not.toContain("…");
   expect(buffer.text).toBe(selected.text);
+});
+
+test("renders a selection across wrapped rows with the cursor at its active edge", () => {
+  const selected = block("alpha beta gamma delta epsilon");
+  const buffer = new TextBuffer(selected.text);
+  buffer.moveWordRight();
+  buffer.moveWordRight(true);
+  buffer.moveWordRight(true);
+  const lines = renderDetailLines(state({
+    context: { selected, ancestors: [], children: [] },
+    mode: "edit",
+    buffer,
+  }), { width: 18, height: 10 });
+
+  expect(lines[3]).toBe("   1 alpha \x1b[7mbeta \x1b[0m");
+  expect(lines[4]).toBe("     \x1b[7mgamma \x1b[0m▏delta ");
+  expect(lines.slice(3, 6).every((line) => visibleWidth(line) <= 18)).toBe(true);
 });

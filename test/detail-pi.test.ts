@@ -70,6 +70,22 @@ describe("Pi TUI Detail input", () => {
       str: "A",
       key: { name: "A", sequence: "A" },
     });
+    expect(decodePiDetailInput("\x1b[1;3D")).toMatchObject({
+      kind: "key",
+      key: { name: "left", meta: true },
+    });
+    expect(decodePiDetailInput("\x1b[1;2C")).toMatchObject({
+      kind: "key",
+      key: { name: "right", shift: true },
+    });
+    expect(decodePiDetailInput("\x1b[1;6C")).toMatchObject({
+      kind: "key",
+      key: { name: "right", ctrl: true, shift: true },
+    });
+    expect(decodePiDetailInput("\x1bb")).toMatchObject({
+      kind: "key",
+      key: { name: "b", meta: true },
+    });
   });
 });
 

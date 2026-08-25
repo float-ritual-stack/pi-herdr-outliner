@@ -260,6 +260,34 @@ describe("detail controller saves and annotations", () => {
     expect(harness.controller.state.mode).toBe("preview");
   });
 
+  test("replaces a motion-selected range before an optimistic save", async () => {
+    const harness = createHarness(makeBlock({
+      text: "alpha beta",
+      updatedAt: "original-version",
+    }));
+    await harness.controller.initialize();
+    await harness.controller.dispatch({ type: "edit.begin" }, viewport);
+    await harness.controller.dispatch(
+      { type: "buffer.move", direction: "word-left" },
+      viewport,
+    );
+    await harness.controller.dispatch(
+      { type: "buffer.move", direction: "home", extend: true },
+      viewport,
+    );
+
+    expect(harness.controller.state.buffer.selectionRange).toEqual({
+      start: { row: 0, column: 0 },
+      end: { row: 0, column: 6 },
+    });
+
+    await harness.controller.dispatch({ type: "buffer.insert", text: "A " }, viewport);
+    await harness.controller.dispatch({ type: "buffer.save" }, viewport);
+    expect(harness.calls.updates).toEqual([
+      { blockId: "block-1", text: "A beta", expectedUpdatedAt: "original-version" },
+    ]);
+  });
+
   test("consumes a pending refresh after a successful optimistic save", async () => {
     const harness = createHarness(makeBlock({ text: "draft" }));
     await harness.controller.initialize();
