@@ -62,6 +62,16 @@ describe("TextBuffer word motion and selection", () => {
     expect(buffer.text).toBe("replacement");
     expect(buffer.selectionRange).toBeNull();
   });
+
+  test("does not retain a collapsed select-all anchor in an empty buffer", () => {
+    const buffer = new TextBuffer();
+    buffer.selectAll();
+    expect(buffer.hasSelection).toBe(false);
+
+    buffer.insert("a");
+    buffer.insert("b");
+    expect(buffer.text).toBe("ab");
+  });
 });
 
 describe("TextBuffer undo and redo", () => {

@@ -125,6 +125,7 @@ export class TextBuffer {
     this.#selectionAnchor = { row: 0, column: 0 };
     this.row = this.lines.length - 1;
     this.column = this.lines[this.row].length;
+    if (!this.hasSelection) this.clearSelectionAnchor();
   }
 
   insert(value: string): void {
