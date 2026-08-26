@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import Foundation
 
 private let defaultConfigURL = FileManager.default.homeDirectoryForCurrentUser
@@ -47,6 +48,10 @@ private enum HandlerError: LocalizedError {
         case .remoteFailure(let message): return "Remote outliner navigation failed: \(message)"
         }
     }
+}
+
+private final class DataCapture: @unchecked Sendable {
+    var data = Data()
 }
 
 private func containsTerminalControl(_ value: String) -> Bool {
@@ -176,14 +181,44 @@ private func navigate(_ rawURL: String) throws {
     let stderr = Pipe()
     process.standardOutput = stdout
     process.standardError = stderr
+    let terminated = DispatchSemaphore(value: 0)
+    process.terminationHandler = { _ in terminated.signal() }
     do {
         try process.run()
     } catch {
         throw HandlerError.remoteFailure("could not start /usr/bin/ssh")
     }
-    process.waitUntilExit()
-    let output = String(decoding: stdout.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-    let errorOutput = String(decoding: stderr.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+
+    let outputCapture = DataCapture()
+    let errorCapture = DataCapture()
+    let readers = DispatchGroup()
+    readers.enter()
+    DispatchQueue.global(qos: .utility).async {
+        outputCapture.data = stdout.fileHandleForReading.readDataToEndOfFile()
+        readers.leave()
+    }
+    readers.enter()
+    DispatchQueue.global(qos: .utility).async {
+        errorCapture.data = stderr.fileHandleForReading.readDataToEndOfFile()
+        readers.leave()
+    }
+
+    let commandTimeout: TimeInterval = 15
+    let timedOut = terminated.wait(timeout: .now() + commandTimeout) == .timedOut
+    if timedOut {
+        process.terminate()
+        if terminated.wait(timeout: .now() + 2) == .timedOut {
+            Darwin.kill(process.processIdentifier, SIGKILL)
+            _ = terminated.wait(timeout: .now() + 2)
+        }
+    }
+    readers.wait()
+    if timedOut {
+        throw HandlerError.remoteFailure("ssh command timed out after \(Int(commandTimeout)) seconds")
+    }
+
+    let output = String(data: outputCapture.data, encoding: .utf8) ?? ""
+    let errorOutput = String(data: errorCapture.data, encoding: .utf8) ?? ""
     appendLog("\(route.kind.rawValue) \(route.target): exit \(process.terminationStatus); \(output.trimmingCharacters(in: .whitespacesAndNewlines))")
     guard process.terminationStatus == 0 else {
         let detail = errorOutput.trimmingCharacters(in: .whitespacesAndNewlines)

@@ -7,6 +7,7 @@ REMOTE_BUN="/home/evan/.bun/bin/bun"
 APP_DIR="${HOME}/Applications/Pi Outliner Link.app"
 CONFIG_PATH="${HOME}/Library/Application Support/PiOutlinerLink/config.json"
 FORCE_CONFIG=0
+BUNDLE_ID="dev.floatritual.pi-outliner-link"
 
 usage() {
   cat <<'USAGE'
@@ -64,6 +65,19 @@ if [[ "$APP_DIR" != *.app ]]; then
 fi
 if [[ "$CONFIG_PATH" != /* ]]; then
   CONFIG_PATH="${PWD}/${CONFIG_PATH}"
+fi
+
+if [[ -e "$APP_DIR" ]]; then
+  if [[ -L "$APP_DIR" ]]; then
+    printf 'Refusing to replace a symbolic-link app path: %s\n' "$APP_DIR" >&2
+    exit 2
+  fi
+  EXISTING_PLIST="${APP_DIR}/Contents/Info.plist"
+  EXISTING_ID="$(plutil -extract CFBundleIdentifier raw -o - "$EXISTING_PLIST" 2>/dev/null || true)"
+  if [[ "$EXISTING_ID" != "$BUNDLE_ID" ]]; then
+    printf 'Refusing to replace app with bundle id %s: %s\n' "${EXISTING_ID:-<missing>}" "$APP_DIR" >&2
+    exit 2
+  fi
 fi
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
