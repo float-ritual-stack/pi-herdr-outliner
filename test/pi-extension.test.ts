@@ -40,7 +40,7 @@ test("registers the workspace commands and annotation-aware tools", () => {
   expect(updateSchema).toContain("expectedUpdatedAt");
 });
 
-test("requires protocol v3 and presents bounded query results", async () => {
+test("requires protocol v4 and presents bounded query results", async () => {
   const collection: VisibleBlockCollection = {
     blocks: [
       {
@@ -61,7 +61,7 @@ test("requires protocol v3 and presents bounded query results", async () => {
     ],
     completeness: { kind: "truncated", limit: 20 },
   };
-  let protocolVersion = 3;
+  let protocolVersion = 4;
   let queryCollection = collection;
   const requests: RequestInput[] = [];
   const originalRequest = OutlinerClient.prototype.request;
@@ -156,9 +156,9 @@ test("requires protocol v3 and presents bounded query results", async () => {
     expect(largeEnvelope.presentation.returned).toBe(100);
     expect(largeEnvelope.presentation.presented).toBe(largeEnvelope.blocks.length);
     expect(largeEnvelope.presentation.omitted).toBeGreaterThan(0);
-    protocolVersion = 2;
+    protocolVersion = 3;
     await expect(tools.get("outliner_query")!.execute("incompatible-query", {})).rejects.toThrow(
-      "Incompatible outliner protocol 2; expected 3",
+      "Incompatible outliner protocol 3; expected 4",
     );
   } finally {
     OutlinerClient.prototype.request = originalRequest;

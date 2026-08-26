@@ -105,6 +105,69 @@ Second paragraph`;
     expect(store.toggleMultilineExpanded(block.id)).toBe(false);
   });
 
+  test("retains nonmatching branch ranks and cascades ranks with either endpoint", () => {
+    let store = makeStore();
+    const view = store.create(
+      "Next [type::virtual-branch] [query::status=next]",
+    );
+    const first = store.create("First [status::next]");
+    const nonmatching = store.create("Hidden [status::doing]");
+    const second = store.create("Second [status::next]");
+
+    expect(
+      store.reorderVirtualOccurrences(view.id, [first.id, nonmatching.id, second.id]),
+    ).toEqual([
+      { viewId: view.id, blockId: first.id, rank: 0 },
+      { viewId: view.id, blockId: nonmatching.id, rank: 1 },
+      { viewId: view.id, blockId: second.id, rank: 2 },
+    ]);
+    const persistedStore = stores.at(-1)!;
+    store.close();
+    store = new OutlinerStore(join(persistedStore.directory, "outliner.sqlite"));
+    persistedStore.store = store;
+    expect(store.readWorkspaceSnapshot().virtualOccurrenceRanks).toEqual([
+      { viewId: view.id, blockId: first.id, rank: 0 },
+      { viewId: view.id, blockId: nonmatching.id, rank: 1 },
+      { viewId: view.id, blockId: second.id, rank: 2 },
+    ]);
+    store.reorderVirtualOccurrences(view.id, [second.id, first.id]);
+    expect(store.readWorkspaceSnapshot().virtualOccurrenceRanks).toEqual([
+      { viewId: view.id, blockId: second.id, rank: 0 },
+      { viewId: view.id, blockId: nonmatching.id, rank: 1 },
+      { viewId: view.id, blockId: first.id, rank: 2 },
+    ]);
+    const newlyMatching = store.create("New [status::next]");
+    const ranked = store.queryBlocks({
+      filters: [{ key: "status", value: "next" }],
+      rankViewId: view.id,
+      limit: 2,
+    });
+    expect(ranked.blocks.map((block) => block.id)).toEqual([second.id, first.id]);
+    expect(ranked.blocks[0]).toEqual(expect.objectContaining({
+      id: second.id,
+      depth: 0,
+      multilineExpanded: false,
+      hasChildren: false,
+      displayText: second.text,
+    }));
+    expect(ranked.completeness).toEqual({ kind: "truncated", limit: 2 });
+    expect(ranked.blocks.some((block) => block.id === newlyMatching.id)).toBe(false);
+    expect(() =>
+      store.reorderVirtualOccurrences(view.id, [first.id, first.id])
+    ).toThrow("duplicate block IDs");
+    expect(() =>
+      store.reorderVirtualOccurrences(first.id, [second.id])
+    ).toThrow("not a virtual branch");
+
+    store.delete(first.id);
+    expect(store.readWorkspaceSnapshot().virtualOccurrenceRanks).toEqual([
+      { viewId: view.id, blockId: second.id, rank: 0 },
+      { viewId: view.id, blockId: nonmatching.id, rank: 1 },
+    ]);
+    store.delete(view.id);
+    expect(store.readWorkspaceSnapshot().virtualOccurrenceRanks).toEqual([]);
+  });
+
   test("can include descendants of collapsed blocks for completion queries", () => {
     const store = makeStore();
     const parent = store.create("Collapsed parent");

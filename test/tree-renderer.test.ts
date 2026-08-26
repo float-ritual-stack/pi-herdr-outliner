@@ -358,7 +358,7 @@ describe("renderTreeFrame", () => {
         "▾ Definition [V:1]   ",
         "\x1b[48;5;238m\x1b[1m  ◇ Canonical   \x1b[0m",
         "ready",
-        "\x1b[2m◇ projected occurrence  ← definition  Enter edit canonical  d delete canonical …\x1b[0m",
+        "\x1b[2m◇ projected occurrence  Shift+↑↓ branch order  ← definition  Enter edit canonic…\x1b[0m",
       ].join("\n"),
     });
     expect(rendered.frame).not.toContain("▸ Canonical");

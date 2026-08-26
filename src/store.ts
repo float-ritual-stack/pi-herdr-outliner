@@ -19,6 +19,7 @@ import type {
   SelectionContext,
   VisibleBlock,
   VisibleBlockCollection,
+  VirtualOccurrenceRank,
   WorkspaceSnapshot,
   WorkspaceSnapshotView,
 } from "./types";
@@ -38,6 +39,18 @@ interface PropertyRow {
   block_id: string;
   key: string;
   value: string;
+}
+
+interface VirtualOccurrenceRankRow {
+  view_id: string;
+  block_id: string;
+  rank: number;
+}
+
+interface VisibleBlockRow extends BlockRow {
+  depth: number;
+  multiline_expanded: number;
+  has_children: number;
 }
 
 interface LoadedGraph {
@@ -201,6 +214,56 @@ export class OutlinerStore {
     return expanded;
   }
 
+  reorderVirtualOccurrences(
+    viewId: string,
+    orderedBlockIds: readonly string[],
+  ): VirtualOccurrenceRank[] {
+    if (orderedBlockIds.length === 0) {
+      throw new Error("Virtual occurrence reorder requires at least one block");
+    }
+    return this.database.transaction(() => {
+      const view = this.getFromCurrentRead(viewId);
+      if (!view) throw new Error(`Virtual branch not found: ${viewId}`);
+      if (!view.properties.some((property) =>
+        property.key.toLowerCase() === "type" && property.value.toLowerCase() === "virtual-branch"
+      )) {
+        throw new Error(`Block is not a virtual branch: ${viewId}`);
+      }
+
+      const orderedBlockIdSet = new Set(orderedBlockIds);
+      if (orderedBlockIdSet.size !== orderedBlockIds.length) {
+        throw new Error("Virtual occurrence reorder contains duplicate block IDs");
+      }
+      for (const blockId of orderedBlockIds) {
+        if (blockId === viewId) {
+          throw new Error("Virtual branch cannot rank itself as an occurrence");
+        }
+        if (!this.getFromCurrentRead(blockId)) {
+          throw new Error(`Virtual occurrence block not found: ${blockId}`);
+        }
+      }
+
+      const retainedRanks = new Set(
+        this.virtualOccurrenceRanksFromCurrentRead()
+          .filter((entry) =>
+            entry.viewId === viewId && !orderedBlockIdSet.has(entry.blockId)
+          )
+          .map((entry) => entry.rank),
+      );
+      const upsert = this.database.query(
+        "INSERT INTO virtual_occurrence_ranks (view_id, block_id, rank) VALUES (?, ?, ?) ON CONFLICT(view_id, block_id) DO UPDATE SET rank = excluded.rank",
+      );
+      let nextRank = 0;
+      for (const blockId of orderedBlockIds) {
+        while (retainedRanks.has(nextRank)) nextRank += 1;
+        upsert.run(viewId, blockId, nextRank);
+        nextRank += 1;
+      }
+      this.bumpSequence();
+      return this.virtualOccurrenceRanksFromCurrentRead().filter((entry) => entry.viewId === viewId);
+    })();
+  }
+
   resolveBlockReferences(text: string): string {
     return resolveBlockReferenceText(text, (blockId) => this.get(blockId));
   }
@@ -233,6 +296,9 @@ export class OutlinerStore {
     }
 
     return this.database.transaction((): VisibleBlockCollection => {
+      if (query.rankViewId) {
+        return this.queryRankedBlocksFromCurrentRead(query, query.rankViewId);
+      }
       const blocks = this.traverseLoadedGraph(this.loadGraph(), {
         filters: query.filters,
         subtreeRootId: query.subtreeRootId,
@@ -266,6 +332,7 @@ export class OutlinerStore {
         physical: { blocks: physical, completeness: { kind: "complete" } },
         selection: this.selectionFromGraph(graph),
         sequence: this.sequence,
+        virtualOccurrenceRanks: this.virtualOccurrenceRanksFromCurrentRead(),
       };
     })();
   }
@@ -294,6 +361,118 @@ export class OutlinerStore {
       .query("SELECT * FROM blocks WHERE parent_id IS ? ORDER BY position, created_at")
       .all(parentId) as BlockRow[];
     return rows.map((row) => this.hydrate(row));
+  }
+
+  private queryRankedBlocksFromCurrentRead(
+    query: BlockSearchQuery,
+    rankViewId: string,
+  ): VisibleBlockCollection {
+    const parameters: Array<string | number> = [];
+    const rootQuery = query.subtreeRootId
+      ? "SELECT id, 0, printf('%010d:%s', position, created_at) FROM blocks WHERE id = ?"
+      : "SELECT id, 0, printf('%010d:%s', position, created_at) FROM blocks WHERE parent_id IS NULL";
+    if (query.subtreeRootId) parameters.push(query.subtreeRootId);
+    parameters.push(rankViewId);
+    const predicates: string[] = [];
+    for (const filter of query.filters ?? []) {
+      if (filter.value === undefined) {
+        predicates.push(
+          "EXISTS (SELECT 1 FROM block_properties property WHERE property.block_id = block.id AND property.key = ?)",
+        );
+        parameters.push(filter.key);
+      } else {
+        predicates.push(
+          "EXISTS (SELECT 1 FROM block_properties property WHERE property.block_id = block.id AND property.key = ? AND LOWER(property.value) = LOWER(?))",
+        );
+        parameters.push(filter.key, filter.value);
+      }
+    }
+    if (query.text) {
+      predicates.push("INSTR(LOWER(block.text), LOWER(?)) > 0");
+      parameters.push(query.text);
+    }
+    parameters.push(query.limit + 1);
+
+    const where = predicates.length > 0 ? `WHERE ${predicates.join(" AND ")}` : "";
+    const rows = this.database
+      .query(`
+        WITH RECURSIVE tree(id, depth, sort_path) AS (
+          ${rootQuery}
+          UNION ALL
+          SELECT
+            child.id,
+            tree.depth + 1,
+            tree.sort_path || '/' || printf('%010d:%s', child.position, child.created_at)
+          FROM blocks child
+          JOIN tree ON child.parent_id = tree.id
+        )
+        SELECT
+          block.*,
+          tree.depth,
+          COALESCE(view_state.multiline_expanded, 0) AS multiline_expanded,
+          EXISTS (SELECT 1 FROM blocks child WHERE child.parent_id = block.id) AS has_children
+        FROM tree
+        JOIN blocks block ON block.id = tree.id
+        LEFT JOIN block_view_state view_state ON view_state.block_id = block.id
+        LEFT JOIN virtual_occurrence_ranks occurrence_rank
+          ON occurrence_rank.view_id = ? AND occurrence_rank.block_id = block.id
+        ${where}
+        ORDER BY
+          CASE WHEN occurrence_rank.rank IS NULL THEN 1 ELSE 0 END,
+          occurrence_rank.rank,
+          CASE WHEN occurrence_rank.rank IS NULL THEN tree.sort_path ELSE block.id END
+        LIMIT ?
+      `)
+      .all(...parameters) as VisibleBlockRow[];
+    const blocks = this.hydrateVisibleRowsFromCurrentRead(rows.slice(0, query.limit));
+    return {
+      blocks,
+      completeness: rows.length > query.limit
+        ? { kind: "truncated", limit: query.limit }
+        : { kind: "complete" },
+    };
+  }
+
+  private hydrateVisibleRowsFromCurrentRead(rows: readonly VisibleBlockRow[]): VisibleBlock[] {
+    if (rows.length === 0) return [];
+    const placeholders = rows.map(() => "?").join(", ");
+    const propertyRows = this.database
+      .query(
+        `SELECT block_id, key, value FROM block_properties WHERE block_id IN (${placeholders}) ORDER BY block_id, ordinal`,
+      )
+      .all(...rows.map((row) => row.id)) as PropertyRow[];
+    const propertiesByBlock = new Map<string, BlockProperty[]>();
+    for (const row of propertyRows) {
+      const properties = propertiesByBlock.get(row.block_id);
+      if (properties) properties.push({ key: row.key, value: row.value });
+      else propertiesByBlock.set(row.block_id, [{ key: row.key, value: row.value }]);
+    }
+    return rows.map((row) => {
+      const block = this.hydrate(row, propertiesByBlock.get(row.id) ?? []);
+      return {
+        ...block,
+        depth: row.depth,
+        multilineExpanded: row.multiline_expanded === 1,
+        hasChildren: row.has_children === 1,
+        displayText: resolveBlockReferenceText(
+          block.text,
+          (blockId) => this.getFromCurrentRead(blockId),
+        ),
+      };
+    });
+  }
+
+  private virtualOccurrenceRanksFromCurrentRead(): VirtualOccurrenceRank[] {
+    const rows = this.database
+      .query(
+        "SELECT view_id, block_id, rank FROM virtual_occurrence_ranks ORDER BY view_id, rank, block_id",
+      )
+      .all() as VirtualOccurrenceRankRow[];
+    return rows.map((row) => ({
+      viewId: row.view_id,
+      blockId: row.block_id,
+      rank: row.rank,
+    }));
   }
 
   private selectionFromCurrentRead(): SelectionContext {
@@ -450,6 +629,15 @@ export class OutlinerStore {
         block_id TEXT PRIMARY KEY REFERENCES blocks(id) ON DELETE CASCADE,
         multiline_expanded INTEGER NOT NULL DEFAULT 0
       );
+      CREATE TABLE IF NOT EXISTS virtual_occurrence_ranks (
+        view_id TEXT NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
+        block_id TEXT NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
+        rank INTEGER NOT NULL CHECK (rank >= 0),
+        PRIMARY KEY (view_id, block_id),
+        CHECK (view_id <> block_id)
+      );
+      CREATE INDEX IF NOT EXISTS virtual_occurrence_ranks_order
+        ON virtual_occurrence_ranks(view_id, rank, block_id);
     `);
     this.migratePropertyIndex();
   }

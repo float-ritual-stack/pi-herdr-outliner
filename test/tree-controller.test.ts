@@ -8,6 +8,7 @@ import type {
   BlockCollectionCompleteness,
   OutlinerEvent,
   VisibleBlock,
+  VirtualOccurrenceRank,
   WorkspaceSnapshot,
 } from "../src/types";
 
@@ -40,6 +41,7 @@ function snapshot(
     physicalBlocks?: VisibleBlock[];
     visibleCompleteness?: BlockCollectionCompleteness;
     physicalCompleteness?: BlockCollectionCompleteness;
+    virtualOccurrenceRanks?: VirtualOccurrenceRank[];
   } = {},
 ): WorkspaceSnapshot {
   return {
@@ -52,6 +54,7 @@ function snapshot(
       completeness: options.physicalCompleteness ?? { kind: "complete" },
     },
     selection: { selected, ancestors: [], children: [] },
+    virtualOccurrenceRanks: options.virtualOccurrenceRanks ?? [],
     sequence: 1,
   };
 }
@@ -934,7 +937,78 @@ describe("createTreeController", () => {
     expect(controller.view().status).toContain("Virtual branch is invalid:");
   });
 
-  test("disables occurrence hierarchy effects and left selects its definition", async () => {
+  test("preserves occurrence identity after selection echoes and reorders only that branch", async () => {
+    const definition = block("view", {
+      properties: [
+        { key: "type", value: "virtual-branch" },
+        { key: "query", value: "status=Doing" },
+      ],
+    });
+    const first = block("first", {
+      properties: [{ key: "status", value: "Doing" }],
+    });
+    const second = block("second", {
+      position: 1,
+      properties: [{ key: "status", value: "Doing" }],
+    });
+    let ranks: VirtualOccurrenceRank[] = [];
+    const fake = harness((input) => {
+      if (input.action === "workspace.snapshot") {
+        return snapshot([definition, first, second], definition, {
+          virtualOccurrenceRanks: ranks,
+        });
+      }
+      if (input.action === "blocks.query") {
+        return { blocks: [first, second], completeness: { kind: "complete" } };
+      }
+      if (input.action === "virtual.occurrences.reorder") {
+        ranks = input.orderedBlockIds.map((blockId, rank) => ({
+          viewId: input.viewId,
+          blockId,
+          rank,
+        }));
+        return ranks;
+      }
+      return undefined;
+    });
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+    await controller.handleKeypress("", { name: "down" }, "pass");
+    await controller.handleServiceEvent(event("selection", first.id));
+    expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe(
+      "occurrence:view:first",
+    );
+    fake.calls.length = 0;
+
+    await controller.handleKeypress("", { name: "down", shift: true }, "pass");
+
+    expect(lastCall(fake.calls, "virtual.occurrences.reorder")).toEqual({
+      action: "virtual.occurrences.reorder",
+      viewId: definition.id,
+      orderedBlockIds: [second.id, first.id],
+    });
+    expect(
+      controller.view().rows
+        .filter((row) => row.kind === "physical")
+        .map((row) => row.canonicalId),
+    ).toEqual([definition.id, first.id, second.id]);
+    expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe(
+      "occurrence:view:first",
+    );
+    expect(controller.view().status).toBe(
+      "Moved down within virtual branch; canonical order unchanged",
+    );
+    expect(fake.calls.some((call) => call.action === "move")).toBe(false);
+
+    fake.calls.length = 0;
+    await controller.handleKeypress("", { name: "down", shift: true }, "pass");
+    expect(controller.view().status).toBe(
+      "Already last in virtual branch; canonical order unchanged",
+    );
+    expect(fake.calls.some((call) => call.action === "virtual.occurrences.reorder")).toBe(false);
+  });
+
+  test("keeps occurrence hierarchy effects disabled and left selects its definition", async () => {
     const definition = block("view", {
       properties: [
         { key: "type", value: "virtual-branch" },
@@ -943,7 +1017,9 @@ describe("createTreeController", () => {
     });
     const card = block("card", { properties: [{ key: "status", value: "Doing" }] });
     const fake = harness((input) => {
-      if (input.action === "workspace.snapshot") return snapshot([definition, card], definition);
+      if (input.action === "workspace.snapshot") {
+        return snapshot([definition, card], definition);
+      }
       if (input.action === "blocks.query") {
         return { blocks: [card], completeness: { kind: "complete" } };
       }
@@ -960,11 +1036,9 @@ describe("createTreeController", () => {
     await controller.handleKeypress("s", { name: "s" }, "pass");
     await controller.handleKeypress("", { name: "tab" }, "pass");
     await controller.handleKeypress("", { name: "tab", shift: true }, "pass");
-    await controller.handleKeypress("", { name: "up", shift: true }, "pass");
-    await controller.handleKeypress("", { name: "down", shift: true }, "pass");
 
     expect(controller.view().status).toBe(
-      "Virtual occurrence sibling reorder is disabled; canonical hierarchy unchanged",
+      "Virtual occurrence outdent is disabled; canonical hierarchy unchanged",
     );
     expect(fake.calls.some((call) =>
       ["toggle", "move", "create", "get", "children"].includes(call.action)

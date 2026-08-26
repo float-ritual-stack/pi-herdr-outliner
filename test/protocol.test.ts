@@ -37,7 +37,7 @@ test("serves mutations and property queries over the local socket", async () => 
   const client = new OutlinerClient(socket);
   const service = await client.request<OutlinerServiceStatus>({ action: "ping" });
   expect(service).toEqual({ status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION });
-  expect(service.protocolVersion).toBe(3);
+  expect(service.protocolVersion).toBe(4);
   const block = await client.request<Block>({
     action: "create",
     text: "Waiting for user [type::question] [status::open]",
@@ -137,6 +137,8 @@ test("streams workspace mutations and transient UI commands to subscribers", asy
   const socket = join(directory, "outliner.sock");
   const server = new OutlinerServer(store, socket);
   await server.start();
+  const view = store.create("Doing [type::virtual-branch] [query::status=doing]");
+  const other = store.create("Other [status::doing]");
   const client = new OutlinerClient(socket);
   const connected = Promise.withResolvers<void>();
   const received = Promise.withResolvers<void>();
@@ -145,7 +147,7 @@ test("streams workspace mutations and transient UI commands to subscribers", asy
     onConnect: connected.resolve,
     onEvent: (event) => {
       events.push(event);
-      if (events.length === 4) received.resolve();
+      if (events.length === 5) received.resolve();
     },
   });
   cleanups.push(async () => {
@@ -160,6 +162,11 @@ test("streams workspace mutations and transient UI commands to subscribers", asy
   await client.request({ action: "selection.set", blockId: block.id });
   await client.request({ action: "view.toggleMultiline", blockId: block.id });
   await client.request({
+    action: "virtual.occurrences.reorder",
+    viewId: view.id,
+    orderedBlockIds: [other.id, block.id],
+  });
+  await client.request({
     action: "ui.command.send",
     command: { target: "detail", command: "edit", blockId: block.id },
   });
@@ -169,10 +176,11 @@ test("streams workspace mutations and transient UI commands to subscribers", asy
     ["content", "create"],
     ["selection", "selection.set"],
     ["view", "view.toggleMultiline"],
+    ["view", "virtual.occurrences.reorder"],
     ["ui", "ui.command.send"],
   ]);
   expect(events[0].blockId).toBe(block.id);
-  expect(events[3].command).toEqual({ target: "detail", command: "edit", blockId: block.id });
+  expect(events[4].command).toEqual({ target: "detail", command: "edit", blockId: block.id });
 
   const children = await client.request<Block[]>({ action: "children", parentId: null });
   expect(children.some((candidate) => candidate.id === block.id)).toBe(true);
@@ -182,6 +190,10 @@ test("streams workspace mutations and transient UI commands to subscribers", asy
   expect(snapshot.physical.blocks.some((candidate) => candidate.id === block.id)).toBe(true);
   expect(snapshot.physical.completeness).toEqual({ kind: "complete" });
   expect(snapshot.selection.selected?.id).toBe(block.id);
+  expect(snapshot.virtualOccurrenceRanks).toEqual([
+    { viewId: view.id, blockId: other.id, rank: 0 },
+    { viewId: view.id, blockId: block.id, rank: 1 },
+  ]);
 });
 
 test("watchers reconnect and resubscribe after the service restarts", async () => {

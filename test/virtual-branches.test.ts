@@ -177,11 +177,17 @@ describe("virtual branch projection", () => {
     const projection = await projectVirtualBranches(
       [next, doing, nextCard, doingCard, after],
       [next, doing, nextCard, doingCard, after],
-      async ({ filters, limit }) => {
-        expect(limit).toBe(201);
+      async ({ filters, limit, rankViewId }) => {
+        expect(limit).toBe(202);
         const status = filters?.[0]?.value;
-        if (status === "Next") return complete([next, nextCard, nextCard]);
-        if (status === "Doing") return complete([doingCard]);
+        if (status === "Next") {
+          expect(rankViewId).toBe(next.id);
+          return complete([next, nextCard, nextCard]);
+        }
+        if (status === "Doing") {
+          expect(rankViewId).toBe(doing.id);
+          return complete([doingCard]);
+        }
         throw new Error(`Unexpected status: ${status}`);
       },
     );
@@ -213,6 +219,51 @@ describe("virtual branch projection", () => {
       queryError: null,
       completeness: { kind: "complete" },
     }));
+  });
+
+  test("applies branch-local ranks before limits without changing another branch", async () => {
+    const firstView = visibleBlock("first-view", [
+      { key: "type", value: "virtual-branch" },
+      { key: "query", value: "status=Next" },
+      { key: "limit", value: "2" },
+    ]);
+    const secondView = visibleBlock("second-view", [
+      { key: "type", value: "virtual-branch" },
+      { key: "query", value: "status=Next" },
+      { key: "limit", value: "2" },
+    ]);
+    const first = visibleBlock("first");
+    const second = visibleBlock("second");
+    const third = visibleBlock("third");
+    const physical = [firstView, secondView, first, second, third];
+
+    const projection = await projectVirtualBranches(
+      physical,
+      physical,
+      async ({ limit, rankViewId }) => {
+        expect(limit).toBe(4);
+        expect(rankViewId === firstView.id || rankViewId === secondView.id).toBe(true);
+        return complete([first, second, third]);
+      },
+      [
+        { viewId: firstView.id, blockId: second.id, rank: 0 },
+        { viewId: firstView.id, blockId: first.id, rank: 1 },
+      ],
+    );
+
+    function occurrenceIds(viewId: string): string[] {
+      return projection.rows
+        .filter(
+          (row) => isVirtualBranchOccurrence(row) && row.viewId === viewId,
+        )
+        .map((row) => row.canonicalId);
+    }
+    expect(occurrenceIds(firstView.id)).toEqual([second.id, first.id]);
+    expect(occurrenceIds(secondView.id)).toEqual([first.id, second.id]);
+    expect(projection.branchStates.get(firstView.id)?.completeness).toEqual({
+      kind: "truncated",
+      limit: 2,
+    });
   });
 
   test("does not query collapsed definitions", async () => {
@@ -280,7 +331,7 @@ describe("virtual branch projection", () => {
     const physical = [definition, first, second];
 
     const projection = await projectVirtualBranches(physical, physical, async ({ limit }) => {
-      expect(limit).toBe(3);
+      expect(limit).toBe(4);
       return complete([definition, first, second]);
     });
 

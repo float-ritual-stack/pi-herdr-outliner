@@ -107,10 +107,11 @@ Literal property-looking text inside inline code, fenced code, or escaped syntax
 - `metadata` — service sequence and parser version.
 - `selection` — one selected canonical block per workspace.
 - `block_view_state` — UI state such as multiline expansion without changing canonical text.
+- `virtual_occurrence_ranks` — durable `(virtual-branch ID, canonical block ID) -> branch-local rank`; both foreign keys cascade on deletion.
 
 ## Protocol
 
-The current protocol version is `3`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
+The current protocol version is `4`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
 
 ### Important request families
 
@@ -119,6 +120,7 @@ The current protocol version is `3`, defined in [`src/types.ts`](../src/types.ts
 - bounded search: `blocks.query`
 - mutations: `create`, `update`, `move`, `delete`, `toggle`
 - properties: `properties.patch`, `properties.catalog`
+- virtual ordering: `virtual.occurrences.reorder`
 - references: `references.resolve`
 - selection: `selection.get`, `selection.set`
 - reactive clients: `events.subscribe`
@@ -183,9 +185,9 @@ Tree queries the service and inserts disposable occurrence rows. Each occurrence
 - `viewId` — virtual branch definition, and
 - canonical `Block` data.
 
-Occurrences do not have hierarchy. Tree allows canonical edit/reveal and explicit canonical deletion, but rejects projected indent, outdent, collapse, and sibling reorder where semantics would be ambiguous.
+Occurrences do not have hierarchy. Tree allows canonical edit/reveal and explicit canonical deletion, rejects projected indent, outdent, and collapse, and maps `Shift+Up` / `Shift+Down` to branch-local reorder.
 
-Accepted future behavior stores order as `(virtual-branch ID, canonical block ID) -> branch-local rank`, never as canonical sibling position.
+`workspace.snapshot` carries every persisted occurrence rank in the same transactional read as the block graph. Tree supplies the branch `viewId` on its bounded match query; storage orders matching ranked blocks first, then deterministic unranked results, and returns only the configured window plus overflow detection. Projection reapplies the snapshot ranks defensively before the branch limit. Reorder ranks the complete currently projected sibling sequence without changing canonical parents/positions or another branch. Rank rows survive temporary query mismatches and cascade when either the branch definition or canonical block is deleted.
 
 ## Detail rendering and editing invariants
 
@@ -255,7 +257,6 @@ pi-extension/index.ts         Pi/OMP commands, tools, context hook
 
 The durable roadmap lives in the outliner workboard. Current accepted designs include:
 
-- branch-local virtual occurrence ordering,
 - safe canonical block deletion,
 - reference navigation and back history,
 - symbolic page addresses and create-on-follow stubs,

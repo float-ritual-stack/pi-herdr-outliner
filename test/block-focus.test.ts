@@ -110,6 +110,7 @@ test("focuses only an unambiguous match through selection and Tree reveal", asyn
     visible: { blocks, completeness: { kind: "complete" } },
     physical: { blocks, completeness: { kind: "complete" } },
     selection: { selected: null, ancestors: [], children: [] },
+    virtualOccurrenceRanks: [],
     sequence: 1,
   };
   const requester = {
