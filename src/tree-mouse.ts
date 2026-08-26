@@ -7,6 +7,8 @@ export interface TreeMouseClick {
   row: number;
 }
 
+export type TreeWheelDirection = "up" | "down";
+
 export function isTreeMouseSequence(sequence: string): boolean {
   return SGR_MOUSE_PATTERN.test(sequence);
 }
@@ -20,6 +22,18 @@ export function parseTreePlainClick(sequence: string): TreeMouseClick | null {
   const row = Number.parseInt(match[3], 10) - 1;
   if (column < 0 || row < 0) return null;
   return { column, row };
+}
+
+export function parseTreeWheel(sequence: string): TreeWheelDirection | null {
+  const match = SGR_MOUSE_PATTERN.exec(sequence);
+  if (!match || match[4] !== "M") return null;
+  const column = Number.parseInt(match[2], 10);
+  const row = Number.parseInt(match[3], 10);
+  if (column < 1 || row < 1) return null;
+  const button = Number.parseInt(match[1], 10);
+  if (button === 64) return "up";
+  if (button === 65) return "down";
+  return null;
 }
 
 export function treeLinkAtClick(
