@@ -132,5 +132,20 @@ describe("outliner link rendering", () => {
     expect(linked).toContain(`\`\`PIE-997 ${targetId}\`\``);
     expect(linked).toContain(`[titled](https://example.com/PIE-996 "PIE-995")`);
     expect(linked).toContain(`~~~text\nPIE-994 ${targetId}\n~~~`);
+    expect(linked).not.toContain(outlinerLinkUri("goto", "PIE-994"));
+  });
+
+  test("keeps tilde fences protected until a complete matching close", () => {
+    const literal = [
+      "~~~text",
+      `PIE-994 ${targetId}`,
+      "```not the matching marker",
+      "    ~~~",
+      "~~~not a closing fence",
+      `PIE-993 ${targetId}`,
+      "~~~",
+    ].join("\n");
+
+    expect(linkOutlinerMarkdown(literal, literal)).toBe(literal);
   });
 });

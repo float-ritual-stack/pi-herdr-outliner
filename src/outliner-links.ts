@@ -81,16 +81,23 @@ function protectedMarkdownRanges(text: string): TextRange[] {
   let lineStart = 0;
   for (const line of text.split("\n")) {
     const lineEnd = lineStart + line.length;
-    const delimiter = /^\s*(`{3,}|~{3,})/.exec(line)?.[1];
-    if (activeFence || delimiter) ranges.push({ start: lineStart, end: lineEnd });
-    if (delimiter) {
-      const marker = delimiter[0];
-      if (activeFence) {
-        if (marker === activeFence.marker && delimiter.length >= activeFence.length) {
-          activeFence = null;
-        }
-      } else {
-        activeFence = { marker, length: delimiter.length };
+    if (activeFence) {
+      ranges.push({ start: lineStart, end: lineEnd });
+      const closing = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line)?.[1];
+      if (
+        closing &&
+        closing[0] === activeFence.marker &&
+        closing.length >= activeFence.length
+      ) {
+        activeFence = null;
+      }
+    } else {
+      const opening = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+      if (opening) {
+        ranges.push({ start: lineStart, end: lineEnd });
+        activeFence = { marker: opening[0], length: opening.length };
+      } else if (/^( {4}|\t)/.test(line)) {
+        ranges.push({ start: lineStart, end: lineEnd });
       }
     }
     lineStart = lineEnd + 1;
