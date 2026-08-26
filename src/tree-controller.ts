@@ -30,7 +30,7 @@ import {
   type VirtualBranchState,
 } from "./virtual-branches";
 
-export type TreeInputMode = "edit" | "add-child" | "add-sibling" | "filter" | "goto";
+export type TreeInputMode = "edit" | "add-child" | "add-sibling" | "filter" | "goto" | "purge";
 export type TreeMode = "browse" | "delete" | "viewer" | TreeInputMode;
 
 export interface TreeQuickCompletionItem {
@@ -479,6 +479,27 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       effects.invalidate();
       return;
     }
+    if (mode === "purge") {
+      const selected = rows[selectedIndex];
+      const confirmation = quickInputText().trim();
+      mode = "browse";
+      resetQuickEditor();
+      if (!selected?.block.deletedAt) {
+        status = "Selected block is not a Trash root";
+      } else {
+        await effects.request({
+          action: "trash.purge",
+          blockId: selected.canonicalId,
+          confirmation,
+        });
+        status = "Permanently purged";
+        await reload();
+        const visibleCanonicalId = rows[selectedIndex]?.canonicalId ?? null;
+        await effects.request({ action: "selection.set", blockId: visibleCanonicalId });
+      }
+      effects.invalidate();
+      return;
+    }
 
     const selected = rows[selectedIndex];
     const editingRowId = mode === "edit" ? selected?.rowId : undefined;
@@ -853,7 +874,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         return;
       }
 
-      if (mode !== "filter" && detailHandoffRequested) {
+      if (mode !== "filter" && mode !== "purge" && detailHandoffRequested) {
         await handoffToDetail();
         return;
       }
@@ -864,7 +885,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       } else if (key.name === "return") {
         await finishInput();
         return;
-      } else if (key.name === "tab" && mode !== "filter") {
+      } else if (key.name === "tab" && mode !== "filter" && mode !== "purge") {
         await openQuickCompletion();
       } else {
         updateQuickBuffer(str, key);
@@ -938,7 +959,28 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         await effects.request({ action: "toggle", blockId: selected.canonicalId });
         reloadRequired = true;
       } else if (selected.hasChildren) selectedIndex = Math.min(rows.length - 1, selectedIndex + 1);
+    } else if (str === "r" && selected?.block.deletedAt) {
+      await effects.request({ action: "trash.restore", blockId: selected.canonicalId });
+      status = "Restored from Trash";
+      reloadRequired = true;
+    } else if (str === "p" && selected?.block.deletedAt) {
+      const required =
+        selected.block.properties.find((property) => property.key === "work-id")?.value
+        ?? selected.canonicalId.slice(0, 8);
+      status = `Type ${required} to permanently purge`;
+      await beginInput("purge");
+      return;
     } else if (key.name === "return" && selected) {
+      if (selected.block.effectiveDeletedRootId) {
+        await effects.request({
+          action: "ui.command.send",
+          command: { target: "detail", command: "focus", blockId: selected.canonicalId },
+        });
+        effects.focusPane("detail");
+        status = "Deleted block opened read-only in Detail";
+        effects.invalidate();
+        return;
+      }
       if (selected.block.text.includes("\n")) {
         await handoffToDetail();
         return;

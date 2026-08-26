@@ -5,6 +5,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PROPERTY_PARSER_VERSION } from "../src/properties";
 import { OutlinerStore } from "../src/store";
+import {
+  isVirtualBranchOccurrence,
+  projectVirtualBranches,
+} from "../src/virtual-branches";
 
 const stores: Array<{ store: OutlinerStore; directory: string }> = [];
 
@@ -106,6 +110,88 @@ Second paragraph`;
     expect(store.toggleMultilineExpanded(block.id)).toBe(false);
   });
 
+  test("soft-deletes subtrees centrally and restores only non-independent descendants", async () => {
+    const store = makeStore();
+    const categoryView = store.create(
+      "Category [type::virtual-branch] [query::category=trash-test]",
+    );
+    const parent = store.create("Parent [category::trash-test]");
+    const child = store.create("Child [category::trash-test]", parent.id);
+    const independentlyDeleted = store.create(
+      "Independent [category::trash-test] [work-id::PIE-999]",
+      child.id,
+    );
+
+    store.delete(independentlyDeleted.id);
+    const deletedParent = store.delete(parent.id);
+    expect(deletedParent.deletedAt).toBeDefined();
+    expect(deletedParent.effectiveDeletedRootId).toBe(parent.id);
+    expect(store.require(child.id).effectiveDeletedRootId).toBe(parent.id);
+    expect(store.require(independentlyDeleted.id).effectiveDeletedRootId).toBe(
+      independentlyDeleted.id,
+    );
+    expect(store.readWorkspaceSnapshot().physical.blocks.some((block) =>
+      [parent.id, child.id, independentlyDeleted.id].includes(block.id)
+    )).toBe(false);
+    expect(store.queryBlocks({
+      filters: [{ key: "category", value: "trash-test" }],
+      limit: 10,
+    }).blocks).toEqual([]);
+    expect(store.propertyCatalog("category")).not.toContainEqual(
+      expect.objectContaining({ value: "trash-test" }),
+    );
+    expect(() => store.update(child.id, "changed")).toThrow("is in Trash");
+
+    const trashRoots = store.queryBlocks({
+      filters: [{ key: "deleted", value: "true" }],
+      includeDeleted: "roots",
+      limit: 10,
+    }).blocks;
+    expect(trashRoots.map((block) => block.id)).toEqual([
+      parent.id,
+      independentlyDeleted.id,
+    ]);
+    expect(trashRoots[0]?.deletedDescendantCount).toBe(1);
+    expect(trashRoots[1]?.deletedDescendantCount).toBe(0);
+    const snapshot = store.readWorkspaceSnapshot();
+    const projection = await projectVirtualBranches(
+      snapshot.visible.blocks,
+      snapshot.physical.blocks,
+      async (query) => store.queryBlocks(query),
+      snapshot.virtualOccurrenceRanks,
+    );
+    expect(
+      projection.rows
+        .filter(isVirtualBranchOccurrence)
+        .filter((row) => row.viewId === categoryView.id),
+    ).toEqual([]);
+
+    expect(() => store.restore(independentlyDeleted.id)).toThrow(
+      `Restore enclosing Trash root first: ${parent.id}`,
+    );
+    expect(store.queryBlocks({
+      filters: [{ key: "deleted", value: "true" }],
+      includeDeleted: "roots",
+      limit: 10,
+    }).blocks.map((block) => block.id)).toContain(independentlyDeleted.id);
+    store.restore(parent.id);
+    expect(store.readWorkspaceSnapshot().physical.blocks.some((block) => block.id === parent.id))
+      .toBe(true);
+    expect(store.readWorkspaceSnapshot().physical.blocks.some((block) => block.id === child.id))
+      .toBe(true);
+    expect(store.readWorkspaceSnapshot().physical.blocks.some((block) =>
+      block.id === independentlyDeleted.id
+    )).toBe(false);
+
+    expect(() => store.purge(independentlyDeleted.id, "wrong")).toThrow("PIE-999");
+    store.purge(independentlyDeleted.id, "PIE-999");
+    expect(store.get(independentlyDeleted.id)).toBeNull();
+    expect(
+      store.database.query("SELECT work_id FROM reserved_work_ids WHERE work_id = ?")
+        .get("PIE-999"),
+    ).toEqual({ work_id: "PIE-999" });
+  });
+
   test("persists immutable agent provenance while legacy blocks remain coarse", () => {
     let store = makeStore();
     const agentBlock = store.create(
@@ -180,10 +266,43 @@ Second paragraph`;
       "actor_id",
       "session_id",
       "task_id",
+      "deleted_at",
+      "effective_deleted_root_id",
     ]));
     expect(
       store.create("Migrated agent block", null, "agent", { actorId: "pi" }),
     ).toEqual(expect.objectContaining({ author: "agent", actorId: "pi" }));
+  });
+
+  test("backfills effective deletion when upgrading a database with direct tombstones", () => {
+    const directory = mkdtempSync(join(tmpdir(), "pi-outliner-deletion-migration-"));
+    const path = join(directory, "outliner.sqlite");
+    const legacy = new Database(path, { create: true });
+    legacy.exec(`
+      CREATE TABLE blocks (
+        id TEXT PRIMARY KEY,
+        parent_id TEXT REFERENCES blocks(id) ON DELETE CASCADE,
+        position INTEGER NOT NULL,
+        text TEXT NOT NULL,
+        author TEXT NOT NULL CHECK (author IN ('user', 'agent', 'system')),
+        collapsed INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        deleted_at TEXT
+      );
+      INSERT INTO blocks
+        (id, parent_id, position, text, author, collapsed, created_at, updated_at, deleted_at)
+      VALUES
+        ('deleted-root', NULL, 0, 'Deleted root', 'user', 0, 'created', 'updated', 'deleted'),
+        ('deleted-child', 'deleted-root', 0, 'Deleted child', 'user', 0, 'created', 'updated', NULL);
+    `);
+    legacy.close();
+
+    const store = new OutlinerStore(path);
+    stores.push({ store, directory });
+    expect(store.require("deleted-root").effectiveDeletedRootId).toBe("deleted-root");
+    expect(store.require("deleted-child").effectiveDeletedRootId).toBe("deleted-root");
+    expect(store.children(null).some((block) => block.id === "deleted-root")).toBe(false);
   });
 
   test("retains nonmatching branch ranks and cascades ranks with either endpoint", () => {
@@ -244,8 +363,15 @@ Second paragraph`;
     expect(store.readWorkspaceSnapshot().virtualOccurrenceRanks).toEqual([
       { viewId: view.id, blockId: second.id, rank: 0 },
       { viewId: view.id, blockId: nonmatching.id, rank: 1 },
+      { viewId: view.id, blockId: first.id, rank: 2 },
+    ]);
+    store.purge(first.id, first.id.slice(0, 8));
+    expect(store.readWorkspaceSnapshot().virtualOccurrenceRanks).toEqual([
+      { viewId: view.id, blockId: second.id, rank: 0 },
+      { viewId: view.id, blockId: nonmatching.id, rank: 1 },
     ]);
     store.delete(view.id);
+    store.purge(view.id, view.id.slice(0, 8));
     expect(store.readWorkspaceSnapshot().virtualOccurrenceRanks).toEqual([]);
   });
 
@@ -351,8 +477,8 @@ Second paragraph`;
     const snapshot = store.readWorkspaceSnapshot();
     expect(snapshot.visible.completeness).toEqual({ kind: "complete" });
     expect(snapshot.physical.completeness).toEqual({ kind: "complete" });
-    expect(snapshot.visible.blocks).toHaveLength(506);
-    expect(snapshot.physical.blocks).toHaveLength(506);
+    expect(snapshot.visible.blocks).toHaveLength(507);
+    expect(snapshot.physical.blocks).toHaveLength(507);
     expect(snapshot.visible.blocks.some((block) => block.id === "bulk-root-501")).toBe(true);
     expect(snapshot.physical.blocks.some((block) => block.id === "bulk-root-501")).toBe(true);
   });
@@ -385,7 +511,29 @@ Second paragraph`;
     const rawText = `See ((${target.id}))`;
     const source = store.create(rawText);
 
-    expect(store.resolveBlockReferences(source.text)).toBe("See ((Decision title))");
+    expect(store.resolveBlockReferences(source.text)).toEqual({
+      text: "See ((Decision title))",
+      references: [{
+        blockId: target.id,
+        status: "resolved",
+        title: "Decision title",
+      }],
+    });
+    store.delete(target.id);
+    expect(store.resolveBlockReferences(source.text)).toEqual({
+      text: "See ((Decision title · Trash))",
+      references: [{
+        blockId: target.id,
+        status: "deleted",
+        title: "Decision title",
+        deletionRootId: target.id,
+      }],
+    });
+    store.purge(target.id, target.id.slice(0, 8));
+    expect(store.resolveBlockReferences(source.text)).toEqual({
+      text: rawText,
+      references: [{ blockId: target.id, status: "missing" }],
+    });
     expect(store.require(source.id).text).toBe(rawText);
   });
 

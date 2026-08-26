@@ -29,16 +29,18 @@ function state(): DetailState {
   };
 }
 
-function harness(): {
+function harness(
+  detailState: DetailState = state(),
+  bufferMode = true,
+): {
   intents: DetailIntent[];
   press(key: TerminalKey, str?: string): Promise<void>;
 } {
   const intents: DetailIntent[] = [];
-  const detailState = state();
   const controller: DetailController = {
     state: detailState,
     async initialize() {},
-    isBufferMode: () => true,
+    isBufferMode: () => bufferMode,
     async dispatch(intent) {
       intents.push(intent);
     },
@@ -109,4 +111,27 @@ test("retains save, completion, insertion, and delete bindings", async () => {
     { type: "buffer.insert", text: "x" },
     { type: "buffer.delete" },
   ]);
+});
+
+test("restores direct Trash roots from file mode", async () => {
+  const detailState = state();
+  detailState.mode = "file";
+  detailState.context.selected = {
+    id: "deleted-file",
+    parentId: null,
+    position: 0,
+    text: "Deleted file [file::example.ts]",
+    author: "user",
+    collapsed: false,
+    createdAt: "created",
+    updatedAt: "updated",
+    deletedAt: "deleted",
+    effectiveDeletedRootId: "deleted-file",
+    properties: [{ key: "file", value: "example.ts" }],
+  };
+  const detail = harness(detailState, false);
+
+  await detail.press({ name: "r" }, "r");
+
+  expect(detail.intents).toEqual([{ type: "trash.restore" }]);
 });

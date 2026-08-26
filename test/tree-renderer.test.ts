@@ -399,7 +399,7 @@ describe("renderTreeFrame", () => {
     }), 120, 8).frame;
 
     expect(frame).toContain(
-      "Delete canonical block “Card” and its physical descendants? Removes it everywhere. y/N",
+      "Move canonical block “Card” and its descendants to Trash? y/N",
     );
   });
 
@@ -531,7 +531,22 @@ describe("renderTreeFrame", () => {
     );
 
     const deleteFrame = renderTreeFrame(view([selected], { mode: "delete" }), 80, 8).frame.split("\n");
-    expect(deleteFrame.at(-2)).toBe("\x1b[31;1mDelete this block and all descendants? y/N\x1b[0m");
+    expect(deleteFrame.at(-2)).toBe("\x1b[33;1mMove this block and its descendants to Trash? y/N\x1b[0m");
+
+    const deletedSelected = block("deleted", {
+      text: "PIE-999 deleted [work-id::PIE-999]",
+      displayText: "PIE-999 deleted [work-id::PIE-999]",
+      properties: [{ key: "work-id", value: "PIE-999" }],
+      deletedAt: "deleted-at",
+      effectiveDeletedRootId: "deleted",
+    });
+    const purgeFrame = renderTreeFrame(
+      view([deletedSelected], { mode: "purge", quickInput: "PIE-" }),
+      80,
+      8,
+    ).frame.split("\n");
+    expect(purgeFrame.at(-2)).toContain("Purge PIE-999:");
+    expect(purgeFrame.at(-1)).toContain("type exact identifier");
 
     const viewer = renderTreeFrame(
       view([selected], {

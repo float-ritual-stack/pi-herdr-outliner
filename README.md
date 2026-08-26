@@ -25,13 +25,14 @@ The project started as a small Friday-night experiment and grew into a durable w
 
 - SQLite-backed hierarchical blocks with stable UUIDs, sibling order, authors, timestamps, collapse state, and selection.
 - Workspace-isolated service and runtime paths.
-- JSON-lines RPC protocol v5 over a Unix socket.
+- JSON-lines RPC protocol v6 over a Unix socket.
 - Reactive content, selection, view, and UI-command events.
 - Indexed `[property::value]` metadata with optimistic property patching and catalog queries.
 - Exact block references using `((block-id))`, resolved to display titles in read mode while raw text remains editable.
 - Plain-clickable work IDs, canonical UUIDs, and resolved block references inside Tree/Detail, with OSC 8 `pi-outliner://` links retained for external terminal interoperability.
 - Property-driven virtual branches with canonical projected occurrences, property-aware creation, and persisted branch-local occurrence order.
 - Agent-authored blocks retain immutable actor, session, and originating tool-call/task provenance while preserving the coarse `agent` author role.
+- Recoverable deletion preserves canonical structure and identity, excludes Trash content from normal queries/completions, and requires explicit identifier-confirmed purge.
 - Selected multiline-expanded Tree blocks support viewport-sized intra-block PageUp/PageDown without changing block selection.
 - Pi Markdown preview with line, page, endpoint, and mouse/trackpad scrolling.
 - Grapheme-safe wrapped Detail editing, word motion, selection, deletion, bounded per-session undo/redo, completion, optimistic save, and whole-session Esc cancellation.
@@ -119,7 +120,9 @@ The footer in each pane is authoritative and context-sensitive. These are the pr
 | `g` | Fuzzy goto by UUID, short prefix, title, or content |
 | `/` | Filter visible blocks |
 | `f` | Open a referenced file |
-| `d` | Enter delete confirmation |
+| `d`, then `y` | Confirm moving the selected canonical subtree to Trash |
+| `r` | Restore a selected direct Trash root |
+| `p` | Type the work ID/short UUID to permanently purge a Trash root |
 | `Ctrl+Q` | Close the pane |
 
 Plain-click any linked `PIE-NNN`, canonical UUID, or resolved block-reference label inside Tree or Detail to focus and reveal its canonical block. Shift remains the terminal-native text-selection escape while Tree mouse reporting is active. Symbolic `[[page]]` links remain reserved for PIE-132.
@@ -139,6 +142,7 @@ Projected virtual occurrences deliberately constrain hierarchy and collapse. Bra
 | Mouse wheel / trackpad | Scroll preview |
 | `Enter` or `e` | Edit raw canonical text |
 | `f` | Open referenced file |
+| `r` | Restore the selected block when it is a direct Trash root |
 | `q` | Focus Tree |
 | `Ctrl+Q` | Close Detail |
 

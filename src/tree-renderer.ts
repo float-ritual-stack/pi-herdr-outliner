@@ -216,6 +216,13 @@ export function renderTreeFrame(
 
     const branchState =
       row.kind === "physical" ? view.branchStates.get(row.canonicalId) : undefined;
+    let trashLabel = "";
+    if (block.deletedAt) {
+      trashLabel = `  [Trash · ${block.deletedDescendantCount ?? 0} descendants]`;
+    } else if (block.effectiveDeletedRootId) {
+      trashLabel = "  [Trash]";
+    }
+    const blockText = `${block.displayText}${trashLabel}`;
     let result: string[];
     if (!row.multilineExpanded && branchState) {
       const prefix = `${"  ".repeat(row.depth)}${marker} `;
@@ -225,10 +232,10 @@ export function renderTreeFrame(
         Math.max(1, width - prefix.length - suffix.length),
       );
       const titleWidth = Math.max(1, width - prefix.length - suffix.length - badge.length);
-      const title = truncate(block.displayText.replace(/\r?\n/g, " ↵ "), titleWidth);
+      const title = truncate(blockText.replace(/\r?\n/g, " ↵ "), titleWidth);
       result = [linker.link(truncate(`${prefix}${title}${badge}${suffix}`, width))];
     } else {
-      const displayText = decorateVirtualBranchDefinitionText(block.displayText, branchState);
+      const displayText = decorateVirtualBranchDefinitionText(blockText, branchState);
       if (row.multilineExpanded) {
         const expandedRows = layoutExpandedBlock({
           text: displayText,
@@ -332,6 +339,12 @@ export function renderTreeFrame(
         ? truncate(creationHelp, width)
         : "Quick edit: ←→ cursor  Tab complete  Enter save  Shift+Enter/Ctrl+E multiline  Esc cancel",
     );
+  } else if (view.mode === "purge") {
+    const required =
+      selectedRow?.block.properties.find((property) => property.key === "work-id")?.value
+      ?? selectedRow?.canonicalId.slice(0, 8)
+      ?? "identifier";
+    output.push(`\x1b[31;1mPurge ${required}: \x1b[0m${view.quickInput}▏`);
   } else if (view.mode === "filter" || view.mode === "goto") {
     const label = view.mode === "goto" ? "Goto" : "Filter";
     const completion = view.quickCompletion;
@@ -351,13 +364,13 @@ export function renderTreeFrame(
   } else if (view.mode === "delete") {
     if (selectedRow?.kind === "occurrence") {
       output.push(
-        `\x1b[31;1m${truncate(
-          `Delete canonical block “${blockDisplayTitle(selectedRow.block)}” and its physical descendants? Removes it everywhere. y/N`,
+        `\x1b[33;1m${truncate(
+          `Move canonical block “${blockDisplayTitle(selectedRow.block)}” and its descendants to Trash? y/N`,
           width,
         )}\x1b[0m`,
       );
     } else {
-      output.push("\x1b[31;1mDelete this block and all descendants? y/N\x1b[0m");
+      output.push("\x1b[33;1mMove this block and its descendants to Trash? y/N\x1b[0m");
     }
   } else {
     const contextualStatus =
@@ -367,7 +380,9 @@ export function renderTreeFrame(
     output.push(truncate(contextualStatus, width));
   }
   let help: string;
-  if (view.mode === "goto") {
+  if (view.mode === "purge") {
+    help = "type exact identifier  Enter permanently purge  Esc cancel";
+  } else if (view.mode === "goto") {
     help = "type ID/text  ↑↓ choose  Tab cycle  Enter jump  Esc cancel";
   } else if (expandedScrollable) {
     help = "PgUp/PgDn scroll selected block  click links  ↑↓ navigate blocks  g goto  . / ⌘. detail";

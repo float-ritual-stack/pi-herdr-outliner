@@ -60,6 +60,7 @@ interface Harness {
     setSelections: string[];
     updates: Array<{ blockId: string; text: string; expectedUpdatedAt: string }>;
     creates: Array<{ parentId: string; text: string; author: "user" }>;
+    restores: string[];
     queries: BlockSearchQuery[];
     focuses: number;
   };
@@ -88,6 +89,7 @@ function createHarness(
     setSelections: [],
     updates: [],
     creates: [],
+    restores: [],
     queries: [],
     focuses: 0,
   };
@@ -103,6 +105,16 @@ function createHarness(
     async updateBlock(input) {
       calls.updates.push(input);
       return update(input);
+    },
+    async restoreBlock(blockId) {
+      calls.restores.push(blockId);
+      if (selection.selected?.id === blockId) {
+        selection = {
+          ...selection,
+          selected: makeBlock({ ...selection.selected, deletedAt: undefined, effectiveDeletedRootId: undefined }),
+        };
+      }
+      return selection.selected!;
     },
     async createBlock(input) {
       calls.creates.push(input);
@@ -169,6 +181,42 @@ describe("detail controller projection and deferred refresh", () => {
     await harness.controller.dispatch({ type: "edit.begin" }, viewport);
     expect(harness.controller.state.buffer.text).toBe("Raw ((reference))");
     expect(harness.controller.state.mode).toBe("edit");
+  });
+
+  test("keeps trashed blocks read-only and restores direct Trash roots explicitly", async () => {
+    const deleted = makeBlock({
+      deletedAt: "deleted-at",
+      effectiveDeletedRootId: "block-1",
+    });
+    const harness = createHarness(deleted);
+    await harness.controller.initialize();
+
+    expect(harness.controller.state.status).toContain("In Trash");
+    await harness.controller.dispatch({ type: "edit.begin" }, viewport);
+    expect(harness.controller.state.mode).toBe("preview");
+    expect(harness.controller.state.status).toContain("restore before editing");
+
+    await harness.controller.dispatch({ type: "trash.restore" }, viewport);
+    expect(harness.calls.restores).toEqual([deleted.id]);
+    expect(harness.controller.state.context.selected?.effectiveDeletedRootId).toBeUndefined();
+    expect(harness.controller.state.status).toBe("Restored from Trash");
+  });
+
+  test("keeps inherited Trash descendants read-only without offering direct restore", async () => {
+    const deletedFile = makeBlock({
+      effectiveDeletedRootId: "deleted-root",
+      properties: [{ key: "file", value: "src/example.ts" }],
+    });
+    const harness = createHarness(deletedFile, filePreview());
+    await harness.controller.initialize();
+
+    expect(harness.controller.state.status).toBe(
+      "In Trash — read-only · restore its direct Trash root",
+    );
+    await harness.controller.dispatch({ type: "comment.begin" }, viewport);
+    expect(harness.controller.state.mode).toBe("file");
+    expect(harness.controller.state.status).toContain("restore before adding annotations");
+    expect(harness.calls.creates).toEqual([]);
   });
 
   test("defaults ordinary file blocks to file mode and other blocks to preview", async () => {

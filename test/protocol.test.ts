@@ -37,7 +37,7 @@ test("serves mutations and property queries over the local socket", async () => 
   const client = new OutlinerClient(socket);
   const service = await client.request<OutlinerServiceStatus>({ action: "ping" });
   expect(service).toEqual({ status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION });
-  expect(service.protocolVersion).toBe(5);
+  expect(service.protocolVersion).toBe(6);
   const provenance = {
     actorId: "omp",
     sessionId: "session-1",
@@ -120,6 +120,29 @@ test("serves mutations and property queries over the local socket", async () => 
     prefix: "do",
   });
   expect(catalog).toEqual([{ key: "status", value: "doing", count: 1 }]);
+  const trashTarget = await client.request<Block>({
+    action: "create",
+    text: "Protocol Trash target [work-id::PIE-998]",
+  });
+  const trashed = await client.request<Block>({
+    action: "delete",
+    blockId: trashTarget.id,
+  });
+  expect(trashed.effectiveDeletedRootId).toBe(trashTarget.id);
+  expect((await client.request<VisibleBlockCollection>({
+    action: "blocks.query",
+    query: { text: "Protocol Trash target", limit: 10 },
+  })).blocks).toEqual([]);
+  await client.request({ action: "trash.restore", blockId: trashTarget.id });
+  await client.request({ action: "delete", blockId: trashTarget.id });
+  await client.request({
+    action: "trash.purge",
+    blockId: trashTarget.id,
+    confirmation: "PIE-998",
+  });
+  await expect(
+    client.request({ action: "get", blockId: trashTarget.id }),
+  ).rejects.toThrow("Block not found");
 });
 
 test("rejects malformed socket responses instead of crashing the client", async () => {
