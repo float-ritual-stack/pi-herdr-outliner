@@ -173,6 +173,88 @@ describe("createTreeController", () => {
       blockId: target.id,
     });
   });
+  test("follows the first block reference and navigates service history", async () => {
+    const source = block("source01", {
+      text: "Source points to ((target01))",
+      displayText: "Source points to ((target01))",
+    });
+    const target = block("target01", { position: 1, text: "Target", displayText: "Target" });
+    let selected = source;
+    const fake = harness((input) => {
+      if (input.action === "workspace.snapshot") return snapshot([source, target], selected);
+      if (input.action === "selection.set") {
+        selected = input.blockId === target.id ? target : source;
+        return { selected, ancestors: [], children: [] };
+      }
+      if (input.action === "get") return target;
+      if (input.action === "navigation.back") {
+        selected = source;
+        return {
+          selection: { selected, ancestors: [], children: [] },
+          canBack: false,
+          canForward: true,
+        };
+      }
+      return undefined;
+    });
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+
+    await controller.handleKeypress("o", { name: "o" }, "pass");
+    expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe(target.id);
+    expect(lastCall(fake.calls, "selection.set")).toMatchObject({
+      action: "selection.set",
+      blockId: target.id,
+    });
+
+    await controller.handleKeypress("", { name: "left", meta: true }, "pass");
+    expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe(source.id);
+    expect(lastCall(fake.calls, "navigation.back")).toBeDefined();
+  });
+
+  test("opens deleted reference and history targets read-only in Detail", async () => {
+    const source = block("source01", {
+      text: "Source points to ((deleted1))",
+      displayText: "Source points to ((deleted1))",
+    });
+    const deleted = block("deleted1", {
+      deletedAt: "2026-08-22T01:00:00.000Z",
+      effectiveDeletedRootId: "deleted1",
+    });
+    let selected: Block = source;
+    const fake = harness((input) => {
+      if (input.action === "workspace.snapshot") return snapshot([source], selected);
+      if (input.action === "get") return deleted;
+      if (input.action === "selection.set") {
+        selected = input.blockId === deleted.id ? deleted : source;
+        return { selected, ancestors: [], children: [] };
+      }
+      if (input.action === "navigation.back") {
+        selected = deleted;
+        return {
+          selection: { selected, ancestors: [], children: [] },
+          canBack: false,
+          canForward: true,
+        };
+      }
+      return undefined;
+    });
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+
+    await controller.handleKeypress("o", { name: "o" }, "pass");
+    expect(fake.focused).toEqual(["detail"]);
+    expect(lastCall(fake.calls, "ui.command.send")).toMatchObject({
+      action: "ui.command.send",
+      command: { target: "detail", blockId: deleted.id },
+    });
+
+    selected = source;
+    await controller.handleKeypress("", { name: "left", meta: true }, "pass");
+    expect(fake.focused).toEqual(["detail", "detail"]);
+    expect(controller.view().status).toContain("deleted block read-only");
+  });
+
 
   test("cycles goto candidates across both Tab boundaries", async () => {
     const review = block("40bd0864-913a-4537-9535-8f96e1b63ef7", {

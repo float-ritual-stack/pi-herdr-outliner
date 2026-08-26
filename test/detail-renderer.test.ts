@@ -54,7 +54,7 @@ describe("detail ANSI renderer", () => {
       "",
       "",
       "",
-      "\x1b[2m↑↓ scroll  Enter/e edit  f file  q tree  Ctrl+Q close\x1b[0m",
+      "\x1b[2m↑↓ scroll  o follow ref  ⌥←→ history  Enter/e edit  f file  q t…\x1b[0m",
     ].join("\n"));
   });
 
@@ -76,7 +76,7 @@ describe("detail ANSI renderer", () => {
       "resolved three",
       "resolved four",
       "Ready",
-      "\x1b[2m↑↓ scroll  Enter/e edit  f file  q tree  Ctrl+Q close\x1b[0m",
+      "\x1b[2m↑↓ scroll  o follow ref  ⌥←→ history  Enter/e edit  f file  q t…\x1b[0m",
     ].join("\n"));
   });
 

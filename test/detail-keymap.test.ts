@@ -135,3 +135,38 @@ test("restores direct Trash roots from file mode", async () => {
 
   expect(detail.intents).toEqual([{ type: "trash.restore" }]);
 });
+
+test("maps preview and file navigation history and reference-follow bindings", async () => {
+  const previewState = state();
+  previewState.mode = "preview";
+  const preview = harness(previewState, false);
+
+  await preview.press({ name: "left", meta: true });
+  await preview.press({ name: "right", meta: true });
+  await preview.press({ name: "o" }, "o");
+
+  expect(preview.intents).toEqual([
+    { type: "navigation.back" },
+    { type: "navigation.forward" },
+    { type: "reference.follow" },
+  ]);
+
+  const fileState = state();
+  fileState.mode = "file";
+  fileState.referencedFile = {
+    absolutePath: "/workspace/example.ts",
+    displayPath: "example.ts",
+    sourcePath: "example.ts",
+    lines: ["example"],
+    firstLine: 1,
+  };
+  const file = harness(fileState, false);
+
+  await file.press({ name: "left", meta: true });
+  await file.press({ name: "o" }, "o");
+
+  expect(file.intents).toEqual([
+    { type: "navigation.back" },
+    { type: "reference.follow" },
+  ]);
+});

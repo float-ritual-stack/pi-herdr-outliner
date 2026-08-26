@@ -18,6 +18,7 @@ import type {
   BlockProperty,
   BlockSearchQuery,
   BlockTraversalOptions,
+  NavigationState,
   PropertyCatalogItem,
   PropertyPatchOperation,
   SelectionContext,
@@ -470,8 +471,34 @@ export class OutlinerStore {
       if (blockId !== null && !this.getFromCurrentRead(blockId)) {
         throw new Error(`Block not found: ${blockId}`);
       }
+      const currentId = this.selectionFromCurrentRead().selected?.id ?? null;
+      if (blockId && blockId !== currentId) this.recordNavigationFromCurrentRead(blockId);
       this.database.query("UPDATE selection SET block_id = ? WHERE singleton = 1").run(blockId);
       return this.selectionFromCurrentRead();
+    })();
+  }
+
+  navigationState(): NavigationState {
+    return this.database.transaction(() => this.navigationStateFromCurrentRead())();
+  }
+
+  navigateHistory(direction: "back" | "forward"): NavigationState {
+    return this.database.transaction(() => {
+      const cursor = this.navigationCursorFromCurrentRead();
+      const currentId = this.selectionFromCurrentRead().selected?.id ?? null;
+      const comparison = direction === "back" ? "<" : ">";
+      const ordering = direction === "back" ? "DESC" : "ASC";
+      const target = this.database.query(
+        `SELECT entry_id, block_id FROM navigation_history
+         WHERE entry_id ${comparison} ? AND block_id IS NOT NULL
+           AND (? IS NULL OR block_id <> ?)
+         ORDER BY entry_id ${ordering} LIMIT 1`,
+      ).get(cursor, currentId, currentId) as { entry_id: number; block_id: string } | null;
+      if (!target) return this.navigationStateFromCurrentRead();
+      this.setNavigationCursorFromCurrentRead(target.entry_id);
+      this.database.query("UPDATE selection SET block_id = ? WHERE singleton = 1")
+        .run(target.block_id);
+      return this.navigationStateFromCurrentRead();
     })();
   }
 
@@ -596,6 +623,47 @@ export class OutlinerStore {
       };
     });
   }
+  private navigationCursorFromCurrentRead(): number {
+    const row = this.database.query(
+      "SELECT value FROM metadata WHERE key = 'navigation_cursor'",
+    ).get() as { value: string } | null;
+    return Number(row?.value ?? 0);
+  }
+
+  private setNavigationCursorFromCurrentRead(entryId: number): void {
+    this.database.query(
+      "INSERT INTO metadata (key, value) VALUES ('navigation_cursor', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    ).run(String(entryId));
+  }
+
+  private recordNavigationFromCurrentRead(blockId: string): void {
+    const cursor = this.navigationCursorFromCurrentRead();
+    this.database.query("DELETE FROM navigation_history WHERE entry_id > ?").run(cursor);
+    const result = this.database.query(
+      "INSERT INTO navigation_history (block_id) VALUES (?)",
+    ).run(blockId);
+    this.setNavigationCursorFromCurrentRead(Number(result.lastInsertRowid));
+    this.database.query(
+      "DELETE FROM navigation_history WHERE entry_id NOT IN (SELECT entry_id FROM navigation_history ORDER BY entry_id DESC LIMIT 200)",
+    ).run();
+  }
+
+  private navigationStateFromCurrentRead(): NavigationState {
+    const cursor = this.navigationCursorFromCurrentRead();
+    const currentId = this.selectionFromCurrentRead().selected?.id ?? null;
+    const canBack = this.database.query(
+      "SELECT 1 FROM navigation_history WHERE entry_id < ? AND block_id IS NOT NULL AND (? IS NULL OR block_id <> ?) LIMIT 1",
+    ).get(cursor, currentId, currentId) !== null;
+    const canForward = this.database.query(
+      "SELECT 1 FROM navigation_history WHERE entry_id > ? AND block_id IS NOT NULL AND (? IS NULL OR block_id <> ?) LIMIT 1",
+    ).get(cursor, currentId, currentId) !== null;
+    return {
+      selection: this.selectionFromCurrentRead(),
+      canBack,
+      canForward,
+    };
+  }
+
 
   private virtualOccurrenceRanksFromCurrentRead(): VirtualOccurrenceRank[] {
     const rows = this.database
@@ -799,6 +867,13 @@ export class OutlinerStore {
         block_id TEXT REFERENCES blocks(id) ON DELETE SET NULL
       );
       INSERT OR IGNORE INTO selection (singleton, block_id) VALUES (1, NULL);
+      CREATE TABLE IF NOT EXISTS navigation_history (
+        entry_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        block_id TEXT REFERENCES blocks(id) ON DELETE SET NULL
+      );
+      CREATE INDEX IF NOT EXISTS navigation_history_block
+        ON navigation_history(block_id, entry_id);
+      INSERT OR IGNORE INTO metadata (key, value) VALUES ('navigation_cursor', '0');
       CREATE TABLE IF NOT EXISTS block_view_state (
         block_id TEXT PRIMARY KEY REFERENCES blocks(id) ON DELETE CASCADE,
         multiline_expanded INTEGER NOT NULL DEFAULT 0
@@ -820,6 +895,7 @@ export class OutlinerStore {
     this.migrateBlockStateColumns();
     this.migratePropertyIndex();
     this.migrateWorkIdReservations();
+    this.migrateNavigationHistory();
   }
 
   private migrateBlockStateColumns(): void {
@@ -848,6 +924,17 @@ export class OutlinerStore {
       if (needsEffectiveDeletionBackfill) this.recomputeEffectiveDeletion();
     })();
   }
+  private migrateNavigationHistory(): void {
+    const count = this.database.query(
+      "SELECT COUNT(*) AS count FROM navigation_history",
+    ).get() as { count: number };
+    if (count.count > 0) return;
+    const selected = this.database.query(
+      "SELECT block_id FROM selection WHERE singleton = 1",
+    ).get() as { block_id: string | null } | null;
+    if (selected?.block_id) this.recordNavigationFromCurrentRead(selected.block_id);
+  }
+
 
   private migratePropertyIndex(): void {
     this.database.transaction(() => {

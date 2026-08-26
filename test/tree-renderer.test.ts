@@ -118,8 +118,8 @@ function view(
   };
 }
 
-const HELP = "↑↓ navigate  click links  Shift+↑↓ reorder  g goto  . / ⌘. detail  Enter inline";
-const NARROW_HELP = HELP;
+const HELP = "↑↓ navigate  click/o links  ⌥←→ history  Shift+↑↓ reorder  g goto  . detail  Enter inline";
+const NARROW_HELP = "↑↓ navigate  click/o links  ⌥←→ history  Shift+↑↓ reorder  g goto  . detail  En…";
 
 describe("renderTreeFrame", () => {
   test("renders a representative browse frame exactly", () => {
@@ -212,7 +212,7 @@ describe("renderTreeFrame", () => {
     ]);
     expect(rendered.at(-2)).toBe("Expanded block rows 5-8/12");
     expect(rendered.at(-1)).toBe(
-      "\x1b[2mPgUp/PgDn scroll selected block  click …\x1b[0m",
+      "\x1b[2mPgUp/PgDn scroll selected block  click/…\x1b[0m",
     );
   });
 
@@ -382,7 +382,7 @@ describe("renderTreeFrame", () => {
         "▾ Definition [V:1]   ",
         "\x1b[48;5;238m\x1b[1m  ◇ Canonical   \x1b[0m",
         "ready",
-        "\x1b[2m◇ projected occurrence  click links  Shift+↑↓ branch order  ← definition  Enter…\x1b[0m",
+        "\x1b[2m◇ projected occurrence  click/o links  ⌥←→ history  Shift+↑↓ branch order  ← de…\x1b[0m",
       ].join("\n"),
     });
     expect(rendered.frame).not.toContain("▸ Canonical");

@@ -107,14 +107,15 @@ Literal property-looking text inside inline code, fenced code, or escaped syntax
 
 ### Other tables
 
-- `metadata` — service sequence and parser version.
+- `metadata` — service sequence, parser version, and navigation cursor.
 - `selection` — one selected canonical block per workspace.
+- `navigation_history` — the latest 200 canonical selection visits, suppressing consecutive duplicates; purged block foreign keys become null so traversal skips them.
 - `block_view_state` — UI state such as multiline expansion without changing canonical text.
 - `virtual_occurrence_ranks` — durable `(virtual-branch ID, canonical block ID) -> branch-local rank`; both foreign keys cascade on deletion.
 
 ## Protocol
 
-The current protocol version is `6`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
+The current protocol version is `7`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
 
 ### Important request families
 
@@ -126,6 +127,7 @@ The current protocol version is `6`, defined in [`src/types.ts`](../src/types.ts
 - virtual ordering: `virtual.occurrences.reorder`
 - references: `references.resolve`
 - selection: `selection.get`, `selection.set`
+- navigation: `navigation.state`, `navigation.back`, `navigation.forward`
 - reactive clients: `events.subscribe`
 - cross-pane behavior: `ui.command.send`
 
@@ -143,7 +145,7 @@ Herdr recognizes plain terminal text as a URL only for `http://` and `https://`.
 - `pi-outliner://goto/<encoded-query>` — shared goto resolution, currently used by `PIE-NNN`;
 - `pi-outliner://page/<encoded-address>` — reserved for PIE-132 symbolic-page semantics.
 
-Inside the live panes, navigation stays in-process. Tree enables SGR mouse reporting, keeps the last rendered frame, resolves an unmodified primary click against that frame's OSC 8 cell metadata, and delegates to `navigateOutlinerLink`. Detail supplies the same helper as Pi TUI's `openUrl` callback. Both paths use `focusBlockByQuery`, which updates canonical selection and sends Tree focus/reveal.
+Inside the live panes, navigation stays in-process. Tree enables SGR mouse reporting, keeps the last rendered frame, resolves an unmodified primary click against that frame's OSC 8 cell metadata, and delegates to `navigateOutlinerLink`. Detail supplies the same helper as Pi TUI's `openUrl` callback. Exact block links first read their canonical target, so deleted targets cannot degrade into fuzzy text matches; active targets then use `focusBlockByQuery` to update canonical selection and send Tree focus/reveal.
 
 Authored text is sanitized before link generation. Tree adds OSC 8 only after plain-text wrapping/truncation; Detail generates safe Markdown links after sanitization. Under `HERDR_ENV=1`, Detail enables Pi TUI hyperlink emission because nested panes advertise generic `TERM=xterm-256color` even though Herdr captures OSC 8 metadata. Tree ignores modified, release, motion, and wheel reports for link activation; Shift remains available for terminal-native selection.
 
@@ -185,6 +187,8 @@ Clients must never infer absence from a truncated collection. Workspace snapshot
 6. On reconnect, clients reconstruct from the canonical service rather than replaying guessed local state.
 
 While Detail is editing/commenting, content refreshes are marked pending instead of replacing the active raw buffer. Save uses `expectedUpdatedAt`; conflicts preserve the buffer and surface the error. Esc cancels the buffer, after which pending selection can reload.
+
+Navigation history is service-owned and shares the canonical selection path used by Tree, Detail, goto, direct links, and agents. A distinct non-null `selection.set` appends a visit. `navigation.back` and `navigation.forward` move a persisted cursor without appending; a later selection truncates the forward branch. The store retains 200 rows. Soft-deleted targets remain addressable and open read-only in Detail; purge nulls their history foreign keys and traversal skips those rows.
 
 ## Properties and references
 

@@ -61,6 +61,8 @@ interface Harness {
     updates: Array<{ blockId: string; text: string; expectedUpdatedAt: string }>;
     creates: Array<{ parentId: string; text: string; author: "user" }>;
     restores: string[];
+    histories: Array<"back" | "forward">;
+    followedReferences: string[];
     queries: BlockSearchQuery[];
     focuses: number;
   };
@@ -90,6 +92,8 @@ function createHarness(
     updates: [],
     creates: [],
     restores: [],
+    histories: [],
+    followedReferences: [],
     queries: [],
     focuses: 0,
   };
@@ -115,6 +119,13 @@ function createHarness(
         };
       }
       return selection.selected!;
+    },
+    async navigateHistory(direction) {
+      calls.histories.push(direction);
+      return { selection, canBack: true, canForward: true };
+    },
+    async followReference(blockId) {
+      calls.followedReferences.push(blockId);
     },
     async createBlock(input) {
       calls.creates.push(input);
@@ -217,6 +228,35 @@ describe("detail controller projection and deferred refresh", () => {
     expect(harness.controller.state.mode).toBe("file");
     expect(harness.controller.state.status).toContain("restore before adding annotations");
     expect(harness.calls.creates).toEqual([]);
+  });
+
+  test("follows block references and loads deleted history targets read-only", async () => {
+    const source = makeBlock({ text: "See ((target01))" });
+    const harness = createHarness(source);
+    await harness.controller.initialize();
+
+    await harness.controller.dispatch({ type: "reference.follow" }, viewport);
+    expect(harness.calls.followedReferences).toEqual(["target01"]);
+
+    harness.setSelection({
+      selected: makeBlock({
+        id: "deleted1",
+        deletedAt: "deleted-at",
+        effectiveDeletedRootId: "deleted1",
+      }),
+      ancestors: [],
+      children: [],
+    });
+    await harness.controller.dispatch({ type: "navigation.back" }, viewport);
+    expect(harness.calls.histories).toEqual(["back"]);
+    expect(harness.controller.state.context.selected).toMatchObject({
+      id: "deleted1",
+      effectiveDeletedRootId: "deleted1",
+    });
+    expect(harness.controller.state.mode).toBe("preview");
+
+    await harness.controller.dispatch({ type: "edit.begin" }, viewport);
+    expect(harness.controller.state.status).toContain("restore before editing");
   });
 
   test("defaults ordinary file blocks to file mode and other blocks to preview", async () => {

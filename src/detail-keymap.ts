@@ -117,7 +117,11 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
   }
 
   async function handlePreviewKey(str: string, key: TerminalKey): Promise<void> {
-    if (isPageNavigationKey(key.name)) {
+    if (key.meta && (key.name === "left" || key.name === "right")) {
+      await dispatch({ type: key.name === "left" ? "navigation.back" : "navigation.forward" });
+    } else if (str === "o") {
+      await dispatch({ type: "reference.follow" });
+    } else if (isPageNavigationKey(key.name)) {
       await dispatch({ type: "preview.navigate", direction: key.name });
     } else if (key.name === "return" || str === "e") await dispatch({ type: "edit.begin" });
     else if (str === "f") await dispatch({ type: "view.file" });
@@ -126,7 +130,11 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
   }
 
   async function handleFileKey(str: string, key: TerminalKey): Promise<void> {
-    if (isPageNavigationKey(key.name)) {
+    if (key.meta && (key.name === "left" || key.name === "right")) {
+      await dispatch({ type: key.name === "left" ? "navigation.back" : "navigation.forward" });
+    } else if (str === "o") {
+      await dispatch({ type: "reference.follow" });
+    } else if (isPageNavigationKey(key.name)) {
       await dispatch({ type: "file.navigate", direction: key.name });
     } else if (str === "g") await dispatch({ type: "file.navigate", direction: "home" });
     else if (str === "G") await dispatch({ type: "file.navigate", direction: "end" });

@@ -108,7 +108,7 @@ export interface ResolvedBlockReferences {
   references: BlockReferenceResolution[];
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 6;
+export const OUTLINER_PROTOCOL_VERSION = 7;
 
 export interface OutlinerServiceStatus {
   status: "ready";
@@ -154,7 +154,10 @@ export type OutlinerRequest =
     }
   | { id: string; action: "properties.catalog"; key?: string; prefix?: string; limit?: number }
   | { id: string; action: "selection.get" }
-  | { id: string; action: "selection.set"; blockId: string | null };
+  | { id: string; action: "selection.set"; blockId: string | null }
+  | { id: string; action: "navigation.state" }
+  | { id: string; action: "navigation.back" }
+  | { id: string; action: "navigation.forward" };
 
 export type OutlinerResponse =
   | { id: string; ok: true; result: unknown; sequence: number }
@@ -164,6 +167,12 @@ export interface SelectionContext {
   selected: Block | null;
   ancestors: Block[];
   children: Block[];
+}
+
+export interface NavigationState {
+  selection: SelectionContext;
+  canBack: boolean;
+  canForward: boolean;
 }
 
 export interface WorkspaceSnapshotView {

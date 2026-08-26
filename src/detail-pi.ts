@@ -22,12 +22,13 @@ import { createPiDetailInputListener, decodePiDetailInput } from "./detail-pi-in
 import { DetailPiPreviewLayout } from "./detail-pi-preview";
 import { DetailPiComponent } from "./detail-pi-renderer";
 import { completeReferencedPaths, readReferencedFile } from "./files";
-import { navigateOutlinerLink } from "./outliner-links";
+import { navigateOutlinerLink, outlinerLinkUri } from "./outliner-links";
 import { focusPluginPane, registerPaneState } from "./pane-control";
 import { resolvePaths } from "./paths";
 import {
   OUTLINER_PROTOCOL_VERSION,
   type Block,
+  type NavigationState,
   type OutlinerServiceStatus,
   type SelectionContext,
   type VisibleBlockCollection,
@@ -89,6 +90,13 @@ const effects: DetailEffects = {
   },
   async restoreBlock(blockId) {
     return client.request<Block>({ action: "trash.restore", blockId });
+  },
+  async navigateHistory(direction) {
+    const action = direction === "back" ? "navigation.back" : "navigation.forward";
+    return client.request<NavigationState>({ action });
+  },
+  async followReference(blockId) {
+    await navigateOutlinerLink(client, outlinerLinkUri("block", blockId));
   },
   async createBlock(input) {
     return client.request<Block>({ action: "create", ...input });

@@ -80,6 +80,7 @@ describe("outliner link URIs", () => {
     const requester = {
       async request<T>(input: RequestInput): Promise<T> {
         calls.push(input);
+        if (input.action === "get") return target as T;
         if (input.action === "workspace.snapshot") return snapshot as T;
         return {} as T;
       },
@@ -96,6 +97,7 @@ describe("outliner link URIs", () => {
       title: "Clickable target",
     });
     expect(calls).toEqual([
+      { action: "get", blockId: target.id },
       { action: "workspace.snapshot" },
       { action: "selection.set", blockId: target.id },
       {
@@ -115,18 +117,10 @@ describe("outliner link URIs", () => {
     );
     target.deletedAt = "deleted-at";
     target.effectiveDeletedRootId = target.id;
-    const emptySnapshot: WorkspaceSnapshot = {
-      visible: { blocks: [], completeness: { kind: "complete" } },
-      physical: { blocks: [], completeness: { kind: "complete" } },
-      selection: { selected: null, ancestors: [], children: [] },
-      virtualOccurrenceRanks: [],
-      sequence: 1,
-    };
     const calls: RequestInput[] = [];
     const requester = {
       async request<T>(input: RequestInput): Promise<T> {
         calls.push(input);
-        if (input.action === "workspace.snapshot") return emptySnapshot as T;
         if (input.action === "get") return target as T;
         return {} as T;
       },
@@ -147,6 +141,22 @@ describe("outliner link URIs", () => {
         command: { target: "detail", command: "focus", blockId: target.id },
       },
     ]);
+  });
+
+  test("does not fuzzy-match a missing exact block reference", async () => {
+    const missingId = "missing-reference";
+    const calls: RequestInput[] = [];
+    const requester = {
+      async request<T>(input: RequestInput): Promise<T> {
+        calls.push(input);
+        throw new Error(`Block not found: ${missingId}`);
+      },
+    };
+
+    await expect(
+      navigateOutlinerLink(requester, outlinerLinkUri("block", missingId)),
+    ).rejects.toThrow(`Block not found: ${missingId}`);
+    expect(calls).toEqual([{ action: "get", blockId: missingId }]);
   });
 });
 
