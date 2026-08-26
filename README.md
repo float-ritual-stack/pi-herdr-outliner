@@ -29,7 +29,7 @@ The project started as a small Friday-night experiment and grew into a durable w
 - Reactive content, selection, view, and UI-command events.
 - Indexed `[property::value]` metadata with optimistic property patching and catalog queries.
 - Exact block references using `((block-id))`, resolved to display titles in read mode while raw text remains editable.
-- Ctrl-clickable work IDs, canonical UUIDs, and resolved block references through OSC 8 `pi-outliner://` links and a Herdr plugin link handler.
+- Plain-clickable work IDs, canonical UUIDs, and resolved block references inside Tree/Detail, with OSC 8 `pi-outliner://` links retained for external terminal interoperability.
 - Property-driven virtual branches with canonical projected occurrences, property-aware creation, and persisted branch-local occurrence order.
 - Agent-authored blocks retain immutable actor, session, and originating tool-call/task provenance while preserving the coarse `agent` author role.
 - Selected multiline-expanded Tree blocks support viewport-sized intra-block PageUp/PageDown without changing block selection.
@@ -122,9 +122,9 @@ The footer in each pane is authoritative and context-sensitive. These are the pr
 | `d` | Enter delete confirmation |
 | `Ctrl+Q` | Close the pane |
 
-Ctrl-click any linked `PIE-NNN`, canonical UUID, or resolved block-reference label to focus and reveal its canonical block. Herdr uses Control as the modified-click key on every platform, including macOS. Symbolic `[[page]]` links remain reserved for PIE-132.
+Plain-click any linked `PIE-NNN`, canonical UUID, or resolved block-reference label inside Tree or Detail to focus and reveal its canonical block. Shift remains the terminal-native text-selection escape while Tree mouse reporting is active. Symbolic `[[page]]` links remain reserved for PIE-132.
 
-On macOS, terminals may consume Command-click locally and translate Control-click into a secondary click before Herdr receives it. The optional `macos/pi-outliner-link` app registers the private scheme locally and forwards validated work-ID/block targets to the configured workspace over SSH. Warp uses Command-click; Ghostty with mouse capture uses Shift-Command-click. Install from a local checkout with `macos/pi-outliner-link/install.sh`. Configuration defaults to `~/Library/Application Support/PiOutlinerLink/config.json`; pass `--config PATH` to use another location. Reinstalling preserves an existing configuration unless `--force-config` is supplied.
+For links rendered outside the active Outliner, the Herdr Control-click handler remains available where the terminal delivers that modifier. On macOS, the optional `macos/pi-outliner-link` app handles the native path instead: Warp uses Command-click; Ghostty with mouse capture uses Shift-Command-click. The bridge forwards validated targets over SSH/Tailscale and preserves the live workspace navigation semantics.
 
 Projected virtual occurrences deliberately constrain hierarchy and collapse. Branch-local sibling reorder changes only that projection; editing and confirmed deletion still target the canonical block.
 
