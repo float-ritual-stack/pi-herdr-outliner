@@ -143,6 +143,13 @@ Second paragraph`;
       limit: 2,
     });
     expect(ranked.blocks.map((block) => block.id)).toEqual([second.id, first.id]);
+    expect(ranked.blocks[0]).toEqual(expect.objectContaining({
+      id: second.id,
+      depth: 0,
+      multilineExpanded: false,
+      hasChildren: false,
+      displayText: second.text,
+    }));
     expect(ranked.completeness).toEqual({ kind: "truncated", limit: 2 });
     expect(ranked.blocks.some((block) => block.id === newlyMatching.id)).toBe(false);
     expect(() =>
