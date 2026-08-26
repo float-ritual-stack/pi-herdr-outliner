@@ -149,8 +149,8 @@ private func appendLog(_ message: String) {
     )
     if FileManager.default.fileExists(atPath: logURL.path), let handle = try? FileHandle(forWritingTo: logURL) {
         defer { try? handle.close() }
-        try? handle.seekToEnd()
-        try? handle.write(contentsOf: data)
+        _ = try? handle.seekToEnd()
+        _ = try? handle.write(contentsOf: data)
     } else {
         try? data.write(to: logURL, options: .atomic)
     }
@@ -288,7 +288,7 @@ if arguments.count == 6, arguments[1] == "--write-config" {
 }
 
 let application = NSApplication.shared
-let delegate = AppDelegate()
+private let delegate = AppDelegate()
 application.delegate = delegate
 application.setActivationPolicy(.accessory)
 application.run()
