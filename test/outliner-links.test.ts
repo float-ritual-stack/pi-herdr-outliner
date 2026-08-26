@@ -107,6 +107,47 @@ describe("outliner link URIs", () => {
       navigateOutlinerLink(requester, outlinerLinkUri("page", "future")),
     ).rejects.toThrow("require PIE-132");
   });
+
+  test("routes exact deleted targets to read-only Detail inspection", async () => {
+    const target = block(
+      "550e8400-e29b-41d4-a716-446655440009",
+      "Deleted target",
+    );
+    target.deletedAt = "deleted-at";
+    target.effectiveDeletedRootId = target.id;
+    const emptySnapshot: WorkspaceSnapshot = {
+      visible: { blocks: [], completeness: { kind: "complete" } },
+      physical: { blocks: [], completeness: { kind: "complete" } },
+      selection: { selected: null, ancestors: [], children: [] },
+      virtualOccurrenceRanks: [],
+      sequence: 1,
+    };
+    const calls: RequestInput[] = [];
+    const requester = {
+      async request<T>(input: RequestInput): Promise<T> {
+        calls.push(input);
+        if (input.action === "workspace.snapshot") return emptySnapshot as T;
+        if (input.action === "get") return target as T;
+        return {} as T;
+      },
+    };
+
+    await expect(
+      navigateOutlinerLink(requester, outlinerLinkUri("block", target.id)),
+    ).resolves.toEqual({
+      kind: "block",
+      id: target.id,
+      title: "Deleted target",
+      deleted: true,
+    });
+    expect(calls.slice(-2)).toEqual([
+      { action: "selection.set", blockId: target.id },
+      {
+        action: "ui.command.send",
+        command: { target: "detail", command: "focus", blockId: target.id },
+      },
+    ]);
+  });
 });
 
 describe("outliner link rendering", () => {

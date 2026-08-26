@@ -93,6 +93,8 @@ The SQLite schema is created in [`OutlinerStore.migrate()`](../src/store.ts):
 | `author` | `user`, `agent`, or `system` |
 | `actor_id`, `session_id`, `task_id` | Optional immutable creator provenance for agent-authored blocks |
 | `collapsed` | Physical-tree collapse state |
+| `deleted_at` | Direct tombstone timestamp; null for blocks not independently deleted |
+| `effective_deleted_root_id` | Materialized nearest direct deleted ancestor, including self |
 | `created_at`, `updated_at` | Version and audit timestamps |
 
 ### `block_properties`
@@ -112,14 +114,14 @@ Literal property-looking text inside inline code, fenced code, or escaped syntax
 
 ## Protocol
 
-The current protocol version is `5`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
+The current protocol version is `6`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
 
 ### Important request families
 
 - health: `ping`
 - canonical reads: `get`, `children`, `workspace.snapshot`
 - bounded search: `blocks.query`
-- mutations: `create`, `update`, `move`, `delete`, `toggle`
+- mutations: `create`, `update`, `move`, `delete` (move to Trash), `trash.restore`, `trash.purge`, `toggle`
 - properties: `properties.patch`, `properties.catalog`
 - virtual ordering: `virtual.occurrences.reorder`
 - references: `references.resolve`
@@ -197,6 +199,24 @@ Query filters compare indexed keys and optional exact values. Property patches a
 Exact references use `((block-id))`. Read paths replace a resolvable ID with the target’s first non-property content line. Edit paths retain the raw ID. Dangling references remain unchanged.
 
 Symbolic `[[address]]` pages, aliases, `PIE-NNN` work IDs, and backlinks are accepted roadmap designs, not current protocol behavior.
+
+## Recoverable deletion and Trash
+
+Deletion changes canonical block state, not canonical location. `parent_id`, `position`, UUID, text, properties, descendants, and branch-local ranks remain intact. A direct deletion sets `deleted_at`; `effective_deleted_root_id` materializes the nearest direct deleted ancestor for every block. The service recomputes that field transactionally on delete/restore/purge and backfills it in the same transaction that introduces the column during migration. This deliberately pays bounded descendant/all-row writes on rare Trash mutations so every common read can exclude deleted content with one indexed scalar check instead of an ancestry walk or recursive CTE.
+
+Normal traversal, workspace snapshots, bounded/ranked queries, property catalogs, completions, goto candidates, and virtual branches centrally require `effective_deleted_root_id IS NULL`. Exact `get` remains identity-aware and can inspect a tombstone. Mutation APIs reject effectively deleted blocks except explicit Trash operations.
+
+The store ensures one ordinary canonical system view:
+
+```text
+Trash [type::virtual-branch] [system-view::trash] [query::deleted=true]
+```
+
+The special `deleted=true` query returns direct deletion roots only. It is read-only because it has no create configuration. Root rows include an effective descendant count; Detail previews deleted selection read-only. `r` clears only the selected root's direct marker, so independently deleted descendants stay deleted. `p` requires the exact work ID or eight-character block prefix before physical purge.
+
+References resolve to three states. Active targets render normally; effectively deleted targets retain their title with a Trash marker and deletion-root identity; purged/missing targets remain dangling. Following an exact deleted block link selects it for read-only Detail inspection rather than silently failing or restoring it.
+
+Permanent purge is manual and irreversible. It physically deletes the canonical subtree through existing foreign-key cascades. Before deletion, every subtree work ID is copied into `reserved_work_ids`; future work-ID allocation must consult that ledger so deleted or purged identifiers are never reused.
 
 ## Virtual branches
 

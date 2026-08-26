@@ -46,6 +46,8 @@ export interface Block {
   collapsed: boolean;
   createdAt: string;
   updatedAt: string;
+  deletedAt?: string;
+  effectiveDeletedRootId?: string;
   properties: BlockProperty[];
 }
 
@@ -67,6 +69,7 @@ export interface BlockSearchQuery {
   text?: string;
   subtreeRootId?: string;
   rankViewId?: string;
+  includeDeleted?: "roots" | "all";
   limit: number;
 }
 
@@ -77,6 +80,7 @@ export type BlockCollectionCompleteness =
 export interface VisibleBlock extends Block {
   depth: number;
   multilineExpanded: boolean;
+  deletedDescendantCount?: number;
   hasChildren: boolean;
   displayText: string;
 }
@@ -92,7 +96,19 @@ export interface VirtualOccurrenceRank {
   rank: number;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 5;
+export interface BlockReferenceResolution {
+  blockId: string;
+  status: "resolved" | "deleted" | "missing";
+  title?: string;
+  deletionRootId?: string;
+}
+
+export interface ResolvedBlockReferences {
+  text: string;
+  references: BlockReferenceResolution[];
+}
+
+export const OUTLINER_PROTOCOL_VERSION = 6;
 
 export interface OutlinerServiceStatus {
   status: "ready";
@@ -118,6 +134,8 @@ export type OutlinerRequest =
   | { id: string; action: "update"; blockId: string; text: string; expectedUpdatedAt?: string }
   | { id: string; action: "move"; blockId: string; parentId: string | null; position?: number }
   | { id: string; action: "delete"; blockId: string }
+  | { id: string; action: "trash.restore"; blockId: string }
+  | { id: string; action: "trash.purge"; blockId: string; confirmation: string }
   | { id: string; action: "toggle"; blockId: string }
   | { id: string; action: "view.toggleMultiline"; blockId: string }
   | {

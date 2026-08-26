@@ -1048,4 +1048,73 @@ describe("createTreeController", () => {
     expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe("view");
     expect(fake.calls.at(-1)).toEqual({ action: "selection.set", blockId: "view" });
   });
+
+  test("restores Trash roots and requires the exact identifier for permanent purge", async () => {
+    const definition = block("trash-view", {
+      text: "Trash [type::virtual-branch] [query::deleted=true]",
+      properties: [
+        { key: "type", value: "virtual-branch" },
+        { key: "query", value: "deleted=true" },
+      ],
+    });
+    const deleted = block("deleted-block", {
+      text: "PIE-999 deleted [work-id::PIE-999]",
+      properties: [{ key: "work-id", value: "PIE-999" }],
+      deletedAt: "deleted-at",
+      effectiveDeletedRootId: "deleted-block",
+    });
+    const makeTrashHarness = () => {
+      let present = true;
+      const fake = harness((input) => {
+        if (input.action === "workspace.snapshot") {
+          return snapshot([definition], definition);
+        }
+        if (input.action === "blocks.query") {
+          return {
+            blocks: present ? [deleted] : [],
+            completeness: { kind: "complete" },
+          };
+        }
+        if (input.action === "trash.restore" || input.action === "trash.purge") {
+          present = false;
+          return deleted;
+        }
+        return undefined;
+      });
+      return fake;
+    };
+
+    const restoreFake = makeTrashHarness();
+    const restoreController = createTreeController(restoreFake.effects);
+    await restoreController.initialize();
+    await restoreController.handleKeypress("", { name: "down" }, "pass");
+    restoreFake.calls.length = 0;
+    await restoreController.handleKeypress("r", { name: "r" }, "pass");
+    expect(restoreFake.calls).toContainEqual({
+      action: "trash.restore",
+      blockId: deleted.id,
+    });
+    expect(restoreController.view().status).toBe("Restored from Trash");
+
+    const purgeFake = makeTrashHarness();
+    const purgeController = createTreeController(purgeFake.effects);
+    await purgeController.initialize();
+    await purgeController.handleKeypress("", { name: "down" }, "pass");
+    await purgeController.handleKeypress("p", { name: "p" }, "pass");
+    expect(purgeController.view().mode).toBe("purge");
+    for (const character of "PIE-999") {
+      await purgeController.handleKeypress(character, { name: character }, "pass");
+    }
+    await purgeController.handleKeypress("", { name: "return" }, "pass");
+    expect(purgeFake.calls).toContainEqual({
+      action: "trash.purge",
+      blockId: deleted.id,
+      confirmation: "PIE-999",
+    });
+    expect(purgeFake.calls.at(-1)).toEqual({
+      action: "selection.set",
+      blockId: definition.id,
+    });
+    expect(purgeController.view().status).toBe("Permanently purged");
+  });
 });

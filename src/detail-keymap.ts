@@ -155,6 +155,10 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
       await dispatch({ type: "focus.outliner", announce: true });
       return;
     }
+    if (str === "r" && controller.state.context.selected?.deletedAt) {
+      await dispatch({ type: "trash.restore" });
+      return;
+    }
     if (controller.state.mode === "file" && controller.state.referencedFile) {
       await handleFileKey(str, key);
     } else {

@@ -70,6 +70,7 @@ export interface DetailEffects {
     text: string;
     author: "user";
   }): Promise<Block>;
+  restoreBlock(blockId: string): Promise<Block>;
   queryBlocks(query: BlockSearchQuery): Promise<VisibleBlockCollection>;
   readFile(block: Block): ReferencedFile;
   completeFiles(query: string): ReferencedPathCandidate[];
@@ -88,6 +89,7 @@ export type DetailBufferMoveDirection =
 
 export type DetailIntent =
   | { type: "edit.begin" }
+  | { type: "trash.restore" }
   | { type: "comment.begin" }
   | { type: "buffer.insert"; text: string }
   | { type: "buffer.newline" }
@@ -241,6 +243,11 @@ export function createDetailController(
     state.previewOffset = 0;
     state.completion = null;
     state.mode = detailDisplayMode(next.selected);
+    if (next.selected?.deletedAt) {
+      state.status = "In Trash — read-only · r restore";
+    } else if (next.selected?.effectiveDeletedRootId) {
+      state.status = "In Trash — read-only · restore its direct Trash root";
+    }
     if ((state.mode === "file" || state.mode === "annotation") && next.selected) loadFile(next.selected);
     else state.referencedFile = null;
   };
@@ -278,6 +285,10 @@ export function createDetailController(
 
   const beginEdit = (viewport: DetailViewport): void => {
     if (!state.context.selected) return;
+    if (state.context.selected.effectiveDeletedRootId) {
+      state.status = "Block is in Trash; restore before editing";
+      return;
+    }
     state.buffer = new TextBuffer(state.context.selected.text);
     state.buffer.row = state.buffer.lines.length - 1;
     state.buffer.moveEnd();
@@ -289,6 +300,10 @@ export function createDetailController(
   };
 
   const beginComment = (): void => {
+    if (state.context.selected?.effectiveDeletedRootId) {
+      state.status = "Block is in Trash; restore before adding annotations";
+      return;
+    }
     const range = selectedDetailFileRange(state);
     if (!range || !state.referencedFile) return;
     state.annotationRange = range;
@@ -448,6 +463,13 @@ export function createDetailController(
     switch (intent.type) {
       case "edit.begin":
         beginEdit(viewport);
+        break;
+      case "trash.restore":
+        if (state.context.selected?.deletedAt) {
+          await effects.restoreBlock(state.context.selected.id);
+          await loadSelection(true);
+          state.status = "Restored from Trash";
+        }
         break;
       case "comment.begin":
         beginComment();

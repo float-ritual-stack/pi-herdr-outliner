@@ -60,6 +60,9 @@ const effects: DetailEffects = {
   async updateBlock(input) {
     return client.request<Block>({ action: "update", ...input });
   },
+  async restoreBlock(blockId) {
+    return client.request<Block>({ action: "trash.restore", blockId });
+  },
   async createBlock(input) {
     return client.request<Block>({ action: "create", ...input });
   },

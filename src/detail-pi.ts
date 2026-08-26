@@ -18,11 +18,11 @@ import {
   type DetailViewport,
 } from "./detail-controller";
 import { createDetailKeyHandler } from "./detail-keymap";
-import { navigateOutlinerLink } from "./outliner-links";
 import { createPiDetailInputListener, decodePiDetailInput } from "./detail-pi-input";
 import { DetailPiPreviewLayout } from "./detail-pi-preview";
 import { DetailPiComponent } from "./detail-pi-renderer";
 import { completeReferencedPaths, readReferencedFile } from "./files";
+import { navigateOutlinerLink } from "./outliner-links";
 import { focusPluginPane, registerPaneState } from "./pane-control";
 import { resolvePaths } from "./paths";
 import {
@@ -86,6 +86,9 @@ const effects: DetailEffects = {
   },
   async updateBlock(input) {
     return client.request<Block>({ action: "update", ...input });
+  },
+  async restoreBlock(blockId) {
+    return client.request<Block>({ action: "trash.restore", blockId });
   },
   async createBlock(input) {
     return client.request<Block>({ action: "create", ...input });

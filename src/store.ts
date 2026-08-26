@@ -7,7 +7,10 @@ import {
   patchPropertyText,
   PROPERTY_PARSER_VERSION,
 } from "./properties";
-import { resolveBlockReferences as resolveBlockReferenceText } from "./references";
+import {
+  resolveBlockReferences as resolveBlockReferenceText,
+  resolveBlockReferencesWithStatus,
+} from "./references";
 import type {
   Block,
   BlockAuthor,
@@ -18,6 +21,7 @@ import type {
   PropertyCatalogItem,
   PropertyPatchOperation,
   SelectionContext,
+  ResolvedBlockReferences,
   VisibleBlock,
   VisibleBlockCollection,
   VirtualOccurrenceRank,
@@ -34,6 +38,8 @@ interface BlockRow {
   actor_id: string | null;
   session_id: string | null;
   task_id: string | null;
+  deleted_at: string | null;
+  effective_deleted_root_id: string | null;
   collapsed: number;
   created_at: string;
   updated_at: string;
@@ -66,6 +72,7 @@ interface LoadedGraph {
 interface LoadedGraphTraversalOptions extends BlockTraversalOptions {
   text?: string;
   stopAfterMatches?: number;
+  deletedMode?: "active" | "roots" | "all";
 }
 
 function normalizeCreatorProvenance(
@@ -104,6 +111,7 @@ export class OutlinerStore {
     this.database.exec("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;");
     this.migrate();
     this.seed();
+    this.ensureTrashView();
   }
 
   close(): void {
@@ -123,7 +131,7 @@ export class OutlinerStore {
     author: BlockAuthor = "user",
     provenance?: BlockProvenance,
   ): Block {
-    if (parentId !== null && !this.get(parentId)) throw new Error(`Parent block not found: ${parentId}`);
+    if (parentId !== null) this.requireActive(parentId);
     const { actorId, sessionId, taskId } = normalizeCreatorProvenance(author, provenance);
     const now = new Date().toISOString();
     const id = crypto.randomUUID();
@@ -156,7 +164,7 @@ export class OutlinerStore {
   }
 
   update(id: string, text: string, expectedUpdatedAt?: string): Block {
-    const existing = this.require(id);
+    const existing = this.requireActive(id);
     if (expectedUpdatedAt && existing.updatedAt !== expectedUpdatedAt) {
       throw new Error(`Block changed since editing began: ${id}`);
     }
@@ -175,7 +183,7 @@ export class OutlinerStore {
     operations: PropertyPatchOperation[],
   ): Block {
     if (operations.length === 0) throw new Error("Property patch requires at least one operation");
-    const existing = this.require(id);
+    const existing = this.requireActive(id);
     if (existing.updatedAt !== expectedUpdatedAt) {
       throw new Error(`Block changed since editing began: ${id}`);
     }
@@ -193,21 +201,21 @@ export class OutlinerStore {
     if (key) {
       return this.database
         .query(
-          "SELECT key, value, COUNT(*) AS count FROM block_properties WHERE key = ? AND SUBSTR(LOWER(value), 1, LENGTH(?)) = ? GROUP BY key, value ORDER BY count DESC, LOWER(value), value LIMIT ?",
+          "SELECT property.key, property.value, COUNT(*) AS count FROM block_properties property JOIN blocks block ON block.id = property.block_id WHERE block.effective_deleted_root_id IS NULL AND property.key = ? AND SUBSTR(LOWER(property.value), 1, LENGTH(?)) = ? GROUP BY property.key, property.value ORDER BY count DESC, LOWER(property.value), property.value LIMIT ?",
         )
         .all(key.toLowerCase(), normalizedPrefix, normalizedPrefix, limit) as PropertyCatalogItem[];
     }
     return this.database
       .query(
-        "SELECT key, value, COUNT(*) AS count FROM block_properties WHERE SUBSTR(key, 1, LENGTH(?)) = ? GROUP BY key, value ORDER BY count DESC, key, LOWER(value), value LIMIT ?",
+        "SELECT property.key, property.value, COUNT(*) AS count FROM block_properties property JOIN blocks block ON block.id = property.block_id WHERE block.effective_deleted_root_id IS NULL AND SUBSTR(property.key, 1, LENGTH(?)) = ? GROUP BY property.key, property.value ORDER BY count DESC, property.key, LOWER(property.value), property.value LIMIT ?",
       )
       .all(normalizedPrefix, normalizedPrefix, limit) as PropertyCatalogItem[];
   }
 
   move(id: string, parentId: string | null, requestedPosition?: number): Block {
-    const block = this.require(id);
+    const block = this.requireActive(id);
     if (parentId !== null) {
-      this.require(parentId);
+      this.requireActive(parentId);
       if (parentId === id || this.isDescendant(parentId, id)) throw new Error("Cannot move a block beneath itself");
     }
 
@@ -226,16 +234,63 @@ export class OutlinerStore {
     return this.require(id);
   }
 
-  delete(id: string): void {
-    this.require(id);
+  delete(id: string): Block {
+    const block = this.requireActive(id);
+    const deletedAt = new Date().toISOString();
     this.database.transaction(() => {
+      this.database.query("UPDATE blocks SET deleted_at = ?, updated_at = ? WHERE id = ?")
+        .run(deletedAt, deletedAt, id);
+      this.recomputeEffectiveDeletion();
+      const selected = this.selectionFromCurrentRead().selected;
+      if (selected?.effectiveDeletedRootId) {
+        const replacement = this.childrenFromCurrentRead(block.parentId)
+          .find((candidate) => !candidate.effectiveDeletedRootId && candidate.id !== id)
+          ?? (block.parentId ? this.getFromCurrentRead(block.parentId) : null);
+        this.database.query("UPDATE selection SET block_id = ? WHERE singleton = 1")
+          .run(replacement?.effectiveDeletedRootId ? null : replacement?.id ?? null);
+      }
+      this.bumpSequence();
+    })();
+    return this.require(id);
+  }
+
+  restore(id: string): Block {
+    const block = this.require(id);
+    if (!block.deletedAt) throw new Error(`Block is not a direct Trash root: ${id}`);
+    this.database.transaction(() => {
+      this.database.query("UPDATE blocks SET deleted_at = NULL, updated_at = ? WHERE id = ?")
+        .run(new Date().toISOString(), id);
+      this.recomputeEffectiveDeletion();
+      this.bumpSequence();
+    })();
+    return this.require(id);
+  }
+
+  purge(id: string, confirmation: string): void {
+    const block = this.require(id);
+    if (!block.deletedAt) throw new Error(`Block is not a direct Trash root: ${id}`);
+    const workId = block.properties.find((property) => property.key === "work-id")?.value;
+    const expected = workId ?? block.id.slice(0, 8);
+    if (confirmation !== expected) throw new Error(`Permanent purge requires confirmation: ${expected}`);
+    this.database.transaction(() => {
+      const subtree = this.subtreeIdsFromCurrentRead(id);
+      const placeholders = subtree.map(() => "?").join(", ");
+      const reserved = this.database.query(
+        `SELECT value FROM block_properties WHERE key = 'work-id' AND block_id IN (${placeholders})`,
+      ).all(...subtree) as Array<{ value: string }>;
+      const reserve = this.database.query(
+        "INSERT OR IGNORE INTO reserved_work_ids (work_id, reserved_at) VALUES (?, ?)",
+      );
+      const now = new Date().toISOString();
+      for (const row of reserved) reserve.run(row.value, now);
       this.database.query("DELETE FROM blocks WHERE id = ?").run(id);
+      this.recomputeEffectiveDeletion();
       this.bumpSequence();
     })();
   }
 
   toggle(id: string): Block {
-    this.require(id);
+    this.requireActive(id);
     this.database.transaction(() => {
       this.database
         .query("UPDATE blocks SET collapsed = CASE collapsed WHEN 0 THEN 1 ELSE 0 END, updated_at = ? WHERE id = ?")
@@ -246,7 +301,7 @@ export class OutlinerStore {
   }
 
   toggleMultilineExpanded(id: string): boolean {
-    this.require(id);
+    this.requireActive(id);
     const current = this.database
       .query("SELECT multiline_expanded FROM block_view_state WHERE block_id = ?")
       .get(id) as { multiline_expanded: number } | null;
@@ -311,9 +366,8 @@ export class OutlinerStore {
       return this.virtualOccurrenceRanksFromCurrentRead().filter((entry) => entry.viewId === viewId);
     })();
   }
-
-  resolveBlockReferences(text: string): string {
-    return resolveBlockReferenceText(text, (blockId) => this.get(blockId));
+  resolveBlockReferences(text: string): ResolvedBlockReferences {
+    return resolveBlockReferencesWithStatus(text, (blockId) => this.get(blockId));
   }
 
   get(id: string): Block | null {
@@ -323,6 +377,12 @@ export class OutlinerStore {
   require(id: string): Block {
     const block = this.get(id);
     if (!block) throw new Error(`Block not found: ${id}`);
+    return block;
+  }
+
+  requireActive(id: string): Block {
+    const block = this.require(id);
+    if (block.effectiveDeletedRootId) throw new Error(`Block is in Trash: ${id}`);
     return block;
   }
 
@@ -336,7 +396,6 @@ export class OutlinerStore {
     )();
   }
 
-
   queryBlocks(query: BlockSearchQuery): VisibleBlockCollection {
     const limit = query?.limit;
     if (typeof limit !== "number" || !Number.isInteger(limit) || limit <= 0) {
@@ -344,15 +403,24 @@ export class OutlinerStore {
     }
 
     return this.database.transaction((): VisibleBlockCollection => {
-      if (query.rankViewId) {
-        return this.queryRankedBlocksFromCurrentRead(query, query.rankViewId);
+      const deletedFilter = query.filters?.find((filter) =>
+        filter.key === "deleted" && filter.value?.toLowerCase() === "true"
+      );
+      const filters = query.filters?.filter((filter) => filter !== deletedFilter);
+      const deletedMode = query.includeDeleted ?? (deletedFilter ? "roots" : "active");
+      if (query.rankViewId && deletedMode === "active") {
+        return this.queryRankedBlocksFromCurrentRead(
+          { ...query, filters },
+          query.rankViewId,
+        );
       }
       const blocks = this.traverseLoadedGraph(this.loadGraph(), {
-        filters: query.filters,
+        filters,
         subtreeRootId: query.subtreeRootId,
         collapsedDescendants: "traverse",
         text: query.text,
         stopAfterMatches: limit + 1,
+        deletedMode,
       });
       if (blocks.length <= limit) {
         return { blocks, completeness: { kind: "complete" } };
@@ -404,9 +472,16 @@ export class OutlinerStore {
     return row ? this.hydrate(row) : null;
   }
 
-  private childrenFromCurrentRead(parentId: string | null): Block[] {
+  private childrenFromCurrentRead(
+    parentId: string | null,
+    includeDeleted = false,
+  ): Block[] {
     const rows = this.database
-      .query("SELECT * FROM blocks WHERE parent_id IS ? ORDER BY position, created_at")
+      .query(
+        `SELECT * FROM blocks WHERE parent_id IS ? ${
+          includeDeleted ? "" : "AND effective_deleted_root_id IS NULL"
+        } ORDER BY position, created_at`,
+      )
       .all(parentId) as BlockRow[];
     return rows.map((row) => this.hydrate(row));
   }
@@ -435,6 +510,7 @@ export class OutlinerStore {
         parameters.push(filter.key, filter.value);
       }
     }
+    predicates.push("block.effective_deleted_root_id IS NULL");
     if (query.text) {
       predicates.push("INSTR(LOWER(block.text), LOWER(?)) > 0");
       parameters.push(query.text);
@@ -458,7 +534,10 @@ export class OutlinerStore {
           block.*,
           tree.depth,
           COALESCE(view_state.multiline_expanded, 0) AS multiline_expanded,
-          EXISTS (SELECT 1 FROM blocks child WHERE child.parent_id = block.id) AS has_children
+          EXISTS (
+            SELECT 1 FROM blocks child
+            WHERE child.parent_id = block.id AND child.effective_deleted_root_id IS NULL
+          ) AS has_children
         FROM tree
         JOIN blocks block ON block.id = tree.id
         LEFT JOIN block_view_state view_state ON view_state.block_id = block.id
@@ -538,7 +617,14 @@ export class OutlinerStore {
       ancestors.unshift(parent);
       parentId = parent.parentId;
     }
-    return { selected, ancestors, children: this.childrenFromCurrentRead(selected.id) };
+    return {
+      selected,
+      ancestors,
+      children: this.childrenFromCurrentRead(
+        selected.id,
+        Boolean(selected.effectiveDeletedRootId),
+      ),
+    };
   }
 
   private loadGraph(): LoadedGraph {
@@ -583,17 +669,44 @@ export class OutlinerStore {
   ): VisibleBlock[] {
     const blocks: VisibleBlock[] = [];
     const filterText = options.text?.toLowerCase();
+    const deletedMode = options.deletedMode ?? "active";
     const visit = (block: Block, depth: number): boolean => {
+      const effectivelyDeleted = Boolean(block.effectiveDeletedRootId);
+      if (deletedMode === "active" && effectivelyDeleted) return false;
+      let deletionMatches: boolean;
+      switch (deletedMode) {
+        case "active":
+          deletionMatches = !effectivelyDeleted;
+          break;
+        case "roots":
+          deletionMatches = Boolean(block.deletedAt);
+          break;
+        case "all":
+          deletionMatches = effectivelyDeleted;
+          break;
+      }
       const matches =
+        deletionMatches &&
         (!options.filters?.length || matchesFilters(block.properties, options.filters)) &&
         (!filterText || block.text.toLowerCase().includes(filterText));
       if (matches) {
-        const children = graph.byParent.get(block.id) ?? [];
+        const children = (graph.byParent.get(block.id) ?? []).filter((child) =>
+          deletedMode === "active" ? !child.effectiveDeletedRootId : true
+        );
         blocks.push({
           ...block,
           depth,
           multilineExpanded: graph.expandedIds.has(block.id),
           hasChildren: children.length > 0,
+          ...(block.deletedAt
+            ? {
+                deletedDescendantCount: [...graph.byId.values()].filter(
+                  (candidate) =>
+                    candidate.id !== block.id &&
+                    candidate.effectiveDeletedRootId === block.id,
+                ).length,
+              }
+            : {}),
           displayText: resolveBlockReferenceText(
             block.text,
             (blockId) => graph.byId.get(blockId) ?? null,
@@ -658,7 +771,9 @@ export class OutlinerStore {
         task_id TEXT,
         collapsed INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
+        updated_at TEXT NOT NULL,
+        deleted_at TEXT,
+        effective_deleted_root_id TEXT
       );
       CREATE INDEX IF NOT EXISTS blocks_parent_position ON blocks(parent_id, position);
       CREATE TABLE IF NOT EXISTS block_properties (
@@ -689,23 +804,41 @@ export class OutlinerStore {
       );
       CREATE INDEX IF NOT EXISTS virtual_occurrence_ranks_order
         ON virtual_occurrence_ranks(view_id, rank, block_id);
+      CREATE TABLE IF NOT EXISTS reserved_work_ids (
+        work_id TEXT PRIMARY KEY,
+        reserved_at TEXT NOT NULL
+      );
     `);
-    this.migrateBlockProvenanceColumns();
+    this.migrateBlockStateColumns();
     this.migratePropertyIndex();
+    this.migrateWorkIdReservations();
   }
 
-  private migrateBlockProvenanceColumns(): void {
-    const existingColumns = new Set(
-      (
-        this.database.query("PRAGMA table_info(blocks)").all() as Array<{ name: string }>
-      ).map((column) => column.name),
-    );
-    const provenanceColumns = ["actor_id", "session_id", "task_id"] as const;
-    for (const name of provenanceColumns) {
-      if (!existingColumns.has(name)) {
-        this.database.exec(`ALTER TABLE blocks ADD COLUMN ${name} TEXT`);
+  private migrateBlockStateColumns(): void {
+    this.database.transaction(() => {
+      const existingColumns = new Set(
+        (
+          this.database.query("PRAGMA table_info(blocks)").all() as Array<{ name: string }>
+        ).map((column) => column.name),
+      );
+      const needsEffectiveDeletionBackfill = !existingColumns.has("effective_deleted_root_id");
+      const textColumns = [
+        "actor_id",
+        "session_id",
+        "task_id",
+        "deleted_at",
+        "effective_deleted_root_id",
+      ] as const;
+      for (const name of textColumns) {
+        if (!existingColumns.has(name)) {
+          this.database.exec(`ALTER TABLE blocks ADD COLUMN ${name} TEXT`);
+        }
       }
-    }
+      this.database.exec(
+        "CREATE INDEX IF NOT EXISTS blocks_effective_deleted ON blocks(effective_deleted_root_id, deleted_at)",
+      );
+      if (needsEffectiveDeletionBackfill) this.recomputeEffectiveDeletion();
+    })();
   }
 
   private migratePropertyIndex(): void {
@@ -741,6 +874,26 @@ export class OutlinerStore {
     })();
   }
 
+  private migrateWorkIdReservations(): void {
+    const now = new Date().toISOString();
+    this.database.query(
+      "INSERT OR IGNORE INTO reserved_work_ids (work_id, reserved_at) SELECT value, ? FROM block_properties WHERE key = 'work-id'",
+    ).run(now);
+  }
+
+  private ensureTrashView(): void {
+    const existing = this.queryBlocks({
+      filters: [{ key: "system-view", value: "trash" }],
+      limit: 1,
+    }).blocks[0];
+    if (existing) return;
+    this.create(
+      "Trash [type::virtual-branch] [system-view::trash] [query::deleted=true] [limit::200]",
+      null,
+      "system",
+    );
+  }
+
   private seed(): void {
     const row = this.database.query("SELECT COUNT(*) AS count FROM blocks").get() as { count: number };
     if (row.count > 0) return;
@@ -772,6 +925,10 @@ export class OutlinerStore {
       collapsed: row.collapsed === 1,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
+      ...(row.deleted_at ? { deletedAt: row.deleted_at } : {}),
+      ...(row.effective_deleted_root_id
+        ? { effectiveDeletedRootId: row.effective_deleted_root_id }
+        : {}),
       properties: hydratedProperties,
     };
   }
@@ -782,6 +939,45 @@ export class OutlinerStore {
       "INSERT INTO block_properties (block_id, key, value, ordinal) VALUES (?, ?, ?, ?)",
     );
     properties.forEach((property, ordinal) => insert.run(blockId, property.key, property.value, ordinal));
+    const reserve = this.database.query(
+      "INSERT OR IGNORE INTO reserved_work_ids (work_id, reserved_at) VALUES (?, ?)",
+    );
+    for (const property of properties) {
+      if (property.key === "work-id") reserve.run(property.value, new Date().toISOString());
+    }
+  }
+
+  private subtreeIdsFromCurrentRead(rootId: string): string[] {
+    const rows = this.database.query(`
+      WITH RECURSIVE subtree(id) AS (
+        SELECT id FROM blocks WHERE id = ?
+        UNION ALL
+        SELECT block.id FROM blocks block JOIN subtree ON block.parent_id = subtree.id
+      )
+      SELECT id FROM subtree
+    `).all(rootId) as Array<{ id: string }>;
+    return rows.map((row) => row.id);
+  }
+
+  private recomputeEffectiveDeletion(): void {
+    const rows = this.database
+      .query("SELECT id, parent_id, deleted_at FROM blocks ORDER BY position, created_at")
+      .all() as Array<{ id: string; parent_id: string | null; deleted_at: string | null }>;
+    const children = new Map<string | null, typeof rows>();
+    for (const row of rows) {
+      const siblings = children.get(row.parent_id);
+      if (siblings) siblings.push(row);
+      else children.set(row.parent_id, [row]);
+    }
+    const update = this.database.query(
+      "UPDATE blocks SET effective_deleted_root_id = ? WHERE id = ?",
+    );
+    const visit = (row: (typeof rows)[number], inheritedRoot: string | null): void => {
+      const effectiveRoot = row.deleted_at ? row.id : inheritedRoot;
+      update.run(effectiveRoot, row.id);
+      for (const child of children.get(row.id) ?? []) visit(child, effectiveRoot);
+    };
+    for (const root of children.get(null) ?? []) visit(root, null);
   }
 
   private normalizePositions(parentId: string | null): void {

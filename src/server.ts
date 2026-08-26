@@ -114,8 +114,14 @@ export class OutlinerServer {
           result = this.store.move(request.blockId, request.parentId, request.position);
           break;
         case "delete":
-          this.store.delete(request.blockId);
-          result = { deleted: request.blockId };
+          result = this.store.delete(request.blockId);
+          break;
+        case "trash.restore":
+          result = this.store.restore(request.blockId);
+          break;
+        case "trash.purge":
+          this.store.purge(request.blockId, request.confirmation);
+          result = { purged: request.blockId };
           break;
         case "toggle":
           result = this.store.toggle(request.blockId);
@@ -130,7 +136,7 @@ export class OutlinerServer {
           );
           break;
         case "references.resolve":
-          result = { text: this.store.resolveBlockReferences(request.text) };
+          result = this.store.resolveBlockReferences(request.text);
           break;
         case "properties.patch":
           result = this.store.patchProperties(
@@ -177,6 +183,8 @@ export class OutlinerServer {
       case "update":
       case "move":
       case "delete":
+      case "trash.restore":
+      case "trash.purge":
       case "properties.patch":
         domain = "content";
         blockId = request.blockId;
