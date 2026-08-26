@@ -32,6 +32,8 @@ describe("Tree mouse parsing", () => {
       "\x1b[<96;4;3M",
       "\x1b[<66;4;3M",
       "\x1b[<0;4;3M",
+      "\x1b[<64;0;3M",
+      "\x1b[<65;4;0M",
       "not-mouse",
     ]) {
       expect(parseTreeWheel(sequence)).toBeNull();
