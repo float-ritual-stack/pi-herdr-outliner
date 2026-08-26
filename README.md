@@ -120,7 +120,7 @@ The footer in each pane is authoritative and context-sensitive. These are the pr
 | `g` | Fuzzy goto by UUID, short prefix, title, or content |
 | `/` | Filter visible blocks |
 | `f` | Open a referenced file |
-| `d` | Move the selected canonical subtree to Trash |
+| `d`, then `y` | Confirm moving the selected canonical subtree to Trash |
 | `r` | Restore a selected direct Trash root |
 | `p` | Type the work ID/short UUID to permanently purge a Trash root |
 | `Ctrl+Q` | Close the pane |

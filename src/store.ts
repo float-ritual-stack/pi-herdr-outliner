@@ -257,6 +257,14 @@ export class OutlinerStore {
   restore(id: string): Block {
     const block = this.require(id);
     if (!block.deletedAt) throw new Error(`Block is not a direct Trash root: ${id}`);
+    let ancestorId = block.parentId;
+    while (ancestorId) {
+      const ancestor = this.require(ancestorId);
+      if (ancestor.deletedAt) {
+        throw new Error(`Restore enclosing Trash root first: ${ancestor.id}`);
+      }
+      ancestorId = ancestor.parentId;
+    }
     this.database.transaction(() => {
       this.database.query("UPDATE blocks SET deleted_at = NULL, updated_at = ? WHERE id = ?")
         .run(new Date().toISOString(), id);

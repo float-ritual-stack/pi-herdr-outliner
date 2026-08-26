@@ -166,6 +166,14 @@ Second paragraph`;
         .filter((row) => row.viewId === categoryView.id),
     ).toEqual([]);
 
+    expect(() => store.restore(independentlyDeleted.id)).toThrow(
+      `Restore enclosing Trash root first: ${parent.id}`,
+    );
+    expect(store.queryBlocks({
+      filters: [{ key: "deleted", value: "true" }],
+      includeDeleted: "roots",
+      limit: 10,
+    }).blocks.map((block) => block.id)).toContain(independentlyDeleted.id);
     store.restore(parent.id);
     expect(store.readWorkspaceSnapshot().physical.blocks.some((block) => block.id === parent.id))
       .toBe(true);
