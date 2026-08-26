@@ -124,6 +124,8 @@ The footer in each pane is authoritative and context-sensitive. These are the pr
 
 Ctrl-click any linked `PIE-NNN`, canonical UUID, or resolved block-reference label to focus and reveal its canonical block. Herdr uses Control as the modified-click key on every platform, including macOS. Symbolic `[[page]]` links remain reserved for PIE-132.
 
+On macOS, terminals may consume Command-click locally and translate Control-click into a secondary click before Herdr receives it. The optional `macos/pi-outliner-link` app registers the private scheme locally and forwards validated work-ID/block targets to the configured workspace over SSH. Warp uses Command-click; Ghostty with mouse capture uses Shift-Command-click. Install from a local checkout with `macos/pi-outliner-link/install.sh`. Configuration defaults to `~/Library/Application Support/PiOutlinerLink/config.json`; pass `--config PATH` to use another location. Reinstalling preserves an existing configuration unless `--force-config` is supplied.
+
 Projected virtual occurrences deliberately constrain hierarchy and collapse. Branch-local sibling reorder changes only that projection; editing and confirmed deletion still target the canonical block.
 
 ### Detail preview
