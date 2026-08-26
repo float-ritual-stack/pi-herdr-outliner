@@ -10,7 +10,11 @@ import { focusPluginPane, registerPaneState } from "./pane-control";
 import { resolvePaths } from "./paths";
 import { TerminalInputDecoder, type TerminalKey } from "./terminal";
 import { createTreeController, type TreeController } from "./tree-controller";
-import { isTreeMouseSequence, treeLinkAtClick } from "./tree-mouse";
+import {
+  isTreeMouseSequence,
+  parseTreeWheel,
+  treeLinkAtClick,
+} from "./tree-mouse";
 import { renderTreeFrame } from "./tree-renderer";
 import { OUTLINER_PROTOCOL_VERSION, type OutlinerServiceStatus } from "./types";
 
@@ -104,11 +108,23 @@ function handleRawInput(data: string | Buffer): void {
   mouseInput?.process(data);
 }
 
-mouseInput?.on("data", (sequence) => {
+function handleMouseSequence(sequence: string): void {
+  const wheelDirection = parseTreeWheel(sequence);
+  if (wheelDirection) {
+    enqueueWork(() =>
+      controller.handleKeypress("", { name: wheelDirection, sequence }, "pass")
+    );
+    return;
+  }
+
   const link = treeLinkAtClick(renderedFrameLines, sequence);
   if (!link) return;
-  enqueueWork(async () => { await navigateOutlinerLink(client, link); });
-});
+  enqueueWork(async () => {
+    await navigateOutlinerLink(client, link);
+  });
+}
+
+mouseInput?.on("data", handleMouseSequence);
 
 function startWatcher(): void {
   watcher = client.watch({
