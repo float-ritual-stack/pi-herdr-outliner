@@ -18,6 +18,7 @@ import {
   type DetailViewport,
 } from "./detail-controller";
 import { createDetailKeyHandler } from "./detail-keymap";
+import { navigateOutlinerLink } from "./outliner-links";
 import { createPiDetailInputListener, decodePiDetailInput } from "./detail-pi-input";
 import { DetailPiPreviewLayout } from "./detail-pi-preview";
 import { DetailPiComponent } from "./detail-pi-renderer";
@@ -51,7 +52,12 @@ const paths = resolvePaths();
 const client = new OutlinerClient(paths.socket);
 const paneStatePath = join(paths.stateDir, "detail-pane.json");
 const terminal = new ProcessTerminal();
-const tui = new TuiAltScreen(terminal, false, undefined, { mouse: true });
+const tui = new TuiAltScreen(terminal, false, undefined, {
+  mouse: true,
+  openUrl(url) {
+    if (!stopping) enqueueWork(async () => { await navigateOutlinerLink(client, url); });
+  },
+});
 let stopping = false;
 let watcher: OutlinerWatcher | null = null;
 let workQueue = Promise.resolve();

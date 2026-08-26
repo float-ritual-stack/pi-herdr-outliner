@@ -1,4 +1,9 @@
 import { hyperlink } from "@earendil-works/pi-tui";
+import {
+  focusBlockByQuery,
+  formatBlockFocusMatch,
+  type BlockFocusRequester,
+} from "./block-focus";
 import { blockDisplayTitle, blockReferenceIds } from "./references";
 import type { Block } from "./types";
 
@@ -14,6 +19,12 @@ export type OutlinerLinkKind = "block" | "goto" | "page";
 export interface OutlinerLinkTarget {
   kind: OutlinerLinkKind;
   value: string;
+}
+
+export interface OutlinerLinkNavigation {
+  kind: Exclude<OutlinerLinkKind, "page">;
+  id: string;
+  title: string;
 }
 
 interface LinkSpan {
@@ -73,6 +84,31 @@ export function parseOutlinerLinkUri(uri: string): OutlinerLinkTarget {
     throw new Error(`Invalid outliner ${kind} target`);
   }
   return { kind, value };
+}
+
+export async function navigateOutlinerLink(
+  requester: BlockFocusRequester,
+  uri: string,
+): Promise<OutlinerLinkNavigation> {
+  const target = parseOutlinerLinkUri(uri);
+  if (target.kind === "page") {
+    throw new Error("Symbolic page links require PIE-132");
+  }
+  const focused = await focusBlockByQuery(requester, target.value);
+  if (focused.resolution.kind === "none") {
+    throw new Error(`No outliner block matches clicked link: ${target.value}`);
+  }
+  if (focused.resolution.kind === "ambiguous") {
+    const candidates = focused.resolution.matches
+      .map((match) => formatBlockFocusMatch(match, match.block.id))
+      .join("\n");
+    throw new Error(`Clicked outliner link is ambiguous:\n${candidates}`);
+  }
+  return {
+    kind: target.kind,
+    id: focused.resolution.match.block.id,
+    title: focused.resolution.match.title,
+  };
 }
 
 function protectedMarkdownRanges(text: string): TextRange[] {

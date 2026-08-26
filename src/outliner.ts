@@ -2,12 +2,15 @@ import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { emitKeypressEvents } from "node:readline";
 import { setTimeout as sleep } from "node:timers/promises";
+import { StdinBuffer } from "@earendil-works/pi-tui";
 import { OutlinerClient, type OutlinerWatcher, type RequestInput } from "./client";
 import { completeReferencedPaths, readReferencedFile } from "./files";
+import { navigateOutlinerLink } from "./outliner-links";
 import { focusPluginPane, registerPaneState } from "./pane-control";
 import { resolvePaths } from "./paths";
 import { TerminalInputDecoder, type TerminalKey } from "./terminal";
 import { createTreeController, type TreeController } from "./tree-controller";
+import { isTreeMouseSequence, treeLinkAtClick } from "./tree-mouse";
 import { renderTreeFrame } from "./tree-renderer";
 import { OUTLINER_PROTOCOL_VERSION, type OutlinerServiceStatus } from "./types";
 
@@ -15,10 +18,15 @@ const paths = resolvePaths();
 const client = new OutlinerClient(paths.socket);
 const paneStatePath = join(paths.stateDir, "outliner-pane.json");
 const inputDecoder = new TerminalInputDecoder();
+const mouseEnabled = process.env.HERDR_ENV === "1";
+const mouseInput = mouseEnabled ? new StdinBuffer() : null;
+const enableMouse = "\x1b[?1000h\x1b[?1006h";
+const disableMouse = "\x1b[?1006l\x1b[?1000l";
 let watcher: OutlinerWatcher | null = null;
 let stopping = false;
 let workQueue = Promise.resolve();
 let scrollStartEntryIndex = 0;
+let renderedFrameLines: string[] = [];
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -31,6 +39,7 @@ function draw(): void {
     process.stdout.rows ?? 30,
     scrollStartEntryIndex,
   );
+  renderedFrameLines = result.frame.split("\n");
   scrollStartEntryIndex = result.scrollStartEntryIndex;
   process.stdout.write(result.frame);
 }
@@ -40,7 +49,9 @@ function stop(): void {
   stopping = true;
   watcher?.stop();
   if (process.stdin.isTTY) process.stdin.setRawMode(false);
-  process.stdout.write("\x1b[?25h\x1b[?1049l");
+  mouseInput?.destroy();
+  process.stdin.off("data", handleRawInput);
+  process.stdout.write(`${mouseEnabled ? disableMouse : ""}\x1b[?25h\x1b[?1049l`);
   rmSync(paneStatePath, { force: true });
   process.exit(0);
 }
@@ -89,6 +100,16 @@ function enqueueWork(task: () => void | Promise<void>): void {
   workQueue = workQueue.then(task).catch((error) => controller.handleError(error));
 }
 
+function handleRawInput(data: string | Buffer): void {
+  mouseInput?.process(data);
+}
+
+mouseInput?.on("data", (sequence) => {
+  const link = treeLinkAtClick(renderedFrameLines, sequence);
+  if (!link) return;
+  enqueueWork(async () => { await navigateOutlinerLink(client, link); });
+});
+
 function startWatcher(): void {
   watcher = client.watch({
     onConnect: () => enqueueWork(() => controller.handleConnect()),
@@ -114,13 +135,15 @@ try {
 
 emitKeypressEvents(process.stdin);
 if (process.stdin.isTTY) process.stdin.setRawMode(true);
-process.stdout.write("\x1b[?1049h\x1b[?25l");
+process.stdout.write(`\x1b[?1049h\x1b[?25l${mouseEnabled ? enableMouse : ""}`);
+if (mouseInput) process.stdin.on("data", handleRawInput);
 
 process.on("SIGINT", stop);
 process.on("SIGTERM", stop);
 process.on("SIGHUP", stop);
 
 process.stdin.on("keypress", (str: string, key: TerminalKey) => {
+  if (isTreeMouseSequence(key.sequence ?? str)) return;
   const inputAction = inputDecoder.consume(str, key);
   enqueueWork(() => controller.handleKeypress(str, key, inputAction));
 });

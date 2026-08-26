@@ -141,11 +141,11 @@ Herdr recognizes plain terminal text as a URL only for `http://` and `https://`.
 - `pi-outliner://goto/<encoded-query>` — shared goto resolution, currently used by `PIE-NNN`;
 - `pi-outliner://page/<encoded-address>` — reserved for PIE-132 symbolic-page semantics.
 
-The `outliner-navigation` manifest handler routes matching Ctrl-clicks to `src/herdr-link-open.ts`. The action validates and decodes the private URI, resolves the clicked pane's workspace, and delegates to `focusBlockByQuery`, which updates canonical selection and sends Tree focus/reveal. It never opens the private URI in a browser.
+Inside the live panes, navigation stays in-process. Tree enables SGR mouse reporting, keeps the last rendered frame, resolves an unmodified primary click against that frame's OSC 8 cell metadata, and delegates to `navigateOutlinerLink`. Detail supplies the same helper as Pi TUI's `openUrl` callback. Both paths use `focusBlockByQuery`, which updates canonical selection and sends Tree focus/reveal.
 
-Authored text is sanitized before link generation. Tree adds OSC 8 only after plain-text wrapping/truncation; Detail generates safe Markdown links after sanitization. Under `HERDR_ENV=1`, Detail enables Pi TUI hyperlink emission because nested panes advertise generic `TERM=xterm-256color` even though Herdr captures OSC 8 metadata.
+Authored text is sanitized before link generation. Tree adds OSC 8 only after plain-text wrapping/truncation; Detail generates safe Markdown links after sanitization. Under `HERDR_ENV=1`, Detail enables Pi TUI hyperlink emission because nested panes advertise generic `TERM=xterm-256color` even though Herdr captures OSC 8 metadata. Tree ignores modified, release, motion, and wheel reports for link activation; Shift remains available for terminal-native selection.
 
-Ctrl-click is the modifier on every platform. Symbolic `[[address]]` rendering remains non-navigable until PIE-132 owns address resolution and create-on-follow behavior.
+The `outliner-navigation` manifest handler and `src/herdr-link-open.ts` remain the external/interoperability path for rendered output outside the active TUI. They validate/decode the private URI, resolve the clicked pane workspace, and enter the same shared navigation helper. Symbolic `[[address]]` rendering remains non-navigable until PIE-132 owns address resolution and create-on-follow behavior.
 
 
 ### macOS native URL bridge

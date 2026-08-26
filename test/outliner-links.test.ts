@@ -1,12 +1,14 @@
 import { getOsc8LinkAtColumn, stripTerminalSequences } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "bun:test";
+import type { RequestInput } from "../src/client";
 import {
   createOutlinerTextLinker,
   linkOutlinerMarkdown,
+  navigateOutlinerLink,
   outlinerLinkUri,
   parseOutlinerLinkUri,
 } from "../src/outliner-links";
-import type { Block } from "../src/types";
+import type { Block, WorkspaceSnapshot } from "../src/types";
 
 function block(id: string, text: string): Block {
   return {
@@ -51,6 +53,59 @@ describe("outliner link URIs", () => {
     expect(() => outlinerLinkUri("goto", "unsafe\nquery")).toThrow(
       "terminal control characters",
     );
+  });
+
+  test("delegates direct clicks to shared selection and Tree focus/reveal", async () => {
+    const target = block(
+      "550e8400-e29b-41d4-a716-446655440000",
+      "Clickable target [type::decision]",
+    );
+    const snapshot: WorkspaceSnapshot = {
+      visible: { blocks: [], completeness: { kind: "complete" } },
+      physical: {
+        blocks: [{
+          ...target,
+          depth: 0,
+          multilineExpanded: false,
+          hasChildren: false,
+          displayText: target.text,
+        }],
+        completeness: { kind: "complete" },
+      },
+      selection: { selected: null, ancestors: [], children: [] },
+      virtualOccurrenceRanks: [],
+      sequence: 1,
+    };
+    const calls: RequestInput[] = [];
+    const requester = {
+      async request<T>(input: RequestInput): Promise<T> {
+        calls.push(input);
+        if (input.action === "workspace.snapshot") return snapshot as T;
+        return {} as T;
+      },
+    };
+
+    await expect(
+      navigateOutlinerLink(
+        requester,
+        outlinerLinkUri("block", target.id),
+      ),
+    ).resolves.toEqual({
+      kind: "block",
+      id: target.id,
+      title: "Clickable target",
+    });
+    expect(calls).toEqual([
+      { action: "workspace.snapshot" },
+      { action: "selection.set", blockId: target.id },
+      {
+        action: "ui.command.send",
+        command: { target: "tree", command: "focus", blockId: target.id },
+      },
+    ]);
+    await expect(
+      navigateOutlinerLink(requester, outlinerLinkUri("page", "future")),
+    ).rejects.toThrow("require PIE-132");
   });
 });
 

@@ -31,7 +31,7 @@ function renderPreviewDocument(
   return linkOutlinerMarkdown(sanitizedSource, sanitizeMarkdownDocument(rawText));
 }
 
-const PREVIEW_HELP = "↑↓ line  ^U/D half  Fn+↑↓ page  Ctrl-click links  g/G ends  Enter edit  q tree";
+const PREVIEW_HELP = "↑↓ line  ^U/D half  Fn+↑↓ page  click links  g/G ends  Enter edit  q tree";
 
 class DetailPreviewHeader implements Component {
   constructor(private readonly state: Readonly<DetailState>) {}
