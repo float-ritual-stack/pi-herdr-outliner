@@ -37,12 +37,22 @@ test("serves mutations and property queries over the local socket", async () => 
   const client = new OutlinerClient(socket);
   const service = await client.request<OutlinerServiceStatus>({ action: "ping" });
   expect(service).toEqual({ status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION });
-  expect(service.protocolVersion).toBe(4);
+  expect(service.protocolVersion).toBe(5);
+  const provenance = {
+    actorId: "omp",
+    sessionId: "session-1",
+    taskId: "tool-call-1",
+  };
   const block = await client.request<Block>({
     action: "create",
     text: "Waiting for user [type::question] [status::open]",
     author: "agent",
+    provenance,
   });
+  expect(block).toEqual(expect.objectContaining({
+    author: "agent",
+    ...provenance,
+  }));
   await client.request<Block>({
     action: "create",
     text: "Another question [type::question] [status::open]",

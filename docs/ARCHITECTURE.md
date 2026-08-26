@@ -91,6 +91,7 @@ The SQLite schema is created in [`OutlinerStore.migrate()`](../src/store.ts):
 | `position` | Sibling order beneath the parent |
 | `text` | Canonical raw block text |
 | `author` | `user`, `agent`, or `system` |
+| `actor_id`, `session_id`, `task_id` | Optional immutable creator provenance for agent-authored blocks |
 | `collapsed` | Physical-tree collapse state |
 | `created_at`, `updated_at` | Version and audit timestamps |
 
@@ -111,7 +112,7 @@ Literal property-looking text inside inline code, fenced code, or escaped syntax
 
 ## Protocol
 
-The current protocol version is `4`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
+The current protocol version is `5`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
 
 ### Important request families
 
@@ -125,6 +126,12 @@ The current protocol version is `4`, defined in [`src/types.ts`](../src/types.ts
 - selection: `selection.get`, `selection.set`
 - reactive clients: `events.subscribe`
 - cross-pane behavior: `ui.command.send`
+
+### Agent provenance
+
+`author` remains the coarse `user | agent | system` role used by renderers and existing clients. Agent creation requests may additionally carry `{ actorId, sessionId?, taskId? }`; the service accepts that provenance only with `author: "agent"`, stores it on the new block, and never rewrites it during later content updates.
+
+The Pi/OMP adapter forces `author: "agent"`. It identifies the host as `pi` or `omp`, reads the durable session ID from Pi's `ExtensionContext.sessionManager`, and records the tool-call ID as the originating task ID. Legacy and user-authored blocks omit these optional fields.
 
 Every response carries the service sequence. Every mutation increments it and emits an event.
 

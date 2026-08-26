@@ -11,6 +11,7 @@ import { resolveBlockReferences as resolveBlockReferenceText } from "./reference
 import type {
   Block,
   BlockAuthor,
+  BlockProvenance,
   BlockProperty,
   BlockSearchQuery,
   BlockTraversalOptions,
@@ -30,6 +31,9 @@ interface BlockRow {
   position: number;
   text: string;
   author: BlockAuthor;
+  actor_id: string | null;
+  session_id: string | null;
+  task_id: string | null;
   collapsed: number;
   created_at: string;
   updated_at: string;
@@ -64,6 +68,33 @@ interface LoadedGraphTraversalOptions extends BlockTraversalOptions {
   stopAfterMatches?: number;
 }
 
+function normalizeCreatorProvenance(
+  author: BlockAuthor,
+  provenance: BlockProvenance | undefined,
+): { actorId: string | null; sessionId: string | null; taskId: string | null } {
+  if (provenance === undefined) {
+    return { actorId: null, sessionId: null, taskId: null };
+  }
+  if (author !== "agent") {
+    throw new Error("Only agent-authored blocks may include agent provenance");
+  }
+
+  const normalizeOptionalId = (value: string | undefined, label: string): string | null => {
+    if (value === undefined) return null;
+    const normalized = value.trim();
+    if (!normalized) throw new Error(`${label} cannot be empty`);
+    return normalized;
+  };
+  const actorId = normalizeOptionalId(provenance.actorId, "Provenance actorId");
+  if (actorId === null) throw new Error("Provenance actorId cannot be empty");
+
+  return {
+    actorId,
+    sessionId: normalizeOptionalId(provenance.sessionId, "Provenance sessionId"),
+    taskId: normalizeOptionalId(provenance.taskId, "Provenance taskId"),
+  };
+}
+
 export class OutlinerStore {
   readonly database: Database;
 
@@ -86,8 +117,14 @@ export class OutlinerStore {
     return Number(row?.value ?? 0);
   }
 
-  create(text: string, parentId: string | null = null, author: BlockAuthor = "user"): Block {
+  create(
+    text: string,
+    parentId: string | null = null,
+    author: BlockAuthor = "user",
+    provenance?: BlockProvenance,
+  ): Block {
     if (parentId !== null && !this.get(parentId)) throw new Error(`Parent block not found: ${parentId}`);
+    const { actorId, sessionId, taskId } = normalizeCreatorProvenance(author, provenance);
     const now = new Date().toISOString();
     const id = crypto.randomUUID();
     const positionRow = this.database
@@ -97,9 +134,20 @@ export class OutlinerStore {
     this.database.transaction(() => {
       this.database
         .query(
-          "INSERT INTO blocks (id, parent_id, position, text, author, collapsed, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 0, ?, ?)",
+          "INSERT INTO blocks (id, parent_id, position, text, author, actor_id, session_id, task_id, collapsed, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)",
         )
-        .run(id, parentId, positionRow.position, text, author, now, now);
+        .run(
+          id,
+          parentId,
+          positionRow.position,
+          text,
+          author,
+          actorId,
+          sessionId,
+          taskId,
+          now,
+          now,
+        );
       this.replaceProperties(id, parseProperties(text));
       this.bumpSequence();
     })();
@@ -605,6 +653,9 @@ export class OutlinerStore {
         position INTEGER NOT NULL,
         text TEXT NOT NULL,
         author TEXT NOT NULL CHECK (author IN ('user', 'agent', 'system')),
+        actor_id TEXT,
+        session_id TEXT,
+        task_id TEXT,
         collapsed INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -639,7 +690,22 @@ export class OutlinerStore {
       CREATE INDEX IF NOT EXISTS virtual_occurrence_ranks_order
         ON virtual_occurrence_ranks(view_id, rank, block_id);
     `);
+    this.migrateBlockProvenanceColumns();
     this.migratePropertyIndex();
+  }
+
+  private migrateBlockProvenanceColumns(): void {
+    const existingColumns = new Set(
+      (
+        this.database.query("PRAGMA table_info(blocks)").all() as Array<{ name: string }>
+      ).map((column) => column.name),
+    );
+    const provenanceColumns = ["actor_id", "session_id", "task_id"] as const;
+    for (const name of provenanceColumns) {
+      if (!existingColumns.has(name)) {
+        this.database.exec(`ALTER TABLE blocks ADD COLUMN ${name} TEXT`);
+      }
+    }
   }
 
   private migratePropertyIndex(): void {
@@ -700,6 +766,9 @@ export class OutlinerStore {
       position: row.position,
       text: row.text,
       author: row.author,
+      ...(row.actor_id ? { actorId: row.actor_id } : {}),
+      ...(row.session_id ? { sessionId: row.session_id } : {}),
+      ...(row.task_id ? { taskId: row.task_id } : {}),
       collapsed: row.collapsed === 1,
       createdAt: row.created_at,
       updatedAt: row.updated_at,

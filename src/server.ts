@@ -100,7 +100,12 @@ export class OutlinerServer {
           result = this.store.require(request.blockId);
           break;
         case "create":
-          result = this.store.create(request.text, request.parentId, request.author);
+          result = this.store.create(
+            request.text,
+            request.parentId,
+            request.author,
+            request.provenance,
+          );
           break;
         case "update":
           result = this.store.update(request.blockId, request.text, request.expectedUpdatedAt);
