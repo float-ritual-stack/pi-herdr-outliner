@@ -28,3 +28,15 @@ id = "open"
 title = "Open or focus outliner workspace"
 contexts = ["workspace", "tab", "pane"]
 command = ["bun", "run", "src/herdr-open.ts"]
+
+[[actions]]
+id = "navigate"
+title = "Navigate to outliner identity"
+contexts = ["pane"]
+command = ["bun", "run", "src/herdr-link-open.ts"]
+
+[[link_handlers]]
+id = "outliner-navigation"
+title = "Navigate Outliner"
+pattern = "^pi-outliner://(block|goto|page)/[^[:space:]]+$"
+action = "navigate"

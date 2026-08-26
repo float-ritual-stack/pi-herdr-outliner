@@ -1,4 +1,5 @@
 import { completionWindow } from "./completion";
+import { createOutlinerTextLinker } from "./outliner-links";
 import { quickInsertionPoint } from "./quick-edit";
 import { blockDisplayTitle } from "./references";
 import { layoutExpandedBlock } from "./tree-layout";
@@ -16,7 +17,6 @@ function countLabel(count: number, singular: string): string {
   return `${count} ${singular}${count === 1 ? "" : "s"}`;
 }
 
-
 function branchStatusText(state: VirtualBranchState): string {
   const details = [countLabel(state.count, "projected occurrence")];
   if (state.completeness?.kind === "truncated") {
@@ -33,7 +33,6 @@ function branchStatusText(state: VirtualBranchState): string {
   }
   return `Virtual branch · ${details.join(" · ")}`;
 }
-
 
 function virtualBranchCreationHelp(
   state: VirtualBranchState | undefined,
@@ -210,6 +209,11 @@ export function renderTreeFrame(
       return result;
     }
 
+    const linker = createOutlinerTextLinker(
+      block.text,
+      (blockId) => view.physicalBlocksById.get(blockId) ?? null,
+    );
+
     const branchState =
       row.kind === "physical" ? view.branchStates.get(row.canonicalId) : undefined;
     let result: string[];
@@ -222,7 +226,7 @@ export function renderTreeFrame(
       );
       const titleWidth = Math.max(1, width - prefix.length - suffix.length - badge.length);
       const title = truncate(block.displayText.replace(/\r?\n/g, " ↵ "), titleWidth);
-      result = [truncate(`${prefix}${title}${badge}${suffix}`, width)];
+      result = [linker.link(truncate(`${prefix}${title}${badge}${suffix}`, width))];
     } else {
       const displayText = decorateVirtualBranchDefinitionText(block.displayText, branchState);
       if (row.multilineExpanded) {
@@ -233,7 +237,8 @@ export function renderTreeFrame(
           marker,
           author,
         }).map((renderedRow, rowIndex) => {
-          const text = rowIndex === 0 ? renderedRow.text : renderMarkdownLine(renderedRow.text);
+          const linkedText = linker.link(renderedRow.text);
+          const text = rowIndex === 0 ? linkedText : renderMarkdownLine(linkedText);
           return `${renderedRow.prefix}${text}${renderedRow.suffix}`;
         });
         if (index === view.selectedIndex) {
@@ -251,9 +256,11 @@ export function renderTreeFrame(
         }
       } else {
         result = [
-          truncate(
-            `${"  ".repeat(row.depth)}${marker} ${displayText.replace(/\r?\n/g, " ↵ ")}  ${author}`,
-            width,
+          linker.link(
+            truncate(
+              `${"  ".repeat(row.depth)}${marker} ${displayText.replace(/\r?\n/g, " ↵ ")}  ${author}`,
+              width,
+            ),
           ),
         ];
       }
@@ -363,11 +370,11 @@ export function renderTreeFrame(
   if (view.mode === "goto") {
     help = "type ID/text  ↑↓ choose  Tab cycle  Enter jump  Esc cancel";
   } else if (expandedScrollable) {
-    help = "PgUp/PgDn scroll selected block  ↑↓ navigate blocks  g goto  . / ⌘. detail";
+    help = "PgUp/PgDn scroll selected block  Ctrl-click links  ↑↓ navigate blocks  g goto  . / ⌘. detail";
   } else if (selectedRow?.kind === "occurrence") {
-    help = "◇ projected occurrence  Shift+↑↓ branch order  ← definition  Enter edit canonical  d delete canonical";
+    help = "◇ projected occurrence  Ctrl-click links  Shift+↑↓ branch order  ← definition  Enter edit canonical";
   } else {
-    help = "↑↓ navigate  Shift+↑↓ reorder  g goto  . / ⌘. detail  Enter inline  Ctrl+Q close";
+    help = "↑↓ navigate  Ctrl-click links  Shift+↑↓ reorder  g goto  . / ⌘. detail  Enter inline";
   }
   output.push(`\x1b[2m${truncate(help, width)}\x1b[0m`);
   return { frame: output.join("\n"), scrollStartEntryIndex };

@@ -1,3 +1,4 @@
+import { getOsc8LinkAtColumn, stripTerminalSequences } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "bun:test";
 import type { TreeView } from "../src/tree-controller";
 import { renderTreeFrame } from "../src/tree-renderer";
@@ -117,7 +118,8 @@ function view(
   };
 }
 
-const HELP = "↑↓ navigate  Shift+↑↓ reorder  g goto  . / ⌘. detail  Enter inline  Ctrl+Q close";
+const HELP = "↑↓ navigate  Ctrl-click links  Shift+↑↓ reorder  g goto  . / ⌘. detail  Enter inline";
+const NARROW_HELP = "↑↓ navigate  Ctrl-click links  Shift+↑↓ reorder  g goto  . / ⌘. detail  Enter i…";
 
 describe("renderTreeFrame", () => {
   test("renders a representative browse frame exactly", () => {
@@ -144,9 +146,31 @@ describe("renderTreeFrame", () => {
         "  • Child  A",
         "",
         "ready",
-        `\x1b[2m${HELP}\x1b[0m`,
+        `\x1b[2m${NARROW_HELP}\x1b[0m`,
       ].join("\n"),
     });
+  });
+
+  test("renders work IDs and canonical UUIDs as OSC 8 outliner links", () => {
+    const id = "550e8400-e29b-41d4-a716-446655440000";
+    const linked = block(id, {
+      text: `PIE-133 links [decision::${id}]`,
+      displayText: `PIE-133 links [decision::${id}]`,
+    });
+    const frame = renderTreeFrame(view([linked]), 120, 8).frame;
+    const line = frame.split("\n").find((candidate) =>
+      stripTerminalSequences(candidate).includes("PIE-133 links")
+    );
+    expect(line).toBeDefined();
+    const visible = stripTerminalSequences(line!);
+    expect(visible).toBe(`• PIE-133 links [decision::${id}]   `);
+
+    expect(getOsc8LinkAtColumn(line!, visible.indexOf("PIE-133") + 2)).toBe(
+      "pi-outliner://goto/PIE-133",
+    );
+    expect(getOsc8LinkAtColumn(line!, visible.indexOf(id) + 2)).toBe(
+      `pi-outliner://block/${id}`,
+    );
   });
 
   test("renders expanded physical rows and markdown continuation styling", () => {
@@ -188,7 +212,7 @@ describe("renderTreeFrame", () => {
     ]);
     expect(rendered.at(-2)).toBe("Expanded block rows 5-8/12");
     expect(rendered.at(-1)).toBe(
-      "\x1b[2mPgUp/PgDn scroll selected block  ↑↓ nav…\x1b[0m",
+      "\x1b[2mPgUp/PgDn scroll selected block  Ctrl-c…\x1b[0m",
     );
   });
 
@@ -358,7 +382,7 @@ describe("renderTreeFrame", () => {
         "▾ Definition [V:1]   ",
         "\x1b[48;5;238m\x1b[1m  ◇ Canonical   \x1b[0m",
         "ready",
-        "\x1b[2m◇ projected occurrence  Shift+↑↓ branch order  ← definition  Enter edit canonic…\x1b[0m",
+        "\x1b[2m◇ projected occurrence  Ctrl-click links  Shift+↑↓ branch order  ← definition  …\x1b[0m",
       ].join("\n"),
     });
     expect(rendered.frame).not.toContain("▸ Canonical");

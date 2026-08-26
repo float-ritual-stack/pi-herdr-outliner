@@ -29,6 +29,7 @@ The project started as a small Friday-night experiment and grew into a durable w
 - Reactive content, selection, view, and UI-command events.
 - Indexed `[property::value]` metadata with optimistic property patching and catalog queries.
 - Exact block references using `((block-id))`, resolved to display titles in read mode while raw text remains editable.
+- Ctrl-clickable work IDs, canonical UUIDs, and resolved block references through OSC 8 `pi-outliner://` links and a Herdr plugin link handler.
 - Property-driven virtual branches with canonical projected occurrences, property-aware creation, and persisted branch-local occurrence order.
 - Agent-authored blocks retain immutable actor, session, and originating tool-call/task provenance while preserving the coarse `agent` author role.
 - Selected multiline-expanded Tree blocks support viewport-sized intra-block PageUp/PageDown without changing block selection.
@@ -120,6 +121,8 @@ The footer in each pane is authoritative and context-sensitive. These are the pr
 | `f` | Open a referenced file |
 | `d` | Enter delete confirmation |
 | `Ctrl+Q` | Close the pane |
+
+Ctrl-click any linked `PIE-NNN`, canonical UUID, or resolved block-reference label to focus and reveal its canonical block. Herdr uses Control as the modified-click key on every platform, including macOS. Symbolic `[[page]]` links remain reserved for PIE-132.
 
 Projected virtual occurrences deliberately constrain hierarchy and collapse. Branch-local sibling reorder changes only that projection; editing and confirmed deletion still target the canonical block.
 
