@@ -177,11 +177,17 @@ describe("virtual branch projection", () => {
     const projection = await projectVirtualBranches(
       [next, doing, nextCard, doingCard, after],
       [next, doing, nextCard, doingCard, after],
-      async ({ filters, limit }) => {
-        expect(limit).toBe(6);
+      async ({ filters, limit, rankViewId }) => {
+        expect(limit).toBe(202);
         const status = filters?.[0]?.value;
-        if (status === "Next") return complete([next, nextCard, nextCard]);
-        if (status === "Doing") return complete([doingCard]);
+        if (status === "Next") {
+          expect(rankViewId).toBe(next.id);
+          return complete([next, nextCard, nextCard]);
+        }
+        if (status === "Doing") {
+          expect(rankViewId).toBe(doing.id);
+          return complete([doingCard]);
+        }
         throw new Error(`Unexpected status: ${status}`);
       },
     );
@@ -234,8 +240,9 @@ describe("virtual branch projection", () => {
     const projection = await projectVirtualBranches(
       physical,
       physical,
-      async ({ limit }) => {
-        expect(limit).toBe(6);
+      async ({ limit, rankViewId }) => {
+        expect(limit).toBe(4);
+        expect(rankViewId === firstView.id || rankViewId === secondView.id).toBe(true);
         return complete([first, second, third]);
       },
       [

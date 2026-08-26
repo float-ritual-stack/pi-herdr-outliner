@@ -57,6 +57,7 @@ export interface BlockSearchQuery {
   filters?: PropertyFilter[];
   text?: string;
   subtreeRootId?: string;
+  rankViewId?: string;
   limit: number;
 }
 

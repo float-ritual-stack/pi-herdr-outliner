@@ -333,7 +333,8 @@ async function projectVirtualBranch(
   try {
     const result = await queryBlocks({
       filters: parsed.config.filters,
-      limit: Math.max(1, physicalBlocks.length + 1),
+      rankViewId: definitionId,
+      limit: parsed.config.limit + 2,
     });
     const projected = occurrenceRows(
       definition,

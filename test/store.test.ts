@@ -136,6 +136,15 @@ Second paragraph`;
       { viewId: view.id, blockId: nonmatching.id, rank: 1 },
       { viewId: view.id, blockId: first.id, rank: 2 },
     ]);
+    const newlyMatching = store.create("New [status::next]");
+    const ranked = store.queryBlocks({
+      filters: [{ key: "status", value: "next" }],
+      rankViewId: view.id,
+      limit: 2,
+    });
+    expect(ranked.blocks.map((block) => block.id)).toEqual([second.id, first.id]);
+    expect(ranked.completeness).toEqual({ kind: "truncated", limit: 2 });
+    expect(ranked.blocks.some((block) => block.id === newlyMatching.id)).toBe(false);
     expect(() =>
       store.reorderVirtualOccurrences(view.id, [first.id, first.id])
     ).toThrow("duplicate block IDs");

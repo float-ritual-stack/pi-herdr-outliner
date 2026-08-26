@@ -295,8 +295,23 @@ export class OutlinerStore {
         subtreeRootId: query.subtreeRootId,
         collapsedDescendants: "traverse",
         text: query.text,
-        stopAfterMatches: limit + 1,
+        stopAfterMatches: query.rankViewId ? undefined : limit + 1,
       });
+      if (query.rankViewId) {
+        const rankByBlockId = new Map(
+          this.virtualOccurrenceRanksFromCurrentRead()
+            .filter((entry) => entry.viewId === query.rankViewId)
+            .map((entry) => [entry.blockId, entry.rank]),
+        );
+        blocks.sort((left, right) => {
+          const leftRank = rankByBlockId.get(left.id);
+          const rightRank = rankByBlockId.get(right.id);
+          if (leftRank === undefined && rightRank === undefined) return 0;
+          if (leftRank === undefined) return 1;
+          if (rightRank === undefined) return -1;
+          return leftRank - rightRank || left.id.localeCompare(right.id);
+        });
+      }
       if (blocks.length <= limit) {
         return { blocks, completeness: { kind: "complete" } };
       }

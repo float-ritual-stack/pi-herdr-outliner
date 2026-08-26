@@ -120,7 +120,7 @@ The footer in each pane is authoritative and context-sensitive. These are the pr
 | `d` | Enter delete confirmation |
 | `Ctrl+Q` | Close the pane |
 
-Projected virtual occurrences deliberately constrain hierarchy, collapse, and sibling reorder. Editing and confirmed deletion target their canonical block.
+Projected virtual occurrences deliberately constrain hierarchy and collapse. Branch-local sibling reorder changes only that projection; editing and confirmed deletion still target the canonical block.
 
 ### Detail preview
 
