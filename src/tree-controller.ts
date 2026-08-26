@@ -7,7 +7,8 @@ import {
 import { completionTargetAtCursor } from "./completion";
 import type { ReferencedFile, ReferencedPathCandidate } from "./files";
 import { parseFilter } from "./properties";
-import { blockDisplayTitle } from "./references";
+import { navigateOutlinerLink, outlinerLinkUri } from "./outliner-links";
+import { blockDisplayTitle, blockReferenceIds } from "./references";
 import { layoutExpandedBlock } from "./tree-layout";
 import { isDetailToggle, isPrintableInput, type TerminalInputAction, type TerminalKey } from "./terminal";
 import { TextBuffer } from "./text-buffer";
@@ -15,6 +16,7 @@ import type {
   Block,
   BlockCollectionCompleteness,
   OutlinerEvent,
+  NavigationState,
   VisibleBlock,
   VisibleBlockCollection,
   WorkspaceSnapshot,
@@ -897,6 +899,30 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     const selected = rows[selectedIndex];
     let preferredRowId: string | undefined;
     let reloadRequired = false;
+    if (key.meta && (key.name === "left" || key.name === "right")) {
+      const action = key.name === "left" ? "navigation.back" : "navigation.forward";
+      const navigation = await effects.request<NavigationState>({ action });
+      const target = navigation.selection.selected;
+      if (target?.id === selected?.canonicalId) {
+        status = "No further navigation history";
+        effects.invalidate();
+        return;
+      }
+      if (target?.effectiveDeletedRootId) {
+        await effects.request({
+          action: "ui.command.send",
+          command: { target: "detail", command: "focus", blockId: target.id },
+        });
+        effects.focusPane("detail");
+        status = "Navigation history opened deleted block read-only in Detail";
+      } else {
+        await reload(target?.id ?? null);
+        lastVisibleCanonicalId = rows[selectedIndex]?.canonicalId ?? null;
+        status = key.name === "left" ? "Navigation back" : "Navigation forward";
+      }
+      effects.invalidate();
+      return;
+    }
     if (key.name === "q") {
       status = "Outliner remains open; Ctrl+Q closes this pane";
     } else if (isDetailToggle(str, key)) {
@@ -1002,6 +1028,25 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       } else {
         await effects.request({ action: "toggle", blockId: selected.canonicalId });
         reloadRequired = true;
+      }
+    } else if (str === "o" && selected) {
+      const referenceId = blockReferenceIds(selected.block.text)[0];
+      if (!referenceId) {
+        status = "Selected block has no block references";
+      } else {
+        const navigation = await navigateOutlinerLink(
+          effects,
+          outlinerLinkUri("block", referenceId),
+        );
+        if (navigation.deleted) {
+          effects.focusPane("detail");
+          status = "Deleted reference opened read-only in Detail";
+        } else {
+          await reload(navigation.id);
+          status = `Followed reference to ${navigation.title}`;
+        }
+        effects.invalidate();
+        return;
       }
     } else if (str === "a" && selected) {
       if (isVirtualBranchOccurrence(selected)) {

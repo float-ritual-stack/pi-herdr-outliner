@@ -7,6 +7,7 @@ import {
   type Block,
   type OutlinerEvent,
   type OutlinerEventEnvelope,
+  type NavigationState,
   type OutlinerRequest,
   type OutlinerResponse,
 } from "./types";
@@ -154,6 +155,15 @@ export class OutlinerServer {
         case "selection.set":
           result = this.store.setSelection(request.blockId);
           break;
+        case "navigation.state":
+          result = this.store.navigationState();
+          break;
+        case "navigation.back":
+          result = this.store.navigateHistory("back");
+          break;
+        case "navigation.forward":
+          result = this.store.navigateHistory("forward");
+          break;
         default: {
           const unsupportedAction: never = action;
           throw new Error(`Unsupported action: ${String(unsupportedAction)}`);
@@ -201,6 +211,11 @@ export class OutlinerServer {
       case "selection.set":
         domain = "selection";
         blockId = request.blockId ?? undefined;
+        break;
+      case "navigation.back":
+      case "navigation.forward":
+        domain = "selection";
+        blockId = (response.result as NavigationState).selection.selected?.id;
         break;
       case "ui.command.send":
         domain = "ui";

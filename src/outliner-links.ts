@@ -95,24 +95,24 @@ export async function navigateOutlinerLink(
   if (target.kind === "page") {
     throw new Error("Symbolic page links require PIE-132");
   }
+  if (target.kind === "block") {
+    const block = await requester.request<Block>({ action: "get", blockId: target.value });
+    if (block.effectiveDeletedRootId) {
+      await requester.request({ action: "selection.set", blockId: block.id });
+      await requester.request({
+        action: "ui.command.send",
+        command: { target: "detail", command: "focus", blockId: block.id },
+      });
+      return {
+        kind: "block",
+        id: block.id,
+        title: blockDisplayTitle(block),
+        deleted: true,
+      };
+    }
+  }
   const focused = await focusBlockByQuery(requester, target.value);
   if (focused.resolution.kind === "none") {
-    if (target.kind === "block") {
-      const block = await requester.request<Block>({ action: "get", blockId: target.value });
-      if (block.effectiveDeletedRootId) {
-        await requester.request({ action: "selection.set", blockId: block.id });
-        await requester.request({
-          action: "ui.command.send",
-          command: { target: "detail", command: "focus", blockId: block.id },
-        });
-        return {
-          kind: "block",
-          id: block.id,
-          title: blockDisplayTitle(block),
-          deleted: true,
-        };
-      }
-    }
     throw new Error(`No outliner block matches clicked link: ${target.value}`);
   }
   if (focused.resolution.kind === "ambiguous") {

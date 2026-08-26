@@ -25,8 +25,8 @@ The project started as a small Friday-night experiment and grew into a durable w
 
 - SQLite-backed hierarchical blocks with stable UUIDs, sibling order, authors, timestamps, collapse state, and selection.
 - Workspace-isolated service and runtime paths.
-- JSON-lines RPC protocol v6 over a Unix socket.
-- Reactive content, selection, view, and UI-command events.
+- JSON-lines RPC protocol v7 over a Unix socket.
+- Reactive content, selection, view, and UI-command events, with service-owned block navigation history.
 - Indexed `[property::value]` metadata with optimistic property patching and catalog queries.
 - Exact block references using `((block-id))`, resolved to display titles in read mode while raw text remains editable.
 - Plain-clickable work IDs, canonical UUIDs, and resolved block references inside Tree/Detail, with OSC 8 `pi-outliner://` links retained for external terminal interoperability.
@@ -118,6 +118,8 @@ The footer in each pane is authoritative and context-sensitive. These are the pr
 | `.` or `Command+.` | Expand/collapse multiline block detail in Tree |
 | `Ctrl+E` or modified Enter | Open the selected block in Detail |
 | `g` | Fuzzy goto by UUID, short prefix, title, or content |
+| `o` | Follow the first exact `((block-id))` reference in the selected block |
+| `Option+Left` / `Option+Right` | Move backward / forward through block navigation history |
 | `/` | Filter visible blocks |
 | `f` | Open a referenced file |
 | `d`, then `y` | Confirm moving the selected canonical subtree to Trash |
@@ -142,9 +144,13 @@ Projected virtual occurrences deliberately constrain hierarchy and collapse. Bra
 | Mouse wheel / trackpad | Scroll preview |
 | `Enter` or `e` | Edit raw canonical text |
 | `f` | Open referenced file |
+| `o` | Follow the first exact `((block-id))` reference |
+| `Option+Left` / `Option+Right` | Move backward / forward through block navigation history |
 | `r` | Restore the selected block when it is a direct Trash root |
 | `q` | Focus Tree |
 | `Ctrl+Q` | Close Detail |
+
+Navigation history belongs to the workspace service, not either pane. Every distinct `selection.set` from a user or agent records a visit; going back and then selecting another block discards the forward branch. The latest 200 visits persist across pane/service restarts. History can reopen a Trash target for read-only Detail inspection; purged targets are skipped.
 
 ### Detail edit and comment modes
 

@@ -3,11 +3,12 @@ import { completionTargetAtCursor } from "./completion";
 import { layoutDetailEditor } from "./detail-editor-layout";
 import type { ReferencedFile, ReferencedPathCandidate } from "./files";
 import { getProperty } from "./properties";
-import { blockDisplayTitle } from "./references";
+import { blockDisplayTitle, blockReferenceIds } from "./references";
 import { TextBuffer } from "./text-buffer";
 import type {
   Block,
   BlockSearchQuery,
+  NavigationState,
   OutlinerEvent,
   SelectionContext,
   VisibleBlockCollection,
@@ -71,6 +72,8 @@ export interface DetailEffects {
     author: "user";
   }): Promise<Block>;
   restoreBlock(blockId: string): Promise<Block>;
+  navigateHistory(direction: "back" | "forward"): Promise<NavigationState>;
+  followReference(blockId: string): Promise<void>;
   queryBlocks(query: BlockSearchQuery): Promise<VisibleBlockCollection>;
   readFile(block: Block): ReferencedFile;
   completeFiles(query: string): ReferencedPathCandidate[];
@@ -91,6 +94,9 @@ export type DetailIntent =
   | { type: "edit.begin" }
   | { type: "trash.restore" }
   | { type: "comment.begin" }
+  | { type: "navigation.back" }
+  | { type: "navigation.forward" }
+  | { type: "reference.follow" }
   | { type: "buffer.insert"; text: string }
   | { type: "buffer.newline" }
   | { type: "buffer.backspace" }
@@ -139,11 +145,11 @@ export function detailHelpText(mode: DetailMode): string {
     case "comment":
       return "^Z/⌘Z undo  ^⇧Z/^Y redo  ⌥←→ word  Home/End line  ⇧Arrows select  Del  ^S add annotation  Esc cancel";
     case "annotation":
-      return "↑↓ scroll  e edit annotation  f source file  b raw block  q tree";
+      return "↑↓ scroll  o follow ref  ⌥←→ history  e edit annotation  f source file  b raw block  q tree";
     case "file":
-      return "↑↓ lines  v select range  c comment  b block  q tree";
+      return "↑↓ lines  o follow ref  ⌥←→ history  v select range  c comment  b block  q tree";
     case "preview":
-      return "↑↓ scroll  Enter/e edit  f file  q tree  Ctrl+Q close";
+      return "↑↓ scroll  o follow ref  ⌥←→ history  Enter/e edit  f file  q tree  Ctrl+Q close";
   }
 }
 
@@ -471,6 +477,33 @@ export function createDetailController(
           state.status = "Restored from Trash";
         }
         break;
+      case "navigation.back":
+      case "navigation.forward": {
+        const previousId = state.context.selected?.id;
+        await effects.navigateHistory(
+          intent.type === "navigation.back" ? "back" : "forward",
+        );
+        await loadSelection(true);
+        state.status = state.context.selected?.id === previousId
+          ? "No further navigation history"
+          : intent.type === "navigation.back"
+            ? "Navigation back"
+            : "Navigation forward";
+        break;
+      }
+      case "reference.follow": {
+        const referenceId = state.context.selected
+          ? blockReferenceIds(state.context.selected.text)[0]
+          : undefined;
+        if (!referenceId) {
+          state.status = "Selected block has no block references";
+          break;
+        }
+        await effects.followReference(referenceId);
+        await loadSelection(true);
+        state.status = "Followed block reference";
+        break;
+      }
       case "comment.begin":
         beginComment();
         break;

@@ -183,6 +183,7 @@ Second paragraph`;
       block.id === independentlyDeleted.id
     )).toBe(false);
 
+
     expect(() => store.purge(independentlyDeleted.id, "wrong")).toThrow("PIE-999");
     store.purge(independentlyDeleted.id, "PIE-999");
     expect(store.get(independentlyDeleted.id)).toBeNull();
@@ -190,6 +191,52 @@ Second paragraph`;
       store.database.query("SELECT work_id FROM reserved_work_ids WHERE work_id = ?")
         .get("PIE-999"),
     ).toEqual({ work_id: "PIE-999" });
+  });
+  test("records bounded selection history with back, forward, and branch truncation", () => {
+    const store = makeStore();
+    const first = store.create("History first");
+    const second = store.create("History second");
+    const third = store.create("History third");
+    store.setSelection(first.id);
+    store.setSelection(second.id);
+    store.setSelection(third.id);
+
+    expect(store.navigationState()).toMatchObject({
+      selection: { selected: { id: third.id } },
+      canBack: true,
+      canForward: false,
+    });
+    expect(store.navigateHistory("back")).toMatchObject({
+      selection: { selected: { id: second.id } },
+      canBack: true,
+      canForward: true,
+    });
+    expect(store.navigateHistory("back")).toMatchObject({
+      selection: { selected: { id: first.id } },
+      canForward: true,
+    });
+    expect(store.navigateHistory("forward")).toMatchObject({
+      selection: { selected: { id: second.id } },
+    });
+
+    store.setSelection(first.id);
+    expect(store.navigationState().canForward).toBe(false);
+    expect(store.navigateHistory("forward").selection.selected?.id).toBe(first.id);
+
+    store.delete(second.id);
+    expect(store.navigateHistory("back")).toMatchObject({
+      selection: { selected: { id: second.id, effectiveDeletedRootId: second.id } },
+      canForward: true,
+    });
+
+    const storeEntry = stores.at(-1)!;
+    store.close();
+    const reopened = new OutlinerStore(join(storeEntry.directory, "outliner.sqlite"));
+    storeEntry.store = reopened;
+    expect(reopened.navigationState()).toMatchObject({
+      selection: { selected: { id: second.id, effectiveDeletedRootId: second.id } },
+      canForward: true,
+    });
   });
 
   test("persists immutable agent provenance while legacy blocks remain coarse", () => {

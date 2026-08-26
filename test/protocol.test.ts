@@ -11,6 +11,7 @@ import type {
   Block,
   OutlinerEvent,
   OutlinerRequest,
+  NavigationState,
   OutlinerServiceStatus,
   PropertyCatalogItem,
   VisibleBlockCollection,
@@ -37,7 +38,7 @@ test("serves mutations and property queries over the local socket", async () => 
   const client = new OutlinerClient(socket);
   const service = await client.request<OutlinerServiceStatus>({ action: "ping" });
   expect(service).toEqual({ status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION });
-  expect(service.protocolVersion).toBe(6);
+  expect(service.protocolVersion).toBe(7);
   const provenance = {
     actorId: "omp",
     sessionId: "session-1",
@@ -67,6 +68,18 @@ test("serves mutations and property queries over the local socket", async () => 
   await client.request({ action: "selection.set", blockId: block.id });
   const context = await client.request<{ selected: Block }>({ action: "selection.get" });
   expect(context.selected.id).toBe(block.id);
+  const navigation = await client.request<NavigationState>({ action: "navigation.state" });
+  expect(navigation).toMatchObject({
+    selection: { selected: { id: block.id } },
+    canBack: true,
+    canForward: false,
+  });
+  expect((await client.request<NavigationState>({
+    action: "navigation.back",
+  })).selection.selected?.id).not.toBe(block.id);
+  expect((await client.request<NavigationState>({
+    action: "navigation.forward",
+  })).selection.selected?.id).toBe(block.id);
   const resolved = await client.request<{ text: string }>({
     action: "references.resolve",
     text: `See ((${block.id}))`,
@@ -180,7 +193,7 @@ test("streams workspace mutations and transient UI commands to subscribers", asy
     onConnect: connected.resolve,
     onEvent: (event) => {
       events.push(event);
-      if (events.length === 5) received.resolve();
+      if (events.length === 7) received.resolve();
     },
   });
   cleanups.push(async () => {
@@ -193,6 +206,8 @@ test("streams workspace mutations and transient UI commands to subscribers", asy
   await connected.promise;
   const block = await client.request<Block>({ action: "create", text: "Reactive block" });
   await client.request({ action: "selection.set", blockId: block.id });
+  await client.request({ action: "navigation.back" });
+  await client.request({ action: "navigation.forward" });
   await client.request({ action: "view.toggleMultiline", blockId: block.id });
   await client.request({
     action: "virtual.occurrences.reorder",
@@ -208,12 +223,14 @@ test("streams workspace mutations and transient UI commands to subscribers", asy
   expect(events.map((event) => [event.domain, event.action])).toEqual([
     ["content", "create"],
     ["selection", "selection.set"],
+    ["selection", "navigation.back"],
+    ["selection", "navigation.forward"],
     ["view", "view.toggleMultiline"],
     ["view", "virtual.occurrences.reorder"],
     ["ui", "ui.command.send"],
   ]);
   expect(events[0].blockId).toBe(block.id);
-  expect(events[4].command).toEqual({ target: "detail", command: "edit", blockId: block.id });
+  expect(events[6].command).toEqual({ target: "detail", command: "edit", blockId: block.id });
 
   const children = await client.request<Block[]>({ action: "children", parentId: null });
   expect(children.some((candidate) => candidate.id === block.id)).toBe(true);

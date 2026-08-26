@@ -11,6 +11,7 @@ import {
 import { createDetailKeyHandler } from "./detail-keymap";
 import { renderDetailAnsi } from "./detail-renderer";
 import { completeReferencedPaths, readReferencedFile } from "./files";
+import { navigateOutlinerLink, outlinerLinkUri } from "./outliner-links";
 import { focusPluginPane, registerPaneState } from "./pane-control";
 import { resolvePaths } from "./paths";
 import {
@@ -22,6 +23,7 @@ import {
 import {
   OUTLINER_PROTOCOL_VERSION,
   type Block,
+  type NavigationState,
   type OutlinerServiceStatus,
   type SelectionContext,
   type VisibleBlockCollection,
@@ -62,6 +64,13 @@ const effects: DetailEffects = {
   },
   async restoreBlock(blockId) {
     return client.request<Block>({ action: "trash.restore", blockId });
+  },
+  async navigateHistory(direction) {
+    const action = direction === "back" ? "navigation.back" : "navigation.forward";
+    return client.request<NavigationState>({ action });
+  },
+  async followReference(blockId) {
+    await navigateOutlinerLink(client, outlinerLinkUri("block", blockId));
   },
   async createBlock(input) {
     return client.request<Block>({ action: "create", ...input });
