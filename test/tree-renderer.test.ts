@@ -118,7 +118,8 @@ function view(
   };
 }
 
-const HELP = "↑↓ navigate  Shift+↑↓ reorder  g goto  . / ⌘. detail  Enter inline  Ctrl+Q close";
+const HELP = "↑↓ navigate  Ctrl-click links  Shift+↑↓ reorder  g goto  . / ⌘. detail  Enter inline";
+const NARROW_HELP = "↑↓ navigate  Ctrl-click links  Shift+↑↓ reorder  g goto  . / ⌘. detail  Enter i…";
 
 describe("renderTreeFrame", () => {
   test("renders a representative browse frame exactly", () => {
@@ -145,7 +146,7 @@ describe("renderTreeFrame", () => {
         "  • Child  A",
         "",
         "ready",
-        `\x1b[2m${HELP}\x1b[0m`,
+        `\x1b[2m${NARROW_HELP}\x1b[0m`,
       ].join("\n"),
     });
   });
@@ -211,7 +212,7 @@ describe("renderTreeFrame", () => {
     ]);
     expect(rendered.at(-2)).toBe("Expanded block rows 5-8/12");
     expect(rendered.at(-1)).toBe(
-      "\x1b[2mPgUp/PgDn scroll selected block  ↑↓ nav…\x1b[0m",
+      "\x1b[2mPgUp/PgDn scroll selected block  Ctrl-c…\x1b[0m",
     );
   });
 
@@ -381,7 +382,7 @@ describe("renderTreeFrame", () => {
         "▾ Definition [V:1]   ",
         "\x1b[48;5;238m\x1b[1m  ◇ Canonical   \x1b[0m",
         "ready",
-        "\x1b[2m◇ projected occurrence  Shift+↑↓ branch order  ← definition  Enter edit canonic…\x1b[0m",
+        "\x1b[2m◇ projected occurrence  Ctrl-click links  Shift+↑↓ branch order  ← definition  …\x1b[0m",
       ].join("\n"),
     });
     expect(rendered.frame).not.toContain("▸ Canonical");

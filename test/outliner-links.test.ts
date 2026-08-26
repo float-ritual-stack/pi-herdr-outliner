@@ -42,10 +42,15 @@ describe("outliner link URIs", () => {
       "pi-outliner://block/short",
       "pi-outliner://goto/value?query=yes",
       "pi-outliner://goto/value#fragment",
+      "pi-outliner://goto/%1B%5B31mowned",
+      "pi-outliner://goto/value%7F",
     ]) {
       expect(() => parseOutlinerLinkUri(uri)).toThrow();
     }
     expect(() => outlinerLinkUri("block", "short")).toThrow("Invalid outliner block target");
+    expect(() => outlinerLinkUri("goto", "unsafe\nquery")).toThrow(
+      "terminal control characters",
+    );
   });
 });
 
@@ -111,6 +116,9 @@ describe("outliner link rendering", () => {
       "[existing](https://example.com/PIE-998)",
       `\`\`PIE-997 ${targetId}\`\``,
       `[titled](https://example.com/PIE-996 "PIE-995")`,
+      "~~~text",
+      `PIE-994 ${targetId}`,
+      "~~~",
     ].join("\n");
     const resolved = raw.replace(`((${targetId}))`, "((Target decision))");
     const linked = linkOutlinerMarkdown(resolved, raw);
@@ -123,5 +131,6 @@ describe("outliner link rendering", () => {
     expect(linked).toContain("[existing](https://example.com/PIE-998)");
     expect(linked).toContain(`\`\`PIE-997 ${targetId}\`\``);
     expect(linked).toContain(`[titled](https://example.com/PIE-996 "PIE-995")`);
+    expect(linked).toContain(`~~~text\nPIE-994 ${targetId}\n~~~`);
   });
 });

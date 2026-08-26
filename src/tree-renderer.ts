@@ -370,11 +370,11 @@ export function renderTreeFrame(
   if (view.mode === "goto") {
     help = "type ID/text  ↑↓ choose  Tab cycle  Enter jump  Esc cancel";
   } else if (expandedScrollable) {
-    help = "PgUp/PgDn scroll selected block  ↑↓ navigate blocks  g goto  . / ⌘. detail";
+    help = "PgUp/PgDn scroll selected block  Ctrl-click links  ↑↓ navigate blocks  g goto  . / ⌘. detail";
   } else if (selectedRow?.kind === "occurrence") {
-    help = "◇ projected occurrence  Shift+↑↓ branch order  ← definition  Enter edit canonical  d delete canonical";
+    help = "◇ projected occurrence  Ctrl-click links  Shift+↑↓ branch order  ← definition  Enter edit canonical";
   } else {
-    help = "↑↓ navigate  Shift+↑↓ reorder  g goto  . / ⌘. detail  Enter inline  Ctrl+Q close";
+    help = "↑↓ navigate  Ctrl-click links  Shift+↑↓ reorder  g goto  . / ⌘. detail  Enter inline";
   }
   output.push(`\x1b[2m${truncate(help, width)}\x1b[0m`);
   return { frame: output.join("\n"), scrollStartEntryIndex };

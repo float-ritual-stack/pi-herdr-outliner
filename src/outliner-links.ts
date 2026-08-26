@@ -7,6 +7,7 @@ const BLOCK_ID_PATTERN = /^[A-Za-z0-9_-]{8,}$/;
 const BLOCK_ID_TOKEN_PATTERN = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
 const WORK_ID_PATTERN = /\bPIE-\d+\b/g;
 const RAW_BLOCK_REFERENCE_PATTERN = /\(\(([A-Za-z0-9_-]{8,})\)\)/g;
+const TERMINAL_CONTROL_PATTERN = /[\u0000-\u001f\u007f]/;
 
 export type OutlinerLinkKind = "block" | "goto" | "page";
 
@@ -28,6 +29,9 @@ interface TextRange {
 
 export function outlinerLinkUri(kind: OutlinerLinkKind, value: string): string {
   const normalized = value.trim();
+  if (TERMINAL_CONTROL_PATTERN.test(normalized)) {
+    throw new Error("Outliner link target contains terminal control characters");
+  }
   if (!normalized) throw new Error("Outliner link target cannot be empty");
   if (kind === "block" && !BLOCK_ID_PATTERN.test(normalized)) {
     throw new Error(`Invalid outliner block target: ${normalized}`);
@@ -61,7 +65,11 @@ export function parseOutlinerLinkUri(uri: string): OutlinerLinkTarget {
   } catch {
     throw new Error("Invalid outliner link encoding");
   }
-  if (!value || (kind === "block" && !BLOCK_ID_PATTERN.test(value))) {
+  if (
+    !value ||
+    TERMINAL_CONTROL_PATTERN.test(value) ||
+    (kind === "block" && !BLOCK_ID_PATTERN.test(value))
+  ) {
     throw new Error(`Invalid outliner ${kind} target`);
   }
   return { kind, value };
@@ -69,13 +77,22 @@ export function parseOutlinerLinkUri(uri: string): OutlinerLinkTarget {
 
 function protectedMarkdownRanges(text: string): TextRange[] {
   const ranges: TextRange[] = [];
-  let fenced = false;
+  let activeFence: { marker: string; length: number } | null = null;
   let lineStart = 0;
   for (const line of text.split("\n")) {
     const lineEnd = lineStart + line.length;
-    const fenceLine = /^\s*```/.test(line);
-    if (fenced || fenceLine) ranges.push({ start: lineStart, end: lineEnd });
-    if (fenceLine) fenced = !fenced;
+    const delimiter = /^\s*(`{3,}|~{3,})/.exec(line)?.[1];
+    if (activeFence || delimiter) ranges.push({ start: lineStart, end: lineEnd });
+    if (delimiter) {
+      const marker = delimiter[0];
+      if (activeFence) {
+        if (marker === activeFence.marker && delimiter.length >= activeFence.length) {
+          activeFence = null;
+        }
+      } else {
+        activeFence = { marker, length: delimiter.length };
+      }
+    }
     lineStart = lineEnd + 1;
   }
   for (const pattern of [/(`+)[^\n]*?\1/g, /!?\[[^\]\n]*\]\([^)\n]*\)/g]) {
