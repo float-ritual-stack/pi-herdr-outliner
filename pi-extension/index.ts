@@ -3,7 +3,11 @@ import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
-import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type {
+  AgentToolResult,
+  ExtensionAPI,
+  ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { formatFileAnnotation } from "../src/annotations";
 import {
@@ -17,6 +21,7 @@ import { blockDisplayTitle } from "../src/references";
 import {
   OUTLINER_PROTOCOL_VERSION,
   type Block,
+  type BlockProvenance,
   type OutlinerServiceStatus,
   type PropertyCatalogItem,
   type SelectionContext,
@@ -28,6 +33,19 @@ const extensionRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const paths = resolvePaths();
 const client = new OutlinerClient(paths.socket);
 let headlessServer: ChildProcess | null = null;
+
+const HOST_ACTOR_ID = process.env.OMPCODE ? "omp" : "pi";
+
+function toolProvenance(
+  context: ExtensionContext,
+  toolCallId: string,
+): BlockProvenance {
+  return {
+    actorId: HOST_ACTOR_ID,
+    sessionId: context.sessionManager.getSessionId(),
+    taskId: toolCallId,
+  };
+}
 
 const propertyPatchOperationSchema = Type.Union([
   Type.Object({
@@ -266,13 +284,14 @@ export default function outlinerExtension(pi: ExtensionAPI): void {
       text: Type.String({ description: "Block text, optionally containing [property::value] markers" }),
       parentId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     }),
-    async execute(_id, params) {
+    async execute(toolCallId, params, _signal, _onUpdate, context) {
       await ensureService(false);
       const block = await client.request<Block>({
         action: "create",
         text: params.text,
         parentId: params.parentId,
         author: "agent",
+        provenance: toolProvenance(context, toolCallId),
       });
       return toolResult(block);
     },
@@ -289,7 +308,7 @@ export default function outlinerExtension(pi: ExtensionAPI): void {
       endLine: Type.Integer({ minimum: 1 }),
       comment: Type.String(),
     }),
-    async execute(_id, params) {
+    async execute(toolCallId, params, _signal, _onUpdate, context) {
       await ensureService(false);
       const source = await client.request<Block>({ action: "get", blockId: params.sourceBlockId });
       const filePath = getProperty(source.properties, "file");
@@ -300,6 +319,7 @@ export default function outlinerExtension(pi: ExtensionAPI): void {
         parentId: source.id,
         text,
         author: "agent",
+        provenance: toolProvenance(context, toolCallId),
       });
       return toolResult(annotation);
     },

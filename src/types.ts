@@ -1,5 +1,11 @@
 export type BlockAuthor = "user" | "agent" | "system";
 
+export interface BlockProvenance {
+  actorId: string;
+  sessionId?: string;
+  taskId?: string;
+}
+
 export interface BlockProperty {
   key: string;
   value: string;
@@ -34,6 +40,9 @@ export interface Block {
   position: number;
   text: string;
   author: BlockAuthor;
+  actorId?: string;
+  sessionId?: string;
+  taskId?: string;
   collapsed: boolean;
   createdAt: string;
   updatedAt: string;
@@ -83,7 +92,7 @@ export interface VirtualOccurrenceRank {
   rank: number;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 4;
+export const OUTLINER_PROTOCOL_VERSION = 5;
 
 export interface OutlinerServiceStatus {
   status: "ready";
@@ -98,7 +107,14 @@ export type OutlinerRequest =
   | { id: string; action: "workspace.snapshot"; view?: WorkspaceSnapshotView }
   | { id: string; action: "events.subscribe" }
   | { id: string; action: "ui.command.send"; command: OutlinerUiCommand }
-  | { id: string; action: "create"; parentId?: string | null; text: string; author?: BlockAuthor }
+  | {
+      id: string;
+      action: "create";
+      parentId?: string | null;
+      text: string;
+      author?: BlockAuthor;
+      provenance?: BlockProvenance;
+    }
   | { id: string; action: "update"; blockId: string; text: string; expectedUpdatedAt?: string }
   | { id: string; action: "move"; blockId: string; parentId: string | null; position?: number }
   | { id: string; action: "delete"; blockId: string }

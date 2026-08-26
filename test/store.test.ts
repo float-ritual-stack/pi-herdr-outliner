@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -103,6 +104,86 @@ Second paragraph`;
         .find((candidate) => candidate.id === block.id)?.multilineExpanded,
     ).toBe(true);
     expect(store.toggleMultilineExpanded(block.id)).toBe(false);
+  });
+
+  test("persists immutable agent provenance while legacy blocks remain coarse", () => {
+    let store = makeStore();
+    const agentBlock = store.create(
+      "Agent artifact",
+      null,
+      "agent",
+      {
+        actorId: " omp ",
+        sessionId: " session-1 ",
+        taskId: " tool-call-1 ",
+      },
+    );
+    expect(agentBlock).toEqual(expect.objectContaining({
+      author: "agent",
+      actorId: "omp",
+      sessionId: "session-1",
+      taskId: "tool-call-1",
+    }));
+    const updated = store.update(agentBlock.id, "Updated artifact", agentBlock.updatedAt);
+    expect(updated).toEqual(expect.objectContaining({
+      actorId: "omp",
+      sessionId: "session-1",
+      taskId: "tool-call-1",
+    }));
+
+    const humanBlock = store.create("Human note");
+    expect("actorId" in humanBlock).toBe(false);
+    expect(() =>
+      store.create("Spoofed", null, "user", { actorId: "agent" })
+    ).toThrow("Only agent-authored blocks");
+    expect(() =>
+      store.create("Missing actor", null, "agent", { actorId: " " })
+    ).toThrow("actorId cannot be empty");
+
+    const storeEntry = stores.at(-1)!;
+    store.close();
+    store = new OutlinerStore(join(storeEntry.directory, "outliner.sqlite"));
+    storeEntry.store = store;
+    expect(store.require(agentBlock.id)).toEqual(expect.objectContaining({
+      actorId: "omp",
+      sessionId: "session-1",
+      taskId: "tool-call-1",
+    }));
+  });
+
+  test("adds provenance columns to an existing block database", () => {
+    const directory = mkdtempSync(join(tmpdir(), "pi-outliner-legacy-"));
+    const path = join(directory, "outliner.sqlite");
+    const legacy = new Database(path, { create: true });
+    legacy.exec(`
+      CREATE TABLE blocks (
+        id TEXT PRIMARY KEY,
+        parent_id TEXT REFERENCES blocks(id) ON DELETE CASCADE,
+        position INTEGER NOT NULL,
+        text TEXT NOT NULL,
+        author TEXT NOT NULL CHECK (author IN ('user', 'agent', 'system')),
+        collapsed INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+    `);
+    legacy.close();
+
+    const store = new OutlinerStore(path);
+    stores.push({ store, directory });
+    const columnNames = (
+      store.database
+        .query("PRAGMA table_info(blocks)")
+        .all() as Array<{ name: string }>
+    ).map((column) => column.name);
+    expect(columnNames).toEqual(expect.arrayContaining([
+      "actor_id",
+      "session_id",
+      "task_id",
+    ]));
+    expect(
+      store.create("Migrated agent block", null, "agent", { actorId: "pi" }),
+    ).toEqual(expect.objectContaining({ author: "agent", actorId: "pi" }));
   });
 
   test("retains nonmatching branch ranks and cascades ranks with either endpoint", () => {

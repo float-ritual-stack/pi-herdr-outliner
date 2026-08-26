@@ -1,5 +1,8 @@
 import { expect, test } from "bun:test";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import outlinerExtension, { formatSelection } from "../pi-extension/index";
 import { OutlinerClient, type RequestInput } from "../src/client";
 import type { Block, SelectionContext, VisibleBlockCollection } from "../src/types";
@@ -40,7 +43,7 @@ test("registers the workspace commands and annotation-aware tools", () => {
   expect(updateSchema).toContain("expectedUpdatedAt");
 });
 
-test("requires protocol v4 and presents bounded query results", async () => {
+test("requires protocol v5, attributes agent creates, and presents bounded query results", async () => {
   const collection: VisibleBlockCollection = {
     blocks: [
       {
@@ -61,13 +64,14 @@ test("requires protocol v4 and presents bounded query results", async () => {
     ],
     completeness: { kind: "truncated", limit: 20 },
   };
-  let protocolVersion = 4;
+  let protocolVersion = 5;
   let queryCollection = collection;
   const requests: RequestInput[] = [];
   const originalRequest = OutlinerClient.prototype.request;
   OutlinerClient.prototype.request = async function <T>(input: RequestInput): Promise<T> {
     requests.push(input);
     if (input.action === "blocks.query") return queryCollection as unknown as T;
+    if (input.action === "create") return {} as T;
     if (input.action === "ping") {
       return { status: "ready", protocolVersion } as unknown as T;
     }
@@ -88,7 +92,10 @@ test("requires protocol v4 and presents bounded query results", async () => {
     name: string;
     execute(
       id: string,
-      params: { text?: string; limit?: number },
+      params: { text?: string; limit?: number; parentId?: string | null },
+      signal?: AbortSignal,
+      onUpdate?: unknown,
+      context?: ExtensionContext,
     ): Promise<{ content: Array<{ type: string; text: string }> }>;
   };
   const commands = new Map<string, CommandDefinition>();
@@ -103,6 +110,11 @@ test("requires protocol v4 and presents bounded query results", async () => {
     on() {},
   } as unknown as ExtensionAPI;
   const widgets: Array<{ id: string; lines: string[] }> = [];
+  const context = {
+    sessionManager: {
+      getSessionId: () => "session-test",
+    },
+  } as unknown as ExtensionContext;
 
   try {
     outlinerExtension(pi);
@@ -114,6 +126,13 @@ test("requires protocol v4 and presents bounded query results", async () => {
       },
     });
     const result = await tools.get("outliner_query")!.execute("query-id", { text: "Matching" });
+    await tools.get("outliner_create")!.execute(
+      "tool-call-test",
+      { text: "Agent-created artifact", parentId: null },
+      undefined,
+      undefined,
+      context,
+    );
 
     expect(requests.filter((request) => request.action === "blocks.query")).toEqual([
       {
@@ -125,6 +144,17 @@ test("requires protocol v4 and presents bounded query results", async () => {
         query: { text: "Matching", limit: 100 },
       },
     ]);
+    expect(requests.find((request) => request.action === "create")).toEqual({
+      action: "create",
+      text: "Agent-created artifact",
+      parentId: null,
+      author: "agent",
+      provenance: {
+        actorId: process.env.OMPCODE ? "omp" : "pi",
+        sessionId: "session-test",
+        taskId: "tool-call-test",
+      },
+    });
     expect(widgets).toEqual([
       {
         id: "pi-outliner-filter",
@@ -156,9 +186,9 @@ test("requires protocol v4 and presents bounded query results", async () => {
     expect(largeEnvelope.presentation.returned).toBe(100);
     expect(largeEnvelope.presentation.presented).toBe(largeEnvelope.blocks.length);
     expect(largeEnvelope.presentation.omitted).toBeGreaterThan(0);
-    protocolVersion = 3;
+    protocolVersion = 4;
     await expect(tools.get("outliner_query")!.execute("incompatible-query", {})).rejects.toThrow(
-      "Incompatible outliner protocol 3; expected 4",
+      "Incompatible outliner protocol 4; expected 5",
     );
   } finally {
     OutlinerClient.prototype.request = originalRequest;
