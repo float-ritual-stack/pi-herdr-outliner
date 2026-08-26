@@ -7,6 +7,7 @@ import {
   type MarkdownTheme,
   VStack,
 } from "@earendil-works/pi-tui";
+import { linkOutlinerMarkdown } from "./outliner-links";
 import type { DetailState } from "./detail-controller";
 import {
   renderDetailFooter,
@@ -16,6 +17,18 @@ import { sanitizeDynamicText } from "./terminal";
 
 export function sanitizeMarkdownDocument(value: string): string {
   return sanitizeDynamicText(value, true);
+}
+
+function renderPreviewDocument(
+  sourceText: string,
+  rawText: string,
+  linksEnabled: boolean,
+): string {
+  const sanitizedSource = sanitizeMarkdownDocument(sourceText);
+  if (!linksEnabled) return sanitizedSource;
+
+  // Authored text must be sanitized before adding trusted, generated Markdown links.
+  return linkOutlinerMarkdown(sanitizedSource, sanitizeMarkdownDocument(rawText));
 }
 
 const PREVIEW_HELP = "↑↓ line  ^U/D half  Fn+↑↓ page  g/G ends  Enter edit  q tree  ^Q close";
@@ -43,9 +56,8 @@ class DetailPreviewFooter implements Component {
 export class DetailPiPreviewLayout extends VStack {
   readonly markdown: Markdown;
   readonly scrollView: ScrollView;
-  private sourceText: string | undefined;
-
-  private renderedText: string | undefined;
+  private renderedSourceText: string | undefined;
+  private renderedRawText: string | undefined;
   private previousSelectionId: string | null | undefined;
   private active: boolean;
   private resetScroll = false;
@@ -53,6 +65,7 @@ export class DetailPiPreviewLayout extends VStack {
   constructor(
     private readonly state: Readonly<DetailState>,
     markdownTheme: MarkdownTheme,
+    private readonly linksEnabled = process.env.HERDR_ENV === "1",
   ) {
     const markdown = new Markdown("", 0, 0, markdownTheme);
     const scrollView = new ScrollView(markdown, {
@@ -102,19 +115,21 @@ export class DetailPiPreviewLayout extends VStack {
   syncState(): void {
     if (!this.active) return;
 
-    const selectionId = this.state.context.selected?.id ?? null;
+    const selected = this.state.context.selected;
+    const selectionId = selected?.id ?? null;
     const selectionChanged = selectionId !== this.previousSelectionId;
     this.previousSelectionId = selectionId;
-    const sourceText = this.state.context.selected
+    const sourceText = selected
       ? this.state.resolvedSelectedText
       : "Select a block in the outliner pane.";
-    if (sourceText !== this.sourceText) {
-      this.sourceText = sourceText;
-      // Preserve the complete document; source and Markdown render caches avoid repeated full-text work.
-      this.renderedText = this.state.context.selected
-        ? sanitizeMarkdownDocument(sourceText)
+    const rawText = selected && this.linksEnabled ? selected.text : sourceText;
+    if (sourceText !== this.renderedSourceText || rawText !== this.renderedRawText) {
+      this.renderedSourceText = sourceText;
+      this.renderedRawText = rawText;
+      const renderedText = selected
+        ? renderPreviewDocument(sourceText, rawText, this.linksEnabled)
         : sourceText;
-      this.markdown.setText(this.renderedText);
+      this.markdown.setText(renderedText);
     }
     if (this.resetScroll || selectionChanged) this.scrollView.scrollToStart();
     this.resetScroll = false;

@@ -3,9 +3,11 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { getMarkdownTheme, initTheme } from "@earendil-works/pi-coding-agent";
 import {
+  getCapabilities,
   KeybindingsManager,
   ProcessTerminal,
   setKeybindings,
+  setCapabilities,
   TUI_KEYBINDINGS,
   TuiAltScreen,
 } from "@earendil-works/pi-tui";
@@ -39,6 +41,11 @@ setKeybindings(
     "tui.altScreen.bottom": [],
   }),
 );
+
+const hyperlinksEnabled = process.env.HERDR_ENV === "1";
+if (hyperlinksEnabled) {
+  setCapabilities({ ...getCapabilities(), hyperlinks: true });
+}
 
 const paths = resolvePaths();
 const client = new OutlinerClient(paths.socket);
@@ -167,7 +174,7 @@ const customFrame = new DetailPiComponent({
   state: controller.state,
   height: () => terminal.rows,
 });
-const preview = new DetailPiPreviewLayout(controller.state, getMarkdownTheme());
+const preview = new DetailPiPreviewLayout(controller.state, getMarkdownTheme(), hyperlinksEnabled);
 let layoutRoot: DetailPiComponent | DetailPiPreviewLayout | undefined;
 
 synchronizeLayout = () => {

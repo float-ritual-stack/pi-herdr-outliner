@@ -1,4 +1,7 @@
 import {
+  getCapabilities,
+  getOsc8LinkAtColumn,
+  setCapabilities,
   stripTerminalSequences,
   visibleWidth,
   type MarkdownTheme,
@@ -26,8 +29,8 @@ function block(id: string, text: string): Block {
   };
 }
 
-function state(text: string): DetailState {
-  const selected = block("block-1", "raw edit source");
+function state(text: string, rawText = "raw edit source"): DetailState {
+  const selected = block("block-1", rawText);
   return {
     context: { selected, ancestors: [], children: [] },
     resolvedSelectedText: text,
@@ -66,7 +69,7 @@ const plainMarkdownTheme: MarkdownTheme = {
 };
 
 function previewLayout(detail: DetailState): DetailPiPreviewLayout {
-  return new DetailPiPreviewLayout(detail, plainMarkdownTheme);
+  return new DetailPiPreviewLayout(detail, plainMarkdownTheme, false);
 }
 
 function renderedDocument(layout: DetailPiPreviewLayout, width: number): string[] {
@@ -74,7 +77,7 @@ function renderedDocument(layout: DetailPiPreviewLayout, width: number): string[
   return layout.markdown.render(width).map(stripTerminalSequences);
 }
 
-
+describe("Pi Markdown detail preview", () => {
   test("synchronizes Markdown before the viewport layout renders child nodes directly", () => {
     const detail = state("Body rendered by the child Markdown component");
     const layout = previewLayout(detail);
@@ -85,7 +88,7 @@ function renderedDocument(layout: DetailPiPreviewLayout, width: number): string[
       layout.markdown.render(40).map(stripTerminalSequences).join(" ").replace(/\s+/g, " "),
     ).toContain("Body rendered by the child Markdown component");
   });
-describe("Pi Markdown detail preview", () => {
+
   test("wraps long document lines without ellipsizing and hangs list continuations", () => {
     const detail = state([
       "A deliberately long paragraph with enough words to wrap across several terminal rows without losing its ending.",
@@ -141,6 +144,34 @@ describe("Pi Markdown detail preview", () => {
     expect(rendered).toContain("second    linedonetail");
     expect(rendered).not.toContain("owned");
     expect(rendered).not.toContain("payload");
+  });
+
+  test("renders generated outliner Markdown links as OSC 8 hyperlinks in Herdr", () => {
+    const capabilities = getCapabilities();
+    setCapabilities({ ...capabilities, hyperlinks: true });
+    try {
+      const targetId = "550e8400-e29b-41d4-a716-446655440000";
+      const detail = state(
+        "PIE-133 and ((Target decision))",
+        `PIE-133 and ((${targetId}))`,
+      );
+      const layout = new DetailPiPreviewLayout(detail, plainMarkdownTheme, true);
+      layout.syncState();
+      const rendered = layout.markdown.render(80);
+      const line = rendered.find((candidate) =>
+        stripTerminalSequences(candidate).includes("PIE-133 and")
+      );
+      expect(line).toBeDefined();
+      const visible = stripTerminalSequences(line!);
+      expect(getOsc8LinkAtColumn(line!, visible.indexOf("PIE-133") + 2)).toBe(
+        "pi-outliner://goto/PIE-133",
+      );
+      expect(getOsc8LinkAtColumn(line!, visible.indexOf("Target decision") + 2)).toBe(
+        `pi-outliner://block/${targetId}`,
+      );
+    } finally {
+      setCapabilities(capabilities);
+    }
   });
 
   test("scrolls the primary view by contracted amounts and reaches long content", () => {
@@ -201,7 +232,7 @@ describe("Pi Markdown detail preview", () => {
     expect(layout.scrollView.scrollTop).toBe(0);
   });
 
-  test("sanitizes and updates Markdown only when the resolved source changes", () => {
+  test("without links, updates Markdown only when the resolved source changes", () => {
     const detail = state("Initial **document**");
     const layout = previewLayout(detail);
     const originalSetText = layout.markdown.setText.bind(layout.markdown);
@@ -214,6 +245,8 @@ describe("Pi Markdown detail preview", () => {
     layout.render(40);
     layout.render(40);
     detail.status = "status-only change";
+    layout.render(40);
+    detail.context.selected!.text = "raw-only change";
     layout.render(40);
     expect(updates).toBe(1);
 

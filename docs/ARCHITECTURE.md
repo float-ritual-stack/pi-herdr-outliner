@@ -133,6 +133,21 @@ The current protocol version is `5`, defined in [`src/types.ts`](../src/types.ts
 
 The Pi/OMP adapter forces `author: "agent"`. It identifies the host as `pi` or `omp`, reads the durable session ID from Pi's `ExtensionContext.sessionManager`, and records the tool-call ID as the originating task ID. Legacy and user-authored blocks omit these optional fields.
 
+### Clickable outliner identities
+
+Herdr recognizes plain terminal text as a URL only for `http://` and `https://`. Outliner renderers therefore generate trusted OSC 8 hyperlinks with private URIs instead of expecting link-handler regexes to scan arbitrary text:
+
+- `pi-outliner://block/<uuid>` — exact canonical block;
+- `pi-outliner://goto/<encoded-query>` — shared goto resolution, currently used by `PIE-NNN`;
+- `pi-outliner://page/<encoded-address>` — reserved for PIE-132 symbolic-page semantics.
+
+The `outliner-navigation` manifest handler routes matching Ctrl-clicks to `src/herdr-link-open.ts`. The action validates and decodes the private URI, resolves the clicked pane's workspace, and delegates to `focusBlockByQuery`, which updates canonical selection and sends Tree focus/reveal. It never opens the private URI in a browser.
+
+Authored text is sanitized before link generation. Tree adds OSC 8 only after plain-text wrapping/truncation; Detail generates safe Markdown links after sanitization. Under `HERDR_ENV=1`, Detail enables Pi TUI hyperlink emission because nested panes advertise generic `TERM=xterm-256color` even though Herdr captures OSC 8 metadata.
+
+Ctrl-click is the modifier on every platform. Symbolic `[[address]]` rendering remains non-navigable until PIE-132 owns address resolution and create-on-follow behavior.
+
+
 Every response carries the service sequence. Every mutation increments it and emits an event.
 
 ### Complete versus bounded collections
@@ -251,6 +266,8 @@ src/tree-controller.ts        Tree behavior
 src/tree-renderer.ts          Tree ANSI rendering
 src/virtual-branches.ts       projection configuration and rows
 src/detail-main.ts            Detail implementation selector
+src/outliner-links.ts          private URI codec and safe Tree/Markdown link generation
+src/herdr-link-open.ts         Herdr link-handler action using shared goto/reveal
 src/detail-controller.ts      Detail behavior and effects
 src/detail-pi*.ts             Pi TUI preview/input/frame integration
 src/detail-editor-layout.ts   wrapped visual rows and selections

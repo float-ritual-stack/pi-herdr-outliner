@@ -1,3 +1,4 @@
+import { getOsc8LinkAtColumn, stripTerminalSequences } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "bun:test";
 import type { TreeView } from "../src/tree-controller";
 import { renderTreeFrame } from "../src/tree-renderer";
@@ -147,6 +148,28 @@ describe("renderTreeFrame", () => {
         `\x1b[2m${HELP}\x1b[0m`,
       ].join("\n"),
     });
+  });
+
+  test("renders work IDs and canonical UUIDs as OSC 8 outliner links", () => {
+    const id = "550e8400-e29b-41d4-a716-446655440000";
+    const linked = block(id, {
+      text: `PIE-133 links [decision::${id}]`,
+      displayText: `PIE-133 links [decision::${id}]`,
+    });
+    const frame = renderTreeFrame(view([linked]), 120, 8).frame;
+    const line = frame.split("\n").find((candidate) =>
+      stripTerminalSequences(candidate).includes("PIE-133 links")
+    );
+    expect(line).toBeDefined();
+    const visible = stripTerminalSequences(line!);
+    expect(visible).toBe(`• PIE-133 links [decision::${id}]   `);
+
+    expect(getOsc8LinkAtColumn(line!, visible.indexOf("PIE-133") + 2)).toBe(
+      "pi-outliner://goto/PIE-133",
+    );
+    expect(getOsc8LinkAtColumn(line!, visible.indexOf(id) + 2)).toBe(
+      `pi-outliner://block/${id}`,
+    );
   });
 
   test("renders expanded physical rows and markdown continuation styling", () => {
