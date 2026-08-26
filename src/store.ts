@@ -247,8 +247,9 @@ export class OutlinerStore {
         const replacement = this.childrenFromCurrentRead(block.parentId)
           .find((candidate) => !candidate.effectiveDeletedRootId && candidate.id !== id)
           ?? (block.parentId ? this.getFromCurrentRead(block.parentId) : null);
-        this.database.query("UPDATE selection SET block_id = ? WHERE singleton = 1")
-          .run(replacement?.effectiveDeletedRootId ? null : replacement?.id ?? null);
+        this.setSelectionFromCurrentRead(
+          replacement?.effectiveDeletedRootId ? null : replacement?.id ?? null,
+        );
       }
       this.bumpSequence();
     })();
@@ -467,15 +468,7 @@ export class OutlinerStore {
   }
 
   setSelection(blockId: string | null): SelectionContext {
-    return this.database.transaction(() => {
-      if (blockId !== null && !this.getFromCurrentRead(blockId)) {
-        throw new Error(`Block not found: ${blockId}`);
-      }
-      const currentId = this.selectionFromCurrentRead().selected?.id ?? null;
-      if (blockId && blockId !== currentId) this.recordNavigationFromCurrentRead(blockId);
-      this.database.query("UPDATE selection SET block_id = ? WHERE singleton = 1").run(blockId);
-      return this.selectionFromCurrentRead();
-    })();
+    return this.database.transaction(() => this.setSelectionFromCurrentRead(blockId))();
   }
 
   navigationState(): NavigationState {
@@ -636,8 +629,25 @@ export class OutlinerStore {
     ).run(String(entryId));
   }
 
+  private setSelectionFromCurrentRead(blockId: string | null): SelectionContext {
+    if (blockId !== null && !this.getFromCurrentRead(blockId)) {
+      throw new Error(`Block not found: ${blockId}`);
+    }
+    const currentId = this.selectionFromCurrentRead().selected?.id ?? null;
+    if (blockId !== currentId) {
+      if (currentId) this.recordNavigationFromCurrentRead(currentId);
+      if (blockId) this.recordNavigationFromCurrentRead(blockId);
+      this.database.query("UPDATE selection SET block_id = ? WHERE singleton = 1").run(blockId);
+    }
+    return this.selectionFromCurrentRead();
+  }
+
   private recordNavigationFromCurrentRead(blockId: string): void {
     const cursor = this.navigationCursorFromCurrentRead();
+    const current = this.database.query(
+      "SELECT block_id FROM navigation_history WHERE entry_id = ?",
+    ).get(cursor) as { block_id: string | null } | null;
+    if (current?.block_id === blockId) return;
     this.database.query("DELETE FROM navigation_history WHERE entry_id > ?").run(cursor);
     const result = this.database.query(
       "INSERT INTO navigation_history (block_id) VALUES (?)",

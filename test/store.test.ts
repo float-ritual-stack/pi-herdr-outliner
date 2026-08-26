@@ -239,6 +239,21 @@ Second paragraph`;
     });
   });
 
+  test("records a delete replacement before later navigation", () => {
+    const store = makeStore();
+    const parent = store.create("History replacement parent");
+    const deleted = store.create("History deleted selection", parent.id);
+    const replacement = store.create("History replacement", parent.id);
+    const destination = store.create("History destination", parent.id);
+
+    store.setSelection(deleted.id);
+    store.delete(deleted.id);
+    expect(store.getSelection().selected?.id).toBe(replacement.id);
+
+    store.setSelection(destination.id);
+    expect(store.navigateHistory("back").selection.selected?.id).toBe(replacement.id);
+  });
+
   test("persists immutable agent provenance while legacy blocks remain coarse", () => {
     let store = makeStore();
     const agentBlock = store.create(
