@@ -118,6 +118,12 @@ export class OutlinerServer {
         case "view.toggleMultiline":
           result = { expanded: this.store.toggleMultilineExpanded(request.blockId) };
           break;
+        case "virtual.occurrences.reorder":
+          result = this.store.reorderVirtualOccurrences(
+            request.viewId,
+            request.orderedBlockIds,
+          );
+          break;
         case "references.resolve":
           result = { text: this.store.resolveBlockReferences(request.text) };
           break;
@@ -174,6 +180,10 @@ export class OutlinerServer {
       case "view.toggleMultiline":
         domain = "view";
         blockId = request.blockId;
+        break;
+      case "virtual.occurrences.reorder":
+        domain = "view";
+        blockId = request.viewId;
         break;
       case "selection.set":
         domain = "selection";

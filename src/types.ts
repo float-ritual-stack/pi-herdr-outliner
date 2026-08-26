@@ -76,7 +76,13 @@ export interface VisibleBlockCollection {
   completeness: BlockCollectionCompleteness;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 3;
+export interface VirtualOccurrenceRank {
+  viewId: string;
+  blockId: string;
+  rank: number;
+}
+
+export const OUTLINER_PROTOCOL_VERSION = 4;
 
 export interface OutlinerServiceStatus {
   status: "ready";
@@ -97,6 +103,12 @@ export type OutlinerRequest =
   | { id: string; action: "delete"; blockId: string }
   | { id: string; action: "toggle"; blockId: string }
   | { id: string; action: "view.toggleMultiline"; blockId: string }
+  | {
+      id: string;
+      action: "virtual.occurrences.reorder";
+      viewId: string;
+      orderedBlockIds: string[];
+    }
   | { id: string; action: "references.resolve"; text: string }
   | {
       id: string;
@@ -127,6 +139,7 @@ export interface WorkspaceSnapshot {
   visible: VisibleBlockCollection;
   physical: VisibleBlockCollection;
   selection: SelectionContext;
+  virtualOccurrenceRanks: VirtualOccurrenceRank[];
   sequence: number;
 }
 

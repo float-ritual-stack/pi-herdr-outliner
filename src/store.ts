@@ -19,6 +19,7 @@ import type {
   SelectionContext,
   VisibleBlock,
   VisibleBlockCollection,
+  VirtualOccurrenceRank,
   WorkspaceSnapshot,
   WorkspaceSnapshotView,
 } from "./types";
@@ -38,6 +39,12 @@ interface PropertyRow {
   block_id: string;
   key: string;
   value: string;
+}
+
+interface VirtualOccurrenceRankRow {
+  view_id: string;
+  block_id: string;
+  rank: number;
 }
 
 interface LoadedGraph {
@@ -201,6 +208,56 @@ export class OutlinerStore {
     return expanded;
   }
 
+  reorderVirtualOccurrences(
+    viewId: string,
+    orderedBlockIds: readonly string[],
+  ): VirtualOccurrenceRank[] {
+    if (orderedBlockIds.length === 0) {
+      throw new Error("Virtual occurrence reorder requires at least one block");
+    }
+    return this.database.transaction(() => {
+      const view = this.getFromCurrentRead(viewId);
+      if (!view) throw new Error(`Virtual branch not found: ${viewId}`);
+      if (!view.properties.some((property) =>
+        property.key.toLowerCase() === "type" && property.value.toLowerCase() === "virtual-branch"
+      )) {
+        throw new Error(`Block is not a virtual branch: ${viewId}`);
+      }
+
+      const orderedBlockIdSet = new Set(orderedBlockIds);
+      if (orderedBlockIdSet.size !== orderedBlockIds.length) {
+        throw new Error("Virtual occurrence reorder contains duplicate block IDs");
+      }
+      for (const blockId of orderedBlockIds) {
+        if (blockId === viewId) {
+          throw new Error("Virtual branch cannot rank itself as an occurrence");
+        }
+        if (!this.getFromCurrentRead(blockId)) {
+          throw new Error(`Virtual occurrence block not found: ${blockId}`);
+        }
+      }
+
+      const retainedRanks = new Set(
+        this.virtualOccurrenceRanksFromCurrentRead()
+          .filter((entry) =>
+            entry.viewId === viewId && !orderedBlockIdSet.has(entry.blockId)
+          )
+          .map((entry) => entry.rank),
+      );
+      const upsert = this.database.query(
+        "INSERT INTO virtual_occurrence_ranks (view_id, block_id, rank) VALUES (?, ?, ?) ON CONFLICT(view_id, block_id) DO UPDATE SET rank = excluded.rank",
+      );
+      let nextRank = 0;
+      for (const blockId of orderedBlockIds) {
+        while (retainedRanks.has(nextRank)) nextRank += 1;
+        upsert.run(viewId, blockId, nextRank);
+        nextRank += 1;
+      }
+      this.bumpSequence();
+      return this.virtualOccurrenceRanksFromCurrentRead().filter((entry) => entry.viewId === viewId);
+    })();
+  }
+
   resolveBlockReferences(text: string): string {
     return resolveBlockReferenceText(text, (blockId) => this.get(blockId));
   }
@@ -266,6 +323,7 @@ export class OutlinerStore {
         physical: { blocks: physical, completeness: { kind: "complete" } },
         selection: this.selectionFromGraph(graph),
         sequence: this.sequence,
+        virtualOccurrenceRanks: this.virtualOccurrenceRanksFromCurrentRead(),
       };
     })();
   }
@@ -294,6 +352,19 @@ export class OutlinerStore {
       .query("SELECT * FROM blocks WHERE parent_id IS ? ORDER BY position, created_at")
       .all(parentId) as BlockRow[];
     return rows.map((row) => this.hydrate(row));
+  }
+
+  private virtualOccurrenceRanksFromCurrentRead(): VirtualOccurrenceRank[] {
+    const rows = this.database
+      .query(
+        "SELECT view_id, block_id, rank FROM virtual_occurrence_ranks ORDER BY view_id, rank, block_id",
+      )
+      .all() as VirtualOccurrenceRankRow[];
+    return rows.map((row) => ({
+      viewId: row.view_id,
+      blockId: row.block_id,
+      rank: row.rank,
+    }));
   }
 
   private selectionFromCurrentRead(): SelectionContext {
@@ -450,6 +521,15 @@ export class OutlinerStore {
         block_id TEXT PRIMARY KEY REFERENCES blocks(id) ON DELETE CASCADE,
         multiline_expanded INTEGER NOT NULL DEFAULT 0
       );
+      CREATE TABLE IF NOT EXISTS virtual_occurrence_ranks (
+        view_id TEXT NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
+        block_id TEXT NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
+        rank INTEGER NOT NULL CHECK (rank >= 0),
+        PRIMARY KEY (view_id, block_id),
+        CHECK (view_id <> block_id)
+      );
+      CREATE INDEX IF NOT EXISTS virtual_occurrence_ranks_order
+        ON virtual_occurrence_ranks(view_id, rank, block_id);
     `);
     this.migratePropertyIndex();
   }

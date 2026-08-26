@@ -365,7 +365,7 @@ export function renderTreeFrame(
   } else if (expandedScrollable) {
     help = "PgUp/PgDn scroll selected block  ↑↓ navigate blocks  g goto  . / ⌘. detail";
   } else if (selectedRow?.kind === "occurrence") {
-    help = "◇ projected occurrence  ← definition  Enter edit canonical  d delete canonical  hierarchy disabled";
+    help = "◇ projected occurrence  Shift+↑↓ branch order  ← definition  Enter edit canonical  d delete canonical";
   } else {
     help = "↑↓ navigate  Shift+↑↓ reorder  g goto  . / ⌘. detail  Enter inline  Ctrl+Q close";
   }

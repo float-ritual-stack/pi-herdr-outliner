@@ -26,6 +26,7 @@ import {
   projectVirtualBranches,
   type PhysicalTreeRow,
   type TreeRow,
+  type VirtualBranchOccurrenceRow,
   type VirtualBranchState,
 } from "./virtual-branches";
 
@@ -134,7 +135,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   let viewerPath = "";
   let viewerOffset = 0;
   let expandedBlockOffset = 0;
-  let lastSelectionId: string | null = null;
+  let lastVisibleCanonicalId: string | null = null;
   let status = "";
   let refreshPending = false;
 
@@ -164,7 +165,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     };
   }
 
-  async function reload(preferredSelectedId?: string | null): Promise<boolean> {
+  async function reload(preferredRowId?: string | null): Promise<boolean> {
     const currentSelected = rows[selectedIndex];
     const snapshot = await effects.request<WorkspaceSnapshot>({
       action: "workspace.snapshot",
@@ -180,14 +181,15 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       snapshot.visible.blocks,
       snapshot.physical.blocks,
       (query) => effects.request<VisibleBlockCollection>({ action: "blocks.query", query }),
+      snapshot.virtualOccurrenceRanks,
     );
     const nextRows = projection.rows;
     const nextPhysicalBlocksById = new Map(snapshot.physical.blocks.map((block) => [block.id, block]));
     const serviceSelectedId = snapshot.selection.selected?.id ?? null;
     let nextIndex = -1;
-    if (preferredSelectedId !== undefined) {
-      if (preferredSelectedId) {
-        nextIndex = rowIndexForIdentity(nextRows, preferredSelectedId);
+    if (preferredRowId !== undefined) {
+      if (preferredRowId) {
+        nextIndex = rowIndexForIdentity(nextRows, preferredRowId);
       }
     } else if (currentSelected) {
       nextIndex = rowIndexForIdentity(
@@ -196,7 +198,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         currentSelected.canonicalId,
       );
     }
-    if (nextIndex < 0 && preferredSelectedId === undefined && serviceSelectedId) {
+    if (nextIndex < 0 && preferredRowId === undefined && serviceSelectedId) {
       nextIndex = nextRows.findIndex((row) => row.canonicalId === serviceSelectedId);
     }
     const nextSelectedIndex = Math.max(
@@ -214,7 +216,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     visibleCompleteness = snapshot.visible.completeness;
     branchStates = projection.branchStates;
     selectedIndex = nextSelectedIndex;
-    lastSelectionId = rows[selectedIndex]?.canonicalId ?? null;
+    lastVisibleCanonicalId = rows[selectedIndex]?.canonicalId ?? null;
     refreshPending = false;
     return serviceSelectedId !== null;
   }
@@ -433,14 +435,14 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   }
 
   async function selectVisibleBlock(
-    preferredId: string | null,
+    canonicalId: string | null,
     preferredRowId?: string,
   ): Promise<void> {
-    await reload(preferredRowId ?? preferredId);
+    await reload(preferredRowId ?? canonicalId);
     let visibilityChanged = false;
-    if (preferredId && rows[selectedIndex]?.canonicalId !== preferredId) {
-      const target = physicalBlocksById.get(preferredId);
-      if (!target) throw new Error(`Block not found: ${preferredId}`);
+    if (canonicalId && rows[selectedIndex]?.canonicalId !== canonicalId) {
+      const target = physicalBlocksById.get(canonicalId);
+      if (!target) throw new Error(`Block not found: ${canonicalId}`);
       if (activeFilter) {
         activeFilter = "";
         visibilityChanged = true;
@@ -457,14 +459,14 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         await effects.request({ action: "toggle", blockId });
         visibilityChanged = true;
       }
-      await reload(preferredId);
+      await reload(canonicalId);
     }
-    const visibleId = rows[selectedIndex]?.canonicalId ?? null;
-    if (preferredId && visibleId !== preferredId) {
-      throw new Error(`Block ${preferredId} could not be revealed`);
+    const visibleCanonicalId = rows[selectedIndex]?.canonicalId ?? null;
+    if (canonicalId && visibleCanonicalId !== canonicalId) {
+      throw new Error(`Block ${canonicalId} could not be revealed`);
     }
-    lastSelectionId = visibleId;
-    await effects.request({ action: "selection.set", blockId: visibleId });
+    lastVisibleCanonicalId = visibleCanonicalId;
+    await effects.request({ action: "selection.set", blockId: visibleCanonicalId });
     if (visibilityChanged) status = "Filter cleared or collapsed ancestors expanded to reveal block";
   }
 
@@ -658,6 +660,41 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     return canonical.id;
   }
 
+  async function moveOccurrenceSibling(
+    selected: VirtualBranchOccurrenceRow,
+    offset: -1 | 1,
+  ): Promise<string | null> {
+    const branchRows = rows.filter(
+      (row): row is VirtualBranchOccurrenceRow =>
+        isVirtualBranchOccurrence(row) && row.viewId === selected.viewId,
+    );
+    const currentIndex = branchRows.findIndex((row) => row.rowId === selected.rowId);
+    const targetIndex = currentIndex + offset;
+    if (currentIndex < 0 || targetIndex < 0) {
+      status = "Already first in virtual branch; canonical order unchanged";
+      return null;
+    }
+    if (targetIndex >= branchRows.length) {
+      status = "Already last in virtual branch; canonical order unchanged";
+      return null;
+    }
+
+    const orderedBlockIds = branchRows.map((row) => row.canonicalId);
+    [orderedBlockIds[currentIndex], orderedBlockIds[targetIndex]] = [
+      orderedBlockIds[targetIndex]!,
+      orderedBlockIds[currentIndex]!,
+    ];
+    await effects.request({
+      action: "virtual.occurrences.reorder",
+      viewId: selected.viewId,
+      orderedBlockIds,
+    });
+    status = offset < 0
+      ? "Moved up within virtual branch; canonical order unchanged"
+      : "Moved down within virtual branch; canonical order unchanged";
+    return selected.rowId;
+  }
+
   function occurrenceMutationDisabled(action: string): void {
     status = `Virtual occurrence ${action} is disabled; canonical hierarchy unchanged`;
   }
@@ -698,7 +735,12 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       return;
     }
     if (event.domain === "selection") {
-      await reload(event.blockId ?? null);
+      const currentRow = rows[selectedIndex];
+      let preferredRowId = event.blockId ?? null;
+      if (event.blockId && currentRow?.canonicalId === event.blockId) {
+        preferredRowId = currentRow.rowId;
+      }
+      await reload(preferredRowId);
     } else {
       await reload();
     }
@@ -769,9 +811,9 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       }
       mode = "browse";
       await reload();
-      const visibleId = rows[selectedIndex]?.canonicalId ?? null;
-      lastSelectionId = visibleId;
-      await effects.request({ action: "selection.set", blockId: visibleId });
+      const visibleCanonicalId = rows[selectedIndex]?.canonicalId ?? null;
+      lastVisibleCanonicalId = visibleCanonicalId;
+      await effects.request({ action: "selection.set", blockId: visibleCanonicalId });
       effects.invalidate();
       return;
     }
@@ -832,7 +874,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     }
 
     const selected = rows[selectedIndex];
-    let preferredSelectedId: string | undefined;
+    let preferredRowId: string | undefined;
     let reloadRequired = false;
     if (key.name === "q") {
       status = "Outliner remains open; Ctrl+Q closes this pane";
@@ -855,16 +897,24 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       scrollSelectedExpandedBlock(key.name);
     } else if (key.shift && key.name === "up") {
       if (selected && isVirtualBranchOccurrence(selected)) {
-        occurrenceMutationDisabled("sibling reorder");
+        const movedRowId = await moveOccurrenceSibling(selected, -1);
+        if (movedRowId) {
+          preferredRowId = movedRowId;
+          reloadRequired = true;
+        }
       } else if (selected) {
-        preferredSelectedId = await moveSibling(selected, -1);
+        preferredRowId = await moveSibling(selected, -1);
         reloadRequired = true;
       }
     } else if (key.shift && key.name === "down") {
       if (selected && isVirtualBranchOccurrence(selected)) {
-        occurrenceMutationDisabled("sibling reorder");
+        const movedRowId = await moveOccurrenceSibling(selected, 1);
+        if (movedRowId) {
+          preferredRowId = movedRowId;
+          reloadRequired = true;
+        }
       } else if (selected) {
-        preferredSelectedId = await moveSibling(selected, 1);
+        preferredRowId = await moveSibling(selected, 1);
         reloadRequired = true;
       }
     } else if (key.name === "up") selectedIndex = Math.max(0, selectedIndex - 1);
@@ -901,7 +951,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       } else {
         if (key.shift) await outdent(selected);
         else await indent(selected);
-        preferredSelectedId = selected.canonicalId;
+        preferredRowId = selected.canonicalId;
         reloadRequired = true;
       }
     } else if (key.name === "space" && selected) {
@@ -944,19 +994,19 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     }
 
     if (rows[selectedIndex]?.rowId !== selected?.rowId) resetExpandedBlockPaging();
-    if (reloadRequired) await reload(preferredSelectedId);
-    const visibleId = rows[selectedIndex]?.canonicalId ?? null;
-    if (visibleId !== lastSelectionId) {
-      lastSelectionId = visibleId;
-      await effects.request({ action: "selection.set", blockId: visibleId });
+    if (reloadRequired) await reload(preferredRowId);
+    const visibleCanonicalId = rows[selectedIndex]?.canonicalId ?? null;
+    if (visibleCanonicalId !== lastVisibleCanonicalId) {
+      lastVisibleCanonicalId = visibleCanonicalId;
+      await effects.request({ action: "selection.set", blockId: visibleCanonicalId });
     }
     effects.invalidate();
   }
 
   async function initialize(): Promise<void> {
     const hasServiceSelection = await reload();
-    if (!hasServiceSelection && lastSelectionId !== null) {
-      await effects.request({ action: "selection.set", blockId: lastSelectionId });
+    if (!hasServiceSelection && lastVisibleCanonicalId !== null) {
+      await effects.request({ action: "selection.set", blockId: lastVisibleCanonicalId });
     }
   }
 

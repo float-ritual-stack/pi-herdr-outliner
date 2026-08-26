@@ -7,6 +7,7 @@ import type {
   PropertyFilter,
   VisibleBlock,
   VisibleBlockCollection,
+  VirtualOccurrenceRank,
 } from "./types";
 
 const DEFAULT_VIRTUAL_BRANCH_LIMIT = 200;
@@ -272,6 +273,7 @@ function occurrenceRows(
   definition: PhysicalTreeRow,
   matches: readonly VisibleBlock[],
   limit: number,
+  ranks: readonly VirtualOccurrenceRank[],
 ): { rows: VirtualBranchOccurrenceRow[]; hasMore: boolean } {
   const definitionId = definition.canonicalId;
   const seenCanonicalIds = new Set<string>();
@@ -281,6 +283,19 @@ function occurrenceRows(
     seenCanonicalIds.add(block.id);
     eligible.push(block);
   }
+  const rankByBlockId = new Map(
+    ranks
+      .filter((entry) => entry.viewId === definitionId)
+      .map((entry) => [entry.blockId, entry.rank]),
+  );
+  eligible.sort((left, right) => {
+    const leftRank = rankByBlockId.get(left.id);
+    const rightRank = rankByBlockId.get(right.id);
+    if (leftRank === undefined && rightRank === undefined) return 0;
+    if (leftRank === undefined) return 1;
+    if (rightRank === undefined) return -1;
+    return leftRank - rightRank || left.id.localeCompare(right.id);
+  });
   return {
     rows: eligible.slice(0, limit).map((block) => ({
       kind: "occurrence",
@@ -306,6 +321,7 @@ async function projectVirtualBranch(
   definition: PhysicalTreeRow,
   physicalBlocks: readonly VisibleBlock[],
   queryBlocks: VirtualBranchQueryEffect,
+  ranks: readonly VirtualOccurrenceRank[],
 ): Promise<ProjectedVirtualBranch> {
   const definitionId = definition.canonicalId;
   const parsed = parseVirtualBranchConfig(definition.block, physicalBlocks);
@@ -317,9 +333,14 @@ async function projectVirtualBranch(
   try {
     const result = await queryBlocks({
       filters: parsed.config.filters,
-      limit: parsed.config.limit + 1,
+      limit: Math.max(1, physicalBlocks.length + 1),
     });
-    const projected = occurrenceRows(definition, result.blocks, parsed.config.limit);
+    const projected = occurrenceRows(
+      definition,
+      result.blocks,
+      parsed.config.limit,
+      ranks,
+    );
     const completeness: BlockCollectionCompleteness =
       projected.hasMore || result.completeness.kind === "truncated"
         ? { kind: "truncated", limit: parsed.config.limit }
@@ -351,11 +372,14 @@ export async function projectVirtualBranches(
   visibleBlocks: readonly VisibleBlock[],
   physicalBlocks: readonly VisibleBlock[],
   queryBlocks: VirtualBranchQueryEffect,
+  ranks: readonly VirtualOccurrenceRank[] = [],
 ): Promise<VirtualBranchProjection> {
   const physicalRows = buildPhysicalTreeRows(visibleBlocks);
   const definitions = physicalRows.filter((row) => isVirtualBranchDefinition(row.block));
   const projected = await Promise.all(
-    definitions.map((definition) => projectVirtualBranch(definition, physicalBlocks, queryBlocks)),
+    definitions.map((definition) =>
+      projectVirtualBranch(definition, physicalBlocks, queryBlocks, ranks)
+    ),
   );
   const branchStates = new Map<string, VirtualBranchState>();
   const occurrences = new Map<string, readonly VirtualBranchOccurrenceRow[]>();

@@ -25,11 +25,11 @@ The project started as a small Friday-night experiment and grew into a durable w
 
 - SQLite-backed hierarchical blocks with stable UUIDs, sibling order, authors, timestamps, collapse state, and selection.
 - Workspace-isolated service and runtime paths.
-- JSON-lines RPC protocol v3 over a Unix socket.
+- JSON-lines RPC protocol v4 over a Unix socket.
 - Reactive content, selection, view, and UI-command events.
 - Indexed `[property::value]` metadata with optimistic property patching and catalog queries.
 - Exact block references using `((block-id))`, resolved to display titles in read mode while raw text remains editable.
-- Property-driven virtual branches with canonical projected occurrences and property-aware creation.
+- Property-driven virtual branches with canonical projected occurrences, property-aware creation, and persisted branch-local occurrence order.
 - Selected multiline-expanded Tree blocks support viewport-sized intra-block PageUp/PageDown without changing block selection.
 - Pi Markdown preview with line, page, endpoint, and mouse/trackpad scrolling.
 - Grapheme-safe wrapped Detail editing, word motion, selection, deletion, bounded per-session undo/redo, completion, optimistic save, and whole-session Esc cancellation.
@@ -37,7 +37,7 @@ The project started as a small Friday-night experiment and grew into a durable w
 - Herdr pane discovery, restart reconstruction, and a disposable runtime registry.
 - Pi/OMP commands, tools, and selection-context injection.
 
-Planned work is tracked inside the outliner itself. Notable accepted designs include branch-local ordering for virtual occurrences, `PIE-NNN` work IDs, symbolic `[[page]]` addresses, backlinks, and pinned reference panes.
+Planned work is tracked inside the outliner itself. Notable accepted designs include `PIE-NNN` work IDs, symbolic `[[page]]` addresses, backlinks, and pinned reference panes.
 
 ## Quick start
 
@@ -107,7 +107,7 @@ The footer in each pane is authoritative and context-sensitive. These are the pr
 | `Up` / `Down` | Move selection |
 | `PageUp` / `PageDown` | Scroll within the selected multiline-expanded block |
 | `Left` / `Right` | Collapse/go to parent; expand/go to first child |
-| `Shift+Up` / `Shift+Down` | Reorder canonical siblings |
+| `Shift+Up` / `Shift+Down` | Reorder canonical siblings, or branch-local projected occurrences |
 | `Enter` | Inline edit a single-line block; hand multiline blocks to Detail |
 | `a` / `s` | Add child / sibling |
 | `Tab` / `Shift+Tab` | Indent / outdent |
@@ -189,7 +189,7 @@ Next
 
 Matches appear as disposable `◇` occurrences. Creating beneath the branch creates one canonical block under `create-parent` and applies the configured property. The same canonical block may appear in multiple branches.
 
-Current behavior intentionally rejects projected sibling reorder rather than mutating canonical order. Branch-local occurrence ranks are planned.
+`Shift+Up` / `Shift+Down` reorders projected siblings within that branch using persisted occurrence ranks. Canonical parent/position order stays unchanged, and ranks survive temporary query mismatches.
 
 ## Agent integration
 
