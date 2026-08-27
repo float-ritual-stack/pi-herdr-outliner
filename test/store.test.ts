@@ -1015,6 +1015,25 @@ Second paragraph`;
     });
   });
 
+  test("registers an unambiguous legacy declaration when restoring from Trash", () => {
+    const store = makeStore();
+    const directory = stores[stores.length - 1].directory;
+    const path = join(directory, "outliner.sqlite");
+    const legacy = store.create("Legacy page [page::Legacy Restored]");
+    store.delete(legacy.id);
+    store.database.query("DELETE FROM page_addresses").run();
+    store.database.query(
+      "UPDATE metadata SET value = '0' WHERE key = 'page_address_registry_version'",
+    ).run();
+    store.close();
+
+    const reopened = new OutlinerStore(path);
+    stores[stores.length - 1].store = reopened;
+    expect(reopened.resolvePageAddress("Legacy Restored").status).toBe("missing");
+    reopened.restore(legacy.id);
+    expect(reopened.resolvePageAddress("Legacy Restored").block?.id).toBe(legacy.id);
+  });
+
   test("restores ambiguous legacy Trash declarations without registering them", () => {
     const store = makeStore();
     const directory = stores[stores.length - 1].directory;
