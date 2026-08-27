@@ -936,6 +936,56 @@ describe("createTreeController", () => {
     expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe(successor.id);
   });
 
+  test("keeps deletion focus at the visual position when the fallback row vanishes with a surviving occurrence", async () => {
+    const laneView = block("lane-view", {
+      properties: [
+        { key: "type", value: "virtual-branch" },
+        { key: "query", value: "lane=first" },
+      ],
+    });
+    const target = block("target", { position: 1 });
+    const card = block("card", {
+      position: 2,
+      properties: [{ key: "lane", value: "first" }],
+    });
+    const tail = block("tail", { position: 3 });
+    let deleted = false;
+    let serviceSelected: Block | null = laneView;
+    const fake = harness((input) => {
+      if (input.action === "workspace.snapshot") {
+        // The fallback row's canonical block also disappears externally, while its
+        // occurrence in the lane view survives.
+        return snapshot(deleted ? [laneView, tail] : [laneView, target, card, tail], serviceSelected);
+      }
+      if (input.action === "blocks.query") {
+        return { blocks: [card], completeness: { kind: "complete" } };
+      }
+      if (input.action === "selection.set") {
+        serviceSelected = input.blockId === tail.id ? tail : serviceSelected;
+        return undefined;
+      }
+      if (input.action === "delete") {
+        deleted = true;
+        return undefined;
+      }
+      return undefined;
+    });
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+    await controller.handleKeypress("", { name: "down" }, "pass");
+    await controller.handleKeypress("", { name: "down" }, "pass");
+    expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe("target");
+
+    await controller.handleKeypress("d", { name: "d" }, "pass");
+    await controller.handleKeypress("y", { name: "y" }, "pass");
+
+    expect(lastCall(fake.calls, "delete")).toEqual({ action: "delete", blockId: "target" });
+    expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe("tail");
+    expect(controller.view().rows[controller.view().selectedIndex]?.rowId).not.toBe(
+      "occurrence:lane-view:card",
+    );
+  });
+
   test("keeps occurrence identity while editing and routes allowed effects to the canonical block", async () => {
     const definition = block("view", {
       properties: [

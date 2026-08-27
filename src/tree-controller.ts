@@ -202,7 +202,10 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     };
   }
 
-  async function reload(preferredRowId?: string | null): Promise<boolean> {
+  async function reload(
+    preferredRowId?: string | null,
+    options?: { exactRowIdOnly?: boolean },
+  ): Promise<boolean> {
     const currentSelected = rows[selectedIndex];
     const snapshot = await effects.request<WorkspaceSnapshot>({
       action: "workspace.snapshot",
@@ -227,7 +230,9 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     let currentRowVanished = false;
     if (preferredRowId !== undefined) {
       if (preferredRowId) {
-        nextIndex = rowIndexForIdentity(nextRows, preferredRowId);
+        nextIndex = options?.exactRowIdOnly
+          ? nextRows.findIndex((row) => row.rowId === preferredRowId)
+          : rowIndexForIdentity(nextRows, preferredRowId);
       }
     } else if (currentSelected) {
       nextIndex = nextRows.findIndex((row) => row.rowId === currentSelected.rowId);
@@ -889,7 +894,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
           blockId: fallback?.canonicalId ?? null,
         });
         await effects.request({ action: "delete", blockId: selected.canonicalId });
-        await reload(fallback?.rowId ?? null);
+        await reload(fallback?.rowId ?? null, { exactRowIdOnly: true });
         lastVisibleCanonicalId = rows[selectedIndex]?.canonicalId ?? null;
         status = "Moved to Trash";
       }
