@@ -40,6 +40,10 @@ describe("outliner link URIs", () => {
       kind: "work",
       value: "PIE-133",
     });
+    expect(parseOutlinerLinkUri(outlinerLinkUri("work", "ABC-001"))).toEqual({
+      kind: "work",
+      value: "ABC-001",
+    });
   });
 
   test("rejects web URLs, unsupported kinds, malformed IDs, and URL decorations", () => {
@@ -226,7 +230,11 @@ describe("outliner link rendering", () => {
   test("emits OSC 8 links for pages, work IDs, exact metadata IDs, and resolved references", () => {
     const raw = `[[Future Page]] PIE-133 depends on [decision::${targetId}] and ((${targetId}))`;
     const resolved = `[[Future Page]] PIE-133 depends on [decision::${targetId}] and ((Target decision))`;
-    const linker = createOutlinerTextLinker(raw, (id) => id === targetId ? target : null);
+    const linker = createOutlinerTextLinker(
+      raw,
+      (id) => id === targetId ? target : null,
+      "PIE",
+    );
     const rendered = linker.link(resolved);
 
     expect(stripTerminalSequences(rendered)).toBe(resolved);
@@ -289,7 +297,7 @@ describe("outliner link rendering", () => {
       "~~~",
     ].join("\n");
     const resolved = raw.replace(`((${targetId}))`, "((Target decision))");
-    const linked = linkOutlinerMarkdown(resolved, raw);
+    const linked = linkOutlinerMarkdown(resolved, raw, "PIE");
 
     expect(linked).toContain(`[PIE-133](${outlinerLinkUri("work", "PIE-133")})`);
     expect(linked).toContain(
@@ -321,15 +329,15 @@ describe("outliner link rendering", () => {
       kind: "block",
       value: "target01",
     });
-    expect(firstOutlinerReference("PIE-132 without brackets")).toEqual({
+    expect(firstOutlinerReference("PIE-132 without brackets", "PIE")).toEqual({
       kind: "work",
       value: "PIE-132",
     });
   });
 
   test("finds bare Work IDs as symbolic references", () => {
-    expect(firstOutlinerReference("PIE-133")).toEqual({ kind: "work", value: "PIE-133" });
-    expect(firstOutlinerReference("`PIE-133` then PIE-134")).toEqual({
+    expect(firstOutlinerReference("PIE-133", "PIE")).toEqual({ kind: "work", value: "PIE-133" });
+    expect(firstOutlinerReference("`PIE-133` then PIE-134", "PIE")).toEqual({
       kind: "work",
       value: "PIE-134",
     });
@@ -340,9 +348,27 @@ describe("outliner link rendering", () => {
     expect(firstOutlinerReference("[[PIE-135]")).toBeNull();
     const malformed = createOutlinerTextLinker("[[PIE-135]", () => null).link("[[PIE-135]");
     expect(getOsc8LinkAtColumn(malformed, 3)).toBeUndefined();
-    expect(firstOutlinerReference("pie-136")).toEqual({ kind: "work", value: "pie-136" });
+    expect(firstOutlinerReference("pie-136")).toBeNull();
     const lowercase = createOutlinerTextLinker("pie-136", () => null).link("pie-136");
-    expect(getOsc8LinkAtColumn(lowercase, 2)).toBe(outlinerLinkUri("work", "pie-136"));
+    expect(getOsc8LinkAtColumn(lowercase, 2)).toBeUndefined();
+    expect(firstOutlinerReference("ABC-001", "ABC")).toEqual({
+      kind: "work",
+      value: "ABC-001",
+    });
+    const customPrefix = createOutlinerTextLinker(
+      "ABC-001",
+      () => null,
+      "ABC",
+    ).link("ABC-001");
+    expect(getOsc8LinkAtColumn(customPrefix, 2)).toBe(
+      outlinerLinkUri("work", "ABC-001"),
+    );
+    expect(firstOutlinerReference("ABC-001_foo")).toBeNull();
+    expect(firstOutlinerReference("foo_ABC-001")).toBeNull();
+    const embedded = createOutlinerTextLinker("ABC-001_foo", () => null).link(
+      "ABC-001_foo",
+    );
+    expect(getOsc8LinkAtColumn(embedded, 2)).toBeUndefined();
   });
 
   test("keeps tilde fences protected until a complete matching close", () => {

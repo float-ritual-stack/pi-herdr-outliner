@@ -13,6 +13,7 @@ import type {
   PageAddressCollection,
   OutlinerEvent,
   SelectionContext,
+  ResolvedBlockReferences,
   VisibleBlockCollection,
 } from "./types";
 
@@ -43,6 +44,7 @@ export interface DetailLineRange {
 export interface DetailState {
   context: SelectionContext;
   resolvedSelectedText: string;
+  workIdPrefix: string | null;
   resolvedBreadcrumb: string;
   mode: DetailMode;
   buffer: TextBuffer;
@@ -62,7 +64,7 @@ export interface DetailState {
 export interface DetailEffects {
   getSelection(): Promise<SelectionContext>;
   setSelection(blockId: string): Promise<void>;
-  resolveReferences(text: string): Promise<string>;
+  resolveReferences(text: string): Promise<ResolvedBlockReferences>;
   updateBlock(input: {
     blockId: string;
     text: string;
@@ -196,6 +198,7 @@ export function createDetailController(
   const state: DetailState = {
     context: { selected: null, ancestors: [], children: [] },
     resolvedSelectedText: "",
+    workIdPrefix: null,
     resolvedBreadcrumb: "",
     mode: "preview",
     buffer: new TextBuffer(),
@@ -235,6 +238,11 @@ export function createDetailController(
     }
   };
 
+  const applyResolvedReferences = (resolved: ResolvedBlockReferences): void => {
+    state.resolvedSelectedText = resolved.text;
+    state.workIdPrefix = resolved.workIdPrefix ?? null;
+  };
+
   const loadSelection = async (force = false): Promise<void> => {
     const next = await effects.getSelection();
     state.refreshPending = false;
@@ -245,9 +253,12 @@ export function createDetailController(
     if (!force && !changed) return;
     if (changed) state.status = "";
 
-    state.resolvedSelectedText = next.selected
-      ? await effects.resolveReferences(next.selected.text)
-      : "";
+    if (next.selected) {
+      applyResolvedReferences(await effects.resolveReferences(next.selected.text));
+    } else {
+      state.resolvedSelectedText = "";
+      state.workIdPrefix = null;
+    }
     refreshBreadcrumb();
     state.previewOffset = 0;
     state.completion = null;
@@ -349,7 +360,7 @@ export function createDetailController(
           expectedUpdatedAt: state.context.selected.updatedAt,
         });
         state.context = { ...state.context, selected: updated };
-        state.resolvedSelectedText = await effects.resolveReferences(updated.text);
+        applyResolvedReferences(await effects.resolveReferences(updated.text));
         refreshBreadcrumb();
         state.mode = detailDisplayMode(updated);
         if (state.mode === "file" || state.mode === "annotation") loadFile(updated);
@@ -502,7 +513,7 @@ export function createDetailController(
       }
       case "reference.follow": {
         const reference = state.context.selected
-          ? firstOutlinerReference(state.context.selected.text)
+          ? firstOutlinerReference(state.context.selected.text, state.workIdPrefix)
           : null;
         if (!reference) {
           state.status = "Selected block has no block or page references";

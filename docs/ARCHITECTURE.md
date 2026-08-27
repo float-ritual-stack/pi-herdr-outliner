@@ -113,10 +113,12 @@ Literal property-looking text inside inline code, fenced code, or escaped syntax
 - `block_view_state` — UI state such as multiline expansion without changing canonical text.
 - `virtual_occurrence_ranks` — durable `(virtual-branch ID, canonical block ID) -> branch-local rank`; both foreign keys cascade on deletion.
 - `page_addresses` — unique normalized symbolic address to canonical block mapping for page declarations, Work IDs, and explicit aliases; foreign keys cascade only on physical purge.
+- `reserved_work_ids` — immutable Work-ID reservation ledger with the original canonical owner UUID retained after purge.
+- `work_id_allocator` — singleton workspace prefix and next monotonic sequence number.
 
 ## Protocol
 
-The current protocol version is `8`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
+The current protocol version is `9`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
 
 ### Important request families
 
@@ -128,6 +130,7 @@ The current protocol version is `8`, defined in [`src/types.ts`](../src/types.ts
 - virtual ordering: `virtual.occurrences.reorder`
 - references: `references.resolve`
 - symbolic addresses: `pages.resolve`, `pages.follow`, `pages.complete`, `pages.rename`, `pages.alias`, `pages.remove`
+- Work IDs: `work-ids.status`, `work-ids.configure`, `work-ids.allocate`
 - selection: `selection.get`, `selection.set`
 - navigation: `navigation.state`, `navigation.back`, `navigation.forward`
 - reactive clients: `events.subscribe`
@@ -207,7 +210,9 @@ Exact references use `((block-id))`. Read paths replace a resolvable ID with the
 
 Symbolic references use `[[address]]`. The registry compares trimmed, Unicode-normalized, caseless, whitespace-collapsed keys while preserving the authored address label. One `[page::address]` declaration registers a page; `[work-id::PIE-NNN]` registers the same canonical block under its Work ID. Bare Work IDs navigate through a resolve-only registry path rather than fuzzy goto, and unresolved Work-ID-shaped addresses cannot create page stubs. Parsing and ordinary saves never create a referenced block. `pages.follow` transactionally resolves or creates one ordinary root stub. General edits cannot silently change or remove a registered declaration: `pages.rename` uses optimistic concurrency, changes the primary declaration, and retains the former address as an alias; `pages.alias` adds another explicit address; `pages.remove` explicitly unregisters an alias or primary declaration. Registry rebuilds preserve aliases.
 
-The initial registry migration backfills active declarations only. Pre-PIE-132 Trash content can contain indexed property-shaped examples and copied Work IDs that never established symbolic identity; importing those would either create false addresses or block startup. Registry rebuilds retain addresses already owned by deleted blocks. Restoring a legacy Trash subtree registers newly active declarations only when they are unambiguous and unclaimed. Legacy registration is block-atomic: one ambiguous declaration suppresses every address on that block until repair. The block still restores as ordinary editable content and can register through a subsequent valid edit.
+Work-ID allocation is workspace-scoped and transactional. A one-time v9 migration adopts a clean existing reservation prefix; an empty or ambiguous legacy workspace requires explicit `work-ids.configure`, and later manual values never auto-configure on restart. Prefix configuration can be corrected until the chosen prefix owns an immutable reservation. The allocator tracks the next number monotonically and formats a minimum three-digit suffix. Allocation uses optimistic block concurrency, appends canonical text, rebuilds the property/address indexes, and reserves the ID with its owning UUID in one transaction. Canonical manual declarations for the configured prefix pass through the same ownership, sequence, and never-reuse enforcement. Malformed, noncanonical, duplicate legacy, and out-of-prefix values remain indexed inert metadata rather than blocking startup or text saves. Existing valid legacy Work-ID addresses for other prefixes are retained, but bare Work-ID linking and new allocation are scoped to the configured prefix.
+
+The initial registry migration backfills active declarations only. Pre-PIE-132 Trash content can contain indexed property-shaped examples and copied Work IDs that never established symbolic identity; importing those would either create false addresses or block startup. Registry rebuilds retain addresses already owned by deleted blocks. Restoring a legacy Trash subtree registers newly active declarations only when they are unambiguous and unclaimed. Legacy registration is block-atomic: one ambiguous declaration suppresses every address on that block until repair. The block still restores as ordinary editable content and can register through a subsequent valid edit. Reservation migration and allocator reconciliation leave malformed, duplicate-owner, and foreign-prefix legacy Work-ID values as inert indexed metadata instead of failing workspace startup.
 
 ## Recoverable deletion and Trash
 
@@ -229,7 +234,7 @@ References resolve to three states. Active targets render normally; effectively 
 
 Symbolic addresses use the same lifecycle distinction. Soft deletion retains the registry row and resolves to the read-only tombstone. Purge cascades registry rows, so the former address becomes genuinely missing and may create a new stub only on a later explicit follow.
 
-Permanent purge is manual and irreversible. It physically deletes the canonical subtree through existing foreign-key cascades. Before deletion, every subtree work ID is copied into `reserved_work_ids`; future work-ID allocation must consult that ledger so deleted or purged identifiers are never reused.
+Permanent purge is manual and irreversible. It physically deletes the canonical subtree through existing foreign-key cascades. Before deletion, every subtree Work ID is confirmed in `reserved_work_ids`; the ledger retains its original canonical owner UUID, so neither the allocator nor later manual declarations can reuse a deleted or purged identifier.
 
 ## Virtual branches
 
@@ -300,6 +305,7 @@ After deploying a merged change, restart Detail, Tree, and service in that order
 ```text
 src/store.ts                  SQLite block graph, property index, and symbolic-address registry
 src/page-addresses.ts         symbolic-address validation, normalization, and syntax scanning
+src/work-ids.ts              Work-ID prefix validation, parsing, and formatting
 src/server.ts                 protocol and subscriptions
 src/client.ts                 request/watch client
 src/server-main.ts            canonical service process

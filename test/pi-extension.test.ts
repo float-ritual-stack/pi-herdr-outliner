@@ -30,6 +30,7 @@ test("registers the workspace commands and annotation-aware tools", () => {
     "outliner_property_patch",
     "outliner_property_catalog",
     "outliner_page",
+    "outliner_work_id",
     "outliner_query",
     "outliner_move",
     "outliner_selection",
@@ -44,7 +45,7 @@ test("registers the workspace commands and annotation-aware tools", () => {
   expect(updateSchema).toContain("expectedUpdatedAt");
 });
 
-test("requires protocol v8, attributes agent creates and page follows, and presents bounded query results", async () => {
+test("requires protocol v9, attributes agent creates and page follows, and presents bounded query results", async () => {
   const collection: VisibleBlockCollection = {
     blocks: [
       {
@@ -65,7 +66,7 @@ test("requires protocol v8, attributes agent creates and page follows, and prese
     ],
     completeness: { kind: "truncated", limit: 20 },
   };
-  let protocolVersion = 8;
+  let protocolVersion = 9;
   let queryCollection = collection;
   const requests: RequestInput[] = [];
   const originalRequest = OutlinerClient.prototype.request;
@@ -74,6 +75,9 @@ test("requires protocol v8, attributes agent creates and page follows, and prese
     if (input.action === "blocks.query") return queryCollection as unknown as T;
     if (input.action === "create") return {} as T;
     if (input.action === "pages.follow") return { created: true } as T;
+    if (input.action === "work-ids.status") return { prefix: "PIE" } as T;
+    if (input.action === "work-ids.configure") return { prefix: input.prefix } as T;
+    if (input.action === "work-ids.allocate") return { workId: "PIE-152" } as T;
     if (input.action === "ping") {
       return { status: "ready", protocolVersion } as unknown as T;
     }
@@ -98,8 +102,11 @@ test("requires protocol v8, attributes agent creates and page follows, and prese
         text?: string;
         limit?: number;
         parentId?: string | null;
-        operation?: "follow";
+        operation?: "follow" | "status" | "configure" | "allocate";
         address?: string;
+        blockId?: string;
+        expectedUpdatedAt?: string;
+        prefix?: string;
       },
       signal?: AbortSignal,
       onUpdate?: unknown,
@@ -148,6 +155,18 @@ test("requires protocol v8, attributes agent creates and page follows, and prese
       undefined,
       context,
     );
+    await tools.get("outliner_work_id")!.execute("work-status", {
+      operation: "status",
+    });
+    await tools.get("outliner_work_id")!.execute("work-configure", {
+      operation: "configure",
+      prefix: "PIE",
+    });
+    await tools.get("outliner_work_id")!.execute("work-allocate", {
+      operation: "allocate",
+      blockId: "work-block",
+      expectedUpdatedAt: "version-1",
+    });
     await expect(
       tools.get("outliner_page")!.execute(
         "unknown-page-op",
@@ -189,6 +208,18 @@ test("requires protocol v8, attributes agent creates and page follows, and prese
         taskId: "page-follow-test",
       },
     });
+    expect(requests.find((request) => request.action === "work-ids.status")).toEqual({
+      action: "work-ids.status",
+    });
+    expect(requests.find((request) => request.action === "work-ids.configure")).toEqual({
+      action: "work-ids.configure",
+      prefix: "PIE",
+    });
+    expect(requests.find((request) => request.action === "work-ids.allocate")).toEqual({
+      action: "work-ids.allocate",
+      blockId: "work-block",
+      expectedUpdatedAt: "version-1",
+    });
     expect(widgets).toEqual([
       {
         id: "pi-outliner-filter",
@@ -222,7 +253,7 @@ test("requires protocol v8, attributes agent creates and page follows, and prese
     expect(largeEnvelope.presentation.omitted).toBeGreaterThan(0);
     protocolVersion = 5;
     await expect(tools.get("outliner_query")!.execute("incompatible-query", {})).rejects.toThrow(
-      "Incompatible outliner protocol 5; expected 8",
+      "Incompatible outliner protocol 5; expected 9",
     );
   } finally {
     OutlinerClient.prototype.request = originalRequest;

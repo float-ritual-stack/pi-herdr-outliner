@@ -26,6 +26,7 @@ import {
   type NavigationState,
   type PageAddressCollection,
   type OutlinerServiceStatus,
+  type ResolvedBlockReferences,
   type SelectionContext,
   type VisibleBlockCollection,
 } from "./types";
@@ -57,8 +58,7 @@ const effects: DetailEffects = {
     await client.request({ action: "selection.set", blockId });
   },
   async resolveReferences(text) {
-    const result = await client.request<{ text: string }>({ action: "references.resolve", text });
-    return result.text;
+    return client.request<ResolvedBlockReferences>({ action: "references.resolve", text });
   },
   async updateBlock(input) {
     return client.request<Block>({ action: "update", ...input });

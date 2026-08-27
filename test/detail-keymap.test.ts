@@ -12,6 +12,7 @@ function state(): DetailState {
   return {
     context: { selected: null, ancestors: [], children: [] },
     resolvedSelectedText: "",
+    workIdPrefix: null,
     resolvedBreadcrumb: "",
     mode: "edit",
     buffer: new TextBuffer("alpha beta"),

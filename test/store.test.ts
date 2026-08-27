@@ -804,8 +804,323 @@ Second paragraph`;
     rmSync(directory, { recursive: true, force: true });
   });
 
+  test("allocates monotonic project Work IDs transactionally", async () => {
+    const store = makeStore();
+    const first = store.create("First opted-in work item");
+    const second = store.create("Second opted-in work item");
+    const third = store.create("Third opted-in work item");
+
+    expect(store.workIdAllocatorStatus()).toEqual({
+      prefix: null,
+      nextNumber: null,
+      nextWorkId: null,
+      reservedCount: 0,
+      observedPrefixes: [],
+    });
+    expect(() => store.allocateWorkId(first.id, first.updatedAt)).toThrow(
+      "Configure the project Work-ID prefix",
+    );
+    expect(store.configureWorkIdPrefix("pei")).toMatchObject({
+      prefix: "PEI",
+      nextWorkId: "PEI-001",
+    });
+    expect(store.configureWorkIdPrefix("pie")).toMatchObject({
+      prefix: "PIE",
+      nextWorkId: "PIE-001",
+    });
+    const firstAllocation = store.allocateWorkId(first.id, first.updatedAt);
+    const [secondAllocation, thirdAllocation] = await Promise.all([
+      Promise.resolve().then(() =>
+        store.allocateWorkId(second.id, second.updatedAt)
+      ),
+      Promise.resolve().then(() =>
+        store.allocateWorkId(third.id, third.updatedAt)
+      ),
+    ]);
+
+    expect(firstAllocation).toMatchObject({
+      workId: "PIE-001",
+      block: {
+        id: first.id,
+        properties: [{ key: "work-id", value: "PIE-001" }],
+      },
+    });
+    expect([secondAllocation.workId, thirdAllocation.workId]).toEqual([
+      "PIE-002",
+      "PIE-003",
+    ]);
+    expect(secondAllocation.block.text).toContain("[work-id::PIE-002]");
+    expect(store.resolvePageAddress("pie-003").block?.id).toBe(third.id);
+    expect(store.workIdAllocatorStatus()).toEqual({
+      prefix: "PIE",
+      nextNumber: 4,
+      nextWorkId: "PIE-004",
+      reservedCount: 3,
+      observedPrefixes: ["PIE"],
+    });
+  });
+  test("protects a configured non-PIE Work-ID namespace from page stubs", () => {
+    const store = makeStore();
+    const work = store.create("Custom-prefix work");
+    store.configureWorkIdPrefix("abc");
+    expect(store.followPageAddress("RFC-2119")).toMatchObject({
+      created: true,
+      kind: "page",
+      block: { text: "RFC-2119 [page::RFC-2119]" },
+    });
+    expect(
+      store.allocateWorkId(work.id, work.updatedAt).workId,
+    ).toBe("ABC-001");
+    expect(store.resolvePageAddress("abc-001").block?.id).toBe(work.id);
+    expect(() => store.followPageAddress("ABC-002")).toThrow(
+      "Unresolved Work ID cannot create a page stub",
+    );
+    expect(store.resolvePageAddress("ABC-002").status).toBe("missing");
+  });
+
+
+  test("protects reserved IDs before configuration and does not auto-adopt later typos", () => {
+    const store = makeStore();
+    const directory = stores[stores.length - 1].directory;
+    const path = join(directory, "outliner.sqlite");
+    const owner = store.create("Reserved before configuration [work-id::PIE-001]");
+    expect(() => store.followPageAddress("PIE-001")).toThrow(
+      "Unresolved Work ID cannot create a page stub",
+    );
+    expect(store.configureWorkIdPrefix("PIE")).toMatchObject({
+      prefix: "PIE",
+      nextWorkId: "PIE-002",
+    });
+    expect(store.resolvePageAddress("PIE-001").block?.id).toBe(owner.id);
+
+    store.close();
+    const reopened = new OutlinerStore(path);
+    stores[stores.length - 1].store = reopened;
+    expect(reopened.workIdAllocatorStatus().prefix).toBe("PIE");
+  });
+
+  test("does not auto-configure a typo introduced after the v9 migration", () => {
+    const store = makeStore();
+    const directory = stores[stores.length - 1].directory;
+    const path = join(directory, "outliner.sqlite");
+    store.create("Typo remains inert [work-id::PEI-001]");
+    store.close();
+
+    const reopened = new OutlinerStore(path);
+    stores[stores.length - 1].store = reopened;
+    expect(reopened.workIdAllocatorStatus()).toMatchObject({
+      prefix: null,
+      observedPrefixes: ["PEI"],
+    });
+    expect(reopened.configureWorkIdPrefix("PIE")).toMatchObject({
+      prefix: "PIE",
+      nextWorkId: "PIE-001",
+    });
+  });
+
+  test("adopts manual IDs, rejects prefix changes, and never reuses purged IDs", () => {
+    const store = makeStore();
+    const existing = store.create("Existing work [work-id::PIE-123]");
+    const allocated = store.create("Allocated work");
+    const afterPurge = store.create("After purge");
+
+    expect(store.workIdAllocatorStatus()).toMatchObject({
+      prefix: null,
+      nextNumber: null,
+      nextWorkId: null,
+      observedPrefixes: ["PIE"],
+    });
+    expect(store.configureWorkIdPrefix("PIE")).toMatchObject({
+      prefix: "PIE",
+      nextNumber: 124,
+      nextWorkId: "PIE-124",
+    });
+    expect(() => store.configureWorkIdPrefix("OTHER")).toThrow(
+      "already has immutable reservations",
+    );
+    expect(() =>
+      store.allocateWorkId(allocated.id, "stale")
+    ).toThrow("changed since editing began");
+    const allocation = store.allocateWorkId(
+      allocated.id,
+      allocated.updatedAt,
+    );
+    const otherPrefix = store.create("Other project [work-id::OTHER-001]");
+    const malformed = store.create("Malformed work [work-id::PIE-x]");
+    const unpadded = store.create("Unpadded work [work-id::PIE-7]");
+    expect(otherPrefix.properties).toContainEqual({ key: "work-id", value: "OTHER-001" });
+    expect(malformed.properties).toContainEqual({ key: "work-id", value: "PIE-x" });
+    expect(unpadded.properties).toContainEqual({ key: "work-id", value: "PIE-7" });
+    expect(store.resolvePageAddress("OTHER-001").status).toBe("missing");
+    expect(store.resolvePageAddress("PIE-7").status).toBe("missing");
+    expect(allocation.workId).toBe("PIE-124");
+    expect(() =>
+      store.allocateWorkId(existing.id, existing.updatedAt)
+    ).toThrow("already has a Work ID");
+
+    store.delete(allocated.id);
+    store.purge(allocated.id, allocation.workId);
+    expect(() => store.create("Illegal reuse [work-id::PIE-124]")).toThrow(
+      `already belongs to block ${allocated.id}`,
+    );
+    expect(store.allocateWorkId(afterPurge.id, afterPurge.updatedAt).workId).toBe(
+      "PIE-125",
+    );
+    store.create("Manual future [work-id::PIE-200]");
+    expect(store.workIdAllocatorStatus().nextWorkId).toBe("PIE-201");
+  });
+
+  test("migrates reservation ownership and adopts the existing sequence", () => {
+    const store = makeStore();
+    const directory = stores[stores.length - 1].directory;
+    const path = join(directory, "outliner.sqlite");
+    const existing = store.create("Legacy allocated [work-id::PIE-123]");
+    store.database.query(
+      "DELETE FROM metadata WHERE key = 'work_id_allocator_migration_version'",
+    ).run();
+    store.close();
+
+    const legacy = new Database(path);
+    legacy.exec(`
+      DROP TABLE work_id_allocator;
+      CREATE TABLE reserved_work_ids_legacy (
+        work_id TEXT PRIMARY KEY,
+        reserved_at TEXT NOT NULL
+      );
+      INSERT INTO reserved_work_ids_legacy (work_id, reserved_at)
+        SELECT work_id, reserved_at FROM reserved_work_ids;
+      DROP TABLE reserved_work_ids;
+      ALTER TABLE reserved_work_ids_legacy RENAME TO reserved_work_ids;
+    `);
+    legacy.close();
+
+    const reopened = new OutlinerStore(path);
+    stores[stores.length - 1].store = reopened;
+    expect(reopened.workIdAllocatorStatus()).toMatchObject({
+      prefix: "PIE",
+      nextNumber: 124,
+      nextWorkId: "PIE-124",
+      observedPrefixes: ["PIE"],
+    });
+    expect(
+      reopened.database.query(
+        "SELECT block_id FROM reserved_work_ids WHERE work_id = 'PIE-123'",
+      ).get(),
+    ).toEqual({ block_id: existing.id });
+  });
+
+  test("migrates dirty legacy Work-ID properties without blocking startup", () => {
+    const store = makeStore();
+    const directory = stores[stores.length - 1].directory;
+    const path = join(directory, "outliner.sqlite");
+    const pieOwner = store.create("PIE owner [work-id::PIE-001]");
+    store.create("Other prefix [work-id::ABC-001]");
+    const duplicate = store.create("Copied legacy value");
+    store.database.query(
+      "UPDATE blocks SET text = ? WHERE id = ?",
+    ).run("Copied [work-id::PIE-001] [work-id::todo-later]", duplicate.id);
+    store.database.query(
+      "INSERT INTO block_properties (block_id, key, value, ordinal) VALUES (?, 'work-id', 'PIE-001', 0), (?, 'work-id', 'todo-later', 1)",
+    ).run(duplicate.id, duplicate.id);
+    store.database.query(
+      "DELETE FROM metadata WHERE key = 'work_id_allocator_migration_version'",
+    ).run();
+    store.close();
+
+    const reopened = new OutlinerStore(path);
+    stores[stores.length - 1].store = reopened;
+    expect(reopened.workIdAllocatorStatus()).toMatchObject({
+      prefix: null,
+      observedPrefixes: ["ABC", "PIE"],
+      reservedCount: 2,
+    });
+    expect(reopened.configureWorkIdPrefix("PIE")).toMatchObject({
+      prefix: "PIE",
+      nextWorkId: "PIE-002",
+    });
+    expect(reopened.resolvePageAddress("PIE-001").block?.id).toBe(pieOwner.id);
+    expect(reopened.require(duplicate.id).properties).toEqual([
+      { key: "work-id", value: "PIE-001" },
+      { key: "work-id", value: "todo-later" },
+    ]);
+  });
+
+  test("purges legacy copied and malformed Work-ID properties without ownership adoption", () => {
+    const store = makeStore();
+    const owner = store.create("Canonical owner [work-id::PIE-123]");
+    const legacy = store.create("Legacy Trash source");
+    store.database.query(
+      "UPDATE blocks SET text = ? WHERE id = ?",
+    ).run("Legacy [work-id::PIE-123] [work-id::not-an-id]", legacy.id);
+    store.database.query(
+      "INSERT INTO block_properties (block_id, key, value, ordinal) VALUES (?, 'work-id', 'PIE-123', 0), (?, 'work-id', 'not-an-id', 1)",
+    ).run(legacy.id, legacy.id);
+    store.delete(legacy.id);
+
+    store.purge(legacy.id, "PIE-123");
+
+    expect(store.get(legacy.id)).toBeNull();
+    expect(
+      store.database.query(
+        "SELECT block_id FROM reserved_work_ids WHERE work_id = 'PIE-123'",
+      ).get(),
+    ).toEqual({ block_id: owner.id });
+  });
+
+  test("reserves purged Work IDs without a surviving address row and tolerates legacy values", () => {
+    const store = makeStore();
+    const directory = stores[stores.length - 1].directory;
+    const path = join(directory, "outliner.sqlite");
+    const orphan = store.create("Legacy deleted work [work-id::PIE-321]");
+    store.delete(orphan.id);
+    store.database.query("DELETE FROM page_addresses WHERE block_id = ?").run(orphan.id);
+    store.database.query("DELETE FROM reserved_work_ids WHERE work_id = 'PIE-321'").run();
+    store.database.query("DELETE FROM work_id_allocator").run();
+
+    store.purge(orphan.id, "PIE-321");
+    expect(
+      store.database.query(
+        "SELECT block_id FROM reserved_work_ids WHERE work_id = 'PIE-321'",
+      ).get(),
+    ).toEqual({ block_id: orphan.id });
+    expect(store.workIdAllocatorStatus()).toMatchObject({
+      prefix: null,
+      nextWorkId: null,
+      observedPrefixes: ["PIE"],
+    });
+    expect(store.configureWorkIdPrefix("PIE")).toMatchObject({
+      prefix: "PIE",
+      nextWorkId: "PIE-322",
+    });
+
+    const later = store.create("Later deleted work [work-id::PIE-400]");
+    store.delete(later.id);
+    store.database.query("DELETE FROM page_addresses WHERE block_id = ?").run(later.id);
+    store.database.query("DELETE FROM reserved_work_ids WHERE work_id = 'PIE-400'").run();
+    store.database.query(
+      "UPDATE work_id_allocator SET next_number = 322 WHERE singleton = 1",
+    ).run();
+    store.purge(later.id, "PIE-400");
+    expect(store.workIdAllocatorStatus().nextWorkId).toBe("PIE-401");
+
+    store.database.query(
+      "INSERT INTO reserved_work_ids (work_id, reserved_at, block_id) VALUES ('not-an-id', ?, NULL), ('OTHER-004', ?, NULL)",
+    ).run(new Date().toISOString(), new Date().toISOString());
+    store.close();
+
+    const reopened = new OutlinerStore(path);
+    stores[stores.length - 1].store = reopened;
+    expect(reopened.workIdAllocatorStatus()).toMatchObject({
+      prefix: "PIE",
+      nextWorkId: "PIE-401",
+      observedPrefixes: ["OTHER", "PIE"],
+      reservedCount: 3,
+    });
+  });
+
   test("registers normalized page declarations and Work IDs with authored labels", () => {
     const store = makeStore();
+    store.configureWorkIdPrefix("PIE");
     const page = store.create("Research hub [page::Research   Notes]");
     const work = store.create("Symbolic registry [work-id::PIE-132]");
 
@@ -853,6 +1168,7 @@ Second paragraph`;
   });
   test("does not create on parse or save and creates one stub only on follow", async () => {
     const store = makeStore();
+    store.configureWorkIdPrefix("PIE");
     const source = store.create("Source mentions [[Future Page]]");
     const updated = store.update(source.id, "Source still mentions [[Future Page]]");
     const before = store.traversePreorder({ collapsedDescendants: "traverse" }).length;
@@ -885,6 +1201,7 @@ Second paragraph`;
 
   test("rejects normalized address collisions across page and Work-ID declarations", () => {
     const store = makeStore();
+    store.configureWorkIdPrefix("PIE");
     const owner = store.create("Owner [work-id::PIE-132]");
     const count = store.traversePreorder({ collapsedDescendants: "traverse" }).length;
 
@@ -980,6 +1297,7 @@ Second paragraph`;
     const store = makeStore();
     const directory = stores[stores.length - 1].directory;
     const path = join(directory, "outliner.sqlite");
+    store.configureWorkIdPrefix("PIE");
     const page = store.create("Migrated page [page::Migration Target]");
     const work = store.create("Migrated work [work-id::PIE-777]");
     store.addPageAlias(page.id, "Migrated Alias");

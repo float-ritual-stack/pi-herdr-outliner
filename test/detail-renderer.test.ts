@@ -23,6 +23,7 @@ function state(overrides: Partial<DetailState> = {}): DetailState {
   return {
     context: { selected: null, ancestors: [], children: [] },
     resolvedSelectedText: "",
+    workIdPrefix: null,
     resolvedBreadcrumb: "",
     mode: "preview",
     buffer: new TextBuffer(),

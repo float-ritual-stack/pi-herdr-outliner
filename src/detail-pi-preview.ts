@@ -23,12 +23,17 @@ function renderPreviewDocument(
   sourceText: string,
   rawText: string,
   linksEnabled: boolean,
+  workIdPrefix: string | null,
 ): string {
   const sanitizedSource = sanitizeMarkdownDocument(sourceText);
   if (!linksEnabled) return sanitizedSource;
 
   // Authored text must be sanitized before adding trusted, generated Markdown links.
-  return linkOutlinerMarkdown(sanitizedSource, sanitizeMarkdownDocument(rawText));
+  return linkOutlinerMarkdown(
+    sanitizedSource,
+    sanitizeMarkdownDocument(rawText),
+    workIdPrefix,
+  );
 }
 
 const PREVIEW_HELP = "↑↓ line  ^U/D half  Fn+↑↓ page  click links  g/G ends  Enter edit  q tree";
@@ -58,6 +63,7 @@ export class DetailPiPreviewLayout extends VStack {
   readonly scrollView: ScrollView;
   private renderedSourceText: string | undefined;
   private renderedRawText: string | undefined;
+  private renderedWorkIdPrefix: string | null | undefined;
   private previousSelectionId: string | null | undefined;
   private active: boolean;
   private resetScroll = false;
@@ -123,11 +129,21 @@ export class DetailPiPreviewLayout extends VStack {
       ? this.state.resolvedSelectedText
       : "Select a block in the outliner pane.";
     const rawText = selected && this.linksEnabled ? selected.text : sourceText;
-    if (sourceText !== this.renderedSourceText || rawText !== this.renderedRawText) {
+    if (
+      sourceText !== this.renderedSourceText ||
+      rawText !== this.renderedRawText ||
+      this.state.workIdPrefix !== this.renderedWorkIdPrefix
+    ) {
       this.renderedSourceText = sourceText;
       this.renderedRawText = rawText;
+      this.renderedWorkIdPrefix = this.state.workIdPrefix;
       const renderedText = selected
-        ? renderPreviewDocument(sourceText, rawText, this.linksEnabled)
+        ? renderPreviewDocument(
+            sourceText,
+            rawText,
+            this.linksEnabled,
+            this.state.workIdPrefix,
+          )
         : sourceText;
       this.markdown.setText(renderedText);
     }

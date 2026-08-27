@@ -7,11 +7,12 @@ import {
 import { blockDisplayTitle, blockReferenceIds } from "./references";
 import { isWorkIdAddress, pageAddressReferences } from "./page-addresses";
 import type { Block, PageAddressFollowResult, PageAddressResolution } from "./types";
+import { workIdReferences } from "./work-ids";
 
 const OUTLINER_SCHEME = "pi-outliner:";
 const BLOCK_ID_PATTERN = /^[A-Za-z0-9_-]{8,}$/;
 const BLOCK_ID_TOKEN_PATTERN = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
-const WORK_ID_PATTERN = /\bPIE-\d+\b/gi;
+
 const RAW_BLOCK_REFERENCE_PATTERN = /\(\(([A-Za-z0-9_-]{8,})\)\)/g;
 const TERMINAL_CONTROL_PATTERN = /[\u0000-\u001f\u007f]/;
 
@@ -209,7 +210,10 @@ function overlaps(left: TextRange, right: TextRange): boolean {
   return left.start < right.end && right.start < left.end;
 }
 
-export function firstOutlinerReference(text: string): OutlinerLinkTarget | null {
+export function firstOutlinerReference(
+  text: string,
+  workIdPrefix: string | null = null,
+): OutlinerLinkTarget | null {
   const candidates: Array<OutlinerLinkTarget & TextRange> = [];
   for (const match of text.matchAll(RAW_BLOCK_REFERENCE_PATTERN)) {
     candidates.push({
@@ -228,12 +232,12 @@ export function firstOutlinerReference(text: string): OutlinerLinkTarget | null 
     });
   }
   const pageRanges = pageSyntaxRanges(text);
-  for (const match of text.matchAll(WORK_ID_PATTERN)) {
-    const range = { start: match.index, end: match.index + match[0].length };
+  for (const reference of workIdPrefix ? workIdReferences(text, workIdPrefix) : []) {
+    const range = { start: reference.start, end: reference.end };
     if (pageRanges.some((pageRange) => overlaps(range, pageRange))) continue;
     candidates.push({
       kind: "work",
-      value: match[0],
+      value: reference.workId,
       ...range,
     });
   }
@@ -247,6 +251,7 @@ export function firstOutlinerReference(text: string): OutlinerLinkTarget | null 
 function genericLinkSpans(
   text: string,
   canLinkBlock: (blockId: string) => boolean,
+  workIdPrefix: string | null,
 ): LinkSpan[] {
   const spans: LinkSpan[] = [];
   const pageRanges = pageSyntaxRanges(text);
@@ -257,12 +262,12 @@ function genericLinkSpans(
       uri: outlinerLinkUri("page", reference.displayAddress),
     });
   }
-  for (const match of text.matchAll(WORK_ID_PATTERN)) {
-    const range = { start: match.index, end: match.index + match[0].length };
+  for (const reference of workIdPrefix ? workIdReferences(text, workIdPrefix) : []) {
+    const range = { start: reference.start, end: reference.end };
     if (pageRanges.some((pageRange) => overlaps(range, pageRange))) continue;
     spans.push({
       ...range,
-      uri: outlinerLinkUri("work", match[0]),
+      uri: outlinerLinkUri("work", reference.workId),
     });
   }
   for (const match of text.matchAll(BLOCK_ID_TOKEN_PATTERN)) {
@@ -280,10 +285,14 @@ function selectLinkSpans(
   text: string,
   exactSpans: readonly LinkSpan[],
   canLinkBlock: (blockId: string) => boolean,
+  workIdPrefix: string | null,
 ): LinkSpan[] {
   const protectedRanges = protectedMarkdownRanges(text);
   const selected: LinkSpan[] = [];
-  for (const span of [...exactSpans, ...genericLinkSpans(text, canLinkBlock)]) {
+  for (const span of [
+    ...exactSpans,
+    ...genericLinkSpans(text, canLinkBlock, workIdPrefix),
+  ]) {
     if (protectedRanges.some((range) => overlaps(span, range))) continue;
     if (selected.some((existing) => overlaps(span, existing))) continue;
     selected.push(span);
@@ -332,11 +341,16 @@ function resolvedReferenceSpans(rawText: string, resolvedText: string): LinkSpan
   return spans;
 }
 
-export function linkOutlinerMarkdown(resolvedText: string, rawText: string): string {
+export function linkOutlinerMarkdown(
+  resolvedText: string,
+  rawText: string,
+  workIdPrefix: string | null = null,
+): string {
   const spans = selectLinkSpans(
     resolvedText,
     resolvedReferenceSpans(rawText, resolvedText),
     () => true,
+    workIdPrefix,
   );
   return renderLinkSpans(resolvedText, spans, markdownLink);
 }
@@ -348,6 +362,7 @@ export interface OutlinerTextLinker {
 export function createOutlinerTextLinker(
   rawText: string,
   lookup: (blockId: string) => Block | null,
+  workIdPrefix: string | null = null,
 ): OutlinerTextLinker {
   const references = blockReferenceIds(rawText).map((blockId) => {
     const target = lookup(blockId);
@@ -382,7 +397,12 @@ export function createOutlinerTextLinker(
         consumedReferences.add(index);
         if (reference.uri) exactSpans.push({ ...range, uri: reference.uri });
       }
-      const spans = selectLinkSpans(text, exactSpans, (blockId) => lookup(blockId) !== null);
+      const spans = selectLinkSpans(
+        text,
+        exactSpans,
+        (blockId) => lookup(blockId) !== null,
+        workIdPrefix,
+      );
       return renderLinkSpans(text, spans, hyperlink);
     },
   };

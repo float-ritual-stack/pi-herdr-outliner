@@ -58,6 +58,7 @@ export interface TreeView {
   readonly workspaceRoot: string;
   readonly rows: readonly TreeRow[];
   readonly physicalBlocksById: ReadonlyMap<string, VisibleBlock>;
+  readonly workIdPrefix: string | null;
   readonly visibleCompleteness: BlockCollectionCompleteness;
   readonly branchStates: ReadonlyMap<string, VirtualBranchState>;
   readonly selectedIndex: number;
@@ -169,6 +170,7 @@ function fallbackRowBeforeDelete(
 export function createTreeController(effects: TreeControllerEffects): TreeController {
   let rows: TreeRow[] = [];
   let physicalBlocksById = new Map<string, VisibleBlock>();
+  let workIdPrefix: string | null = null;
   let visibleCompleteness: BlockCollectionCompleteness = { kind: "complete" };
   let branchStates = new Map<string, VirtualBranchState>();
   let selectedIndex = 0;
@@ -193,6 +195,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       workspaceRoot: effects.workspaceRoot,
       rows,
       physicalBlocksById,
+      workIdPrefix,
       visibleCompleteness,
       branchStates,
       selectedIndex,
@@ -219,6 +222,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       action: "workspace.snapshot",
       view: { filters: parseFilter(activeFilter) },
     });
+    workIdPrefix = snapshot.workIdPrefix ?? null;
     if (snapshot.physical.completeness.kind === "truncated") {
       throw new Error(
         `Workspace snapshot physical blocks are truncated at ${snapshot.physical.completeness.limit}; canonical ancestry is unavailable`,
@@ -1102,7 +1106,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         reloadRequired = true;
       }
     } else if (str === "o" && selected) {
-      const reference = firstOutlinerReference(selected.block.text);
+      const reference = firstOutlinerReference(selected.block.text, workIdPrefix);
       if (!reference) {
         status = "Selected block has no block or page references";
       } else {
