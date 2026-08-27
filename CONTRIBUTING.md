@@ -104,7 +104,7 @@ Prefer clean cutovers: migrate every caller, test, and import, then remove obsol
 - Keep UUID as canonical identity and Work ID as an immutable human/symbolic address.
 - Preserve reservation owner UUIDs after purge; neither allocator nor manual canonical declarations may reuse them.
 - Treat malformed, unpadded, duplicate-owner, and out-of-prefix legacy properties as inert metadata during migration rather than blocking startup.
-- Keep bare Work-ID rendering scoped to the configured prefix; bracketed symbolic lookup may preserve valid legacy addresses from other prefixes.
+- Preserve an existing valid legacy Work-ID address from another prefix only when its reservation still names the same canonical owner; do not create new bare links or allocations outside the configured prefix.
 
 ### Terminal safety
 
