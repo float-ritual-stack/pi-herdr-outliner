@@ -833,6 +833,227 @@ describe("createTreeController", () => {
     expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe("created");
   });
 
+  test("selects the visual successor beyond a deleted physical subtree before deletion", async () => {
+    const parent = block("parent", { hasChildren: true });
+    const child = block("child", { parentId: parent.id, depth: 1 });
+    const successor = block("successor", { position: 1 });
+    let physical = [parent, child, successor];
+    let selected: Block | null = parent;
+    const fake = harness((input) => {
+      if (input.action === "workspace.snapshot") return snapshot(physical, selected);
+      if (input.action === "selection.set") {
+        selected = physical.find((candidate) => candidate.id === input.blockId) ?? null;
+        return undefined;
+      }
+      if (input.action === "delete") {
+        physical = physical.filter((candidate) => candidate.id === successor.id);
+        return undefined;
+      }
+      return undefined;
+    });
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+
+    await controller.handleKeypress("d", { name: "d" }, "pass");
+    await controller.handleKeypress("y", { name: "y" }, "pass");
+
+    const deleteIndex = fake.calls.findIndex((call) => call.action === "delete");
+    expect(fake.calls[deleteIndex - 1]).toEqual({
+      action: "selection.set",
+      blockId: successor.id,
+    });
+    expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe(successor.id);
+  });
+
+  test("accounts for removed projected rows above a deleted physical row", async () => {
+    const definition = block("view", {
+      properties: [
+        { key: "type", value: "virtual-branch" },
+        { key: "query", value: "status=Doing" },
+      ],
+    });
+    const card = block("card", {
+      position: 1,
+      properties: [{ key: "status", value: "Doing" }],
+    });
+    const successor = block("successor", { position: 2 });
+    const tail = block("tail", { position: 3 });
+    let cardPresent = true;
+    let physical = [definition, card, successor, tail];
+    let selected: Block | null = card;
+    const fake = harness((input) => {
+      if (input.action === "workspace.snapshot") return snapshot(physical, selected);
+      if (input.action === "blocks.query") {
+        return {
+          blocks: cardPresent ? [card] : [],
+          completeness: { kind: "complete" },
+        };
+      }
+      if (input.action === "selection.set") {
+        selected = physical.find((candidate) => candidate.id === input.blockId) ?? null;
+        return undefined;
+      }
+      if (input.action === "delete") {
+        cardPresent = false;
+        physical = [definition, successor, tail];
+        return undefined;
+      }
+      return undefined;
+    });
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+    await controller.handleKeypress("", { name: "down" }, "pass");
+    expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe(card.id);
+
+    await controller.handleKeypress("d", { name: "d" }, "pass");
+    await controller.handleKeypress("y", { name: "y" }, "pass");
+
+    expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe(successor.id);
+  });
+
+  test("reloads deferred content when delete confirmation is cancelled", async () => {
+    const selected = block("selected");
+    const added = block("added", { position: 1 });
+    let physical = [selected];
+    const fake = harness((input) =>
+      input.action === "workspace.snapshot" ? snapshot(physical, selected) : undefined
+    );
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+    await controller.handleKeypress("d", { name: "d" }, "pass");
+
+    physical = [selected, added];
+    await controller.handleServiceEvent(event("content", added.id));
+    expect(controller.view().refreshPending).toBe(true);
+    await controller.handleKeypress("n", { name: "n" }, "pass");
+
+    expect(controller.view().mode).toBe("browse");
+    expect(controller.view().refreshPending).toBe(false);
+    expect(controller.view().rows.map((row) => row.rowId)).toEqual([selected.id, added.id]);
+    expect(fake.calls.some((call) => call.action === "delete")).toBe(false);
+  });
+
+  test("selects the previous visual row when deleting the final row", async () => {
+    const previous = block("previous");
+    const deleted = block("deleted", { position: 1 });
+    let physical = [previous, deleted];
+    let selected: Block | null = deleted;
+    const fake = harness((input) => {
+      if (input.action === "workspace.snapshot") return snapshot(physical, selected);
+      if (input.action === "selection.set") {
+        selected = physical.find((candidate) => candidate.id === input.blockId) ?? null;
+        return undefined;
+      }
+      if (input.action === "delete") {
+        physical = [previous];
+        return undefined;
+      }
+      return undefined;
+    });
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+
+    await controller.handleKeypress("d", { name: "d" }, "pass");
+    await controller.handleKeypress("y", { name: "y" }, "pass");
+
+    expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe(previous.id);
+    expect(fake.calls.findIndex((call) => call.action === "selection.set")).toBeLessThan(
+      fake.calls.findIndex((call) => call.action === "delete"),
+    );
+  });
+
+  test("skips projected rows owned by a deleted virtual-branch definition", async () => {
+    const definition = block("view", {
+      properties: [
+        { key: "type", value: "virtual-branch" },
+        { key: "query", value: "status=Doing" },
+      ],
+    });
+    const successor = block("successor", { position: 1 });
+    const card = block("card", {
+      position: 2,
+      properties: [{ key: "status", value: "Doing" }],
+    });
+    let physical = [definition, successor, card];
+    let selected: Block | null = definition;
+    const fake = harness((input) => {
+      if (input.action === "workspace.snapshot") return snapshot(physical, selected);
+      if (input.action === "blocks.query") {
+        return { blocks: [card], completeness: { kind: "complete" } };
+      }
+      if (input.action === "selection.set") {
+        selected = physical.find((candidate) => candidate.id === input.blockId) ?? null;
+        return undefined;
+      }
+      if (input.action === "delete") {
+        physical = [successor, card];
+        return undefined;
+      }
+      return undefined;
+    });
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+
+    await controller.handleKeypress("d", { name: "d" }, "pass");
+    await controller.handleKeypress("y", { name: "y" }, "pass");
+
+    expect(lastCall(fake.calls, "selection.set")).toEqual({
+      action: "selection.set",
+      blockId: successor.id,
+    });
+    expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe(successor.id);
+  });
+
+  test("keeps deletion focus at the visual position when the fallback row vanishes with a surviving occurrence", async () => {
+    const laneView = block("lane-view", {
+      properties: [
+        { key: "type", value: "virtual-branch" },
+        { key: "query", value: "lane=first" },
+      ],
+    });
+    const target = block("target", { position: 1 });
+    const card = block("card", {
+      position: 2,
+      properties: [{ key: "lane", value: "first" }],
+    });
+    const tail = block("tail", { position: 3 });
+    let deleted = false;
+    let serviceSelected: Block | null = laneView;
+    const fake = harness((input) => {
+      if (input.action === "workspace.snapshot") {
+        // The fallback row's canonical block also disappears externally, while its
+        // occurrence in the lane view survives.
+        return snapshot(deleted ? [laneView, tail] : [laneView, target, card, tail], serviceSelected);
+      }
+      if (input.action === "blocks.query") {
+        return { blocks: [card], completeness: { kind: "complete" } };
+      }
+      if (input.action === "selection.set") {
+        serviceSelected = input.blockId === tail.id ? tail : serviceSelected;
+        return undefined;
+      }
+      if (input.action === "delete") {
+        deleted = true;
+        return undefined;
+      }
+      return undefined;
+    });
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+    await controller.handleKeypress("", { name: "down" }, "pass");
+    await controller.handleKeypress("", { name: "down" }, "pass");
+    expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe("target");
+
+    await controller.handleKeypress("d", { name: "d" }, "pass");
+    await controller.handleKeypress("y", { name: "y" }, "pass");
+
+    expect(lastCall(fake.calls, "delete")).toEqual({ action: "delete", blockId: "target" });
+    expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe("tail");
+    expect(controller.view().rows[controller.view().selectedIndex]?.rowId).not.toBe(
+      "occurrence:lane-view:card",
+    );
+  });
+
   test("keeps occurrence identity while editing and routes allowed effects to the canonical block", async () => {
     const definition = block("view", {
       properties: [
@@ -923,20 +1144,33 @@ describe("createTreeController", () => {
       action: "delete",
       blockId: "card",
     });
+    const deleteIndex = fake.calls.findIndex((call) => call.action === "delete");
+    expect(fake.calls[deleteIndex - 1]).toEqual({
+      action: "selection.set",
+      blockId: "view",
+    });
+    expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe("view");
+    expect(controller.view().status).toBe("Moved to Trash");
     expect(JSON.stringify(fake.calls)).not.toContain("occurrence:");
   });
 
-  test("falls back from a disappeared occurrence to its still-visible canonical row", async () => {
+  test("falls back at a vanished occurrence's visual position instead of its physical row", async () => {
     const definition = block("view", {
       properties: [
         { key: "type", value: "virtual-branch" },
         { key: "query", value: "status=Doing" },
       ],
     });
-    const card = block("card", { properties: [{ key: "status", value: "Doing" }] });
+    const context = block("context", { position: 1 });
+    const card = block("card", {
+      position: 2,
+      properties: [{ key: "status", value: "Doing" }],
+    });
     let matches = true;
     const fake = harness((input) => {
-      if (input.action === "workspace.snapshot") return snapshot([definition, card], definition);
+      if (input.action === "workspace.snapshot") {
+        return snapshot([definition, context, card], definition);
+      }
       if (input.action === "blocks.query") {
         return { blocks: matches ? [card] : [], completeness: { kind: "complete" } };
       }
@@ -952,11 +1186,88 @@ describe("createTreeController", () => {
     matches = false;
     await controller.handleServiceEvent(event("content"));
 
-    expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe("card");
-    expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe("card");
+    expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe("context");
+    expect(lastCall(fake.calls, "selection.set")).toEqual({
+      action: "selection.set",
+      blockId: "context",
+    });
   });
 
-  test("prefers the physical row when one of several occurrences disappears", async () => {
+  test("does not retarget a vanished occurrence to its Trash occurrence", async () => {
+    const doingView = block("doing-view", {
+      properties: [
+        { key: "type", value: "virtual-branch" },
+        { key: "query", value: "status=Doing" },
+      ],
+    });
+    const trashView = block("trash-view", {
+      position: 1,
+      properties: [
+        { key: "type", value: "virtual-branch" },
+        { key: "system-view", value: "trash" },
+        { key: "query", value: "deleted=true" },
+      ],
+    });
+    const context = block("context", { position: 2 });
+    const card = block("card", {
+      position: 3,
+      properties: [{ key: "status", value: "Doing" }],
+    });
+    const trashedCard = {
+      ...card,
+      deletedAt: "deleted",
+      effectiveDeletedRootId: card.id,
+    };
+    let deleted = false;
+    let serviceSelected: Block | null = doingView;
+    const fake = harness((input) => {
+      if (input.action === "workspace.snapshot") {
+        const active = deleted ? [doingView, trashView, context] : [doingView, trashView, context, card];
+        return snapshot(active, serviceSelected);
+      }
+      if (input.action === "blocks.query") {
+        if (input.query.includeDeleted) {
+          return {
+            blocks: deleted ? [trashedCard] : [],
+            completeness: { kind: "complete" },
+          };
+        }
+        return {
+          blocks: deleted ? [] : [card],
+          completeness: { kind: "complete" },
+        };
+      }
+      if (input.action === "selection.set") {
+        serviceSelected = input.blockId === trashView.id
+          ? trashView
+          : input.blockId === card.id
+            ? card
+            : serviceSelected;
+      }
+      return undefined;
+    });
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+    await controller.handleKeypress("", { name: "down" }, "pass");
+    expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe(
+      "occurrence:doing-view:card",
+    );
+
+    deleted = true;
+    serviceSelected = trashedCard;
+    await controller.handleServiceEvent(event("content", card.id));
+
+    expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe(trashView.id);
+    expect(controller.view().rows[controller.view().selectedIndex]?.rowId).not.toBe(
+      "occurrence:trash-view:card",
+    );
+    expect(lastCall(fake.calls, "selection.set")).toEqual({
+      action: "selection.set",
+      blockId: trashView.id,
+    });
+  });
+
+  test("uses the same visual index when one of several occurrences disappears", async () => {
     const firstView = block("first-view", {
       properties: [
         { key: "type", value: "virtual-branch" },

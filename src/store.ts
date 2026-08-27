@@ -269,15 +269,6 @@ export class OutlinerStore {
       this.database.query("UPDATE blocks SET deleted_at = ?, updated_at = ? WHERE id = ?")
         .run(deletedAt, deletedAt, id);
       this.recomputeEffectiveDeletion();
-      const selected = this.selectionFromCurrentRead().selected;
-      if (selected?.effectiveDeletedRootId) {
-        const replacement = this.childrenFromCurrentRead(block.parentId)
-          .find((candidate) => !candidate.effectiveDeletedRootId && candidate.id !== id)
-          ?? (block.parentId ? this.getFromCurrentRead(block.parentId) : null);
-        this.setSelectionFromCurrentRead(
-          replacement?.effectiveDeletedRootId ? null : replacement?.id ?? null,
-        );
-      }
       this.bumpSequence();
     })();
     return this.require(id);

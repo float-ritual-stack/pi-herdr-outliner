@@ -240,7 +240,7 @@ Second paragraph`;
     });
   });
 
-  test("records a delete replacement before later navigation", () => {
+  test("keeps canonical delete independent from replacement navigation", () => {
     const store = makeStore();
     const parent = store.create("History replacement parent");
     const deleted = store.create("History deleted selection", parent.id);
@@ -249,8 +249,12 @@ Second paragraph`;
 
     store.setSelection(deleted.id);
     store.delete(deleted.id);
-    expect(store.getSelection().selected?.id).toBe(replacement.id);
+    expect(store.getSelection().selected).toMatchObject({
+      id: deleted.id,
+      effectiveDeletedRootId: deleted.id,
+    });
 
+    store.setSelection(replacement.id);
     store.setSelection(destination.id);
     expect(store.navigateHistory("back").selection.selected?.id).toBe(replacement.id);
   });
