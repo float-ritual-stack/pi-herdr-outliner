@@ -397,43 +397,39 @@ export default function outlinerExtension(pi: ExtensionAPI): void {
     label: "Outliner Page Address",
     description: "Resolve, follow, complete, rename, or alias a unique symbolic page address",
     promptSnippet: "Use the shared symbolic page-address registry",
-    parameters: Type.Union([
-      Type.Object({
-        operation: Type.Literal("resolve"),
-        address: Type.String(),
-      }),
-      Type.Object({
-        operation: Type.Literal("follow"),
-        address: Type.String(),
-      }),
-      Type.Object({
-        operation: Type.Literal("complete"),
-        query: Type.Optional(Type.String()),
-        limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
-      }),
-      Type.Object({
-        operation: Type.Literal("rename"),
-        blockId: Type.String(),
-        address: Type.String(),
-      }),
-      Type.Object({
-        operation: Type.Literal("alias"),
-        blockId: Type.String(),
-        address: Type.String(),
-      }),
-    ]),
+    parameters: Type.Object({
+      operation: Type.Union([
+        Type.Literal("resolve"),
+        Type.Literal("follow"),
+        Type.Literal("complete"),
+        Type.Literal("rename"),
+        Type.Literal("alias"),
+      ]),
+      address: Type.Optional(
+        Type.String({ description: "Required for resolve, follow, rename, and alias" }),
+      ),
+      blockId: Type.Optional(Type.String({ description: "Required for rename and alias" })),
+      query: Type.Optional(Type.String({ description: "Optional prefix filter for complete" })),
+      limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+    }),
     async execute(toolCallId, params, _signal, _onUpdate, context) {
       await ensureService(false);
+      const requireField = (value: string | undefined, field: string): string => {
+        if (value === undefined || value === "") {
+          throw new Error(`outliner_page ${params.operation} requires ${field}`);
+        }
+        return value;
+      };
       switch (params.operation) {
         case "resolve":
           return toolResult(await client.request({
             action: "pages.resolve",
-            address: params.address,
+            address: requireField(params.address, "address"),
           }));
         case "follow":
           return toolResult(await client.request({
             action: "pages.follow",
-            address: params.address,
+            address: requireField(params.address, "address"),
             author: "agent",
             provenance: toolProvenance(context, toolCallId),
           }));
@@ -446,14 +442,14 @@ export default function outlinerExtension(pi: ExtensionAPI): void {
         case "rename":
           return toolResult(await client.request({
             action: "pages.rename",
-            blockId: params.blockId,
-            address: params.address,
+            blockId: requireField(params.blockId, "blockId"),
+            address: requireField(params.address, "address"),
           }));
         case "alias":
           return toolResult(await client.request({
             action: "pages.alias",
-            blockId: params.blockId,
-            address: params.address,
+            blockId: requireField(params.blockId, "blockId"),
+            address: requireField(params.address, "address"),
           }));
       }
     },

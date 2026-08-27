@@ -1186,7 +1186,7 @@ export class OutlinerStore {
       }
       if (version === PAGE_ADDRESS_REGISTRY_VERSION) return;
 
-      this.database.query("DELETE FROM page_addresses").run();
+      this.database.query("DELETE FROM page_addresses WHERE kind IN ('page', 'work-id')").run();
       const rows = this.database.query(
         "SELECT block_id, key, value FROM block_properties WHERE key IN ('page', 'work-id') ORDER BY block_id, ordinal",
       ).all() as PropertyRow[];

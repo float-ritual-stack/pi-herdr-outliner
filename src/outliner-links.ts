@@ -209,6 +209,14 @@ export function firstOutlinerReference(text: string): OutlinerLinkTarget | null 
       end: reference.end,
     });
   }
+  for (const match of text.matchAll(WORK_ID_PATTERN)) {
+    candidates.push({
+      kind: "page",
+      value: match[0],
+      start: match.index,
+      end: match.index + match[0].length,
+    });
+  }
   const protectedRanges = protectedMarkdownRanges(text);
   const first = candidates
     .filter((candidate) => !protectedRanges.some((range) => overlaps(candidate, range)))
