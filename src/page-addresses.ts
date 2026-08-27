@@ -39,6 +39,14 @@ export function normalizePageAddress(input: string): NormalizedPageAddress {
   return { displayAddress, normalizedAddress };
 }
 
+export function tryNormalizePageAddress(input: string): NormalizedPageAddress | null {
+  try {
+    return normalizePageAddress(input);
+  } catch {
+    return null;
+  }
+}
+
 export function pageAddressReferences(text: string): PageAddressReference[] {
   const references: PageAddressReference[] = [];
   for (const match of text.matchAll(PAGE_ADDRESS_PATTERN)) {
