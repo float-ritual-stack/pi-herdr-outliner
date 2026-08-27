@@ -166,7 +166,7 @@ describe("renderTreeFrame", () => {
     expect(visible).toBe(`• PIE-133 links [decision::${id}]   `);
 
     expect(getOsc8LinkAtColumn(line!, visible.indexOf("PIE-133") + 2)).toBe(
-      "pi-outliner://page/PIE-133",
+      "pi-outliner://work/PIE-133",
     );
     expect(getOsc8LinkAtColumn(line!, visible.indexOf(id) + 2)).toBe(
       `pi-outliner://block/${id}`,

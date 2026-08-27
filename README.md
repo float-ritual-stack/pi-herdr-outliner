@@ -29,8 +29,8 @@ The project started as a small Friday-night experiment and grew into a durable w
 - Reactive content, selection, view, and UI-command events, with service-owned block navigation history.
 - Indexed `[property::value]` metadata with optimistic property patching and catalog queries.
 - Exact block references using `((block-id))`, resolved to display titles in read mode while raw text remains editable.
-- Unique normalized symbolic addresses from explicit `[page::address]` declarations and Work IDs, with aliases, bounded completion, dangling links, and transactional create-on-follow.
-- Plain-clickable work IDs, canonical UUIDs, exact references, and `[[address]]` links inside Tree/Detail, with OSC 8 `pi-outliner://` links retained for external terminal interoperability.
+- Unique normalized symbolic addresses from explicit `[page::address]` declarations and Work IDs, with aliases, explicit removal, bounded completion, dangling links, and transactional create-on-follow.
+- Plain-clickable Work IDs, canonical UUIDs, exact references, and `[[address]]` links inside Tree/Detail, with OSC 8 `pi-outliner://` links retained for external terminal interoperability.
 - Property-driven virtual branches with canonical projected occurrences, property-aware creation, and persisted branch-local occurrence order.
 - Agent-authored blocks retain immutable actor, session, and originating tool-call/task provenance while preserving the coarse `agent` author role.
 - Recoverable deletion preserves canonical structure and identity, excludes Trash content from normal queries/completions, and requires explicit identifier-confirmed purge.
@@ -128,7 +128,7 @@ The footer in each pane is authoritative and context-sensitive. These are the pr
 | `p` | Type the work ID/short UUID to permanently purge a Trash root |
 | `Ctrl+Q` | Close the pane |
 
-Plain-click any linked `PIE-NNN`, canonical UUID, exact reference, or symbolic `[[address]]` inside Tree or Detail. Resolved addresses focus their canonical block; following a dangling address creates one canonical page stub and then focuses it. Shift remains the terminal-native text-selection escape while Tree mouse reporting is active.
+Plain-click any linked `PIE-NNN`, canonical UUID, exact reference, or symbolic `[[address]]` inside Tree or Detail. Registered Work IDs resolve without fuzzy matching and never create content when missing. Resolved page addresses focus their canonical block; following another dangling address creates one canonical page stub and then focuses it. Shift remains the terminal-native text-selection escape while Tree mouse reporting is active.
 
 For links rendered outside the active Outliner, the Herdr Control-click handler remains available where the terminal delivers that modifier. On macOS, the optional `macos/pi-outliner-link` app handles the native path instead: Warp uses Command-click; Ghostty with mouse capture uses Shift-Command-click. The bridge forwards validated targets over SSH/Tailscale and preserves the live workspace navigation semantics.
 
@@ -189,7 +189,7 @@ Exact references use stable block IDs:
 Depends on ((516e1754-7741-4c9e-83a6-7b703a8f0798))
 ```
 
-Read views resolve exact-reference titles while edit views retain raw IDs. Symbolic links use `[[address]]`; a block registers an address through `[page::address]`, and existing Work IDs participate in the same unique normalized registry. Parsing or saving a dangling link never creates content. Only explicit follow creates a root stub, transactionally. Explicit rename preserves the old address as an alias; deleted targets remain resolvable and purged targets become dangling.
+Read views resolve exact-reference titles while edit views retain raw IDs. Symbolic links use `[[address]]`; a block registers an address through `[page::address]`, and existing Work IDs participate in the same unique normalized registry. Parsing or saving a dangling link never creates content. Only explicit follow creates a root stub, transactionally; unresolved Work-ID-shaped addresses fail instead of squatting the stable Work-ID namespace. Explicit rename preserves the old address as an alias, and explicit removal unregisters an alias or primary declaration. Deleted targets remain resolvable and purged targets become dangling.
 
 ### Virtual branches
 

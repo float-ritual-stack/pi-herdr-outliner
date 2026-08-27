@@ -16,6 +16,7 @@ import type {
   PageAddressFollowResult,
   PageAddressRecord,
   PageAddressResolution,
+  PageAddressRemoval,
   OutlinerServiceStatus,
   PropertyCatalogItem,
   VisibleBlockCollection,
@@ -124,12 +125,23 @@ test("serves mutations and property queries over the local socket", async () => 
     action: "pages.rename",
     blockId: followedPage.block!.id,
     address: "Renamed Protocol Page",
+    expectedUpdatedAt: followedPage.block!.updatedAt,
   })).toMatchObject({ address: "Renamed Protocol Page", kind: "page" });
   expect(await client.request<PageAddressRecord>({
     action: "pages.alias",
     blockId: followedPage.block!.id,
     address: "Protocol Alias",
   })).toMatchObject({ address: "Protocol Alias", kind: "alias" });
+  const renamedPageBlock = await client.request<Block>({
+    action: "get",
+    blockId: followedPage.block!.id,
+  });
+  expect(await client.request<PageAddressRemoval>({
+    action: "pages.remove",
+    blockId: followedPage.block!.id,
+    address: "Protocol Alias",
+    expectedUpdatedAt: renamedPageBlock.updatedAt,
+  })).toMatchObject({ removed: { address: "Protocol Alias", kind: "alias" } });
   expect(await client.request<PageAddressResolution>({
     action: "pages.resolve",
     address: "Protocol Page",

@@ -60,6 +60,11 @@ export interface PageAddressRecord {
   kind: PageAddressKind;
 }
 
+export interface PageAddressRemoval {
+  removed: PageAddressRecord;
+  block: Block;
+}
+
 export interface PageAddressResolution {
   address: string;
   normalizedAddress: string;
@@ -186,8 +191,21 @@ export type OutlinerRequest =
       provenance?: BlockProvenance;
     }
   | { id: string; action: "pages.complete"; query?: string; limit: number }
-  | { id: string; action: "pages.rename"; blockId: string; address: string }
+  | {
+      id: string;
+      action: "pages.rename";
+      blockId: string;
+      address: string;
+      expectedUpdatedAt: string;
+    }
   | { id: string; action: "pages.alias"; blockId: string; address: string }
+  | {
+      id: string;
+      action: "pages.remove";
+      blockId: string;
+      address: string;
+      expectedUpdatedAt: string;
+    }
   | {
       id: string;
       action: "properties.patch";

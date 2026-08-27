@@ -127,7 +127,7 @@ The current protocol version is `8`, defined in [`src/types.ts`](../src/types.ts
 - properties: `properties.patch`, `properties.catalog`
 - virtual ordering: `virtual.occurrences.reorder`
 - references: `references.resolve`
-- symbolic addresses: `pages.resolve`, `pages.follow`, `pages.complete`, `pages.rename`, `pages.alias`
+- symbolic addresses: `pages.resolve`, `pages.follow`, `pages.complete`, `pages.rename`, `pages.alias`, `pages.remove`
 - selection: `selection.get`, `selection.set`
 - navigation: `navigation.state`, `navigation.back`, `navigation.forward`
 - reactive clients: `events.subscribe`
@@ -145,7 +145,8 @@ Herdr recognizes plain terminal text as a URL only for `http://` and `https://`.
 
 - `pi-outliner://block/<uuid>` — exact canonical block;
 - `pi-outliner://goto/<encoded-query>` — shared fuzzy goto resolution;
-- `pi-outliner://page/<encoded-address>` — unique symbolic address resolution for `[[address]]`, bare Work IDs, and explicit create-on-follow.
+- `pi-outliner://work/<PIE-NNN>` — resolve-only Work-ID registry lookup;
+- `pi-outliner://page/<encoded-address>` — unique symbolic page resolution and explicit create-on-follow.
 
 Inside the live panes, navigation stays in-process. Tree enables SGR mouse reporting, keeps the last rendered frame, resolves an unmodified primary click against that frame's OSC 8 cell metadata, and delegates to `navigateOutlinerLink`. Detail supplies the same helper as Pi TUI's `openUrl` callback. Exact block and resolved symbolic links select one canonical UUID directly, so deleted targets cannot degrade into fuzzy text matches. Deleted targets open read-only in Detail; active targets send exact Tree focus/reveal.
 
@@ -204,7 +205,7 @@ Query filters compare indexed keys and optional exact values. Property patches a
 
 Exact references use `((block-id))`. Read paths replace a resolvable ID with the target’s first non-property content line. Edit paths retain the raw ID. Dangling exact references remain unchanged.
 
-Symbolic references use `[[address]]`. The registry compares trimmed, Unicode-normalized, caseless, whitespace-collapsed keys while preserving the authored address label. One `[page::address]` declaration registers a page; `[work-id::PIE-NNN]` registers the same canonical block under its Work ID. Bare Work IDs and bracketed symbolic links both navigate through this registry rather than fuzzy goto. Parsing and ordinary saves never create a referenced block. `pages.follow` transactionally resolves or creates one root stub. General edits cannot silently change or remove a registered declaration; `pages.rename` changes the primary declaration and retains the former address as an alias, while `pages.alias` adds another explicit address.
+Symbolic references use `[[address]]`. The registry compares trimmed, Unicode-normalized, caseless, whitespace-collapsed keys while preserving the authored address label. One `[page::address]` declaration registers a page; `[work-id::PIE-NNN]` registers the same canonical block under its Work ID. Bare Work IDs navigate through a resolve-only registry path rather than fuzzy goto, and unresolved Work-ID-shaped addresses cannot create page stubs. Parsing and ordinary saves never create a referenced block. `pages.follow` transactionally resolves or creates one ordinary root stub. General edits cannot silently change or remove a registered declaration: `pages.rename` uses optimistic concurrency, changes the primary declaration, and retains the former address as an alias; `pages.alias` adds another explicit address; `pages.remove` explicitly unregisters an alias or primary declaration. Registry rebuilds preserve aliases.
 
 ## Recoverable deletion and Trash
 

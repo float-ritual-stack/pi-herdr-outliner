@@ -5,8 +5,8 @@ import {
   type BlockFocusRequester,
 } from "./block-focus";
 import { blockDisplayTitle, blockReferenceIds } from "./references";
-import { pageAddressReferences } from "./page-addresses";
-import type { Block, PageAddressFollowResult } from "./types";
+import { isWorkIdAddress, pageAddressReferences } from "./page-addresses";
+import type { Block, PageAddressFollowResult, PageAddressResolution } from "./types";
 
 const OUTLINER_SCHEME = "pi-outliner:";
 const BLOCK_ID_PATTERN = /^[A-Za-z0-9_-]{8,}$/;
@@ -15,7 +15,7 @@ const WORK_ID_PATTERN = /\bPIE-\d+\b/g;
 const RAW_BLOCK_REFERENCE_PATTERN = /\(\(([A-Za-z0-9_-]{8,})\)\)/g;
 const TERMINAL_CONTROL_PATTERN = /[\u0000-\u001f\u007f]/;
 
-export type OutlinerLinkKind = "block" | "goto" | "page";
+export type OutlinerLinkKind = "block" | "goto" | "page" | "work";
 
 export interface OutlinerLinkTarget {
   kind: OutlinerLinkKind;
@@ -47,8 +47,11 @@ export function outlinerLinkUri(kind: OutlinerLinkKind, value: string): string {
     throw new Error("Outliner link target contains terminal control characters");
   }
   if (!normalized) throw new Error("Outliner link target cannot be empty");
-  if (kind === "block" && !BLOCK_ID_PATTERN.test(normalized)) {
-    throw new Error(`Invalid outliner block target: ${normalized}`);
+  if (
+    (kind === "block" && !BLOCK_ID_PATTERN.test(normalized)) ||
+    (kind === "work" && !isWorkIdAddress(normalized))
+  ) {
+    throw new Error(`Invalid outliner ${kind} target: ${normalized}`);
   }
   return `${OUTLINER_SCHEME}//${kind}/${encodeURIComponent(normalized)}`;
 }
@@ -69,7 +72,7 @@ export function parseOutlinerLinkUri(uri: string): OutlinerLinkTarget {
     throw new Error("Invalid outliner link URI");
   }
   const kind = parsed.hostname;
-  if (kind !== "block" && kind !== "goto" && kind !== "page") {
+  if (kind !== "block" && kind !== "goto" && kind !== "page" && kind !== "work") {
     throw new Error(`Unsupported outliner link kind: ${parsed.hostname}`);
   }
   const encoded = parsed.pathname.startsWith("/") ? parsed.pathname.slice(1) : parsed.pathname;
@@ -82,7 +85,8 @@ export function parseOutlinerLinkUri(uri: string): OutlinerLinkTarget {
   if (
     !value ||
     TERMINAL_CONTROL_PATTERN.test(value) ||
-    (kind === "block" && !BLOCK_ID_PATTERN.test(value))
+    (kind === "block" && !BLOCK_ID_PATTERN.test(value)) ||
+    (kind === "work" && !isWorkIdAddress(value))
   ) {
     throw new Error(`Invalid outliner ${kind} target`);
   }
@@ -119,8 +123,15 @@ export async function navigateOutlinerLink(
       action: "pages.follow",
       address: target.value,
     });
-    block = pageFollow.block
-      ?? await requester.request<Block>({ action: "get", blockId: target.value });
+    if (!pageFollow.block) throw new Error(`Page address did not resolve: ${target.value}`);
+    block = pageFollow.block;
+  } else if (target.kind === "work") {
+    const resolution = await requester.request<PageAddressResolution>({
+      action: "pages.resolve",
+      address: target.value,
+    });
+    if (!resolution.block) throw new Error(`Work ID address is unresolved: ${target.value}`);
+    block = resolution.block;
   } else {
     block = await requester.request<Block>({ action: "get", blockId: target.value });
   }
@@ -211,7 +222,7 @@ export function firstOutlinerReference(text: string): OutlinerLinkTarget | null 
   }
   for (const match of text.matchAll(WORK_ID_PATTERN)) {
     candidates.push({
-      kind: "page",
+      kind: "work",
       value: match[0],
       start: match.index,
       end: match.index + match[0].length,
@@ -240,7 +251,7 @@ function genericLinkSpans(
     spans.push({
       start: match.index,
       end: match.index + match[0].length,
-      uri: outlinerLinkUri("page", match[0]),
+      uri: outlinerLinkUri("work", match[0]),
     });
   }
   for (const match of text.matchAll(BLOCK_ID_TOKEN_PATTERN)) {

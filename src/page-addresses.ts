@@ -1,8 +1,9 @@
 const CONTROL_PATTERN = /[\u0000-\u001f\u007f]/;
 const PAGE_ADDRESS_PATTERN = /\[\[([^\]\r\n]+)\]\]/g;
+const WORK_ID_ADDRESS_PATTERN = /^PIE-\d+$/i;
 
 export const PAGE_ADDRESS_MAX_LENGTH = 512;
-export const PAGE_ADDRESS_REGISTRY_VERSION = 2;
+export const PAGE_ADDRESS_REGISTRY_VERSION = 1;
 
 export interface NormalizedPageAddress {
   displayAddress: string;
@@ -12,6 +13,9 @@ export interface NormalizedPageAddress {
 export interface PageAddressReference extends NormalizedPageAddress {
   start: number;
   end: number;
+}
+export function isWorkIdAddress(address: string): boolean {
+  return WORK_ID_ADDRESS_PATTERN.test(address.trim());
 }
 
 export function normalizePageAddress(input: string): NormalizedPageAddress {
@@ -26,6 +30,7 @@ export function normalizePageAddress(input: string): NormalizedPageAddress {
   if (displayAddress.includes("]")) {
     throw new Error("Page address cannot contain ]");
   }
+  // Upper-then-lower performs stable caseless canonicalization for forms such as ß and final sigma.
   const normalizedAddress = displayAddress
     .normalize("NFKC")
     .replace(/\s+/gu, " ")

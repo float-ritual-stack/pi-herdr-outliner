@@ -36,6 +36,10 @@ describe("outliner link URIs", () => {
       kind: "goto",
       value: "PIE-133 / links",
     });
+    expect(parseOutlinerLinkUri(outlinerLinkUri("work", "PIE-133"))).toEqual({
+      kind: "work",
+      value: "PIE-133",
+    });
   });
 
   test("rejects web URLs, unsupported kinds, malformed IDs, and URL decorations", () => {
@@ -43,6 +47,7 @@ describe("outliner link URIs", () => {
       "https://example.com",
       "pi-outliner://unknown/value",
       "pi-outliner://block/short",
+      "pi-outliner://work/not-a-work-id",
       "pi-outliner://goto/value?query=yes",
       "pi-outliner://goto/value#fragment",
       "pi-outliner://goto/%1B%5B31mowned",
@@ -75,6 +80,16 @@ describe("outliner link URIs", () => {
             kind: "page",
             block: target,
             created: true,
+          } as T;
+        }
+        if (input.action === "pages.resolve") {
+          return {
+            address: input.address,
+            normalizedAddress: "pie-133",
+            registeredAddress: "PIE-133",
+            status: "resolved",
+            kind: "work-id",
+            block: target,
           } as T;
         }
         return {} as T;
@@ -117,6 +132,22 @@ describe("outliner link URIs", () => {
       },
     ]);
 
+    calls.length = 0;
+    await expect(
+      navigateOutlinerLink(requester, outlinerLinkUri("work", "PIE-133")),
+    ).resolves.toEqual({
+      kind: "work",
+      id: target.id,
+      title: "Clickable target",
+    });
+    expect(calls).toEqual([
+      { action: "pages.resolve", address: "PIE-133" },
+      { action: "selection.set", blockId: target.id },
+      {
+        action: "ui.command.send",
+        command: { target: "tree", command: "focus", blockId: target.id },
+      },
+    ]);
   });
 
   test("routes exact deleted targets to read-only Detail inspection", async () => {
@@ -167,6 +198,25 @@ describe("outliner link URIs", () => {
     ).rejects.toThrow(`Block not found: ${missingId}`);
     expect(calls).toEqual([{ action: "get", blockId: missingId }]);
   });
+
+  test("does not create an unresolved bare Work-ID link", async () => {
+    const calls: RequestInput[] = [];
+    const requester = {
+      async request<T>(input: RequestInput): Promise<T> {
+        calls.push(input);
+        return {
+          address: "PIE-404",
+          normalizedAddress: "pie-404",
+          status: "missing",
+        } as T;
+      },
+    };
+
+    await expect(
+      navigateOutlinerLink(requester, outlinerLinkUri("work", "PIE-404")),
+    ).rejects.toThrow("Work ID address is unresolved");
+    expect(calls).toEqual([{ action: "pages.resolve", address: "PIE-404" }]);
+  });
 });
 
 describe("outliner link rendering", () => {
@@ -182,7 +232,7 @@ describe("outliner link rendering", () => {
     expect(stripTerminalSequences(rendered)).toBe(resolved);
     expect(getOsc8LinkAtColumn(rendered, 2)).toBe(outlinerLinkUri("page", "Future Page"));
     expect(getOsc8LinkAtColumn(rendered, resolved.indexOf("PIE-133") + 2)).toBe(
-      outlinerLinkUri("page", "PIE-133"),
+      outlinerLinkUri("work", "PIE-133"),
     );
     expect(getOsc8LinkAtColumn(rendered, resolved.indexOf(targetId) + 2)).toBe(
       outlinerLinkUri("block", targetId),
@@ -241,7 +291,7 @@ describe("outliner link rendering", () => {
     const resolved = raw.replace(`((${targetId}))`, "((Target decision))");
     const linked = linkOutlinerMarkdown(resolved, raw);
 
-    expect(linked).toContain(`[PIE-133](${outlinerLinkUri("page", "PIE-133")})`);
+    expect(linked).toContain(`[PIE-133](${outlinerLinkUri("work", "PIE-133")})`);
     expect(linked).toContain(
       `[((Target decision))](${outlinerLinkUri("block", targetId)})`,
     );
@@ -250,7 +300,7 @@ describe("outliner link rendering", () => {
     expect(linked).toContain(`\`\`PIE-997 ${targetId}\`\``);
     expect(linked).toContain(`[titled](https://example.com/PIE-996 "PIE-995")`);
     expect(linked).toContain(`~~~text\nPIE-994 ${targetId}\n~~~`);
-    expect(linked).not.toContain(outlinerLinkUri("page", "PIE-994"));
+    expect(linked).not.toContain(outlinerLinkUri("work", "PIE-994"));
   });
 
   test("links dangling pages in Markdown while protecting literal examples", () => {
@@ -270,6 +320,10 @@ describe("outliner link rendering", () => {
     expect(firstOutlinerReference("((target01)) then [[Page]]")).toEqual({
       kind: "block",
       value: "target01",
+    });
+    expect(firstOutlinerReference("PIE-132 without brackets")).toEqual({
+      kind: "work",
+      value: "PIE-132",
     });
   });
 

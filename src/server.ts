@@ -154,10 +154,21 @@ export class OutlinerServer {
           result = this.store.completePageAddresses(request.query, request.limit);
           break;
         case "pages.rename":
-          result = this.store.renamePageAddress(request.blockId, request.address);
+          result = this.store.renamePageAddress(
+            request.blockId,
+            request.address,
+            request.expectedUpdatedAt,
+          );
           break;
         case "pages.alias":
           result = this.store.addPageAlias(request.blockId, request.address);
+          break;
+        case "pages.remove":
+          result = this.store.removePageAddress(
+            request.blockId,
+            request.address,
+            request.expectedUpdatedAt,
+          );
           break;
         case "properties.patch":
           result = this.store.patchProperties(
@@ -218,6 +229,7 @@ export class OutlinerServer {
       case "properties.patch":
       case "pages.rename":
       case "pages.alias":
+      case "pages.remove":
         domain = "content";
         blockId = request.blockId;
         break;

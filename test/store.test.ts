@@ -828,6 +828,14 @@ Second paragraph`;
       }],
       completeness: { kind: "complete" },
     });
+    expect(store.completePageAddresses("notes", 20).addresses[0]).toMatchObject({
+      address: "Research   Notes",
+      blockId: page.id,
+    });
+    expect(store.completePageAddresses("]", 20)).toEqual({
+      addresses: [],
+      completeness: { kind: "complete" },
+    });
   });
 
   test("uses Unicode caseless normalization for symbolic uniqueness", () => {
@@ -853,6 +861,9 @@ Second paragraph`;
       status: "missing",
     });
     expect(store.traversePreorder({ collapsedDescendants: "traverse" })).toHaveLength(before);
+    expect(() => store.followPageAddress("PIE-404")).toThrow(
+      "Unresolved Work ID cannot create a page stub",
+    );
 
     const [first, second] = await Promise.all([
       Promise.resolve().then(() => store.followPageAddress(" Future   Page ")),
@@ -886,7 +897,10 @@ Second paragraph`;
     const store = makeStore();
     const page = store.create("Knowledge [page::Old Address]");
 
-    expect(store.renamePageAddress(page.id, "New Address")).toEqual({
+    expect(() => store.renamePageAddress(page.id, "New Address", "stale")).toThrow(
+      "Block changed since editing began",
+    );
+    expect(store.renamePageAddress(page.id, "New Address", page.updatedAt)).toEqual({
       address: "New Address",
       normalizedAddress: "new address",
       blockId: page.id,
@@ -916,6 +930,22 @@ Second paragraph`;
       kind: "alias",
     });
     expect(store.resolvePageAddress("knowledge hub").block?.id).toBe(page.id);
+
+    const current = store.require(page.id);
+    const removedAlias = store.removePageAddress(page.id, "Knowledge Hub", current.updatedAt);
+    expect(removedAlias.removed.kind).toBe("alias");
+    const removedPage = store.removePageAddress(
+      page.id,
+      "New Address",
+      removedAlias.block.updatedAt,
+    );
+    expect(removedPage.removed.kind).toBe("page");
+    expect(removedPage.block.text.trimEnd()).toBe("Knowledge revised");
+    expect(store.resolvePageAddress("new address").status).toBe("missing");
+    expect(store.resolvePageAddress("old address").block?.id).toBe(page.id);
+    expect(store.update(page.id, "Knowledge without a primary page").text).toBe(
+      "Knowledge without a primary page",
+    );
   });
 
   test("retains deleted symbolic identity and makes purged addresses dangling", () => {
@@ -948,8 +978,10 @@ Second paragraph`;
     const path = join(directory, "outliner.sqlite");
     const page = store.create("Migrated page [page::Migration Target]");
     const work = store.create("Migrated work [work-id::PIE-777]");
-    store.database.query("DELETE FROM page_addresses").run();
-    store.database.query("DELETE FROM metadata WHERE key = 'page_address_registry_version'").run();
+    store.addPageAlias(page.id, "Migrated Alias");
+    store.database.query(
+      "UPDATE metadata SET value = '0' WHERE key = 'page_address_registry_version'",
+    ).run();
     store.close();
 
     const reopened = new OutlinerStore(path);
@@ -961,6 +993,7 @@ Second paragraph`;
       ).get(),
     ).toEqual({ value: String(PAGE_ADDRESS_REGISTRY_VERSION) });
     expect(reopened.resolvePageAddress("pie-777").block?.id).toBe(work.id);
+    expect(reopened.resolvePageAddress("migrated alias").block?.id).toBe(page.id);
   });
 
   test("backfills declarations transactionally and rejects duplicate migration data", () => {

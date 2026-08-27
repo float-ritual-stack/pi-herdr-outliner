@@ -395,7 +395,7 @@ export default function outlinerExtension(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "outliner_page",
     label: "Outliner Page Address",
-    description: "Resolve, follow, complete, rename, or alias a unique symbolic page address",
+    description: "Resolve, follow, complete, rename, alias, or remove a unique symbolic page address",
     promptSnippet: "Use the shared symbolic page-address registry",
     parameters: Type.Object({
       operation: Type.Union([
@@ -404,12 +404,16 @@ export default function outlinerExtension(pi: ExtensionAPI): void {
         Type.Literal("complete"),
         Type.Literal("rename"),
         Type.Literal("alias"),
+        Type.Literal("remove"),
       ]),
       address: Type.Optional(
-        Type.String({ description: "Required for resolve, follow, rename, and alias" }),
+        Type.String({ description: "Required for resolve, follow, rename, alias, and remove" }),
       ),
-      blockId: Type.Optional(Type.String({ description: "Required for rename and alias" })),
-      query: Type.Optional(Type.String({ description: "Optional prefix filter for complete" })),
+      blockId: Type.Optional(Type.String({ description: "Required for rename, alias, and remove" })),
+      expectedUpdatedAt: Type.Optional(
+        Type.String({ description: "Required for rename and remove" }),
+      ),
+      query: Type.Optional(Type.String({ description: "Optional substring filter for complete" })),
       limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
     }),
     async execute(toolCallId, params, _signal, _onUpdate, context) {
@@ -444,12 +448,20 @@ export default function outlinerExtension(pi: ExtensionAPI): void {
             action: "pages.rename",
             blockId: requireField(params.blockId, "blockId"),
             address: requireField(params.address, "address"),
+            expectedUpdatedAt: requireField(params.expectedUpdatedAt, "expectedUpdatedAt"),
           }));
         case "alias":
           return toolResult(await client.request({
             action: "pages.alias",
             blockId: requireField(params.blockId, "blockId"),
             address: requireField(params.address, "address"),
+          }));
+        case "remove":
+          return toolResult(await client.request({
+            action: "pages.remove",
+            blockId: requireField(params.blockId, "blockId"),
+            address: requireField(params.address, "address"),
+            expectedUpdatedAt: requireField(params.expectedUpdatedAt, "expectedUpdatedAt"),
           }));
       }
     },
