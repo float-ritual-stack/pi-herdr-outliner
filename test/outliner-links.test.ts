@@ -340,6 +340,9 @@ describe("outliner link rendering", () => {
     expect(firstOutlinerReference("[[PIE-135]")).toBeNull();
     const malformed = createOutlinerTextLinker("[[PIE-135]", () => null).link("[[PIE-135]");
     expect(getOsc8LinkAtColumn(malformed, 3)).toBeUndefined();
+    expect(firstOutlinerReference("pie-136")).toEqual({ kind: "work", value: "pie-136" });
+    const lowercase = createOutlinerTextLinker("pie-136", () => null).link("pie-136");
+    expect(getOsc8LinkAtColumn(lowercase, 2)).toBe(outlinerLinkUri("work", "pie-136"));
   });
 
   test("keeps tilde fences protected until a complete matching close", () => {
