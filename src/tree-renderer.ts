@@ -212,6 +212,7 @@ export function renderTreeFrame(
     const linker = createOutlinerTextLinker(
       block.text,
       (blockId) => view.physicalBlocksById.get(blockId) ?? null,
+      view.workIdPrefix,
     );
 
     const branchState =

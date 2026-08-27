@@ -100,6 +100,7 @@ function view(
         row.block,
       ]),
     ),
+    workIdPrefix: "PIE",
     visibleCompleteness: { kind: "complete" },
     branchStates: new Map(),
     selectedIndex: 0,
@@ -172,6 +173,26 @@ describe("renderTreeFrame", () => {
       `pi-outliner://block/${id}`,
     );
   });
+  test("links only Work IDs for the configured project prefix", () => {
+    const linked = block("custom-work", {
+      text: "ABC-001 and PIE-001",
+      displayText: "ABC-001 and PIE-001",
+    });
+    const frame = renderTreeFrame(
+      view([linked], { workIdPrefix: "ABC" }),
+      80,
+      8,
+    ).frame;
+    const line = frame.split("\n").find((candidate) =>
+      stripTerminalSequences(candidate).includes("ABC-001 and")
+    )!;
+    const visible = stripTerminalSequences(line);
+    expect(getOsc8LinkAtColumn(line, visible.indexOf("ABC-001") + 2)).toBe(
+      "pi-outliner://work/ABC-001",
+    );
+    expect(getOsc8LinkAtColumn(line, visible.indexOf("PIE-001") + 2)).toBeUndefined();
+  });
+
 
   test("renders expanded physical rows and markdown continuation styling", () => {
     const expanded = block("expanded", {

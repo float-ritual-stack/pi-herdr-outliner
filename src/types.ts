@@ -93,6 +93,7 @@ export interface WorkIdAllocatorStatus {
   nextNumber: number | null;
   nextWorkId: string | null;
   reservedCount: number;
+  observedPrefixes: string[];
 }
 
 export interface WorkIdAllocation {
@@ -155,6 +156,7 @@ export interface BlockReferenceResolution {
 export interface ResolvedBlockReferences {
   text: string;
   references: BlockReferenceResolution[];
+  workIdPrefix?: string;
 }
 
 export const OUTLINER_PROTOCOL_VERSION = 9;
@@ -232,12 +234,12 @@ export type OutlinerRequest =
   | { id: string; action: "navigation.back" }
   | { id: string; action: "navigation.forward" }
   | { id: string; action: "work-ids.status" }
+  | { id: string; action: "work-ids.configure"; prefix: string }
   | {
       id: string;
       action: "work-ids.allocate";
       blockId: string;
       expectedUpdatedAt: string;
-      prefix?: string;
     };
 
 export type OutlinerResponse =
@@ -266,6 +268,7 @@ export interface WorkspaceSnapshot {
   selection: SelectionContext;
   virtualOccurrenceRanks: VirtualOccurrenceRank[];
   sequence: number;
+  workIdPrefix?: string;
 }
 
 export interface OutlinerUiCommand {

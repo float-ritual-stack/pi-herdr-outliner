@@ -34,6 +34,7 @@ function state(text: string, rawText = "raw edit source"): DetailState {
   return {
     context: { selected, ancestors: [], children: [] },
     resolvedSelectedText: text,
+    workIdPrefix: "PIE",
     resolvedBreadcrumb: "Resolved block",
     mode: "preview",
     buffer: new TextBuffer(),
@@ -169,6 +170,27 @@ describe("Pi Markdown detail preview", () => {
       expect(getOsc8LinkAtColumn(line!, visible.indexOf("Target decision") + 2)).toBe(
         `pi-outliner://block/${targetId}`,
       );
+    } finally {
+      setCapabilities(capabilities);
+    }
+  });
+
+  test("renders only the configured Work-ID prefix", () => {
+    const capabilities = getCapabilities();
+    setCapabilities({ ...capabilities, hyperlinks: true });
+    try {
+      const detail = state("ABC-001 and PIE-001", "ABC-001 and PIE-001");
+      detail.workIdPrefix = "ABC";
+      const layout = new DetailPiPreviewLayout(detail, plainMarkdownTheme, true);
+      layout.syncState();
+      const line = layout.markdown.render(80).find((candidate) =>
+        stripTerminalSequences(candidate).includes("ABC-001 and")
+      )!;
+      const visible = stripTerminalSequences(line);
+      expect(getOsc8LinkAtColumn(line, visible.indexOf("ABC-001") + 2)).toBe(
+        "pi-outliner://work/ABC-001",
+      );
+      expect(getOsc8LinkAtColumn(line, visible.indexOf("PIE-001") + 2)).toBeUndefined();
     } finally {
       setCapabilities(capabilities);
     }

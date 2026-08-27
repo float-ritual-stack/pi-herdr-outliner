@@ -173,11 +173,13 @@ export class OutlinerServer {
         case "work-ids.status":
           result = this.store.workIdAllocatorStatus();
           break;
+        case "work-ids.configure":
+          result = this.store.configureWorkIdPrefix(request.prefix);
+          break;
         case "work-ids.allocate":
           result = this.store.allocateWorkId(
             request.blockId,
             request.expectedUpdatedAt,
-            request.prefix,
           );
           break;
         case "properties.patch":
@@ -243,6 +245,9 @@ export class OutlinerServer {
       case "work-ids.allocate":
         domain = "content";
         blockId = request.blockId;
+        break;
+      case "work-ids.configure":
+        domain = "content";
         break;
       case "pages.follow": {
         const followed = response.result as PageAddressFollowResult;

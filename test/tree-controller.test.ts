@@ -42,6 +42,7 @@ function snapshot(
     visibleCompleteness?: BlockCollectionCompleteness;
     physicalCompleteness?: BlockCollectionCompleteness;
     virtualOccurrenceRanks?: VirtualOccurrenceRank[];
+    workIdPrefix?: string;
   } = {},
 ): WorkspaceSnapshot {
   return {
@@ -56,6 +57,7 @@ function snapshot(
     selection: { selected, ancestors: [], children: [] },
     virtualOccurrenceRanks: options.virtualOccurrenceRanks ?? [],
     sequence: 1,
+    workIdPrefix: options.workIdPrefix,
   };
 }
 
@@ -253,6 +255,44 @@ describe("createTreeController", () => {
     });
     expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe(target.id);
     expect(controller.view().status).toBe("Created and followed [[Future Page]]");
+  });
+
+  test("follows a bare Work ID for the configured project prefix", async () => {
+    const source = block("source01", {
+      text: "Source points to ABC-001 and PIE-001",
+      displayText: "Source points to ABC-001 and PIE-001",
+    });
+    const target = block("target01", { position: 1, text: "Target", displayText: "Target" });
+    let selected = source;
+    const fake = harness((input) => {
+      if (input.action === "workspace.snapshot") {
+        return snapshot([source, target], selected, { workIdPrefix: "ABC" });
+      }
+      if (input.action === "pages.resolve") {
+        return {
+          address: input.address,
+          normalizedAddress: "abc-001",
+          registeredAddress: "ABC-001",
+          status: "resolved",
+          kind: "work-id",
+          block: target,
+        };
+      }
+      if (input.action === "selection.set") {
+        selected = input.blockId === target.id ? target : source;
+      }
+      return undefined;
+    });
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+
+    await controller.handleKeypress("o", { name: "o" }, "pass");
+
+    expect(lastCall(fake.calls, "pages.resolve")).toEqual({
+      action: "pages.resolve",
+      address: "ABC-001",
+    });
+    expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe(target.id);
   });
 
   test("opens deleted reference and history targets read-only in Detail", async () => {

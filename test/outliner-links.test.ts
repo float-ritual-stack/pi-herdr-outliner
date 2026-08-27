@@ -344,14 +344,18 @@ describe("outliner link rendering", () => {
     expect(firstOutlinerReference("[[PIE-135]")).toBeNull();
     const malformed = createOutlinerTextLinker("[[PIE-135]", () => null).link("[[PIE-135]");
     expect(getOsc8LinkAtColumn(malformed, 3)).toBeUndefined();
-    expect(firstOutlinerReference("pie-136")).toEqual({ kind: "work", value: "pie-136" });
+    expect(firstOutlinerReference("pie-136")).toBeNull();
     const lowercase = createOutlinerTextLinker("pie-136", () => null).link("pie-136");
-    expect(getOsc8LinkAtColumn(lowercase, 2)).toBe(outlinerLinkUri("work", "pie-136"));
-    expect(firstOutlinerReference("ABC-001")).toEqual({
+    expect(getOsc8LinkAtColumn(lowercase, 2)).toBeUndefined();
+    expect(firstOutlinerReference("ABC-001", "ABC")).toEqual({
       kind: "work",
       value: "ABC-001",
     });
-    const customPrefix = createOutlinerTextLinker("ABC-001", () => null).link("ABC-001");
+    const customPrefix = createOutlinerTextLinker(
+      "ABC-001",
+      () => null,
+      "ABC",
+    ).link("ABC-001");
     expect(getOsc8LinkAtColumn(customPrefix, 2)).toBe(
       outlinerLinkUri("work", "ABC-001"),
     );

@@ -76,6 +76,7 @@ test("requires protocol v9, attributes agent creates and page follows, and prese
     if (input.action === "create") return {} as T;
     if (input.action === "pages.follow") return { created: true } as T;
     if (input.action === "work-ids.status") return { prefix: "PIE" } as T;
+    if (input.action === "work-ids.configure") return { prefix: input.prefix } as T;
     if (input.action === "work-ids.allocate") return { workId: "PIE-152" } as T;
     if (input.action === "ping") {
       return { status: "ready", protocolVersion } as unknown as T;
@@ -101,7 +102,7 @@ test("requires protocol v9, attributes agent creates and page follows, and prese
         text?: string;
         limit?: number;
         parentId?: string | null;
-        operation?: "follow" | "status" | "allocate";
+        operation?: "follow" | "status" | "configure" | "allocate";
         address?: string;
         blockId?: string;
         expectedUpdatedAt?: string;
@@ -157,11 +158,14 @@ test("requires protocol v9, attributes agent creates and page follows, and prese
     await tools.get("outliner_work_id")!.execute("work-status", {
       operation: "status",
     });
+    await tools.get("outliner_work_id")!.execute("work-configure", {
+      operation: "configure",
+      prefix: "PIE",
+    });
     await tools.get("outliner_work_id")!.execute("work-allocate", {
       operation: "allocate",
       blockId: "work-block",
       expectedUpdatedAt: "version-1",
-      prefix: "PIE",
     });
     await expect(
       tools.get("outliner_page")!.execute(
@@ -207,11 +211,14 @@ test("requires protocol v9, attributes agent creates and page follows, and prese
     expect(requests.find((request) => request.action === "work-ids.status")).toEqual({
       action: "work-ids.status",
     });
+    expect(requests.find((request) => request.action === "work-ids.configure")).toEqual({
+      action: "work-ids.configure",
+      prefix: "PIE",
+    });
     expect(requests.find((request) => request.action === "work-ids.allocate")).toEqual({
       action: "work-ids.allocate",
       blockId: "work-block",
       expectedUpdatedAt: "version-1",
-      prefix: "PIE",
     });
     expect(widgets).toEqual([
       {

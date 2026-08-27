@@ -1,8 +1,10 @@
 import { expect, test } from "bun:test";
 import {
   formatWorkId,
+  isCanonicalWorkId,
   normalizeWorkIdPrefix,
   parseWorkId,
+  workIdReferences,
 } from "../src/work-ids";
 
 test("normalizes project prefixes and formats monotonic Work IDs", () => {
@@ -34,6 +36,23 @@ test("parses canonical project Work-ID components", () => {
     prefix: "PIE",
     number: 1,
   });
+  expect(parseWorkId("PIE-7")).toEqual({
+    workId: "PIE-007",
+    prefix: "PIE",
+    number: 7,
+  });
+  expect(isCanonicalWorkId("PIE-007")).toBe(true);
+  expect(isCanonicalWorkId("PIE-7")).toBe(false);
   expect(parseWorkId("PIE-000")).toBeNull();
   expect(parseWorkId("PIE-x")).toBeNull();
+});
+
+test("finds only canonical IDs for the configured project prefix", () => {
+  const text = "RFC-2119 PIE-001 ABC-002 UTF-8";
+  expect(workIdReferences(text, "PIE").map((reference) => reference.workId)).toEqual([
+    "PIE-001",
+  ]);
+  expect(workIdReferences(text, "ABC").map((reference) => reference.workId)).toEqual([
+    "ABC-002",
+  ]);
 });

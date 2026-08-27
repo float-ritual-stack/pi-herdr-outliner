@@ -77,7 +77,9 @@ test("serves mutations and property queries over the local socket", async () => 
     nextNumber: null,
     nextWorkId: null,
     reservedCount: 0,
+    observedPrefixes: [],
   });
+  await client.request({ action: "work-ids.configure", prefix: "pie" });
   const workTarget = await client.request<Block>({
     action: "create",
     text: "Protocol work target",
@@ -86,7 +88,6 @@ test("serves mutations and property queries over the local socket", async () => 
     action: "work-ids.allocate",
     blockId: workTarget.id,
     expectedUpdatedAt: workTarget.updatedAt,
-    prefix: "pie",
   });
   expect(allocation).toMatchObject({
     workId: "PIE-001",
@@ -102,6 +103,7 @@ test("serves mutations and property queries over the local socket", async () => 
     nextNumber: 2,
     nextWorkId: "PIE-002",
     reservedCount: 1,
+    observedPrefixes: ["PIE"],
   });
 
   expect(matches.blocks.some((candidate) => candidate.id === block.id)).toBe(true);
@@ -121,10 +123,11 @@ test("serves mutations and property queries over the local socket", async () => 
   expect((await client.request<NavigationState>({
     action: "navigation.forward",
   })).selection.selected?.id).toBe(block.id);
-  const resolved = await client.request<{ text: string }>({
+  const resolved = await client.request<{ text: string; workIdPrefix?: string }>({
     action: "references.resolve",
     text: `See ((${block.id}))`,
   });
+  expect(resolved.workIdPrefix).toBe("PIE");
   expect(resolved.text).toBe("See ((Waiting for user))");
   const dangling = await client.request<PageAddressResolution>({
     action: "pages.resolve",
@@ -290,7 +293,7 @@ test("streams workspace mutations and transient UI commands to subscribers", asy
     onConnect: connected.resolve,
     onEvent: (event) => {
       events.push(event);
-      if (events.length === 8) received.resolve();
+      if (events.length === 9) received.resolve();
     },
   });
   cleanups.push(async () => {
@@ -301,12 +304,12 @@ test("streams workspace mutations and transient UI commands to subscribers", asy
   });
 
   await connected.promise;
+  await client.request({ action: "work-ids.configure", prefix: "EVT" });
   const block = await client.request<Block>({ action: "create", text: "Reactive block" });
   await client.request({
     action: "work-ids.allocate",
     blockId: block.id,
     expectedUpdatedAt: block.updatedAt,
-    prefix: "EVT",
   });
   await client.request({ action: "selection.set", blockId: block.id });
   await client.request({ action: "navigation.back" });
@@ -324,6 +327,7 @@ test("streams workspace mutations and transient UI commands to subscribers", asy
   await received.promise;
 
   expect(events.map((event) => [event.domain, event.action])).toEqual([
+    ["content", "work-ids.configure"],
     ["content", "create"],
     ["content", "work-ids.allocate"],
     ["selection", "selection.set"],
@@ -333,14 +337,16 @@ test("streams workspace mutations and transient UI commands to subscribers", asy
     ["view", "virtual.occurrences.reorder"],
     ["ui", "ui.command.send"],
   ]);
-  expect(events[0].blockId).toBe(block.id);
-  expect(events[7].command).toEqual({ target: "detail", command: "edit", blockId: block.id });
+  expect(events[1].blockId).toBe(block.id);
+  expect(events[2].blockId).toBe(block.id);
+  expect(events[8].command).toEqual({ target: "detail", command: "edit", blockId: block.id });
 
   const children = await client.request<Block[]>({ action: "children", parentId: null });
   expect(children.some((candidate) => candidate.id === block.id)).toBe(true);
   const snapshot = await client.request<WorkspaceSnapshot>({ action: "workspace.snapshot" });
   expect(snapshot.visible.blocks.some((candidate) => candidate.id === block.id)).toBe(true);
   expect(snapshot.visible.completeness).toEqual({ kind: "complete" });
+  expect(snapshot.workIdPrefix).toBe("EVT");
   expect(snapshot.physical.blocks.some((candidate) => candidate.id === block.id)).toBe(true);
   expect(snapshot.physical.completeness).toEqual({ kind: "complete" });
   expect(snapshot.selection.selected?.id).toBe(block.id);

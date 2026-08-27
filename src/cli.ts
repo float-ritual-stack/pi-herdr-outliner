@@ -179,13 +179,22 @@ switch (command) {
   case "work-id-status":
     request = { action: "work-ids.status" };
     break;
+  case "work-id-configure": {
+    const { values } = parseArgs({
+      args: rest,
+      options: { prefix: { type: "string" } },
+      strict: true,
+    });
+    if (!values.prefix) throw new Error("work-id-configure requires --prefix");
+    request = { action: "work-ids.configure", prefix: values.prefix };
+    break;
+  }
   case "work-id-allocate": {
     const { values } = parseArgs({
       args: rest,
       options: {
         id: { type: "string" },
         expected: { type: "string" },
-        prefix: { type: "string" },
       },
       strict: true,
     });
@@ -196,7 +205,6 @@ switch (command) {
       action: "work-ids.allocate",
       blockId: values.id,
       expectedUpdatedAt: values.expected,
-      prefix: values.prefix,
     };
     break;
   }

@@ -79,7 +79,11 @@ interface Harness {
 function createHarness(
   initial: Block,
   referencedFile: ReferencedFile | null = null,
-  resolveReferences: DetailEffects["resolveReferences"] = async (text) => `resolved:${text}`,
+  resolveReferences: DetailEffects["resolveReferences"] = async (text) => ({
+    text: `resolved:${text}`,
+    references: [],
+    workIdPrefix: "PIE",
+  }),
 ): Harness {
   let selection: SelectionContext = { selected: initial, ancestors: [], children: [] };
   let update: DetailEffects["updateBlock"] = async (input) => makeBlock({
@@ -285,6 +289,23 @@ describe("detail controller projection and deferred refresh", () => {
     }]);
   });
 
+  test("follows bare Work IDs for the configured project prefix", async () => {
+    const harness = createHarness(
+      makeBlock({ text: "See ABC-001 and PIE-001" }),
+      null,
+      async (text) => ({ text, references: [], workIdPrefix: "ABC" }),
+    );
+    await harness.controller.initialize();
+
+    await harness.controller.dispatch({ type: "reference.follow" }, viewport);
+
+    expect(harness.controller.state.workIdPrefix).toBe("ABC");
+    expect(harness.calls.followedReferences).toEqual([{
+      kind: "work",
+      value: "ABC-001",
+    }]);
+  });
+
   test("defaults ordinary file blocks to file mode and other blocks to preview", async () => {
     const fileHarness = createHarness(
       makeBlock({ properties: [{ key: "file", value: "src/example.ts" }] }),
@@ -304,7 +325,7 @@ describe("detail controller projection and deferred refresh", () => {
     const harness = createHarness(
       makeBlock({ text: "((reference))" }),
       null,
-      async () => resolvedLines.join("\n"),
+      async () => ({ text: resolvedLines.join("\n"), references: [] }),
     );
     await harness.controller.initialize();
 

@@ -1,4 +1,4 @@
-import { parseWorkId } from "./work-ids";
+import { isCanonicalWorkId } from "./work-ids";
 
 const CONTROL_PATTERN = /[\u0000-\u001f\u007f]/;
 const PAGE_ADDRESS_PATTERN = /\[\[([^\]\r\n]+)\]\]/g;
@@ -16,7 +16,7 @@ export interface PageAddressReference extends NormalizedPageAddress {
   end: number;
 }
 export function isWorkIdAddress(address: string): boolean {
-  return parseWorkId(address) !== null;
+  return isCanonicalWorkId(address);
 }
 
 export function normalizePageAddress(input: string): NormalizedPageAddress {

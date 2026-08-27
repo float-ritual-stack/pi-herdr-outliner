@@ -479,6 +479,7 @@ export default function outlinerExtension(pi: ExtensionAPI): void {
     parameters: Type.Object({
       operation: Type.Union([
         Type.Literal("status"),
+        Type.Literal("configure"),
         Type.Literal("allocate"),
       ]),
       blockId: Type.Optional(Type.String({ description: "Required for allocate" })),
@@ -486,13 +487,22 @@ export default function outlinerExtension(pi: ExtensionAPI): void {
         Type.String({ description: "Required for allocate" }),
       ),
       prefix: Type.Optional(
-        Type.String({ description: "Required only for the first allocation in a workspace" }),
+        Type.String({ description: "Required for configure" }),
       ),
     }),
     async execute(_id, params) {
       await ensureService(false);
       if (params.operation === "status") {
         return toolResult(await client.request({ action: "work-ids.status" }));
+      }
+      if (params.operation === "configure") {
+        if (!params.prefix) {
+          throw new Error("outliner_work_id configure requires prefix");
+        }
+        return toolResult(await client.request({
+          action: "work-ids.configure",
+          prefix: params.prefix,
+        }));
       }
       if (!params.blockId || !params.expectedUpdatedAt) {
         throw new Error("outliner_work_id allocate requires blockId and expectedUpdatedAt");
@@ -501,7 +511,6 @@ export default function outlinerExtension(pi: ExtensionAPI): void {
         action: "work-ids.allocate",
         blockId: params.blockId,
         expectedUpdatedAt: params.expectedUpdatedAt,
-        prefix: params.prefix,
       }));
     },
   });
