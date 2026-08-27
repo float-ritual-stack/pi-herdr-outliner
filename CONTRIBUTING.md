@@ -97,6 +97,15 @@ Prefer clean cutovers: migrate every caller, test, and import, then remove obsol
 - A projected occurrence always mutates its canonical block.
 - Reject ambiguous projected hierarchy/order operations rather than guessing.
 
+### Work IDs
+
+- Configure one workspace prefix explicitly unless the v9 migration adopts one clean existing prefix.
+- Allocate opted-in work through `work-ids.allocate` / `outliner_work_id`; never scan and guess the next number in a client.
+- Keep UUID as canonical identity and Work ID as an immutable human/symbolic address.
+- Preserve reservation owner UUIDs after purge; neither allocator nor manual canonical declarations may reuse them.
+- Treat malformed, unpadded, duplicate-owner, and out-of-prefix legacy properties as inert metadata during migration rather than blocking startup.
+- Keep bare Work-ID rendering scoped to the configured prefix; bracketed symbolic lookup may preserve valid legacy addresses from other prefixes.
+
 ### Terminal safety
 
 - Sanitize user- and file-controlled text before emitting terminal frames.

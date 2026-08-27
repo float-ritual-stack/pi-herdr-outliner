@@ -327,6 +327,6 @@ pi-extension/index.ts         Pi/OMP commands, tools, context hook
 
 ## Accepted designs not yet implemented
 
-The durable roadmap lives in the outliner workboard. Current accepted designs include backlinks, scoped property semantics, retained Detail targets, projected canonical descendants, and projected-child creation.
+The durable roadmap lives in the outliner workboard. Current accepted designs include normalized bounded query construction, deterministic agent work-placeholder resolution, backlinks, scoped property semantics, retained Detail targets, projected canonical descendants, and projected-child creation.
 
 Do not describe these as shipped behavior until their roadmap items are Complete on main.
