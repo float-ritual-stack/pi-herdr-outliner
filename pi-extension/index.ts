@@ -463,6 +463,10 @@ export default function outlinerExtension(pi: ExtensionAPI): void {
             address: requireField(params.address, "address"),
             expectedUpdatedAt: requireField(params.expectedUpdatedAt, "expectedUpdatedAt"),
           }));
+        default: {
+          const unsupported: never = params.operation;
+          throw new Error(`Unsupported page operation: ${String(unsupported)}`);
+        }
       }
     },
   });

@@ -148,6 +148,15 @@ test("requires protocol v8, attributes agent creates and page follows, and prese
       undefined,
       context,
     );
+    await expect(
+      tools.get("outliner_page")!.execute(
+        "unknown-page-op",
+        { operation: "unknown" } as never,
+        undefined,
+        undefined,
+        context,
+      ),
+    ).rejects.toThrow("Unsupported page operation: unknown");
 
     expect(requests.filter((request) => request.action === "blocks.query")).toEqual([
       {

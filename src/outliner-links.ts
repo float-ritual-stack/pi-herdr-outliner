@@ -198,6 +198,13 @@ function protectedMarkdownRanges(text: string): TextRange[] {
   return ranges;
 }
 
+function pageSyntaxRanges(text: string): TextRange[] {
+  return [...text.matchAll(/\[\[[^\r\n]*?(?:\]\]|(?=\r?$))/gm)].map((match) => ({
+    start: match.index,
+    end: match.index + match[0].length,
+  }));
+}
+
 function overlaps(left: TextRange, right: TextRange): boolean {
   return left.start < right.end && right.start < left.end;
 }
@@ -220,12 +227,14 @@ export function firstOutlinerReference(text: string): OutlinerLinkTarget | null 
       end: reference.end,
     });
   }
+  const pageRanges = pageSyntaxRanges(text);
   for (const match of text.matchAll(WORK_ID_PATTERN)) {
+    const range = { start: match.index, end: match.index + match[0].length };
+    if (pageRanges.some((pageRange) => overlaps(range, pageRange))) continue;
     candidates.push({
       kind: "work",
       value: match[0],
-      start: match.index,
-      end: match.index + match[0].length,
+      ...range,
     });
   }
   const protectedRanges = protectedMarkdownRanges(text);
@@ -240,6 +249,7 @@ function genericLinkSpans(
   canLinkBlock: (blockId: string) => boolean,
 ): LinkSpan[] {
   const spans: LinkSpan[] = [];
+  const pageRanges = pageSyntaxRanges(text);
   for (const reference of pageAddressReferences(text)) {
     spans.push({
       start: reference.start,
@@ -248,9 +258,10 @@ function genericLinkSpans(
     });
   }
   for (const match of text.matchAll(WORK_ID_PATTERN)) {
+    const range = { start: match.index, end: match.index + match[0].length };
+    if (pageRanges.some((pageRange) => overlaps(range, pageRange))) continue;
     spans.push({
-      start: match.index,
-      end: match.index + match[0].length,
+      ...range,
       uri: outlinerLinkUri("work", match[0]),
     });
   }

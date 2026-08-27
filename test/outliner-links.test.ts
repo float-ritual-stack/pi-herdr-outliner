@@ -337,6 +337,9 @@ describe("outliner link rendering", () => {
       kind: "page",
       value: "Page",
     });
+    expect(firstOutlinerReference("[[PIE-135]")).toBeNull();
+    const malformed = createOutlinerTextLinker("[[PIE-135]", () => null).link("[[PIE-135]");
+    expect(getOsc8LinkAtColumn(malformed, 3)).toBeUndefined();
   });
 
   test("keeps tilde fences protected until a complete matching close", () => {
