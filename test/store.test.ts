@@ -996,6 +996,71 @@ Second paragraph`;
     expect(reopened.resolvePageAddress("migrated alias").block?.id).toBe(page.id);
   });
 
+  test("preserves registered deleted addresses across registry rebuilds", () => {
+    const store = makeStore();
+    const directory = stores[stores.length - 1].directory;
+    const path = join(directory, "outliner.sqlite");
+    const page = store.create("Deleted page [page::Deleted Registered]");
+    store.delete(page.id);
+    store.database.query(
+      "UPDATE metadata SET value = '0' WHERE key = 'page_address_registry_version'",
+    ).run();
+    store.close();
+
+    const reopened = new OutlinerStore(path);
+    stores[stores.length - 1].store = reopened;
+    expect(reopened.resolvePageAddress("Deleted Registered")).toMatchObject({
+      status: "deleted",
+      block: { id: page.id },
+    });
+  });
+
+  test("registers an unambiguous legacy declaration when restoring from Trash", () => {
+    const store = makeStore();
+    const directory = stores[stores.length - 1].directory;
+    const path = join(directory, "outliner.sqlite");
+    const legacy = store.create("Legacy page [page::Legacy Restored]");
+    store.delete(legacy.id);
+    store.database.query("DELETE FROM page_addresses").run();
+    store.database.query(
+      "UPDATE metadata SET value = '0' WHERE key = 'page_address_registry_version'",
+    ).run();
+    store.close();
+
+    const reopened = new OutlinerStore(path);
+    stores[stores.length - 1].store = reopened;
+    expect(reopened.resolvePageAddress("Legacy Restored").status).toBe("missing");
+    reopened.restore(legacy.id);
+    expect(reopened.resolvePageAddress("Legacy Restored").block?.id).toBe(legacy.id);
+  });
+
+  test("restores ambiguous legacy Trash declarations without registering them", () => {
+    const store = makeStore();
+    const directory = stores[stores.length - 1].directory;
+    const path = join(directory, "outliner.sqlite");
+    const legacy = store.create("Legacy source");
+    const legacyText = "Legacy source [page::One] [page::Two]";
+    store.database.query("UPDATE blocks SET text = ? WHERE id = ?").run(legacyText, legacy.id);
+    store.database.query(
+      "INSERT INTO block_properties (block_id, key, value, ordinal) VALUES (?, 'page', 'One', 0), (?, 'page', 'Two', 1)",
+    ).run(legacy.id, legacy.id);
+    store.delete(legacy.id);
+    store.database.query("DELETE FROM page_addresses").run();
+    store.database.query(
+      "UPDATE metadata SET value = '0' WHERE key = 'page_address_registry_version'",
+    ).run();
+    store.close();
+
+    const reopened = new OutlinerStore(path);
+    stores[stores.length - 1].store = reopened;
+    expect(reopened.resolvePageAddress("One").status).toBe("missing");
+    expect(reopened.resolvePageAddress("Two").status).toBe("missing");
+    expect(reopened.restore(legacy.id).effectiveDeletedRootId).toBeUndefined();
+    expect(reopened.resolvePageAddress("One").status).toBe("missing");
+    reopened.update(legacy.id, "Legacy repaired [page::One]");
+    expect(reopened.resolvePageAddress("One").block?.id).toBe(legacy.id);
+  });
+
   test("backfills declarations transactionally and rejects duplicate migration data", () => {
     const store = makeStore();
     const directory = stores[stores.length - 1].directory;

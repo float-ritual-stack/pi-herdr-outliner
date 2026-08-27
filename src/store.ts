@@ -13,6 +13,7 @@ import {
   isWorkIdAddress,
   normalizePageAddress,
   PAGE_ADDRESS_REGISTRY_VERSION,
+  tryNormalizePageAddress,
   type NormalizedPageAddress,
 } from "./page-addresses";
 import {
@@ -297,6 +298,16 @@ export class OutlinerStore {
       this.database.query("UPDATE blocks SET deleted_at = NULL, updated_at = ? WHERE id = ?")
         .run(new Date().toISOString(), id);
       this.recomputeEffectiveDeletion();
+      for (const blockId of this.subtreeIdsFromCurrentRead(id)) {
+        const restored = this.getFromCurrentRead(blockId);
+        if (
+          restored &&
+          !restored.effectiveDeletedRootId &&
+          this.canRegisterRestoredPageAddresses(blockId, restored.properties)
+        ) {
+          this.syncDeclaredPageAddresses(blockId, restored.properties);
+        }
+      }
       this.bumpSequence();
     })();
     return this.require(id);
@@ -1253,12 +1264,12 @@ export class OutlinerStore {
       }
       if (version === PAGE_ADDRESS_REGISTRY_VERSION) return;
 
-      const aliases = this.database.query(
-        "SELECT normalized_address, display_address, block_id, kind FROM page_addresses WHERE kind = 'alias' ORDER BY normalized_address",
+      const retainedAddresses = this.database.query(
+        "SELECT address.normalized_address, address.display_address, address.block_id, address.kind FROM page_addresses address JOIN blocks block ON block.id = address.block_id WHERE address.kind = 'alias' OR block.effective_deleted_root_id IS NOT NULL ORDER BY address.normalized_address",
       ).all() as PageAddressRow[];
       this.database.query("DELETE FROM page_addresses").run();
       const rows = this.database.query(
-        "SELECT block_id, key, value FROM block_properties WHERE key IN ('page', 'work-id') ORDER BY block_id, ordinal",
+        "SELECT property.block_id, property.key, property.value FROM block_properties property JOIN blocks block ON block.id = property.block_id WHERE block.effective_deleted_root_id IS NULL AND property.key IN ('page', 'work-id') ORDER BY property.block_id, property.ordinal",
       ).all() as PropertyRow[];
       const propertiesByBlock = new Map<string, BlockProperty[]>();
       for (const row of rows) {
@@ -1269,16 +1280,20 @@ export class OutlinerStore {
       for (const [blockId, properties] of propertiesByBlock) {
         this.syncDeclaredPageAddresses(blockId, properties);
       }
-      for (const alias of aliases) {
-        const normalized = normalizePageAddress(alias.display_address);
+      for (const retained of retainedAddresses) {
+        const normalized = normalizePageAddress(retained.display_address);
         const existing = this.pageAddressRowFromCurrentRead(normalized.normalizedAddress);
         if (existing) {
-          if (existing.block_id === alias.block_id) continue;
+          if (existing.block_id === retained.block_id) continue;
           throw new Error(
-            `Page alias migration conflicts with block ${existing.block_id}: ${alias.display_address}`,
+            `Retained address migration conflicts with block ${existing.block_id}: ${retained.display_address}`,
           );
         }
-        this.insertPageAddressFromCurrentRead(alias.block_id, alias.display_address, "alias");
+        this.insertPageAddressFromCurrentRead(
+          retained.block_id,
+          retained.display_address,
+          retained.kind,
+        );
       }
       this.database.query(
         "INSERT INTO metadata (key, value) VALUES ('page_address_registry_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -1402,6 +1417,31 @@ export class OutlinerStore {
       blockId,
       kind,
     };
+  }
+
+  private canRegisterRestoredPageAddresses(
+    blockId: string,
+    properties: BlockProperty[],
+  ): boolean {
+    const pageValues = properties.filter((property) => property.key === "page");
+    const workIdValues = properties.filter((property) => property.key === "work-id");
+    if (pageValues.length > 1 || workIdValues.length > 1) return false;
+
+    const page = pageValues[0] ? tryNormalizePageAddress(pageValues[0].value) : null;
+    const workId = workIdValues[0] ? tryNormalizePageAddress(workIdValues[0].value) : null;
+    if ((pageValues[0] && !page) || (workIdValues[0] && !workId)) return false;
+    if (page && workId && page.normalizedAddress === workId.normalizedAddress) return false;
+
+    for (const [kind, desired] of [["page", page], ["work-id", workId]] as const) {
+      const current = this.database.query(
+        "SELECT normalized_address FROM page_addresses WHERE block_id = ? AND kind = ?",
+      ).get(blockId, kind) as { normalized_address: string } | null;
+      if (current && current.normalized_address !== desired?.normalizedAddress) return false;
+      if (!desired) continue;
+      const owner = this.pageAddressRowFromCurrentRead(desired.normalizedAddress);
+      if (owner && owner.block_id !== blockId) return false;
+    }
+    return true;
   }
 
   private syncDeclaredPageAddresses(blockId: string, properties: BlockProperty[]): void {
