@@ -230,7 +230,11 @@ describe("outliner link rendering", () => {
   test("emits OSC 8 links for pages, work IDs, exact metadata IDs, and resolved references", () => {
     const raw = `[[Future Page]] PIE-133 depends on [decision::${targetId}] and ((${targetId}))`;
     const resolved = `[[Future Page]] PIE-133 depends on [decision::${targetId}] and ((Target decision))`;
-    const linker = createOutlinerTextLinker(raw, (id) => id === targetId ? target : null);
+    const linker = createOutlinerTextLinker(
+      raw,
+      (id) => id === targetId ? target : null,
+      "PIE",
+    );
     const rendered = linker.link(resolved);
 
     expect(stripTerminalSequences(rendered)).toBe(resolved);
@@ -293,7 +297,7 @@ describe("outliner link rendering", () => {
       "~~~",
     ].join("\n");
     const resolved = raw.replace(`((${targetId}))`, "((Target decision))");
-    const linked = linkOutlinerMarkdown(resolved, raw);
+    const linked = linkOutlinerMarkdown(resolved, raw, "PIE");
 
     expect(linked).toContain(`[PIE-133](${outlinerLinkUri("work", "PIE-133")})`);
     expect(linked).toContain(
@@ -325,15 +329,15 @@ describe("outliner link rendering", () => {
       kind: "block",
       value: "target01",
     });
-    expect(firstOutlinerReference("PIE-132 without brackets")).toEqual({
+    expect(firstOutlinerReference("PIE-132 without brackets", "PIE")).toEqual({
       kind: "work",
       value: "PIE-132",
     });
   });
 
   test("finds bare Work IDs as symbolic references", () => {
-    expect(firstOutlinerReference("PIE-133")).toEqual({ kind: "work", value: "PIE-133" });
-    expect(firstOutlinerReference("`PIE-133` then PIE-134")).toEqual({
+    expect(firstOutlinerReference("PIE-133", "PIE")).toEqual({ kind: "work", value: "PIE-133" });
+    expect(firstOutlinerReference("`PIE-133` then PIE-134", "PIE")).toEqual({
       kind: "work",
       value: "PIE-134",
     });

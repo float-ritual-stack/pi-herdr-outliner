@@ -446,10 +446,16 @@ export class OutlinerStore {
       if (existing.status !== "missing") return { ...existing, created: false };
       const parsedWorkId = parseWorkId(normalized.displayAddress);
       const allocator = this.workIdAllocatorFromCurrentRead();
+      const canonicalWorkId = parsedWorkId?.workId ===
+          normalized.displayAddress.toUpperCase()
+        ? parsedWorkId
+        : null;
       if (
-        allocator &&
-        parsedWorkId?.prefix === allocator.prefix &&
-        parsedWorkId.workId === normalized.displayAddress.toUpperCase()
+        canonicalWorkId &&
+        (
+          this.reservedWorkIdOwnerFromCurrentRead(canonicalWorkId.workId) !== undefined ||
+          allocator?.prefix === canonicalWorkId.prefix
+        )
       ) {
         throw new Error(`Unresolved Work ID cannot create a page stub: ${normalized.displayAddress}`);
       }
@@ -1403,20 +1409,25 @@ export class OutlinerStore {
         reservations.map((reservation) => reservation.prefix),
       )].sort();
       const current = this.workIdAllocatorFromCurrentRead();
-      if (!current) {
-        if (prefixes.length !== 1) return;
+      const migration = this.database.query(
+        "SELECT value FROM metadata WHERE key = 'work_id_allocator_migration_version'",
+      ).get() as { value: string } | null;
+      if (!current && migration === null && prefixes.length === 1) {
         const prefix = prefixes[0]!;
         this.database.query(
           "INSERT INTO work_id_allocator (singleton, prefix, next_number) VALUES (1, ?, ?)",
         ).run(prefix, this.nextWorkIdNumberForPrefixFromCurrentRead(prefix));
-        return;
+      } else if (current) {
+        this.database.query(
+          "UPDATE work_id_allocator SET next_number = ? WHERE singleton = 1",
+        ).run(Math.max(
+          current.next_number,
+          this.nextWorkIdNumberForPrefixFromCurrentRead(current.prefix),
+        ));
       }
       this.database.query(
-        "UPDATE work_id_allocator SET next_number = ? WHERE singleton = 1",
-      ).run(Math.max(
-        current.next_number,
-        this.nextWorkIdNumberForPrefixFromCurrentRead(current.prefix),
-      ));
+        "INSERT INTO metadata (key, value) VALUES ('work_id_allocator_migration_version', '1') ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+      ).run();
     })();
   }
 
@@ -1432,10 +1443,8 @@ export class OutlinerStore {
           ? this.reservedWorkIdOwnerFromCurrentRead(parsed.workId)
           : undefined;
         if (
-          !allocator ||
           !parsed ||
           parsed.workId !== row.display_address.trim() ||
-          parsed.prefix !== allocator.prefix ||
           owner !== row.block_id
         ) {
           this.database.query(

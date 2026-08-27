@@ -212,7 +212,7 @@ function overlaps(left: TextRange, right: TextRange): boolean {
 
 export function firstOutlinerReference(
   text: string,
-  workIdPrefix: string | null = "PIE",
+  workIdPrefix: string | null = null,
 ): OutlinerLinkTarget | null {
   const candidates: Array<OutlinerLinkTarget & TextRange> = [];
   for (const match of text.matchAll(RAW_BLOCK_REFERENCE_PATTERN)) {
@@ -344,7 +344,7 @@ function resolvedReferenceSpans(rawText: string, resolvedText: string): LinkSpan
 export function linkOutlinerMarkdown(
   resolvedText: string,
   rawText: string,
-  workIdPrefix: string | null = "PIE",
+  workIdPrefix: string | null = null,
 ): string {
   const spans = selectLinkSpans(
     resolvedText,
@@ -362,7 +362,7 @@ export interface OutlinerTextLinker {
 export function createOutlinerTextLinker(
   rawText: string,
   lookup: (blockId: string) => Block | null,
-  workIdPrefix: string | null = "PIE",
+  workIdPrefix: string | null = null,
 ): OutlinerTextLinker {
   const references = blockReferenceIds(rawText).map((blockId) => {
     const target = lookup(blockId);

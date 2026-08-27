@@ -879,6 +879,45 @@ Second paragraph`;
   });
 
 
+  test("protects reserved IDs before configuration and does not auto-adopt later typos", () => {
+    const store = makeStore();
+    const directory = stores[stores.length - 1].directory;
+    const path = join(directory, "outliner.sqlite");
+    const owner = store.create("Reserved before configuration [work-id::PIE-001]");
+    expect(() => store.followPageAddress("PIE-001")).toThrow(
+      "Unresolved Work ID cannot create a page stub",
+    );
+    expect(store.configureWorkIdPrefix("PIE")).toMatchObject({
+      prefix: "PIE",
+      nextWorkId: "PIE-002",
+    });
+    expect(store.resolvePageAddress("PIE-001").block?.id).toBe(owner.id);
+
+    store.close();
+    const reopened = new OutlinerStore(path);
+    stores[stores.length - 1].store = reopened;
+    expect(reopened.workIdAllocatorStatus().prefix).toBe("PIE");
+  });
+
+  test("does not auto-configure a typo introduced after the v9 migration", () => {
+    const store = makeStore();
+    const directory = stores[stores.length - 1].directory;
+    const path = join(directory, "outliner.sqlite");
+    store.create("Typo remains inert [work-id::PEI-001]");
+    store.close();
+
+    const reopened = new OutlinerStore(path);
+    stores[stores.length - 1].store = reopened;
+    expect(reopened.workIdAllocatorStatus()).toMatchObject({
+      prefix: null,
+      observedPrefixes: ["PEI"],
+    });
+    expect(reopened.configureWorkIdPrefix("PIE")).toMatchObject({
+      prefix: "PIE",
+      nextWorkId: "PIE-001",
+    });
+  });
+
   test("adopts manual IDs, rejects prefix changes, and never reuses purged IDs", () => {
     const store = makeStore();
     const existing = store.create("Existing work [work-id::PIE-123]");
@@ -936,6 +975,9 @@ Second paragraph`;
     const directory = stores[stores.length - 1].directory;
     const path = join(directory, "outliner.sqlite");
     const existing = store.create("Legacy allocated [work-id::PIE-123]");
+    store.database.query(
+      "DELETE FROM metadata WHERE key = 'work_id_allocator_migration_version'",
+    ).run();
     store.close();
 
     const legacy = new Database(path);
@@ -980,6 +1022,9 @@ Second paragraph`;
     store.database.query(
       "INSERT INTO block_properties (block_id, key, value, ordinal) VALUES (?, 'work-id', 'PIE-001', 0), (?, 'work-id', 'todo-later', 1)",
     ).run(duplicate.id, duplicate.id);
+    store.database.query(
+      "DELETE FROM metadata WHERE key = 'work_id_allocator_migration_version'",
+    ).run();
     store.close();
 
     const reopened = new OutlinerStore(path);
@@ -1252,6 +1297,7 @@ Second paragraph`;
     const store = makeStore();
     const directory = stores[stores.length - 1].directory;
     const path = join(directory, "outliner.sqlite");
+    store.configureWorkIdPrefix("PIE");
     const page = store.create("Migrated page [page::Migration Target]");
     const work = store.create("Migrated work [work-id::PIE-777]");
     store.addPageAlias(page.id, "Migrated Alias");
