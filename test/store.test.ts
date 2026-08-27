@@ -964,6 +964,40 @@ Second paragraph`;
     ).toEqual({ block_id: owner.id });
   });
 
+  test("reserves purged Work IDs without a surviving address row and tolerates legacy values", () => {
+    const store = makeStore();
+    const directory = stores[stores.length - 1].directory;
+    const path = join(directory, "outliner.sqlite");
+    const orphan = store.create("Legacy deleted work [work-id::PIE-321]");
+    store.delete(orphan.id);
+    store.database.query("DELETE FROM page_addresses WHERE block_id = ?").run(orphan.id);
+    store.database.query("DELETE FROM reserved_work_ids WHERE work_id = 'PIE-321'").run();
+
+    store.purge(orphan.id, "PIE-321");
+    expect(
+      store.database.query(
+        "SELECT block_id FROM reserved_work_ids WHERE work_id = 'PIE-321'",
+      ).get(),
+    ).toEqual({ block_id: orphan.id });
+    expect(store.workIdAllocatorStatus().nextWorkId).toBe("PIE-322");
+
+    store.database.query(
+      "INSERT INTO reserved_work_ids (work_id, reserved_at, block_id) VALUES ('not-an-id', ?, NULL), ('OTHER-004', ?, NULL)",
+    ).run(new Date().toISOString(), new Date().toISOString());
+    store.close();
+
+    const reopened = new OutlinerStore(path);
+    stores[stores.length - 1].store = reopened;
+    expect(reopened.workIdAllocatorStatus()).toMatchObject({
+      prefix: "PIE",
+      nextWorkId: "PIE-322",
+    });
+    expect([...reopened.skippedLegacyWorkIds].sort()).toEqual([
+      "OTHER-004",
+      "not-an-id",
+    ]);
+  });
+
   test("registers normalized page declarations and Work IDs with authored labels", () => {
     const store = makeStore();
     const page = store.create("Research hub [page::Research   Notes]");

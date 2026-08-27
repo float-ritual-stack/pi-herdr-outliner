@@ -20,7 +20,12 @@ import {
   resolveBlockReferences as resolveBlockReferenceText,
   resolveBlockReferencesWithStatus,
 } from "./references";
-import { formatWorkId, normalizeWorkIdPrefix, parseWorkId } from "./work-ids";
+import {
+  formatWorkId,
+  normalizeWorkIdPrefix,
+  parseWorkId,
+  type ParsedWorkId,
+} from "./work-ids";
 import type {
   Block,
   BlockAuthor,
@@ -140,6 +145,7 @@ function normalizeCreatorProvenance(
 
 export class OutlinerStore {
   readonly database: Database;
+  private readonly skippedLegacyWorkIdValues: string[] = [];
 
   constructor(path: string) {
     mkdirSync(dirname(path), { recursive: true });
@@ -159,6 +165,11 @@ export class OutlinerStore {
       | { value: string }
       | null;
     return Number(row?.value ?? 0);
+  }
+
+  /** Legacy Work-ID values skipped during migration because they are malformed or use a foreign prefix. */
+  get skippedLegacyWorkIds(): readonly string[] {
+    return this.skippedLegacyWorkIdValues;
   }
 
   create(
@@ -335,12 +346,7 @@ export class OutlinerStore {
         if (this.reservedWorkIdOwnerFromCurrentRead(parsed.workId) !== undefined) {
           continue;
         }
-        const address = this.pageAddressRowFromCurrentRead(
-          normalizePageAddress(parsed.workId).normalizedAddress,
-        );
-        if (address?.kind === "work-id" && address.block_id === row.block_id) {
-          this.reserveWorkIdForBlockFromCurrentRead(row.block_id, parsed.workId);
-        }
+        this.reservePurgedWorkIdFromCurrentRead(row.block_id, parsed);
       }
       this.database.query("DELETE FROM blocks WHERE id = ?").run(id);
       this.recomputeEffectiveDeletion();
@@ -1373,7 +1379,11 @@ export class OutlinerStore {
         "SELECT property.block_id, property.value FROM block_properties property JOIN blocks block ON block.id = property.block_id WHERE property.key = 'work-id' AND block.effective_deleted_root_id IS NULL ORDER BY property.block_id",
       ).all() as Array<{ block_id: string; value: string }>;
       for (const row of rows) {
-        this.reserveWorkIdForBlockFromCurrentRead(row.block_id, row.value);
+        try {
+          this.reserveWorkIdForBlockFromCurrentRead(row.block_id, row.value);
+        } catch {
+          this.skippedLegacyWorkIdValues.push(row.value);
+        }
       }
     })();
   }
@@ -1383,29 +1393,20 @@ export class OutlinerStore {
       const reservations = this.database.query(
         "SELECT work_id FROM reserved_work_ids ORDER BY work_id",
       ).all() as Array<{ work_id: string }>;
-      let prefix: string | null = null;
+      const current = this.workIdAllocatorFromCurrentRead();
+      let prefix: string | null = current?.prefix ?? null;
       let maximum = 0;
       for (const reservation of reservations) {
         const parsed = parseWorkId(reservation.work_id);
-        if (!parsed) {
-          throw new Error(`Invalid reserved Work ID: ${reservation.work_id}`);
-        }
-        if (prefix && parsed.prefix !== prefix) {
-          throw new Error(
-            `Workspace has multiple Work-ID prefixes: ${prefix}, ${parsed.prefix}`,
-          );
+        if (!parsed || (prefix && parsed.prefix !== prefix)) {
+          this.skippedLegacyWorkIdValues.push(reservation.work_id);
+          continue;
         }
         prefix = parsed.prefix;
         maximum = Math.max(maximum, parsed.number);
       }
       if (!prefix) return;
 
-      const current = this.workIdAllocatorFromCurrentRead();
-      if (current && current.prefix !== prefix) {
-        throw new Error(
-          `Configured Work-ID prefix ${current.prefix} conflicts with ${prefix}`,
-        );
-      }
       const nextNumber = Math.max(current?.next_number ?? 1, maximum + 1);
       this.database.query(
         "INSERT INTO work_id_allocator (singleton, prefix, next_number) VALUES (1, ?, ?) ON CONFLICT(singleton) DO UPDATE SET prefix = excluded.prefix, next_number = excluded.next_number",
@@ -1569,6 +1570,25 @@ export class OutlinerStore {
       this.database.query(
         "INSERT INTO reserved_work_ids (work_id, reserved_at, block_id) VALUES (?, ?, ?)",
       ).run(parsed.workId, new Date().toISOString(), blockId);
+    }
+  }
+
+  private reservePurgedWorkIdFromCurrentRead(
+    blockId: string,
+    parsed: ParsedWorkId,
+  ): void {
+    this.database.query(
+      "INSERT INTO reserved_work_ids (work_id, reserved_at, block_id) VALUES (?, ?, ?)",
+    ).run(parsed.workId, new Date().toISOString(), blockId);
+    const allocator = this.workIdAllocatorFromCurrentRead();
+    if (
+      allocator &&
+      allocator.prefix === parsed.prefix &&
+      allocator.next_number <= parsed.number
+    ) {
+      this.database.query(
+        "UPDATE work_id_allocator SET next_number = ? WHERE singleton = 1",
+      ).run(parsed.number + 1);
     }
   }
 

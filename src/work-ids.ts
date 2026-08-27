@@ -21,7 +21,7 @@ export function parseWorkId(input: string): ParsedWorkId | null {
   const number = Number(match[2]);
   if (!Number.isSafeInteger(number) || number < 1) return null;
   const prefix = normalizeWorkIdPrefix(match[1]);
-  return { workId: `${prefix}-${match[2]}`, prefix, number };
+  return { workId: formatWorkId(prefix, number), prefix, number };
 }
 
 export function formatWorkId(prefix: string, number: number): string {

@@ -24,6 +24,16 @@ test("parses canonical project Work-ID components", () => {
     prefix: "PIE",
     number: 123,
   });
+  expect(parseWorkId("PIE-1")).toEqual({
+    workId: "PIE-001",
+    prefix: "PIE",
+    number: 1,
+  });
+  expect(parseWorkId("PIE-0001")).toEqual({
+    workId: "PIE-001",
+    prefix: "PIE",
+    number: 1,
+  });
   expect(parseWorkId("PIE-000")).toBeNull();
   expect(parseWorkId("PIE-x")).toBeNull();
 });

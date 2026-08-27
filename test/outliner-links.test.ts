@@ -355,6 +355,12 @@ describe("outliner link rendering", () => {
     expect(getOsc8LinkAtColumn(customPrefix, 2)).toBe(
       outlinerLinkUri("work", "ABC-001"),
     );
+    expect(firstOutlinerReference("ABC-001_foo")).toBeNull();
+    expect(firstOutlinerReference("foo_ABC-001")).toBeNull();
+    const embedded = createOutlinerTextLinker("ABC-001_foo", () => null).link(
+      "ABC-001_foo",
+    );
+    expect(getOsc8LinkAtColumn(embedded, 2)).toBeUndefined();
   });
 
   test("keeps tilde fences protected until a complete matching close", () => {
