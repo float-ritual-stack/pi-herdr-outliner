@@ -5,6 +5,7 @@ import {
 } from "./block-focus";
 import { OutlinerClient, type RequestInput } from "./client";
 import { resolvePaths } from "./paths";
+import { navigateOutlinerLink } from "./outliner-links";
 import type { BlockSearchQuery, PropertyFilter } from "./types";
 
 function parsePropertyFilter(item: string): PropertyFilter {
@@ -161,6 +162,18 @@ switch (command) {
       title: focused.resolution.match.title,
       kind: focused.resolution.match.kind,
     };
+    break;
+  }
+  case "link": {
+    const { values, positionals } = parseArgs({
+      args: rest,
+      options: { url: { type: "string" } },
+      allowPositionals: true,
+      strict: true,
+    });
+    const url = values.url ?? positionals.join("");
+    if (!url) throw new Error("link requires a pi-outliner URL");
+    directResult = await navigateOutlinerLink(client, url);
     break;
   }
   case "selection":

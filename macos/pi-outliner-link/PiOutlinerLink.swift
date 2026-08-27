@@ -30,6 +30,8 @@ private struct LinkRoute: Equatable {
     enum Kind: String {
         case block
         case goto
+        case page
+        case work
     }
 
     let kind: Kind
@@ -89,10 +91,12 @@ private func parseRoute(_ rawURL: String) throws -> LinkRoute {
         guard target.range(of: #"^[A-Za-z0-9_-]{8,}$"#, options: .regularExpression) != nil else {
             throw HandlerError.invalidURL("malformed block ID")
         }
-    case .goto:
+    case .goto, .work:
         guard target.range(of: #"^PIE-[0-9]+$"#, options: .regularExpression) != nil else {
-            throw HandlerError.invalidURL("only PIE work IDs are accepted as goto targets")
+            throw HandlerError.invalidURL("only PIE work IDs are accepted as \(kind.rawValue) targets")
         }
+    case .page:
+        break
     }
     return LinkRoute(kind: kind, target: target)
 }
@@ -166,7 +170,7 @@ private func navigate(_ rawURL: String) throws {
     let config = try loadConfig()
     let remoteCommand = [
         "cd -- \(shellQuote(config.workspace))",
-        "\(shellQuote(config.remoteBun)) run src/cli.ts goto --query \(shellQuote(route.target))",
+        "\(shellQuote(config.remoteBun)) run src/cli.ts link --url \(shellQuote(rawURL))",
     ].joined(separator: " && ")
 
     let process = Process()
@@ -245,9 +249,15 @@ private func runSelfTests() throws {
     guard try parseRoute("pi-outliner://goto/PIE-133") == LinkRoute(kind: .goto, target: "PIE-133") else {
         throw HandlerError.invalidURL("goto self-test failed")
     }
+    guard try parseRoute("pi-outliner://work/PIE-133") == LinkRoute(kind: .work, target: "PIE-133") else {
+        throw HandlerError.invalidURL("work self-test failed")
+    }
+    guard try parseRoute("pi-outliner://page/Research%20Notes") == LinkRoute(kind: .page, target: "Research Notes") else {
+        throw HandlerError.invalidURL("page self-test failed")
+    }
     for invalid in [
         "https://example.com",
-        "pi-outliner://page/address",
+        "pi-outliner://work/arbitrary",
         "pi-outliner://goto/arbitrary",
         "pi-outliner://goto/PIE-133?query=yes",
         "pi-outliner://goto/%1Bowned",

@@ -1440,8 +1440,10 @@ export class OutlinerStore {
       return;
     }
     if (!desired) {
-      const label = kind === "page" ? "Page address" : "Work ID";
-      throw new Error(`${label} removal requires an explicit address operation: ${blockId}`);
+      if (kind === "work-id") {
+        throw new Error(`Work IDs are immutable once registered: ${blockId}`);
+      }
+      throw new Error(`Page address removal requires pages.remove: ${blockId}`);
     }
     if (current.normalized_address !== desired.normalizedAddress) {
       if (kind === "page") {
