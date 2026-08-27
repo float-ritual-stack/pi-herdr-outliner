@@ -328,9 +328,9 @@ describe("outliner link rendering", () => {
   });
 
   test("finds bare Work IDs as symbolic references", () => {
-    expect(firstOutlinerReference("PIE-133")).toEqual({ kind: "page", value: "PIE-133" });
+    expect(firstOutlinerReference("PIE-133")).toEqual({ kind: "work", value: "PIE-133" });
     expect(firstOutlinerReference("`PIE-133` then PIE-134")).toEqual({
-      kind: "page",
+      kind: "work",
       value: "PIE-134",
     });
     expect(firstOutlinerReference("[[Page]] before PIE-133")).toEqual({
