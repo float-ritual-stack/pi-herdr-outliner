@@ -128,6 +128,36 @@ function rowIndexForIdentity(
   return rows.findIndex((row) => row.canonicalId === canonicalId);
 }
 
+function fallbackRowBeforeDelete(
+  rows: readonly TreeRow[],
+  selectedIndex: number,
+  physicalBlocksById: ReadonlyMap<string, VisibleBlock>,
+): TreeRow | null {
+  const selected = rows[selectedIndex];
+  if (!selected) return null;
+  const removedCanonicalIds = new Set([selected.canonicalId]);
+  let discoveredDescendant = true;
+  while (discoveredDescendant) {
+    discoveredDescendant = false;
+    for (const block of physicalBlocksById.values()) {
+      if (
+        block.parentId &&
+        removedCanonicalIds.has(block.parentId) &&
+        !removedCanonicalIds.has(block.id)
+      ) {
+        removedCanonicalIds.add(block.id);
+        discoveredDescendant = true;
+      }
+    }
+  }
+  const survivingRows = rows.filter((row) =>
+    !removedCanonicalIds.has(row.canonicalId) &&
+    !(row.kind === "occurrence" && removedCanonicalIds.has(row.viewId))
+  );
+  if (survivingRows.length === 0) return null;
+  return survivingRows[Math.min(selectedIndex, survivingRows.length - 1)] ?? null;
+}
+
 export function createTreeController(effects: TreeControllerEffects): TreeController {
   let rows: TreeRow[] = [];
   let physicalBlocksById = new Map<string, VisibleBlock>();
@@ -194,18 +224,21 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     const nextPhysicalBlocksById = new Map(snapshot.physical.blocks.map((block) => [block.id, block]));
     const serviceSelectedId = snapshot.selection.selected?.id ?? null;
     let nextIndex = -1;
+    let currentRowVanished = false;
     if (preferredRowId !== undefined) {
       if (preferredRowId) {
         nextIndex = rowIndexForIdentity(nextRows, preferredRowId);
       }
     } else if (currentSelected) {
-      nextIndex = rowIndexForIdentity(
-        nextRows,
-        currentSelected.rowId,
-        currentSelected.canonicalId,
-      );
+      nextIndex = nextRows.findIndex((row) => row.rowId === currentSelected.rowId);
+      currentRowVanished = nextIndex < 0;
     }
-    if (nextIndex < 0 && preferredRowId === undefined && serviceSelectedId) {
+    if (
+      nextIndex < 0 &&
+      preferredRowId === undefined &&
+      serviceSelectedId &&
+      !currentRowVanished
+    ) {
       nextIndex = nextRows.findIndex((row) => row.canonicalId === serviceSelectedId);
     }
     const nextSelectedIndex = Math.max(
@@ -779,7 +812,13 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       }
       await reload(preferredRowId);
     } else {
+      const previousRow = rows[selectedIndex];
       await reload();
+      if (previousRow && !rows.some((row) => row.rowId === previousRow.rowId)) {
+        const fallbackCanonicalId = rows[selectedIndex]?.canonicalId ?? null;
+        lastVisibleCanonicalId = fallbackCanonicalId;
+        await effects.request({ action: "selection.set", blockId: fallbackCanonicalId });
+      }
     }
     effects.invalidate();
   }
@@ -844,13 +883,17 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     if (mode === "delete") {
       const selected = rows[selectedIndex];
       if (str.toLowerCase() === "y" && selected) {
+        const fallback = fallbackRowBeforeDelete(rows, selectedIndex, physicalBlocksById);
+        await effects.request({
+          action: "selection.set",
+          blockId: fallback?.canonicalId ?? null,
+        });
         await effects.request({ action: "delete", blockId: selected.canonicalId });
+        await reload(fallback?.rowId ?? null);
+        lastVisibleCanonicalId = rows[selectedIndex]?.canonicalId ?? null;
+        status = "Moved to Trash";
       }
       mode = "browse";
-      await reload();
-      const visibleCanonicalId = rows[selectedIndex]?.canonicalId ?? null;
-      lastVisibleCanonicalId = visibleCanonicalId;
-      await effects.request({ action: "selection.set", blockId: visibleCanonicalId });
       effects.invalidate();
       return;
     }
