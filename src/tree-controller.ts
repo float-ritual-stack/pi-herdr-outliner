@@ -150,12 +150,20 @@ function fallbackRowBeforeDelete(
       }
     }
   }
-  const survivingRows = rows.filter((row) =>
+  const survives = (row: TreeRow): boolean =>
     !removedCanonicalIds.has(row.canonicalId) &&
-    !(row.kind === "occurrence" && removedCanonicalIds.has(row.viewId))
-  );
+    !(row.kind === "occurrence" && removedCanonicalIds.has(row.viewId));
+  const survivingRows = rows.filter(survives);
   if (survivingRows.length === 0) return null;
-  return survivingRows[Math.min(selectedIndex, survivingRows.length - 1)] ?? null;
+  const removedBefore = rows
+    .slice(0, selectedIndex)
+    .filter((row) => !survives(row))
+    .length;
+  const fallbackIndex = Math.min(
+    selectedIndex - removedBefore,
+    survivingRows.length - 1,
+  );
+  return survivingRows[Math.max(0, fallbackIndex)] ?? null;
 }
 
 export function createTreeController(effects: TreeControllerEffects): TreeController {
@@ -897,6 +905,8 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         await reload(fallback?.rowId ?? null, { exactRowIdOnly: true });
         lastVisibleCanonicalId = rows[selectedIndex]?.canonicalId ?? null;
         status = "Moved to Trash";
+      } else if (refreshPending) {
+        await reload();
       }
       mode = "browse";
       effects.invalidate();

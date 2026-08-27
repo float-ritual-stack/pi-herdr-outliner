@@ -865,6 +865,74 @@ describe("createTreeController", () => {
     expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe(successor.id);
   });
 
+  test("accounts for removed projected rows above a deleted physical row", async () => {
+    const definition = block("view", {
+      properties: [
+        { key: "type", value: "virtual-branch" },
+        { key: "query", value: "status=Doing" },
+      ],
+    });
+    const card = block("card", {
+      position: 1,
+      properties: [{ key: "status", value: "Doing" }],
+    });
+    const successor = block("successor", { position: 2 });
+    const tail = block("tail", { position: 3 });
+    let cardPresent = true;
+    let physical = [definition, card, successor, tail];
+    let selected: Block | null = card;
+    const fake = harness((input) => {
+      if (input.action === "workspace.snapshot") return snapshot(physical, selected);
+      if (input.action === "blocks.query") {
+        return {
+          blocks: cardPresent ? [card] : [],
+          completeness: { kind: "complete" },
+        };
+      }
+      if (input.action === "selection.set") {
+        selected = physical.find((candidate) => candidate.id === input.blockId) ?? null;
+        return undefined;
+      }
+      if (input.action === "delete") {
+        cardPresent = false;
+        physical = [definition, successor, tail];
+        return undefined;
+      }
+      return undefined;
+    });
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+    await controller.handleKeypress("", { name: "down" }, "pass");
+    expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe(card.id);
+
+    await controller.handleKeypress("d", { name: "d" }, "pass");
+    await controller.handleKeypress("y", { name: "y" }, "pass");
+
+    expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe(successor.id);
+  });
+
+  test("reloads deferred content when delete confirmation is cancelled", async () => {
+    const selected = block("selected");
+    const added = block("added", { position: 1 });
+    let physical = [selected];
+    const fake = harness((input) =>
+      input.action === "workspace.snapshot" ? snapshot(physical, selected) : undefined
+    );
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+    await controller.handleKeypress("d", { name: "d" }, "pass");
+
+    physical = [selected, added];
+    await controller.handleServiceEvent(event("content", added.id));
+    expect(controller.view().refreshPending).toBe(true);
+    await controller.handleKeypress("n", { name: "n" }, "pass");
+
+    expect(controller.view().mode).toBe("browse");
+    expect(controller.view().refreshPending).toBe(false);
+    expect(controller.view().rows.map((row) => row.rowId)).toEqual([selected.id, added.id]);
+    expect(fake.calls.some((call) => call.action === "delete")).toBe(false);
+  });
+
   test("selects the previous visual row when deleting the final row", async () => {
     const previous = block("previous");
     const deleted = block("deleted", { position: 1 });
