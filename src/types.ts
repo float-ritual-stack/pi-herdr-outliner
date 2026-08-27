@@ -88,6 +88,18 @@ export interface PageAddressCollection {
   completeness: BlockCollectionCompleteness;
 }
 
+export interface WorkIdAllocatorStatus {
+  prefix: string | null;
+  nextNumber: number | null;
+  nextWorkId: string | null;
+  reservedCount: number;
+}
+
+export interface WorkIdAllocation {
+  workId: string;
+  block: Block;
+}
+
 export interface PropertyFilter {
   key: string;
   value?: string;
@@ -145,7 +157,7 @@ export interface ResolvedBlockReferences {
   references: BlockReferenceResolution[];
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 8;
+export const OUTLINER_PROTOCOL_VERSION = 9;
 
 export interface OutlinerServiceStatus {
   status: "ready";
@@ -218,7 +230,15 @@ export type OutlinerRequest =
   | { id: string; action: "selection.set"; blockId: string | null }
   | { id: string; action: "navigation.state" }
   | { id: string; action: "navigation.back" }
-  | { id: string; action: "navigation.forward" };
+  | { id: string; action: "navigation.forward" }
+  | { id: string; action: "work-ids.status" }
+  | {
+      id: string;
+      action: "work-ids.allocate";
+      blockId: string;
+      expectedUpdatedAt: string;
+      prefix?: string;
+    };
 
 export type OutlinerResponse =
   | { id: string; ok: true; result: unknown; sequence: number }

@@ -472,6 +472,41 @@ export default function outlinerExtension(pi: ExtensionAPI): void {
   });
 
   pi.registerTool({
+    name: "outliner_work_id",
+    label: "Outliner Work ID",
+    description: "Read allocator state or transactionally assign the next immutable project Work ID",
+    promptSnippet: "Allocate project-scoped Work IDs through the canonical outliner service",
+    parameters: Type.Object({
+      operation: Type.Union([
+        Type.Literal("status"),
+        Type.Literal("allocate"),
+      ]),
+      blockId: Type.Optional(Type.String({ description: "Required for allocate" })),
+      expectedUpdatedAt: Type.Optional(
+        Type.String({ description: "Required for allocate" }),
+      ),
+      prefix: Type.Optional(
+        Type.String({ description: "Required only for the first allocation in a workspace" }),
+      ),
+    }),
+    async execute(_id, params) {
+      await ensureService(false);
+      if (params.operation === "status") {
+        return toolResult(await client.request({ action: "work-ids.status" }));
+      }
+      if (!params.blockId || !params.expectedUpdatedAt) {
+        throw new Error("outliner_work_id allocate requires blockId and expectedUpdatedAt");
+      }
+      return toolResult(await client.request({
+        action: "work-ids.allocate",
+        blockId: params.blockId,
+        expectedUpdatedAt: params.expectedUpdatedAt,
+        prefix: params.prefix,
+      }));
+    },
+  });
+
+  pi.registerTool({
     name: "outliner_query",
     label: "Outliner Query",
     description:

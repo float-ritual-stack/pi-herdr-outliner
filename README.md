@@ -25,11 +25,12 @@ The project started as a small Friday-night experiment and grew into a durable w
 
 - SQLite-backed hierarchical blocks with stable UUIDs, sibling order, authors, timestamps, collapse state, and selection.
 - Workspace-isolated service and runtime paths.
-- JSON-lines RPC protocol v8 over a Unix socket.
+- JSON-lines RPC protocol v9 over a Unix socket.
 - Reactive content, selection, view, and UI-command events, with service-owned block navigation history.
 - Indexed `[property::value]` metadata with optimistic property patching and catalog queries.
 - Exact block references using `((block-id))`, resolved to display titles in read mode while raw text remains editable.
 - Unique normalized symbolic addresses from explicit `[page::address]` declarations and Work IDs, with aliases, explicit removal, bounded completion, dangling links, and transactional create-on-follow.
+- Workspace-scoped monotonic Work-ID allocation adopts existing IDs, persists one project prefix, optimistically assigns the next immutable ID, and never reuses reserved or purged identifiers.
 - Plain-clickable Work IDs, canonical UUIDs, exact references, and `[[address]]` links inside Tree/Detail, with OSC 8 `pi-outliner://` links retained for external terminal interoperability.
 - Property-driven virtual branches with canonical projected occurrences, property-aware creation, and persisted branch-local occurrence order.
 - Agent-authored blocks retain immutable actor, session, and originating tool-call/task provenance while preserving the coarse `agent` author role.
@@ -190,6 +191,8 @@ Depends on ((516e1754-7741-4c9e-83a6-7b703a8f0798))
 ```
 
 Read views resolve exact-reference titles while edit views retain raw IDs. Symbolic links use `[[address]]`; a block registers an address through `[page::address]`, and existing Work IDs participate in the same unique normalized registry. Parsing or saving a dangling link never creates content. Only explicit follow creates a root stub, transactionally; unresolved Work-ID-shaped addresses fail instead of squatting the stable Work-ID namespace. Explicit rename preserves the old address as an alias, and explicit removal unregisters an alias or primary declaration. Deleted targets remain resolvable and purged targets become dangling.
+
+Work IDs are allocated through the service rather than by scanning in a client. `work-ids.status` reports the configured prefix and next ID; `work-ids.allocate` optimistically appends the next ID to an opted-in canonical block. The first allocation in an empty workspace declares the prefix. Existing/manual canonical IDs advance the same allocator, and the reservation ledger retains their owning UUID after purge.
 
 ### Virtual branches
 

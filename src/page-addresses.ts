@@ -1,6 +1,7 @@
+import { parseWorkId } from "./work-ids";
+
 const CONTROL_PATTERN = /[\u0000-\u001f\u007f]/;
 const PAGE_ADDRESS_PATTERN = /\[\[([^\]\r\n]+)\]\]/g;
-const WORK_ID_ADDRESS_PATTERN = /^PIE-\d+$/i;
 
 export const PAGE_ADDRESS_MAX_LENGTH = 512;
 export const PAGE_ADDRESS_REGISTRY_VERSION = 1;
@@ -15,7 +16,7 @@ export interface PageAddressReference extends NormalizedPageAddress {
   end: number;
 }
 export function isWorkIdAddress(address: string): boolean {
-  return WORK_ID_ADDRESS_PATTERN.test(address.trim());
+  return parseWorkId(address) !== null;
 }
 
 export function normalizePageAddress(input: string): NormalizedPageAddress {

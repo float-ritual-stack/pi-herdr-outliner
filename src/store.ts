@@ -20,6 +20,7 @@ import {
   resolveBlockReferences as resolveBlockReferenceText,
   resolveBlockReferencesWithStatus,
 } from "./references";
+import { formatWorkId, normalizeWorkIdPrefix, parseWorkId } from "./work-ids";
 import type {
   Block,
   BlockAuthor,
@@ -43,6 +44,8 @@ import type {
   VisibleBlockCollection,
   VirtualOccurrenceRank,
   WorkspaceSnapshot,
+  WorkIdAllocation,
+  WorkIdAllocatorStatus,
   WorkspaceSnapshotView,
 } from "./types";
 
@@ -77,6 +80,11 @@ interface PageAddressRow {
 
 interface PageAddressMatchRow extends PageAddressRow {
   text: string;
+}
+
+interface WorkIdAllocatorRow {
+  prefix: string;
+  next_number: number;
 }
 
 interface VirtualOccurrenceRankRow {
@@ -296,6 +304,11 @@ export class OutlinerStore {
           !restored.effectiveDeletedRootId &&
           this.canRegisterRestoredPageAddresses(blockId, restored.properties)
         ) {
+          for (const property of restored.properties) {
+            if (property.key === "work-id") {
+              this.reserveWorkIdForBlockFromCurrentRead(blockId, property.value);
+            }
+          }
           this.syncDeclaredPageAddresses(blockId, restored.properties);
         }
       }
@@ -314,13 +327,21 @@ export class OutlinerStore {
       const subtree = this.subtreeIdsFromCurrentRead(id);
       const placeholders = subtree.map(() => "?").join(", ");
       const reserved = this.database.query(
-        `SELECT value FROM block_properties WHERE key = 'work-id' AND block_id IN (${placeholders})`,
-      ).all(...subtree) as Array<{ value: string }>;
-      const reserve = this.database.query(
-        "INSERT OR IGNORE INTO reserved_work_ids (work_id, reserved_at) VALUES (?, ?)",
-      );
-      const now = new Date().toISOString();
-      for (const row of reserved) reserve.run(row.value, now);
+        `SELECT block_id, value FROM block_properties WHERE key = 'work-id' AND block_id IN (${placeholders})`,
+      ).all(...subtree) as Array<{ block_id: string; value: string }>;
+      for (const row of reserved) {
+        const parsed = parseWorkId(row.value);
+        if (!parsed || parsed.workId !== row.value.trim()) continue;
+        if (this.reservedWorkIdOwnerFromCurrentRead(parsed.workId) !== undefined) {
+          continue;
+        }
+        const address = this.pageAddressRowFromCurrentRead(
+          normalizePageAddress(parsed.workId).normalizedAddress,
+        );
+        if (address?.kind === "work-id" && address.block_id === row.block_id) {
+          this.reserveWorkIdForBlockFromCurrentRead(row.block_id, parsed.workId);
+        }
+      }
       this.database.query("DELETE FROM blocks WHERE id = ?").run(id);
       this.recomputeEffectiveDeletion();
       this.bumpSequence();
@@ -620,6 +641,83 @@ export class OutlinerStore {
       }
       this.bumpSequence();
       return { removed, block: updated };
+    })();
+  }
+
+  workIdAllocatorStatus(): WorkIdAllocatorStatus {
+    return this.database.transaction(() => {
+      const allocator = this.workIdAllocatorFromCurrentRead();
+      const reserved = this.database.query(
+        "SELECT COUNT(*) AS count FROM reserved_work_ids",
+      ).get() as { count: number };
+      return {
+        prefix: allocator?.prefix ?? null,
+        nextNumber: allocator?.next_number ?? null,
+        nextWorkId: allocator
+          ? formatWorkId(allocator.prefix, allocator.next_number)
+          : null,
+        reservedCount: reserved.count,
+      };
+    })();
+  }
+
+  allocateWorkId(
+    blockId: string,
+    expectedUpdatedAt: string,
+    requestedPrefix?: string,
+  ): WorkIdAllocation {
+    const normalizedPrefix = requestedPrefix === undefined
+      ? null
+      : normalizeWorkIdPrefix(requestedPrefix);
+    return this.database.transaction(() => {
+      const block = this.getFromCurrentRead(blockId);
+      if (!block) throw new Error(`Block not found: ${blockId}`);
+      if (block.effectiveDeletedRootId) throw new Error(`Block is in Trash: ${blockId}`);
+      if (block.updatedAt !== expectedUpdatedAt) {
+        throw new Error(`Block changed since editing began: ${blockId}`);
+      }
+      if (block.properties.some((property) => property.key === "work-id")) {
+        throw new Error(`Block already has a Work ID: ${blockId}`);
+      }
+
+      let allocator = this.workIdAllocatorFromCurrentRead();
+      if (!allocator) {
+        if (!normalizedPrefix) {
+          throw new Error("First Work-ID allocation requires a project prefix");
+        }
+        this.database.query(
+          "INSERT INTO work_id_allocator (singleton, prefix, next_number) VALUES (1, ?, 1)",
+        ).run(normalizedPrefix);
+        allocator = { prefix: normalizedPrefix, next_number: 1 };
+      } else if (normalizedPrefix && normalizedPrefix !== allocator.prefix) {
+        throw new Error(
+          `Work-ID prefix is already configured as ${allocator.prefix}`,
+        );
+      }
+
+      let nextNumber = allocator.next_number;
+      let workId = formatWorkId(allocator.prefix, nextNumber);
+      while (this.reservedWorkIdOwnerFromCurrentRead(workId) !== undefined) {
+        nextNumber += 1;
+        workId = formatWorkId(allocator.prefix, nextNumber);
+      }
+      const nextText = patchPropertyText(block.text, [{
+        op: "append",
+        key: "work-id",
+        value: workId,
+      }]);
+      const updatedAt = new Date(
+        Math.max(Date.now(), Date.parse(block.updatedAt) + 1),
+      ).toISOString();
+      const properties = parseProperties(nextText);
+      this.database.query("UPDATE blocks SET text = ?, updated_at = ? WHERE id = ?")
+        .run(nextText, updatedAt, blockId);
+      this.replaceProperties(blockId, properties);
+      this.bumpSequence();
+      return {
+        workId,
+        block: { ...block, text: nextText, updatedAt, properties },
+      };
     })();
   }
 
@@ -1142,7 +1240,13 @@ export class OutlinerStore {
         ON virtual_occurrence_ranks(view_id, rank, block_id);
       CREATE TABLE IF NOT EXISTS reserved_work_ids (
         work_id TEXT PRIMARY KEY,
-        reserved_at TEXT NOT NULL
+        reserved_at TEXT NOT NULL,
+        block_id TEXT
+      );
+      CREATE TABLE IF NOT EXISTS work_id_allocator (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        prefix TEXT NOT NULL UNIQUE,
+        next_number INTEGER NOT NULL CHECK (next_number >= 1)
       );
       CREATE TABLE IF NOT EXISTS page_addresses (
         normalized_address TEXT PRIMARY KEY,
@@ -1156,8 +1260,10 @@ export class OutlinerStore {
         ON page_addresses(block_id) WHERE kind = 'work-id';
     `);
     this.migrateBlockStateColumns();
+    this.migrateWorkIdStateColumns();
     this.migratePropertyIndex();
     this.migrateWorkIdReservations();
+    this.reconcileWorkIdAllocator();
     this.migratePageAddressRegistry();
     this.migrateNavigationHistory();
   }
@@ -1186,6 +1292,34 @@ export class OutlinerStore {
         "CREATE INDEX IF NOT EXISTS blocks_effective_deleted ON blocks(effective_deleted_root_id, deleted_at)",
       );
       if (needsEffectiveDeletionBackfill) this.recomputeEffectiveDeletion();
+    })();
+  }
+
+  private migrateWorkIdStateColumns(): void {
+    this.database.transaction(() => {
+      const columns = new Set(
+        (
+          this.database.query("PRAGMA table_info(reserved_work_ids)").all() as Array<{
+            name: string;
+          }>
+        ).map((column) => column.name),
+      );
+      if (!columns.has("block_id")) {
+        this.database.exec("ALTER TABLE reserved_work_ids ADD COLUMN block_id TEXT");
+      }
+      this.database.query(`
+        UPDATE reserved_work_ids
+        SET block_id = (
+          SELECT property.block_id
+          FROM block_properties property
+          JOIN blocks block ON block.id = property.block_id
+          WHERE property.key = 'work-id'
+            AND UPPER(property.value) = UPPER(reserved_work_ids.work_id)
+          ORDER BY (block.effective_deleted_root_id IS NOT NULL), property.block_id
+          LIMIT 1
+        )
+        WHERE block_id IS NULL
+      `).run();
     })();
   }
   private migrateNavigationHistory(): void {
@@ -1222,7 +1356,7 @@ export class OutlinerStore {
       }>;
       this.database.query("DELETE FROM block_properties").run();
       for (const block of existingBlocks) {
-        this.replaceProperties(block.id, parseProperties(block.text));
+        this.replacePropertyIndex(block.id, parseProperties(block.text));
       }
       this.database
         .query(
@@ -1234,10 +1368,49 @@ export class OutlinerStore {
   }
 
   private migrateWorkIdReservations(): void {
-    const now = new Date().toISOString();
-    this.database.query(
-      "INSERT OR IGNORE INTO reserved_work_ids (work_id, reserved_at) SELECT value, ? FROM block_properties WHERE key = 'work-id'",
-    ).run(now);
+    this.database.transaction(() => {
+      const rows = this.database.query(
+        "SELECT property.block_id, property.value FROM block_properties property JOIN blocks block ON block.id = property.block_id WHERE property.key = 'work-id' AND block.effective_deleted_root_id IS NULL ORDER BY property.block_id",
+      ).all() as Array<{ block_id: string; value: string }>;
+      for (const row of rows) {
+        this.reserveWorkIdForBlockFromCurrentRead(row.block_id, row.value);
+      }
+    })();
+  }
+
+  private reconcileWorkIdAllocator(): void {
+    this.database.transaction(() => {
+      const reservations = this.database.query(
+        "SELECT work_id FROM reserved_work_ids ORDER BY work_id",
+      ).all() as Array<{ work_id: string }>;
+      let prefix: string | null = null;
+      let maximum = 0;
+      for (const reservation of reservations) {
+        const parsed = parseWorkId(reservation.work_id);
+        if (!parsed) {
+          throw new Error(`Invalid reserved Work ID: ${reservation.work_id}`);
+        }
+        if (prefix && parsed.prefix !== prefix) {
+          throw new Error(
+            `Workspace has multiple Work-ID prefixes: ${prefix}, ${parsed.prefix}`,
+          );
+        }
+        prefix = parsed.prefix;
+        maximum = Math.max(maximum, parsed.number);
+      }
+      if (!prefix) return;
+
+      const current = this.workIdAllocatorFromCurrentRead();
+      if (current && current.prefix !== prefix) {
+        throw new Error(
+          `Configured Work-ID prefix ${current.prefix} conflicts with ${prefix}`,
+        );
+      }
+      const nextNumber = Math.max(current?.next_number ?? 1, maximum + 1);
+      this.database.query(
+        "INSERT INTO work_id_allocator (singleton, prefix, next_number) VALUES (1, ?, ?) ON CONFLICT(singleton) DO UPDATE SET prefix = excluded.prefix, next_number = excluded.next_number",
+      ).run(prefix, nextNumber);
+    })();
   }
 
   private migratePageAddressRegistry(): void {
@@ -1344,6 +1517,61 @@ export class OutlinerStore {
     };
   }
 
+  private workIdAllocatorFromCurrentRead(): WorkIdAllocatorRow | null {
+    return this.database.query(
+      "SELECT prefix, next_number FROM work_id_allocator WHERE singleton = 1",
+    ).get() as WorkIdAllocatorRow | null;
+  }
+
+  private reservedWorkIdOwnerFromCurrentRead(
+    workId: string,
+  ): string | null | undefined {
+    const row = this.database.query(
+      "SELECT block_id FROM reserved_work_ids WHERE work_id = ?",
+    ).get(workId) as { block_id: string | null } | null;
+    return row ? row.block_id : undefined;
+  }
+
+  private reserveWorkIdForBlockFromCurrentRead(
+    blockId: string,
+    value: string,
+  ): void {
+    const parsed = parseWorkId(value);
+    if (!parsed || parsed.workId !== value.trim()) {
+      throw new Error(`Invalid canonical Work ID: ${value}`);
+    }
+    const allocator = this.workIdAllocatorFromCurrentRead();
+    if (!allocator) {
+      this.database.query(
+        "INSERT INTO work_id_allocator (singleton, prefix, next_number) VALUES (1, ?, ?)",
+      ).run(parsed.prefix, parsed.number + 1);
+    } else {
+      if (allocator.prefix !== parsed.prefix) {
+        throw new Error(
+          `Work-ID prefix is already configured as ${allocator.prefix}`,
+        );
+      }
+      if (allocator.next_number <= parsed.number) {
+        this.database.query(
+          "UPDATE work_id_allocator SET next_number = ? WHERE singleton = 1",
+        ).run(parsed.number + 1);
+      }
+    }
+
+    const owner = this.reservedWorkIdOwnerFromCurrentRead(parsed.workId);
+    if (owner === null) {
+      throw new Error(`Work ID is reserved and cannot be reused: ${parsed.workId}`);
+    }
+    if (owner !== undefined && owner !== blockId) {
+      throw new Error(`Work ID already belongs to block ${owner}: ${parsed.workId}`);
+    }
+    if (owner === undefined) {
+      this.database.query(
+        "INSERT INTO reserved_work_ids (work_id, reserved_at, block_id) VALUES (?, ?, ?)",
+      ).run(parsed.workId, new Date().toISOString(), blockId);
+    }
+  }
+
   private resolvePageAddressFromCurrentRead(
     normalized: NormalizedPageAddress,
   ): PageAddressResolution {
@@ -1416,6 +1644,14 @@ export class OutlinerStore {
   ): boolean {
     const pageValues = properties.filter((property) => property.key === "page");
     const workIdValues = properties.filter((property) => property.key === "work-id");
+    if (workIdValues[0]) {
+      const parsed = parseWorkId(workIdValues[0].value);
+      if (!parsed || parsed.workId !== workIdValues[0].value.trim()) return false;
+      const allocator = this.workIdAllocatorFromCurrentRead();
+      if (allocator && allocator.prefix !== parsed.prefix) return false;
+      const owner = this.reservedWorkIdOwnerFromCurrentRead(parsed.workId);
+      if (owner === null || (owner !== undefined && owner !== blockId)) return false;
+    }
     if (pageValues.length > 1 || workIdValues.length > 1) return false;
 
     const page = pageValues[0] ? tryNormalizePageAddress(pageValues[0].value) : null;
@@ -1489,19 +1725,27 @@ export class OutlinerStore {
     }
   }
 
-  private replaceProperties(blockId: string, properties: BlockProperty[]): void {
+  private replacePropertyIndex(
+    blockId: string,
+    properties: BlockProperty[],
+  ): void {
     this.database.query("DELETE FROM block_properties WHERE block_id = ?").run(blockId);
     const insert = this.database.query(
       "INSERT INTO block_properties (block_id, key, value, ordinal) VALUES (?, ?, ?, ?)",
     );
-    properties.forEach((property, ordinal) => insert.run(blockId, property.key, property.value, ordinal));
-    this.syncDeclaredPageAddresses(blockId, properties);
-    const reserve = this.database.query(
-      "INSERT OR IGNORE INTO reserved_work_ids (work_id, reserved_at) VALUES (?, ?)",
+    properties.forEach((property, ordinal) =>
+      insert.run(blockId, property.key, property.value, ordinal)
     );
+  }
+
+  private replaceProperties(blockId: string, properties: BlockProperty[]): void {
+    this.replacePropertyIndex(blockId, properties);
     for (const property of properties) {
-      if (property.key === "work-id") reserve.run(property.value, new Date().toISOString());
+      if (property.key === "work-id") {
+        this.reserveWorkIdForBlockFromCurrentRead(blockId, property.value);
+      }
     }
+    this.syncDeclaredPageAddresses(blockId, properties);
   }
 
   private subtreeIdsFromCurrentRead(rootId: string): string[] {

@@ -11,7 +11,7 @@ import type { Block, PageAddressFollowResult, PageAddressResolution } from "./ty
 const OUTLINER_SCHEME = "pi-outliner:";
 const BLOCK_ID_PATTERN = /^[A-Za-z0-9_-]{8,}$/;
 const BLOCK_ID_TOKEN_PATTERN = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
-const WORK_ID_PATTERN = /\bPIE-\d+\b/gi;
+const WORK_ID_PATTERN = /(?<![A-Za-z0-9-])(?:(?:PIE|pie)|[A-Z][A-Z0-9]{0,15})-\d+(?![A-Za-z0-9-])/g;
 const RAW_BLOCK_REFERENCE_PATTERN = /\(\(([A-Za-z0-9_-]{8,})\)\)/g;
 const TERMINAL_CONTROL_PATTERN = /[\u0000-\u001f\u007f]/;
 
@@ -230,6 +230,7 @@ export function firstOutlinerReference(text: string): OutlinerLinkTarget | null 
   const pageRanges = pageSyntaxRanges(text);
   for (const match of text.matchAll(WORK_ID_PATTERN)) {
     const range = { start: match.index, end: match.index + match[0].length };
+    if (!isWorkIdAddress(match[0])) continue;
     if (pageRanges.some((pageRange) => overlaps(range, pageRange))) continue;
     candidates.push({
       kind: "work",
@@ -260,6 +261,7 @@ function genericLinkSpans(
   for (const match of text.matchAll(WORK_ID_PATTERN)) {
     const range = { start: match.index, end: match.index + match[0].length };
     if (pageRanges.some((pageRange) => overlaps(range, pageRange))) continue;
+    if (!isWorkIdAddress(match[0])) continue;
     spans.push({
       ...range,
       uri: outlinerLinkUri("work", match[0]),

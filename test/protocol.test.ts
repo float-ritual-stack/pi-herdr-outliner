@@ -20,6 +20,8 @@ import type {
   OutlinerServiceStatus,
   PropertyCatalogItem,
   VisibleBlockCollection,
+  WorkIdAllocation,
+  WorkIdAllocatorStatus,
   WorkspaceSnapshot,
 } from "../src/types";
 
@@ -43,7 +45,7 @@ test("serves mutations and property queries over the local socket", async () => 
   const client = new OutlinerClient(socket);
   const service = await client.request<OutlinerServiceStatus>({ action: "ping" });
   expect(service).toEqual({ status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION });
-  expect(service.protocolVersion).toBe(8);
+  expect(service.protocolVersion).toBe(9);
   const provenance = {
     actorId: "omp",
     sessionId: "session-1",
@@ -66,6 +68,40 @@ test("serves mutations and property queries over the local socket", async () => 
   const matches = await client.request<VisibleBlockCollection>({
     action: "blocks.query",
     query: { filters: [{ key: "type", value: "question" }], limit: 1 },
+  });
+  const allocatorBefore = await client.request<WorkIdAllocatorStatus>({
+    action: "work-ids.status",
+  });
+  expect(allocatorBefore).toEqual({
+    prefix: null,
+    nextNumber: null,
+    nextWorkId: null,
+    reservedCount: 0,
+  });
+  const workTarget = await client.request<Block>({
+    action: "create",
+    text: "Protocol work target",
+  });
+  const allocation = await client.request<WorkIdAllocation>({
+    action: "work-ids.allocate",
+    blockId: workTarget.id,
+    expectedUpdatedAt: workTarget.updatedAt,
+    prefix: "pie",
+  });
+  expect(allocation).toMatchObject({
+    workId: "PIE-001",
+    block: {
+      id: workTarget.id,
+      properties: [{ key: "work-id", value: "PIE-001" }],
+    },
+  });
+  expect(await client.request<WorkIdAllocatorStatus>({
+    action: "work-ids.status",
+  })).toEqual({
+    prefix: "PIE",
+    nextNumber: 2,
+    nextWorkId: "PIE-002",
+    reservedCount: 1,
   });
 
   expect(matches.blocks.some((candidate) => candidate.id === block.id)).toBe(true);
@@ -254,7 +290,7 @@ test("streams workspace mutations and transient UI commands to subscribers", asy
     onConnect: connected.resolve,
     onEvent: (event) => {
       events.push(event);
-      if (events.length === 7) received.resolve();
+      if (events.length === 8) received.resolve();
     },
   });
   cleanups.push(async () => {
@@ -266,6 +302,12 @@ test("streams workspace mutations and transient UI commands to subscribers", asy
 
   await connected.promise;
   const block = await client.request<Block>({ action: "create", text: "Reactive block" });
+  await client.request({
+    action: "work-ids.allocate",
+    blockId: block.id,
+    expectedUpdatedAt: block.updatedAt,
+    prefix: "EVT",
+  });
   await client.request({ action: "selection.set", blockId: block.id });
   await client.request({ action: "navigation.back" });
   await client.request({ action: "navigation.forward" });
@@ -283,6 +325,7 @@ test("streams workspace mutations and transient UI commands to subscribers", asy
 
   expect(events.map((event) => [event.domain, event.action])).toEqual([
     ["content", "create"],
+    ["content", "work-ids.allocate"],
     ["selection", "selection.set"],
     ["selection", "navigation.back"],
     ["selection", "navigation.forward"],
@@ -291,7 +334,7 @@ test("streams workspace mutations and transient UI commands to subscribers", asy
     ["ui", "ui.command.send"],
   ]);
   expect(events[0].blockId).toBe(block.id);
-  expect(events[6].command).toEqual({ target: "detail", command: "edit", blockId: block.id });
+  expect(events[7].command).toEqual({ target: "detail", command: "edit", blockId: block.id });
 
   const children = await client.request<Block[]>({ action: "children", parentId: null });
   expect(children.some((candidate) => candidate.id === block.id)).toBe(true);

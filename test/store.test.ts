@@ -804,6 +804,166 @@ Second paragraph`;
     rmSync(directory, { recursive: true, force: true });
   });
 
+  test("allocates monotonic project Work IDs transactionally", async () => {
+    const store = makeStore();
+    const first = store.create("First opted-in work item");
+    const second = store.create("Second opted-in work item");
+    const third = store.create("Third opted-in work item");
+
+    expect(store.workIdAllocatorStatus()).toEqual({
+      prefix: null,
+      nextNumber: null,
+      nextWorkId: null,
+      reservedCount: 0,
+    });
+    expect(() => store.allocateWorkId(first.id, first.updatedAt)).toThrow(
+      "requires a project prefix",
+    );
+    const firstAllocation = store.allocateWorkId(first.id, first.updatedAt, "pie");
+    const [secondAllocation, thirdAllocation] = await Promise.all([
+      Promise.resolve().then(() =>
+        store.allocateWorkId(second.id, second.updatedAt)
+      ),
+      Promise.resolve().then(() =>
+        store.allocateWorkId(third.id, third.updatedAt)
+      ),
+    ]);
+
+    expect(firstAllocation).toMatchObject({
+      workId: "PIE-001",
+      block: {
+        id: first.id,
+        properties: [{ key: "work-id", value: "PIE-001" }],
+      },
+    });
+    expect([secondAllocation.workId, thirdAllocation.workId]).toEqual([
+      "PIE-002",
+      "PIE-003",
+    ]);
+    expect(secondAllocation.block.text).toContain("[work-id::PIE-002]");
+    expect(store.resolvePageAddress("pie-003").block?.id).toBe(third.id);
+    expect(store.workIdAllocatorStatus()).toEqual({
+      prefix: "PIE",
+      nextNumber: 4,
+      nextWorkId: "PIE-004",
+      reservedCount: 3,
+    });
+  });
+  test("protects a configured non-PIE Work-ID namespace from page stubs", () => {
+    const store = makeStore();
+    const work = store.create("Custom-prefix work");
+    expect(
+      store.allocateWorkId(work.id, work.updatedAt, "abc").workId,
+    ).toBe("ABC-001");
+    expect(store.resolvePageAddress("abc-001").block?.id).toBe(work.id);
+    expect(() => store.followPageAddress("ABC-002")).toThrow(
+      "Unresolved Work ID cannot create a page stub",
+    );
+    expect(store.resolvePageAddress("ABC-002").status).toBe("missing");
+  });
+
+
+  test("adopts manual IDs, rejects prefix changes, and never reuses purged IDs", () => {
+    const store = makeStore();
+    const existing = store.create("Existing work [work-id::PIE-123]");
+    const allocated = store.create("Allocated work");
+    const afterPurge = store.create("After purge");
+
+    expect(store.workIdAllocatorStatus()).toMatchObject({
+      prefix: "PIE",
+      nextNumber: 124,
+      nextWorkId: "PIE-124",
+    });
+    expect(() =>
+      store.allocateWorkId(allocated.id, allocated.updatedAt, "OTHER")
+    ).toThrow("configured as PIE");
+    expect(() =>
+      store.allocateWorkId(allocated.id, "stale", "PIE")
+    ).toThrow("changed since editing began");
+    const allocation = store.allocateWorkId(
+      allocated.id,
+      allocated.updatedAt,
+    );
+    expect(() => store.create("Other project [work-id::OTHER-001]")).toThrow(
+      "configured as PIE",
+    );
+    expect(() => store.create("Malformed work [work-id::PIE-x]")).toThrow(
+      "Invalid canonical Work ID",
+    );
+    expect(allocation.workId).toBe("PIE-124");
+    expect(() =>
+      store.allocateWorkId(existing.id, existing.updatedAt)
+    ).toThrow("already has a Work ID");
+
+    store.delete(allocated.id);
+    store.purge(allocated.id, allocation.workId);
+    expect(() => store.create("Illegal reuse [work-id::PIE-124]")).toThrow(
+      `already belongs to block ${allocated.id}`,
+    );
+    expect(store.allocateWorkId(afterPurge.id, afterPurge.updatedAt).workId).toBe(
+      "PIE-125",
+    );
+    store.create("Manual future [work-id::PIE-200]");
+    expect(store.workIdAllocatorStatus().nextWorkId).toBe("PIE-201");
+  });
+
+  test("migrates reservation ownership and adopts the existing sequence", () => {
+    const store = makeStore();
+    const directory = stores[stores.length - 1].directory;
+    const path = join(directory, "outliner.sqlite");
+    const existing = store.create("Legacy allocated [work-id::PIE-123]");
+    store.close();
+
+    const legacy = new Database(path);
+    legacy.exec(`
+      DROP TABLE work_id_allocator;
+      CREATE TABLE reserved_work_ids_legacy (
+        work_id TEXT PRIMARY KEY,
+        reserved_at TEXT NOT NULL
+      );
+      INSERT INTO reserved_work_ids_legacy (work_id, reserved_at)
+        SELECT work_id, reserved_at FROM reserved_work_ids;
+      DROP TABLE reserved_work_ids;
+      ALTER TABLE reserved_work_ids_legacy RENAME TO reserved_work_ids;
+    `);
+    legacy.close();
+
+    const reopened = new OutlinerStore(path);
+    stores[stores.length - 1].store = reopened;
+    expect(reopened.workIdAllocatorStatus()).toMatchObject({
+      prefix: "PIE",
+      nextNumber: 124,
+      nextWorkId: "PIE-124",
+    });
+    expect(
+      reopened.database.query(
+        "SELECT block_id FROM reserved_work_ids WHERE work_id = 'PIE-123'",
+      ).get(),
+    ).toEqual({ block_id: existing.id });
+  });
+
+  test("purges legacy copied and malformed Work-ID properties without ownership adoption", () => {
+    const store = makeStore();
+    const owner = store.create("Canonical owner [work-id::PIE-123]");
+    const legacy = store.create("Legacy Trash source");
+    store.database.query(
+      "UPDATE blocks SET text = ? WHERE id = ?",
+    ).run("Legacy [work-id::PIE-123] [work-id::not-an-id]", legacy.id);
+    store.database.query(
+      "INSERT INTO block_properties (block_id, key, value, ordinal) VALUES (?, 'work-id', 'PIE-123', 0), (?, 'work-id', 'not-an-id', 1)",
+    ).run(legacy.id, legacy.id);
+    store.delete(legacy.id);
+
+    store.purge(legacy.id, "PIE-123");
+
+    expect(store.get(legacy.id)).toBeNull();
+    expect(
+      store.database.query(
+        "SELECT block_id FROM reserved_work_ids WHERE work_id = 'PIE-123'",
+      ).get(),
+    ).toEqual({ block_id: owner.id });
+  });
+
   test("registers normalized page declarations and Work IDs with authored labels", () => {
     const store = makeStore();
     const page = store.create("Research hub [page::Research   Notes]");

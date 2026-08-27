@@ -40,6 +40,10 @@ describe("outliner link URIs", () => {
       kind: "work",
       value: "PIE-133",
     });
+    expect(parseOutlinerLinkUri(outlinerLinkUri("work", "ABC-001"))).toEqual({
+      kind: "work",
+      value: "ABC-001",
+    });
   });
 
   test("rejects web URLs, unsupported kinds, malformed IDs, and URL decorations", () => {
@@ -343,6 +347,14 @@ describe("outliner link rendering", () => {
     expect(firstOutlinerReference("pie-136")).toEqual({ kind: "work", value: "pie-136" });
     const lowercase = createOutlinerTextLinker("pie-136", () => null).link("pie-136");
     expect(getOsc8LinkAtColumn(lowercase, 2)).toBe(outlinerLinkUri("work", "pie-136"));
+    expect(firstOutlinerReference("ABC-001")).toEqual({
+      kind: "work",
+      value: "ABC-001",
+    });
+    const customPrefix = createOutlinerTextLinker("ABC-001", () => null).link("ABC-001");
+    expect(getOsc8LinkAtColumn(customPrefix, 2)).toBe(
+      outlinerLinkUri("work", "ABC-001"),
+    );
   });
 
   test("keeps tilde fences protected until a complete matching close", () => {

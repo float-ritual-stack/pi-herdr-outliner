@@ -92,8 +92,11 @@ private func parseRoute(_ rawURL: String) throws -> LinkRoute {
             throw HandlerError.invalidURL("malformed block ID")
         }
     case .goto, .work:
-        guard target.range(of: #"^PIE-[0-9]+$"#, options: .regularExpression) != nil else {
-            throw HandlerError.invalidURL("only PIE work IDs are accepted as \(kind.rawValue) targets")
+        guard target.range(
+            of: #"^[A-Za-z][A-Za-z0-9]{0,15}-[0-9]+$"#,
+            options: .regularExpression
+        ) != nil else {
+            throw HandlerError.invalidURL("malformed \(kind.rawValue) Work ID")
         }
     case .page:
         break
@@ -251,6 +254,9 @@ private func runSelfTests() throws {
     }
     guard try parseRoute("pi-outliner://work/PIE-133") == LinkRoute(kind: .work, target: "PIE-133") else {
         throw HandlerError.invalidURL("work self-test failed")
+    }
+    guard try parseRoute("pi-outliner://work/ABC-001") == LinkRoute(kind: .work, target: "ABC-001") else {
+        throw HandlerError.invalidURL("custom-prefix work self-test failed")
     }
     guard try parseRoute("pi-outliner://page/Research%20Notes") == LinkRoute(kind: .page, target: "Research Notes") else {
         throw HandlerError.invalidURL("page self-test failed")

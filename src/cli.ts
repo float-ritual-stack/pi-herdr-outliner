@@ -176,6 +176,30 @@ switch (command) {
     directResult = await navigateOutlinerLink(client, url);
     break;
   }
+  case "work-id-status":
+    request = { action: "work-ids.status" };
+    break;
+  case "work-id-allocate": {
+    const { values } = parseArgs({
+      args: rest,
+      options: {
+        id: { type: "string" },
+        expected: { type: "string" },
+        prefix: { type: "string" },
+      },
+      strict: true,
+    });
+    if (!values.id || !values.expected) {
+      throw new Error("work-id-allocate requires --id and --expected");
+    }
+    request = {
+      action: "work-ids.allocate",
+      blockId: values.id,
+      expectedUpdatedAt: values.expected,
+      prefix: values.prefix,
+    };
+    break;
+  }
   case "selection":
     request = { action: "selection.get" };
     break;
