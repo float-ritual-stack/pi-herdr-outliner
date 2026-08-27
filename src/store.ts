@@ -297,6 +297,12 @@ export class OutlinerStore {
       this.database.query("UPDATE blocks SET deleted_at = NULL, updated_at = ? WHERE id = ?")
         .run(new Date().toISOString(), id);
       this.recomputeEffectiveDeletion();
+      for (const blockId of this.subtreeIdsFromCurrentRead(id)) {
+        const restored = this.getFromCurrentRead(blockId);
+        if (restored && !restored.effectiveDeletedRootId) {
+          this.syncDeclaredPageAddresses(blockId, restored.properties);
+        }
+      }
       this.bumpSequence();
     })();
     return this.require(id);
@@ -1258,7 +1264,7 @@ export class OutlinerStore {
       ).all() as PageAddressRow[];
       this.database.query("DELETE FROM page_addresses").run();
       const rows = this.database.query(
-        "SELECT block_id, key, value FROM block_properties WHERE key IN ('page', 'work-id') ORDER BY block_id, ordinal",
+        "SELECT property.block_id, property.key, property.value FROM block_properties property JOIN blocks block ON block.id = property.block_id WHERE block.effective_deleted_root_id IS NULL AND property.key IN ('page', 'work-id') ORDER BY property.block_id, property.ordinal",
       ).all() as PropertyRow[];
       const propertiesByBlock = new Map<string, BlockProperty[]>();
       for (const row of rows) {

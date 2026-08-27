@@ -996,6 +996,25 @@ Second paragraph`;
     expect(reopened.resolvePageAddress("migrated alias").block?.id).toBe(page.id);
   });
 
+  test("skips legacy Trash declarations during migration and registers them on restore", () => {
+    const store = makeStore();
+    const directory = stores[stores.length - 1].directory;
+    const path = join(directory, "outliner.sqlite");
+    const legacy = store.create("Legacy page [page::Legacy Restored]");
+    store.delete(legacy.id);
+    store.database.query("DELETE FROM page_addresses").run();
+    store.database.query(
+      "UPDATE metadata SET value = '0' WHERE key = 'page_address_registry_version'",
+    ).run();
+    store.close();
+
+    const reopened = new OutlinerStore(path);
+    stores[stores.length - 1].store = reopened;
+    expect(reopened.resolvePageAddress("Legacy Restored").status).toBe("missing");
+    reopened.restore(legacy.id);
+    expect(reopened.resolvePageAddress("Legacy Restored").block?.id).toBe(legacy.id);
+  });
+
   test("backfills declarations transactionally and rejects duplicate migration data", () => {
     const store = makeStore();
     const directory = stores[stores.length - 1].directory;
