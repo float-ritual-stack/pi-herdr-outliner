@@ -1039,6 +1039,11 @@ Second paragraph`;
       ).get(),
     ).toEqual({ block_id: orphan.id });
     expect(store.workIdAllocatorStatus()).toMatchObject({
+      prefix: null,
+      nextWorkId: null,
+      observedPrefixes: ["PIE"],
+    });
+    expect(store.configureWorkIdPrefix("PIE")).toMatchObject({
       prefix: "PIE",
       nextWorkId: "PIE-322",
     });
@@ -1063,11 +1068,9 @@ Second paragraph`;
     expect(reopened.workIdAllocatorStatus()).toMatchObject({
       prefix: "PIE",
       nextWorkId: "PIE-401",
+      observedPrefixes: ["OTHER", "PIE"],
+      reservedCount: 3,
     });
-    expect([...reopened.skippedLegacyWorkIds].sort()).toEqual([
-      "OTHER-004",
-      "not-an-id",
-    ]);
   });
 
   test("registers normalized page declarations and Work IDs with authored labels", () => {
