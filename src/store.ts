@@ -1581,8 +1581,13 @@ export class OutlinerStore {
       "INSERT INTO reserved_work_ids (work_id, reserved_at, block_id) VALUES (?, ?, ?)",
     ).run(parsed.workId, new Date().toISOString(), blockId);
     const allocator = this.workIdAllocatorFromCurrentRead();
+    if (!allocator) {
+      this.database.query(
+        "INSERT INTO work_id_allocator (singleton, prefix, next_number) VALUES (1, ?, ?)",
+      ).run(parsed.prefix, parsed.number + 1);
+      return;
+    }
     if (
-      allocator &&
       allocator.prefix === parsed.prefix &&
       allocator.next_number <= parsed.number
     ) {

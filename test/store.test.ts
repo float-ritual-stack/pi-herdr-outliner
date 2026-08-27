@@ -972,6 +972,7 @@ Second paragraph`;
     store.delete(orphan.id);
     store.database.query("DELETE FROM page_addresses WHERE block_id = ?").run(orphan.id);
     store.database.query("DELETE FROM reserved_work_ids WHERE work_id = 'PIE-321'").run();
+    store.database.query("DELETE FROM work_id_allocator").run();
 
     store.purge(orphan.id, "PIE-321");
     expect(
@@ -979,7 +980,20 @@ Second paragraph`;
         "SELECT block_id FROM reserved_work_ids WHERE work_id = 'PIE-321'",
       ).get(),
     ).toEqual({ block_id: orphan.id });
-    expect(store.workIdAllocatorStatus().nextWorkId).toBe("PIE-322");
+    expect(store.workIdAllocatorStatus()).toMatchObject({
+      prefix: "PIE",
+      nextWorkId: "PIE-322",
+    });
+
+    const later = store.create("Later deleted work [work-id::PIE-400]");
+    store.delete(later.id);
+    store.database.query("DELETE FROM page_addresses WHERE block_id = ?").run(later.id);
+    store.database.query("DELETE FROM reserved_work_ids WHERE work_id = 'PIE-400'").run();
+    store.database.query(
+      "UPDATE work_id_allocator SET next_number = 322 WHERE singleton = 1",
+    ).run();
+    store.purge(later.id, "PIE-400");
+    expect(store.workIdAllocatorStatus().nextWorkId).toBe("PIE-401");
 
     store.database.query(
       "INSERT INTO reserved_work_ids (work_id, reserved_at, block_id) VALUES ('not-an-id', ?, NULL), ('OTHER-004', ?, NULL)",
@@ -990,7 +1004,7 @@ Second paragraph`;
     stores[stores.length - 1].store = reopened;
     expect(reopened.workIdAllocatorStatus()).toMatchObject({
       prefix: "PIE",
-      nextWorkId: "PIE-322",
+      nextWorkId: "PIE-401",
     });
     expect([...reopened.skippedLegacyWorkIds].sort()).toEqual([
       "OTHER-004",
