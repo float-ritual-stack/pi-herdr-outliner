@@ -5,10 +5,12 @@ import {
   type DetailViewport,
 } from "../src/detail-controller";
 import type { ReferencedFile } from "../src/files";
+import type { OutlinerLinkTarget } from "../src/outliner-links";
 import type {
   Block,
   BlockSearchQuery,
   OutlinerEvent,
+  PageAddressCollection,
   SelectionContext,
   VisibleBlock,
   VisibleBlockCollection,
@@ -62,13 +64,15 @@ interface Harness {
     creates: Array<{ parentId: string; text: string; author: "user" }>;
     restores: string[];
     histories: Array<"back" | "forward">;
-    followedReferences: string[];
+    followedReferences: OutlinerLinkTarget[];
     queries: BlockSearchQuery[];
+    pageQueries: Array<{ query: string | undefined; limit: number }>;
     focuses: number;
   };
   setSelection(selection: SelectionContext): void;
   setUpdate(implementation: DetailEffects["updateBlock"]): void;
   setQueryResults(results: VisibleBlockCollection[]): void;
+  setPageQueryResults(results: PageAddressCollection[]): void;
   setFocusError(error: Error | null): void;
 }
 
@@ -86,6 +90,7 @@ function createHarness(
   });
   let queryResults: VisibleBlockCollection[] = [];
   let focusError: Error | null = null;
+  let pageQueryResults: PageAddressCollection[] = [];
   const calls: Harness["calls"] = {
     selections: 0,
     setSelections: [],
@@ -95,6 +100,7 @@ function createHarness(
     histories: [],
     followedReferences: [],
     queries: [],
+    pageQueries: [],
     focuses: 0,
   };
   const effects: DetailEffects = {
@@ -124,8 +130,8 @@ function createHarness(
       calls.histories.push(direction);
       return { selection, canBack: true, canForward: true };
     },
-    async followReference(blockId) {
-      calls.followedReferences.push(blockId);
+    async followReference(target) {
+      calls.followedReferences.push(target);
     },
     async createBlock(input) {
       calls.creates.push(input);
@@ -134,6 +140,10 @@ function createHarness(
     async queryBlocks(query) {
       calls.queries.push(query);
       return queryResults.shift() ?? { blocks: [], completeness: { kind: "complete" } };
+    },
+    async queryPageAddresses(query, limit) {
+      calls.pageQueries.push({ query, limit });
+      return pageQueryResults.shift() ?? { addresses: [], completeness: { kind: "complete" } };
     },
     readFile() {
       if (!referencedFile) throw new Error("file unavailable");
@@ -163,6 +173,9 @@ function createHarness(
     },
     setQueryResults(next) {
       queryResults = [...next];
+    },
+    setPageQueryResults(next) {
+      pageQueryResults = [...next];
     },
     setFocusError(error) {
       focusError = error;
@@ -236,7 +249,8 @@ describe("detail controller projection and deferred refresh", () => {
     await harness.controller.initialize();
 
     await harness.controller.dispatch({ type: "reference.follow" }, viewport);
-    expect(harness.calls.followedReferences).toEqual(["target01"]);
+    expect(harness.calls.followedReferences).toEqual([{ kind: "block", value: "target01" }]);
+
 
     harness.setSelection({
       selected: makeBlock({
@@ -257,6 +271,18 @@ describe("detail controller projection and deferred refresh", () => {
 
     await harness.controller.dispatch({ type: "edit.begin" }, viewport);
     expect(harness.controller.state.status).toContain("restore before editing");
+  });
+
+  test("follows symbolic references through the page-address path", async () => {
+    const harness = createHarness(makeBlock({ text: "See [[Future Page]]" }));
+    await harness.controller.initialize();
+
+    await harness.controller.dispatch({ type: "reference.follow" }, viewport);
+
+    expect(harness.calls.followedReferences).toEqual([{
+      kind: "page",
+      value: "Future Page",
+    }]);
   });
 
   test("defaults ordinary file blocks to file mode and other blocks to preview", async () => {
@@ -509,26 +535,27 @@ describe("detail controller wrapped editor scrolling", () => {
 });
 
 describe("detail controller completion, navigation, and focus", () => {
-  test("queries pages first, uses a truncated fallback collection, and applies a candidate", async () => {
+  test("queries registered page addresses and applies their authored label", async () => {
     const harness = createHarness(makeBlock({ text: "See [[rel" }));
-    harness.setQueryResults([
-      { blocks: [], completeness: { kind: "complete" } },
-      {
-        blocks: [makeVisibleBlock({ id: "release-id", text: "Release Notes [type::page]" })],
-        completeness: { kind: "truncated", limit: 20 },
-      },
-    ]);
+    harness.setPageQueryResults([{
+      addresses: [{
+        address: "release-notes",
+        normalizedAddress: "release-notes",
+        blockId: "release-id",
+        kind: "page",
+        title: "Release Notes",
+      }],
+      completeness: { kind: "truncated", limit: 20 },
+    }]);
     await harness.controller.initialize();
     await harness.controller.dispatch({ type: "edit.begin" }, viewport);
     await harness.controller.dispatch({ type: "completion.open" }, viewport);
 
-    expect(harness.calls.queries).toEqual([
-      { text: "rel", filters: [{ key: "type", value: "page" }], limit: 20 },
-      { text: "rel", limit: 20 },
-    ]);
+    expect(harness.calls.pageQueries).toEqual([{ query: "rel", limit: 20 }]);
+    expect(harness.calls.queries).toEqual([]);
     expect(harness.controller.state.status).toBe("Showing first 20 matches");
     await harness.controller.dispatch({ type: "completion.accept" }, viewport);
-    expect(harness.controller.state.buffer.text).toBe("See [[Release Notes]]");
+    expect(harness.controller.state.buffer.text).toBe("See [[release-notes]]");
     expect(harness.controller.state.completion).toBeNull();
     expect(harness.controller.state.status).toBe("");
   });

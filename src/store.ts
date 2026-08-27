@@ -2,11 +2,19 @@ import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import {
+  firstLineWithoutPropertyTokens,
   matchesFilters,
   parseProperties,
+  parsePropertyTokens,
   patchPropertyText,
   PROPERTY_PARSER_VERSION,
 } from "./properties";
+import {
+  isWorkIdAddress,
+  normalizePageAddress,
+  PAGE_ADDRESS_REGISTRY_VERSION,
+  type NormalizedPageAddress,
+} from "./page-addresses";
 import {
   resolveBlockReferences as resolveBlockReferenceText,
   resolveBlockReferencesWithStatus,
@@ -19,6 +27,13 @@ import type {
   BlockSearchQuery,
   BlockTraversalOptions,
   NavigationState,
+  PageAddressCollection,
+  PageAddressFollowResult,
+  PageAddressRemoval,
+  PageAddressKind,
+  PageAddressMatch,
+  PageAddressRecord,
+  PageAddressResolution,
   PropertyCatalogItem,
   PropertyPatchOperation,
   SelectionContext,
@@ -50,6 +65,17 @@ interface PropertyRow {
   block_id: string;
   key: string;
   value: string;
+}
+
+interface PageAddressRow {
+  normalized_address: string;
+  display_address: string;
+  block_id: string;
+  kind: PageAddressKind;
+}
+
+interface PageAddressMatchRow extends PageAddressRow {
+  text: string;
 }
 
 interface VirtualOccurrenceRankRow {
@@ -378,6 +404,221 @@ export class OutlinerStore {
   }
   resolveBlockReferences(text: string): ResolvedBlockReferences {
     return resolveBlockReferencesWithStatus(text, (blockId) => this.get(blockId));
+  }
+
+  resolvePageAddress(address: string): PageAddressResolution {
+    return this.database.transaction(() =>
+      this.resolvePageAddressFromCurrentRead(normalizePageAddress(address))
+    )();
+  }
+
+  followPageAddress(
+    address: string,
+    author: BlockAuthor = "user",
+    provenance?: BlockProvenance,
+  ): PageAddressFollowResult {
+    return this.database.transaction(() => {
+      const normalized = normalizePageAddress(address);
+      const existing = this.resolvePageAddressFromCurrentRead(normalized);
+      if (existing.status !== "missing") return { ...existing, created: false };
+      if (isWorkIdAddress(normalized.displayAddress)) {
+        throw new Error(`Unresolved Work ID cannot create a page stub: ${normalized.displayAddress}`);
+      }
+
+      this.create(
+        `${normalized.displayAddress} [page::${normalized.displayAddress}]`,
+        null,
+        author,
+        provenance,
+      );
+      const created = this.resolvePageAddressFromCurrentRead(normalized);
+      if (!created.block) {
+        throw new Error(`Created page address did not resolve: ${normalized.displayAddress}`);
+      }
+      return { ...created, created: true };
+    })();
+  }
+
+  completePageAddresses(query: string | undefined, requestedLimit: number): PageAddressCollection {
+    if (!Number.isInteger(requestedLimit) || requestedLimit <= 0) {
+      throw new Error("Page address completion limit must be a positive integer");
+    }
+    const limit = Math.min(requestedLimit, 100);
+    let normalizedQuery = "";
+    try {
+      normalizedQuery = query?.trim()
+        ? normalizePageAddress(query).normalizedAddress
+        : "";
+    } catch {
+      return { addresses: [], completeness: { kind: "complete" } };
+    }
+    const rows = this.database.query(`
+      SELECT address.normalized_address, address.display_address, address.block_id, address.kind, block.text
+      FROM page_addresses address
+      JOIN blocks block ON block.id = address.block_id
+      WHERE block.effective_deleted_root_id IS NULL
+        AND INSTR(address.normalized_address, ?) > 0
+      ORDER BY
+        CASE WHEN SUBSTR(address.normalized_address, 1, LENGTH(?)) = ? THEN 0 ELSE 1 END,
+        CASE address.kind WHEN 'page' THEN 0 WHEN 'work-id' THEN 1 ELSE 2 END,
+        address.normalized_address,
+        address.block_id
+      LIMIT ?
+    `).all(
+      normalizedQuery,
+      normalizedQuery,
+      normalizedQuery,
+      limit + 1,
+    ) as PageAddressMatchRow[];
+    const complete = rows.length <= limit;
+    const addresses: PageAddressMatch[] = rows.slice(0, limit).map((row) => ({
+      ...this.pageAddressRecord(row),
+      title: firstLineWithoutPropertyTokens(row.text)?.trim() || row.block_id,
+    }));
+    return {
+      addresses,
+      completeness: complete ? { kind: "complete" } : { kind: "truncated", limit },
+    };
+  }
+
+  renamePageAddress(
+    blockId: string,
+    address: string,
+    expectedUpdatedAt: string,
+  ): PageAddressRecord {
+    const nextAddress = normalizePageAddress(address);
+    return this.database.transaction(() => {
+      const block = this.getFromCurrentRead(blockId);
+      if (!block) throw new Error(`Block not found: ${blockId}`);
+      if (block.effectiveDeletedRootId) throw new Error(`Block is in Trash: ${blockId}`);
+      if (block.updatedAt !== expectedUpdatedAt) {
+        throw new Error(`Block changed since editing began: ${blockId}`);
+      }
+      const pageTokens = parsePropertyTokens(block.text).filter((token) => token.key === "page");
+      if (pageTokens.length !== 1) {
+        throw new Error(`Page rename requires exactly one [page::address] declaration: ${blockId}`);
+      }
+      const nextText = patchPropertyText(block.text, [{
+        op: "replace",
+        ordinal: pageTokens[0].ordinal,
+        value: nextAddress.displayAddress,
+      }]);
+      const current = this.database.query(
+        "SELECT normalized_address, display_address, block_id, kind FROM page_addresses WHERE block_id = ? AND kind = 'page'",
+      ).get(blockId) as PageAddressRow | null;
+      if (!current) throw new Error(`Block has no registered page address: ${blockId}`);
+
+      const target = this.pageAddressRowFromCurrentRead(nextAddress.normalizedAddress);
+      if (target && target.block_id !== blockId) {
+        throw new Error(
+          `Page address already belongs to block ${target.block_id}: ${nextAddress.displayAddress}`,
+        );
+      }
+      if (target?.kind === "work-id") {
+        throw new Error(`Page address conflicts with the block Work ID: ${nextAddress.displayAddress}`);
+      }
+
+      if (current.normalized_address === nextAddress.normalizedAddress) {
+        this.database.query(
+          "UPDATE page_addresses SET display_address = ? WHERE normalized_address = ?",
+        ).run(nextAddress.displayAddress, current.normalized_address);
+      } else {
+        this.database.query(
+          "UPDATE page_addresses SET kind = 'alias' WHERE normalized_address = ?",
+        ).run(current.normalized_address);
+        if (target) {
+          this.database.query(
+            "UPDATE page_addresses SET display_address = ?, kind = 'page' WHERE normalized_address = ?",
+          ).run(nextAddress.displayAddress, nextAddress.normalizedAddress);
+        } else {
+          this.insertPageAddressFromCurrentRead(blockId, nextAddress.displayAddress, "page");
+        }
+      }
+
+      const timestamp = new Date(Math.max(Date.now(), Date.parse(block.updatedAt) + 1)).toISOString();
+      this.database.query("UPDATE blocks SET text = ?, updated_at = ? WHERE id = ?")
+        .run(nextText, timestamp, blockId);
+      this.replaceProperties(blockId, parseProperties(nextText));
+      this.bumpSequence();
+      const renamed: PageAddressRecord = {
+        address: nextAddress.displayAddress,
+        normalizedAddress: nextAddress.normalizedAddress,
+        blockId,
+        kind: "page",
+      };
+      return renamed;
+    })();
+  }
+
+  addPageAlias(blockId: string, address: string): PageAddressRecord {
+    this.requireActive(blockId);
+    const normalized = normalizePageAddress(address);
+    return this.database.transaction(() => {
+      const registered = this.database.query(
+        "SELECT 1 FROM page_addresses WHERE block_id = ? LIMIT 1",
+      ).get(blockId);
+      if (!registered) throw new Error(`Block has no registered symbolic address: ${blockId}`);
+
+      const existing = this.pageAddressRowFromCurrentRead(normalized.normalizedAddress);
+      if (existing) {
+        if (existing.block_id !== blockId) {
+          throw new Error(
+            `Page address already belongs to block ${existing.block_id}: ${normalized.displayAddress}`,
+          );
+        }
+        return this.pageAddressRecord(existing);
+      }
+      const alias = this.insertPageAddressFromCurrentRead(
+        blockId,
+        normalized.displayAddress,
+        "alias",
+      );
+      this.bumpSequence();
+      return alias;
+    })();
+  }
+
+  removePageAddress(
+    blockId: string,
+    address: string,
+    expectedUpdatedAt: string,
+  ): PageAddressRemoval {
+    const normalized = normalizePageAddress(address);
+    return this.database.transaction(() => {
+      const block = this.getFromCurrentRead(blockId);
+      if (!block) throw new Error(`Block not found: ${blockId}`);
+      if (block.effectiveDeletedRootId) throw new Error(`Block is in Trash: ${blockId}`);
+      if (block.updatedAt !== expectedUpdatedAt) {
+        throw new Error(`Block changed since editing began: ${blockId}`);
+      }
+      const row = this.pageAddressRowFromCurrentRead(normalized.normalizedAddress);
+      if (!row || row.block_id !== blockId) {
+        throw new Error(`Page address is not registered to block ${blockId}: ${normalized.displayAddress}`);
+      }
+      if (row.kind === "work-id") {
+        throw new Error(`Work IDs cannot be removed through pages.remove: ${normalized.displayAddress}`);
+      }
+      const removed = this.pageAddressRecord(row);
+      this.database.query("DELETE FROM page_addresses WHERE normalized_address = ?")
+        .run(row.normalized_address);
+
+      let updated = block;
+      if (row.kind === "page") {
+        const token = parsePropertyTokens(block.text).find((candidate) =>
+          candidate.key === "page" &&
+          normalizePageAddress(candidate.value).normalizedAddress === row.normalized_address
+        );
+        if (!token) throw new Error(`Block has no matching page declaration: ${blockId}`);
+        const nextText = patchPropertyText(block.text, [{ op: "remove", ordinal: token.ordinal }]);
+        const timestamp = new Date(Math.max(Date.now(), Date.parse(block.updatedAt) + 1)).toISOString();
+        this.database.query("UPDATE blocks SET text = ?, updated_at = ? WHERE id = ?")
+          .run(nextText, timestamp, blockId);
+        this.replaceProperties(blockId, parseProperties(nextText));
+        updated = this.getFromCurrentRead(blockId)!;
+      }
+      this.bumpSequence();
+      return { removed, block: updated };
+    })();
   }
 
   get(id: string): Block | null {
@@ -901,10 +1142,21 @@ export class OutlinerStore {
         work_id TEXT PRIMARY KEY,
         reserved_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS page_addresses (
+        normalized_address TEXT PRIMARY KEY,
+        display_address TEXT NOT NULL,
+        block_id TEXT NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL CHECK (kind IN ('page', 'alias', 'work-id'))
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS page_addresses_primary_per_block
+        ON page_addresses(block_id) WHERE kind = 'page';
+      CREATE UNIQUE INDEX IF NOT EXISTS page_addresses_work_id_per_block
+        ON page_addresses(block_id) WHERE kind = 'work-id';
     `);
     this.migrateBlockStateColumns();
     this.migratePropertyIndex();
     this.migrateWorkIdReservations();
+    this.migratePageAddressRegistry();
     this.migrateNavigationHistory();
   }
 
@@ -986,6 +1238,54 @@ export class OutlinerStore {
     ).run(now);
   }
 
+  private migratePageAddressRegistry(): void {
+    this.database.transaction(() => {
+      const versionRow = this.database.query(
+        "SELECT value FROM metadata WHERE key = 'page_address_registry_version'",
+      ).get() as { value: string } | null;
+      const version = versionRow ? Number(versionRow.value) : 0;
+      if (
+        !Number.isInteger(version) ||
+        version < 0 ||
+        version > PAGE_ADDRESS_REGISTRY_VERSION
+      ) {
+        throw new Error(`Unsupported page address registry version: ${versionRow?.value}`);
+      }
+      if (version === PAGE_ADDRESS_REGISTRY_VERSION) return;
+
+      const aliases = this.database.query(
+        "SELECT normalized_address, display_address, block_id, kind FROM page_addresses WHERE kind = 'alias' ORDER BY normalized_address",
+      ).all() as PageAddressRow[];
+      this.database.query("DELETE FROM page_addresses").run();
+      const rows = this.database.query(
+        "SELECT block_id, key, value FROM block_properties WHERE key IN ('page', 'work-id') ORDER BY block_id, ordinal",
+      ).all() as PropertyRow[];
+      const propertiesByBlock = new Map<string, BlockProperty[]>();
+      for (const row of rows) {
+        const properties = propertiesByBlock.get(row.block_id) ?? [];
+        properties.push({ key: row.key, value: row.value });
+        propertiesByBlock.set(row.block_id, properties);
+      }
+      for (const [blockId, properties] of propertiesByBlock) {
+        this.syncDeclaredPageAddresses(blockId, properties);
+      }
+      for (const alias of aliases) {
+        const normalized = normalizePageAddress(alias.display_address);
+        const existing = this.pageAddressRowFromCurrentRead(normalized.normalizedAddress);
+        if (existing) {
+          if (existing.block_id === alias.block_id) continue;
+          throw new Error(
+            `Page alias migration conflicts with block ${existing.block_id}: ${alias.display_address}`,
+          );
+        }
+        this.insertPageAddressFromCurrentRead(alias.block_id, alias.display_address, "alias");
+      }
+      this.database.query(
+        "INSERT INTO metadata (key, value) VALUES ('page_address_registry_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+      ).run(String(PAGE_ADDRESS_REGISTRY_VERSION));
+    })();
+  }
+
   private ensureTrashView(): void {
     const existing = this.queryBlocks({
       filters: [{ key: "system-view", value: "trash" }],
@@ -1038,12 +1338,133 @@ export class OutlinerStore {
     };
   }
 
+  private resolvePageAddressFromCurrentRead(
+    normalized: NormalizedPageAddress,
+  ): PageAddressResolution {
+    const row = this.pageAddressRowFromCurrentRead(normalized.normalizedAddress);
+    if (!row) {
+      return {
+        address: normalized.displayAddress,
+        normalizedAddress: normalized.normalizedAddress,
+        status: "missing",
+      };
+    }
+    const block = this.getFromCurrentRead(row.block_id);
+    if (!block) {
+      throw new Error(`Page address points to missing block: ${row.normalized_address}`);
+    }
+    return {
+      address: normalized.displayAddress,
+      normalizedAddress: normalized.normalizedAddress,
+      status: block.effectiveDeletedRootId ? "deleted" : "resolved",
+      registeredAddress: row.display_address,
+      kind: row.kind,
+      block,
+      ...(block.effectiveDeletedRootId
+        ? { deletionRootId: block.effectiveDeletedRootId }
+        : {}),
+    };
+  }
+
+  private pageAddressRowFromCurrentRead(normalizedAddress: string): PageAddressRow | null {
+    return this.database.query(
+      "SELECT normalized_address, display_address, block_id, kind FROM page_addresses WHERE normalized_address = ?",
+    ).get(normalizedAddress) as PageAddressRow | null;
+  }
+
+  private pageAddressRecord(row: PageAddressRow): PageAddressRecord {
+    return {
+      address: row.display_address,
+      normalizedAddress: row.normalized_address,
+      blockId: row.block_id,
+      kind: row.kind,
+    };
+  }
+
+  private insertPageAddressFromCurrentRead(
+    blockId: string,
+    address: string,
+    kind: PageAddressKind,
+  ): PageAddressRecord {
+    const normalized = normalizePageAddress(address);
+    const existing = this.pageAddressRowFromCurrentRead(normalized.normalizedAddress);
+    if (existing) {
+      throw new Error(
+        `Page address already belongs to block ${existing.block_id}: ${normalized.displayAddress}`,
+      );
+    }
+    this.database.query(
+      "INSERT INTO page_addresses (normalized_address, display_address, block_id, kind) VALUES (?, ?, ?, ?)",
+    ).run(normalized.normalizedAddress, normalized.displayAddress, blockId, kind);
+    return {
+      address: normalized.displayAddress,
+      normalizedAddress: normalized.normalizedAddress,
+      blockId,
+      kind,
+    };
+  }
+
+  private syncDeclaredPageAddresses(blockId: string, properties: BlockProperty[]): void {
+    const pageValues = properties
+      .filter((property) => property.key === "page")
+      .map((property) => property.value);
+    const workIdValues = properties
+      .filter((property) => property.key === "work-id")
+      .map((property) => property.value);
+    if (pageValues.length > 1) {
+      throw new Error(`Block may declare at most one page address: ${blockId}`);
+    }
+    if (workIdValues.length > 1) {
+      throw new Error(`Block may declare at most one Work ID: ${blockId}`);
+    }
+
+    const page = pageValues[0] ? normalizePageAddress(pageValues[0]) : null;
+    const workId = workIdValues[0] ? normalizePageAddress(workIdValues[0]) : null;
+    if (page && workId && page.normalizedAddress === workId.normalizedAddress) {
+      throw new Error(`Page address duplicates the block Work ID: ${page.displayAddress}`);
+    }
+    this.syncDeclaredPageAddressKind(blockId, "page", page);
+    this.syncDeclaredPageAddressKind(blockId, "work-id", workId);
+  }
+
+  private syncDeclaredPageAddressKind(
+    blockId: string,
+    kind: Extract<PageAddressKind, "page" | "work-id">,
+    desired: NormalizedPageAddress | null,
+  ): void {
+    const current = this.database.query(
+      "SELECT normalized_address, display_address, block_id, kind FROM page_addresses WHERE block_id = ? AND kind = ?",
+    ).get(blockId, kind) as PageAddressRow | null;
+    if (!current) {
+      if (desired) this.insertPageAddressFromCurrentRead(blockId, desired.displayAddress, kind);
+      return;
+    }
+    if (!desired) {
+      if (kind === "work-id") {
+        throw new Error(`Work IDs are immutable once registered: ${blockId}`);
+      }
+      throw new Error(`Page address removal requires pages.remove: ${blockId}`);
+    }
+    if (current.normalized_address !== desired.normalizedAddress) {
+      if (kind === "page") {
+        throw new Error(`Page address changes require pages.rename: ${blockId}`);
+      }
+      throw new Error(`Work IDs are immutable once registered: ${blockId}`);
+    }
+    if (current.display_address !== desired.displayAddress) {
+      this.database.query(
+        "UPDATE page_addresses SET display_address = ? WHERE normalized_address = ?",
+      ).run(desired.displayAddress, desired.normalizedAddress);
+    }
+  }
+
   private replaceProperties(blockId: string, properties: BlockProperty[]): void {
     this.database.query("DELETE FROM block_properties WHERE block_id = ?").run(blockId);
     const insert = this.database.query(
       "INSERT INTO block_properties (block_id, key, value, ordinal) VALUES (?, ?, ?, ?)",
     );
     properties.forEach((property, ordinal) => insert.run(blockId, property.key, property.value, ordinal));
+    this.syncDeclaredPageAddresses(blockId, properties);
     const reserve = this.database.query(
       "INSERT OR IGNORE INTO reserved_work_ids (work_id, reserved_at) VALUES (?, ?)",
     );

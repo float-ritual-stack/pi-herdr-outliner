@@ -7,8 +7,12 @@ import {
 import { completionTargetAtCursor } from "./completion";
 import type { ReferencedFile, ReferencedPathCandidate } from "./files";
 import { parseFilter } from "./properties";
-import { navigateOutlinerLink, outlinerLinkUri } from "./outliner-links";
-import { blockDisplayTitle, blockReferenceIds } from "./references";
+import {
+  firstOutlinerReference,
+  navigateOutlinerLink,
+  outlinerLinkUri,
+} from "./outliner-links";
+import { blockDisplayTitle } from "./references";
 import { layoutExpandedBlock } from "./tree-layout";
 import { isDetailToggle, isPrintableInput, type TerminalInputAction, type TerminalKey } from "./terminal";
 import { TextBuffer } from "./text-buffer";
@@ -17,6 +21,7 @@ import type {
   BlockCollectionCompleteness,
   OutlinerEvent,
   NavigationState,
+  PageAddressCollection,
   VisibleBlock,
   VisibleBlockCollection,
   WorkspaceSnapshot,
@@ -556,39 +561,48 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         label: candidate.sourcePath,
         insertion: `[file::${candidate.sourcePath}${candidate.isDirectory ? "" : "]"}`,
       }));
-    } else {
-      let collection: VisibleBlockCollection | undefined;
-      if (target.kind === "page") {
-        collection = await effects.request<VisibleBlockCollection>({
-          action: "blocks.query",
-          query: {
-            text: target.query || undefined,
-            filters: [{ key: "type", value: "page" }],
-            limit: 20,
-          },
-        });
-      }
-      if (!collection || collection.blocks.length === 0) {
-        collection = await effects.request<VisibleBlockCollection>({
-          action: "blocks.query",
-          query: { text: target.query || undefined, limit: 20 },
-        });
-      }
+    } else if (target.kind === "page") {
+      const collection = await effects.request<PageAddressCollection>({
+        action: "pages.complete",
+        query: target.query || undefined,
+        limit: 20,
+      });
       if (collection.completeness.kind === "truncated") {
         truncatedLimit = collection.completeness.limit;
       }
-      items = collection.blocks.map((block) => {
-        const title = blockDisplayTitle(block);
-        return {
-          label: title,
-          insertion: target.kind === "page" ? `[[${title}]]` : `((${block.id}))`,
-        };
+      items = collection.addresses.map((address) => ({
+        label: `${address.address} — ${address.title}`,
+        insertion: `[[${address.address}]]`,
+        blockId: address.blockId,
+      }));
+    } else {
+      const collection = await effects.request<VisibleBlockCollection>({
+        action: "blocks.query",
+        query: { text: target.query || undefined, limit: 20 },
       });
+      if (collection.completeness.kind === "truncated") {
+        truncatedLimit = collection.completeness.limit;
+      }
+      items = collection.blocks.map((block) => ({
+        label: blockDisplayTitle(block),
+        insertion: `((${block.id}))`,
+        blockId: block.id,
+      }));
     }
 
     if (items.length === 0) {
       quickCompletion = null;
-      status = target.kind === "file" ? "No matching files" : "No matching blocks";
+      switch (target.kind) {
+        case "file":
+          status = "No matching files";
+          break;
+        case "page":
+          status = "No matching page addresses";
+          break;
+        case "block":
+          status = "No matching blocks";
+          break;
+      }
       return;
     }
     quickCompletion = {
@@ -1030,20 +1044,22 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         reloadRequired = true;
       }
     } else if (str === "o" && selected) {
-      const referenceId = blockReferenceIds(selected.block.text)[0];
-      if (!referenceId) {
-        status = "Selected block has no block references";
+      const reference = firstOutlinerReference(selected.block.text);
+      if (!reference) {
+        status = "Selected block has no block or page references";
       } else {
         const navigation = await navigateOutlinerLink(
           effects,
-          outlinerLinkUri("block", referenceId),
+          outlinerLinkUri(reference.kind, reference.value),
         );
         if (navigation.deleted) {
           effects.focusPane("detail");
           status = "Deleted reference opened read-only in Detail";
         } else {
           await reload(navigation.id);
-          status = `Followed reference to ${navigation.title}`;
+          status = navigation.created
+            ? `Created and followed [[${reference.value}]]`
+            : `Followed reference to ${navigation.title}`;
         }
         effects.invalidate();
         return;

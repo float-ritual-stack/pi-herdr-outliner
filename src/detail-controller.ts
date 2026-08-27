@@ -2,13 +2,15 @@ import { extractFileAnnotationComment, formatFileAnnotation } from "./annotation
 import { completionTargetAtCursor } from "./completion";
 import { layoutDetailEditor } from "./detail-editor-layout";
 import type { ReferencedFile, ReferencedPathCandidate } from "./files";
+import { firstOutlinerReference, type OutlinerLinkTarget } from "./outliner-links";
 import { getProperty } from "./properties";
-import { blockDisplayTitle, blockReferenceIds } from "./references";
+import { blockDisplayTitle } from "./references";
 import { TextBuffer } from "./text-buffer";
 import type {
   Block,
   BlockSearchQuery,
   NavigationState,
+  PageAddressCollection,
   OutlinerEvent,
   SelectionContext,
   VisibleBlockCollection,
@@ -73,8 +75,9 @@ export interface DetailEffects {
   }): Promise<Block>;
   restoreBlock(blockId: string): Promise<Block>;
   navigateHistory(direction: "back" | "forward"): Promise<NavigationState>;
-  followReference(blockId: string): Promise<void>;
+  followReference(target: OutlinerLinkTarget): Promise<void>;
   queryBlocks(query: BlockSearchQuery): Promise<VisibleBlockCollection>;
+  queryPageAddresses(query: string | undefined, limit: number): Promise<PageAddressCollection>;
   readFile(block: Block): ReferencedFile;
   completeFiles(query: string): ReferencedPathCandidate[];
   focusOutliner(): void;
@@ -392,28 +395,24 @@ export function createDetailController(
         label: candidate.sourcePath,
         insertion: `[file::${candidate.sourcePath}${candidate.isDirectory ? "" : "]"}`,
       }));
+    } else if (target.kind === "page") {
+      const collection = await effects.queryPageAddresses(target.query || undefined, 20);
+      items = collection.addresses.map((address) => ({
+        label: `${address.address} — ${address.title}`,
+        insertion: `[[${address.address}]]`,
+      }));
+      if (collection.completeness.kind === "truncated") {
+        completionStatus = `Showing first ${collection.completeness.limit} matches`;
+      }
     } else {
-      let collection: VisibleBlockCollection | undefined;
-      if (target.kind === "page") {
-        collection = await effects.queryBlocks({
-          text: target.query || undefined,
-          filters: [{ key: "type", value: "page" }],
-          limit: 20,
-        });
-      }
-      if (!collection || collection.blocks.length === 0) {
-        collection = await effects.queryBlocks({
-          text: target.query || undefined,
-          limit: 20,
-        });
-      }
-      items = collection.blocks.map((block) => {
-        const title = blockDisplayTitle(block);
-        return {
-          label: title,
-          insertion: target.kind === "page" ? `[[${title}]]` : `((${block.id}))`,
-        };
+      const collection = await effects.queryBlocks({
+        text: target.query || undefined,
+        limit: 20,
       });
+      items = collection.blocks.map((block) => ({
+        label: blockDisplayTitle(block),
+        insertion: `((${block.id}))`,
+      }));
       if (collection.completeness.kind === "truncated") {
         completionStatus = `Showing first ${collection.completeness.limit} matches`;
       }
@@ -421,7 +420,17 @@ export function createDetailController(
 
     if (items.length === 0) {
       state.completion = null;
-      state.status = target.kind === "file" ? "No matching files" : "No matching blocks";
+      switch (target.kind) {
+        case "file":
+          state.status = "No matching files";
+          break;
+        case "page":
+          state.status = "No matching page addresses";
+          break;
+        case "block":
+          state.status = "No matching blocks";
+          break;
+      }
       return;
     }
     state.completion = { start: target.start, end: target.end, index: 0, items };
@@ -492,16 +501,18 @@ export function createDetailController(
         break;
       }
       case "reference.follow": {
-        const referenceId = state.context.selected
-          ? blockReferenceIds(state.context.selected.text)[0]
-          : undefined;
-        if (!referenceId) {
-          state.status = "Selected block has no block references";
+        const reference = state.context.selected
+          ? firstOutlinerReference(state.context.selected.text)
+          : null;
+        if (!reference) {
+          state.status = "Selected block has no block or page references";
           break;
         }
-        await effects.followReference(referenceId);
+        await effects.followReference(reference);
         await loadSelection(true);
-        state.status = "Followed block reference";
+        state.status = reference.kind === "page"
+          ? `Followed [[${reference.value}]]`
+          : "Followed block reference";
         break;
       }
       case "comment.begin":

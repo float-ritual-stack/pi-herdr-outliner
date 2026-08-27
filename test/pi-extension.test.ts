@@ -29,6 +29,7 @@ test("registers the workspace commands and annotation-aware tools", () => {
     "outliner_update",
     "outliner_property_patch",
     "outliner_property_catalog",
+    "outliner_page",
     "outliner_query",
     "outliner_move",
     "outliner_selection",
@@ -43,7 +44,7 @@ test("registers the workspace commands and annotation-aware tools", () => {
   expect(updateSchema).toContain("expectedUpdatedAt");
 });
 
-test("requires protocol v7, attributes agent creates, and presents bounded query results", async () => {
+test("requires protocol v8, attributes agent creates and page follows, and presents bounded query results", async () => {
   const collection: VisibleBlockCollection = {
     blocks: [
       {
@@ -64,7 +65,7 @@ test("requires protocol v7, attributes agent creates, and presents bounded query
     ],
     completeness: { kind: "truncated", limit: 20 },
   };
-  let protocolVersion = 7;
+  let protocolVersion = 8;
   let queryCollection = collection;
   const requests: RequestInput[] = [];
   const originalRequest = OutlinerClient.prototype.request;
@@ -72,6 +73,7 @@ test("requires protocol v7, attributes agent creates, and presents bounded query
     requests.push(input);
     if (input.action === "blocks.query") return queryCollection as unknown as T;
     if (input.action === "create") return {} as T;
+    if (input.action === "pages.follow") return { created: true } as T;
     if (input.action === "ping") {
       return { status: "ready", protocolVersion } as unknown as T;
     }
@@ -92,7 +94,13 @@ test("requires protocol v7, attributes agent creates, and presents bounded query
     name: string;
     execute(
       id: string,
-      params: { text?: string; limit?: number; parentId?: string | null },
+      params: {
+        text?: string;
+        limit?: number;
+        parentId?: string | null;
+        operation?: "follow";
+        address?: string;
+      },
       signal?: AbortSignal,
       onUpdate?: unknown,
       context?: ExtensionContext,
@@ -133,6 +141,22 @@ test("requires protocol v7, attributes agent creates, and presents bounded query
       undefined,
       context,
     );
+    await tools.get("outliner_page")!.execute(
+      "page-follow-test",
+      { operation: "follow", address: "Agent Page" },
+      undefined,
+      undefined,
+      context,
+    );
+    await expect(
+      tools.get("outliner_page")!.execute(
+        "unknown-page-op",
+        { operation: "unknown" } as never,
+        undefined,
+        undefined,
+        context,
+      ),
+    ).rejects.toThrow("Unsupported page operation: unknown");
 
     expect(requests.filter((request) => request.action === "blocks.query")).toEqual([
       {
@@ -153,6 +177,16 @@ test("requires protocol v7, attributes agent creates, and presents bounded query
         actorId: process.env.OMPCODE ? "omp" : "pi",
         sessionId: "session-test",
         taskId: "tool-call-test",
+      },
+    });
+    expect(requests.find((request) => request.action === "pages.follow")).toEqual({
+      action: "pages.follow",
+      address: "Agent Page",
+      author: "agent",
+      provenance: {
+        actorId: process.env.OMPCODE ? "omp" : "pi",
+        sessionId: "session-test",
+        taskId: "page-follow-test",
       },
     });
     expect(widgets).toEqual([
@@ -188,7 +222,7 @@ test("requires protocol v7, attributes agent creates, and presents bounded query
     expect(largeEnvelope.presentation.omitted).toBeGreaterThan(0);
     protocolVersion = 5;
     await expect(tools.get("outliner_query")!.execute("incompatible-query", {})).rejects.toThrow(
-      "Incompatible outliner protocol 5; expected 7",
+      "Incompatible outliner protocol 5; expected 8",
     );
   } finally {
     OutlinerClient.prototype.request = originalRequest;

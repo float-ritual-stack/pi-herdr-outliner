@@ -393,6 +393,85 @@ export default function outlinerExtension(pi: ExtensionAPI): void {
   });
 
   pi.registerTool({
+    name: "outliner_page",
+    label: "Outliner Page Address",
+    description: "Resolve, follow, complete, rename, alias, or remove a unique symbolic page address",
+    promptSnippet: "Use the shared symbolic page-address registry",
+    parameters: Type.Object({
+      operation: Type.Union([
+        Type.Literal("resolve"),
+        Type.Literal("follow"),
+        Type.Literal("complete"),
+        Type.Literal("rename"),
+        Type.Literal("alias"),
+        Type.Literal("remove"),
+      ]),
+      address: Type.Optional(
+        Type.String({ description: "Required for resolve, follow, rename, alias, and remove" }),
+      ),
+      blockId: Type.Optional(Type.String({ description: "Required for rename, alias, and remove" })),
+      expectedUpdatedAt: Type.Optional(
+        Type.String({ description: "Required for rename and remove" }),
+      ),
+      query: Type.Optional(Type.String({ description: "Optional substring filter for complete" })),
+      limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+    }),
+    async execute(toolCallId, params, _signal, _onUpdate, context) {
+      await ensureService(false);
+      const requireField = (value: string | undefined, field: string): string => {
+        if (value === undefined || value === "") {
+          throw new Error(`outliner_page ${params.operation} requires ${field}`);
+        }
+        return value;
+      };
+      switch (params.operation) {
+        case "resolve":
+          return toolResult(await client.request({
+            action: "pages.resolve",
+            address: requireField(params.address, "address"),
+          }));
+        case "follow":
+          return toolResult(await client.request({
+            action: "pages.follow",
+            address: requireField(params.address, "address"),
+            author: "agent",
+            provenance: toolProvenance(context, toolCallId),
+          }));
+        case "complete":
+          return toolResult(await client.request({
+            action: "pages.complete",
+            query: params.query,
+            limit: params.limit ?? 50,
+          }));
+        case "rename":
+          return toolResult(await client.request({
+            action: "pages.rename",
+            blockId: requireField(params.blockId, "blockId"),
+            address: requireField(params.address, "address"),
+            expectedUpdatedAt: requireField(params.expectedUpdatedAt, "expectedUpdatedAt"),
+          }));
+        case "alias":
+          return toolResult(await client.request({
+            action: "pages.alias",
+            blockId: requireField(params.blockId, "blockId"),
+            address: requireField(params.address, "address"),
+          }));
+        case "remove":
+          return toolResult(await client.request({
+            action: "pages.remove",
+            blockId: requireField(params.blockId, "blockId"),
+            address: requireField(params.address, "address"),
+            expectedUpdatedAt: requireField(params.expectedUpdatedAt, "expectedUpdatedAt"),
+          }));
+        default: {
+          const unsupported: never = params.operation;
+          throw new Error(`Unsupported page operation: ${String(unsupported)}`);
+        }
+      }
+    },
+  });
+
+  pi.registerTool({
     name: "outliner_query",
     label: "Outliner Query",
     description:

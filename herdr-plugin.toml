@@ -38,5 +38,5 @@ command = ["bun", "run", "src/herdr-link-open.ts"]
 [[link_handlers]]
 id = "outliner-navigation"
 title = "Navigate Outliner"
-pattern = "^pi-outliner://(block|goto|page)/[^[:space:]]+$"
+pattern = "^pi-outliner://(block|goto|page|work)/[^[:space:]]+$"
 action = "navigate"

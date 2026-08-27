@@ -5,16 +5,17 @@ import {
   type BlockFocusRequester,
 } from "./block-focus";
 import { blockDisplayTitle, blockReferenceIds } from "./references";
-import type { Block } from "./types";
+import { isWorkIdAddress, pageAddressReferences } from "./page-addresses";
+import type { Block, PageAddressFollowResult, PageAddressResolution } from "./types";
 
 const OUTLINER_SCHEME = "pi-outliner:";
 const BLOCK_ID_PATTERN = /^[A-Za-z0-9_-]{8,}$/;
 const BLOCK_ID_TOKEN_PATTERN = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
-const WORK_ID_PATTERN = /\bPIE-\d+\b/g;
+const WORK_ID_PATTERN = /\bPIE-\d+\b/gi;
 const RAW_BLOCK_REFERENCE_PATTERN = /\(\(([A-Za-z0-9_-]{8,})\)\)/g;
 const TERMINAL_CONTROL_PATTERN = /[\u0000-\u001f\u007f]/;
 
-export type OutlinerLinkKind = "block" | "goto" | "page";
+export type OutlinerLinkKind = "block" | "goto" | "page" | "work";
 
 export interface OutlinerLinkTarget {
   kind: OutlinerLinkKind;
@@ -22,10 +23,11 @@ export interface OutlinerLinkTarget {
 }
 
 export interface OutlinerLinkNavigation {
-  kind: Exclude<OutlinerLinkKind, "page">;
+  kind: OutlinerLinkKind;
   id: string;
   title: string;
   deleted?: boolean;
+  created?: boolean;
 }
 
 interface LinkSpan {
@@ -45,8 +47,11 @@ export function outlinerLinkUri(kind: OutlinerLinkKind, value: string): string {
     throw new Error("Outliner link target contains terminal control characters");
   }
   if (!normalized) throw new Error("Outliner link target cannot be empty");
-  if (kind === "block" && !BLOCK_ID_PATTERN.test(normalized)) {
-    throw new Error(`Invalid outliner block target: ${normalized}`);
+  if (
+    (kind === "block" && !BLOCK_ID_PATTERN.test(normalized)) ||
+    (kind === "work" && !isWorkIdAddress(normalized))
+  ) {
+    throw new Error(`Invalid outliner ${kind} target: ${normalized}`);
   }
   return `${OUTLINER_SCHEME}//${kind}/${encodeURIComponent(normalized)}`;
 }
@@ -67,7 +72,7 @@ export function parseOutlinerLinkUri(uri: string): OutlinerLinkTarget {
     throw new Error("Invalid outliner link URI");
   }
   const kind = parsed.hostname;
-  if (kind !== "block" && kind !== "goto" && kind !== "page") {
+  if (kind !== "block" && kind !== "goto" && kind !== "page" && kind !== "work") {
     throw new Error(`Unsupported outliner link kind: ${parsed.hostname}`);
   }
   const encoded = parsed.pathname.startsWith("/") ? parsed.pathname.slice(1) : parsed.pathname;
@@ -80,7 +85,8 @@ export function parseOutlinerLinkUri(uri: string): OutlinerLinkTarget {
   if (
     !value ||
     TERMINAL_CONTROL_PATTERN.test(value) ||
-    (kind === "block" && !BLOCK_ID_PATTERN.test(value))
+    (kind === "block" && !BLOCK_ID_PATTERN.test(value)) ||
+    (kind === "work" && !isWorkIdAddress(value))
   ) {
     throw new Error(`Invalid outliner ${kind} target`);
   }
@@ -92,39 +98,68 @@ export async function navigateOutlinerLink(
   uri: string,
 ): Promise<OutlinerLinkNavigation> {
   const target = parseOutlinerLinkUri(uri);
-  if (target.kind === "page") {
-    throw new Error("Symbolic page links require PIE-132");
-  }
-  if (target.kind === "block") {
-    const block = await requester.request<Block>({ action: "get", blockId: target.value });
-    if (block.effectiveDeletedRootId) {
-      await requester.request({ action: "selection.set", blockId: block.id });
-      await requester.request({
-        action: "ui.command.send",
-        command: { target: "detail", command: "focus", blockId: block.id },
-      });
-      return {
-        kind: "block",
-        id: block.id,
-        title: blockDisplayTitle(block),
-        deleted: true,
-      };
+  if (target.kind === "goto") {
+    const focused = await focusBlockByQuery(requester, target.value);
+    if (focused.resolution.kind === "none") {
+      throw new Error(`No outliner block matches clicked link: ${target.value}`);
     }
+    if (focused.resolution.kind === "ambiguous") {
+      const candidates = focused.resolution.matches
+        .map((match) => formatBlockFocusMatch(match, match.block.id))
+        .join("\n");
+      throw new Error(`Clicked outliner link is ambiguous:\n${candidates}`);
+    }
+    return {
+      kind: "goto",
+      id: focused.resolution.match.block.id,
+      title: focused.resolution.match.title,
+    };
   }
-  const focused = await focusBlockByQuery(requester, target.value);
-  if (focused.resolution.kind === "none") {
-    throw new Error(`No outliner block matches clicked link: ${target.value}`);
+
+  let pageFollow: PageAddressFollowResult | null = null;
+  let block: Block;
+  if (target.kind === "page") {
+    pageFollow = await requester.request<PageAddressFollowResult>({
+      action: "pages.follow",
+      address: target.value,
+    });
+    if (!pageFollow.block) throw new Error(`Page address did not resolve: ${target.value}`);
+    block = pageFollow.block;
+  } else if (target.kind === "work") {
+    const resolution = await requester.request<PageAddressResolution>({
+      action: "pages.resolve",
+      address: target.value,
+    });
+    if (!resolution.block) throw new Error(`Work ID address is unresolved: ${target.value}`);
+    block = resolution.block;
+  } else {
+    block = await requester.request<Block>({ action: "get", blockId: target.value });
   }
-  if (focused.resolution.kind === "ambiguous") {
-    const candidates = focused.resolution.matches
-      .map((match) => formatBlockFocusMatch(match, match.block.id))
-      .join("\n");
-    throw new Error(`Clicked outliner link is ambiguous:\n${candidates}`);
+  if (block.effectiveDeletedRootId) {
+    await requester.request({ action: "selection.set", blockId: block.id });
+    await requester.request({
+      action: "ui.command.send",
+      command: { target: "detail", command: "focus", blockId: block.id },
+    });
+    return {
+      kind: target.kind,
+      id: block.id,
+      title: blockDisplayTitle(block),
+      deleted: true,
+      ...(pageFollow?.created ? { created: true } : {}),
+    };
   }
+
+  await requester.request({ action: "selection.set", blockId: block.id });
+  await requester.request({
+    action: "ui.command.send",
+    command: { target: "tree", command: "focus", blockId: block.id },
+  });
   return {
     kind: target.kind,
-    id: focused.resolution.match.block.id,
-    title: focused.resolution.match.title,
+    id: block.id,
+    title: blockDisplayTitle(block),
+    ...(pageFollow?.created ? { created: true } : {}),
   };
 }
 
@@ -163,8 +198,50 @@ function protectedMarkdownRanges(text: string): TextRange[] {
   return ranges;
 }
 
+function pageSyntaxRanges(text: string): TextRange[] {
+  return [...text.matchAll(/\[\[[^\r\n]*?(?:\]\]|(?=\r?$))/gm)].map((match) => ({
+    start: match.index,
+    end: match.index + match[0].length,
+  }));
+}
+
 function overlaps(left: TextRange, right: TextRange): boolean {
   return left.start < right.end && right.start < left.end;
+}
+
+export function firstOutlinerReference(text: string): OutlinerLinkTarget | null {
+  const candidates: Array<OutlinerLinkTarget & TextRange> = [];
+  for (const match of text.matchAll(RAW_BLOCK_REFERENCE_PATTERN)) {
+    candidates.push({
+      kind: "block",
+      value: match[1],
+      start: match.index,
+      end: match.index + match[0].length,
+    });
+  }
+  for (const reference of pageAddressReferences(text)) {
+    candidates.push({
+      kind: "page",
+      value: reference.displayAddress,
+      start: reference.start,
+      end: reference.end,
+    });
+  }
+  const pageRanges = pageSyntaxRanges(text);
+  for (const match of text.matchAll(WORK_ID_PATTERN)) {
+    const range = { start: match.index, end: match.index + match[0].length };
+    if (pageRanges.some((pageRange) => overlaps(range, pageRange))) continue;
+    candidates.push({
+      kind: "work",
+      value: match[0],
+      ...range,
+    });
+  }
+  const protectedRanges = protectedMarkdownRanges(text);
+  const first = candidates
+    .filter((candidate) => !protectedRanges.some((range) => overlaps(candidate, range)))
+    .sort((left, right) => left.start - right.start)[0];
+  return first ? { kind: first.kind, value: first.value } : null;
 }
 
 function genericLinkSpans(
@@ -172,11 +249,20 @@ function genericLinkSpans(
   canLinkBlock: (blockId: string) => boolean,
 ): LinkSpan[] {
   const spans: LinkSpan[] = [];
-  for (const match of text.matchAll(WORK_ID_PATTERN)) {
+  const pageRanges = pageSyntaxRanges(text);
+  for (const reference of pageAddressReferences(text)) {
     spans.push({
-      start: match.index,
-      end: match.index + match[0].length,
-      uri: outlinerLinkUri("goto", match[0]),
+      start: reference.start,
+      end: reference.end,
+      uri: outlinerLinkUri("page", reference.displayAddress),
+    });
+  }
+  for (const match of text.matchAll(WORK_ID_PATTERN)) {
+    const range = { start: match.index, end: match.index + match[0].length };
+    if (pageRanges.some((pageRange) => overlaps(range, pageRange))) continue;
+    spans.push({
+      ...range,
+      uri: outlinerLinkUri("work", match[0]),
     });
   }
   for (const match of text.matchAll(BLOCK_ID_TOKEN_PATTERN)) {

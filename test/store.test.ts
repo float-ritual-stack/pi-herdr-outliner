@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PROPERTY_PARSER_VERSION } from "../src/properties";
+import { PAGE_ADDRESS_REGISTRY_VERSION } from "../src/page-addresses";
 import { OutlinerStore } from "../src/store";
 import {
   isVirtualBranchOccurrence,
@@ -795,6 +796,223 @@ Second paragraph`;
     store.close();
 
     expect(() => new OutlinerStore(path)).toThrow("newer than supported");
+    stores.pop();
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  test("registers normalized page declarations and Work IDs with authored labels", () => {
+    const store = makeStore();
+    const page = store.create("Research hub [page::Research   Notes]");
+    const work = store.create("Symbolic registry [work-id::PIE-132]");
+
+    expect(store.resolvePageAddress("  research notes  ")).toMatchObject({
+      normalizedAddress: "research notes",
+      status: "resolved",
+      registeredAddress: "Research   Notes",
+      kind: "page",
+      block: { id: page.id },
+    });
+    expect(store.resolvePageAddress("pie-132")).toMatchObject({
+      status: "resolved",
+      registeredAddress: "PIE-132",
+      kind: "work-id",
+      block: { id: work.id },
+    });
+    expect(store.completePageAddresses("pie", 20)).toEqual({
+      addresses: [{
+        address: "PIE-132",
+        normalizedAddress: "pie-132",
+        blockId: work.id,
+        kind: "work-id",
+        title: "Symbolic registry",
+      }],
+      completeness: { kind: "complete" },
+    });
+    expect(store.completePageAddresses("notes", 20).addresses[0]).toMatchObject({
+      address: "Research   Notes",
+      blockId: page.id,
+    });
+    expect(store.completePageAddresses("]", 20)).toEqual({
+      addresses: [],
+      completeness: { kind: "complete" },
+    });
+  });
+
+  test("uses Unicode caseless normalization for symbolic uniqueness", () => {
+    const store = makeStore();
+    const owner = store.create("Greek address [page::ΟΣ]");
+
+    expect(store.resolvePageAddress("οσ").block?.id).toBe(owner.id);
+    expect(() => store.create("Collision [page::οσ]")).toThrow(
+      `Page address already belongs to block ${owner.id}`,
+    );
+  });
+  test("does not create on parse or save and creates one stub only on follow", async () => {
+    const store = makeStore();
+    const source = store.create("Source mentions [[Future Page]]");
+    const updated = store.update(source.id, "Source still mentions [[Future Page]]");
+    const before = store.traversePreorder({ collapsedDescendants: "traverse" }).length;
+    expect(updated.text).toContain("[[Future Page]]");
+    expect(store.completePageAddresses("future", 20).addresses).toEqual([]);
+
+    expect(store.resolvePageAddress("Future Page")).toEqual({
+      address: "Future Page",
+      normalizedAddress: "future page",
+      status: "missing",
+    });
+    expect(store.traversePreorder({ collapsedDescendants: "traverse" })).toHaveLength(before);
+    expect(() => store.followPageAddress("PIE-404")).toThrow(
+      "Unresolved Work ID cannot create a page stub",
+    );
+
+    const [first, second] = await Promise.all([
+      Promise.resolve().then(() => store.followPageAddress(" Future   Page ")),
+      Promise.resolve().then(() => store.followPageAddress("future page")),
+    ]);
+    expect([first.created, second.created].sort()).toEqual([false, true]);
+    expect(first.block?.id).toBe(second.block?.id);
+    expect(first.block?.text).toBe("Future   Page [page::Future   Page]");
+    expect(
+      store.database.query(
+        "SELECT COUNT(*) AS count FROM page_addresses WHERE normalized_address = 'future page'",
+      ).get(),
+    ).toEqual({ count: 1 });
+  });
+
+  test("rejects normalized address collisions across page and Work-ID declarations", () => {
+    const store = makeStore();
+    const owner = store.create("Owner [work-id::PIE-132]");
+    const count = store.traversePreorder({ collapsedDescendants: "traverse" }).length;
+
+    expect(() => store.create("Collision [page::pie-132]")).toThrow(
+      `Page address already belongs to block ${owner.id}`,
+    );
+    expect(store.traversePreorder({ collapsedDescendants: "traverse" })).toHaveLength(count);
+    expect(() => store.create("Duplicate [page::One] [page::Two]")).toThrow(
+      "at most one page address",
+    );
+  });
+
+  test("renames pages explicitly while preserving old and added aliases", () => {
+    const store = makeStore();
+    const page = store.create("Knowledge [page::Old Address]");
+
+    expect(() => store.renamePageAddress(page.id, "New Address", "stale")).toThrow(
+      "Block changed since editing began",
+    );
+    expect(store.renamePageAddress(page.id, "New Address", page.updatedAt)).toEqual({
+      address: "New Address",
+      normalizedAddress: "new address",
+      blockId: page.id,
+      kind: "page",
+    });
+    expect(store.resolvePageAddress("old address")).toMatchObject({
+      status: "resolved",
+      kind: "alias",
+      block: { id: page.id },
+    });
+    expect(store.resolvePageAddress("new address")).toMatchObject({
+      status: "resolved",
+      kind: "page",
+      block: { id: page.id },
+    });
+    expect(store.require(page.id).text).toBe("Knowledge [page::New Address]");
+
+    const updated = store.update(page.id, "Knowledge revised [page::New Address]");
+    expect(updated.text).toContain("Knowledge revised");
+    expect(() => store.update(page.id, "Knowledge [page::Third Address]")).toThrow(
+      "changes require pages.rename",
+    );
+    expect(store.addPageAlias(page.id, "Knowledge Hub")).toEqual({
+      address: "Knowledge Hub",
+      normalizedAddress: "knowledge hub",
+      blockId: page.id,
+      kind: "alias",
+    });
+    expect(store.resolvePageAddress("knowledge hub").block?.id).toBe(page.id);
+
+    const current = store.require(page.id);
+    const removedAlias = store.removePageAddress(page.id, "Knowledge Hub", current.updatedAt);
+    expect(removedAlias.removed.kind).toBe("alias");
+    const removedPage = store.removePageAddress(
+      page.id,
+      "New Address",
+      removedAlias.block.updatedAt,
+    );
+    expect(removedPage.removed.kind).toBe("page");
+    expect(removedPage.block.text.trimEnd()).toBe("Knowledge revised");
+    expect(store.resolvePageAddress("new address").status).toBe("missing");
+    expect(store.resolvePageAddress("old address").block?.id).toBe(page.id);
+    expect(store.update(page.id, "Knowledge without a primary page").text).toBe(
+      "Knowledge without a primary page",
+    );
+  });
+
+  test("retains deleted symbolic identity and makes purged addresses dangling", () => {
+    const store = makeStore();
+    const page = store.create("Disposable [page::Disposable Page]");
+    store.delete(page.id);
+
+    expect(store.resolvePageAddress("disposable page")).toMatchObject({
+      status: "deleted",
+      deletionRootId: page.id,
+      block: { id: page.id },
+    });
+    expect(store.followPageAddress("Disposable Page")).toMatchObject({
+      status: "deleted",
+      created: false,
+      block: { id: page.id },
+    });
+
+    store.purge(page.id, page.id.slice(0, 8));
+    expect(store.resolvePageAddress("Disposable Page")).toEqual({
+      address: "Disposable Page",
+      normalizedAddress: "disposable page",
+      status: "missing",
+    });
+  });
+
+  test("backfills existing page and Work-ID declarations on migration", () => {
+    const store = makeStore();
+    const directory = stores[stores.length - 1].directory;
+    const path = join(directory, "outliner.sqlite");
+    const page = store.create("Migrated page [page::Migration Target]");
+    const work = store.create("Migrated work [work-id::PIE-777]");
+    store.addPageAlias(page.id, "Migrated Alias");
+    store.database.query(
+      "UPDATE metadata SET value = '0' WHERE key = 'page_address_registry_version'",
+    ).run();
+    store.close();
+
+    const reopened = new OutlinerStore(path);
+    stores[stores.length - 1].store = reopened;
+    expect(reopened.resolvePageAddress("migration target").block?.id).toBe(page.id);
+    expect(
+      reopened.database.query(
+        "SELECT value FROM metadata WHERE key = 'page_address_registry_version'",
+      ).get(),
+    ).toEqual({ value: String(PAGE_ADDRESS_REGISTRY_VERSION) });
+    expect(reopened.resolvePageAddress("pie-777").block?.id).toBe(work.id);
+    expect(reopened.resolvePageAddress("migrated alias").block?.id).toBe(page.id);
+  });
+
+  test("backfills declarations transactionally and rejects duplicate migration data", () => {
+    const store = makeStore();
+    const directory = stores[stores.length - 1].directory;
+    const path = join(directory, "outliner.sqlite");
+    const first = store.create("First");
+    const second = store.create("Second");
+    store.database.query(
+      "INSERT INTO block_properties (block_id, key, value, ordinal) VALUES (?, 'page', 'Same Page', 0)",
+    ).run(first.id);
+    store.database.query(
+      "INSERT INTO block_properties (block_id, key, value, ordinal) VALUES (?, 'page', 'same   page', 0)",
+    ).run(second.id);
+    store.database.query("DELETE FROM page_addresses").run();
+    store.database.query("DELETE FROM metadata WHERE key = 'page_address_registry_version'").run();
+    store.close();
+
+    expect(() => new OutlinerStore(path)).toThrow("Page address already belongs to block");
     stores.pop();
     rmSync(directory, { recursive: true, force: true });
   });

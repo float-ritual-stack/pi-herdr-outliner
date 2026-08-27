@@ -112,10 +112,11 @@ Literal property-looking text inside inline code, fenced code, or escaped syntax
 - `navigation_history` — the latest 200 canonical selection visits, suppressing consecutive duplicates; purged block foreign keys become null so traversal skips them.
 - `block_view_state` — UI state such as multiline expansion without changing canonical text.
 - `virtual_occurrence_ranks` — durable `(virtual-branch ID, canonical block ID) -> branch-local rank`; both foreign keys cascade on deletion.
+- `page_addresses` — unique normalized symbolic address to canonical block mapping for page declarations, Work IDs, and explicit aliases; foreign keys cascade only on physical purge.
 
 ## Protocol
 
-The current protocol version is `7`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
+The current protocol version is `8`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
 
 ### Important request families
 
@@ -126,6 +127,7 @@ The current protocol version is `7`, defined in [`src/types.ts`](../src/types.ts
 - properties: `properties.patch`, `properties.catalog`
 - virtual ordering: `virtual.occurrences.reorder`
 - references: `references.resolve`
+- symbolic addresses: `pages.resolve`, `pages.follow`, `pages.complete`, `pages.rename`, `pages.alias`, `pages.remove`
 - selection: `selection.get`, `selection.set`
 - navigation: `navigation.state`, `navigation.back`, `navigation.forward`
 - reactive clients: `events.subscribe`
@@ -142,21 +144,22 @@ The Pi/OMP adapter forces `author: "agent"`. It identifies the host as `pi` or `
 Herdr recognizes plain terminal text as a URL only for `http://` and `https://`. Outliner renderers therefore generate trusted OSC 8 hyperlinks with private URIs instead of expecting link-handler regexes to scan arbitrary text:
 
 - `pi-outliner://block/<uuid>` — exact canonical block;
-- `pi-outliner://goto/<encoded-query>` — shared goto resolution, currently used by `PIE-NNN`;
-- `pi-outliner://page/<encoded-address>` — reserved for PIE-132 symbolic-page semantics.
+- `pi-outliner://goto/<encoded-query>` — shared fuzzy goto resolution;
+- `pi-outliner://work/<PIE-NNN>` — resolve-only Work-ID registry lookup;
+- `pi-outliner://page/<encoded-address>` — unique symbolic page resolution and explicit create-on-follow.
 
-Inside the live panes, navigation stays in-process. Tree enables SGR mouse reporting, keeps the last rendered frame, resolves an unmodified primary click against that frame's OSC 8 cell metadata, and delegates to `navigateOutlinerLink`. Detail supplies the same helper as Pi TUI's `openUrl` callback. Exact block links first read their canonical target, so deleted targets cannot degrade into fuzzy text matches; active targets then use `focusBlockByQuery` to update canonical selection and send Tree focus/reveal.
+Inside the live panes, navigation stays in-process. Tree enables SGR mouse reporting, keeps the last rendered frame, resolves an unmodified primary click against that frame's OSC 8 cell metadata, and delegates to `navigateOutlinerLink`. Detail supplies the same helper as Pi TUI's `openUrl` callback. Exact block and resolved symbolic links select one canonical UUID directly, so deleted targets cannot degrade into fuzzy text matches. Deleted targets open read-only in Detail; active targets send exact Tree focus/reveal.
 
 Authored text is sanitized before link generation. Tree adds OSC 8 only after plain-text wrapping/truncation; Detail generates safe Markdown links after sanitization. Under `HERDR_ENV=1`, Detail enables Pi TUI hyperlink emission because nested panes advertise generic `TERM=xterm-256color` even though Herdr captures OSC 8 metadata. Tree ignores modified, release, motion, and wheel reports for link activation; Shift remains available for terminal-native selection.
 
-The `outliner-navigation` manifest handler and `src/herdr-link-open.ts` remain the external/interoperability path for rendered output outside the active TUI. They validate/decode the private URI, resolve the clicked pane workspace, and enter the same shared navigation helper. Symbolic `[[address]]` rendering remains non-navigable until PIE-132 owns address resolution and create-on-follow behavior.
+The `outliner-navigation` manifest handler and `src/herdr-link-open.ts` remain the external/interoperability path for rendered output outside the active TUI. They validate/decode the private URI, resolve the clicked pane workspace, and enter the same shared navigation helper. `[[address]]` remains visible when dangling; the explicit follow action creates exactly one root stub through the transactional registry path.
 
 
 ### macOS native URL bridge
 
 Real Ghostty/Warp/xterm-based clients do not reliably deliver Herdr's documented Control-modified left click: macOS may translate it to secondary click, while Command-click is consumed by the local terminal and sent to LaunchServices. `macos/pi-outliner-link` is an optional local app bundle for that boundary.
 
-The app registers `pi-outliner://`, accepts only exact block IDs and `PIE-NNN` goto targets, rejects terminal controls and URL decorations, reads a local host/workspace/Bun configuration, and invokes `/usr/bin/ssh` in batch mode. The installer stores the selected configuration path in bundle metadata because apps opened by LaunchServices do not inherit the installer's shell environment. The remote command calls the existing `src/cli.ts goto --query` path, so canonical selection and Tree reveal remain server-owned. Host and paths are validated and shell-quoted; authored URL content never becomes an unchecked remote command.
+The app registers `pi-outliner://`, accepts exact block, fuzzy goto, symbolic page, and resolve-only Work-ID routes, rejects terminal controls and URL decorations, reads a local host/workspace/Bun configuration, and invokes `/usr/bin/ssh` in batch mode. The installer stores the selected configuration path in bundle metadata because apps opened by LaunchServices do not inherit the installer's shell environment. The remote command forwards the validated private URL through `src/cli.ts link --url`, so registry resolution, canonical selection, and Tree reveal remain server-owned. Host and paths are validated and shell-quoted; authored URL content never becomes an unchecked remote command.
 
 The default bridge targets `evan@float-box:/home/evan/test`, which resolves over Tailscale MagicDNS without exposing a public service. Warp activates it with Command-click; Ghostty uses Shift-Command-click to bypass mouse capture. This bridge is an immediate per-device workaround, not a replacement for the requested opt-in plain-click Herdr plugin-handler mode tracked upstream.
 
@@ -200,9 +203,9 @@ Question [type::question] [status::open]
 
 Query filters compare indexed keys and optional exact values. Property patches address token ordinals so an agent can replace/remove/append metadata without rewriting unrelated prose.
 
-Exact references use `((block-id))`. Read paths replace a resolvable ID with the target’s first non-property content line. Edit paths retain the raw ID. Dangling references remain unchanged.
+Exact references use `((block-id))`. Read paths replace a resolvable ID with the target’s first non-property content line. Edit paths retain the raw ID. Dangling exact references remain unchanged.
 
-Symbolic `[[address]]` pages, aliases, `PIE-NNN` work IDs, and backlinks are accepted roadmap designs, not current protocol behavior.
+Symbolic references use `[[address]]`. The registry compares trimmed, Unicode-normalized, caseless, whitespace-collapsed keys while preserving the authored address label. One `[page::address]` declaration registers a page; `[work-id::PIE-NNN]` registers the same canonical block under its Work ID. Bare Work IDs navigate through a resolve-only registry path rather than fuzzy goto, and unresolved Work-ID-shaped addresses cannot create page stubs. Parsing and ordinary saves never create a referenced block. `pages.follow` transactionally resolves or creates one ordinary root stub. General edits cannot silently change or remove a registered declaration: `pages.rename` uses optimistic concurrency, changes the primary declaration, and retains the former address as an alias; `pages.alias` adds another explicit address; `pages.remove` explicitly unregisters an alias or primary declaration. Registry rebuilds preserve aliases.
 
 ## Recoverable deletion and Trash
 
@@ -219,6 +222,8 @@ Trash [type::virtual-branch] [system-view::trash] [query::deleted=true]
 The special `deleted=true` query returns direct deletion roots only. It is read-only because it has no create configuration. Root rows include an effective descendant count; Detail previews deleted selection read-only. `r` clears only the selected root's direct marker, so independently deleted descendants stay deleted. `p` requires the exact work ID or eight-character block prefix before physical purge.
 
 References resolve to three states. Active targets render normally; effectively deleted targets retain their title with a Trash marker and deletion-root identity; purged/missing targets remain dangling. Following an exact deleted block link selects it for read-only Detail inspection rather than silently failing or restoring it.
+
+Symbolic addresses use the same lifecycle distinction. Soft deletion retains the registry row and resolves to the read-only tombstone. Purge cascades registry rows, so the former address becomes genuinely missing and may create a new stub only on a later explicit follow.
 
 Permanent purge is manual and irreversible. It physically deletes the canonical subtree through existing foreign-key cascades. Before deletion, every subtree work ID is copied into `reserved_work_ids`; future work-ID allocation must consult that ledger so deleted or purged identifiers are never reused.
 
@@ -289,7 +294,8 @@ After deploying a merged change, restart Detail, Tree, and service in that order
 ## Repository map
 
 ```text
-src/store.ts                  SQLite block graph and property index
+src/store.ts                  SQLite block graph, property index, and symbolic-address registry
+src/page-addresses.ts         symbolic-address validation, normalization, and syntax scanning
 src/server.ts                 protocol and subscriptions
 src/client.ts                 request/watch client
 src/server-main.ts            canonical service process
@@ -311,13 +317,6 @@ pi-extension/index.ts         Pi/OMP commands, tools, context hook
 
 ## Accepted designs not yet implemented
 
-The durable roadmap lives in the outliner workboard. Current accepted designs include:
-
-- safe canonical block deletion,
-- reference navigation and back history,
-- symbolic page addresses and create-on-follow stubs,
-- project-scoped `PIE-NNN` work IDs,
-- backlinks,
-- pinned reference panes.
+The durable roadmap lives in the outliner workboard. Current accepted designs include backlinks, scoped property semantics, retained Detail targets, projected canonical descendants, and projected-child creation.
 
 Do not describe these as shipped behavior until their roadmap items are Complete on main.
