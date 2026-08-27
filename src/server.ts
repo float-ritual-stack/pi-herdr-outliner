@@ -8,6 +8,7 @@ import {
   type OutlinerEvent,
   type OutlinerEventEnvelope,
   type NavigationState,
+  type PageAddressFollowResult,
   type OutlinerRequest,
   type OutlinerResponse,
 } from "./types";
@@ -139,6 +140,25 @@ export class OutlinerServer {
         case "references.resolve":
           result = this.store.resolveBlockReferences(request.text);
           break;
+        case "pages.resolve":
+          result = this.store.resolvePageAddress(request.address);
+          break;
+        case "pages.follow":
+          result = this.store.followPageAddress(
+            request.address,
+            request.author,
+            request.provenance,
+          );
+          break;
+        case "pages.complete":
+          result = this.store.completePageAddresses(request.query, request.limit);
+          break;
+        case "pages.rename":
+          result = this.store.renamePageAddress(request.blockId, request.address);
+          break;
+        case "pages.alias":
+          result = this.store.addPageAlias(request.blockId, request.address);
+          break;
         case "properties.patch":
           result = this.store.patchProperties(
             request.blockId,
@@ -196,9 +216,18 @@ export class OutlinerServer {
       case "trash.restore":
       case "trash.purge":
       case "properties.patch":
+      case "pages.rename":
+      case "pages.alias":
         domain = "content";
         blockId = request.blockId;
         break;
+      case "pages.follow": {
+        const followed = response.result as PageAddressFollowResult;
+        if (!followed.created) return null;
+        domain = "content";
+        blockId = followed.block?.id;
+        break;
+      }
       case "toggle":
       case "view.toggleMultiline":
         domain = "view";

@@ -164,7 +164,7 @@ describe("Pi Markdown detail preview", () => {
       expect(line).toBeDefined();
       const visible = stripTerminalSequences(line!);
       expect(getOsc8LinkAtColumn(line!, visible.indexOf("PIE-133") + 2)).toBe(
-        "pi-outliner://goto/PIE-133",
+        "pi-outliner://page/PIE-133",
       );
       expect(getOsc8LinkAtColumn(line!, visible.indexOf("Target decision") + 2)).toBe(
         `pi-outliner://block/${targetId}`,

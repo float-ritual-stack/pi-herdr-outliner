@@ -3,12 +3,13 @@ import { describe, expect, test } from "bun:test";
 import type { RequestInput } from "../src/client";
 import {
   createOutlinerTextLinker,
+  firstOutlinerReference,
   linkOutlinerMarkdown,
   navigateOutlinerLink,
   outlinerLinkUri,
   parseOutlinerLinkUri,
 } from "../src/outliner-links";
-import type { Block, WorkspaceSnapshot } from "../src/types";
+import type { Block } from "../src/types";
 
 function block(id: string, text: string): Block {
   return {
@@ -60,28 +61,22 @@ describe("outliner link URIs", () => {
       "550e8400-e29b-41d4-a716-446655440000",
       "Clickable target [type::decision]",
     );
-    const snapshot: WorkspaceSnapshot = {
-      visible: { blocks: [], completeness: { kind: "complete" } },
-      physical: {
-        blocks: [{
-          ...target,
-          depth: 0,
-          multilineExpanded: false,
-          hasChildren: false,
-          displayText: target.text,
-        }],
-        completeness: { kind: "complete" },
-      },
-      selection: { selected: null, ancestors: [], children: [] },
-      virtualOccurrenceRanks: [],
-      sequence: 1,
-    };
     const calls: RequestInput[] = [];
     const requester = {
       async request<T>(input: RequestInput): Promise<T> {
         calls.push(input);
         if (input.action === "get") return target as T;
-        if (input.action === "workspace.snapshot") return snapshot as T;
+        if (input.action === "pages.follow") {
+          return {
+            address: input.address,
+            normalizedAddress: "future",
+            registeredAddress: "future",
+            status: "resolved",
+            kind: "page",
+            block: target,
+            created: true,
+          } as T;
+        }
         return {} as T;
       },
     };
@@ -98,16 +93,30 @@ describe("outliner link URIs", () => {
     });
     expect(calls).toEqual([
       { action: "get", blockId: target.id },
-      { action: "workspace.snapshot" },
       { action: "selection.set", blockId: target.id },
       {
         action: "ui.command.send",
         command: { target: "tree", command: "focus", blockId: target.id },
       },
     ]);
+    calls.length = 0;
     await expect(
       navigateOutlinerLink(requester, outlinerLinkUri("page", "future")),
-    ).rejects.toThrow("require PIE-132");
+    ).resolves.toEqual({
+      kind: "page",
+      id: target.id,
+      title: "Clickable target",
+      created: true,
+    });
+    expect(calls).toEqual([
+      { action: "pages.follow", address: "future" },
+      { action: "selection.set", blockId: target.id },
+      {
+        action: "ui.command.send",
+        command: { target: "tree", command: "focus", blockId: target.id },
+      },
+    ]);
+
   });
 
   test("routes exact deleted targets to read-only Detail inspection", async () => {
@@ -164,14 +173,17 @@ describe("outliner link rendering", () => {
   const targetId = "550e8400-e29b-41d4-a716-446655440000";
   const target = block(targetId, "Target decision [type::decision]");
 
-  test("emits OSC 8 links for work IDs, exact metadata IDs, and resolved references", () => {
-    const raw = `PIE-133 depends on [decision::${targetId}] and ((${targetId}))`;
-    const resolved = `PIE-133 depends on [decision::${targetId}] and ((Target decision))`;
+  test("emits OSC 8 links for pages, work IDs, exact metadata IDs, and resolved references", () => {
+    const raw = `[[Future Page]] PIE-133 depends on [decision::${targetId}] and ((${targetId}))`;
+    const resolved = `[[Future Page]] PIE-133 depends on [decision::${targetId}] and ((Target decision))`;
     const linker = createOutlinerTextLinker(raw, (id) => id === targetId ? target : null);
     const rendered = linker.link(resolved);
 
     expect(stripTerminalSequences(rendered)).toBe(resolved);
-    expect(getOsc8LinkAtColumn(rendered, 2)).toBe(outlinerLinkUri("goto", "PIE-133"));
+    expect(getOsc8LinkAtColumn(rendered, 2)).toBe(outlinerLinkUri("page", "Future Page"));
+    expect(getOsc8LinkAtColumn(rendered, resolved.indexOf("PIE-133") + 2)).toBe(
+      outlinerLinkUri("page", "PIE-133"),
+    );
     expect(getOsc8LinkAtColumn(rendered, resolved.indexOf(targetId) + 2)).toBe(
       outlinerLinkUri("block", targetId),
     );
@@ -229,7 +241,7 @@ describe("outliner link rendering", () => {
     const resolved = raw.replace(`((${targetId}))`, "((Target decision))");
     const linked = linkOutlinerMarkdown(resolved, raw);
 
-    expect(linked).toContain(`[PIE-133](${outlinerLinkUri("goto", "PIE-133")})`);
+    expect(linked).toContain(`[PIE-133](${outlinerLinkUri("page", "PIE-133")})`);
     expect(linked).toContain(
       `[((Target decision))](${outlinerLinkUri("block", targetId)})`,
     );
@@ -238,7 +250,27 @@ describe("outliner link rendering", () => {
     expect(linked).toContain(`\`\`PIE-997 ${targetId}\`\``);
     expect(linked).toContain(`[titled](https://example.com/PIE-996 "PIE-995")`);
     expect(linked).toContain(`~~~text\nPIE-994 ${targetId}\n~~~`);
-    expect(linked).not.toContain(outlinerLinkUri("goto", "PIE-994"));
+    expect(linked).not.toContain(outlinerLinkUri("page", "PIE-994"));
+  });
+
+  test("links dangling pages in Markdown while protecting literal examples", () => {
+    const raw = "[[Future Page]] and `[[Literal Page]]`";
+    const linked = linkOutlinerMarkdown(raw, raw);
+
+    expect(linked).toContain(`[[[Future Page\\]\\]](${outlinerLinkUri("page", "Future Page")})`);
+    expect(linked).toContain("`[[Literal Page]]`");
+    expect(linked).not.toContain(outlinerLinkUri("page", "Literal Page"));
+  });
+
+  test("finds the first actionable exact or symbolic reference", () => {
+    expect(firstOutlinerReference("`[[literal]]` then [[Page]] and ((target01))")).toEqual({
+      kind: "page",
+      value: "Page",
+    });
+    expect(firstOutlinerReference("((target01)) then [[Page]]")).toEqual({
+      kind: "block",
+      value: "target01",
+    });
   });
 
   test("keeps tilde fences protected until a complete matching close", () => {

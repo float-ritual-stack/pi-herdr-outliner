@@ -393,6 +393,73 @@ export default function outlinerExtension(pi: ExtensionAPI): void {
   });
 
   pi.registerTool({
+    name: "outliner_page",
+    label: "Outliner Page Address",
+    description: "Resolve, follow, complete, rename, or alias a unique symbolic page address",
+    promptSnippet: "Use the shared symbolic page-address registry",
+    parameters: Type.Union([
+      Type.Object({
+        operation: Type.Literal("resolve"),
+        address: Type.String(),
+      }),
+      Type.Object({
+        operation: Type.Literal("follow"),
+        address: Type.String(),
+      }),
+      Type.Object({
+        operation: Type.Literal("complete"),
+        query: Type.Optional(Type.String()),
+        limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+      }),
+      Type.Object({
+        operation: Type.Literal("rename"),
+        blockId: Type.String(),
+        address: Type.String(),
+      }),
+      Type.Object({
+        operation: Type.Literal("alias"),
+        blockId: Type.String(),
+        address: Type.String(),
+      }),
+    ]),
+    async execute(toolCallId, params, _signal, _onUpdate, context) {
+      await ensureService(false);
+      switch (params.operation) {
+        case "resolve":
+          return toolResult(await client.request({
+            action: "pages.resolve",
+            address: params.address,
+          }));
+        case "follow":
+          return toolResult(await client.request({
+            action: "pages.follow",
+            address: params.address,
+            author: "agent",
+            provenance: toolProvenance(context, toolCallId),
+          }));
+        case "complete":
+          return toolResult(await client.request({
+            action: "pages.complete",
+            query: params.query,
+            limit: params.limit ?? 50,
+          }));
+        case "rename":
+          return toolResult(await client.request({
+            action: "pages.rename",
+            blockId: params.blockId,
+            address: params.address,
+          }));
+        case "alias":
+          return toolResult(await client.request({
+            action: "pages.alias",
+            blockId: params.blockId,
+            address: params.address,
+          }));
+      }
+    },
+  });
+
+  pi.registerTool({
     name: "outliner_query",
     label: "Outliner Query",
     description:

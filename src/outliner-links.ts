@@ -5,7 +5,8 @@ import {
   type BlockFocusRequester,
 } from "./block-focus";
 import { blockDisplayTitle, blockReferenceIds } from "./references";
-import type { Block } from "./types";
+import { pageAddressReferences } from "./page-addresses";
+import type { Block, PageAddressFollowResult } from "./types";
 
 const OUTLINER_SCHEME = "pi-outliner:";
 const BLOCK_ID_PATTERN = /^[A-Za-z0-9_-]{8,}$/;
@@ -22,10 +23,11 @@ export interface OutlinerLinkTarget {
 }
 
 export interface OutlinerLinkNavigation {
-  kind: Exclude<OutlinerLinkKind, "page">;
+  kind: OutlinerLinkKind;
   id: string;
   title: string;
   deleted?: boolean;
+  created?: boolean;
 }
 
 interface LinkSpan {
@@ -92,39 +94,61 @@ export async function navigateOutlinerLink(
   uri: string,
 ): Promise<OutlinerLinkNavigation> {
   const target = parseOutlinerLinkUri(uri);
-  if (target.kind === "page") {
-    throw new Error("Symbolic page links require PIE-132");
-  }
-  if (target.kind === "block") {
-    const block = await requester.request<Block>({ action: "get", blockId: target.value });
-    if (block.effectiveDeletedRootId) {
-      await requester.request({ action: "selection.set", blockId: block.id });
-      await requester.request({
-        action: "ui.command.send",
-        command: { target: "detail", command: "focus", blockId: block.id },
-      });
-      return {
-        kind: "block",
-        id: block.id,
-        title: blockDisplayTitle(block),
-        deleted: true,
-      };
+  if (target.kind === "goto") {
+    const focused = await focusBlockByQuery(requester, target.value);
+    if (focused.resolution.kind === "none") {
+      throw new Error(`No outliner block matches clicked link: ${target.value}`);
     }
+    if (focused.resolution.kind === "ambiguous") {
+      const candidates = focused.resolution.matches
+        .map((match) => formatBlockFocusMatch(match, match.block.id))
+        .join("\n");
+      throw new Error(`Clicked outliner link is ambiguous:\n${candidates}`);
+    }
+    return {
+      kind: "goto",
+      id: focused.resolution.match.block.id,
+      title: focused.resolution.match.title,
+    };
   }
-  const focused = await focusBlockByQuery(requester, target.value);
-  if (focused.resolution.kind === "none") {
-    throw new Error(`No outliner block matches clicked link: ${target.value}`);
+
+  let pageFollow: PageAddressFollowResult | null = null;
+  let block: Block;
+  if (target.kind === "page") {
+    pageFollow = await requester.request<PageAddressFollowResult>({
+      action: "pages.follow",
+      address: target.value,
+    });
+    block = pageFollow.block
+      ?? await requester.request<Block>({ action: "get", blockId: target.value });
+  } else {
+    block = await requester.request<Block>({ action: "get", blockId: target.value });
   }
-  if (focused.resolution.kind === "ambiguous") {
-    const candidates = focused.resolution.matches
-      .map((match) => formatBlockFocusMatch(match, match.block.id))
-      .join("\n");
-    throw new Error(`Clicked outliner link is ambiguous:\n${candidates}`);
+  if (block.effectiveDeletedRootId) {
+    await requester.request({ action: "selection.set", blockId: block.id });
+    await requester.request({
+      action: "ui.command.send",
+      command: { target: "detail", command: "focus", blockId: block.id },
+    });
+    return {
+      kind: target.kind,
+      id: block.id,
+      title: blockDisplayTitle(block),
+      deleted: true,
+      ...(pageFollow?.created ? { created: true } : {}),
+    };
   }
+
+  await requester.request({ action: "selection.set", blockId: block.id });
+  await requester.request({
+    action: "ui.command.send",
+    command: { target: "tree", command: "focus", blockId: block.id },
+  });
   return {
     kind: target.kind,
-    id: focused.resolution.match.block.id,
-    title: focused.resolution.match.title,
+    id: block.id,
+    title: blockDisplayTitle(block),
+    ...(pageFollow?.created ? { created: true } : {}),
   };
 }
 
@@ -167,16 +191,48 @@ function overlaps(left: TextRange, right: TextRange): boolean {
   return left.start < right.end && right.start < left.end;
 }
 
+export function firstOutlinerReference(text: string): OutlinerLinkTarget | null {
+  const candidates: Array<OutlinerLinkTarget & TextRange> = [];
+  for (const match of text.matchAll(RAW_BLOCK_REFERENCE_PATTERN)) {
+    candidates.push({
+      kind: "block",
+      value: match[1],
+      start: match.index,
+      end: match.index + match[0].length,
+    });
+  }
+  for (const reference of pageAddressReferences(text)) {
+    candidates.push({
+      kind: "page",
+      value: reference.displayAddress,
+      start: reference.start,
+      end: reference.end,
+    });
+  }
+  const protectedRanges = protectedMarkdownRanges(text);
+  const first = candidates
+    .filter((candidate) => !protectedRanges.some((range) => overlaps(candidate, range)))
+    .sort((left, right) => left.start - right.start)[0];
+  return first ? { kind: first.kind, value: first.value } : null;
+}
+
 function genericLinkSpans(
   text: string,
   canLinkBlock: (blockId: string) => boolean,
 ): LinkSpan[] {
   const spans: LinkSpan[] = [];
+  for (const reference of pageAddressReferences(text)) {
+    spans.push({
+      start: reference.start,
+      end: reference.end,
+      uri: outlinerLinkUri("page", reference.displayAddress),
+    });
+  }
   for (const match of text.matchAll(WORK_ID_PATTERN)) {
     spans.push({
       start: match.index,
       end: match.index + match[0].length,
-      uri: outlinerLinkUri("goto", match[0]),
+      uri: outlinerLinkUri("page", match[0]),
     });
   }
   for (const match of text.matchAll(BLOCK_ID_TOKEN_PATTERN)) {

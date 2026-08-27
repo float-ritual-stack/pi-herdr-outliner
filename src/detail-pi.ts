@@ -29,6 +29,7 @@ import {
   OUTLINER_PROTOCOL_VERSION,
   type Block,
   type NavigationState,
+  type PageAddressCollection,
   type OutlinerServiceStatus,
   type SelectionContext,
   type VisibleBlockCollection,
@@ -95,14 +96,17 @@ const effects: DetailEffects = {
     const action = direction === "back" ? "navigation.back" : "navigation.forward";
     return client.request<NavigationState>({ action });
   },
-  async followReference(blockId) {
-    await navigateOutlinerLink(client, outlinerLinkUri("block", blockId));
+  async followReference(target) {
+    await navigateOutlinerLink(client, outlinerLinkUri(target.kind, target.value));
   },
   async createBlock(input) {
     return client.request<Block>({ action: "create", ...input });
   },
   async queryBlocks(query) {
     return client.request<VisibleBlockCollection>({ action: "blocks.query", query });
+  },
+  async queryPageAddresses(query, limit) {
+    return client.request<PageAddressCollection>({ action: "pages.complete", query, limit });
   },
   readFile(block) {
     return readReferencedFile(block, paths.workspaceRoot);

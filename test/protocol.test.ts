@@ -12,6 +12,10 @@ import type {
   OutlinerEvent,
   OutlinerRequest,
   NavigationState,
+  PageAddressCollection,
+  PageAddressFollowResult,
+  PageAddressRecord,
+  PageAddressResolution,
   OutlinerServiceStatus,
   PropertyCatalogItem,
   VisibleBlockCollection,
@@ -38,7 +42,7 @@ test("serves mutations and property queries over the local socket", async () => 
   const client = new OutlinerClient(socket);
   const service = await client.request<OutlinerServiceStatus>({ action: "ping" });
   expect(service).toEqual({ status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION });
-  expect(service.protocolVersion).toBe(7);
+  expect(service.protocolVersion).toBe(8);
   const provenance = {
     actorId: "omp",
     sessionId: "session-1",
@@ -85,6 +89,51 @@ test("serves mutations and property queries over the local socket", async () => 
     text: `See ((${block.id}))`,
   });
   expect(resolved.text).toBe("See ((Waiting for user))");
+  const dangling = await client.request<PageAddressResolution>({
+    action: "pages.resolve",
+    address: "Protocol Page",
+  });
+  expect(dangling).toEqual({
+    address: "Protocol Page",
+    normalizedAddress: "protocol page",
+    status: "missing",
+  });
+  const followedPage = await client.request<PageAddressFollowResult>({
+    action: "pages.follow",
+    address: "Protocol Page",
+  });
+  expect(followedPage).toMatchObject({
+    status: "resolved",
+    created: true,
+    registeredAddress: "Protocol Page",
+    block: { text: "Protocol Page [page::Protocol Page]" },
+  });
+  expect(await client.request<PageAddressCollection>({
+    action: "pages.complete",
+    query: "protocol",
+    limit: 20,
+  })).toMatchObject({
+    addresses: [{
+      address: "Protocol Page",
+      blockId: followedPage.block!.id,
+      kind: "page",
+    }],
+    completeness: { kind: "complete" },
+  });
+  expect(await client.request<PageAddressRecord>({
+    action: "pages.rename",
+    blockId: followedPage.block!.id,
+    address: "Renamed Protocol Page",
+  })).toMatchObject({ address: "Renamed Protocol Page", kind: "page" });
+  expect(await client.request<PageAddressRecord>({
+    action: "pages.alias",
+    blockId: followedPage.block!.id,
+    address: "Protocol Alias",
+  })).toMatchObject({ address: "Protocol Alias", kind: "alias" });
+  expect(await client.request<PageAddressResolution>({
+    action: "pages.resolve",
+    address: "Protocol Page",
+  })).toMatchObject({ status: "resolved", kind: "alias", block: { id: followedPage.block!.id } });
   const invalidPatch = server.handle({
     id: "invalid-patch",
     action: "properties.patch",

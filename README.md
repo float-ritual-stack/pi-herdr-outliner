@@ -25,11 +25,12 @@ The project started as a small Friday-night experiment and grew into a durable w
 
 - SQLite-backed hierarchical blocks with stable UUIDs, sibling order, authors, timestamps, collapse state, and selection.
 - Workspace-isolated service and runtime paths.
-- JSON-lines RPC protocol v7 over a Unix socket.
+- JSON-lines RPC protocol v8 over a Unix socket.
 - Reactive content, selection, view, and UI-command events, with service-owned block navigation history.
 - Indexed `[property::value]` metadata with optimistic property patching and catalog queries.
 - Exact block references using `((block-id))`, resolved to display titles in read mode while raw text remains editable.
-- Plain-clickable work IDs, canonical UUIDs, and resolved block references inside Tree/Detail, with OSC 8 `pi-outliner://` links retained for external terminal interoperability.
+- Unique normalized symbolic addresses from explicit `[page::address]` declarations and Work IDs, with aliases, bounded completion, dangling links, and transactional create-on-follow.
+- Plain-clickable work IDs, canonical UUIDs, exact references, and `[[address]]` links inside Tree/Detail, with OSC 8 `pi-outliner://` links retained for external terminal interoperability.
 - Property-driven virtual branches with canonical projected occurrences, property-aware creation, and persisted branch-local occurrence order.
 - Agent-authored blocks retain immutable actor, session, and originating tool-call/task provenance while preserving the coarse `agent` author role.
 - Recoverable deletion preserves canonical structure and identity, excludes Trash content from normal queries/completions, and requires explicit identifier-confirmed purge.
@@ -40,7 +41,7 @@ The project started as a small Friday-night experiment and grew into a durable w
 - Herdr pane discovery, restart reconstruction, and a disposable runtime registry.
 - Pi/OMP commands, tools, and selection-context injection.
 
-Planned work is tracked inside the outliner itself. Notable accepted designs include `PIE-NNN` work IDs, symbolic `[[page]]` addresses, backlinks, and pinned reference panes.
+Planned work is tracked inside the outliner itself. Notable accepted designs include backlinks, scoped property semantics, retained Detail targets, and projected canonical descendants.
 
 ## Quick start
 
@@ -118,7 +119,7 @@ The footer in each pane is authoritative and context-sensitive. These are the pr
 | `.` or `Command+.` | Expand/collapse multiline block detail in Tree |
 | `Ctrl+E` or modified Enter | Open the selected block in Detail |
 | `g` | Fuzzy goto by UUID, short prefix, title, or content |
-| `o` | Follow the first exact `((block-id))` reference in the selected block |
+| `o` | Follow the first exact `((block-id))` or symbolic `[[address]]` reference in the selected block |
 | `Option+Left` / `Option+Right` | Move backward / forward through block navigation history |
 | `/` | Filter visible blocks |
 | `f` | Open a referenced file |
@@ -127,7 +128,7 @@ The footer in each pane is authoritative and context-sensitive. These are the pr
 | `p` | Type the work ID/short UUID to permanently purge a Trash root |
 | `Ctrl+Q` | Close the pane |
 
-Plain-click any linked `PIE-NNN`, canonical UUID, or resolved block-reference label inside Tree or Detail to focus and reveal its canonical block. Shift remains the terminal-native text-selection escape while Tree mouse reporting is active. Symbolic `[[page]]` links remain reserved for PIE-132.
+Plain-click any linked `PIE-NNN`, canonical UUID, exact reference, or symbolic `[[address]]` inside Tree or Detail. Resolved addresses focus their canonical block; following a dangling address creates one canonical page stub and then focuses it. Shift remains the terminal-native text-selection escape while Tree mouse reporting is active.
 
 For links rendered outside the active Outliner, the Herdr Control-click handler remains available where the terminal delivers that modifier. On macOS, the optional `macos/pi-outliner-link` app handles the native path instead: Warp uses Command-click; Ghostty with mouse capture uses Shift-Command-click. The bridge forwards validated targets over SSH/Tailscale and preserves the live workspace navigation semantics.
 
@@ -144,7 +145,7 @@ Projected virtual occurrences deliberately constrain hierarchy and collapse. Bra
 | Mouse wheel / trackpad | Scroll preview |
 | `Enter` or `e` | Edit raw canonical text |
 | `f` | Open referenced file |
-| `o` | Follow the first exact `((block-id))` reference |
+| `o` | Follow the first exact `((block-id))` or symbolic `[[address]]` reference |
 | `Option+Left` / `Option+Right` | Move backward / forward through block navigation history |
 | `r` | Restore the selected block when it is a direct Trash root |
 | `q` | Focus Tree |
@@ -188,7 +189,7 @@ Exact references use stable block IDs:
 Depends on ((516e1754-7741-4c9e-83a6-7b703a8f0798))
 ```
 
-Read views resolve the target title. Edit views retain the raw reference. Symbolic `[[page]]` addresses are an accepted design but are not implemented yet.
+Read views resolve exact-reference titles while edit views retain raw IDs. Symbolic links use `[[address]]`; a block registers an address through `[page::address]`, and existing Work IDs participate in the same unique normalized registry. Parsing or saving a dangling link never creates content. Only explicit follow creates a root stub, transactionally. Explicit rename preserves the old address as an alias; deleted targets remain resolvable and purged targets become dangling.
 
 ### Virtual branches
 

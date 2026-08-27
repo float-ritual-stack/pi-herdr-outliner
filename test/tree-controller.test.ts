@@ -212,6 +212,49 @@ describe("createTreeController", () => {
     expect(lastCall(fake.calls, "navigation.back")).toBeDefined();
   });
 
+  test("creates and follows a dangling symbolic reference only on explicit open", async () => {
+    const source = block("source01", {
+      text: "Source points to [[Future Page]]",
+      displayText: "Source points to [[Future Page]]",
+    });
+    const target = block("target01", {
+      position: 1,
+      text: "Future Page [page::Future Page]",
+      displayText: "Future Page [page::Future Page]",
+    });
+    let selected = source;
+    const fake = harness((input) => {
+      if (input.action === "workspace.snapshot") return snapshot([source, target], selected);
+      if (input.action === "pages.follow") {
+        return {
+          address: input.address,
+          normalizedAddress: "future page",
+          registeredAddress: "Future Page",
+          status: "resolved",
+          kind: "page",
+          block: target,
+          created: true,
+        };
+      }
+      if (input.action === "selection.set") {
+        selected = input.blockId === target.id ? target : source;
+        return { selected, ancestors: [], children: [] };
+      }
+      return undefined;
+    });
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+
+    await controller.handleKeypress("o", { name: "o" }, "pass");
+
+    expect(lastCall(fake.calls, "pages.follow")).toEqual({
+      action: "pages.follow",
+      address: "Future Page",
+    });
+    expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe(target.id);
+    expect(controller.view().status).toBe("Created and followed [[Future Page]]");
+  });
+
   test("opens deleted reference and history targets read-only in Detail", async () => {
     const source = block("source01", {
       text: "Source points to ((deleted1))",
@@ -517,20 +560,21 @@ describe("createTreeController", () => {
     expect(controller.view().refreshPending).toBe(false);
   });
 
-  test("applies page completion after the page-only query falls back to all blocks", async () => {
+  test("applies registered symbolic-address completion without generic block fallback", async () => {
     const selected = block("selected", { text: "[[ho", displayText: "[[ho" });
-    const home = block("home", {
-      text: "Home [type::page]",
-      displayText: "Home [type::page]",
-      properties: [{ key: "type", value: "page" }],
-    });
     const fake = harness((input) => {
       if (input.action === "workspace.snapshot") return snapshot([selected], selected);
-      if (input.action === "blocks.query" && input.query.filters) {
-        return { blocks: [], completeness: { kind: "complete" } };
-      }
-      if (input.action === "blocks.query") {
-        return { blocks: [home], completeness: { kind: "truncated", limit: 20 } };
+      if (input.action === "pages.complete") {
+        return {
+          addresses: [{
+            address: "home",
+            normalizedAddress: "home",
+            blockId: "home-id",
+            kind: "page",
+            title: "Home",
+          }],
+          completeness: { kind: "truncated", limit: 20 },
+        };
       }
       return undefined;
     });
@@ -539,24 +583,21 @@ describe("createTreeController", () => {
     await controller.handleKeypress("", { name: "return" }, "pass");
 
     await controller.handleKeypress("", { name: "tab" }, "pass");
-    expect(fake.calls.filter((call) => call.action === "blocks.query")).toEqual([
-      {
-        action: "blocks.query",
-        query: { text: "ho", filters: [{ key: "type", value: "page" }], limit: 20 },
-      },
-      {
-        action: "blocks.query",
-        query: { text: "ho", limit: 20 },
-      },
-    ]);
+    expect(fake.calls.filter((call) => call.action === "pages.complete")).toEqual([{
+      action: "pages.complete",
+      query: "ho",
+      limit: 20,
+    }]);
+    expect(fake.calls.some((call) => call.action === "blocks.query")).toBe(false);
     expect(controller.view().quickCompletion?.items[0]).toEqual({
-      label: "Home",
-      insertion: "[[Home]]",
+      label: "home — Home",
+      insertion: "[[home]]",
+      blockId: "home-id",
     });
     expect(controller.view().quickCompletion?.truncatedLimit).toBe(20);
 
     await controller.handleKeypress("", { name: "tab" }, "pass");
-    expect(controller.view().quickInput).toBe("[[Home]]");
+    expect(controller.view().quickInput).toBe("[[home]]");
   });
 
   test("honors key precedence for close and detail-toggle inputs", async () => {

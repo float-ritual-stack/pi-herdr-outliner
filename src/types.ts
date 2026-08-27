@@ -51,6 +51,38 @@ export interface Block {
   properties: BlockProperty[];
 }
 
+export type PageAddressKind = "page" | "alias" | "work-id";
+
+export interface PageAddressRecord {
+  address: string;
+  normalizedAddress: string;
+  blockId: string;
+  kind: PageAddressKind;
+}
+
+export interface PageAddressResolution {
+  address: string;
+  normalizedAddress: string;
+  status: "resolved" | "deleted" | "missing";
+  registeredAddress?: string;
+  kind?: PageAddressKind;
+  block?: Block;
+  deletionRootId?: string;
+}
+
+export interface PageAddressFollowResult extends PageAddressResolution {
+  created: boolean;
+}
+
+export interface PageAddressMatch extends PageAddressRecord {
+  title: string;
+}
+
+export interface PageAddressCollection {
+  addresses: PageAddressMatch[];
+  completeness: BlockCollectionCompleteness;
+}
+
 export interface PropertyFilter {
   key: string;
   value?: string;
@@ -108,7 +140,7 @@ export interface ResolvedBlockReferences {
   references: BlockReferenceResolution[];
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 7;
+export const OUTLINER_PROTOCOL_VERSION = 8;
 
 export interface OutlinerServiceStatus {
   status: "ready";
@@ -145,6 +177,17 @@ export type OutlinerRequest =
       orderedBlockIds: string[];
     }
   | { id: string; action: "references.resolve"; text: string }
+  | { id: string; action: "pages.resolve"; address: string }
+  | {
+      id: string;
+      action: "pages.follow";
+      address: string;
+      author?: BlockAuthor;
+      provenance?: BlockProvenance;
+    }
+  | { id: string; action: "pages.complete"; query?: string; limit: number }
+  | { id: string; action: "pages.rename"; blockId: string; address: string }
+  | { id: string; action: "pages.alias"; blockId: string; address: string }
   | {
       id: string;
       action: "properties.patch";
