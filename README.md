@@ -42,7 +42,7 @@ The project started as a small Friday-night experiment and grew into a durable w
 - Herdr pane discovery, restart reconstruction, and a disposable runtime registry.
 - Pi/OMP commands, tools, and selection-context injection.
 
-Planned work is tracked inside the outliner itself. Notable accepted designs include backlinks, scoped property semantics, retained Detail targets, and projected canonical descendants.
+Planned work is tracked inside the outliner itself. Notable accepted designs include normalized query construction, agent-assisted `PREFIX-XXX` placeholder resolution, backlinks, scoped property semantics, retained Detail targets, and projected canonical descendants.
 
 ## Quick start
 
@@ -97,9 +97,12 @@ bun run cli create --text "A durable note [type::note]"
 bun run cli selection
 bun run goto 40bd0864
 bun run goto --query "roadmap review"
+bun run cli work-id-status
+bun run cli work-id-configure --prefix PIE
+bun run cli work-id-allocate --id <block-uuid> --expected <updatedAt>
 ```
 
-The CLI resolves the same workspace-scoped socket and database as the service. `goto` accepts a full UUID, unique short prefix, or unambiguous fuzzy title/content query. Eight-character IDs are convenience labels, not a uniqueness guarantee; ambiguous queries return full-UUID candidates without changing selection.
+The CLI resolves the same workspace-scoped socket and database as the service. `goto` accepts a full UUID, unique short prefix, or unambiguous fuzzy title/content query. Eight-character IDs are convenience labels, not a uniqueness guarantee; ambiguous queries return full-UUID candidates without changing selection. Work-ID configuration is normally one-time; allocation requires the exact block UUID and its latest `updatedAt`, available in bounded `list` results. A successful allocation atomically persists both the immutable reservation and the block's `[work-id::…]` property/address; a failed request consumes neither the number nor a reservation.
 
 ## Keyboard controls
 
@@ -194,6 +197,10 @@ Read views resolve exact-reference titles while edit views retain raw IDs. Symbo
 
 Work IDs are allocated through the service rather than by scanning in a client. `work-ids.status` reports the configured prefix, observed legacy prefixes, and next ID; `work-ids.configure` explicitly chooses the workspace prefix; `work-ids.allocate` optimistically appends the next ID to an opted-in canonical block. A clean existing prefix is adopted automatically, while ambiguous legacy prefixes remain visible but unconfigured. Canonical manual IDs for the configured prefix advance the same allocator; malformed, noncanonical, or out-of-prefix property values remain inert text metadata. The reservation ledger retains owning UUIDs after purge.
 
+For a human writing notes, the intended promotion flow is: write freely, decide a block has become durable work, then ask the agent to assign it a Work ID. The agent calls `outliner_work_id` rather than guessing a number. Typing `PIE-NNN` or `[[PIE-NNN]]` only references an existing assignment; it never allocates one.
+
+`PIE-XXX` intent markers are planned in PIE-152 but are not shipped yet. Today they remain inert text and do not trigger an extension nudge, candidate search, allocation, relationship creation, or rewrite. PIE-152 will add deterministic prompt/focused-block/tool-result nudges plus a `work-placeholder-resolver` skill after the normalized query primitive in PIE-146.
+
 ### Virtual branches
 
 A normal physical block becomes a virtual branch through properties:
@@ -224,11 +231,13 @@ The project Pi extension is auto-discovered through [`.pi/extensions/outliner.ts
 - `outliner_property_patch`
 - `outliner_property_catalog`
 - `outliner_query`
+- `outliner_page`
+- `outliner_work_id`
 - `outliner_move`
 - `outliner_selection`
 - `outliner_annotate_file`
 
-Before each agent turn, the extension injects a bounded view of the selected block, breadcrumb, and children. This injection fails open when the service is unavailable.
+Before each agent turn, the extension injects a bounded view of the selected block, breadcrumb, and children. This injection fails open when the service is unavailable. It does not yet interpret `PREFIX-XXX`; that deterministic nudge is explicitly tracked by PIE-152.
 
 ## Persistence and isolation
 
