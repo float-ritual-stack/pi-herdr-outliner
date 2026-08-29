@@ -24,6 +24,7 @@ interface PaneDetailsResponse {
 const herdr = process.env.HERDR_BIN_PATH ?? "herdr";
 const pluginId = process.env.HERDR_PLUGIN_ID ?? "float.pi-outliner";
 const currentPaneId = process.env.HERDR_PANE_ID;
+const HERDR_SYNC_TIMEOUT_MS = 2_000;
 const modeArgument = process.argv.indexOf("--mode");
 const mode =
   modeArgument < 0
@@ -50,7 +51,10 @@ if (process.env.HERDR_ENV !== "1") throw new Error("The outliner workspace actio
 
 let workspaceRoot = process.cwd();
 if (currentPaneId) {
-  const paneOutput = execFileSync(herdr, ["pane", "get", currentPaneId], { encoding: "utf8" });
+  const paneOutput = execFileSync(herdr, ["pane", "get", currentPaneId], {
+    encoding: "utf8",
+    timeout: HERDR_SYNC_TIMEOUT_MS,
+  });
   const paneResponse = JSON.parse(paneOutput) as PaneDetailsResponse;
   workspaceRoot = paneResponse.result?.pane?.foreground_cwd ?? paneResponse.result?.pane?.cwd ?? workspaceRoot;
 }
@@ -99,7 +103,10 @@ function openPane(
   }
   if (options.direction) args.push("--direction", options.direction);
   if (options.targetPane) args.push("--target-pane", options.targetPane);
-  const output = execFileSync(herdr, args, { encoding: "utf8" });
+  const output = execFileSync(herdr, args, {
+    encoding: "utf8",
+    timeout: HERDR_SYNC_TIMEOUT_MS,
+  });
   const paneId = (JSON.parse(output) as OpenPaneResponse).result?.plugin_pane?.pane?.pane_id;
   if (!paneId) throw new Error(`Herdr did not return a pane id for ${entrypoint}`);
   if (entrypoint === "service") rememberPane(entrypoint, paneId);
@@ -162,6 +169,7 @@ function openHere(): {
   });
   execFileSync(herdr, ["plugin", "pane", "focus", outlinerPane], {
     stdio: "ignore",
+    timeout: HERDR_SYNC_TIMEOUT_MS,
   });
   return { servicePane, outlinerPane, detailPane, workspaceRoot };
 }

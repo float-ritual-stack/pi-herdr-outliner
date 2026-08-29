@@ -33,6 +33,20 @@ export async function requireUniqueClientId(
   );
 }
 
+export async function requireClientIdForRole(
+  requester: OutlinerRequester,
+  clientId: string,
+  role: OutlinerClientRole,
+): Promise<string> {
+  const client = (await listLiveClients(requester))
+    .find((registered) => registered.clientId === clientId);
+  if (!client) throw new Error(`Client is not registered: ${clientId}`);
+  if (client.role !== role) {
+    throw new Error(`Client ${clientId} has role ${client.role}; expected ${role}`);
+  }
+  return clientId;
+}
+
 export async function sendClientCommand(
   requester: OutlinerRequester,
   targetClientId: string,

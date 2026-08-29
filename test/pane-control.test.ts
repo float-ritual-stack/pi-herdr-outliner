@@ -2,8 +2,53 @@ import { expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
-import { removeLegacyClientPaneStates, resolveServicePaneId } from "../src/pane-control";
+import {
+  currentPaneRuntime,
+  focusCurrentPane,
+  removeLegacyClientPaneStates,
+  resolveServicePaneId,
+} from "../src/pane-control";
 
+test("keeps standalone focus inert and treats failed Herdr metadata as optional", () => {
+  const originalHerdrEnv = process.env.HERDR_ENV;
+  try {
+    delete process.env.HERDR_ENV;
+    expect(() => focusCurrentPane("/missing/herdr")).not.toThrow();
+
+    process.env.HERDR_ENV = "1";
+    expect(currentPaneRuntime("/missing/herdr")).toBeUndefined();
+    expect(() => focusCurrentPane("/missing/herdr")).toThrow(
+      "Current Herdr pane identity is unavailable",
+    );
+  } finally {
+    if (originalHerdrEnv === undefined) delete process.env.HERDR_ENV;
+    else process.env.HERDR_ENV = originalHerdrEnv;
+  }
+});
+
+test("rejects service pane state from another Herdr server endpoint", () => {
+  const stateDir = mkdtempSync(join(tmpdir(), "pi-outliner-server-state-"));
+  const originalSocketPath = process.env.HERDR_SOCKET_PATH;
+  try {
+    process.env.HERDR_SOCKET_PATH = "/current/herdr.sock";
+    writeFileSync(
+      join(stateDir, "service-pane.json"),
+      `${JSON.stringify({
+        paneId: "w1:p1",
+        terminalId: "term-1",
+        workspaceRoot: "/workspace",
+        herdrSocketPath: "/different/herdr.sock",
+        hostname: hostname(),
+      })}\n`,
+    );
+
+    expect(resolveServicePaneId(stateDir, "/missing/herdr")).toBeNull();
+  } finally {
+    if (originalSocketPath === undefined) delete process.env.HERDR_SOCKET_PATH;
+    else process.env.HERDR_SOCKET_PATH = originalSocketPath;
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
 
 test("removes obsolete role-keyed pane state without touching the service singleton", () => {
   const stateDir = mkdtempSync(join(tmpdir(), "pi-outliner-pane-state-"));

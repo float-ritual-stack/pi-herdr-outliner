@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
-import { createServer, Socket } from "node:net";
+import { createConnection, createServer, Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { OutlinerClient } from "../src/client";
@@ -13,6 +13,7 @@ import type {
   OutlinerEvent,
   OutlinerClientRegistration,
   OutlinerRequest,
+  OutlinerResponse,
   NavigationState,
   PageAddressCollection,
   PageAddressFollowResult,
@@ -418,6 +419,7 @@ test("prunes destroyed client registrations before listing or targeting", () => 
   const directory = mkdtempSync(join(tmpdir(), "pi-outliner-destroyed-client-"));
   const store = new OutlinerStore(join(directory, "outliner.sqlite"));
   const server = new OutlinerServer(store, join(directory, "outliner.sock"));
+  const sequence = store.sequence;
   const socket = new Socket();
   socket.destroy();
   const subscribers = (server as unknown as {
@@ -429,7 +431,7 @@ test("prunes destroyed client registrations before listing or targeting", () => 
     id: "list",
     ok: true,
     result: [],
-    sequence: 0,
+    sequence,
   });
   expect(server.handle({
     id: "focus",
@@ -439,7 +441,7 @@ test("prunes destroyed client registrations before listing or targeting", () => 
     id: "focus",
     ok: false,
     error: "Target client is not registered: destroyed-tree",
-    sequence: 0,
+    sequence,
   });
 
   store.close();
@@ -533,6 +535,26 @@ test("registers multiple live clients, targets one recipient, broadcasts content
     action: "events.subscribe",
     client: registrations[0],
   })).rejects.toThrow("Client ID is already registered: tree-a");
+  const correlatedResponse = Promise.withResolvers<OutlinerResponse>();
+  const duplicateSocket = createConnection(socket);
+  duplicateSocket.setEncoding("utf8");
+  duplicateSocket.once("error", correlatedResponse.reject);
+  duplicateSocket.once("connect", () => {
+    duplicateSocket.write(`${JSON.stringify({
+      id: "duplicate-registration",
+      action: "events.subscribe",
+      client: registrations[0],
+    })}\n`);
+  });
+  duplicateSocket.once("data", (line) => {
+    correlatedResponse.resolve(JSON.parse(String(line)) as OutlinerResponse);
+    duplicateSocket.end();
+  });
+  expect(await correlatedResponse.promise).toMatchObject({
+    id: "duplicate-registration",
+    ok: false,
+    error: "Client ID is already registered: tree-a",
+  });
   await expect(client.request({
     action: "events.subscribe",
     client: {
@@ -575,15 +597,14 @@ test("registers multiple live clients, targets one recipient, broadcasts content
   });
   watchers.push(replacement);
   await replacementConnected.promise;
-  const cleanupDeadline = Date.now() + 1_000;
   let clientsAfterRestart: Array<{ clientId: string }> = [];
-  do {
+  for (let turn = 0; turn < 100; turn += 1) {
     clientsAfterRestart = await client.request<Array<{ clientId: string }>>({
       action: "clients.list",
     });
     if (!clientsAfterRestart.some(({ clientId }) => clientId === "tree-a")) break;
-    await Bun.sleep(10);
-  } while (Date.now() < cleanupDeadline);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
   expect(clientsAfterRestart.some(({ clientId }) => clientId === "tree-a")).toBe(false);
   expect(clientsAfterRestart).toEqual(
     expect.arrayContaining([

@@ -5,6 +5,7 @@ import {
   formatBlockFocusMatch,
 } from "./block-focus";
 import { OutlinerClient, type RequestInput } from "./client";
+import { listLiveClients, requireClientIdForRole } from "./client-target";
 import { resolvePaths } from "./paths";
 import { navigateOutlinerLink } from "./outliner-links";
 import type { BlockSearchQuery, CaptureReceipt } from "./types";
@@ -164,6 +165,9 @@ switch (command) {
     const query = values.query ?? positionals.join(" ");
     if (!query.trim()) throw new Error("goto requires a block ID, short prefix, or text query");
     const limit = parseLimit(values.limit, 10);
+    if (values.client !== undefined) {
+      await requireClientIdForRole(client, values.client, "tree");
+    }
     const focused = await focusBlockByQuery(client, query, limit, values.client);
     if (focused.resolution.kind === "none") {
       throw new Error(`No block matches: ${query}`);

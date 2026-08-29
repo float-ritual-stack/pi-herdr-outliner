@@ -78,6 +78,7 @@ export function currentPaneRuntime(
 export function focusCurrentPane(
   herdr = process.env.HERDR_BIN_PATH ?? "herdr",
 ): void {
+  if (process.env.HERDR_ENV !== "1") return;
   const paneId = currentPaneRuntime(herdr)?.paneId;
   if (!paneId) throw new Error("Current Herdr pane identity is unavailable");
   invokeHerdr(herdr, ["plugin", "pane", "focus", paneId]);
@@ -177,7 +178,9 @@ export function resolveServicePaneId(
     const output = invokeHerdr(herdr, ["pane", "get", state.paneId]);
     const pane = Parse(PaneGetResponseSchema, JSON.parse(output)).result.pane;
     const stateHasIdentity = Boolean(state.terminalId || state.workspaceRoot);
-    if (!stateHasIdentity || paneMatchesState(pane, state)) return pane.pane_id;
+    if (!stateHasIdentity || paneMatchesState(pane, state)) {
+      return pane.pane_id;
+    }
   } catch {
     // Search by stable pane identity below.
   }
