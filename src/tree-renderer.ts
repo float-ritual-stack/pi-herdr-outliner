@@ -334,7 +334,15 @@ export function renderTreeFrame(
     view.mode === "add-child"
       ? virtualBranchCreationHelp(selectedBranchState, view.physicalBlocksById)
       : null;
-  if (view.mode === "edit" || view.mode === "add-child" || view.mode === "add-sibling") {
+  if (view.mode === "capture") {
+    const label = `Capture ${view.quickRow + 1}/${view.quickLineCount}`;
+    output.push(
+      `\x1b[1m${label}:\x1b[0m ${truncate(
+        `${view.quickInput}▏${view.status ? `  ${view.status}` : ""}`,
+        Math.max(1, width - label.length - 3),
+      )}`,
+    );
+  } else if (view.mode === "edit" || view.mode === "add-child" || view.mode === "add-sibling") {
     output.push(
       creationHelp
         ? truncate(creationHelp, width)
@@ -381,7 +389,9 @@ export function renderTreeFrame(
     output.push(truncate(contextualStatus, width));
   }
   let help: string;
-  if (view.mode === "purge") {
+  if (view.mode === "capture") {
+    help = "type/paste  ↑↓ lines  Shift+Enter/Ctrl+E newline  Enter capture  Esc cancel";
+  } else if (view.mode === "purge") {
     help = "type exact identifier  Enter permanently purge  Esc cancel";
   } else if (view.mode === "goto") {
     help = "type ID/text  ↑↓ choose  Tab cycle  Enter jump  Esc cancel";

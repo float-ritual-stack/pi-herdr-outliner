@@ -92,6 +92,14 @@ Prefer clean cutovers: migrate every caller, test, and import, then remove obsol
 - Tree, virtual branches, CLI, Pi commands, and agent tools must converge on the same normalized `BlockSearchQuery`.
 - Projections must use a complete physical snapshot, not a collapse-pruned visible tree.
 
+### Capture
+
+- `capture.create` is idempotent by explicit request ID across retries and restarts.
+- Capture creates ordinary canonical content under exactly one active `[system-view::inbox]`.
+- Capture must not mutate workspace selection or navigation history.
+- Replayed captures return the original receipt and emit no duplicate content event.
+- Empty/invalid/ambiguous capture requests fail without partial content.
+
 ### Mutations
 
 - Agent and long-form Detail updates use `expectedUpdatedAt` optimistic concurrency.

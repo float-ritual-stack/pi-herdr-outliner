@@ -9,6 +9,7 @@ import { OutlinerStore } from "../src/store";
 import { OUTLINER_PROTOCOL_VERSION } from "../src/types";
 import type {
   Block,
+  CaptureReceipt,
   OutlinerEvent,
   OutlinerRequest,
   NavigationState,
@@ -45,7 +46,7 @@ test("serves mutations and property queries over the local socket", async () => 
   const client = new OutlinerClient(socket);
   const service = await client.request<OutlinerServiceStatus>({ action: "ping" });
   expect(service).toEqual({ status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION });
-  expect(service.protocolVersion).toBe(10);
+  expect(service.protocolVersion).toBe(11);
   const provenance = {
     actorId: "omp",
     sessionId: "session-1",
@@ -311,7 +312,7 @@ test("streams workspace mutations and transient UI commands to subscribers", asy
     onConnect: connected.resolve,
     onEvent: (event) => {
       events.push(event);
-      if (events.length === 9) received.resolve();
+      if (events.length === 10) received.resolve();
     },
   });
   cleanups.push(async () => {
@@ -324,6 +325,36 @@ test("streams workspace mutations and transient UI commands to subscribers", asy
   await connected.promise;
   await client.request({ action: "work-ids.configure", prefix: "EVT" });
   const block = await client.request<Block>({ action: "create", text: "Reactive block" });
+  const capture = await client.request<CaptureReceipt>({
+    action: "capture.create",
+    requestId: "event-capture",
+    text: "Reactive capture",
+    source: "tree",
+    capturedFromBlockId: block.id,
+  });
+  const replay = await client.request<CaptureReceipt>({
+    action: "capture.create",
+    requestId: "event-capture",
+    text: "Ignored retry",
+    source: "tree",
+    capturedFromBlockId: block.id,
+  });
+  expect(capture).toEqual({
+    block: expect.objectContaining({
+      parentId: capture.inboxBlockId,
+      properties: expect.arrayContaining([
+        { key: "type", value: "capture" },
+        { key: "captured-from", value: block.id },
+      ]),
+    }),
+    inboxBlockId: expect.any(String),
+    deduplicated: false,
+  });
+  expect(replay).toEqual({
+    block: expect.objectContaining({ id: capture.block.id }),
+    inboxBlockId: capture.inboxBlockId,
+    deduplicated: true,
+  });
   await client.request({
     action: "work-ids.allocate",
     blockId: block.id,
@@ -347,6 +378,7 @@ test("streams workspace mutations and transient UI commands to subscribers", asy
   expect(events.map((event) => [event.domain, event.action])).toEqual([
     ["content", "work-ids.configure"],
     ["content", "create"],
+    ["content", "capture.create"],
     ["content", "work-ids.allocate"],
     ["selection", "selection.set"],
     ["selection", "navigation.back"],
@@ -356,8 +388,9 @@ test("streams workspace mutations and transient UI commands to subscribers", asy
     ["ui", "ui.command.send"],
   ]);
   expect(events[1].blockId).toBe(block.id);
-  expect(events[2].blockId).toBe(block.id);
-  expect(events[8].command).toEqual({ target: "detail", command: "edit", blockId: block.id });
+  expect(events[2].blockId).toBe(capture.block.id);
+  expect(events[3].blockId).toBe(block.id);
+  expect(events[9].command).toEqual({ target: "detail", command: "edit", blockId: block.id });
 
   const children = await client.request<Block[]>({ action: "children", parentId: null });
   expect(children.some((candidate) => candidate.id === block.id)).toBe(true);
