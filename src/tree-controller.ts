@@ -32,7 +32,6 @@ import type {
   CaptureReceipt,
   BlockCollectionCompleteness,
   OutlinerEvent,
-  NavigationState,
   PageAddressCollection,
   PropertyCatalogItem,
   VisibleBlock,
@@ -48,6 +47,7 @@ import {
   type TreeRow,
   type VirtualBranchOccurrenceRow,
   type VirtualBranchState,
+  type TreePresentationState,
 } from "./virtual-branches";
 
 export type TreeInputMode =
@@ -81,6 +81,7 @@ export interface TreeView {
   readonly workIdPrefix: string | null;
   readonly visibleCompleteness: BlockCollectionCompleteness;
   readonly branchStates: ReadonlyMap<string, VirtualBranchState>;
+  readonly workspaceContextBlockId: string | null;
   readonly selectedIndex: number;
   readonly activeFilter: string;
   readonly mode: TreeMode;
@@ -131,6 +132,13 @@ interface MutableQuickCompletion {
   items: TreeQuickCompletionItem[];
   truncatedLimit: number | null;
 }
+
+interface TreeNavigationEntry {
+  readonly rowId: string;
+  readonly canonicalId: string;
+}
+
+const MAX_TREE_HISTORY_ENTRIES = 200;
 
 const GOTO_PROMPT = "Type a block ID, short prefix, or fuzzy text";
 
@@ -196,6 +204,13 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   let workIdPrefix: string | null = null;
   let visibleCompleteness: BlockCollectionCompleteness = { kind: "complete" };
   let branchStates = new Map<string, VirtualBranchState>();
+  const collapsedBlockIds = new Set<string>();
+  const multilineExpandedRowIds = new Set<string>();
+  const uncollapsedPresentationIds = new Set<string>();
+  const navigationHistory: TreeNavigationEntry[] = [];
+  let navigationIndex = -1;
+  let initialWorkspaceSelectionApplied = false;
+  let workspaceContextBlockId: string | null = null;
   let selectedIndex = 0;
   let activeFilter = "";
   let mode: TreeMode = "browse";
@@ -223,6 +238,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       physicalBlocksById,
       workIdPrefix,
       visibleCompleteness,
+      workspaceContextBlockId,
       branchStates,
       selectedIndex,
       activeFilter,
@@ -264,17 +280,22 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       );
     }
 
+    const presentation: TreePresentationState = {
+      collapsedBlockIds: activeFilter ? uncollapsedPresentationIds : collapsedBlockIds,
+      multilineExpandedRowIds,
+    };
     const projection = await projectVirtualBranches(
       snapshot.visible.blocks,
       snapshot.physical.blocks,
       (query) => effects.request<VisibleBlockCollection>({ action: "blocks.query", query }),
       snapshot.virtualOccurrenceRanks,
+      presentation,
     );
     const nextRows = projection.rows;
     const nextPhysicalBlocksById = new Map(snapshot.physical.blocks.map((block) => [block.id, block]));
     const serviceSelectedId = snapshot.selection.selected?.id ?? null;
+    workspaceContextBlockId = serviceSelectedId;
     let nextIndex = -1;
-    let currentRowVanished = false;
     if (preferredRowId !== undefined) {
       if (preferredRowId) {
         nextIndex = options?.exactRowIdOnly
@@ -283,13 +304,12 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       }
     } else if (currentSelected) {
       nextIndex = nextRows.findIndex((row) => row.rowId === currentSelected.rowId);
-      currentRowVanished = nextIndex < 0;
     }
     if (
       nextIndex < 0 &&
       preferredRowId === undefined &&
-      serviceSelectedId &&
-      !currentRowVanished
+      !initialWorkspaceSelectionApplied &&
+      serviceSelectedId
     ) {
       nextIndex = nextRows.findIndex((row) => row.canonicalId === serviceSelectedId);
     }
@@ -309,6 +329,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     branchStates = projection.branchStates;
     selectedIndex = nextSelectedIndex;
     lastVisibleCanonicalId = rows[selectedIndex]?.canonicalId ?? null;
+    initialWorkspaceSelectionApplied = true;
     refreshPending = false;
     return serviceSelectedId !== null;
   }
@@ -316,7 +337,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   function expandedBlockRowCount(row: TreeRow): number {
     let marker = row.kind === "occurrence" ? "◇" : "•";
     if (row.kind === "physical" && row.hasChildren) {
-      marker = row.block.collapsed ? "▸" : "▾";
+      marker = row.collapsed ? "▸" : "▾";
     }
     const branchState = row.kind === "physical" ? branchStates.get(row.canonicalId) : undefined;
     const displayText = decorateVirtualBranchDefinitionText(row.block.displayText, branchState);
@@ -406,8 +427,8 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
 
   async function beginInput(nextMode: TreeInputMode, initial = ""): Promise<void> {
     const selected = rows[selectedIndex];
-    if (nextMode === "add-child" && selected?.block.collapsed) {
-      await effects.request({ action: "toggle", blockId: selected.canonicalId });
+    if (nextMode === "add-child" && selected?.kind === "physical" && selected.collapsed) {
+      collapsedBlockIds.delete(selected.canonicalId);
       await reload(selected.rowId);
     }
     mode = nextMode;
@@ -461,7 +482,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     const label = item.label;
     mode = "browse";
     resetQuickEditor();
-    await selectVisibleBlock(blockId);
+    await selectVisibleBlock(blockId, { recordNavigation: true });
     status = `Focused ${label}`;
     effects.invalidate();
   }
@@ -532,11 +553,48 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     return null;
   }
 
+  function navigationEntry(row: TreeRow | undefined): TreeNavigationEntry | null {
+    return row ? { rowId: row.rowId, canonicalId: row.canonicalId } : null;
+  }
+
+  function sameNavigationEntry(
+    left: TreeNavigationEntry | null | undefined,
+    right: TreeNavigationEntry | null | undefined,
+  ): boolean {
+    return left?.rowId === right?.rowId && left?.canonicalId === right?.canonicalId;
+  }
+
+  function recordNavigation(
+    source: TreeNavigationEntry | null,
+    target: TreeNavigationEntry | null,
+  ): void {
+    if (!source || !target || sameNavigationEntry(source, target)) return;
+
+    if (!sameNavigationEntry(navigationHistory[navigationIndex], source)) {
+      navigationHistory.splice(navigationIndex + 1);
+      navigationHistory.push(source);
+      navigationIndex = navigationHistory.length - 1;
+    } else {
+      navigationHistory.splice(navigationIndex + 1);
+    }
+    navigationHistory.push(target);
+    navigationIndex = navigationHistory.length - 1;
+    if (navigationHistory.length > MAX_TREE_HISTORY_ENTRIES) {
+      const excess = navigationHistory.length - MAX_TREE_HISTORY_ENTRIES;
+      navigationHistory.splice(0, excess);
+      navigationIndex -= excess;
+    }
+  }
+
   async function selectVisibleBlock(
     canonicalId: string | null,
-    preferredRowId?: string,
+    options?: {
+      preferredRowId?: string;
+      recordNavigation?: boolean;
+    },
   ): Promise<void> {
-    await reload(preferredRowId ?? canonicalId);
+    const source = navigationEntry(rows[selectedIndex]);
+    await reload(options?.preferredRowId ?? canonicalId);
     let visibilityChanged = false;
     if (canonicalId && rows[selectedIndex]?.canonicalId !== canonicalId) {
       const target = physicalBlocksById.get(canonicalId);
@@ -545,17 +603,12 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         activeFilter = "";
         visibilityChanged = true;
       }
-      const collapsedAncestorIds: string[] = [];
       let parentId = target.parentId;
       while (parentId) {
         const parent = physicalBlocksById.get(parentId);
         if (!parent) throw new Error(`Block ancestry is incomplete at ${parentId}`);
-        if (parent.collapsed) collapsedAncestorIds.push(parent.id);
+        if (collapsedBlockIds.delete(parent.id)) visibilityChanged = true;
         parentId = parent.parentId;
-      }
-      for (const blockId of collapsedAncestorIds.reverse()) {
-        await effects.request({ action: "toggle", blockId });
-        visibilityChanged = true;
       }
       await reload(canonicalId);
     }
@@ -563,6 +616,8 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     if (canonicalId && visibleCanonicalId !== canonicalId) {
       throw new Error(`Block ${canonicalId} could not be revealed`);
     }
+    const target = navigationEntry(rows[selectedIndex]);
+    if (options?.recordNavigation) recordNavigation(source, target);
     lastVisibleCanonicalId = visibleCanonicalId;
     await effects.request({ action: "selection.set", blockId: visibleCanonicalId });
     if (visibilityChanged) status = "Filter cleared or collapsed ancestors expanded to reveal block";
@@ -649,7 +704,9 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     const fallbackId = selected?.canonicalId ?? null;
     mode = "browse";
     resetQuickEditor();
-    await selectVisibleBlock(committedBlockId ?? fallbackId, editingRowId);
+    await selectVisibleBlock(committedBlockId ?? fallbackId, {
+      preferredRowId: editingRowId,
+    });
     effects.invalidate();
   }
 
@@ -666,7 +723,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     const targetRowId = mode === "edit" ? selected.rowId : undefined;
     mode = "browse";
     resetQuickEditor();
-    await selectVisibleBlock(targetId, targetRowId);
+    await selectVisibleBlock(targetId, { preferredRowId: targetRowId });
     try {
       await sendUniqueClientCommand(effects, "detail", {
         command: "edit",
@@ -940,9 +997,14 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       }
       if (command.blockId) {
         activeFilter = "";
-        await selectVisibleBlock(command.blockId);
+        await selectVisibleBlock(command.blockId, { recordNavigation: true });
       }
       if (command.command === "focus") effects.focusSelf();
+      effects.invalidate();
+      return;
+    }
+    if (event.domain === "selection") {
+      workspaceContextBlockId = event.blockId ?? null;
       effects.invalidate();
       return;
     }
@@ -950,23 +1012,46 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       refreshPending = true;
       return;
     }
-    if (event.domain === "selection") {
-      const currentRow = rows[selectedIndex];
-      let preferredRowId = event.blockId ?? null;
-      if (event.blockId && currentRow?.canonicalId === event.blockId) {
-        preferredRowId = currentRow.rowId;
-      }
-      await reload(preferredRowId);
-    } else {
-      const previousRow = rows[selectedIndex];
-      await reload();
-      if (previousRow && !rows.some((row) => row.rowId === previousRow.rowId)) {
-        const fallbackCanonicalId = rows[selectedIndex]?.canonicalId ?? null;
-        lastVisibleCanonicalId = fallbackCanonicalId;
-        await effects.request({ action: "selection.set", blockId: fallbackCanonicalId });
-      }
+    const previousRow = rows[selectedIndex];
+    await reload();
+    if (previousRow && !rows.some((row) => row.rowId === previousRow.rowId)) {
+      const fallbackCanonicalId = rows[selectedIndex]?.canonicalId ?? null;
+      lastVisibleCanonicalId = fallbackCanonicalId;
+      await effects.request({ action: "selection.set", blockId: fallbackCanonicalId });
     }
     effects.invalidate();
+  }
+
+  async function navigateTreeHistory(direction: "back" | "forward"): Promise<void> {
+    const targetIndex = navigationIndex + (direction === "back" ? -1 : 1);
+    const target = navigationHistory[targetIndex];
+    if (!target) {
+      status = "No further navigation history";
+      return;
+    }
+
+    let canonical: Block;
+    try {
+      canonical = await effects.request<Block>({
+        action: "get",
+        blockId: target.canonicalId,
+      });
+    } catch {
+      status = "Navigation target no longer exists";
+      return;
+    }
+    navigationIndex = targetIndex;
+    if (canonical.effectiveDeletedRootId) {
+      await sendUniqueClientCommand(effects, "detail", {
+        command: "focus",
+        blockId: canonical.id,
+      });
+      status = "Navigation history opened deleted block read-only in Detail";
+      return;
+    }
+
+    await selectVisibleBlock(canonical.id, { preferredRowId: target.rowId });
+    status = direction === "back" ? "Navigation back" : "Navigation forward";
   }
 
   async function handleConnect(): Promise<void> {
@@ -1121,25 +1206,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     let reloadRequired = false;
     const historyDirection = historyNavigationDirection(key);
     if (historyDirection) {
-      const action = historyDirection === "back" ? "navigation.back" : "navigation.forward";
-      const navigation = await effects.request<NavigationState>({ action });
-      const target = navigation.selection.selected;
-      if (target?.id === selected?.canonicalId) {
-        status = "No further navigation history";
-        effects.invalidate();
-        return;
-      }
-      if (target?.effectiveDeletedRootId) {
-        await sendUniqueClientCommand(effects, "detail", {
-          command: "focus",
-          blockId: target.id,
-        });
-        status = "Navigation history opened deleted block read-only in Detail";
-      } else {
-        await reload(target?.id ?? null);
-        lastVisibleCanonicalId = rows[selectedIndex]?.canonicalId ?? null;
-        status = historyDirection === "back" ? "Navigation back" : "Navigation forward";
-      }
+      await navigateTreeHistory(historyDirection);
       effects.invalidate();
       return;
     }
@@ -1150,11 +1217,10 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         status = "No block selected";
       } else {
         resetExpandedBlockPaging();
-        const result = await effects.request<{ expanded: boolean }>({
-          action: "view.toggleMultiline",
-          blockId: selected.canonicalId,
-        });
-        status = result.expanded ? "Block detail expanded" : "Block detail collapsed";
+        const expanded = !multilineExpandedRowIds.delete(selected.rowId);
+        if (expanded) multilineExpandedRowIds.add(selected.rowId);
+        status = expanded ? "Block detail expanded" : "Block detail collapsed";
+        preferredRowId = selected.rowId;
         reloadRequired = true;
       }
     } else if (detailHandoffRequested) {
@@ -1189,8 +1255,8 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     else if (key.name === "left" && selected) {
       if (isVirtualBranchOccurrence(selected)) {
         selectedIndex = Math.max(0, rows.findIndex((row) => row.rowId === selected.viewId));
-      } else if (!selected.block.collapsed && selected.hasChildren) {
-        await effects.request({ action: "toggle", blockId: selected.canonicalId });
+      } else if (!selected.collapsed && selected.hasChildren) {
+        collapsedBlockIds.add(selected.canonicalId);
         reloadRequired = true;
       } else if (selected.block.parentId) {
         selectedIndex = Math.max(
@@ -1201,8 +1267,8 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     } else if (key.name === "right" && selected) {
       if (isVirtualBranchOccurrence(selected)) {
         occurrenceMutationDisabled("hierarchy expansion");
-      } else if (selected.block.collapsed) {
-        await effects.request({ action: "toggle", blockId: selected.canonicalId });
+      } else if (selected.collapsed) {
+        collapsedBlockIds.delete(selected.canonicalId);
         reloadRequired = true;
       } else if (selected.hasChildren) selectedIndex = Math.min(rows.length - 1, selectedIndex + 1);
     } else if (str === "r" && selected?.block.deletedAt) {
@@ -1245,7 +1311,9 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       if (isVirtualBranchOccurrence(selected)) {
         occurrenceMutationDisabled("collapse");
       } else {
-        await effects.request({ action: "toggle", blockId: selected.canonicalId });
+        if (!collapsedBlockIds.delete(selected.canonicalId)) {
+          collapsedBlockIds.add(selected.canonicalId);
+        }
         reloadRequired = true;
       }
     } else if (str === "o" && selected) {
@@ -1261,7 +1329,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         if (navigation.deleted) {
           status = "Deleted reference opened read-only in Detail";
         } else {
-          await reload(navigation.id);
+          await selectVisibleBlock(navigation.id, { recordNavigation: true });
           status = navigation.created
             ? `Created and followed [[${reference.value}]]`
             : `Followed reference to ${navigation.title}`;

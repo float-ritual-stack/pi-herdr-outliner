@@ -23,12 +23,10 @@ function visibleBlock(
     position: 0,
     text: id,
     author: "user",
-    collapsed: false,
     createdAt: timestamp,
     updatedAt: timestamp,
     properties,
     depth: 0,
-    multilineExpanded: false,
     hasChildren: false,
     displayText: id,
     ...overrides,
@@ -199,7 +197,6 @@ describe("virtual branch projection", () => {
     const nextCard = visibleBlock("next-card", [{ key: "status", value: "Next" }], {
       depth: 4,
       hasChildren: true,
-      multilineExpanded: true,
     });
     const doingCard = visibleBlock("doing-card", [{ key: "status", value: "Doing" }], { depth: 2 });
     const after = visibleBlock("after");
@@ -219,6 +216,11 @@ describe("virtual branch projection", () => {
           return complete([doingCard]);
         }
         throw new Error(`Unexpected status: ${status}`);
+      },
+      [],
+      {
+        collapsedBlockIds: new Set(),
+        multilineExpandedRowIds: new Set(["occurrence:next-view:next-card"]),
       },
     );
 
@@ -300,11 +302,20 @@ describe("virtual branch projection", () => {
     const collapsed = visibleBlock("collapsed-view", [
       { key: "type", value: "virtual-branch" },
       { key: "query", value: "status=Done" },
-    ], { collapsed: true });
+    ]);
 
-    const projection = await projectVirtualBranches([collapsed], [collapsed], async () => {
-      throw new Error("collapsed branch queried");
-    });
+    const projection = await projectVirtualBranches(
+      [collapsed],
+      [collapsed],
+      async () => {
+        throw new Error("collapsed branch queried");
+      },
+      [],
+      {
+        collapsedBlockIds: new Set([collapsed.id]),
+        multilineExpandedRowIds: new Set(),
+      },
+    );
 
     expect(projection.rows.map((row) => row.rowId)).toEqual(["collapsed-view"]);
     expect(projection.branchStates.get("collapsed-view")).toEqual(expect.objectContaining({

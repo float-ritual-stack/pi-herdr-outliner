@@ -18,7 +18,6 @@ function block(id: string, text: string): Block {
     position: 0,
     text,
     author: "user",
-    collapsed: false,
     createdAt: "created",
     updatedAt: "updated",
     properties: [],

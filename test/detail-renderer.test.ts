@@ -12,7 +12,6 @@ function block(text: string, properties: Block["properties"] = []): Block {
     position: 0,
     text,
     author: "user",
-    collapsed: false,
     createdAt: "created",
     updatedAt: "updated",
     properties,

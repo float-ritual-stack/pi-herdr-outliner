@@ -47,7 +47,7 @@ test("registers the workspace commands and annotation-aware tools", () => {
   expect(updateSchema).toContain("expectedUpdatedAt");
 });
 
-test("requires protocol v12, attributes agent creates and page follows, and presents bounded query results", async () => {
+test("requires protocol v13, attributes agent creates and page follows, and presents bounded query results", async () => {
   const collection: VisibleBlockCollection = {
     blocks: [
       {
@@ -56,19 +56,17 @@ test("requires protocol v12, attributes agent creates and page follows, and pres
         position: 0,
         text: "Matching block",
         author: "user",
-        collapsed: false,
         createdAt: "2026-08-22T00:00:00.000Z",
         updatedAt: "2026-08-22T00:00:00.000Z",
         properties: [{ key: "status", value: "open" }],
         depth: 0,
-        multilineExpanded: false,
         hasChildren: false,
         displayText: "Matching block",
       },
     ],
     completeness: { kind: "truncated", limit: 20 },
   };
-  let protocolVersion = 12;
+  let protocolVersion = 13;
   let queryCollection = collection;
   let queryError: Error | undefined;
   const requests: RequestInput[] = [];
@@ -327,7 +325,7 @@ test("requires protocol v12, attributes agent creates and page follows, and pres
     expect(largeEnvelope.presentation.omitted).toBeGreaterThan(0);
     protocolVersion = 5;
     await expect(tools.get("outliner_query")!.execute("incompatible-query", {})).rejects.toThrow(
-      "Incompatible outliner protocol 5; expected 12",
+      "Incompatible outliner protocol 5; expected 13",
     );
   } finally {
     OutlinerClient.prototype.request = originalRequest;
@@ -365,7 +363,6 @@ test("captures through command, tool, and exact standalone dispatch without an a
     position: 0,
     text: "Selected context",
     author: "user",
-    collapsed: false,
     createdAt: "created",
     updatedAt: "updated",
     properties: [],
@@ -381,7 +378,7 @@ test("captures through command, tool, and exact standalone dispatch without an a
   OutlinerClient.prototype.request = async function <T>(input: RequestInput): Promise<T> {
     requests.push(input);
     if (input.action === "ping") {
-      return { status: "ready", protocolVersion: 12 } as T;
+      return { status: "ready", protocolVersion: 13 } as T;
     }
     if (input.action === "selection.get") {
       return {
@@ -521,7 +518,6 @@ test("formats compact bounded selection context", () => {
     position: 0,
     text: `Selected title\n${"full text ".repeat(800)}`,
     author: "user",
-    collapsed: false,
     createdAt: "2026-08-22T00:00:00.000Z",
     updatedAt: "2026-08-22T00:00:00.000Z",
     properties: [{ key: "status", value: "active" }],

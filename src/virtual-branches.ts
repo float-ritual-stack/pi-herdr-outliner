@@ -28,8 +28,19 @@ interface TreeRowBase {
   readonly multilineExpanded: boolean;
 }
 
+export interface TreePresentationState {
+  readonly collapsedBlockIds: ReadonlySet<string>;
+  readonly multilineExpandedRowIds: ReadonlySet<string>;
+}
+
+const EMPTY_TREE_PRESENTATION_STATE: TreePresentationState = {
+  collapsedBlockIds: new Set(),
+  multilineExpandedRowIds: new Set(),
+};
+
 export interface PhysicalTreeRow extends TreeRowBase {
   readonly kind: "physical";
+  readonly collapsed: boolean;
 }
 
 export interface VirtualBranchOccurrenceRow extends TreeRowBase {
@@ -130,7 +141,10 @@ export function isVirtualBranchOccurrence(row: TreeRow): row is VirtualBranchOcc
   return row.kind === "occurrence";
 }
 
-function physicalTreeRow(block: VisibleBlock): PhysicalTreeRow {
+function physicalTreeRow(
+  block: VisibleBlock,
+  presentation: TreePresentationState,
+): PhysicalTreeRow {
   return {
     kind: "physical",
     rowId: block.id,
@@ -138,12 +152,16 @@ function physicalTreeRow(block: VisibleBlock): PhysicalTreeRow {
     block,
     depth: block.depth,
     hasChildren: block.hasChildren,
-    multilineExpanded: block.multilineExpanded,
+    collapsed: presentation.collapsedBlockIds.has(block.id),
+    multilineExpanded: presentation.multilineExpandedRowIds.has(block.id),
   };
 }
 
-export function buildPhysicalTreeRows(blocks: readonly VisibleBlock[]): PhysicalTreeRow[] {
-  return blocks.map(physicalTreeRow);
+export function buildPhysicalTreeRows(
+  blocks: readonly VisibleBlock[],
+  presentation: TreePresentationState = EMPTY_TREE_PRESENTATION_STATE,
+): PhysicalTreeRow[] {
+  return blocks.map((block) => physicalTreeRow(block, presentation));
 }
 
 export function parseVirtualBranchConfig(
@@ -279,6 +297,7 @@ function occurrenceRows(
   matches: readonly VisibleBlock[],
   limit: number,
   ranks: readonly VirtualOccurrenceRank[],
+  presentation: TreePresentationState,
 ): { rows: VirtualBranchOccurrenceRow[]; hasMore: boolean } {
   const definitionId = definition.canonicalId;
   const seenCanonicalIds = new Set<string>();
@@ -302,16 +321,19 @@ function occurrenceRows(
     return leftRank - rightRank || left.id.localeCompare(right.id);
   });
   return {
-    rows: eligible.slice(0, limit).map((block) => ({
-      kind: "occurrence",
-      rowId: `occurrence:${definitionId}:${block.id}`,
-      canonicalId: block.id,
-      viewId: definitionId,
-      block,
-      depth: definition.depth + 1,
-      hasChildren: false,
-      multilineExpanded: block.multilineExpanded,
-    })),
+    rows: eligible.slice(0, limit).map((block) => {
+      const rowId = `occurrence:${definitionId}:${block.id}`;
+      return {
+        kind: "occurrence",
+        rowId,
+        canonicalId: block.id,
+        viewId: definitionId,
+        block,
+        depth: definition.depth + 1,
+        hasChildren: false,
+        multilineExpanded: presentation.multilineExpandedRowIds.has(rowId),
+      };
+    }),
     hasMore: eligible.length > limit,
   };
 }
@@ -327,11 +349,12 @@ async function projectVirtualBranch(
   physicalBlocks: readonly VisibleBlock[],
   queryBlocks: VirtualBranchQueryEffect,
   ranks: readonly VirtualOccurrenceRank[],
+  presentation: TreePresentationState,
 ): Promise<ProjectedVirtualBranch> {
   const definitionId = definition.canonicalId;
   const parsed = parseVirtualBranchConfig(definition.block, physicalBlocks);
   const initialState = initialBranchState(parsed);
-  if (!parsed.config || definition.block.collapsed) {
+  if (!parsed.config || definition.collapsed) {
     return { definitionId, rows: [], state: initialState };
   }
 
@@ -346,6 +369,7 @@ async function projectVirtualBranch(
       result.blocks,
       parsed.config.limit,
       ranks,
+      presentation,
     );
     const completeness: BlockCollectionCompleteness =
       projected.hasMore || result.completeness.kind === "truncated"
@@ -374,17 +398,37 @@ async function projectVirtualBranch(
   }
 }
 
+function pruneCollapsedPhysicalBlocks(
+  blocks: readonly VisibleBlock[],
+  collapsedBlockIds: ReadonlySet<string>,
+): readonly VisibleBlock[] {
+  if (collapsedBlockIds.size === 0) return blocks;
+  let hiddenBelowDepth: number | null = null;
+  const visible: VisibleBlock[] = [];
+  for (const block of blocks) {
+    if (hiddenBelowDepth !== null && block.depth > hiddenBelowDepth) continue;
+    hiddenBelowDepth = null;
+    visible.push(block);
+    if (collapsedBlockIds.has(block.id)) hiddenBelowDepth = block.depth;
+  }
+  return visible;
+}
+
 export async function projectVirtualBranches(
   visibleBlocks: readonly VisibleBlock[],
   physicalBlocks: readonly VisibleBlock[],
   queryBlocks: VirtualBranchQueryEffect,
   ranks: readonly VirtualOccurrenceRank[] = [],
+  presentation: TreePresentationState = EMPTY_TREE_PRESENTATION_STATE,
 ): Promise<VirtualBranchProjection> {
-  const physicalRows = buildPhysicalTreeRows(visibleBlocks);
+  const physicalRows = buildPhysicalTreeRows(
+    pruneCollapsedPhysicalBlocks(visibleBlocks, presentation.collapsedBlockIds),
+    presentation,
+  );
   const definitions = physicalRows.filter((row) => isVirtualBranchDefinition(row.block));
   const projected = await Promise.all(
     definitions.map((definition) =>
-      projectVirtualBranch(definition, physicalBlocks, queryBlocks, ranks)
+      projectVirtualBranch(definition, physicalBlocks, queryBlocks, ranks, presentation)
     ),
   );
   const branchStates = new Map<string, VirtualBranchState>();

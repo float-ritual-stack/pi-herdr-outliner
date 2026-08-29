@@ -18,19 +18,20 @@ function block(id: string, overrides: Partial<VisibleBlock> = {}): VisibleBlock 
     position: 0,
     text: id,
     author: "user",
-    collapsed: false,
     createdAt: "2026-08-22T00:00:00.000Z",
     updatedAt: "2026-08-22T00:00:00.000Z",
     properties: [],
     depth: 0,
-    multilineExpanded: false,
     hasChildren: false,
     displayText: id,
     ...overrides,
   };
 }
 
-function physical(block: VisibleBlock): PhysicalTreeRow {
+function physical(
+  block: VisibleBlock,
+  presentation: { collapsed?: boolean; multilineExpanded?: boolean } = {},
+): PhysicalTreeRow {
   return {
     kind: "physical",
     rowId: block.id,
@@ -38,7 +39,8 @@ function physical(block: VisibleBlock): PhysicalTreeRow {
     block,
     depth: block.depth,
     hasChildren: block.hasChildren,
-    multilineExpanded: block.multilineExpanded,
+    collapsed: presentation.collapsed ?? false,
+    multilineExpanded: presentation.multilineExpanded ?? false,
   };
 }
 
@@ -46,6 +48,7 @@ function occurrence(
   viewId: string,
   canonical: VisibleBlock,
   depth = 1,
+  multilineExpanded = false,
 ): VirtualBranchOccurrenceRow {
   return {
     kind: "occurrence",
@@ -55,7 +58,7 @@ function occurrence(
     block: canonical,
     depth,
     hasChildren: false,
-    multilineExpanded: canonical.multilineExpanded,
+    multilineExpanded,
   };
 }
 
@@ -118,6 +121,7 @@ function view(
     status: "ready",
     refreshPending: false,
     ...overrides,
+    workspaceContextBlockId: overrides.workspaceContextBlockId ?? null,
   };
 }
 
@@ -201,10 +205,13 @@ describe("renderTreeFrame", () => {
       text: "# Heading\n- item",
       displayText: "# Heading\n- item",
       author: "system",
-      multilineExpanded: true,
     });
 
-    const rendered = renderTreeFrame(view([expanded]), 40, 9).frame.split("\n");
+    const rendered = renderTreeFrame(
+      view([physical(expanded, { multilineExpanded: true })]),
+      40,
+      9,
+    ).frame.split("\n");
 
     expect(rendered.slice(4, 6)).toEqual([
       "\x1b[48;5;238m\x1b[1m• # Heading  S\x1b[0m",
@@ -218,11 +225,13 @@ describe("renderTreeFrame", () => {
     const expanded = block("expanded", {
       text,
       displayText: text,
-      multilineExpanded: true,
     });
 
     const rendered = renderTreeFrame(
-      view([expanded], { expandedBlockOffset: 4, status: "" }),
+      view([physical(expanded, { multilineExpanded: true })], {
+        expandedBlockOffset: 4,
+        status: "",
+      }),
       40,
       10,
     ).frame.split("\n");
@@ -312,7 +321,6 @@ describe("renderTreeFrame", () => {
       text: "Card",
       displayText: "Card",
       hasChildren: true,
-      collapsed: true,
     });
     const limited = block("limited", { text: "Limited", displayText: "Limited" });
     const invalid = block("invalid", { text: "Invalid", displayText: "Invalid" });
@@ -383,7 +391,6 @@ describe("renderTreeFrame", () => {
       text: "Canonical",
       displayText: "Canonical",
       hasChildren: true,
-      collapsed: true,
     });
     const rows = [physical(definition), occurrence(definition.id, canonical)];
     const rendered = renderTreeFrame(

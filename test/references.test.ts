@@ -8,7 +8,6 @@ const target: Block = {
   position: 0,
   text: "Referenced decision [type::decision]\nAdditional detail",
   author: "user",
-  collapsed: false,
   createdAt: "2026-08-22T00:00:00.000Z",
   updatedAt: "2026-08-22T00:00:00.000Z",
   properties: [{ key: "type", value: "decision" }],

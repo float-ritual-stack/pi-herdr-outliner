@@ -49,7 +49,7 @@ test("serves mutations and property queries over the local socket", async () => 
   const client = new OutlinerClient(socket);
   const service = await client.request<OutlinerServiceStatus>({ action: "ping" });
   expect(service).toEqual({ status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION });
-  expect(service.protocolVersion).toBe(12);
+  expect(service.protocolVersion).toBe(13);
   const provenance = {
     actorId: "omp",
     sessionId: "session-1",
@@ -316,7 +316,7 @@ test("streams workspace mutations and transient UI commands to subscribers", asy
     onConnect: connected.resolve,
     onEvent: (event) => {
       events.push(event);
-      if (events.length === 10) received.resolve();
+      if (events.length === 9) received.resolve();
     },
   });
   cleanups.push(async () => {
@@ -367,7 +367,6 @@ test("streams workspace mutations and transient UI commands to subscribers", asy
   await client.request({ action: "selection.set", blockId: block.id });
   await client.request({ action: "navigation.back" });
   await client.request({ action: "navigation.forward" });
-  await client.request({ action: "view.toggleMultiline", blockId: block.id });
   await client.request({
     action: "virtual.occurrences.reorder",
     viewId: view.id,
@@ -387,14 +386,13 @@ test("streams workspace mutations and transient UI commands to subscribers", asy
     ["selection", "selection.set"],
     ["selection", "navigation.back"],
     ["selection", "navigation.forward"],
-    ["view", "view.toggleMultiline"],
     ["view", "virtual.occurrences.reorder"],
     ["ui", "ui.command.send"],
   ]);
   expect(events[1].blockId).toBe(block.id);
   expect(events[2].blockId).toBe(capture.block.id);
   expect(events[3].blockId).toBe(block.id);
-  expect(events[9].command).toEqual({
+  expect(events[8].command).toEqual({
     targetClientId: "event-detail",
     command: "edit",
     blockId: block.id,

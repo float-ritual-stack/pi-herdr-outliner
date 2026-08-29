@@ -197,7 +197,7 @@ export function renderTreeFrame(
     const row = view.rows[index];
     const block = row.block;
     let marker = row.kind === "occurrence" ? "◇" : "•";
-    if (row.kind === "physical" && row.hasChildren) marker = block.collapsed ? "▸" : "▾";
+    if (row.kind === "physical" && row.hasChildren) marker = row.collapsed ? "▸" : "▾";
     const author = AUTHOR_MARKERS[block.author];
     const editingInline = view.mode === "edit" && index === view.selectedIndex;
     if (editingInline) {
