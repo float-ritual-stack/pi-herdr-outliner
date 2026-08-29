@@ -68,6 +68,7 @@ interface Harness {
     queries: BlockSearchQuery[];
     pageQueries: Array<{ query: string | undefined; limit: number }>;
     focuses: number;
+    selfFocuses: number;
   };
   setSelection(selection: SelectionContext): void;
   setUpdate(implementation: DetailEffects["updateBlock"]): void;
@@ -106,8 +107,13 @@ function createHarness(
     queries: [],
     pageQueries: [],
     focuses: 0,
+    selfFocuses: 0,
   };
   const effects: DetailEffects = {
+    clientId: "detail-test",
+    focusSelf() {
+      calls.selfFocuses += 1;
+    },
     async getSelection() {
       calls.selections += 1;
       return selection;
@@ -161,7 +167,7 @@ function createHarness(
           ]
         : [];
     },
-    focusOutliner() {
+    async focusOutliner() {
       calls.focuses += 1;
       if (focusError) throw focusError;
     },
@@ -346,7 +352,7 @@ describe("detail controller projection and deferred refresh", () => {
 
     await harness.controller.onServiceEvent(event("content"), viewport);
     await harness.controller.onServiceEvent(
-      event("ui", { target: "detail", command: "edit", blockId: "other-block" }),
+      event("ui", { targetClientId: "detail-test", command: "edit", blockId: "other-block" }),
       viewport,
     );
 
@@ -620,7 +626,7 @@ describe("detail controller completion, navigation, and focus", () => {
     expect(harness.controller.state.previewOffset).toBe(0);
   });
 
-  test("preserves the established focus-status precedence", async () => {
+  test("preserves focus failures when an announcement was requested", async () => {
     const harness = createHarness(makeBlock());
     harness.setFocusError(new Error("pane missing"));
     await harness.controller.initialize();
@@ -628,11 +634,11 @@ describe("detail controller completion, navigation, and focus", () => {
     await harness.controller.dispatch({ type: "focus.outliner" }, viewport);
     expect(harness.controller.state.status).toBe("pane missing");
     await harness.controller.dispatch({ type: "focus.outliner", announce: true }, viewport);
-    expect(harness.controller.state.status).toBe("Focus returned to outliner; Ctrl+Q closes detail");
+    expect(harness.controller.state.status).toBe("pane missing");
     expect(harness.calls.focuses).toBe(2);
   });
 
-  test("targets a detail UI command without invoking pane focus", async () => {
+  test("targets a detail UI command and focuses only the recipient", async () => {
     const first = makeBlock();
     const second = makeBlock({ id: "block-2", text: "second", updatedAt: "version-2" });
     const harness = createHarness(first);
@@ -640,12 +646,12 @@ describe("detail controller completion, navigation, and focus", () => {
     harness.setSelection({ selected: second, ancestors: [], children: [] });
 
     await harness.controller.onServiceEvent(
-      event("ui", { target: "detail", command: "reveal", blockId: "block-2" }),
+      event("ui", { targetClientId: "detail-test", command: "reveal", blockId: "block-2" }),
       viewport,
     );
 
     expect(harness.calls.setSelections).toEqual(["block-2"]);
     expect(harness.controller.state.context.selected?.id).toBe("block-2");
-    expect(harness.calls.focuses).toBe(0);
+    expect(harness.calls.selfFocuses).toBe(1);
   });
 });

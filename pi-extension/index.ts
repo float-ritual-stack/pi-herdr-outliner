@@ -29,6 +29,7 @@ import {
   type BlockProvenance,
   type CaptureReceipt,
   type CaptureSource,
+  type OutlinerClientRegistration,
   type OutlinerServiceStatus,
   type PropertyCatalogItem,
   type SelectionContext,
@@ -184,12 +185,16 @@ async function ensureService(focus: boolean): Promise<void> {
   }
 
   if (process.env.HERDR_ENV === "1") {
-    await execFileAsync("bun", ["run", join(extensionRoot, "src", "herdr-open.ts")], {
+    await execFileAsync(process.execPath, [
+      "run",
+      join(extensionRoot, "src", "herdr-open.ts"),
+      "--mode",
+      focus ? "focus-or-open" : "service-only",
+    ], {
       cwd: paths.workspaceRoot,
       env: {
         ...process.env,
         HERDR_PLUGIN_ID: "float.pi-outliner",
-        OUTLINER_FOCUS: focus ? "1" : "0",
         OUTLINER_WORKSPACE_ROOT: paths.workspaceRoot,
       },
     });
@@ -642,6 +647,25 @@ export default function outlinerExtension(pi: ExtensionAPI): void {
     async execute(_id, params) {
       await ensureService(false);
       return toolResult(await client.request<Block>({ action: "move", ...params }));
+    },
+  });
+
+  pi.registerTool({
+    name: "outliner_clients",
+    label: "Outliner Clients",
+    description: "List live Tree and Detail client IDs for explicit targeting",
+    promptSnippet: "List live outliner client instances",
+    parameters: Type.Object({
+      role: Type.Optional(Type.Union([Type.Literal("tree"), Type.Literal("detail")])),
+    }),
+    async execute(_id, params) {
+      await ensureService(false);
+      return toolResult(
+        await client.request<OutlinerClientRegistration[]>({
+          action: "clients.list",
+          ...(params.role ? { role: params.role } : {}),
+        }),
+      );
     },
   });
 

@@ -2,7 +2,7 @@ import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { HerdrRuntimeRegistry } from "./herdr-registry";
 import { HerdrRegistryRunner } from "./herdr-runtime";
-import { registerPaneState } from "./pane-control";
+import { registerServicePaneState, removeLegacyClientPaneStates } from "./pane-control";
 import { resolvePaths } from "./paths";
 import { OutlinerServer } from "./server";
 import { OutlinerStore } from "./store";
@@ -19,7 +19,8 @@ let ownsPaneState = false;
 try {
   await server.start();
   ownsPaneState = true;
-  registerPaneState(paths.stateDir, "service", paths.workspaceRoot);
+  removeLegacyClientPaneStates(paths.stateDir);
+  registerServicePaneState(paths.stateDir, paths.workspaceRoot);
   herdrRunner?.start();
 } catch (error) {
   try {

@@ -1,5 +1,11 @@
 import { createConnection, type Socket } from "node:net";
-import type { OutlinerEvent, OutlinerEventEnvelope, OutlinerRequest, OutlinerResponse } from "./types";
+import type {
+  OutlinerClientRegistration,
+  OutlinerEvent,
+  OutlinerEventEnvelope,
+  OutlinerRequest,
+  OutlinerResponse,
+} from "./types";
 
 export type RequestInput = OutlinerRequest extends infer Request
   ? Request extends { id: string }
@@ -8,6 +14,7 @@ export type RequestInput = OutlinerRequest extends infer Request
   : never;
 
 export interface OutlinerWatchHandlers {
+  client: OutlinerClientRegistration;
   onConnect?: () => void | Promise<void>;
   onDisconnect?: () => void;
   onEvent: (event: OutlinerEvent) => void | Promise<void>;
@@ -27,12 +34,17 @@ export class OutlinerWatcher {
     this.connect();
   }
 
-  stop(): void {
+  stop(): Promise<void> {
     this.stopped = true;
     clearTimeout(this.retryTimer ?? undefined);
     this.retryTimer = null;
-    this.socket?.destroy();
+    const socket = this.socket;
     this.socket = null;
+    if (!socket) return Promise.resolve();
+    const closed = Promise.withResolvers<void>();
+    socket.once("close", () => closed.resolve());
+    socket.destroy();
+    return closed.promise;
   }
 
   private connect(): void {
@@ -51,7 +63,11 @@ export class OutlinerWatcher {
     }
 
     socket.once("connect", () => {
-      const request: OutlinerRequest = { id: subscriptionId, action: "events.subscribe" };
+      const request: OutlinerRequest = {
+        id: subscriptionId,
+        action: "events.subscribe",
+        client: this.handlers.client,
+      };
       socket.write(`${JSON.stringify(request)}\n`);
       acknowledgementTimer = setTimeout(() => {
         socket.destroy(new Error("Outliner subscription was not acknowledged"));

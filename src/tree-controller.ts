@@ -9,6 +9,7 @@ import {
   parsePropertyFilterExpression,
   serializePropertyFilterValue,
 } from "./block-query";
+import { sendUniqueClientCommand } from "./client-target";
 import { completionTargetAtCursor } from "./completion";
 import type { ReferencedFile, ReferencedPathCandidate } from "./files";
 import {
@@ -97,9 +98,10 @@ export interface TreeFilesystem {
 
 export interface TreeControllerEffects {
   readonly workspaceRoot: string;
+  readonly clientId: string;
   request<T>(input: RequestInput): Promise<T>;
   readonly filesystem: TreeFilesystem;
-  focusPane(pane: "detail" | "outliner"): void;
+  focusSelf(): void;
   terminalWidth(): number;
   terminalHeight(): number;
   stop(): void;
@@ -659,12 +661,11 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     mode = "browse";
     resetQuickEditor();
     await selectVisibleBlock(targetId, targetRowId);
-    await effects.request({
-      action: "ui.command.send",
-      command: { target: "detail", command: "edit", blockId: targetId },
-    });
     try {
-      effects.focusPane("detail");
+      await sendUniqueClientCommand(effects, "detail", {
+        command: "edit",
+        blockId: targetId,
+      });
       status = "Multiline editor opened in detail pane";
     } catch (error) {
       status = errorMessage(error);
@@ -926,7 +927,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   async function handleServiceEvent(event: OutlinerEvent): Promise<void> {
     if (event.domain === "ui") {
       const command = event.command;
-      if (!command || command.target !== "tree") return;
+      if (!command || command.targetClientId !== effects.clientId) return;
       if (mode !== "browse") {
         refreshPending = true;
         return;
@@ -935,7 +936,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         activeFilter = "";
         await selectVisibleBlock(command.blockId);
       }
-      if (command.command === "focus") effects.focusPane("outliner");
+      if (command.command === "focus") effects.focusSelf();
       effects.invalidate();
       return;
     }
@@ -1122,11 +1123,10 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         return;
       }
       if (target?.effectiveDeletedRootId) {
-        await effects.request({
-          action: "ui.command.send",
-          command: { target: "detail", command: "focus", blockId: target.id },
+        await sendUniqueClientCommand(effects, "detail", {
+          command: "focus",
+          blockId: target.id,
         });
-        effects.focusPane("detail");
         status = "Navigation history opened deleted block read-only in Detail";
       } else {
         await reload(target?.id ?? null);
@@ -1211,11 +1211,10 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       return;
     } else if (key.name === "return" && selected) {
       if (selected.block.effectiveDeletedRootId) {
-        await effects.request({
-          action: "ui.command.send",
-          command: { target: "detail", command: "focus", blockId: selected.canonicalId },
+        await sendUniqueClientCommand(effects, "detail", {
+          command: "focus",
+          blockId: selected.canonicalId,
         });
-        effects.focusPane("detail");
         status = "Deleted block opened read-only in Detail";
         effects.invalidate();
         return;
@@ -1250,9 +1249,9 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         const navigation = await navigateOutlinerLink(
           effects,
           outlinerLinkUri(reference.kind, reference.value),
+          { treeClientId: effects.clientId },
         );
         if (navigation.deleted) {
-          effects.focusPane("detail");
           status = "Deleted reference opened read-only in Detail";
         } else {
           await reload(navigation.id);

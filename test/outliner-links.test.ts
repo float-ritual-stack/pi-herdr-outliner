@@ -86,6 +86,13 @@ describe("outliner link URIs", () => {
             created: true,
           } as T;
         }
+        if (input.action === "pages.resolve" && input.address === "future") {
+          return {
+            address: input.address,
+            normalizedAddress: "future",
+            status: "missing",
+          } as T;
+        }
         if (input.action === "pages.resolve") {
           return {
             address: input.address,
@@ -95,6 +102,9 @@ describe("outliner link URIs", () => {
             kind: "work-id",
             block: target,
           } as T;
+        }
+        if (input.action === "clients.list") {
+          return [{ clientId: "tree-client", role: "tree" }] as T;
         }
         return {} as T;
       },
@@ -112,10 +122,11 @@ describe("outliner link URIs", () => {
     });
     expect(calls).toEqual([
       { action: "get", blockId: target.id },
+      { action: "clients.list", role: "tree" },
       { action: "selection.set", blockId: target.id },
       {
         action: "ui.command.send",
-        command: { target: "tree", command: "focus", blockId: target.id },
+        command: { targetClientId: "tree-client", command: "focus", blockId: target.id },
       },
     ]);
     calls.length = 0;
@@ -128,11 +139,13 @@ describe("outliner link URIs", () => {
       created: true,
     });
     expect(calls).toEqual([
+      { action: "pages.resolve", address: "future" },
+      { action: "clients.list", role: "tree" },
       { action: "pages.follow", address: "future" },
       { action: "selection.set", blockId: target.id },
       {
         action: "ui.command.send",
-        command: { target: "tree", command: "focus", blockId: target.id },
+        command: { targetClientId: "tree-client", command: "focus", blockId: target.id },
       },
     ]);
 
@@ -146,11 +159,45 @@ describe("outliner link URIs", () => {
     });
     expect(calls).toEqual([
       { action: "pages.resolve", address: "PIE-133" },
+      { action: "clients.list", role: "tree" },
       { action: "selection.set", blockId: target.id },
       {
         action: "ui.command.send",
-        command: { target: "tree", command: "focus", blockId: target.id },
+        command: { targetClientId: "tree-client", command: "focus", blockId: target.id },
       },
+    ]);
+  });
+
+  test("does not create a missing page before resolving Tree ambiguity", async () => {
+    const calls: RequestInput[] = [];
+    const requester = {
+      async request<T>(input: RequestInput): Promise<T> {
+        calls.push(input);
+        if (input.action === "pages.resolve") {
+          return {
+            address: input.address,
+            normalizedAddress: "future",
+            status: "missing",
+          } as T;
+        }
+        if (input.action === "clients.list") {
+          return [
+            { clientId: "tree-a", role: "tree" },
+            { clientId: "tree-b", role: "tree" },
+          ] as T;
+        }
+        throw new Error(`Unexpected request: ${input.action}`);
+      },
+    };
+
+    await expect(
+      navigateOutlinerLink(requester, outlinerLinkUri("page", "future")),
+    ).rejects.toThrow(
+      "Multiple live tree clients are registered; choose clientId: tree-a, tree-b",
+    );
+    expect(calls).toEqual([
+      { action: "pages.resolve", address: "future" },
+      { action: "clients.list", role: "tree" },
     ]);
   });
 
@@ -166,6 +213,9 @@ describe("outliner link URIs", () => {
       async request<T>(input: RequestInput): Promise<T> {
         calls.push(input);
         if (input.action === "get") return target as T;
+        if (input.action === "clients.list") {
+          return [{ clientId: "detail-client", role: "detail" }] as T;
+        }
         return {} as T;
       },
     };
@@ -178,11 +228,16 @@ describe("outliner link URIs", () => {
       title: "Deleted target",
       deleted: true,
     });
-    expect(calls.slice(-2)).toEqual([
+    expect(calls.slice(-3)).toEqual([
+      { action: "clients.list", role: "detail" },
       { action: "selection.set", blockId: target.id },
       {
         action: "ui.command.send",
-        command: { target: "detail", command: "focus", blockId: target.id },
+        command: {
+          targetClientId: "detail-client",
+          command: "focus",
+          blockId: target.id,
+        },
       },
     ]);
   });

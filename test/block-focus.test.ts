@@ -117,6 +117,9 @@ test("focuses only an unambiguous match through selection and Tree reveal", asyn
     async request<T>(input: RequestInput): Promise<T> {
       calls.push(input);
       if (input.action === "workspace.snapshot") return snapshot as T;
+      if (input.action === "clients.list") {
+        return [{ clientId: "tree-client", role: "tree" }] as T;
+      }
       return {} as T;
     },
   };
@@ -130,10 +133,71 @@ test("focuses only an unambiguous match through selection and Tree reveal", asyn
   expect(focused.focused).toBe(true);
   expect(calls).toEqual([
     { action: "workspace.snapshot" },
+    { action: "clients.list", role: "tree" },
     { action: "selection.set", blockId: roadmap.id },
     {
       action: "ui.command.send",
-      command: { target: "tree", command: "focus", blockId: roadmap.id },
+      command: { targetClientId: "tree-client", command: "focus", blockId: roadmap.id },
     },
+  ]);
+});
+
+test("rejects an explicit goto target that is not a live Tree client", async () => {
+  const calls: RequestInput[] = [];
+  const requester = {
+    async request<T>(input: RequestInput): Promise<T> {
+      calls.push(input);
+      if (input.action === "workspace.snapshot") {
+        return {
+          visible: { blocks, completeness: { kind: "complete" } },
+          physical: { blocks, completeness: { kind: "complete" } },
+          selection: { selected: null, ancestors: [], children: [] },
+          virtualOccurrenceRanks: [],
+          sequence: 1,
+        } as T;
+      }
+      if (input.action === "clients.list") {
+        return [{ clientId: "tree-client", role: "tree" }] as T;
+      }
+      return {} as T;
+    },
+  };
+
+  await expect(focusBlockByQuery(requester, "40bd0864", 20, "detail-client")).rejects.toThrow(
+    "Target client is not a registered tree client: detail-client",
+  );
+  expect(calls.map((call) => call.action)).toEqual(["workspace.snapshot", "clients.list"]);
+});
+
+test("refuses an implicit goto when multiple Tree clients are live", async () => {
+  const calls: RequestInput[] = [];
+  const requester = {
+    async request<T>(input: RequestInput): Promise<T> {
+      calls.push(input);
+      if (input.action === "workspace.snapshot") {
+        return {
+          visible: { blocks, completeness: { kind: "complete" } },
+          physical: { blocks, completeness: { kind: "complete" } },
+          selection: { selected: null, ancestors: [], children: [] },
+          virtualOccurrenceRanks: [],
+          sequence: 1,
+        } as T;
+      }
+      if (input.action === "clients.list") {
+        return [
+          { clientId: "tree-a", role: "tree" },
+          { clientId: "tree-b", role: "tree" },
+        ] as T;
+      }
+      return {} as T;
+    },
+  };
+
+  await expect(focusBlockByQuery(requester, "40bd0864")).rejects.toThrow(
+    "Multiple live tree clients are registered; choose clientId: tree-a, tree-b",
+  );
+  expect(calls.map((call) => call.action)).toEqual([
+    "workspace.snapshot",
+    "clients.list",
   ]);
 });

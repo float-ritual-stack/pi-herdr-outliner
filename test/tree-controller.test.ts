@@ -76,10 +76,18 @@ function harness(respond: (input: RequestInput) => unknown | Promise<unknown>): 
     invalidations: 0,
     stops: 0,
     effects: {
+      clientId: "tree-test",
       workspaceRoot: "/workspace",
       request: async <T>(input: RequestInput): Promise<T> => {
         result.calls.push(input);
-        return (await respond(input)) as T;
+        const response = await respond(input);
+        if (response === undefined && input.action === "clients.list") {
+          return [{
+            clientId: input.role === "tree" ? "tree-test" : "detail-test",
+            role: input.role ?? "tree",
+          }] as T;
+        }
+        return response as T;
       },
       filesystem: {
         completeReferencedPaths: () => [],
@@ -87,7 +95,7 @@ function harness(respond: (input: RequestInput) => unknown | Promise<unknown>): 
           throw new Error("not configured");
         },
       },
-      focusPane: (pane: "detail" | "outliner") => result.focused.push(pane),
+      focusSelf: () => result.focused.push("outliner"),
       terminalWidth: () => 80,
       terminalHeight: () => 12,
       stop: () => {
@@ -227,6 +235,13 @@ describe("createTreeController", () => {
     let selected = source;
     const fake = harness((input) => {
       if (input.action === "workspace.snapshot") return snapshot([source, target], selected);
+      if (input.action === "pages.resolve") {
+        return {
+          address: input.address,
+          normalizedAddress: "future page",
+          status: "missing",
+        };
+      }
       if (input.action === "pages.follow") {
         return {
           address: input.address,
@@ -326,15 +341,15 @@ describe("createTreeController", () => {
     await controller.initialize();
 
     await controller.handleKeypress("o", { name: "o" }, "pass");
-    expect(fake.focused).toEqual(["detail"]);
+    expect(fake.focused).toEqual([]);
     expect(lastCall(fake.calls, "ui.command.send")).toMatchObject({
       action: "ui.command.send",
-      command: { target: "detail", blockId: deleted.id },
+      command: { targetClientId: "detail-test", blockId: deleted.id },
     });
 
     selected = source;
     await controller.handleKeypress("", { name: "left", meta: true }, "pass");
-    expect(fake.focused).toEqual(["detail", "detail"]);
+    expect(fake.focused).toEqual([]);
     expect(controller.view().status).toContain("deleted block read-only");
   });
 
@@ -634,7 +649,7 @@ describe("createTreeController", () => {
       domain: "ui",
       action: "ui.command.send",
       sequence: 2,
-      command: { target: "tree", command: "reveal", blockId: "hidden" },
+      command: { targetClientId: "tree-test", command: "reveal", blockId: "hidden" },
     });
 
     expect(fake.calls.filter((call) => call.action === "toggle")).toEqual([
@@ -710,7 +725,7 @@ describe("createTreeController", () => {
     expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe("stable");
   });
 
-  test("commits a quick child before selection handoff, command dispatch, and detail focus", async () => {
+  test("commits a quick child before targeted Detail handoff", async () => {
     const parent = block("parent", { hasChildren: true });
     const created = block("child", { parentId: "parent", text: "Child", displayText: "Child", depth: 1 });
     let snapshotCount = 0;
@@ -724,10 +739,6 @@ describe("createTreeController", () => {
       if (input.action === "create") return created;
       return undefined;
     });
-    fake.effects.focusPane = (pane) => {
-      effectOrder.push(`focus:${pane}`);
-      fake.focused.push(pane);
-    };
     const controller = createTreeController(fake.effects);
     await controller.initialize();
     effectOrder.length = 0;
@@ -741,8 +752,8 @@ describe("createTreeController", () => {
       "move",
       "workspace.snapshot",
       "selection.set",
+      "clients.list",
       "ui.command.send",
-      "focus:detail",
     ]);
     expect(fake.calls.find((call) => call.action === "move")).toEqual({
       action: "move",
@@ -1343,7 +1354,7 @@ describe("createTreeController", () => {
     await controller.handleKeypress("", { name: "e", ctrl: true }, "pass");
     expect(lastCall(fake.calls, "ui.command.send")).toEqual({
       action: "ui.command.send",
-      command: { target: "detail", command: "edit", blockId: "card" },
+      command: { targetClientId: "detail-test", command: "edit", blockId: "card" },
     });
     await controller.handleKeypress("", { name: "up" }, "pass");
     expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe(

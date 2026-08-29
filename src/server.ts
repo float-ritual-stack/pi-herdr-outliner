@@ -7,6 +7,9 @@ import {
   type Block,
   type CaptureReceipt,
   type OutlinerEvent,
+  type OutlinerClientRegistration,
+  type OutlinerClientRuntime,
+  type OutlinerClientRole,
   type OutlinerEventEnvelope,
   type NavigationState,
   type PageAddressFollowResult,
@@ -16,7 +19,7 @@ import {
 
 export class OutlinerServer {
   private server: Server | null = null;
-  private readonly subscribers = new Set<Socket>();
+  private readonly subscribers = new Map<Socket, OutlinerClientRegistration>();
 
   constructor(
     readonly store: OutlinerStore,
@@ -48,7 +51,7 @@ export class OutlinerServer {
   async close(): Promise<void> {
     const server = this.server;
     if (!server) return;
-    for (const subscriber of this.subscribers) subscriber.destroy();
+    for (const subscriber of this.subscribers.keys()) subscriber.destroy();
     this.subscribers.clear();
     const closed = Promise.withResolvers<void>();
     server.close((error) => (error ? closed.reject(error) : closed.resolve()));
@@ -76,7 +79,94 @@ export class OutlinerServer {
     return connected.promise;
   }
 
-  handle(request: OutlinerRequest): OutlinerResponse {
+  private pruneDestroyedSubscribers(): void {
+    for (const socket of this.subscribers.keys()) {
+      if (socket.destroyed) this.subscribers.delete(socket);
+    }
+  }
+
+  private registerSubscriber(
+    socket: Socket,
+    registration: OutlinerClientRegistration,
+  ): OutlinerClientRegistration {
+    if (!registration || typeof registration !== "object") {
+      throw new Error("Client registration is required");
+    }
+    const clientId = registration.clientId?.trim();
+    if (
+      !clientId ||
+      clientId.length > 200 ||
+      /[\u0000-\u001f\u007f]/.test(clientId)
+    ) {
+      throw new Error("Client registration clientId must be 1-200 printable characters");
+    }
+    if (registration.role !== "tree" && registration.role !== "detail") {
+      throw new Error(`Invalid client role: ${String(registration.role)}`);
+    }
+    this.pruneDestroyedSubscribers();
+    if (this.subscribers.has(socket)) {
+      throw new Error("Socket already owns a client registration");
+    }
+    for (const [owner, client] of this.subscribers) {
+      if (owner !== socket && client.clientId === clientId) {
+        throw new Error(`Client ID is already registered: ${clientId}`);
+      }
+    }
+    let runtime: OutlinerClientRuntime | undefined;
+    if (registration.runtime !== undefined) {
+      if (
+        !registration.runtime ||
+        typeof registration.runtime !== "object" ||
+        Array.isArray(registration.runtime)
+      ) {
+        throw new Error("Client runtime must be an object");
+      }
+      const runtimeKeys = ["paneId", "terminalId", "workspaceId", "tabId"] as const;
+      const unknownKey = Object.keys(registration.runtime)
+        .find((key) => !runtimeKeys.includes(key as typeof runtimeKeys[number]));
+      if (unknownKey) throw new Error(`Invalid client runtime ${unknownKey}`);
+      const entries = runtimeKeys.flatMap((key) => {
+        const value = registration.runtime?.[key];
+        if (value === undefined) return [];
+        if (
+          typeof value !== "string" ||
+          !value.trim() ||
+          value.length > 500 ||
+          /[\u0000-\u001f\u007f]/.test(value)
+        ) {
+          throw new Error(`Invalid client runtime ${key}`);
+        }
+        return [[key, value.trim()] as const];
+      });
+      if (entries.length > 0) runtime = Object.fromEntries(entries);
+    }
+    const normalized: OutlinerClientRegistration = {
+      clientId,
+      role: registration.role,
+      ...(runtime ? { runtime } : {}),
+    };
+    this.subscribers.set(socket, normalized);
+    return normalized;
+  }
+
+  private listClients(role?: OutlinerClientRole): OutlinerClientRegistration[] {
+    this.pruneDestroyedSubscribers();
+    return [...this.subscribers.values()]
+      .filter((client) => role === undefined || client.role === role)
+      .sort((left, right) =>
+        left.role.localeCompare(right.role) || left.clientId.localeCompare(right.clientId)
+      );
+  }
+
+  private hasClient(clientId: string): boolean {
+    this.pruneDestroyedSubscribers();
+    return [...this.subscribers.values()].some((client) => client.clientId === clientId);
+  }
+
+  handle(
+    request: OutlinerRequest,
+    subscribedClient?: OutlinerClientRegistration,
+  ): OutlinerResponse {
     try {
       let result: unknown;
       const action = request.action;
@@ -94,9 +184,18 @@ export class OutlinerServer {
           result = this.store.readWorkspaceSnapshot(request.view);
           break;
         case "events.subscribe":
-          result = { subscribed: true };
+          result = { subscribed: true, client: subscribedClient ?? request.client };
+          break;
+        case "clients.list":
+          if (request.role !== undefined && request.role !== "tree" && request.role !== "detail") {
+            throw new Error(`Invalid client role: ${String(request.role)}`);
+          }
+          result = this.listClients(request.role);
           break;
         case "ui.command.send":
+          if (!this.hasClient(request.command.targetClientId)) {
+            throw new Error(`Target client is not registered: ${request.command.targetClientId}`);
+          }
           result = { accepted: true, command: request.command };
           break;
         case "get":
@@ -312,10 +411,14 @@ export class OutlinerServer {
   }
 
   private broadcast(event: OutlinerEvent): void {
+    this.pruneDestroyedSubscribers();
     const envelope: OutlinerEventEnvelope = { event };
     const line = `${JSON.stringify(envelope)}\n`;
-    for (const subscriber of this.subscribers) {
-      if (!subscriber.destroyed) subscriber.write(line);
+    for (const [subscriber, client] of this.subscribers) {
+      if (event.domain === "ui" && event.command?.targetClientId !== client.clientId) {
+        continue;
+      }
+      subscriber.write(line);
     }
   }
 
@@ -334,11 +437,13 @@ export class OutlinerServer {
           let response: OutlinerResponse;
           try {
             request = JSON.parse(line) as OutlinerRequest;
-            if (request.action === "events.subscribe") this.subscribers.add(socket);
-            response = this.handle(request);
+            const subscribedClient = request.action === "events.subscribe"
+              ? this.registerSubscriber(socket, request.client)
+              : undefined;
+            response = this.handle(request, subscribedClient);
           } catch (error) {
             response = {
-              id: "invalid",
+              id: request?.id ?? "invalid",
               ok: false,
               error: error instanceof Error ? error.message : String(error),
               sequence: this.store.sequence,

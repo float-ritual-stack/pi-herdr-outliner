@@ -1,8 +1,7 @@
-import { rmSync } from "node:fs";
-import { join } from "node:path";
 import { emitKeypressEvents } from "node:readline";
 import { setTimeout as sleep } from "node:timers/promises";
 import { OutlinerClient, type OutlinerWatcher } from "./client";
+import { sendUniqueClientCommand } from "./client-target";
 import {
   createDetailController,
   type DetailEffects,
@@ -12,7 +11,7 @@ import { createDetailKeyHandler } from "./detail-keymap";
 import { renderDetailAnsi } from "./detail-renderer";
 import { completeReferencedPaths, readReferencedFile } from "./files";
 import { navigateOutlinerLink, outlinerLinkUri } from "./outliner-links";
-import { focusPluginPane, registerPaneState } from "./pane-control";
+import { currentPaneRuntime, focusCurrentPane } from "./pane-control";
 import { resolvePaths } from "./paths";
 import {
   BRACKETED_PASTE_DISABLE,
@@ -33,7 +32,7 @@ import {
 
 const paths = resolvePaths();
 const client = new OutlinerClient(paths.socket);
-const paneStatePath = join(paths.stateDir, "detail-pane.json");
+const clientId = crypto.randomUUID();
 let stopping = false;
 let watcher: OutlinerWatcher | null = null;
 let workQueue = Promise.resolve();
@@ -51,6 +50,10 @@ function errorMessage(error: unknown): string {
 }
 
 const effects: DetailEffects = {
+  clientId,
+  focusSelf() {
+    if (process.env.HERDR_ENV === "1") focusCurrentPane();
+  },
   async getSelection() {
     return client.request<SelectionContext>({ action: "selection.get" });
   },
@@ -71,7 +74,9 @@ const effects: DetailEffects = {
     return client.request<NavigationState>({ action });
   },
   async followReference(target) {
-    await navigateOutlinerLink(client, outlinerLinkUri(target.kind, target.value));
+    await navigateOutlinerLink(client, outlinerLinkUri(target.kind, target.value), {
+      detailClientId: clientId,
+    });
   },
   async createBlock(input) {
     return client.request<Block>({ action: "create", ...input });
@@ -88,8 +93,8 @@ const effects: DetailEffects = {
   completeFiles(query) {
     return completeReferencedPaths(query, paths.workspaceRoot);
   },
-  focusOutliner() {
-    focusPluginPane(paths.stateDir, "outliner");
+  async focusOutliner() {
+    await sendUniqueClientCommand(client, "tree", { command: "focus" });
   },
 };
 
@@ -125,6 +130,11 @@ async function waitForService(): Promise<void> {
 
 function startWatcher(): void {
   watcher = client.watch({
+    client: {
+      clientId,
+      role: "detail",
+      runtime: currentPaneRuntime(),
+    },
     onConnect: () => enqueueWork(() => controller.onServiceConnect(viewport())),
     onDisconnect: () => enqueueWork(() => controller.onServiceDisconnect()),
     onError: (error) => enqueueWork(() => controller.onServiceError(error)),
@@ -138,7 +148,6 @@ function stop(): void {
   watcher?.stop();
   if (process.stdin.isTTY) process.stdin.setRawMode(false);
   process.stdout.write(`${BRACKETED_PASTE_DISABLE}\x1b[?25h\x1b[?1049l`);
-  rmSync(paneStatePath, { force: true });
   process.exit(0);
 }
 
@@ -147,13 +156,11 @@ const handleKeypress = createDetailKeyHandler({ controller, viewport, stop });
 async function initialize(): Promise<void> {
   await waitForService();
   await controller.initialize();
-  registerPaneState(paths.stateDir, "detail", paths.workspaceRoot);
 }
 
 try {
   await initialize();
 } catch (error) {
-  rmSync(paneStatePath, { force: true });
   console.error(errorMessage(error));
   process.exit(1);
 }
