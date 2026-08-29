@@ -380,13 +380,93 @@ describe("createTreeController", () => {
 
     expect(fake.calls[0]).toEqual({
       action: "workspace.snapshot",
-      view: { filters: [] },
+      view: undefined,
     });
     expect(controller.view().rows).toHaveLength(501);
     expect(controller.view().physicalBlocksById.size).toBe(501);
     expect(controller.view().visibleCompleteness).toEqual({ kind: "complete" });
     expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe("block-500");
     expect(fake.calls.some((call) => call.action === "selection.set")).toBe(false);
+  });
+
+  test("completes quoted property filters and preserves the prior view on parse errors", async () => {
+    const alpha = block("alpha", {
+      text: "Alpha [status::in progress]",
+      properties: [{ key: "status", value: "in progress" }],
+    });
+    const beta = block("beta", {
+      position: 1,
+      text: "Beta [status::in review]",
+      properties: [{ key: "status", value: "in review" }],
+    });
+    const fake = harness((input) => {
+      if (input.action === "workspace.snapshot") {
+        const filtered = input.view?.query?.filters?.[0]?.value === "in progress";
+        return snapshot(filtered ? [alpha] : [alpha, beta], alpha, {
+          physicalBlocks: [alpha, beta],
+        });
+      }
+      if (input.action === "properties.catalog") {
+        return input.key === "status"
+          ? [{ key: "status", value: "in progress", count: 4 }]
+          : [
+              { key: "status", value: "in progress", count: 4 },
+              { key: "status", value: "in review", count: 2 },
+              { key: "stage", value: "next", count: 1 },
+            ];
+      }
+      if (input.action === "selection.set") {
+        return { selected: alpha, ancestors: [], children: [] };
+      }
+      return undefined;
+    });
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+
+    await controller.handleKeypress("/", { name: "/" }, "pass");
+    await controller.handleKeypress("sta", { sequence: "sta" }, "pass");
+    await controller.handleKeypress("", { name: "tab" }, "pass");
+    expect(lastCall(fake.calls, "properties.catalog")).toEqual({
+      action: "properties.catalog",
+      prefix: "sta",
+      limit: 100,
+    });
+    expect(controller.view().quickCompletion?.items[0]).toEqual({
+      label: "status (6)",
+      insertion: "status=",
+    });
+    await controller.handleKeypress("", { name: "tab" }, "pass");
+    await controller.handleKeypress("in", { sequence: "in" }, "pass");
+    await controller.handleKeypress("", { name: "tab" }, "pass");
+    expect(lastCall(fake.calls, "properties.catalog")).toEqual({
+      action: "properties.catalog",
+      key: "status",
+      prefix: "in",
+      limit: 20,
+    });
+    await controller.handleKeypress("", { name: "tab" }, "pass");
+    expect(controller.view().quickInput).toBe('status="in progress"');
+    await controller.handleKeypress("", { name: "return" }, "pass");
+
+    expect(controller.view().activeFilter).toBe('status="in progress"');
+    expect(controller.view().rows.map((row) => row.canonicalId)).toEqual(["alpha"]);
+    expect(lastCall(fake.calls, "workspace.snapshot")).toEqual({
+      action: "workspace.snapshot",
+      view: {
+        query: {
+          filters: [{ key: "status", value: "in progress" }],
+          limit: 500,
+        },
+      },
+    });
+
+    await controller.handleKeypress("/", { name: "/" }, "pass");
+    await controller.handleKeypress('"', { sequence: '"' }, "pass");
+    await controller.handleKeypress("", { name: "return" }, "pass");
+    expect(controller.view().mode).toBe("filter");
+    expect(controller.view().activeFilter).toBe('status="in progress"');
+    expect(controller.view().rows.map((row) => row.canonicalId)).toEqual(["alpha"]);
+    expect(controller.view().status).toContain("Invalid filter:");
   });
 
   test("installs visible completeness and the distinct complete physical collection", async () => {

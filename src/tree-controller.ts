@@ -4,9 +4,13 @@ import {
   rankBlockFocusMatches,
   uniqueBlockFocusIdentifier,
 } from "./block-focus";
+import {
+  filterCompletionTargetAtCursor,
+  parsePropertyFilterExpression,
+  serializePropertyFilterValue,
+} from "./block-query";
 import { completionTargetAtCursor } from "./completion";
 import type { ReferencedFile, ReferencedPathCandidate } from "./files";
-import { parseFilter } from "./properties";
 import {
   firstOutlinerReference,
   navigateOutlinerLink,
@@ -22,6 +26,7 @@ import type {
   OutlinerEvent,
   NavigationState,
   PageAddressCollection,
+  PropertyCatalogItem,
   VisibleBlock,
   VisibleBlockCollection,
   WorkspaceSnapshot,
@@ -220,7 +225,14 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     const currentSelected = rows[selectedIndex];
     const snapshot = await effects.request<WorkspaceSnapshot>({
       action: "workspace.snapshot",
-      view: { filters: parseFilter(activeFilter) },
+      view: activeFilter
+        ? {
+            query: {
+              filters: parsePropertyFilterExpression(activeFilter),
+              limit: 500,
+            },
+          }
+        : undefined,
     });
     workIdPrefix = snapshot.workIdPrefix ?? null;
     if (snapshot.physical.completeness.kind === "truncated") {
@@ -529,7 +541,16 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
 
   async function finishInput(): Promise<void> {
     if (mode === "filter") {
-      activeFilter = quickInputText().trim();
+      const candidate = quickInputText().trim();
+      try {
+        parsePropertyFilterExpression(candidate);
+      } catch (error) {
+        quickCompletion = null;
+        status = `Invalid filter: ${errorMessage(error)}`;
+        effects.invalidate();
+        return;
+      }
+      activeFilter = candidate;
       mode = "browse";
       resetQuickEditor();
       await selectVisibleBlock(null);
@@ -596,14 +617,59 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   }
 
   async function openQuickCompletion(): Promise<void> {
-    if (mode === "filter") return;
+    if (mode === "filter") {
+      const target = filterCompletionTargetAtCursor(quickInputText(), quickBuffer.column);
+      if (!target) {
+        status = "Type a valid property key before requesting filter completion";
+        return;
+      }
+      const catalog = await effects.request<PropertyCatalogItem[]>({
+        action: "properties.catalog",
+        ...(target.kind === "value" ? { key: target.key } : {}),
+        prefix: target.prefix,
+        limit: target.kind === "value" ? 20 : 100,
+      });
+      let items: TreeQuickCompletionItem[];
+      if (target.kind === "value") {
+        items = catalog.map((item) => ({
+          label: `${item.value} (${item.count})`,
+          insertion: `${target.key}=${serializePropertyFilterValue(item.value)}`,
+        }));
+      } else {
+        const counts = new Map<string, number>();
+        for (const item of catalog) counts.set(item.key, (counts.get(item.key) ?? 0) + item.count);
+        items = [...counts]
+          .sort(([leftKey, leftCount], [rightKey, rightCount]) =>
+            rightCount - leftCount || leftKey.localeCompare(rightKey)
+          )
+          .map(([key, count]) => ({
+            label: `${key} (${count})`,
+            insertion: `${key}=`,
+          }));
+      }
+      if (items.length === 0) {
+        quickCompletion = null;
+        status = target.kind === "value"
+          ? `No matching values for ${target.key}`
+          : "No matching property keys";
+        return;
+      }
+      quickCompletion = {
+        start: target.start,
+        end: target.end,
+        index: 0,
+        items,
+        truncatedLimit: null,
+      };
+      status = "";
+      return;
+    }
     const line = quickInputText();
     const target = completionTargetAtCursor(line, quickBuffer.column);
     if (!target) {
       status = "Type [[page, ((block, or [file::path before requesting completion";
       return;
     }
-
     let items: MutableQuickCompletion["items"];
     let truncatedLimit: number | null = null;
     if (target.kind === "file") {
@@ -963,7 +1029,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       } else if (key.name === "return") {
         await finishInput();
         return;
-      } else if (key.name === "tab" && mode !== "filter" && mode !== "purge") {
+      } else if (key.name === "tab" && mode !== "purge") {
         await openQuickCompletion();
       } else {
         updateQuickBuffer(str, key);

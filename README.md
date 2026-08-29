@@ -25,7 +25,7 @@ The project started as a small Friday-night experiment and grew into a durable w
 
 - SQLite-backed hierarchical blocks with stable UUIDs, sibling order, authors, timestamps, collapse state, and selection.
 - Workspace-isolated service and runtime paths.
-- JSON-lines RPC protocol v9 over a Unix socket.
+- JSON-lines RPC protocol v10 over a Unix socket.
 - Reactive content, selection, view, and UI-command events, with service-owned block navigation history.
 - Indexed `[property::value]` metadata with optimistic property patching and catalog queries.
 - Exact block references using `((block-id))`, resolved to display titles in read mode while raw text remains editable.
@@ -93,6 +93,8 @@ In another terminal, from the same workspace root:
 ```sh
 bun run cli list
 bun run cli list --filter work-stage=next --limit 20
+bun run cli list --filter 'status=in progress' --filter project=pi-outliner --limit 20
+bun run cli list --subtree <block-uuid> --text "route snapshot" --limit 20
 bun run cli create --text "A durable note [type::note]"
 bun run cli selection
 bun run goto 40bd0864
@@ -187,6 +189,20 @@ Investigate page navigation [type::roadmap-item] [status::planned] [work-stage::
 
 Eligible property tokens are indexed in `block_properties`; canonical `Block.text` remains the source of truth. Literal examples inside inline/fenced code are not indexed.
 
+### Bounded block queries
+
+The service owns one structured `BlockSearchQuery` used by Tree filters, virtual branches, CLI, Pi commands, and agent tools. Property filters are positive AND clauses with presence or exact equality:
+
+```text
+status=open priority
+status="in progress" project=pi-outliner
+status::"in review" type::roadmap-item
+```
+
+Whitespace separates clauses outside double quotes. `key` checks property presence; `key=value` and `key::value` check case-insensitive exact equality. Double-quoted values preserve spaces and support only `\\` and `\"` escapes. Invalid syntax reports a character position instead of becoming an accidental query. OR, NOT, ranges, grouping, aggregation, sorting, and reference traversal are intentionally not supported.
+
+Text substring, subtree root, deleted-content mode, projection rank context, and limit remain explicit structured fields rather than reserved filter words. Every query carries a limit from 1 through 1000 and returns `complete` or `truncated` metadata. Tree `/` mode uses the indexed property catalog for key/value completion; agents call `outliner_query` with structured filters and never parse the shorthand.
+
 Exact references use stable block IDs:
 
 ```text
@@ -214,6 +230,12 @@ Next
 [limit::20]
 ```
 
+Spaced values use the same canonical filter syntax:
+
+```text
+[query::status="in progress" project=pi-outliner]
+```
+
 Matches appear as disposable `◇` occurrences. Creating beneath the branch creates one canonical block under `create-parent` and applies the configured property. The same canonical block may appear in multiple branches.
 
 `Shift+Up` / `Shift+Down` reorders projected siblings within that branch using persisted occurrence ranks. Canonical parent/position order stays unchanged, and ranks survive temporary query mismatches.
@@ -236,6 +258,8 @@ The project Pi extension is auto-discovered through [`.pi/extensions/outliner.ts
 - `outliner_move`
 - `outliner_selection`
 - `outliner_annotate_file`
+
+`outliner_query` accepts structured filters such as `{ key: "status", value: "in progress" }`, plus optional text and subtree fields. The service normalizes keys/values and applies the same bounded semantics used by human surfaces.
 
 Before each agent turn, the extension injects a bounded view of the selected block, breadcrumb, and children. This injection fails open when the service is unavailable. It does not yet interpret `PREFIX-XXX`; that deterministic nudge is explicitly tracked by PIE-152.
 

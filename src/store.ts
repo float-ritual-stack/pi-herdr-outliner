@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { normalizeBlockSearchQuery } from "./block-query";
 import {
   firstLineWithoutPropertyTokens,
   matchesFilters,
@@ -762,38 +763,29 @@ export class OutlinerStore {
     )();
   }
 
-  queryBlocks(query: BlockSearchQuery): VisibleBlockCollection {
-    const limit = query?.limit;
-    if (typeof limit !== "number" || !Number.isInteger(limit) || limit <= 0) {
-      throw new Error("Block search limit must be a positive integer");
-    }
+  queryBlocks(input: BlockSearchQuery): VisibleBlockCollection {
+    const query = normalizeBlockSearchQuery(input);
 
     return this.database.transaction((): VisibleBlockCollection => {
-      const deletedFilter = query.filters?.find((filter) =>
-        filter.key === "deleted" && filter.value?.toLowerCase() === "true"
-      );
-      const filters = query.filters?.filter((filter) => filter !== deletedFilter);
-      const deletedMode = query.includeDeleted ?? (deletedFilter ? "roots" : "active");
+      if (query.subtreeRootId) this.require(query.subtreeRootId);
+      const deletedMode = query.includeDeleted ?? "active";
       if (query.rankViewId && deletedMode === "active") {
-        return this.queryRankedBlocksFromCurrentRead(
-          { ...query, filters },
-          query.rankViewId,
-        );
+        return this.queryRankedBlocksFromCurrentRead(query, query.rankViewId);
       }
       const blocks = this.traverseLoadedGraph(this.loadGraph(), {
-        filters,
+        filters: query.filters,
         subtreeRootId: query.subtreeRootId,
         collapsedDescendants: "traverse",
         text: query.text,
-        stopAfterMatches: limit + 1,
+        stopAfterMatches: query.limit + 1,
         deletedMode,
       });
-      if (blocks.length <= limit) {
+      if (blocks.length <= query.limit) {
         return { blocks, completeness: { kind: "complete" } };
       }
       return {
-        blocks: blocks.slice(0, limit),
-        completeness: { kind: "truncated", limit },
+        blocks: blocks.slice(0, query.limit),
+        completeness: { kind: "truncated", limit: query.limit },
       };
     })();
   }
@@ -801,17 +793,32 @@ export class OutlinerStore {
   readWorkspaceSnapshot(view: WorkspaceSnapshotView = {}): WorkspaceSnapshot {
     return this.database.transaction((): WorkspaceSnapshot => {
       const graph = this.loadGraph();
-      const visible = this.traverseLoadedGraph(graph, {
-        filters: view.filters,
-        collapsedDescendants: view.filters?.length ? "traverse" : "prune",
+      const query = view.query ? normalizeBlockSearchQuery(view.query) : null;
+      if (query?.rankViewId) throw new Error("Workspace snapshot query cannot use rankViewId");
+      if (query?.subtreeRootId && !graph.byId.has(query.subtreeRootId)) {
+        throw new Error(`Block not found: ${query.subtreeRootId}`);
+      }
+      const matched = this.traverseLoadedGraph(graph, {
+        filters: query?.filters,
+        subtreeRootId: query?.subtreeRootId,
+        collapsedDescendants: query ? "traverse" : "prune",
+        text: query?.text,
+        stopAfterMatches: query ? query.limit + 1 : undefined,
+        deletedMode: query?.includeDeleted ?? "active",
       });
+      const visible: VisibleBlockCollection = query && matched.length > query.limit
+        ? {
+            blocks: matched.slice(0, query.limit),
+            completeness: { kind: "truncated", limit: query.limit },
+          }
+        : { blocks: matched, completeness: { kind: "complete" } };
       const physical = this.traverseLoadedGraph(graph, {
         collapsedDescendants: "traverse",
       });
 
       const workIdPrefix = this.workIdAllocatorFromCurrentRead()?.prefix;
       return {
-        visible: { blocks: visible, completeness: { kind: "complete" } },
+        visible,
         physical: { blocks: physical, completeness: { kind: "complete" } },
         selection: this.selectionFromGraph(graph),
         sequence: this.sequence,

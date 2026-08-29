@@ -267,14 +267,20 @@ export function stripProperties(text: string): string {
   return stripPropertyTokens(text).replace(/\s{2,}/g, " ").trim();
 }
 
+export function normalizePropertyKey(key: string): string {
+  const normalized = key.trim();
+  if (!PROPERTY_KEY_PATTERN.test(normalized)) throw new Error(`Invalid property key: ${key}`);
+  return normalized.toLowerCase();
+}
+
 export function validateProperty(key: string, value: string): BlockProperty {
-  if (!PROPERTY_KEY_PATTERN.test(key)) throw new Error(`Invalid property key: ${key}`);
+  const normalizedKey = normalizePropertyKey(key);
   const normalizedValue = value.trim();
   if (!normalizedValue) throw new Error(`Property value cannot be empty: ${key}`);
   if (/[\]\r\n]/.test(normalizedValue)) {
     throw new Error(`Property value cannot contain ], CR, or LF: ${key}`);
   }
-  return { key: key.toLowerCase(), value: normalizedValue };
+  return { key: normalizedKey, value: normalizedValue };
 }
 
 export function formatProperty(property: BlockProperty): string {
@@ -353,20 +359,6 @@ export function patchPropertyText(text: string, operations: PropertyPatchOperati
   return `${patched.slice(0, firstLineEnd)}${lineBreak}${appendedText}${patched.slice(firstLineEnd)}`;
 }
 
-export function parseFilter(input: string): PropertyFilter[] {
-  const trimmed = input.trim();
-  if (!trimmed) return [];
-
-  return trimmed.split(/\s+/).map((token) => {
-    const separator = token.includes("::") ? "::" : "=";
-    const index = token.indexOf(separator);
-    if (index < 1) return { key: token.toLowerCase() };
-    return {
-      key: token.slice(0, index).toLowerCase(),
-      value: token.slice(index + separator.length),
-    };
-  });
-}
 
 export function matchesFilters(properties: BlockProperty[], filters: PropertyFilter[]): boolean {
   return filters.every((filter) =>

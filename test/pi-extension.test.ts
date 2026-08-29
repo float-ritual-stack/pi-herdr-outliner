@@ -45,7 +45,7 @@ test("registers the workspace commands and annotation-aware tools", () => {
   expect(updateSchema).toContain("expectedUpdatedAt");
 });
 
-test("requires protocol v9, attributes agent creates and page follows, and presents bounded query results", async () => {
+test("requires protocol v10, attributes agent creates and page follows, and presents bounded query results", async () => {
   const collection: VisibleBlockCollection = {
     blocks: [
       {
@@ -66,7 +66,7 @@ test("requires protocol v9, attributes agent creates and page follows, and prese
     ],
     completeness: { kind: "truncated", limit: 20 },
   };
-  let protocolVersion = 9;
+  let protocolVersion = 10;
   let queryCollection = collection;
   const requests: RequestInput[] = [];
   const originalRequest = OutlinerClient.prototype.request;
@@ -140,6 +140,20 @@ test("requires protocol v9, attributes agent creates and page follows, and prese
         },
       },
     });
+    await commands.get("outliner-filter")!.handler('status="in progress"', {
+      ui: {
+        setWidget(id, lines) {
+          widgets.push({ id, lines });
+        },
+      },
+    });
+    await commands.get("outliner-filter")!.handler('status="in progress', {
+      ui: {
+        setWidget(id, lines) {
+          widgets.push({ id, lines });
+        },
+      },
+    });
     const result = await tools.get("outliner_query")!.execute("query-id", { text: "Matching" });
     await tools.get("outliner_create")!.execute(
       "tool-call-test",
@@ -184,6 +198,10 @@ test("requires protocol v9, attributes agent creates and page follows, and prese
       },
       {
         action: "blocks.query",
+        query: { filters: [{ key: "status", value: "in progress" }], limit: 20 },
+      },
+      {
+        action: "blocks.query",
         query: { text: "Matching", limit: 100 },
       },
     ]);
@@ -225,6 +243,14 @@ test("requires protocol v9, attributes agent creates and page follows, and prese
         id: "pi-outliner-filter",
         lines: ["• Matching block", "Results truncated at 20 blocks"],
       },
+      {
+        id: "pi-outliner-filter",
+        lines: ["• Matching block", "Results truncated at 20 blocks"],
+      },
+      {
+        id: "pi-outliner-filter",
+        lines: ["Invalid filter: Unterminated quoted filter value at character 8"],
+      },
     ]);
     expect(JSON.parse(result.content[0]!.text)).toEqual({
       ...collection,
@@ -253,7 +279,7 @@ test("requires protocol v9, attributes agent creates and page follows, and prese
     expect(largeEnvelope.presentation.omitted).toBeGreaterThan(0);
     protocolVersion = 5;
     await expect(tools.get("outliner_query")!.execute("incompatible-query", {})).rejects.toThrow(
-      "Incompatible outliner protocol 5; expected 9",
+      "Incompatible outliner protocol 5; expected 10",
     );
   } finally {
     OutlinerClient.prototype.request = originalRequest;

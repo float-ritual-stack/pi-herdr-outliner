@@ -91,6 +91,36 @@ describe("virtual branch definitions", () => {
     });
   });
 
+  test("preserves exact spaced values in durable virtual branch queries", () => {
+    const definition = visibleBlock("spaced-view", [
+      { key: "type", value: "virtual-branch" },
+      { key: "query", value: 'status="in progress" project=pi-outliner' },
+    ]);
+
+    const parsed = parseVirtualBranchConfig(definition, [definition]);
+    expect(parsed.configurationErrors).toEqual([]);
+    expect(parsed.config).toEqual(expect.objectContaining({
+      query: 'status="in progress" project=pi-outliner',
+      filters: [
+        { key: "status", value: "in progress" },
+        { key: "project", value: "pi-outliner" },
+      ],
+    }));
+  });
+
+  test("reports positioned diagnostics for malformed quoted queries", () => {
+    const definition = visibleBlock("malformed-view", [
+      { key: "type", value: "virtual-branch" },
+      { key: "query", value: 'status="in progress' },
+    ]);
+
+    const parsed = parseVirtualBranchConfig(definition, [definition]);
+    expect(parsed.config).toBeNull();
+    expect(parsed.configurationErrors).toEqual([
+      "Invalid virtual branch query: Unterminated quoted filter value at character 8",
+    ]);
+  });
+
   test("keeps missing creation settings read-only while retaining a valid query", () => {
     const definition = visibleBlock("done-view", [
       { key: "type", value: "virtual-branch" },
