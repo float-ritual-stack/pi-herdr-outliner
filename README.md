@@ -25,9 +25,9 @@ The project started as a small Friday-night experiment and grew into a durable w
 
 - SQLite-backed hierarchical blocks with stable UUIDs, sibling order, authors, timestamps, and one canonical graph per workspace root.
 - Workspace-isolated service and runtime paths.
-- JSON-lines RPC protocol v14 over a Unix socket.
-- Reactive canonical content/view broadcasts, context-targeted browsing events, per-process Tree/Detail registration, and exact-client UI commands.
-- Each Tree owns its cursor, occurrence selection, filter, viewport, collapsed rows, multiline expansion, explicit-navigation history, and paired browsing context; moving one Tree does not move or retarget another pair.
+- JSON-lines RPC protocol v15 over a Unix socket.
+- Reactive canonical content/view broadcasts, context-targeted browsing events, per-process Tree/Detail registration, exact-client UI commands, and source-aware `open | peek | reveal` navigation.
+- Each Tree owns its cursor, occurrence selection, filter, viewport, collapsed rows, multiline expansion, explicit-navigation history, paired browsing context, and optional same-tab open destination; moving one Tree does not move or retarget another pair.
 - Indexed `[property::value]` metadata with optimistic property patching and catalog queries.
 - Exact block references using `((block-id))`, resolved to display titles in read mode while raw text remains editable.
 - Unique normalized symbolic addresses from explicit `[page::address]` declarations and Work IDs, with aliases, explicit removal, bounded completion, dangling links, and transactional create-on-follow.
@@ -40,12 +40,12 @@ The project started as a small Friday-night experiment and grew into a durable w
 - Client-local multiline-expanded Tree rows support viewport-sized intra-block PageUp/PageDown without changing the Tree cursor.
 - Pi Markdown preview with line, page, endpoint, and mouse/trackpad scrolling.
 - Grapheme-safe wrapped Detail editing, word motion, selection, deletion, bounded per-session undo/redo, completion, optimistic save, and whole-session Esc cancellation.
-- Each Detail visibly reports `Follow` or `Independent`, owns its exact target and bounded in-process history, and can hold a target while its paired Tree moves.
+- Each Detail visibly reports `Follow`, `Independent`, or temporary `Peek`, owns its exact target and bounded in-process history, and can hold a target while its paired Tree moves.
 - Referenced text/Markdown file viewing and durable line-range annotations.
 - Herdr-owned pane placement/focus and current-pane recovery, one remembered service pane, per-process live client discovery, and a disposable runtime registry.
 - Pi/OMP commands, tools, and selection-context injection.
 
-Planned work is tracked inside the outliner itself. Notable accepted designs include normalized query construction, agent-assisted `PREFIX-XXX` placeholder resolution, backlinks, scoped property semantics, origin-aware link routing, and projected canonical descendants.
+Planned work is tracked inside the outliner itself. Notable accepted designs include normalized query construction, agent-assisted `PREFIX-XXX` placeholder resolution, backlinks, scoped property semantics, and projected canonical descendants.
 
 ## Quick start
 
@@ -98,6 +98,15 @@ but not cursors, targets, filters, viewport state, or navigation history. In a
 new pair, Detail starts in **Follow** mode and displays the block selected by its
 paired Tree. Press `i` in Detail to hold the current block in **Independent**
 mode; press `i` again to resume following the paired Tree.
+
+Reference navigation is source-aware. `o` opens and `P` peeks in a Detail;
+`R` reveals the target in a Tree. Resolution prefers an explicitly configured
+open destination, then the source pane itself when its role matches, then the
+paired browsing context, then one unambiguous same-tab pane. Other tabs and
+workspaces are never implicit candidates. Press `L` in either Tree or Detail to
+choose **Open links in…**. The picker displays Herdr pane labels, but persists
+only the destination's opaque live client ID; renaming a pane never changes
+routing.
 
 Closing a pair discards its browsing context. Renaming its tab or panes changes
 nothing. A newly opened pair receives a new context and initially seeds its Tree
@@ -155,7 +164,10 @@ The footer in each pane is authoritative and context-sensitive. These are the pr
 | `.` or `Command+.` | Expand/collapse multiline block detail in Tree |
 | `Ctrl+E` or modified Enter | Open the selected block in Detail |
 | `g` | Fuzzy goto by UUID, short prefix, title, or content |
-| `o` | Follow the first exact `((block-id))` or symbolic `[[address]]` reference in the selected block |
+| `o` | Open the first exact `((block-id))` or symbolic `[[address]]` reference in the routed Detail |
+| `P` | Temporarily peek at the first reference in the routed Detail; `Esc` there restores its prior target and mode |
+| `R` | Reveal the first reference in this Tree |
+| `L` | Choose the same-tab Detail used by `o`, `P`, and clicks |
 | `Option+Left` / `Option+Right` | Move backward / forward through block navigation history |
 | `/` | Filter visible blocks |
 | `f` | Open a referenced file |
@@ -164,9 +176,9 @@ The footer in each pane is authoritative and context-sensitive. These are the pr
 | `p` | Type the work ID/short UUID to permanently purge a Trash root |
 | `Ctrl+Q` | Close the pane |
 
-Plain-click any linked `PIE-NNN`, canonical UUID, exact reference, or symbolic `[[address]]` inside Tree or Detail. Registered Work IDs resolve without fuzzy matching and never create content when missing. Resolved page addresses focus their canonical block; following another dangling address creates one canonical page stub and then focuses it. Shift remains the terminal-native text-selection escape while Tree mouse reporting is active.
+Plain-click any linked `PIE-NNN`, canonical UUID, exact reference, or symbolic `[[address]]` inside Tree or Detail. Clicks dispatch `open` from the originating pane and use that pane's configured/default destination without changing workspace-global selection. Registered Work IDs resolve without fuzzy matching and never create content when missing. Following another dangling address creates one canonical page stub before dispatch. Shift remains the terminal-native text-selection escape while Tree mouse reporting is active.
 
-For links rendered outside the active Outliner, the Herdr Control-click handler remains available where the terminal delivers that modifier. On macOS, the optional `macos/pi-outliner-link` app handles the native path instead: Warp uses Command-click; Ghostty with mouse capture uses Shift-Command-click. The bridge forwards validated targets over SSH/Tailscale and preserves the live workspace navigation semantics.
+For links rendered outside the active Outliner, the Herdr handler identifies the invoking pane's live client and uses the same source-aware route. On macOS, the optional `macos/pi-outliner-link` app remains an explicit compatibility path: Warp uses Command-click; Ghostty with mouse capture uses Shift-Command-click.
 
 Projected virtual occurrences deliberately constrain hierarchy and collapse. Branch-local sibling reorder changes only that projection; editing and confirmed deletion still target the canonical block.
 
@@ -181,7 +193,10 @@ Projected virtual occurrences deliberately constrain hierarchy and collapse. Bra
 | Mouse wheel / trackpad | Scroll preview |
 | `Enter` or `e` | Edit raw canonical text |
 | `f` | Open referenced file |
-| `o` | Open the first exact `((block-id))` or symbolic `[[address]]` reference in this Detail and enter **Independent** mode |
+| `o` | Open the first exact `((block-id))` or symbolic `[[address]]` reference in this Detail's configured/default destination |
+| `P` | Temporarily peek at the first reference; `Esc` restores the prior target and `Follow`/`Independent` mode |
+| `R` | Reveal the first reference in the paired or unique same-tab Tree |
+| `L` | Choose the same-tab Detail used by `o`, `P`, and clicks from this Detail |
 | `i` | Toggle between following the paired Tree and holding an independent target |
 | `Option+Left` / `Option+Right` | Move backward / forward through this Detail's local history; history navigation enters **Independent** mode |
 | `r` | Restore the selected block when it is a direct Trash root |

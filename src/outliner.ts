@@ -7,6 +7,7 @@ import { navigateOutlinerLink } from "./outliner-links";
 import { currentPaneRuntime, focusCurrentPane } from "./pane-control";
 import { resolvePaths } from "./paths";
 import { TerminalInputDecoder, type TerminalKey } from "./terminal";
+import { listOpenRouteDestinations } from "./navigation-routes";
 import { createTreeController, type TreeController } from "./tree-controller";
 import {
   isTreeMouseSequence,
@@ -65,6 +66,9 @@ const controller = createTreeController({
   request<T>(input: RequestInput): Promise<T> {
     return client.request<T>(input);
   },
+  listOpenRouteDestinations() {
+    return listOpenRouteDestinations(client, clientId);
+  },
   filesystem: {
     completeReferencedPaths(prefix) {
       return completeReferencedPaths(prefix, paths.workspaceRoot);
@@ -120,7 +124,7 @@ function handleMouseSequence(sequence: string): void {
   const link = treeLinkAtClick(renderedFrameLines, sequence);
   if (!link) return;
   enqueueWork(async () => {
-    await navigateOutlinerLink(client, link, { treeClientId: clientId });
+    await navigateOutlinerLink(client, link, { sourceClientId: clientId, intent: "open" });
   });
 }
 

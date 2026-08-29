@@ -75,6 +75,20 @@ export function currentPaneRuntime(
   }
 }
 
+export function paneLabel(
+  paneId: string,
+  herdr = process.env.HERDR_BIN_PATH ?? "herdr",
+): string | null {
+  if (process.env.HERDR_ENV !== "1") return null;
+  try {
+    const output = invokeHerdr(herdr, ["pane", "get", paneId]);
+    const pane = Parse(PaneGetResponseSchema, JSON.parse(output)).result.pane;
+    return pane.label?.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
 export function focusCurrentPane(
   herdr = process.env.HERDR_BIN_PATH ?? "herdr",
 ): void {

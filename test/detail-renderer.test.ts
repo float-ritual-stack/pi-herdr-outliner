@@ -25,6 +25,8 @@ function state(overrides: Partial<DetailState> = {}): DetailState {
     connectionMode: "follow",
     canNavigateBack: false,
     canNavigateForward: false,
+    peeking: false,
+    routePicker: null,
     resolvedSelectedText: "",
     workIdPrefix: null,
     resolvedBreadcrumb: "",
@@ -308,4 +310,33 @@ test("renders a selection across wrapped rows with the cursor at its active edge
   expect(lines[3]).toBe("   1 alpha \x1b[7mbeta \x1b[0m");
   expect(lines[4]).toBe("     \x1b[7mgamma \x1b[0m▏delta ");
   expect(lines.slice(3, 6).every((line) => visibleWidth(line) <= 18)).toBe(true);
+});
+
+test("renders human route labels without exposing opaque client IDs", () => {
+  const rendered = renderDetailLines(
+    state({
+      mode: "route",
+      routePicker: {
+        index: 1,
+        items: [
+          { label: "Paired/default", targetClientId: null },
+          { label: "[D] Detail", targetClientId: "opaque-detail-d" },
+        ],
+      },
+      status: "Open links in…",
+    }),
+    { width: 80, height: 12 },
+  ).join("\n");
+
+  expect(rendered).toContain("Open links in…");
+  expect(rendered).toContain("› [D] Detail");
+  expect(rendered).not.toContain("opaque-detail-d");
+});
+
+test("labels a temporary Detail target as Peek", () => {
+  const rendered = renderDetailLines(
+    state({ peeking: true, connectionMode: "independent" }),
+    { width: 80, height: 8 },
+  ).join("\n");
+  expect(rendered).toContain("Detail · Peek");
 });

@@ -90,7 +90,23 @@ function harness(
             contextId: `${clientId}-context`,
           }] as T;
         }
+        if (response === undefined && input.action === "navigation.dispatch") {
+          return {
+            sourceClientId: input.sourceClientId,
+            targetClientId: "detail-test",
+            intent: input.intent,
+            resolution: input.intent === "reveal" ? "self" : "context",
+            command: {
+              targetClientId: input.intent === "reveal" ? clientId : "detail-test",
+              command: input.intent,
+              blockId: input.blockId,
+            },
+          } as T;
+        }
         return response as T;
+      },
+      async listOpenRouteDestinations() {
+        return [];
       },
       filesystem: {
         completeReferencedPaths: () => [],
@@ -183,19 +199,14 @@ describe("createTreeController", () => {
     expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe(target.id);
     expect(lastCall(fake.calls, "browsing-context.publish")).toEqual({ action: "browsing-context.publish", contextId: "tree-test-context", blockId: target.id });
   });
-  test("follows the first block reference and navigates Tree-local history", async () => {
+  test("opens the first block reference without moving Tree-local selection", async () => {
     const source = block("source01", {
       text: "Source points to ((target01))",
       displayText: "Source points to ((target01))",
     });
     const target = block("target01", { position: 1, text: "Target", displayText: "Target" });
-    let selected = source;
     const fake = harness((input) => {
-      if (input.action === "workspace.snapshot") return snapshot([source, target], selected);
-      if (input.action === "browsing-context.publish") {
-        selected = input.blockId === target.id ? target : source;
-        return { selected, ancestors: [], children: [] };
-      }
+      if (input.action === "workspace.snapshot") return snapshot([source, target], source);
       if (input.action === "get") return input.blockId === source.id ? source : target;
       return undefined;
     });
@@ -203,8 +214,23 @@ describe("createTreeController", () => {
     await controller.initialize();
 
     await controller.handleKeypress("o", { name: "o" }, "pass");
-    expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe(target.id);
-    expect(lastCall(fake.calls, "browsing-context.publish")).toMatchObject({ action: "browsing-context.publish", contextId: "tree-test-context", blockId: target.id });
+    expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe(source.id);
+    expect(lastCall(fake.calls, "navigation.dispatch")).toEqual({
+      action: "navigation.dispatch",
+      sourceClientId: "tree-test",
+      blockId: target.id,
+      intent: "open",
+    });
+    expect(controller.view().status).toBe("Opened Target · context");
+
+    await controller.handleKeypress("P", { name: "p", shift: true }, "pass");
+    await controller.handleKeypress("R", { name: "r", shift: true }, "pass");
+    expect(fake.calls.filter((call) => call.action === "navigation.dispatch")).toEqual([
+      expect.objectContaining({ blockId: target.id, intent: "open" }),
+      expect.objectContaining({ blockId: target.id, intent: "peek" }),
+      expect.objectContaining({ blockId: target.id, intent: "reveal" }),
+    ]);
+    expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe(source.id);
 
     await controller.handleKeypress("", { name: "b", meta: true }, "pass");
     expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe(source.id);
@@ -257,8 +283,8 @@ describe("createTreeController", () => {
       action: "pages.follow",
       address: "Future Page",
     });
-    expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe(target.id);
-    expect(controller.view().status).toBe("Created and followed [[Future Page]]");
+    expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe(source.id);
+    expect(controller.view().status).toBe("Created and opened Future Page · context");
   });
 
   test("follows a bare Work ID for the configured project prefix", async () => {
@@ -296,7 +322,12 @@ describe("createTreeController", () => {
       action: "pages.resolve",
       address: "ABC-001",
     });
-    expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe(target.id);
+    expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe(source.id);
+    expect(lastCall(fake.calls, "navigation.dispatch")).toMatchObject({
+      sourceClientId: "tree-test",
+      blockId: target.id,
+      intent: "open",
+    });
   });
 
   test("opens a deleted reference read-only in Detail", async () => {
@@ -323,13 +354,48 @@ describe("createTreeController", () => {
 
     await controller.handleKeypress("o", { name: "o" }, "pass");
     expect(fake.focused).toEqual([]);
-    expect(lastCall(fake.calls, "ui.command.send")).toMatchObject({
-      action: "ui.command.send",
-      command: { targetClientId: "detail-test", blockId: deleted.id },
+    expect(lastCall(fake.calls, "navigation.dispatch")).toEqual({
+      action: "navigation.dispatch",
+      sourceClientId: "tree-test",
+      blockId: deleted.id,
+      intent: "open",
     });
 
   });
+  test("chooses a human-labelled same-tab open destination", async () => {
+    const root = block("root", { text: "Root", displayText: "Root" });
+    const fake = harness((input) => {
+      if (input.action === "workspace.snapshot") return snapshot([root], root);
+      if (input.action === "routes.get") {
+        return { sourceClientId: "tree-test", targetClientId: "opaque-detail-d" };
+      }
+      return undefined;
+    });
+    fake.effects.listOpenRouteDestinations = async () => [
+      { targetClientId: "opaque-detail-c", label: "[C] Detail" },
+      { targetClientId: "opaque-detail-d", label: "[D] Detail" },
+    ];
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
 
+    await controller.handleKeypress("L", { name: "l", shift: true }, "pass");
+    expect(controller.view().mode).toBe("route");
+    expect(controller.view().quickCompletion?.items.map(({ label }) => label)).toEqual([
+      "Paired/default",
+      "[C] Detail",
+      "[D] Detail",
+    ]);
+    expect(controller.view().quickCompletion?.index).toBe(2);
+
+    await controller.handleKeypress("", { name: "return" }, "pass");
+    expect(lastCall(fake.calls, "routes.set")).toEqual({
+      action: "routes.set",
+      sourceClientId: "tree-test",
+      targetClientId: "opaque-detail-d",
+    });
+    expect(controller.view().status).toBe("Open links in [D] Detail");
+    expect(controller.view().status).not.toContain("opaque-detail-d");
+  });
 
   test("cycles goto candidates across both Tab boundaries", async () => {
     const review = block("40bd0864-913a-4537-9535-8f96e1b63ef7", {

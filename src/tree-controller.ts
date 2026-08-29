@@ -14,9 +14,9 @@ import { completionTargetAtCursor } from "./completion";
 import type { ReferencedFile, ReferencedPathCandidate } from "./files";
 import {
   firstOutlinerReference,
-  navigateOutlinerLink,
-  outlinerLinkUri,
+  resolveOutlinerLinkTarget,
 } from "./outliner-links";
+import type { OpenRouteDestination } from "./navigation-routes";
 import { blockDisplayTitle } from "./references";
 import { layoutExpandedBlock } from "./tree-layout";
 import {
@@ -32,6 +32,8 @@ import type {
   CaptureReceipt,
   BlockCollectionCompleteness,
   OutlinerEvent,
+  OutlinerNavigationIntent,
+  OutlinerOpenRoute,
   PageAddressCollection,
   PropertyCatalogItem,
   VisibleBlock,
@@ -57,13 +59,15 @@ export type TreeInputMode =
   | "capture"
   | "filter"
   | "goto"
-  | "purge";
+  | "purge"
+  | "route";
 export type TreeMode = "browse" | "delete" | "viewer" | TreeInputMode;
 
 export interface TreeQuickCompletionItem {
   readonly label: string;
   readonly insertion: string;
   readonly blockId?: string;
+  readonly targetClientId?: string;
 }
 
 export interface TreeQuickCompletion {
@@ -108,6 +112,7 @@ export interface TreeControllerEffects {
   readonly clientId: string;
   readonly browsingContextId: string;
   request<T>(input: RequestInput): Promise<T>;
+  listOpenRouteDestinations(): Promise<OpenRouteDestination[]>;
   readonly filesystem: TreeFilesystem;
   focusSelf(): void;
   terminalWidth(): number;
@@ -485,6 +490,54 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     resetQuickEditor();
     await selectVisibleBlock(blockId, { recordNavigation: true });
     status = `Focused ${label}`;
+    effects.invalidate();
+  }
+
+  async function beginRoutePicker(): Promise<void> {
+    const [destinations, currentRoute] = await Promise.all([
+      effects.listOpenRouteDestinations(),
+      effects.request<OutlinerOpenRoute | null>({
+        action: "routes.get",
+        sourceClientId: effects.clientId,
+      }),
+    ]);
+    const items: TreeQuickCompletionItem[] = [
+      { label: "Paired/default", insertion: "" },
+      ...destinations.map((destination) => ({
+        label: destination.label,
+        insertion: "",
+        targetClientId: destination.targetClientId,
+      })),
+    ];
+    mode = "route";
+    quickBuffer = new TextBuffer();
+    quickCompletion = {
+      start: 0,
+      end: 0,
+      index: Math.max(
+        0,
+        items.findIndex((item) => item.targetClientId === currentRoute?.targetClientId),
+      ),
+      items,
+      truncatedLimit: null,
+    };
+    status = "Open links in…";
+    effects.invalidate();
+  }
+
+  async function acceptRouteDestination(): Promise<void> {
+    const item = quickCompletion?.items[quickCompletion.index];
+    if (!item) return;
+    await effects.request({
+      action: "routes.set",
+      sourceClientId: effects.clientId,
+      targetClientId: item.targetClientId ?? null,
+    });
+    mode = "browse";
+    resetQuickEditor();
+    status = item.targetClientId
+      ? `Open links in ${item.label}`
+      : "Open links in paired/default destination";
     effects.invalidate();
   }
 
@@ -1080,6 +1133,37 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     effects.invalidate();
   }
 
+  async function navigateSelectedReference(
+    selected: TreeRow,
+    intent: OutlinerNavigationIntent,
+  ): Promise<void> {
+    const reference = firstOutlinerReference(selected.block.text, workIdPrefix);
+    if (!reference) {
+      status = "Selected block has no block or page references";
+      return;
+    }
+    if (reference.kind === "page") {
+      await effects.request({
+        action: "navigation.resolve",
+        sourceClientId: effects.clientId,
+        intent,
+      });
+    }
+    const resolved = await resolveOutlinerLinkTarget(effects, reference);
+    const dispatched = await effects.request<{
+      resolution: "configured" | "self" | "context" | "same-tab";
+    }>({
+      action: "navigation.dispatch",
+      sourceClientId: effects.clientId,
+      blockId: resolved.block.id,
+      intent,
+    });
+    const verb = intent === "open"
+      ? resolved.created ? "Created and opened" : "Opened"
+      : intent === "peek" ? "Peeked" : "Revealed";
+    status = `${verb} ${blockDisplayTitle(resolved.block)} · ${dispatched.resolution}`;
+  }
+
   async function handleKeypress(
     str: string,
     key: TerminalKey,
@@ -1134,6 +1218,23 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         await reload();
       }
       mode = "browse";
+      effects.invalidate();
+      return;
+    }
+
+    if (mode === "route") {
+      if (key.name === "escape") {
+        mode = "browse";
+        resetQuickEditor();
+        status = "";
+      } else if (key.name === "up") {
+        moveQuickCompletion(-1, true);
+      } else if (key.name === "down" || key.name === "tab") {
+        moveQuickCompletion(key.shift ? -1 : 1, true);
+      } else if (key.name === "return") {
+        await acceptRouteDestination();
+        return;
+      }
       effects.invalidate();
       return;
     }
@@ -1321,27 +1422,17 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         }
         reloadRequired = true;
       }
-    } else if (str === "o" && selected) {
-      const reference = firstOutlinerReference(selected.block.text, workIdPrefix);
-      if (!reference) {
-        status = "Selected block has no block or page references";
-      } else {
-        const navigation = await navigateOutlinerLink(
-          effects,
-          outlinerLinkUri(reference.kind, reference.value),
-          { treeClientId: effects.clientId },
+    } else if ((str === "o" || str === "P" || str === "R") && selected) {
+      try {
+        await navigateSelectedReference(
+          selected,
+          str === "P" ? "peek" : str === "R" ? "reveal" : "open",
         );
-        if (navigation.deleted) {
-          status = "Deleted reference opened read-only in Detail";
-        } else {
-          await selectVisibleBlock(navigation.id, { recordNavigation: true });
-          status = navigation.created
-            ? `Created and followed [[${reference.value}]]`
-            : `Followed reference to ${navigation.title}`;
-        }
-        effects.invalidate();
-        return;
+      } catch (error) {
+        status = errorMessage(error);
       }
+      effects.invalidate();
+      return;
     } else if (str === "c" && selected) {
       status = "";
       captureRequestId = crypto.randomUUID();
@@ -1376,7 +1467,15 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       return;
     } else if (str === "d" && selected) mode = "delete";
     else if (str === "f" && selected) openReferencedFile(selected.block);
-    else if (key.name === "escape" && activeFilter) {
+    else if (str === "L") {
+      try {
+        await beginRoutePicker();
+      } catch (error) {
+        status = errorMessage(error);
+        effects.invalidate();
+      }
+      return;
+    } else if (key.name === "escape" && activeFilter) {
       activeFilter = "";
       reloadRequired = true;
     }

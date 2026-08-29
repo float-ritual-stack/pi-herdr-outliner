@@ -60,6 +60,8 @@ export interface CaptureReceipt {
 
 export type OutlinerClientRole = "tree" | "detail";
 
+export type OutlinerNavigationIntent = "open" | "peek" | "reveal";
+
 export interface OutlinerClientRuntime {
   paneId?: string;
   terminalId?: string;
@@ -179,7 +181,7 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 14;
+export const OUTLINER_PROTOCOL_VERSION = 15;
 
 export interface OutlinerServiceStatus {
   status: "ready";
@@ -198,6 +200,21 @@ export type OutlinerRequest =
   | { id: string; action: "blocks.context"; blockId: string }
   | { id: string; action: "browsing-context.get"; contextId: string }
   | { id: string; action: "browsing-context.publish"; contextId: string; blockId: string | null }
+  | { id: string; action: "routes.get"; sourceClientId: string }
+  | { id: string; action: "routes.set"; sourceClientId: string; targetClientId: string | null }
+  | {
+      id: string;
+      action: "navigation.resolve";
+      sourceClientId: string;
+      intent: OutlinerNavigationIntent;
+    }
+  | {
+      id: string;
+      action: "navigation.dispatch";
+      sourceClientId: string;
+      blockId: string;
+      intent: OutlinerNavigationIntent;
+    }
   | {
       id: string;
       action: "create";
@@ -310,8 +327,24 @@ export interface WorkspaceSnapshot {
 
 export interface OutlinerUiCommand {
   targetClientId: string;
-  command: "edit" | "reveal" | "focus";
+  command: "edit" | "reveal" | "focus" | "open" | "peek";
   blockId?: string;
+}
+
+export interface OutlinerOpenRoute {
+  sourceClientId: string;
+  targetClientId: string;
+}
+
+export interface OutlinerNavigationResolution {
+  sourceClientId: string;
+  targetClientId: string;
+  intent: OutlinerNavigationIntent;
+  resolution: "configured" | "self" | "context" | "same-tab";
+}
+
+export interface OutlinerNavigationDispatch extends OutlinerNavigationResolution {
+  command: OutlinerUiCommand;
 }
 
 export type OutlinerEventDomain = "content" | "selection" | "view" | "ui" | "browsing-context";

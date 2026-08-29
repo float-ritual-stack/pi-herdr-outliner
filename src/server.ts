@@ -12,6 +12,9 @@ import {
   type OutlinerClientRole,
   type OutlinerEventEnvelope,
   type NavigationState,
+  type OutlinerNavigationDispatch,
+  type OutlinerNavigationIntent,
+  type OutlinerOpenRoute,
   type PageAddressFollowResult,
   type OutlinerRequest,
   type OutlinerResponse,
@@ -21,6 +24,7 @@ export class OutlinerServer {
   private server: Server | null = null;
   private readonly subscribers = new Map<Socket, OutlinerClientRegistration>();
   private readonly browsingContextTargets = new Map<string, string | null>();
+  private readonly openRoutes = new Map<string, string>();
 
   constructor(
     readonly store: OutlinerStore,
@@ -55,6 +59,7 @@ export class OutlinerServer {
     for (const subscriber of this.subscribers.keys()) subscriber.destroy();
     this.subscribers.clear();
     this.browsingContextTargets.clear();
+    this.openRoutes.clear();
     const closed = Promise.withResolvers<void>();
     server.close((error) => (error ? closed.reject(error) : closed.resolve()));
     await closed.promise;
@@ -108,6 +113,12 @@ export class OutlinerServer {
       ![...this.subscribers.values()].some((client) => client.contextId === removed.contextId)
     ) {
       this.browsingContextTargets.delete(removed.contextId);
+    }
+    if (removed) {
+      this.openRoutes.delete(removed.clientId);
+      for (const [sourceClientId, targetClientId] of this.openRoutes) {
+        if (targetClientId === removed.clientId) this.openRoutes.delete(sourceClientId);
+      }
     }
   }
 
@@ -191,6 +202,109 @@ export class OutlinerServer {
     return [...this.subscribers.values()].some((client) => client.clientId === clientId);
   }
 
+  private clientById(clientId: string): OutlinerClientRegistration {
+    const client = this.listClients().find((candidate) => candidate.clientId === clientId);
+    if (!client) throw new Error("Navigation source is not a live Outliner pane");
+    return client;
+  }
+
+  private sameTab(
+    left: OutlinerClientRegistration,
+    right: OutlinerClientRegistration,
+  ): boolean {
+    return Boolean(
+      left.runtime?.workspaceId &&
+      left.runtime.tabId &&
+      left.runtime.workspaceId === right.runtime?.workspaceId &&
+      left.runtime.tabId === right.runtime?.tabId
+    );
+  }
+
+  private setOpenRoute(sourceClientId: string, targetClientId: string | null): OutlinerOpenRoute | null {
+    const source = this.clientById(sourceClientId);
+    if (targetClientId === null) {
+      this.openRoutes.delete(sourceClientId);
+      return null;
+    }
+    const target = this.clientById(targetClientId);
+    if (target.role !== "detail") throw new Error("Open-route destination must be a Detail pane");
+    if (!this.sameTab(source, target)) {
+      throw new Error("Open-route destination must be in the source pane's current tab");
+    }
+    this.openRoutes.set(sourceClientId, targetClientId);
+    return { sourceClientId, targetClientId };
+  }
+
+  private getOpenRoute(sourceClientId: string): OutlinerOpenRoute | null {
+    this.clientById(sourceClientId);
+    const targetClientId = this.openRoutes.get(sourceClientId);
+    if (!targetClientId) return null;
+    if (!this.listClients().some((client) => client.clientId === targetClientId)) {
+      this.openRoutes.delete(sourceClientId);
+      return null;
+    }
+    return { sourceClientId, targetClientId };
+  }
+
+  private navigationIntent(value: unknown): OutlinerNavigationIntent {
+    if (value === "open" || value === "peek" || value === "reveal") return value;
+    throw new Error("Navigation intent must be open, peek, or reveal");
+  }
+
+  private resolveNavigationTarget(
+    sourceClientId: string,
+    intent: OutlinerNavigationIntent,
+  ): Omit<OutlinerNavigationDispatch, "command"> {
+    const source = this.clientById(sourceClientId);
+    const targetRole: OutlinerClientRole = intent === "reveal" ? "tree" : "detail";
+    if (intent !== "reveal") {
+      const configured = this.getOpenRoute(sourceClientId);
+      if (configured) {
+        return {
+          sourceClientId,
+          targetClientId: configured.targetClientId,
+          intent,
+          resolution: "configured",
+        };
+      }
+    }
+    if (source.role === targetRole) {
+      return {
+        sourceClientId,
+        targetClientId: source.clientId,
+        intent,
+        resolution: "self",
+      };
+    }
+    const contextCandidates = this.listClients(targetRole)
+      .filter((client) => client.contextId === source.contextId);
+    if (contextCandidates.length === 1) {
+      return {
+        sourceClientId,
+        targetClientId: contextCandidates[0]!.clientId,
+        intent,
+        resolution: "context",
+      };
+    }
+    if (contextCandidates.length > 1) {
+      throw new Error(`Multiple ${targetRole} panes share this browsing context`);
+    }
+    const sameTabCandidates = this.listClients(targetRole)
+      .filter((client) => this.sameTab(source, client));
+    if (sameTabCandidates.length === 1) {
+      return {
+        sourceClientId,
+        targetClientId: sameTabCandidates[0]!.clientId,
+        intent,
+        resolution: "same-tab",
+      };
+    }
+    if (sameTabCandidates.length === 0) {
+      throw new Error(`No ${targetRole} destination is available in this pane's context or tab`);
+    }
+    throw new Error(`Multiple same-tab ${targetRole} destinations; choose one with Open links in…`);
+  }
+
   handle(
     request: OutlinerRequest,
     subscribedClient?: OutlinerClientRegistration,
@@ -241,6 +355,32 @@ export class OutlinerServer {
             : { selected: null, ancestors: [], children: [] };
           this.browsingContextTargets.set(contextId, request.blockId);
           result = { contextId, target };
+          break;
+        }
+        case "routes.get":
+          result = this.getOpenRoute(request.sourceClientId);
+          break;
+        case "routes.set":
+          result = this.setOpenRoute(request.sourceClientId, request.targetClientId);
+          break;
+        case "navigation.resolve":
+          result = this.resolveNavigationTarget(
+            request.sourceClientId,
+            this.navigationIntent(request.intent),
+          );
+          break;
+        case "navigation.dispatch": {
+          const intent = this.navigationIntent(request.intent);
+          this.store.blockContext(request.blockId);
+          const route = this.resolveNavigationTarget(request.sourceClientId, intent);
+          result = {
+            ...route,
+            command: {
+              targetClientId: route.targetClientId,
+              command: intent,
+              blockId: request.blockId,
+            },
+          } satisfies OutlinerNavigationDispatch;
           break;
         }
         case "ui.command.send":
@@ -436,6 +576,13 @@ export class OutlinerServer {
         blockId = request.command.blockId;
         command = request.command;
         break;
+      case "navigation.dispatch": {
+        const dispatched = response.result as OutlinerNavigationDispatch;
+        domain = "ui";
+        blockId = request.blockId;
+        command = dispatched.command;
+        break;
+      }
       case "browsing-context.publish":
         domain = "browsing-context";
         blockId = request.blockId ?? undefined;

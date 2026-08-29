@@ -2,6 +2,7 @@ import { extractFileAnnotationComment, formatFileAnnotation } from "./annotation
 import { completionTargetAtCursor } from "./completion";
 import { layoutDetailEditor } from "./detail-editor-layout";
 import type { ReferencedFile, ReferencedPathCandidate } from "./files";
+import type { OpenRouteDestination } from "./navigation-routes";
 import { firstOutlinerReference, type OutlinerLinkTarget } from "./outliner-links";
 import { getProperty } from "./properties";
 import { blockDisplayTitle } from "./references";
@@ -13,11 +14,16 @@ import type {
   PageAddressCollection,
   OutlinerEvent,
   SelectionContext,
+  OutlinerNavigationDispatch,
+  OutlinerNavigationResolution,
+  OutlinerNavigationIntent,
+  OutlinerOpenRoute,
+  OutlinerUiCommand,
   ResolvedBlockReferences,
   VisibleBlockCollection,
 } from "./types";
 
-export type DetailMode = "preview" | "file" | "annotation" | "edit" | "comment";
+export type DetailMode = "preview" | "file" | "annotation" | "edit" | "comment" | "route";
 export type DetailConnectionMode = "follow" | "independent";
 
 export interface DetailViewport {
@@ -42,12 +48,19 @@ export interface DetailLineRange {
   endLine: number;
 }
 
+export interface DetailRoutePicker {
+  index: number;
+  items: Array<{ label: string; targetClientId: string | null }>;
+}
+
 export interface DetailState {
   context: SelectionContext;
   targetBlockId: string | null;
   connectionMode: DetailConnectionMode;
   canNavigateBack: boolean;
   canNavigateForward: boolean;
+  peeking: boolean;
+  routePicker: DetailRoutePicker | null;
   resolvedSelectedText: string;
   workIdPrefix: string | null;
   resolvedBreadcrumb: string;
@@ -72,6 +85,16 @@ export interface DetailEffects {
   focusSelf(): void;
   getBrowsingContext(): Promise<BrowsingContextState>;
   getBlockContext(blockId: string): Promise<SelectionContext>;
+  listOpenRouteDestinations(): Promise<OpenRouteDestination[]>;
+  getOpenRoute(): Promise<OutlinerOpenRoute | null>;
+  setOpenRoute(targetClientId: string | null): Promise<void>;
+  dispatchNavigation(
+    blockId: string,
+    intent: OutlinerNavigationIntent,
+  ): Promise<OutlinerNavigationDispatch>;
+  resolveNavigation(
+    intent: OutlinerNavigationIntent,
+  ): Promise<OutlinerNavigationResolution>;
   resolveReferences(text: string): Promise<ResolvedBlockReferences>;
   updateBlock(input: {
     blockId: string;
@@ -110,6 +133,13 @@ export type DetailIntent =
   | { type: "navigation.forward" }
   | { type: "reference.follow" }
   | { type: "reference.open"; target: OutlinerLinkTarget }
+  | { type: "reference.peek" }
+  | { type: "reference.reveal" }
+  | { type: "peek.close" }
+  | { type: "route.open" }
+  | { type: "route.move"; delta: -1 | 1 }
+  | { type: "route.accept" }
+  | { type: "route.cancel" }
   | { type: "connection.toggle" }
   | { type: "buffer.insert"; text: string }
   | { type: "buffer.newline" }
@@ -164,6 +194,8 @@ export function detailHelpText(mode: DetailMode): string {
       return "↑↓ lines  o open ref  i hold/follow  ⌥←→ history  v select  c comment  b block  q tree";
     case "preview":
       return "↑↓ scroll  o open ref  i hold/follow  ⌥←→ history  Enter/e edit  f file  q tree  Ctrl+Q close";
+    case "route":
+      return "↑↓/Tab choose  Enter set destination  Esc cancel";
   }
 }
 
@@ -210,6 +242,8 @@ export function createDetailController(
     connectionMode: "follow",
     canNavigateBack: false,
     canNavigateForward: false,
+    peeking: false,
+    routePicker: null,
     resolvedSelectedText: "",
     workIdPrefix: null,
     resolvedBreadcrumb: "",
@@ -229,7 +263,12 @@ export function createDetailController(
   };
   const navigationHistory: string[] = [];
   let navigationIndex = -1;
-  let pendingTargetBlockId: string | null = null;
+  let pendingUiCommand: OutlinerUiCommand | null = null;
+  let routeReturnMode: Exclude<DetailMode, "route"> = "preview";
+  let peekReturn: {
+    targetBlockId: string | null;
+    connectionMode: DetailConnectionMode;
+  } | null = null;
 
   const emit = (): void => onChange(state);
   const isBufferMode = (): boolean => state.mode === "edit" || state.mode === "comment";
@@ -345,15 +384,46 @@ export function createDetailController(
     }
   };
 
-  const refreshPendingTarget = async (): Promise<void> => {
-    const blockId = pendingTargetBlockId;
-    pendingTargetBlockId = null;
-    if (blockId) {
+  const applyNavigationCommand = async (command: OutlinerUiCommand): Promise<void> => {
+    if (!command.blockId) return;
+    if (command.command === "peek") {
+      if (!state.peeking) {
+        peekReturn = {
+          targetBlockId: state.targetBlockId,
+          connectionMode: state.connectionMode,
+        };
+      }
+      state.peeking = true;
       state.connectionMode = "independent";
-      await loadBlock(blockId, true);
-    } else {
-      await loadCurrentTarget(true);
+      await loadBlock(command.blockId, true, false);
+      return;
     }
+    state.peeking = false;
+    peekReturn = null;
+    state.connectionMode = "independent";
+    await loadBlock(command.blockId, true);
+  };
+
+  const closePeek = async (): Promise<void> => {
+    const prior = peekReturn;
+    state.peeking = false;
+    peekReturn = null;
+    if (!prior || prior.connectionMode === "follow") {
+      state.connectionMode = "follow";
+      await loadBrowsingContext(true);
+    } else {
+      state.connectionMode = "independent";
+      if (prior.targetBlockId) await loadBlock(prior.targetBlockId, true, false);
+      else await applyTarget({ selected: null, ancestors: [], children: [] }, true, false);
+    }
+    state.status = "Closed peek";
+  };
+
+  const refreshPendingTarget = async (): Promise<void> => {
+    const command = pendingUiCommand;
+    pendingUiCommand = null;
+    if (command) await applyNavigationCommand(command);
+    else await loadCurrentTarget(true);
   };
 
   const ensureEditorCursorVisible = (viewport: DetailViewport): void => {
@@ -598,7 +668,9 @@ export function createDetailController(
         break;
       }
       case "reference.open":
-      case "reference.follow": {
+      case "reference.follow":
+      case "reference.peek":
+      case "reference.reveal": {
         const reference = intent.type === "reference.open"
           ? intent.target
           : state.context.selected
@@ -608,14 +680,82 @@ export function createDetailController(
           state.status = "Selected block has no block or page references";
           break;
         }
+        const navigationIntent: OutlinerNavigationIntent =
+          intent.type === "reference.peek"
+            ? "peek"
+            : intent.type === "reference.reveal"
+              ? "reveal"
+              : "open";
+        if (reference.kind === "page") {
+          await effects.resolveNavigation(navigationIntent);
+        }
         const resolved = await effects.resolveReference(reference);
-        state.connectionMode = "independent";
-        await loadBlock(resolved.block.id, true);
-        state.status = reference.kind === "page"
-          ? `${resolved.created ? "Created and opened" : "Opened"} [[${reference.value}]] · Independent`
-          : "Opened block reference · Independent";
+        const dispatched = await effects.dispatchNavigation(
+          resolved.block.id,
+          navigationIntent,
+        );
+        if (dispatched.targetClientId === effects.clientId && navigationIntent !== "reveal") {
+          await applyNavigationCommand({
+            targetClientId: effects.clientId,
+            command: navigationIntent,
+            blockId: resolved.block.id,
+          });
+        }
+        const verb = navigationIntent === "open"
+          ? resolved.created ? "Created and opened" : "Opened"
+          : navigationIntent === "peek"
+            ? "Peeked"
+            : "Revealed";
+        state.status = `${verb} ${blockDisplayTitle(resolved.block)} · ${dispatched.resolution}`;
         break;
       }
+      case "peek.close":
+        await closePeek();
+        break;
+      case "route.open": {
+        const [destinations, currentRoute] = await Promise.all([
+          effects.listOpenRouteDestinations(),
+          effects.getOpenRoute(),
+        ]);
+        routeReturnMode = state.mode === "route" ? routeReturnMode : state.mode;
+        state.mode = "route";
+        const items = [
+          { label: "Paired/default", targetClientId: null },
+          ...destinations.map(({ label, targetClientId }) => ({ label, targetClientId })),
+        ];
+        state.routePicker = {
+          index: Math.max(
+            0,
+            items.findIndex((item) => item.targetClientId === currentRoute?.targetClientId),
+          ),
+          items,
+        };
+        state.status = "Open links in…";
+        break;
+      }
+      case "route.move":
+        if (state.routePicker) {
+          const count = state.routePicker.items.length;
+          state.routePicker.index =
+            (state.routePicker.index + intent.delta + count) % count;
+        }
+        break;
+      case "route.accept":
+        if (state.routePicker) {
+          const selected = state.routePicker.items[state.routePicker.index];
+          await effects.setOpenRoute(selected?.targetClientId ?? null);
+          state.mode = routeReturnMode;
+          state.routePicker = null;
+          state.status = selected?.targetClientId
+            ? `Open links in ${selected.label}`
+            : "Open links in paired/default Detail";
+        }
+        break;
+      case "route.cancel":
+        state.mode = routeReturnMode;
+        state.routePicker = null;
+        state.status = "Destination unchanged";
+        break;
       case "connection.toggle":
         if (state.connectionMode === "follow") {
           state.connectionMode = "independent";
@@ -776,13 +916,14 @@ export function createDetailController(
         const command = event.command;
         if (!command || command.targetClientId !== effects.clientId) return;
         if (isBufferMode()) {
-          if (command.blockId) pendingTargetBlockId = command.blockId;
+          if (command.blockId) pendingUiCommand = command;
           state.refreshPending = true;
           return;
         }
         if (command.blockId) {
-          state.connectionMode = "independent";
-          await loadBlock(command.blockId, true);
+          await applyNavigationCommand(command);
+          if (command.command === "peek") state.status = "Peek · Esc to close";
+          else if (command.command === "open") state.status = "Opened · Independent";
         }
         if (command.command === "edit") beginEdit(viewport);
         effects.focusSelf();

@@ -167,6 +167,78 @@ describe("outliner link URIs", () => {
     ]);
   });
 
+  test("dispatches typed navigation from the originating pane without global selection", async () => {
+    const target = block(
+      "550e8400-e29b-41d4-a716-446655440000",
+      "Origin-routed target",
+    );
+    const calls: RequestInput[] = [];
+    const requester = {
+      async request<T>(input: RequestInput): Promise<T> {
+        calls.push(input);
+        if (input.action === "get") return target as T;
+        if (input.action === "navigation.dispatch") {
+          return {
+            sourceClientId: input.sourceClientId,
+            targetClientId: "detail-c",
+            intent: input.intent,
+            resolution: "configured",
+            command: {
+              targetClientId: "detail-c",
+              command: input.intent,
+              blockId: input.blockId,
+            },
+          } as T;
+        }
+        throw new Error(`Unexpected request: ${input.action}`);
+      },
+    };
+
+    await expect(navigateOutlinerLink(
+      requester,
+      outlinerLinkUri("block", target.id),
+      { sourceClientId: "tree-a", intent: "peek" },
+    )).resolves.toEqual({
+      kind: "block",
+      id: target.id,
+      title: "Origin-routed target",
+      targetClientId: "detail-c",
+      intent: "peek",
+      resolution: "configured",
+    });
+    expect(calls).toEqual([
+      { action: "get", blockId: target.id },
+      {
+        action: "navigation.dispatch",
+        sourceClientId: "tree-a",
+        blockId: target.id,
+        intent: "peek",
+      },
+    ]);
+  });
+
+  test("does not create a dangling page before source-route ambiguity is resolved", async () => {
+    const calls: RequestInput[] = [];
+    const requester = {
+      async request<T>(input: RequestInput): Promise<T> {
+        calls.push(input);
+        if (input.action === "navigation.resolve") {
+          throw new Error("Multiple same-tab detail destinations; choose one with Open links in…");
+        }
+        throw new Error(`Unexpected request: ${input.action}`);
+      },
+    };
+
+    await expect(navigateOutlinerLink(
+      requester,
+      outlinerLinkUri("page", "Future"),
+      { sourceClientId: "tree-a", intent: "open" },
+    )).rejects.toThrow("Multiple same-tab detail destinations");
+    expect(calls).toEqual([
+      { action: "navigation.resolve", sourceClientId: "tree-a", intent: "open" },
+    ]);
+  });
+
   test("does not create a missing page before resolving Tree ambiguity", async () => {
     const calls: RequestInput[] = [];
     const requester = {

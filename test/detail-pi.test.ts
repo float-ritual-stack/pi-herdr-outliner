@@ -25,6 +25,8 @@ function state(overrides: Partial<DetailState> = {}): DetailState {
     connectionMode: "follow",
     canNavigateBack: false,
     canNavigateForward: false,
+    peeking: false,
+    routePicker: null,
     resolvedSelectedText: "",
     workIdPrefix: null,
     resolvedBreadcrumb: "",

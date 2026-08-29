@@ -36,6 +36,8 @@ function state(text: string, rawText = "raw edit source"): DetailState {
     connectionMode: "follow",
     canNavigateBack: false,
     canNavigateForward: false,
+    peeking: false,
+    routePicker: null,
     resolvedSelectedText: text,
     workIdPrefix: "PIE",
     resolvedBreadcrumb: "Resolved block",

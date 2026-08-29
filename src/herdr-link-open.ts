@@ -1,10 +1,12 @@
 import { OutlinerClient } from "./client";
+import { listLiveClients } from "./client-target";
 import { navigateOutlinerLink } from "./outliner-links";
 import { resolvePaths } from "./paths";
 
 interface PluginLinkContext {
   clicked_url?: string;
   focused_pane_cwd?: string;
+  focused_pane_id?: string;
   workspace_cwd?: string;
 }
 
@@ -26,10 +28,21 @@ if (!clickedUrl) throw new Error("Herdr plugin link context has no clicked URL")
 const workspaceRoot = context.focused_pane_cwd ?? context.workspace_cwd ?? process.cwd();
 const paths = resolvePaths({ ...process.env, OUTLINER_WORKSPACE_ROOT: workspaceRoot });
 const client = new OutlinerClient(paths.socket);
-const navigation = await navigateOutlinerLink(client, clickedUrl);
+const paneId = context.focused_pane_id ?? process.env.HERDR_PANE_ID;
+if (!paneId) throw new Error("Herdr plugin link context has no source pane");
+const source = (await listLiveClients(client)).find(
+  (registration) => registration.runtime?.paneId === paneId,
+);
+if (!source) throw new Error("The source Outliner pane is not registered");
+const navigation = await navigateOutlinerLink(client, clickedUrl, {
+  sourceClientId: source.clientId,
+  intent: "open",
+});
 process.stdout.write(`${JSON.stringify({
-  focused: true,
+  dispatched: true,
   target: navigation.kind,
   id: navigation.id,
   title: navigation.title,
+  destinationClientId: navigation.targetClientId,
+  resolution: navigation.resolution,
 })}\n`);

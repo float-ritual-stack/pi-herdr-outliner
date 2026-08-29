@@ -21,18 +21,39 @@ test("Herdr link action delegates an exact block URI to shared focus and reveal"
   });
   const store = new OutlinerStore(paths.database);
   const target = store.create("Clickable target [type::decision]");
+  const initialSelectionId = store.getSelection().selected?.id;
   const server = new OutlinerServer(store, paths.socket);
   await server.start();
-  const connected = Promise.withResolvers<void>();
-  const focused = Promise.withResolvers<void>();
-  const watcher = new OutlinerClient(paths.socket).watch({
-    client: { clientId: "herdr-link-tree", role: "tree", contextId: "herdr-link-tree" },
-    onConnect: connected.resolve,
+  const sourceConnected = Promise.withResolvers<void>();
+  const detailConnected = Promise.withResolvers<void>();
+  const opened = Promise.withResolvers<void>();
+  const sourceWatcher = new OutlinerClient(paths.socket).watch({
+    client: {
+      clientId: "herdr-link-tree",
+      role: "tree",
+      contextId: "herdr-link-context",
+      runtime: { workspaceId: "workspace", tabId: "tab", paneId: "pane-a" },
+    },
+    onConnect: sourceConnected.resolve,
+    onEvent: () => {},
+  });
+  const detailWatcher = new OutlinerClient(paths.socket).watch({
+    client: {
+      clientId: "herdr-link-detail",
+      role: "detail",
+      contextId: "herdr-link-context",
+      runtime: { workspaceId: "workspace", tabId: "tab", paneId: "pane-c" },
+    },
+    onConnect: detailConnected.resolve,
     onEvent: (event) => {
-      if (event.domain === "ui") focused.resolve();
+      if (
+        event.domain === "ui" &&
+        event.command?.command === "open" &&
+        event.command.blockId === target.id
+      ) opened.resolve();
     },
   });
-  await connected.promise;
+  await Promise.all([sourceConnected.promise, detailConnected.promise]);
 
   try {
     const clickedUrl = outlinerLinkUri("block", target.id);
@@ -48,6 +69,7 @@ test("Herdr link action delegates an exact block URI to shared focus and reveal"
             invocation_source: "link_click",
             clicked_url: clickedUrl,
             focused_pane_cwd: workspaceRoot,
+            focused_pane_id: "pane-a",
           }),
           OUTLINER_STATE_DIR: stateRoot,
         },
@@ -61,15 +83,18 @@ test("Herdr link action delegates an exact block URI to shared focus and reveal"
 
     expect(exitCode, stderr).toBe(0);
     expect(JSON.parse(stdout)).toEqual({
-      focused: true,
+      dispatched: true,
       target: "block",
       id: target.id,
       title: "Clickable target",
+      destinationClientId: "herdr-link-detail",
+      resolution: "context",
     });
-    await focused.promise;
-    expect(store.getSelection().selected?.id).toBe(target.id);
+    await opened.promise;
+    expect(store.getSelection().selected?.id).toBe(initialSelectionId);
   } finally {
-    await watcher.stop();
+    await sourceWatcher.stop();
+    await detailWatcher.stop();
     await server.close();
     store.close();
     rmSync(directory, { recursive: true, force: true });

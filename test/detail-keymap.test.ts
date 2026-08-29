@@ -15,6 +15,8 @@ function state(): DetailState {
     connectionMode: "follow",
     canNavigateBack: false,
     canNavigateForward: false,
+    peeking: false,
+    routePicker: null,
     resolvedSelectedText: "",
     workIdPrefix: null,
     resolvedBreadcrumb: "",
@@ -185,4 +187,41 @@ test("maps preview and file navigation history and reference-follow bindings", a
     { type: "reference.follow" },
     { type: "connection.toggle" },
   ]);
+});
+
+test("maps typed navigation, destination picker, and peek close bindings", async () => {
+  const previewState = state();
+  previewState.mode = "preview";
+  const preview = harness(previewState, false);
+  await preview.press({ name: "p", shift: true }, "P");
+  await preview.press({ name: "r", shift: true }, "R");
+  await preview.press({ name: "l", shift: true }, "L");
+  expect(preview.intents).toEqual([
+    { type: "reference.peek" },
+    { type: "reference.reveal" },
+    { type: "route.open" },
+  ]);
+
+  const routeState = state();
+  routeState.mode = "route";
+  const route = harness(routeState, false);
+  await route.press({ name: "up" });
+  await route.press({ name: "down" });
+  await route.press({ name: "tab" });
+  await route.press({ name: "return" });
+  await route.press({ name: "escape" });
+  expect(route.intents).toEqual([
+    { type: "route.move", delta: -1 },
+    { type: "route.move", delta: 1 },
+    { type: "route.move", delta: 1 },
+    { type: "route.accept" },
+    { type: "route.cancel" },
+  ]);
+
+  const peekState = state();
+  peekState.mode = "preview";
+  peekState.peeking = true;
+  const peek = harness(peekState, false);
+  await peek.press({ name: "escape" });
+  expect(peek.intents).toEqual([{ type: "peek.close" }]);
 });

@@ -14,6 +14,7 @@ import type {
   OutlinerClientRegistration,
   OutlinerRequest,
   OutlinerResponse,
+  OutlinerNavigationDispatch,
   NavigationState,
   PageAddressCollection,
   PageAddressFollowResult,
@@ -50,7 +51,7 @@ test("serves mutations and property queries over the local socket", async () => 
   const client = new OutlinerClient(socket);
   const service = await client.request<OutlinerServiceStatus>({ action: "ping" });
   expect(service).toEqual({ status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION });
-  expect(service.protocolVersion).toBe(14);
+  expect(service.protocolVersion).toBe(15);
   const provenance = {
     actorId: "omp",
     sessionId: "session-1",
@@ -792,4 +793,117 @@ test("stopping a connected watcher does not report a disconnect", async () => {
   await connectionClosed.promise;
 
   expect(disconnectCount).toBe(0);
+});
+
+test("routes typed navigation within the source tab and never considers other tabs", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-outliner-routes-"));
+  const store = new OutlinerStore(join(directory, "outliner.sqlite"));
+  const target = store.create("Navigation target");
+  const socket = join(directory, "outliner.sock");
+  const server = new OutlinerServer(store, socket);
+  await server.start();
+
+  const registrations: OutlinerClientRegistration[] = [
+    { clientId: "tree-a", role: "tree", contextId: "context-a", runtime: { workspaceId: "ws", tabId: "tab-1", paneId: "pane-a" } },
+    { clientId: "tree-b", role: "tree", contextId: "context-b", runtime: { workspaceId: "ws", tabId: "tab-1", paneId: "pane-b" } },
+    { clientId: "detail-c", role: "detail", contextId: "context-a", runtime: { workspaceId: "ws", tabId: "tab-1", paneId: "pane-c" } },
+    { clientId: "detail-d", role: "detail", contextId: "context-d", runtime: { workspaceId: "ws", tabId: "tab-1", paneId: "pane-d" } },
+    { clientId: "tree-oi", role: "tree", contextId: "context-oi", runtime: { workspaceId: "ws", tabId: "tab-oi", paneId: "pane-oi-tree" } },
+    { clientId: "detail-oi", role: "detail", contextId: "context-oi", runtime: { workspaceId: "ws", tabId: "tab-oi", paneId: "pane-oi-detail" } },
+  ];
+  const connected = registrations.map(() => Promise.withResolvers<void>());
+  const received = new Map<string, OutlinerEvent[]>();
+  const watchers = registrations.map((registration, index) =>
+    new OutlinerClient(socket).watch({
+      client: registration,
+      onConnect: connected[index]!.resolve,
+      onEvent: (event) => {
+        const events = received.get(registration.clientId) ?? [];
+        events.push(event);
+        received.set(registration.clientId, events);
+      },
+    })
+  );
+  cleanups.push(async () => {
+    for (const watcher of watchers) await watcher.stop();
+    await server.close();
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  await Promise.all(connected.map(({ promise }) => promise));
+  const client = new OutlinerClient(socket);
+
+  await client.request({
+    action: "routes.set",
+    sourceClientId: "tree-a",
+    targetClientId: "detail-c",
+  });
+  await client.request({
+    action: "routes.set",
+    sourceClientId: "detail-c",
+    targetClientId: "detail-d",
+  });
+
+  const fromTree = await client.request<OutlinerNavigationDispatch>({
+    action: "navigation.dispatch",
+    sourceClientId: "tree-a",
+    blockId: target.id,
+    intent: "open",
+  });
+  expect(fromTree).toMatchObject({
+    targetClientId: "detail-c",
+    intent: "open",
+    resolution: "configured",
+    command: { targetClientId: "detail-c", command: "open", blockId: target.id },
+  });
+  const fromDetail = await client.request<OutlinerNavigationDispatch>({
+    action: "navigation.dispatch",
+    sourceClientId: "detail-c",
+    blockId: target.id,
+    intent: "peek",
+  });
+  expect(fromDetail).toMatchObject({
+    targetClientId: "detail-d",
+    intent: "peek",
+    resolution: "configured",
+  });
+  const reveal = await client.request<OutlinerNavigationDispatch>({
+    action: "navigation.dispatch",
+    sourceClientId: "tree-a",
+    blockId: target.id,
+    intent: "reveal",
+  });
+  expect(reveal).toMatchObject({
+    targetClientId: "tree-a",
+    intent: "reveal",
+    resolution: "self",
+  });
+  const otherTab = await client.request<OutlinerNavigationDispatch>({
+    action: "navigation.dispatch",
+    sourceClientId: "tree-oi",
+    blockId: target.id,
+    intent: "open",
+  });
+  expect(otherTab).toMatchObject({
+    targetClientId: "detail-oi",
+    resolution: "context",
+  });
+  await expect(client.request({
+    action: "navigation.dispatch",
+    sourceClientId: "tree-b",
+    blockId: target.id,
+    intent: "open",
+  })).rejects.toThrow("Multiple same-tab detail destinations; choose one with Open links in…");
+  await expect(client.request({
+    action: "routes.set",
+    sourceClientId: "tree-a",
+    targetClientId: "detail-oi",
+  })).rejects.toThrow("Open-route destination must be in the source pane's current tab");
+
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  expect(received.get("detail-c")?.some((event) => event.command?.command === "open")).toBe(true);
+  expect(received.get("detail-d")?.some((event) => event.command?.command === "peek")).toBe(true);
+  expect(received.get("tree-a")?.some((event) => event.command?.command === "reveal")).toBe(true);
+  expect(received.get("detail-oi")?.some((event) => event.command?.command === "open")).toBe(true);
+  expect(received.get("tree-b")).toBeUndefined();
 });

@@ -6,8 +6,17 @@ import {
 } from "./block-focus";
 import { requireUniqueClientId, sendClientCommand } from "./client-target";
 import { blockDisplayTitle, blockReferenceIds } from "./references";
+import {
+  dispatchNavigation,
+  resolveNavigationDestination,
+} from "./navigation-routes";
 import { isWorkIdAddress, pageAddressReferences } from "./page-addresses";
-import type { Block, PageAddressFollowResult, PageAddressResolution } from "./types";
+import type {
+  Block,
+  OutlinerNavigationIntent,
+  PageAddressFollowResult,
+  PageAddressResolution,
+} from "./types";
 import { workIdReferences } from "./work-ids";
 
 const OUTLINER_SCHEME = "pi-outliner:";
@@ -30,6 +39,9 @@ export interface OutlinerLinkNavigation {
   title: string;
   deleted?: boolean;
   created?: boolean;
+  targetClientId?: string;
+  intent?: OutlinerNavigationIntent;
+  resolution?: "configured" | "self" | "context" | "same-tab";
 }
 
 interface LinkSpan {
@@ -129,7 +141,12 @@ export async function resolveOutlinerLinkTarget(
 export async function navigateOutlinerLink(
   requester: BlockFocusRequester,
   uri: string,
-  targets: { treeClientId?: string; detailClientId?: string } = {},
+  targets: {
+    treeClientId?: string;
+    detailClientId?: string;
+    sourceClientId?: string;
+    intent?: OutlinerNavigationIntent;
+  } = {},
 ): Promise<OutlinerLinkNavigation> {
   const target = parseOutlinerLinkUri(uri);
   if (target.kind === "goto") {
@@ -147,6 +164,33 @@ export async function navigateOutlinerLink(
       kind: "goto",
       id: focused.resolution.match.block.id,
       title: focused.resolution.match.title,
+    };
+  }
+
+  if (targets.sourceClientId) {
+    if (target.kind === "page") {
+      await resolveNavigationDestination(
+        requester,
+        targets.sourceClientId,
+        targets.intent ?? "open",
+      );
+    }
+    const resolved = await resolveOutlinerLinkTarget(requester, target);
+    const dispatched = await dispatchNavigation(
+      requester,
+      targets.sourceClientId,
+      resolved.block.id,
+      targets.intent ?? "open",
+    );
+    return {
+      kind: target.kind,
+      id: resolved.block.id,
+      title: blockDisplayTitle(resolved.block),
+      targetClientId: dispatched.targetClientId,
+      intent: dispatched.intent,
+      resolution: dispatched.resolution,
+      ...(resolved.block.effectiveDeletedRootId ? { deleted: true } : {}),
+      ...(resolved.created ? { created: true } : {}),
     };
   }
 

@@ -11,6 +11,13 @@ import { createDetailKeyHandler } from "./detail-keymap";
 import { renderDetailAnsi } from "./detail-renderer";
 import { completeReferencedPaths, readReferencedFile } from "./files";
 import { resolveOutlinerLinkTarget } from "./outliner-links";
+import {
+  dispatchNavigation,
+  getOpenRoute as fetchOpenRoute,
+  listOpenRouteDestinations,
+  resolveNavigationDestination,
+  setOpenRoute as setConfiguredOpenRoute,
+} from "./navigation-routes";
 import { currentPaneRuntime, focusCurrentPane } from "./pane-control";
 import { resolvePaths } from "./paths";
 import {
@@ -64,6 +71,21 @@ const effects: DetailEffects = {
   },
   async getBlockContext(blockId) {
     return client.request<SelectionContext>({ action: "blocks.context", blockId });
+  },
+  listOpenRouteDestinations() {
+    return listOpenRouteDestinations(client, clientId);
+  },
+  getOpenRoute() {
+    return fetchOpenRoute(client, clientId);
+  },
+  async setOpenRoute(targetClientId) {
+    await setConfiguredOpenRoute(client, clientId, targetClientId);
+  },
+  dispatchNavigation(blockId, intent) {
+    return dispatchNavigation(client, clientId, blockId, intent);
+  },
+  resolveNavigation(intent) {
+    return resolveNavigationDestination(client, clientId, intent);
   },
   async resolveReferences(text) {
     return client.request<ResolvedBlockReferences>({ action: "references.resolve", text });

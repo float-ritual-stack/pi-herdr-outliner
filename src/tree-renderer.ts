@@ -354,8 +354,8 @@ export function renderTreeFrame(
       ?? selectedRow?.canonicalId.slice(0, 8)
       ?? "identifier";
     output.push(`\x1b[31;1mPurge ${required}: \x1b[0m${view.quickInput}▏`);
-  } else if (view.mode === "filter" || view.mode === "goto") {
-    const label = view.mode === "goto" ? "Goto" : "Filter";
+  } else if (view.mode === "filter" || view.mode === "goto" || view.mode === "route") {
+    const label = view.mode === "goto" ? "Goto" : view.mode === "route" ? "Open links in" : "Filter";
     const completion = view.quickCompletion;
     const selectedCompletion = completion?.items[completion.index];
     let completionSuffix = "";
@@ -395,12 +395,14 @@ export function renderTreeFrame(
     help = "type exact identifier  Enter permanently purge  Esc cancel";
   } else if (view.mode === "goto") {
     help = "type ID/text  ↑↓ choose  Tab cycle  Enter jump  Esc cancel";
+  } else if (view.mode === "route") {
+    help = "↑↓/Tab choose  Enter set destination  Esc cancel";
   } else if (expandedScrollable) {
-    help = "PgUp/PgDn scroll selected block  click/o links  ⌥←→ history  ↑↓ navigate  g goto  . detail";
+    help = "PgUp/PgDn scroll  click/o open  P peek  R reveal  L destination  ⌥←→ history";
   } else if (selectedRow?.kind === "occurrence") {
-    help = "◇ projected occurrence  click/o links  ⌥←→ history  Shift+↑↓ branch order  ← definition";
+    help = "◇ occurrence  click/o open  P peek  R reveal  L destination  Shift+↑↓ order";
   } else {
-    help = "↑↓ navigate  click/o links  ⌥←→ history  Shift+↑↓ reorder  g goto  . detail  Enter inline";
+    help = "↑↓ navigate  click/o open  P peek  R reveal  L destination  g goto  . detail";
   }
   output.push(`\x1b[2m${truncate(help, width)}\x1b[0m`);
   return { frame: output.join("\n"), scrollStartEntryIndex };

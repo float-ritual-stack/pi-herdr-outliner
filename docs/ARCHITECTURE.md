@@ -41,7 +41,7 @@ The service is the only process that opens the workspace SQLite database. It log
 
 Tree holds no canonical block state. It reconstructs canonical data from service snapshots and events, then owns its cursor, occurrence selection, filter, collapsed canonical IDs, multiline-expanded row IDs, viewport, explicit-navigation history, and browsing-context publication in-process. Closing a Tree discards only that Tree's presentation state.
 
-Cursor changes publish the selected canonical block to exactly one browsing context. Only subscribers registered to that context receive the event. Global `selection` events are ignored by Tree panes; exact-client `focus` and `reveal` commands move only their addressed Tree and locally expand ancestors when required. The legacy saved workspace selection may seed a newly created Tree once, but it is not continuing pane authority.
+Cursor changes publish the selected canonical block to exactly one browsing context. Only subscribers registered to that context receive the event. Global `selection` events are ignored by Tree panes. Exact-client `focus` and `reveal` commands move only their addressed Tree and locally expand ancestors when required; `open` and `peek` dispatch to a resolved Detail without moving the source Tree. The legacy saved workspace selection may seed a newly created Tree once, but it is not continuing pane authority.
 
 PageUp/PageDown move the selected expanded row's offset by one Tree body viewport and clamp to its wrapped row count. Cursor changes, multiline expansion changes, and reconnects reset the offset.
 
@@ -59,11 +59,12 @@ PageUp/PageDown move the selected expanded row's offset by one Tree body viewpor
 The legacy ANSI Detail entrypoint remains available in [`src/detail.ts`](../src/detail.ts), but the Herdr manifest starts [`src/detail-main.ts`](../src/detail-main.ts).
 
 Detail owns an exact target, a bounded in-process target history, and a visible
-`Follow | Independent` connection mode. Follow subscribes to one browsing
+`Follow | Independent | Peek` connection mode. Follow subscribes to one browsing
 context; Independent retains its exact target across unrelated context events.
-Content events refresh the current exact block without changing that target.
-History navigation and reference opening enter Independent mode. Closing Detail
-discards only this ephemeral navigation state.
+Peek temporarily replaces the rendered target without recording history; `Esc`
+restores the prior exact target and connection mode. Content events refresh the
+current exact block without changing its ownership. Closing Detail discards only
+this ephemeral navigation state.
 
 ### Pi / OMP extension
 
@@ -131,7 +132,7 @@ Literal property-looking text inside inline code, fenced code, or escaped syntax
 
 ## Protocol
 
-The current protocol version is `14`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
+The current protocol version is `15`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
 
 ### Important request families
 
@@ -139,6 +140,8 @@ The current protocol version is `14`, defined in [`src/types.ts`](../src/types.t
 - canonical reads: `get`, `children`, `blocks.context`, `workspace.snapshot`
 - bounded search: `blocks.query`
 - browsing contexts: `browsing-context.get`, `browsing-context.publish`
+- source routes: `routes.get`, `routes.set`
+- typed navigation: `navigation.resolve` preflight and `navigation.dispatch` with `open | peek | reveal`
 - selection-neutral capture: `capture.create`
 - mutations: `create`, `update`, `move`, `delete` (move to Trash), `trash.restore`, `trash.purge`
 - properties: `properties.patch`, `properties.catalog`
@@ -163,17 +166,26 @@ snapshots. Opaque live IDs may be routing inputs; tab numbers, labels such as
 Herdr remains authoritative for current placement and focus.
 
 The subscription socket owns its registration. The service rejects duplicate
-live client IDs and removes exactly that socket's entry on disconnect. When the
-last subscriber for a browsing context disconnects, its target is pruned.
-`clients.list` returns the live registry, optionally filtered by role.
+live client IDs and removes exactly that socket's registration. It also removes
+routes owned by or targeting a disconnected client. When the last subscriber for
+a browsing context disconnects, its target is pruned. `clients.list` returns the
+live registry, optionally filtered by role.
 
 `content`, legacy `selection`, and `view` events are workspace broadcasts.
 `browsing-context` events are written only to registrations with the matching
-`contextId`. A `ui` command is written only to its `targetClientId`. Pair-local
-handoffs first resolve a client with the requested role inside the source
-context; role-global uniqueness is not used for paired Tree/Detail behavior.
-Tree and Detail recover their current pane through Herdr when focusing instead
-of treating registration snapshots as durable pane handles.
+`contextId`. A `ui` command is written only to its `targetClientId`.
+
+`navigation.resolve` and `navigation.dispatch` resolve a destination from the source registration and
+the intent's required role (`Detail` for `open`/`peek`, `Tree` for `reveal`).
+Precedence is: an explicit open route, source self when its role matches, one
+same-context client, then one same-tab client. Explicit routes apply only to
+`open` and `peek`, must target a live same-tab Detail, and store an opaque client
+ID. Other tabs/workspaces are never candidates and never create ambiguity.
+Multiple same-context or same-tab candidates fail with a human instruction to
+use **Open links in…**. Pane labels are resolved through Herdr only for display;
+titles, labels, and tab names are never parsed as routing keys.
+Dangling page activation preflights the destination before transactional
+create-on-follow, so an ambiguous route cannot create content.
 
 ### Agent provenance
 
@@ -190,11 +202,11 @@ Herdr recognizes plain terminal text as a URL only for `http://` and `https://`.
 - `pi-outliner://work/<PIE-NNN>` — resolve-only Work-ID registry lookup;
 - `pi-outliner://page/<encoded-address>` — unique symbolic page resolution and explicit create-on-follow.
 
-Inside the live panes, navigation stays in-process. Tree enables SGR mouse reporting, keeps the last rendered frame, resolves an unmodified primary click against that frame's OSC 8 cell metadata, and delegates to `navigateOutlinerLink`. Detail supplies the same helper as Pi TUI's `openUrl` callback. Exact block and resolved symbolic links select one canonical UUID directly, so deleted targets cannot degrade into fuzzy text matches. Deleted targets open read-only in Detail; active targets send exact Tree focus/reveal.
+Inside live panes, reference activation resolves one exact canonical block and sends `navigation.dispatch` with the originating client ID. Keyboard `o`, mouse clicks, and Pi TUI's `openUrl` emit `open`; `P` emits `peek`; `R` emits `reveal`. The service emits one exact-client `ui` event and does not mutate workspace-global selection. Deleted targets retain exact identity and therefore open read-only rather than degrading into fuzzy text matches.
 
 Authored text is sanitized before link generation. Tree adds OSC 8 only after plain-text wrapping/truncation; Detail generates safe Markdown links after sanitization. Under `HERDR_ENV=1`, Detail enables Pi TUI hyperlink emission because nested panes advertise generic `TERM=xterm-256color` even though Herdr captures OSC 8 metadata. Tree ignores modified, release, motion, and wheel reports for link activation; Shift remains available for terminal-native selection.
 
-The `outliner-navigation` manifest handler and `src/herdr-link-open.ts` remain the external/interoperability path for rendered output outside the active TUI. They validate/decode the private URI, resolve the clicked pane workspace, and enter the same shared navigation helper. `[[address]]` remains visible when dangling; the explicit follow action creates exactly one root stub through the transactional registry path.
+The `outliner-navigation` manifest handler and [`src/herdr-link-open.ts`](../src/herdr-link-open.ts) are the external Herdr path. They validate/decode the private URI, resolve the invoking pane to its live source registration, and dispatch through the same route. `[[address]]` remains visible when dangling; explicit activation creates exactly one root stub through the transactional registry path before navigation dispatch.
 
 
 ### macOS native URL bridge

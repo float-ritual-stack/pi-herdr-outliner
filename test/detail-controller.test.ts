@@ -55,6 +55,7 @@ function filePreview(overrides: Partial<ReferencedFile> = {}): ReferencedFile {
 
 interface Harness {
   controller: ReturnType<typeof createDetailController>;
+  effects: DetailEffects;
   calls: {
     selections: number;
     setSelections: string[];
@@ -126,7 +127,32 @@ function createHarness(
         children: [],
       };
     },
+    async listOpenRouteDestinations() {
+      return [];
+    },
+    async getOpenRoute() {
+      return null;
+    },
+    async setOpenRoute() {},
+    async dispatchNavigation(blockId, intent) {
+      return {
+        sourceClientId: "detail-test",
+        targetClientId: "detail-test",
+        blockId,
+        intent,
+        resolution: "self",
+        command: { targetClientId: "detail-test", command: intent, blockId },
+      };
+    },
     resolveReferences,
+    async resolveNavigation(intent) {
+      return {
+        sourceClientId: "detail-test",
+        targetClientId: "detail-test",
+        intent,
+        resolution: "self",
+      };
+    },
     async updateBlock(input) {
       calls.updates.push(input);
       return update(input);
@@ -181,6 +207,7 @@ function createHarness(
   };
   return {
     controller: createDetailController(effects),
+    effects,
     calls,
     setSelection(next) {
       selection = next;
@@ -693,4 +720,51 @@ describe("detail controller completion, navigation, and focus", () => {
     expect(harness.controller.state.connectionMode).toBe("independent");
     expect(harness.calls.selfFocuses).toBe(1);
   });
+});
+
+test("Detail chooses a human-labelled open destination and hides its opaque client ID", async () => {
+  const harness = createHarness(makeBlock({ text: "Source ((target))" }));
+  let selectedRoute: string | null | undefined;
+  harness.effects.listOpenRouteDestinations = async () => [
+    { targetClientId: "opaque-detail-d", label: "[D] Detail" },
+  ];
+  harness.effects.getOpenRoute = async () => ({
+    sourceClientId: "detail-test",
+    targetClientId: "opaque-detail-d",
+  });
+  harness.effects.setOpenRoute = async (targetClientId) => {
+    selectedRoute = targetClientId;
+  };
+  await harness.controller.initialize();
+
+  await harness.controller.dispatch({ type: "route.open" }, viewport);
+  expect(harness.controller.state.mode).toBe("route");
+  expect(harness.controller.state.routePicker?.items.map(({ label }) => label)).toEqual([
+    "Paired/default",
+    "[D] Detail",
+  ]);
+  expect(harness.controller.state.routePicker?.index).toBe(1);
+  await harness.controller.dispatch({ type: "route.accept" }, viewport);
+
+  expect(selectedRoute).toBe("opaque-detail-d");
+  expect(harness.controller.state.mode).toBe("preview");
+  expect(harness.controller.state.status).toBe("Open links in [D] Detail");
+  expect(harness.controller.state.status).not.toContain("opaque-detail-d");
+});
+
+test("Detail peek restores the prior target and Follow mode when closed", async () => {
+  const source = makeBlock({ id: "source01", text: "Source ((target01))" });
+  const harness = createHarness(source);
+  await harness.controller.initialize();
+
+  await harness.controller.dispatch({ type: "reference.peek" }, viewport);
+  expect(harness.controller.state.targetBlockId).toBe("target01");
+  expect(harness.controller.state.peeking).toBe(true);
+  expect(harness.controller.state.connectionMode).toBe("independent");
+
+  await harness.controller.dispatch({ type: "peek.close" }, viewport);
+  expect(harness.controller.state.targetBlockId).toBe(source.id);
+  expect(harness.controller.state.peeking).toBe(false);
+  expect(harness.controller.state.connectionMode).toBe("follow");
+  expect(harness.controller.state.status).toBe("Closed peek");
 });
