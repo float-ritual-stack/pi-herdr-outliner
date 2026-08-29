@@ -1,6 +1,6 @@
 import type { RequestInput } from "./client";
 import { MAX_BLOCK_QUERY_LIMIT } from "./block-query";
-import { stripFragmentAnchors } from "./fragments";
+import { resolveFragmentSlice, stripFragmentAnchors } from "./fragments";
 import { blockDisplayTitle } from "./references";
 import type {
   Block,
@@ -14,7 +14,8 @@ import {
   parseVirtualBranchConfig,
 } from "./virtual-branches";
 
-const DETAIL_EMBED_PATTERN = /!\(\(([A-Za-z0-9_-]{8,})\)\)/g;
+const DETAIL_EMBED_PATTERN =
+  /!\(\(([A-Za-z0-9_-]{8,})(?:\^([A-Za-z0-9][A-Za-z0-9_-]{0,63}))?\)\)/g;
 const MAX_DETAIL_EMBEDS = 16;
 const MAX_ERROR_LENGTH = 240;
 
@@ -29,11 +30,14 @@ export type DetailEmbedStatus =
   | "invalid"
   | "missing"
   | "deleted"
+  | "fragment-missing"
+  | "fragment-duplicate"
   | "failed"
   | "limit";
 
 export interface DetailEmbedState {
   blockId: string;
+  fragmentId?: string;
   status: DetailEmbedStatus;
   count: number;
   completeness?: BlockCollectionCompleteness;
@@ -58,10 +62,20 @@ function linkedHeading(blockId: string, suffix: string): string {
   return `Embedded view: ((${blockId})) · ${suffix}`;
 }
 
-function explicitFallback(blockId: string, status: DetailEmbedStatus, detail: string): ProjectedEmbed {
+function embedReference(blockId: string, fragmentId?: string): string {
+  return `${blockId}${fragmentId ? `^${fragmentId}` : ""}`;
+}
+
+function explicitFallback(
+  blockId: string,
+  status: DetailEmbedStatus,
+  detail: string,
+  fragmentId?: string,
+): ProjectedEmbed {
+  const reference = embedReference(blockId, fragmentId);
   return {
-    text: `!((${blockId})) · ${detail}`,
-    state: { blockId, status, count: 0 },
+    text: `!((${reference})) · ${detail}`,
+    state: { blockId, ...(fragmentId ? { fragmentId } : {}), status, count: 0 },
   };
 }
 
@@ -147,19 +161,41 @@ async function projectVirtualBranch(
 async function projectEmbed(
   requester: DetailEmbedRequester,
   blockId: string,
+  fragmentId: string | undefined,
+  loadTarget: () => Promise<Block>,
   loadPhysicalBlocks: () => Promise<readonly Block[]>,
 ): Promise<ProjectedEmbed> {
   let target: Block;
   try {
-    target = await requester.request<Block>({ action: "get", blockId });
+    target = await loadTarget();
   } catch (error) {
     const message = boundedError(error);
     return message.startsWith(`Block not found: ${blockId}`)
-      ? explicitFallback(blockId, "missing", "MISSING TARGET")
-      : explicitFallback(blockId, "failed", `TARGET FAILED · ${message}`);
+      ? explicitFallback(blockId, "missing", "MISSING TARGET", fragmentId)
+      : explicitFallback(blockId, "failed", `TARGET FAILED · ${message}`, fragmentId);
   }
   if (target.effectiveDeletedRootId) {
-    return explicitFallback(blockId, "deleted", `IN TRASH · ${blockDisplayTitle(target)}`);
+    return explicitFallback(
+      blockId,
+      "deleted",
+      `IN TRASH · ${blockDisplayTitle(target)}`,
+      fragmentId,
+    );
+  }
+  if (fragmentId) {
+    const resolution = resolveFragmentSlice(target.text, fragmentId);
+    if (resolution.status === "missing") {
+      return explicitFallback(blockId, "fragment-missing", "MISSING FRAGMENT", fragmentId);
+    }
+    if (resolution.status === "duplicate") {
+      return explicitFallback(blockId, "fragment-duplicate", "DUPLICATE FRAGMENT", fragmentId);
+    }
+    return {
+      text: `Embedded fragment: ((${embedReference(blockId, fragmentId)}))\n${
+        resolution.slice.text
+      }`,
+      state: { blockId, fragmentId, status: "ready", count: 1 },
+    };
   }
   if (!isVirtualBranchDefinition(target)) {
     return {
@@ -190,6 +226,15 @@ export async function projectDetailRead(
   const matches = [...projectedSource.matchAll(DETAIL_EMBED_PATTERN)];
   if (matches.length === 0) return { text: projectedSource, embeds: [] };
 
+  const targetCache = new Map<string, Promise<Block>>();
+  const loadTarget = (blockId: string): Promise<Block> => {
+    let pending = targetCache.get(blockId);
+    if (!pending) {
+      pending = requester.request<Block>({ action: "get", blockId });
+      targetCache.set(blockId, pending);
+    }
+    return pending;
+  };
   let pendingPhysicalBlocks: Promise<readonly Block[]> | null = null;
   const loadPhysicalBlocks = (): Promise<readonly Block[]> => {
     pendingPhysicalBlocks ??= requester.request<WorkspaceSnapshot>({
@@ -200,8 +245,19 @@ export async function projectDetailRead(
   const cache = new Map<string, Promise<ProjectedEmbed>>();
   for (const match of matches.slice(0, MAX_DETAIL_EMBEDS)) {
     const blockId = match[1]!;
-    if (cache.has(blockId)) continue;
-    cache.set(blockId, projectEmbed(requester, blockId, loadPhysicalBlocks));
+    const fragmentId = match[2];
+    const cacheKey = embedReference(blockId, fragmentId);
+    if (cache.has(cacheKey)) continue;
+    cache.set(
+      cacheKey,
+      projectEmbed(
+        requester,
+        blockId,
+        fragmentId,
+        () => loadTarget(blockId),
+        loadPhysicalBlocks,
+      ),
+    );
   }
   let consumed = 0;
   let output = "";
@@ -212,12 +268,18 @@ export async function projectDetailRead(
     const start = match.index;
     output += projectedSource.slice(consumed, start);
     const blockId = match[1]!;
+    const fragmentId = match[2];
     if (index >= MAX_DETAIL_EMBEDS) {
-      const limited = explicitFallback(blockId, "limit", `EMBED LIMIT · maximum ${MAX_DETAIL_EMBEDS}`);
+      const limited = explicitFallback(
+        blockId,
+        "limit",
+        `EMBED LIMIT · maximum ${MAX_DETAIL_EMBEDS}`,
+        fragmentId,
+      );
       output += limited.text;
       embeds.push(limited.state);
     } else {
-      const pending = cache.get(blockId)!;
+      const pending = cache.get(embedReference(blockId, fragmentId))!;
       const projected = await pending;
       output += projected.text;
       embeds.push(projected.state);

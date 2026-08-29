@@ -5,6 +5,7 @@ import {
   fragmentCandidates,
   parseFragmentCompletionQuery,
   resolveFragment,
+  resolveFragmentSlice,
   stripFragmentAnchors,
 } from "../src/fragments";
 
@@ -52,6 +53,41 @@ test("resolves missing and duplicate anchors explicitly", () => {
     status: "duplicate",
     anchors: [{ lineIndex: 2 }, { lineIndex: 9 }],
   });
+});
+
+test("resolves deterministic heading-section and paragraph slices", () => {
+  const sliced = [
+    "# Document",
+    "",
+    "## Chosen ^chosen",
+    "Chosen body.",
+    "",
+    "### Nested",
+    "Nested body. ^nested-note",
+    "",
+    "## Next",
+    "Next body.",
+  ].join("\n");
+
+  expect(resolveFragmentSlice(sliced, "chosen")).toEqual({
+    status: "resolved",
+    slice: {
+      anchor: expect.objectContaining({ id: "chosen", lineIndex: 2 }),
+      text: "## Chosen\nChosen body.\n\n### Nested\nNested body.",
+      startLine: 2,
+      endLine: 7,
+    },
+  });
+  expect(resolveFragmentSlice(sliced, "nested-note")).toEqual({
+    status: "resolved",
+    slice: {
+      anchor: expect.objectContaining({ id: "nested-note", lineIndex: 6 }),
+      text: "Nested body.",
+      startLine: 6,
+      endLine: 6,
+    },
+  });
+  expect(resolveFragmentSlice(sliced, "missing")).toEqual({ status: "missing" });
 });
 
 test("offers headings and anchored chunks while exact-id mode excludes unanchored headings", () => {

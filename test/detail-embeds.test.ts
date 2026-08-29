@@ -206,6 +206,83 @@ test("renders ordinary block Markdown without loading a workspace snapshot or ne
   expect(requester.calls).not.toContainEqual({ action: "get", blockId: "nested-target" });
 });
 
+test("renders exact fragment slices with explicit fragment failures and no recursion", async () => {
+  const target = block(
+    "fragment-target",
+    [
+      "# Long source",
+      "",
+      "## Chosen section ^chosen-section",
+      "Chosen body with !((nested-target)).",
+      "",
+      "### Nested section",
+      "Nested body.",
+      "",
+      "## Outside section",
+      "Outside body.",
+      "",
+      "Paragraph first line",
+      "paragraph final line. ^paragraph-note",
+      "",
+      "Duplicate one. ^duplicate-note",
+      "Duplicate two. ^duplicate-note",
+    ].join("\n"),
+  );
+  const requester = new FakeRequester(new Map([[target.id, target]]), new Map());
+
+  const projection = await projectDetailRead(requester, [
+    `!((fragment-target^chosen-section))`,
+    `!((fragment-target^paragraph-note))`,
+    `!((fragment-target^missing-note))`,
+    `!((fragment-target^duplicate-note))`,
+  ].join("\n"));
+
+  expect(projection.text).toBe([
+    "Embedded fragment: ((fragment-target^chosen-section))",
+    "## Chosen section",
+    "Chosen body with !((nested-target)).",
+    "",
+    "### Nested section",
+    "Nested body.",
+    "Embedded fragment: ((fragment-target^paragraph-note))",
+    "Paragraph first line",
+    "paragraph final line.",
+    "!((fragment-target^missing-note)) · MISSING FRAGMENT",
+    "!((fragment-target^duplicate-note)) · DUPLICATE FRAGMENT",
+  ].join("\n"));
+  expect(projection.text).not.toContain("Outside body.");
+  expect(projection.embeds).toEqual([
+    {
+      blockId: target.id,
+      fragmentId: "chosen-section",
+      status: "ready",
+      count: 1,
+    },
+    {
+      blockId: target.id,
+      fragmentId: "paragraph-note",
+      status: "ready",
+      count: 1,
+    },
+    {
+      blockId: target.id,
+      fragmentId: "missing-note",
+      status: "fragment-missing",
+      count: 0,
+    },
+    {
+      blockId: target.id,
+      fragmentId: "duplicate-note",
+      status: "fragment-duplicate",
+      count: 0,
+    },
+  ]);
+  expect(requester.calls).not.toContainEqual({ action: "get", blockId: "nested-target" });
+  expect(requester.calls.filter((call) =>
+    call.action === "get" && call.blockId === target.id
+  )).toHaveLength(1);
+});
+
 test("hides fragment anchor markers only in the generated read projection", async () => {
   const requester = new FakeRequester(new Map(), new Map());
   const authored = "# Heading ^stable-heading\n\nParagraph ^stable-paragraph";

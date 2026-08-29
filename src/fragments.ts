@@ -24,6 +24,18 @@ export type FragmentResolution =
   | { status: "missing" }
   | { status: "duplicate"; anchors: FragmentAnchor[] };
 
+export interface FragmentSlice {
+  anchor: FragmentAnchor;
+  text: string;
+  startLine: number;
+  endLine: number;
+}
+
+export type FragmentSliceResolution =
+  | { status: "resolved"; slice: FragmentSlice }
+  | { status: "missing" }
+  | { status: "duplicate"; anchors: FragmentAnchor[] };
+
 export interface FragmentCompletionQuery {
   blockQuery: string;
   fragmentQuery: string;
@@ -54,7 +66,16 @@ function contentBeforeAnchor(line: string, match: RegExpMatchArray | null): stri
 
 function paragraphLabel(lines: readonly string[], lineIndex: number, finalLine: string): string {
   let start = lineIndex;
-  while (start > 0 && lines[start - 1]!.trim() !== "") start -= 1;
+  while (
+    start > 0 &&
+    lines[start - 1]!.trim() !== "" &&
+    !contentBeforeAnchor(
+      lines[start - 1]!,
+      anchorMatch(lines[start - 1]!),
+    ).match(HEADING_PATTERN)
+  ) {
+    start -= 1;
+  }
   const paragraph = [...lines.slice(start, lineIndex), finalLine]
     .map((line) => line.trim())
     .filter(Boolean)
@@ -92,6 +113,55 @@ export function resolveFragment(text: string, fragmentId: string): FragmentResol
   if (matches.length === 0) return { status: "missing" };
   if (matches.length > 1) return { status: "duplicate", anchors: matches };
   return { status: "resolved", anchor: matches[0]! };
+}
+
+export function resolveFragmentSlice(
+  text: string,
+  fragmentId: string,
+): FragmentSliceResolution {
+  const resolution = resolveFragment(text, fragmentId);
+  if (resolution.status !== "resolved") return resolution;
+
+  const lines = text.split(/\r?\n/);
+  const anchor = resolution.anchor;
+  let startLine = anchor.lineIndex;
+  let endLine = anchor.lineIndex;
+  if (anchor.kind === "heading") {
+    const heading = contentBeforeAnchor(
+      lines[anchor.lineIndex]!,
+      anchorMatch(lines[anchor.lineIndex]!),
+    ).match(HEADING_PATTERN)!;
+    const depth = heading[1]!.length;
+    endLine = lines.length - 1;
+    for (let lineIndex = anchor.lineIndex + 1; lineIndex < lines.length; lineIndex += 1) {
+      const candidate = contentBeforeAnchor(
+        lines[lineIndex]!,
+        anchorMatch(lines[lineIndex]!),
+      ).match(HEADING_PATTERN);
+      if (candidate && candidate[1]!.length <= depth) {
+        endLine = lineIndex - 1;
+        break;
+      }
+    }
+  } else {
+    while (
+      startLine > 0 &&
+      lines[startLine - 1]!.trim() !== "" &&
+      !contentBeforeAnchor(
+        lines[startLine - 1]!,
+        anchorMatch(lines[startLine - 1]!),
+      ).match(HEADING_PATTERN)
+    ) {
+      startLine -= 1;
+    }
+  }
+
+  const sliceText = stripFragmentAnchors(lines.slice(startLine, endLine + 1).join("\n"))
+    .trimEnd();
+  return {
+    status: "resolved",
+    slice: { anchor, text: sliceText, startLine, endLine },
+  };
 }
 
 export function fragmentCandidates(
