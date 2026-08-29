@@ -57,3 +57,41 @@ test("forwards a preview dispatch without inventing a destination", async () => 
     intent: "preview",
   }]);
 });
+
+test("forwards source preservation as an explicit routing constraint", async () => {
+  const calls: RequestInput[] = [];
+  const requester = {
+    async request<T>(input: RequestInput): Promise<T> {
+      calls.push(input);
+      return {
+        sourceClientId: "detail-a",
+        targetClientId: "detail-b",
+        intent: "open",
+        resolution: "unlocked",
+      } as T;
+    },
+  };
+
+  await resolveNavigationDestination(requester, "detail-a", "open", {
+    preserveSource: true,
+  });
+  await dispatchNavigation(requester, "detail-a", "block-a", "open", {
+    preserveSource: true,
+  });
+
+  expect(calls).toEqual([
+    {
+      action: "navigation.resolve",
+      sourceClientId: "detail-a",
+      intent: "open",
+      preserveSource: true,
+    },
+    {
+      action: "navigation.dispatch",
+      sourceClientId: "detail-a",
+      blockId: "block-a",
+      intent: "open",
+      preserveSource: true,
+    },
+  ]);
+});

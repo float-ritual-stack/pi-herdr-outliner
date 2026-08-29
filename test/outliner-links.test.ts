@@ -43,6 +43,20 @@ describe("outliner link URIs", () => {
       kind: "work",
       value: "ABC-001",
     });
+    expect(parseOutlinerLinkUri(
+      outlinerLinkUri("block", blockId, { preserveSource: true }),
+    )).toEqual({
+      kind: "block",
+      value: blockId,
+      preserveSource: true,
+    });
+    expect(parseOutlinerLinkUri(
+      outlinerLinkUri("block", blockId, { intent: "reveal" }),
+    )).toEqual({
+      kind: "block",
+      value: blockId,
+      intent: "reveal",
+    });
   });
 
   test("rejects web URLs, unsupported kinds, malformed IDs, and URL decorations", () => {
@@ -55,6 +69,8 @@ describe("outliner link URIs", () => {
       "pi-outliner://goto/value#fragment",
       "pi-outliner://goto/%1B%5B31mowned",
       "pi-outliner://goto/value%7F",
+      "pi-outliner://block/550e8400-e29b-41d4-a716-446655440000?preserveSource=0",
+      "pi-outliner://block/550e8400-e29b-41d4-a716-446655440000?other=1",
     ]) {
       expect(() => parseOutlinerLinkUri(uri)).toThrow();
     }

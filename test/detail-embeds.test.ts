@@ -1,0 +1,209 @@
+import { expect, test } from "bun:test";
+import type { RequestInput } from "../src/client";
+import {
+  detailEmbedIds,
+  projectDetailRead,
+  type DetailEmbedRequester,
+} from "../src/detail-embeds";
+import type {
+  Block,
+  VisibleBlock,
+  VisibleBlockCollection,
+  WorkspaceSnapshot,
+} from "../src/types";
+
+const timestamp = "2026-08-29T00:00:00.000Z";
+
+function block(id: string, text: string, properties: Block["properties"] = []): Block {
+  return {
+    id,
+    parentId: null,
+    position: 0,
+    text,
+    author: "user",
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    properties,
+  };
+}
+
+function visible(source: Block): VisibleBlock {
+  return { ...source, depth: 0, hasChildren: false, displayText: source.text };
+}
+
+function snapshot(blocks: readonly Block[]): WorkspaceSnapshot {
+  const projected = blocks.map(visible);
+  return {
+    visible: { blocks: projected, completeness: { kind: "complete" } },
+    physical: { blocks: projected, completeness: { kind: "complete" } },
+    selection: { selected: null, ancestors: [], children: [] },
+    virtualOccurrenceRanks: [],
+    sequence: 1,
+  };
+}
+
+class FakeRequester implements DetailEmbedRequester {
+  readonly calls: RequestInput[] = [];
+
+  constructor(
+    private readonly blocks: Map<string, Block>,
+    private readonly collections: Map<string, VisibleBlockCollection | Error>,
+    private readonly getFailures = new Map<string, Error>(),
+    private readonly snapshotFailure: Error | null = null,
+  ) {}
+
+  async request<T>(input: RequestInput): Promise<T> {
+    this.calls.push(input);
+    if (input.action === "workspace.snapshot") {
+      if (this.snapshotFailure) throw this.snapshotFailure;
+      return snapshot([...this.blocks.values()]) as T;
+    }
+    if (input.action === "get") {
+      const failure = this.getFailures.get(input.blockId);
+      if (failure) throw failure;
+      const result = this.blocks.get(input.blockId);
+      if (!result) throw new Error(`Block not found: ${input.blockId}`);
+      return result as T;
+    }
+    if (input.action === "blocks.query") {
+      const viewId = input.query.rankViewId ?? "";
+      const result = this.collections.get(viewId);
+      if (result instanceof Error) throw result;
+      if (!result) throw new Error(`Unexpected query: ${viewId}`);
+      return result as T;
+    }
+    throw new Error(`Unexpected action: ${input.action}`);
+  }
+}
+
+function virtualBranch(id: string, query = "status=next", limit?: number): Block {
+  return block(id, `View [type::virtual-branch] [query::${query}]${limit ? ` [limit::${limit}]` : ""}`, [
+    { key: "type", value: "virtual-branch" },
+    { key: "query", value: query },
+    ...(limit ? [{ key: "limit", value: String(limit) }] : []),
+  ]);
+}
+
+test("renders a bounded virtual-branch embed without changing authored source", async () => {
+  const definition = virtualBranch("view-next", "status=next", 2);
+  const first = block("result-one", "First !((nested-target)) [status::next]", [{ key: "status", value: "next" }]);
+  const second = block("result-two", "Second [status::next]", [{ key: "status", value: "next" }]);
+  const third = block("result-three", "Third [status::next]", [{ key: "status", value: "next" }]);
+  const requester = new FakeRequester(
+    new Map([definition, first, second, third].map((item) => [item.id, item])),
+    new Map([[definition.id, {
+      blocks: [visible(definition), visible(first), visible(second), visible(third)],
+      completeness: { kind: "complete" },
+    }]]),
+  );
+  const authored = `Recommendation\n!((view-next))\nConclusion`;
+
+  const projection = await projectDetailRead(requester, authored);
+
+  expect(authored).toBe(`Recommendation\n!((view-next))\nConclusion`);
+  expect(projection.text).toBe([
+    "Recommendation",
+    "Embedded view: ((view-next)) · 2 results · TRUNCATED at 2",
+    "- ((result-one))",
+    "- ((result-two))",
+    "Conclusion",
+  ].join("\n"));
+  expect(projection.embeds).toEqual([{
+    blockId: definition.id,
+    status: "truncated",
+    count: 2,
+    completeness: { kind: "truncated", limit: 2 },
+  }]);
+  expect(requester.calls).toContainEqual({
+    action: "blocks.query",
+    query: { filters: [{ key: "status", value: "next" }], rankViewId: definition.id, limit: 4 },
+  });
+  expect(requester.calls).not.toContainEqual({ action: "get", blockId: "nested-target" });
+});
+
+test("renders explicit empty, invalid, failed, missing, deleted, and unsupported states", async () => {
+  const empty = virtualBranch("view-empty");
+  const invalid = block("view-invalid", "Invalid [type::virtual-branch]", [
+    { key: "type", value: "virtual-branch" },
+  ]);
+  const failed = virtualBranch("view-failed");
+  const targetFailed = virtualBranch("view-target-failed");
+  const deleted = {
+    ...virtualBranch("view-trash"),
+    deletedAt: timestamp,
+    effectiveDeletedRootId: "view-trash",
+  };
+  const unsupported = block("ordinary-block", "Ordinary");
+  const requester = new FakeRequester(
+    new Map([empty, invalid, failed, targetFailed, deleted, unsupported].map((item) => [item.id, item])),
+    new Map<string, VisibleBlockCollection | Error>([
+      [empty.id, { blocks: [], completeness: { kind: "complete" } }],
+      [failed.id, new Error("query backend unavailable\nretry later")],
+    ]),
+    new Map([[targetFailed.id, new Error("service transport unavailable")]]),
+  );
+  const source = [
+    "!((view-empty))",
+    "!((view-invalid))",
+    "!((view-failed))",
+    "!((view-target-failed))",
+    "!((view-missing))",
+    "!((view-trash))",
+    "!((ordinary-block))",
+  ].join("\n");
+
+  const projection = await projectDetailRead(requester, source);
+
+  expect(projection.embeds.map(({ status }) => status)).toEqual([
+    "empty",
+    "invalid",
+    "failed",
+    "failed",
+    "missing",
+    "deleted",
+    "unsupported",
+  ]);
+  expect(projection.text).toContain("Embedded view: ((view-empty)) · EMPTY");
+  expect(projection.text).toContain("Embedded view: ((view-invalid)) · CONFIG ERROR");
+  expect(projection.text).toContain("Virtual branch query property must appear exactly once; found 0");
+  expect(projection.text).toContain("Embedded view: ((view-failed)) · QUERY FAILED");
+  expect(projection.text).toContain("!((view-target-failed)) · TARGET FAILED · service transport unavailable");
+  expect(projection.text).toContain("query backend unavailable retry later");
+  expect(projection.text).toContain("!((view-missing)) · MISSING TARGET");
+  expect(projection.text).toContain("!((view-trash)) · IN TRASH");
+  expect(projection.text).toContain("Embedded block: ((ordinary-block)) · UNSUPPORTED TYPE");
+});
+
+test("renders workspace projection failures instead of hiding the document", async () => {
+  const requester = new FakeRequester(
+    new Map(),
+    new Map(),
+    new Map(),
+    new Error("snapshot unavailable"),
+  );
+
+  const projection = await projectDetailRead(requester, "Before\n!((view-next))\nAfter");
+
+  expect(projection.embeds).toEqual([{ blockId: "view-next", status: "failed", count: 0 }]);
+  expect(projection.text).toBe(
+    "Before\n!((view-next)) · PROJECTION FAILED · snapshot unavailable\nAfter",
+  );
+});
+
+test("reuses a repeated target projection and bounds the embed count", async () => {
+  const definition = virtualBranch("view-repeat");
+  const requester = new FakeRequester(
+    new Map([[definition.id, definition]]),
+    new Map([[definition.id, { blocks: [], completeness: { kind: "complete" } }]]),
+  );
+  const source = Array.from({ length: 18 }, () => "!((view-repeat))").join("\n");
+
+  const projection = await projectDetailRead(requester, source);
+
+  expect(projection.embeds).toHaveLength(18);
+  expect(projection.embeds.filter(({ status }) => status === "empty")).toHaveLength(16);
+  expect(projection.embeds.filter(({ status }) => status === "limit")).toHaveLength(2);
+  expect(requester.calls.filter(({ action }) => action === "get")).toHaveLength(1);
+  expect(requester.calls.filter(({ action }) => action === "blocks.query")).toHaveLength(1);
+  expect(detailEmbedIds(source)).toHaveLength(18);
+});

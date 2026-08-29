@@ -7,13 +7,27 @@ import type {
 
 const BLOCK_REFERENCE_PATTERN = /\(\(([A-Za-z0-9_-]{8,})\)\)/g;
 
+export interface BlockReferenceOccurrence {
+  blockId: string;
+  start: number;
+  end: number;
+}
+
 export function blockDisplayTitle(block: Block): string {
   const firstContentLine = firstLineWithoutPropertyTokens(block.text);
   return firstContentLine?.replace(/\s{2,}/g, " ").trim() || block.id;
 }
 
+export function blockReferenceOccurrences(text: string): BlockReferenceOccurrence[] {
+  return [...text.matchAll(BLOCK_REFERENCE_PATTERN)].map((match) => ({
+    blockId: match[1],
+    start: match.index,
+    end: match.index + match[0].length,
+  }));
+}
+
 export function blockReferenceIds(text: string): string[] {
-  return [...text.matchAll(BLOCK_REFERENCE_PATTERN)].map((match) => match[1]);
+  return blockReferenceOccurrences(text).map((reference) => reference.blockId);
 }
 
 export function resolveBlockReferencesWithStatus(

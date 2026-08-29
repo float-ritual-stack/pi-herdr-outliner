@@ -8,6 +8,7 @@ import { OutlinerServer } from "../src/server";
 import { OutlinerStore } from "../src/store";
 import { OUTLINER_PROTOCOL_VERSION } from "../src/types";
 import type {
+  BacklinkCollection,
   Block,
   CaptureReceipt,
   BrowsingContextPublication,
@@ -52,7 +53,7 @@ test("serves mutations and property queries over the local socket", async () => 
   const client = new OutlinerClient(socket);
   const service = await client.request<OutlinerServiceStatus>({ action: "ping" });
   expect(service).toEqual({ status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION });
-  expect(service.protocolVersion).toBe(17);
+  expect(service.protocolVersion).toBe(18);
   const provenance = {
     actorId: "omp",
     sessionId: "session-1",
@@ -154,6 +155,23 @@ test("serves mutations and property queries over the local socket", async () => 
   });
   expect(resolved.workIdPrefix).toBe("PIE");
   expect(resolved.text).toBe("See ((Waiting for user))");
+  const backlinkSource = await client.request<Block>({
+    action: "create",
+    text: `Protocol backlink source\n((${block.id}))`,
+  });
+  const backlinks = await client.request<BacklinkCollection>({
+    action: "references.backlinks",
+    query: { targetBlockId: block.id, limit: 10 },
+  });
+  expect(backlinks).toMatchObject({
+    targetBlockId: block.id,
+    sources: [{
+      blockId: backlinkSource.id,
+      title: "Protocol backlink source",
+      occurrenceCount: 1,
+    }],
+    completeness: { kind: "complete" },
+  });
   const dangling = await client.request<PageAddressResolution>({
     action: "pages.resolve",
     address: "Protocol Page",
@@ -851,7 +869,29 @@ test("routes previews and opens to the first spatially unlocked Detail", async (
     command: { targetClientId: "detail-c", command: "open", blockId: target.id },
   });
 
-  await client.request({ action: "clients.update", clientId: "detail-c", locked: true });
+  const sourcePreservingOpen = await client.request<OutlinerNavigationDispatch>({
+    action: "navigation.dispatch",
+    sourceClientId: "detail-c",
+    blockId: target.id,
+    intent: "open",
+    preserveSource: true,
+  });
+  expect(sourcePreservingOpen).toMatchObject({
+    sourceClientId: "detail-c",
+    targetClientId: "detail-d",
+    resolution: "unlocked",
+  });
+
+  await client.request({
+    action: "clients.update",
+    clientId: "detail-c",
+    locked: true,
+    currentBlockId: target.id,
+  });
+  expect(
+    (await client.request<OutlinerClientRegistration[]>({ action: "clients.list" }))
+      .find(({ clientId }) => clientId === "detail-c"),
+  ).toMatchObject({ locked: true, currentBlockId: target.id });
   const nextOpen = await client.request<OutlinerNavigationDispatch>({
     action: "navigation.dispatch",
     sourceClientId: "detail-c",
@@ -900,6 +940,15 @@ test("routes previews and opens to the first spatially unlocked Detail", async (
     blockId: target.id,
     intent: "open",
   })).rejects.toThrow("All Details in this tab are locked · unlock one or open another Detail");
+  await expect(client.request({
+    action: "navigation.dispatch",
+    sourceClientId: "detail-c",
+    blockId: target.id,
+    intent: "open",
+    preserveSource: true,
+  })).rejects.toThrow(
+    "No other unlocked Detail is available · unlock one or open another Detail",
+  );
 
   await new Promise<void>((resolve) => setImmediate(resolve));
   expect(received.get("detail-c")?.some((event) => event.command?.command === "open")).toBe(true);

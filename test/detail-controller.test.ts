@@ -1,12 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import {
   createDetailController,
+  visibleBacklinkSources,
   type DetailEffects,
   type DetailViewport,
 } from "../src/detail-controller";
 import type { ReferencedFile } from "../src/files";
 import type { OutlinerLinkTarget } from "../src/outliner-links";
 import type {
+  BacklinkCollection,
+  BacklinkQuery,
   Block,
   BlockSearchQuery,
   OutlinerEvent,
@@ -59,20 +62,29 @@ interface Harness {
   calls: {
     selections: number;
     setSelections: string[];
+    projectedReads: string[];
     updates: Array<{ blockId: string; text: string; expectedUpdatedAt: string }>;
     creates: Array<{ parentId: string; text: string; author: "user" }>;
     restores: string[];
     histories: Array<"back" | "forward">;
     followedReferences: OutlinerLinkTarget[];
     queries: BlockSearchQuery[];
+    backlinkQueries: BacklinkQuery[];
+    navigationDispatches: Array<{
+      blockId: string;
+      intent: "preview" | "open" | "reveal";
+      preserveSource: boolean;
+    }>;
     pageQueries: Array<{ query: string | undefined; limit: number }>;
     focuses: number;
     selfFocuses: number;
     locks: boolean[];
+    currentBlocks: Array<string | null>;
   };
   setSelection(selection: SelectionContext): void;
   setUpdate(implementation: DetailEffects["updateBlock"]): void;
   setQueryResults(results: VisibleBlockCollection[]): void;
+  setBacklinkResults(results: BacklinkCollection[]): void;
   setPageQueryResults(results: PageAddressCollection[]): void;
   setFocusError(error: Error | null): void;
 }
@@ -85,6 +97,7 @@ function createHarness(
     references: [],
     workIdPrefix: "PIE",
   }),
+  projectRead: DetailEffects["projectRead"] = async (text) => ({ text, embeds: [] }),
 ): Harness {
   let selection: SelectionContext = { selected: initial, ancestors: [], children: [] };
   let update: DetailEffects["updateBlock"] = async (input) => makeBlock({
@@ -94,21 +107,26 @@ function createHarness(
     properties: initial.properties,
   });
   let queryResults: VisibleBlockCollection[] = [];
+  let backlinkResults: BacklinkCollection[] = [];
   let focusError: Error | null = null;
   let pageQueryResults: PageAddressCollection[] = [];
   const calls: Harness["calls"] = {
     selections: 0,
     setSelections: [],
+    projectedReads: [],
     updates: [],
     creates: [],
     restores: [],
     histories: [],
     followedReferences: [],
     queries: [],
+    backlinkQueries: [],
+    navigationDispatches: [],
     pageQueries: [],
     focuses: 0,
     selfFocuses: 0,
     locks: [],
+    currentBlocks: [],
   };
   const effects: DetailEffects = {
     clientId: "detail-test",
@@ -132,17 +150,38 @@ function createHarness(
     async setLocked(locked) {
       calls.locks.push(locked);
     },
-    async dispatchNavigation(blockId, intent) {
+    async setCurrentBlock(blockId) {
+      calls.currentBlocks.push(blockId);
+    },
+    async dispatchNavigation(blockId, intent, options) {
+      calls.navigationDispatches.push({
+        blockId,
+        intent,
+        preserveSource: options?.preserveSource === true,
+      });
+      const targetClientId = options?.preserveSource ? "detail-other" : "detail-test";
       return {
         sourceClientId: "detail-test",
-        targetClientId: "detail-test",
+        targetClientId,
         blockId,
         intent,
         resolution: "unlocked",
-        command: { targetClientId: "detail-test", command: intent, blockId },
+        command: { targetClientId, command: intent, blockId },
       };
     },
     resolveReferences,
+    async projectRead(text) {
+      calls.projectedReads.push(text);
+      return projectRead(text);
+    },
+    async queryBacklinks(query) {
+      calls.backlinkQueries.push(query);
+      return backlinkResults.shift() ?? {
+        targetBlockId: query.targetBlockId,
+        sources: [],
+        completeness: { kind: "complete" },
+      };
+    },
     async resolveNavigation(intent) {
       return {
         sourceClientId: "detail-test",
@@ -216,6 +255,9 @@ function createHarness(
     setQueryResults(next) {
       queryResults = [...next];
     },
+    setBacklinkResults(next) {
+      backlinkResults = [...next];
+    },
     setPageQueryResults(next) {
       pageQueryResults = [...next];
     },
@@ -243,10 +285,41 @@ describe("detail controller projection and deferred refresh", () => {
     await harness.controller.initialize();
     expect(harness.controller.state.mode).toBe("annotation");
     expect(harness.controller.state.resolvedSelectedText).toBe("resolved:Raw ((reference))");
+    expect(harness.calls.currentBlocks).toEqual([]);
+
 
     await harness.controller.dispatch({ type: "edit.begin" }, viewport);
     expect(harness.controller.state.buffer.text).toBe("Raw ((reference))");
     expect(harness.controller.state.mode).toBe("edit");
+  });
+  test("refreshes generated read projection on content events without changing canonical text", async () => {
+    const selected = makeBlock({ text: "Recommendation\n!((view-next))" });
+    let version = 1;
+    const harness = createHarness(
+      selected,
+      null,
+      async (text) => ({ text, references: [] }),
+      async () => ({
+        text: `Recommendation\nEmbedded view version ${version}\n- ((result-one))`,
+        embeds: [{
+          blockId: "view-next",
+          status: "ready",
+          count: 1,
+          completeness: { kind: "complete" },
+        }],
+      }),
+    );
+
+    await harness.controller.initialize();
+    expect(harness.controller.state.projectedSelectedText).toContain("version 1");
+    expect(harness.controller.state.embedStates[0]?.status).toBe("ready");
+
+    version = 2;
+    await harness.controller.onServiceEvent(event("content"), viewport);
+
+    expect(harness.controller.state.projectedSelectedText).toContain("version 2");
+    expect(harness.controller.state.context.selected?.text).toBe(selected.text);
+    expect(harness.calls.projectedReads).toEqual([selected.text, selected.text]);
   });
 
   test("keeps trashed blocks read-only and restores direct Trash roots explicitly", async () => {
@@ -321,6 +394,29 @@ describe("detail controller projection and deferred refresh", () => {
     expect(harness.controller.state.status).toContain("restore before editing");
   });
 
+  test("returns to an unlocked Tree preview after opening its link", async () => {
+    const previous = makeBlock({ id: "previous-block", text: "Previous" });
+    const previewed = makeBlock({ id: "c021d559-preview", text: "See linked block" });
+    const harness = createHarness(previous);
+    await harness.controller.initialize();
+
+    harness.setSelection({ selected: previewed, ancestors: [], children: [] });
+    await harness.controller.onServiceEvent(
+      event("ui", { targetClientId: "detail-test", command: "preview", blockId: previewed.id }),
+      viewport,
+    );
+    await harness.controller.dispatch({
+      type: "reference.open",
+      target: { kind: "block", value: "linked-block" },
+    }, viewport);
+    expect(harness.controller.state.context.selected?.id).toBe("linked-block");
+
+    await harness.controller.dispatch({ type: "navigation.back" }, viewport);
+    expect(harness.controller.state.context.selected?.id).toBe(previewed.id);
+    await harness.controller.dispatch({ type: "navigation.forward" }, viewport);
+    expect(harness.controller.state.context.selected?.id).toBe("linked-block");
+  });
+
   test("locks an anchor out of preview updates until explicitly unlocked", async () => {
     const first = makeBlock({ id: "first-block", text: "First" });
     const second = makeBlock({ id: "second-block", text: "Second" });
@@ -343,6 +439,13 @@ describe("detail controller projection and deferred refresh", () => {
     expect(harness.controller.state.context.selected?.id).toBe(second.id);
     expect(harness.controller.state.connectionMode).toBe("locked");
 
+    await harness.controller.onServiceEvent(
+      event("ui", { targetClientId: "detail-test", command: "open", blockId: third.id }),
+      viewport,
+    );
+    expect(harness.controller.state.context.selected?.id).toBe(second.id);
+    expect(harness.calls.selfFocuses).toBe(0);
+
     await harness.controller.dispatch({ type: "lock.toggle" }, viewport);
     await harness.controller.onServiceEvent(
       event("ui", { targetClientId: "detail-test", command: "preview", blockId: third.id }),
@@ -351,6 +454,21 @@ describe("detail controller projection and deferred refresh", () => {
     expect(harness.controller.state.context.selected?.id).toBe(third.id);
     expect(harness.controller.state.connectionMode).toBe("unlocked");
     expect(harness.calls.locks).toEqual([true, false]);
+  });
+
+  test("keeps a locked Detail unchanged when an ordinary link resolves back to itself", async () => {
+    const source = makeBlock({ id: "source-block", text: "See ((target01))" });
+    const harness = createHarness(source);
+    await harness.controller.initialize();
+    await harness.controller.dispatch({ type: "lock.toggle" }, viewport);
+
+    await harness.controller.dispatch({ type: "reference.follow" }, viewport);
+
+    expect(harness.controller.state.context.selected?.id).toBe(source.id);
+    expect(harness.controller.state.connectionMode).toBe("locked");
+    expect(harness.controller.state.status).toBe(
+      "Locked · ordinary navigation preserved this Detail",
+    );
   });
 
   test("follows symbolic references through the page-address path", async () => {
@@ -454,6 +572,7 @@ describe("detail controller projection and deferred refresh", () => {
     expect(harness.controller.state.buffer.text).toBe("keep me");
     expect(harness.controller.state.refreshPending).toBe(true);
     expect(harness.calls.selections).toBe(loads);
+    expect(harness.calls.currentBlocks).toEqual([block.id]);
   });
 });
 
@@ -471,6 +590,40 @@ describe("detail controller saves and annotations", () => {
     expect(harness.controller.state.context.selected?.updatedAt).toBe("version-2");
     expect(harness.controller.state.resolvedSelectedText).toBe("resolved:raw changed");
     expect(harness.controller.state.mode).toBe("preview");
+  });
+
+  test("never serializes generated backlink projection content", async () => {
+    const harness = createHarness(makeBlock({ text: "raw", updatedAt: "original-version" }));
+    harness.setBacklinkResults([{
+      targetBlockId: "block-1",
+      sources: [{
+        blockId: "source-block",
+        title: "Generated backlink",
+        parentContext: "Top level",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-02T00:00:00.000Z",
+        occurrenceCount: 1,
+        referenceGroups: [{ kind: "block", count: 1 }],
+        occurrences: [{
+          kind: "block",
+          label: "((block-1))",
+          snippet: "Generated backlink snippet",
+          start: 0,
+          end: 11,
+        }],
+        occurrencesTruncated: false,
+      }],
+      completeness: { kind: "complete" },
+    }]);
+    await harness.controller.initialize();
+    await harness.controller.dispatch({ type: "backlinks.toggle" }, viewport);
+    await harness.controller.dispatch({ type: "edit.begin" }, viewport);
+    await harness.controller.dispatch({ type: "buffer.insert", text: " changed" }, viewport);
+    await harness.controller.dispatch({ type: "buffer.save" }, viewport);
+
+    expect(harness.calls.updates).toEqual([
+      { blockId: "block-1", text: "raw changed", expectedUpdatedAt: "original-version" },
+    ]);
   });
 
   test("replaces a motion-selected range before an optimistic save", async () => {
@@ -659,6 +812,29 @@ describe("detail controller completion, navigation, and focus", () => {
     expect(harness.controller.state.status).toBe("");
   });
 
+  test("accepts Work-ID page completion as an exact titled block reference", async () => {
+    const harness = createHarness(makeBlock({ text: "See [[PIE-126" }));
+    harness.setPageQueryResults([{
+      addresses: [{
+        address: "PIE-126",
+        normalizedAddress: "pie-126",
+        blockId: "target-block-126",
+        kind: "work-id",
+        title: "PIE-126 — Render oversized Tree expansions",
+      }],
+      completeness: { kind: "complete" },
+    }]);
+    await harness.controller.initialize();
+    await harness.controller.dispatch({ type: "edit.begin" }, viewport);
+    await harness.controller.dispatch({ type: "completion.open" }, viewport);
+    expect(harness.controller.state.completion?.items[0]?.label).toBe(
+      "PIE-126 — Render oversized Tree expansions",
+    );
+    await harness.controller.dispatch({ type: "completion.accept" }, viewport);
+
+    expect(harness.controller.state.buffer.text).toBe("See ((target-block-126))");
+  });
+
   test("completes directories without closing and files with a closing bracket", async () => {
     const harness = createHarness(makeBlock({ text: "[file::src/" }));
     await harness.controller.initialize();
@@ -762,5 +938,229 @@ describe("detail controller completion, navigation, and focus", () => {
     expect(harness.controller.state.connectionMode).toBe("locked");
     expect(harness.calls.locks).toEqual([true]);
     expect(harness.controller.state.status).toBe("Locked for editing");
+  });
+});
+
+describe("detail backlink loading and navigation", () => {
+  test("does not query while collapsed and caches loaded results until invalidated", async () => {
+    const first = makeBlock({ id: "block-1", text: "First" });
+    const second = makeBlock({ id: "block-2", text: "Second" });
+    const harness = createHarness(first);
+    harness.setBacklinkResults([
+      {
+        targetBlockId: second.id,
+        sources: [],
+        completeness: { kind: "complete" },
+      },
+      {
+        targetBlockId: second.id,
+        sources: [],
+        completeness: { kind: "complete" },
+      },
+    ]);
+
+    await harness.controller.initialize();
+    harness.setSelection({ selected: second, ancestors: [], children: [] });
+    await harness.controller.onServiceEvent(
+      event("ui", {
+        targetClientId: "detail-test",
+        command: "preview",
+        blockId: second.id,
+      }),
+      viewport,
+    );
+    expect(harness.calls.backlinkQueries).toEqual([]);
+
+    await harness.controller.dispatch({ type: "backlinks.toggle" }, viewport);
+    expect(harness.calls.backlinkQueries).toEqual([{ targetBlockId: second.id, limit: 50 }]);
+
+    await harness.controller.dispatch({ type: "backlinks.toggle" }, viewport);
+    await harness.controller.dispatch({ type: "backlinks.toggle" }, viewport);
+    expect(harness.calls.backlinkQueries).toHaveLength(1);
+
+    await harness.controller.onServiceEvent(event("content"), viewport);
+    expect(harness.calls.backlinkQueries).toEqual([
+      { targetBlockId: second.id, limit: 50 },
+      { targetBlockId: second.id, limit: 50 },
+    ]);
+  });
+
+  test("reloads an expanded backlink projection when its target changes", async () => {
+    const first = makeBlock({ id: "block-1", text: "First" });
+    const second = makeBlock({ id: "block-2", text: "Second" });
+    const harness = createHarness(first);
+    harness.setBacklinkResults([
+      {
+        targetBlockId: first.id,
+        sources: [],
+        completeness: { kind: "complete" },
+      },
+      {
+        targetBlockId: second.id,
+        sources: [],
+        completeness: { kind: "complete" },
+      },
+    ]);
+    await harness.controller.initialize();
+    await harness.controller.dispatch({ type: "backlinks.toggle" }, viewport);
+
+    harness.setSelection({ selected: second, ancestors: [], children: [] });
+    await harness.controller.onServiceEvent(
+      event("ui", {
+        targetClientId: "detail-test",
+        command: "preview",
+        blockId: second.id,
+      }),
+      viewport,
+    );
+
+    expect(harness.calls.backlinkQueries).toEqual([
+      { targetBlockId: first.id, limit: 50 },
+      { targetBlockId: second.id, limit: 50 },
+    ]);
+    expect(harness.controller.state.backlinks.collection?.targetBlockId).toBe(second.id);
+  });
+
+  test("dispatches generated backlink targets with source preservation", async () => {
+    const source = makeBlock({ id: "hub-block", text: "Hub" });
+    const harness = createHarness(source);
+    await harness.controller.initialize();
+
+    await harness.controller.dispatch({
+      type: "reference.open",
+      target: {
+        kind: "block",
+        value: "source-block",
+        preserveSource: true,
+      },
+    }, viewport);
+
+    expect(harness.calls.navigationDispatches).toEqual([{
+      blockId: "source-block",
+      intent: "open",
+      preserveSource: true,
+    }]);
+    expect(harness.controller.state.context.selected?.id).toBe(source.id);
+    expect(harness.controller.state.status).toContain("first unlocked Detail");
+
+    await harness.controller.dispatch({
+      type: "reference.open",
+      target: {
+        kind: "block",
+        value: "ancestor-block",
+        intent: "reveal",
+      },
+    }, viewport);
+    expect(harness.calls.navigationDispatches.at(-1)).toEqual({
+      blockId: "ancestor-block",
+      intent: "reveal",
+      preserveSource: false,
+    });
+  });
+
+  test("navigates the selected backlink through explicit inspect and reveal actions", async () => {
+    const hub = makeBlock({ id: "hub-block", text: "Hub" });
+    const harness = createHarness(hub);
+    harness.setBacklinkResults([{
+      targetBlockId: hub.id,
+      sources: [
+        {
+          blockId: "source-one",
+          title: "Source one",
+          parentContext: "Top level",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-04T00:00:00.000Z",
+          occurrenceCount: 1,
+          referenceGroups: [{ kind: "block", count: 1 }],
+          occurrences: [],
+          occurrencesTruncated: false,
+        },
+        {
+          blockId: "source-two",
+          title: "Source two",
+          parentContext: "Top level",
+          createdAt: "2026-01-03T00:00:00.000Z",
+          updatedAt: "2026-01-02T00:00:00.000Z",
+          occurrenceCount: 1,
+          referenceGroups: [{ kind: "page", count: 1 }],
+          occurrences: [],
+          occurrencesTruncated: false,
+        },
+      ],
+      completeness: { kind: "complete" },
+    }]);
+    await harness.controller.initialize();
+    await harness.controller.dispatch({ type: "backlinks.toggle" }, viewport);
+    await harness.controller.dispatch({ type: "backlinks.move", delta: 1 }, viewport);
+    await harness.controller.dispatch({ type: "backlinks.open" }, viewport);
+    await harness.controller.dispatch({ type: "backlinks.reveal" }, viewport);
+
+    expect(harness.controller.state.backlinks.selectedIndex).toBe(1);
+    expect(harness.calls.navigationDispatches).toEqual([
+      { blockId: "source-two", intent: "open", preserveSource: true },
+      { blockId: "source-two", intent: "reveal", preserveSource: false },
+    ]);
+    expect(harness.controller.state.context.selected?.id).toBe(hub.id);
+    expect(harness.controller.state.status).toBe("Revealed Source two");
+  });
+
+  test("filters fuzzily, cycles timestamp sorting, and toggles source detail", async () => {
+    const hub = makeBlock({ id: "hub-block", text: "Hub" });
+    const harness = createHarness(hub);
+    harness.setBacklinkResults([{
+      targetBlockId: hub.id,
+      sources: [
+        {
+          blockId: "alpha-source",
+          title: "Alpha source",
+          parentContext: "Research",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-04T00:00:00.000Z",
+          occurrenceCount: 1,
+          referenceGroups: [{ kind: "block", count: 1 }],
+          occurrences: [{
+            kind: "block",
+            label: "synthetic",
+            snippet: "Project integration evidence - phase 1 had 5 findings and 1 follow-up",
+            start: 0,
+            end: 9,
+          }],
+          occurrencesTruncated: false,
+        },
+        {
+          blockId: "gamma-source",
+          title: "Gamma source",
+          parentContext: "Architecture",
+          createdAt: "2026-01-03T00:00:00.000Z",
+          updatedAt: "2026-01-02T00:00:00.000Z",
+          occurrenceCount: 1,
+          referenceGroups: [{ kind: "property", propertyKey: "source-block", count: 1 }],
+          occurrences: [],
+          occurrencesTruncated: false,
+        },
+      ],
+      completeness: { kind: "complete" },
+    }]);
+    await harness.controller.initialize();
+    await harness.controller.dispatch({ type: "backlinks.toggle" }, viewport);
+
+    expect(visibleBacklinkSources(harness.controller.state.backlinks).map((source) => source.blockId))
+      .toEqual(["alpha-source", "gamma-source"]);
+    await harness.controller.dispatch({ type: "backlinks.sort.cycle" }, viewport);
+    expect(visibleBacklinkSources(harness.controller.state.backlinks).map((source) => source.blockId))
+      .toEqual(["gamma-source", "alpha-source"]);
+
+    await harness.controller.dispatch({ type: "backlinks.filter.begin" }, viewport);
+    await harness.controller.dispatch({ type: "backlinks.filter.input", text: "gm" }, viewport);
+    await harness.controller.dispatch({ type: "backlinks.filter.commit" }, viewport);
+    expect(visibleBacklinkSources(harness.controller.state.backlinks).map((source) => source.blockId))
+      .toEqual(["gamma-source"]);
+
+    await harness.controller.dispatch({ type: "backlinks.source.toggle" }, viewport);
+    expect(harness.controller.state.backlinks.expandedSourceIds).toEqual(
+      new Set(["gamma-source"]),
+    );
+    harness.controller.state.backlinks.filter = "PIE-151";
+    expect(visibleBacklinkSources(harness.controller.state.backlinks)).toEqual([]);
   });
 });

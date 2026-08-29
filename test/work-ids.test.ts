@@ -1,7 +1,10 @@
 import { expect, test } from "bun:test";
 import {
+  containsWorkIdPlaceholder,
   formatWorkId,
+  formatWorkIdPlaceholder,
   isCanonicalWorkId,
+  isConfiguredWorkIdPlaceholder,
   normalizeWorkIdPrefix,
   parseWorkId,
   workIdReferences,
@@ -13,6 +16,16 @@ test("normalizes project prefixes and formats monotonic Work IDs", () => {
   expect(formatWorkId("PIE", 1_000)).toBe("PIE-1000");
   expect(() => normalizeWorkIdPrefix("bad-prefix")).toThrow("1-16 ASCII");
   expect(() => formatWorkId("PIE", 0)).toThrow("positive safe integer");
+});
+
+test("recognizes only the configured canonical placeholder token", () => {
+  expect(formatWorkIdPlaceholder("pie")).toBe("PIE-XXX");
+  expect(containsWorkIdPlaceholder("[work-id::PIE-XXX]", "PIE")).toBe(true);
+  expect(containsWorkIdPlaceholder("[[PIE-XXX]]", "PIE")).toBe(true);
+  expect(containsWorkIdPlaceholder("[issue::PIE-XXX]", "PIE")).toBe(true);
+  expect(containsWorkIdPlaceholder("OTHER-XXX PIE-XXXX XPIE-XXX", "PIE")).toBe(false);
+  expect(isConfiguredWorkIdPlaceholder(" PIE-XXX ", "PIE")).toBe(true);
+  expect(isConfiguredWorkIdPlaceholder("OTHER-XXX", "PIE")).toBe(false);
 });
 
 test("parses canonical project Work-ID components", () => {

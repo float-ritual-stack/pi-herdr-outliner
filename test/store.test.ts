@@ -997,6 +997,41 @@ Second paragraph`;
       observedPrefixes: ["PIE"],
     });
   });
+
+  test("atomically replaces the configured self-assignment placeholder", () => {
+    const store = makeStore();
+    const selfAssignment = store.create(
+      "Promote this work [work-id::PIE-XXX] [status::planned]",
+    );
+    const wrongPrefix = store.create("Other placeholder [work-id::OTHER-XXX]");
+    store.configureWorkIdPrefix("PIE");
+
+    expect(() =>
+      store.allocateWorkId(selfAssignment.id, "stale")
+    ).toThrow("changed since editing began");
+    expect(store.get(selfAssignment.id)?.text).toContain("[work-id::PIE-XXX]");
+
+    const allocation = store.allocateWorkId(
+      selfAssignment.id,
+      selfAssignment.updatedAt,
+    );
+    expect(allocation).toMatchObject({
+      workId: "PIE-001",
+      block: {
+        properties: [
+          { key: "work-id", value: "PIE-001" },
+          { key: "status", value: "planned" },
+        ],
+      },
+    });
+    expect(allocation.block.text).not.toContain("PIE-XXX");
+    expect(allocation.block.properties.filter(({ key }) => key === "work-id")).toHaveLength(1);
+
+    expect(() =>
+      store.allocateWorkId(wrongPrefix.id, wrongPrefix.updatedAt)
+    ).toThrow("already has a Work ID");
+    expect(store.get(wrongPrefix.id)?.text).toContain("[work-id::OTHER-XXX]");
+  });
   test("protects a configured non-PIE Work-ID namespace from page stubs", () => {
     const store = makeStore();
     const work = store.create("Custom-prefix work");

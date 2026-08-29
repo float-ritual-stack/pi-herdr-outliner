@@ -1,12 +1,17 @@
 import { extractFileAnnotationComment, formatFileAnnotation } from "./annotations";
 import { completionTargetAtCursor } from "./completion";
+import { subsequenceScore } from "./block-focus";
 import { layoutDetailEditor } from "./detail-editor-layout";
+import type { DetailEmbedState, DetailReadProjection } from "./detail-embeds";
 import type { ReferencedFile, ReferencedPathCandidate } from "./files";
 import { firstOutlinerReference, type OutlinerLinkTarget } from "./outliner-links";
 import { getProperty } from "./properties";
 import { blockDisplayTitle } from "./references";
 import { TextBuffer } from "./text-buffer";
 import type {
+  BacklinkCollection,
+  BacklinkSource,
+  BacklinkQuery,
   Block,
   BlockSearchQuery,
   BrowsingContextState,
@@ -46,7 +51,54 @@ export interface DetailLineRange {
   endLine: number;
 }
 
+export type DetailBacklinkSortField = "created" | "updated";
+export type DetailBacklinkSortDirection = "asc" | "desc";
 
+export interface DetailBacklinkState {
+  expanded: boolean;
+  loading: boolean;
+  collection: BacklinkCollection | null;
+  selectedIndex: number;
+  error: string;
+  filter: string;
+  filterDraft: string | null;
+  sortField: DetailBacklinkSortField;
+  sortDirection: DetailBacklinkSortDirection;
+  expandedSourceIds: Set<string>;
+}
+
+
+
+function normalizeBacklinkFilter(value: string): string {
+  return value.normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+export function visibleBacklinkSources(
+  backlinks: Readonly<DetailBacklinkState>,
+): BacklinkSource[] {
+  const query = normalizeBacklinkFilter(backlinks.filter);
+  const sources = backlinks.collection?.sources.filter((source) => {
+    if (!query) return true;
+    const fields = [
+      source.title,
+      source.parentContext,
+      ...source.referenceGroups.map((group) =>
+        group.kind === "property" ? group.propertyKey : group.kind
+      ),
+      ...source.occurrences.map((occurrence) => occurrence.snippet),
+    ].map(normalizeBacklinkFilter);
+    return fields.some((field) =>
+      field.includes(query) || subsequenceScore(query, field) >= 900
+    );
+  }) ?? [];
+  const timestamp = backlinks.sortField === "created" ? "createdAt" : "updatedAt";
+  const direction = backlinks.sortDirection === "asc" ? 1 : -1;
+  return sources.sort((left, right) =>
+    direction * left[timestamp].localeCompare(right[timestamp]) ||
+    left.title.localeCompare(right.title) ||
+    left.blockId.localeCompare(right.blockId)
+  );
+}
 export interface DetailState {
   context: SelectionContext;
   targetBlockId: string | null;
@@ -54,6 +106,8 @@ export interface DetailState {
   canNavigateBack: boolean;
   canNavigateForward: boolean;
   resolvedSelectedText: string;
+  projectedSelectedText: string;
+  embedStates: DetailEmbedState[];
   workIdPrefix: string | null;
   resolvedBreadcrumb: string;
   mode: DetailMode;
@@ -69,6 +123,7 @@ export interface DetailState {
   status: string;
   busy: boolean;
   refreshPending: boolean;
+  backlinks: DetailBacklinkState;
 }
 
 export interface DetailEffects {
@@ -78,14 +133,19 @@ export interface DetailEffects {
   getBrowsingContext(): Promise<BrowsingContextState>;
   getBlockContext(blockId: string): Promise<SelectionContext>;
   setLocked(locked: boolean): Promise<void>;
+  setCurrentBlock(blockId: string | null): Promise<void>;
   dispatchNavigation(
     blockId: string,
     intent: OutlinerNavigationIntent,
+    options?: { preserveSource?: boolean },
   ): Promise<OutlinerNavigationDispatch>;
   resolveNavigation(
     intent: OutlinerNavigationIntent,
+    options?: { preserveSource?: boolean },
   ): Promise<OutlinerNavigationResolution>;
   resolveReferences(text: string): Promise<ResolvedBlockReferences>;
+  projectRead(text: string): Promise<DetailReadProjection>;
+  queryBacklinks(query: BacklinkQuery): Promise<BacklinkCollection>;
   updateBlock(input: {
     blockId: string;
     text: string;
@@ -124,6 +184,17 @@ export type DetailIntent =
   | { type: "reference.follow" }
   | { type: "reference.open"; target: OutlinerLinkTarget }
   | { type: "reference.reveal" }
+  | { type: "backlinks.move"; delta: -1 | 1 }
+  | { type: "backlinks.open" }
+  | { type: "backlinks.reveal" }
+  | { type: "backlinks.toggle" }
+  | { type: "backlinks.filter.begin" }
+  | { type: "backlinks.filter.input"; text: string }
+  | { type: "backlinks.filter.backspace" }
+  | { type: "backlinks.filter.commit" }
+  | { type: "backlinks.filter.cancel" }
+  | { type: "backlinks.sort.cycle" }
+  | { type: "backlinks.source.toggle"; blockId?: string }
   | { type: "lock.toggle" }
   | { type: "buffer.insert"; text: string }
   | { type: "buffer.newline" }
@@ -225,6 +296,8 @@ export function createDetailController(
     canNavigateBack: false,
     canNavigateForward: false,
     resolvedSelectedText: "",
+    projectedSelectedText: "",
+    embedStates: [],
     workIdPrefix: null,
     resolvedBreadcrumb: "",
     mode: "preview",
@@ -240,10 +313,23 @@ export function createDetailController(
     status: "",
     busy: false,
     refreshPending: false,
+    backlinks: {
+      expanded: false,
+      loading: false,
+      collection: null,
+      selectedIndex: 0,
+      error: "",
+      filter: "",
+      filterDraft: null,
+      sortField: "updated",
+      sortDirection: "desc",
+      expandedSourceIds: new Set(),
+    },
   };
   const navigationHistory: string[] = [];
   let navigationIndex = -1;
   let pendingUiCommand: OutlinerUiCommand | null = null;
+  let serviceConnected = false;
 
   const emit = (): void => onChange(state);
   const isBufferMode = (): boolean => state.mode === "edit" || state.mode === "comment";
@@ -273,6 +359,60 @@ export function createDetailController(
     state.workIdPrefix = resolved.workIdPrefix ?? null;
   };
 
+  const applyReadProjection = async (text: string): Promise<void> => {
+    const projection = await effects.projectRead(text);
+    state.projectedSelectedText = projection.text;
+    state.embedStates = projection.embeds;
+    applyResolvedReferences(await effects.resolveReferences(projection.text));
+  };
+
+  const invalidateBacklinks = (): void => {
+    state.backlinks.loading = false;
+    state.backlinks.collection = null;
+    state.backlinks.error = "";
+    state.backlinks.selectedIndex = 0;
+    state.backlinks.filter = "";
+    state.backlinks.filterDraft = null;
+    state.backlinks.expandedSourceIds.clear();
+  };
+
+  const selectedBacklinkSource = (): BacklinkSource | undefined =>
+    visibleBacklinkSources(state.backlinks)[state.backlinks.selectedIndex];
+
+  const clampBacklinkSelection = (): void => {
+    const maximum = Math.max(0, visibleBacklinkSources(state.backlinks).length - 1);
+    state.backlinks.selectedIndex = Math.min(state.backlinks.selectedIndex, maximum);
+  };
+
+  const loadBacklinks = async (): Promise<void> => {
+    const targetBlockId = state.targetBlockId;
+    if (
+      !state.backlinks.expanded ||
+      !targetBlockId ||
+      state.backlinks.collection?.targetBlockId === targetBlockId
+    ) {
+      return;
+    }
+    state.backlinks.loading = true;
+    state.backlinks.error = "";
+    try {
+      const collection = await effects.queryBacklinks({
+        targetBlockId,
+        limit: 50,
+      });
+      if (state.backlinks.expanded && state.targetBlockId === targetBlockId) {
+        state.backlinks.collection = collection;
+        clampBacklinkSelection();
+      }
+    } catch (error) {
+      if (state.backlinks.expanded && state.targetBlockId === targetBlockId) {
+        state.backlinks.error = errorMessage(error);
+      }
+    } finally {
+      if (state.targetBlockId === targetBlockId) state.backlinks.loading = false;
+    }
+  };
+
   const syncNavigationState = (): void => {
     state.canNavigateBack = navigationIndex > 0;
     state.canNavigateForward = navigationIndex >= 0 && navigationIndex < navigationHistory.length - 1;
@@ -296,19 +436,25 @@ export function createDetailController(
     record = true,
   ): Promise<void> => {
     state.refreshPending = false;
+    const targetChanged = next.selected?.id !== state.context.selected?.id;
     const changed =
-      next.selected?.id !== state.context.selected?.id ||
+      targetChanged ||
       next.selected?.updatedAt !== state.context.selected?.updatedAt;
+    if (changed) invalidateBacklinks();
+    if (record) recordNavigation(state.targetBlockId);
     state.context = next;
     state.targetBlockId = next.selected?.id ?? null;
+    if (targetChanged && serviceConnected) await effects.setCurrentBlock(state.targetBlockId);
     if (record) recordNavigation(state.targetBlockId);
     else syncNavigationState();
     if (!force && !changed) return;
     if (changed) state.status = "";
 
     if (next.selected) {
-      applyResolvedReferences(await effects.resolveReferences(next.selected.text));
+      await applyReadProjection(next.selected.text);
     } else {
+      state.projectedSelectedText = "";
+      state.embedStates = [];
       state.resolvedSelectedText = "";
       state.workIdPrefix = null;
     }
@@ -323,6 +469,7 @@ export function createDetailController(
     }
     if ((state.mode === "file" || state.mode === "annotation") && next.selected) loadFile(next.selected);
     else state.referencedFile = null;
+    await loadBacklinks();
   };
 
   const loadBrowsingContext = async (force = false): Promise<void> => {
@@ -338,9 +485,13 @@ export function createDetailController(
     try {
       await applyTarget(await effects.getBlockContext(blockId), force, record);
     } catch {
+      if (record) recordNavigation(state.targetBlockId);
       state.context = { selected: null, ancestors: [], children: [] };
+      await effects.setCurrentBlock(null);
       state.targetBlockId = blockId;
       state.resolvedSelectedText = "";
+      state.projectedSelectedText = "";
+      state.embedStates = [];
       state.resolvedBreadcrumb = "";
       state.referencedFile = null;
       if (record) recordNavigation(blockId);
@@ -354,9 +505,16 @@ export function createDetailController(
     else await loadBrowsingContext(force);
   };
 
-  const applyNavigationCommand = async (command: OutlinerUiCommand): Promise<void> => {
-    if (!command.blockId) return;
+  const applyNavigationCommand = async (command: OutlinerUiCommand): Promise<boolean> => {
+    if (!command.blockId) return false;
+    if (
+      state.connectionMode === "locked" &&
+      (command.command === "preview" || command.command === "open")
+    ) {
+      return false;
+    }
     await loadBlock(command.blockId, true, command.command !== "preview");
+    return true;
   };
 
   const refreshPendingTarget = async (): Promise<void> => {
@@ -462,7 +620,7 @@ export function createDetailController(
           expectedUpdatedAt: state.context.selected.updatedAt,
         });
         state.context = { ...state.context, selected: updated };
-        applyResolvedReferences(await effects.resolveReferences(updated.text));
+        await applyReadProjection(updated.text);
         refreshBreadcrumb();
         state.mode = detailDisplayMode(updated);
         if (state.mode === "file" || state.mode === "annotation") loadFile(updated);
@@ -510,10 +668,20 @@ export function createDetailController(
       }));
     } else if (target.kind === "page") {
       const collection = await effects.queryPageAddresses(target.query || undefined, 20);
-      items = collection.addresses.map((address) => ({
-        label: `${address.address} — ${address.title}`,
-        insertion: `[[${address.address}]]`,
-      }));
+      items = collection.addresses.map((address) => {
+        const title = address.title.trim();
+        const normalizedTitle = title.toLocaleLowerCase();
+        const normalizedAddress = address.address.toLocaleLowerCase();
+        return {
+          label: normalizedTitle === normalizedAddress ||
+              normalizedTitle.startsWith(`${normalizedAddress} `)
+            ? title
+            : `${address.address} — ${title}`,
+          insertion: address.kind === "work-id"
+            ? `((${address.blockId}))`
+            : `[[${address.address}]]`,
+        };
+      });
       if (collection.completeness.kind === "truncated") {
         completionStatus = `Showing first ${collection.completeness.limit} matches`;
       }
@@ -619,28 +787,38 @@ export function createDetailController(
         const reference = intent.type === "reference.open"
           ? intent.target
           : state.context.selected
-            ? firstOutlinerReference(state.context.selected.text, state.workIdPrefix)
+            ? firstOutlinerReference(state.projectedSelectedText, state.workIdPrefix)
             : null;
         if (!reference) {
           state.status = "Selected block has no block or page references";
           break;
         }
+        const preserveSource = intent.type === "reference.open" &&
+          intent.target.preserveSource === true;
         const navigationIntent: OutlinerNavigationIntent =
-          intent.type === "reference.reveal" ? "reveal" : "open";
+          intent.type === "reference.reveal" ||
+            (intent.type === "reference.open" && intent.target.intent === "reveal")
+            ? "reveal"
+            : "open";
         if (reference.kind === "page") {
-          await effects.resolveNavigation(navigationIntent);
+          await effects.resolveNavigation(navigationIntent, { preserveSource });
         }
         const resolved = await effects.resolveReference(reference);
         const dispatched = await effects.dispatchNavigation(
           resolved.block.id,
           navigationIntent,
+          { preserveSource },
         );
         if (dispatched.targetClientId === effects.clientId && navigationIntent === "open") {
-          await applyNavigationCommand({
+          const applied = await applyNavigationCommand({
             targetClientId: effects.clientId,
             command: "open",
             blockId: resolved.block.id,
           });
+          if (!applied) {
+            state.status = "Locked · ordinary navigation preserved this Detail";
+            break;
+          }
         }
         const verb = navigationIntent === "open"
           ? resolved.created ? "Created and opened" : "Opened"
@@ -656,6 +834,98 @@ export function createDetailController(
         state.status = locked
           ? "Locked this block · previews use the next unlocked Detail"
           : "Unlocked · available for previews and opens";
+        break;
+      }
+      case "backlinks.toggle":
+        state.backlinks.expanded = !state.backlinks.expanded;
+        state.backlinks.filterDraft = null;
+        if (state.backlinks.expanded) {
+          await loadBacklinks();
+          state.status = state.backlinks.error || "Backlinks expanded";
+        } else {
+          state.status = "Backlinks collapsed";
+        }
+        break;
+      case "backlinks.move": {
+        const maximum = Math.max(0, visibleBacklinkSources(state.backlinks).length - 1);
+        state.backlinks.selectedIndex = Math.max(
+          0,
+          Math.min(maximum, state.backlinks.selectedIndex + intent.delta),
+        );
+        break;
+      }
+      case "backlinks.filter.begin":
+        state.backlinks.filterDraft = state.backlinks.filter;
+        state.status = "Filtering backlinks";
+        break;
+      case "backlinks.filter.input":
+        state.backlinks.filterDraft = `${state.backlinks.filterDraft ?? ""}${intent.text}`;
+        break;
+      case "backlinks.filter.backspace":
+        state.backlinks.filterDraft = (state.backlinks.filterDraft ?? "").slice(0, -1);
+        break;
+      case "backlinks.filter.commit":
+        state.backlinks.filter = (state.backlinks.filterDraft ?? "").trim();
+        state.backlinks.filterDraft = null;
+        state.backlinks.selectedIndex = 0;
+        state.status = state.backlinks.filter
+          ? `Filtered backlinks by “${state.backlinks.filter}”`
+          : "Backlink filter cleared";
+        break;
+      case "backlinks.filter.cancel":
+        state.backlinks.filterDraft = null;
+        state.status = "Backlink filter unchanged";
+        break;
+      case "backlinks.sort.cycle": {
+        const options: Array<[
+          DetailBacklinkSortField,
+          DetailBacklinkSortDirection,
+        ]> = [
+          ["updated", "desc"],
+          ["updated", "asc"],
+          ["created", "desc"],
+          ["created", "asc"],
+        ];
+        const current = options.findIndex(([field, direction]) =>
+          field === state.backlinks.sortField && direction === state.backlinks.sortDirection
+        );
+        const [field, direction] = options[(current + 1) % options.length];
+        state.backlinks.sortField = field;
+        state.backlinks.sortDirection = direction;
+        state.backlinks.selectedIndex = 0;
+        state.status = `Backlinks sorted by ${field} ${direction}`;
+        break;
+      }
+      case "backlinks.source.toggle": {
+        const blockId = intent.blockId ?? selectedBacklinkSource()?.blockId;
+        if (!blockId) {
+          state.status = "No backlink source selected";
+          break;
+        }
+        if (state.backlinks.expandedSourceIds.has(blockId)) {
+          state.backlinks.expandedSourceIds.delete(blockId);
+        } else {
+          state.backlinks.expandedSourceIds.add(blockId);
+        }
+        break;
+      }
+      case "backlinks.open":
+      case "backlinks.reveal": {
+        const source = selectedBacklinkSource();
+        if (!source) {
+          state.status = "No backlink source selected";
+          break;
+        }
+        const navigationIntent: OutlinerNavigationIntent =
+          intent.type === "backlinks.reveal" ? "reveal" : "open";
+        await effects.dispatchNavigation(
+          source.blockId,
+          navigationIntent,
+          navigationIntent === "open" ? { preserveSource: true } : undefined,
+        );
+        state.status = navigationIntent === "open"
+          ? `Opened ${source.title} in another unlocked Detail`
+          : `Revealed ${source.title}`;
         break;
       }
       case "comment.begin":
@@ -807,7 +1077,12 @@ export function createDetailController(
       if (event.domain === "ui") {
         const command = event.command;
         if (!command || command.targetClientId !== effects.clientId) return;
-        if (command.command === "preview" && state.connectionMode === "locked") return;
+        if (
+          state.connectionMode === "locked" &&
+          (command.command === "preview" || command.command === "open")
+        ) {
+          return;
+        }
         if (isBufferMode()) {
           if (command.blockId) pendingUiCommand = command;
           state.refreshPending = true;
@@ -826,22 +1101,27 @@ export function createDetailController(
         emit();
         return;
       }
+      if (event.domain === "content") invalidateBacklinks();
       if (event.domain === "selection" || event.domain === "browsing-context") return;
       if (isBufferMode()) {
         state.refreshPending = true;
         return;
       }
-      await loadCurrentTarget();
+      await loadCurrentTarget(event.domain === "content");
+      await loadBacklinks();
       emit();
     },
     async onServiceConnect() {
+      serviceConnected = true;
       await effects.setLocked(state.connectionMode === "locked");
+      await effects.setCurrentBlock(state.targetBlockId);
       state.status = "";
       if (isBufferMode()) state.refreshPending = true;
       else await loadCurrentTarget(true);
       emit();
     },
     onServiceDisconnect() {
+      serviceConnected = false;
       state.status = "Workspace service disconnected; reconnecting…";
       emit();
     },

@@ -76,6 +76,7 @@ export interface OutlinerClientRegistration {
   role: OutlinerClientRole;
   contextId: string;
   locked?: boolean;
+  currentBlockId?: string;
   runtime?: OutlinerClientRuntime;
 }
 
@@ -165,6 +166,61 @@ export interface VisibleBlockCollection {
   completeness: BlockCollectionCompleteness;
 }
 
+export type BacklinkReferenceKind = "block" | "page" | "work-id" | "property";
+
+interface BacklinkOccurrenceBase {
+  label: string;
+  snippet: string;
+  start: number;
+  end: number;
+}
+
+export type BacklinkOccurrence =
+  | (BacklinkOccurrenceBase & {
+      kind: "block" | "page" | "work-id";
+    })
+  | (BacklinkOccurrenceBase & {
+      kind: "property";
+      propertyKey: string;
+    });
+
+export type BacklinkReferenceGroup =
+  | {
+      kind: "block" | "page" | "work-id";
+      count: number;
+    }
+  | {
+      kind: "property";
+      propertyKey: string;
+      count: number;
+    };
+
+export interface BacklinkSource {
+  blockId: string;
+  title: string;
+  parentContext: string;
+  createdAt: string;
+  updatedAt: string;
+  occurrenceCount: number;
+  referenceGroups: BacklinkReferenceGroup[];
+  occurrences: BacklinkOccurrence[];
+  occurrencesTruncated: boolean;
+  deletedRootId?: string;
+}
+
+export interface BacklinkQuery {
+  targetBlockId: string;
+  includeDeleted?: boolean;
+  limit: number;
+}
+
+export interface BacklinkCollection {
+  targetBlockId: string;
+  targetDeletedRootId?: string;
+  sources: BacklinkSource[];
+  completeness: BlockCollectionCompleteness;
+}
+
 export interface VirtualOccurrenceRank {
   viewId: string;
   blockId: string;
@@ -184,7 +240,7 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 17;
+export const OUTLINER_PROTOCOL_VERSION = 18;
 
 export interface OutlinerServiceStatus {
   status: "ready";
@@ -199,7 +255,13 @@ export type OutlinerRequest =
   | { id: string; action: "workspace.snapshot"; view?: WorkspaceSnapshotView }
   | { id: string; action: "events.subscribe"; client: OutlinerClientRegistration }
   | { id: string; action: "clients.list"; role?: OutlinerClientRole }
-  | { id: string; action: "clients.update"; clientId: string; locked: boolean }
+  | {
+      id: string;
+      action: "clients.update";
+      clientId: string;
+      locked?: boolean;
+      currentBlockId?: string | null;
+    }
   | { id: string; action: "ui.command.send"; command: OutlinerUiCommand }
   | { id: string; action: "blocks.context"; blockId: string }
   | { id: string; action: "browsing-context.get"; contextId: string }
@@ -215,6 +277,7 @@ export type OutlinerRequest =
       action: "navigation.resolve";
       sourceClientId: string;
       intent: OutlinerNavigationIntent;
+      preserveSource?: boolean;
     }
   | {
       id: string;
@@ -222,6 +285,7 @@ export type OutlinerRequest =
       sourceClientId: string;
       blockId: string;
       intent: OutlinerNavigationIntent;
+      preserveSource?: boolean;
     }
   | {
       id: string;
@@ -253,6 +317,7 @@ export type OutlinerRequest =
       orderedBlockIds: string[];
     }
   | { id: string; action: "references.resolve"; text: string }
+  | { id: string; action: "references.backlinks"; query: BacklinkQuery }
   | { id: string; action: "pages.resolve"; address: string }
   | {
       id: string;

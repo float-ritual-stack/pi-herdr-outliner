@@ -18,7 +18,31 @@ interface OpenPaneResponse {
 }
 
 interface PaneDetailsResponse {
-  result?: { pane?: { foreground_cwd?: string; cwd?: string } };
+  result?: {
+    pane?: {
+      pane_id?: string;
+      label?: string;
+      foreground_cwd?: string;
+      cwd?: string;
+    };
+  };
+}
+
+interface PaneLayoutResponse {
+  result?: {
+    layout?: {
+      panes?: Array<{ pane_id?: string }>;
+    };
+  };
+}
+
+interface LayoutActionResponse {
+  panes?: {
+    tree?: string;
+    detailA?: string;
+    detailB?: string;
+    shell?: string;
+  };
 }
 
 const herdr = process.env.HERDR_BIN_PATH ?? "herdr";
@@ -33,6 +57,7 @@ const mode =
 if (
   mode !== "focus-or-open" &&
   mode !== "open-here" &&
+  mode !== "open-layout" &&
   mode !== "focus-existing" &&
   mode !== "service-only"
 ) {
@@ -44,7 +69,10 @@ const requestedClientId =
 if (clientArgument >= 0 && !requestedClientId) {
   throw new Error("--client requires a client ID");
 }
-if (requestedClientId && (mode === "open-here" || mode === "service-only")) {
+if (
+  requestedClientId &&
+  (mode === "open-here" || mode === "open-layout" || mode === "service-only")
+) {
   throw new Error(`--client cannot be used with --mode ${mode}`);
 }
 if (process.env.HERDR_ENV !== "1") throw new Error("The outliner workspace action must run inside Herdr");
@@ -135,6 +163,30 @@ async function waitForService(): Promise<void> {
   }
   throw new Error(`Compatible outliner service did not become ready at ${paths.socket}`);
 }
+
+function workingLayoutBasePane(): string {
+  if (!currentPaneId) throw new Error("Open working layout requires Herdr pane context");
+  const paneOutput = execFileSync(herdr, ["pane", "get", currentPaneId], {
+    encoding: "utf8",
+    timeout: HERDR_SYNC_TIMEOUT_MS,
+  });
+  const pane = (JSON.parse(paneOutput) as PaneDetailsResponse).result?.pane;
+  const layoutOutput = execFileSync(herdr, ["pane", "layout", "--pane", currentPaneId], {
+    encoding: "utf8",
+    timeout: HERDR_SYNC_TIMEOUT_MS,
+  });
+  const layoutPaneIds = (JSON.parse(layoutOutput) as PaneLayoutResponse).result?.layout?.panes
+    ?.flatMap((candidate) => candidate.pane_id ? [candidate.pane_id] : []) ?? [];
+  if (layoutPaneIds.length === 1) return layoutPaneIds[0]!;
+  if (pane?.label === "Command palette") {
+    const underlying = layoutPaneIds.filter((paneId) => paneId !== currentPaneId);
+    if (underlying.length === 1) return underlying[0]!;
+  }
+  throw new Error(
+    `Open working layout needs an otherwise empty tab; found ${layoutPaneIds.length} panes`,
+  );
+}
+const workingBasePane = mode === "open-layout" ? workingLayoutBasePane() : undefined;
 const servicePane =
   resolveServicePaneId(paths.stateDir, herdr) ??
   openPane("service", { placement: "tab" });
@@ -186,9 +238,82 @@ function openHere(): {
   return { servicePane, outlinerPane, detailPane, browsingContextId, workspaceRoot };
 }
 
+function openWorkingLayout(): {
+  servicePane: string;
+  outlinerPane: string;
+  detailAPane: string;
+  detailBPane: string;
+  shellPane: string;
+  browsingContextId: string;
+  workspaceRoot: string;
+} {
+  const shellPane = workingBasePane!;
+  const browsingContextId = crypto.randomUUID();
+  const outlinerPane = openPane("outliner", {
+    placement: "split",
+    targetPane: shellPane,
+    direction: "right",
+    env: { OUTLINER_BROWSING_CONTEXT_ID: browsingContextId },
+  });
+  const detailAPane = openPane("detail", {
+    placement: "split",
+    targetPane: outlinerPane,
+    direction: "down",
+    env: { OUTLINER_BROWSING_CONTEXT_ID: browsingContextId },
+  });
+  const detailBPane = openPane("detail", {
+    placement: "split",
+    targetPane: detailAPane,
+    direction: "right",
+    env: { OUTLINER_BROWSING_CONTEXT_ID: crypto.randomUUID() },
+  });
+  const layoutOutput = execFileSync(
+    process.execPath,
+    [
+      "run",
+      join(import.meta.dir, "herdr-layout-action.ts"),
+      "detail-b",
+      "--tree",
+      outlinerPane,
+      "--detail-a",
+      detailAPane,
+      "--detail-b",
+      detailBPane,
+      "--shell",
+      shellPane,
+      "--focus",
+      outlinerPane,
+    ],
+    {
+      encoding: "utf8",
+      timeout: 30_000,
+      env: process.env,
+    },
+  );
+  const livePanes = (JSON.parse(layoutOutput) as LayoutActionResponse).panes;
+  if (!livePanes?.tree || !livePanes.detailA || !livePanes.detailB || !livePanes.shell) {
+    throw new Error("Outliner layout action did not return the live panes");
+  }
+  execFileSync(herdr, ["plugin", "pane", "focus", livePanes.tree], {
+    stdio: "ignore",
+    timeout: HERDR_SYNC_TIMEOUT_MS,
+  });
+  return {
+    servicePane,
+    outlinerPane: livePanes.tree,
+    detailAPane: livePanes.detailA,
+    detailBPane: livePanes.detailB,
+    shellPane: livePanes.shell,
+    browsingContextId,
+    workspaceRoot,
+  };
+}
+
 let result: object;
 if (mode === "service-only") {
   result = { servicePane, workspaceRoot };
+} else if (mode === "open-layout") {
+  result = openWorkingLayout();
 } else if (mode === "open-here") {
   result = openHere();
 } else if (mode === "focus-existing") {

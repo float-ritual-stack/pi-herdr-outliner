@@ -16,9 +16,13 @@ import {
   type DetailEffects,
   type DetailViewport,
 } from "./detail-controller";
+import { projectDetailRead } from "./detail-embeds";
 import { createDetailKeyHandler } from "./detail-keymap";
 import { createPiDetailInputListener, decodePiDetailInput } from "./detail-pi-input";
-import { DetailPiPreviewLayout } from "./detail-pi-preview";
+import {
+  DetailPiPreviewLayout,
+  parseDetailPreviewActionUri,
+} from "./detail-pi-preview";
 import { DetailPiComponent } from "./detail-pi-renderer";
 import { completeReferencedPaths, readReferencedFile } from "./files";
 import { parseOutlinerLinkUri, resolveOutlinerLinkTarget } from "./outliner-links";
@@ -30,6 +34,7 @@ import { currentPaneRuntime, focusCurrentPane } from "./pane-control";
 import { resolvePaths } from "./paths";
 import {
   OUTLINER_PROTOCOL_VERSION,
+  type BacklinkCollection,
   type Block,
   type BrowsingContextState,
   type PageAddressCollection,
@@ -63,7 +68,18 @@ const tui = new TuiAltScreen(terminal, false, undefined, {
   mouse: true,
   openUrl(url) {
     if (!stopping) enqueueWork(async () => {
-      await controller.dispatch({ type: "reference.open", target: parseOutlinerLinkUri(url) }, viewport());
+      const action = parseDetailPreviewActionUri(url);
+      if (action?.kind === "backlink-toggle") {
+        await controller.dispatch({
+          type: "backlinks.source.toggle",
+          blockId: action.blockId,
+        }, viewport());
+        return;
+      }
+      await controller.dispatch({
+        type: "reference.open",
+        target: parseOutlinerLinkUri(url),
+      }, viewport());
     });
   },
 });
@@ -100,14 +116,23 @@ const effects: DetailEffects = {
   async setLocked(locked) {
     await client.request({ action: "clients.update", clientId, locked });
   },
-  dispatchNavigation(blockId, intent) {
-    return dispatchNavigation(client, clientId, blockId, intent);
+  async setCurrentBlock(currentBlockId) {
+    await client.request({ action: "clients.update", clientId, currentBlockId });
   },
-  resolveNavigation(intent) {
-    return resolveNavigationDestination(client, clientId, intent);
+  dispatchNavigation(blockId, intent, options) {
+    return dispatchNavigation(client, clientId, blockId, intent, options);
+  },
+  resolveNavigation(intent, options) {
+    return resolveNavigationDestination(client, clientId, intent, options);
   },
   async resolveReferences(text) {
     return client.request<ResolvedBlockReferences>({ action: "references.resolve", text });
+  },
+  projectRead(text) {
+    return projectDetailRead(client, text);
+  },
+  async queryBacklinks(query) {
+    return client.request<BacklinkCollection>({ action: "references.backlinks", query });
   },
   async updateBlock(input) {
     return client.request<Block>({ action: "update", ...input });
@@ -226,7 +251,10 @@ let layoutRoot: DetailPiComponent | DetailPiPreviewLayout | undefined;
 synchronizeLayout = () => {
   const previewActive = controller.state.mode === "preview";
   preview.setActive(previewActive);
-  if (previewActive) preview.syncState();
+  if (previewActive) {
+    preview.syncState();
+    preview.ensureBacklinkSelectionVisible(terminal.columns);
+  }
   const nextRoot = previewActive ? preview : customFrame;
   if (nextRoot !== layoutRoot) {
     layoutRoot = nextRoot;

@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { resolveBacklinkRelation } from "./backlinks";
 import { normalizeBlockSearchQuery } from "./block-query";
 import {
   firstLineWithoutPropertyTokens,
@@ -23,12 +24,15 @@ import {
 } from "./references";
 import {
   formatWorkId,
+  isConfiguredWorkIdPlaceholder,
   normalizeWorkIdPrefix,
   parseWorkId,
   type ParsedWorkId,
 } from "./work-ids";
 import type {
   Block,
+  BacklinkCollection,
+  BacklinkQuery,
   BlockAuthor,
   CaptureReceipt,
   CaptureSource,
@@ -485,6 +489,37 @@ export class OutlinerStore {
     return workIdPrefix ? { ...resolved, workIdPrefix } : resolved;
   }
 
+  queryBacklinks(input: BacklinkQuery): BacklinkCollection {
+    return this.database.transaction(() => {
+      const query = { ...input, targetBlockId: input.targetBlockId.trim() };
+      const graph = this.loadGraph();
+      const target = graph.byId.get(query.targetBlockId);
+      if (!target) throw new Error(`Block not found: ${query.targetBlockId}`);
+
+      const orderedBlocks: Block[] = [];
+      const visit = (block: Block): void => {
+        orderedBlocks.push(block);
+        for (const child of graph.byParent.get(block.id) ?? []) visit(child);
+      };
+      for (const root of graph.byParent.get(null) ?? []) visit(root);
+
+      const addressRows = this.database.query(
+        "SELECT normalized_address, block_id FROM page_addresses ORDER BY normalized_address",
+      ).all() as Array<{ normalized_address: string; block_id: string }>;
+      const addressTargets = new Map(
+        addressRows.map((row) => [row.normalized_address, row.block_id]),
+      );
+      return resolveBacklinkRelation({
+        query,
+        target,
+        orderedBlocks,
+        blocksById: graph.byId,
+        addressTargets,
+        workIdPrefix: this.workIdAllocatorFromCurrentRead()?.prefix ?? null,
+      });
+    })();
+  }
+
   resolvePageAddress(address: string): PageAddressResolution {
     return this.database.transaction(() =>
       this.resolvePageAddressFromCurrentRead(normalizePageAddress(address))
@@ -758,12 +793,18 @@ export class OutlinerStore {
       if (block.updatedAt !== expectedUpdatedAt) {
         throw new Error(`Block changed since editing began: ${blockId}`);
       }
-      if (block.properties.some((property) => property.key === "work-id")) {
-        throw new Error(`Block already has a Work ID: ${blockId}`);
-      }
       const allocator = this.workIdAllocatorFromCurrentRead();
       if (!allocator) {
         throw new Error("Configure the project Work-ID prefix before allocation");
+      }
+      const workIdProperties = block.properties.flatMap((property, ordinal) =>
+        property.key === "work-id" ? [{ ordinal, value: property.value }] : []
+      );
+      const replacesPlaceholder =
+        workIdProperties.length === 1 &&
+        isConfiguredWorkIdPlaceholder(workIdProperties[0]!.value, allocator.prefix);
+      if (workIdProperties.length > 0 && !replacesPlaceholder) {
+        throw new Error(`Block already has a Work ID: ${blockId}`);
       }
 
       let nextNumber = allocator.next_number;
@@ -772,11 +813,10 @@ export class OutlinerStore {
         nextNumber += 1;
         workId = formatWorkId(allocator.prefix, nextNumber);
       }
-      const nextText = patchPropertyText(block.text, [{
-        op: "append",
-        key: "work-id",
-        value: workId,
-      }]);
+      const workIdOperation: PropertyPatchOperation = replacesPlaceholder
+        ? { op: "replace", ordinal: workIdProperties[0]!.ordinal, value: workId }
+        : { op: "append", key: "work-id", value: workId };
+      const nextText = patchPropertyText(block.text, [workIdOperation]);
       const updatedAt = new Date(
         Math.max(Date.now(), Date.parse(block.updatedAt) + 1),
       ).toISOString();

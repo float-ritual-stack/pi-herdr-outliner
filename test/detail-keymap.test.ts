@@ -16,6 +16,8 @@ function state(): DetailState {
     canNavigateBack: false,
     canNavigateForward: false,
     resolvedSelectedText: "",
+    projectedSelectedText: "",
+    embedStates: [],
     workIdPrefix: null,
     resolvedBreadcrumb: "",
     mode: "edit",
@@ -31,6 +33,18 @@ function state(): DetailState {
     status: "",
     busy: false,
     refreshPending: false,
+    backlinks: {
+      expanded: false,
+      loading: false,
+      collection: null,
+      selectedIndex: 0,
+      error: "",
+      filter: "",
+      filterDraft: null,
+      sortField: "updated",
+      sortDirection: "desc",
+      expandedSourceIds: new Set(),
+    },
   };
 }
 
@@ -198,6 +212,85 @@ test("keeps reader Enter inert and reserves e for editing", async () => {
   expect(preview.intents).toEqual([
     { type: "redraw" },
     { type: "edit.begin" },
+  ]);
+});
+
+test("maps preview b to the lazy backlink section", async () => {
+  const previewState = state();
+  previewState.mode = "preview";
+  const preview = harness(previewState, false);
+
+  await preview.press({ name: "b" }, "b");
+
+  expect(preview.intents).toEqual([{ type: "backlinks.toggle" }]);
+});
+
+test("selects, inspects, and reveals expanded backlink rows", async () => {
+  const previewState = state();
+  previewState.mode = "preview";
+  previewState.backlinks = {
+    expanded: true,
+    loading: false,
+    selectedIndex: 0,
+    error: "",
+    filter: "",
+    filterDraft: null,
+    sortField: "updated",
+    sortDirection: "desc",
+    expandedSourceIds: new Set(),
+    collection: {
+      targetBlockId: "target-block",
+      sources: [{
+        blockId: "source-block",
+        title: "Source",
+        parentContext: "Top level",
+        occurrenceCount: 1,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-02T00:00:00.000Z",
+        referenceGroups: [{ kind: "block", count: 1 }],
+        occurrences: [],
+        occurrencesTruncated: false,
+      }],
+      completeness: { kind: "complete" },
+    },
+  };
+  const preview = harness(previewState, false);
+
+  await preview.press({ name: "tab" });
+  await preview.press({ name: "tab", shift: true });
+  await preview.press({ name: "return" });
+  await preview.press({ name: "r", shift: true }, "R");
+
+  expect(preview.intents).toEqual([
+    { type: "backlinks.move", delta: 1 },
+    { type: "backlinks.move", delta: -1 },
+    { type: "backlinks.open" },
+    { type: "backlinks.reveal" },
+  ]);
+});
+
+test("maps backlink filter, sort, and disclosure controls", async () => {
+  const previewState = state();
+  previewState.mode = "preview";
+  previewState.backlinks.expanded = true;
+  const preview = harness(previewState, false);
+
+  await preview.press({ name: "/" }, "/");
+  previewState.backlinks.filterDraft = "";
+  await preview.press({ name: "g" }, "g");
+  await preview.press({ name: "backspace" });
+  await preview.press({ name: "return" });
+  previewState.backlinks.filterDraft = null;
+  await preview.press({ name: "s" }, "s");
+  await preview.press({ name: "." }, ".");
+
+  expect(preview.intents).toEqual([
+    { type: "backlinks.filter.begin" },
+    { type: "backlinks.filter.input", text: "g" },
+    { type: "backlinks.filter.backspace" },
+    { type: "backlinks.filter.commit" },
+    { type: "backlinks.sort.cycle" },
+    { type: "backlinks.source.toggle" },
   ]);
 });
 

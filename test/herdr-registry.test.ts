@@ -56,8 +56,12 @@ test("focus, layout, and dedicated status events update registry state", () => {
   initial.panes.push({ pane_id: "p2", terminal_id: "term-2", workspace_id: "w1", tab_id: "t1", focused: false, agent_status: "idle" });
   initial.layouts[0] = { ...initial.layouts[0], panes: [{ pane_id: "p1" }, { pane_id: "p2" }] };
   registry.replaceSnapshot(initial);
+  expect(registry.recentFocusedPaneIds()).toEqual(["p1"]);
   expect(registry.applyEvent(event("pane_focused", { pane_id: "p2", workspace_id: "w1" })).kind).toBe("applied");
   expect(registry.focusedPaneId).toBe("p2");
+  expect(registry.recentFocusedPaneIds()).toEqual(["p2", "p1"]);
+  expect(registry.applyEvent(event("pane_focused", { pane_id: "p2", workspace_id: "w1" })).kind).toBe("applied");
+  expect(registry.recentFocusedPaneIds()).toEqual(["p2", "p1"]);
   expect(registry.applyEvent(event("layout_updated", { layout: { workspace_id: "w1", tab_id: "t1", focused_pane_id: "p2", panes: [{ pane_id: "p2" }, { pane_id: "p1" }] } })).kind).toBe("applied");
   expect(registry.layouts.get("t1")?.focused_pane_id).toBe("p2");
 

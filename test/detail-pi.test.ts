@@ -26,6 +26,8 @@ function state(overrides: Partial<DetailState> = {}): DetailState {
     canNavigateBack: false,
     canNavigateForward: false,
     resolvedSelectedText: "",
+    projectedSelectedText: "",
+    embedStates: [],
     workIdPrefix: null,
     resolvedBreadcrumb: "",
     mode: "preview",
@@ -41,6 +43,18 @@ function state(overrides: Partial<DetailState> = {}): DetailState {
     status: "",
     busy: false,
     refreshPending: false,
+    backlinks: {
+      expanded: false,
+      loading: false,
+      collection: null,
+      selectedIndex: 0,
+      error: "",
+      filter: "",
+      filterDraft: null,
+      sortField: "updated",
+      sortDirection: "desc",
+      expandedSourceIds: new Set(),
+    },
     ...overrides,
   };
 }

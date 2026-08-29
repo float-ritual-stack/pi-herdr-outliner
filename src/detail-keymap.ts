@@ -1,8 +1,9 @@
-import type {
-  DetailBufferMoveDirection,
-  DetailController,
-  DetailIntent,
-  DetailViewport,
+import {
+  visibleBacklinkSources,
+  type DetailBufferMoveDirection,
+  type DetailController,
+  type DetailIntent,
+  type DetailViewport,
 } from "./detail-controller";
 import {
   historyNavigationDirection,
@@ -118,9 +119,32 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
   }
 
   async function handlePreviewKey(str: string, key: TerminalKey): Promise<void> {
+    if (controller.state.backlinks.filterDraft !== null) {
+      if (key.name === "return") await dispatch({ type: "backlinks.filter.commit" });
+      else if (key.name === "escape") await dispatch({ type: "backlinks.filter.cancel" });
+      else if (key.name === "backspace") await dispatch({ type: "backlinks.filter.backspace" });
+      else if (isPrintableInput(str, key)) {
+        await dispatch({ type: "backlinks.filter.input", text: str });
+      } else await dispatch({ type: "redraw" });
+      return;
+    }
     const direction = historyNavigationDirection(key);
     if (direction) {
       await dispatch({ type: direction === "back" ? "navigation.back" : "navigation.forward" });
+    } else if (key.name === "tab" && controller.state.backlinks.expanded) {
+      await dispatch({ type: "backlinks.move", delta: key.shift ? -1 : 1 });
+    } else if (
+      key.name === "return" &&
+      controller.state.backlinks.expanded &&
+      visibleBacklinkSources(controller.state.backlinks).length > 0
+    ) {
+      await dispatch({ type: "backlinks.open" });
+    } else if (str === "/" && controller.state.backlinks.expanded) {
+      await dispatch({ type: "backlinks.filter.begin" });
+    } else if (str === "s" && controller.state.backlinks.expanded) {
+      await dispatch({ type: "backlinks.sort.cycle" });
+    } else if (str === "." && controller.state.backlinks.expanded) {
+      await dispatch({ type: "backlinks.source.toggle" });
     } else if (str === "o") {
       await dispatch({ type: "reference.follow" });
     } else if (isPageNavigationKey(key.name)) {
@@ -128,6 +152,7 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
     } else if (str === "e") await dispatch({ type: "edit.begin" });
     else if (str === "f") await dispatch({ type: "view.file" });
     else if (str === "b" && controller.state.mode === "annotation") await dispatch({ type: "view.block" });
+    else if (str === "b") await dispatch({ type: "backlinks.toggle" });
     else await dispatch({ type: "redraw" });
   }
 
@@ -172,7 +197,12 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
       return;
     }
     if (str === "R") {
-      await dispatch({ type: "reference.reveal" });
+      await dispatch(
+        controller.state.backlinks.expanded &&
+          visibleBacklinkSources(controller.state.backlinks).length > 0
+          ? { type: "backlinks.reveal" }
+          : { type: "reference.reveal" },
+      );
       return;
     }
     if (key.name === "q") {

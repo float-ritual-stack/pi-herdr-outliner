@@ -10,8 +10,12 @@ import { describe, expect, test } from "bun:test";
 import type { DetailState } from "../src/detail-controller";
 import {
   DetailPiPreviewLayout,
+  detailBacklinkToggleUri,
+  parseDetailPreviewActionUri,
+  renderBacklinksDocument,
   sanitizeMarkdownDocument,
 } from "../src/detail-pi-preview";
+import { outlinerLinkUri } from "../src/outliner-links";
 import { TextBuffer } from "../src/text-buffer";
 import type { Block } from "../src/types";
 
@@ -37,6 +41,8 @@ function state(text: string, rawText = "raw edit source"): DetailState {
     canNavigateBack: false,
     canNavigateForward: false,
     resolvedSelectedText: text,
+    projectedSelectedText: rawText,
+    embedStates: [],
     workIdPrefix: "PIE",
     resolvedBreadcrumb: "Resolved block",
     mode: "preview",
@@ -52,6 +58,18 @@ function state(text: string, rawText = "raw edit source"): DetailState {
     status: "",
     busy: false,
     refreshPending: false,
+    backlinks: {
+      expanded: false,
+      selectedIndex: 0,
+      loading: false,
+      collection: null,
+      error: "",
+      filter: "",
+      filterDraft: null,
+      sortField: "updated",
+      sortDirection: "desc",
+      expandedSourceIds: new Set(),
+    },
   };
 }
 
@@ -123,7 +141,7 @@ describe("Pi Markdown detail preview", () => {
     expect(lines[1]).toContain("Detail · Unlocked");
     expect(lines[2]).toBe("─".repeat(32));
     expect(lines.at(-2)).toBe("Ready");
-    expect(lines.at(-1)).toContain("L lock/unlock");
+    expect(lines.at(-1)).toContain("b backlinks");
     expect(lines.at(-1)).not.toContain("Enter edit");
     expect(previewLayout(detail).scrollView.scrollbar).toBe("always");
   });
@@ -173,6 +191,59 @@ describe("Pi Markdown detail preview", () => {
       );
       expect(getOsc8LinkAtColumn(line!, visible.indexOf("Target decision") + 2)).toBe(
         `pi-outliner://block/${targetId}`,
+      );
+    } finally {
+      setCapabilities(capabilities);
+    }
+  });
+
+  test("links generated embed result rows from projected raw text", () => {
+    const capabilities = getCapabilities();
+    setCapabilities({ ...capabilities, hyperlinks: true });
+    try {
+      const resultId = "550e8400-e29b-41d4-a716-446655440001";
+      const detail = state(
+        "Embedded view: ((Next items)) · 1 result\n- ((Projected result))",
+        "!((view-next))",
+      );
+      detail.projectedSelectedText =
+        `Embedded view: ((view-next)) · 1 result\n- ((${resultId}))`;
+      const layout = new DetailPiPreviewLayout(detail, plainMarkdownTheme, true);
+      layout.syncState();
+      const rendered = layout.markdown.render(80);
+      const line = rendered.find((candidate) =>
+        stripTerminalSequences(candidate).includes("Projected result")
+      );
+
+      expect(line).toBeDefined();
+      const visible = stripTerminalSequences(line!);
+      expect(getOsc8LinkAtColumn(line!, visible.indexOf("Projected result") + 2)).toBe(
+        `pi-outliner://block/${resultId}`,
+      );
+      expect(detail.context.selected?.text).toBe("!((view-next))");
+    } finally {
+      setCapabilities(capabilities);
+    }
+  });
+
+  test("links each Detail breadcrumb segment to an explicit Tree reveal", () => {
+    const capabilities = getCapabilities();
+    setCapabilities({ ...capabilities, hyperlinks: true });
+    try {
+      const detail = state("Selected leaf");
+      detail.context = {
+        selected: block("selected-01", "Selected leaf"),
+        ancestors: [block("parent-001", "Parent page")],
+        children: [],
+      };
+      const line = new DetailPiPreviewLayout(detail, plainMarkdownTheme, true).render(80)[1]!;
+      const visible = stripTerminalSequences(line);
+
+      expect(getOsc8LinkAtColumn(line, visible.indexOf("Parent page") + 2)).toBe(
+        outlinerLinkUri("block", "parent-001", { intent: "reveal" }),
+      );
+      expect(getOsc8LinkAtColumn(line, visible.indexOf("Selected leaf") + 2)).toBe(
+        outlinerLinkUri("block", "selected-01", { intent: "reveal" }),
       );
     } finally {
       setCapabilities(capabilities);
@@ -280,5 +351,191 @@ describe("Pi Markdown detail preview", () => {
     const lines = renderedDocument(layout, 80);
     expect(updates).toBe(2);
     expect(lines.map((line) => line.trim()).join(" ")).toContain("complete ending");
+  });
+});
+
+describe("generated backlink preview", () => {
+  test("keeps collapsed and expanded backlink Markdown separate from authored content", () => {
+    const detail = state("Canonical **authored** document", "Canonical raw source");
+    const layout = previewLayout(detail);
+    layout.syncState();
+
+    expect(layout.markdown.render(80).map(stripTerminalSequences).join(" ")).toContain(
+      "Canonical authored document",
+    );
+    expect(layout.markdown.render(80).map(stripTerminalSequences).join(" ")).not.toContain(
+      "Backlinks",
+    );
+    expect(
+      layout.backlinkMarkdown.render(80).map(stripTerminalSequences).join(" ").replace(/\s+/g, " "),
+    ).toContain("Backlinks Collapsed");
+
+    detail.backlinks = {
+      expanded: true,
+      loading: false,
+      selectedIndex: 0,
+      error: "",
+      filter: "",
+      filterDraft: null,
+      sortField: "updated",
+      sortDirection: "desc",
+      expandedSourceIds: new Set(["source-target"]),
+      collection: {
+        targetBlockId: "block-1",
+        sources: [{
+          blockId: "source-target",
+          title: "Duplicate source",
+          parentContext: "Project › Notes",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-02T00:00:00.000Z",
+          occurrenceCount: 3,
+          referenceGroups: [
+            { kind: "block", count: 1 },
+            { kind: "property", propertyKey: "source-block", count: 2 },
+          ],
+          occurrences: [{
+            kind: "block",
+            label: "((block-1))",
+            snippet: "See ((block-1)) from here",
+            start: 4,
+            end: 15,
+          }, {
+            kind: "property",
+            propertyKey: "source-block",
+            label: "[source-block::block-1]",
+            snippet: "[source-block::Canonical target]",
+            start: 16,
+            end: 39,
+          }],
+          occurrencesTruncated: true,
+        }],
+        completeness: { kind: "truncated", limit: 1 },
+      },
+    };
+    layout.syncState();
+
+    const generated = renderBacklinksDocument(detail);
+    expect(generated).toContain(
+      outlinerLinkUri("block", "source-target", { preserveSource: true }),
+    );
+    expect(generated).toContain("Additional occurrences omitted");
+    expect(generated).toContain("Showing first 1 source blocks");
+    expect(generated).toContain("source-block property ×2");
+    expect(generated).toContain("**source-block property**");
+    expect(generated).toContain("Filter: none");
+    expect(generated).toContain("Sort: Updated ↓");
+    expect(generated).toContain("▶ ACTIVE");
+    const highlighted = layout.backlinkMarkdown.render(80).find((line) =>
+      stripTerminalSequences(line).includes("▶ ACTIVE")
+    );
+    expect(highlighted).toContain("\x1b[1;97;48;5;24m");
+    expect(generated).toContain(detailBacklinkToggleUri("source-target"));
+    expect(parseDetailPreviewActionUri(detailBacklinkToggleUri("source-target"))).toEqual({
+      kind: "backlink-toggle",
+      blockId: "source-target",
+    });
+    detail.backlinks.expandedSourceIds.clear();
+    expect(renderBacklinksDocument(detail)).not.toContain("See ((block-1)) from here");
+    detail.backlinks.filter = "missing";
+    expect(renderBacklinksDocument(detail)).toContain("No backlinks match the current filter.");
+    expect(layout.markdown.render(80).map(stripTerminalSequences).join(" ")).not.toContain(
+      "Duplicate source",
+    );
+    expect(layout.backlinkMarkdown.render(80).map(stripTerminalSequences).join(" ")).toContain(
+      "Duplicate source",
+    );
+    expect(detail.context.selected?.text).toBe("Canonical raw source");
+    expect(
+      layout.backlinkMarkdown.render(80).map(stripTerminalSequences).join(" "),
+    ).not.toContain("source-target");
+  });
+
+  test("scrolls a changed backlink selection into the preview viewport", () => {
+    const detail = state("Hub");
+    detail.backlinks = {
+      expanded: true,
+      loading: false,
+      selectedIndex: 0,
+      error: "",
+      filter: "",
+      filterDraft: null,
+      sortField: "updated",
+      sortDirection: "desc",
+      expandedSourceIds: new Set(),
+      collection: {
+        targetBlockId: "block-1",
+        sources: Array.from({ length: 4 }, (_, index) => ({
+          blockId: `source-${index}`,
+          title: `Backlink source ${index} with a wrapping title`,
+          parentContext: "Top level",
+          occurrenceCount: 1,
+          referenceGroups: [{ kind: "block" as const, count: 1 }],
+          createdAt: `2026-01-0${index + 1}T00:00:00.000Z`,
+          updatedAt: `2026-02-0${index + 1}T00:00:00.000Z`,
+          occurrences: [{
+            kind: "block" as const,
+            label: "((block-1))",
+            snippet: `Long backlink snippet ${index} that wraps in a narrow pane`,
+            start: 0,
+            end: 11,
+          }],
+          occurrencesTruncated: false,
+        })),
+        completeness: { kind: "complete" },
+      },
+    };
+    const layout = previewLayout(detail);
+    layout.syncState();
+    const width = 20;
+    const contentWidth = layout.scrollView.getContentWidth(width);
+    const contentHeight = layout.markdown.render(contentWidth).length + 1 +
+      layout.backlinkMarkdown.render(contentWidth).length;
+    layout.scrollView.updateLayout(contentHeight, 6, () => {});
+    layout.render(width);
+
+    detail.backlinks.selectedIndex = 3;
+    layout.syncState();
+    layout.render(width);
+
+    const selectedLine = layout.backlinkMarkdown.render(contentWidth)
+      .findIndex((line) => line.includes("▶ ACTIVE"));
+    const selectedRow = layout.markdown.render(contentWidth).length + 1 + selectedLine;
+    expect(layout.scrollView.scrollTop).toBeGreaterThan(0);
+    expect(selectedRow).toBeGreaterThanOrEqual(layout.scrollView.scrollTop);
+    expect(selectedRow).toBeLessThan(
+      layout.scrollView.scrollTop + layout.scrollView.viewportHeight,
+    );
+  });
+
+  test("renders explicit empty, deleted-target, loading, and error states", () => {
+    const detail = state("Target");
+    detail.backlinks = {
+      expanded: true,
+      loading: true,
+      selectedIndex: 0,
+      collection: null,
+      error: "",
+      filter: "",
+      filterDraft: null,
+      sortField: "updated",
+      sortDirection: "desc",
+      expandedSourceIds: new Set(),
+    };
+    expect(renderBacklinksDocument(detail)).toContain("Loading");
+
+    detail.backlinks.loading = false;
+    detail.backlinks.error = "service unavailable";
+    expect(renderBacklinksDocument(detail)).toContain("service unavailable");
+
+    detail.backlinks.error = "";
+    detail.backlinks.collection = {
+      targetBlockId: "block-1",
+      targetDeletedRootId: "block-1",
+      sources: [],
+      completeness: { kind: "complete" },
+    };
+    const empty = renderBacklinksDocument(detail);
+    expect(empty).toContain("Target is in Trash");
+    expect(empty).toContain("No backlinks");
   });
 });

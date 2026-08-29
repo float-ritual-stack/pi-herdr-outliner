@@ -103,6 +103,19 @@ export class OutlinerServer {
     return contextId;
   }
 
+  private normalizeClientBlockId(value: unknown): string {
+    const blockId = typeof value === "string" ? value.trim() : "";
+    if (
+      !blockId ||
+      blockId.length > 200 ||
+      /[\u0000-\u001f\u007f]/.test(blockId)
+    ) {
+      throw new Error("Client currentBlockId must be 1-200 printable characters");
+    }
+    this.store.require(blockId);
+    return blockId;
+  }
+
   private removeSubscriber(socket: Socket): void {
     const removed = this.subscribers.get(socket);
     this.subscribers.delete(socket);
@@ -188,11 +201,15 @@ export class OutlinerServer {
     if (registration.role === "tree" && registration.locked) {
       throw new Error("Only Detail clients can be locked");
     }
+    const currentBlockId = registration.currentBlockId === undefined
+      ? undefined
+      : this.normalizeClientBlockId(registration.currentBlockId);
     const normalized: OutlinerClientRegistration = {
       clientId,
       role: registration.role,
       contextId,
       ...(registration.role === "detail" ? { locked: registration.locked ?? false } : {}),
+      ...(currentBlockId ? { currentBlockId } : {}),
       ...(runtime ? { runtime } : {}),
     };
     this.subscribers.set(socket, normalized);
@@ -219,11 +236,25 @@ export class OutlinerServer {
     return client;
   }
 
-  private updateClientLock(clientId: string, locked: boolean): OutlinerClientRegistration {
+  private updateClient(
+    clientId: string,
+    update: { locked?: boolean; currentBlockId?: string | null },
+  ): OutlinerClientRegistration {
+    if (update.locked === undefined && update.currentBlockId === undefined) {
+      throw new Error("Client update must change locked or currentBlockId");
+    }
     for (const [socket, client] of this.subscribers) {
       if (client.clientId !== clientId) continue;
-      if (client.role !== "detail") throw new Error("Only Detail clients can be locked");
-      const updated = { ...client, locked };
+      const updated = { ...client };
+      if (update.locked !== undefined) {
+        if (client.role !== "detail") throw new Error("Only Detail clients can be locked");
+        updated.locked = update.locked;
+      }
+      if (update.currentBlockId === null) {
+        delete updated.currentBlockId;
+      } else if (update.currentBlockId !== undefined) {
+        updated.currentBlockId = this.normalizeClientBlockId(update.currentBlockId);
+      }
       this.subscribers.set(socket, updated);
       return updated;
     }
@@ -264,13 +295,22 @@ export class OutlinerServer {
   private resolveUnlockedDetail(
     source: OutlinerClientRegistration,
     intent: "preview" | "open",
+    preserveSource = false,
   ): Omit<OutlinerNavigationDispatch, "command"> {
     const pool = this.detailPool(source);
     if (pool.length === 0) {
       throw new Error("No Detail is available in this tab · open another Detail");
     }
-    const target = pool.find((client) => !client.locked);
+    const candidates = preserveSource
+      ? pool.filter((client) => client.clientId !== source.clientId)
+      : pool;
+    const target = candidates.find((client) => !client.locked);
     if (!target) {
+      if (preserveSource) {
+        throw new Error(
+          "No other unlocked Detail is available · unlock one or open another Detail",
+        );
+      }
       throw new Error("All Details in this tab are locked · unlock one or open another Detail");
     }
     return {
@@ -284,9 +324,12 @@ export class OutlinerServer {
   private resolveNavigationTarget(
     sourceClientId: string,
     intent: OutlinerNavigationIntent,
+    preserveSource = false,
   ): Omit<OutlinerNavigationDispatch, "command"> {
     const source = this.clientById(sourceClientId);
-    if (intent !== "reveal") return this.resolveUnlockedDetail(source, intent);
+    if (intent !== "reveal") {
+      return this.resolveUnlockedDetail(source, intent, preserveSource);
+    }
     if (source.role === "tree") {
       return {
         sourceClientId,
@@ -351,7 +394,7 @@ export class OutlinerServer {
           result = this.listClients(request.role);
           break;
         case "clients.update":
-          result = this.updateClientLock(request.clientId, request.locked);
+          result = this.updateClient(request.clientId, request);
           break;
         case "blocks.context":
           result = this.store.blockContext(request.blockId);
@@ -402,12 +445,17 @@ export class OutlinerServer {
           result = this.resolveNavigationTarget(
             request.sourceClientId,
             this.navigationIntent(request.intent),
+            request.preserveSource,
           );
           break;
         case "navigation.dispatch": {
           const intent = this.navigationIntent(request.intent);
           this.store.blockContext(request.blockId);
-          const route = this.resolveNavigationTarget(request.sourceClientId, intent);
+          const route = this.resolveNavigationTarget(
+            request.sourceClientId,
+            intent,
+            request.preserveSource,
+          );
           result = {
             ...route,
             command: {
@@ -469,6 +517,9 @@ export class OutlinerServer {
           break;
         case "references.resolve":
           result = this.store.resolveBlockReferences(request.text);
+          break;
+        case "references.backlinks":
+          result = this.store.queryBacklinks(request.query);
           break;
         case "pages.resolve":
           result = this.store.resolvePageAddress(request.address);

@@ -7,6 +7,7 @@ import {
   type DetailEffects,
   type DetailViewport,
 } from "./detail-controller";
+import { projectDetailRead } from "./detail-embeds";
 import { createDetailKeyHandler } from "./detail-keymap";
 import { renderDetailAnsi } from "./detail-renderer";
 import { completeReferencedPaths, readReferencedFile } from "./files";
@@ -25,6 +26,7 @@ import {
 } from "./terminal";
 import {
   OUTLINER_PROTOCOL_VERSION,
+  type BacklinkCollection,
   type Block,
   type BrowsingContextState,
   type PageAddressCollection,
@@ -72,14 +74,23 @@ const effects: DetailEffects = {
   async setLocked(locked) {
     await client.request({ action: "clients.update", clientId, locked });
   },
-  dispatchNavigation(blockId, intent) {
-    return dispatchNavigation(client, clientId, blockId, intent);
+  async setCurrentBlock(currentBlockId) {
+    await client.request({ action: "clients.update", clientId, currentBlockId });
   },
-  resolveNavigation(intent) {
-    return resolveNavigationDestination(client, clientId, intent);
+  dispatchNavigation(blockId, intent, options) {
+    return dispatchNavigation(client, clientId, blockId, intent, options);
+  },
+  resolveNavigation(intent, options) {
+    return resolveNavigationDestination(client, clientId, intent, options);
   },
   async resolveReferences(text) {
     return client.request<ResolvedBlockReferences>({ action: "references.resolve", text });
+  },
+  projectRead(text) {
+    return projectDetailRead(client, text);
+  },
+  async queryBacklinks(query) {
+    return client.request<BacklinkCollection>({ action: "references.backlinks", query });
   },
   async updateBlock(input) {
     return client.request<Block>({ action: "update", ...input });

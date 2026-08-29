@@ -13,6 +13,7 @@ import { formatFileAnnotation } from "../src/annotations";
 import {
   focusBlockByQuery,
   formatBlockFocusMatch,
+  resolveBlockFocus,
 } from "../src/block-focus";
 import {
   BlockQuerySyntaxError,
@@ -20,20 +21,31 @@ import {
 } from "../src/block-query";
 import { parseStandaloneDispatchMarker } from "../src/dispatch-marker";
 import { OutlinerClient } from "../src/client";
+import { HerdrRuntimeRegistry } from "../src/herdr-registry";
+import { HerdrRegistryRunner } from "../src/herdr-runtime";
 import { resolvePaths } from "../src/paths";
 import { getProperty } from "../src/properties";
 import { blockDisplayTitle } from "../src/references";
 import {
+  containsWorkIdPlaceholder,
+  formatWorkIdPlaceholder,
+} from "../src/work-ids";
+import {
   OUTLINER_PROTOCOL_VERSION,
   type Block,
   type BlockProvenance,
+  type BrowsingContextState,
   type CaptureReceipt,
   type CaptureSource,
   type OutlinerClientRegistration,
   type OutlinerServiceStatus,
   type PropertyCatalogItem,
+  type PageAddressResolution,
+  type PropertyPatchOperation,
   type SelectionContext,
   type VisibleBlockCollection,
+  type WorkIdAllocatorStatus,
+  type WorkspaceSnapshot,
 } from "../src/types";
 
 const execFileAsync = promisify(execFile);
@@ -96,6 +108,20 @@ const propertyPatchOperationSchema = Type.Union([
 ]);
 
 const MAX_TOOL_RESULT_CHARS = 12_000;
+const WORK_PLACEHOLDER_SKILL = "work-placeholder-resolver";
+
+export { containsWorkIdPlaceholder as containsConfiguredWorkPlaceholder } from "../src/work-ids";
+
+export function formatWorkPlaceholderNudge(prefix: string): string {
+  return [
+    `Work placeholder detected (${formatWorkIdPlaceholder(prefix)}).`,
+    `Use the ${WORK_PLACEHOLDER_SKILL} skill: search existing work first;`,
+    "reuse and connect one confident match, otherwise create and allocate;",
+    "then optimistically replace only the exact marker.",
+    "Ambiguous or failed resolution leaves XXX unchanged.",
+    "Detection alone never mutates canonical state.",
+  ].join(" ");
+}
 
 function textToolResult(text: string): AgentToolResult<Record<string, never>> {
   return {
@@ -109,6 +135,15 @@ function toolResult(value: unknown): AgentToolResult<Record<string, never>> {
   return textToolResult(
     text.length > MAX_TOOL_RESULT_CHARS ? `${text.slice(0, MAX_TOOL_RESULT_CHARS)}\n…` : text,
   );
+}
+
+function textualToolResult(content: readonly { type: string; text?: string }[]): string {
+  return content
+    .filter((item): item is { type: "text"; text: string } =>
+      item.type === "text" && typeof item.text === "string"
+    )
+    .map((item) => item.text)
+    .join("\n");
 }
 
 function serializeQueryResult(
@@ -209,8 +244,103 @@ async function ensureService(focus: boolean): Promise<void> {
 }
 
 const MAX_SELECTION_CONTEXT_CHARS = 4_000;
+const ACTIVE_TASK_ENTRY_TYPE = "pi-outliner.active-task";
+const OUTLINER_PRESENCE_SOURCE = "float.pi-outliner.agent";
+const OUTLINER_PRESENCE_TTL_MS = 600_000;
+let herdrMetadataSequence = 0;
 
-export function formatSelection(context: SelectionContext): string {
+type DurableArtifactType =
+  | "field-note"
+  | "finding"
+  | "decision"
+  | "implementation-proof"
+  | "synthesis"
+  | "roadmap-review"
+  | "progress";
+
+interface ActiveTaskEntryData {
+  version: 1;
+  blockId: string | null;
+}
+
+function restoredActiveTaskId(entries: readonly unknown[]): string | null {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (typeof entry !== "object" || entry === null) continue;
+    const record = entry as Record<string, unknown>;
+    if (record.type !== "custom" || record.customType !== ACTIVE_TASK_ENTRY_TYPE) continue;
+    const data = record.data;
+    if (typeof data !== "object" || data === null) return null;
+    const state = data as Partial<ActiveTaskEntryData>;
+    if (state.version !== 1) return null;
+    return typeof state.blockId === "string" && state.blockId.length > 0
+      ? state.blockId
+      : null;
+  }
+  return null;
+}
+
+function workId(block: Block): string | undefined {
+  return getProperty(block.properties, "work-id");
+}
+
+function requireRoadmapTask(block: Block): string {
+  if (getProperty(block.properties, "type") !== "roadmap-item") {
+    throw new Error(`Block is not a roadmap item: ${block.id}`);
+  }
+  const identifier = workId(block);
+  if (!identifier) throw new Error(`Roadmap item has no Work ID: ${block.id}`);
+  return identifier;
+}
+
+export function selectRecentFocusedOutlinerClient(
+  clients: readonly OutlinerClientRegistration[],
+  recentPaneIds: readonly string[],
+): OutlinerClientRegistration | undefined {
+  const clientsByPaneId = new Map(
+    clients.flatMap((registration) =>
+      registration.runtime?.paneId ? [[registration.runtime.paneId, registration] as const] : []
+    ),
+  );
+  for (const paneId of recentPaneIds) {
+    const registration = clientsByPaneId.get(paneId);
+    if (registration) return registration;
+  }
+  return undefined;
+}
+
+function boundAgentContext(content: string): string {
+  if (content.length <= MAX_SELECTION_CONTEXT_CHARS) return content;
+  const suffix = "\n… context truncated; use outliner tools for full text.";
+  return content.slice(0, MAX_SELECTION_CONTEXT_CHARS - suffix.length) + suffix;
+}
+
+function propertyTransition(
+  block: Block,
+  key: string,
+  value: string,
+): PropertyPatchOperation {
+  const ordinals = block.properties.flatMap((property, ordinal) =>
+    property.key === key ? [ordinal] : []
+  );
+  if (ordinals.length > 1) {
+    throw new Error(`Roadmap item has duplicate [${key}::…] properties: ${block.id}`);
+  }
+  return ordinals.length === 1
+    ? { op: "replace", ordinal: ordinals[0]!, value }
+    : { op: "append", key, value };
+}
+
+function formatContext(
+  context: SelectionContext,
+  options: {
+    heading: string;
+    selectedLabel: string;
+    dependencies?: readonly Block[];
+    includeContent?: boolean;
+    workflowReminder?: boolean;
+  },
+): string {
   const { selected } = context;
   if (!selected) return "";
   const selectedTitle = `[${selected.id}] ${blockDisplayTitle(selected)}`;
@@ -219,24 +349,411 @@ export function formatSelection(context: SelectionContext): string {
     .slice(0, 20)
     .map((property) => `${property.key}=${property.value}`)
     .join(", ");
+  const selectedContent = options.includeContent
+    ? selected.text.length <= 2_400
+      ? selected.text
+      : `${selected.text.slice(0, 2_400)}\n… focused block body truncated`
+    : "";
   const children = context.children
     .slice(0, 20)
     .map((block) => `- [${block.id}] ${blockDisplayTitle(block)}`)
     .join("\n");
-  const content = [
-    "Outliner workspace context:",
-    `Selected: ${selectedTitle}`,
+  const dependencies = options.dependencies
+    ?.slice(0, 8)
+    .map((block) => {
+      const status = getProperty(block.properties, "status");
+      return `- [${block.id}] ${blockDisplayTitle(block)}${status ? ` · status=${status}` : ""}`;
+    })
+    .join("\n");
+  return boundAgentContext([
+    options.heading,
+    `${options.selectedLabel}: ${selectedTitle}`,
     `Path: ${path}`,
     properties ? `Properties: ${properties}` : "Properties: none",
+    selectedContent ? `Content:\n${selectedContent}` : "",
+    dependencies ? `Dependencies:\n${dependencies}` : "",
     children ? `Children:\n${children}` : "Children: none",
-    "Use outliner_selection/get/query for full block text.",
-  ].join("\n");
-  if (content.length <= MAX_SELECTION_CONTEXT_CHARS) return content;
-  const suffix = "\n… context truncated; use outliner tools for full text.";
-  return content.slice(0, MAX_SELECTION_CONTEXT_CHARS - suffix.length) + suffix;
+    "Use outliner_selection/outliner_query for additional block text.",
+    options.workflowReminder
+      ? "Workflow: publish durable plans, roadmap reviews, findings, decisions, handoffs, and proof with outliner_publish; keep ordinary conversational explanation in chat. Use outliner_focus to present the relevant block before narrating it. Never infer task completion from agent lifecycle events."
+      : "",
+  ].filter(Boolean).join("\n"));
+}
+
+export function formatSelection(context: SelectionContext): string {
+  return formatContext(context, {
+    heading: "Outliner workspace context:",
+    selectedLabel: "Selected",
+    includeContent: true,
+  });
+}
+
+function formatActiveTask(
+  context: SelectionContext,
+  dependencies: readonly Block[],
+): string {
+  return formatContext(context, {
+    heading: "Outliner active task context:",
+    selectedLabel: "Active task",
+    dependencies,
+    workflowReminder: true,
+  });
+}
+
+function formatFocusedPane(context: SelectionContext): string {
+  return formatContext(context, {
+    heading: "Outliner last-focused pane context:",
+    selectedLabel: "Focused block",
+    includeContent: true,
+    workflowReminder: true,
+  });
+}
+
+async function resolveRoadmapTask(address: string): Promise<Block> {
+  const symbolic = await client.request<PageAddressResolution>({
+    action: "pages.resolve",
+    address,
+  });
+  if (symbolic.status === "resolved" && symbolic.block) {
+    requireRoadmapTask(symbolic.block);
+    return symbolic.block;
+  }
+  if (symbolic.status === "deleted") {
+    throw new Error(`Task address resolves to a block in Trash: ${address}`);
+  }
+  const snapshot = await client.request<WorkspaceSnapshot>({ action: "workspace.snapshot" });
+  const resolution = resolveBlockFocus(snapshot.physical.blocks, address, 10);
+  if (resolution.kind === "none") throw new Error(`No block matches task address: ${address}`);
+  if (resolution.kind === "ambiguous") {
+    const candidates = resolution.matches
+      .slice(0, 5)
+      .map((match) => formatBlockFocusMatch(match, match.block.id))
+      .join("\n");
+    throw new Error(`Ambiguous task address; retry with a full UUID:\n${candidates}`);
+  }
+  requireRoadmapTask(resolution.match.block);
+  return resolution.match.block;
+}
+
+async function focusOutlinerAddress(
+  query: string,
+  limit: number,
+  targetClientId?: string,
+) {
+  const symbolic = await client.request<PageAddressResolution>({
+    action: "pages.resolve",
+    address: query,
+  });
+  if (symbolic.status === "deleted") {
+    throw new Error(`Outliner address resolves to a block in Trash: ${query}`);
+  }
+  return focusBlockByQuery(
+    client,
+    symbolic.status === "resolved" && symbolic.block ? symbolic.block.id : query,
+    limit,
+    targetClientId,
+  );
+}
+
+function durableArtifactText(
+  text: string,
+  type: DurableArtifactType,
+  parentId: string | null,
+): string {
+  const body = text.trim();
+  if (!body) throw new Error("Durable artifact text cannot be empty");
+  const metadata = [`[type::${type}]`];
+  if (parentId) metadata.push(`[source-block::${parentId}]`);
+  return `${body}\n${metadata.join(" ")}`;
+}
+
+async function reportHerdrTask(
+  task: Block | null,
+  activity: "working" | "idle" | "clear",
+): Promise<boolean> {
+  const paneId = process.env.HERDR_PANE_ID;
+  if (process.env.HERDR_ENV !== "1" || !paneId) return false;
+  const args = [
+    "pane",
+    "report-metadata",
+    paneId,
+    "--source",
+    OUTLINER_PRESENCE_SOURCE,
+    "--seq",
+    String(++herdrMetadataSequence),
+  ];
+  if (task && activity !== "clear") {
+    args.push(
+      "--token",
+      `task=${workId(task) ?? task.id.slice(0, 8)}`,
+      "--token",
+      `task-id=${task.id}`,
+      "--token",
+      `activity=${activity}`,
+      "--ttl-ms",
+      String(OUTLINER_PRESENCE_TTL_MS),
+    );
+  } else {
+    args.push(
+      "--clear-token",
+      "task",
+      "--clear-token",
+      "task-id",
+      "--clear-token",
+      "activity",
+    );
+  }
+  try {
+    await execFileAsync(process.env.HERDR_BIN_PATH ?? "herdr", args, {
+      cwd: paths.workspaceRoot,
+      timeout: 1_000,
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export default function outlinerExtension(pi: ExtensionAPI): void {
+  let activeTaskId: string | null = null;
+  let focusRegistry: HerdrRuntimeRegistry | null = null;
+  let focusRunner: HerdrRegistryRunner | null = null;
+  let workPlaceholderNudgedThisTurn = false;
+
+  function startFocusTracker(): void {
+    const socketPath = process.env.HERDR_SOCKET_PATH;
+    if (!socketPath || focusRunner) return;
+    focusRegistry = new HerdrRuntimeRegistry();
+    focusRunner = new HerdrRegistryRunner(focusRegistry, socketPath, {
+      diagnostic: () => {},
+      eventTypes: ["pane.focused"],
+      includePaneAgentStatus: false,
+      replayQuietMs: 25,
+      replayMaxMs: 500,
+    });
+    focusRunner.start();
+  }
+
+  function persistActiveTask(blockId: string | null): void {
+    activeTaskId = blockId;
+    pi.appendEntry<ActiveTaskEntryData>(ACTIVE_TASK_ENTRY_TYPE, { version: 1, blockId });
+  }
+
+  async function currentTask(): Promise<Block | null> {
+    if (!activeTaskId) return null;
+    return client.request<Block>({ action: "get", blockId: activeTaskId });
+  }
+
+  async function presentTask(
+    context: ExtensionContext,
+    task: Block | null,
+    activity: "working" | "idle" | "clear",
+  ): Promise<boolean> {
+    context.ui.setStatus("pi-outliner-task", task ? workId(task) ?? task.id.slice(0, 8) : undefined);
+    return reportHerdrTask(task, activity);
+  }
+
+  async function startTask(address: string, context: ExtensionContext) {
+    await ensureService(false);
+    const task = await resolveRoadmapTask(address);
+    if (activeTaskId && activeTaskId !== task.id) {
+      const active = await currentTask();
+      throw new Error(
+        `Another task is active in this session: ${active ? workId(active) ?? active.id : activeTaskId}. Pause, complete, or clear it before switching.`,
+      );
+    }
+    const stage = getProperty(task.properties, "work-stage");
+    if (stage === "done" || stage === "complete") {
+      throw new Error(`Cannot start completed task: ${workId(task) ?? task.id}`);
+    }
+    const updated = stage === "doing"
+      ? task
+      : await client.request<Block>({
+        action: "properties.patch",
+        blockId: task.id,
+        expectedUpdatedAt: task.updatedAt,
+        operations: [propertyTransition(task, "work-stage", "doing")],
+      });
+    persistActiveTask(updated.id);
+    const activity = context.isIdle?.() === false ? "working" : "idle";
+    const presenceReported = await presentTask(context, updated, activity);
+    return {
+      blockId: updated.id,
+      workId: requireRoadmapTask(updated),
+      stage: getProperty(updated.properties, "work-stage"),
+      presenceReported,
+    };
+  }
+
+  async function pauseTask(context: ExtensionContext) {
+    await ensureService(false);
+    const task = await currentTask();
+    if (!task) throw new Error("No active Outliner task");
+    const updated = await client.request<Block>({
+      action: "properties.patch",
+      blockId: task.id,
+      expectedUpdatedAt: task.updatedAt,
+      operations: [propertyTransition(task, "work-stage", "next")],
+    });
+    persistActiveTask(null);
+    const presenceReported = await presentTask(context, null, "clear");
+    return {
+      blockId: updated.id,
+      workId: requireRoadmapTask(updated),
+      stage: getProperty(updated.properties, "work-stage"),
+      presenceReported,
+    };
+  }
+
+  async function clearTask(context: ExtensionContext) {
+    const previousBlockId = activeTaskId;
+    persistActiveTask(null);
+    const presenceReported = await presentTask(context, null, "clear");
+    return { previousBlockId, presenceReported };
+  }
+
+  async function completeTask(proofBlockId: string, context: ExtensionContext) {
+    await ensureService(false);
+    const task = await currentTask();
+    if (!task) throw new Error("No active Outliner task");
+    const proof = await client.request<Block>({ action: "get", blockId: proofBlockId });
+    if (proof.effectiveDeletedRootId) throw new Error(`Proof block is in Trash: ${proof.id}`);
+    const linkedProof = proof.parentId === task.id ||
+      proof.properties.some((property) =>
+        property.key === "source-block" && property.value === task.id
+      );
+    if (!linkedProof) {
+      throw new Error(`Proof block must be a child of or reference the active task: ${task.id}`);
+    }
+    const operations: PropertyPatchOperation[] = [
+      propertyTransition(task, "status", "complete"),
+      propertyTransition(task, "work-stage", "done"),
+    ];
+    if (!task.properties.some((property) => property.key === "proof" && property.value === proof.id)) {
+      operations.push({ op: "append", key: "proof", value: proof.id });
+    }
+    const updated = await client.request<Block>({
+      action: "properties.patch",
+      blockId: task.id,
+      expectedUpdatedAt: task.updatedAt,
+      operations,
+    });
+    persistActiveTask(null);
+    const presenceReported = await presentTask(context, null, "clear");
+    return {
+      blockId: updated.id,
+      workId: requireRoadmapTask(updated),
+      stage: getProperty(updated.properties, "work-stage"),
+      status: getProperty(updated.properties, "status"),
+      proofBlockId: proof.id,
+      presenceReported,
+    };
+  }
+
+  async function activeTaskContext(): Promise<string> {
+    if (!activeTaskId) return "";
+    const context = await client.request<SelectionContext>({
+      action: "blocks.context",
+      blockId: activeTaskId,
+    }, 250);
+    const dependencyIds = context.selected?.properties
+      .filter((property) => property.key === "depends-on")
+      .map((property) => property.value)
+      .slice(0, 8) ?? [];
+    const dependencies = (
+      await Promise.all(
+        dependencyIds.map((blockId) =>
+          client.request<Block>({ action: "get", blockId }, 250).catch(() => null)
+        ),
+      )
+    ).filter((block): block is Block => block !== null);
+    return formatActiveTask(context, dependencies);
+  }
+
+  async function lastFocusedPaneContext(): Promise<SelectionContext | null> {
+    if (!focusRegistry || focusRegistry.phase !== "ready") return null;
+    const clients = await client.request<OutlinerClientRegistration[]>({
+      action: "clients.list",
+    }, 250);
+    const focusedClient = selectRecentFocusedOutlinerClient(
+      clients,
+      focusRegistry.recentFocusedPaneIds(),
+    );
+    if (!focusedClient) return null;
+    if (focusedClient.currentBlockId) {
+      return client.request<SelectionContext>({
+        action: "blocks.context",
+        blockId: focusedClient.currentBlockId,
+      }, 250);
+    }
+    const browsing = await client.request<BrowsingContextState>({
+      action: "browsing-context.get",
+      contextId: focusedClient.contextId,
+    }, 250);
+    return browsing.target.selected ? browsing.target : null;
+  }
+
+  async function agentWorkspaceContext(): Promise<string> {
+    const focused = await lastFocusedPaneContext();
+    if (focused?.selected) {
+      const sections = [formatFocusedPane(focused)];
+      if (activeTaskId && activeTaskId !== focused.selected.id) {
+        const task = await currentTask();
+        if (task) {
+          const taskProperties = [
+            getProperty(task.properties, "status") && `status=${getProperty(task.properties, "status")}`,
+            getProperty(task.properties, "work-stage") &&
+            `work-stage=${getProperty(task.properties, "work-stage")}`,
+          ].filter(Boolean).join(", ");
+          sections.push(
+            `Session active task (separate from the focused block): [${task.id}] ${blockDisplayTitle(task)}${taskProperties ? ` · ${taskProperties}` : ""}`,
+          );
+        }
+      }
+      return boundAgentContext(sections.join("\n\n"));
+    }
+    if (activeTaskId) return activeTaskContext();
+    return formatSelection(
+      await client.request<SelectionContext>({ action: "selection.get" }, 250),
+    );
+  }
+
+  async function selectedAgentBlockText(): Promise<string> {
+    const focused = await lastFocusedPaneContext();
+    if (focused?.selected) return focused.selected.text;
+    if (activeTaskId) return (await currentTask())?.text ?? "";
+    const selection = await client.request<SelectionContext>({ action: "selection.get" }, 250);
+    return selection.selected?.text ?? "";
+  }
+
+  pi.on("resources_discover", () => ({
+    skillPaths: [
+      join(extensionRoot, "pi-extension", "skills", "outliner-workflow", "SKILL.md"),
+      join(
+        extensionRoot,
+        "pi-extension",
+        "skills",
+        WORK_PLACEHOLDER_SKILL,
+        "SKILL.md",
+      ),
+    ],
+  }));
+
+  pi.on("session_start", async (_event, context) => {
+    startFocusTracker();
+    activeTaskId = restoredActiveTaskId(context.sessionManager.getBranch());
+    if (!activeTaskId) {
+      await presentTask(context, null, "clear");
+      return;
+    }
+    try {
+      await ensureService(false);
+      const task = await currentTask();
+      if (task) await presentTask(context, task, "idle");
+    } catch {
+      context.ui.setStatus("pi-outliner-task", activeTaskId.slice(0, 8));
+    }
+  });
   pi.registerCommand("outliner", {
     description: "Open or focus the persistent Herdr outliner pane",
     handler: async (_args, ctx) => {
@@ -245,6 +762,57 @@ export default function outlinerExtension(pi: ExtensionAPI): void {
         ctx.ui.notify("Outliner ready", "info");
       } catch (error) {
         ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+      }
+    },
+  });
+
+  pi.registerCommand("outliner-task", {
+    description: "Start, inspect, pause, complete, or clear the session-scoped Outliner task",
+    handler: async (args, context) => {
+      const [operation = "status", ...rest] = args.trim().split(/\s+/).filter(Boolean);
+      try {
+        if (operation === "status") {
+          await ensureService(false);
+          const task = await currentTask();
+          context.ui.notify(
+            task
+              ? `Active Outliner task: ${workId(task) ?? task.id.slice(0, 8)} · ${blockDisplayTitle(task)}`
+              : "No active Outliner task",
+            "info",
+          );
+          return;
+        }
+        if (operation === "start") {
+          const address = rest.join(" ");
+          if (!address) throw new Error("Usage: /outliner-task start <Work ID, block ID, or title>");
+          const result = await startTask(address, context);
+          context.ui.notify(`Started ${result.workId}`, "info");
+          return;
+        }
+        if (operation === "pause") {
+          const result = await pauseTask(context);
+          context.ui.notify(`Paused ${result.workId}; returned it to Next`, "info");
+          return;
+        }
+        if (operation === "complete") {
+          const proofBlockId = rest[0];
+          if (!proofBlockId) {
+            throw new Error("Usage: /outliner-task complete <proof-block-id>");
+          }
+          const result = await completeTask(proofBlockId, context);
+          context.ui.notify(`Completed ${result.workId}`, "info");
+          return;
+        }
+        if (operation === "clear") {
+          await clearTask(context);
+          context.ui.notify("Cleared the session task without changing roadmap metadata", "info");
+          return;
+        }
+        throw new Error(
+          "Usage: /outliner-task [status|start <address>|pause|complete <proof-block-id>|clear]",
+        );
+      } catch (error) {
+        context.ui.notify(error instanceof Error ? error.message : String(error), "error");
       }
     },
   });
@@ -289,7 +857,7 @@ export default function outlinerExtension(pi: ExtensionAPI): void {
       }
       try {
         await ensureService(true);
-        const result = await focusBlockByQuery(client, query, 10);
+        const result = await focusOutlinerAddress(query, 10);
         if (result.resolution.kind === "none") {
           ctx.ui.notify(`No block matches: ${query}`, "warning");
           return;
@@ -333,6 +901,163 @@ export default function outlinerExtension(pi: ExtensionAPI): void {
         const label = error instanceof BlockQuerySyntaxError ? "Invalid filter" : "Filter failed";
         ctx.ui.setWidget("pi-outliner-filter", [`${label}: ${message}`], {
           placement: "belowEditor",
+        });
+      }
+    },
+  });
+
+  pi.registerTool({
+    name: "outliner_task",
+    label: "Outliner Task",
+    description:
+      "Manage the explicit session-scoped roadmap task; completion requires a linked proof block",
+    promptSnippet: "Start, inspect, pause, complete, or clear the active Outliner task",
+    parameters: Type.Object({
+      operation: Type.Union([
+        Type.Literal("status"),
+        Type.Literal("start"),
+        Type.Literal("pause"),
+        Type.Literal("complete"),
+        Type.Literal("clear"),
+      ]),
+      address: Type.Optional(
+        Type.String({ description: "Work ID, block ID, or title required for start" }),
+      ),
+      proofBlockId: Type.Optional(
+        Type.String({ description: "Linked proof block required for complete" }),
+      ),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, context) {
+      if (params.operation === "status") {
+        await ensureService(false);
+        const task = await currentTask();
+        return toolResult(task
+          ? {
+            blockId: task.id,
+            workId: requireRoadmapTask(task),
+            stage: getProperty(task.properties, "work-stage"),
+            status: getProperty(task.properties, "status"),
+          }
+          : { blockId: null });
+      }
+      if (params.operation === "start") {
+        if (!params.address) throw new Error("outliner_task start requires address");
+        return toolResult(await startTask(params.address, context));
+      }
+      if (params.operation === "pause") {
+        return toolResult(await pauseTask(context));
+      }
+      if (params.operation === "complete") {
+        if (!params.proofBlockId) {
+          throw new Error("outliner_task complete requires proofBlockId");
+        }
+        return toolResult(await completeTask(params.proofBlockId, context));
+      }
+      return toolResult(await clearTask(context));
+    },
+  });
+
+  pi.registerTool({
+    name: "outliner_focus",
+    label: "Outliner Focus",
+    description:
+      "Focus a block in an explicit or unique live Tree client and return bounded structural context",
+    promptSnippet: "Present an Outliner block before narrating or handing it to the user",
+    parameters: Type.Object({
+      query: Type.String({ description: "Full ID, short ID prefix, symbolic title, or fuzzy text" }),
+      clientId: Type.Optional(
+        Type.String({ description: "Required when more than one Tree client is live" }),
+      ),
+    }),
+    async execute(_toolCallId, params) {
+      await ensureService(true);
+      const result = await focusOutlinerAddress(params.query, 10, params.clientId);
+      if (result.resolution.kind !== "match") {
+        return toolResult({
+          focused: false,
+          resolution: result.resolution.kind,
+          candidates: result.resolution.matches.map((match) => ({
+            blockId: match.block.id,
+            title: match.title,
+            kind: match.kind,
+          })),
+        });
+      }
+      const block = result.resolution.match.block;
+      const context = await client.request<SelectionContext>({
+        action: "blocks.context",
+        blockId: block.id,
+      });
+      return toolResult({
+        focused: true,
+        blockId: block.id,
+        title: result.resolution.match.title,
+        matchKind: result.resolution.match.kind,
+        context: formatSelection(context),
+      });
+    },
+  });
+
+  pi.registerTool({
+    name: "outliner_publish",
+    label: "Outliner Publish",
+    description:
+      "Publish a durable typed workspace artifact beneath the active task or explicit parent and optionally focus it",
+    promptSnippet:
+      "Publish plans, roadmap reviews, findings, decisions, progress, syntheses, and implementation proof to the Outliner",
+    parameters: Type.Object({
+      text: Type.String({ description: "Authored artifact body without generated metadata" }),
+      type: Type.Union([
+        Type.Literal("field-note"),
+        Type.Literal("finding"),
+        Type.Literal("decision"),
+        Type.Literal("implementation-proof"),
+        Type.Literal("synthesis"),
+        Type.Literal("roadmap-review"),
+        Type.Literal("progress"),
+      ]),
+      parentId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+      focus: Type.Optional(Type.Boolean({ description: "Defaults to true" })),
+      clientId: Type.Optional(
+        Type.String({ description: "Tree client to focus when multiple clients are live" }),
+      ),
+    }),
+    async execute(toolCallId, params, _signal, _onUpdate, context) {
+      await ensureService(false);
+      const parentId = params.parentId !== undefined
+        ? params.parentId
+        : activeTaskId ?? await selectedBlockId() ?? null;
+      const block = await client.request<Block>({
+        action: "create",
+        text: durableArtifactText(params.text, params.type, parentId),
+        parentId,
+        author: "agent",
+        provenance: toolProvenance(context, toolCallId),
+      });
+      if (params.focus === false) {
+        return toolResult({
+          blockId: block.id,
+          parentId,
+          type: params.type,
+          focused: false,
+        });
+      }
+      try {
+        await ensureService(true);
+        const focused = await focusOutlinerAddress(block.id, 10, params.clientId);
+        return toolResult({
+          blockId: block.id,
+          parentId,
+          type: params.type,
+          focused: focused.focused,
+        });
+      } catch (error) {
+        return toolResult({
+          blockId: block.id,
+          parentId,
+          type: params.type,
+          focused: false,
+          focusError: error instanceof Error ? error.message : String(error),
         });
       }
     },
@@ -721,17 +1446,88 @@ export default function outlinerExtension(pi: ExtensionAPI): void {
     }
   });
 
-  pi.on("before_agent_start", async (event) => {
+  pi.on("tool_result", async (event) => {
+    if (workPlaceholderNudgedThisTurn || !event.toolName.startsWith("outliner_")) return;
+    const text = textualToolResult(event.content);
+    if (!text) return;
     try {
-      const selection = await client.request<SelectionContext>({ action: "selection.get" }, 250);
-      const context = formatSelection(selection);
-      if (context) return { systemPrompt: `${event.systemPrompt}\n\n${context}` };
+      const status = await client.request<WorkIdAllocatorStatus>({
+        action: "work-ids.status",
+      }, 250);
+      if (!status.prefix || !containsWorkIdPlaceholder(text, status.prefix)) return;
+      workPlaceholderNudgedThisTurn = true;
+      return {
+        content: [
+          ...event.content,
+          { type: "text" as const, text: `\n\n${formatWorkPlaceholderNudge(status.prefix)}` },
+        ],
+      };
     } catch {
-      // The outliner is optional until explicitly opened.
+      // Placeholder detection is advisory; preserve the original tool result if unavailable.
     }
   });
 
-  pi.on("session_shutdown", async () => {
+  pi.on("before_agent_start", async (event) => {
+    workPlaceholderNudgedThisTurn = false;
+    let context = "";
+    let selectedText = "";
+    try {
+      context = await agentWorkspaceContext();
+    } catch {
+      // The outliner remains optional until a task or workspace is explicitly opened.
+    }
+    try {
+      selectedText = await selectedAgentBlockText();
+    } catch {
+      // Prompt-only detection remains available when no selected block can be read.
+    }
+    let nudge = "";
+    try {
+      const status = await client.request<WorkIdAllocatorStatus>({
+        action: "work-ids.status",
+      }, 250);
+      if (
+        status.prefix &&
+        (
+          containsWorkIdPlaceholder(event.prompt, status.prefix) ||
+          containsWorkIdPlaceholder(selectedText, status.prefix)
+        )
+      ) {
+        workPlaceholderNudgedThisTurn = true;
+        nudge = formatWorkPlaceholderNudge(status.prefix);
+      }
+    } catch {
+      // A missing allocator configuration cannot define the canonical placeholder prefix.
+    }
+    const additions = [context, nudge].filter(Boolean);
+    if (additions.length > 0) {
+      return { systemPrompt: `${event.systemPrompt}\n\n${additions.join("\n\n")}` };
+    }
+  });
+
+  pi.on("agent_start", async (_event, context) => {
+    try {
+      const task = await currentTask();
+      if (task) await presentTask(context, task, "working");
+    } catch {
+      // Presence is a disposable projection; canonical task state remains authoritative.
+    }
+  });
+
+  pi.on("agent_settled", async (_event, context) => {
+    try {
+      const task = await currentTask();
+      if (task) await presentTask(context, task, "idle");
+    } catch {
+      // Presence is a disposable projection; canonical task state remains authoritative.
+    }
+  });
+
+  pi.on("session_shutdown", async (_event, context) => {
+    await presentTask(context, null, "clear");
+    await focusRunner?.stop();
+    focusRunner = null;
+    focusRegistry = null;
     if (headlessServer) {
       headlessServer.kill("SIGTERM");
       headlessServer = null;

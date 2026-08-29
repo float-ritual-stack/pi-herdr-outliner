@@ -24,26 +24,36 @@ placement = "split"
 command = ["bun", "run", "src/detail-main.ts"]
 
 [[actions]]
-id = "open"
-title = "Focus existing or open first outliner"
+id = "open-layout"
+title = "Outliner: open Tree + two Details working layout"
+description = "Build the standard four-pane Outliner layout in an otherwise empty tab."
 contexts = ["workspace", "tab", "pane"]
-command = ["bun", "run", "src/herdr-open.ts"]
+command = ["bun", "run", "src/herdr-open.ts", "--mode", "open-layout"]
 
 [[actions]]
-id = "open-here"
-title = "Open another Tree and Detail here"
+id = "layout-detail-a"
+title = "Outliner layout: Detail A full height"
+description = "Keep the shell on the right and make the Detail sharing the Tree context full height."
 contexts = ["workspace", "tab", "pane"]
-command = ["bun", "run", "src/herdr-open.ts", "--mode", "open-here"]
+command = ["bun", "run", "src/herdr-layout-action.ts", "detail-a"]
 
 [[actions]]
-id = "focus-existing"
-title = "Focus the unique existing Tree"
+id = "layout-detail-b"
+title = "Outliner layout: Detail B full height"
+description = "Keep the shell on the right and make the secondary Detail full height."
 contexts = ["workspace", "tab", "pane"]
-command = ["bun", "run", "src/herdr-open.ts", "--mode", "focus-existing"]
+command = ["bun", "run", "src/herdr-layout-action.ts", "detail-b"]
+
+[[actions]]
+id = "layout-tree-wide"
+title = "Outliner layout: Tree wide, Details underneath"
+description = "Span the Tree across the Outliner area with Detail A and Detail B underneath."
+contexts = ["workspace", "tab", "pane"]
+command = ["bun", "run", "src/herdr-layout-action.ts", "tree-wide"]
 
 [[actions]]
 id = "navigate"
-title = "Navigate to outliner identity"
+title = "Internal: handle pi-outliner:// link"
 contexts = ["pane"]
 command = ["bun", "run", "src/herdr-link-open.ts"]
 

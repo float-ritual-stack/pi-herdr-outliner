@@ -40,7 +40,7 @@ function normalize(value: string): string {
   return value.normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim();
 }
 
-function subsequenceScore(query: string, candidate: string): number {
+export function subsequenceScore(query: string, candidate: string): number {
   if (!query || query.length > candidate.length) return 0;
   let queryIndex = 0;
   let previousMatch = -1;

@@ -63,6 +63,7 @@ function invokeHerdr(herdr: string, args: string[]): string {
   return execFileSync(herdr, args, {
     encoding: "utf8",
     timeout: HERDR_COMMAND_TIMEOUT_MS,
+    stdio: ["ignore", "pipe", "pipe"],
   });
 }
 
@@ -120,7 +121,15 @@ export function focusCurrentPane(
   if (process.env.HERDR_ENV !== "1") return;
   const paneId = currentPaneRuntime(herdr)?.paneId;
   if (!paneId) throw new Error("Current Herdr pane identity is unavailable");
-  invokeHerdr(herdr, ["plugin", "pane", "focus", paneId]);
+  try {
+    invokeHerdr(herdr, ["plugin", "pane", "focus", paneId]);
+  } catch (error) {
+    const stderr = typeof error === "object" && error !== null && "stderr" in error
+      ? String(error.stderr)
+      : "";
+    if (!stderr.includes('"code":"plugin_pane_not_found"')) throw error;
+    // Manual panes can receive navigation but have no plugin focus handle.
+  }
 }
 
 function paneMatchesState(

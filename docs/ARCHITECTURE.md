@@ -49,9 +49,9 @@ PageUp/PageDown move the selected expanded row's offset by one Tree body viewpor
 
 [`src/detail-main.ts`](../src/detail-main.ts) selects the Pi TUI Detail implementation, which separates:
 
-- [`DetailController`](../src/detail-controller.ts) — modes, effects, optimistic saves, completion, file/annotation behavior, and cursor visibility;
+- [`DetailController`](../src/detail-controller.ts) — modes, effects, optimistic saves, completion, lazy backlink state, file/annotation behavior, and cursor visibility;
 - [`detail-pi.ts`](../src/detail-pi.ts) — terminal lifecycle, input, and Pi layout switching;
-- [`detail-pi-preview.ts`](../src/detail-pi-preview.ts) — Markdown `ScrollView` preview;
+- [`detail-pi-preview.ts`](../src/detail-pi-preview.ts) — separate authored and generated-backlink Markdown components in one `ScrollView`;
 - [`detail-editor-layout.ts`](../src/detail-editor-layout.ts) — grapheme-safe wrapped visual rows, cursor mapping, and selection spans;
 - [`detail-renderer.ts`](../src/detail-renderer.ts) — fixed custom frames for edit, comment, file, and annotation modes; and
 - [`text-buffer.ts`](../src/text-buffer.ts) — raw text, grapheme/word movement, and selections.
@@ -60,11 +60,34 @@ The legacy ANSI Detail entrypoint remains available in [`src/detail.ts`](../src/
 
 Detail owns an exact target, a bounded in-process target history, and a visible
 `Unlocked | Locked` state. An unlocked Detail is eligible for same-tab Tree
-previews and reference opens. `L`, `i`, `Ctrl+L`, or `Meta+L` locks the current
-target as a context anchor; the same command unlocks it. Block editing and
-annotation commenting lock before opening a mutable buffer. Ordinary `open`
-focuses its destination but leaves it unlocked. Reader `Enter` is inert.
+previews and reference opens. Ordinary navigation, including navigation
+originating inside a locked Detail, can target only an unlocked Detail. A locked
+Detail also rejects directly addressed ordinary `preview` and `open` commands;
+if no suitable Detail is unlocked, dispatch fails without replacing any anchor.
+`L`, `i`, `Ctrl+L`, or `Meta+L` locks the current target as a context anchor; the
+same command unlocks it. Block editing and annotation commenting lock before
+opening a mutable buffer. Ordinary `open` focuses its unlocked destination but
+leaves it unlocked. Reader `Enter` is inert.
 Closing Detail discards its target, history, and lock state.
+
+The generated Backlinks section is collapsed by default and therefore performs
+no relation query during ordinary Tree cursor previews. Expansion calls the
+bounded `references.backlinks` action, caches the result by exact target, and
+invalidates it on canonical content/address events. One relation primitive
+reverses exact block references, normalized page addresses, Work IDs, and
+block-valued properties such as `[source-block::<block-id>]`. Each projected
+source carries canonical created/updated timestamps plus normalized relation
+groups. Detail keeps only transient filter, sort, selection, and per-source
+disclosure state: fuzzy matching spans source title, parent context, relation
+type, and snippets; sorting cycles created/updated timestamps in both
+directions. The authored Markdown and generated backlink Markdown remain
+separate components; edit/save paths only read canonical block text. `Tab`
+selects generated sources, `.` toggles the selected source's occurrence rows,
+`Enter` inspects one, and `R` reveals one. The generated `+`/`−` controls use a
+Detail-local action URI and do not enter canonical text. Backlink source links
+carry a transient `preserveSource` constraint. The service excludes the source
+client before choosing the first other unlocked same-tab Detail and fails
+explicitly if none remains.
 
 ### Pi / OMP extension
 
@@ -132,7 +155,7 @@ Literal property-looking text inside inline code, fenced code, or escaped syntax
 
 ## Protocol
 
-The current protocol version is `17`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
+The current protocol version is `18`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
 
 ### Important request families
 
@@ -140,12 +163,12 @@ The current protocol version is `17`, defined in [`src/types.ts`](../src/types.t
 - canonical reads: `get`, `children`, `blocks.context`, `workspace.snapshot`
 - bounded search: `blocks.query`
 - browsing contexts and Tree previews: `browsing-context.get`, `browsing-context.publish`
-- typed navigation: `navigation.resolve` preflight and `navigation.dispatch` with `preview | open | reveal`
+- typed navigation: `navigation.resolve` preflight and `navigation.dispatch` with `preview | open | reveal`, plus optional transient source preservation
 - selection-neutral capture: `capture.create`
 - mutations: `create`, `update`, `move`, `delete` (move to Trash), `trash.restore`, `trash.purge`
 - properties: `properties.patch`, `properties.catalog`
 - virtual ordering: `virtual.occurrences.reorder`
-- references: `references.resolve`
+- references: `references.resolve`, `references.backlinks`
 - symbolic addresses: `pages.resolve`, `pages.follow`, `pages.complete`, `pages.rename`, `pages.alias`, `pages.remove`
 - Work IDs: `work-ids.status`, `work-ids.configure`, `work-ids.allocate`
 - legacy workspace selection/history: `selection.get`, `selection.set`, `navigation.state`, `navigation.back`, `navigation.forward`
@@ -201,7 +224,7 @@ Herdr recognizes plain terminal text as a URL only for `http://` and `https://`.
 - `pi-outliner://work/<PIE-NNN>` — resolve-only Work-ID registry lookup;
 - `pi-outliner://page/<encoded-address>` — unique symbolic page resolution and explicit create-on-follow.
 
-Inside live panes, reference activation resolves one exact canonical block and sends `navigation.dispatch` with the originating client ID. Keyboard `o`, mouse clicks, and Pi TUI's `openUrl` emit `open`; `R` emits `reveal`. The service emits one exact-client `ui` event and does not mutate workspace-global selection. Deleted targets retain exact identity and therefore open read-only rather than degrading into fuzzy text matches.
+Inside live panes, reference activation resolves one exact canonical block and sends `navigation.dispatch` with the originating client ID. Keyboard `o`, ordinary mouse clicks, and Pi TUI's `openUrl` emit `open`; `R` emits `reveal`. Detail breadcrumb links explicitly emit `reveal`, so selecting an ancestor moves the paired Tree rather than opening another Detail. Generated backlink links add `preserveSource`, which filters the originating Detail out before unlocked-pool selection without creating a persistent route. The service emits one exact-client `ui` event and does not mutate workspace-global selection. Deleted targets retain exact identity and therefore open read-only rather than degrading into fuzzy text matches.
 
 Authored text is sanitized before link generation. Tree adds OSC 8 only after plain-text wrapping/truncation; Detail generates safe Markdown links after sanitization. Under `HERDR_ENV=1`, Detail enables Pi TUI hyperlink emission because nested panes advertise generic `TERM=xterm-256color` even though Herdr captures OSC 8 metadata. Tree ignores modified, release, motion, and wheel reports for link activation; Shift remains available for terminal-native selection.
 
@@ -316,6 +339,17 @@ Query filters compare indexed keys and optional exact values. Property patches a
 Exact references use `((block-id))`. Read paths replace a resolvable ID with the target’s first non-property content line. Edit paths retain the raw ID. Dangling exact references remain unchanged.
 
 Symbolic references use `[[address]]`. The registry compares trimmed, Unicode-normalized, caseless, whitespace-collapsed keys while preserving the authored address label. One `[page::address]` declaration registers a page; `[work-id::PIE-NNN]` registers the same canonical block under its Work ID. Bare Work IDs navigate through a resolve-only registry path rather than fuzzy goto, and unresolved Work-ID-shaped addresses cannot create page stubs. Parsing and ordinary saves never create a referenced block. `pages.follow` transactionally resolves or creates one ordinary root stub. General edits cannot silently change or remove a registered declaration: `pages.rename` uses optimistic concurrency, changes the primary declaration, and retains the former address as an alias; `pages.alias` adds another explicit address; `pages.remove` explicitly unregisters an alias or primary declaration. Registry rebuilds preserve aliases.
+
+[`reference-occurrences.ts`](../src/reference-occurrences.ts) is the shared pure
+scanner for actionable exact, page, and bare Work-ID occurrences. It excludes
+inline/fenced/indented code, authored Markdown links, and property tokens before
+either first-reference navigation or backlink reversal consumes occurrences.
+[`backlinks.ts`](../src/backlinks.ts) owns the reusable reverse-relation
+primitive: symbolic occurrences resolve through the address registry, repeated
+occurrences group under one source, snippets and source rows are bounded, and
+deleted source inclusion is explicit. `references.backlinks` is the current
+delivery seam; a later typed block-set source must call this same primitive
+rather than implement a second resolver.
 
 Work-ID allocation is workspace-scoped and transactional. A one-time v9 migration adopts a clean existing reservation prefix; an empty or ambiguous legacy workspace requires explicit `work-ids.configure`, and later manual values never auto-configure on restart. Prefix configuration can be corrected until the chosen prefix owns an immutable reservation. The allocator tracks the next number monotonically and formats a minimum three-digit suffix. Allocation uses optimistic block concurrency, appends canonical text, rebuilds the property/address indexes, and reserves the ID with its owning UUID in one transaction. Canonical manual declarations for the configured prefix pass through the same ownership, sequence, and never-reuse enforcement. Malformed, noncanonical, duplicate legacy, and out-of-prefix values remain indexed inert metadata rather than blocking startup or text saves. Existing valid legacy Work-ID addresses for other prefixes are retained, but bare Work-ID linking and new allocation are scoped to the configured prefix.
 

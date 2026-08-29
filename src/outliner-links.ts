@@ -7,17 +7,22 @@ import {
 import { requireUniqueClientId, sendClientCommand } from "./client-target";
 import { blockDisplayTitle, blockReferenceIds } from "./references";
 import {
+  outlinerReferenceOccurrences,
+  protectedMarkdownRanges,
+  rangesOverlap,
+  type TextRange,
+} from "./reference-occurrences";
+import {
   dispatchNavigation,
   resolveNavigationDestination,
 } from "./navigation-routes";
-import { isWorkIdAddress, pageAddressReferences } from "./page-addresses";
+import { isWorkIdAddress } from "./page-addresses";
 import type {
   Block,
   OutlinerNavigationIntent,
   PageAddressFollowResult,
   PageAddressResolution,
 } from "./types";
-import { workIdReferences } from "./work-ids";
 
 const OUTLINER_SCHEME = "pi-outliner:";
 const BLOCK_ID_PATTERN = /^[A-Za-z0-9_-]{8,}$/;
@@ -31,6 +36,8 @@ export type OutlinerLinkKind = "block" | "goto" | "page" | "work";
 export interface OutlinerLinkTarget {
   kind: OutlinerLinkKind;
   value: string;
+  preserveSource?: boolean;
+  intent?: "reveal";
 }
 
 export interface OutlinerLinkNavigation {
@@ -50,12 +57,12 @@ interface LinkSpan {
   uri: string;
 }
 
-interface TextRange {
-  start: number;
-  end: number;
-}
 
-export function outlinerLinkUri(kind: OutlinerLinkKind, value: string): string {
+export function outlinerLinkUri(
+  kind: OutlinerLinkKind,
+  value: string,
+  options: { preserveSource?: boolean; intent?: "reveal" } = {},
+): string {
   const normalized = value.trim();
   if (TERMINAL_CONTROL_PATTERN.test(normalized)) {
     throw new Error("Outliner link target contains terminal control characters");
@@ -67,7 +74,11 @@ export function outlinerLinkUri(kind: OutlinerLinkKind, value: string): string {
   ) {
     throw new Error(`Invalid outliner ${kind} target: ${normalized}`);
   }
-  return `${OUTLINER_SCHEME}//${kind}/${encodeURIComponent(normalized)}`;
+  const query = new URLSearchParams();
+  if (options.preserveSource) query.set("preserveSource", "1");
+  if (options.intent) query.set("intent", options.intent);
+  const suffix = query.size > 0 ? `?${query}` : "";
+  return `${OUTLINER_SCHEME}//${kind}/${encodeURIComponent(normalized)}${suffix}`;
 }
 
 export function parseOutlinerLinkUri(uri: string): OutlinerLinkTarget {
@@ -80,7 +91,6 @@ export function parseOutlinerLinkUri(uri: string): OutlinerLinkTarget {
     parsed.username ||
     parsed.password ||
     parsed.port ||
-    parsed.search ||
     parsed.hash
   ) {
     throw new Error("Invalid outliner link URI");
@@ -96,6 +106,19 @@ export function parseOutlinerLinkUri(uri: string): OutlinerLinkTarget {
   } catch {
     throw new Error("Invalid outliner link encoding");
   }
+  const preserveSourceValues = parsed.searchParams.getAll("preserveSource");
+  const intentValues = parsed.searchParams.getAll("intent");
+  if (
+    [...parsed.searchParams.keys()].some((key) =>
+      key !== "preserveSource" && key !== "intent"
+    ) ||
+    preserveSourceValues.length > 1 ||
+    (preserveSourceValues.length === 1 && preserveSourceValues[0] !== "1") ||
+    intentValues.length > 1 ||
+    (intentValues.length === 1 && intentValues[0] !== "reveal")
+  ) {
+    throw new Error("Invalid outliner link navigation constraints");
+  }
   if (
     !value ||
     TERMINAL_CONTROL_PATTERN.test(value) ||
@@ -104,7 +127,12 @@ export function parseOutlinerLinkUri(uri: string): OutlinerLinkTarget {
   ) {
     throw new Error(`Invalid outliner ${kind} target`);
   }
-  return { kind, value };
+  return {
+    kind,
+    value,
+    ...(preserveSourceValues.length === 1 ? { preserveSource: true } : {}),
+    ...(intentValues.length === 1 ? { intent: "reveal" as const } : {}),
+  };
 }
 
 export interface ResolvedOutlinerLinkTarget {
@@ -168,11 +196,13 @@ export async function navigateOutlinerLink(
   }
 
   if (targets.sourceClientId) {
+    const intent = target.intent ?? targets.intent ?? "open";
     if (target.kind === "page") {
       await resolveNavigationDestination(
         requester,
         targets.sourceClientId,
-        targets.intent ?? "open",
+        intent,
+        { preserveSource: target.preserveSource },
       );
     }
     const resolved = await resolveOutlinerLinkTarget(requester, target);
@@ -180,7 +210,8 @@ export async function navigateOutlinerLink(
       requester,
       targets.sourceClientId,
       resolved.block.id,
-      targets.intent ?? "open",
+      intent,
+      { preserveSource: target.preserveSource },
     );
     return {
       kind: target.kind,
@@ -254,88 +285,16 @@ export async function navigateOutlinerLink(
   };
 }
 
-function protectedMarkdownRanges(text: string): TextRange[] {
-  const ranges: TextRange[] = [];
-  let activeFence: { marker: string; length: number } | null = null;
-  let lineStart = 0;
-  for (const line of text.split("\n")) {
-    const lineEnd = lineStart + line.length;
-    if (activeFence) {
-      ranges.push({ start: lineStart, end: lineEnd });
-      const closing = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line)?.[1];
-      if (
-        closing &&
-        closing[0] === activeFence.marker &&
-        closing.length >= activeFence.length
-      ) {
-        activeFence = null;
-      }
-    } else {
-      const opening = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
-      if (opening) {
-        ranges.push({ start: lineStart, end: lineEnd });
-        activeFence = { marker: opening[0], length: opening.length };
-      } else if (/^( {4}|\t)/.test(line)) {
-        ranges.push({ start: lineStart, end: lineEnd });
-      }
-    }
-    lineStart = lineEnd + 1;
-  }
-  for (const pattern of [/(`+)[^\n]*?\1/g, /!?\[[^\]\n]*\]\([^)\n]*\)/g]) {
-    for (const match of text.matchAll(pattern)) {
-      ranges.push({ start: match.index, end: match.index + match[0].length });
-    }
-  }
-  return ranges;
-}
-
-function pageSyntaxRanges(text: string): TextRange[] {
-  return [...text.matchAll(/\[\[[^\r\n]*?(?:\]\]|(?=\r?$))/gm)].map((match) => ({
-    start: match.index,
-    end: match.index + match[0].length,
-  }));
-}
-
-function overlaps(left: TextRange, right: TextRange): boolean {
-  return left.start < right.end && right.start < left.end;
-}
 
 export function firstOutlinerReference(
   text: string,
   workIdPrefix: string | null = null,
 ): OutlinerLinkTarget | null {
-  const candidates: Array<OutlinerLinkTarget & TextRange> = [];
-  for (const match of text.matchAll(RAW_BLOCK_REFERENCE_PATTERN)) {
-    candidates.push({
-      kind: "block",
-      value: match[1],
-      start: match.index,
-      end: match.index + match[0].length,
-    });
-  }
-  for (const reference of pageAddressReferences(text)) {
-    candidates.push({
-      kind: "page",
-      value: reference.displayAddress,
-      start: reference.start,
-      end: reference.end,
-    });
-  }
-  const pageRanges = pageSyntaxRanges(text);
-  for (const reference of workIdPrefix ? workIdReferences(text, workIdPrefix) : []) {
-    const range = { start: reference.start, end: reference.end };
-    if (pageRanges.some((pageRange) => overlaps(range, pageRange))) continue;
-    candidates.push({
-      kind: "work",
-      value: reference.workId,
-      ...range,
-    });
-  }
-  const protectedRanges = protectedMarkdownRanges(text);
-  const first = candidates
-    .filter((candidate) => !protectedRanges.some((range) => overlaps(candidate, range)))
-    .sort((left, right) => left.start - right.start)[0];
-  return first ? { kind: first.kind, value: first.value } : null;
+  const first = outlinerReferenceOccurrences(text, workIdPrefix)[0];
+  if (!first) return null;
+  if (first.kind === "block") return { kind: "block", value: first.blockId };
+  if (first.kind === "page") return { kind: "page", value: first.address };
+  return { kind: "work", value: first.address };
 }
 
 function genericLinkSpans(
@@ -344,21 +303,20 @@ function genericLinkSpans(
   workIdPrefix: string | null,
 ): LinkSpan[] {
   const spans: LinkSpan[] = [];
-  const pageRanges = pageSyntaxRanges(text);
-  for (const reference of pageAddressReferences(text)) {
-    spans.push({
-      start: reference.start,
-      end: reference.end,
-      uri: outlinerLinkUri("page", reference.displayAddress),
-    });
-  }
-  for (const reference of workIdPrefix ? workIdReferences(text, workIdPrefix) : []) {
-    const range = { start: reference.start, end: reference.end };
-    if (pageRanges.some((pageRange) => overlaps(range, pageRange))) continue;
-    spans.push({
-      ...range,
-      uri: outlinerLinkUri("work", reference.workId),
-    });
+  for (const reference of outlinerReferenceOccurrences(text, workIdPrefix)) {
+    if (reference.kind === "page") {
+      spans.push({
+        start: reference.start,
+        end: reference.end,
+        uri: outlinerLinkUri("page", reference.address),
+      });
+    } else if (reference.kind === "work-id") {
+      spans.push({
+        start: reference.start,
+        end: reference.end,
+        uri: outlinerLinkUri("work", reference.address),
+      });
+    }
   }
   for (const match of text.matchAll(BLOCK_ID_TOKEN_PATTERN)) {
     if (!canLinkBlock(match[0])) continue;
@@ -383,8 +341,8 @@ function selectLinkSpans(
     ...exactSpans,
     ...genericLinkSpans(text, canLinkBlock, workIdPrefix),
   ]) {
-    if (protectedRanges.some((range) => overlaps(span, range))) continue;
-    if (selected.some((existing) => overlaps(span, existing))) continue;
+    if (protectedRanges.some((range) => rangesOverlap(span, range))) continue;
+    if (selected.some((existing) => rangesOverlap(span, existing))) continue;
     selected.push(span);
   }
   return selected.sort((left, right) => left.start - right.start);

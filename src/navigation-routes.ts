@@ -5,15 +5,21 @@ import type {
   OutlinerNavigationResolution,
 } from "./types";
 
+export interface NavigationRouteOptions {
+  preserveSource?: boolean;
+}
+
 export async function resolveNavigationDestination(
   requester: OutlinerRequester,
   sourceClientId: string,
   intent: OutlinerNavigationIntent,
+  options: NavigationRouteOptions = {},
 ): Promise<OutlinerNavigationResolution> {
   return requester.request<OutlinerNavigationResolution>({
     action: "navigation.resolve",
     sourceClientId,
     intent,
+    ...(options.preserveSource ? { preserveSource: true } : {}),
   });
 }
 
@@ -22,11 +28,13 @@ export async function dispatchNavigation(
   sourceClientId: string,
   blockId: string,
   intent: OutlinerNavigationIntent,
+  options: NavigationRouteOptions = {},
 ): Promise<OutlinerNavigationDispatch> {
   return requester.request<OutlinerNavigationDispatch>({
     action: "navigation.dispatch",
     sourceClientId,
     blockId,
     intent,
+    ...(options.preserveSource ? { preserveSource: true } : {}),
   });
 }

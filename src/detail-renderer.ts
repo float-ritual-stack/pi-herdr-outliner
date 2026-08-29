@@ -1,10 +1,13 @@
 import {
+  hyperlink,
   sliceByColumn,
   truncateToWidth,
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import { extractFileAnnotationComment } from "./annotations";
 import { completionWindow } from "./completion";
+import { outlinerLinkUri } from "./outliner-links";
+import { blockDisplayTitle } from "./references";
 import {
   detailHelpText,
   detailVisibleEditorHeight,
@@ -44,18 +47,51 @@ function fitBreadcrumb(value: string, width: number): string {
   return fitToWidth(`… › ${suffix}`, width);
 }
 
+function fitLinkedBreadcrumb(state: Readonly<DetailState>, width: number): string {
+  const blocks = [
+    ...state.context.ancestors,
+    ...(state.context.selected
+      ? [{ ...state.context.selected, text: state.resolvedSelectedText }]
+      : []),
+  ];
+  if (blocks.length === 0) return fitBreadcrumb(state.resolvedBreadcrumb, width);
+
+  const titles = blocks.map((block) => sanitizeDynamicText(blockDisplayTitle(block)));
+  let start = titles.length - 1;
+  let suffix = titles[start];
+  while (start > 0) {
+    const candidate = `${titles[start - 1]} › ${suffix}`;
+    if (visibleWidth(`… › ${candidate}`) > width) break;
+    start -= 1;
+    suffix = candidate;
+  }
+  const linked = blocks.slice(start).map((block, index) =>
+    hyperlink(
+      titles[start + index],
+      outlinerLinkUri("block", block.id, { intent: "reveal" }),
+    )
+  ).join(" › ");
+  return fitToWidth(`${start > 0 ? "… › " : ""}${linked}`, width);
+}
+
+export interface DetailHeaderOptions {
+  linkBreadcrumbs?: boolean;
+}
+
 export function renderDetailHeader(
   state: Readonly<DetailState>,
   width: number,
+  options: DetailHeaderOptions = {},
 ): string[] {
   const connection = state.connectionMode === "locked" ? "Locked" : "Unlocked";
   const label = `Detail · ${connection}`;
   const header = width <= label.length + 2
     ? `\x1b[1;36m${fitToWidth(label, width)}\x1b[0m`
-    : `\x1b[1;36m${label}\x1b[0m  \x1b[2m${fitBreadcrumb(
-        state.resolvedBreadcrumb,
-        Math.max(1, width - label.length - 2),
-      )}\x1b[0m`;
+    : `\x1b[1;36m${label}\x1b[0m  \x1b[2m${
+      options.linkBreadcrumbs
+        ? fitLinkedBreadcrumb(state, Math.max(1, width - label.length - 2))
+        : fitBreadcrumb(state.resolvedBreadcrumb, Math.max(1, width - label.length - 2))
+    }\x1b[0m`;
   return [
     "",
     header,

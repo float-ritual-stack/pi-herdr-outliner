@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -23,6 +24,45 @@ test("keeps standalone focus inert and treats failed Herdr metadata as optional"
   } finally {
     if (originalHerdrEnv === undefined) delete process.env.HERDR_ENV;
     else process.env.HERDR_ENV = originalHerdrEnv;
+  }
+});
+
+test("ignores focus misses for manual panes outside the plugin registry", () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-outliner-pane-focus-"));
+  const herdr = join(directory, "fake-herdr");
+  const originalHerdrEnv = process.env.HERDR_ENV;
+  try {
+    process.env.HERDR_ENV = "1";
+    writeFileSync(
+      herdr,
+      `#!/usr/bin/env bun
+const args = process.argv.slice(2);
+if (args[0] === "pane" && args[1] === "current") {
+  console.log(JSON.stringify({ result: { pane: { pane_id: "w1:p2" } } }));
+} else if (args[0] === "plugin") {
+  console.error(JSON.stringify({ error: { code: "plugin_pane_not_found" } }));
+  process.exit(1);
+}
+`,
+    );
+    chmodSync(herdr, 0o755);
+
+    expect(() => focusCurrentPane(herdr)).not.toThrow();
+    const probe = spawnSync(
+      process.execPath,
+      ["--eval", `import { focusCurrentPane } from "./src/pane-control.ts"; focusCurrentPane(${JSON.stringify(herdr)});`],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: { ...process.env, HERDR_ENV: "1" },
+      },
+    );
+    expect(probe.status).toBe(0);
+    expect(probe.stderr).toBe("");
+  } finally {
+    if (originalHerdrEnv === undefined) delete process.env.HERDR_ENV;
+    else process.env.HERDR_ENV = originalHerdrEnv;
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 
