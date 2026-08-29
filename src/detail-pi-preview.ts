@@ -36,7 +36,7 @@ function renderPreviewDocument(
   );
 }
 
-const PREVIEW_HELP = "↑↓ line  ^U/D half  Fn+↑↓ page  click links  g/G ends  Enter edit  q tree";
+const PREVIEW_HELP = "i pin/follow  e edit  o open/pin  P peek (Esc back)  R reveal  L destination  ↑↓ read  q tree";
 
 class DetailPreviewHeader implements Component {
   constructor(private readonly state: Readonly<DetailState>) {}

@@ -125,7 +125,8 @@ describe("Pi Markdown detail preview", () => {
     expect(lines[1]).toContain("Detail · Follow  Resolved block");
     expect(lines[2]).toBe("─".repeat(32));
     expect(lines.at(-2)).toBe("Ready");
-    expect(lines.at(-1)).toContain("^U/D half");
+    expect(lines.at(-1)).toContain("i pin/follow");
+    expect(lines.at(-1)).not.toContain("Enter edit");
     expect(previewLayout(detail).scrollView.scrollbar).toBe("always");
   });
 
