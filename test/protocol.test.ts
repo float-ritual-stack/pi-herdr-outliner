@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
-import { createServer } from "node:net";
+import { createServer, Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { OutlinerClient } from "../src/client";
@@ -412,6 +412,38 @@ test("streams workspace mutations and transient UI commands to subscribers", asy
     { viewId: view.id, blockId: other.id, rank: 0 },
     { viewId: view.id, blockId: block.id, rank: 1 },
   ]);
+});
+
+test("prunes destroyed client registrations before listing or targeting", () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-outliner-destroyed-client-"));
+  const store = new OutlinerStore(join(directory, "outliner.sqlite"));
+  const server = new OutlinerServer(store, join(directory, "outliner.sock"));
+  const socket = new Socket();
+  socket.destroy();
+  const subscribers = (server as unknown as {
+    subscribers: Map<Socket, OutlinerClientRegistration>;
+  }).subscribers;
+  subscribers.set(socket, { clientId: "destroyed-tree", role: "tree" });
+
+  expect(server.handle({ id: "list", action: "clients.list" })).toEqual({
+    id: "list",
+    ok: true,
+    result: [],
+    sequence: 0,
+  });
+  expect(server.handle({
+    id: "focus",
+    action: "ui.command.send",
+    command: { targetClientId: "destroyed-tree", command: "focus" },
+  })).toEqual({
+    id: "focus",
+    ok: false,
+    error: "Target client is not registered: destroyed-tree",
+    sequence: 0,
+  });
+
+  store.close();
+  rmSync(directory, { recursive: true, force: true });
 });
 
 test("registers multiple live clients, targets one recipient, broadcasts content, and cleans up exact connections", async () => {

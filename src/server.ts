@@ -79,6 +79,12 @@ export class OutlinerServer {
     return connected.promise;
   }
 
+  private pruneDestroyedSubscribers(): void {
+    for (const socket of this.subscribers.keys()) {
+      if (socket.destroyed) this.subscribers.delete(socket);
+    }
+  }
+
   private registerSubscriber(
     socket: Socket,
     registration: OutlinerClientRegistration,
@@ -97,14 +103,11 @@ export class OutlinerServer {
     if (registration.role !== "tree" && registration.role !== "detail") {
       throw new Error(`Invalid client role: ${String(registration.role)}`);
     }
+    this.pruneDestroyedSubscribers();
     if (this.subscribers.has(socket)) {
       throw new Error("Socket already owns a client registration");
     }
     for (const [owner, client] of this.subscribers) {
-      if (owner.destroyed) {
-        this.subscribers.delete(owner);
-        continue;
-      }
       if (owner !== socket && client.clientId === clientId) {
         throw new Error(`Client ID is already registered: ${clientId}`);
       }
@@ -147,6 +150,7 @@ export class OutlinerServer {
   }
 
   private listClients(role?: OutlinerClientRole): OutlinerClientRegistration[] {
+    this.pruneDestroyedSubscribers();
     return [...this.subscribers.values()]
       .filter((client) => role === undefined || client.role === role)
       .sort((left, right) =>
@@ -155,6 +159,7 @@ export class OutlinerServer {
   }
 
   private hasClient(clientId: string): boolean {
+    this.pruneDestroyedSubscribers();
     return [...this.subscribers.values()].some((client) => client.clientId === clientId);
   }
 
@@ -406,10 +411,10 @@ export class OutlinerServer {
   }
 
   private broadcast(event: OutlinerEvent): void {
+    this.pruneDestroyedSubscribers();
     const envelope: OutlinerEventEnvelope = { event };
     const line = `${JSON.stringify(envelope)}\n`;
     for (const [subscriber, client] of this.subscribers) {
-      if (subscriber.destroyed) continue;
       if (event.domain === "ui" && event.command?.targetClientId !== client.clientId) {
         continue;
       }
