@@ -51,7 +51,7 @@ export interface Block {
   properties: BlockProperty[];
 }
 
-export type CaptureSource = "tree" | "pi" | "cli" | "external";
+export type CaptureSource = "tree" | "pi" | "omp" | "cli" | "external";
 
 export interface CaptureReceipt {
   block: Block;

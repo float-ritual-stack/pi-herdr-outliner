@@ -99,6 +99,9 @@ Prefer clean cutovers: migrate every caller, test, and import, then remove obsol
 - Capture must not mutate workspace selection or navigation history.
 - Replayed captures return the original receipt and emit no duplicate content event.
 - Empty/invalid/ambiguous capture requests fail without partial content.
+- Every adapter must call `capture.create`; never open SQLite or create an adapter-specific Inbox.
+- CLI heredoc/stdin payloads and dispatch markers are literal data, never shell/eval input.
+- Exact standalone dispatch may bypass the agent only after durable capture confirmation; embedded markers remain ordinary conversation.
 
 ### Mutations
 

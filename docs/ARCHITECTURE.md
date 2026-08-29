@@ -221,6 +221,10 @@ interface CaptureReceipt {
 
 Capture text remains ordinary editable/movable content. The service appends indexed lifecycle/context properties (`type=capture`, `status=unprocessed`, source, timestamp, optional captured-from UUID) and stores immutable agent provenance through the existing block fields. The mutation never calls selection or navigation operations.
 
+
+Capture adapters remain clients. CLI text/stdin/heredoc, Pi/OMP `/capture`, `outliner_capture`, and standalone `float.dispatch(…)` interception all send one `capture.create` request and return the same compact receipt. Adapter differences are limited to source, author/provenance, optional captured-from context, and request-ID generation.
+
+The input hook intercepts only a complete standalone marker while idle and without images. It uses a balanced parenthesis/quote parser with no `eval` or shell interpretation. Embedded markers continue to the agent unchanged. A valid exact marker is handled without an LLM turn only after durable service confirmation; service failure reports the error and returns `continue` so the original input is preserved.
 Store startup creates one canonical `Inbox [type::inbox] [system-view::inbox]` when absent and rejects multiple active Inbox markers. The block may move or be renamed; the marker/UUID remains the destination identity.
 
 ## Reactive flow

@@ -7,7 +7,7 @@ import {
 import { OutlinerClient, type RequestInput } from "./client";
 import { resolvePaths } from "./paths";
 import { navigateOutlinerLink } from "./outliner-links";
-import type { BlockSearchQuery } from "./types";
+import type { BlockSearchQuery, CaptureReceipt } from "./types";
 
 
 function parseLimit(value: string | undefined, fallback: number): number {
@@ -44,6 +44,36 @@ switch (command) {
       limit,
     };
     request = { action: "blocks.query", query };
+    break;
+  }
+  case "capture": {
+    const { values } = parseArgs({
+      args: rest,
+      options: {
+        text: { type: "string" },
+        stdin: { type: "boolean" },
+        "request-id": { type: "string" },
+        "captured-from": { type: "string" },
+      },
+      strict: true,
+    });
+    if (values.text !== undefined && values.stdin) {
+      throw new Error("capture accepts either --text or --stdin, not both");
+    }
+    const readStdin =
+      values.stdin === true || (values.text === undefined && process.stdin.isTTY !== true);
+    if (values.text === undefined && !readStdin) {
+      throw new Error("capture requires --text or stdin");
+    }
+    const text = values.text ?? await Bun.stdin.text();
+    request = {
+      action: "capture.create",
+      requestId: values["request-id"] ?? crypto.randomUUID(),
+      text,
+      source: "cli",
+      capturedFromBlockId: values["captured-from"],
+      author: "user",
+    };
     break;
   }
   case "create": {
@@ -210,4 +240,18 @@ switch (command) {
 }
 
 const result = request ? await client.request(request) : directResult;
-console.log(JSON.stringify(result, null, 2));
+if (command === "capture") {
+  const receipt = result as CaptureReceipt;
+  const capturedFromBlockId = receipt.block.properties.find(
+    (property) => property.key === "captured-from",
+  )?.value;
+  console.log(JSON.stringify({
+    blockId: receipt.block.id,
+    inboxBlockId: receipt.inboxBlockId,
+    source: "cli",
+    ...(capturedFromBlockId ? { capturedFromBlockId } : {}),
+    deduplicated: receipt.deduplicated,
+  }, null, 2));
+} else {
+  console.log(JSON.stringify(result, null, 2));
+}
