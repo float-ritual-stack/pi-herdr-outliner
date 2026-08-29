@@ -24,10 +24,7 @@ import { completeReferencedPaths, readReferencedFile } from "./files";
 import { parseOutlinerLinkUri, resolveOutlinerLinkTarget } from "./outliner-links";
 import {
   dispatchNavigation,
-  getOpenRoute as fetchOpenRoute,
-  listOpenRouteDestinations,
   resolveNavigationDestination,
-  setOpenRoute as setConfiguredOpenRoute,
 } from "./navigation-routes";
 import { currentPaneRuntime, focusCurrentPane } from "./pane-control";
 import { resolvePaths } from "./paths";
@@ -100,14 +97,8 @@ const effects: DetailEffects = {
   async getBlockContext(blockId) {
     return client.request<SelectionContext>({ action: "blocks.context", blockId });
   },
-  listOpenRouteDestinations() {
-    return listOpenRouteDestinations(client, clientId);
-  },
-  getOpenRoute() {
-    return fetchOpenRoute(client, clientId);
-  },
-  async setOpenRoute(targetClientId) {
-    await setConfiguredOpenRoute(client, clientId, targetClientId);
+  async setLocked(locked) {
+    await client.request({ action: "clients.update", clientId, locked });
   },
   dispatchNavigation(blockId, intent) {
     return dispatchNavigation(client, clientId, blockId, intent);
@@ -179,6 +170,7 @@ function startWatcher(): void {
       clientId,
       role: "detail",
       contextId: browsingContextId,
+      locked: false,
       runtime: currentPaneRuntime(),
     },
     onConnect: () => enqueueWork(() => controller.onServiceConnect(viewport())),

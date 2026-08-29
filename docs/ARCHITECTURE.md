@@ -41,7 +41,7 @@ The service is the only process that opens the workspace SQLite database. It log
 
 Tree holds no canonical block state. It reconstructs canonical data from service snapshots and events, then owns its cursor, occurrence selection, filter, collapsed canonical IDs, multiline-expanded row IDs, viewport, explicit-navigation history, and browsing-context publication in-process. Closing a Tree discards only that Tree's presentation state.
 
-Cursor changes publish the selected canonical block to exactly one browsing context. Only subscribers registered to that context receive the event. Global `selection` events are ignored by Tree panes. Tree `Enter` sends an exact-context `follow` command that focuses the paired Detail reader without entering edit mode. Exact-client `focus` and `reveal` commands move only their addressed Tree and locally expand ancestors when required; `open` and `peek` dispatch to a resolved Detail without moving the source Tree. The legacy saved workspace selection may seed a newly created Tree once, but it is not continuing pane authority.
+Cursor changes publish the selected canonical block together with the source Tree client ID. The service retains the browsing-context target and emits a `preview` UI command to the first spatially unlocked Detail in the same tab; preview never focuses the destination. Global `selection` events are ignored by Tree panes. Tree `Enter` dispatches `open` to focus the same unlocked reader without entering edit mode. Exact-client `focus` and `reveal` commands move only their addressed Tree and locally expand ancestors when required. The legacy saved workspace selection may seed a newly created Tree once, but it is not continuing pane authority.
 
 PageUp/PageDown move the selected expanded row's offset by one Tree body viewport and clamp to its wrapped row count. Cursor changes, multiline expansion changes, and reconnects reset the offset.
 
@@ -59,14 +59,12 @@ PageUp/PageDown move the selected expanded row's offset by one Tree body viewpor
 The legacy ANSI Detail entrypoint remains available in [`src/detail.ts`](../src/detail.ts), but the Herdr manifest starts [`src/detail-main.ts`](../src/detail-main.ts).
 
 Detail owns an exact target, a bounded in-process target history, and a visible
-`Follow | Independent | Peek` connection mode. Follow subscribes to one browsing
-context; `i` pins the current target as Independent or resumes Follow.
-Independent retains its exact target across unrelated context events. A durable
-`open` enters Independent and records local history. Peek temporarily replaces
-the rendered target without recording history; `Esc` restores the prior exact
-target and connection mode. Reader `Enter` is inert; only explicit `e` or an
-exact-client `edit` command enters the editor. Closing Detail discards only this
-ephemeral navigation state.
+`Unlocked | Locked` state. An unlocked Detail is eligible for same-tab Tree
+previews and reference opens. `L`, `i`, `Ctrl+L`, or `Meta+L` locks the current
+target as a context anchor; the same command unlocks it. Block editing and
+annotation commenting lock before opening a mutable buffer. Ordinary `open`
+focuses its destination but leaves it unlocked. Reader `Enter` is inert.
+Closing Detail discards its target, history, and lock state.
 
 ### Pi / OMP extension
 
@@ -134,16 +132,15 @@ Literal property-looking text inside inline code, fenced code, or escaped syntax
 
 ## Protocol
 
-The current protocol version is `16`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
+The current protocol version is `17`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
 
 ### Important request families
 
 - health: `ping`
 - canonical reads: `get`, `children`, `blocks.context`, `workspace.snapshot`
 - bounded search: `blocks.query`
-- browsing contexts: `browsing-context.get`, `browsing-context.publish`
-- source routes: `routes.get`, `routes.set`
-- typed navigation: `navigation.resolve` preflight and `navigation.dispatch` with `open | peek | reveal`
+- browsing contexts and Tree previews: `browsing-context.get`, `browsing-context.publish`
+- typed navigation: `navigation.resolve` preflight and `navigation.dispatch` with `preview | open | reveal`
 - selection-neutral capture: `capture.create`
 - mutations: `create`, `update`, `move`, `delete` (move to Trash), `trash.restore`, `trash.purge`
 - properties: `properties.patch`, `properties.catalog`
@@ -152,42 +149,42 @@ The current protocol version is `16`, defined in [`src/types.ts`](../src/types.t
 - symbolic addresses: `pages.resolve`, `pages.follow`, `pages.complete`, `pages.rename`, `pages.alias`, `pages.remove`
 - Work IDs: `work-ids.status`, `work-ids.configure`, `work-ids.allocate`
 - legacy workspace selection/history: `selection.get`, `selection.set`, `navigation.state`, `navigation.back`, `navigation.forward`
-- reactive clients: `events.subscribe`, `clients.list`
+- reactive clients: `events.subscribe`, `clients.list`, `clients.update`
 - exact-client behavior: `ui.command.send`
 
 ### Live client identity
 
 Each Tree and Detail process generates a fresh client UUID and registers
-`{ clientId, role, contextId, runtime? }` on `events.subscribe`. `open-here`
-generates one context UUID and passes it to the Tree and Detail it creates.
-Standalone processes use their client UUID as a private context.
+`{ clientId, role, contextId, locked?, runtime? }` on `events.subscribe`.
+Details register unlocked and publish every explicit lock-state transition
+through `clients.update`. `open-here` generates one context UUID and passes it
+to the Tree and Detail it creates. Standalone processes use their client UUID
+as a private context.
 
-Runtime pane, terminal, workspace, and tab fields are advisory topology
-snapshots. Opaque live IDs may be routing inputs; tab numbers, labels such as
-`oi`, and pane titles are mutable display metadata and are never routing keys.
+Runtime pane, terminal, workspace, tab, and pane-coordinate fields are advisory
+topology snapshots. The service orders same-tab Detail candidates by horizontal
+then vertical pane position, with client ID only as a deterministic fallback.
 Herdr remains authoritative for current placement and focus.
 
 The subscription socket owns its registration. The service rejects duplicate
-live client IDs and removes exactly that socket's registration. It also removes
-routes owned by or targeting a disconnected client. When the last subscriber for
-a browsing context disconnects, its target is pruned. `clients.list` returns the
-live registry, optionally filtered by role.
+live client IDs and removes exactly that socket's registration. When the last
+subscriber for a browsing context disconnects, its target is pruned.
+`clients.list` returns the live registry, optionally filtered by role.
 
-`content`, legacy `selection`, and `view` events are workspace broadcasts.
-`browsing-context` events are written only to registrations with the matching
-`contextId`. A `ui` command is written only to its `targetClientId`.
+`content`, legacy `selection`, and `view` events are workspace broadcasts. A
+`ui` command is written only to its `targetClientId`.
 
-`navigation.resolve` and `navigation.dispatch` resolve a destination from the source registration and
-the intent's required role (`Detail` for `open`/`peek`, `Tree` for `reveal`).
-Precedence is: an explicit open route, source self when its role matches, one
-same-context client, then one same-tab client. Explicit routes apply only to
-`open` and `peek`, must target a live same-tab Detail, and store an opaque client
-ID. Other tabs/workspaces are never candidates and never create ambiguity.
-Multiple same-context or same-tab candidates fail with a human instruction to
-use **Open links in…**. Pane labels are resolved through Herdr only for display;
-titles, labels, and tab names are never parsed as routing keys.
+For `preview` and `open`, `navigation.resolve` and `navigation.dispatch` select
+the first unlocked Detail in the source's current tab. Locked Details and every
+other tab/workspace are excluded. If the source lacks Herdr topology, its
+browsing context is the fallback pool boundary. When the pool exists but every
+Detail is locked, navigation fails with an instruction to unlock one or open
+another Detail; no anchor is overwritten. `reveal` targets the source Tree,
+then one same-context Tree, then one unambiguous same-tab Tree. There are no
+persisted or manual per-source open routes.
+
 Dangling page activation preflights the destination before transactional
-create-on-follow, so an ambiguous route cannot create content.
+create-on-follow, so an exhausted unlocked pool cannot create content.
 
 ### Agent provenance
 
@@ -204,7 +201,7 @@ Herdr recognizes plain terminal text as a URL only for `http://` and `https://`.
 - `pi-outliner://work/<PIE-NNN>` — resolve-only Work-ID registry lookup;
 - `pi-outliner://page/<encoded-address>` — unique symbolic page resolution and explicit create-on-follow.
 
-Inside live panes, reference activation resolves one exact canonical block and sends `navigation.dispatch` with the originating client ID. Keyboard `o`, mouse clicks, and Pi TUI's `openUrl` emit `open`; `P` emits `peek`; `R` emits `reveal`. The service emits one exact-client `ui` event and does not mutate workspace-global selection. Deleted targets retain exact identity and therefore open read-only rather than degrading into fuzzy text matches.
+Inside live panes, reference activation resolves one exact canonical block and sends `navigation.dispatch` with the originating client ID. Keyboard `o`, mouse clicks, and Pi TUI's `openUrl` emit `open`; `R` emits `reveal`. The service emits one exact-client `ui` event and does not mutate workspace-global selection. Deleted targets retain exact identity and therefore open read-only rather than degrading into fuzzy text matches.
 
 Authored text is sanitized before link generation. Tree adds OSC 8 only after plain-text wrapping/truncation; Detail generates safe Markdown links after sanitization. Under `HERDR_ENV=1`, Detail enables Pi TUI hyperlink emission because nested panes advertise generic `TERM=xterm-256color` even though Herdr captures OSC 8 metadata. Tree ignores modified, release, motion, and wheel reports for link activation; Shift remains available for terminal-native selection.
 
@@ -282,27 +279,29 @@ Store startup creates one canonical `Inbox [type::inbox] [system-view::inbox]` w
 ## Reactive flow
 
 1. A client obtains a workspace snapshot or exact block context.
-2. It registers a fresh process identity, role, and browsing-context identity.
-3. Tree publishes its local cursor to that browsing context.
-4. The service delivers that event only to clients in the same context.
+2. It registers a fresh process identity, role, browsing-context identity, and
+   Detail lock state.
+3. Tree publishes its local cursor with its source client identity.
+4. The service retains the context target, chooses the first spatially unlocked
+   same-tab Detail, and sends that one client a `preview` UI command.
 5. Canonical mutations broadcast `content` events to every client under the
    workspace root; receiving content refreshes data but never transfers browsing
    authority.
 6. Exact `ui` commands are delivered only to their target client.
-7. On service reconnect, Tree republishes its retained cursor. A restarted
-   process receives a new client identity; `open-here` creates a new pair
-   context.
+7. On service reconnect, Detail republishes its lock state and Tree republishes
+   its retained cursor. A restarted process receives a new client identity;
+   `open-here` creates a new pair context.
 
-While Detail is editing/commenting, content, context, and exact-target refreshes
-are marked pending instead of replacing the active raw buffer. An exact UI
-target is retained and applied after save/cancel. Save uses `expectedUpdatedAt`;
-conflicts preserve the buffer and surface the error.
+While Detail is editing/commenting, it is locked before the mutable buffer
+opens. Content and exact-target refreshes are marked pending instead of
+replacing that buffer. Save uses `expectedUpdatedAt`; conflicts preserve the
+buffer and surface the error.
 
 Tree and Detail navigation histories are process-local and bounded to 200 exact
-targets. Detail history navigation enters Independent mode, preventing the next
-paired Tree event from replacing the historical target. Soft-deleted targets
-remain exact and read-only; purged targets surface as unavailable. Legacy
-service-owned `selection` history remains only for CLI/agent compatibility.
+targets. History navigation does not change Detail lock state. Soft-deleted
+targets remain exact and read-only; purged targets surface as unavailable.
+Legacy service-owned `selection` history remains only for CLI/agent
+compatibility.
 
 ## Properties and references
 

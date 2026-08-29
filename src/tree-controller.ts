@@ -9,14 +9,12 @@ import {
   parsePropertyFilterExpression,
   serializePropertyFilterValue,
 } from "./block-query";
-import { sendContextClientCommand } from "./client-target";
 import { completionTargetAtCursor } from "./completion";
 import type { ReferencedFile, ReferencedPathCandidate } from "./files";
 import {
   firstOutlinerReference,
   resolveOutlinerLinkTarget,
 } from "./outliner-links";
-import type { OpenRouteDestination } from "./navigation-routes";
 import { blockDisplayTitle } from "./references";
 import { layoutExpandedBlock } from "./tree-layout";
 import {
@@ -33,7 +31,9 @@ import type {
   BlockCollectionCompleteness,
   OutlinerEvent,
   OutlinerNavigationIntent,
-  OutlinerOpenRoute,
+  OutlinerNavigationDispatch,
+  OutlinerNavigationResolution,
+  BrowsingContextPublication,
   PageAddressCollection,
   PropertyCatalogItem,
   VisibleBlock,
@@ -59,15 +59,13 @@ export type TreeInputMode =
   | "capture"
   | "filter"
   | "goto"
-  | "purge"
-  | "route";
+  | "purge";
 export type TreeMode = "browse" | "delete" | "viewer" | TreeInputMode;
 
 export interface TreeQuickCompletionItem {
   readonly label: string;
   readonly insertion: string;
   readonly blockId?: string;
-  readonly targetClientId?: string;
 }
 
 export interface TreeQuickCompletion {
@@ -112,7 +110,6 @@ export interface TreeControllerEffects {
   readonly clientId: string;
   readonly browsingContextId: string;
   request<T>(input: RequestInput): Promise<T>;
-  listOpenRouteDestinations(): Promise<OpenRouteDestination[]>;
   readonly filesystem: TreeFilesystem;
   focusSelf(): void;
   terminalWidth(): number;
@@ -493,53 +490,6 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     effects.invalidate();
   }
 
-  async function beginRoutePicker(): Promise<void> {
-    const [destinations, currentRoute] = await Promise.all([
-      effects.listOpenRouteDestinations(),
-      effects.request<OutlinerOpenRoute | null>({
-        action: "routes.get",
-        sourceClientId: effects.clientId,
-      }),
-    ]);
-    const items: TreeQuickCompletionItem[] = [
-      { label: "Paired/default", insertion: "" },
-      ...destinations.map((destination) => ({
-        label: destination.label,
-        insertion: "",
-        targetClientId: destination.targetClientId,
-      })),
-    ];
-    mode = "route";
-    quickBuffer = new TextBuffer();
-    quickCompletion = {
-      start: 0,
-      end: 0,
-      index: Math.max(
-        0,
-        items.findIndex((item) => item.targetClientId === currentRoute?.targetClientId),
-      ),
-      items,
-      truncatedLimit: null,
-    };
-    status = "Open links in…";
-    effects.invalidate();
-  }
-
-  async function acceptRouteDestination(): Promise<void> {
-    const item = quickCompletion?.items[quickCompletion.index];
-    if (!item) return;
-    await effects.request({
-      action: "routes.set",
-      sourceClientId: effects.clientId,
-      targetClientId: item.targetClientId ?? null,
-    });
-    mode = "browse";
-    resetQuickEditor();
-    status = item.targetClientId
-      ? `Open links in ${item.label}`
-      : "Open links in paired/default destination";
-    effects.invalidate();
-  }
 
   async function commitQuickBlock(): Promise<string | null> {
     const selected = rows[selectedIndex];
@@ -640,6 +590,16 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     }
   }
 
+  async function publishBrowsingContext(blockId: string | null): Promise<void> {
+    const publication = await effects.request<BrowsingContextPublication>({
+      action: "browsing-context.publish",
+      sourceClientId: effects.clientId,
+      contextId: effects.browsingContextId,
+      blockId,
+    });
+    if (publication.unavailable) status = publication.unavailable;
+  }
+
   async function selectVisibleBlock(
     canonicalId: string | null,
     options?: {
@@ -673,7 +633,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     const target = navigationEntry(rows[selectedIndex]);
     if (options?.recordNavigation) recordNavigation(source, target);
     lastVisibleCanonicalId = visibleCanonicalId;
-    await effects.request({ action: "browsing-context.publish", contextId: effects.browsingContextId, blockId: visibleCanonicalId });
+    await publishBrowsingContext(visibleCanonicalId);
     if (visibilityChanged) status = "Filter cleared or collapsed ancestors expanded to reveal block";
   }
 
@@ -746,7 +706,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         status = "Permanently purged";
         await reload();
         const visibleCanonicalId = rows[selectedIndex]?.canonicalId ?? null;
-        await effects.request({ action: "browsing-context.publish", contextId: effects.browsingContextId, blockId: visibleCanonicalId });
+        await publishBrowsingContext(visibleCanonicalId);
       }
       effects.invalidate();
       return;
@@ -768,17 +728,18 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     const selected = rows[selectedIndex];
     if (!selected) return;
     try {
-      await sendContextClientCommand(effects, "detail", effects.browsingContextId, {
-        command: "follow",
+      await effects.request<OutlinerNavigationDispatch>({
+        action: "navigation.dispatch",
+        sourceClientId: effects.clientId,
         blockId: selected.canonicalId,
+        intent: "open",
       });
-      status = "Reader opened · Detail follows this Tree";
+      status = "Reader opened in first unlocked Detail";
     } catch (error) {
       status = errorMessage(error);
     }
     effects.invalidate();
   }
-
   async function handoffToDetail(): Promise<void> {
     const selected = rows[selectedIndex];
     if (!selected) return;
@@ -794,11 +755,20 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     resetQuickEditor();
     await selectVisibleBlock(targetId, { preferredRowId: targetRowId });
     try {
-      await sendContextClientCommand(effects, "detail", effects.browsingContextId, {
-        command: "edit",
-        blockId: targetId,
+      const destination = await effects.request<OutlinerNavigationResolution>({
+        action: "navigation.resolve",
+        sourceClientId: effects.clientId,
+        intent: "open",
       });
-      status = "Multiline editor opened in detail pane";
+      await effects.request({
+        action: "ui.command.send",
+        command: {
+          targetClientId: destination.targetClientId,
+          command: "edit",
+          blockId: targetId,
+        },
+      });
+      status = "Multiline editor opened and locked in first unlocked Detail";
     } catch (error) {
       status = errorMessage(error);
     }
@@ -1087,7 +1057,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     if (previousRow && !rows.some((row) => row.rowId === previousRow.rowId)) {
       const fallbackCanonicalId = rows[selectedIndex]?.canonicalId ?? null;
       lastVisibleCanonicalId = fallbackCanonicalId;
-      await effects.request({ action: "browsing-context.publish", contextId: effects.browsingContextId, blockId: fallbackCanonicalId });
+      await publishBrowsingContext(fallbackCanonicalId);
     }
     effects.invalidate();
   }
@@ -1112,11 +1082,13 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     }
     navigationIndex = targetIndex;
     if (canonical.effectiveDeletedRootId) {
-      await sendContextClientCommand(effects, "detail", effects.browsingContextId, {
-        command: "focus",
+      await effects.request({
+        action: "navigation.dispatch",
+        sourceClientId: effects.clientId,
         blockId: canonical.id,
+        intent: "open",
       });
-      status = "Navigation history opened deleted block read-only in Detail";
+      status = "Navigation history opened deleted block read-only in first unlocked Detail";
       return;
     }
 
@@ -1129,11 +1101,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     status = "";
     if (mode === "browse") {
       await reload();
-      await effects.request({
-        action: "browsing-context.publish",
-        contextId: effects.browsingContextId,
-        blockId: lastVisibleCanonicalId,
-      });
+      await publishBrowsingContext(lastVisibleCanonicalId);
     } else refreshPending = true;
     effects.invalidate();
   }
@@ -1165,9 +1133,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       });
     }
     const resolved = await resolveOutlinerLinkTarget(effects, reference);
-    const dispatched = await effects.request<{
-      resolution: "configured" | "self" | "context" | "same-tab";
-    }>({
+    const dispatched = await effects.request<OutlinerNavigationDispatch>({
       action: "navigation.dispatch",
       sourceClientId: effects.clientId,
       blockId: resolved.block.id,
@@ -1175,8 +1141,10 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     });
     const verb = intent === "open"
       ? resolved.created ? "Created and opened" : "Opened"
-      : intent === "peek" ? "Peeked" : "Revealed";
-    status = `${verb} ${blockDisplayTitle(resolved.block)} · ${dispatched.resolution}`;
+      : "Revealed";
+    status = intent === "open"
+      ? `${verb} ${blockDisplayTitle(resolved.block)} in first unlocked Detail`
+      : `${verb} ${blockDisplayTitle(resolved.block)} · ${dispatched.resolution}`;
   }
 
   async function handleKeypress(
@@ -1224,7 +1192,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       const selected = rows[selectedIndex];
       if (str.toLowerCase() === "y" && selected) {
         const fallback = fallbackRowBeforeDelete(rows, selectedIndex, physicalBlocksById);
-        await effects.request({ action: "browsing-context.publish", contextId: effects.browsingContextId, blockId: fallback?.canonicalId ?? null });
+        await publishBrowsingContext(fallback?.canonicalId ?? null);
         await effects.request({ action: "delete", blockId: selected.canonicalId });
         await reload(fallback?.rowId ?? null, { exactRowIdOnly: true });
         lastVisibleCanonicalId = rows[selectedIndex]?.canonicalId ?? null;
@@ -1237,22 +1205,6 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       return;
     }
 
-    if (mode === "route") {
-      if (key.name === "escape") {
-        mode = "browse";
-        resetQuickEditor();
-        status = "";
-      } else if (key.name === "up") {
-        moveQuickCompletion(-1, true);
-      } else if (key.name === "down" || key.name === "tab") {
-        moveQuickCompletion(key.shift ? -1 : 1, true);
-      } else if (key.name === "return") {
-        await acceptRouteDestination();
-        return;
-      }
-      effects.invalidate();
-      return;
-    }
 
     if (mode === "goto") {
       if (key.name === "escape") {
@@ -1436,12 +1388,9 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         }
         reloadRequired = true;
       }
-    } else if ((str === "o" || str === "P" || str === "R") && selected) {
+    } else if ((str === "o" || str === "R") && selected) {
       try {
-        await navigateSelectedReference(
-          selected,
-          str === "P" ? "peek" : str === "R" ? "reveal" : "open",
-        );
+        await navigateSelectedReference(selected, str === "R" ? "reveal" : "open");
       } catch (error) {
         status = errorMessage(error);
       }
@@ -1482,12 +1431,8 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     } else if (str === "d" && selected) mode = "delete";
     else if (str === "f" && selected) openReferencedFile(selected.block);
     else if (str === "L") {
-      try {
-        await beginRoutePicker();
-      } catch (error) {
-        status = errorMessage(error);
-        effects.invalidate();
-      }
+      status = "Lock or unlock from a Detail pane";
+      effects.invalidate();
       return;
     } else if (key.name === "escape" && activeFilter) {
       activeFilter = "";
@@ -1499,18 +1444,14 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     const visibleCanonicalId = rows[selectedIndex]?.canonicalId ?? null;
     if (visibleCanonicalId !== lastVisibleCanonicalId) {
       lastVisibleCanonicalId = visibleCanonicalId;
-      await effects.request({ action: "browsing-context.publish", contextId: effects.browsingContextId, blockId: visibleCanonicalId });
+      await publishBrowsingContext(visibleCanonicalId);
     }
     effects.invalidate();
   }
 
   async function initialize(): Promise<void> {
     await reload();
-    await effects.request({
-      action: "browsing-context.publish",
-      contextId: effects.browsingContextId,
-      blockId: lastVisibleCanonicalId,
-    });
+    await publishBrowsingContext(lastVisibleCanonicalId);
   }
 
   return {

@@ -33,11 +33,9 @@ function state(text: string, rawText = "raw edit source"): DetailState {
   return {
     context: { selected, ancestors: [], children: [] },
     targetBlockId: selected.id,
-    connectionMode: "follow",
+    connectionMode: "unlocked",
     canNavigateBack: false,
     canNavigateForward: false,
-    peeking: false,
-    routePicker: null,
     resolvedSelectedText: text,
     workIdPrefix: "PIE",
     resolvedBreadcrumb: "Resolved block",
@@ -122,10 +120,10 @@ describe("Pi Markdown detail preview", () => {
     const lines = previewLayout(detail).render(32).map(stripTerminalSequences);
 
     expect(lines[0]).toBe("");
-    expect(lines[1]).toContain("Detail · Follow  Resolved block");
+    expect(lines[1]).toContain("Detail · Unlocked");
     expect(lines[2]).toBe("─".repeat(32));
     expect(lines.at(-2)).toBe("Ready");
-    expect(lines.at(-1)).toContain("i pin/follow");
+    expect(lines.at(-1)).toContain("L lock/unlock");
     expect(lines.at(-1)).not.toContain("Enter edit");
     expect(previewLayout(detail).scrollView.scrollbar).toBe("always");
   });

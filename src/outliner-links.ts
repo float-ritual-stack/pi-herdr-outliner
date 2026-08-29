@@ -41,7 +41,7 @@ export interface OutlinerLinkNavigation {
   created?: boolean;
   targetClientId?: string;
   intent?: OutlinerNavigationIntent;
-  resolution?: "configured" | "self" | "context" | "same-tab";
+  resolution?: "unlocked" | "self" | "context" | "same-tab";
 }
 
 interface LinkSpan {

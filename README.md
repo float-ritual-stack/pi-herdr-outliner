@@ -25,9 +25,9 @@ The project started as a small Friday-night experiment and grew into a durable w
 
 - SQLite-backed hierarchical blocks with stable UUIDs, sibling order, authors, timestamps, and one canonical graph per workspace root.
 - Workspace-isolated service and runtime paths.
-- JSON-lines RPC protocol v16 over a Unix socket.
-- Reactive canonical content/view broadcasts, context-targeted browsing events, per-process Tree/Detail registration, exact-client UI commands, and source-aware `open | peek | reveal` navigation.
-- Each Tree owns its cursor, occurrence selection, filter, viewport, collapsed rows, multiline expansion, explicit-navigation history, paired browsing context, and optional same-tab open destination; moving one Tree does not move or retarget another pair.
+- JSON-lines RPC protocol v17 over a Unix socket.
+- Reactive canonical content/view broadcasts, per-process Tree/Detail registration with Detail lock availability, exact-client UI commands, and source-aware `preview | open | reveal` navigation.
+- Each Tree owns its cursor, occurrence selection, filter, viewport, collapsed rows, multiline expansion, explicit-navigation history, and browsing context; moving a Tree previews only in the first unlocked same-tab Detail and never replaces a locked anchor.
 - Indexed `[property::value]` metadata with optimistic property patching and catalog queries.
 - Exact block references using `((block-id))`, resolved to display titles in read mode while raw text remains editable.
 - Unique normalized symbolic addresses from explicit `[page::address]` declarations and Work IDs, with aliases, explicit removal, bounded completion, dangling links, and transactional create-on-follow.
@@ -40,7 +40,7 @@ The project started as a small Friday-night experiment and grew into a durable w
 - Client-local multiline-expanded Tree rows support viewport-sized intra-block PageUp/PageDown without changing the Tree cursor.
 - Pi Markdown preview with line, page, endpoint, and mouse/trackpad scrolling.
 - Grapheme-safe wrapped Detail editing, word motion, selection, deletion, bounded per-session undo/redo, completion, optimistic save, and whole-session Esc cancellation.
-- Each Detail visibly reports `Follow`, `Pinned`, or temporary `Peek`, owns its exact target and bounded in-process history, and can hold a target while its paired Tree moves.
+- Each Detail visibly reports `Unlocked` or `Locked`; unlocked Details form a spatial preview/open pool, while locked Details retain exact context anchors.
 - Referenced text/Markdown file viewing and durable line-range annotations.
 - Herdr-owned pane placement/focus and current-pane recovery, one remembered service pane, per-process live client discovery, and a disposable runtime registry.
 - Pi/OMP commands, tools, and selection-context injection.
@@ -91,31 +91,30 @@ focus-or-open action. The project-local `/outline` command in
 [`.claude/commands/outline.md`](.claude/commands/outline.md) invokes and
 verifies the Herdr action.
 
-#### Working with multiple Tree/Detail pairs
+#### Working with multiple Details
 
-Pairs under the same filesystem root share canonical blocks and content updates,
-but not cursors, targets, filters, viewport state, or navigation history. In a
-new pair, Detail starts in **Follow** mode and displays the block selected by its
-paired Tree. Press `i` in Detail to hold the current block in **Pinned**
-mode; press `i` again to resume following the paired Tree.
+Trees and Details under the same filesystem root share canonical blocks and
+content updates, but not cursors, targets, filters, viewport state, lock state,
+or navigation history.
 
-The primary reader workflow is selection-first: move through the Tree, then
-press `Enter` to focus its paired Detail in **Follow** reader mode. This never
-starts an editor, for either single-line or multiline blocks. In Detail, press
-`i` to pin the current block for deeper work, `e` to edit it,
-and `i` again to resume following the paired Tree.
+Every Detail starts **Unlocked**. Tree cursor movement previews the selected
+canonical block in the first unlocked Detail in the same Herdr tab, ordered by
+pane position from left to right and then top to bottom. Preview updates never
+steal focus. Press `Enter` in Tree to focus that reader without locking it.
 
-Reference navigation is a separate detour from selection reading. `o` performs
-a durable open: the destination becomes **Pinned** and records local history.
-`P` performs a temporary peek: it records no history, and `Esc` restores the
-destination's prior target and Follow/Pinned mode. `R`
-reveals the target in a Tree. Resolution prefers an explicitly configured
-open destination, then the source pane itself when its role matches, then the
-paired browsing context, then one unambiguous same-tab pane. Other tabs and
-workspaces are never implicit candidates. Press `L` in either Tree or Detail to
-choose **Open links in…**. The picker displays Herdr pane labels, but persists
-only the destination's opaque live client ID; renaming a pane never changes
-routing.
+When a block becomes a context anchor, focus its Detail and press `L`, `i`,
+`Ctrl+L`, or `Command/Meta+L`. The header changes to **Locked**, and that pane
+is removed from the preview/open pool. The next Tree selection therefore
+appears in the next unlocked Detail. Entering block edit or annotation-comment
+mode locks the Detail automatically. Locking never silently expires; explicitly
+unlock the pane to make it eligible again.
+
+`o`, plain-clicked references, and external Herdr link activation open in the
+first unlocked same-tab Detail and focus it without locking it. `R` reveals the
+reference in the paired or unique same-tab Tree. Manual per-source destination
+routes and temporary Peek mode do not exist. If every same-tab Detail is locked,
+the source shows **All Details in this tab are locked — unlock one or open
+another Detail** and preserves every anchor.
 
 Closing a pair discards its browsing context. Renaming its tab or panes changes
 nothing. A newly opened pair receives a new context and initially seeds its Tree
@@ -165,19 +164,18 @@ The footer in each pane is authoritative and context-sensitive. These are the pr
 | `PageUp` / `PageDown` | Scroll within the selected multiline-expanded block |
 | `Left` / `Right` | Collapse/go to parent; expand/go to first child |
 | `Shift+Up` / `Shift+Down` | Reorder canonical siblings, or branch-local projected occurrences |
-| `Enter` | Focus the paired Detail reader and resume **Follow** mode |
-| `e` | Edit a single-line block inline; open a multiline block in the Detail editor |
+| `Enter` | Focus the current block in the first unlocked same-tab Detail; remain unlocked |
+| `e` | Edit a single-line block inline; open and lock a multiline block in the first unlocked Detail |
 | `a` / `s` | Add child / sibling |
 | `c` | Open quick capture; Shift+Enter/Ctrl+E adds a line, Enter saves to Inbox, Esc cancels |
 | `Tab` / `Shift+Tab` | Indent / outdent |
 | `Space` | Toggle collapse |
 | `.` or `Command+.` | Expand/collapse multiline block detail in Tree |
-| `Ctrl+E` or modified Enter | Explicitly edit the selected block in Detail |
+| `Ctrl+E` or modified Enter | Explicitly edit and lock the selected block in the first unlocked Detail |
 | `g` | Fuzzy goto by UUID, short prefix, title, or content |
-| `o` | Open the first exact `((block-id))` or symbolic `[[address]]` reference in the routed Detail |
-| `P` | Temporarily peek at the first reference in the routed Detail; `Esc` there restores its prior target and mode |
+| `o` | Open the first exact `((block-id))` or symbolic `[[address]]` reference in the first unlocked Detail |
 | `R` | Reveal the first reference in this Tree |
-| `L` | Choose the same-tab Detail used by `o`, `P`, and clicks |
+| `L` | Explain that locking is controlled from a Detail pane |
 | `Option+Left` / `Option+Right` | Move backward / forward through block navigation history |
 | `/` | Filter visible blocks |
 | `f` | Open a referenced file |
@@ -186,9 +184,18 @@ The footer in each pane is authoritative and context-sensitive. These are the pr
 | `p` | Type the work ID/short UUID to permanently purge a Trash root |
 | `Ctrl+Q` | Close the pane |
 
-Plain-click any linked `PIE-NNN`, canonical UUID, exact reference, or symbolic `[[address]]` inside Tree or Detail. Clicks dispatch `open` from the originating pane and use that pane's configured/default destination without changing workspace-global selection. Registered Work IDs resolve without fuzzy matching and never create content when missing. Following another dangling address creates one canonical page stub before dispatch. Shift remains the terminal-native text-selection escape while Tree mouse reporting is active.
+Plain-click any linked `PIE-NNN`, canonical UUID, exact reference, or symbolic
+`[[address]]` inside Tree or Detail. Clicks open in the first unlocked same-tab
+Detail without changing workspace-global selection. Registered Work IDs resolve
+without fuzzy matching and never create content when missing. Following another
+dangling address creates one canonical page stub before dispatch. Shift remains
+the terminal-native text-selection escape while Tree mouse reporting is active.
 
-For links rendered outside the active Outliner, the Herdr handler identifies the invoking pane's live client and uses the same source-aware route. On macOS, the optional `macos/pi-outliner-link` app remains an explicit compatibility path: Warp uses Command-click; Ghostty with mouse capture uses Shift-Command-click.
+For links rendered outside the active Outliner, the Herdr handler identifies the
+invoking pane's live client and uses the same unlocked-pool routing. On macOS,
+the optional `macos/pi-outliner-link` app remains an explicit compatibility
+path: Warp uses Command-click; Ghostty with mouse capture uses
+Shift-Command-click.
 
 Projected virtual occurrences deliberately constrain hierarchy and collapse. Branch-local sibling reorder changes only that projection; editing and confirmed deletion still target the canonical block.
 
@@ -201,14 +208,12 @@ Projected virtual occurrences deliberately constrain hierarchy and collapse. Bra
 | `PageUp` / `PageDown` | Scroll one viewport |
 | `g` / `G` | Top / bottom |
 | Mouse wheel / trackpad | Scroll preview |
-| `e` | Edit raw canonical text; `Enter` remains reader-only |
+| `e` | Lock this Detail and edit raw canonical text; `Enter` remains reader-only |
 | `f` | Open referenced file |
-| `o` | Durably open the first reference in the configured/default Detail, pinning that destination and adding local history |
-| `P` | Temporarily peek at the first reference without history; `Esc` restores the prior target and `Follow`/`Pinned` mode |
+| `o` | Open the first reference in the first unlocked same-tab Detail; the destination remains unlocked |
 | `R` | Reveal the first reference in the paired or unique same-tab Tree |
-| `L` | Choose the same-tab Detail used by `o`, `P`, and clicks from this Detail |
-| `i` | Pin the current block, or resume **Follow** of the paired Tree |
-| `Option+Left` / `Option+Right` | Move backward / forward through this Detail's local history; history navigation pins the historical target |
+| `L`, `i`, `Ctrl+L`, or `Command/Meta+L` | Lock this block as an anchor, or unlock the Detail for previews and opens |
+| `Option+Left` / `Option+Right` | Move backward / forward through this Detail's local history without changing lock state |
 | `r` | Restore the selected block when it is a direct Trash root |
 | `q` | Focus Tree |
 | `Ctrl+Q` | Close Detail |

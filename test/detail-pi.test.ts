@@ -22,11 +22,9 @@ function state(overrides: Partial<DetailState> = {}): DetailState {
   return {
     context: { selected: null, ancestors: [], children: [] },
     targetBlockId: null,
-    connectionMode: "follow",
+    connectionMode: "unlocked",
     canNavigateBack: false,
     canNavigateForward: false,
-    peeking: false,
-    routePicker: null,
     resolvedSelectedText: "",
     workIdPrefix: null,
     resolvedBreadcrumb: "",

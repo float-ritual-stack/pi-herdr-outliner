@@ -26,6 +26,40 @@ test("keeps standalone focus inert and treats failed Herdr metadata as optional"
   }
 });
 
+test("captures current pane coordinates for spatial Detail ordering", () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-outliner-pane-layout-"));
+  const herdr = join(directory, "fake-herdr");
+  const originalHerdrEnv = process.env.HERDR_ENV;
+  try {
+    process.env.HERDR_ENV = "1";
+    writeFileSync(
+      herdr,
+      `#!/usr/bin/env bun
+const args = process.argv.slice(2);
+if (args[0] === "pane" && args[1] === "current") {
+  console.log(JSON.stringify({ result: { pane: { pane_id: "w1:p2", terminal_id: "term-2", workspace_id: "w1", tab_id: "w1:t1" } } }));
+} else if (args[0] === "pane" && args[1] === "layout") {
+  console.log(JSON.stringify({ result: { layout: { panes: [{ pane_id: "w1:p2", rect: { x: 42, y: 7 } }] } } }));
+}
+`,
+    );
+    chmodSync(herdr, 0o755);
+
+    expect(currentPaneRuntime(herdr)).toEqual({
+      paneId: "w1:p2",
+      terminalId: "term-2",
+      workspaceId: "w1",
+      tabId: "w1:t1",
+      paneX: 42,
+      paneY: 7,
+    });
+  } finally {
+    if (originalHerdrEnv === undefined) delete process.env.HERDR_ENV;
+    else process.env.HERDR_ENV = originalHerdrEnv;
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("rejects service pane state from another Herdr server endpoint", () => {
   const stateDir = mkdtempSync(join(tmpdir(), "pi-outliner-server-state-"));
   const originalSocketPath = process.env.HERDR_SOCKET_PATH;

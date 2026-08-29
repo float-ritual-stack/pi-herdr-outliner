@@ -36,7 +36,7 @@ function renderPreviewDocument(
   );
 }
 
-const PREVIEW_HELP = "i pin/follow  e edit  o open/pin  P peek (Esc back)  R reveal  L destination  ↑↓ read  q tree";
+const PREVIEW_HELP = "L lock/unlock  e edit  o open next unlocked  R reveal  ↑↓ read  q tree";
 
 class DetailPreviewHeader implements Component {
   constructor(private readonly state: Readonly<DetailState>) {}

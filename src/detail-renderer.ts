@@ -48,9 +48,7 @@ export function renderDetailHeader(
   state: Readonly<DetailState>,
   width: number,
 ): string[] {
-  const connection = state.peeking
-    ? "Peek"
-    : state.connectionMode === "follow" ? "Follow" : "Pinned";
+  const connection = state.connectionMode === "locked" ? "Locked" : "Unlocked";
   const label = `Detail · ${connection}`;
   const header = width <= label.length + 2
     ? `\x1b[1;36m${fitToWidth(label, width)}\x1b[0m`
@@ -182,13 +180,7 @@ export function renderDetailLines(
   const bodyHeight = Math.max(1, height - 5);
   const output = renderDetailHeader(state, width);
 
-  if (state.mode === "route" && state.routePicker) {
-    output.push("Open links in…", "");
-    for (const [index, item] of state.routePicker.items.entries()) {
-      const prefix = index === state.routePicker.index ? "› " : "  ";
-      output.push(fitDynamicText(`${prefix}${item.label}`, width));
-    }
-  } else if (!state.context.selected) {
+  if (!state.context.selected) {
     output.push("Select a block in the outliner pane.");
   } else if (state.mode === "edit" || state.mode === "comment") {
     const editorHeight = detailVisibleEditorHeight(state, viewport);

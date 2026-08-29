@@ -354,8 +354,8 @@ export function renderTreeFrame(
       ?? selectedRow?.canonicalId.slice(0, 8)
       ?? "identifier";
     output.push(`\x1b[31;1mPurge ${required}: \x1b[0m${view.quickInput}▏`);
-  } else if (view.mode === "filter" || view.mode === "goto" || view.mode === "route") {
-    const label = view.mode === "goto" ? "Goto" : view.mode === "route" ? "Open links in" : "Filter";
+  } else if (view.mode === "filter" || view.mode === "goto") {
+    const label = view.mode === "goto" ? "Goto" : "Filter";
     const completion = view.quickCompletion;
     const selectedCompletion = completion?.items[completion.index];
     let completionSuffix = "";
@@ -395,14 +395,12 @@ export function renderTreeFrame(
     help = "type exact identifier  Enter permanently purge  Esc cancel";
   } else if (view.mode === "goto") {
     help = "type ID/text  ↑↓ choose  Tab cycle  Enter jump  Esc cancel";
-  } else if (view.mode === "route") {
-    help = "↑↓/Tab choose  Enter set destination  Esc cancel";
   } else if (expandedScrollable) {
-    help = "Enter read/follow  e edit  PgUp/PgDn scroll  o open/pin  P peek/Esc back  R reveal  L destination";
+    help = "Enter read  e edit  PgUp/PgDn scroll  o open next unlocked  R reveal";
   } else if (selectedRow?.kind === "occurrence") {
-    help = "◇ occurrence  Enter read/follow  e edit  o open/pin  P peek/Esc back  R reveal  L destination";
+    help = "◇ occurrence  Enter read  e edit  o open next unlocked  R reveal";
   } else {
-    help = "↑↓ browse  Enter read/follow  e edit  o open/pin  P peek/Esc back  R reveal  L destination  g goto";
+    help = "↑↓ browse/preview  Enter read  e edit  o open next unlocked  R reveal  g goto";
   }
   output.push(`\x1b[2m${truncate(help, width)}\x1b[0m`);
   return { frame: output.join("\n"), scrollStartEntryIndex };

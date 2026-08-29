@@ -147,14 +147,6 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
     else await dispatch({ type: "redraw" });
   }
 
-  async function handleRouteKey(key: TerminalKey): Promise<void> {
-    if (key.name === "up") await dispatch({ type: "route.move", delta: -1 });
-    else if (key.name === "down" || key.name === "tab") {
-      await dispatch({ type: "route.move", delta: 1 });
-    } else if (key.name === "return") await dispatch({ type: "route.accept" });
-    else if (key.name === "escape") await dispatch({ type: "route.cancel" });
-    else await dispatch({ type: "redraw" });
-  }
 
   return async (str, key, inputAction) => {
     if (inputAction === "suppress") return;
@@ -171,28 +163,20 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
       await handleBufferKey(str, key, inputAction === "modified-enter");
       return;
     }
-    if (controller.state.mode === "route") {
-      await handleRouteKey(key);
+    if (
+      str === "L" ||
+      str === "i" ||
+      ((key.ctrl || key.meta) && key.name === "l")
+    ) {
+      await dispatch({ type: "lock.toggle" });
       return;
     }
-    if (controller.state.peeking && key.name === "escape") {
-      await dispatch({ type: "peek.close" });
-      return;
-    }
-    if (str === "L") {
-      await dispatch({ type: "route.open" });
-      return;
-    }
-    if (str === "P" || str === "R") {
-      await dispatch({ type: str === "P" ? "reference.peek" : "reference.reveal" });
+    if (str === "R") {
+      await dispatch({ type: "reference.reveal" });
       return;
     }
     if (key.name === "q") {
       await dispatch({ type: "focus.outliner", announce: true });
-      return;
-    }
-    if (str === "i") {
-      await dispatch({ type: "connection.toggle" });
       return;
     }
     if (str === "r" && controller.state.context.selected?.deletedAt) {

@@ -88,7 +88,7 @@ test("Herdr link action delegates an exact block URI to shared focus and reveal"
       id: target.id,
       title: "Clickable target",
       destinationClientId: "herdr-link-detail",
-      resolution: "context",
+      resolution: "unlocked",
     });
     await opened.promise;
     expect(store.getSelection().selected?.id).toBe(initialSelectionId);

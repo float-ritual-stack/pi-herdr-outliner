@@ -42,6 +42,19 @@ const WorkspaceListResponseSchema = Type.Object({
 const PaneListResponseSchema = Type.Object({
   result: Type.Object({ panes: Type.Array(HerdrPaneSchema) }),
 });
+const PaneLayoutResponseSchema = Type.Object({
+  result: Type.Object({
+    layout: Type.Object({
+      panes: Type.Array(Type.Object({
+        pane_id: Type.String(),
+        rect: Type.Object({
+          x: Type.Number(),
+          y: Type.Number(),
+        }),
+      })),
+    }),
+  }),
+});
 
 const SERVICE_PANE_LABEL = "Outliner Service";
 const HERDR_COMMAND_TIMEOUT_MS = 2_000;
@@ -69,7 +82,19 @@ export function currentPaneRuntime(
   try {
     const output = invokeHerdr(herdr, ["pane", "current", "--current"]);
     const pane = Parse(PaneCurrentResponseSchema, JSON.parse(output)).result.pane;
-    return runtimeFromPane(pane);
+    const runtime = runtimeFromPane(pane);
+    try {
+      const layoutOutput = invokeHerdr(herdr, ["pane", "layout", "--pane", pane.pane_id]);
+      const layout = Parse(PaneLayoutResponseSchema, JSON.parse(layoutOutput)).result.layout;
+      const positioned = layout.panes.find((candidate) => candidate.pane_id === pane.pane_id);
+      if (positioned) {
+        runtime.paneX = positioned.rect.x;
+        runtime.paneY = positioned.rect.y;
+      }
+    } catch {
+      // Pane identity remains useful when spatial metadata is unavailable.
+    }
+    return runtime;
   } catch {
     return undefined;
   }

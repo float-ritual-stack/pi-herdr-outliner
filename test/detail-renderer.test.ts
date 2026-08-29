@@ -22,11 +22,9 @@ function state(overrides: Partial<DetailState> = {}): DetailState {
   return {
     context: { selected: null, ancestors: [], children: [] },
     targetBlockId: null,
-    connectionMode: "follow",
+    connectionMode: "unlocked",
     canNavigateBack: false,
     canNavigateForward: false,
-    peeking: false,
-    routePicker: null,
     resolvedSelectedText: "",
     workIdPrefix: null,
     resolvedBreadcrumb: "",
@@ -54,13 +52,13 @@ describe("detail ANSI renderer", () => {
 
     expect(rendered).toBe([
       "\x1b[H\x1b[2J",
-      "\x1b[1;36mDetail · Follow\x1b[0m  \x1b[2mNo block selected\x1b[0m",
+      "\x1b[1;36mDetail · Unlocked\x1b[0m  \x1b[2mNo block selected\x1b[0m",
       "─".repeat(width),
       "Select a block in the outliner pane.",
       "",
       "",
       "",
-      "\x1b[2mi pin/follow  ↑↓ read  e edit  o open/pin  P peek (Esc back)  R…\x1b[0m",
+      "\x1b[2mL lock/unlock  ↑↓ read  e edit  o open next unlocked  R reveal …\x1b[0m",
     ].join("\n"));
   });
 
@@ -76,13 +74,13 @@ describe("detail ANSI renderer", () => {
 
     expect(rendered).toBe([
       "\x1b[H\x1b[2J",
-      "\x1b[1;36mDetail · Follow\x1b[0m  \x1b[2mResolved title\x1b[0m",
+      "\x1b[1;36mDetail · Unlocked\x1b[0m  \x1b[2mResolved title\x1b[0m",
       "─".repeat(64),
       "resolved two",
       "resolved three",
       "resolved four",
       "Ready",
-      "\x1b[2mi pin/follow  ↑↓ read  e edit  o open/pin  P peek (Esc back)  R…\x1b[0m",
+      "\x1b[2mL lock/unlock  ↑↓ read  e edit  o open next unlocked  R reveal …\x1b[0m",
     ].join("\n"));
   });
 
@@ -118,7 +116,7 @@ describe("detail ANSI renderer", () => {
 
     expect(rendered).toBe([
       "\x1b[H\x1b[2J",
-      "\x1b[1;36mDetail · Follow\x1b[0m  \x1b[2mBlock\x1b[0m",
+      "\x1b[1;36mDetail · Unlocked\x1b[0m  \x1b[2mBlock\x1b[0m",
       "─".repeat(32),
       "   4 four▏",
       "\x1b[2mCompletions 2/2\x1b[0m",
@@ -156,7 +154,7 @@ describe("detail ANSI renderer", () => {
 
     expect(rendered).toBe([
       "\x1b[H\x1b[2J",
-      "\x1b[1;36mDetail · Follow\x1b[0m  \x1b[2mBlock\x1b[0m",
+      "\x1b[1;36mDetail · Unlocked\x1b[0m  \x1b[2mBlock\x1b[0m",
       "─".repeat(32),
       "   1 alpha▏",
       "",
@@ -312,39 +310,16 @@ test("renders a selection across wrapped rows with the cursor at its active edge
   expect(lines.slice(3, 6).every((line) => visibleWidth(line) <= 18)).toBe(true);
 });
 
-test("renders human route labels without exposing opaque client IDs", () => {
-  const rendered = renderDetailLines(
-    state({
-      mode: "route",
-      routePicker: {
-        index: 1,
-        items: [
-          { label: "Paired/default", targetClientId: null },
-          { label: "[D] Detail", targetClientId: "opaque-detail-d" },
-        ],
-      },
-      status: "Open links in…",
-    }),
-    { width: 80, height: 12 },
-  ).join("\n");
-
-  expect(rendered).toContain("Open links in…");
-  expect(rendered).toContain("› [D] Detail");
-  expect(rendered).not.toContain("opaque-detail-d");
-});
-
-test("labels an independent Detail target as Pinned", () => {
-  const rendered = renderDetailLines(
-    state({ connectionMode: "independent" }),
+test("labels Detail availability directly", () => {
+  const unlocked = renderDetailLines(
+    state({ connectionMode: "unlocked" }),
     { width: 80, height: 8 },
   ).join("\n");
-  expect(rendered).toContain("Detail · Pinned");
-});
-
-test("labels a temporary Detail target as Peek", () => {
-  const rendered = renderDetailLines(
-    state({ peeking: true, connectionMode: "independent" }),
+  const locked = renderDetailLines(
+    state({ connectionMode: "locked" }),
     { width: 80, height: 8 },
   ).join("\n");
-  expect(rendered).toContain("Detail · Peek");
+
+  expect(unlocked).toContain("Detail · Unlocked");
+  expect(locked).toContain("Detail · Locked");
 });

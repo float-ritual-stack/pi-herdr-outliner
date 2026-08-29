@@ -182,7 +182,7 @@ describe("outliner link URIs", () => {
             sourceClientId: input.sourceClientId,
             targetClientId: "detail-c",
             intent: input.intent,
-            resolution: "configured",
+            resolution: "unlocked",
             command: {
               targetClientId: "detail-c",
               command: input.intent,
@@ -197,14 +197,14 @@ describe("outliner link URIs", () => {
     await expect(navigateOutlinerLink(
       requester,
       outlinerLinkUri("block", target.id),
-      { sourceClientId: "tree-a", intent: "peek" },
+      { sourceClientId: "tree-a", intent: "preview" },
     )).resolves.toEqual({
       kind: "block",
       id: target.id,
       title: "Origin-routed target",
       targetClientId: "detail-c",
-      intent: "peek",
-      resolution: "configured",
+      intent: "preview",
+      resolution: "unlocked",
     });
     expect(calls).toEqual([
       { action: "get", blockId: target.id },
@@ -212,18 +212,18 @@ describe("outliner link URIs", () => {
         action: "navigation.dispatch",
         sourceClientId: "tree-a",
         blockId: target.id,
-        intent: "peek",
+        intent: "preview",
       },
     ]);
   });
 
-  test("does not create a dangling page before source-route ambiguity is resolved", async () => {
+  test("does not create a dangling page when every Detail is locked", async () => {
     const calls: RequestInput[] = [];
     const requester = {
       async request<T>(input: RequestInput): Promise<T> {
         calls.push(input);
         if (input.action === "navigation.resolve") {
-          throw new Error("Multiple same-tab detail destinations; choose one with Open links in…");
+          throw new Error("All Details in this tab are locked · unlock one or open another Detail");
         }
         throw new Error(`Unexpected request: ${input.action}`);
       },
@@ -233,7 +233,7 @@ describe("outliner link URIs", () => {
       requester,
       outlinerLinkUri("page", "Future"),
       { sourceClientId: "tree-a", intent: "open" },
-    )).rejects.toThrow("Multiple same-tab detail destinations");
+    )).rejects.toThrow("All Details in this tab are locked");
     expect(calls).toEqual([
       { action: "navigation.resolve", sourceClientId: "tree-a", intent: "open" },
     ]);

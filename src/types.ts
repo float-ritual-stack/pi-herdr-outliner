@@ -60,19 +60,22 @@ export interface CaptureReceipt {
 
 export type OutlinerClientRole = "tree" | "detail";
 
-export type OutlinerNavigationIntent = "open" | "peek" | "reveal";
+export type OutlinerNavigationIntent = "preview" | "open" | "reveal";
 
 export interface OutlinerClientRuntime {
   paneId?: string;
   terminalId?: string;
   workspaceId?: string;
   tabId?: string;
+  paneX?: number;
+  paneY?: number;
 }
 
 export interface OutlinerClientRegistration {
   clientId: string;
   role: OutlinerClientRole;
   contextId: string;
+  locked?: boolean;
   runtime?: OutlinerClientRuntime;
 }
 
@@ -181,7 +184,7 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 16;
+export const OUTLINER_PROTOCOL_VERSION = 17;
 
 export interface OutlinerServiceStatus {
   status: "ready";
@@ -196,12 +199,17 @@ export type OutlinerRequest =
   | { id: string; action: "workspace.snapshot"; view?: WorkspaceSnapshotView }
   | { id: string; action: "events.subscribe"; client: OutlinerClientRegistration }
   | { id: string; action: "clients.list"; role?: OutlinerClientRole }
+  | { id: string; action: "clients.update"; clientId: string; locked: boolean }
   | { id: string; action: "ui.command.send"; command: OutlinerUiCommand }
   | { id: string; action: "blocks.context"; blockId: string }
   | { id: string; action: "browsing-context.get"; contextId: string }
-  | { id: string; action: "browsing-context.publish"; contextId: string; blockId: string | null }
-  | { id: string; action: "routes.get"; sourceClientId: string }
-  | { id: string; action: "routes.set"; sourceClientId: string; targetClientId: string | null }
+  | {
+      id: string;
+      action: "browsing-context.publish";
+      sourceClientId: string;
+      contextId: string;
+      blockId: string | null;
+    }
   | {
       id: string;
       action: "navigation.resolve";
@@ -312,6 +320,11 @@ export interface BrowsingContextState {
   target: SelectionContext;
 }
 
+export interface BrowsingContextPublication extends BrowsingContextState {
+  preview?: OutlinerNavigationDispatch;
+  unavailable?: string;
+}
+
 export interface WorkspaceSnapshotView {
   query?: BlockSearchQuery;
 }
@@ -327,20 +340,15 @@ export interface WorkspaceSnapshot {
 
 export interface OutlinerUiCommand {
   targetClientId: string;
-  command: "edit" | "reveal" | "focus" | "follow" | "open" | "peek";
+  command: "edit" | "reveal" | "focus" | "preview" | "open";
   blockId?: string;
-}
-
-export interface OutlinerOpenRoute {
-  sourceClientId: string;
-  targetClientId: string;
 }
 
 export interface OutlinerNavigationResolution {
   sourceClientId: string;
   targetClientId: string;
   intent: OutlinerNavigationIntent;
-  resolution: "configured" | "self" | "context" | "same-tab";
+  resolution: "unlocked" | "self" | "context" | "same-tab";
 }
 
 export interface OutlinerNavigationDispatch extends OutlinerNavigationResolution {

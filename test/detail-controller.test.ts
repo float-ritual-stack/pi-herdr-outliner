@@ -68,6 +68,7 @@ interface Harness {
     pageQueries: Array<{ query: string | undefined; limit: number }>;
     focuses: number;
     selfFocuses: number;
+    locks: boolean[];
   };
   setSelection(selection: SelectionContext): void;
   setUpdate(implementation: DetailEffects["updateBlock"]): void;
@@ -107,6 +108,7 @@ function createHarness(
     pageQueries: [],
     focuses: 0,
     selfFocuses: 0,
+    locks: [],
   };
   const effects: DetailEffects = {
     clientId: "detail-test",
@@ -127,20 +129,16 @@ function createHarness(
         children: [],
       };
     },
-    async listOpenRouteDestinations() {
-      return [];
+    async setLocked(locked) {
+      calls.locks.push(locked);
     },
-    async getOpenRoute() {
-      return null;
-    },
-    async setOpenRoute() {},
     async dispatchNavigation(blockId, intent) {
       return {
         sourceClientId: "detail-test",
         targetClientId: "detail-test",
         blockId,
         intent,
-        resolution: "self",
+        resolution: "unlocked",
         command: { targetClientId: "detail-test", command: intent, blockId },
       };
     },
@@ -150,7 +148,7 @@ function createHarness(
         sourceClientId: "detail-test",
         targetClientId: "detail-test",
         intent,
-        resolution: "self",
+        resolution: "unlocked",
       };
     },
     async updateBlock(input) {
@@ -295,7 +293,7 @@ describe("detail controller projection and deferred refresh", () => {
     await harness.controller.dispatch({ type: "reference.follow" }, viewport);
     expect(harness.calls.followedReferences).toEqual([{ kind: "block", value: "target01" }]);
     expect(harness.controller.state.context.selected?.id).toBe("target01");
-    expect(harness.controller.state.connectionMode).toBe("independent");
+    expect(harness.controller.state.connectionMode).toBe("unlocked");
 
     harness.setSelection({
       selected: makeBlock({
@@ -323,27 +321,36 @@ describe("detail controller projection and deferred refresh", () => {
     expect(harness.controller.state.status).toContain("restore before editing");
   });
 
-  test("follows only its browsing context and can hold an independent target", async () => {
+  test("locks an anchor out of preview updates until explicitly unlocked", async () => {
     const first = makeBlock({ id: "first-block", text: "First" });
     const second = makeBlock({ id: "second-block", text: "Second" });
     const third = makeBlock({ id: "third-block", text: "Third" });
     const harness = createHarness(first);
     await harness.controller.initialize();
 
-    harness.setSelection({ selected: second, ancestors: [], children: [] });
-    await harness.controller.onServiceEvent(event("browsing-context"), viewport);
+    await harness.controller.onServiceEvent(
+      event("ui", { targetClientId: "detail-test", command: "preview", blockId: second.id }),
+      viewport,
+    );
     expect(harness.controller.state.context.selected?.id).toBe(second.id);
-    expect(harness.controller.state.connectionMode).toBe("follow");
+    expect(harness.controller.state.connectionMode).toBe("unlocked");
 
-    await harness.controller.dispatch({ type: "connection.toggle" }, viewport);
-    harness.setSelection({ selected: third, ancestors: [], children: [] });
-    await harness.controller.onServiceEvent(event("browsing-context"), viewport);
+    await harness.controller.dispatch({ type: "lock.toggle" }, viewport);
+    await harness.controller.onServiceEvent(
+      event("ui", { targetClientId: "detail-test", command: "preview", blockId: third.id }),
+      viewport,
+    );
     expect(harness.controller.state.context.selected?.id).toBe(second.id);
-    expect(harness.controller.state.connectionMode).toBe("independent");
+    expect(harness.controller.state.connectionMode).toBe("locked");
 
-    await harness.controller.dispatch({ type: "connection.toggle" }, viewport);
+    await harness.controller.dispatch({ type: "lock.toggle" }, viewport);
+    await harness.controller.onServiceEvent(
+      event("ui", { targetClientId: "detail-test", command: "preview", blockId: third.id }),
+      viewport,
+    );
     expect(harness.controller.state.context.selected?.id).toBe(third.id);
-    expect(harness.controller.state.connectionMode).toBe("follow");
+    expect(harness.controller.state.connectionMode).toBe("unlocked");
+    expect(harness.calls.locks).toEqual([true, false]);
   });
 
   test("follows symbolic references through the page-address path", async () => {
@@ -430,7 +437,7 @@ describe("detail controller projection and deferred refresh", () => {
     expect(harness.calls.selections).toBe(selectionLoads + 1);
     expect(harness.controller.state.refreshPending).toBe(false);
     expect(harness.controller.state.context.selected?.id).toBe("other-block");
-    expect(harness.controller.state.connectionMode).toBe("independent");
+    expect(harness.controller.state.connectionMode).toBe("locked");
   });
 
   test("connect marks a comment buffer pending without replacing it", async () => {
@@ -703,32 +710,31 @@ describe("detail controller completion, navigation, and focus", () => {
     expect(harness.calls.focuses).toBe(2);
   });
 
-  test("a targeted reader command resumes Follow on the paired Tree", async () => {
+  test("a targeted preview updates the unlocked reader without stealing focus", async () => {
     const initial = makeBlock({ id: "block-1", text: "Initial" });
     const next = makeBlock({ id: "block-2", text: "Next" });
     const harness = createHarness(initial);
     await harness.controller.initialize();
-    await harness.controller.dispatch({ type: "connection.toggle" }, viewport);
     harness.setSelection({ selected: next, ancestors: [], children: [] });
 
     await harness.controller.onServiceEvent(
       event("ui", {
         targetClientId: "detail-test",
-        command: "follow",
+        command: "preview",
         blockId: next.id,
       }),
       viewport,
     );
 
-    expect(harness.controller.state.connectionMode).toBe("follow");
+    expect(harness.controller.state.connectionMode).toBe("unlocked");
     expect(harness.controller.state.targetBlockId).toBe(next.id);
     expect(harness.controller.state.status).toBe(
-      "Following paired Tree · i pins current block",
+      "Previewing Tree selection · L locks this block",
     );
+    expect(harness.calls.selfFocuses).toBe(0);
   });
 
-
-  test("targets a detail UI command and focuses only the recipient", async () => {
+  test("an ordinary open focuses its unlocked destination without locking it", async () => {
     const first = makeBlock();
     const second = makeBlock({ id: "block-2", text: "second", updatedAt: "version-2" });
     const harness = createHarness(first);
@@ -736,60 +742,25 @@ describe("detail controller completion, navigation, and focus", () => {
     harness.setSelection({ selected: second, ancestors: [], children: [] });
 
     await harness.controller.onServiceEvent(
-      event("ui", { targetClientId: "detail-test", command: "reveal", blockId: "block-2" }),
+      event("ui", { targetClientId: "detail-test", command: "open", blockId: "block-2" }),
       viewport,
     );
 
-    expect(harness.calls.setSelections).toEqual([]);
     expect(harness.controller.state.context.selected?.id).toBe("block-2");
-    expect(harness.controller.state.connectionMode).toBe("independent");
+    expect(harness.controller.state.connectionMode).toBe("unlocked");
     expect(harness.calls.selfFocuses).toBe(1);
+    expect(harness.calls.locks).toEqual([]);
   });
-});
 
-test("Detail chooses a human-labelled open destination and hides its opaque client ID", async () => {
-  const harness = createHarness(makeBlock({ text: "Source ((target))" }));
-  let selectedRoute: string | null | undefined;
-  harness.effects.listOpenRouteDestinations = async () => [
-    { targetClientId: "opaque-detail-d", label: "[D] Detail" },
-  ];
-  harness.effects.getOpenRoute = async () => ({
-    sourceClientId: "detail-test",
-    targetClientId: "opaque-detail-d",
+  test("entering edit mode locks the current Detail anchor", async () => {
+    const harness = createHarness(makeBlock());
+    await harness.controller.initialize();
+
+    await harness.controller.dispatch({ type: "edit.begin" }, viewport);
+
+    expect(harness.controller.state.mode).toBe("edit");
+    expect(harness.controller.state.connectionMode).toBe("locked");
+    expect(harness.calls.locks).toEqual([true]);
+    expect(harness.controller.state.status).toBe("Locked for editing");
   });
-  harness.effects.setOpenRoute = async (targetClientId) => {
-    selectedRoute = targetClientId;
-  };
-  await harness.controller.initialize();
-
-  await harness.controller.dispatch({ type: "route.open" }, viewport);
-  expect(harness.controller.state.mode).toBe("route");
-  expect(harness.controller.state.routePicker?.items.map(({ label }) => label)).toEqual([
-    "Paired/default",
-    "[D] Detail",
-  ]);
-  expect(harness.controller.state.routePicker?.index).toBe(1);
-  await harness.controller.dispatch({ type: "route.accept" }, viewport);
-
-  expect(selectedRoute).toBe("opaque-detail-d");
-  expect(harness.controller.state.mode).toBe("preview");
-  expect(harness.controller.state.status).toBe("Open links in [D] Detail");
-  expect(harness.controller.state.status).not.toContain("opaque-detail-d");
-});
-
-test("Detail peek restores the prior target and Follow mode when closed", async () => {
-  const source = makeBlock({ id: "source01", text: "Source ((target01))" });
-  const harness = createHarness(source);
-  await harness.controller.initialize();
-
-  await harness.controller.dispatch({ type: "reference.peek" }, viewport);
-  expect(harness.controller.state.targetBlockId).toBe("target01");
-  expect(harness.controller.state.peeking).toBe(true);
-  expect(harness.controller.state.connectionMode).toBe("independent");
-
-  await harness.controller.dispatch({ type: "peek.close" }, viewport);
-  expect(harness.controller.state.targetBlockId).toBe(source.id);
-  expect(harness.controller.state.peeking).toBe(false);
-  expect(harness.controller.state.connectionMode).toBe("follow");
-  expect(harness.controller.state.status).toBe("Peek closed · restored prior target");
 });

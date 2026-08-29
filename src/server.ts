@@ -5,16 +5,16 @@ import { OutlinerStore } from "./store";
 import {
   OUTLINER_PROTOCOL_VERSION,
   type Block,
+  type BrowsingContextPublication,
   type CaptureReceipt,
-  type OutlinerEvent,
-  type OutlinerClientRegistration,
-  type OutlinerClientRuntime,
-  type OutlinerClientRole,
-  type OutlinerEventEnvelope,
   type NavigationState,
+  type OutlinerClientRegistration,
+  type OutlinerClientRole,
+  type OutlinerClientRuntime,
+  type OutlinerEvent,
+  type OutlinerEventEnvelope,
   type OutlinerNavigationDispatch,
   type OutlinerNavigationIntent,
-  type OutlinerOpenRoute,
   type PageAddressFollowResult,
   type OutlinerRequest,
   type OutlinerResponse,
@@ -24,7 +24,6 @@ export class OutlinerServer {
   private server: Server | null = null;
   private readonly subscribers = new Map<Socket, OutlinerClientRegistration>();
   private readonly browsingContextTargets = new Map<string, string | null>();
-  private readonly openRoutes = new Map<string, string>();
 
   constructor(
     readonly store: OutlinerStore,
@@ -59,7 +58,6 @@ export class OutlinerServer {
     for (const subscriber of this.subscribers.keys()) subscriber.destroy();
     this.subscribers.clear();
     this.browsingContextTargets.clear();
-    this.openRoutes.clear();
     const closed = Promise.withResolvers<void>();
     server.close((error) => (error ? closed.reject(error) : closed.resolve()));
     await closed.promise;
@@ -114,12 +112,6 @@ export class OutlinerServer {
     ) {
       this.browsingContextTargets.delete(removed.contextId);
     }
-    if (removed) {
-      this.openRoutes.delete(removed.clientId);
-      for (const [sourceClientId, targetClientId] of this.openRoutes) {
-        if (targetClientId === removed.clientId) this.openRoutes.delete(sourceClientId);
-      }
-    }
   }
 
   private registerSubscriber(
@@ -159,11 +151,13 @@ export class OutlinerServer {
       ) {
         throw new Error("Client runtime must be an object");
       }
-      const runtimeKeys = ["paneId", "terminalId", "workspaceId", "tabId"] as const;
+      const stringKeys = ["paneId", "terminalId", "workspaceId", "tabId"] as const;
+      const numberKeys = ["paneX", "paneY"] as const;
+      const runtimeKeys = [...stringKeys, ...numberKeys];
       const unknownKey = Object.keys(registration.runtime)
         .find((key) => !runtimeKeys.includes(key as typeof runtimeKeys[number]));
       if (unknownKey) throw new Error(`Invalid client runtime ${unknownKey}`);
-      const entries = runtimeKeys.flatMap((key) => {
+      const stringEntries = stringKeys.flatMap((key) => {
         const value = registration.runtime?.[key];
         if (value === undefined) return [];
         if (
@@ -176,12 +170,29 @@ export class OutlinerServer {
         }
         return [[key, value.trim()] as const];
       });
-      if (entries.length > 0) runtime = Object.fromEntries(entries);
+      const numberEntries = numberKeys.flatMap((key) => {
+        const value = registration.runtime?.[key];
+        if (value === undefined) return [];
+        if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+          throw new Error(`Invalid client runtime ${key}`);
+        }
+        return [[key, value] as const];
+      });
+      if (stringEntries.length > 0 || numberEntries.length > 0) {
+        runtime = Object.fromEntries([...stringEntries, ...numberEntries]);
+      }
+    }
+    if (registration.locked !== undefined && typeof registration.locked !== "boolean") {
+      throw new Error("Client locked state must be boolean");
+    }
+    if (registration.role === "tree" && registration.locked) {
+      throw new Error("Only Detail clients can be locked");
     }
     const normalized: OutlinerClientRegistration = {
       clientId,
       role: registration.role,
       contextId,
+      ...(registration.role === "detail" ? { locked: registration.locked ?? false } : {}),
       ...(runtime ? { runtime } : {}),
     };
     this.subscribers.set(socket, normalized);
@@ -208,6 +219,17 @@ export class OutlinerServer {
     return client;
   }
 
+  private updateClientLock(clientId: string, locked: boolean): OutlinerClientRegistration {
+    for (const [socket, client] of this.subscribers) {
+      if (client.clientId !== clientId) continue;
+      if (client.role !== "detail") throw new Error("Only Detail clients can be locked");
+      const updated = { ...client, locked };
+      this.subscribers.set(socket, updated);
+      return updated;
+    }
+    throw new Error(`Client is not registered: ${clientId}`);
+  }
+
   private sameTab(
     left: OutlinerClientRegistration,
     right: OutlinerClientRegistration,
@@ -220,35 +242,43 @@ export class OutlinerServer {
     );
   }
 
-  private setOpenRoute(sourceClientId: string, targetClientId: string | null): OutlinerOpenRoute | null {
-    const source = this.clientById(sourceClientId);
-    if (targetClientId === null) {
-      this.openRoutes.delete(sourceClientId);
-      return null;
-    }
-    const target = this.clientById(targetClientId);
-    if (target.role !== "detail") throw new Error("Open-route destination must be a Detail pane");
-    if (!this.sameTab(source, target)) {
-      throw new Error("Open-route destination must be in the source pane's current tab");
-    }
-    this.openRoutes.set(sourceClientId, targetClientId);
-    return { sourceClientId, targetClientId };
-  }
-
-  private getOpenRoute(sourceClientId: string): OutlinerOpenRoute | null {
-    this.clientById(sourceClientId);
-    const targetClientId = this.openRoutes.get(sourceClientId);
-    if (!targetClientId) return null;
-    if (!this.listClients().some((client) => client.clientId === targetClientId)) {
-      this.openRoutes.delete(sourceClientId);
-      return null;
-    }
-    return { sourceClientId, targetClientId };
-  }
-
   private navigationIntent(value: unknown): OutlinerNavigationIntent {
-    if (value === "open" || value === "peek" || value === "reveal") return value;
-    throw new Error("Navigation intent must be open, peek, or reveal");
+    if (value === "preview" || value === "open" || value === "reveal") return value;
+    throw new Error("Navigation intent must be preview, open, or reveal");
+  }
+
+  private detailPool(source: OutlinerClientRegistration): OutlinerClientRegistration[] {
+    const details = this.listClients("detail");
+    const candidates = source.runtime?.workspaceId && source.runtime.tabId
+      ? details.filter((client) => this.sameTab(source, client))
+      : details.filter((client) => client.contextId === source.contextId);
+    return candidates.sort((left, right) =>
+      (left.runtime?.paneX ?? Number.MAX_SAFE_INTEGER) -
+        (right.runtime?.paneX ?? Number.MAX_SAFE_INTEGER) ||
+      (left.runtime?.paneY ?? Number.MAX_SAFE_INTEGER) -
+        (right.runtime?.paneY ?? Number.MAX_SAFE_INTEGER) ||
+      left.clientId.localeCompare(right.clientId)
+    );
+  }
+
+  private resolveUnlockedDetail(
+    source: OutlinerClientRegistration,
+    intent: "preview" | "open",
+  ): Omit<OutlinerNavigationDispatch, "command"> {
+    const pool = this.detailPool(source);
+    if (pool.length === 0) {
+      throw new Error("No Detail is available in this tab · open another Detail");
+    }
+    const target = pool.find((client) => !client.locked);
+    if (!target) {
+      throw new Error("All Details in this tab are locked · unlock one or open another Detail");
+    }
+    return {
+      sourceClientId: source.clientId,
+      targetClientId: target.clientId,
+      intent,
+      resolution: "unlocked",
+    };
   }
 
   private resolveNavigationTarget(
@@ -256,19 +286,8 @@ export class OutlinerServer {
     intent: OutlinerNavigationIntent,
   ): Omit<OutlinerNavigationDispatch, "command"> {
     const source = this.clientById(sourceClientId);
-    const targetRole: OutlinerClientRole = intent === "reveal" ? "tree" : "detail";
-    if (intent !== "reveal") {
-      const configured = this.getOpenRoute(sourceClientId);
-      if (configured) {
-        return {
-          sourceClientId,
-          targetClientId: configured.targetClientId,
-          intent,
-          resolution: "configured",
-        };
-      }
-    }
-    if (source.role === targetRole) {
+    if (intent !== "reveal") return this.resolveUnlockedDetail(source, intent);
+    if (source.role === "tree") {
       return {
         sourceClientId,
         targetClientId: source.clientId,
@@ -276,7 +295,7 @@ export class OutlinerServer {
         resolution: "self",
       };
     }
-    const contextCandidates = this.listClients(targetRole)
+    const contextCandidates = this.listClients("tree")
       .filter((client) => client.contextId === source.contextId);
     if (contextCandidates.length === 1) {
       return {
@@ -286,10 +305,7 @@ export class OutlinerServer {
         resolution: "context",
       };
     }
-    if (contextCandidates.length > 1) {
-      throw new Error(`Multiple ${targetRole} panes share this browsing context`);
-    }
-    const sameTabCandidates = this.listClients(targetRole)
+    const sameTabCandidates = this.listClients("tree")
       .filter((client) => this.sameTab(source, client));
     if (sameTabCandidates.length === 1) {
       return {
@@ -300,9 +316,9 @@ export class OutlinerServer {
       };
     }
     if (sameTabCandidates.length === 0) {
-      throw new Error(`No ${targetRole} destination is available in this pane's context or tab`);
+      throw new Error("No Tree destination is available in this pane's context or tab");
     }
-    throw new Error(`Multiple same-tab ${targetRole} destinations; choose one with Open links in…`);
+    throw new Error("Multiple same-tab Tree destinations share no browsing context");
   }
 
   handle(
@@ -334,6 +350,9 @@ export class OutlinerServer {
           }
           result = this.listClients(request.role);
           break;
+        case "clients.update":
+          result = this.updateClientLock(request.clientId, request.locked);
+          break;
         case "blocks.context":
           result = this.store.blockContext(request.blockId);
           break;
@@ -354,15 +373,31 @@ export class OutlinerServer {
             ? this.store.blockContext(request.blockId)
             : { selected: null, ancestors: [], children: [] };
           this.browsingContextTargets.set(contextId, request.blockId);
-          result = { contextId, target };
+          let preview: OutlinerNavigationDispatch | undefined;
+          let unavailable: string | undefined;
+          if (request.blockId) {
+            try {
+              const route = this.resolveNavigationTarget(request.sourceClientId, "preview");
+              preview = {
+                ...route,
+                command: {
+                  targetClientId: route.targetClientId,
+                  command: "preview",
+                  blockId: request.blockId,
+                },
+              };
+            } catch (error) {
+              unavailable = error instanceof Error ? error.message : String(error);
+            }
+          }
+          result = {
+            contextId,
+            target,
+            ...(preview ? { preview } : {}),
+            ...(unavailable ? { unavailable } : {}),
+          } satisfies BrowsingContextPublication;
           break;
         }
-        case "routes.get":
-          result = this.getOpenRoute(request.sourceClientId);
-          break;
-        case "routes.set":
-          result = this.setOpenRoute(request.sourceClientId, request.targetClientId);
-          break;
         case "navigation.resolve":
           result = this.resolveNavigationTarget(
             request.sourceClientId,
@@ -583,11 +618,14 @@ export class OutlinerServer {
         command = dispatched.command;
         break;
       }
-      case "browsing-context.publish":
-        domain = "browsing-context";
+      case "browsing-context.publish": {
+        const published = response.result as BrowsingContextPublication;
+        if (!published.preview) return null;
+        domain = "ui";
         blockId = request.blockId ?? undefined;
-        contextId = request.contextId;
+        command = published.preview.command;
         break;
+      }
       default:
         return null;
     }
