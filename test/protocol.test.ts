@@ -53,7 +53,7 @@ test("serves mutations and property queries over the local socket", async () => 
   const client = new OutlinerClient(socket);
   const service = await client.request<OutlinerServiceStatus>({ action: "ping" });
   expect(service).toEqual({ status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION });
-  expect(service.protocolVersion).toBe(18);
+  expect(service.protocolVersion).toBe(19);
   const provenance = {
     actorId: "omp",
     sessionId: "session-1",
@@ -822,7 +822,7 @@ test("stopping a connected watcher does not report a disconnect", async () => {
 test("routes previews and opens to the first spatially unlocked Detail", async () => {
   const directory = mkdtempSync(join(tmpdir(), "pi-outliner-routes-"));
   const store = new OutlinerStore(join(directory, "outliner.sqlite"));
-  const target = store.create("Navigation target");
+  const target = store.create("Navigation target\n\n## Decision ^durable-decision");
   const socket = join(directory, "outliner.sock");
   const server = new OutlinerServer(store, socket);
   await server.start();
@@ -868,6 +868,26 @@ test("routes previews and opens to the first spatially unlocked Detail", async (
     resolution: "unlocked",
     command: { targetClientId: "detail-c", command: "open", blockId: target.id },
   });
+  const fragmentOpen = await client.request<OutlinerNavigationDispatch>({
+    action: "navigation.dispatch",
+    sourceClientId: "tree-a",
+    blockId: target.id,
+    fragmentId: "durable-decision",
+    intent: "open",
+  });
+  expect(fragmentOpen.command).toEqual({
+    targetClientId: "detail-c",
+    command: "open",
+    blockId: target.id,
+    fragmentId: "durable-decision",
+  });
+  await expect(client.request({
+    action: "navigation.dispatch",
+    sourceClientId: "tree-a",
+    blockId: target.id,
+    fragmentId: "stale-decision",
+    intent: "open",
+  })).rejects.toThrow(`Fragment not found: ${target.id}^stale-decision`);
 
   const sourcePreservingOpen = await client.request<OutlinerNavigationDispatch>({
     action: "navigation.dispatch",

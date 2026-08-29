@@ -22,6 +22,7 @@ function state(overrides: Partial<DetailState> = {}): DetailState {
   return {
     context: { selected: null, ancestors: [], children: [] },
     targetBlockId: null,
+    targetFragmentId: null,
     connectionMode: "unlocked",
     canNavigateBack: false,
     canNavigateForward: false,
@@ -82,13 +83,14 @@ describe("detail ANSI renderer", () => {
       context: { selected, ancestors: [], children: [] },
       resolvedSelectedText: "resolved one\nresolved two\nresolved three\nresolved four",
       resolvedBreadcrumb: "Resolved title",
+      targetFragmentId: "resolved-section",
       previewOffset: 1,
       status: "Ready",
     }), { width: 64, height: 8 });
 
     expect(rendered).toBe([
       "\x1b[H\x1b[2J",
-      "\x1b[1;36mDetail · Unlocked\x1b[0m  \x1b[2mResolved title\x1b[0m",
+      "\x1b[1;36mDetail · Unlocked\x1b[0m  \x1b[2mResolved title · ^resolved-section\x1b[0m",
       "─".repeat(64),
       "resolved two",
       "resolved three",

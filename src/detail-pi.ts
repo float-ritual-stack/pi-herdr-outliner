@@ -245,7 +245,12 @@ const customFrame = new DetailPiComponent({
   state: controller.state,
   height: () => terminal.rows,
 });
-const preview = new DetailPiPreviewLayout(controller.state, getMarkdownTheme(), hyperlinksEnabled);
+const preview = new DetailPiPreviewLayout(
+  controller.state,
+  getMarkdownTheme(),
+  hyperlinksEnabled,
+  () => tui.requestRender(),
+);
 let layoutRoot: DetailPiComponent | DetailPiPreviewLayout | undefined;
 
 synchronizeLayout = () => {
@@ -253,6 +258,7 @@ synchronizeLayout = () => {
   preview.setActive(previewActive);
   if (previewActive) {
     preview.syncState();
+    preview.applyPendingFragmentScroll(terminal.columns);
     preview.ensureBacklinkSelectionVisible(terminal.columns);
   }
   const nextRoot = previewActive ? preview : customFrame;

@@ -5,7 +5,11 @@ import {
   type BlockFocusRequester,
 } from "./block-focus";
 import { requireUniqueClientId, sendClientCommand } from "./client-target";
-import { blockDisplayTitle, blockReferenceIds } from "./references";
+import { isFragmentId, resolveFragment } from "./fragments";
+import {
+  blockDisplayTitle,
+  blockReferenceOccurrences,
+} from "./references";
 import {
   outlinerReferenceOccurrences,
   protectedMarkdownRanges,
@@ -28,7 +32,6 @@ const OUTLINER_SCHEME = "pi-outliner:";
 const BLOCK_ID_PATTERN = /^[A-Za-z0-9_-]{8,}$/;
 const BLOCK_ID_TOKEN_PATTERN = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
 
-const RAW_BLOCK_REFERENCE_PATTERN = /\(\(([A-Za-z0-9_-]{8,})\)\)/g;
 const TERMINAL_CONTROL_PATTERN = /[\u0000-\u001f\u007f]/;
 
 export type OutlinerLinkKind = "block" | "goto" | "page" | "work";
@@ -36,6 +39,7 @@ export type OutlinerLinkKind = "block" | "goto" | "page" | "work";
 export interface OutlinerLinkTarget {
   kind: OutlinerLinkKind;
   value: string;
+  fragmentId?: string;
   preserveSource?: boolean;
   intent?: "reveal";
 }
@@ -61,7 +65,11 @@ interface LinkSpan {
 export function outlinerLinkUri(
   kind: OutlinerLinkKind,
   value: string,
-  options: { preserveSource?: boolean; intent?: "reveal" } = {},
+  options: {
+    preserveSource?: boolean;
+    intent?: "reveal";
+    fragmentId?: string;
+  } = {},
 ): string {
   const normalized = value.trim();
   if (TERMINAL_CONTROL_PATTERN.test(normalized)) {
@@ -74,9 +82,13 @@ export function outlinerLinkUri(
   ) {
     throw new Error(`Invalid outliner ${kind} target: ${normalized}`);
   }
+  if (options.fragmentId && (kind !== "block" || !isFragmentId(options.fragmentId))) {
+    throw new Error(`Invalid outliner fragment target: ${options.fragmentId}`);
+  }
   const query = new URLSearchParams();
   if (options.preserveSource) query.set("preserveSource", "1");
   if (options.intent) query.set("intent", options.intent);
+  if (options.fragmentId) query.set("fragment", options.fragmentId);
   const suffix = query.size > 0 ? `?${query}` : "";
   return `${OUTLINER_SCHEME}//${kind}/${encodeURIComponent(normalized)}${suffix}`;
 }
@@ -108,14 +120,18 @@ export function parseOutlinerLinkUri(uri: string): OutlinerLinkTarget {
   }
   const preserveSourceValues = parsed.searchParams.getAll("preserveSource");
   const intentValues = parsed.searchParams.getAll("intent");
+  const fragmentValues = parsed.searchParams.getAll("fragment");
   if (
     [...parsed.searchParams.keys()].some((key) =>
-      key !== "preserveSource" && key !== "intent"
+      key !== "preserveSource" && key !== "intent" && key !== "fragment"
     ) ||
     preserveSourceValues.length > 1 ||
     (preserveSourceValues.length === 1 && preserveSourceValues[0] !== "1") ||
     intentValues.length > 1 ||
-    (intentValues.length === 1 && intentValues[0] !== "reveal")
+    (intentValues.length === 1 && intentValues[0] !== "reveal") ||
+    fragmentValues.length > 1 ||
+    (fragmentValues.length === 1 &&
+      (kind !== "block" || !isFragmentId(fragmentValues[0]!)))
   ) {
     throw new Error("Invalid outliner link navigation constraints");
   }
@@ -130,6 +146,7 @@ export function parseOutlinerLinkUri(uri: string): OutlinerLinkTarget {
   return {
     kind,
     value,
+    ...(fragmentValues.length === 1 ? { fragmentId: fragmentValues[0] } : {}),
     ...(preserveSourceValues.length === 1 ? { preserveSource: true } : {}),
     ...(intentValues.length === 1 ? { intent: "reveal" as const } : {}),
   };
@@ -137,6 +154,7 @@ export function parseOutlinerLinkUri(uri: string): OutlinerLinkTarget {
 
 export interface ResolvedOutlinerLinkTarget {
   block: Block;
+  fragmentId?: string;
   created?: boolean;
 }
 
@@ -148,7 +166,16 @@ export async function resolveOutlinerLinkTarget(
     throw new Error("Fuzzy goto links require a Tree destination");
   }
   if (target.kind === "block") {
-    return { block: await requester.request<Block>({ action: "get", blockId: target.value }) };
+    const block = await requester.request<Block>({ action: "get", blockId: target.value });
+    if (!target.fragmentId) return { block };
+    const fragment = resolveFragment(block.text, target.fragmentId);
+    if (fragment.status === "missing") {
+      throw new Error(`Fragment not found: ${target.value}^${target.fragmentId}`);
+    }
+    if (fragment.status === "duplicate") {
+      throw new Error(`Fragment is duplicated: ${target.value}^${target.fragmentId}`);
+    }
+    return { block, fragmentId: target.fragmentId };
   }
   const resolution = await requester.request<PageAddressResolution>({
     action: "pages.resolve",
@@ -211,7 +238,10 @@ export async function navigateOutlinerLink(
       targets.sourceClientId,
       resolved.block.id,
       intent,
-      { preserveSource: target.preserveSource },
+      {
+        preserveSource: target.preserveSource,
+        fragmentId: resolved.fragmentId,
+      },
     );
     return {
       kind: target.kind,
@@ -252,7 +282,7 @@ export async function navigateOutlinerLink(
     if (!resolution.block) throw new Error(`Work ID address is unresolved: ${target.value}`);
     block = resolution.block;
   } else {
-    block = await requester.request<Block>({ action: "get", blockId: target.value });
+    block = (await resolveOutlinerLinkTarget(requester, target)).block;
   }
   if (block.effectiveDeletedRootId) {
     const detailClientId =
@@ -261,6 +291,7 @@ export async function navigateOutlinerLink(
     await sendClientCommand(requester, detailClientId, {
       command: "focus",
       blockId: block.id,
+      ...(target.fragmentId ? { fragmentId: target.fragmentId } : {}),
     });
     return {
       kind: target.kind,
@@ -276,6 +307,7 @@ export async function navigateOutlinerLink(
   await sendClientCommand(requester, treeClientId, {
     command: "focus",
     blockId: block.id,
+    ...(target.fragmentId ? { fragmentId: target.fragmentId } : {}),
   });
   return {
     kind: target.kind,
@@ -292,7 +324,13 @@ export function firstOutlinerReference(
 ): OutlinerLinkTarget | null {
   const first = outlinerReferenceOccurrences(text, workIdPrefix)[0];
   if (!first) return null;
-  if (first.kind === "block") return { kind: "block", value: first.blockId };
+  if (first.kind === "block") {
+    return {
+      kind: "block",
+      value: first.blockId,
+      ...(first.fragmentId ? { fragmentId: first.fragmentId } : {}),
+    };
+  }
   if (first.kind === "page") return { kind: "page", value: first.address };
   return { kind: "work", value: first.address };
 }
@@ -373,17 +411,19 @@ function resolvedReferenceSpans(rawText: string, resolvedText: string): LinkSpan
   const spans: LinkSpan[] = [];
   let rawCursor = 0;
   let resolvedCursor = 0;
-  for (const match of rawText.matchAll(RAW_BLOCK_REFERENCE_PATTERN)) {
-    resolvedCursor += match.index - rawCursor;
+  for (const reference of blockReferenceOccurrences(rawText)) {
+    resolvedCursor += reference.start - rawCursor;
     if (!resolvedText.startsWith("((", resolvedCursor)) return [];
     const end = resolvedText.indexOf("))", resolvedCursor + 2);
     if (end < 0) return [];
     spans.push({
       start: resolvedCursor,
       end: end + 2,
-      uri: outlinerLinkUri("block", match[1]),
+      uri: outlinerLinkUri("block", reference.blockId, {
+        fragmentId: reference.fragmentId,
+      }),
     });
-    rawCursor = match.index + match[0].length;
+    rawCursor = reference.end;
     resolvedCursor = end + 2;
   }
   return spans;
@@ -412,14 +452,39 @@ export function createOutlinerTextLinker(
   lookup: (blockId: string) => Block | null,
   workIdPrefix: string | null = null,
 ): OutlinerTextLinker {
-  const references = blockReferenceIds(rawText).map((blockId) => {
-    const target = lookup(blockId);
-    const title = target
-      ? `${blockDisplayTitle(target)}${target.effectiveDeletedRootId ? " · Trash" : ""}`
-      : blockId;
+  const references = blockReferenceOccurrences(rawText).map((reference) => {
+    const target = lookup(reference.blockId);
+    const fragmentSuffix = reference.fragmentId ? `^${reference.fragmentId}` : "";
+    if (!target) {
+      return {
+        visible: `((${reference.blockId}${fragmentSuffix}))`,
+        uri: null,
+      };
+    }
+    const title = blockDisplayTitle(target);
+    if (target.effectiveDeletedRootId) {
+      return {
+        visible: `((${title}${fragmentSuffix} · Trash))`,
+        uri: outlinerLinkUri("block", reference.blockId, {
+          fragmentId: reference.fragmentId,
+        }),
+      };
+    }
+    if (reference.fragmentId) {
+      const fragment = resolveFragment(target.text, reference.fragmentId);
+      if (fragment.status !== "resolved") {
+        const state = fragment.status === "missing" ? "Missing fragment" : "Duplicate fragment";
+        return {
+          visible: `((${title}${fragmentSuffix} · ${state}))`,
+          uri: null,
+        };
+      }
+    }
     return {
-      visible: `((${title}))`,
-      uri: target ? outlinerLinkUri("block", blockId) : null,
+      visible: `((${title}${fragmentSuffix}))`,
+      uri: outlinerLinkUri("block", reference.blockId, {
+        fragmentId: reference.fragmentId,
+      }),
     };
   });
   const consumedReferences = new Set<number>();

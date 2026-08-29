@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { blockDisplayTitle, blockReferenceIds, resolveBlockReferences } from "../src/references";
+import {
+  blockDisplayTitle,
+  blockReferenceIds,
+  blockReferenceOccurrences,
+  resolveBlockReferences,
+  resolveBlockReferencesWithStatus,
+} from "../src/references";
 import type { Block } from "../src/types";
 
 const target: Block = {
@@ -48,5 +54,60 @@ describe("block reference rendering", () => {
 
     expect(resolveBlockReferences(text, () => null)).toBe(text);
     expect(blockReferenceIds(text)).toEqual([missing]);
+  });
+
+  test("resolves durable fragments and reports stale or duplicate anchors explicitly", () => {
+    const anchored = {
+      ...target,
+      text: "Referenced decision\n\n## Durable section ^durable-section",
+    };
+    const text = [
+      `((${target.id}^durable-section))`,
+      `((${target.id}^stale-section))`,
+    ].join(" ");
+
+    expect(resolveBlockReferencesWithStatus(text, () => anchored)).toEqual({
+      text: [
+        "((Referenced decision^durable-section))",
+        "((Referenced decision^stale-section · Missing fragment))",
+      ].join(" "),
+      references: [
+        {
+          blockId: target.id,
+          fragmentId: "durable-section",
+          status: "resolved",
+          title: "Referenced decision",
+        },
+        {
+          blockId: target.id,
+          fragmentId: "stale-section",
+          status: "stale",
+          title: "Referenced decision",
+        },
+      ],
+    });
+    expect(blockReferenceOccurrences(text)).toEqual([
+      {
+        blockId: target.id,
+        fragmentId: "durable-section",
+        start: 0,
+        end: target.id.length + "((^durable-section))".length,
+      },
+      {
+        blockId: target.id,
+        fragmentId: "stale-section",
+        start: target.id.length + "((^durable-section)) ".length,
+        end: text.length,
+      },
+    ]);
+
+    const duplicate = {
+      ...anchored,
+      text: `${anchored.text}\nDuplicate ^durable-section`,
+    };
+    expect(resolveBlockReferencesWithStatus(
+      `((${target.id}^durable-section))`,
+      () => duplicate,
+    ).references[0]?.status).toBe("duplicate");
   });
 });

@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
 import { dirname } from "node:path";
+import { isFragmentId, resolveFragment } from "./fragments";
 import { OutlinerStore } from "./store";
 import {
   OUTLINER_PROTOCOL_VERSION,
@@ -278,6 +279,19 @@ export class OutlinerServer {
     throw new Error("Navigation intent must be preview, open, or reveal");
   }
 
+  private validateFragmentTarget(blockId: string, fragmentId: string | undefined): void {
+    const target = this.store.blockContext(blockId).selected!;
+    if (!fragmentId) return;
+    if (!isFragmentId(fragmentId)) throw new Error(`Invalid fragment ID: ${fragmentId}`);
+    const fragment = resolveFragment(target.text, fragmentId);
+    if (fragment.status === "missing") {
+      throw new Error(`Fragment not found: ${blockId}^${fragmentId}`);
+    }
+    if (fragment.status === "duplicate") {
+      throw new Error(`Fragment is duplicated: ${blockId}^${fragmentId}`);
+    }
+  }
+
   private detailPool(source: OutlinerClientRegistration): OutlinerClientRegistration[] {
     const details = this.listClients("detail");
     const candidates = source.runtime?.workspaceId && source.runtime.tabId
@@ -450,7 +464,7 @@ export class OutlinerServer {
           break;
         case "navigation.dispatch": {
           const intent = this.navigationIntent(request.intent);
-          this.store.blockContext(request.blockId);
+          this.validateFragmentTarget(request.blockId, request.fragmentId);
           const route = this.resolveNavigationTarget(
             request.sourceClientId,
             intent,
@@ -462,6 +476,7 @@ export class OutlinerServer {
               targetClientId: route.targetClientId,
               command: intent,
               blockId: request.blockId,
+              ...(request.fragmentId ? { fragmentId: request.fragmentId } : {}),
             },
           } satisfies OutlinerNavigationDispatch;
           break;
@@ -469,6 +484,12 @@ export class OutlinerServer {
         case "ui.command.send":
           if (!this.hasClient(request.command.targetClientId)) {
             throw new Error(`Target client is not registered: ${request.command.targetClientId}`);
+          }
+          if (request.command.fragmentId) {
+            if (!request.command.blockId) {
+              throw new Error("Fragment navigation requires a block ID");
+            }
+            this.validateFragmentTarget(request.command.blockId, request.command.fragmentId);
           }
           result = { accepted: true, command: request.command };
           break;

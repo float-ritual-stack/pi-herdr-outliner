@@ -63,6 +63,33 @@ describe("semantic backlink relation", () => {
     expect(result.sources[0]!.occurrences[0]!.snippet).not.toContain(target.id);
   });
 
+  test("keeps fragment backlinks attached to canonical targets across heading renames", () => {
+    const workspace = store();
+    const target = workspace.create("Target\n\n## Original heading ^durable-heading");
+    const source = workspace.create(`Source\n((${target.id}^durable-heading))`);
+
+    const before = workspace.queryBacklinks({ targetBlockId: target.id, limit: 10 });
+    expect(before.sources).toMatchObject([{
+      blockId: source.id,
+      occurrenceCount: 1,
+      referenceGroups: [{ kind: "block", count: 1 }],
+    }]);
+    expect(before.sources[0]!.occurrences[0]!.snippet).toContain(
+      "((Target^durable-heading))",
+    );
+
+    workspace.update(
+      target.id,
+      "Target\n\n## Renamed heading ^durable-heading",
+      target.updatedAt,
+    );
+    const after = workspace.queryBacklinks({ targetBlockId: target.id, limit: 10 });
+    expect(after.sources.map((candidate) => candidate.blockId)).toEqual([source.id]);
+    expect(after.sources[0]!.occurrences[0]!.snippet).toContain(
+      "((Target^durable-heading))",
+    );
+  });
+
   test("groups block-valued property backlinks by property key", () => {
     const workspace = store();
     const target = workspace.create("Source document");

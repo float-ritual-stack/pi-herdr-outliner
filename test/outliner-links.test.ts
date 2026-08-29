@@ -59,6 +59,23 @@ describe("outliner link URIs", () => {
     });
   });
 
+  test("round-trips validated block fragments without using URL hashes", () => {
+    const blockId = "550e8400-e29b-41d4-a716-446655440000";
+    const uri = outlinerLinkUri("block", blockId, { fragmentId: "durable-decision" });
+    expect(uri).toContain("?fragment=durable-decision");
+    expect(parseOutlinerLinkUri(uri)).toEqual({
+      kind: "block",
+      value: blockId,
+      fragmentId: "durable-decision",
+    });
+    expect(() => outlinerLinkUri("page", "Roadmap", { fragmentId: "decision" })).toThrow(
+      "Invalid outliner fragment target",
+    );
+    expect(() => parseOutlinerLinkUri(
+      "pi-outliner://block/550e8400-e29b-41d4-a716-446655440000?fragment=bad%20id",
+    )).toThrow("Invalid outliner link navigation constraints");
+  });
+
   test("rejects web URLs, unsupported kinds, malformed IDs, and URL decorations", () => {
     for (const uri of [
       "https://example.com",
@@ -233,6 +250,52 @@ describe("outliner link URIs", () => {
     ]);
   });
 
+  test("dispatches exact fragment identity from linked references", async () => {
+    const target = block(
+      "550e8400-e29b-41d4-a716-446655440000",
+      "Target\n\n## Decision ^durable-decision",
+    );
+    const calls: RequestInput[] = [];
+    const requester = {
+      async request<T>(input: RequestInput): Promise<T> {
+        calls.push(input);
+        if (input.action === "get") return target as T;
+        if (input.action === "navigation.dispatch") {
+          return {
+            sourceClientId: input.sourceClientId,
+            targetClientId: "detail-c",
+            intent: input.intent,
+            resolution: "unlocked",
+            command: {
+              targetClientId: "detail-c",
+              command: input.intent,
+              blockId: input.blockId,
+              fragmentId: input.fragmentId,
+            },
+          } as T;
+        }
+        throw new Error(`Unexpected request: ${input.action}`);
+      },
+    };
+
+    await navigateOutlinerLink(
+      requester,
+      outlinerLinkUri("block", target.id, { fragmentId: "durable-decision" }),
+      { sourceClientId: "detail-a" },
+    );
+
+    expect(calls).toEqual([
+      { action: "get", blockId: target.id },
+      {
+        action: "navigation.dispatch",
+        sourceClientId: "detail-a",
+        blockId: target.id,
+        fragmentId: "durable-decision",
+        intent: "open",
+      },
+    ]);
+  });
+
   test("does not create a dangling page when every Detail is locked", async () => {
     const calls: RequestInput[] = [];
     const requester = {
@@ -392,6 +455,22 @@ describe("outliner link rendering", () => {
     );
   });
 
+  test("links resolved durable fragments to fragment-aware block URIs", () => {
+    const anchored = block(targetId, "Target decision\n\n## Durable ^durable");
+    const raw = `((${targetId}^durable))`;
+    const resolved = "((Target decision^durable))";
+    const linker = createOutlinerTextLinker(raw, () => anchored);
+    const rendered = linker.link(resolved);
+
+    expect(stripTerminalSequences(rendered)).toBe(resolved);
+    expect(getOsc8LinkAtColumn(rendered, 3)).toBe(
+      outlinerLinkUri("block", targetId, { fragmentId: "durable" }),
+    );
+    expect(linkOutlinerMarkdown(resolved, raw)).toContain(
+      outlinerLinkUri("block", targetId, { fragmentId: "durable" }),
+    );
+  });
+
   test("consumes protected references before linking later rendered rows", () => {
     const firstId = "550e8400-e29b-41d4-a716-446655440001";
     const secondId = "550e8400-e29b-41d4-a716-446655440002";
@@ -474,6 +553,11 @@ describe("outliner link rendering", () => {
     expect(firstOutlinerReference("PIE-132 without brackets", "PIE")).toEqual({
       kind: "work",
       value: "PIE-132",
+    });
+    expect(firstOutlinerReference("((target01^decision))")).toEqual({
+      kind: "block",
+      value: "target01",
+      fragmentId: "decision",
     });
   });
 

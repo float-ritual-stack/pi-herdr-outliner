@@ -7,6 +7,7 @@ import type {
 
 export interface NavigationRouteOptions {
   preserveSource?: boolean;
+  fragmentId?: string;
 }
 
 export async function resolveNavigationDestination(
@@ -35,6 +36,7 @@ export async function dispatchNavigation(
     sourceClientId,
     blockId,
     intent,
+    ...(options.fragmentId ? { fragmentId: options.fragmentId } : {}),
     ...(options.preserveSource ? { preserveSource: true } : {}),
   });
 }

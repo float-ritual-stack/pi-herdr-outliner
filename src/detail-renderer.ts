@@ -56,7 +56,12 @@ function fitLinkedBreadcrumb(state: Readonly<DetailState>, width: number): strin
   ];
   if (blocks.length === 0) return fitBreadcrumb(state.resolvedBreadcrumb, width);
 
-  const titles = blocks.map((block) => sanitizeDynamicText(blockDisplayTitle(block)));
+  const titles = blocks.map((block, index) => {
+    const title = sanitizeDynamicText(blockDisplayTitle(block));
+    return state.targetFragmentId && index === blocks.length - 1
+      ? `${title} · ^${state.targetFragmentId}`
+      : title;
+  });
   let start = titles.length - 1;
   let suffix = titles[start];
   while (start > 0) {
@@ -65,12 +70,18 @@ function fitLinkedBreadcrumb(state: Readonly<DetailState>, width: number): strin
     start -= 1;
     suffix = candidate;
   }
-  const linked = blocks.slice(start).map((block, index) =>
-    hyperlink(
-      titles[start + index],
-      outlinerLinkUri("block", block.id, { intent: "reveal" }),
-    )
-  ).join(" › ");
+  const linked = blocks.slice(start).map((block, index) => {
+    const blockIndex = start + index;
+    return hyperlink(
+      titles[blockIndex],
+      outlinerLinkUri("block", block.id, {
+        intent: "reveal",
+        ...(state.targetFragmentId && blockIndex === blocks.length - 1
+          ? { fragmentId: state.targetFragmentId }
+          : {}),
+      }),
+    );
+  }).join(" › ");
   return fitToWidth(`${start > 0 ? "… › " : ""}${linked}`, width);
 }
 
@@ -85,12 +96,15 @@ export function renderDetailHeader(
 ): string[] {
   const connection = state.connectionMode === "locked" ? "Locked" : "Unlocked";
   const label = `Detail · ${connection}`;
+  const breadcrumb = state.targetFragmentId
+    ? `${state.resolvedBreadcrumb} · ^${state.targetFragmentId}`
+    : state.resolvedBreadcrumb;
   const header = width <= label.length + 2
     ? `\x1b[1;36m${fitToWidth(label, width)}\x1b[0m`
     : `\x1b[1;36m${label}\x1b[0m  \x1b[2m${
       options.linkBreadcrumbs
         ? fitLinkedBreadcrumb(state, Math.max(1, width - label.length - 2))
-        : fitBreadcrumb(state.resolvedBreadcrumb, Math.max(1, width - label.length - 2))
+        : fitBreadcrumb(breadcrumb, Math.max(1, width - label.length - 2))
     }\x1b[0m`;
   return [
     "",

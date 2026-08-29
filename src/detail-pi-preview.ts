@@ -205,16 +205,21 @@ export class DetailPiPreviewLayout extends VStack {
   private renderedWorkIdPrefix: string | null | undefined;
   private renderedBacklinksDocument: string | undefined;
   private previousSelectionId: string | null | undefined;
+  private previousTargetFragmentId: string | null | undefined;
+  private previousPreviewOffset: number | undefined;
   private active: boolean;
   private resetScroll = false;
   private previousBacklinksExpanded = false;
   private previousBacklinkSelectedIndex: number | undefined;
   private pendingBacklinkSelectionScroll = false;
+  private pendingFragmentScroll = false;
+  private fragmentRenderScheduled = false;
 
   constructor(
     private readonly state: Readonly<DetailState>,
     markdownTheme: MarkdownTheme,
     private readonly linksEnabled = process.env.HERDR_ENV === "1",
+    private readonly requestRender?: () => void,
   ) {
     const markdown = new Markdown("", 0, 0, markdownTheme);
     const backlinkMarkdown = new Markdown("", 0, 0, {
@@ -279,11 +284,11 @@ export class DetailPiPreviewLayout extends VStack {
       ? this.state.resolvedSelectedText
       : "Select a block in the outliner pane.";
     const rawText = selected && this.linksEnabled ? this.state.projectedSelectedText : sourceText;
-    if (
+    const sourceChanged =
       sourceText !== this.renderedSourceText ||
       rawText !== this.renderedRawText ||
-      this.state.workIdPrefix !== this.renderedWorkIdPrefix
-    ) {
+      this.state.workIdPrefix !== this.renderedWorkIdPrefix;
+    if (sourceChanged) {
       this.renderedSourceText = sourceText;
       this.renderedRawText = rawText;
       this.renderedWorkIdPrefix = this.state.workIdPrefix;
@@ -312,8 +317,44 @@ export class DetailPiPreviewLayout extends VStack {
     }
     this.previousBacklinksExpanded = this.state.backlinks.expanded;
     this.previousBacklinkSelectedIndex = this.state.backlinks.selectedIndex;
-    if (this.resetScroll || selectionChanged) this.scrollView.scrollToStart();
+    const fragmentChanged =
+      this.state.targetFragmentId !== this.previousTargetFragmentId ||
+      this.state.previewOffset !== this.previousPreviewOffset;
+    if (
+      this.resetScroll ||
+      selectionChanged ||
+      fragmentChanged ||
+      (sourceChanged && this.state.targetFragmentId)
+    ) {
+      this.pendingFragmentScroll = true;
+    }
+    this.previousTargetFragmentId = this.state.targetFragmentId;
+    this.previousPreviewOffset = this.state.previewOffset;
     this.resetScroll = false;
+  }
+
+  applyPendingFragmentScroll(width: number): boolean {
+    if (!this.pendingFragmentScroll) return false;
+    if (this.scrollView.viewportHeight <= 0) {
+      if (this.requestRender && !this.fragmentRenderScheduled) {
+        this.fragmentRenderScheduled = true;
+        setTimeout(() => {
+          this.fragmentRenderScheduled = false;
+          this.requestRender?.();
+        }, 0);
+      }
+      return false;
+    }
+    const contentWidth = this.scrollView.getContentWidth(width);
+    const contentHeight = this.markdown.render(contentWidth).length + 1 +
+      this.backlinkMarkdown.render(contentWidth).length;
+    this.scrollView.updateLayout(contentHeight, this.scrollView.viewportHeight, () => {});
+    this.pendingFragmentScroll = false;
+    const previousScrollTop = this.scrollView.scrollTop;
+    this.scrollView.scrollTo(
+      this.state.targetFragmentId ? this.state.previewOffset : 0,
+    );
+    return this.scrollView.scrollTop !== previousScrollTop;
   }
 
   ensureBacklinkSelectionVisible(width: number): boolean {
@@ -337,8 +378,9 @@ export class DetailPiPreviewLayout extends VStack {
 
   override render(width: number): string[] {
     this.syncState();
-    const lines = super.render(width);
-    return this.ensureBacklinkSelectionVisible(width) ? super.render(width) : lines;
+    let lines = super.render(width);
+    if (this.applyPendingFragmentScroll(width)) lines = super.render(width);
+    if (this.ensureBacklinkSelectionVisible(width)) lines = super.render(width);
+    return lines;
   }
 }
-

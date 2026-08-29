@@ -74,7 +74,9 @@ function humanizedReferenceLabel(
   occurrence: BacklinkRelationOccurrence,
   targetTitle: string,
 ): string {
-  if (occurrence.kind === "block") return `((${targetTitle}))`;
+  if (occurrence.kind === "block") {
+    return `((${targetTitle}${occurrence.fragmentId ? `^${occurrence.fragmentId}` : ""}))`;
+  }
   if (occurrence.kind === "property") return `[${occurrence.propertyKey}::${targetTitle}]`;
   return source.text.slice(occurrence.start, occurrence.end);
 }

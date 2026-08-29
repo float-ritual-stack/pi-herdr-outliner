@@ -12,6 +12,7 @@ export type OutlinerReferenceOccurrence =
   | {
       kind: "block";
       blockId: string;
+      fragmentId?: string;
       start: number;
       end: number;
     }

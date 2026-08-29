@@ -166,6 +166,20 @@ export class TextBuffer {
     this.column = safeStart + value.length;
   }
 
+  replaceLine(row: number, value: string): void {
+    if (!Number.isInteger(row) || row < 0 || row >= this.lines.length) {
+      throw new Error(`Text buffer line is unavailable: ${row + 1}`);
+    }
+    if (value.includes("\n") || value.includes("\r")) {
+      throw new Error("Text buffer line replacement cannot contain a newline");
+    }
+    if (this.lines[row] === value) return;
+    this.recordEdit(null);
+    this.clearSelectionAnchor();
+    this.lines[row] = value;
+    if (row === this.row) this.column = Math.min(this.column, value.length);
+  }
+
   newline(): void {
     this.insert("\n");
   }

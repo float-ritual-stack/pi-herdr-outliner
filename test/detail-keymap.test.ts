@@ -12,6 +12,7 @@ function state(): DetailState {
   return {
     context: { selected: null, ancestors: [], children: [] },
     targetBlockId: null,
+    targetFragmentId: null,
     connectionMode: "unlocked",
     canNavigateBack: false,
     canNavigateForward: false,

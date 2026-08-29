@@ -74,6 +74,7 @@ interface Harness {
       blockId: string;
       intent: "preview" | "open" | "reveal";
       preserveSource: boolean;
+      fragmentId?: string;
     }>;
     pageQueries: Array<{ query: string | undefined; limit: number }>;
     focuses: number;
@@ -158,6 +159,7 @@ function createHarness(
         blockId,
         intent,
         preserveSource: options?.preserveSource === true,
+        ...(options?.fragmentId ? { fragmentId: options.fragmentId } : {}),
       });
       const targetClientId = options?.preserveSource ? "detail-other" : "detail-test";
       return {
@@ -166,7 +168,12 @@ function createHarness(
         blockId,
         intent,
         resolution: "unlocked",
-        command: { targetClientId, command: intent, blockId },
+        command: {
+          targetClientId,
+          command: intent,
+          blockId,
+          ...(options?.fragmentId ? { fragmentId: options.fragmentId } : {}),
+        },
       };
     },
     resolveReferences,
@@ -392,6 +399,49 @@ describe("detail controller projection and deferred refresh", () => {
 
     await harness.controller.dispatch({ type: "edit.begin" }, viewport);
     expect(harness.controller.state.status).toContain("restore before editing");
+  });
+
+  test("follows a durable fragment reference to its anchored preview line", async () => {
+    const source = makeBlock({ text: "See ((target01^decision))" });
+    const target = makeBlock({
+      id: "target01",
+      text: "Target\n\nIntro\n\n## Decision ^decision\nBody",
+    });
+    const harness = createHarness(source);
+    await harness.controller.initialize();
+    harness.setSelection({ selected: target, ancestors: [], children: [] });
+
+    await harness.controller.dispatch({ type: "reference.follow" }, viewport);
+
+    expect(harness.calls.followedReferences).toEqual([{
+      kind: "block",
+      value: target.id,
+      fragmentId: "decision",
+    }]);
+    expect(harness.calls.navigationDispatches).toEqual([{
+      blockId: target.id,
+      intent: "open",
+      preserveSource: false,
+      fragmentId: "decision",
+    }]);
+    expect(harness.controller.state.context.selected?.id).toBe(target.id);
+    expect(harness.controller.state.previewOffset).toBe(4);
+
+    const renamed = makeBlock({
+      ...target,
+      text: "Target\n\nIntro revised\n\n## Renamed decision ^decision\nBody",
+      updatedAt: "renamed-version",
+    });
+    harness.setSelection({ selected: renamed, ancestors: [], children: [] });
+    await harness.controller.onServiceEvent(event("content"), viewport);
+    expect(harness.controller.state.targetFragmentId).toBe("decision");
+    expect(harness.controller.state.previewOffset).toBe(4);
+
+    await harness.controller.dispatch({ type: "navigation.back" }, viewport);
+    await harness.controller.dispatch({ type: "navigation.forward" }, viewport);
+    expect(harness.controller.state.context.selected?.id).toBe(target.id);
+    expect(harness.controller.state.targetFragmentId).toBe("decision");
+    expect(harness.controller.state.previewOffset).toBe(4);
   });
 
   test("returns to an unlocked Tree preview after opening its link", async () => {
@@ -833,6 +883,89 @@ describe("detail controller completion, navigation, and focus", () => {
     await harness.controller.dispatch({ type: "completion.accept" }, viewport);
 
     expect(harness.controller.state.buffer.text).toBe("See ((target-block-126))");
+  });
+
+  test("creates a stable heading anchor only when fragment completion is accepted", async () => {
+    const target = makeBlock({
+      id: "fragment-target",
+      text: "Target\n\n## Durable heading\nBody",
+    });
+    const harness = createHarness(makeBlock({ text: "See ((fragment-target#durable" }));
+    harness.setQueryResults([{
+      blocks: [{ ...target, depth: 0, hasChildren: false, displayText: target.text }],
+      completeness: { kind: "complete" },
+    }]);
+    await harness.controller.initialize();
+    await harness.controller.dispatch({ type: "edit.begin" }, viewport);
+    await harness.controller.dispatch({ type: "completion.open" }, viewport);
+
+    expect(harness.calls.updates).toEqual([]);
+    expect(harness.controller.state.completion?.items).toMatchObject([{
+      label: "Target › # Durable heading · create anchor",
+      insertion: "((fragment-target^durable-heading))",
+      anchor: {
+        blockId: "fragment-target",
+        fragmentId: "durable-heading",
+        lineIndex: 2,
+      },
+    }]);
+
+
+    await harness.controller.dispatch({ type: "completion.accept" }, viewport);
+    expect(harness.calls.updates).toMatchObject([{
+      blockId: "fragment-target",
+      text: "Target\n\n## Durable heading ^durable-heading\nBody",
+      expectedUpdatedAt: target.updatedAt,
+    }]);
+    expect(harness.controller.state.buffer.text).toBe(
+      "See ((fragment-target^durable-heading))",
+    );
+    expect(harness.controller.state.status).toBe("Created fragment · ^durable-heading");
+  });
+  test("stages a same-block heading anchor in the current buffer before inserting its reference", async () => {
+    const source = makeBlock({
+      id: "current-block",
+      text: "## Local heading\n\nSee ((current-block#local",
+    });
+    const harness = createHarness(source);
+    harness.setQueryResults([{
+      blocks: [{ ...source, depth: 0, hasChildren: false, displayText: source.text }],
+      completeness: { kind: "complete" },
+    }]);
+    await harness.controller.initialize();
+    await harness.controller.dispatch({ type: "edit.begin" }, viewport);
+    await harness.controller.dispatch({ type: "completion.open" }, viewport);
+    await harness.controller.dispatch({ type: "completion.accept" }, viewport);
+
+    expect(harness.calls.updates).toEqual([]);
+    expect(harness.controller.state.buffer.text).toBe(
+      "## Local heading ^local-heading\n\nSee ((current-block^local-heading))",
+    );
+    expect(harness.controller.state.buffer.undo()).toBe(true);
+    expect(harness.controller.state.buffer.text).toBe(
+      "## Local heading ^local-heading\n\nSee ((current-block#local",
+    );
+  });
+
+  test("reuses an existing fragment anchor without updating its target", async () => {
+    const target = makeBlock({
+      id: "fragment-target",
+      text: "Target\n\nParagraph ^stable-paragraph",
+    });
+    const harness = createHarness(makeBlock({ text: "See ((fragment-target^stable" }));
+    harness.setQueryResults([{
+      blocks: [{ ...target, depth: 0, hasChildren: false, displayText: target.text }],
+      completeness: { kind: "complete" },
+    }]);
+    await harness.controller.initialize();
+    await harness.controller.dispatch({ type: "edit.begin" }, viewport);
+    await harness.controller.dispatch({ type: "completion.open" }, viewport);
+    await harness.controller.dispatch({ type: "completion.accept" }, viewport);
+
+    expect(harness.calls.updates).toEqual([]);
+    expect(harness.controller.state.buffer.text).toBe(
+      "See ((fragment-target^stable-paragraph))",
+    );
   });
 
   test("completes directories without closing and files with a closing bracket", async () => {

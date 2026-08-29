@@ -37,6 +37,7 @@ function state(text: string, rawText = "raw edit source"): DetailState {
   return {
     context: { selected, ancestors: [], children: [] },
     targetBlockId: selected.id,
+    targetFragmentId: null,
     connectionMode: "unlocked",
     canNavigateBack: false,
     canNavigateForward: false,
@@ -304,6 +305,7 @@ describe("Pi Markdown detail preview", () => {
     layout.scrollView.setScrollbar("hidden");
     const contentHeight = renderedDocument(layout, 20).length;
     layout.scrollView.updateLayout(contentHeight, 4, () => {});
+    layout.render(20);
     layout.scrollView.scrollBy(5);
 
     detail.status = "ordinary status update";
@@ -327,6 +329,29 @@ describe("Pi Markdown detail preview", () => {
     };
     layout.render(20);
     expect(layout.scrollView.scrollTop).toBe(0);
+  });
+
+  test("opens and preserves durable fragment offsets", () => {
+    const detail = state(Array.from({ length: 30 }, (_, index) => `line ${index}`).join("\n"));
+    const layout = previewLayout(detail);
+    layout.scrollView.setScrollbar("hidden");
+    const contentHeight = renderedDocument(layout, 20).length;
+    layout.scrollView.updateLayout(contentHeight, 6, () => {});
+
+    detail.targetFragmentId = "decision";
+    detail.previewOffset = 15;
+    layout.render(20);
+    expect(layout.scrollView.scrollTop).toBe(15);
+
+    layout.scrollView.scrollBy(2);
+    detail.status = "ordinary status update";
+    layout.render(20);
+    expect(layout.scrollView.scrollTop).toBe(17);
+
+    detail.resolvedSelectedText = `new leading line\n${detail.resolvedSelectedText}`;
+    detail.previewOffset = 16;
+    layout.render(20);
+    expect(layout.scrollView.scrollTop).toBe(16);
   });
 
   test("without links, updates Markdown only when the resolved source changes", () => {

@@ -1,5 +1,6 @@
 import type { RequestInput } from "./client";
 import { MAX_BLOCK_QUERY_LIMIT } from "./block-query";
+import { stripFragmentAnchors } from "./fragments";
 import { blockDisplayTitle } from "./references";
 import type {
   Block,
@@ -185,8 +186,9 @@ export async function projectDetailRead(
   requester: DetailEmbedRequester,
   text: string,
 ): Promise<DetailReadProjection> {
-  const matches = [...text.matchAll(DETAIL_EMBED_PATTERN)];
-  if (matches.length === 0) return { text, embeds: [] };
+  const projectedSource = stripFragmentAnchors(text);
+  const matches = [...projectedSource.matchAll(DETAIL_EMBED_PATTERN)];
+  if (matches.length === 0) return { text: projectedSource, embeds: [] };
 
   let pendingPhysicalBlocks: Promise<readonly Block[]> | null = null;
   const loadPhysicalBlocks = (): Promise<readonly Block[]> => {
@@ -208,7 +210,7 @@ export async function projectDetailRead(
   for (let index = 0; index < matches.length; index += 1) {
     const match = matches[index]!;
     const start = match.index;
-    output += text.slice(consumed, start);
+    output += projectedSource.slice(consumed, start);
     const blockId = match[1]!;
     if (index >= MAX_DETAIL_EMBEDS) {
       const limited = explicitFallback(blockId, "limit", `EMBED LIMIT · maximum ${MAX_DETAIL_EMBEDS}`);
@@ -222,6 +224,6 @@ export async function projectDetailRead(
     }
     consumed = start + match[0].length;
   }
-  output += text.slice(consumed);
+  output += projectedSource.slice(consumed);
   return { text: output, embeds };
 }

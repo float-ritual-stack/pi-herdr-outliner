@@ -229,7 +229,8 @@ export interface VirtualOccurrenceRank {
 
 export interface BlockReferenceResolution {
   blockId: string;
-  status: "resolved" | "deleted" | "missing";
+  fragmentId?: string;
+  status: "resolved" | "deleted" | "missing" | "stale" | "duplicate";
   title?: string;
   deletionRootId?: string;
 }
@@ -240,7 +241,7 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 18;
+export const OUTLINER_PROTOCOL_VERSION = 19;
 
 export interface OutlinerServiceStatus {
   status: "ready";
@@ -284,6 +285,7 @@ export type OutlinerRequest =
       action: "navigation.dispatch";
       sourceClientId: string;
       blockId: string;
+      fragmentId?: string;
       intent: OutlinerNavigationIntent;
       preserveSource?: boolean;
     }
@@ -407,6 +409,7 @@ export interface OutlinerUiCommand {
   targetClientId: string;
   command: "edit" | "reveal" | "focus" | "preview" | "open";
   blockId?: string;
+  fragmentId?: string;
 }
 
 export interface OutlinerNavigationResolution {

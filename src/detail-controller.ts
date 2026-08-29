@@ -1,8 +1,14 @@
 import { extractFileAnnotationComment, formatFileAnnotation } from "./annotations";
 import { completionTargetAtCursor } from "./completion";
-import { subsequenceScore } from "./block-focus";
+import { rankBlockFocusMatches, subsequenceScore } from "./block-focus";
 import { layoutDetailEditor } from "./detail-editor-layout";
 import type { DetailEmbedState, DetailReadProjection } from "./detail-embeds";
+import {
+  ensureHeadingFragment,
+  fragmentCandidates,
+  parseFragmentCompletionQuery,
+  resolveFragment,
+} from "./fragments";
 import type { ReferencedFile, ReferencedPathCandidate } from "./files";
 import { firstOutlinerReference, type OutlinerLinkTarget } from "./outliner-links";
 import { getProperty } from "./properties";
@@ -26,6 +32,11 @@ import type {
   VisibleBlockCollection,
 } from "./types";
 
+interface DetailNavigationEntry {
+  blockId: string;
+  fragmentId: string | null;
+}
+
 export type DetailMode = "preview" | "file" | "annotation" | "edit" | "comment";
 export type DetailConnectionMode = "unlocked" | "locked";
 
@@ -37,6 +48,13 @@ export interface DetailViewport {
 export interface DetailCompletionItem {
   label: string;
   insertion: string;
+  anchor?: {
+    blockId: string;
+    fragmentId: string;
+    lineIndex: number;
+    text: string;
+    expectedUpdatedAt: string;
+  };
 }
 
 export interface DetailCompletionState {
@@ -102,6 +120,7 @@ export function visibleBacklinkSources(
 export interface DetailState {
   context: SelectionContext;
   targetBlockId: string | null;
+  targetFragmentId: string | null;
   connectionMode: DetailConnectionMode;
   canNavigateBack: boolean;
   canNavigateForward: boolean;
@@ -137,7 +156,7 @@ export interface DetailEffects {
   dispatchNavigation(
     blockId: string,
     intent: OutlinerNavigationIntent,
-    options?: { preserveSource?: boolean },
+    options?: { preserveSource?: boolean; fragmentId?: string },
   ): Promise<OutlinerNavigationDispatch>;
   resolveNavigation(
     intent: OutlinerNavigationIntent,
@@ -292,6 +311,7 @@ export function createDetailController(
   const state: DetailState = {
     context: { selected: null, ancestors: [], children: [] },
     targetBlockId: null,
+    targetFragmentId: null,
     connectionMode: "unlocked",
     canNavigateBack: false,
     canNavigateForward: false,
@@ -326,7 +346,7 @@ export function createDetailController(
       expandedSourceIds: new Set(),
     },
   };
-  const navigationHistory: string[] = [];
+  const navigationHistory: DetailNavigationEntry[] = [];
   let navigationIndex = -1;
   let pendingUiCommand: OutlinerUiCommand | null = null;
   let serviceConnected = false;
@@ -418,13 +438,20 @@ export function createDetailController(
     state.canNavigateForward = navigationIndex >= 0 && navigationIndex < navigationHistory.length - 1;
   };
 
-  const recordNavigation = (blockId: string | null): void => {
-    if (!blockId || navigationHistory[navigationIndex] === blockId) {
+  const recordNavigation = (
+    blockId: string | null,
+    fragmentId: string | null,
+  ): void => {
+    const current = navigationHistory[navigationIndex];
+    if (
+      !blockId ||
+      (current?.blockId === blockId && current.fragmentId === fragmentId)
+    ) {
       syncNavigationState();
       return;
     }
     navigationHistory.splice(navigationIndex + 1);
-    navigationHistory.push(blockId);
+    navigationHistory.push({ blockId, fragmentId });
     if (navigationHistory.length > 200) navigationHistory.shift();
     navigationIndex = navigationHistory.length - 1;
     syncNavigationState();
@@ -434,18 +461,24 @@ export function createDetailController(
     next: SelectionContext,
     force = false,
     record = true,
+    fragmentId: string | null = null,
   ): Promise<void> => {
     state.refreshPending = false;
     const targetChanged = next.selected?.id !== state.context.selected?.id;
+    const fragmentChanged = fragmentId !== state.targetFragmentId;
     const changed =
       targetChanged ||
+      fragmentChanged ||
       next.selected?.updatedAt !== state.context.selected?.updatedAt;
-    if (changed) invalidateBacklinks();
-    if (record) recordNavigation(state.targetBlockId);
+    if (targetChanged || next.selected?.updatedAt !== state.context.selected?.updatedAt) {
+      invalidateBacklinks();
+    }
+    if (record) recordNavigation(state.targetBlockId, state.targetFragmentId);
     state.context = next;
     state.targetBlockId = next.selected?.id ?? null;
+    state.targetFragmentId = fragmentId;
     if (targetChanged && serviceConnected) await effects.setCurrentBlock(state.targetBlockId);
-    if (record) recordNavigation(state.targetBlockId);
+    if (record) recordNavigation(state.targetBlockId, state.targetFragmentId);
     else syncNavigationState();
     if (!force && !changed) return;
     if (changed) state.status = "";
@@ -460,6 +493,16 @@ export function createDetailController(
     }
     refreshBreadcrumb();
     state.previewOffset = 0;
+    if (fragmentId && next.selected) {
+      const fragment = resolveFragment(next.selected.text, fragmentId);
+      if (fragment.status === "resolved") {
+        state.previewOffset = fragment.anchor.lineIndex;
+      } else {
+        state.status = fragment.status === "duplicate"
+          ? `Duplicate fragment · ^${fragmentId}`
+          : `Missing fragment · ^${fragmentId}`;
+      }
+    }
     state.completion = null;
     state.mode = detailDisplayMode(next.selected);
     if (next.selected?.deletedAt) {
@@ -481,28 +524,43 @@ export function createDetailController(
     blockId: string,
     force = false,
     record = true,
+    fragmentId: string | null = null,
   ): Promise<void> => {
     try {
-      await applyTarget(await effects.getBlockContext(blockId), force, record);
+      await applyTarget(
+        await effects.getBlockContext(blockId),
+        force,
+        record,
+        fragmentId,
+      );
     } catch {
-      if (record) recordNavigation(state.targetBlockId);
+      if (record) recordNavigation(state.targetBlockId, state.targetFragmentId);
       state.context = { selected: null, ancestors: [], children: [] };
       await effects.setCurrentBlock(null);
       state.targetBlockId = blockId;
+      state.targetFragmentId = fragmentId;
       state.resolvedSelectedText = "";
       state.projectedSelectedText = "";
       state.embedStates = [];
       state.resolvedBreadcrumb = "";
       state.referencedFile = null;
-      if (record) recordNavigation(blockId);
+      if (record) recordNavigation(blockId, fragmentId);
       else syncNavigationState();
-      state.status = `Target is no longer available · ${blockId}`;
+      state.status = `Target is no longer available · ${blockId}${
+        fragmentId ? `^${fragmentId}` : ""
+      }`;
     }
   };
 
   const loadCurrentTarget = async (force = false): Promise<void> => {
-    if (state.targetBlockId) await loadBlock(state.targetBlockId, force, false);
-    else await loadBrowsingContext(force);
+    if (state.targetBlockId) {
+      await loadBlock(
+        state.targetBlockId,
+        force,
+        false,
+        state.targetFragmentId,
+      );
+    } else await loadBrowsingContext(force);
   };
 
   const applyNavigationCommand = async (command: OutlinerUiCommand): Promise<boolean> => {
@@ -513,7 +571,12 @@ export function createDetailController(
     ) {
       return false;
     }
-    await loadBlock(command.blockId, true, command.command !== "preview");
+    await loadBlock(
+      command.blockId,
+      true,
+      command.command !== "preview",
+      command.fragmentId ?? null,
+    );
     return true;
   };
 
@@ -660,6 +723,7 @@ export function createDetailController(
     }
 
     let items: DetailCompletionItem[];
+    let emptyStatus = "";
     let completionStatus = "";
     if (target.kind === "file") {
       items = effects.completeFiles(target.query).map((candidate) => ({
@@ -686,16 +750,67 @@ export function createDetailController(
         completionStatus = `Showing first ${collection.completeness.limit} matches`;
       }
     } else {
-      const collection = await effects.queryBlocks({
-        text: target.query || undefined,
-        limit: 20,
-      });
-      items = collection.blocks.map((block) => ({
-        label: blockDisplayTitle(block),
-        insertion: `((${block.id}))`,
-      }));
-      if (collection.completeness.kind === "truncated") {
-        completionStatus = `Showing first ${collection.completeness.limit} matches`;
+      const fragmentQuery = parseFragmentCompletionQuery(target.query);
+      if (!fragmentQuery) {
+        const collection = await effects.queryBlocks({
+          text: target.query || undefined,
+          limit: 20,
+        });
+        items = collection.blocks.map((block) => ({
+          label: blockDisplayTitle(block),
+          insertion: `((${block.id}))`,
+        }));
+        if (collection.completeness.kind === "truncated") {
+          completionStatus = `Showing first ${collection.completeness.limit} matches`;
+        }
+      } else {
+        const collection = await effects.queryBlocks({ limit: 500 });
+        const blocks = fragmentQuery.blockQuery
+          ? rankBlockFocusMatches(collection.blocks, fragmentQuery.blockQuery, 50)
+            .map((match) => match.block)
+          : collection.blocks;
+        items = [];
+        outer:
+        for (const block of blocks) {
+          const sourceText = block.id === state.context.selected?.id
+            ? state.buffer.text
+            : block.text;
+          for (
+            const candidate of fragmentCandidates(
+              sourceText,
+              fragmentQuery.fragmentQuery,
+              fragmentQuery.mode,
+            )
+          ) {
+            const ensured = candidate.fragmentId
+              ? { text: sourceText, fragmentId: candidate.fragmentId, created: false }
+              : ensureHeadingFragment(sourceText, candidate.lineIndex);
+            items.push({
+              label: `${blockDisplayTitle(block)} › ${
+                candidate.kind === "heading" ? "#" : "¶"
+              } ${candidate.label}${
+                candidate.fragmentId ? ` · ^${candidate.fragmentId}` : " · create anchor"
+              }`,
+              insertion: `((${block.id}^${ensured.fragmentId}))`,
+              ...(ensured.created
+                ? {
+                    anchor: {
+                      blockId: block.id,
+                      fragmentId: ensured.fragmentId,
+                      lineIndex: candidate.lineIndex,
+                      text: ensured.text,
+                      expectedUpdatedAt: block.updatedAt,
+                    },
+                  }
+                : {}),
+            });
+            if (items.length >= 20) break outer;
+          }
+        }
+        emptyStatus = "No matching block fragments";
+        if (collection.completeness.kind === "truncated") {
+          completionStatus = `Searched first ${collection.completeness.limit} blocks`;
+        }
       }
     }
 
@@ -709,7 +824,7 @@ export function createDetailController(
           state.status = "No matching page addresses";
           break;
         case "block":
-          state.status = "No matching blocks";
+          state.status = emptyStatus || "No matching blocks";
           break;
       }
       return;
@@ -717,13 +832,28 @@ export function createDetailController(
     state.completion = { start: target.start, end: target.end, index: 0, items };
     state.status = completionStatus;
   };
-
-  const applyCompletion = (): void => {
-    if (!state.completion || state.completion.items.length === 0) return;
-    const item = state.completion.items[state.completion.index];
-    state.buffer.replaceCurrentLine(state.completion.start, state.completion.end, item.insertion);
+  const applyCompletion = async (): Promise<void> => {
+    const completion = state.completion;
+    if (!completion || completion.items.length === 0) return;
+    const item = completion.items[completion.index]!;
+    if (item.anchor) {
+      if (item.anchor.blockId === state.context.selected?.id) {
+        const anchoredLine = item.anchor.text.split(/\r?\n/)[item.anchor.lineIndex];
+        if (anchoredLine === undefined) {
+          throw new Error(`Fragment heading line is unavailable: ${item.anchor.lineIndex + 1}`);
+        }
+        state.buffer.replaceLine(item.anchor.lineIndex, anchoredLine);
+      } else {
+        await effects.updateBlock({
+          blockId: item.anchor.blockId,
+          text: item.anchor.text,
+          expectedUpdatedAt: item.anchor.expectedUpdatedAt,
+        });
+      }
+    }
+    state.buffer.replaceCurrentLine(completion.start, completion.end, item.insertion);
     state.completion = null;
-    state.status = "";
+    state.status = item.anchor ? `Created fragment · ^${item.anchor.fragmentId}` : "";
   };
 
   const navigatePreview = (
@@ -771,13 +901,18 @@ export function createDetailController(
       case "navigation.forward": {
         const direction = intent.type === "navigation.back" ? -1 : 1;
         const targetIndex = navigationIndex + direction;
-        const blockId = navigationHistory[targetIndex];
-        if (!blockId) {
+        const target = navigationHistory[targetIndex];
+        if (!target) {
           state.status = "No further navigation history";
           break;
         }
         navigationIndex = targetIndex;
-        await loadBlock(blockId, true, false);
+        await loadBlock(
+          target.blockId,
+          true,
+          false,
+          target.fragmentId,
+        );
         state.status = direction < 0 ? "Navigation back" : "Navigation forward";
         break;
       }
@@ -807,13 +942,19 @@ export function createDetailController(
         const dispatched = await effects.dispatchNavigation(
           resolved.block.id,
           navigationIntent,
-          { preserveSource },
+          {
+            preserveSource,
+            fragmentId: reference.kind === "block" ? reference.fragmentId : undefined,
+          },
         );
         if (dispatched.targetClientId === effects.clientId && navigationIntent === "open") {
           const applied = await applyNavigationCommand({
             targetClientId: effects.clientId,
             command: "open",
             blockId: resolved.block.id,
+            ...(reference.kind === "block" && reference.fragmentId
+              ? { fragmentId: reference.fragmentId }
+              : {}),
           });
           if (!applied) {
             state.status = "Locked · ordinary navigation preserved this Detail";
@@ -1022,7 +1163,11 @@ export function createDetailController(
         }
         break;
       case "completion.accept":
-        applyCompletion();
+        try {
+          await applyCompletion();
+        } catch (error) {
+          state.status = errorMessage(error);
+        }
         ensureEditorCursorVisible(viewport);
         break;
       case "completion.dismiss":
@@ -1093,7 +1238,9 @@ export function createDetailController(
           if (command.command === "preview") {
             state.status = "Previewing Tree selection · L locks this block";
           } else if (command.command === "open") {
-            state.status = "Opened here · still unlocked · L locks this block";
+            state.status = command.fragmentId
+              ? `Opened fragment · ^${command.fragmentId} · line ${state.previewOffset + 1} · still unlocked`
+              : "Opened here · still unlocked · L locks this block";
           }
         }
         if (command.command === "edit") await beginEdit(viewport);

@@ -206,6 +206,20 @@ test("renders ordinary block Markdown without loading a workspace snapshot or ne
   expect(requester.calls).not.toContainEqual({ action: "get", blockId: "nested-target" });
 });
 
+test("hides fragment anchor markers only in the generated read projection", async () => {
+  const requester = new FakeRequester(new Map(), new Map());
+  const authored = "# Heading ^stable-heading\n\nParagraph ^stable-paragraph";
+
+  const projection = await projectDetailRead(requester, authored);
+
+  expect(projection).toEqual({
+    text: "# Heading\n\nParagraph",
+    embeds: [],
+  });
+  expect(authored).toContain("^stable-heading");
+  expect(requester.calls).toEqual([]);
+});
+
 test("renders workspace projection failures instead of hiding the document", async () => {
   const definition = virtualBranch("view-next");
   const requester = new FakeRequester(
