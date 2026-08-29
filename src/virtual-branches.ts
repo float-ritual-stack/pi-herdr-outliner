@@ -1,4 +1,9 @@
-import { parseFilter, parsePropertyTokens, patchPropertyText } from "./properties";
+import {
+  MAX_BLOCK_QUERY_LIMIT,
+  parsePropertyFilterClause,
+  parsePropertyFilterExpression,
+} from "./block-query";
+import { parsePropertyTokens, patchPropertyText } from "./properties";
 import type {
   Block,
   BlockCollectionCompleteness,
@@ -11,7 +16,7 @@ import type {
 } from "./types";
 
 const DEFAULT_VIRTUAL_BRANCH_LIMIT = 200;
-const MAX_VIRTUAL_BRANCH_LIMIT = 1_000;
+const MAX_VIRTUAL_BRANCH_LIMIT = MAX_BLOCK_QUERY_LIMIT;
 const VIRTUAL_BRANCH_TYPE = "virtual-branch";
 
 interface TreeRowBase {
@@ -164,7 +169,7 @@ export function parseVirtualBranchConfig(
   if (queryProperty) {
     query = queryProperty.value;
     try {
-      filters = parseFilter(query);
+      filters = parsePropertyFilterExpression(query);
       if (filters.length === 0) configurationErrors.push("Virtual branch query cannot be empty");
     } catch (error) {
       configurationErrors.push(`Invalid virtual branch query: ${errorMessage(error)}`);
@@ -186,7 +191,7 @@ export function parseVirtualBranchConfig(
   let create: BlockProperty | null = null;
   if (createProperty) {
     try {
-      const parsed = parseFilter(createProperty.value);
+      const parsed = [parsePropertyFilterClause(createProperty.value)];
       if (parsed.length !== 1 || parsed[0]?.value === undefined || parsed[0].value.length === 0) {
         creationErrors.push(
           "Virtual branch create must contain exactly one property with a value",

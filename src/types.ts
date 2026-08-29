@@ -159,7 +159,7 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 9;
+export const OUTLINER_PROTOCOL_VERSION = 10;
 
 export interface OutlinerServiceStatus {
   status: "ready";
@@ -259,7 +259,7 @@ export interface NavigationState {
 }
 
 export interface WorkspaceSnapshotView {
-  filters?: PropertyFilter[];
+  query?: BlockSearchQuery;
 }
 
 export interface WorkspaceSnapshot {

@@ -85,9 +85,11 @@ Prefer clean cutovers: migrate every caller, test, and import, then remove obsol
 
 ### Queries
 
-- `blocks.query` always has a positive limit.
+- `blocks.query` always has an integer limit from 1 through 1000.
 - Every bounded collection carries `complete` or `truncated` metadata.
 - Never infer absence from a truncated collection.
+- Human filter shorthand is positive-AND property presence/equality only; quote spaced values and keep text/subtree/deletion/rank/limit as structured fields.
+- Tree, virtual branches, CLI, Pi commands, and agent tools must converge on the same normalized `BlockSearchQuery`.
 - Projections must use a complete physical snapshot, not a collapse-pruned visible tree.
 
 ### Mutations

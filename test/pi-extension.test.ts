@@ -45,7 +45,7 @@ test("registers the workspace commands and annotation-aware tools", () => {
   expect(updateSchema).toContain("expectedUpdatedAt");
 });
 
-test("requires protocol v9, attributes agent creates and page follows, and presents bounded query results", async () => {
+test("requires protocol v10, attributes agent creates and page follows, and presents bounded query results", async () => {
   const collection: VisibleBlockCollection = {
     blocks: [
       {
@@ -66,13 +66,17 @@ test("requires protocol v9, attributes agent creates and page follows, and prese
     ],
     completeness: { kind: "truncated", limit: 20 },
   };
-  let protocolVersion = 9;
+  let protocolVersion = 10;
   let queryCollection = collection;
+  let queryError: Error | undefined;
   const requests: RequestInput[] = [];
   const originalRequest = OutlinerClient.prototype.request;
   OutlinerClient.prototype.request = async function <T>(input: RequestInput): Promise<T> {
     requests.push(input);
-    if (input.action === "blocks.query") return queryCollection as unknown as T;
+    if (input.action === "blocks.query") {
+      if (queryError) throw queryError;
+      return queryCollection as unknown as T;
+    }
     if (input.action === "create") return {} as T;
     if (input.action === "pages.follow") return { created: true } as T;
     if (input.action === "work-ids.status") return { prefix: "PIE" } as T;
@@ -140,6 +144,29 @@ test("requires protocol v9, attributes agent creates and page follows, and prese
         },
       },
     });
+    await commands.get("outliner-filter")!.handler('status="in progress"', {
+      ui: {
+        setWidget(id, lines) {
+          widgets.push({ id, lines });
+        },
+      },
+    });
+    await commands.get("outliner-filter")!.handler('status="in progress', {
+      ui: {
+        setWidget(id, lines) {
+          widgets.push({ id, lines });
+        },
+      },
+    });
+    queryError = new Error("Service unavailable");
+    await commands.get("outliner-filter")!.handler("status=open", {
+      ui: {
+        setWidget(id, lines) {
+          widgets.push({ id, lines });
+        },
+      },
+    });
+    queryError = undefined;
     const result = await tools.get("outliner_query")!.execute("query-id", { text: "Matching" });
     await tools.get("outliner_create")!.execute(
       "tool-call-test",
@@ -178,6 +205,14 @@ test("requires protocol v9, attributes agent creates and page follows, and prese
     ).rejects.toThrow("Unsupported page operation: unknown");
 
     expect(requests.filter((request) => request.action === "blocks.query")).toEqual([
+      {
+        action: "blocks.query",
+        query: { filters: [{ key: "status", value: "open" }], limit: 20 },
+      },
+      {
+        action: "blocks.query",
+        query: { filters: [{ key: "status", value: "in progress" }], limit: 20 },
+      },
       {
         action: "blocks.query",
         query: { filters: [{ key: "status", value: "open" }], limit: 20 },
@@ -225,6 +260,18 @@ test("requires protocol v9, attributes agent creates and page follows, and prese
         id: "pi-outliner-filter",
         lines: ["• Matching block", "Results truncated at 20 blocks"],
       },
+      {
+        id: "pi-outliner-filter",
+        lines: ["• Matching block", "Results truncated at 20 blocks"],
+      },
+      {
+        id: "pi-outliner-filter",
+        lines: ["Invalid filter: Unterminated quoted filter value at character 8"],
+      },
+      {
+        id: "pi-outliner-filter",
+        lines: ["Filter failed: Service unavailable"],
+      },
     ]);
     expect(JSON.parse(result.content[0]!.text)).toEqual({
       ...collection,
@@ -253,7 +300,7 @@ test("requires protocol v9, attributes agent creates and page follows, and prese
     expect(largeEnvelope.presentation.omitted).toBeGreaterThan(0);
     protocolVersion = 5;
     await expect(tools.get("outliner_query")!.execute("incompatible-query", {})).rejects.toThrow(
-      "Incompatible outliner protocol 5; expected 9",
+      "Incompatible outliner protocol 5; expected 10",
     );
   } finally {
     OutlinerClient.prototype.request = originalRequest;

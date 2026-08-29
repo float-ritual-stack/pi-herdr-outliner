@@ -1,4 +1,5 @@
 import { parseArgs } from "node:util";
+import { parsePropertyFilterClause } from "./block-query";
 import {
   focusBlockByQuery,
   formatBlockFocusMatch,
@@ -6,17 +7,8 @@ import {
 import { OutlinerClient, type RequestInput } from "./client";
 import { resolvePaths } from "./paths";
 import { navigateOutlinerLink } from "./outliner-links";
-import type { BlockSearchQuery, PropertyFilter } from "./types";
+import type { BlockSearchQuery } from "./types";
 
-function parsePropertyFilter(item: string): PropertyFilter {
-  const separator = item.includes("::") ? "::" : "=";
-  const index = item.indexOf(separator);
-  if (index < 0) return { key: item };
-  return {
-    key: item.slice(0, index),
-    value: item.slice(index + separator.length),
-  };
-}
 
 function parseLimit(value: string | undefined, fallback: number): number {
   const limit = value === undefined ? fallback : Number(value);
@@ -39,14 +31,16 @@ switch (command) {
         filter: { type: "string", multiple: true },
         text: { type: "string" },
         limit: { type: "string" },
+        subtree: { type: "string" },
       },
       strict: true,
     });
-    const filters = values.filter?.map(parsePropertyFilter);
+    const filters = values.filter?.map((filter) => parsePropertyFilterClause(filter));
     const limit = parseLimit(values.limit, 500);
     const query: BlockSearchQuery = {
       filters,
       text: values.text,
+      subtreeRootId: values.subtree,
       limit,
     };
     request = { action: "blocks.query", query };

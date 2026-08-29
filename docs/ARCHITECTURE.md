@@ -118,7 +118,7 @@ Literal property-looking text inside inline code, fenced code, or escaped syntax
 
 ## Protocol
 
-The current protocol version is `9`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
+The current protocol version is `10`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
 
 ### Important request families
 
@@ -182,6 +182,27 @@ interface VisibleBlockCollection {
 ```
 
 Clients must never infer absence from a truncated collection. Workspace snapshots carry separate visible and complete physical collections so projections are not derived from a collapse-pruned tree.
+
+### Normalized block queries
+
+`BlockSearchQuery` is the sole semantic query model:
+
+```ts
+interface BlockSearchQuery {
+  filters?: Array<{ key: string; value?: string }>;
+  text?: string;
+  subtreeRootId?: string;
+  rankViewId?: string;
+  includeDeleted?: "roots" | "all";
+  limit: number;
+}
+```
+
+The service normalizes every query before regular graph traversal or ranked virtual-branch SQL. It validates limits from 1 through 1000 without clamping, lowercases property keys, preserves exact interior value spaces, distinguishes presence from equality, removes exact duplicate clauses, validates subtree roots, and translates the reserved `deleted=true` compatibility filter into explicit deleted-root mode.
+
+Human text surfaces share one minimal property-filter parser: whitespace-separated positive-AND clauses, `key` presence, `key=value`/`key::value` equality, and double-quoted spaced values with `\\` and `\"` escapes. Tree and Pi commands use the expression parser; each repeated CLI `--filter` is parsed as one clause so a shell-quoted value containing spaces remains exact. Virtual branches persist the canonical expression in `[query::…]`. Agent tools remain structured and bypass the shorthand.
+
+`workspace.snapshot.view.query` uses the same model for bounded Tree filtering while retaining a separate complete physical collection for canonical ancestry and projection construction. `rankViewId` is internal projection context and is rejected from snapshot queries.
 
 ## Reactive flow
 

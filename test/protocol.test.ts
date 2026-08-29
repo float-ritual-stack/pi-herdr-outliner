@@ -45,7 +45,7 @@ test("serves mutations and property queries over the local socket", async () => 
   const client = new OutlinerClient(socket);
   const service = await client.request<OutlinerServiceStatus>({ action: "ping" });
   expect(service).toEqual({ status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION });
-  expect(service.protocolVersion).toBe(9);
+  expect(service.protocolVersion).toBe(10);
   const provenance = {
     actorId: "omp",
     sessionId: "session-1",
@@ -68,6 +68,24 @@ test("serves mutations and property queries over the local socket", async () => 
   const matches = await client.request<VisibleBlockCollection>({
     action: "blocks.query",
     query: { filters: [{ key: "type", value: "question" }], limit: 1 },
+  });
+  const spaced = await client.request<Block>({
+    action: "create",
+    text: "Active protocol work [status::in progress] [project::pi-outliner]",
+  });
+  const spacedMatches = await client.request<VisibleBlockCollection>({
+    action: "blocks.query",
+    query: {
+      filters: [
+        { key: " STATUS ", value: " in progress " },
+        { key: "project", value: "PI-OUTLINER" },
+      ],
+      limit: 20,
+    },
+  });
+  expect(spacedMatches).toEqual({
+    blocks: [expect.objectContaining({ id: spaced.id })],
+    completeness: { kind: "complete" },
   });
   const allocatorBefore = await client.request<WorkIdAllocatorStatus>({
     action: "work-ids.status",
@@ -213,7 +231,7 @@ test("serves mutations and property queries over the local socket", async () => 
   });
   expect(invalidLimit.ok).toBe(false);
   if (!invalidLimit.ok) {
-    expect(invalidLimit.error).toBe("Block search limit must be a positive integer");
+    expect(invalidLimit.error).toBe("Block search limit must be an integer from 1 through 1000");
   }
   const patched = await client.request<Block>({
     action: "properties.patch",

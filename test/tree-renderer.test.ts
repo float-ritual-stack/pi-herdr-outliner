@@ -516,11 +516,23 @@ describe("renderTreeFrame", () => {
   test("renders filter, delete, and viewer mode-specific frames", () => {
     const selected = block("selected");
     const filterFrame = renderTreeFrame(
-      view([selected], { mode: "filter", quickInput: "type=page" }),
+      view([selected], { mode: "filter", quickInput: "type=page", status: "" }),
       80,
       8,
     ).frame.split("\n");
     expect(filterFrame.at(-2)).toBe("\x1b[1mFilter:\x1b[0m type=page▏");
+    const invalidFilterFrame = renderTreeFrame(
+      view([selected], {
+        mode: "filter",
+        quickInput: 'status="in progress',
+        status: "Invalid filter: Unterminated quoted filter value at character 8",
+      }),
+      120,
+      8,
+    ).frame.split("\n");
+    expect(invalidFilterFrame.at(-2)).toContain(
+      "Invalid filter: Unterminated quoted filter value at character 8",
+    );
 
     const gotoFrame = renderTreeFrame(
       view([selected], {

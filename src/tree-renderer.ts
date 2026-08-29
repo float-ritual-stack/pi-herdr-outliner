@@ -353,7 +353,7 @@ export function renderTreeFrame(
     let completionSuffix = "";
     if (completion && selectedCompletion) {
       completionSuffix = `  ${completion.index + 1}/${completion.items.length} ${selectedCompletion.label}`;
-    } else if (view.mode === "goto" && view.status) {
+    } else if (view.status) {
       completionSuffix = `  ${view.status}`;
     }
     output.push(

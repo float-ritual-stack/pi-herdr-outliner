@@ -50,6 +50,43 @@ describe("OutlinerStore", () => {
     expect(matches[0].author).toBe("agent");
   });
 
+  test("normalizes exact spaced filters and combines them with text and subtree scope", () => {
+    const store = makeStore();
+    const firstRoot = store.create("First query root");
+    const secondRoot = store.create("Second query root");
+    const alpha = store.create(
+      "Alpha route snapshot [status::in progress] [project::pi-outliner]",
+      firstRoot.id,
+    );
+    store.create(
+      "Beta route snapshot [status::in review] [project::pi-outliner]",
+      firstRoot.id,
+    );
+    store.create(
+      "Gamma route snapshot [status::in progress] [project::other]",
+      secondRoot.id,
+    );
+
+    const result = store.queryBlocks({
+      filters: [
+        { key: " STATUS ", value: " in progress " },
+        { key: "status", value: "IN PROGRESS" },
+        { key: "project", value: "PI-OUTLINER" },
+      ],
+      text: "route snapshot",
+      subtreeRootId: firstRoot.id,
+      limit: 20,
+    });
+    expect(result).toEqual({
+      blocks: [expect.objectContaining({ id: alpha.id, depth: 1 })],
+      completeness: { kind: "complete" },
+    });
+    expect(() => store.queryBlocks({
+      subtreeRootId: "missing-query-root",
+      limit: 20,
+    })).toThrow("Block not found: missing-query-root");
+  });
+
   test("keeps literal property examples out of indexed queries", () => {
     const store = makeStore();
     const block = store.create([
@@ -510,12 +547,12 @@ Second paragraph`;
     });
     for (const limit of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
       expect(() => store.queryBlocks({ text: "matching", limit })).toThrow(
-        "Block search limit must be a positive integer",
+        "Block search limit must be an integer from 1 through 1000",
       );
     }
     expect(() =>
       store.queryBlocks({ text: "matching" } as Parameters<OutlinerStore["queryBlocks"]>[0]),
-    ).toThrow("Block search limit must be a positive integer");
+    ).toThrow("Block search limit must be an integer from 1 through 1000");
   });
 
   test("reads complete visible and physical snapshots without a row cap", () => {
@@ -561,7 +598,10 @@ Second paragraph`;
     expect(unfiltered.physical.blocks.find((block) => block.id === child.id)?.depth).toBe(1);
 
     const filtered = store.readWorkspaceSnapshot({
-      filters: [{ key: "kind", value: "snapshot-target" }],
+      query: {
+        filters: [{ key: "kind", value: "snapshot-target" }],
+        limit: 500,
+      },
     });
     expect(filtered.visible.blocks).toEqual([
       expect.objectContaining({
@@ -572,7 +612,27 @@ Second paragraph`;
     expect(filtered.physical.blocks.find((block) => block.id === child.id)?.depth).toBe(1);
   });
 
+  test("bounds filtered workspace snapshots while retaining a complete physical graph", () => {
+    const store = makeStore();
+    const first = store.create("First [status::in progress]");
+    store.create("Second [status::in progress]");
+
+    const snapshot = store.readWorkspaceSnapshot({
+      query: {
+        filters: [{ key: "status", value: "in progress" }],
+        limit: 1,
+      },
+    });
+    expect(snapshot.visible).toEqual({
+      blocks: [expect.objectContaining({ id: first.id })],
+      completeness: { kind: "truncated", limit: 1 },
+    });
+    expect(snapshot.physical.completeness).toEqual({ kind: "complete" });
+    expect(snapshot.physical.blocks.length).toBeGreaterThan(snapshot.visible.blocks.length);
+  });
+
   test("resolves references for display without changing canonical block text", () => {
+
     const store = makeStore();
     const target = store.create("Decision title [type::decision]");
     const rawText = `See ((${target.id}))`;

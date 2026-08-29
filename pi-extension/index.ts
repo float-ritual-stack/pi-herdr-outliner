@@ -14,6 +14,10 @@ import {
   focusBlockByQuery,
   formatBlockFocusMatch,
 } from "../src/block-focus";
+import {
+  BlockQuerySyntaxError,
+  parsePropertyFilterExpression,
+} from "../src/block-query";
 import { OutlinerClient } from "../src/client";
 import { resolvePaths } from "../src/paths";
 import { getProperty } from "../src/properties";
@@ -247,31 +251,30 @@ export default function outlinerExtension(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("outliner-filter", {
-    description: "Preview blocks matching property filters such as type=question status=open",
+    description:
+      'Preview blocks matching AND property filters such as type=question status="in progress"',
     handler: async (args, ctx) => {
       await ensureService(false);
-      const filters = args
-        .trim()
-        .split(/\s+/)
-        .filter(Boolean)
-        .map((token) => {
-          const separator = token.includes("::") ? "::" : "=";
-          const index = token.indexOf(separator);
-          return index < 0
-            ? { key: token }
-            : { key: token.slice(0, index), value: token.slice(index + separator.length) };
+      try {
+        const filters = parsePropertyFilterExpression(args);
+        const { blocks, completeness } = await client.request<VisibleBlockCollection>({
+          action: "blocks.query",
+          query: { filters, limit: 20 },
         });
-      const { blocks, completeness } = await client.request<VisibleBlockCollection>({
-        action: "blocks.query",
-        query: { filters, limit: 20 },
-      });
-      const lines = blocks.length
-        ? blocks.map((block) => `${"  ".repeat(block.depth)}• ${block.text}`)
-        : ["No matching blocks"];
-      if (completeness.kind === "truncated") {
-        lines.push(`Results truncated at ${completeness.limit} blocks`);
+        const lines = blocks.length
+          ? blocks.map((block) => `${"  ".repeat(block.depth)}• ${block.text}`)
+          : ["No matching blocks"];
+        if (completeness.kind === "truncated") {
+          lines.push(`Results truncated at ${completeness.limit} blocks`);
+        }
+        ctx.ui.setWidget("pi-outliner-filter", lines, { placement: "belowEditor" });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const label = error instanceof BlockQuerySyntaxError ? "Invalid filter" : "Filter failed";
+        ctx.ui.setWidget("pi-outliner-filter", [`${label}: ${message}`], {
+          placement: "belowEditor",
+        });
       }
-      ctx.ui.setWidget("pi-outliner-filter", lines, { placement: "belowEditor" });
     },
   });
 
