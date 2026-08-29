@@ -9,7 +9,7 @@ import { TextBuffer } from "./text-buffer";
 import type {
   Block,
   BlockSearchQuery,
-  NavigationState,
+  BrowsingContextState,
   PageAddressCollection,
   OutlinerEvent,
   SelectionContext,
@@ -18,6 +18,7 @@ import type {
 } from "./types";
 
 export type DetailMode = "preview" | "file" | "annotation" | "edit" | "comment";
+export type DetailConnectionMode = "follow" | "independent";
 
 export interface DetailViewport {
   width: number;
@@ -43,6 +44,10 @@ export interface DetailLineRange {
 
 export interface DetailState {
   context: SelectionContext;
+  targetBlockId: string | null;
+  connectionMode: DetailConnectionMode;
+  canNavigateBack: boolean;
+  canNavigateForward: boolean;
   resolvedSelectedText: string;
   workIdPrefix: string | null;
   resolvedBreadcrumb: string;
@@ -63,9 +68,10 @@ export interface DetailState {
 
 export interface DetailEffects {
   readonly clientId: string;
+  readonly browsingContextId: string;
   focusSelf(): void;
-  getSelection(): Promise<SelectionContext>;
-  setSelection(blockId: string): Promise<void>;
+  getBrowsingContext(): Promise<BrowsingContextState>;
+  getBlockContext(blockId: string): Promise<SelectionContext>;
   resolveReferences(text: string): Promise<ResolvedBlockReferences>;
   updateBlock(input: {
     blockId: string;
@@ -78,8 +84,7 @@ export interface DetailEffects {
     author: "user";
   }): Promise<Block>;
   restoreBlock(blockId: string): Promise<Block>;
-  navigateHistory(direction: "back" | "forward"): Promise<NavigationState>;
-  followReference(target: OutlinerLinkTarget): Promise<void>;
+  resolveReference(target: OutlinerLinkTarget): Promise<{ block: Block; created?: boolean }>;
   queryBlocks(query: BlockSearchQuery): Promise<VisibleBlockCollection>;
   queryPageAddresses(query: string | undefined, limit: number): Promise<PageAddressCollection>;
   readFile(block: Block): ReferencedFile;
@@ -104,6 +109,8 @@ export type DetailIntent =
   | { type: "navigation.back" }
   | { type: "navigation.forward" }
   | { type: "reference.follow" }
+  | { type: "reference.open"; target: OutlinerLinkTarget }
+  | { type: "connection.toggle" }
   | { type: "buffer.insert"; text: string }
   | { type: "buffer.newline" }
   | { type: "buffer.backspace" }
@@ -152,11 +159,11 @@ export function detailHelpText(mode: DetailMode): string {
     case "comment":
       return "^Z/⌘Z undo  ^⇧Z/^Y redo  ⌥←→ word  Home/End line  ⇧Arrows select  Del  ^S add annotation  Esc cancel";
     case "annotation":
-      return "↑↓ scroll  o follow ref  ⌥←→ history  e edit annotation  f source file  b raw block  q tree";
+      return "↑↓ scroll  o open ref  i hold/follow  ⌥←→ history  e edit  f source file  b raw block  q tree";
     case "file":
-      return "↑↓ lines  o follow ref  ⌥←→ history  v select range  c comment  b block  q tree";
+      return "↑↓ lines  o open ref  i hold/follow  ⌥←→ history  v select  c comment  b block  q tree";
     case "preview":
-      return "↑↓ scroll  o follow ref  ⌥←→ history  Enter/e edit  f file  q tree  Ctrl+Q close";
+      return "↑↓ scroll  o open ref  i hold/follow  ⌥←→ history  Enter/e edit  f file  q tree  Ctrl+Q close";
   }
 }
 
@@ -199,6 +206,10 @@ export function createDetailController(
 ): DetailController {
   const state: DetailState = {
     context: { selected: null, ancestors: [], children: [] },
+    targetBlockId: null,
+    connectionMode: "follow",
+    canNavigateBack: false,
+    canNavigateForward: false,
     resolvedSelectedText: "",
     workIdPrefix: null,
     resolvedBreadcrumb: "",
@@ -216,6 +227,9 @@ export function createDetailController(
     busy: false,
     refreshPending: false,
   };
+  const navigationHistory: string[] = [];
+  let navigationIndex = -1;
+  let pendingTargetBlockId: string | null = null;
 
   const emit = (): void => onChange(state);
   const isBufferMode = (): boolean => state.mode === "edit" || state.mode === "comment";
@@ -245,13 +259,36 @@ export function createDetailController(
     state.workIdPrefix = resolved.workIdPrefix ?? null;
   };
 
-  const loadSelection = async (force = false): Promise<void> => {
-    const next = await effects.getSelection();
+  const syncNavigationState = (): void => {
+    state.canNavigateBack = navigationIndex > 0;
+    state.canNavigateForward = navigationIndex >= 0 && navigationIndex < navigationHistory.length - 1;
+  };
+
+  const recordNavigation = (blockId: string | null): void => {
+    if (!blockId || navigationHistory[navigationIndex] === blockId) {
+      syncNavigationState();
+      return;
+    }
+    navigationHistory.splice(navigationIndex + 1);
+    navigationHistory.push(blockId);
+    if (navigationHistory.length > 200) navigationHistory.shift();
+    navigationIndex = navigationHistory.length - 1;
+    syncNavigationState();
+  };
+
+  const applyTarget = async (
+    next: SelectionContext,
+    force = false,
+    record = true,
+  ): Promise<void> => {
     state.refreshPending = false;
     const changed =
       next.selected?.id !== state.context.selected?.id ||
       next.selected?.updatedAt !== state.context.selected?.updatedAt;
     state.context = next;
+    state.targetBlockId = next.selected?.id ?? null;
+    if (record) recordNavigation(state.targetBlockId);
+    else syncNavigationState();
     if (!force && !changed) return;
     if (changed) state.status = "";
 
@@ -272,6 +309,51 @@ export function createDetailController(
     }
     if ((state.mode === "file" || state.mode === "annotation") && next.selected) loadFile(next.selected);
     else state.referencedFile = null;
+  };
+
+  const loadBrowsingContext = async (force = false): Promise<void> => {
+    const browsingContext = await effects.getBrowsingContext();
+    await applyTarget(browsingContext.target, force);
+  };
+
+  const loadBlock = async (
+    blockId: string,
+    force = false,
+    record = true,
+  ): Promise<void> => {
+    try {
+      await applyTarget(await effects.getBlockContext(blockId), force, record);
+    } catch {
+      state.context = { selected: null, ancestors: [], children: [] };
+      state.targetBlockId = blockId;
+      state.resolvedSelectedText = "";
+      state.resolvedBreadcrumb = "";
+      state.referencedFile = null;
+      if (record) recordNavigation(blockId);
+      else syncNavigationState();
+      state.status = `Target is no longer available · ${blockId}`;
+    }
+  };
+
+  const loadCurrentTarget = async (force = false): Promise<void> => {
+    if (state.connectionMode === "follow") {
+      await loadBrowsingContext(force);
+    } else if (state.targetBlockId) {
+      await loadBlock(state.targetBlockId, force, false);
+    } else {
+      await applyTarget({ selected: null, ancestors: [], children: [] }, force, false);
+    }
+  };
+
+  const refreshPendingTarget = async (): Promise<void> => {
+    const blockId = pendingTargetBlockId;
+    pendingTargetBlockId = null;
+    if (blockId) {
+      state.connectionMode = "independent";
+      await loadBlock(blockId, true);
+    } else {
+      await loadCurrentTarget(true);
+    }
   };
 
   const ensureEditorCursorVisible = (viewport: DetailViewport): void => {
@@ -385,7 +467,7 @@ export function createDetailController(
         state.selectionAnchor = null;
         state.status = `Annotation added for lines ${state.annotationRange.startLine}-${state.annotationRange.endLine}`;
       }
-      if (!isBufferMode() && state.refreshPending) await loadSelection(true);
+      if (!isBufferMode() && state.refreshPending) await refreshPendingTarget();
     } catch (error) {
       state.status = errorMessage(error);
     } finally {
@@ -496,39 +578,54 @@ export function createDetailController(
       case "trash.restore":
         if (state.context.selected?.deletedAt) {
           await effects.restoreBlock(state.context.selected.id);
-          await loadSelection(true);
+          await loadCurrentTarget(true);
           state.status = "Restored from Trash";
         }
         break;
       case "navigation.back":
       case "navigation.forward": {
-        const previousId = state.context.selected?.id;
-        await effects.navigateHistory(
-          intent.type === "navigation.back" ? "back" : "forward",
-        );
-        await loadSelection(true);
-        state.status = state.context.selected?.id === previousId
-          ? "No further navigation history"
-          : intent.type === "navigation.back"
-            ? "Navigation back"
-            : "Navigation forward";
+        const direction = intent.type === "navigation.back" ? -1 : 1;
+        const targetIndex = navigationIndex + direction;
+        const blockId = navigationHistory[targetIndex];
+        if (!blockId) {
+          state.status = "No further navigation history";
+          break;
+        }
+        navigationIndex = targetIndex;
+        state.connectionMode = "independent";
+        await loadBlock(blockId, true, false);
+        state.status = direction < 0 ? "Navigation back · Independent" : "Navigation forward · Independent";
         break;
       }
+      case "reference.open":
       case "reference.follow": {
-        const reference = state.context.selected
-          ? firstOutlinerReference(state.context.selected.text, state.workIdPrefix)
-          : null;
+        const reference = intent.type === "reference.open"
+          ? intent.target
+          : state.context.selected
+            ? firstOutlinerReference(state.context.selected.text, state.workIdPrefix)
+            : null;
         if (!reference) {
           state.status = "Selected block has no block or page references";
           break;
         }
-        await effects.followReference(reference);
-        await loadSelection(true);
+        const resolved = await effects.resolveReference(reference);
+        state.connectionMode = "independent";
+        await loadBlock(resolved.block.id, true);
         state.status = reference.kind === "page"
-          ? `Followed [[${reference.value}]]`
-          : "Followed block reference";
+          ? `${resolved.created ? "Created and opened" : "Opened"} [[${reference.value}]] · Independent`
+          : "Opened block reference · Independent";
         break;
       }
+      case "connection.toggle":
+        if (state.connectionMode === "follow") {
+          state.connectionMode = "independent";
+          state.status = "Independent · paired Tree movement will not replace this target";
+        } else {
+          state.connectionMode = "follow";
+          await loadBrowsingContext(true);
+          state.status = "Following paired Tree";
+        }
+        break;
       case "comment.begin":
         beginComment();
         break;
@@ -670,7 +767,7 @@ export function createDetailController(
       return state;
     },
     initialize() {
-      return loadSelection(true);
+      return loadBrowsingContext(true);
     },
     isBufferMode,
     dispatch,
@@ -679,29 +776,32 @@ export function createDetailController(
         const command = event.command;
         if (!command || command.targetClientId !== effects.clientId) return;
         if (isBufferMode()) {
+          if (command.blockId) pendingTargetBlockId = command.blockId;
           state.refreshPending = true;
           return;
         }
-        if (command.blockId && state.context.selected?.id !== command.blockId) {
-          await effects.setSelection(command.blockId);
+        if (command.blockId) {
+          state.connectionMode = "independent";
+          await loadBlock(command.blockId, true);
         }
-        await loadSelection(true);
         if (command.command === "edit") beginEdit(viewport);
         effects.focusSelf();
         emit();
         return;
       }
+      if (event.domain === "selection") return;
+      if (event.domain === "browsing-context" && state.connectionMode === "independent") return;
       if (isBufferMode()) {
         state.refreshPending = true;
         return;
       }
-      await loadSelection(event.domain === "selection");
+      await loadCurrentTarget(event.domain === "browsing-context");
       emit();
     },
     async onServiceConnect() {
       state.status = "";
       if (isBufferMode()) state.refreshPending = true;
-      else await loadSelection(true);
+      else await loadCurrentTarget(true);
       emit();
     },
     onServiceDisconnect() {
@@ -714,7 +814,7 @@ export function createDetailController(
     },
     async refreshPendingSelection() {
       if (!state.refreshPending) return;
-      await loadSelection(true);
+      await refreshPendingTarget();
       emit();
     },
   };

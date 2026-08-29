@@ -48,12 +48,17 @@ export function renderDetailHeader(
   state: Readonly<DetailState>,
   width: number,
 ): string[] {
+  const connection = state.connectionMode === "follow" ? "Follow" : "Independent";
+  const label = `Detail · ${connection}`;
+  const header = width <= label.length + 2
+    ? `\x1b[1;36m${fitToWidth(label, width)}\x1b[0m`
+    : `\x1b[1;36m${label}\x1b[0m  \x1b[2m${fitBreadcrumb(
+        state.resolvedBreadcrumb,
+        Math.max(1, width - label.length - 2),
+      )}\x1b[0m`;
   return [
     "",
-    `\x1b[1;36mDetail\x1b[0m  \x1b[2m${fitBreadcrumb(
-      state.resolvedBreadcrumb,
-      Math.max(1, width - 8),
-    )}\x1b[0m`,
+    header,
     "─".repeat(width),
   ];
 }

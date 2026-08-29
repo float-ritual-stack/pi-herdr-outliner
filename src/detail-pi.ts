@@ -10,7 +10,7 @@ import {
   TuiAltScreen,
 } from "@earendil-works/pi-tui";
 import { OutlinerClient, type OutlinerWatcher } from "./client";
-import { sendUniqueClientCommand } from "./client-target";
+import { sendContextClientCommand } from "./client-target";
 import {
   createDetailController,
   type DetailEffects,
@@ -21,13 +21,13 @@ import { createPiDetailInputListener, decodePiDetailInput } from "./detail-pi-in
 import { DetailPiPreviewLayout } from "./detail-pi-preview";
 import { DetailPiComponent } from "./detail-pi-renderer";
 import { completeReferencedPaths, readReferencedFile } from "./files";
-import { navigateOutlinerLink, outlinerLinkUri } from "./outliner-links";
+import { parseOutlinerLinkUri, resolveOutlinerLinkTarget } from "./outliner-links";
 import { currentPaneRuntime, focusCurrentPane } from "./pane-control";
 import { resolvePaths } from "./paths";
 import {
   OUTLINER_PROTOCOL_VERSION,
   type Block,
-  type NavigationState,
+  type BrowsingContextState,
   type PageAddressCollection,
   type OutlinerServiceStatus,
   type ResolvedBlockReferences,
@@ -53,12 +53,13 @@ if (hyperlinksEnabled) {
 const paths = resolvePaths();
 const client = new OutlinerClient(paths.socket);
 const clientId = crypto.randomUUID();
+const browsingContextId = process.env.OUTLINER_BROWSING_CONTEXT_ID?.trim() || clientId;
 const terminal = new ProcessTerminal();
 const tui = new TuiAltScreen(terminal, false, undefined, {
   mouse: true,
   openUrl(url) {
     if (!stopping) enqueueWork(async () => {
-      await navigateOutlinerLink(client, url, { detailClientId: clientId });
+      await controller.dispatch({ type: "reference.open", target: parseOutlinerLinkUri(url) }, viewport());
     });
   },
 });
@@ -79,14 +80,18 @@ function errorMessage(error: unknown): string {
 
 const effects: DetailEffects = {
   clientId,
+  browsingContextId,
   focusSelf() {
     if (process.env.HERDR_ENV === "1") focusCurrentPane();
   },
-  async getSelection() {
-    return client.request<SelectionContext>({ action: "selection.get" });
+  async getBrowsingContext() {
+    return client.request<BrowsingContextState>({
+      action: "browsing-context.get",
+      contextId: browsingContextId,
+    });
   },
-  async setSelection(blockId) {
-    await client.request({ action: "selection.set", blockId });
+  async getBlockContext(blockId) {
+    return client.request<SelectionContext>({ action: "blocks.context", blockId });
   },
   async resolveReferences(text) {
     return client.request<ResolvedBlockReferences>({ action: "references.resolve", text });
@@ -97,14 +102,8 @@ const effects: DetailEffects = {
   async restoreBlock(blockId) {
     return client.request<Block>({ action: "trash.restore", blockId });
   },
-  async navigateHistory(direction) {
-    const action = direction === "back" ? "navigation.back" : "navigation.forward";
-    return client.request<NavigationState>({ action });
-  },
-  async followReference(target) {
-    await navigateOutlinerLink(client, outlinerLinkUri(target.kind, target.value), {
-      detailClientId: clientId,
-    });
+  async resolveReference(target) {
+    return resolveOutlinerLinkTarget(client, target);
   },
   async createBlock(input) {
     return client.request<Block>({ action: "create", ...input });
@@ -122,7 +121,7 @@ const effects: DetailEffects = {
     return completeReferencedPaths(query, paths.workspaceRoot);
   },
   async focusOutliner() {
-    await sendUniqueClientCommand(client, "tree", { command: "focus" });
+    await sendContextClientCommand(client, "tree", browsingContextId, { command: "focus" });
   },
 };
 
@@ -157,6 +156,7 @@ function startWatcher(): void {
     client: {
       clientId,
       role: "detail",
+      contextId: browsingContextId,
       runtime: currentPaneRuntime(),
     },
     onConnect: () => enqueueWork(() => controller.onServiceConnect(viewport())),

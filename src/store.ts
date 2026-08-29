@@ -883,6 +883,14 @@ export class OutlinerStore {
     return this.database.transaction(() => this.selectionFromCurrentRead())();
   }
 
+  blockContext(blockId: string): SelectionContext {
+    return this.database.transaction(() => {
+      const selected = this.getFromCurrentRead(blockId);
+      if (!selected) throw new Error(`Block not found: ${blockId}`);
+      return this.contextForBlockFromCurrentRead(selected);
+    })();
+  }
+
   setSelection(blockId: string | null): SelectionContext {
     return this.database.transaction(() => this.setSelectionFromCurrentRead(blockId))();
   }
@@ -1106,6 +1114,10 @@ export class OutlinerStore {
       | { block_id: string | null }
       | null;
     const selected = row?.block_id ? this.getFromCurrentRead(row.block_id) : null;
+    return this.contextForBlockFromCurrentRead(selected);
+  }
+
+  private contextForBlockFromCurrentRead(selected: Block | null): SelectionContext {
     if (!selected) return { selected: null, ancestors: [], children: [] };
 
     const ancestors: Block[] = [];

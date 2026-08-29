@@ -47,7 +47,7 @@ test("registers the workspace commands and annotation-aware tools", () => {
   expect(updateSchema).toContain("expectedUpdatedAt");
 });
 
-test("requires protocol v13, attributes agent creates and page follows, and presents bounded query results", async () => {
+test("requires protocol v14, attributes agent creates and page follows, and presents bounded query results", async () => {
   const collection: VisibleBlockCollection = {
     blocks: [
       {
@@ -66,7 +66,7 @@ test("requires protocol v13, attributes agent creates and page follows, and pres
     ],
     completeness: { kind: "truncated", limit: 20 },
   };
-  let protocolVersion = 13;
+  let protocolVersion = 14;
   let queryCollection = collection;
   let queryError: Error | undefined;
   const requests: RequestInput[] = [];
@@ -84,8 +84,8 @@ test("requires protocol v13, attributes agent creates and page follows, and pres
     if (input.action === "work-ids.allocate") return { workId: "PIE-152" } as T;
     if (input.action === "clients.list") {
       const clients = [
-        { clientId: "tree-client", role: "tree" },
-        { clientId: "detail-client", role: "detail" },
+        { clientId: "tree-client", role: "tree", contextId: "tree-client" },
+        { clientId: "detail-client", role: "detail", contextId: "detail-client" },
       ];
       return (input.role
         ? clients.filter((client) => client.role === input.role)
@@ -208,12 +208,12 @@ test("requires protocol v13, attributes agent creates and page follows, and pres
       role: "tree",
     });
     expect(JSON.parse(clientsResult.content[0]!.text)).toEqual([
-      { clientId: "tree-client", role: "tree" },
+      { clientId: "tree-client", role: "tree", contextId: "tree-client" },
     ]);
     const allClientsResult = await tools.get("outliner_clients")!.execute("all-clients", {});
     expect(JSON.parse(allClientsResult.content[0]!.text)).toEqual([
-      { clientId: "tree-client", role: "tree" },
-      { clientId: "detail-client", role: "detail" },
+      { clientId: "tree-client", role: "tree", contextId: "tree-client" },
+      { clientId: "detail-client", role: "detail", contextId: "detail-client" },
     ]);
     await expect(
       tools.get("outliner_page")!.execute(
@@ -325,7 +325,7 @@ test("requires protocol v13, attributes agent creates and page follows, and pres
     expect(largeEnvelope.presentation.omitted).toBeGreaterThan(0);
     protocolVersion = 5;
     await expect(tools.get("outliner_query")!.execute("incompatible-query", {})).rejects.toThrow(
-      "Incompatible outliner protocol 5; expected 13",
+      "Incompatible outliner protocol 5; expected 14",
     );
   } finally {
     OutlinerClient.prototype.request = originalRequest;
@@ -378,7 +378,7 @@ test("captures through command, tool, and exact standalone dispatch without an a
   OutlinerClient.prototype.request = async function <T>(input: RequestInput): Promise<T> {
     requests.push(input);
     if (input.action === "ping") {
-      return { status: "ready", protocolVersion: 13 } as T;
+      return { status: "ready", protocolVersion: 14 } as T;
     }
     if (input.action === "selection.get") {
       return {

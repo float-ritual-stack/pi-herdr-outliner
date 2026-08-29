@@ -109,15 +109,22 @@ function createHarness(
   };
   const effects: DetailEffects = {
     clientId: "detail-test",
+    browsingContextId: "context-test",
     focusSelf() {
       calls.selfFocuses += 1;
     },
-    async getSelection() {
+    async getBrowsingContext() {
       calls.selections += 1;
-      return selection;
+      return { contextId: "context-test", target: selection };
     },
-    async setSelection(blockId) {
-      calls.setSelections.push(blockId);
+    async getBlockContext(blockId) {
+      calls.selections += 1;
+      if (selection.selected?.id === blockId) return selection;
+      return {
+        selected: makeBlock({ id: blockId, text: `Target ${blockId}` }),
+        ancestors: [],
+        children: [],
+      };
     },
     resolveReferences,
     async updateBlock(input) {
@@ -134,12 +141,14 @@ function createHarness(
       }
       return selection.selected!;
     },
-    async navigateHistory(direction) {
-      calls.histories.push(direction);
-      return { selection, canBack: true, canForward: true };
-    },
-    async followReference(target) {
+    async resolveReference(target) {
       calls.followedReferences.push(target);
+      const blockId = target.kind === "block" ? target.value : `resolved-${target.kind}`;
+      return {
+        block: selection.selected?.id === blockId
+          ? selection.selected
+          : makeBlock({ id: blockId, text: `Target ${blockId}` }),
+      };
     },
     async createBlock(input) {
       calls.creates.push(input);
@@ -251,14 +260,15 @@ describe("detail controller projection and deferred refresh", () => {
     expect(harness.calls.creates).toEqual([]);
   });
 
-  test("follows block references and loads deleted history targets read-only", async () => {
+  test("keeps navigation history local and loads deleted targets read-only", async () => {
     const source = makeBlock({ text: "See ((target01))" });
     const harness = createHarness(source);
     await harness.controller.initialize();
 
     await harness.controller.dispatch({ type: "reference.follow" }, viewport);
     expect(harness.calls.followedReferences).toEqual([{ kind: "block", value: "target01" }]);
-
+    expect(harness.controller.state.context.selected?.id).toBe("target01");
+    expect(harness.controller.state.connectionMode).toBe("independent");
 
     harness.setSelection({
       selected: makeBlock({
@@ -269,8 +279,13 @@ describe("detail controller projection and deferred refresh", () => {
       ancestors: [],
       children: [],
     });
+    await harness.controller.onServiceEvent(
+      event("ui", { targetClientId: "detail-test", command: "reveal", blockId: "deleted1" }),
+      viewport,
+    );
     await harness.controller.dispatch({ type: "navigation.back" }, viewport);
-    expect(harness.calls.histories).toEqual(["back"]);
+    expect(harness.controller.state.context.selected?.id).toBe("target01");
+    await harness.controller.dispatch({ type: "navigation.forward" }, viewport);
     expect(harness.controller.state.context.selected).toMatchObject({
       id: "deleted1",
       effectiveDeletedRootId: "deleted1",
@@ -279,6 +294,29 @@ describe("detail controller projection and deferred refresh", () => {
 
     await harness.controller.dispatch({ type: "edit.begin" }, viewport);
     expect(harness.controller.state.status).toContain("restore before editing");
+  });
+
+  test("follows only its browsing context and can hold an independent target", async () => {
+    const first = makeBlock({ id: "first-block", text: "First" });
+    const second = makeBlock({ id: "second-block", text: "Second" });
+    const third = makeBlock({ id: "third-block", text: "Third" });
+    const harness = createHarness(first);
+    await harness.controller.initialize();
+
+    harness.setSelection({ selected: second, ancestors: [], children: [] });
+    await harness.controller.onServiceEvent(event("browsing-context"), viewport);
+    expect(harness.controller.state.context.selected?.id).toBe(second.id);
+    expect(harness.controller.state.connectionMode).toBe("follow");
+
+    await harness.controller.dispatch({ type: "connection.toggle" }, viewport);
+    harness.setSelection({ selected: third, ancestors: [], children: [] });
+    await harness.controller.onServiceEvent(event("browsing-context"), viewport);
+    expect(harness.controller.state.context.selected?.id).toBe(second.id);
+    expect(harness.controller.state.connectionMode).toBe("independent");
+
+    await harness.controller.dispatch({ type: "connection.toggle" }, viewport);
+    expect(harness.controller.state.context.selected?.id).toBe(third.id);
+    expect(harness.controller.state.connectionMode).toBe("follow");
   });
 
   test("follows symbolic references through the page-address path", async () => {
@@ -364,6 +402,8 @@ describe("detail controller projection and deferred refresh", () => {
     await harness.controller.refreshPendingSelection();
     expect(harness.calls.selections).toBe(selectionLoads + 1);
     expect(harness.controller.state.refreshPending).toBe(false);
+    expect(harness.controller.state.context.selected?.id).toBe("other-block");
+    expect(harness.controller.state.connectionMode).toBe("independent");
   });
 
   test("connect marks a comment buffer pending without replacing it", async () => {
@@ -648,8 +688,9 @@ describe("detail controller completion, navigation, and focus", () => {
       viewport,
     );
 
-    expect(harness.calls.setSelections).toEqual(["block-2"]);
+    expect(harness.calls.setSelections).toEqual([]);
     expect(harness.controller.state.context.selected?.id).toBe("block-2");
+    expect(harness.controller.state.connectionMode).toBe("independent");
     expect(harness.calls.selfFocuses).toBe(1);
   });
 });

@@ -23,11 +23,11 @@ The project started as a small Friday-night experiment and grew into a durable w
 
 ## Current capabilities
 
-- SQLite-backed hierarchical blocks with stable UUIDs, sibling order, authors, timestamps, and shared workspace context.
+- SQLite-backed hierarchical blocks with stable UUIDs, sibling order, authors, timestamps, and one canonical graph per workspace root.
 - Workspace-isolated service and runtime paths.
-- JSON-lines RPC protocol v13 over a Unix socket.
-- Reactive content, workspace-context, and view broadcasts plus per-process Tree/Detail registration and exact-client UI commands.
-- Each Tree owns its cursor, occurrence selection, filter, viewport, collapsed rows, multiline expansion, and explicit-navigation history; publishing workspace context does not move sibling Trees.
+- JSON-lines RPC protocol v14 over a Unix socket.
+- Reactive canonical content/view broadcasts, context-targeted browsing events, per-process Tree/Detail registration, and exact-client UI commands.
+- Each Tree owns its cursor, occurrence selection, filter, viewport, collapsed rows, multiline expansion, explicit-navigation history, and paired browsing context; moving one Tree does not move or retarget another pair.
 - Indexed `[property::value]` metadata with optimistic property patching and catalog queries.
 - Exact block references using `((block-id))`, resolved to display titles in read mode while raw text remains editable.
 - Unique normalized symbolic addresses from explicit `[page::address]` declarations and Work IDs, with aliases, explicit removal, bounded completion, dangling links, and transactional create-on-follow.
@@ -40,11 +40,12 @@ The project started as a small Friday-night experiment and grew into a durable w
 - Client-local multiline-expanded Tree rows support viewport-sized intra-block PageUp/PageDown without changing the Tree cursor.
 - Pi Markdown preview with line, page, endpoint, and mouse/trackpad scrolling.
 - Grapheme-safe wrapped Detail editing, word motion, selection, deletion, bounded per-session undo/redo, completion, optimistic save, and whole-session Esc cancellation.
+- Each Detail visibly reports `Follow` or `Independent`, owns its exact target and bounded in-process history, and can hold a target while its paired Tree moves.
 - Referenced text/Markdown file viewing and durable line-range annotations.
 - Herdr-owned pane placement/focus and current-pane recovery, one remembered service pane, per-process live client discovery, and a disposable runtime registry.
 - Pi/OMP commands, tools, and selection-context injection.
 
-Planned work is tracked inside the outliner itself. Notable accepted designs include normalized query construction, agent-assisted `PREFIX-XXX` placeholder resolution, backlinks, scoped property semantics, retained Detail targets, and projected canonical descendants.
+Planned work is tracked inside the outliner itself. Notable accepted designs include normalized query construction, agent-assisted `PREFIX-XXX` placeholder resolution, backlinks, scoped property semantics, origin-aware link routing, and projected canonical descendants.
 
 ## Quick start
 
@@ -78,14 +79,29 @@ focuses the new Tree. With one live Tree it focuses that exact client. With
 multiple live Trees it fails explicitly and lists client IDs instead of choosing
 an arbitrary pane.
 
-Use `open-here` to create another Tree/Detail pair in the current tab, or
-`focus-existing` to focus the unique Tree. The CLI and Pi/OMP
-`outliner_clients` tool expose live client IDs for explicit targeting.
+Use `open-here` to create another Tree/Detail pair in the current tab. Every
+invocation creates a fresh ephemeral browsing context shared only by that pair.
+Tab labels, tab numbers, pane titles, and labels such as `oi` are display
+metadata—not routing keys. `focus-existing` focuses the unique Tree. The CLI and
+Pi/OMP `outliner_clients` tool expose live client and context IDs for diagnostics
+and explicit targeting.
 
 When the project Pi extension is loaded, `/outliner` performs the same
 focus-or-open action. The project-local `/outline` command in
 [`.claude/commands/outline.md`](.claude/commands/outline.md) invokes and
 verifies the Herdr action.
+
+#### Working with multiple Tree/Detail pairs
+
+Pairs under the same filesystem root share canonical blocks and content updates,
+but not cursors, targets, filters, viewport state, or navigation history. In a
+new pair, Detail starts in **Follow** mode and displays the block selected by its
+paired Tree. Press `i` in Detail to hold the current block in **Independent**
+mode; press `i` again to resume following the paired Tree.
+
+Closing a pair discards its browsing context. Renaming its tab or panes changes
+nothing. A newly opened pair receives a new context and initially seeds its Tree
+from the workspace's saved selection only as a starting point.
 
 ### Headless service and CLI
 
@@ -165,13 +181,14 @@ Projected virtual occurrences deliberately constrain hierarchy and collapse. Bra
 | Mouse wheel / trackpad | Scroll preview |
 | `Enter` or `e` | Edit raw canonical text |
 | `f` | Open referenced file |
-| `o` | Follow the first exact `((block-id))` or symbolic `[[address]]` reference |
-| `Option+Left` / `Option+Right` | Move backward / forward through block navigation history |
+| `o` | Open the first exact `((block-id))` or symbolic `[[address]]` reference in this Detail and enter **Independent** mode |
+| `i` | Toggle between following the paired Tree and holding an independent target |
+| `Option+Left` / `Option+Right` | Move backward / forward through this Detail's local history; history navigation enters **Independent** mode |
 | `r` | Restore the selected block when it is a direct Trash root |
 | `q` | Focus Tree |
 | `Ctrl+Q` | Close Detail |
 
-Navigation history belongs to the workspace service, not either pane. Every distinct `selection.set` from a user or agent records a visit; going back and then selecting another block discards the forward branch. The latest 200 visits persist across pane/service restarts. History can reopen a Trash target for read-only Detail inspection; purged targets are skipped.
+Detail navigation history is local to that Detail process and retains at most 200 exact targets. Opening a reference, receiving an exact target, or following the paired Tree records a visit. Back/forward enters **Independent** mode so a later Tree cursor event cannot immediately replace the historical target. Soft-deleted targets reopen read-only; a purged target remains visible as unavailable. Closing Detail discards this history.
 
 ### Detail edit and comment modes
 
@@ -312,6 +329,10 @@ Each resolved workspace root receives a distinct 12-character SHA-256 key contai
 - remembered plugin-pane metadata
 
 Override the root with `OUTLINER_WORKSPACE_ROOT` and the base state directory with `OUTLINER_STATE_DIR`.
+
+Browsing contexts, Detail targets/history, Tree presentation state, and live
+Herdr client identities are intentionally ephemeral and are not stored in
+`outliner.sqlite`. Canonical content remains shared and durable.
 
 Back up `outliner.sqlite` before experimenting with migrations. Do not copy a live database without also accounting for SQLite WAL files.
 

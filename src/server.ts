@@ -20,6 +20,7 @@ import {
 export class OutlinerServer {
   private server: Server | null = null;
   private readonly subscribers = new Map<Socket, OutlinerClientRegistration>();
+  private readonly browsingContextTargets = new Map<string, string | null>();
 
   constructor(
     readonly store: OutlinerStore,
@@ -53,6 +54,7 @@ export class OutlinerServer {
     if (!server) return;
     for (const subscriber of this.subscribers.keys()) subscriber.destroy();
     this.subscribers.clear();
+    this.browsingContextTargets.clear();
     const closed = Promise.withResolvers<void>();
     server.close((error) => (error ? closed.reject(error) : closed.resolve()));
     await closed.promise;
@@ -81,7 +83,31 @@ export class OutlinerServer {
 
   private pruneDestroyedSubscribers(): void {
     for (const socket of this.subscribers.keys()) {
-      if (socket.destroyed) this.subscribers.delete(socket);
+      if (socket.destroyed) this.removeSubscriber(socket);
+    }
+  }
+
+
+  private normalizeContextId(value: string): string {
+    const contextId = value?.trim();
+    if (
+      !contextId ||
+      contextId.length > 200 ||
+      /[\u0000-\u001f\u007f]/.test(contextId)
+    ) {
+      throw new Error("Browsing context ID must be 1-200 printable characters");
+    }
+    return contextId;
+  }
+
+  private removeSubscriber(socket: Socket): void {
+    const removed = this.subscribers.get(socket);
+    this.subscribers.delete(socket);
+    if (
+      removed &&
+      ![...this.subscribers.values()].some((client) => client.contextId === removed.contextId)
+    ) {
+      this.browsingContextTargets.delete(removed.contextId);
     }
   }
 
@@ -103,6 +129,7 @@ export class OutlinerServer {
     if (registration.role !== "tree" && registration.role !== "detail") {
       throw new Error(`Invalid client role: ${String(registration.role)}`);
     }
+    const contextId = this.normalizeContextId(registration.contextId);
     this.pruneDestroyedSubscribers();
     if (this.subscribers.has(socket)) {
       throw new Error("Socket already owns a client registration");
@@ -143,6 +170,7 @@ export class OutlinerServer {
     const normalized: OutlinerClientRegistration = {
       clientId,
       role: registration.role,
+      contextId,
       ...(runtime ? { runtime } : {}),
     };
     this.subscribers.set(socket, normalized);
@@ -192,6 +220,29 @@ export class OutlinerServer {
           }
           result = this.listClients(request.role);
           break;
+        case "blocks.context":
+          result = this.store.blockContext(request.blockId);
+          break;
+        case "browsing-context.get": {
+          const contextId = this.normalizeContextId(request.contextId);
+          const blockId = this.browsingContextTargets.get(contextId) ?? null;
+          result = {
+            contextId,
+            target: blockId
+              ? this.store.blockContext(blockId)
+              : { selected: null, ancestors: [], children: [] },
+          };
+          break;
+        }
+        case "browsing-context.publish": {
+          const contextId = this.normalizeContextId(request.contextId);
+          const target = request.blockId
+            ? this.store.blockContext(request.blockId)
+            : { selected: null, ancestors: [], children: [] };
+          this.browsingContextTargets.set(contextId, request.blockId);
+          result = { contextId, target };
+          break;
+        }
         case "ui.command.send":
           if (!this.hasClient(request.command.targetClientId)) {
             throw new Error(`Target client is not registered: ${request.command.targetClientId}`);
@@ -330,8 +381,8 @@ export class OutlinerServer {
   private eventFor(request: OutlinerRequest, response: Extract<OutlinerResponse, { ok: true }>): OutlinerEvent | null {
     let domain: OutlinerEvent["domain"];
     let blockId: string | undefined;
+    let contextId: string | undefined;
     let command: OutlinerEvent["command"];
-
     switch (request.action) {
       case "create":
         domain = "content";
@@ -385,6 +436,11 @@ export class OutlinerServer {
         blockId = request.command.blockId;
         command = request.command;
         break;
+      case "browsing-context.publish":
+        domain = "browsing-context";
+        blockId = request.blockId ?? undefined;
+        contextId = request.contextId;
+        break;
       default:
         return null;
     }
@@ -396,6 +452,7 @@ export class OutlinerServer {
       sequence: response.sequence,
       blockId,
       command,
+      contextId,
     };
   }
 
@@ -407,13 +464,16 @@ export class OutlinerServer {
       if (event.domain === "ui" && event.command?.targetClientId !== client.clientId) {
         continue;
       }
+      if (event.domain === "browsing-context" && event.contextId !== client.contextId) {
+        continue;
+      }
       subscriber.write(line);
     }
   }
 
   private accept(socket: Socket): void {
     socket.setEncoding("utf8");
-    socket.once("close", () => this.subscribers.delete(socket));
+    socket.once("close", () => this.removeSubscriber(socket));
     let buffer = "";
     socket.on("data", (chunk: string) => {
       buffer += chunk;

@@ -11,6 +11,10 @@ import type { TerminalKey } from "../src/terminal";
 function state(): DetailState {
   return {
     context: { selected: null, ancestors: [], children: [] },
+    targetBlockId: null,
+    connectionMode: "follow",
+    canNavigateBack: false,
+    canNavigateForward: false,
     resolvedSelectedText: "",
     workIdPrefix: null,
     resolvedBreadcrumb: "",
@@ -150,6 +154,7 @@ test("maps preview and file navigation history and reference-follow bindings", a
   await preview.press({ name: "b", meta: true });
   await preview.press({ name: "f", meta: true });
   await preview.press({ name: "o" }, "o");
+  await preview.press({ name: "i" }, "i");
 
   expect(preview.intents).toEqual([
     { type: "navigation.back" },
@@ -157,6 +162,7 @@ test("maps preview and file navigation history and reference-follow bindings", a
     { type: "navigation.back" },
     { type: "navigation.forward" },
     { type: "reference.follow" },
+    { type: "connection.toggle" },
   ]);
 
   const fileState = state();
@@ -172,9 +178,11 @@ test("maps preview and file navigation history and reference-follow bindings", a
 
   await file.press({ name: "left", meta: true });
   await file.press({ name: "o" }, "o");
+  await file.press({ name: "i" }, "i");
 
   expect(file.intents).toEqual([
     { type: "navigation.back" },
     { type: "reference.follow" },
+    { type: "connection.toggle" },
   ]);
 });

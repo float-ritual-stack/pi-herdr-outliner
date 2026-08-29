@@ -70,6 +70,7 @@ export interface OutlinerClientRuntime {
 export interface OutlinerClientRegistration {
   clientId: string;
   role: OutlinerClientRole;
+  contextId: string;
   runtime?: OutlinerClientRuntime;
 }
 
@@ -178,7 +179,7 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 13;
+export const OUTLINER_PROTOCOL_VERSION = 14;
 
 export interface OutlinerServiceStatus {
   status: "ready";
@@ -194,6 +195,9 @@ export type OutlinerRequest =
   | { id: string; action: "events.subscribe"; client: OutlinerClientRegistration }
   | { id: string; action: "clients.list"; role?: OutlinerClientRole }
   | { id: string; action: "ui.command.send"; command: OutlinerUiCommand }
+  | { id: string; action: "blocks.context"; blockId: string }
+  | { id: string; action: "browsing-context.get"; contextId: string }
+  | { id: string; action: "browsing-context.publish"; contextId: string; blockId: string | null }
   | {
       id: string;
       action: "create";
@@ -286,6 +290,11 @@ export interface NavigationState {
   canForward: boolean;
 }
 
+export interface BrowsingContextState {
+  contextId: string;
+  target: SelectionContext;
+}
+
 export interface WorkspaceSnapshotView {
   query?: BlockSearchQuery;
 }
@@ -305,7 +314,7 @@ export interface OutlinerUiCommand {
   blockId?: string;
 }
 
-export type OutlinerEventDomain = "content" | "selection" | "view" | "ui";
+export type OutlinerEventDomain = "content" | "selection" | "view" | "ui" | "browsing-context";
 
 export interface OutlinerEvent {
   id: string;
@@ -313,6 +322,7 @@ export interface OutlinerEvent {
   action: string;
   sequence: number;
   blockId?: string;
+  contextId?: string;
   command?: OutlinerUiCommand;
 }
 

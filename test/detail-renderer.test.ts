@@ -21,6 +21,10 @@ function block(text: string, properties: Block["properties"] = []): Block {
 function state(overrides: Partial<DetailState> = {}): DetailState {
   return {
     context: { selected: null, ancestors: [], children: [] },
+    targetBlockId: null,
+    connectionMode: "follow",
+    canNavigateBack: false,
+    canNavigateForward: false,
     resolvedSelectedText: "",
     workIdPrefix: null,
     resolvedBreadcrumb: "",
@@ -48,13 +52,13 @@ describe("detail ANSI renderer", () => {
 
     expect(rendered).toBe([
       "\x1b[H\x1b[2J",
-      "\x1b[1;36mDetail\x1b[0m  \x1b[2mNo block selected\x1b[0m",
+      "\x1b[1;36mDetail · Follow\x1b[0m  \x1b[2mNo block selected\x1b[0m",
       "─".repeat(width),
       "Select a block in the outliner pane.",
       "",
       "",
       "",
-      "\x1b[2m↑↓ scroll  o follow ref  ⌥←→ history  Enter/e edit  f file  q t…\x1b[0m",
+      "\x1b[2m↑↓ scroll  o open ref  i hold/follow  ⌥←→ history  Enter/e edit…\x1b[0m",
     ].join("\n"));
   });
 
@@ -70,13 +74,13 @@ describe("detail ANSI renderer", () => {
 
     expect(rendered).toBe([
       "\x1b[H\x1b[2J",
-      "\x1b[1;36mDetail\x1b[0m  \x1b[2mResolved title\x1b[0m",
+      "\x1b[1;36mDetail · Follow\x1b[0m  \x1b[2mResolved title\x1b[0m",
       "─".repeat(64),
       "resolved two",
       "resolved three",
       "resolved four",
       "Ready",
-      "\x1b[2m↑↓ scroll  o follow ref  ⌥←→ history  Enter/e edit  f file  q t…\x1b[0m",
+      "\x1b[2m↑↓ scroll  o open ref  i hold/follow  ⌥←→ history  Enter/e edit…\x1b[0m",
     ].join("\n"));
   });
 
@@ -112,7 +116,7 @@ describe("detail ANSI renderer", () => {
 
     expect(rendered).toBe([
       "\x1b[H\x1b[2J",
-      "\x1b[1;36mDetail\x1b[0m  \x1b[2mBlock\x1b[0m",
+      "\x1b[1;36mDetail · Follow\x1b[0m  \x1b[2mBlock\x1b[0m",
       "─".repeat(32),
       "   4 four▏",
       "\x1b[2mCompletions 2/2\x1b[0m",
@@ -150,7 +154,7 @@ describe("detail ANSI renderer", () => {
 
     expect(rendered).toBe([
       "\x1b[H\x1b[2J",
-      "\x1b[1;36mDetail\x1b[0m  \x1b[2mBlock\x1b[0m",
+      "\x1b[1;36mDetail · Follow\x1b[0m  \x1b[2mBlock\x1b[0m",
       "─".repeat(32),
       "   1 alpha▏",
       "",

@@ -9,7 +9,7 @@ import {
   parsePropertyFilterExpression,
   serializePropertyFilterValue,
 } from "./block-query";
-import { sendUniqueClientCommand } from "./client-target";
+import { sendContextClientCommand } from "./client-target";
 import { completionTargetAtCursor } from "./completion";
 import type { ReferencedFile, ReferencedPathCandidate } from "./files";
 import {
@@ -106,6 +106,7 @@ export interface TreeFilesystem {
 export interface TreeControllerEffects {
   readonly workspaceRoot: string;
   readonly clientId: string;
+  readonly browsingContextId: string;
   request<T>(input: RequestInput): Promise<T>;
   readonly filesystem: TreeFilesystem;
   focusSelf(): void;
@@ -294,7 +295,6 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     const nextRows = projection.rows;
     const nextPhysicalBlocksById = new Map(snapshot.physical.blocks.map((block) => [block.id, block]));
     const serviceSelectedId = snapshot.selection.selected?.id ?? null;
-    workspaceContextBlockId = serviceSelectedId;
     let nextIndex = -1;
     if (preferredRowId !== undefined) {
       if (preferredRowId) {
@@ -330,8 +330,9 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     selectedIndex = nextSelectedIndex;
     lastVisibleCanonicalId = rows[selectedIndex]?.canonicalId ?? null;
     initialWorkspaceSelectionApplied = true;
+    workspaceContextBlockId = lastVisibleCanonicalId;
     refreshPending = false;
-    return serviceSelectedId !== null;
+    return lastVisibleCanonicalId !== null;
   }
 
   function expandedBlockRowCount(row: TreeRow): number {
@@ -619,7 +620,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     const target = navigationEntry(rows[selectedIndex]);
     if (options?.recordNavigation) recordNavigation(source, target);
     lastVisibleCanonicalId = visibleCanonicalId;
-    await effects.request({ action: "selection.set", blockId: visibleCanonicalId });
+    await effects.request({ action: "browsing-context.publish", contextId: effects.browsingContextId, blockId: visibleCanonicalId });
     if (visibilityChanged) status = "Filter cleared or collapsed ancestors expanded to reveal block";
   }
 
@@ -692,7 +693,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         status = "Permanently purged";
         await reload();
         const visibleCanonicalId = rows[selectedIndex]?.canonicalId ?? null;
-        await effects.request({ action: "selection.set", blockId: visibleCanonicalId });
+        await effects.request({ action: "browsing-context.publish", contextId: effects.browsingContextId, blockId: visibleCanonicalId });
       }
       effects.invalidate();
       return;
@@ -725,7 +726,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     resetQuickEditor();
     await selectVisibleBlock(targetId, { preferredRowId: targetRowId });
     try {
-      await sendUniqueClientCommand(effects, "detail", {
+      await sendContextClientCommand(effects, "detail", effects.browsingContextId, {
         command: "edit",
         blockId: targetId,
       });
@@ -1003,11 +1004,12 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       effects.invalidate();
       return;
     }
-    if (event.domain === "selection") {
+    if (event.domain === "browsing-context") {
       workspaceContextBlockId = event.blockId ?? null;
       effects.invalidate();
       return;
     }
+    if (event.domain === "selection") return;
     if (mode !== "browse") {
       refreshPending = true;
       return;
@@ -1017,7 +1019,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     if (previousRow && !rows.some((row) => row.rowId === previousRow.rowId)) {
       const fallbackCanonicalId = rows[selectedIndex]?.canonicalId ?? null;
       lastVisibleCanonicalId = fallbackCanonicalId;
-      await effects.request({ action: "selection.set", blockId: fallbackCanonicalId });
+      await effects.request({ action: "browsing-context.publish", contextId: effects.browsingContextId, blockId: fallbackCanonicalId });
     }
     effects.invalidate();
   }
@@ -1042,7 +1044,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     }
     navigationIndex = targetIndex;
     if (canonical.effectiveDeletedRootId) {
-      await sendUniqueClientCommand(effects, "detail", {
+      await sendContextClientCommand(effects, "detail", effects.browsingContextId, {
         command: "focus",
         blockId: canonical.id,
       });
@@ -1057,8 +1059,14 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   async function handleConnect(): Promise<void> {
     resetExpandedBlockPaging();
     status = "";
-    if (mode === "browse") await reload();
-    else refreshPending = true;
+    if (mode === "browse") {
+      await reload();
+      await effects.request({
+        action: "browsing-context.publish",
+        contextId: effects.browsingContextId,
+        blockId: lastVisibleCanonicalId,
+      });
+    } else refreshPending = true;
     effects.invalidate();
   }
 
@@ -1117,10 +1125,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       const selected = rows[selectedIndex];
       if (str.toLowerCase() === "y" && selected) {
         const fallback = fallbackRowBeforeDelete(rows, selectedIndex, physicalBlocksById);
-        await effects.request({
-          action: "selection.set",
-          blockId: fallback?.canonicalId ?? null,
-        });
+        await effects.request({ action: "browsing-context.publish", contextId: effects.browsingContextId, blockId: fallback?.canonicalId ?? null });
         await effects.request({ action: "delete", blockId: selected.canonicalId });
         await reload(fallback?.rowId ?? null, { exactRowIdOnly: true });
         lastVisibleCanonicalId = rows[selectedIndex]?.canonicalId ?? null;
@@ -1284,7 +1289,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       return;
     } else if (key.name === "return" && selected) {
       if (selected.block.effectiveDeletedRootId) {
-        await sendUniqueClientCommand(effects, "detail", {
+        await sendContextClientCommand(effects, "detail", effects.browsingContextId, {
           command: "focus",
           blockId: selected.canonicalId,
         });
@@ -1381,16 +1386,18 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     const visibleCanonicalId = rows[selectedIndex]?.canonicalId ?? null;
     if (visibleCanonicalId !== lastVisibleCanonicalId) {
       lastVisibleCanonicalId = visibleCanonicalId;
-      await effects.request({ action: "selection.set", blockId: visibleCanonicalId });
+      await effects.request({ action: "browsing-context.publish", contextId: effects.browsingContextId, blockId: visibleCanonicalId });
     }
     effects.invalidate();
   }
 
   async function initialize(): Promise<void> {
-    const hasServiceSelection = await reload();
-    if (!hasServiceSelection && lastVisibleCanonicalId !== null) {
-      await effects.request({ action: "selection.set", blockId: lastVisibleCanonicalId });
-    }
+    await reload();
+    await effects.request({
+      action: "browsing-context.publish",
+      contextId: effects.browsingContextId,
+      blockId: lastVisibleCanonicalId,
+    });
   }
 
   return {

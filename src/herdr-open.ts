@@ -80,7 +80,12 @@ function rememberPane(entrypoint: PaneEntrypoint, paneId: string): void {
 
 function openPane(
   entrypoint: PaneEntrypoint,
-  options: { placement: "split" | "tab"; targetPane?: string; direction?: "right" | "down" },
+  options: {
+    placement: "split" | "tab";
+    targetPane?: string;
+    direction?: "right" | "down";
+    env?: Record<string, string>;
+  },
 ): string {
   const args = [
     "plugin",
@@ -100,6 +105,9 @@ function openPane(
   ];
   if (process.env.OUTLINER_STATE_DIR) {
     args.push("--env", `OUTLINER_STATE_DIR=${process.env.OUTLINER_STATE_DIR}`);
+  }
+  for (const [key, value] of Object.entries(options.env ?? {})) {
+    args.push("--env", `${key}=${value}`);
   }
   if (options.direction) args.push("--direction", options.direction);
   if (options.targetPane) args.push("--target-pane", options.targetPane);
@@ -152,26 +160,30 @@ function openHere(): {
   servicePane: string;
   outlinerPane: string;
   detailPane: string;
+  browsingContextId: string;
   workspaceRoot: string;
 } {
   if (!currentPaneId) {
     throw new Error("open-here requires Herdr invocation pane context");
   }
+  const browsingContextId = crypto.randomUUID();
   const outlinerPane = openPane("outliner", {
     placement: "split",
     targetPane: currentPaneId,
     direction: "right",
+    env: { OUTLINER_BROWSING_CONTEXT_ID: browsingContextId },
   });
   const detailPane = openPane("detail", {
     placement: "split",
     targetPane: outlinerPane,
     direction: "down",
+    env: { OUTLINER_BROWSING_CONTEXT_ID: browsingContextId },
   });
   execFileSync(herdr, ["plugin", "pane", "focus", outlinerPane], {
     stdio: "ignore",
     timeout: HERDR_SYNC_TIMEOUT_MS,
   });
-  return { servicePane, outlinerPane, detailPane, workspaceRoot };
+  return { servicePane, outlinerPane, detailPane, browsingContextId, workspaceRoot };
 }
 
 let result: object;

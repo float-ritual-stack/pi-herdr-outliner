@@ -78,6 +78,7 @@ function harness(
     stops: 0,
     effects: {
       clientId,
+      browsingContextId: `${clientId}-context`,
       workspaceRoot: "/workspace",
       request: async <T>(input: RequestInput): Promise<T> => {
         result.calls.push(input);
@@ -86,6 +87,7 @@ function harness(
           return [{
             clientId: input.role === "tree" ? clientId : "detail-test",
             role: input.role ?? "tree",
+            contextId: `${clientId}-context`,
           }] as T;
         }
         return response as T;
@@ -136,11 +138,11 @@ describe("createTreeController", () => {
 
     await controller.initialize();
     expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe("second");
-    expect(fake.calls.some((call) => call.action === "selection.set")).toBe(false);
+    expect(fake.calls.filter((call) => call.action === "browsing-context.publish")).toHaveLength(1);
 
     await controller.handleServiceEvent(event("content"));
     expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe("second");
-    expect(fake.calls.some((call) => call.action === "selection.set")).toBe(false);
+    expect(fake.calls.filter((call) => call.action === "browsing-context.publish")).toHaveLength(1);
   });
 
   test("fuzzy goto previews candidates and reveals the selected block", async () => {
@@ -179,10 +181,7 @@ describe("createTreeController", () => {
     await controller.handleKeypress("", { name: "return" }, "pass");
     expect(controller.view().mode).toBe("browse");
     expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe(target.id);
-    expect(lastCall(fake.calls, "selection.set")).toEqual({
-      action: "selection.set",
-      blockId: target.id,
-    });
+    expect(lastCall(fake.calls, "browsing-context.publish")).toEqual({ action: "browsing-context.publish", contextId: "tree-test-context", blockId: target.id });
   });
   test("follows the first block reference and navigates Tree-local history", async () => {
     const source = block("source01", {
@@ -193,7 +192,7 @@ describe("createTreeController", () => {
     let selected = source;
     const fake = harness((input) => {
       if (input.action === "workspace.snapshot") return snapshot([source, target], selected);
-      if (input.action === "selection.set") {
+      if (input.action === "browsing-context.publish") {
         selected = input.blockId === target.id ? target : source;
         return { selected, ancestors: [], children: [] };
       }
@@ -205,10 +204,7 @@ describe("createTreeController", () => {
 
     await controller.handleKeypress("o", { name: "o" }, "pass");
     expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe(target.id);
-    expect(lastCall(fake.calls, "selection.set")).toMatchObject({
-      action: "selection.set",
-      blockId: target.id,
-    });
+    expect(lastCall(fake.calls, "browsing-context.publish")).toMatchObject({ action: "browsing-context.publish", contextId: "tree-test-context", blockId: target.id });
 
     await controller.handleKeypress("", { name: "b", meta: true }, "pass");
     expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe(source.id);
@@ -246,7 +242,7 @@ describe("createTreeController", () => {
           created: true,
         };
       }
-      if (input.action === "selection.set") {
+      if (input.action === "browsing-context.publish") {
         selected = input.blockId === target.id ? target : source;
         return { selected, ancestors: [], children: [] };
       }
@@ -286,7 +282,7 @@ describe("createTreeController", () => {
           block: target,
         };
       }
-      if (input.action === "selection.set") {
+      if (input.action === "browsing-context.publish") {
         selected = input.blockId === target.id ? target : source;
       }
       return undefined;
@@ -316,7 +312,7 @@ describe("createTreeController", () => {
     const fake = harness((input) => {
       if (input.action === "workspace.snapshot") return snapshot([source], selected);
       if (input.action === "get") return deleted;
-      if (input.action === "selection.set") {
+      if (input.action === "browsing-context.publish") {
         selected = input.blockId === deleted.id ? deleted : source;
         return { selected, ancestors: [], children: [] };
       }
@@ -382,7 +378,7 @@ describe("createTreeController", () => {
     expect(controller.view().physicalBlocksById.size).toBe(501);
     expect(controller.view().visibleCompleteness).toEqual({ kind: "complete" });
     expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe("block-500");
-    expect(fake.calls.some((call) => call.action === "selection.set")).toBe(false);
+    expect(fake.calls.filter((call) => call.action === "browsing-context.publish")).toHaveLength(1);
   });
 
   test("completes quoted property filters and preserves the prior view on parse errors", async () => {
@@ -411,7 +407,7 @@ describe("createTreeController", () => {
               { key: "stage", value: "next", count: 1 },
             ];
       }
-      if (input.action === "selection.set") {
+      if (input.action === "browsing-context.publish") {
         return { selected: alpha, ancestors: [], children: [] };
       }
       return undefined;
@@ -512,7 +508,7 @@ describe("createTreeController", () => {
     expect(controller.view().mode).toBe("browse");
     expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe(origin.id);
     expect(controller.view().status).toBe("Captured to Inbox · capture");
-    expect(fake.calls.some((call) => call.action === "selection.set")).toBe(false);
+    expect(fake.calls.filter((call) => call.action === "browsing-context.publish")).toHaveLength(1);
 
     await controller.handleKeypress("c", { name: "c" }, "pass");
     await controller.handleKeypress("Cancelled", { sequence: "Cancelled" }, "pass");
@@ -554,7 +550,7 @@ describe("createTreeController", () => {
     expect(requestIds[0]).toBe(requestIds[1]);
     expect(controller.view().mode).toBe("browse");
     expect(controller.view().status).toBe("Capture already saved · captured");
-    expect(fake.calls.some((call) => call.action === "selection.set")).toBe(false);
+    expect(fake.calls.filter((call) => call.action === "browsing-context.publish")).toHaveLength(1);
   });
 
   test("installs visible completeness and the distinct complete physical collection", async () => {
@@ -586,7 +582,7 @@ describe("createTreeController", () => {
 
     await controller.initialize();
 
-    expect(fake.calls.at(-1)).toEqual({ action: "selection.set", blockId: "first" });
+    expect(fake.calls.at(-1)).toEqual({ action: "browsing-context.publish", contextId: "tree-test-context", blockId: "first" });
   });
 
   test("receives workspace context publication without moving the local cursor", async () => {
@@ -599,7 +595,7 @@ describe("createTreeController", () => {
 
     await controller.initialize();
     await controller.handleKeypress("", { name: "down" }, "pass");
-    await controller.handleServiceEvent(event("selection", first.id));
+    await controller.handleServiceEvent(event("browsing-context", first.id));
 
     expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe(second.id);
     expect(controller.view().workspaceContextBlockId).toBe(first.id);
@@ -625,7 +621,7 @@ describe("createTreeController", () => {
           physicalBlocks: [root, child, peer],
         });
       }
-      if (input.action === "selection.set") {
+      if (input.action === "browsing-context.publish") {
         workspaceSelection =
           [root, child, peer].find((candidate) => candidate.id === input.blockId) ?? root;
         return { selected: workspaceSelection, ancestors: [], children: [] };
@@ -653,7 +649,7 @@ describe("createTreeController", () => {
     expect(first.view().rows.map((row) => row.canonicalId)).toEqual(["root", "peer"]);
     expect(second.view().rows.map((row) => row.canonicalId)).toEqual(["root", "child", "peer"]);
     await first.handleKeypress("", { name: "down" }, "pass");
-    await second.handleServiceEvent(event("selection", peer.id));
+    await second.handleServiceEvent(event("browsing-context", peer.id));
     expect(second.view().rows[second.view().selectedIndex]?.canonicalId).toBe(root.id);
     expect(second.view().workspaceContextBlockId).toBe(peer.id);
 
@@ -668,7 +664,7 @@ describe("createTreeController", () => {
         blockId: child.id,
       },
     });
-    await first.handleServiceEvent(event("selection", child.id));
+    await first.handleServiceEvent(event("browsing-context", child.id));
     expect(second.view().rows[second.view().selectedIndex]?.canonicalId).toBe(child.id);
     expect(first.view().rows[first.view().selectedIndex]?.canonicalId).toBe(peer.id);
     expect(first.view().rows.map((row) => row.canonicalId)).toEqual(["root", "peer"]);
@@ -707,7 +703,7 @@ describe("createTreeController", () => {
     });
 
     expect(fake.calls.map((call) => String(call.action))).not.toContain("toggle");
-    expect(fake.calls.at(-1)).toEqual({ action: "selection.set", blockId: "hidden" });
+    expect(fake.calls.at(-1)).toEqual({ action: "browsing-context.publish", contextId: "tree-test-context", blockId: "hidden" });
     expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe("hidden");
   });
 
@@ -748,7 +744,7 @@ describe("createTreeController", () => {
     );
     expect(controller.view().rows).toEqual([]);
     expect(controller.view().physicalBlocksById.size).toBe(0);
-    expect(fake.calls.some((call) => call.action === "selection.set")).toBe(false);
+    expect(fake.calls.some((call) => call.action === "browsing-context.publish")).toBe(false);
   });
 
   test("retains the prior complete tree when a refresh has truncated physical ancestry", async () => {
@@ -803,7 +799,7 @@ describe("createTreeController", () => {
       "create",
       "move",
       "workspace.snapshot",
-      "selection.set",
+      "browsing-context.publish",
       "clients.list",
       "ui.command.send",
     ]);
@@ -1102,7 +1098,7 @@ describe("createTreeController", () => {
       "create",
       "workspace.snapshot",
       "blocks.query",
-      "selection.set",
+      "browsing-context.publish",
     ]);
     expect(fake.calls.some((call) => call.action === "move")).toBe(false);
     expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe("created");
@@ -1116,7 +1112,7 @@ describe("createTreeController", () => {
     let selected: Block | null = parent;
     const fake = harness((input) => {
       if (input.action === "workspace.snapshot") return snapshot(physical, selected);
-      if (input.action === "selection.set") {
+      if (input.action === "browsing-context.publish") {
         selected = physical.find((candidate) => candidate.id === input.blockId) ?? null;
         return undefined;
       }
@@ -1133,10 +1129,7 @@ describe("createTreeController", () => {
     await controller.handleKeypress("y", { name: "y" }, "pass");
 
     const deleteIndex = fake.calls.findIndex((call) => call.action === "delete");
-    expect(fake.calls[deleteIndex - 1]).toEqual({
-      action: "selection.set",
-      blockId: successor.id,
-    });
+    expect(fake.calls[deleteIndex - 1]).toEqual({ action: "browsing-context.publish", contextId: "tree-test-context", blockId: successor.id });
     expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe(successor.id);
   });
 
@@ -1164,7 +1157,7 @@ describe("createTreeController", () => {
           completeness: { kind: "complete" },
         };
       }
-      if (input.action === "selection.set") {
+      if (input.action === "browsing-context.publish") {
         selected = physical.find((candidate) => candidate.id === input.blockId) ?? null;
         return undefined;
       }
@@ -1215,7 +1208,7 @@ describe("createTreeController", () => {
     let selected: Block | null = deleted;
     const fake = harness((input) => {
       if (input.action === "workspace.snapshot") return snapshot(physical, selected);
-      if (input.action === "selection.set") {
+      if (input.action === "browsing-context.publish") {
         selected = physical.find((candidate) => candidate.id === input.blockId) ?? null;
         return undefined;
       }
@@ -1232,7 +1225,7 @@ describe("createTreeController", () => {
     await controller.handleKeypress("y", { name: "y" }, "pass");
 
     expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe(previous.id);
-    expect(fake.calls.findIndex((call) => call.action === "selection.set")).toBeLessThan(
+    expect(fake.calls.findIndex((call) => call.action === "browsing-context.publish")).toBeLessThan(
       fake.calls.findIndex((call) => call.action === "delete"),
     );
   });
@@ -1256,7 +1249,7 @@ describe("createTreeController", () => {
       if (input.action === "blocks.query") {
         return { blocks: [card], completeness: { kind: "complete" } };
       }
-      if (input.action === "selection.set") {
+      if (input.action === "browsing-context.publish") {
         selected = physical.find((candidate) => candidate.id === input.blockId) ?? null;
         return undefined;
       }
@@ -1272,10 +1265,7 @@ describe("createTreeController", () => {
     await controller.handleKeypress("d", { name: "d" }, "pass");
     await controller.handleKeypress("y", { name: "y" }, "pass");
 
-    expect(lastCall(fake.calls, "selection.set")).toEqual({
-      action: "selection.set",
-      blockId: successor.id,
-    });
+    expect(lastCall(fake.calls, "browsing-context.publish")).toEqual({ action: "browsing-context.publish", contextId: "tree-test-context", blockId: successor.id });
     expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe(successor.id);
   });
 
@@ -1303,7 +1293,7 @@ describe("createTreeController", () => {
       if (input.action === "blocks.query") {
         return { blocks: [card], completeness: { kind: "complete" } };
       }
-      if (input.action === "selection.set") {
+      if (input.action === "browsing-context.publish") {
         serviceSelected = input.blockId === tail.id ? tail : serviceSelected;
         return undefined;
       }
@@ -1413,10 +1403,7 @@ describe("createTreeController", () => {
       blockId: "card",
     });
     const deleteIndex = fake.calls.findIndex((call) => call.action === "delete");
-    expect(fake.calls[deleteIndex - 1]).toEqual({
-      action: "selection.set",
-      blockId: "view",
-    });
+    expect(fake.calls[deleteIndex - 1]).toEqual({ action: "browsing-context.publish", contextId: "tree-test-context", blockId: "view" });
     expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe("view");
     expect(controller.view().status).toBe("Moved to Trash");
     expect(JSON.stringify(fake.calls)).not.toContain("occurrence:");
@@ -1455,10 +1442,7 @@ describe("createTreeController", () => {
     await controller.handleServiceEvent(event("content"));
 
     expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe("context");
-    expect(lastCall(fake.calls, "selection.set")).toEqual({
-      action: "selection.set",
-      blockId: "context",
-    });
+    expect(lastCall(fake.calls, "browsing-context.publish")).toEqual({ action: "browsing-context.publish", contextId: "tree-test-context", blockId: "context" });
   });
 
   test("does not retarget a vanished occurrence to its Trash occurrence", async () => {
@@ -1505,7 +1489,7 @@ describe("createTreeController", () => {
           completeness: { kind: "complete" },
         };
       }
-      if (input.action === "selection.set") {
+      if (input.action === "browsing-context.publish") {
         serviceSelected = input.blockId === trashView.id
           ? trashView
           : input.blockId === card.id
@@ -1529,10 +1513,7 @@ describe("createTreeController", () => {
     expect(controller.view().rows[controller.view().selectedIndex]?.rowId).not.toBe(
       "occurrence:trash-view:card",
     );
-    expect(lastCall(fake.calls, "selection.set")).toEqual({
-      action: "selection.set",
-      blockId: trashView.id,
-    });
+    expect(lastCall(fake.calls, "browsing-context.publish")).toEqual({ action: "browsing-context.publish", contextId: "tree-test-context", blockId: trashView.id });
   });
 
   test("uses the same visual index when one of several occurrences disappears", async () => {
@@ -1686,7 +1667,7 @@ describe("createTreeController", () => {
     const controller = createTreeController(fake.effects);
     await controller.initialize();
     await controller.handleKeypress("", { name: "down" }, "pass");
-    await controller.handleServiceEvent(event("selection", first.id));
+    await controller.handleServiceEvent(event("browsing-context", first.id));
     expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe(
       "occurrence:view:first",
     );
@@ -1758,7 +1739,7 @@ describe("createTreeController", () => {
 
     await controller.handleKeypress("", { name: "left" }, "pass");
     expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe("view");
-    expect(fake.calls.at(-1)).toEqual({ action: "selection.set", blockId: "view" });
+    expect(fake.calls.at(-1)).toEqual({ action: "browsing-context.publish", contextId: "tree-test-context", blockId: "view" });
   });
 
   test("restores Trash roots and requires the exact identifier for permanent purge", async () => {
@@ -1823,10 +1804,7 @@ describe("createTreeController", () => {
       blockId: deleted.id,
       confirmation: "PIE-999",
     });
-    expect(purgeFake.calls.at(-1)).toEqual({
-      action: "selection.set",
-      blockId: definition.id,
-    });
+    expect(purgeFake.calls.at(-1)).toEqual({ action: "browsing-context.publish", contextId: "tree-test-context", blockId: definition.id });
     expect(purgeController.view().status).toBe("Permanently purged");
   });
 });

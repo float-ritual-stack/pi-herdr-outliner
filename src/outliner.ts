@@ -19,6 +19,7 @@ import { OUTLINER_PROTOCOL_VERSION, type OutlinerServiceStatus } from "./types";
 const paths = resolvePaths();
 const client = new OutlinerClient(paths.socket);
 const clientId = crypto.randomUUID();
+const browsingContextId = process.env.OUTLINER_BROWSING_CONTEXT_ID?.trim() || clientId;
 const inputDecoder = new TerminalInputDecoder();
 const mouseEnabled = process.env.HERDR_ENV === "1";
 const mouseInput = mouseEnabled ? new StdinBuffer() : null;
@@ -59,6 +60,7 @@ function stop(): void {
 
 const controller = createTreeController({
   clientId,
+  browsingContextId,
   workspaceRoot: paths.workspaceRoot,
   request<T>(input: RequestInput): Promise<T> {
     return client.request<T>(input);
@@ -129,6 +131,7 @@ function startWatcher(): void {
     client: {
       clientId,
       role: "tree",
+      contextId: browsingContextId,
       runtime: currentPaneRuntime(),
     },
     onConnect: () => enqueueWork(() => controller.handleConnect()),

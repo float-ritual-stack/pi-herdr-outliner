@@ -3,8 +3,8 @@ import { selectTreeClient } from "../src/herdr-open-policy";
 import type { OutlinerClientRegistration } from "../src/types";
 
 const trees: OutlinerClientRegistration[] = [
-  { clientId: "tree-a", role: "tree", runtime: { paneId: "pane-a" } },
-  { clientId: "tree-b", role: "tree", runtime: { paneId: "pane-b" } },
+  { clientId: "tree-a", role: "tree", contextId: "tree-a", runtime: { paneId: "pane-a" } },
+  { clientId: "tree-b", role: "tree", contextId: "tree-b", runtime: { paneId: "pane-b" } },
 ];
 
 test("focus-existing requires an explicit Tree when several are live", () => {

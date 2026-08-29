@@ -26,7 +26,7 @@ test("Herdr link action delegates an exact block URI to shared focus and reveal"
   const connected = Promise.withResolvers<void>();
   const focused = Promise.withResolvers<void>();
   const watcher = new OutlinerClient(paths.socket).watch({
-    client: { clientId: "herdr-link-tree", role: "tree" },
+    client: { clientId: "herdr-link-tree", role: "tree", contextId: "herdr-link-tree" },
     onConnect: connected.resolve,
     onEvent: (event) => {
       if (event.domain === "ui") focused.resolve();

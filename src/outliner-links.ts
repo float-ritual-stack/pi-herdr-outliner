@@ -95,6 +95,37 @@ export function parseOutlinerLinkUri(uri: string): OutlinerLinkTarget {
   return { kind, value };
 }
 
+export interface ResolvedOutlinerLinkTarget {
+  block: Block;
+  created?: boolean;
+}
+
+export async function resolveOutlinerLinkTarget(
+  requester: BlockFocusRequester,
+  target: OutlinerLinkTarget,
+): Promise<ResolvedOutlinerLinkTarget> {
+  if (target.kind === "goto") {
+    throw new Error("Fuzzy goto links require a Tree destination");
+  }
+  if (target.kind === "block") {
+    return { block: await requester.request<Block>({ action: "get", blockId: target.value }) };
+  }
+  const resolution = await requester.request<PageAddressResolution>({
+    action: "pages.resolve",
+    address: target.value,
+  });
+  if (resolution.block) return { block: resolution.block };
+  if (target.kind === "work") {
+    throw new Error(`Work ID address is unresolved: ${target.value}`);
+  }
+  const followed = await requester.request<PageAddressFollowResult>({
+    action: "pages.follow",
+    address: target.value,
+  });
+  if (!followed.block) throw new Error(`Page address did not resolve: ${target.value}`);
+  return { block: followed.block, ...(followed.created ? { created: true } : {}) };
+}
+
 export async function navigateOutlinerLink(
   requester: BlockFocusRequester,
   uri: string,

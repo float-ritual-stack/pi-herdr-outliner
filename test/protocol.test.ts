@@ -22,6 +22,7 @@ import type {
   PageAddressRemoval,
   OutlinerServiceStatus,
   PropertyCatalogItem,
+  SelectionContext,
   VisibleBlockCollection,
   WorkIdAllocation,
   WorkIdAllocatorStatus,
@@ -49,7 +50,7 @@ test("serves mutations and property queries over the local socket", async () => 
   const client = new OutlinerClient(socket);
   const service = await client.request<OutlinerServiceStatus>({ action: "ping" });
   expect(service).toEqual({ status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION });
-  expect(service.protocolVersion).toBe(13);
+  expect(service.protocolVersion).toBe(14);
   const provenance = {
     actorId: "omp",
     sessionId: "session-1",
@@ -312,7 +313,7 @@ test("streams workspace mutations and transient UI commands to subscribers", asy
   const received = Promise.withResolvers<void>();
   const events: OutlinerEvent[] = [];
   const watcher = client.watch({
-    client: { clientId: "event-detail", role: "detail" },
+    client: { clientId: "event-detail", role: "detail", contextId: "event-detail" },
     onConnect: connected.resolve,
     onEvent: (event) => {
       events.push(event);
@@ -413,6 +414,82 @@ test("streams workspace mutations and transient UI commands to subscribers", asy
   ]);
 });
 
+test("isolates browsing-context targets and events across same-workspace client pairs", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-outliner-contexts-"));
+  const store = new OutlinerStore(join(directory, "outliner.sqlite"));
+  const socket = join(directory, "outliner.sock");
+  const server = new OutlinerServer(store, socket);
+  await server.start();
+  const first = store.create("First context target");
+  const second = store.create("Second context target");
+  const client = new OutlinerClient(socket);
+  const firstConnected = Promise.withResolvers<void>();
+  const secondConnected = Promise.withResolvers<void>();
+  const firstReceived = Promise.withResolvers<void>();
+  const secondReceived = Promise.withResolvers<void>();
+  const firstEvents: OutlinerEvent[] = [];
+  const secondEvents: OutlinerEvent[] = [];
+  const firstWatcher = client.watch({
+    client: { clientId: "detail-first", role: "detail", contextId: "context-first" },
+    onConnect: firstConnected.resolve,
+    onEvent: (event) => {
+      if (event.domain !== "browsing-context") return;
+      firstEvents.push(event);
+      firstReceived.resolve();
+    },
+  });
+  const secondWatcher = client.watch({
+    client: { clientId: "detail-second", role: "detail", contextId: "context-second" },
+    onConnect: secondConnected.resolve,
+    onEvent: (event) => {
+      if (event.domain !== "browsing-context") return;
+      secondEvents.push(event);
+      secondReceived.resolve();
+    },
+  });
+  cleanups.push(async () => {
+    firstWatcher.stop();
+    secondWatcher.stop();
+    await server.close();
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  await Promise.all([firstConnected.promise, secondConnected.promise]);
+  await client.request({
+    action: "browsing-context.publish",
+    contextId: "context-first",
+    blockId: first.id,
+  });
+  await firstReceived.promise;
+  await Bun.sleep(20);
+  expect(firstEvents).toEqual([
+    expect.objectContaining({
+      domain: "browsing-context",
+      contextId: "context-first",
+      blockId: first.id,
+    }),
+  ]);
+  expect(secondEvents).toEqual([]);
+
+  await client.request({
+    action: "browsing-context.publish",
+    contextId: "context-second",
+    blockId: second.id,
+  });
+  await secondReceived.promise;
+  const firstContext = await client.request<{
+    contextId: string;
+    target: SelectionContext;
+  }>({ action: "browsing-context.get", contextId: "context-first" });
+  const secondContext = await client.request<{
+    contextId: string;
+    target: SelectionContext;
+  }>({ action: "browsing-context.get", contextId: "context-second" });
+  expect(firstContext.target.selected?.id).toBe(first.id);
+  expect(secondContext.target.selected?.id).toBe(second.id);
+});
+
 test("prunes destroyed client registrations before listing or targeting", () => {
   const directory = mkdtempSync(join(tmpdir(), "pi-outliner-destroyed-client-"));
   const store = new OutlinerStore(join(directory, "outliner.sqlite"));
@@ -423,7 +500,7 @@ test("prunes destroyed client registrations before listing or targeting", () => 
   const subscribers = (server as unknown as {
     subscribers: Map<Socket, OutlinerClientRegistration>;
   }).subscribers;
-  subscribers.set(socket, { clientId: "destroyed-tree", role: "tree" });
+  subscribers.set(socket, { clientId: "destroyed-tree", role: "tree", contextId: "destroyed-tree" });
 
   expect(server.handle({ id: "list", action: "clients.list" })).toEqual({
     id: "list",
@@ -454,26 +531,10 @@ test("registers multiple live clients, targets one recipient, broadcasts content
   await server.start();
   const client = new OutlinerClient(socket);
   const registrations = [
-    {
-      clientId: "tree-a",
-      role: "tree" as const,
-      runtime: { paneId: "pane-tree-a", workspaceId: "workspace-a", tabId: "tab-a" },
-    },
-    {
-      clientId: "tree-b",
-      role: "tree" as const,
-      runtime: { paneId: "pane-tree-b", workspaceId: "workspace-b", tabId: "tab-b" },
-    },
-    {
-      clientId: "detail-a",
-      role: "detail" as const,
-      runtime: { paneId: "pane-detail-a", workspaceId: "workspace-a", tabId: "tab-a" },
-    },
-    {
-      clientId: "detail-b",
-      role: "detail" as const,
-      runtime: { paneId: "pane-detail-b", workspaceId: "workspace-b", tabId: "tab-b" },
-    },
+    { clientId: "tree-a", role: "tree" as const, contextId: "tree-a", runtime: { paneId: "pane-tree-a", workspaceId: "workspace-a", tabId: "tab-a" } },
+    { clientId: "tree-b", role: "tree" as const, contextId: "tree-b", runtime: { paneId: "pane-tree-b", workspaceId: "workspace-b", tabId: "tab-b" } },
+    { clientId: "detail-a", role: "detail" as const, contextId: "detail-a", runtime: { paneId: "pane-detail-a", workspaceId: "workspace-a", tabId: "tab-a" } },
+    { clientId: "detail-b", role: "detail" as const, contextId: "detail-b", runtime: { paneId: "pane-detail-b", workspaceId: "workspace-b", tabId: "tab-b" } },
   ];
   const events = new Map(registrations.map(({ clientId }) => [clientId, [] as OutlinerEvent[]]));
   const connected = Promise.withResolvers<void>();
@@ -520,10 +581,10 @@ test("registers multiple live clients, targets one recipient, broadcasts content
   ]);
   expect(await client.request<{ subscribed: boolean; client: OutlinerClientRegistration }>({
     action: "events.subscribe",
-    client: { clientId: " normalized-client ", role: "detail", runtime: {} },
+    client: { clientId: " normalized-client ", role: "detail", contextId: " normalized-client ", runtime: {} },
   })).toEqual({
     subscribed: true,
-    client: { clientId: "normalized-client", role: "detail" },
+    client: { clientId: "normalized-client", role: "detail", contextId: "normalized-client" },
   });
   await expect(client.request({
     action: "clients.list",
@@ -555,11 +616,7 @@ test("registers multiple live clients, targets one recipient, broadcasts content
   });
   await expect(client.request({
     action: "events.subscribe",
-    client: {
-      clientId: "invalid-runtime",
-      role: "tree",
-      runtime: { obsoletePaneState: "pane" },
-    } as unknown as OutlinerClientRegistration,
+    client: { clientId: "invalid-runtime", role: "tree", contextId: "invalid-runtime", runtime: { obsoletePaneState: "pane" } } as unknown as OutlinerClientRegistration,
   })).rejects.toThrow("Invalid client runtime obsoletePaneState");
   await expect(client.request({
     action: "ui.command.send",
@@ -582,11 +639,7 @@ test("registers multiple live clients, targets one recipient, broadcasts content
   const replacementEvents: OutlinerEvent[] = [];
   const replacementReceived = Promise.withResolvers<void>();
   const replacement = new OutlinerClient(socket).watch({
-    client: {
-      clientId: "tree-a-restarted",
-      role: "tree",
-      runtime: { paneId: "pane-tree-a-next", workspaceId: "workspace-a", tabId: "tab-a" },
-    },
+    client: { clientId: "tree-a-restarted", role: "tree", contextId: "tree-a-restarted", runtime: { paneId: "pane-tree-a-next", workspaceId: "workspace-a", tabId: "tab-a" } },
     onConnect: replacementConnected.resolve,
     onEvent: (event) => {
       replacementEvents.push(event);
@@ -628,7 +681,7 @@ test("watchers reconnect and resubscribe after the service restarts", async () =
   const disconnected = Promise.withResolvers<void>();
   const reconnected = Promise.withResolvers<void>();
   const watcher = new OutlinerClient(socket).watch({
-    client: { clientId: "reconnecting-tree", role: "tree" },
+    client: { clientId: "reconnecting-tree", role: "tree", contextId: "reconnecting-tree" },
     onConnect: () => {
       connectionCount += 1;
       if (connectionCount === 1) firstConnection.resolve();
@@ -678,7 +731,7 @@ test("watchers reconnect when a subscription is not acknowledged", async () => {
   await listening.promise;
 
   const watcher = new OutlinerClient(socketPath).watch({
-    client: { clientId: "ack-tree", role: "tree" },
+    client: { clientId: "ack-tree", role: "tree", contextId: "ack-tree" },
     onConnect: reconnected.resolve,
     onEvent: () => {},
   });
@@ -719,7 +772,7 @@ test("stopping a connected watcher does not report a disconnect", async () => {
   await listening.promise;
 
   const watcher = new OutlinerClient(socketPath).watch({
-    client: { clientId: "stop-tree", role: "tree" },
+    client: { clientId: "stop-tree", role: "tree", contextId: "stop-tree" },
     onConnect: connected.resolve,
     onDisconnect: () => {
       disconnectCount += 1;

@@ -103,7 +103,7 @@ describe("outliner link URIs", () => {
           } as T;
         }
         if (input.action === "clients.list") {
-          return [{ clientId: "tree-client", role: "tree" }] as T;
+          return [{ clientId: "tree-client", role: "tree", contextId: "tree-client" }] as T;
         }
         return {} as T;
       },
@@ -181,8 +181,8 @@ describe("outliner link URIs", () => {
         }
         if (input.action === "clients.list") {
           return [
-            { clientId: "tree-a", role: "tree" },
-            { clientId: "tree-b", role: "tree" },
+            { clientId: "tree-a", role: "tree", contextId: "tree-a" },
+            { clientId: "tree-b", role: "tree", contextId: "tree-b" },
           ] as T;
         }
         throw new Error(`Unexpected request: ${input.action}`);
@@ -213,7 +213,7 @@ describe("outliner link URIs", () => {
         calls.push(input);
         if (input.action === "get") return target as T;
         if (input.action === "clients.list") {
-          return [{ clientId: "detail-client", role: "detail" }] as T;
+          return [{ clientId: "detail-client", role: "detail", contextId: "detail-client" }] as T;
         }
         return {} as T;
       },

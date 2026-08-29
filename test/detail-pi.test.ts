@@ -21,6 +21,10 @@ function block(text: string): Block {
 function state(overrides: Partial<DetailState> = {}): DetailState {
   return {
     context: { selected: null, ancestors: [], children: [] },
+    targetBlockId: null,
+    connectionMode: "follow",
+    canNavigateBack: false,
+    canNavigateForward: false,
     resolvedSelectedText: "",
     workIdPrefix: null,
     resolvedBreadcrumb: "",

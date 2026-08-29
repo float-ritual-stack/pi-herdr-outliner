@@ -32,6 +32,10 @@ function state(text: string, rawText = "raw edit source"): DetailState {
   const selected = block("block-1", rawText);
   return {
     context: { selected, ancestors: [], children: [] },
+    targetBlockId: selected.id,
+    connectionMode: "follow",
+    canNavigateBack: false,
+    canNavigateForward: false,
     resolvedSelectedText: text,
     workIdPrefix: "PIE",
     resolvedBreadcrumb: "Resolved block",
@@ -116,7 +120,7 @@ describe("Pi Markdown detail preview", () => {
     const lines = previewLayout(detail).render(32).map(stripTerminalSequences);
 
     expect(lines[0]).toBe("");
-    expect(lines[1]).toContain("Detail  Resolved block");
+    expect(lines[1]).toContain("Detail · Follow  Resolved block");
     expect(lines[2]).toBe("─".repeat(32));
     expect(lines.at(-2)).toBe("Ready");
     expect(lines.at(-1)).toContain("^U/D half");
