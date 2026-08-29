@@ -18,6 +18,7 @@ import {
   BlockQuerySyntaxError,
   parsePropertyFilterExpression,
 } from "../src/block-query";
+import { parseStandaloneDispatchMarker } from "../src/dispatch-marker";
 import { OutlinerClient } from "../src/client";
 import { resolvePaths } from "../src/paths";
 import { getProperty } from "../src/properties";
@@ -26,6 +27,8 @@ import {
   OUTLINER_PROTOCOL_VERSION,
   type Block,
   type BlockProvenance,
+  type CaptureReceipt,
+  type CaptureSource,
   type OutlinerServiceStatus,
   type PropertyCatalogItem,
   type SelectionContext,
@@ -49,6 +52,28 @@ function toolProvenance(
     sessionId: context.sessionManager.getSessionId(),
     taskId: toolCallId,
   };
+}
+
+function hostCaptureSource(): CaptureSource {
+  return HOST_ACTOR_ID === "omp" ? "omp" : "pi";
+}
+
+function compactCaptureReceipt(receipt: CaptureReceipt, source: CaptureSource) {
+  const capturedFromBlockId = receipt.block.properties.find(
+    (property) => property.key === "captured-from",
+  )?.value;
+  return {
+    blockId: receipt.block.id,
+    inboxBlockId: receipt.inboxBlockId,
+    source,
+    ...(capturedFromBlockId ? { capturedFromBlockId } : {}),
+    deduplicated: receipt.deduplicated,
+  };
+}
+
+async function selectedBlockId(): Promise<string | undefined> {
+  const selection = await client.request<SelectionContext>({ action: "selection.get" });
+  return selection.selected?.id;
 }
 
 const propertyPatchOperationSchema = Type.Union([
@@ -219,6 +244,36 @@ export default function outlinerExtension(pi: ExtensionAPI): void {
     },
   });
 
+  pi.registerCommand("capture", {
+    description: "Capture text to the shared Inbox without starting an agent turn",
+    handler: async (args, ctx) => {
+      const text = args.trim();
+      if (!text) {
+        ctx.ui.notify("Usage: /capture <text>", "warning");
+        return;
+      }
+      try {
+        await ensureService(false);
+        const source = hostCaptureSource();
+        const receipt = await client.request<CaptureReceipt>({
+          action: "capture.create",
+          requestId: crypto.randomUUID(),
+          text,
+          source,
+          capturedFromBlockId: await selectedBlockId(),
+          author: "user",
+        });
+        const summary = compactCaptureReceipt(receipt, source);
+        ctx.ui.notify(
+          `${receipt.deduplicated ? "Capture already saved" : "Captured to Inbox"} · ${summary.blockId.slice(0, 8)}`,
+          "info",
+        );
+      } catch (error) {
+        ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+      }
+    },
+  });
+
   pi.registerCommand("outliner-goto", {
     description: "Focus a block by full ID, short ID prefix, or fuzzy text",
     handler: async (args, ctx) => {
@@ -297,6 +352,33 @@ export default function outlinerExtension(pi: ExtensionAPI): void {
         provenance: toolProvenance(context, toolCallId),
       });
       return toolResult(block);
+    },
+  });
+
+  pi.registerTool({
+    name: "outliner_capture",
+    label: "Outliner Capture",
+    description: "Capture durable text to the shared Inbox without routing or changing selection",
+    promptSnippet: "Capture text to the shared outliner Inbox",
+    parameters: Type.Object({
+      text: Type.String(),
+      requestId: Type.Optional(Type.String()),
+      capturedFromBlockId: Type.Optional(Type.String()),
+    }),
+    async execute(toolCallId, params, _signal, _onUpdate, context) {
+      await ensureService(false);
+      const source = hostCaptureSource();
+      const receipt = await client.request<CaptureReceipt>({
+        action: "capture.create",
+        requestId:
+          params.requestId ?? `${context.sessionManager.getSessionId()}:${toolCallId}`,
+        text: params.text,
+        source,
+        capturedFromBlockId: params.capturedFromBlockId ?? await selectedBlockId(),
+        author: "agent",
+        provenance: toolProvenance(context, toolCallId),
+      });
+      return textToolResult(JSON.stringify(compactCaptureReceipt(receipt, source), null, 2));
     },
   });
 
@@ -573,6 +655,46 @@ export default function outlinerExtension(pi: ExtensionAPI): void {
       await ensureService(false);
       return toolResult(await client.request<SelectionContext>({ action: "selection.get" }));
     },
+  });
+
+  pi.on("input", async (event, ctx) => {
+    if (
+      event.source === "extension" ||
+      event.streamingBehavior !== undefined ||
+      (event.images?.length ?? 0) > 0
+    ) {
+      return { action: "continue" };
+    }
+    const marker = parseStandaloneDispatchMarker(event.text);
+    if (marker.kind === "none") return { action: "continue" };
+    if (marker.kind === "invalid") {
+      ctx.ui.notify(marker.error, "warning");
+      return { action: "continue" };
+    }
+    try {
+      await ensureService(false);
+      const source = hostCaptureSource();
+      const receipt = await client.request<CaptureReceipt>({
+        action: "capture.create",
+        requestId: crypto.randomUUID(),
+        text: marker.payload,
+        source,
+        capturedFromBlockId: await selectedBlockId(),
+        author: "user",
+      });
+      const summary = compactCaptureReceipt(receipt, source);
+      ctx.ui.notify(
+        `${receipt.deduplicated ? "Capture already saved" : "Captured to Inbox"} · ${summary.blockId.slice(0, 8)}`,
+        "info",
+      );
+      return { action: "handled" };
+    } catch (error) {
+      ctx.ui.notify(
+        `Dispatch failed; input preserved: ${error instanceof Error ? error.message : String(error)}`,
+        "error",
+      );
+      return { action: "continue" };
+    }
   });
 
   pi.on("before_agent_start", async (event) => {

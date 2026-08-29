@@ -151,7 +151,7 @@ function normalizeCreatorProvenance(
   };
 }
 
-const CAPTURE_SOURCES = new Set<CaptureSource>(["tree", "pi", "cli", "external"]);
+const CAPTURE_SOURCES = new Set<CaptureSource>(["tree", "pi", "omp", "cli", "external"]);
 
 function normalizeCaptureRequestId(requestId: string): string {
   if (typeof requestId !== "string") {

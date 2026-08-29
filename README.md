@@ -95,6 +95,10 @@ In another terminal, from the same workspace root:
 bun run cli list
 bun run cli list --filter work-stage=next --limit 20
 bun run cli list --filter 'status=in progress' --filter project=pi-outliner --limit 20
+bun run cli capture --text "A quick thought"
+bun run cli capture <<'EOF'
+Multiline capture with literal $VARIABLE and Unicode 🐢.
+EOF
 bun run cli list --subtree <block-uuid> --text "route snapshot" --limit 20
 bun run cli create --text "A durable note [type::note]"
 bun run cli selection
@@ -209,7 +213,7 @@ Text substring, subtree root, deleted-content mode, projection rank context, and
 
 Tree `c` opens a pane-local capture composer without navigating away from the selected row. Single-line typing and multiline paste are supported; Shift+Enter or Ctrl+E adds a line, Enter submits, and Esc/Ctrl+C cancels.
 
-`capture.create` writes one ordinary canonical child beneath the active `[system-view::inbox]` block. Captures include:
+`capture.create` writes one ordinary canonical child beneath the active `[system-view::inbox]` block. Tree, CLI, Pi/OMP tools/commands, and exact standalone dispatch markers are adapters over this same mutation. Captures include:
 
 ```text
 [type::capture] [status::unprocessed]
@@ -217,7 +221,11 @@ Tree `c` opens a pane-local capture composer without navigating away from the se
 [captured-from::<optional canonical block UUID>]
 ```
 
-The optional captured-from block is context evidence, not the capture’s parent. The Inbox can be renamed or moved while retaining its canonical identity. Persistent request receipts make retries idempotent across reconnects and service restarts. Capture never changes workspace selection/history; the Tree restores the exact prior row and shows a compact receipt. Routing, enrichment, external launchers, and Pi/CLI adapters remain later work.
+The optional captured-from block is context evidence, not the capture’s parent. The Inbox can be renamed or moved while retaining its canonical identity. Persistent request receipts make retries idempotent across reconnects and service restarts. Capture never changes workspace selection/history; the Tree restores the exact prior row and shows a compact receipt. Routing, enrichment, Inbox processing, and concrete third-party launcher integrations remain later work.
+
+CLI accepts `--text`, explicit `--stdin`, or automatic non-TTY stdin/heredoc input. `--request-id` provides caller-controlled retry identity and `--captured-from` records optional context. Receipt JSON is written to stdout; service failure exits nonzero without a local fallback.
+
+The Pi extension registers `/capture` and `outliner_capture`. An exact standalone `float.dispatch(…)` input is intercepted by the Pi/OMP input hook, durably captured, acknowledged, and handled without starting an agent turn. Embedded/conversational markers are left untouched; malformed markers report a warning and continue as ordinary input.
 
 Exact references use stable block IDs:
 
@@ -264,7 +272,9 @@ The project Pi extension is auto-discovered through [`.pi/extensions/outliner.ts
 - `/outliner-goto <query>`
 - `/goto <query>` through the project command
 - `/outliner-filter`
+- `/capture <text>`
 - `outliner_create`
+- `outliner_capture`
 - `outliner_update`
 - `outliner_property_patch`
 - `outliner_property_catalog`

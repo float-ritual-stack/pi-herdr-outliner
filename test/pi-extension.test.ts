@@ -22,9 +22,10 @@ test("registers the workspace commands and annotation-aware tools", () => {
 
   outlinerExtension(pi);
 
-  expect(commands).toEqual(["outliner", "outliner-goto", "outliner-filter"]);
+  expect(commands).toEqual(["outliner", "capture", "outliner-goto", "outliner-filter"]);
   expect(registeredTools.map((definition) => definition.name)).toEqual([
     "outliner_create",
+    "outliner_capture",
     "outliner_annotate_file",
     "outliner_update",
     "outliner_property_patch",
@@ -302,6 +303,186 @@ test("requires protocol v11, attributes agent creates and page follows, and pres
     await expect(tools.get("outliner_query")!.execute("incompatible-query", {})).rejects.toThrow(
       "Incompatible outliner protocol 5; expected 11",
     );
+  } finally {
+    OutlinerClient.prototype.request = originalRequest;
+  }
+});
+
+test("captures through command, tool, and exact standalone dispatch without an agent turn", async () => {
+  type InputResult = { action: "continue" | "handled" };
+  type InputHandler = (
+    event: {
+      text: string;
+      source: "interactive" | "rpc" | "extension";
+      images?: unknown[];
+      streamingBehavior?: "steer" | "followUp";
+    },
+    context: ExtensionContext,
+  ) => Promise<InputResult>;
+  type CommandDefinition = {
+    handler(args: string, context: ExtensionContext): Promise<void>;
+  };
+  type ToolDefinition = {
+    name: string;
+    execute(
+      id: string,
+      params: { text: string; requestId?: string; capturedFromBlockId?: string },
+      signal: AbortSignal | undefined,
+      onUpdate: unknown,
+      context: ExtensionContext,
+    ): Promise<{ content: Array<{ type: string; text: string }> }>;
+  };
+
+  const selectionBlock: Block = {
+    id: "selected-context",
+    parentId: null,
+    position: 0,
+    text: "Selected context",
+    author: "user",
+    collapsed: false,
+    createdAt: "created",
+    updatedAt: "updated",
+    properties: [],
+  };
+  const commands = new Map<string, CommandDefinition>();
+  const tools = new Map<string, ToolDefinition>();
+  const handlers = new Map<string, InputHandler>();
+  const notifications: Array<{ message: string; level: string }> = [];
+  const requests: RequestInput[] = [];
+  let captureFailure: Error | null = null;
+  let captureIndex = 0;
+  const originalRequest = OutlinerClient.prototype.request;
+  OutlinerClient.prototype.request = async function <T>(input: RequestInput): Promise<T> {
+    requests.push(input);
+    if (input.action === "ping") {
+      return { status: "ready", protocolVersion: 11 } as T;
+    }
+    if (input.action === "selection.get") {
+      return {
+        selected: selectionBlock,
+        ancestors: [],
+        children: [],
+      } as T;
+    }
+    if (input.action === "capture.create") {
+      if (captureFailure) throw captureFailure;
+      captureIndex += 1;
+      return {
+        block: {
+          ...selectionBlock,
+          id: `capture-${captureIndex}`,
+          parentId: "inbox",
+          text: input.text,
+          author: input.author ?? "user",
+          properties: [
+            { key: "capture-source", value: input.source },
+            ...(input.capturedFromBlockId
+              ? [{ key: "captured-from", value: input.capturedFromBlockId }]
+              : []),
+          ],
+        },
+        inboxBlockId: "inbox",
+        deduplicated: false,
+      } as T;
+    }
+    throw new Error(`Unexpected request: ${input.action}`);
+  };
+  const pi = {
+    registerCommand(name: string, definition: CommandDefinition) {
+      commands.set(name, definition);
+    },
+    registerTool(definition: ToolDefinition) {
+      tools.set(definition.name, definition);
+    },
+    on(name: string, handler: InputHandler) {
+      if (name === "input") handlers.set(name, handler);
+    },
+  } as unknown as ExtensionAPI;
+  const context = {
+    sessionManager: {
+      getSessionId: () => "session-capture",
+    },
+    ui: {
+      notify(message: string, level: string) {
+        notifications.push({ message, level });
+      },
+    },
+  } as unknown as ExtensionContext;
+
+  try {
+    outlinerExtension(pi);
+    await commands.get("capture")!.handler("command capture", context);
+    const toolResult = await tools.get("outliner_capture")!.execute(
+      "tool-capture",
+      { text: "tool capture", requestId: "stable-tool-request" },
+      undefined,
+      undefined,
+      context,
+    );
+    expect(JSON.parse(toolResult.content[0]!.text)).toEqual({
+      blockId: "capture-2",
+      inboxBlockId: "inbox",
+      source: process.env.OMPCODE ? "omp" : "pi",
+      capturedFromBlockId: selectionBlock.id,
+      deduplicated: false,
+    });
+
+    const input = handlers.get("input")!;
+    expect(await input({
+      text: "float.dispatch({remember this 🐢})",
+      source: "interactive",
+      images: [],
+    }, context)).toEqual({ action: "handled" });
+    expect(await input({
+      text: "I mentioned float.dispatch({not standalone})",
+      source: "interactive",
+      images: [],
+    }, context)).toEqual({ action: "continue" });
+    expect(await input({
+      text: "float.dispatch({unterminated}",
+      source: "interactive",
+      images: [],
+    }, context)).toEqual({ action: "continue" });
+
+    const captures = requests.filter(
+      (request): request is Extract<RequestInput, { action: "capture.create" }> =>
+        request.action === "capture.create",
+    );
+    expect(captures).toHaveLength(3);
+    expect(captures[0]).toMatchObject({
+      text: "command capture",
+      source: process.env.OMPCODE ? "omp" : "pi",
+      capturedFromBlockId: selectionBlock.id,
+      author: "user",
+    });
+    expect(captures[1]).toEqual(expect.objectContaining({
+      requestId: "stable-tool-request",
+      text: "tool capture",
+      source: process.env.OMPCODE ? "omp" : "pi",
+      capturedFromBlockId: selectionBlock.id,
+      author: "agent",
+      provenance: {
+        actorId: process.env.OMPCODE ? "omp" : "pi",
+        sessionId: "session-capture",
+        taskId: "tool-capture",
+      },
+    }));
+    expect(captures[2]).toMatchObject({
+      text: "{remember this 🐢}",
+      source: process.env.OMPCODE ? "omp" : "pi",
+      author: "user",
+    });
+    expect(notifications.some(({ message }) => message.includes("Captured to Inbox"))).toBe(true);
+    expect(notifications.some(({ message }) => message.includes("Unterminated dispatch marker")))
+      .toBe(true);
+
+    captureFailure = new Error("service unavailable");
+    expect(await input({
+      text: "float.dispatch({preserve me})",
+      source: "interactive",
+      images: [],
+    }, context)).toEqual({ action: "continue" });
+    expect(notifications.at(-1)?.message).toContain("Dispatch failed; input preserved");
   } finally {
     OutlinerClient.prototype.request = originalRequest;
   }
