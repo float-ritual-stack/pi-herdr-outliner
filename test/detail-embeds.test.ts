@@ -121,7 +121,7 @@ test("renders a bounded virtual-branch embed without changing authored source", 
   expect(requester.calls).not.toContainEqual({ action: "get", blockId: "nested-target" });
 });
 
-test("renders explicit empty, invalid, failed, missing, deleted, and unsupported states", async () => {
+test("renders explicit empty, invalid, failed, missing, deleted, and ordinary states", async () => {
   const empty = virtualBranch("view-empty");
   const invalid = block("view-invalid", "Invalid [type::virtual-branch]", [
     { key: "type", value: "virtual-branch" },
@@ -133,9 +133,9 @@ test("renders explicit empty, invalid, failed, missing, deleted, and unsupported
     deletedAt: timestamp,
     effectiveDeletedRootId: "view-trash",
   };
-  const unsupported = block("ordinary-block", "Ordinary");
+  const ordinary = block("ordinary-block", "Ordinary");
   const requester = new FakeRequester(
-    new Map([empty, invalid, failed, targetFailed, deleted, unsupported].map((item) => [item.id, item])),
+    new Map([empty, invalid, failed, targetFailed, deleted, ordinary].map((item) => [item.id, item])),
     new Map<string, VisibleBlockCollection | Error>([
       [empty.id, { blocks: [], completeness: { kind: "complete" } }],
       [failed.id, new Error("query backend unavailable\nretry later")],
@@ -161,7 +161,7 @@ test("renders explicit empty, invalid, failed, missing, deleted, and unsupported
     "failed",
     "missing",
     "deleted",
-    "unsupported",
+    "ready",
   ]);
   expect(projection.text).toContain("Embedded view: ((view-empty)) · EMPTY");
   expect(projection.text).toContain("Embedded view: ((view-invalid)) · CONFIG ERROR");
@@ -171,12 +171,45 @@ test("renders explicit empty, invalid, failed, missing, deleted, and unsupported
   expect(projection.text).toContain("query backend unavailable retry later");
   expect(projection.text).toContain("!((view-missing)) · MISSING TARGET");
   expect(projection.text).toContain("!((view-trash)) · IN TRASH");
-  expect(projection.text).toContain("Embedded block: ((ordinary-block)) · UNSUPPORTED TYPE");
+  expect(projection.text).toContain("Embedded block: ((ordinary-block))\nOrdinary");
+});
+
+test("renders ordinary block Markdown without loading a workspace snapshot or nested embeds", async () => {
+  const ordinary = block(
+    "ordinary-block",
+    "Ordinary title\n\nBody with **Markdown** and !((nested-target))",
+  );
+  const requester = new FakeRequester(
+    new Map([[ordinary.id, ordinary]]),
+    new Map(),
+    new Map(),
+    new Error("snapshot must not be loaded"),
+  );
+
+  const projection = await projectDetailRead(
+    requester,
+    "Before\n!((ordinary-block))\nAfter",
+  );
+
+  expect(projection).toEqual({
+    text: [
+      "Before",
+      "Embedded block: ((ordinary-block))",
+      "Ordinary title",
+      "",
+      "Body with **Markdown** and !((nested-target))",
+      "After",
+    ].join("\n"),
+    embeds: [{ blockId: ordinary.id, status: "ready", count: 1 }],
+  });
+  expect(requester.calls).not.toContainEqual({ action: "workspace.snapshot" });
+  expect(requester.calls).not.toContainEqual({ action: "get", blockId: "nested-target" });
 });
 
 test("renders workspace projection failures instead of hiding the document", async () => {
+  const definition = virtualBranch("view-next");
   const requester = new FakeRequester(
-    new Map(),
+    new Map([[definition.id, definition]]),
     new Map(),
     new Map(),
     new Error("snapshot unavailable"),

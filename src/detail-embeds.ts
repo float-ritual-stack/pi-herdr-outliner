@@ -28,7 +28,6 @@ export type DetailEmbedStatus =
   | "invalid"
   | "missing"
   | "deleted"
-  | "unsupported"
   | "failed"
   | "limit";
 
@@ -147,7 +146,7 @@ async function projectVirtualBranch(
 async function projectEmbed(
   requester: DetailEmbedRequester,
   blockId: string,
-  physicalBlocks: readonly Block[],
+  loadPhysicalBlocks: () => Promise<readonly Block[]>,
 ): Promise<ProjectedEmbed> {
   let target: Block;
   try {
@@ -163,11 +162,19 @@ async function projectEmbed(
   }
   if (!isVirtualBranchDefinition(target)) {
     return {
-      text: `Embedded block: ((${blockId})) · UNSUPPORTED TYPE`,
-      state: { blockId, status: "unsupported", count: 0 },
+      text: `Embedded block: ((${blockId}))\n${target.text}`,
+      state: { blockId, status: "ready", count: 1 },
     };
   }
-  return projectVirtualBranch(requester, target, physicalBlocks);
+  try {
+    return projectVirtualBranch(requester, target, await loadPhysicalBlocks());
+  } catch (error) {
+    return explicitFallback(
+      blockId,
+      "failed",
+      `PROJECTION FAILED · ${boundedError(error)}`,
+    );
+  }
 }
 
 export function detailEmbedIds(text: string): string[] {
@@ -181,28 +188,18 @@ export async function projectDetailRead(
   const matches = [...text.matchAll(DETAIL_EMBED_PATTERN)];
   if (matches.length === 0) return { text, embeds: [] };
 
-  let physicalBlocks: readonly Block[] = [];
-  let snapshotError: string | null = null;
-  try {
-    const snapshot = await requester.request<WorkspaceSnapshot>({ action: "workspace.snapshot" });
-    physicalBlocks = snapshot.physical.blocks;
-  } catch (error) {
-    snapshotError = boundedError(error);
-  }
+  let pendingPhysicalBlocks: Promise<readonly Block[]> | null = null;
+  const loadPhysicalBlocks = (): Promise<readonly Block[]> => {
+    pendingPhysicalBlocks ??= requester.request<WorkspaceSnapshot>({
+      action: "workspace.snapshot",
+    }).then((snapshot) => snapshot.physical.blocks);
+    return pendingPhysicalBlocks;
+  };
   const cache = new Map<string, Promise<ProjectedEmbed>>();
   for (const match of matches.slice(0, MAX_DETAIL_EMBEDS)) {
     const blockId = match[1]!;
     if (cache.has(blockId)) continue;
-    cache.set(
-      blockId,
-      snapshotError
-        ? Promise.resolve(explicitFallback(
-          blockId,
-          "failed",
-          `PROJECTION FAILED · ${snapshotError}`,
-        ))
-        : projectEmbed(requester, blockId, physicalBlocks),
-    );
+    cache.set(blockId, projectEmbed(requester, blockId, loadPhysicalBlocks));
   }
   let consumed = 0;
   let output = "";
