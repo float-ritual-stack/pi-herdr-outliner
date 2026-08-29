@@ -68,11 +68,15 @@ test("requires protocol v10, attributes agent creates and page follows, and pres
   };
   let protocolVersion = 10;
   let queryCollection = collection;
+  let queryError: Error | undefined;
   const requests: RequestInput[] = [];
   const originalRequest = OutlinerClient.prototype.request;
   OutlinerClient.prototype.request = async function <T>(input: RequestInput): Promise<T> {
     requests.push(input);
-    if (input.action === "blocks.query") return queryCollection as unknown as T;
+    if (input.action === "blocks.query") {
+      if (queryError) throw queryError;
+      return queryCollection as unknown as T;
+    }
     if (input.action === "create") return {} as T;
     if (input.action === "pages.follow") return { created: true } as T;
     if (input.action === "work-ids.status") return { prefix: "PIE" } as T;
@@ -154,6 +158,15 @@ test("requires protocol v10, attributes agent creates and page follows, and pres
         },
       },
     });
+    queryError = new Error("Service unavailable");
+    await commands.get("outliner-filter")!.handler("status=open", {
+      ui: {
+        setWidget(id, lines) {
+          widgets.push({ id, lines });
+        },
+      },
+    });
+    queryError = undefined;
     const result = await tools.get("outliner_query")!.execute("query-id", { text: "Matching" });
     await tools.get("outliner_create")!.execute(
       "tool-call-test",
@@ -199,6 +212,10 @@ test("requires protocol v10, attributes agent creates and page follows, and pres
       {
         action: "blocks.query",
         query: { filters: [{ key: "status", value: "in progress" }], limit: 20 },
+      },
+      {
+        action: "blocks.query",
+        query: { filters: [{ key: "status", value: "open" }], limit: 20 },
       },
       {
         action: "blocks.query",
@@ -250,6 +267,10 @@ test("requires protocol v10, attributes agent creates and page follows, and pres
       {
         id: "pi-outliner-filter",
         lines: ["Invalid filter: Unterminated quoted filter value at character 8"],
+      },
+      {
+        id: "pi-outliner-filter",
+        lines: ["Filter failed: Service unavailable"],
       },
     ]);
     expect(JSON.parse(result.content[0]!.text)).toEqual({

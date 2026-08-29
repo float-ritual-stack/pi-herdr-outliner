@@ -14,7 +14,10 @@ import {
   focusBlockByQuery,
   formatBlockFocusMatch,
 } from "../src/block-focus";
-import { parsePropertyFilterExpression } from "../src/block-query";
+import {
+  BlockQuerySyntaxError,
+  parsePropertyFilterExpression,
+} from "../src/block-query";
 import { OutlinerClient } from "../src/client";
 import { resolvePaths } from "../src/paths";
 import { getProperty } from "../src/properties";
@@ -267,7 +270,8 @@ export default function outlinerExtension(pi: ExtensionAPI): void {
         ctx.ui.setWidget("pi-outliner-filter", lines, { placement: "belowEditor" });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        ctx.ui.setWidget("pi-outliner-filter", [`Invalid filter: ${message}`], {
+        const label = error instanceof BlockQuerySyntaxError ? "Invalid filter" : "Filter failed";
+        ctx.ui.setWidget("pi-outliner-filter", [`${label}: ${message}`], {
           placement: "belowEditor",
         });
       }
