@@ -6,6 +6,15 @@ export interface TerminalKey {
   sequence?: string;
 }
 
+export function historyNavigationDirection(
+  key: TerminalKey,
+): "back" | "forward" | null {
+  if (!key.meta) return null;
+  if (key.name === "left" || key.name === "b") return "back";
+  if (key.name === "right" || key.name === "f") return "forward";
+  return null;
+}
+
 export const BRACKETED_PASTE_ENABLE = "\x1b[?2004h";
 export const BRACKETED_PASTE_DISABLE = "\x1b[?2004l";
 const BRACKETED_PASTE_START = "\x1b[200~";

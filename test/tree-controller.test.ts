@@ -217,7 +217,7 @@ describe("createTreeController", () => {
       blockId: target.id,
     });
 
-    await controller.handleKeypress("", { name: "left", meta: true }, "pass");
+    await controller.handleKeypress("", { name: "b", meta: true }, "pass");
     expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe(source.id);
     expect(lastCall(fake.calls, "navigation.back")).toBeDefined();
   });
