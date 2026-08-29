@@ -25,7 +25,7 @@ The project started as a small Friday-night experiment and grew into a durable w
 
 - SQLite-backed hierarchical blocks with stable UUIDs, sibling order, authors, timestamps, collapse state, and selection.
 - Workspace-isolated service and runtime paths.
-- JSON-lines RPC protocol v10 over a Unix socket.
+- JSON-lines RPC protocol v11 over a Unix socket.
 - Reactive content, selection, view, and UI-command events, with service-owned block navigation history.
 - Indexed `[property::value]` metadata with optimistic property patching and catalog queries.
 - Exact block references using `((block-id))`, resolved to display titles in read mode while raw text remains editable.
@@ -35,6 +35,7 @@ The project started as a small Friday-night experiment and grew into a durable w
 - Property-driven virtual branches with canonical projected occurrences, property-aware creation, and persisted branch-local occurrence order.
 - Agent-authored blocks retain immutable actor, session, and originating tool-call/task provenance while preserving the coarse `agent` author role.
 - Recoverable deletion preserves canonical structure and identity, excludes Trash content from normal queries/completions, and requires explicit identifier-confirmed purge.
+- Idempotent zero-context-loss Tree capture writes ordinary canonical children under one stable workspace Inbox without moving selection or navigation history.
 - Selected multiline-expanded Tree blocks support viewport-sized intra-block PageUp/PageDown without changing block selection.
 - Pi Markdown preview with line, page, endpoint, and mouse/trackpad scrolling.
 - Grapheme-safe wrapped Detail editing, word motion, selection, deletion, bounded per-session undo/redo, completion, optimistic save, and whole-session Esc cancellation.
@@ -120,6 +121,7 @@ The footer in each pane is authoritative and context-sensitive. These are the pr
 | `Shift+Up` / `Shift+Down` | Reorder canonical siblings, or branch-local projected occurrences |
 | `Enter` | Inline edit a single-line block; hand multiline blocks to Detail |
 | `a` / `s` | Add child / sibling |
+| `c` | Open quick capture; Shift+Enter/Ctrl+E adds a line, Enter saves to Inbox, Esc cancels |
 | `Tab` / `Shift+Tab` | Indent / outdent |
 | `Space` | Toggle collapse |
 | `.` or `Command+.` | Expand/collapse multiline block detail in Tree |
@@ -202,6 +204,20 @@ status::"in review" type::roadmap-item
 Whitespace separates clauses outside double quotes. `key` checks property presence; `key=value` and `key::value` check case-insensitive exact equality. Double-quoted values preserve spaces and support only `\\` and `\"` escapes. Invalid syntax reports a character position instead of becoming an accidental query. OR, NOT, ranges, grouping, aggregation, sorting, and reference traversal are intentionally not supported.
 
 Text substring, subtree root, deleted-content mode, projection rank context, and limit remain explicit structured fields rather than reserved filter words. Every query carries a limit from 1 through 1000 and returns `complete` or `truncated` metadata. Tree `/` mode uses the indexed property catalog for key/value completion; agents call `outliner_query` with structured filters and never parse the shorthand.
+
+### Quick capture Inbox
+
+Tree `c` opens a pane-local capture composer without navigating away from the selected row. Single-line typing and multiline paste are supported; Shift+Enter or Ctrl+E adds a line, Enter submits, and Esc/Ctrl+C cancels.
+
+`capture.create` writes one ordinary canonical child beneath the active `[system-view::inbox]` block. Captures include:
+
+```text
+[type::capture] [status::unprocessed]
+[capture-source::tree] [captured-at::<ISO timestamp>]
+[captured-from::<optional canonical block UUID>]
+```
+
+The optional captured-from block is context evidence, not the capture’s parent. The Inbox can be renamed or moved while retaining its canonical identity. Persistent request receipts make retries idempotent across reconnects and service restarts. Capture never changes workspace selection/history; the Tree restores the exact prior row and shows a compact receipt. Routing, enrichment, external launchers, and Pi/CLI adapters remain later work.
 
 Exact references use stable block IDs:
 

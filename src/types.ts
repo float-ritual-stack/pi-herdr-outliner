@@ -51,6 +51,14 @@ export interface Block {
   properties: BlockProperty[];
 }
 
+export type CaptureSource = "tree" | "pi" | "cli" | "external";
+
+export interface CaptureReceipt {
+  block: Block;
+  inboxBlockId: string;
+  deduplicated: boolean;
+}
+
 export type PageAddressKind = "page" | "alias" | "work-id";
 
 export interface PageAddressRecord {
@@ -159,7 +167,7 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 10;
+export const OUTLINER_PROTOCOL_VERSION = 11;
 
 export interface OutlinerServiceStatus {
   status: "ready";
@@ -179,6 +187,16 @@ export type OutlinerRequest =
       action: "create";
       parentId?: string | null;
       text: string;
+      author?: BlockAuthor;
+      provenance?: BlockProvenance;
+    }
+  | {
+      id: string;
+      action: "capture.create";
+      requestId: string;
+      text: string;
+      source: CaptureSource;
+      capturedFromBlockId?: string;
       author?: BlockAuthor;
       provenance?: BlockProvenance;
     }

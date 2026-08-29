@@ -118,13 +118,14 @@ Literal property-looking text inside inline code, fenced code, or escaped syntax
 
 ## Protocol
 
-The current protocol version is `10`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
+The current protocol version is `11`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
 
 ### Important request families
 
 - health: `ping`
 - canonical reads: `get`, `children`, `workspace.snapshot`
 - bounded search: `blocks.query`
+- selection-neutral capture: `capture.create`
 - mutations: `create`, `update`, `move`, `delete` (move to Trash), `trash.restore`, `trash.purge`, `toggle`
 - properties: `properties.patch`, `properties.catalog`
 - virtual ordering: `virtual.occurrences.reorder`
@@ -203,6 +204,24 @@ The service normalizes every query before regular graph traversal or ranked virt
 Human text surfaces share one minimal property-filter parser: whitespace-separated positive-AND clauses, `key` presence, `key=value`/`key::value` equality, and double-quoted spaced values with `\\` and `\"` escapes. Tree and Pi commands use the expression parser; each repeated CLI `--filter` is parsed as one clause so a shell-quoted value containing spaces remains exact. Virtual branches persist the canonical expression in `[query::…]`. Agent tools remain structured and bypass the shorthand.
 
 `workspace.snapshot.view.query` uses the same model for bounded Tree filtering while retaining a separate complete physical collection for canonical ancestry and projection construction. `rankViewId` is internal projection context and is rejected from snapshot queries.
+
+### Idempotent capture
+
+`capture.create` accepts an explicit request ID, text, source surface, optional captured-from block UUID, and ordinary author/provenance. The store resolves exactly one active `[system-view::inbox]`, creates one canonical child, and returns:
+
+```ts
+interface CaptureReceipt {
+  block: Block;
+  inboxBlockId: string;
+  deduplicated: boolean;
+}
+```
+
+`capture_requests` persists request ID → block/Inbox receipts without a foreign-key cascade. A retry returns the original block with `deduplicated: true`, including after reconnect/service restart, and emits no second content event. A purged receipt target fails explicitly rather than creating a duplicate.
+
+Capture text remains ordinary editable/movable content. The service appends indexed lifecycle/context properties (`type=capture`, `status=unprocessed`, source, timestamp, optional captured-from UUID) and stores immutable agent provenance through the existing block fields. The mutation never calls selection or navigation operations.
+
+Store startup creates one canonical `Inbox [type::inbox] [system-view::inbox]` when absent and rejects multiple active Inbox markers. The block may move or be renamed; the marker/UUID remains the destination identity.
 
 ## Reactive flow
 

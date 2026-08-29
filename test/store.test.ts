@@ -87,6 +87,88 @@ describe("OutlinerStore", () => {
     })).toThrow("Block not found: missing-query-root");
   });
 
+
+  test("captures idempotently into one canonical Inbox without moving selection", () => {
+    const store = makeStore();
+    const source = store.create("Deep source");
+    store.setSelection(source.id);
+
+    const receipt = store.capture(
+      "capture-request-1",
+      "First line\nSecond line",
+      "tree",
+      source.id,
+    );
+    const inbox = store.queryBlocks({
+      filters: [{ key: "system-view", value: "inbox" }],
+      limit: 2,
+    }).blocks;
+    expect(inbox).toHaveLength(1);
+    expect(receipt).toEqual({
+      block: expect.objectContaining({
+        parentId: inbox[0]!.id,
+        author: "user",
+        text: expect.stringContaining("First line\nSecond line"),
+        properties: expect.arrayContaining([
+          { key: "type", value: "capture" },
+          { key: "status", value: "unprocessed" },
+          { key: "capture-source", value: "tree" },
+          { key: "captured-from", value: source.id },
+        ]),
+      }),
+      inboxBlockId: inbox[0]!.id,
+      deduplicated: false,
+    });
+    expect(receipt.block.properties.find((property) => property.key === "captured-at")?.value)
+      .toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(store.getSelection().selected?.id).toBe(source.id);
+
+    const replay = store.capture(
+      "capture-request-1",
+      "Different retry text",
+      "tree",
+      source.id,
+    );
+    expect(replay).toEqual({
+      block: expect.objectContaining({ id: receipt.block.id }),
+      inboxBlockId: inbox[0]!.id,
+      deduplicated: true,
+    });
+    expect(store.children(inbox[0]!.id).map((block) => block.id)).toEqual([receipt.block.id]);
+    expect(store.getSelection().selected?.id).toBe(source.id);
+  });
+
+  test("rejects invalid capture input and ambiguous Inbox markers without partial writes", () => {
+    const store = makeStore();
+    const inbox = store.queryBlocks({
+      filters: [{ key: "system-view", value: "inbox" }],
+      limit: 2,
+    }).blocks[0]!;
+    expect(() => store.capture(42 as never, "Text", "tree")).toThrow(
+      "Capture requestId must be 1-200 printable characters",
+    );
+    expect(() => store.capture("bad-text", 42 as never, "tree")).toThrow(
+      "Capture text must be a string",
+    );
+    expect(() => store.capture("bad-from", "Text", "tree", 42 as never)).toThrow(
+      "Capture capturedFromBlockId must be a string",
+    );
+    expect(() => store.capture("empty", "   ", "tree")).toThrow("Capture text cannot be empty");
+    expect(() => store.capture("bad\nid", "Text", "tree")).toThrow(
+      "Capture requestId must be 1-200 printable characters",
+    );
+    expect(() => store.capture("bad-source", "Text", "unknown" as never)).toThrow(
+      "Invalid capture source: unknown",
+    );
+    expect(() => store.capture("missing-source", "Text", "tree", "missing-block")).toThrow(
+      "Block not found: missing-block",
+    );
+    store.create("Other Inbox [system-view::inbox]");
+    expect(() => store.capture("ambiguous", "Text", "tree")).toThrow(
+      "Workspace must contain exactly one active [system-view::inbox]; found 2",
+    );
+    expect(store.children(inbox.id)).toEqual([]);
+  });
   test("keeps literal property examples out of indexed queries", () => {
     const store = makeStore();
     const block = store.create([
@@ -581,8 +663,8 @@ Second paragraph`;
     const snapshot = store.readWorkspaceSnapshot();
     expect(snapshot.visible.completeness).toEqual({ kind: "complete" });
     expect(snapshot.physical.completeness).toEqual({ kind: "complete" });
-    expect(snapshot.visible.blocks).toHaveLength(507);
-    expect(snapshot.physical.blocks).toHaveLength(507);
+    expect(snapshot.visible.blocks).toHaveLength(508);
+    expect(snapshot.physical.blocks).toHaveLength(508);
     expect(snapshot.visible.blocks.some((block) => block.id === "bulk-root-501")).toBe(true);
     expect(snapshot.physical.blocks.some((block) => block.id === "bulk-root-501")).toBe(true);
   });

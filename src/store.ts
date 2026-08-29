@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import { normalizeBlockSearchQuery } from "./block-query";
 import {
   firstLineWithoutPropertyTokens,
+  formatProperty,
   matchesFilters,
   parseProperties,
   parsePropertyTokens,
@@ -29,6 +30,8 @@ import {
 import type {
   Block,
   BlockAuthor,
+  CaptureReceipt,
+  CaptureSource,
   BlockProvenance,
   BlockProperty,
   BlockSearchQuery,
@@ -68,6 +71,11 @@ interface BlockRow {
   collapsed: number;
   created_at: string;
   updated_at: string;
+}
+
+interface CaptureRequestRow {
+  block_id: string;
+  inbox_block_id: string;
 }
 
 interface PropertyRow {
@@ -143,6 +151,19 @@ function normalizeCreatorProvenance(
   };
 }
 
+const CAPTURE_SOURCES = new Set<CaptureSource>(["tree", "pi", "cli", "external"]);
+
+function normalizeCaptureRequestId(requestId: string): string {
+  if (typeof requestId !== "string") {
+    throw new Error("Capture requestId must be 1-200 printable characters");
+  }
+  const normalized = requestId.trim();
+  if (!normalized || normalized.length > 200 || /[\u0000-\u001f\u007f]/.test(normalized)) {
+    throw new Error("Capture requestId must be 1-200 printable characters");
+  }
+  return normalized;
+}
+
 export class OutlinerStore {
   readonly database: Database;
 
@@ -153,6 +174,7 @@ export class OutlinerStore {
     this.migrate();
     this.seed();
     this.ensureTrashView();
+    this.ensureInbox();
   }
 
   close(): void {
@@ -203,6 +225,68 @@ export class OutlinerStore {
     })();
 
     return this.require(id);
+  }
+
+  capture(
+    requestId: string,
+    text: string,
+    source: CaptureSource,
+    capturedFromBlockId?: string,
+    author: BlockAuthor = "user",
+    provenance?: BlockProvenance,
+  ): CaptureReceipt {
+    if (typeof text !== "string") throw new Error("Capture text must be a string");
+    if (capturedFromBlockId !== undefined && typeof capturedFromBlockId !== "string") {
+      throw new Error("Capture capturedFromBlockId must be a string");
+    }
+    const normalizedRequestId = normalizeCaptureRequestId(requestId);
+    const normalizedText = text.trim();
+    if (!normalizedText) throw new Error("Capture text cannot be empty");
+    if (!CAPTURE_SOURCES.has(source)) throw new Error(`Invalid capture source: ${String(source)}`);
+
+    return this.database.transaction((): CaptureReceipt => {
+      const existing = this.database
+        .query(
+          "SELECT block_id, inbox_block_id FROM capture_requests WHERE request_id = ?",
+        )
+        .get(normalizedRequestId) as CaptureRequestRow | null;
+      if (existing) {
+        const block = this.getFromCurrentRead(existing.block_id);
+        if (!block) {
+          throw new Error(`Capture receipt target no longer exists: ${normalizedRequestId}`);
+        }
+        return {
+          block,
+          inboxBlockId: existing.inbox_block_id,
+          deduplicated: true,
+        };
+      }
+
+      const inbox = this.requireCaptureInboxFromCurrentRead();
+      if (capturedFromBlockId) this.require(capturedFromBlockId);
+      const capturedAt = new Date().toISOString();
+      const metadata = [
+        formatProperty({ key: "type", value: "capture" }),
+        formatProperty({ key: "status", value: "unprocessed" }),
+        formatProperty({ key: "capture-source", value: source }),
+        formatProperty({ key: "captured-at", value: capturedAt }),
+        ...(capturedFromBlockId
+          ? [formatProperty({ key: "captured-from", value: capturedFromBlockId })]
+          : []),
+      ].join(" ");
+      const block = this.create(
+        `${normalizedText}\n${metadata}`,
+        inbox.id,
+        author,
+        provenance,
+      );
+      this.database
+        .query(
+          "INSERT INTO capture_requests (request_id, block_id, inbox_block_id, created_at) VALUES (?, ?, ?, ?)",
+        )
+        .run(normalizedRequestId, block.id, inbox.id, capturedAt);
+      return { block, inboxBlockId: inbox.id, deduplicated: false };
+    })();
   }
 
   update(id: string, text: string, expectedUpdatedAt?: string): Block {
@@ -1282,6 +1366,12 @@ export class OutlinerStore {
         ON page_addresses(block_id) WHERE kind = 'page';
       CREATE UNIQUE INDEX IF NOT EXISTS page_addresses_work_id_per_block
         ON page_addresses(block_id) WHERE kind = 'work-id';
+      CREATE TABLE IF NOT EXISTS capture_requests (
+        request_id TEXT PRIMARY KEY,
+        block_id TEXT NOT NULL,
+        inbox_block_id TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
     `);
     this.migrateBlockStateColumns();
     this.migrateWorkIdStateColumns();
@@ -1515,6 +1605,38 @@ export class OutlinerStore {
         "INSERT INTO metadata (key, value) VALUES ('page_address_registry_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
       ).run(String(PAGE_ADDRESS_REGISTRY_VERSION));
     })();
+  }
+
+  private captureInboxesFromCurrentRead(): Block[] {
+    const rows = this.database
+      .query(
+        "SELECT DISTINCT property.block_id FROM block_properties property JOIN blocks block ON block.id = property.block_id WHERE property.key = 'system-view' AND LOWER(property.value) = 'inbox' AND block.effective_deleted_root_id IS NULL ORDER BY block.created_at, block.id",
+      )
+      .all() as Array<{ block_id: string }>;
+    return rows
+      .map((row) => this.getFromCurrentRead(row.block_id))
+      .filter((block): block is Block => block !== null);
+  }
+
+  private requireCaptureInboxFromCurrentRead(): Block {
+    const inboxes = this.captureInboxesFromCurrentRead();
+    if (inboxes.length !== 1) {
+      throw new Error(
+        `Workspace must contain exactly one active [system-view::inbox]; found ${inboxes.length}`,
+      );
+    }
+    return inboxes[0]!;
+  }
+
+  private ensureInbox(): void {
+    const inboxes = this.database.transaction(() => this.captureInboxesFromCurrentRead())();
+    if (inboxes.length > 1) {
+      throw new Error(
+        `Workspace must contain exactly one active [system-view::inbox]; found ${inboxes.length}`,
+      );
+    }
+    if (inboxes.length === 1) return;
+    this.create("Inbox [type::inbox] [system-view::inbox]", null, "system");
   }
 
   private ensureTrashView(): void {

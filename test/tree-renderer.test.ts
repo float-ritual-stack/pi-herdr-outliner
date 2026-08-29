@@ -108,6 +108,8 @@ function view(
     mode: "browse",
     quickInput: "",
     quickColumn: 0,
+    quickRow: 0,
+    quickLineCount: 1,
     quickCompletion: null,
     viewerLines: [],
     viewerPath: "",
@@ -532,6 +534,22 @@ describe("renderTreeFrame", () => {
     ).frame.split("\n");
     expect(invalidFilterFrame.at(-2)).toContain(
       "Invalid filter: Unterminated quoted filter value at character 8",
+    );
+
+    const captureFrame = renderTreeFrame(
+      view([selected], {
+        mode: "capture",
+        quickInput: "Second line",
+        quickRow: 1,
+        quickLineCount: 2,
+        status: "",
+      }),
+      100,
+      8,
+    ).frame.split("\n");
+    expect(captureFrame.at(-2)).toBe("\x1b[1mCapture 2/2:\x1b[0m Second line▏");
+    expect(captureFrame.at(-1)).toContain(
+      "type/paste  ↑↓ lines  Shift+Enter/Ctrl+E newline  Enter capture  Esc cancel",
     );
 
     const gotoFrame = renderTreeFrame(

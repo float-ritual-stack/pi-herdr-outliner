@@ -5,6 +5,7 @@ import { OutlinerStore } from "./store";
 import {
   OUTLINER_PROTOCOL_VERSION,
   type Block,
+  type CaptureReceipt,
   type OutlinerEvent,
   type OutlinerEventEnvelope,
   type NavigationState,
@@ -105,6 +106,16 @@ export class OutlinerServer {
           result = this.store.create(
             request.text,
             request.parentId,
+            request.author,
+            request.provenance,
+          );
+          break;
+        case "capture.create":
+          result = this.store.capture(
+            request.requestId,
+            request.text,
+            request.source,
+            request.capturedFromBlockId,
             request.author,
             request.provenance,
           );
@@ -233,6 +244,13 @@ export class OutlinerServer {
         domain = "content";
         blockId = (response.result as Block).id;
         break;
+      case "capture.create": {
+        const receipt = response.result as CaptureReceipt;
+        if (receipt.deduplicated) return null;
+        domain = "content";
+        blockId = receipt.block.id;
+        break;
+      }
       case "update":
       case "move":
       case "delete":
