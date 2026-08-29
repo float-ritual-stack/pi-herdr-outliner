@@ -19,7 +19,13 @@ import {
 } from "./outliner-links";
 import { blockDisplayTitle } from "./references";
 import { layoutExpandedBlock } from "./tree-layout";
-import { isDetailToggle, isPrintableInput, type TerminalInputAction, type TerminalKey } from "./terminal";
+import {
+  historyNavigationDirection,
+  isDetailToggle,
+  isPrintableInput,
+  type TerminalInputAction,
+  type TerminalKey,
+} from "./terminal";
 import { TextBuffer } from "./text-buffer";
 import type {
   Block,
@@ -1113,8 +1119,9 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     const selected = rows[selectedIndex];
     let preferredRowId: string | undefined;
     let reloadRequired = false;
-    if (key.meta && (key.name === "left" || key.name === "right")) {
-      const action = key.name === "left" ? "navigation.back" : "navigation.forward";
+    const historyDirection = historyNavigationDirection(key);
+    if (historyDirection) {
+      const action = historyDirection === "back" ? "navigation.back" : "navigation.forward";
       const navigation = await effects.request<NavigationState>({ action });
       const target = navigation.selection.selected;
       if (target?.id === selected?.canonicalId) {
@@ -1131,7 +1138,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       } else {
         await reload(target?.id ?? null);
         lastVisibleCanonicalId = rows[selectedIndex]?.canonicalId ?? null;
-        status = key.name === "left" ? "Navigation back" : "Navigation forward";
+        status = historyDirection === "back" ? "Navigation back" : "Navigation forward";
       }
       effects.invalidate();
       return;

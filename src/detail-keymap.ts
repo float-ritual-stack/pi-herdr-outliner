@@ -5,6 +5,7 @@ import type {
   DetailViewport,
 } from "./detail-controller";
 import {
+  historyNavigationDirection,
   isPrintableInput,
   type TerminalInputAction,
   type TerminalKey,
@@ -117,8 +118,9 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
   }
 
   async function handlePreviewKey(str: string, key: TerminalKey): Promise<void> {
-    if (key.meta && (key.name === "left" || key.name === "right")) {
-      await dispatch({ type: key.name === "left" ? "navigation.back" : "navigation.forward" });
+    const direction = historyNavigationDirection(key);
+    if (direction) {
+      await dispatch({ type: direction === "back" ? "navigation.back" : "navigation.forward" });
     } else if (str === "o") {
       await dispatch({ type: "reference.follow" });
     } else if (isPageNavigationKey(key.name)) {
@@ -130,8 +132,9 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
   }
 
   async function handleFileKey(str: string, key: TerminalKey): Promise<void> {
-    if (key.meta && (key.name === "left" || key.name === "right")) {
-      await dispatch({ type: key.name === "left" ? "navigation.back" : "navigation.forward" });
+    const direction = historyNavigationDirection(key);
+    if (direction) {
+      await dispatch({ type: direction === "back" ? "navigation.back" : "navigation.forward" });
     } else if (str === "o") {
       await dispatch({ type: "reference.follow" });
     } else if (isPageNavigationKey(key.name)) {

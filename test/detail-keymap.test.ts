@@ -66,6 +66,8 @@ test("maps word, line, selection, and select-all controls to explicit intents", 
   const detail = harness();
 
   await detail.press({ name: "left", meta: true });
+  await detail.press({ name: "b", meta: true });
+  await detail.press({ name: "f", meta: true });
   await detail.press({ name: "right", ctrl: true, shift: true });
   await detail.press({ name: "home", shift: true });
   await detail.press({ name: "a", ctrl: true });
@@ -73,6 +75,8 @@ test("maps word, line, selection, and select-all controls to explicit intents", 
 
   expect(detail.intents).toEqual([
     { type: "buffer.move", direction: "word-left", extend: undefined },
+    { type: "buffer.move", direction: "word-left", extend: undefined },
+    { type: "buffer.move", direction: "word-right", extend: undefined },
     { type: "buffer.move", direction: "word-right", extend: true },
     { type: "buffer.move", direction: "home", extend: true },
     { type: "buffer.move", direction: "home", extend: undefined },
@@ -144,9 +148,13 @@ test("maps preview and file navigation history and reference-follow bindings", a
 
   await preview.press({ name: "left", meta: true });
   await preview.press({ name: "right", meta: true });
+  await preview.press({ name: "b", meta: true });
+  await preview.press({ name: "f", meta: true });
   await preview.press({ name: "o" }, "o");
 
   expect(preview.intents).toEqual([
+    { type: "navigation.back" },
+    { type: "navigation.forward" },
     { type: "navigation.back" },
     { type: "navigation.forward" },
     { type: "reference.follow" },
