@@ -38,9 +38,11 @@ The service is the only process that opens the workspace SQLite database. It log
 - [`virtual-branches.ts`](../src/virtual-branches.ts) for projections, and
 - [`OutlinerClient.watch()`](../src/client.ts) for reactive updates.
 
-Tree holds no canonical block state. It reconstructs from a service snapshot and events.
+Tree holds no canonical block state. It reconstructs canonical data from service snapshots and events, then owns its cursor, occurrence selection, filter, collapsed canonical IDs, multiline-expanded row IDs, viewport, and explicit-navigation history in-process. Closing a Tree discards only that Tree's presentation state.
 
-Tree keeps an ephemeral visual-row offset for the selected multiline-expanded block. PageUp/PageDown move that offset by one Tree body viewport and clamp to the wrapped row count; Up/Down continue to change canonical block selection. Selection, reveal, collapse/expansion, and reconnect changes reset the offset.
+Cursor changes publish the selected canonical block as shared workspace context. Selection broadcasts update that context without moving another Tree's cursor or projection. Exact-client `focus` and `reveal` commands move only their addressed Tree and locally expand ancestors when required.
+
+PageUp/PageDown move the selected expanded row's offset by one Tree body viewport and clamp to its wrapped row count. Cursor changes, multiline expansion changes, and reconnects reset the offset.
 
 ### Detail client
 
@@ -94,7 +96,6 @@ The SQLite schema is created in [`OutlinerStore.migrate()`](../src/store.ts):
 | `text` | Canonical raw block text |
 | `author` | `user`, `agent`, or `system` |
 | `actor_id`, `session_id`, `task_id` | Optional immutable creator provenance for agent-authored blocks |
-| `collapsed` | Physical-tree collapse state |
 | `deleted_at` | Direct tombstone timestamp; null for blocks not independently deleted |
 | `effective_deleted_root_id` | Materialized nearest direct deleted ancestor, including self |
 | `created_at`, `updated_at` | Version and audit timestamps |
@@ -110,9 +111,8 @@ Literal property-looking text inside inline code, fenced code, or escaped syntax
 ### Other tables
 
 - `metadata` — service sequence, parser version, and navigation cursor.
-- `selection` — one selected canonical block per workspace.
-- `navigation_history` — the latest 200 canonical selection visits, suppressing consecutive duplicates; purged block foreign keys become null so traversal skips them.
-- `block_view_state` — UI state such as multiline expansion without changing canonical text.
+- `selection` — one published canonical workspace-context block.
+- `navigation_history` — the latest 200 canonical workspace-context visits for Detail navigation; Trees maintain independent in-process histories.
 - `virtual_occurrence_ranks` — durable `(virtual-branch ID, canonical block ID) -> branch-local rank`; both foreign keys cascade on deletion.
 - `page_addresses` — unique normalized symbolic address to canonical block mapping for page declarations, Work IDs, and explicit aliases; foreign keys cascade only on physical purge.
 - `reserved_work_ids` — immutable Work-ID reservation ledger with the original canonical owner UUID retained after purge.
@@ -128,7 +128,7 @@ The current protocol version is `12`, defined in [`src/types.ts`](../src/types.t
 - canonical reads: `get`, `children`, `workspace.snapshot`
 - bounded search: `blocks.query`
 - selection-neutral capture: `capture.create`
-- mutations: `create`, `update`, `move`, `delete` (move to Trash), `trash.restore`, `trash.purge`, `toggle`
+- mutations: `create`, `update`, `move`, `delete` (move to Trash), `trash.restore`, `trash.purge`
 - properties: `properties.patch`, `properties.catalog`
 - virtual ordering: `virtual.occurrences.reorder`
 - references: `references.resolve`
@@ -151,12 +151,13 @@ live client IDs and removes exactly that socket's entry on disconnect, so a
 late close cannot delete a replacement process or sibling. `clients.list`
 returns the live registry, optionally filtered by role.
 
-`content`, `selection`, and `view` events remain broadcasts. A `ui` command
-contains `targetClientId` and is written only to that registered socket.
-Callers that have only a role resolve it only when exactly one matching client
-is live; otherwise they require an explicit client ID. Tree and Detail recover
-their current pane through Herdr when handling focus instead of treating the
-registration snapshot as a durable pane handle.
+`content`, `selection`, and `view` events remain broadcasts. Trees treat
+`selection` events as workspace-context publication rather than cursor movement.
+A `ui` command contains `targetClientId` and is written only to that registered
+socket. Callers that have only a role resolve it only when exactly one matching
+client is live; otherwise they require an explicit client ID. Tree and Detail
+recover their current pane through Herdr when handling focus instead of treating
+the registration snapshot as a durable pane handle.
 
 ### Agent provenance
 

@@ -25,7 +25,6 @@ function makeBlock(overrides: Partial<Block> = {}): Block {
     position: 0,
     text: "Raw block text",
     author: "user",
-    collapsed: false,
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "version-1",
     properties: [],
@@ -37,7 +36,6 @@ function makeVisibleBlock(overrides: Partial<VisibleBlock> = {}): VisibleBlock {
   return {
     ...makeBlock(overrides),
     depth: 0,
-    multilineExpanded: false,
     hasChildren: false,
     displayText: overrides.text ?? "Raw block text",
     ...overrides,

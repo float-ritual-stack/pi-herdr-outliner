@@ -23,10 +23,11 @@ The project started as a small Friday-night experiment and grew into a durable w
 
 ## Current capabilities
 
-- SQLite-backed hierarchical blocks with stable UUIDs, sibling order, authors, timestamps, collapse state, and selection.
+- SQLite-backed hierarchical blocks with stable UUIDs, sibling order, authors, timestamps, and shared workspace context.
 - Workspace-isolated service and runtime paths.
-- JSON-lines RPC protocol v12 over a Unix socket.
-- Reactive content, selection, and view broadcasts plus per-process Tree/Detail registration and exact-client UI commands, with service-owned block navigation history.
+- JSON-lines RPC protocol v13 over a Unix socket.
+- Reactive content, workspace-context, and view broadcasts plus per-process Tree/Detail registration and exact-client UI commands.
+- Each Tree owns its cursor, occurrence selection, filter, viewport, collapsed rows, multiline expansion, and explicit-navigation history; publishing workspace context does not move sibling Trees.
 - Indexed `[property::value]` metadata with optimistic property patching and catalog queries.
 - Exact block references using `((block-id))`, resolved to display titles in read mode while raw text remains editable.
 - Unique normalized symbolic addresses from explicit `[page::address]` declarations and Work IDs, with aliases, explicit removal, bounded completion, dangling links, and transactional create-on-follow.
@@ -36,7 +37,7 @@ The project started as a small Friday-night experiment and grew into a durable w
 - Agent-authored blocks retain immutable actor, session, and originating tool-call/task provenance while preserving the coarse `agent` author role.
 - Recoverable deletion preserves canonical structure and identity, excludes Trash content from normal queries/completions, and requires explicit identifier-confirmed purge.
 - Idempotent zero-context-loss Tree capture writes ordinary canonical children under one stable workspace Inbox without moving selection or navigation history.
-- Selected multiline-expanded Tree blocks support viewport-sized intra-block PageUp/PageDown without changing block selection.
+- Client-local multiline-expanded Tree rows support viewport-sized intra-block PageUp/PageDown without changing the Tree cursor.
 - Pi Markdown preview with line, page, endpoint, and mouse/trackpad scrolling.
 - Grapheme-safe wrapped Detail editing, word motion, selection, deletion, bounded per-session undo/redo, completion, optimistic save, and whole-session Esc cancellation.
 - Referenced text/Markdown file viewing and durable line-range annotations.

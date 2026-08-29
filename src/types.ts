@@ -43,7 +43,6 @@ export interface Block {
   actorId?: string;
   sessionId?: string;
   taskId?: string;
-  collapsed: boolean;
   createdAt: string;
   updatedAt: string;
   deletedAt?: string;
@@ -129,12 +128,10 @@ export interface PropertyFilter {
   value?: string;
 }
 
-export type CollapsedDescendantPolicy = "prune" | "traverse";
 
 export interface BlockTraversalOptions {
   filters?: PropertyFilter[];
   subtreeRootId?: string;
-  collapsedDescendants: CollapsedDescendantPolicy;
 }
 
 export interface BlockSearchQuery {
@@ -152,7 +149,6 @@ export type BlockCollectionCompleteness =
 
 export interface VisibleBlock extends Block {
   depth: number;
-  multilineExpanded: boolean;
   deletedDescendantCount?: number;
   hasChildren: boolean;
   displayText: string;
@@ -182,7 +178,7 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 12;
+export const OUTLINER_PROTOCOL_VERSION = 13;
 
 export interface OutlinerServiceStatus {
   status: "ready";
@@ -221,8 +217,6 @@ export type OutlinerRequest =
   | { id: string; action: "delete"; blockId: string }
   | { id: string; action: "trash.restore"; blockId: string }
   | { id: string; action: "trash.purge"; blockId: string; confirmation: string }
-  | { id: string; action: "toggle"; blockId: string }
-  | { id: string; action: "view.toggleMultiline"; blockId: string }
   | {
       id: string;
       action: "virtual.occurrences.reorder";

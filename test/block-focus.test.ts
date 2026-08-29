@@ -16,12 +16,10 @@ function block(id: string, text: string, position = 0): VisibleBlock {
     position,
     text,
     author: "user",
-    collapsed: false,
     createdAt: "created",
     updatedAt: "updated",
     properties: [],
     depth: 0,
-    multilineExpanded: false,
     hasChildren: false,
     displayText: text,
   };

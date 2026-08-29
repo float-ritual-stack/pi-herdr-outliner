@@ -235,12 +235,6 @@ export class OutlinerServer {
           this.store.purge(request.blockId, request.confirmation);
           result = { purged: request.blockId };
           break;
-        case "toggle":
-          result = this.store.toggle(request.blockId);
-          break;
-        case "view.toggleMultiline":
-          result = { expanded: this.store.toggleMultilineExpanded(request.blockId) };
-          break;
         case "virtual.occurrences.reorder":
           result = this.store.reorderVirtualOccurrences(
             request.viewId,
@@ -373,11 +367,6 @@ export class OutlinerServer {
         blockId = followed.block?.id;
         break;
       }
-      case "toggle":
-      case "view.toggleMultiline":
-        domain = "view";
-        blockId = request.blockId;
-        break;
       case "virtual.occurrences.reorder":
         domain = "view";
         blockId = request.viewId;

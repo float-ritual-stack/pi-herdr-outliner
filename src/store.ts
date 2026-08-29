@@ -68,7 +68,6 @@ interface BlockRow {
   task_id: string | null;
   deleted_at: string | null;
   effective_deleted_root_id: string | null;
-  collapsed: number;
   created_at: string;
   updated_at: string;
 }
@@ -108,14 +107,12 @@ interface VirtualOccurrenceRankRow {
 
 interface VisibleBlockRow extends BlockRow {
   depth: number;
-  multiline_expanded: number;
   has_children: number;
 }
 
 interface LoadedGraph {
   byId: Map<string, Block>;
   byParent: Map<string | null, Block[]>;
-  expandedIds: Set<string>;
 }
 
 interface LoadedGraphTraversalOptions extends BlockTraversalOptions {
@@ -206,7 +203,7 @@ export class OutlinerStore {
     this.database.transaction(() => {
       this.database
         .query(
-          "INSERT INTO blocks (id, parent_id, position, text, author, actor_id, session_id, task_id, collapsed, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)",
+          "INSERT INTO blocks (id, parent_id, position, text, author, actor_id, session_id, task_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .run(
           id,
@@ -431,33 +428,7 @@ export class OutlinerStore {
     })();
   }
 
-  toggle(id: string): Block {
-    this.requireActive(id);
-    this.database.transaction(() => {
-      this.database
-        .query("UPDATE blocks SET collapsed = CASE collapsed WHEN 0 THEN 1 ELSE 0 END, updated_at = ? WHERE id = ?")
-        .run(new Date().toISOString(), id);
-      this.bumpSequence();
-    })();
-    return this.require(id);
-  }
 
-  toggleMultilineExpanded(id: string): boolean {
-    this.requireActive(id);
-    const current = this.database
-      .query("SELECT multiline_expanded FROM block_view_state WHERE block_id = ?")
-      .get(id) as { multiline_expanded: number } | null;
-    const expanded = current?.multiline_expanded !== 1;
-    this.database.transaction(() => {
-      this.database
-        .query(
-          "INSERT INTO block_view_state (block_id, multiline_expanded) VALUES (?, ?) ON CONFLICT(block_id) DO UPDATE SET multiline_expanded = excluded.multiline_expanded",
-        )
-        .run(id, expanded ? 1 : 0);
-      this.bumpSequence();
-    })();
-    return expanded;
-  }
 
   reorderVirtualOccurrences(
     viewId: string,
@@ -841,7 +812,7 @@ export class OutlinerStore {
     return this.database.transaction(() => this.childrenFromCurrentRead(parentId))();
   }
 
-  traversePreorder(options: BlockTraversalOptions): VisibleBlock[] {
+  traversePreorder(options: BlockTraversalOptions = {}): VisibleBlock[] {
     return this.database.transaction(() =>
       this.traverseLoadedGraph(this.loadGraph(), options)
     )();
@@ -859,7 +830,6 @@ export class OutlinerStore {
       const blocks = this.traverseLoadedGraph(this.loadGraph(), {
         filters: query.filters,
         subtreeRootId: query.subtreeRootId,
-        collapsedDescendants: "traverse",
         text: query.text,
         stopAfterMatches: query.limit + 1,
         deletedMode,
@@ -885,7 +855,6 @@ export class OutlinerStore {
       const matched = this.traverseLoadedGraph(graph, {
         filters: query?.filters,
         subtreeRootId: query?.subtreeRootId,
-        collapsedDescendants: query ? "traverse" : "prune",
         text: query?.text,
         stopAfterMatches: query ? query.limit + 1 : undefined,
         deletedMode: query?.includeDeleted ?? "active",
@@ -896,9 +865,7 @@ export class OutlinerStore {
             completeness: { kind: "truncated", limit: query.limit },
           }
         : { blocks: matched, completeness: { kind: "complete" } };
-      const physical = this.traverseLoadedGraph(graph, {
-        collapsedDescendants: "traverse",
-      });
+      const physical = this.traverseLoadedGraph(graph, {});
 
       const workIdPrefix = this.workIdAllocatorFromCurrentRead()?.prefix;
       return {
@@ -1010,14 +977,12 @@ export class OutlinerStore {
         SELECT
           block.*,
           tree.depth,
-          COALESCE(view_state.multiline_expanded, 0) AS multiline_expanded,
           EXISTS (
             SELECT 1 FROM blocks child
             WHERE child.parent_id = block.id AND child.effective_deleted_root_id IS NULL
           ) AS has_children
         FROM tree
         JOIN blocks block ON block.id = tree.id
-        LEFT JOIN block_view_state view_state ON view_state.block_id = block.id
         LEFT JOIN virtual_occurrence_ranks occurrence_rank
           ON occurrence_rank.view_id = ? AND occurrence_rank.block_id = block.id
         ${where}
@@ -1056,7 +1021,6 @@ export class OutlinerStore {
       return {
         ...block,
         depth: row.depth,
-        multilineExpanded: row.multiline_expanded === 1,
         hasChildren: row.has_children === 1,
         displayText: resolveBlockReferenceText(
           block.text,
@@ -1189,13 +1153,8 @@ export class OutlinerStore {
         byParent.set(block.parentId, [block]);
       }
     }
-    const expandedRows = this.database
-      .query("SELECT block_id FROM block_view_state WHERE multiline_expanded = 1")
-      .all() as Array<{ block_id: string }>;
-    const expandedIds = new Set<string>();
-    for (const row of expandedRows) expandedIds.add(row.block_id);
 
-    return { byId, byParent, expandedIds };
+    return { byId, byParent };
   }
 
   private traverseLoadedGraph(
@@ -1231,7 +1190,6 @@ export class OutlinerStore {
         blocks.push({
           ...block,
           depth,
-          multilineExpanded: graph.expandedIds.has(block.id),
           hasChildren: children.length > 0,
           ...(block.deletedAt
             ? {
@@ -1252,10 +1210,8 @@ export class OutlinerStore {
         }
       }
 
-      if (!block.collapsed || options.collapsedDescendants === "traverse") {
-        for (const child of graph.byParent.get(block.id) ?? []) {
-          if (visit(child, depth + 1)) return true;
-        }
+      for (const child of graph.byParent.get(block.id) ?? []) {
+        if (visit(child, depth + 1)) return true;
       }
       return false;
     };
@@ -1304,7 +1260,6 @@ export class OutlinerStore {
         actor_id TEXT,
         session_id TEXT,
         task_id TEXT,
-        collapsed INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         deleted_at TEXT,
@@ -1333,10 +1288,6 @@ export class OutlinerStore {
       CREATE INDEX IF NOT EXISTS navigation_history_block
         ON navigation_history(block_id, entry_id);
       INSERT OR IGNORE INTO metadata (key, value) VALUES ('navigation_cursor', '0');
-      CREATE TABLE IF NOT EXISTS block_view_state (
-        block_id TEXT PRIMARY KEY REFERENCES blocks(id) ON DELETE CASCADE,
-        multiline_expanded INTEGER NOT NULL DEFAULT 0
-      );
       CREATE TABLE IF NOT EXISTS virtual_occurrence_ranks (
         view_id TEXT NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
         block_id TEXT NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
@@ -1374,6 +1325,7 @@ export class OutlinerStore {
       );
     `);
     this.migrateBlockStateColumns();
+    this.retireTreePresentationState();
     this.migrateWorkIdStateColumns();
     this.migratePropertyIndex();
     this.migrateWorkIdReservations();
@@ -1407,6 +1359,20 @@ export class OutlinerStore {
         "CREATE INDEX IF NOT EXISTS blocks_effective_deleted ON blocks(effective_deleted_root_id, deleted_at)",
       );
       if (needsEffectiveDeletionBackfill) this.recomputeEffectiveDeletion();
+    })();
+  }
+
+  private retireTreePresentationState(): void {
+    this.database.transaction(() => {
+      this.database.exec("DROP TABLE IF EXISTS block_view_state");
+      const columns = new Set(
+        (
+          this.database.query("PRAGMA table_info(blocks)").all() as Array<{ name: string }>
+        ).map((column) => column.name),
+      );
+      if (columns.has("collapsed")) {
+        this.database.exec("ALTER TABLE blocks DROP COLUMN collapsed");
+      }
     })();
   }
 
@@ -1680,7 +1646,6 @@ export class OutlinerStore {
       ...(row.actor_id ? { actorId: row.actor_id } : {}),
       ...(row.session_id ? { sessionId: row.session_id } : {}),
       ...(row.task_id ? { taskId: row.task_id } : {}),
-      collapsed: row.collapsed === 1,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       ...(row.deleted_at ? { deletedAt: row.deleted_at } : {}),

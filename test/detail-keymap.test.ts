@@ -127,7 +127,6 @@ test("restores direct Trash roots from file mode", async () => {
     position: 0,
     text: "Deleted file [file::example.ts]",
     author: "user",
-    collapsed: false,
     createdAt: "created",
     updatedAt: "updated",
     deletedAt: "deleted",

@@ -31,7 +31,7 @@ describe("OutlinerStore", () => {
   test("indexes inline properties and combines filters", () => {
     const store = makeStore();
     const workspace = store
-      .traversePreorder({ collapsedDescendants: "prune" })
+      .traversePreorder({})
       .find((block) => block.properties.some((property) => property.value === "workspace"));
     expect(workspace).toBeDefined();
 
@@ -212,22 +212,33 @@ Second paragraph`;
     ).toBe(block.id);
   });
 
-  test("persists the multiline expansion state independently from block content", () => {
+  test("retires persisted Tree presentation state when opening an existing database", () => {
     const store = makeStore();
-    const block = store.create("First line\nSecond line");
+    const entry = stores[stores.length - 1]!;
+    const path = join(entry.directory, "outliner.sqlite");
+    store.close();
 
+    const legacy = new Database(path);
+    legacy.exec(`
+      ALTER TABLE blocks ADD COLUMN collapsed INTEGER NOT NULL DEFAULT 0;
+      CREATE TABLE block_view_state (
+        block_id TEXT PRIMARY KEY,
+        multiline_expanded INTEGER NOT NULL DEFAULT 0
+      );
+    `);
+    legacy.close();
+
+    const reopened = new OutlinerStore(path);
+    entry.store = reopened;
+    const blockColumns = reopened.database.query("PRAGMA table_info(blocks)").all() as Array<{
+      name: string;
+    }>;
+    expect(blockColumns.some((column) => column.name === "collapsed")).toBe(false);
     expect(
-      store
-        .traversePreorder({ collapsedDescendants: "prune" })
-        .find((candidate) => candidate.id === block.id)?.multilineExpanded,
-    ).toBe(false);
-    expect(store.toggleMultilineExpanded(block.id)).toBe(true);
-    expect(
-      store
-        .traversePreorder({ collapsedDescendants: "prune" })
-        .find((candidate) => candidate.id === block.id)?.multilineExpanded,
-    ).toBe(true);
-    expect(store.toggleMultilineExpanded(block.id)).toBe(false);
+      reopened.database.query(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'block_view_state'",
+      ).get(),
+    ).toBeNull();
   });
 
   test("soft-deletes subtrees centrally and restores only non-independent descendants", async () => {
@@ -532,7 +543,6 @@ Second paragraph`;
     expect(ranked.blocks[0]).toEqual(expect.objectContaining({
       id: second.id,
       depth: 0,
-      multilineExpanded: false,
       hasChildren: false,
       displayText: second.text,
     }));
@@ -561,22 +571,12 @@ Second paragraph`;
     expect(store.readWorkspaceSnapshot().virtualOccurrenceRanks).toEqual([]);
   });
 
-  test("can include descendants of collapsed blocks for completion queries", () => {
+  test("always returns canonical descendants for client-local projection", () => {
     const store = makeStore();
-    const parent = store.create("Collapsed parent");
-    const child = store.create("Hidden child", parent.id);
-    store.toggle(parent.id);
+    const parent = store.create("Parent");
+    const child = store.create("Child", parent.id);
 
-    expect(
-      store
-        .traversePreorder({ collapsedDescendants: "prune" })
-        .some((block) => block.id === child.id),
-    ).toBe(false);
-    expect(
-      store
-        .traversePreorder({ collapsedDescendants: "traverse" })
-        .some((block) => block.id === child.id),
-    ).toBe(true);
+    expect(store.traversePreorder({}).some((block) => block.id === child.id)).toBe(true);
   });
 
   test("traverses a subtree with physical depth and hydrated display metadata", () => {
@@ -587,7 +587,6 @@ Second paragraph`;
 
     const rows = store.traversePreorder({
       subtreeRootId: root.id,
-      collapsedDescendants: "traverse",
     });
     expect(rows).toEqual([
       expect.objectContaining({
@@ -609,7 +608,6 @@ Second paragraph`;
     const parent = store.create("Collapsed parent");
     const first = store.create("Matching child one", parent.id);
     const second = store.create("Matching child two", parent.id);
-    store.toggle(parent.id);
 
     expect(store.queryBlocks({ text: "matching child", limit: 1 })).toEqual({
       blocks: [
@@ -646,7 +644,7 @@ Second paragraph`;
         SELECT n + 1 FROM roots WHERE n < 501
       )
       INSERT INTO blocks (
-        id, parent_id, position, text, author, collapsed, created_at, updated_at
+        id, parent_id, position, text, author, created_at, updated_at
       )
       SELECT
         'bulk-root-' || n,
@@ -654,7 +652,6 @@ Second paragraph`;
         1000 + n,
         'Bulk root ' || n,
         'user',
-        0,
         '2026-01-01T00:00:00.000Z',
         '2026-01-01T00:00:00.000Z'
       FROM roots;
@@ -669,14 +666,13 @@ Second paragraph`;
     expect(snapshot.physical.blocks.some((block) => block.id === "bulk-root-501")).toBe(true);
   });
 
-  test("filtered snapshots traverse collapsed ancestors while preserving physical depth", () => {
+  test("filtered snapshots preserve canonical physical depth", () => {
     const store = makeStore();
     const parent = store.create("Collapsed parent");
     const child = store.create("Filtered child [kind::snapshot-target]", parent.id);
-    store.toggle(parent.id);
 
     const unfiltered = store.readWorkspaceSnapshot();
-    expect(unfiltered.visible.blocks.some((block) => block.id === child.id)).toBe(false);
+    expect(unfiltered.visible.blocks.some((block) => block.id === child.id)).toBe(true);
     expect(unfiltered.physical.blocks.find((block) => block.id === child.id)?.depth).toBe(1);
 
     const filtered = store.readWorkspaceSnapshot({
@@ -1313,7 +1309,7 @@ Second paragraph`;
     store.configureWorkIdPrefix("PIE");
     const source = store.create("Source mentions [[Future Page]]");
     const updated = store.update(source.id, "Source still mentions [[Future Page]]");
-    const before = store.traversePreorder({ collapsedDescendants: "traverse" }).length;
+    const before = store.traversePreorder({}).length;
     expect(updated.text).toContain("[[Future Page]]");
     expect(store.completePageAddresses("future", 20).addresses).toEqual([]);
 
@@ -1322,7 +1318,7 @@ Second paragraph`;
       normalizedAddress: "future page",
       status: "missing",
     });
-    expect(store.traversePreorder({ collapsedDescendants: "traverse" })).toHaveLength(before);
+    expect(store.traversePreorder({})).toHaveLength(before);
     expect(() => store.followPageAddress("PIE-404")).toThrow(
       "Unresolved Work ID cannot create a page stub",
     );
@@ -1345,12 +1341,12 @@ Second paragraph`;
     const store = makeStore();
     store.configureWorkIdPrefix("PIE");
     const owner = store.create("Owner [work-id::PIE-132]");
-    const count = store.traversePreorder({ collapsedDescendants: "traverse" }).length;
+    const count = store.traversePreorder({}).length;
 
     expect(() => store.create("Collision [page::pie-132]")).toThrow(
       `Page address already belongs to block ${owner.id}`,
     );
-    expect(store.traversePreorder({ collapsedDescendants: "traverse" })).toHaveLength(count);
+    expect(store.traversePreorder({})).toHaveLength(count);
     expect(() => store.create("Duplicate [page::One] [page::Two]")).toThrow(
       "at most one page address",
     );

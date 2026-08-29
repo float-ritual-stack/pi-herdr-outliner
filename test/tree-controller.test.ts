@@ -22,12 +22,10 @@ function block(
     position: 0,
     text: id,
     author: "user",
-    collapsed: false,
     createdAt: "2026-08-22T00:00:00.000Z",
     updatedAt: "2026-08-22T00:00:00.000Z",
     properties: [],
     depth: 0,
-    multilineExpanded: false,
     hasChildren: false,
     displayText: id,
     ...overrides,
@@ -69,21 +67,24 @@ interface Harness {
   stops: number;
 }
 
-function harness(respond: (input: RequestInput) => unknown | Promise<unknown>): Harness {
+function harness(
+  respond: (input: RequestInput) => unknown | Promise<unknown>,
+  clientId = "tree-test",
+): Harness {
   const result: Harness = {
     calls: [],
     focused: [],
     invalidations: 0,
     stops: 0,
     effects: {
-      clientId: "tree-test",
+      clientId,
       workspaceRoot: "/workspace",
       request: async <T>(input: RequestInput): Promise<T> => {
         result.calls.push(input);
         const response = await respond(input);
         if (response === undefined && input.action === "clients.list") {
           return [{
-            clientId: input.role === "tree" ? "tree-test" : "detail-test",
+            clientId: input.role === "tree" ? clientId : "detail-test",
             role: input.role ?? "tree",
           }] as T;
         }
@@ -183,7 +184,7 @@ describe("createTreeController", () => {
       blockId: target.id,
     });
   });
-  test("follows the first block reference and navigates service history", async () => {
+  test("follows the first block reference and navigates Tree-local history", async () => {
     const source = block("source01", {
       text: "Source points to ((target01))",
       displayText: "Source points to ((target01))",
@@ -196,15 +197,7 @@ describe("createTreeController", () => {
         selected = input.blockId === target.id ? target : source;
         return { selected, ancestors: [], children: [] };
       }
-      if (input.action === "get") return target;
-      if (input.action === "navigation.back") {
-        selected = source;
-        return {
-          selection: { selected, ancestors: [], children: [] },
-          canBack: false,
-          canForward: true,
-        };
-      }
+      if (input.action === "get") return input.blockId === source.id ? source : target;
       return undefined;
     });
     const controller = createTreeController(fake.effects);
@@ -219,7 +212,7 @@ describe("createTreeController", () => {
 
     await controller.handleKeypress("", { name: "b", meta: true }, "pass");
     expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe(source.id);
-    expect(lastCall(fake.calls, "navigation.back")).toBeDefined();
+    expect(fake.calls.some((call) => call.action === "navigation.back")).toBe(false);
   });
 
   test("creates and follows a dangling symbolic reference only on explicit open", async () => {
@@ -310,7 +303,7 @@ describe("createTreeController", () => {
     expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe(target.id);
   });
 
-  test("opens deleted reference and history targets read-only in Detail", async () => {
+  test("opens a deleted reference read-only in Detail", async () => {
     const source = block("source01", {
       text: "Source points to ((deleted1))",
       displayText: "Source points to ((deleted1))",
@@ -327,14 +320,6 @@ describe("createTreeController", () => {
         selected = input.blockId === deleted.id ? deleted : source;
         return { selected, ancestors: [], children: [] };
       }
-      if (input.action === "navigation.back") {
-        selected = deleted;
-        return {
-          selection: { selected, ancestors: [], children: [] },
-          canBack: false,
-          canForward: true,
-        };
-      }
       return undefined;
     });
     const controller = createTreeController(fake.effects);
@@ -347,10 +332,6 @@ describe("createTreeController", () => {
       command: { targetClientId: "detail-test", blockId: deleted.id },
     });
 
-    selected = source;
-    await controller.handleKeypress("", { name: "left", meta: true }, "pass");
-    expect(fake.focused).toEqual([]);
-    expect(controller.view().status).toContain("deleted block read-only");
   });
 
 
@@ -608,41 +589,114 @@ describe("createTreeController", () => {
     expect(fake.calls.at(-1)).toEqual({ action: "selection.set", blockId: "first" });
   });
 
-  test("preserves a valid hidden service selection without publishing a visual fallback", async () => {
-    const parent = block("parent", { collapsed: true, hasChildren: true });
-    const hidden = block("hidden", { parentId: parent.id, depth: 1 });
+  test("receives workspace context publication without moving the local cursor", async () => {
+    const first = block("first");
+    const second = block("second", { position: 1 });
     const fake = harness((input) =>
-      input.action === "workspace.snapshot"
-        ? snapshot([parent], hidden, { physicalBlocks: [parent, hidden] })
-        : undefined,
+      input.action === "workspace.snapshot" ? snapshot([first, second], first) : undefined,
     );
     const controller = createTreeController(fake.effects);
 
     await controller.initialize();
-    await controller.handleServiceEvent(event("content"));
+    await controller.handleKeypress("", { name: "down" }, "pass");
+    await controller.handleServiceEvent(event("selection", first.id));
 
-    expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe("parent");
-    expect(fake.calls.some((call) => call.action === "selection.set")).toBe(false);
+    expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe(second.id);
+    expect(controller.view().workspaceContextBlockId).toBe(first.id);
   });
 
-  test("reveals a hidden target by expanding canonical ancestors before selecting it", async () => {
-    let collapsed = true;
-    const fake = harness((input) => {
-      const parent = block("parent", { collapsed, hasChildren: true });
-      const hidden = block("hidden", { parentId: parent.id, depth: 1 });
+  test("keeps presentation, cursor, history, and filters independent across two Trees", async () => {
+    const rootText = Array.from({ length: 20 }, (_, index) => `line ${index + 1}`).join("\n");
+    const root = block("root", {
+      text: rootText,
+      displayText: rootText,
+      hasChildren: true,
+    });
+    const child = block("child", { parentId: root.id, depth: 1 });
+    const peer = block("peer", {
+      position: 1,
+      properties: [{ key: "kind", value: "peer" }],
+    });
+    let workspaceSelection: Block = root;
+    const respond = (input: RequestInput): unknown => {
       if (input.action === "workspace.snapshot") {
-        return snapshot(collapsed ? [parent] : [parent, hidden], parent, {
-          physicalBlocks: [parent, hidden],
+        const visible = input.view ? [peer] : [root, child, peer];
+        return snapshot(visible, workspaceSelection, {
+          physicalBlocks: [root, child, peer],
         });
       }
-      if (input.action === "toggle") {
-        collapsed = false;
-        return parent;
+      if (input.action === "selection.set") {
+        workspaceSelection =
+          [root, child, peer].find((candidate) => candidate.id === input.blockId) ?? root;
+        return { selected: workspaceSelection, ancestors: [], children: [] };
+      }
+      if (input.action === "get") {
+        return [root, child, peer].find((candidate) => candidate.id === input.blockId);
       }
       return undefined;
+    };
+    const firstHarness = harness(respond, "tree-first");
+    const secondHarness = harness(respond, "tree-second");
+    const first = createTreeController(firstHarness.effects);
+    const second = createTreeController(secondHarness.effects);
+    await first.initialize();
+    await second.initialize();
+
+    await first.handleKeypress(".", { name: "." }, "modified-enter");
+    await first.handleKeypress("", { name: "pagedown" }, "pass");
+    expect(first.view().expandedBlockOffset).toBeGreaterThan(0);
+    expect(second.view().expandedBlockOffset).toBe(0);
+    expect(first.view().rows[0]?.multilineExpanded).toBe(true);
+    expect(second.view().rows[0]?.multilineExpanded).toBe(false);
+
+    await first.handleKeypress("", { name: "space" }, "pass");
+    expect(first.view().rows.map((row) => row.canonicalId)).toEqual(["root", "peer"]);
+    expect(second.view().rows.map((row) => row.canonicalId)).toEqual(["root", "child", "peer"]);
+    await first.handleKeypress("", { name: "down" }, "pass");
+    await second.handleServiceEvent(event("selection", peer.id));
+    expect(second.view().rows[second.view().selectedIndex]?.canonicalId).toBe(root.id);
+    expect(second.view().workspaceContextBlockId).toBe(peer.id);
+
+    await second.handleServiceEvent({
+      id: "target-second",
+      domain: "ui",
+      action: "ui.command.send",
+      sequence: 3,
+      command: {
+        targetClientId: "tree-second",
+        command: "reveal",
+        blockId: child.id,
+      },
     });
+    await first.handleServiceEvent(event("selection", child.id));
+    expect(second.view().rows[second.view().selectedIndex]?.canonicalId).toBe(child.id);
+    expect(first.view().rows[first.view().selectedIndex]?.canonicalId).toBe(peer.id);
+    expect(first.view().rows.map((row) => row.canonicalId)).toEqual(["root", "peer"]);
+
+    await second.handleKeypress("", { name: "left", meta: true }, "pass");
+    expect(second.view().rows[second.view().selectedIndex]?.canonicalId).toBe(root.id);
+    expect(firstHarness.calls.map((call) => String(call.action))).not.toContain("navigation.back");
+    expect(secondHarness.calls.map((call) => String(call.action))).not.toContain("navigation.back");
+
+    await first.handleKeypress("/", { name: "/" }, "pass");
+    await first.handleKeypress("kind=peer", { sequence: "kind=peer" }, "pass");
+    await first.handleKeypress("", { name: "return" }, "pass");
+    expect(first.view().activeFilter).toBe("kind=peer");
+    expect(second.view().activeFilter).toBe("");
+  });
+
+  test("reveals a target by expanding only this Tree's collapsed ancestors", async () => {
+    const parent = block("parent", { hasChildren: true });
+    const hidden = block("hidden", { parentId: parent.id, depth: 1 });
+    const fake = harness((input) =>
+      input.action === "workspace.snapshot"
+        ? snapshot([parent, hidden], parent)
+        : undefined,
+    );
     const controller = createTreeController(fake.effects);
     await controller.initialize();
+    await controller.handleKeypress("", { name: "space" }, "pass");
+    expect(controller.view().rows.map((row) => row.canonicalId)).toEqual(["parent"]);
 
     await controller.handleServiceEvent({
       id: "reveal",
@@ -652,9 +706,7 @@ describe("createTreeController", () => {
       command: { targetClientId: "tree-test", command: "reveal", blockId: "hidden" },
     });
 
-    expect(fake.calls.filter((call) => call.action === "toggle")).toEqual([
-      { action: "toggle", blockId: "parent" },
-    ]);
+    expect(fake.calls.map((call) => String(call.action))).not.toContain("toggle");
     expect(fake.calls.at(-1)).toEqual({ action: "selection.set", blockId: "hidden" });
     expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe("hidden");
   });
@@ -827,7 +879,6 @@ describe("createTreeController", () => {
     const selected = block("selected");
     const fake = harness((input) => {
       if (input.action === "workspace.snapshot") return snapshot([selected], selected);
-      if (input.action === "view.toggleMultiline") return { expanded: true };
       return undefined;
     });
     const controller = createTreeController(fake.effects);
@@ -839,7 +890,8 @@ describe("createTreeController", () => {
     expect(fake.calls).toHaveLength(callsBeforeClose);
 
     await controller.handleKeypress(".", { name: "." }, "modified-enter");
-    expect(fake.calls.some((call) => call.action === "view.toggleMultiline")).toBe(true);
+    expect(fake.calls.map((call) => String(call.action))).not.toContain("view.toggleMultiline");
+    expect(controller.view().rows[0]?.multilineExpanded).toBe(true);
     expect(fake.calls.some((call) => call.action === "ui.command.send")).toBe(false);
     expect(controller.view().status).toBe("Block detail expanded");
   });
@@ -849,7 +901,6 @@ describe("createTreeController", () => {
     const expanded = block("expanded", {
       text,
       displayText: text,
-      multilineExpanded: true,
     });
     const next = block("next", { position: 1 });
     const fake = harness((input) =>
@@ -859,6 +910,7 @@ describe("createTreeController", () => {
     );
     const controller = createTreeController(fake.effects);
     await controller.initialize();
+    await controller.handleKeypress(".", { name: "." }, "modified-enter");
 
     await controller.handleKeypress("", { name: "pagedown" }, "pass");
     expect(controller.view().expandedBlockOffset).toBe(6);
@@ -893,7 +945,6 @@ describe("createTreeController", () => {
     const definition = block("view", {
       text,
       displayText: text,
-      multilineExpanded: true,
       properties: [
         { key: "type", value: "virtual-branch" },
         { key: "query", value: "status=Next" },
@@ -911,6 +962,7 @@ describe("createTreeController", () => {
     });
     const controller = createTreeController(fake.effects);
     await controller.initialize();
+    await controller.handleKeypress(".", { name: "." }, "modified-enter");
     const branchState = controller.view().branchStates.get("view")!;
     const decoratedText = decorateVirtualBranchDefinitionText(text, branchState);
     const totalRows = layoutExpandedBlock({
@@ -1300,10 +1352,6 @@ describe("createTreeController", () => {
         card = { ...card, text: input.text, displayText: input.text };
         return card;
       }
-      if (input.action === "view.toggleMultiline" && card) {
-        card = { ...card, multilineExpanded: true };
-        return { expanded: true };
-      }
       if (input.action === "delete") {
         card = null;
         return undefined;
@@ -1325,10 +1373,7 @@ describe("createTreeController", () => {
     await controller.handleKeypress("", { name: "down" }, "pass");
 
     await controller.handleKeypress(".", { name: "." }, "modified-enter");
-    expect(lastCall(fake.calls, "view.toggleMultiline")).toEqual({
-      action: "view.toggleMultiline",
-      blockId: "card",
-    });
+    expect(fake.calls.map((call) => String(call.action))).not.toContain("view.toggleMultiline");
     expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe(
       "occurrence:view:card",
     );
@@ -1589,7 +1634,17 @@ describe("createTreeController", () => {
     expect(controller.view().status).toBe(
       "Virtual branch is read-only: configure create and create-parent",
     );
-    await controller.handleServiceEvent(event("selection", "invalid"));
+    await controller.handleServiceEvent({
+      id: "reveal-invalid",
+      domain: "ui",
+      action: "ui.command.send",
+      sequence: 2,
+      command: {
+        targetClientId: "tree-test",
+        command: "reveal",
+        blockId: "invalid",
+      },
+    });
     await controller.handleKeypress("a", { name: "a" }, "pass");
     expect(controller.view().status).toContain("Virtual branch is invalid:");
   });
