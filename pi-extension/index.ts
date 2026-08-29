@@ -185,7 +185,7 @@ async function ensureService(focus: boolean): Promise<void> {
   }
 
   if (process.env.HERDR_ENV === "1") {
-    await execFileAsync("bun", [
+    await execFileAsync(process.execPath, [
       "run",
       join(extensionRoot, "src", "herdr-open.ts"),
       "--mode",

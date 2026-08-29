@@ -486,6 +486,13 @@ test("registers multiple live clients, targets one recipient, broadcasts content
     registrations[0],
     registrations[1],
   ]);
+  expect(await client.request<{ subscribed: boolean; client: OutlinerClientRegistration }>({
+    action: "events.subscribe",
+    client: { clientId: " normalized-client ", role: "detail", runtime: {} },
+  })).toEqual({
+    subscribed: true,
+    client: { clientId: "normalized-client", role: "detail" },
+  });
   await expect(client.request({
     action: "clients.list",
     role: "unknown" as never,
@@ -536,9 +543,15 @@ test("registers multiple live clients, targets one recipient, broadcasts content
   });
   watchers.push(replacement);
   await replacementConnected.promise;
-  const clientsAfterRestart = await client.request<Array<{ clientId: string }>>({
-    action: "clients.list",
-  });
+  const cleanupDeadline = Date.now() + 1_000;
+  let clientsAfterRestart: Array<{ clientId: string }> = [];
+  do {
+    clientsAfterRestart = await client.request<Array<{ clientId: string }>>({
+      action: "clients.list",
+    });
+    if (!clientsAfterRestart.some(({ clientId }) => clientId === "tree-a")) break;
+    await Bun.sleep(10);
+  } while (Date.now() < cleanupDeadline);
   expect(clientsAfterRestart.some(({ clientId }) => clientId === "tree-a")).toBe(false);
   expect(clientsAfterRestart).toEqual(
     expect.arrayContaining([

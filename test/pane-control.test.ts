@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { removeLegacyClientPaneStates, resolveServicePaneId } from "../src/pane-control";
 
@@ -25,6 +25,8 @@ test("removes obsolete role-keyed pane state without touching the service single
 test("recovers a moved service pane by stable terminal identity", () => {
   const stateDir = mkdtempSync(join(tmpdir(), "pi-outliner-service-pane-"));
   const herdr = join(stateDir, "fake-herdr");
+  const previousSocketPath = process.env.HERDR_SOCKET_PATH;
+  process.env.HERDR_SOCKET_PATH = join(stateDir, "herdr.sock");
   try {
     writeFileSync(
       herdr,
@@ -38,12 +40,20 @@ if (args[0] === "pane" && args[1] === "list") console.log(JSON.stringify({ resul
     chmodSync(herdr, 0o755);
     writeFileSync(
       join(stateDir, "service-pane.json"),
-      `${JSON.stringify({ paneId: "w1:p1", terminalId: "term-1", workspaceRoot: "/workspace" })}\n`,
+      `${JSON.stringify({
+        paneId: "w1:p1",
+        terminalId: "term-1",
+        workspaceRoot: "/workspace",
+        herdrSocketPath: process.env.HERDR_SOCKET_PATH,
+        hostname: hostname(),
+      })}\n`,
     );
 
     expect(resolveServicePaneId(stateDir, herdr)).toBe("w2:p9");
     expect(JSON.parse(readFileSync(join(stateDir, "service-pane.json"), "utf8")).paneId).toBe("w2:p9");
   } finally {
+    if (previousSocketPath === undefined) delete process.env.HERDR_SOCKET_PATH;
+    else process.env.HERDR_SOCKET_PATH = previousSocketPath;
     rmSync(stateDir, { recursive: true, force: true });
   }
 });

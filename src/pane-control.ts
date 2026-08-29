@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { hostname } from "node:os";
 import { join } from "node:path";
 import { Type, type Static } from "typebox";
 import { Parse } from "typebox/value";
@@ -11,6 +12,8 @@ const PaneStateSchema = Type.Object({
   paneId: Type.String(),
   terminalId: Type.Optional(Type.String()),
   workspaceRoot: Type.Optional(Type.String()),
+  herdrSocketPath: Type.Optional(Type.String()),
+  hostname: Type.Optional(Type.String()),
 });
 type PaneState = Static<typeof PaneStateSchema>;
 
@@ -41,6 +44,14 @@ const PaneListResponseSchema = Type.Object({
 });
 
 const SERVICE_PANE_LABEL = "Outliner Service";
+const HERDR_COMMAND_TIMEOUT_MS = 2_000;
+
+function invokeHerdr(herdr: string, args: string[]): string {
+  return execFileSync(herdr, args, {
+    encoding: "utf8",
+    timeout: HERDR_COMMAND_TIMEOUT_MS,
+  });
+}
 
 function runtimeFromPane(pane: HerdrPane): OutlinerClientRuntime {
   return {
@@ -55,11 +66,13 @@ export function currentPaneRuntime(
   herdr = process.env.HERDR_BIN_PATH ?? "herdr",
 ): OutlinerClientRuntime | undefined {
   if (process.env.HERDR_ENV !== "1") return undefined;
-  const output = execFileSync(herdr, ["pane", "current", "--current"], {
-    encoding: "utf8",
-  });
-  const pane = Parse(PaneCurrentResponseSchema, JSON.parse(output)).result.pane;
-  return runtimeFromPane(pane);
+  try {
+    const output = invokeHerdr(herdr, ["pane", "current", "--current"]);
+    const pane = Parse(PaneCurrentResponseSchema, JSON.parse(output)).result.pane;
+    return runtimeFromPane(pane);
+  } catch {
+    return undefined;
+  }
 }
 
 export function focusCurrentPane(
@@ -67,7 +80,7 @@ export function focusCurrentPane(
 ): void {
   const paneId = currentPaneRuntime(herdr)?.paneId;
   if (!paneId) throw new Error("Current Herdr pane identity is unavailable");
-  execFileSync(herdr, ["plugin", "pane", "focus", paneId], { stdio: "ignore" });
+  invokeHerdr(herdr, ["plugin", "pane", "focus", paneId]);
 }
 
 function paneMatchesState(
@@ -102,24 +115,28 @@ export function registerServicePaneState(
 ): void {
   const inheritedPaneId = process.env.HERDR_PANE_ID;
   if (!inheritedPaneId) return;
-  const output = execFileSync(herdr, ["pane", "get", inheritedPaneId], { encoding: "utf8" });
+  const herdrSocketPath = process.env.HERDR_SOCKET_PATH;
+  if (!herdrSocketPath) return;
+  const output = invokeHerdr(herdr, ["pane", "get", inheritedPaneId]);
   const pane = Parse(PaneGetResponseSchema, JSON.parse(output)).result.pane;
   writeJsonAtomic(join(stateDir, "service-pane.json"), {
     paneId: pane.pane_id,
     terminalId: pane.terminal_id,
     workspaceRoot,
+    herdrSocketPath,
+    hostname: hostname(),
   } satisfies PaneState);
 }
 
 function listWorkspaces(herdr: string): string[] {
-  const output = execFileSync(herdr, ["workspace", "list"], { encoding: "utf8" });
+  const output = invokeHerdr(herdr, ["workspace", "list"]);
   return Parse(WorkspaceListResponseSchema, JSON.parse(output)).result.workspaces.map(
     (workspace) => workspace.workspace_id,
   );
 }
 
 function listPanes(herdr: string, workspaceId: string): HerdrPane[] {
-  const output = execFileSync(herdr, ["pane", "list", "--workspace", workspaceId], { encoding: "utf8" });
+  const output = invokeHerdr(herdr, ["pane", "list", "--workspace", workspaceId]);
   return Parse(PaneListResponseSchema, JSON.parse(output)).result.panes;
 }
 
@@ -149,9 +166,15 @@ export function resolveServicePaneId(
 ): string | null {
   const state = readPaneState(stateDir);
   if (!state) return null;
+  if (
+    !state.herdrSocketPath ||
+    !state.hostname ||
+    state.herdrSocketPath !== process.env.HERDR_SOCKET_PATH ||
+    state.hostname !== hostname()
+  ) return null;
 
   try {
-    const output = execFileSync(herdr, ["pane", "get", state.paneId], { encoding: "utf8" });
+    const output = invokeHerdr(herdr, ["pane", "get", state.paneId]);
     const pane = Parse(PaneGetResponseSchema, JSON.parse(output)).result.pane;
     const stateHasIdentity = Boolean(state.terminalId || state.workspaceRoot);
     if (!stateHasIdentity || paneMatchesState(pane, state)) return pane.pane_id;

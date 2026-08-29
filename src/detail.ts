@@ -52,7 +52,7 @@ function errorMessage(error: unknown): string {
 const effects: DetailEffects = {
   clientId,
   focusSelf() {
-    focusCurrentPane();
+    if (process.env.HERDR_ENV === "1") focusCurrentPane();
   },
   async getSelection() {
     return client.request<SelectionContext>({ action: "selection.get" });

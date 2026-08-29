@@ -1,5 +1,5 @@
 import type { RequestInput } from "./client";
-import { requireUniqueClientId, sendClientCommand } from "./client-target";
+import { listLiveClients, requireUniqueClientId, sendClientCommand } from "./client-target";
 import { blockDisplayTitle } from "./references";
 import type { Block, WorkspaceSnapshot } from "./types";
 
@@ -184,7 +184,16 @@ export async function focusBlockByQuery(
   if (resolution.kind !== "match") return { resolution, focused: false };
 
   const blockId = resolution.match.block.id;
-  const clientId = targetClientId ?? await requireUniqueClientId(requester, "tree");
+  let clientId: string;
+  if (targetClientId) {
+    const trees = await listLiveClients(requester, "tree");
+    if (!trees.some((client) => client.clientId === targetClientId)) {
+      throw new Error(`Target client is not a registered tree client: ${targetClientId}`);
+    }
+    clientId = targetClientId;
+  } else {
+    clientId = await requireUniqueClientId(requester, "tree");
+  }
   await requester.request({ action: "selection.set", blockId });
   await sendClientCommand(requester, clientId, { command: "focus", blockId });
   return { resolution, focused: true };

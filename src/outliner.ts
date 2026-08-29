@@ -72,7 +72,7 @@ const controller = createTreeController({
     },
   },
   focusSelf() {
-    focusCurrentPane();
+    if (process.env.HERDR_ENV === "1") focusCurrentPane();
   },
   terminalWidth() {
     return process.stdout.columns ?? 100;

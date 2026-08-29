@@ -85,10 +85,13 @@ test("requires protocol v12, attributes agent creates and page follows, and pres
     if (input.action === "work-ids.configure") return { prefix: input.prefix } as T;
     if (input.action === "work-ids.allocate") return { workId: "PIE-152" } as T;
     if (input.action === "clients.list") {
-      return [
+      const clients = [
         { clientId: "tree-client", role: "tree" },
         { clientId: "detail-client", role: "detail" },
-      ] as T;
+      ];
+      return (input.role
+        ? clients.filter((client) => client.role === input.role)
+        : clients) as T;
     }
     if (input.action === "ping") {
       return { status: "ready", protocolVersion } as unknown as T;
@@ -207,6 +210,10 @@ test("requires protocol v12, attributes agent creates and page follows, and pres
       role: "tree",
     });
     expect(JSON.parse(clientsResult.content[0]!.text)).toEqual([
+      { clientId: "tree-client", role: "tree" },
+    ]);
+    const allClientsResult = await tools.get("outliner_clients")!.execute("all-clients", {});
+    expect(JSON.parse(allClientsResult.content[0]!.text)).toEqual([
       { clientId: "tree-client", role: "tree" },
       { clientId: "detail-client", role: "detail" },
     ]);

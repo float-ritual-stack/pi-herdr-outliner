@@ -101,6 +101,10 @@ export class OutlinerServer {
       throw new Error("Socket already owns a client registration");
     }
     for (const [owner, client] of this.subscribers) {
+      if (owner.destroyed) {
+        this.subscribers.delete(owner);
+        continue;
+      }
       if (owner !== socket && client.clientId === clientId) {
         throw new Error(`Client ID is already registered: ${clientId}`);
       }
@@ -154,7 +158,10 @@ export class OutlinerServer {
     return [...this.subscribers.values()].some((client) => client.clientId === clientId);
   }
 
-  handle(request: OutlinerRequest): OutlinerResponse {
+  handle(
+    request: OutlinerRequest,
+    subscribedClient?: OutlinerClientRegistration,
+  ): OutlinerResponse {
     try {
       let result: unknown;
       const action = request.action;
@@ -172,7 +179,7 @@ export class OutlinerServer {
           result = this.store.readWorkspaceSnapshot(request.view);
           break;
         case "events.subscribe":
-          result = { subscribed: true, client: request.client };
+          result = { subscribed: true, client: subscribedClient ?? request.client };
           break;
         case "clients.list":
           if (request.role !== undefined && request.role !== "tree" && request.role !== "detail") {
@@ -425,13 +432,13 @@ export class OutlinerServer {
           let response: OutlinerResponse;
           try {
             request = JSON.parse(line) as OutlinerRequest;
-            if (request.action === "events.subscribe") {
-              this.registerSubscriber(socket, request.client);
-            }
-            response = this.handle(request);
+            const subscribedClient = request.action === "events.subscribe"
+              ? this.registerSubscriber(socket, request.client)
+              : undefined;
+            response = this.handle(request, subscribedClient);
           } catch (error) {
             response = {
-              id: "invalid",
+              id: request?.id ?? "invalid",
               ok: false,
               error: error instanceof Error ? error.message : String(error),
               sequence: this.store.sequence,
