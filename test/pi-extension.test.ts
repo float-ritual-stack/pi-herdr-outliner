@@ -34,6 +34,7 @@ test("registers the workspace commands and annotation-aware tools", () => {
     "outliner_work_id",
     "outliner_query",
     "outliner_move",
+    "outliner_clients",
     "outliner_selection",
   ]);
   const createSchema = JSON.stringify(
@@ -46,7 +47,7 @@ test("registers the workspace commands and annotation-aware tools", () => {
   expect(updateSchema).toContain("expectedUpdatedAt");
 });
 
-test("requires protocol v11, attributes agent creates and page follows, and presents bounded query results", async () => {
+test("requires protocol v12, attributes agent creates and page follows, and presents bounded query results", async () => {
   const collection: VisibleBlockCollection = {
     blocks: [
       {
@@ -67,7 +68,7 @@ test("requires protocol v11, attributes agent creates and page follows, and pres
     ],
     completeness: { kind: "truncated", limit: 20 },
   };
-  let protocolVersion = 11;
+  let protocolVersion = 12;
   let queryCollection = collection;
   let queryError: Error | undefined;
   const requests: RequestInput[] = [];
@@ -83,6 +84,12 @@ test("requires protocol v11, attributes agent creates and page follows, and pres
     if (input.action === "work-ids.status") return { prefix: "PIE" } as T;
     if (input.action === "work-ids.configure") return { prefix: input.prefix } as T;
     if (input.action === "work-ids.allocate") return { workId: "PIE-152" } as T;
+    if (input.action === "clients.list") {
+      return [
+        { clientId: "tree-client", role: "tree" },
+        { clientId: "detail-client", role: "detail" },
+      ] as T;
+    }
     if (input.action === "ping") {
       return { status: "ready", protocolVersion } as unknown as T;
     }
@@ -112,6 +119,7 @@ test("requires protocol v11, attributes agent creates and page follows, and pres
         blockId?: string;
         expectedUpdatedAt?: string;
         prefix?: string;
+        role?: "tree" | "detail";
       },
       signal?: AbortSignal,
       onUpdate?: unknown,
@@ -195,6 +203,13 @@ test("requires protocol v11, attributes agent creates and page follows, and pres
       blockId: "work-block",
       expectedUpdatedAt: "version-1",
     });
+    const clientsResult = await tools.get("outliner_clients")!.execute("clients", {
+      role: "tree",
+    });
+    expect(JSON.parse(clientsResult.content[0]!.text)).toEqual([
+      { clientId: "tree-client", role: "tree" },
+      { clientId: "detail-client", role: "detail" },
+    ]);
     await expect(
       tools.get("outliner_page")!.execute(
         "unknown-page-op",
@@ -256,6 +271,10 @@ test("requires protocol v11, attributes agent creates and page follows, and pres
       blockId: "work-block",
       expectedUpdatedAt: "version-1",
     });
+    expect(requests.find((request) => request.action === "clients.list")).toEqual({
+      action: "clients.list",
+      role: "tree",
+    });
     expect(widgets).toEqual([
       {
         id: "pi-outliner-filter",
@@ -301,7 +320,7 @@ test("requires protocol v11, attributes agent creates and page follows, and pres
     expect(largeEnvelope.presentation.omitted).toBeGreaterThan(0);
     protocolVersion = 5;
     await expect(tools.get("outliner_query")!.execute("incompatible-query", {})).rejects.toThrow(
-      "Incompatible outliner protocol 5; expected 11",
+      "Incompatible outliner protocol 5; expected 12",
     );
   } finally {
     OutlinerClient.prototype.request = originalRequest;
@@ -355,7 +374,7 @@ test("captures through command, tool, and exact standalone dispatch without an a
   OutlinerClient.prototype.request = async function <T>(input: RequestInput): Promise<T> {
     requests.push(input);
     if (input.action === "ping") {
-      return { status: "ready", protocolVersion: 11 } as T;
+      return { status: "ready", protocolVersion: 12 } as T;
     }
     if (input.action === "selection.get") {
       return {

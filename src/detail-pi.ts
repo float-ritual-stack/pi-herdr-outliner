@@ -1,5 +1,3 @@
-import { rmSync } from "node:fs";
-import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { getMarkdownTheme, initTheme } from "@earendil-works/pi-coding-agent";
 import {
@@ -12,6 +10,7 @@ import {
   TuiAltScreen,
 } from "@earendil-works/pi-tui";
 import { OutlinerClient, type OutlinerWatcher } from "./client";
+import { sendUniqueClientCommand } from "./client-target";
 import {
   createDetailController,
   type DetailEffects,
@@ -23,7 +22,7 @@ import { DetailPiPreviewLayout } from "./detail-pi-preview";
 import { DetailPiComponent } from "./detail-pi-renderer";
 import { completeReferencedPaths, readReferencedFile } from "./files";
 import { navigateOutlinerLink, outlinerLinkUri } from "./outliner-links";
-import { focusPluginPane, registerPaneState } from "./pane-control";
+import { currentPaneRuntime, focusCurrentPane } from "./pane-control";
 import { resolvePaths } from "./paths";
 import {
   OUTLINER_PROTOCOL_VERSION,
@@ -53,12 +52,14 @@ if (hyperlinksEnabled) {
 
 const paths = resolvePaths();
 const client = new OutlinerClient(paths.socket);
-const paneStatePath = join(paths.stateDir, "detail-pane.json");
+const clientId = crypto.randomUUID();
 const terminal = new ProcessTerminal();
 const tui = new TuiAltScreen(terminal, false, undefined, {
   mouse: true,
   openUrl(url) {
-    if (!stopping) enqueueWork(async () => { await navigateOutlinerLink(client, url); });
+    if (!stopping) enqueueWork(async () => {
+      await navigateOutlinerLink(client, url, { detailClientId: clientId });
+    });
   },
 });
 let stopping = false;
@@ -77,6 +78,10 @@ function errorMessage(error: unknown): string {
 }
 
 const effects: DetailEffects = {
+  clientId,
+  focusSelf() {
+    focusCurrentPane();
+  },
   async getSelection() {
     return client.request<SelectionContext>({ action: "selection.get" });
   },
@@ -97,7 +102,9 @@ const effects: DetailEffects = {
     return client.request<NavigationState>({ action });
   },
   async followReference(target) {
-    await navigateOutlinerLink(client, outlinerLinkUri(target.kind, target.value));
+    await navigateOutlinerLink(client, outlinerLinkUri(target.kind, target.value), {
+      detailClientId: clientId,
+    });
   },
   async createBlock(input) {
     return client.request<Block>({ action: "create", ...input });
@@ -114,8 +121,8 @@ const effects: DetailEffects = {
   completeFiles(query) {
     return completeReferencedPaths(query, paths.workspaceRoot);
   },
-  focusOutliner() {
-    focusPluginPane(paths.stateDir, "outliner");
+  async focusOutliner() {
+    await sendUniqueClientCommand(client, "tree", { command: "focus" });
   },
 };
 
@@ -147,6 +154,11 @@ async function waitForService(): Promise<void> {
 
 function startWatcher(): void {
   watcher = client.watch({
+    client: {
+      clientId,
+      role: "detail",
+      runtime: currentPaneRuntime(),
+    },
     onConnect: () => enqueueWork(() => controller.onServiceConnect(viewport())),
     onDisconnect: () => enqueueWork(() => controller.onServiceDisconnect()),
     onError: (error) => enqueueWork(() => controller.onServiceError(error)),
@@ -165,7 +177,6 @@ async function stop(exitCode = 0): Promise<void> {
     // Best effort during terminal shutdown.
   }
   tui.stop({ preserveScreen: true });
-  rmSync(paneStatePath, { force: true });
   process.exit(exitCode);
 }
 
@@ -227,13 +238,11 @@ function handleResize(): void {
 async function initialize(): Promise<void> {
   await waitForService();
   await controller.initialize();
-  registerPaneState(paths.stateDir, "detail", paths.workspaceRoot);
 }
 
 try {
   await initialize();
 } catch (error) {
-  rmSync(paneStatePath, { force: true });
   console.error(errorMessage(error));
   process.exit(1);
 }

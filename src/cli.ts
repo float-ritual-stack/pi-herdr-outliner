@@ -156,6 +156,7 @@ switch (command) {
       options: {
         query: { type: "string" },
         limit: { type: "string" },
+        client: { type: "string" },
       },
       allowPositionals: true,
       strict: true,
@@ -163,7 +164,7 @@ switch (command) {
     const query = values.query ?? positionals.join(" ");
     if (!query.trim()) throw new Error("goto requires a block ID, short prefix, or text query");
     const limit = parseLimit(values.limit, 10);
-    const focused = await focusBlockByQuery(client, query, limit);
+    const focused = await focusBlockByQuery(client, query, limit, values.client);
     if (focused.resolution.kind === "none") {
       throw new Error(`No block matches: ${query}`);
     }
@@ -235,6 +236,23 @@ switch (command) {
   case "selection":
     request = { action: "selection.get" };
     break;
+  case "clients": {
+    const { values } = parseArgs({
+      args: rest,
+      options: {
+        role: { type: "string" },
+      },
+      strict: true,
+    });
+    if (values.role !== undefined && values.role !== "tree" && values.role !== "detail") {
+      throw new Error("clients --role must be tree or detail");
+    }
+    request = {
+      action: "clients.list",
+      ...(values.role ? { role: values.role } : {}),
+    };
+    break;
+  }
   default:
     throw new Error(`Unknown command: ${command}`);
 }

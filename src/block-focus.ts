@@ -1,4 +1,5 @@
 import type { RequestInput } from "./client";
+import { requireUniqueClientId, sendClientCommand } from "./client-target";
 import { blockDisplayTitle } from "./references";
 import type { Block, WorkspaceSnapshot } from "./types";
 
@@ -176,16 +177,15 @@ export async function focusBlockByQuery(
   requester: BlockFocusRequester,
   query: string,
   limit = 20,
+  targetClientId?: string,
 ): Promise<BlockFocusResult> {
   const snapshot = await requester.request<WorkspaceSnapshot>({ action: "workspace.snapshot" });
   const resolution = resolveBlockFocus(snapshot.physical.blocks, query, limit);
   if (resolution.kind !== "match") return { resolution, focused: false };
 
   const blockId = resolution.match.block.id;
+  const clientId = targetClientId ?? await requireUniqueClientId(requester, "tree");
   await requester.request({ action: "selection.set", blockId });
-  await requester.request({
-    action: "ui.command.send",
-    command: { target: "tree", command: "focus", blockId },
-  });
+  await sendClientCommand(requester, clientId, { command: "focus", blockId });
   return { resolution, focused: true };
 }

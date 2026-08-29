@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { outlinerLinkUri } from "../src/outliner-links";
+import { OutlinerClient } from "../src/client";
 import { resolvePaths } from "../src/paths";
 import { OutlinerServer } from "../src/server";
 import { OutlinerStore } from "../src/store";
@@ -22,6 +23,16 @@ test("Herdr link action delegates an exact block URI to shared focus and reveal"
   const target = store.create("Clickable target [type::decision]");
   const server = new OutlinerServer(store, paths.socket);
   await server.start();
+  const connected = Promise.withResolvers<void>();
+  const focused = Promise.withResolvers<void>();
+  const watcher = new OutlinerClient(paths.socket).watch({
+    client: { clientId: "herdr-link-tree", role: "tree" },
+    onConnect: connected.resolve,
+    onEvent: (event) => {
+      if (event.domain === "ui") focused.resolve();
+    },
+  });
+  await connected.promise;
 
   try {
     const clickedUrl = outlinerLinkUri("block", target.id);
@@ -55,8 +66,10 @@ test("Herdr link action delegates an exact block URI to shared focus and reveal"
       id: target.id,
       title: "Clickable target",
     });
+    await focused.promise;
     expect(store.getSelection().selected?.id).toBe(target.id);
   } finally {
+    await watcher.stop();
     await server.close();
     store.close();
     rmSync(directory, { recursive: true, force: true });

@@ -1,18 +1,22 @@
 import { expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readPaneId, resolvePluginPaneId } from "../src/pane-control";
+import { removeLegacyClientPaneStates, resolveServicePaneId } from "../src/pane-control";
 
 
-test("reads pane ids and treats malformed state as unavailable", () => {
+test("removes obsolete role-keyed pane state without touching the service singleton", () => {
   const stateDir = mkdtempSync(join(tmpdir(), "pi-outliner-pane-state-"));
   try {
-    writeFileSync(join(stateDir, "detail-pane.json"), '{"paneId":"w1:p2"}\n');
-    expect(readPaneId(stateDir, "detail")).toBe("w1:p2");
+    writeFileSync(join(stateDir, "outliner-pane.json"), "{}\n");
+    writeFileSync(join(stateDir, "detail-pane.json"), "{}\n");
+    writeFileSync(join(stateDir, "service-pane.json"), "{\"paneId\":\"w1:p1\"}\n");
 
-    writeFileSync(join(stateDir, "detail-pane.json"), "not-json");
-    expect(readPaneId(stateDir, "detail")).toBeNull();
+    removeLegacyClientPaneStates(stateDir);
+
+    expect(existsSync(join(stateDir, "outliner-pane.json"))).toBe(false);
+    expect(existsSync(join(stateDir, "detail-pane.json"))).toBe(false);
+    expect(existsSync(join(stateDir, "service-pane.json"))).toBe(true);
   } finally {
     rmSync(stateDir, { recursive: true, force: true });
   }
@@ -37,7 +41,7 @@ if (args[0] === "pane" && args[1] === "list") console.log(JSON.stringify({ resul
       `${JSON.stringify({ paneId: "w1:p1", terminalId: "term-1", workspaceRoot: "/workspace" })}\n`,
     );
 
-    expect(resolvePluginPaneId(stateDir, "service", herdr)).toBe("w2:p9");
+    expect(resolveServicePaneId(stateDir, herdr)).toBe("w2:p9");
     expect(JSON.parse(readFileSync(join(stateDir, "service-pane.json"), "utf8")).paneId).toBe("w2:p9");
   } finally {
     rmSync(stateDir, { recursive: true, force: true });

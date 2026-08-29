@@ -62,6 +62,8 @@ export interface DetailState {
 }
 
 export interface DetailEffects {
+  readonly clientId: string;
+  focusSelf(): void;
   getSelection(): Promise<SelectionContext>;
   setSelection(blockId: string): Promise<void>;
   resolveReferences(text: string): Promise<ResolvedBlockReferences>;
@@ -82,7 +84,7 @@ export interface DetailEffects {
   queryPageAddresses(query: string | undefined, limit: number): Promise<PageAddressCollection>;
   readFile(block: Block): ReferencedFile;
   completeFiles(query: string): ReferencedPathCandidate[];
-  focusOutliner(): void;
+  focusOutliner(): Promise<void>;
 }
 
 export type DetailBufferMoveDirection =
@@ -334,19 +336,20 @@ export function createDetailController(
     state.status = `Commenting on ${state.referencedFile.sourcePath}:${range.startLine}-${range.endLine}`;
   };
 
-  const focusOutliner = (announce: boolean): void => {
+  const focusOutliner = async (announce: boolean): Promise<void> => {
     try {
-      effects.focusOutliner();
+      await effects.focusOutliner();
+      if (announce) state.status = "Focus returned to outliner; Ctrl+Q closes detail";
     } catch (error) {
       state.status = errorMessage(error);
     }
-    if (announce) state.status = "Focus returned to outliner; Ctrl+Q closes detail";
+    emit();
   };
 
-  const cancelBuffer = (): void => {
+  const cancelBuffer = async (): Promise<void> => {
     state.mode = detailDisplayMode(state.context.selected);
     state.status = "Edit cancelled";
-    focusOutliner(false);
+    await focusOutliner(false);
   };
 
   const saveBuffer = async (): Promise<void> => {
@@ -601,7 +604,7 @@ export function createDetailController(
         await saveBuffer();
         return;
       case "buffer.cancel":
-        cancelBuffer();
+        await cancelBuffer();
         break;
       case "completion.open":
         try {
@@ -650,7 +653,7 @@ export function createDetailController(
         state.previewOffset = 0;
         break;
       case "focus.outliner":
-        focusOutliner(intent.announce ?? false);
+        await focusOutliner(intent.announce ?? false);
         break;
       case "viewport.changed":
         if (isBufferMode()) ensureEditorCursorVisible(viewport);
@@ -674,7 +677,7 @@ export function createDetailController(
     async onServiceEvent(event, viewport) {
       if (event.domain === "ui") {
         const command = event.command;
-        if (!command || command.target !== "detail") return;
+        if (!command || command.targetClientId !== effects.clientId) return;
         if (isBufferMode()) {
           state.refreshPending = true;
           return;
@@ -684,6 +687,7 @@ export function createDetailController(
         }
         await loadSelection(true);
         if (command.command === "edit") beginEdit(viewport);
+        effects.focusSelf();
         emit();
         return;
       }

@@ -59,6 +59,21 @@ export interface CaptureReceipt {
   deduplicated: boolean;
 }
 
+export type OutlinerClientRole = "tree" | "detail";
+
+export interface OutlinerClientRuntime {
+  paneId?: string;
+  terminalId?: string;
+  workspaceId?: string;
+  tabId?: string;
+}
+
+export interface OutlinerClientRegistration {
+  clientId: string;
+  role: OutlinerClientRole;
+  runtime?: OutlinerClientRuntime;
+}
+
 export type PageAddressKind = "page" | "alias" | "work-id";
 
 export interface PageAddressRecord {
@@ -167,7 +182,7 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 11;
+export const OUTLINER_PROTOCOL_VERSION = 12;
 
 export interface OutlinerServiceStatus {
   status: "ready";
@@ -180,7 +195,8 @@ export type OutlinerRequest =
   | { id: string; action: "get"; blockId: string }
   | { id: string; action: "children"; parentId: string | null }
   | { id: string; action: "workspace.snapshot"; view?: WorkspaceSnapshotView }
-  | { id: string; action: "events.subscribe" }
+  | { id: string; action: "events.subscribe"; client: OutlinerClientRegistration }
+  | { id: string; action: "clients.list"; role?: OutlinerClientRole }
   | { id: string; action: "ui.command.send"; command: OutlinerUiCommand }
   | {
       id: string;
@@ -290,7 +306,7 @@ export interface WorkspaceSnapshot {
 }
 
 export interface OutlinerUiCommand {
-  target: "tree" | "detail";
+  targetClientId: string;
   command: "edit" | "reveal" | "focus";
   blockId?: string;
 }

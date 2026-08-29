@@ -25,8 +25,8 @@ The project started as a small Friday-night experiment and grew into a durable w
 
 - SQLite-backed hierarchical blocks with stable UUIDs, sibling order, authors, timestamps, collapse state, and selection.
 - Workspace-isolated service and runtime paths.
-- JSON-lines RPC protocol v11 over a Unix socket.
-- Reactive content, selection, view, and UI-command events, with service-owned block navigation history.
+- JSON-lines RPC protocol v12 over a Unix socket.
+- Reactive content, selection, and view broadcasts plus per-process Tree/Detail registration and exact-client UI commands, with service-owned block navigation history.
 - Indexed `[property::value]` metadata with optimistic property patching and catalog queries.
 - Exact block references using `((block-id))`, resolved to display titles in read mode while raw text remains editable.
 - Unique normalized symbolic addresses from explicit `[page::address]` declarations and Work IDs, with aliases, explicit removal, bounded completion, dangling links, and transactional create-on-follow.
@@ -40,7 +40,7 @@ The project started as a small Friday-night experiment and grew into a durable w
 - Pi Markdown preview with line, page, endpoint, and mouse/trackpad scrolling.
 - Grapheme-safe wrapped Detail editing, word motion, selection, deletion, bounded per-session undo/redo, completion, optimistic save, and whole-session Esc cancellation.
 - Referenced text/Markdown file viewing and durable line-range annotations.
-- Herdr pane discovery, restart reconstruction, and a disposable runtime registry.
+- Herdr-owned pane placement/focus and current-pane recovery, one remembered service pane, per-process live client discovery, and a disposable runtime registry.
 - Pi/OMP commands, tools, and selection-context injection.
 
 Planned work is tracked inside the outliner itself. Notable accepted designs include normalized query construction, agent-assisted `PREFIX-XXX` placeholder resolution, backlinks, scoped property semantics, retained Detail targets, and projected canonical descendants.
@@ -71,15 +71,20 @@ Inside a Herdr-managed pane:
 herdr plugin action invoke open --plugin float.pi-outliner
 ```
 
-The action opens or reuses:
+The action preserves one **Outliner Service** tab. With no live Tree it opens an
+**Outliner** Tree and **Outliner Detail** split beside the invoking pane, then
+focuses the new Tree. With one live Tree it focuses that exact client. With
+multiple live Trees it fails explicitly and lists client IDs instead of choosing
+an arbitrary pane.
 
-1. an **Outliner Service** tab,
-2. an **Outliner** Tree split, and
-3. an **Outliner Detail** split.
+Use `open-here` to create another Tree/Detail pair in the current tab, or
+`focus-existing` to focus the unique Tree. The CLI and Pi/OMP
+`outliner_clients` tool expose live client IDs for explicit targeting.
 
-It focuses Tree and prints the three returned pane IDs. Repeated invocation is idempotent.
-
-When the project Pi extension is loaded, `/outliner` performs the same open/focus action. The project-local `/outline` command in [`.claude/commands/outline.md`](.claude/commands/outline.md) invokes and verifies the Herdr action.
+When the project Pi extension is loaded, `/outliner` performs the same
+focus-or-open action. The project-local `/outline` command in
+[`.claude/commands/outline.md`](.claude/commands/outline.md) invokes and
+verifies the Herdr action.
 
 ### Headless service and CLI
 
@@ -102,8 +107,10 @@ EOF
 bun run cli list --subtree <block-uuid> --text "route snapshot" --limit 20
 bun run cli create --text "A durable note [type::note]"
 bun run cli selection
+bun run cli clients --role tree
 bun run goto 40bd0864
 bun run goto --query "roadmap review"
+bun run goto --client <client-uuid> --query "roadmap review"
 bun run cli work-id-status
 bun run cli work-id-configure --prefix PIE
 bun run cli work-id-allocate --id <block-uuid> --expected <updatedAt>

@@ -1,8 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Type, type Static } from "typebox";
 import { Parse } from "typebox/value";
+import type { OutlinerClientRuntime } from "./types";
 
 export type PaneEntrypoint = "service" | "outliner" | "detail";
 
@@ -19,10 +20,15 @@ const HerdrPaneSchema = Type.Object({
   label: Type.Optional(Type.String()),
   cwd: Type.Optional(Type.String()),
   foreground_cwd: Type.Optional(Type.String()),
+  workspace_id: Type.Optional(Type.String()),
+  tab_id: Type.Optional(Type.String()),
 });
 type HerdrPane = Static<typeof HerdrPaneSchema>;
 
 const PaneGetResponseSchema = Type.Object({
+  result: Type.Object({ pane: HerdrPaneSchema }),
+});
+const PaneCurrentResponseSchema = Type.Object({
   result: Type.Object({ pane: HerdrPaneSchema }),
 });
 const WorkspaceListResponseSchema = Type.Object({
@@ -34,19 +40,42 @@ const PaneListResponseSchema = Type.Object({
   result: Type.Object({ panes: Type.Array(HerdrPaneSchema) }),
 });
 
-const LABEL_BY_ENTRYPOINT: Record<PaneEntrypoint, string> = {
-  service: "Outliner Service",
-  outliner: "Outliner",
-  detail: "Outliner Detail",
-};
+const SERVICE_PANE_LABEL = "Outliner Service";
+
+function runtimeFromPane(pane: HerdrPane): OutlinerClientRuntime {
+  return {
+    paneId: pane.pane_id,
+    ...(pane.terminal_id ? { terminalId: pane.terminal_id } : {}),
+    ...(pane.workspace_id ? { workspaceId: pane.workspace_id } : {}),
+    ...(pane.tab_id ? { tabId: pane.tab_id } : {}),
+  };
+}
+
+export function currentPaneRuntime(
+  herdr = process.env.HERDR_BIN_PATH ?? "herdr",
+): OutlinerClientRuntime | undefined {
+  if (process.env.HERDR_ENV !== "1") return undefined;
+  const output = execFileSync(herdr, ["pane", "current", "--current"], {
+    encoding: "utf8",
+  });
+  const pane = Parse(PaneCurrentResponseSchema, JSON.parse(output)).result.pane;
+  return runtimeFromPane(pane);
+}
+
+export function focusCurrentPane(
+  herdr = process.env.HERDR_BIN_PATH ?? "herdr",
+): void {
+  const paneId = currentPaneRuntime(herdr)?.paneId;
+  if (!paneId) throw new Error("Current Herdr pane identity is unavailable");
+  execFileSync(herdr, ["plugin", "pane", "focus", paneId], { stdio: "ignore" });
+}
 
 function paneMatchesState(
   pane: HerdrPane,
   state: PaneState,
-  entrypoint: PaneEntrypoint,
 ): boolean {
   if (state.terminalId) return pane.terminal_id === state.terminalId;
-  if (pane.label !== LABEL_BY_ENTRYPOINT[entrypoint]) return false;
+  if (pane.label !== SERVICE_PANE_LABEL) return false;
   return pane.foreground_cwd === state.workspaceRoot || pane.cwd === state.workspaceRoot;
 }
 
@@ -56,8 +85,8 @@ function writeJsonAtomic(path: string, value: unknown): void {
   renameSync(temporaryPath, path);
 }
 
-function readPaneState(stateDir: string, entrypoint: PaneEntrypoint): PaneState | null {
-  const path = join(stateDir, `${entrypoint}-pane.json`);
+function readPaneState(stateDir: string): PaneState | null {
+  const path = join(stateDir, "service-pane.json");
   if (!existsSync(path)) return null;
   try {
     return Parse(PaneStateSchema, JSON.parse(readFileSync(path, "utf8")));
@@ -66,13 +95,8 @@ function readPaneState(stateDir: string, entrypoint: PaneEntrypoint): PaneState 
   }
 }
 
-export function readPaneId(stateDir: string, entrypoint: PaneEntrypoint): string | null {
-  return readPaneState(stateDir, entrypoint)?.paneId ?? null;
-}
-
-export function registerPaneState(
+export function registerServicePaneState(
   stateDir: string,
-  entrypoint: PaneEntrypoint,
   workspaceRoot: string,
   herdr = process.env.HERDR_BIN_PATH ?? "herdr",
 ): void {
@@ -80,7 +104,7 @@ export function registerPaneState(
   if (!inheritedPaneId) return;
   const output = execFileSync(herdr, ["pane", "get", inheritedPaneId], { encoding: "utf8" });
   const pane = Parse(PaneGetResponseSchema, JSON.parse(output)).result.pane;
-  writeJsonAtomic(join(stateDir, `${entrypoint}-pane.json`), {
+  writeJsonAtomic(join(stateDir, "service-pane.json"), {
     paneId: pane.pane_id,
     terminalId: pane.terminal_id,
     workspaceRoot,
@@ -101,49 +125,44 @@ function listPanes(herdr: string, workspaceId: string): HerdrPane[] {
 
 function recoverMovedPane(
   state: PaneState,
-  entrypoint: PaneEntrypoint,
   herdr: string,
 ): HerdrPane | null {
   for (const workspaceId of listWorkspaces(herdr)) {
     const match = listPanes(herdr, workspaceId).find((pane) =>
-      paneMatchesState(pane, state, entrypoint),
+      paneMatchesState(pane, state),
     );
     if (match) return match;
   }
   return null;
 }
 
-export function resolvePluginPaneId(
+export function removeLegacyClientPaneStates(stateDir: string): void {
+  for (const entrypoint of ["outliner", "detail"]) {
+    const path = join(stateDir, `${entrypoint}-pane.json`);
+    if (existsSync(path)) unlinkSync(path);
+  }
+}
+
+export function resolveServicePaneId(
   stateDir: string,
-  entrypoint: PaneEntrypoint,
   herdr = process.env.HERDR_BIN_PATH ?? "herdr",
 ): string | null {
-  const state = readPaneState(stateDir, entrypoint);
+  const state = readPaneState(stateDir);
   if (!state) return null;
 
   try {
     const output = execFileSync(herdr, ["pane", "get", state.paneId], { encoding: "utf8" });
     const pane = Parse(PaneGetResponseSchema, JSON.parse(output)).result.pane;
     const stateHasIdentity = Boolean(state.terminalId || state.workspaceRoot);
-    if (!stateHasIdentity || paneMatchesState(pane, state, entrypoint)) return pane.pane_id;
+    if (!stateHasIdentity || paneMatchesState(pane, state)) return pane.pane_id;
   } catch {
     // Search by stable pane identity below.
   }
 
-  const movedPane = recoverMovedPane(state, entrypoint, herdr);
+  const movedPane = recoverMovedPane(state, herdr);
   if (!movedPane) return null;
   state.paneId = movedPane.pane_id;
   state.terminalId = movedPane.terminal_id;
-  writeJsonAtomic(join(stateDir, `${entrypoint}-pane.json`), state);
+  writeJsonAtomic(join(stateDir, "service-pane.json"), state);
   return state.paneId;
-}
-
-export function focusPluginPane(
-  stateDir: string,
-  entrypoint: PaneEntrypoint,
-  herdr = process.env.HERDR_BIN_PATH ?? "herdr",
-): void {
-  const paneId = resolvePluginPaneId(stateDir, entrypoint, herdr);
-  if (!paneId) throw new Error(`${entrypoint} pane is not open`);
-  execFileSync(herdr, ["plugin", "pane", "focus", paneId], { stdio: "ignore" });
 }

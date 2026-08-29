@@ -1,12 +1,10 @@
-import { rmSync } from "node:fs";
-import { join } from "node:path";
 import { emitKeypressEvents } from "node:readline";
 import { setTimeout as sleep } from "node:timers/promises";
 import { StdinBuffer } from "@earendil-works/pi-tui";
 import { OutlinerClient, type OutlinerWatcher, type RequestInput } from "./client";
 import { completeReferencedPaths, readReferencedFile } from "./files";
 import { navigateOutlinerLink } from "./outliner-links";
-import { focusPluginPane, registerPaneState } from "./pane-control";
+import { currentPaneRuntime, focusCurrentPane } from "./pane-control";
 import { resolvePaths } from "./paths";
 import { TerminalInputDecoder, type TerminalKey } from "./terminal";
 import { createTreeController, type TreeController } from "./tree-controller";
@@ -20,7 +18,7 @@ import { OUTLINER_PROTOCOL_VERSION, type OutlinerServiceStatus } from "./types";
 
 const paths = resolvePaths();
 const client = new OutlinerClient(paths.socket);
-const paneStatePath = join(paths.stateDir, "outliner-pane.json");
+const clientId = crypto.randomUUID();
 const inputDecoder = new TerminalInputDecoder();
 const mouseEnabled = process.env.HERDR_ENV === "1";
 const mouseInput = mouseEnabled ? new StdinBuffer() : null;
@@ -56,11 +54,11 @@ function stop(): void {
   mouseInput?.destroy();
   process.stdin.off("data", handleRawInput);
   process.stdout.write(`${mouseEnabled ? disableMouse : ""}\x1b[?25h\x1b[?1049l`);
-  rmSync(paneStatePath, { force: true });
   process.exit(0);
 }
 
 const controller = createTreeController({
+  clientId,
   workspaceRoot: paths.workspaceRoot,
   request<T>(input: RequestInput): Promise<T> {
     return client.request<T>(input);
@@ -73,8 +71,8 @@ const controller = createTreeController({
       return readReferencedFile(block, paths.workspaceRoot);
     },
   },
-  focusPane(pane) {
-    focusPluginPane(paths.stateDir, pane);
+  focusSelf() {
+    focusCurrentPane();
   },
   terminalWidth() {
     return process.stdout.columns ?? 100;
@@ -120,7 +118,7 @@ function handleMouseSequence(sequence: string): void {
   const link = treeLinkAtClick(renderedFrameLines, sequence);
   if (!link) return;
   enqueueWork(async () => {
-    await navigateOutlinerLink(client, link);
+    await navigateOutlinerLink(client, link, { treeClientId: clientId });
   });
 }
 
@@ -128,6 +126,11 @@ mouseInput?.on("data", handleMouseSequence);
 
 function startWatcher(): void {
   watcher = client.watch({
+    client: {
+      clientId,
+      role: "tree",
+      runtime: currentPaneRuntime(),
+    },
     onConnect: () => enqueueWork(() => controller.handleConnect()),
     onDisconnect: () => enqueueWork(() => controller.handleDisconnect()),
     onError: (error) => enqueueWork(() => controller.handleError(error)),
@@ -138,13 +141,11 @@ function startWatcher(): void {
 async function initialize(): Promise<void> {
   await waitForService();
   await controller.initialize();
-  registerPaneState(paths.stateDir, "outliner", paths.workspaceRoot);
 }
 
 try {
   await initialize();
 } catch (error) {
-  rmSync(paneStatePath, { force: true });
   console.error(errorMessage(error));
   process.exit(1);
 }

@@ -74,9 +74,11 @@ Persistence, protocol, and rendering do not depend on the agent process survivin
 ${OUTLINER_STATE_DIR:-~/.local/state/pi-herdr-outliner}/<workspace-hash>/
 ```
 
-The directory contains the SQLite database, Unix socket, and remembered plugin-pane metadata. This prevents two repositories from accidentally sharing blocks or selection.
-
-Every process must resolve the same workspace root. Herdr pane commands explicitly pass the invoking pane’s foreground working directory to new plugin panes.
+The directory contains the SQLite database, Unix socket, and remembered
+**service-pane** metadata. Tree and Detail identity is never stored in
+role-keyed pane files. Every process must resolve the same workspace root;
+Herdr pane commands explicitly pass the invoking pane's foreground working
+directory to new plugin panes.
 
 ## Canonical data model
 
@@ -118,7 +120,7 @@ Literal property-looking text inside inline code, fenced code, or escaped syntax
 
 ## Protocol
 
-The current protocol version is `11`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
+The current protocol version is `12`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
 
 ### Important request families
 
@@ -134,8 +136,27 @@ The current protocol version is `11`, defined in [`src/types.ts`](../src/types.t
 - Work IDs: `work-ids.status`, `work-ids.configure`, `work-ids.allocate`
 - selection: `selection.get`, `selection.set`
 - navigation: `navigation.state`, `navigation.back`, `navigation.forward`
-- reactive clients: `events.subscribe`
-- cross-pane behavior: `ui.command.send`
+- reactive clients: `events.subscribe`, `clients.list`
+- exact-client behavior: `ui.command.send`
+
+### Live client identity
+
+Each Tree and Detail process generates a fresh client UUID and registers
+`{ clientId, role, runtime? }` on `events.subscribe`. Runtime pane, terminal,
+workspace, and tab fields are advisory snapshots for diagnostics; Herdr remains
+the authority for current pane identity, placement, and focus.
+
+The subscription socket owns its registration. The service rejects duplicate
+live client IDs and removes exactly that socket's entry on disconnect, so a
+late close cannot delete a replacement process or sibling. `clients.list`
+returns the live registry, optionally filtered by role.
+
+`content`, `selection`, and `view` events remain broadcasts. A `ui` command
+contains `targetClientId` and is written only to that registered socket.
+Callers that have only a role resolve it only when exactly one matching client
+is live; otherwise they require an explicit client ID. Tree and Detail recover
+their current pane through Herdr when handling focus instead of treating the
+registration snapshot as a durable pane handle.
 
 ### Agent provenance
 
@@ -230,11 +251,14 @@ Store startup creates one canonical `Inbox [type::inbox] [system-view::inbox]` w
 ## Reactive flow
 
 1. A client obtains a workspace snapshot.
-2. It subscribes to service events.
+2. It subscribes with a fresh process identity and role.
 3. Mutations occur through RPC.
-4. The service emits a domain event: `content`, `selection`, `view`, or `ui`.
-5. Tree and Detail reload or perform a targeted UI command.
-6. On reconnect, clients reconstruct from the canonical service rather than replaying guessed local state.
+4. The service broadcasts `content`, `selection`, and `view` events, while
+   delivering each `ui` command only to its `targetClientId`.
+5. Tree and Detail reload or perform the addressed UI command.
+6. On reconnect, the same process re-registers its identity; a restarted
+   process generates a new identity and reconstructs from canonical service
+   state.
 
 While Detail is editing/commenting, content refreshes are marked pending instead of replacing the active raw buffer. Save uses `expectedUpdatedAt`; conflicts preserve the buffer and surface the error. Esc cancels the buffer, after which pending selection can reload.
 

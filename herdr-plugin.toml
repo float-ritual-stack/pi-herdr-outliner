@@ -25,9 +25,21 @@ command = ["bun", "run", "src/detail-main.ts"]
 
 [[actions]]
 id = "open"
-title = "Open or focus outliner workspace"
+title = "Focus existing or open first outliner"
 contexts = ["workspace", "tab", "pane"]
 command = ["bun", "run", "src/herdr-open.ts"]
+
+[[actions]]
+id = "open-here"
+title = "Open another Tree and Detail here"
+contexts = ["workspace", "tab", "pane"]
+command = ["bun", "run", "src/herdr-open.ts", "--mode", "open-here"]
+
+[[actions]]
+id = "focus-existing"
+title = "Focus the unique existing Tree"
+contexts = ["workspace", "tab", "pane"]
+command = ["bun", "run", "src/herdr-open.ts", "--mode", "focus-existing"]
 
 [[actions]]
 id = "navigate"

@@ -4,6 +4,7 @@ import {
   formatBlockFocusMatch,
   type BlockFocusRequester,
 } from "./block-focus";
+import { requireUniqueClientId, sendClientCommand } from "./client-target";
 import { blockDisplayTitle, blockReferenceIds } from "./references";
 import { isWorkIdAddress, pageAddressReferences } from "./page-addresses";
 import type { Block, PageAddressFollowResult, PageAddressResolution } from "./types";
@@ -97,10 +98,11 @@ export function parseOutlinerLinkUri(uri: string): OutlinerLinkTarget {
 export async function navigateOutlinerLink(
   requester: BlockFocusRequester,
   uri: string,
+  targets: { treeClientId?: string; detailClientId?: string } = {},
 ): Promise<OutlinerLinkNavigation> {
   const target = parseOutlinerLinkUri(uri);
   if (target.kind === "goto") {
-    const focused = await focusBlockByQuery(requester, target.value);
+    const focused = await focusBlockByQuery(requester, target.value, 20, targets.treeClientId);
     if (focused.resolution.kind === "none") {
       throw new Error(`No outliner block matches clicked link: ${target.value}`);
     }
@@ -118,14 +120,24 @@ export async function navigateOutlinerLink(
   }
 
   let pageFollow: PageAddressFollowResult | null = null;
+  let treeClientId = targets.treeClientId;
   let block: Block;
   if (target.kind === "page") {
-    pageFollow = await requester.request<PageAddressFollowResult>({
-      action: "pages.follow",
+    const resolution = await requester.request<PageAddressResolution>({
+      action: "pages.resolve",
       address: target.value,
     });
-    if (!pageFollow.block) throw new Error(`Page address did not resolve: ${target.value}`);
-    block = pageFollow.block;
+    if (resolution.block) {
+      block = resolution.block;
+    } else {
+      treeClientId ??= await requireUniqueClientId(requester, "tree");
+      pageFollow = await requester.request<PageAddressFollowResult>({
+        action: "pages.follow",
+        address: target.value,
+      });
+      if (!pageFollow.block) throw new Error(`Page address did not resolve: ${target.value}`);
+      block = pageFollow.block;
+    }
   } else if (target.kind === "work") {
     const resolution = await requester.request<PageAddressResolution>({
       action: "pages.resolve",
@@ -137,10 +149,12 @@ export async function navigateOutlinerLink(
     block = await requester.request<Block>({ action: "get", blockId: target.value });
   }
   if (block.effectiveDeletedRootId) {
+    const detailClientId =
+      targets.detailClientId ?? await requireUniqueClientId(requester, "detail");
     await requester.request({ action: "selection.set", blockId: block.id });
-    await requester.request({
-      action: "ui.command.send",
-      command: { target: "detail", command: "focus", blockId: block.id },
+    await sendClientCommand(requester, detailClientId, {
+      command: "focus",
+      blockId: block.id,
     });
     return {
       kind: target.kind,
@@ -151,10 +165,11 @@ export async function navigateOutlinerLink(
     };
   }
 
+  treeClientId ??= await requireUniqueClientId(requester, "tree");
   await requester.request({ action: "selection.set", blockId: block.id });
-  await requester.request({
-    action: "ui.command.send",
-    command: { target: "tree", command: "focus", blockId: block.id },
+  await sendClientCommand(requester, treeClientId, {
+    command: "focus",
+    blockId: block.id,
   });
   return {
     kind: target.kind,
