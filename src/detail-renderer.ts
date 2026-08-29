@@ -50,7 +50,7 @@ export function renderDetailHeader(
 ): string[] {
   const connection = state.peeking
     ? "Peek"
-    : state.connectionMode === "follow" ? "Follow" : "Independent";
+    : state.connectionMode === "follow" ? "Follow" : "Pinned";
   const label = `Detail · ${connection}`;
   const header = width <= label.length + 2
     ? `\x1b[1;36m${fitToWidth(label, width)}\x1b[0m`

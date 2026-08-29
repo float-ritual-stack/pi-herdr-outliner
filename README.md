@@ -25,7 +25,7 @@ The project started as a small Friday-night experiment and grew into a durable w
 
 - SQLite-backed hierarchical blocks with stable UUIDs, sibling order, authors, timestamps, and one canonical graph per workspace root.
 - Workspace-isolated service and runtime paths.
-- JSON-lines RPC protocol v15 over a Unix socket.
+- JSON-lines RPC protocol v16 over a Unix socket.
 - Reactive canonical content/view broadcasts, context-targeted browsing events, per-process Tree/Detail registration, exact-client UI commands, and source-aware `open | peek | reveal` navigation.
 - Each Tree owns its cursor, occurrence selection, filter, viewport, collapsed rows, multiline expansion, explicit-navigation history, paired browsing context, and optional same-tab open destination; moving one Tree does not move or retarget another pair.
 - Indexed `[property::value]` metadata with optimistic property patching and catalog queries.
@@ -40,7 +40,7 @@ The project started as a small Friday-night experiment and grew into a durable w
 - Client-local multiline-expanded Tree rows support viewport-sized intra-block PageUp/PageDown without changing the Tree cursor.
 - Pi Markdown preview with line, page, endpoint, and mouse/trackpad scrolling.
 - Grapheme-safe wrapped Detail editing, word motion, selection, deletion, bounded per-session undo/redo, completion, optimistic save, and whole-session Esc cancellation.
-- Each Detail visibly reports `Follow`, `Independent`, or temporary `Peek`, owns its exact target and bounded in-process history, and can hold a target while its paired Tree moves.
+- Each Detail visibly reports `Follow`, `Pinned`, or temporary `Peek`, owns its exact target and bounded in-process history, and can hold a target while its paired Tree moves.
 - Referenced text/Markdown file viewing and durable line-range annotations.
 - Herdr-owned pane placement/focus and current-pane recovery, one remembered service pane, per-process live client discovery, and a disposable runtime registry.
 - Pi/OMP commands, tools, and selection-context injection.
@@ -96,11 +96,20 @@ verifies the Herdr action.
 Pairs under the same filesystem root share canonical blocks and content updates,
 but not cursors, targets, filters, viewport state, or navigation history. In a
 new pair, Detail starts in **Follow** mode and displays the block selected by its
-paired Tree. Press `i` in Detail to hold the current block in **Independent**
+paired Tree. Press `i` in Detail to hold the current block in **Pinned**
 mode; press `i` again to resume following the paired Tree.
 
-Reference navigation is source-aware. `o` opens and `P` peeks in a Detail;
-`R` reveals the target in a Tree. Resolution prefers an explicitly configured
+The primary reader workflow is selection-first: move through the Tree, then
+press `Enter` to focus its paired Detail in **Follow** reader mode. This never
+starts an editor, for either single-line or multiline blocks. In Detail, press
+`i` to pin the current block for deeper work, `e` to edit it,
+and `i` again to resume following the paired Tree.
+
+Reference navigation is a separate detour from selection reading. `o` performs
+a durable open: the destination becomes **Pinned** and records local history.
+`P` performs a temporary peek: it records no history, and `Esc` restores the
+destination's prior target and Follow/Pinned mode. `R`
+reveals the target in a Tree. Resolution prefers an explicitly configured
 open destination, then the source pane itself when its role matches, then the
 paired browsing context, then one unambiguous same-tab pane. Other tabs and
 workspaces are never implicit candidates. Press `L` in either Tree or Detail to
@@ -156,13 +165,14 @@ The footer in each pane is authoritative and context-sensitive. These are the pr
 | `PageUp` / `PageDown` | Scroll within the selected multiline-expanded block |
 | `Left` / `Right` | Collapse/go to parent; expand/go to first child |
 | `Shift+Up` / `Shift+Down` | Reorder canonical siblings, or branch-local projected occurrences |
-| `Enter` | Inline edit a single-line block; hand multiline blocks to Detail |
+| `Enter` | Focus the paired Detail reader and resume **Follow** mode |
+| `e` | Edit a single-line block inline; open a multiline block in the Detail editor |
 | `a` / `s` | Add child / sibling |
 | `c` | Open quick capture; Shift+Enter/Ctrl+E adds a line, Enter saves to Inbox, Esc cancels |
 | `Tab` / `Shift+Tab` | Indent / outdent |
 | `Space` | Toggle collapse |
 | `.` or `Command+.` | Expand/collapse multiline block detail in Tree |
-| `Ctrl+E` or modified Enter | Open the selected block in Detail |
+| `Ctrl+E` or modified Enter | Explicitly edit the selected block in Detail |
 | `g` | Fuzzy goto by UUID, short prefix, title, or content |
 | `o` | Open the first exact `((block-id))` or symbolic `[[address]]` reference in the routed Detail |
 | `P` | Temporarily peek at the first reference in the routed Detail; `Esc` there restores its prior target and mode |
@@ -191,19 +201,19 @@ Projected virtual occurrences deliberately constrain hierarchy and collapse. Bra
 | `PageUp` / `PageDown` | Scroll one viewport |
 | `g` / `G` | Top / bottom |
 | Mouse wheel / trackpad | Scroll preview |
-| `Enter` or `e` | Edit raw canonical text |
+| `e` | Edit raw canonical text; `Enter` remains reader-only |
 | `f` | Open referenced file |
-| `o` | Open the first exact `((block-id))` or symbolic `[[address]]` reference in this Detail's configured/default destination |
-| `P` | Temporarily peek at the first reference; `Esc` restores the prior target and `Follow`/`Independent` mode |
+| `o` | Durably open the first reference in the configured/default Detail, pinning that destination and adding local history |
+| `P` | Temporarily peek at the first reference without history; `Esc` restores the prior target and `Follow`/`Pinned` mode |
 | `R` | Reveal the first reference in the paired or unique same-tab Tree |
 | `L` | Choose the same-tab Detail used by `o`, `P`, and clicks from this Detail |
-| `i` | Toggle between following the paired Tree and holding an independent target |
-| `Option+Left` / `Option+Right` | Move backward / forward through this Detail's local history; history navigation enters **Independent** mode |
+| `i` | Pin the current block, or resume **Follow** of the paired Tree |
+| `Option+Left` / `Option+Right` | Move backward / forward through this Detail's local history; history navigation pins the historical target |
 | `r` | Restore the selected block when it is a direct Trash root |
 | `q` | Focus Tree |
 | `Ctrl+Q` | Close Detail |
 
-Detail navigation history is local to that Detail process and retains at most 200 exact targets. Opening a reference, receiving an exact target, or following the paired Tree records a visit. Back/forward enters **Independent** mode so a later Tree cursor event cannot immediately replace the historical target. Soft-deleted targets reopen read-only; a purged target remains visible as unavailable. Closing Detail discards this history.
+Detail navigation history is local to that Detail process and retains at most 200 exact targets. Opening a reference, receiving an exact target, or following the paired Tree records a visit. Back/forward pins the historical target so a later Tree cursor event cannot immediately replace it. Soft-deleted targets reopen read-only; a purged target remains visible as unavailable. Closing Detail discards this history.
 
 ### Detail edit and comment modes
 

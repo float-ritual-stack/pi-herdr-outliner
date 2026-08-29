@@ -60,7 +60,7 @@ describe("detail ANSI renderer", () => {
       "",
       "",
       "",
-      "\x1b[2m↑↓ scroll  o open ref  i hold/follow  ⌥←→ history  Enter/e edit…\x1b[0m",
+      "\x1b[2mi pin/follow  ↑↓ read  e edit  o open/pin  P peek (Esc back)  R…\x1b[0m",
     ].join("\n"));
   });
 
@@ -82,7 +82,7 @@ describe("detail ANSI renderer", () => {
       "resolved three",
       "resolved four",
       "Ready",
-      "\x1b[2m↑↓ scroll  o open ref  i hold/follow  ⌥←→ history  Enter/e edit…\x1b[0m",
+      "\x1b[2mi pin/follow  ↑↓ read  e edit  o open/pin  P peek (Esc back)  R…\x1b[0m",
     ].join("\n"));
   });
 
@@ -331,6 +331,14 @@ test("renders human route labels without exposing opaque client IDs", () => {
   expect(rendered).toContain("Open links in…");
   expect(rendered).toContain("› [D] Detail");
   expect(rendered).not.toContain("opaque-detail-d");
+});
+
+test("labels an independent Detail target as Pinned", () => {
+  const rendered = renderDetailLines(
+    state({ connectionMode: "independent" }),
+    { width: 80, height: 8 },
+  ).join("\n");
+  expect(rendered).toContain("Detail · Pinned");
 });
 
 test("labels a temporary Detail target as Peek", () => {

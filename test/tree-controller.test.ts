@@ -879,13 +879,57 @@ describe("createTreeController", () => {
     expect(controller.view().status).toBe("Multiline editor opened in detail pane");
   });
 
+  test("Enter opens the paired Detail reader while e explicitly edits", async () => {
+    const selected = block("selected", {
+      text: "First line\nSecond line",
+      displayText: "First line\nSecond line",
+    });
+    const fake = harness((input) =>
+      input.action === "workspace.snapshot" ? snapshot([selected], selected) : undefined
+    );
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+
+    await controller.handleKeypress("", { name: "return" }, "pass");
+    expect(controller.view().mode).toBe("browse");
+    expect(lastCall(fake.calls, "ui.command.send")).toEqual({
+      action: "ui.command.send",
+      command: { targetClientId: "detail-test", command: "follow", blockId: selected.id },
+    });
+    expect(controller.view().status).toBe("Reader opened · Detail follows this Tree");
+
+    await controller.handleKeypress("e", { name: "e" }, "pass");
+    expect(lastCall(fake.calls, "ui.command.send")).toEqual({
+      action: "ui.command.send",
+      command: { targetClientId: "detail-test", command: "edit", blockId: selected.id },
+    });
+    expect(controller.view().status).toBe("Multiline editor opened in detail pane");
+  });
+
+  test("single-line Enter stays reader-only until explicit e", async () => {
+    const selected = block("selected", { text: "One line", displayText: "One line" });
+    const fake = harness((input) =>
+      input.action === "workspace.snapshot" ? snapshot([selected], selected) : undefined
+    );
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+
+    await controller.handleKeypress("", { name: "return" }, "pass");
+    expect(controller.view().mode).toBe("browse");
+    expect(controller.view().quickInput).toBe("");
+
+    await controller.handleKeypress("e", { name: "e" }, "pass");
+    expect(controller.view().mode).toBe("edit");
+    expect(controller.view().quickInput).toBe("One line");
+  });
+
   test("defers service events during editing and reloads once editing is cancelled", async () => {
     const selected = block("selected");
     const fake = harness((input) => input.action === "workspace.snapshot" ? snapshot([selected], selected) : undefined);
     const controller = createTreeController(fake.effects);
     await controller.initialize();
 
-    await controller.handleKeypress("", { name: "return" }, "pass");
+    await controller.handleKeypress("e", { name: "e" }, "pass");
     const callsBeforeEvent = fake.calls.length;
     await controller.handleServiceEvent(event("content", "selected"));
     expect(fake.calls).toHaveLength(callsBeforeEvent);
@@ -917,7 +961,7 @@ describe("createTreeController", () => {
     });
     const controller = createTreeController(fake.effects);
     await controller.initialize();
-    await controller.handleKeypress("", { name: "return" }, "pass");
+    await controller.handleKeypress("e", { name: "e" }, "pass");
 
     await controller.handleKeypress("", { name: "tab" }, "pass");
     expect(fake.calls.filter((call) => call.action === "pages.complete")).toEqual([{
@@ -1439,7 +1483,7 @@ describe("createTreeController", () => {
     expect(openedFileId).toBe("card");
     await controller.handleKeypress("", { name: "escape" }, "pass");
 
-    await controller.handleKeypress("", { name: "return" }, "pass");
+    await controller.handleKeypress("e", { name: "e" }, "pass");
     await controller.handleKeypress("!", { sequence: "!" }, "pass");
     await controller.handleKeypress("", { name: "return" }, "pass");
     expect(lastCall(fake.calls, "update")).toEqual({

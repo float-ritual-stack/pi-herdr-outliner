@@ -764,6 +764,21 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     effects.invalidate();
   }
 
+  async function focusDetailReader(): Promise<void> {
+    const selected = rows[selectedIndex];
+    if (!selected) return;
+    try {
+      await sendContextClientCommand(effects, "detail", effects.browsingContextId, {
+        command: "follow",
+        blockId: selected.canonicalId,
+      });
+      status = "Reader opened · Detail follows this Tree";
+    } catch (error) {
+      status = errorMessage(error);
+    }
+    effects.invalidate();
+  }
+
   async function handoffToDetail(): Promise<void> {
     const selected = rows[selectedIndex];
     if (!selected) return;
@@ -1389,12 +1404,11 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       await beginInput("purge");
       return;
     } else if (key.name === "return" && selected) {
+      await focusDetailReader();
+      return;
+    } else if (str === "e" && selected) {
       if (selected.block.effectiveDeletedRootId) {
-        await sendContextClientCommand(effects, "detail", effects.browsingContextId, {
-          command: "focus",
-          blockId: selected.canonicalId,
-        });
-        status = "Deleted block opened read-only in Detail";
+        status = "Block is in Trash; open it read-only with Enter";
         effects.invalidate();
         return;
       }

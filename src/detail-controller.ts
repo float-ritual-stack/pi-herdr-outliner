@@ -189,11 +189,11 @@ export function detailHelpText(mode: DetailMode): string {
     case "comment":
       return "^Z/⌘Z undo  ^⇧Z/^Y redo  ⌥←→ word  Home/End line  ⇧Arrows select  Del  ^S add annotation  Esc cancel";
     case "annotation":
-      return "↑↓ scroll  o open ref  i hold/follow  ⌥←→ history  e edit  f source file  b raw block  q tree";
+      return "i pin/follow  ↑↓ read  e edit  o open/pin  P peek (Esc back)  R reveal  L destination  f source  b block";
     case "file":
-      return "↑↓ lines  o open ref  i hold/follow  ⌥←→ history  v select  c comment  b block  q tree";
+      return "i pin/follow  ↑↓ lines  o open/pin  P peek (Esc back)  R reveal  L destination  v select  c comment  b block";
     case "preview":
-      return "↑↓ scroll  o open ref  i hold/follow  ⌥←→ history  Enter/e edit  f file  q tree  Ctrl+Q close";
+      return "i pin/follow  ↑↓ read  e edit  o open/pin  P peek (Esc back)  R reveal  L destination  q tree";
     case "route":
       return "↑↓/Tab choose  Enter set destination  Esc cancel";
   }
@@ -386,6 +386,13 @@ export function createDetailController(
 
   const applyNavigationCommand = async (command: OutlinerUiCommand): Promise<void> => {
     if (!command.blockId) return;
+    if (command.command === "follow") {
+      state.peeking = false;
+      peekReturn = null;
+      state.connectionMode = "follow";
+      await loadBrowsingContext(true);
+      return;
+    }
     if (command.command === "peek") {
       if (!state.peeking) {
         peekReturn = {
@@ -416,7 +423,7 @@ export function createDetailController(
       if (prior.targetBlockId) await loadBlock(prior.targetBlockId, true, false);
       else await applyTarget({ selected: null, ancestors: [], children: [] }, true, false);
     }
-    state.status = "Closed peek";
+    state.status = "Peek closed · restored prior target";
   };
 
   const refreshPendingTarget = async (): Promise<void> => {
@@ -664,7 +671,7 @@ export function createDetailController(
         navigationIndex = targetIndex;
         state.connectionMode = "independent";
         await loadBlock(blockId, true, false);
-        state.status = direction < 0 ? "Navigation back · Independent" : "Navigation forward · Independent";
+        state.status = direction < 0 ? "Navigation back · Pinned" : "Navigation forward · Pinned";
         break;
       }
       case "reference.open":
@@ -759,11 +766,11 @@ export function createDetailController(
       case "connection.toggle":
         if (state.connectionMode === "follow") {
           state.connectionMode = "independent";
-          state.status = "Independent · paired Tree movement will not replace this target";
+          state.status = "Pinned this block · i resumes Follow";
         } else {
           state.connectionMode = "follow";
           await loadBrowsingContext(true);
-          state.status = "Following paired Tree";
+          state.status = "Following paired Tree · i pins current block";
         }
         break;
       case "comment.begin":
@@ -922,8 +929,13 @@ export function createDetailController(
         }
         if (command.blockId) {
           await applyNavigationCommand(command);
-          if (command.command === "peek") state.status = "Peek · Esc to close";
-          else if (command.command === "open") state.status = "Opened · Independent";
+          if (command.command === "follow") {
+            state.status = "Following paired Tree · i pins current block";
+          } else if (command.command === "peek") {
+            state.status = "Peek · temporary · Esc restores prior target";
+          } else if (command.command === "open") {
+            state.status = "Opened and pinned · i resumes Follow";
+          }
         }
         if (command.command === "edit") beginEdit(viewport);
         effects.focusSelf();

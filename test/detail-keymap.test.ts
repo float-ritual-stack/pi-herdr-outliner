@@ -189,6 +189,20 @@ test("maps preview and file navigation history and reference-follow bindings", a
   ]);
 });
 
+test("keeps reader Enter inert and reserves e for editing", async () => {
+  const previewState = state();
+  previewState.mode = "preview";
+  const preview = harness(previewState, false);
+
+  await preview.press({ name: "return" });
+  await preview.press({ name: "e" }, "e");
+
+  expect(preview.intents).toEqual([
+    { type: "redraw" },
+    { type: "edit.begin" },
+  ]);
+});
+
 test("maps typed navigation, destination picker, and peek close bindings", async () => {
   const previewState = state();
   previewState.mode = "preview";

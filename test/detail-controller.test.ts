@@ -703,6 +703,31 @@ describe("detail controller completion, navigation, and focus", () => {
     expect(harness.calls.focuses).toBe(2);
   });
 
+  test("a targeted reader command resumes Follow on the paired Tree", async () => {
+    const initial = makeBlock({ id: "block-1", text: "Initial" });
+    const next = makeBlock({ id: "block-2", text: "Next" });
+    const harness = createHarness(initial);
+    await harness.controller.initialize();
+    await harness.controller.dispatch({ type: "connection.toggle" }, viewport);
+    harness.setSelection({ selected: next, ancestors: [], children: [] });
+
+    await harness.controller.onServiceEvent(
+      event("ui", {
+        targetClientId: "detail-test",
+        command: "follow",
+        blockId: next.id,
+      }),
+      viewport,
+    );
+
+    expect(harness.controller.state.connectionMode).toBe("follow");
+    expect(harness.controller.state.targetBlockId).toBe(next.id);
+    expect(harness.controller.state.status).toBe(
+      "Following paired Tree · i pins current block",
+    );
+  });
+
+
   test("targets a detail UI command and focuses only the recipient", async () => {
     const first = makeBlock();
     const second = makeBlock({ id: "block-2", text: "second", updatedAt: "version-2" });
@@ -766,5 +791,5 @@ test("Detail peek restores the prior target and Follow mode when closed", async 
   expect(harness.controller.state.targetBlockId).toBe(source.id);
   expect(harness.controller.state.peeking).toBe(false);
   expect(harness.controller.state.connectionMode).toBe("follow");
-  expect(harness.controller.state.status).toBe("Closed peek");
+  expect(harness.controller.state.status).toBe("Peek closed · restored prior target");
 });

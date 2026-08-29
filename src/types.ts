@@ -181,7 +181,7 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 15;
+export const OUTLINER_PROTOCOL_VERSION = 16;
 
 export interface OutlinerServiceStatus {
   status: "ready";
@@ -327,7 +327,7 @@ export interface WorkspaceSnapshot {
 
 export interface OutlinerUiCommand {
   targetClientId: string;
-  command: "edit" | "reveal" | "focus" | "open" | "peek";
+  command: "edit" | "reveal" | "focus" | "follow" | "open" | "peek";
   blockId?: string;
 }
 

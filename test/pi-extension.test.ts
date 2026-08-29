@@ -47,7 +47,7 @@ test("registers the workspace commands and annotation-aware tools", () => {
   expect(updateSchema).toContain("expectedUpdatedAt");
 });
 
-test("requires protocol v15, attributes agent creates and page follows, and presents bounded query results", async () => {
+test("requires protocol v16, attributes agent creates and page follows, and presents bounded query results", async () => {
   const collection: VisibleBlockCollection = {
     blocks: [
       {
@@ -66,7 +66,7 @@ test("requires protocol v15, attributes agent creates and page follows, and pres
     ],
     completeness: { kind: "truncated", limit: 20 },
   };
-  let protocolVersion = 15;
+  let protocolVersion = 16;
   let queryCollection = collection;
   let queryError: Error | undefined;
   const requests: RequestInput[] = [];
@@ -325,7 +325,7 @@ test("requires protocol v15, attributes agent creates and page follows, and pres
     expect(largeEnvelope.presentation.omitted).toBeGreaterThan(0);
     protocolVersion = 5;
     await expect(tools.get("outliner_query")!.execute("incompatible-query", {})).rejects.toThrow(
-      "Incompatible outliner protocol 5; expected 15",
+      "Incompatible outliner protocol 5; expected 16",
     );
   } finally {
     OutlinerClient.prototype.request = originalRequest;
@@ -378,7 +378,7 @@ test("captures through command, tool, and exact standalone dispatch without an a
   OutlinerClient.prototype.request = async function <T>(input: RequestInput): Promise<T> {
     requests.push(input);
     if (input.action === "ping") {
-      return { status: "ready", protocolVersion: 15 } as T;
+      return { status: "ready", protocolVersion: 16 } as T;
     }
     if (input.action === "selection.get") {
       return {

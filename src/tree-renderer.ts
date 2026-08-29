@@ -398,11 +398,11 @@ export function renderTreeFrame(
   } else if (view.mode === "route") {
     help = "↑↓/Tab choose  Enter set destination  Esc cancel";
   } else if (expandedScrollable) {
-    help = "PgUp/PgDn scroll  click/o open  P peek  R reveal  L destination  ⌥←→ history";
+    help = "Enter read/follow  e edit  PgUp/PgDn scroll  o open/pin  P peek/Esc back  R reveal  L destination";
   } else if (selectedRow?.kind === "occurrence") {
-    help = "◇ occurrence  click/o open  P peek  R reveal  L destination  Shift+↑↓ order";
+    help = "◇ occurrence  Enter read/follow  e edit  o open/pin  P peek/Esc back  R reveal  L destination";
   } else {
-    help = "↑↓ navigate  click/o open  P peek  R reveal  L destination  g goto  . detail";
+    help = "↑↓ browse  Enter read/follow  e edit  o open/pin  P peek/Esc back  R reveal  L destination  g goto";
   }
   output.push(`\x1b[2m${truncate(help, width)}\x1b[0m`);
   return { frame: output.join("\n"), scrollStartEntryIndex };

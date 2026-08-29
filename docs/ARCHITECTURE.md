@@ -41,7 +41,7 @@ The service is the only process that opens the workspace SQLite database. It log
 
 Tree holds no canonical block state. It reconstructs canonical data from service snapshots and events, then owns its cursor, occurrence selection, filter, collapsed canonical IDs, multiline-expanded row IDs, viewport, explicit-navigation history, and browsing-context publication in-process. Closing a Tree discards only that Tree's presentation state.
 
-Cursor changes publish the selected canonical block to exactly one browsing context. Only subscribers registered to that context receive the event. Global `selection` events are ignored by Tree panes. Exact-client `focus` and `reveal` commands move only their addressed Tree and locally expand ancestors when required; `open` and `peek` dispatch to a resolved Detail without moving the source Tree. The legacy saved workspace selection may seed a newly created Tree once, but it is not continuing pane authority.
+Cursor changes publish the selected canonical block to exactly one browsing context. Only subscribers registered to that context receive the event. Global `selection` events are ignored by Tree panes. Tree `Enter` sends an exact-context `follow` command that focuses the paired Detail reader without entering edit mode. Exact-client `focus` and `reveal` commands move only their addressed Tree and locally expand ancestors when required; `open` and `peek` dispatch to a resolved Detail without moving the source Tree. The legacy saved workspace selection may seed a newly created Tree once, but it is not continuing pane authority.
 
 PageUp/PageDown move the selected expanded row's offset by one Tree body viewport and clamp to its wrapped row count. Cursor changes, multiline expansion changes, and reconnects reset the offset.
 
@@ -60,11 +60,13 @@ The legacy ANSI Detail entrypoint remains available in [`src/detail.ts`](../src/
 
 Detail owns an exact target, a bounded in-process target history, and a visible
 `Follow | Independent | Peek` connection mode. Follow subscribes to one browsing
-context; Independent retains its exact target across unrelated context events.
-Peek temporarily replaces the rendered target without recording history; `Esc`
-restores the prior exact target and connection mode. Content events refresh the
-current exact block without changing its ownership. Closing Detail discards only
-this ephemeral navigation state.
+context; `i` pins the current target as Independent or resumes Follow.
+Independent retains its exact target across unrelated context events. A durable
+`open` enters Independent and records local history. Peek temporarily replaces
+the rendered target without recording history; `Esc` restores the prior exact
+target and connection mode. Reader `Enter` is inert; only explicit `e` or an
+exact-client `edit` command enters the editor. Closing Detail discards only this
+ephemeral navigation state.
 
 ### Pi / OMP extension
 
@@ -132,7 +134,7 @@ Literal property-looking text inside inline code, fenced code, or escaped syntax
 
 ## Protocol
 
-The current protocol version is `15`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
+The current protocol version is `16`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
 
 ### Important request families
 
