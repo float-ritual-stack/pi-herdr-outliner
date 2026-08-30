@@ -25,11 +25,11 @@ The project started as a small Friday-night experiment and grew into a durable w
 
 - SQLite-backed hierarchical blocks with stable UUIDs, sibling order, authors, timestamps, and one canonical graph per workspace root.
 - Workspace-isolated service and runtime paths.
-- JSON-lines RPC protocol v18 over a Unix socket.
+- JSON-lines RPC protocol v20 over a Unix socket.
 - Reactive canonical content/view broadcasts, per-process Tree/Detail registration with Detail lock availability, exact-client UI commands, and source-aware `preview | open | reveal` navigation.
 - Each Tree owns its cursor, occurrence selection, filter, viewport, collapsed rows, multiline expansion, explicit-navigation history, and browsing context; moving a Tree previews only in the first unlocked same-tab Detail and never replaces a locked anchor.
 - Indexed `[property::value]` metadata with optimistic property patching and catalog queries.
-- Exact block references using `((block-id))`, resolved to display titles in read mode while raw text remains editable.
+- Exact block and fragment references using `((block-id))` and `((block-id^fragment-id))`, resolved to display titles in read mode while raw text remains editable.
 - Unique normalized symbolic addresses from explicit `[page::address]` declarations and Work IDs, with aliases, explicit removal, bounded completion, dangling links, and transactional create-on-follow.
 - Workspace-scoped monotonic Work-ID allocation adopts a clean existing prefix or requires explicit configuration, optimistically assigns the next immutable ID, and never reuses reserved or purged identifiers.
 - Plain-clickable Work IDs, canonical UUIDs, exact references, and `[[address]]` links inside Tree/Detail, with OSC 8 `pi-outliner://` links retained for external terminal interoperability.
@@ -44,6 +44,7 @@ The project started as a small Friday-night experiment and grew into a durable w
 - Referenced text/Markdown file viewing and durable line-range annotations.
 - Herdr-owned pane placement/focus and current-pane recovery, one remembered service pane, per-process live client discovery, and a disposable runtime registry.
 - Pi/OMP commands, tools, and selection-context injection.
+- A disposable Pi report pane shows only the latest settled assistant message in service memory; selection-aware promotion creates an ordinary provenance-bearing agent block, while replacement, discard, pane close, and service restart leave no canonical report artifact.
 
 Planned work is tracked inside the outliner itself. Notable accepted designs include normalized query construction, agent-assisted `PREFIX-XXX` placeholder resolution, backlinks, scoped property semantics, and projected canonical descendants.
 
@@ -309,6 +310,13 @@ CLI accepts `--text`, explicit `--stdin`, or automatic non-TTY stdin/heredoc inp
 
 The Pi extension registers `/capture` and `outliner_capture`. An exact standalone `float.dispatch(…)` input is intercepted by the Pi/OMP input hook, durably captured, acknowledged, and handled without starting an agent turn. Embedded/conversational markers are left untouched; malformed markers report a warning and continue as ordinary input.
 
+On `agent_settled`, the Pi extension publishes only the latest assistant Markdown
+to one service-memory report slot and reuses its Herdr report pane. The report
+supports block, page, and Work-ID links. `v` selects an excerpt, `k` promotes the
+selection or whole report to an ordinary agent-authored block, and `x` discards
+it. Promotion is the only path from this disposable surface into the canonical
+block graph.
+
 Exact references use stable block IDs:
 
 ```text
@@ -317,17 +325,40 @@ Depends on ((516e1754-7741-4c9e-83a6-7b703a8f0798))
 
 Read views resolve exact-reference titles while edit views retain raw IDs. Symbolic links use `[[address]]`; a block registers an address through `[page::address]`, and existing Work IDs participate in the same unique normalized registry. Accepting completion for a Work-ID address inserts its exact `((block-id))` reference, so read mode renders the full current block title instead of only the identifier; ordinary pages and aliases retain `[[address]]`. Parsing or saving a dangling link never creates content. Only explicit follow creates a root stub, transactionally; unresolved Work-ID-shaped addresses fail instead of squatting the stable Work-ID namespace. Explicit rename preserves the old address as an alias, and explicit removal unregisters an alias or primary declaration. Deleted targets remain resolvable and purged targets become dangling.
 
-Detail read mode treats `!((block-id))` as an inline projection only when the
-target is a canonical `[type::virtual-branch]` block. It executes that branch's
-existing bounded query and renders the branch plus each result as ordinary
-Outliner links. Empty and truncated results, invalid configuration, missing or
-deleted targets, unsupported target types, query failures, and the 16-embed
-document limit remain explicit.
+Stable fragments are inline anchors attached to a heading or paragraph terminus:
+`## Description ^description`. Read mode hides the marker. Exact links use
+`((block-id^description))`; completion can resolve a heading name to its stable
+ID, and Detail navigation/history retain the fragment target. A heading fragment
+spans through the next equal-or-shallower heading; a paragraph fragment spans
+from its preceding blank line or heading through the anchored terminus. Missing
+and duplicate anchors remain explicit.
 
-The authored token remains unchanged in Tree, edit mode, and `Block.text`;
-generated rows are read-only and refresh after canonical content events.
-Ordinary block transclusion and recursive evaluation of embed syntax appearing
-inside projected result titles are intentionally unsupported.
+Detail read mode projects `!((block-id))` without changing authored text.
+Ordinary targets render their full canonical Markdown once.
+`!((block-id^fragment-id))` renders only the deterministic fragment slice.
+Canonical `[type::virtual-branch]` targets execute their existing bounded query.
+Generated embed output is read-only, refreshes after canonical content events,
+and is never recursively evaluated. Missing/deleted targets, fragment failures,
+invalid definitions, query failures, truncation, and the 16-embed document limit
+remain explicit.
+
+A bounded one-hop relation projection is another canonical definition block:
+
+```text
+Dependencies [type::relation-view]
+[source::embedding-source]
+[relations::depends-on,related-to]
+[fragment::description]
+[order::source]
+[limit::10]
+```
+
+`source` may instead name an explicit block ID. Relation keys are an explicit
+allowlist; repeated `fragment` properties select stable target fragments.
+Traversal deduplicates canonical targets, supports source or target-ID order,
+and rejects limits outside 1–25. Generated rows do not create backlinks.
+Recursion, joins, aggregation, templates, and an unrestricted local query
+language are intentionally unsupported.
 
 `references.backlinks` exposes the inverse semantic relation: each source text
 is parsed with the same protected-range-aware exact/page/Work-ID scanner used by
