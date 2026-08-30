@@ -63,6 +63,7 @@ interface Harness {
     selections: number;
     setSelections: string[];
     projectedReads: string[];
+    projectedReadHosts: Array<string | undefined>;
     updates: Array<{ blockId: string; text: string; expectedUpdatedAt: string }>;
     creates: Array<{ parentId: string; text: string; author: "user" }>;
     restores: string[];
@@ -115,6 +116,7 @@ function createHarness(
     selections: 0,
     setSelections: [],
     projectedReads: [],
+    projectedReadHosts: [],
     updates: [],
     creates: [],
     restores: [],
@@ -177,9 +179,10 @@ function createHarness(
       };
     },
     resolveReferences,
-    async projectRead(text) {
+    async projectRead(text, hostBlockId) {
       calls.projectedReads.push(text);
-      return projectRead(text);
+      calls.projectedReadHosts.push(hostBlockId);
+      return projectRead(text, hostBlockId);
     },
     async queryBacklinks(query) {
       calls.backlinkQueries.push(query);
@@ -327,6 +330,7 @@ describe("detail controller projection and deferred refresh", () => {
     expect(harness.controller.state.projectedSelectedText).toContain("version 2");
     expect(harness.controller.state.context.selected?.text).toBe(selected.text);
     expect(harness.calls.projectedReads).toEqual([selected.text, selected.text]);
+    expect(harness.calls.projectedReadHosts).toEqual([selected.id, selected.id]);
   });
 
   test("keeps trashed blocks read-only and restores direct Trash roots explicitly", async () => {

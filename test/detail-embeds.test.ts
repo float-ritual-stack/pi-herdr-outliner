@@ -5,6 +5,7 @@ import {
   projectDetailRead,
   type DetailEmbedRequester,
 } from "../src/detail-embeds";
+import { parseProperties } from "../src/properties";
 import type {
   Block,
   VisibleBlock,
@@ -82,6 +83,10 @@ function virtualBranch(id: string, query = "status=next", limit?: number): Block
     { key: "query", value: query },
     ...(limit ? [{ key: "limit", value: String(limit) }] : []),
   ]);
+}
+
+function relationView(id: string, text: string): Block {
+  return block(id, text, parseProperties(text));
 }
 
 test("renders a bounded virtual-branch embed without changing authored source", async () => {
@@ -281,6 +286,98 @@ test("renders exact fragment slices with explicit fragment failures and no recur
   expect(requester.calls.filter((call) =>
     call.action === "get" && call.blockId === target.id
   )).toHaveLength(1);
+});
+
+test("renders bounded one-hop relation views over selected stable fragments", async () => {
+  const source = block(
+    "source-block",
+    [
+      "Roadmap source",
+      "[depends-on::target-beta]",
+      "[related-to::target-alpha]",
+      "[depends-on::target-beta]",
+      "[depends-on::missing-target]",
+    ].join("\n"),
+  );
+  const targetBeta = block(
+    "target-beta",
+    [
+      "# Beta",
+      "## Description ^description",
+      "Beta body with !((nested-target)).",
+      "### Detail",
+      "Nested detail.",
+      "## Outside",
+      "Must not project.",
+    ].join("\n"),
+  );
+  const targetAlpha = block("target-alpha", "# Alpha\n\nNo selected fragment.");
+  const embedded = relationView(
+    "relation-embedded",
+    [
+      "Relations [type::relation-view]",
+      "[source::embedding-source]",
+      "[relations::depends-on, related-to]",
+      "[fragment::description]",
+      "[limit::2]",
+    ].join("\n"),
+  );
+  const explicit = relationView(
+    "relation-explicit",
+    [
+      "Dependencies [type::relation-view]",
+      "[source::source-block]",
+      "[relations::depends-on]",
+      "[fragment::description]",
+    ].join("\n"),
+  );
+  const requester = new FakeRequester(
+    new Map([source, targetBeta, targetAlpha, embedded, explicit].map((item) => [item.id, item])),
+    new Map(),
+  );
+
+  const projection = await projectDetailRead(
+    requester,
+    "!((relation-embedded))\n!((relation-explicit))",
+    { hostBlockId: source.id },
+  );
+
+  expect(projection.text).toContain(
+    "Embedded view: ((relation-embedded)) · RELATION · 2 targets · TRUNCATED at 2",
+  );
+  expect(projection.text).toContain([
+    "- ((target-beta))",
+    "  - ((target-beta^description))",
+    "    ## Description",
+    "    Beta body with !((nested-target)).",
+    "    ### Detail",
+    "    Nested detail.",
+  ].join("\n"));
+  expect(projection.text).toContain(
+    "- ((target-alpha))\n  - ((target-alpha^description)) · MISSING FRAGMENT",
+  );
+  expect(projection.text).toContain(
+    "- ((missing-target)) · MISSING TARGET",
+  );
+  expect(projection.text).not.toContain("Must not project.");
+  expect(projection.embeds).toEqual([
+    {
+      blockId: embedded.id,
+      status: "truncated",
+      count: 2,
+      completeness: { kind: "truncated", limit: 2 },
+    },
+    {
+      blockId: explicit.id,
+      status: "ready",
+      count: 2,
+      completeness: { kind: "complete" },
+    },
+  ]);
+  expect(requester.calls.filter((call) =>
+    call.action === "get" && call.blockId === targetBeta.id
+  )).toHaveLength(1);
+  expect(requester.calls).not.toContainEqual({ action: "get", blockId: "nested-target" });
 });
 
 test("hides fragment anchor markers only in the generated read projection", async () => {

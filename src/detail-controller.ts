@@ -163,7 +163,7 @@ export interface DetailEffects {
     options?: { preserveSource?: boolean },
   ): Promise<OutlinerNavigationResolution>;
   resolveReferences(text: string): Promise<ResolvedBlockReferences>;
-  projectRead(text: string): Promise<DetailReadProjection>;
+  projectRead(text: string, hostBlockId?: string): Promise<DetailReadProjection>;
   queryBacklinks(query: BacklinkQuery): Promise<BacklinkCollection>;
   updateBlock(input: {
     blockId: string;
@@ -379,8 +379,8 @@ export function createDetailController(
     state.workIdPrefix = resolved.workIdPrefix ?? null;
   };
 
-  const applyReadProjection = async (text: string): Promise<void> => {
-    const projection = await effects.projectRead(text);
+  const applyReadProjection = async (text: string, hostBlockId?: string): Promise<void> => {
+    const projection = await effects.projectRead(text, hostBlockId);
     state.projectedSelectedText = projection.text;
     state.embedStates = projection.embeds;
     applyResolvedReferences(await effects.resolveReferences(projection.text));
@@ -484,7 +484,7 @@ export function createDetailController(
     if (changed) state.status = "";
 
     if (next.selected) {
-      await applyReadProjection(next.selected.text);
+      await applyReadProjection(next.selected.text, next.selected.id);
     } else {
       state.projectedSelectedText = "";
       state.embedStates = [];
@@ -683,7 +683,7 @@ export function createDetailController(
           expectedUpdatedAt: state.context.selected.updatedAt,
         });
         state.context = { ...state.context, selected: updated };
-        await applyReadProjection(updated.text);
+        await applyReadProjection(updated.text, updated.id);
         refreshBreadcrumb();
         state.mode = detailDisplayMode(updated);
         if (state.mode === "file" || state.mode === "annotation") loadFile(updated);

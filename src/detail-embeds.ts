@@ -1,7 +1,12 @@
 import type { RequestInput } from "./client";
 import { MAX_BLOCK_QUERY_LIMIT } from "./block-query";
 import { resolveFragmentSlice, stripFragmentAnchors } from "./fragments";
+import { propertyReferenceOccurrences } from "./reference-occurrences";
 import { blockDisplayTitle } from "./references";
+import {
+  isRelationViewDefinition,
+  parseRelationViewConfig,
+} from "./relation-views";
 import type {
   Block,
   BlockCollectionCompleteness,
@@ -158,11 +163,131 @@ async function projectVirtualBranch(
   }
 }
 
+async function projectRelationView(
+  definition: Block,
+  embeddingSourceId: string | undefined,
+  loadBlock: (blockId: string) => Promise<Block>,
+): Promise<ProjectedEmbed> {
+  const parsed = parseRelationViewConfig(definition);
+  if (!parsed.config) {
+    const detail = parsed.errors.join("; ") || "Invalid relation view configuration";
+    return {
+      text: `${linkedHeading(definition.id, "RELATION CONFIG ERROR")}\n  ${detail}`,
+      state: { blockId: definition.id, status: "invalid", count: 0 },
+    };
+  }
+  const sourceId = parsed.config.source.kind === "embedding-source"
+    ? embeddingSourceId
+    : parsed.config.source.blockId;
+  if (!sourceId) {
+    return {
+      text: `${linkedHeading(definition.id, "RELATION SOURCE ERROR")}\n  Embedding source is unavailable`,
+      state: { blockId: definition.id, status: "invalid", count: 0 },
+    };
+  }
+
+  let source: Block;
+  try {
+    source = await loadBlock(sourceId);
+  } catch (error) {
+    const message = boundedError(error);
+    const missing = message.startsWith(`Block not found: ${sourceId}`);
+    return {
+      text: `${linkedHeading(
+        definition.id,
+        missing ? "RELATION SOURCE MISSING" : "RELATION SOURCE FAILED",
+      )}\n  ${missing ? `((${sourceId}))` : message}`,
+      state: { blockId: definition.id, status: missing ? "missing" : "failed", count: 0 },
+    };
+  }
+  if (source.effectiveDeletedRootId) {
+    return {
+      text: `${linkedHeading(definition.id, "RELATION SOURCE IN TRASH")}\n  ((${sourceId}))`,
+      state: { blockId: definition.id, status: "deleted", count: 0 },
+    };
+  }
+
+  const allowedKeys = new Set(parsed.config.relationKeys);
+  const seen = new Set<string>();
+  const targetIds: string[] = [];
+  for (const occurrence of propertyReferenceOccurrences(source.text)) {
+    if (!allowedKeys.has(occurrence.propertyKey) || seen.has(occurrence.blockId)) continue;
+    seen.add(occurrence.blockId);
+    targetIds.push(occurrence.blockId);
+  }
+  if (parsed.config.order === "target-id") targetIds.sort();
+  const truncated = targetIds.length > parsed.config.limit;
+  const visibleIds = targetIds.slice(0, parsed.config.limit);
+  if (visibleIds.length === 0) {
+    return {
+      text: linkedHeading(definition.id, "RELATION EMPTY"),
+      state: {
+        blockId: definition.id,
+        status: "empty",
+        count: 0,
+        completeness: { kind: "complete" },
+      },
+    };
+  }
+
+  const rows: string[] = [];
+  for (const targetId of visibleIds) {
+    let target: Block;
+    try {
+      target = await loadBlock(targetId);
+    } catch (error) {
+      const message = boundedError(error);
+      rows.push(
+        message.startsWith(`Block not found: ${targetId}`)
+          ? `- ((${targetId})) · MISSING TARGET`
+          : `- ((${targetId})) · TARGET FAILED · ${message}`,
+      );
+      continue;
+    }
+    if (target.effectiveDeletedRootId) {
+      rows.push(`- ((${targetId})) · IN TRASH · ${blockDisplayTitle(target)}`);
+      continue;
+    }
+    rows.push(`- ((${targetId}))`);
+    for (const fragmentId of parsed.config.fragmentIds) {
+      const resolution = resolveFragmentSlice(target.text, fragmentId);
+      if (resolution.status === "missing") {
+        rows.push(`  - ((${targetId}^${fragmentId})) · MISSING FRAGMENT`);
+      } else if (resolution.status === "duplicate") {
+        rows.push(`  - ((${targetId}^${fragmentId})) · DUPLICATE FRAGMENT`);
+      } else {
+        rows.push(`  - ((${targetId}^${fragmentId}))`);
+        rows.push(...resolution.slice.text.split(/\r?\n/).map((line) => `    ${line}`));
+      }
+    }
+  }
+
+  const completeness: BlockCollectionCompleteness = truncated
+    ? { kind: "truncated", limit: parsed.config.limit }
+    : { kind: "complete" };
+  const countLabel = `${visibleIds.length} target${visibleIds.length === 1 ? "" : "s"}`;
+  const suffix = truncated
+    ? `RELATION · ${countLabel} · TRUNCATED at ${parsed.config.limit}`
+    : `RELATION · ${countLabel}`;
+  return {
+    text: [linkedHeading(definition.id, suffix), ...rows].join("\n"),
+    state: {
+      blockId: definition.id,
+      status: truncated ? "truncated" : "ready",
+      count: visibleIds.length,
+      completeness,
+    },
+  };
+}
+
+
 async function projectEmbed(
   requester: DetailEmbedRequester,
   blockId: string,
   fragmentId: string | undefined,
+  embeddingSourceId: string | undefined,
   loadTarget: () => Promise<Block>,
+  loadBlock: (blockId: string) => Promise<Block>,
   loadPhysicalBlocks: () => Promise<readonly Block[]>,
 ): Promise<ProjectedEmbed> {
   let target: Block;
@@ -197,6 +322,9 @@ async function projectEmbed(
       state: { blockId, fragmentId, status: "ready", count: 1 },
     };
   }
+  if (isRelationViewDefinition(target)) {
+    return projectRelationView(target, embeddingSourceId, loadBlock);
+  }
   if (!isVirtualBranchDefinition(target)) {
     return {
       text: `Embedded block: ((${blockId}))\n${target.text}`,
@@ -221,6 +349,7 @@ export function detailEmbedIds(text: string): string[] {
 export async function projectDetailRead(
   requester: DetailEmbedRequester,
   text: string,
+  options: { hostBlockId?: string } = {},
 ): Promise<DetailReadProjection> {
   const projectedSource = stripFragmentAnchors(text);
   const matches = [...projectedSource.matchAll(DETAIL_EMBED_PATTERN)];
@@ -254,7 +383,9 @@ export async function projectDetailRead(
         requester,
         blockId,
         fragmentId,
+        options.hostBlockId,
         () => loadTarget(blockId),
+        loadTarget,
         loadPhysicalBlocks,
       ),
     );
