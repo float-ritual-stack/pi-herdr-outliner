@@ -6,7 +6,7 @@ import { Type, type Static } from "typebox";
 import { Parse } from "typebox/value";
 import type { OutlinerClientRuntime } from "./types";
 
-export type PaneEntrypoint = "service" | "outliner" | "detail";
+export type PaneEntrypoint = "service" | "outliner" | "detail" | "report";
 
 const PaneStateSchema = Type.Object({
   paneId: Type.String(),

@@ -71,6 +71,78 @@ function hostCaptureSource(): CaptureSource {
   return HOST_ACTOR_ID === "omp" ? "omp" : "pi";
 }
 
+export function latestAssistantReport(entries: readonly unknown[]): string | null {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (
+      !entry ||
+      typeof entry !== "object" ||
+      Array.isArray(entry) ||
+      !("type" in entry) ||
+      entry.type !== "message" ||
+      !("message" in entry)
+    ) continue;
+    const message = entry.message;
+    if (
+      !message ||
+      typeof message !== "object" ||
+      Array.isArray(message) ||
+      !("role" in message) ||
+      message.role !== "assistant" ||
+      !("content" in message)
+    ) continue;
+    const content = message.content;
+    if (typeof content === "string") return content.trim() || null;
+    if (!Array.isArray(content)) continue;
+    const text = content.flatMap((part) => {
+      if (
+        !part ||
+        typeof part !== "object" ||
+        Array.isArray(part) ||
+        !("type" in part) ||
+        part.type !== "text" ||
+        !("text" in part) ||
+        typeof part.text !== "string"
+      ) return [];
+      return [part.text];
+    }).join("");
+    return text.trim() || null;
+  }
+  return null;
+}
+
+async function openAgentReportSurface(sessionId: string): Promise<void> {
+  if (process.env.HERDR_ENV !== "1") return;
+  const reports = await client.request<OutlinerClientRegistration[]>({
+    action: "clients.list",
+    role: "report",
+  });
+  if (reports.some((report) => report.contextId === sessionId)) return;
+  const args = [
+    "plugin",
+    "pane",
+    "open",
+    "--plugin",
+    "float.pi-outliner",
+    "--entrypoint",
+    "report",
+    "--placement",
+    "tab",
+    "--cwd",
+    extensionRoot,
+    "--env",
+    `OUTLINER_WORKSPACE_ROOT=${paths.workspaceRoot}`,
+    "--env",
+    `OUTLINER_REPORT_SESSION_ID=${sessionId}`,
+    "--no-focus",
+  ];
+  const workspaceId = process.env.HERDR_WORKSPACE_ID?.trim();
+  if (workspaceId) args.push("--workspace", workspaceId);
+  await execFileAsync(process.env.HERDR_BIN_PATH ?? "herdr", args, {
+    cwd: extensionRoot,
+  });
+}
+
 function compactCaptureReceipt(receipt: CaptureReceipt, source: CaptureSource) {
   const capturedFromBlockId = receipt.block.properties.find(
     (property) => property.key === "captured-from",
@@ -1521,9 +1593,35 @@ export default function outlinerExtension(pi: ExtensionAPI): void {
     } catch {
       // Presence is a disposable projection; canonical task state remains authoritative.
     }
+    const text = latestAssistantReport(context.sessionManager.getBranch());
+    if (!text) return;
+    const sessionId = context.sessionManager.getSessionId();
+    try {
+      await ensureService(false);
+      await client.request({
+        action: "reports.publish",
+        sessionId,
+        text,
+        ...(activeTaskId ? { taskId: activeTaskId } : {}),
+      });
+      await openAgentReportSurface(sessionId);
+    } catch (error) {
+      context.ui.notify(
+        `Agent report unavailable: ${error instanceof Error ? error.message : String(error)}`,
+        "warning",
+      );
+    }
   });
 
   pi.on("session_shutdown", async (_event, context) => {
+    try {
+      await client.request({
+        action: "reports.clear",
+        sessionId: context.sessionManager.getSessionId(),
+      }, 300);
+    } catch {
+      // Service shutdown also drops the in-memory report.
+    }
     await presentTask(context, null, "clear");
     await focusRunner?.stop();
     focusRunner = null;

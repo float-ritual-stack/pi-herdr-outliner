@@ -6,6 +6,7 @@ import type {
 import outlinerExtension, {
   containsConfiguredWorkPlaceholder,
   formatSelection,
+  latestAssistantReport,
   formatWorkPlaceholderNudge,
   selectRecentFocusedOutlinerClient,
 } from "../pi-extension/index";
@@ -16,6 +17,99 @@ import type {
   SelectionContext,
   VisibleBlockCollection,
 } from "../src/types";
+
+test("extracts only the latest completed assistant text from a session branch", () => {
+  const entries = [
+    { type: "message", message: { role: "assistant", content: [{ type: "text", text: "Older" }] } },
+    { type: "message", message: { role: "user", content: [{ type: "text", text: "Prompt" }] } },
+    {
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "private" },
+          { type: "text", text: "Final " },
+          { type: "toolCall", name: "noop" },
+          { type: "text", text: "report" },
+        ],
+      },
+    },
+  ];
+
+  expect(latestAssistantReport(entries)).toBe("Final report");
+  expect(latestAssistantReport([
+    { type: "message", message: { role: "user", content: "No assistant" } },
+  ])).toBeNull();
+});
+
+test("publishes only the final assistant message at agent_settled", async () => {
+  type EventHandler = (
+    event: Record<string, unknown>,
+    context: ExtensionContext,
+  ) => Promise<unknown> | unknown;
+  const handlers = new Map<string, EventHandler>();
+  const requests: RequestInput[] = [];
+  const originalRequest = OutlinerClient.prototype.request;
+  const originalHerdrEnv = process.env.HERDR_ENV;
+  process.env.HERDR_ENV = "0";
+  OutlinerClient.prototype.request = async function <T>(input: RequestInput): Promise<T> {
+    requests.push(input);
+    if (input.action === "ping") {
+      return { status: "ready", protocolVersion: 20 } as T;
+    }
+    if (input.action === "reports.publish") {
+      return {
+        sessionId: input.sessionId,
+        rawText: input.text,
+        resolvedText: input.text,
+        publishedAt: "published",
+        revision: 1,
+      } as T;
+    }
+    throw new Error(`Unexpected request: ${input.action}`);
+  };
+  const pi = {
+    registerTool() {},
+    registerCommand() {},
+    on(name: string, handler: EventHandler) {
+      handlers.set(name, handler);
+    },
+  } as unknown as ExtensionAPI;
+  const context = {
+    ui: {
+      setStatus() {},
+      notify() {},
+    },
+    sessionManager: {
+      getSessionId: () => "settled-session",
+      getBranch: () => [
+        {
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "Final settled report" }],
+          },
+        },
+      ],
+    },
+  } as unknown as ExtensionContext;
+
+  try {
+    outlinerExtension(pi);
+    await handlers.get("agent_start")!({}, context);
+    expect(requests.some(({ action }) => action === "reports.publish")).toBe(false);
+    await handlers.get("agent_settled")!({}, context);
+    expect(requests).toContainEqual({
+      action: "reports.publish",
+      sessionId: "settled-session",
+      text: "Final settled report",
+    });
+  } finally {
+    OutlinerClient.prototype.request = originalRequest;
+    if (originalHerdrEnv === undefined) delete process.env.HERDR_ENV;
+    else process.env.HERDR_ENV = originalHerdrEnv;
+  }
+});
 
 test("registers the workspace commands and annotation-aware tools", () => {
   const registeredTools: Array<{ name: string; parameters: unknown }> = [];
@@ -262,7 +356,7 @@ test("drives an explicit task through context, focus, durable proof, and complet
   OutlinerClient.prototype.request = async function <T>(input: RequestInput): Promise<T> {
     requests.push(input);
     if (input.action === "ping") {
-      return { status: "ready", protocolVersion: 18 } as T;
+      return { status: "ready", protocolVersion: 20 } as T;
     }
     if (input.action === "pages.resolve") {
       return (input.address === "PIE-144"
@@ -495,7 +589,7 @@ test("drives an explicit task through context, focus, durable proof, and complet
   }
 });
 
-test("requires protocol v18, attributes agent creates and page follows, and presents bounded query results", async () => {
+test("requires protocol v20, attributes agent creates and page follows, and presents bounded query results", async () => {
   const collection: VisibleBlockCollection = {
     blocks: [
       {
@@ -514,7 +608,7 @@ test("requires protocol v18, attributes agent creates and page follows, and pres
     ],
     completeness: { kind: "truncated", limit: 20 },
   };
-  let protocolVersion = 18;
+  let protocolVersion = 20;
   let queryCollection = collection;
   let queryError: Error | undefined;
   const requests: RequestInput[] = [];
@@ -773,7 +867,7 @@ test("requires protocol v18, attributes agent creates and page follows, and pres
     expect(largeEnvelope.presentation.omitted).toBeGreaterThan(0);
     protocolVersion = 5;
     await expect(tools.get("outliner_query")!.execute("incompatible-query", {})).rejects.toThrow(
-      "Incompatible outliner protocol 5; expected 18",
+      "Incompatible outliner protocol 5; expected 20",
     );
   } finally {
     OutlinerClient.prototype.request = originalRequest;
@@ -826,7 +920,7 @@ test("captures through command, tool, and exact standalone dispatch without an a
   OutlinerClient.prototype.request = async function <T>(input: RequestInput): Promise<T> {
     requests.push(input);
     if (input.action === "ping") {
-      return { status: "ready", protocolVersion: 18 } as T;
+      return { status: "ready", protocolVersion: 20 } as T;
     }
     if (input.action === "selection.get") {
       return {

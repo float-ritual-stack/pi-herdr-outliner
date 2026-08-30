@@ -23,6 +23,12 @@ title = "Outliner Detail"
 placement = "split"
 command = ["bun", "run", "src/detail-main.ts"]
 
+[[panes]]
+id = "report"
+title = "Last Agent Report"
+placement = "tab"
+command = ["bun", "run", "src/report-main.ts"]
+
 [[actions]]
 id = "open-layout"
 title = "Outliner: open Tree + two Details working layout"

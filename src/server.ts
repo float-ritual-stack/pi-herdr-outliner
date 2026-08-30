@@ -5,6 +5,8 @@ import { isFragmentId, resolveFragment } from "./fragments";
 import { OutlinerStore } from "./store";
 import {
   OUTLINER_PROTOCOL_VERSION,
+  type AgentReport,
+  type AgentReportPromotion,
   type Block,
   type BrowsingContextPublication,
   type CaptureReceipt,
@@ -25,6 +27,7 @@ export class OutlinerServer {
   private server: Server | null = null;
   private readonly subscribers = new Map<Socket, OutlinerClientRegistration>();
   private readonly browsingContextTargets = new Map<string, string | null>();
+  private readonly reports = new Map<string, AgentReport>();
 
   constructor(
     readonly store: OutlinerStore,
@@ -59,6 +62,7 @@ export class OutlinerServer {
     for (const subscriber of this.subscribers.keys()) subscriber.destroy();
     this.subscribers.clear();
     this.browsingContextTargets.clear();
+    this.reports.clear();
     const closed = Promise.withResolvers<void>();
     server.close((error) => (error ? closed.reject(error) : closed.resolve()));
     await closed.promise;
@@ -104,6 +108,60 @@ export class OutlinerServer {
     return contextId;
   }
 
+  private publishReport(sessionIdValue: string, text: string, taskId?: string): AgentReport {
+    const sessionId = this.normalizeContextId(sessionIdValue);
+    if (!text.trim()) throw new Error("Agent report text cannot be empty");
+    if (text.length > 200_000) throw new Error("Agent report exceeds 200000 characters");
+    const resolved = this.store.resolveBlockReferences(text);
+    const report: AgentReport = {
+      sessionId,
+      rawText: text,
+      resolvedText: resolved.text,
+      publishedAt: new Date().toISOString(),
+      revision: (this.reports.get(sessionId)?.revision ?? 0) + 1,
+      ...(resolved.workIdPrefix ? { workIdPrefix: resolved.workIdPrefix } : {}),
+      ...(taskId ? { taskId: this.normalizeClientBlockId(taskId) } : {}),
+    };
+    this.reports.set(sessionId, report);
+    return report;
+  }
+
+  private requireReport(sessionIdValue: string): AgentReport {
+    const sessionId = this.normalizeContextId(sessionIdValue);
+    const report = this.reports.get(sessionId);
+    if (!report) throw new Error(`Agent report is unavailable: ${sessionId}`);
+    return report;
+  }
+
+  private promoteReport(
+    sessionId: string,
+    requestedStart?: number,
+    requestedEnd?: number,
+  ): AgentReportPromotion {
+    const report = this.requireReport(sessionId);
+    const lines = report.rawText.split(/\r?\n/);
+    const startLine = requestedStart ?? 0;
+    const endLine = requestedEnd ?? lines.length - 1;
+    if (
+      !Number.isInteger(startLine) ||
+      !Number.isInteger(endLine) ||
+      startLine < 0 ||
+      endLine < startLine ||
+      endLine >= lines.length
+    ) {
+      throw new Error(`Invalid report line range: ${startLine + 1}-${endLine + 1}`);
+    }
+    const text = lines.slice(startLine, endLine + 1).join("\n");
+    if (!text.trim()) throw new Error("Selected report excerpt cannot be empty");
+    const block = this.store.create(text, null, "agent", {
+      actorId: "pi-outliner.agent-report",
+      sessionId: report.sessionId,
+      ...(report.taskId ? { taskId: report.taskId } : {}),
+    });
+    return { reportRevision: report.revision, block, startLine, endLine };
+  }
+
+
   private normalizeClientBlockId(value: unknown): string {
     const blockId = typeof value === "string" ? value.trim() : "";
     if (
@@ -143,7 +201,11 @@ export class OutlinerServer {
     ) {
       throw new Error("Client registration clientId must be 1-200 printable characters");
     }
-    if (registration.role !== "tree" && registration.role !== "detail") {
+    if (
+      registration.role !== "tree" &&
+      registration.role !== "detail" &&
+      registration.role !== "report"
+    ) {
       throw new Error(`Invalid client role: ${String(registration.role)}`);
     }
     const contextId = this.normalizeContextId(registration.contextId);
@@ -402,13 +464,36 @@ export class OutlinerServer {
           result = { subscribed: true, client: subscribedClient ?? request.client };
           break;
         case "clients.list":
-          if (request.role !== undefined && request.role !== "tree" && request.role !== "detail") {
+          if (
+            request.role !== undefined &&
+            request.role !== "tree" &&
+            request.role !== "detail" &&
+            request.role !== "report"
+          ) {
             throw new Error(`Invalid client role: ${String(request.role)}`);
           }
           result = this.listClients(request.role);
           break;
         case "clients.update":
           result = this.updateClient(request.clientId, request);
+          break;
+        case "reports.publish":
+          result = this.publishReport(request.sessionId, request.text, request.taskId);
+          break;
+        case "reports.get":
+          result = this.requireReport(request.sessionId);
+          break;
+        case "reports.clear": {
+          const sessionId = this.normalizeContextId(request.sessionId);
+          result = { cleared: this.reports.delete(sessionId), sessionId };
+          break;
+        }
+        case "reports.promote":
+          result = this.promoteReport(
+            request.sessionId,
+            request.startLine,
+            request.endLine,
+          );
           break;
         case "blocks.context":
           result = this.store.blockContext(request.blockId);
@@ -642,6 +727,16 @@ export class OutlinerServer {
         blockId = receipt.block.id;
         break;
       }
+      case "reports.publish":
+      case "reports.clear":
+        domain = "report";
+        contextId = this.normalizeContextId(request.sessionId);
+        break;
+      case "reports.promote": {
+        domain = "content";
+        blockId = (response.result as AgentReportPromotion).block.id;
+        break;
+      }
       case "update":
       case "move":
       case "delete":
@@ -722,6 +817,12 @@ export class OutlinerServer {
         continue;
       }
       if (event.domain === "browsing-context" && event.contextId !== client.contextId) {
+        continue;
+      }
+      if (
+        event.domain === "report" &&
+        (client.role !== "report" || event.contextId !== client.contextId)
+      ) {
         continue;
       }
       subscriber.write(line);
