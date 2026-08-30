@@ -18,7 +18,7 @@ import type {
   VisibleBlockCollection,
 } from "../src/types";
 
-test("extracts only the latest completed assistant text from a session branch", () => {
+test("collects the user response without an advisor follow-up", () => {
   const entries = [
     { type: "message", message: { role: "assistant", content: [{ type: "text", text: "Older" }] } },
     { type: "message", message: { role: "user", content: [{ type: "text", text: "Prompt" }] } },
@@ -28,15 +28,33 @@ test("extracts only the latest completed assistant text from a session branch", 
         role: "assistant",
         content: [
           { type: "thinking", thinking: "private" },
-          { type: "text", text: "Final " },
-          { type: "toolCall", name: "noop" },
-          { type: "text", text: "response" },
+          { type: "text", text: "First fragment" },
         ],
+      },
+    },
+    { type: "message", message: { role: "toolResult", content: "tool output" } },
+    {
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Second fragment" }],
+      },
+    },
+    {
+      type: "custom_message",
+      customType: "advisor",
+      content: "Advisory starts a separate follow-up turn",
+    },
+    {
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Short advisor recap" }],
       },
     },
   ];
 
-  expect(latestAssistantResponse(entries)).toBe("Final response");
+  expect(latestAssistantResponse(entries)).toBe("First fragment\n\nSecond fragment");
   expect(latestAssistantResponse([
     { type: "message", message: { role: "user", content: "No assistant" } },
   ])).toBeNull();
@@ -921,17 +939,31 @@ test("captures through command, tool, and exact standalone dispatch without an a
   const context = {
     sessionManager: {
       getSessionId: () => "session-capture",
-      getBranch: () => [{
-        type: "message",
-        message: {
-          role: "assistant",
-          content: [{
-            type: "text",
-            text:
-              "Latest assistant response with [[page]], ((block-ref)), and !((embed-ref))\n[type::virtual-branch]",
-          }],
+      getBranch: () => [
+        {
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "Roadmap analysis before the advisory." }],
+          },
         },
-      }],
+        {
+          type: "custom_message",
+          customType: "advisor",
+          content: "Synthesize without more queries",
+        },
+        {
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [{
+              type: "text",
+              text:
+                "Latest assistant response with [[page]], ((block-ref)), and !((embed-ref))\n[type::virtual-branch]",
+            }],
+          },
+        },
+      ],
     },
     ui: {
       notify(message: string, level: string) {
@@ -988,8 +1020,7 @@ test("captures through command, tool, and exact standalone dispatch without an a
       author: "user",
     });
     expect(captures[1]).toEqual(expect.objectContaining({
-      text:
-        "Latest assistant response with [[page]], ((block-ref)), and !((embed-ref))\n[type::virtual-branch]",
+      text: "Roadmap analysis before the advisory.",
       source: process.env.OMPCODE ? "omp" : "pi",
       author: "agent",
       provenance: {

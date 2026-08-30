@@ -72,16 +72,38 @@ function hostCaptureSource(): CaptureSource {
 }
 
 export function latestAssistantResponse(entries: readonly unknown[]): string | null {
+  let startIndex = 0;
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index];
     if (
-      !entry ||
-      typeof entry !== "object" ||
-      Array.isArray(entry) ||
-      !("type" in entry) ||
-      entry.type !== "message" ||
-      !("message" in entry)
-    ) continue;
+      entry &&
+      typeof entry === "object" &&
+      !Array.isArray(entry) &&
+      "type" in entry &&
+      entry.type === "message" &&
+      "message" in entry &&
+      entry.message &&
+      typeof entry.message === "object" &&
+      !Array.isArray(entry.message) &&
+      "role" in entry.message &&
+      entry.message.role === "user"
+    ) {
+      startIndex = index + 1;
+      break;
+    }
+  }
+
+  const segments: string[] = [];
+  for (let index = startIndex; index < entries.length; index += 1) {
+    const entry = entries[index];
+    if (!entry || typeof entry !== "object" || Array.isArray(entry) || !("type" in entry)) continue;
+    if (
+      entry.type === "custom_message" &&
+      "customType" in entry &&
+      entry.customType === "advisor" &&
+      segments.length > 0
+    ) break;
+    if (entry.type !== "message" || !("message" in entry)) continue;
     const message = entry.message;
     if (
       !message ||
@@ -92,23 +114,25 @@ export function latestAssistantResponse(entries: readonly unknown[]): string | n
       !("content" in message)
     ) continue;
     const content = message.content;
-    if (typeof content === "string") return content.trim() || null;
-    if (!Array.isArray(content)) continue;
-    const text = content.flatMap((part) => {
-      if (
-        !part ||
-        typeof part !== "object" ||
-        Array.isArray(part) ||
-        !("type" in part) ||
-        part.type !== "text" ||
-        !("text" in part) ||
-        typeof part.text !== "string"
-      ) return [];
-      return [part.text];
-    }).join("");
-    return text.trim() || null;
+    const text = typeof content === "string"
+      ? content
+      : Array.isArray(content)
+        ? content.flatMap((part) => {
+          if (
+            !part ||
+            typeof part !== "object" ||
+            Array.isArray(part) ||
+            !("type" in part) ||
+            part.type !== "text" ||
+            !("text" in part) ||
+            typeof part.text !== "string"
+          ) return [];
+          return [part.text];
+        }).join("")
+        : "";
+    if (text.trim()) segments.push(text.trim());
   }
-  return null;
+  return segments.length > 0 ? segments.join("\n\n") : null;
 }
 
 
