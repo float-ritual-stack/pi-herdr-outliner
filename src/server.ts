@@ -6,6 +6,7 @@ import { OutlinerStore } from "./store";
 import {
   OUTLINER_PROTOCOL_VERSION,
   type AgentReport,
+  type AgentReportSummary,
   type AgentReportPromotion,
   type Block,
   type BrowsingContextPublication,
@@ -124,6 +125,20 @@ export class OutlinerServer {
     };
     this.reports.set(sessionId, report);
     return report;
+  }
+
+  private listReports(): AgentReportSummary[] {
+    return [...this.reports.values()]
+      .sort((left, right) =>
+        right.publishedAt.localeCompare(left.publishedAt) ||
+        left.sessionId.localeCompare(right.sessionId)
+      )
+      .map(({ sessionId, publishedAt, revision, taskId }) => ({
+        sessionId,
+        publishedAt,
+        revision,
+        ...(taskId ? { taskId } : {}),
+      }));
   }
 
   private requireReport(sessionIdValue: string): AgentReport {
@@ -479,6 +494,9 @@ export class OutlinerServer {
           break;
         case "reports.publish":
           result = this.publishReport(request.sessionId, request.text, request.taskId);
+          break;
+        case "reports.list":
+          result = this.listReports();
           break;
         case "reports.get":
           result = this.requireReport(request.sessionId);

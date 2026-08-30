@@ -9,6 +9,7 @@ import { OutlinerStore } from "../src/store";
 import { OUTLINER_PROTOCOL_VERSION } from "../src/types";
 import type {
   AgentReport,
+  AgentReportSummary,
   AgentReportPromotion,
   BacklinkCollection,
   Block,
@@ -55,7 +56,7 @@ test("serves mutations and property queries over the local socket", async () => 
   const client = new OutlinerClient(socket);
   const service = await client.request<OutlinerServiceStatus>({ action: "ping" });
   expect(service).toEqual({ status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION });
-  expect(service.protocolVersion).toBe(20);
+  expect(service.protocolVersion).toBe(21);
   const provenance = {
     actorId: "omp",
     sessionId: "session-1",
@@ -331,6 +332,7 @@ test("replaces disposable reports without Block writes and promotes explicit exc
     rmSync(directory, { recursive: true, force: true });
   });
   await connected.promise;
+  expect(await client.request<AgentReportSummary[]>({ action: "reports.list" })).toEqual([]);
 
   const first = await client.request<AgentReport>({
     action: "reports.publish",
@@ -362,6 +364,12 @@ test("replaces disposable reports without Block writes and promotes explicit exc
     action: "reports.get",
     sessionId: "session-report",
   })).toEqual(replacement);
+  expect(await client.request<AgentReportSummary[]>({ action: "reports.list" })).toEqual([{
+    sessionId: replacement.sessionId,
+    publishedAt: replacement.publishedAt,
+    revision: 2,
+    taskId: target.id,
+  }]);
   expect(store.readWorkspaceSnapshot().physical.blocks).toHaveLength(initialCount);
 
   const promoted = await client.request<AgentReportPromotion>({
@@ -387,6 +395,7 @@ test("replaces disposable reports without Block writes and promotes explicit exc
     action: "reports.clear",
     sessionId: "session-report",
   })).toEqual({ cleared: true, sessionId: "session-report" });
+  expect(await client.request<AgentReportSummary[]>({ action: "reports.list" })).toEqual([]);
   await expect(client.request({
     action: "reports.get",
     sessionId: "session-report",

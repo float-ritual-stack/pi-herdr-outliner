@@ -241,7 +241,7 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 20;
+export const OUTLINER_PROTOCOL_VERSION = 21;
 
 export interface AgentReport {
   sessionId: string;
@@ -250,6 +250,13 @@ export interface AgentReport {
   publishedAt: string;
   revision: number;
   workIdPrefix?: string;
+  taskId?: string;
+}
+
+export interface AgentReportSummary {
+  sessionId: string;
+  publishedAt: string;
+  revision: number;
   taskId?: string;
 }
 
@@ -288,6 +295,7 @@ export type OutlinerRequest =
       text: string;
       taskId?: string;
     }
+  | { id: string; action: "reports.list" }
   | { id: string; action: "reports.get"; sessionId: string }
   | { id: string; action: "reports.clear"; sessionId: string }
   | {

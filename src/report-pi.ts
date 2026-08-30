@@ -20,6 +20,7 @@ import {
 } from "./outliner-links";
 import { currentPaneRuntime } from "./pane-control";
 import { resolvePaths } from "./paths";
+import { formatMissingReportSession } from "./report-startup";
 import {
   createReportController,
   renderAgentReportMarkdown,
@@ -30,8 +31,10 @@ import {
 import {
   OUTLINER_PROTOCOL_VERSION,
   type AgentReport,
+  type AgentReportSummary,
   type AgentReportPromotion,
   type OutlinerServiceStatus,
+  type OutlinerClientRegistration,
 } from "./types";
 
 initTheme(undefined, false);
@@ -40,11 +43,33 @@ if (process.env.HERDR_ENV === "1") {
   setCapabilities({ ...getCapabilities(), hyperlinks: true });
 }
 
-const configuredSessionId = process.env.OUTLINER_REPORT_SESSION_ID?.trim();
-if (!configuredSessionId) throw new Error("OUTLINER_REPORT_SESSION_ID is required");
-const sessionId: string = configuredSessionId;
 const paths = resolvePaths();
 const client = new OutlinerClient(paths.socket);
+const configuredSessionId = process.env.OUTLINER_REPORT_SESSION_ID?.trim();
+if (!configuredSessionId) {
+  let reports: Array<Pick<AgentReportSummary, "sessionId">> = [];
+  let listingError: string | undefined;
+  try {
+    reports = await client.request<AgentReportSummary[]>({ action: "reports.list" });
+  } catch (reportListError) {
+    try {
+      const reportClients = await client.request<OutlinerClientRegistration[]>({
+        action: "clients.list",
+        role: "report",
+      });
+      reports = [...new Set(reportClients.map((reportClient) => reportClient.contextId))]
+        .sort()
+        .map((sessionId) => ({ sessionId }));
+    } catch {
+      listingError = reportListError instanceof Error
+        ? reportListError.message
+        : String(reportListError);
+    }
+  }
+  console.error(formatMissingReportSession(reports, listingError));
+  process.exit(2);
+}
+const sessionId: string = configuredSessionId;
 const clientId = crypto.randomUUID();
 const terminal = new ProcessTerminal();
 let stopping = false;

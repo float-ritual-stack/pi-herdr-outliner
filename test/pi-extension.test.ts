@@ -55,7 +55,7 @@ test("publishes only the final assistant message at agent_settled", async () => 
   OutlinerClient.prototype.request = async function <T>(input: RequestInput): Promise<T> {
     requests.push(input);
     if (input.action === "ping") {
-      return { status: "ready", protocolVersion: 20 } as T;
+      return { status: "ready", protocolVersion: 21 } as T;
     }
     if (input.action === "reports.publish") {
       return {
@@ -356,7 +356,7 @@ test("drives an explicit task through context, focus, durable proof, and complet
   OutlinerClient.prototype.request = async function <T>(input: RequestInput): Promise<T> {
     requests.push(input);
     if (input.action === "ping") {
-      return { status: "ready", protocolVersion: 20 } as T;
+      return { status: "ready", protocolVersion: 21 } as T;
     }
     if (input.action === "pages.resolve") {
       return (input.address === "PIE-144"
@@ -589,7 +589,7 @@ test("drives an explicit task through context, focus, durable proof, and complet
   }
 });
 
-test("requires protocol v20, attributes agent creates and page follows, and presents bounded query results", async () => {
+test("requires protocol v21, attributes agent creates and page follows, and presents bounded query results", async () => {
   const collection: VisibleBlockCollection = {
     blocks: [
       {
@@ -608,7 +608,7 @@ test("requires protocol v20, attributes agent creates and page follows, and pres
     ],
     completeness: { kind: "truncated", limit: 20 },
   };
-  let protocolVersion = 20;
+  let protocolVersion = 21;
   let queryCollection = collection;
   let queryError: Error | undefined;
   const requests: RequestInput[] = [];
@@ -867,7 +867,7 @@ test("requires protocol v20, attributes agent creates and page follows, and pres
     expect(largeEnvelope.presentation.omitted).toBeGreaterThan(0);
     protocolVersion = 5;
     await expect(tools.get("outliner_query")!.execute("incompatible-query", {})).rejects.toThrow(
-      "Incompatible outliner protocol 5; expected 20",
+      "Incompatible outliner protocol 5; expected 21",
     );
   } finally {
     OutlinerClient.prototype.request = originalRequest;
@@ -920,7 +920,7 @@ test("captures through command, tool, and exact standalone dispatch without an a
   OutlinerClient.prototype.request = async function <T>(input: RequestInput): Promise<T> {
     requests.push(input);
     if (input.action === "ping") {
-      return { status: "ready", protocolVersion: 20 } as T;
+      return { status: "ready", protocolVersion: 21 } as T;
     }
     if (input.action === "selection.get") {
       return {
