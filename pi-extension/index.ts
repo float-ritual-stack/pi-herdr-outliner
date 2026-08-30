@@ -7,7 +7,10 @@ import type {
   AgentToolResult,
   ExtensionAPI,
   ExtensionContext,
+  Theme,
+  ToolRenderResultOptions,
 } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { formatFileAnnotation } from "../src/annotations";
 import {
@@ -175,6 +178,16 @@ const propertyPatchOperationSchema = Type.Union([
 
 const MAX_TOOL_RESULT_CHARS = 12_000;
 const WORK_PLACEHOLDER_SKILL = "work-placeholder-resolver";
+const OUTLINER_CAPTURE_RECEIPT_ENTRY = "outliner-capture-receipt";
+
+interface OutlinerCaptureReceiptEntry {
+  blockId: string;
+  title: string;
+  source: CaptureSource;
+  deduplicated: boolean;
+  detail: "opened" | "no-tree" | "unavailable";
+  capturedAt: number;
+}
 
 export { containsWorkIdPlaceholder as containsConfiguredWorkPlaceholder } from "../src/work-ids";
 
@@ -196,11 +209,15 @@ function textToolResult(text: string): AgentToolResult<Record<string, never>> {
   };
 }
 
-function toolResult(value: unknown): AgentToolResult<Record<string, never>> {
+function toolResult<T>(value: T): AgentToolResult<T> {
   const text = JSON.stringify(value, null, 2);
-  return textToolResult(
-    text.length > MAX_TOOL_RESULT_CHARS ? `${text.slice(0, MAX_TOOL_RESULT_CHARS)}\n…` : text,
-  );
+  return {
+    content: [{
+      type: "text",
+      text: text.length > MAX_TOOL_RESULT_CHARS ? `${text.slice(0, MAX_TOOL_RESULT_CHARS)}\n…` : text,
+    }],
+    details: value,
+  };
 }
 
 function textualToolResult(content: readonly { type: string; text?: string }[]): string {
@@ -212,28 +229,29 @@ function textualToolResult(content: readonly { type: string; text?: string }[]):
     .join("\n");
 }
 
+function queryDetails(
+  collection: VisibleBlockCollection,
+  blocks: VisibleBlockCollection["blocks"],
+) {
+  return {
+    blocks,
+    completeness: collection.completeness,
+    presentation: {
+      returned: collection.blocks.length,
+      presented: blocks.length,
+      omitted: collection.blocks.length - blocks.length,
+    },
+  };
+}
+
 function serializeQueryResult(
   collection: VisibleBlockCollection,
   blocks: VisibleBlockCollection["blocks"],
 ): string {
-  return JSON.stringify(
-    {
-      blocks,
-      completeness: collection.completeness,
-      presentation: {
-        returned: collection.blocks.length,
-        presented: blocks.length,
-        omitted: collection.blocks.length - blocks.length,
-      },
-    },
-    null,
-    2,
-  );
+  return JSON.stringify(queryDetails(collection, blocks), null, 2);
 }
 
-function queryToolResult(
-  collection: VisibleBlockCollection,
-): AgentToolResult<Record<string, never>> {
+function queryToolResult(collection: VisibleBlockCollection) {
   const blocks: VisibleBlockCollection["blocks"] = [];
   let text = serializeQueryResult(collection, blocks);
   for (const block of collection.blocks) {
@@ -245,7 +263,141 @@ function queryToolResult(
     }
     text = candidate;
   }
-  return textToolResult(text);
+  return {
+    content: [{ type: "text" as const, text }],
+    details: queryDetails(collection, blocks),
+  };
+}
+
+
+function firstDisplayLine(value: unknown, limit = 72): string {
+  if (typeof value !== "string") return "";
+  const line = value.split("\n", 1)[0]?.trim() ?? "";
+  return line.length <= limit ? line : `${line.slice(0, limit - 1)}…`;
+}
+
+function shortBlockId(value: unknown): string {
+  return typeof value === "string" ? value.slice(0, 8) : "";
+}
+
+function summarizeToolDetails(details: unknown): { text: string; tone: "success" | "warning" | "muted" } {
+  if (Array.isArray(details)) {
+    return { text: `${details.length} ${details.length === 1 ? "item" : "items"}`, tone: "success" };
+  }
+  if (!details || typeof details !== "object") return { text: "Completed", tone: "success" };
+  const value = details as Record<string, unknown>;
+
+  if (value.presentation && typeof value.presentation === "object") {
+    const presentation = value.presentation as Record<string, unknown>;
+    const completeness = value.completeness && typeof value.completeness === "object"
+      ? value.completeness as Record<string, unknown>
+      : undefined;
+    const count = typeof presentation.returned === "number" ? presentation.returned : 0;
+    const omitted = presentation.omitted;
+    const suffix = completeness?.kind === "truncated" || (typeof omitted === "number" && omitted > 0)
+      ? " · bounded"
+      : " · complete";
+    return { text: `${count} ${count === 1 ? "match" : "matches"}${suffix}`, tone: "success" };
+  }
+
+  if (typeof value.focused === "boolean") {
+    if (!value.focused) {
+      const resolution = typeof value.resolution === "string" ? ` · ${value.resolution}` : "";
+      return { text: `Not focused${resolution}`, tone: "warning" };
+    }
+    const title = firstDisplayLine(value.title);
+    return {
+      text: `Focused${title ? ` · ${title}` : ""}${value.blockId ? ` · ${shortBlockId(value.blockId)}` : ""}`,
+      tone: "success",
+    };
+  }
+
+  if (value.selected && typeof value.selected === "object") {
+    const selected = value.selected as Record<string, unknown>;
+    const title = firstDisplayLine(selected.text);
+    return {
+      text: `Selected${title ? ` · ${title}` : ""}${selected.id ? ` · ${shortBlockId(selected.id)}` : ""}`,
+      tone: "success",
+    };
+  }
+  if ("selected" in value && value.selected === null) {
+    return { text: "No selection", tone: "muted" };
+  }
+
+  if (typeof value.workId === "string") {
+    const state = [value.stage, value.status].filter((item) => typeof item === "string").join(" · ");
+    return { text: `${value.workId}${state ? ` · ${state}` : ""}`, tone: "success" };
+  }
+
+  if (typeof value.id === "string") {
+    const title = firstDisplayLine(value.text) || firstDisplayLine(value.title);
+    return {
+      text: `${title || "Block"} · ${shortBlockId(value.id)}`,
+      tone: "success",
+    };
+  }
+
+  if (typeof value.blockId === "string") {
+    const title = firstDisplayLine(value.title);
+    return {
+      text: `${title || "Block"} · ${shortBlockId(value.blockId)}`,
+      tone: "success",
+    };
+  }
+
+  if (typeof value.status === "string") {
+    return { text: value.status, tone: value.status === "missing" ? "warning" : "success" };
+  }
+  return { text: "Completed", tone: "success" };
+}
+function summarizeToolCall(args: object): string {
+  const value = args as Record<string, unknown>;
+  const operation = typeof value.operation === "string" ? value.operation : "";
+  const target = firstDisplayLine(value.query) ||
+    firstDisplayLine(value.address) ||
+    shortBlockId(value.blockId) ||
+    firstDisplayLine(value.text);
+  if (operation && target) return `${operation} · ${target}`;
+  if (operation) return operation;
+  if (target) return target;
+  if (Array.isArray(value.filters)) return `${value.filters.length} filters`;
+  if (typeof value.role === "string") return value.role;
+  return "";
+}
+
+function renderOutlinerResult(
+  result: AgentToolResult<unknown>,
+  { expanded, isPartial }: ToolRenderResultOptions,
+  theme: Theme,
+) {
+  if (isPartial) return new Text(theme.fg("warning", "Working…"), 0, 0);
+  const summary = summarizeToolDetails(result.details);
+  let text = theme.fg(summary.tone, summary.text);
+  if (expanded) {
+    const emptyDetails = result.details !== null &&
+      typeof result.details === "object" &&
+      !Array.isArray(result.details) &&
+      Object.keys(result.details).length === 0;
+    const serialized = emptyDetails
+      ? textualToolResult(result.content)
+      : JSON.stringify(result.details, null, 2);
+    const lines = serialized.split("\n");
+    for (const line of lines.slice(0, 24)) text += `\n${theme.fg("dim", line)}`;
+    if (lines.length > 24) text += `\n${theme.fg("muted", `… ${lines.length - 24} more lines`)}`;
+  }
+  return new Text(text, 0, 0);
+}
+
+function outlinerToolPresentation(label: string) {
+  return {
+    renderCall(args: object, theme: Theme) {
+      const summary = summarizeToolCall(args);
+      const text = theme.fg("toolTitle", theme.bold(label)) +
+        (summary ? theme.fg("dim", ` · ${summary}`) : "");
+      return new Text(text, 0, 0);
+    },
+    renderResult: renderOutlinerResult,
+  };
 }
 
 function assertCompatibleProtocol(service: OutlinerServiceStatus): void {
@@ -586,6 +738,31 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
   let focusRegistry: HerdrRuntimeRegistry | null = null;
   let focusRunner: HerdrRegistryRunner | null = null;
   let workPlaceholderNudgedThisTurn = false;
+
+  if (typeof (pi as { registerEntryRenderer?: unknown }).registerEntryRenderer === "function") {
+    pi.registerEntryRenderer<OutlinerCaptureReceiptEntry>(
+      OUTLINER_CAPTURE_RECEIPT_ENTRY,
+      (entry, { expanded }, theme) => {
+        const data = entry.data;
+        if (!data) return new Text(theme.fg("warning", "Outliner capture receipt unavailable"), 0, 0);
+        const detail = data.detail === "opened"
+          ? "opened in Detail"
+          : data.detail === "no-tree"
+            ? "saved; no unambiguous Tree"
+            : "saved; Detail unavailable";
+        let text = `${theme.fg("accent", theme.bold("Outliner"))} ` +
+          theme.fg("success", `${data.deduplicated ? "Reused" : "Sent"} response to Inbox`) +
+          theme.fg("dim", ` · ${shortBlockId(data.blockId)} · ${detail}`);
+        if (expanded) {
+          text += `\n${theme.fg("text", data.title)}`;
+          text += `\n${theme.fg("dim", `Block: ${data.blockId}`)}`;
+          text += `\n${theme.fg("dim", `Source: ${data.source}`)}`;
+          text += `\n${theme.fg("dim", `Captured: ${new Date(data.capturedAt).toLocaleString()}`)}`;
+        }
+        return new Text(text, 0, 0);
+      },
+    );
+  }
 
   function startFocusTracker(): void {
     const socketPath = process.env.HERDR_SOCKET_PATH;
@@ -962,9 +1139,11 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
             ...(activeTaskId ? { taskId: activeTaskId } : {}),
           },
         });
+        let detail: OutlinerCaptureReceiptEntry["detail"] = "unavailable";
         try {
           await ensureService(true);
           const displayed = await displayCapturedResponse(receipt.block.id);
+          detail = displayed ? "opened" : "no-tree";
           context.ui.notify(
             displayed
               ? `Sent latest response to Inbox and opened it in Detail · ${receipt.block.id.slice(0, 8)}`
@@ -979,6 +1158,14 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
             "warning",
           );
         }
+        pi.appendEntry<OutlinerCaptureReceiptEntry>(OUTLINER_CAPTURE_RECEIPT_ENTRY, {
+          blockId: receipt.block.id,
+          title: firstDisplayLine(text, 120),
+          source,
+          deduplicated: receipt.deduplicated,
+          detail,
+          capturedAt: Date.now(),
+        });
       } catch (error) {
         context.ui.notify(error instanceof Error ? error.message : String(error), "error");
       }
@@ -1045,6 +1232,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
   });
 
   pi.registerTool({
+    ...outlinerToolPresentation("Outliner Task"),
     name: "outliner_task",
     label: "Outliner Task",
     description:
@@ -1096,6 +1284,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
   });
 
   pi.registerTool({
+    ...outlinerToolPresentation("Outliner Focus"),
     name: "outliner_focus",
     label: "Outliner Focus",
     description:
@@ -1137,6 +1326,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
   });
 
   pi.registerTool({
+    ...outlinerToolPresentation("Outliner Publish"),
     name: "outliner_publish",
     label: "Outliner Publish",
     description:
@@ -1202,6 +1392,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
   });
 
   pi.registerTool({
+    ...outlinerToolPresentation("Outliner Create"),
     name: "outliner_create",
     label: "Outliner Create",
     description: "Create a durable outliner block for a note, progress update, open question, decision, or artifact",
@@ -1224,6 +1415,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
   });
 
   pi.registerTool({
+    ...outlinerToolPresentation("Outliner Capture"),
     name: "outliner_capture",
     label: "Outliner Capture",
     description: "Capture durable text to the shared Inbox without routing or changing selection",
@@ -1246,11 +1438,12 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
         author: "agent",
         provenance: toolProvenance(actorId, context, toolCallId),
       });
-      return textToolResult(JSON.stringify(compactCaptureReceipt(receipt, source), null, 2));
+      return toolResult(compactCaptureReceipt(receipt, source));
     },
   });
 
   pi.registerTool({
+    ...outlinerToolPresentation("Outliner Annotate File"),
     name: "outliner_annotate_file",
     label: "Outliner Annotate File",
     description: "Attach a durable line-range comment beneath a file-reference block",
@@ -1279,6 +1472,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
   });
 
   pi.registerTool({
+    ...outlinerToolPresentation("Outliner Update"),
     name: "outliner_update",
     label: "Outliner Update",
     description: "Update an existing outliner block only if it is still the version the agent read",
@@ -1302,6 +1496,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
   });
 
   pi.registerTool({
+    ...outlinerToolPresentation("Outliner Property Patch"),
     name: "outliner_property_patch",
     label: "Outliner Property Patch",
     description: "Replace, remove, or append property tokens without rewriting unrelated block prose",
@@ -1325,6 +1520,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
   });
 
   pi.registerTool({
+    ...outlinerToolPresentation("Outliner Property Catalog"),
     name: "outliner_property_catalog",
     label: "Outliner Property Catalog",
     description: "List observed property key/value pairs with occurrence counts",
@@ -1346,6 +1542,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
   });
 
   pi.registerTool({
+    ...outlinerToolPresentation("Outliner Page"),
     name: "outliner_page",
     label: "Outliner Page Address",
     description: "Resolve, follow, complete, rename, alias, or remove a unique symbolic page address",
@@ -1425,6 +1622,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
   });
 
   pi.registerTool({
+    ...outlinerToolPresentation("Outliner Work ID"),
     name: "outliner_work_id",
     label: "Outliner Work ID",
     description: "Read allocator state or transactionally assign the next immutable project Work ID",
@@ -1469,6 +1667,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
   });
 
   pi.registerTool({
+    ...outlinerToolPresentation("Outliner Query"),
     name: "outliner_query",
     label: "Outliner Query",
     description:
@@ -1498,6 +1697,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
   });
 
   pi.registerTool({
+    ...outlinerToolPresentation("Outliner Move"),
     name: "outliner_move",
     label: "Outliner Move",
     description: "Move a block to another parent and optional sibling position",
@@ -1514,6 +1714,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
   });
 
   pi.registerTool({
+    ...outlinerToolPresentation("Outliner Clients"),
     name: "outliner_clients",
     label: "Outliner Clients",
     description: "List live Tree and Detail client IDs for explicit targeting",
@@ -1533,6 +1734,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
   });
 
   pi.registerTool({
+    ...outlinerToolPresentation("Outliner Selection"),
     name: "outliner_selection",
     label: "Outliner Selection",
     description: "Read the user's selected block with its ancestors and children",

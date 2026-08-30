@@ -63,7 +63,12 @@ test("collects the user response without an advisor follow-up", () => {
 
 
 test("registers the workspace commands and annotation-aware tools", () => {
-  const registeredTools: Array<{ name: string; parameters: unknown }> = [];
+  const registeredTools: Array<{
+    name: string;
+    parameters: unknown;
+    renderCall?: unknown;
+    renderResult?: unknown;
+  }> = [];
   const commands: string[] = [];
   const pi = {
     registerTool(definition: { name: string; parameters: unknown }) {
@@ -72,6 +77,8 @@ test("registers the workspace commands and annotation-aware tools", () => {
     registerCommand(name: string) {
       commands.push(name);
     },
+    registerEntryRenderer() {},
+    appendEntry() {},
     on() {},
   } as unknown as ExtensionAPI;
 
@@ -102,6 +109,9 @@ test("registers the workspace commands and annotation-aware tools", () => {
     "outliner_clients",
     "outliner_selection",
   ]);
+  expect(registeredTools.every((definition) =>
+    typeof definition.renderCall === "function" && typeof definition.renderResult === "function"
+  )).toBe(true);
   const createSchema = JSON.stringify(
     registeredTools.find((definition) => definition.name === "outliner_create")?.parameters,
   );
@@ -110,6 +120,21 @@ test("registers the workspace commands and annotation-aware tools", () => {
   );
   expect(createSchema).not.toContain("author");
   expect(updateSchema).toContain("expectedUpdatedAt");
+});
+
+test("loads command support without a custom entry renderer", () => {
+  const commands: string[] = [];
+  const pi = {
+    registerTool() {},
+    registerCommand(name: string) {
+      commands.push(name);
+    },
+    appendEntry() {},
+    on() {},
+  } as unknown as ExtensionAPI;
+
+  expect(() => createOutlinerExtension("omp")(pi)).not.toThrow();
+  expect(commands).toContain("send-to-outline");
 });
 
 test("nudges once per turn from prompt, focused block, or outliner tool text", async () => {
@@ -158,6 +183,7 @@ test("nudges once per turn from prompt, focused block, or outliner tool text", a
   const pi = {
     registerCommand() {},
     registerTool() {},
+    registerEntryRenderer() {},
     on(name: string, handler: EventHandler) {
       handlers.set(name, handler);
     },
@@ -416,6 +442,7 @@ test("drives an explicit task through context, focus, durable proof, and complet
     registerTool(definition: ToolDefinition) {
       tools.set(definition.name, definition);
     },
+    registerEntryRenderer() {},
     on(name: string, handler: EventHandler) {
       handlers.set(name, handler);
     },
@@ -619,7 +646,7 @@ test("requires protocol v22, attributes agent creates and page follows, and pres
       signal?: AbortSignal,
       onUpdate?: unknown,
       context?: ExtensionContext,
-    ): Promise<{ content: Array<{ type: string; text: string }> }>;
+    ): Promise<{ content: Array<{ type: string; text: string }>; details: unknown }>;
   };
   const commands = new Map<string, CommandDefinition>();
   const tools = new Map<string, ToolDefinition>();
@@ -630,6 +657,8 @@ test("requires protocol v22, attributes agent creates and page follows, and pres
     registerTool(definition: ToolDefinition) {
       tools.set(definition.name, definition);
     },
+    registerEntryRenderer() {},
+    appendEntry() {},
     on() {},
   } as unknown as ExtensionAPI;
   const widgets: Array<{ id: string; lines: string[] }> = [];
@@ -796,6 +825,10 @@ test("requires protocol v22, attributes agent creates and page follows, and pres
       ...collection,
       presentation: { returned: 1, presented: 1, omitted: 0 },
     });
+    expect(result.details).toEqual({
+      ...collection,
+      presentation: { returned: 1, presented: 1, omitted: 0 },
+    });
 
     queryCollection = {
       blocks: Array.from({ length: 100 }, (_, index) => ({
@@ -848,7 +881,7 @@ test("captures through command, tool, and exact standalone dispatch without an a
       signal: AbortSignal | undefined,
       onUpdate: unknown,
       context: ExtensionContext,
-    ): Promise<{ content: Array<{ type: string; text: string }> }>;
+    ): Promise<{ content: Array<{ type: string; text: string }>; details: unknown }>;
   };
 
   const selectionBlock: Block = {
@@ -864,6 +897,7 @@ test("captures through command, tool, and exact standalone dispatch without an a
   const commands = new Map<string, CommandDefinition>();
   const tools = new Map<string, ToolDefinition>();
   const handlers = new Map<string, InputHandler>();
+  const appendedEntries: Array<{ customType: string; data: unknown }> = [];
   const notifications: Array<{ message: string; level: string }> = [];
   const requests: RequestInput[] = [];
   let captureFailure: Error | null = null;
@@ -933,6 +967,10 @@ test("captures through command, tool, and exact standalone dispatch without an a
     registerTool(definition: ToolDefinition) {
       tools.set(definition.name, definition);
     },
+    registerEntryRenderer() {},
+    appendEntry(customType: string, data: unknown) {
+      appendedEntries.push({ customType, data });
+    },
     on(name: string, handler: InputHandler) {
       if (name === "input") handlers.set(name, handler);
     },
@@ -985,6 +1023,13 @@ test("captures through command, tool, and exact standalone dispatch without an a
       context,
     );
     expect(JSON.parse(toolResult.content[0]!.text)).toEqual({
+      blockId: "capture-3",
+      inboxBlockId: "inbox",
+      source: "omp",
+      capturedFromBlockId: selectionBlock.id,
+      deduplicated: false,
+    });
+    expect(toolResult.details).toEqual({
       blockId: "capture-3",
       inboxBlockId: "inbox",
       source: "omp",
@@ -1050,6 +1095,17 @@ test("captures through command, tool, and exact standalone dispatch without an a
     expect(notifications.some(({ message }) =>
       message.includes("Sent latest response to Inbox and opened it in Detail")
     )).toBe(true);
+    expect(appendedEntries).toHaveLength(1);
+    expect(appendedEntries[0]).toEqual({
+      customType: "outliner-capture-receipt",
+      data: expect.objectContaining({
+        blockId: "capture-2",
+        title: "Roadmap analysis before the advisory.",
+        source: "omp",
+        deduplicated: false,
+        detail: "opened",
+      }),
+    });
     expect(notifications.some(({ message }) => message.includes("Unterminated dispatch marker")))
       .toBe(true);
 

@@ -1,6 +1,6 @@
 ---
 name: outliner-workflow
-description: This skill should be used when the user asks to "review the roadmap", "what should we work on next", "walk me through these blocks", "capture this finding", "write this into the outline", "focus that item", or when producing a durable plan, decision, synthesis, handoff, progress record, or implementation proof in the Pi Outliner workspace.
+description: This skill should be used when the user asks to "review the roadmap", "what should we work on next", "walk me through these blocks", "step through the roadmap", "help me prioritize these items", "review this outline with me", "capture this finding", "write this into the outline", "focus that item", or when producing a durable plan, decision, synthesis, handoff, progress record, or implementation proof in the Pi Outliner workspace.
 ---
 
 # Outliner Workflow
@@ -25,6 +25,22 @@ Call `outliner_focus` before explaining a roadmap item, decision chain, investig
 - Follow semantic order: governing task or decision first, supporting findings next, implementation proof last.
 - Use the returned bounded ancestors, properties, dependencies, and children to narrate structure.
 - Never invent a parallel comment or walkthrough data model.
+
+## Conduct a walkthrough or review
+
+Use this workflow when the user wants to inspect, discuss, prioritize, or review a connected set of blocks:
+
+1. Read the current selection and query only enough bounded structure to identify the relevant arc.
+2. Choose a narrative order based on decisions and dependencies rather than storage or query order.
+3. State the scope briefly: which blocks are included, why they belong together, and what judgment the walkthrough should produce.
+4. Focus the first block before discussing it. Read the full body only for the block currently under discussion.
+5. Explain its role, current state, and connection to the preceding and following items. Avoid reciting every property or child.
+6. Continue through a small coherent group when no owner decision is required.
+7. Stop at an actual judgment boundary with one bounded question. Do not publish a decision or change priority before the owner answers.
+8. Resume from the next unresolved block. Re-read selection or query results after any mutation that may have changed the arc.
+9. End with the agreed ordering, unresolved questions, and next action. Publish only the durable conclusion, not each walkthrough stop.
+
+Treat Tree focus as the ephemeral shared attention marker. Use durable child blocks only for conclusions, corrections, decisions, follow-ups, or proof. Preserve the existing Now/Next work-in-progress limit and never promote an item silently.
 
 ## Decide whether to publish
 
