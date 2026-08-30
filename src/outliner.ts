@@ -4,7 +4,7 @@ import { StdinBuffer } from "@earendil-works/pi-tui";
 import { OutlinerClient, type OutlinerWatcher, type RequestInput } from "./client";
 import { completeReferencedPaths, readReferencedFile } from "./files";
 import { navigateOutlinerLink } from "./outliner-links";
-import { currentPaneRuntime, focusCurrentPane } from "./pane-control";
+import { currentPaneRuntime, focusCurrentPane, openDetailPane } from "./pane-control";
 import { resolvePaths } from "./paths";
 import { TerminalInputDecoder, type TerminalKey } from "./terminal";
 import { createTreeController, type TreeController } from "./tree-controller";
@@ -72,6 +72,19 @@ const controller = createTreeController({
     readReferencedFile(block) {
       return readReferencedFile(block, paths.workspaceRoot);
     },
+  },
+  async createDetailPane(blockId) {
+    const detailContextId = crypto.randomUUID();
+    await client.request({
+      action: "browsing-context.publish",
+      sourceClientId: clientId,
+      contextId: detailContextId,
+      blockId,
+    });
+    openDetailPane({
+      workspaceRoot: paths.workspaceRoot,
+      browsingContextId: detailContextId,
+    });
   },
   focusSelf() {
     if (process.env.HERDR_ENV === "1") focusCurrentPane();

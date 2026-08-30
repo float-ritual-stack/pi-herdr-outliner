@@ -6,6 +6,7 @@ import { join } from "node:path";
 import {
   currentPaneRuntime,
   focusCurrentPane,
+  openDetailPane,
   removeLegacyClientPaneStates,
   resolveServicePaneId,
 } from "../src/pane-control";
@@ -62,6 +63,80 @@ if (args[0] === "pane" && args[1] === "current") {
   } finally {
     if (originalHerdrEnv === undefined) delete process.env.HERDR_ENV;
     else process.env.HERDR_ENV = originalHerdrEnv;
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("opens and focuses a Detail pane with an independent browsing context", () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-outliner-detail-pane-"));
+  const herdr = join(directory, "fake-herdr");
+  const logPath = join(directory, "calls.jsonl");
+  const originalHerdrEnv = process.env.HERDR_ENV;
+  const originalPaneId = process.env.HERDR_PANE_ID;
+  const originalStateDir = process.env.OUTLINER_STATE_DIR;
+  try {
+    process.env.HERDR_ENV = "1";
+    process.env.HERDR_PANE_ID = "w1:p2";
+    process.env.OUTLINER_STATE_DIR = "/tmp/outliner-state";
+    writeFileSync(
+      herdr,
+      `#!/usr/bin/env bun
+import { appendFileSync } from "node:fs";
+const args = process.argv.slice(2);
+appendFileSync(${JSON.stringify(logPath)}, JSON.stringify(args) + "\\n");
+if (args[0] === "pane" && args[1] === "current") {
+  console.log(JSON.stringify({ result: { pane: { pane_id: "w1:p2", workspace_id: "w1", tab_id: "w1:t1" } } }));
+} else if (args[0] === "pane" && args[1] === "layout") {
+  console.log(JSON.stringify({ result: { layout: { panes: [{ pane_id: "w1:p2", rect: { x: 0, y: 0 } }] } } }));
+} else if (args[0] === "plugin" && args[1] === "pane" && args[2] === "open") {
+  console.log(JSON.stringify({ result: { plugin_pane: { pane: { pane_id: "w1:p3", workspace_id: "w1", tab_id: "w1:t1" } } } }));
+} else if (args[0] === "plugin" && args[1] === "pane" && args[2] === "focus") {
+  console.log(JSON.stringify({ result: { type: "ok" } }));
+}
+`,
+    );
+    chmodSync(herdr, 0o755);
+
+    expect(openDetailPane({
+      workspaceRoot: "/workspace",
+      browsingContextId: "independent-context",
+    }, herdr)).toBe("w1:p3");
+
+    const calls = readFileSync(logPath, "utf8").trim().split("\n").map(
+      (line) => JSON.parse(line) as string[],
+    );
+    expect(calls).toContainEqual([
+      "plugin",
+      "pane",
+      "open",
+      "--plugin",
+      "float.pi-outliner",
+      "--entrypoint",
+      "detail",
+      "--env",
+      "OUTLINER_WORKSPACE_ROOT=/workspace",
+      "--env",
+      "OUTLINER_BROWSING_CONTEXT_ID=independent-context",
+      "--placement",
+      "split",
+      "--target-pane",
+      "w1:p2",
+      "--direction",
+      "down",
+      "--cwd",
+      "/workspace",
+      "--no-focus",
+      "--env",
+      "OUTLINER_STATE_DIR=/tmp/outliner-state",
+    ]);
+    expect(calls.at(-1)).toEqual(["plugin", "pane", "focus", "w1:p3"]);
+  } finally {
+    if (originalHerdrEnv === undefined) delete process.env.HERDR_ENV;
+    else process.env.HERDR_ENV = originalHerdrEnv;
+    if (originalPaneId === undefined) delete process.env.HERDR_PANE_ID;
+    else process.env.HERDR_PANE_ID = originalPaneId;
+    if (originalStateDir === undefined) delete process.env.OUTLINER_STATE_DIR;
+    else process.env.OUTLINER_STATE_DIR = originalStateDir;
     rmSync(directory, { recursive: true, force: true });
   }
 });

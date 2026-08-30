@@ -34,6 +34,11 @@ const PaneGetResponseSchema = Type.Object({
 const PaneCurrentResponseSchema = Type.Object({
   result: Type.Object({ pane: HerdrPaneSchema }),
 });
+const PluginPaneOpenResponseSchema = Type.Object({
+  result: Type.Object({
+    plugin_pane: Type.Object({ pane: HerdrPaneSchema }),
+  }),
+});
 const WorkspaceListResponseSchema = Type.Object({
   result: Type.Object({
     workspaces: Type.Array(Type.Object({ workspace_id: Type.String() })),
@@ -58,6 +63,7 @@ const PaneLayoutResponseSchema = Type.Object({
 
 const SERVICE_PANE_LABEL = "Outliner Service";
 const HERDR_COMMAND_TIMEOUT_MS = 2_000;
+const OUTLINER_PLUGIN_ID = "float.pi-outliner";
 
 function invokeHerdr(herdr: string, args: string[]): string {
   return execFileSync(herdr, args, {
@@ -130,6 +136,51 @@ export function focusCurrentPane(
     if (!stderr.includes('"code":"plugin_pane_not_found"')) throw error;
     // Manual panes can receive navigation but have no plugin focus handle.
   }
+}
+
+export interface OpenDetailPaneOptions {
+  workspaceRoot: string;
+  browsingContextId: string;
+}
+
+export function openDetailPane(
+  options: OpenDetailPaneOptions,
+  herdr = process.env.HERDR_BIN_PATH ?? "herdr",
+): string {
+  if (process.env.HERDR_ENV !== "1") {
+    throw new Error("Creating a Detail pane requires Herdr");
+  }
+  const sourcePaneId = process.env.HERDR_PANE_ID ?? currentPaneRuntime(herdr)?.paneId;
+  if (!sourcePaneId) throw new Error("Current Herdr pane identity is unavailable");
+  const args = [
+    "plugin",
+    "pane",
+    "open",
+    "--plugin",
+    OUTLINER_PLUGIN_ID,
+    "--entrypoint",
+    "detail",
+    "--env",
+    `OUTLINER_WORKSPACE_ROOT=${options.workspaceRoot}`,
+    "--env",
+    `OUTLINER_BROWSING_CONTEXT_ID=${options.browsingContextId}`,
+    "--placement",
+    "split",
+    "--target-pane",
+    sourcePaneId,
+    "--direction",
+    "down",
+    "--cwd",
+    options.workspaceRoot,
+    "--no-focus",
+  ];
+  if (process.env.OUTLINER_STATE_DIR) {
+    args.push("--env", `OUTLINER_STATE_DIR=${process.env.OUTLINER_STATE_DIR}`);
+  }
+  const output = invokeHerdr(herdr, args);
+  const pane = Parse(PluginPaneOpenResponseSchema, JSON.parse(output)).result.plugin_pane.pane;
+  invokeHerdr(herdr, ["plugin", "pane", "focus", pane.pane_id]);
+  return pane.pane_id;
 }
 
 function paneMatchesState(

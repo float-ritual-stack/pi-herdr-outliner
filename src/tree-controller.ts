@@ -111,6 +111,7 @@ export interface TreeControllerEffects {
   readonly browsingContextId: string;
   request<T>(input: RequestInput): Promise<T>;
   readonly filesystem: TreeFilesystem;
+  createDetailPane(blockId: string): Promise<void>;
   focusSelf(): void;
   terminalWidth(): number;
   terminalHeight(): number;
@@ -735,6 +736,17 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         intent: "open",
       });
       status = "Reader opened in first unlocked Detail";
+    } catch (error) {
+      status = errorMessage(error);
+    }
+    effects.invalidate();
+  }
+  async function createDetailPane(): Promise<void> {
+    const selected = rows[selectedIndex];
+    if (!selected) return;
+    try {
+      await effects.createDetailPane(selected.canonicalId);
+      status = `Opened new independent Detail for ${blockDisplayTitle(selected.block)}`;
     } catch (error) {
       status = errorMessage(error);
     }
@@ -1427,6 +1439,9 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       return;
     } else if (str === "/") {
       await beginInput("filter", activeFilter);
+      return;
+    } else if (str === "D" && selected) {
+      await createDetailPane();
       return;
     } else if (str === "d" && selected) mode = "delete";
     else if (str === "f" && selected) openReferencedFile(selected.block);

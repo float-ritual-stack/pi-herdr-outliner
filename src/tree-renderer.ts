@@ -396,11 +396,11 @@ export function renderTreeFrame(
   } else if (view.mode === "goto") {
     help = "type ID/text  ↑↓ choose  Tab cycle  Enter jump  Esc cancel";
   } else if (expandedScrollable) {
-    help = "Enter read  e edit  PgUp/PgDn scroll  o open next unlocked  R reveal";
+    help = "Enter read  e edit  D new Detail  PgUp/PgDn scroll  o open next unlocked  R reveal";
   } else if (selectedRow?.kind === "occurrence") {
-    help = "◇ occurrence  Enter read  e edit  o open next unlocked  R reveal";
+    help = "◇ occurrence  Enter read  e edit  D new Detail  o open next unlocked  R reveal";
   } else {
-    help = "↑↓ browse/preview  Enter read  e edit  o open next unlocked  R reveal  g goto";
+    help = "↑↓ browse/preview  Enter read  e edit  D new Detail  o open next unlocked  R reveal  g goto";
   }
   output.push(`\x1b[2m${truncate(help, width)}\x1b[0m`);
   return { frame: output.join("\n"), scrollStartEntryIndex };

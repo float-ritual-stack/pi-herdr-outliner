@@ -103,6 +103,11 @@ canonical block in the first unlocked Detail in the same Herdr tab, ordered by
 pane position from left to right and then top to bottom. Preview updates never
 steal focus. Press `Enter` in Tree to focus that reader without locking it.
 
+Press `Shift+D` in Tree to create and focus another Detail below that Tree. The
+new pane receives a fresh browsing context seeded with the selected canonical
+block, so later Tree cursor movement does not replace it. It remains unlocked
+for explicit opens until you lock it.
+
 When a block becomes a context anchor, focus its Detail and press `L`, `i`,
 `Ctrl+L`, or `Command/Meta+L`. The header changes to **Locked**, and that pane
 is removed from the preview/open pool. The next Tree selection therefore
@@ -170,6 +175,7 @@ The footer in each pane is authoritative and context-sensitive. These are the pr
 | `Left` / `Right` | Collapse/go to parent; expand/go to first child |
 | `Shift+Up` / `Shift+Down` | Reorder canonical siblings, or branch-local projected occurrences |
 | `Enter` | Focus the current block in the first unlocked same-tab Detail; remain unlocked |
+| `Shift+D` | Create and focus a new independent Detail pane on the selected block |
 | `e` | Edit a single-line block inline; open and lock a multiline block in the first unlocked Detail |
 | `a` / `s` | Add child / sibling |
 | `c` | Open quick capture; Shift+Enter/Ctrl+E adds a line, Enter saves to Inbox, Esc cancels |

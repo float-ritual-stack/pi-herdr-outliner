@@ -63,6 +63,7 @@ interface Harness {
   readonly calls: RequestInput[];
   effects: TreeControllerEffects;
   readonly focused: Array<"detail" | "outliner">;
+  readonly createdDetails: string[];
   invalidations: number;
   stops: number;
 }
@@ -74,6 +75,7 @@ function harness(
   const result: Harness = {
     calls: [],
     focused: [],
+    createdDetails: [],
     invalidations: 0,
     stops: 0,
     effects: {
@@ -125,6 +127,9 @@ function harness(
         readReferencedFile: () => {
           throw new Error("not configured");
         },
+      },
+      createDetailPane: async (blockId) => {
+        result.createdDetails.push(blockId);
       },
       focusSelf: () => result.focused.push("outliner"),
       terminalWidth: () => 80,
@@ -385,6 +390,20 @@ describe("createTreeController", () => {
     expect(controller.view().mode).toBe("browse");
     expect(controller.view().status).toBe("Lock or unlock from a Detail pane");
     expect(fake.calls.some(({ action }) => action === "navigation.resolve")).toBe(false);
+  });
+  test("opens a new independent Detail pane for the selected block with Shift+D", async () => {
+    const root = block("root", { text: "Root", displayText: "Root" });
+    const fake = harness((input) =>
+      input.action === "workspace.snapshot" ? snapshot([root], root) : undefined
+    );
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+
+    await controller.handleKeypress("D", { name: "d", shift: true }, "pass");
+
+    expect(fake.createdDetails).toEqual([root.id]);
+    expect(controller.view().status).toBe("Opened new independent Detail for Root");
+    expect(fake.calls.some(({ action }) => action === "navigation.dispatch")).toBe(false);
   });
 
   test("cycles goto candidates across both Tab boundaries", async () => {
