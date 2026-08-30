@@ -8,9 +8,6 @@ import { OutlinerServer } from "../src/server";
 import { OutlinerStore } from "../src/store";
 import { OUTLINER_PROTOCOL_VERSION } from "../src/types";
 import type {
-  AgentReport,
-  AgentReportSummary,
-  AgentReportPromotion,
   BacklinkCollection,
   Block,
   CaptureReceipt,
@@ -56,7 +53,7 @@ test("serves mutations and property queries over the local socket", async () => 
   const client = new OutlinerClient(socket);
   const service = await client.request<OutlinerServiceStatus>({ action: "ping" });
   expect(service).toEqual({ status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION });
-  expect(service.protocolVersion).toBe(21);
+  expect(service.protocolVersion).toBe(22);
   const provenance = {
     actorId: "omp",
     sessionId: "session-1",
@@ -304,103 +301,6 @@ test("serves mutations and property queries over the local socket", async () => 
   ).rejects.toThrow("Block not found");
 });
 
-test("replaces disposable reports without Block writes and promotes explicit excerpts", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "pi-outliner-reports-"));
-  const store = new OutlinerStore(join(directory, "outliner.sqlite"));
-  const socket = join(directory, "outliner.sock");
-  const server = new OutlinerServer(store, socket);
-  await server.start();
-  const client = new OutlinerClient(socket);
-  const target = await client.request<Block>({
-    action: "create",
-    text: "Canonical report target",
-  });
-  const initialCount = store.readWorkspaceSnapshot().physical.blocks.length;
-  const connected = Promise.withResolvers<void>();
-  const reportEvent = Promise.withResolvers<OutlinerEvent>();
-  const watcher = client.watch({
-    client: { clientId: "report-pane", role: "report", contextId: "session-report" },
-    onConnect: connected.resolve,
-    onEvent: (event) => {
-      if (event.domain === "report") reportEvent.resolve(event);
-    },
-  });
-  cleanups.push(async () => {
-    await watcher.stop();
-    await server.close();
-    store.close();
-    rmSync(directory, { recursive: true, force: true });
-  });
-  await connected.promise;
-  expect(await client.request<AgentReportSummary[]>({ action: "reports.list" })).toEqual([]);
-
-  const first = await client.request<AgentReport>({
-    action: "reports.publish",
-    sessionId: "session-report",
-    text: `First report\nSee ((${target.id}))`,
-    taskId: target.id,
-  });
-  expect(first).toMatchObject({
-    sessionId: "session-report",
-    revision: 1,
-    rawText: `First report\nSee ((${target.id}))`,
-    resolvedText: "First report\nSee ((Canonical report target))",
-    taskId: target.id,
-  });
-  expect(await reportEvent.promise).toMatchObject({
-    domain: "report",
-    action: "reports.publish",
-    contextId: "session-report",
-  });
-
-  const replacement = await client.request<AgentReport>({
-    action: "reports.publish",
-    sessionId: "session-report",
-    text: "Replacement heading\nKeep this excerpt\nDiscard this line",
-    taskId: target.id,
-  });
-  expect(replacement.revision).toBe(2);
-  expect(await client.request<AgentReport>({
-    action: "reports.get",
-    sessionId: "session-report",
-  })).toEqual(replacement);
-  expect(await client.request<AgentReportSummary[]>({ action: "reports.list" })).toEqual([{
-    sessionId: replacement.sessionId,
-    publishedAt: replacement.publishedAt,
-    revision: 2,
-    taskId: target.id,
-  }]);
-  expect(store.readWorkspaceSnapshot().physical.blocks).toHaveLength(initialCount);
-
-  const promoted = await client.request<AgentReportPromotion>({
-    action: "reports.promote",
-    sessionId: "session-report",
-    startLine: 1,
-    endLine: 1,
-  });
-  expect(promoted).toMatchObject({
-    reportRevision: 2,
-    startLine: 1,
-    endLine: 1,
-    block: {
-      text: "Keep this excerpt",
-      author: "agent",
-      actorId: "pi-outliner.agent-report",
-      sessionId: "session-report",
-      taskId: target.id,
-    },
-  });
-  expect(store.readWorkspaceSnapshot().physical.blocks).toHaveLength(initialCount + 1);
-  expect(await client.request<{ cleared: boolean; sessionId: string }>({
-    action: "reports.clear",
-    sessionId: "session-report",
-  })).toEqual({ cleared: true, sessionId: "session-report" });
-  expect(await client.request<AgentReportSummary[]>({ action: "reports.list" })).toEqual([]);
-  await expect(client.request({
-    action: "reports.get",
-    sessionId: "session-report",
-  })).rejects.toThrow("Agent report is unavailable");
-});
 
 test("rejects malformed socket responses instead of crashing the client", async () => {
   const directory = mkdtempSync(join(tmpdir(), "pi-outliner-malformed-"));

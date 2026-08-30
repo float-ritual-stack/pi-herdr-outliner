@@ -25,7 +25,7 @@ The project started as a small Friday-night experiment and grew into a durable w
 
 - SQLite-backed hierarchical blocks with stable UUIDs, sibling order, authors, timestamps, and one canonical graph per workspace root.
 - Workspace-isolated service and runtime paths.
-- JSON-lines RPC protocol v21 over a Unix socket.
+- JSON-lines RPC protocol v22 over a Unix socket.
 - Reactive canonical content/view broadcasts, per-process Tree/Detail registration with Detail lock availability, exact-client UI commands, and source-aware `preview | open | reveal` navigation.
 - Each Tree owns its cursor, occurrence selection, filter, viewport, collapsed rows, multiline expansion, explicit-navigation history, and browsing context; moving a Tree previews only in the first unlocked same-tab Detail and never replaces a locked anchor.
 - Indexed `[property::value]` metadata with optimistic property patching and catalog queries.
@@ -317,12 +317,12 @@ CLI accepts `--text`, explicit `--stdin`, or automatic non-TTY stdin/heredoc inp
 
 The Pi extension registers `/capture` and `outliner_capture`. An exact standalone `float.dispatch(…)` input is intercepted by the Pi/OMP input hook, durably captured, acknowledged, and handled without starting an agent turn. Embedded/conversational markers are left untouched; malformed markers report a warning and continue as ordinary input.
 
-On `agent_settled`, the Pi extension publishes only the latest assistant Markdown
-to one service-memory report slot and reuses its Herdr report pane. The report
-supports block, page, and Work-ID links. `v` selects an excerpt, `k` promotes the
-selection or whole report to an ordinary agent-authored block, and `x` discards
-it. Promotion is the only path from this disposable surface into the canonical
-block graph.
+`/send-to-outline` copies the latest completed assistant Markdown from the
+current Pi/OMP session into Inbox as an agent-authored capture with session
+provenance. It then focuses the new canonical block and opens it in the first
+available Detail, so links, backlinks, block references, embeds, and bounded
+queries use the ordinary Detail projection. Responses remain chat-only unless
+the command is invoked; there is no disposable report slot or report pane.
 
 Exact references use stable block IDs:
 
@@ -421,6 +421,7 @@ The project Pi extension is auto-discovered through [`.pi/extensions/outliner.ts
 - `/goto <query>` through the project command
 - `/outliner-filter`
 - `/capture <text>`
+- `/send-to-outline`
 - `outliner_task`
 - `outliner_focus`
 - `outliner_publish`

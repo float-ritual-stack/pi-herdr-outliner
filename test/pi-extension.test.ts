@@ -6,7 +6,7 @@ import type {
 import outlinerExtension, {
   containsConfiguredWorkPlaceholder,
   formatSelection,
-  latestAssistantReport,
+  latestAssistantResponse,
   formatWorkPlaceholderNudge,
   selectRecentFocusedOutlinerClient,
 } from "../pi-extension/index";
@@ -30,86 +30,18 @@ test("extracts only the latest completed assistant text from a session branch", 
           { type: "thinking", thinking: "private" },
           { type: "text", text: "Final " },
           { type: "toolCall", name: "noop" },
-          { type: "text", text: "report" },
+          { type: "text", text: "response" },
         ],
       },
     },
   ];
 
-  expect(latestAssistantReport(entries)).toBe("Final report");
-  expect(latestAssistantReport([
+  expect(latestAssistantResponse(entries)).toBe("Final response");
+  expect(latestAssistantResponse([
     { type: "message", message: { role: "user", content: "No assistant" } },
   ])).toBeNull();
 });
 
-test("publishes only the final assistant message at agent_settled", async () => {
-  type EventHandler = (
-    event: Record<string, unknown>,
-    context: ExtensionContext,
-  ) => Promise<unknown> | unknown;
-  const handlers = new Map<string, EventHandler>();
-  const requests: RequestInput[] = [];
-  const originalRequest = OutlinerClient.prototype.request;
-  const originalHerdrEnv = process.env.HERDR_ENV;
-  process.env.HERDR_ENV = "0";
-  OutlinerClient.prototype.request = async function <T>(input: RequestInput): Promise<T> {
-    requests.push(input);
-    if (input.action === "ping") {
-      return { status: "ready", protocolVersion: 21 } as T;
-    }
-    if (input.action === "reports.publish") {
-      return {
-        sessionId: input.sessionId,
-        rawText: input.text,
-        resolvedText: input.text,
-        publishedAt: "published",
-        revision: 1,
-      } as T;
-    }
-    throw new Error(`Unexpected request: ${input.action}`);
-  };
-  const pi = {
-    registerTool() {},
-    registerCommand() {},
-    on(name: string, handler: EventHandler) {
-      handlers.set(name, handler);
-    },
-  } as unknown as ExtensionAPI;
-  const context = {
-    ui: {
-      setStatus() {},
-      notify() {},
-    },
-    sessionManager: {
-      getSessionId: () => "settled-session",
-      getBranch: () => [
-        {
-          type: "message",
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "Final settled report" }],
-          },
-        },
-      ],
-    },
-  } as unknown as ExtensionContext;
-
-  try {
-    outlinerExtension(pi);
-    await handlers.get("agent_start")!({}, context);
-    expect(requests.some(({ action }) => action === "reports.publish")).toBe(false);
-    await handlers.get("agent_settled")!({}, context);
-    expect(requests).toContainEqual({
-      action: "reports.publish",
-      sessionId: "settled-session",
-      text: "Final settled report",
-    });
-  } finally {
-    OutlinerClient.prototype.request = originalRequest;
-    if (originalHerdrEnv === undefined) delete process.env.HERDR_ENV;
-    else process.env.HERDR_ENV = originalHerdrEnv;
-  }
-});
 
 test("registers the workspace commands and annotation-aware tools", () => {
   const registeredTools: Array<{ name: string; parameters: unknown }> = [];
@@ -130,6 +62,7 @@ test("registers the workspace commands and annotation-aware tools", () => {
     "outliner",
     "outliner-task",
     "capture",
+    "send-to-outline",
     "outliner-goto",
     "outliner-filter",
   ]);
@@ -356,7 +289,7 @@ test("drives an explicit task through context, focus, durable proof, and complet
   OutlinerClient.prototype.request = async function <T>(input: RequestInput): Promise<T> {
     requests.push(input);
     if (input.action === "ping") {
-      return { status: "ready", protocolVersion: 21 } as T;
+      return { status: "ready", protocolVersion: 22 } as T;
     }
     if (input.action === "pages.resolve") {
       return (input.address === "PIE-144"
@@ -589,7 +522,7 @@ test("drives an explicit task through context, focus, durable proof, and complet
   }
 });
 
-test("requires protocol v21, attributes agent creates and page follows, and presents bounded query results", async () => {
+test("requires protocol v22, attributes agent creates and page follows, and presents bounded query results", async () => {
   const collection: VisibleBlockCollection = {
     blocks: [
       {
@@ -608,7 +541,7 @@ test("requires protocol v21, attributes agent creates and page follows, and pres
     ],
     completeness: { kind: "truncated", limit: 20 },
   };
-  let protocolVersion = 21;
+  let protocolVersion = 22;
   let queryCollection = collection;
   let queryError: Error | undefined;
   const requests: RequestInput[] = [];
@@ -867,7 +800,7 @@ test("requires protocol v21, attributes agent creates and page follows, and pres
     expect(largeEnvelope.presentation.omitted).toBeGreaterThan(0);
     protocolVersion = 5;
     await expect(tools.get("outliner_query")!.execute("incompatible-query", {})).rejects.toThrow(
-      "Incompatible outliner protocol 5; expected 21",
+      "Incompatible outliner protocol 5; expected 22",
     );
   } finally {
     OutlinerClient.prototype.request = originalRequest;
@@ -916,17 +849,39 @@ test("captures through command, tool, and exact standalone dispatch without an a
   const requests: RequestInput[] = [];
   let captureFailure: Error | null = null;
   let captureIndex = 0;
+  const originalHerdrEnv = process.env.HERDR_ENV;
+  process.env.HERDR_ENV = "0";
   const originalRequest = OutlinerClient.prototype.request;
   OutlinerClient.prototype.request = async function <T>(input: RequestInput): Promise<T> {
     requests.push(input);
     if (input.action === "ping") {
-      return { status: "ready", protocolVersion: 21 } as T;
+      return { status: "ready", protocolVersion: 22 } as T;
     }
     if (input.action === "selection.get") {
       return {
         selected: selectionBlock,
         ancestors: [],
         children: [],
+      } as T;
+    }
+    if (input.action === "clients.list") {
+      return [{
+        clientId: "tree-client",
+        role: "tree",
+        contextId: "tree-context",
+      }] as T;
+    }
+    if (input.action === "selection.set") {
+      return { selected: selectionBlock, ancestors: [], children: [] } as T;
+    }
+    if (input.action === "ui.command.send") return { delivered: true } as T;
+    if (input.action === "navigation.dispatch") {
+      return {
+        sourceClientId: input.sourceClientId,
+        targetClientId: "detail-client",
+        command: "open",
+        intent: "open",
+        blockId: input.blockId,
       } as T;
     }
     if (input.action === "capture.create") {
@@ -966,6 +921,17 @@ test("captures through command, tool, and exact standalone dispatch without an a
   const context = {
     sessionManager: {
       getSessionId: () => "session-capture",
+      getBranch: () => [{
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [{
+            type: "text",
+            text:
+              "Latest assistant response with [[page]], ((block-ref)), and !((embed-ref))\n[type::virtual-branch]",
+          }],
+        },
+      }],
     },
     ui: {
       notify(message: string, level: string) {
@@ -977,6 +943,7 @@ test("captures through command, tool, and exact standalone dispatch without an a
   try {
     outlinerExtension(pi);
     await commands.get("capture")!.handler("command capture", context);
+    await commands.get("send-to-outline")!.handler("", context);
     const toolResult = await tools.get("outliner_capture")!.execute(
       "tool-capture",
       { text: "tool capture", requestId: "stable-tool-request" },
@@ -985,7 +952,7 @@ test("captures through command, tool, and exact standalone dispatch without an a
       context,
     );
     expect(JSON.parse(toolResult.content[0]!.text)).toEqual({
-      blockId: "capture-2",
+      blockId: "capture-3",
       inboxBlockId: "inbox",
       source: process.env.OMPCODE ? "omp" : "pi",
       capturedFromBlockId: selectionBlock.id,
@@ -1013,7 +980,7 @@ test("captures through command, tool, and exact standalone dispatch without an a
       (request): request is Extract<RequestInput, { action: "capture.create" }> =>
         request.action === "capture.create",
     );
-    expect(captures).toHaveLength(3);
+    expect(captures).toHaveLength(4);
     expect(captures[0]).toMatchObject({
       text: "command capture",
       source: process.env.OMPCODE ? "omp" : "pi",
@@ -1021,6 +988,16 @@ test("captures through command, tool, and exact standalone dispatch without an a
       author: "user",
     });
     expect(captures[1]).toEqual(expect.objectContaining({
+      text:
+        "Latest assistant response with [[page]], ((block-ref)), and !((embed-ref))\n[type::virtual-branch]",
+      source: process.env.OMPCODE ? "omp" : "pi",
+      author: "agent",
+      provenance: {
+        actorId: process.env.OMPCODE ? "omp" : "pi",
+        sessionId: "session-capture",
+      },
+    }));
+    expect(captures[2]).toEqual(expect.objectContaining({
       requestId: "stable-tool-request",
       text: "tool capture",
       source: process.env.OMPCODE ? "omp" : "pi",
@@ -1032,12 +1009,15 @@ test("captures through command, tool, and exact standalone dispatch without an a
         taskId: "tool-capture",
       },
     }));
-    expect(captures[2]).toMatchObject({
+    expect(captures[3]).toMatchObject({
       text: "{remember this 🐢}",
       source: process.env.OMPCODE ? "omp" : "pi",
       author: "user",
     });
     expect(notifications.some(({ message }) => message.includes("Captured to Inbox"))).toBe(true);
+    expect(notifications.some(({ message }) =>
+      message.includes("Sent latest response to Inbox and opened it in Detail")
+    )).toBe(true);
     expect(notifications.some(({ message }) => message.includes("Unterminated dispatch marker")))
       .toBe(true);
 
@@ -1050,6 +1030,8 @@ test("captures through command, tool, and exact standalone dispatch without an a
     expect(notifications.at(-1)?.message).toContain("Dispatch failed; input preserved");
   } finally {
     OutlinerClient.prototype.request = originalRequest;
+    if (originalHerdrEnv === undefined) delete process.env.HERDR_ENV;
+    else process.env.HERDR_ENV = originalHerdrEnv;
   }
 });
 

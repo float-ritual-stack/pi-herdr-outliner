@@ -71,7 +71,7 @@ function hostCaptureSource(): CaptureSource {
   return HOST_ACTOR_ID === "omp" ? "omp" : "pi";
 }
 
-export function latestAssistantReport(entries: readonly unknown[]): string | null {
+export function latestAssistantResponse(entries: readonly unknown[]): string | null {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index];
     if (
@@ -111,37 +111,6 @@ export function latestAssistantReport(entries: readonly unknown[]): string | nul
   return null;
 }
 
-async function openAgentReportSurface(sessionId: string): Promise<void> {
-  if (process.env.HERDR_ENV !== "1") return;
-  const reports = await client.request<OutlinerClientRegistration[]>({
-    action: "clients.list",
-    role: "report",
-  });
-  if (reports.some((report) => report.contextId === sessionId)) return;
-  const args = [
-    "plugin",
-    "pane",
-    "open",
-    "--plugin",
-    "float.pi-outliner",
-    "--entrypoint",
-    "report",
-    "--placement",
-    "tab",
-    "--cwd",
-    extensionRoot,
-    "--env",
-    `OUTLINER_WORKSPACE_ROOT=${paths.workspaceRoot}`,
-    "--env",
-    `OUTLINER_REPORT_SESSION_ID=${sessionId}`,
-    "--no-focus",
-  ];
-  const workspaceId = process.env.HERDR_WORKSPACE_ID?.trim();
-  if (workspaceId) args.push("--workspace", workspaceId);
-  await execFileAsync(process.env.HERDR_BIN_PATH ?? "herdr", args, {
-    cwd: extensionRoot,
-  });
-}
 
 function compactCaptureReceipt(receipt: CaptureReceipt, source: CaptureSource) {
   const capturedFromBlockId = receipt.block.properties.find(
@@ -292,7 +261,7 @@ async function ensureService(focus: boolean): Promise<void> {
   }
 
   if (process.env.HERDR_ENV === "1") {
-    await execFileAsync(process.execPath, [
+    await execFileAsync("bun", [
       "run",
       join(extensionRoot, "src", "herdr-open.ts"),
       "--mode",
@@ -606,6 +575,30 @@ export default function outlinerExtension(pi: ExtensionAPI): void {
     focusRunner.start();
   }
 
+  async function displayCapturedResponse(blockId: string): Promise<boolean> {
+    const trees = await client.request<OutlinerClientRegistration[]>({
+      action: "clients.list",
+      role: "tree",
+    });
+    const recent = focusRegistry
+      ? selectRecentFocusedOutlinerClient(trees, focusRegistry.recentFocusedPaneIds())
+      : undefined;
+    const target = recent ?? (trees.length === 1 ? trees[0] : undefined);
+    if (!target) return false;
+    await client.request({ action: "selection.set", blockId });
+    await client.request({
+      action: "ui.command.send",
+      command: { targetClientId: target.clientId, command: "focus", blockId },
+    });
+    await client.request({
+      action: "navigation.dispatch",
+      sourceClientId: target.clientId,
+      blockId,
+      intent: "open",
+    });
+    return true;
+  }
+
   function persistActiveTask(blockId: string | null): void {
     activeTaskId = blockId;
     pi.appendEntry<ActiveTaskEntryData>(ACTIVE_TASK_ENTRY_TYPE, { version: 1, blockId });
@@ -915,6 +908,53 @@ export default function outlinerExtension(pi: ExtensionAPI): void {
         );
       } catch (error) {
         ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+      }
+    },
+  });
+
+  pi.registerCommand("send-to-outline", {
+    description: "Save the latest assistant response to Inbox and open it in Detail",
+    handler: async (_args, context) => {
+      const text = latestAssistantResponse(context.sessionManager.getBranch());
+      if (!text) {
+        context.ui.notify("No assistant response is available to send", "warning");
+        return;
+      }
+      try {
+        await ensureService(false);
+        const sessionId = context.sessionManager.getSessionId();
+        const source = hostCaptureSource();
+        const receipt = await client.request<CaptureReceipt>({
+          action: "capture.create",
+          requestId: crypto.randomUUID(),
+          text,
+          source,
+          author: "agent",
+          provenance: {
+            actorId: HOST_ACTOR_ID,
+            sessionId,
+            ...(activeTaskId ? { taskId: activeTaskId } : {}),
+          },
+        });
+        try {
+          await ensureService(true);
+          const displayed = await displayCapturedResponse(receipt.block.id);
+          context.ui.notify(
+            displayed
+              ? `Sent latest response to Inbox and opened it in Detail · ${receipt.block.id.slice(0, 8)}`
+              : `Sent latest response to Inbox · ${receipt.block.id.slice(0, 8)} · no unambiguous Tree was available`,
+            displayed ? "info" : "warning",
+          );
+        } catch (error) {
+          context.ui.notify(
+            `Sent latest response to Inbox · ${receipt.block.id.slice(0, 8)} · Detail unavailable: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+            "warning",
+          );
+        }
+      } catch (error) {
+        context.ui.notify(error instanceof Error ? error.message : String(error), "error");
       }
     },
   });
@@ -1593,35 +1633,9 @@ export default function outlinerExtension(pi: ExtensionAPI): void {
     } catch {
       // Presence is a disposable projection; canonical task state remains authoritative.
     }
-    const text = latestAssistantReport(context.sessionManager.getBranch());
-    if (!text) return;
-    const sessionId = context.sessionManager.getSessionId();
-    try {
-      await ensureService(false);
-      await client.request({
-        action: "reports.publish",
-        sessionId,
-        text,
-        ...(activeTaskId ? { taskId: activeTaskId } : {}),
-      });
-      await openAgentReportSurface(sessionId);
-    } catch (error) {
-      context.ui.notify(
-        `Agent report unavailable: ${error instanceof Error ? error.message : String(error)}`,
-        "warning",
-      );
-    }
   });
 
   pi.on("session_shutdown", async (_event, context) => {
-    try {
-      await client.request({
-        action: "reports.clear",
-        sessionId: context.sessionManager.getSessionId(),
-      }, 300);
-    } catch {
-      // Service shutdown also drops the in-memory report.
-    }
     await presentTask(context, null, "clear");
     await focusRunner?.stop();
     focusRunner = null;

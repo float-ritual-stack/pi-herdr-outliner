@@ -58,7 +58,7 @@ export interface CaptureReceipt {
   deduplicated: boolean;
 }
 
-export type OutlinerClientRole = "tree" | "detail" | "report";
+export type OutlinerClientRole = "tree" | "detail";
 
 export type OutlinerNavigationIntent = "preview" | "open" | "reveal";
 
@@ -241,31 +241,8 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 21;
+export const OUTLINER_PROTOCOL_VERSION = 22;
 
-export interface AgentReport {
-  sessionId: string;
-  rawText: string;
-  resolvedText: string;
-  publishedAt: string;
-  revision: number;
-  workIdPrefix?: string;
-  taskId?: string;
-}
-
-export interface AgentReportSummary {
-  sessionId: string;
-  publishedAt: string;
-  revision: number;
-  taskId?: string;
-}
-
-export interface AgentReportPromotion {
-  reportRevision: number;
-  block: Block;
-  startLine: number;
-  endLine: number;
-}
 
 export interface OutlinerServiceStatus {
   status: "ready";
@@ -288,23 +265,6 @@ export type OutlinerRequest =
       currentBlockId?: string | null;
     }
   | { id: string; action: "ui.command.send"; command: OutlinerUiCommand }
-  | {
-      id: string;
-      action: "reports.publish";
-      sessionId: string;
-      text: string;
-      taskId?: string;
-    }
-  | { id: string; action: "reports.list" }
-  | { id: string; action: "reports.get"; sessionId: string }
-  | { id: string; action: "reports.clear"; sessionId: string }
-  | {
-      id: string;
-      action: "reports.promote";
-      sessionId: string;
-      startLine?: number;
-      endLine?: number;
-    }
   | { id: string; action: "blocks.context"; blockId: string }
   | { id: string; action: "browsing-context.get"; contextId: string }
   | {
@@ -469,8 +429,7 @@ export type OutlinerEventDomain =
   | "selection"
   | "view"
   | "ui"
-  | "browsing-context"
-  | "report";
+  | "browsing-context";
 
 export interface OutlinerEvent {
   id: string;
