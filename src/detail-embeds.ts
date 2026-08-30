@@ -48,9 +48,15 @@ export interface DetailEmbedState {
   completeness?: BlockCollectionCompleteness;
 }
 
+export interface DetailEmbedRange {
+  startLine: number;
+  endLine: number;
+}
+
 export interface DetailReadProjection {
   text: string;
   embeds: DetailEmbedState[];
+  embedRanges: DetailEmbedRange[];
 }
 
 interface ProjectedEmbed {
@@ -61,6 +67,14 @@ interface ProjectedEmbed {
 function boundedError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   return message.replace(/\s+/g, " ").slice(0, MAX_ERROR_LENGTH);
+}
+
+function newlineCount(value: string): number {
+  let count = 0;
+  for (let index = value.indexOf("\n"); index >= 0; index = value.indexOf("\n", index + 1)) {
+    count += 1;
+  }
+  return count;
 }
 
 function linkedHeading(blockId: string, suffix: string): string {
@@ -353,7 +367,7 @@ export async function projectDetailRead(
 ): Promise<DetailReadProjection> {
   const projectedSource = stripFragmentAnchors(text);
   const matches = [...projectedSource.matchAll(DETAIL_EMBED_PATTERN)];
-  if (matches.length === 0) return { text: projectedSource, embeds: [] };
+  if (matches.length === 0) return { text: projectedSource, embeds: [], embedRanges: [] };
 
   const targetCache = new Map<string, Promise<Block>>();
   const loadTarget = (blockId: string): Promise<Block> => {
@@ -392,31 +406,37 @@ export async function projectDetailRead(
   }
   let consumed = 0;
   let output = "";
+  let outputLine = 0;
   const embeds: DetailEmbedState[] = [];
+  const embedRanges: DetailEmbedRange[] = [];
 
   for (let index = 0; index < matches.length; index += 1) {
     const match = matches[index]!;
     const start = match.index;
-    output += projectedSource.slice(consumed, start);
+    const sourceChunk = projectedSource.slice(consumed, start);
+    output += sourceChunk;
+    outputLine += newlineCount(sourceChunk);
     const blockId = match[1]!;
     const fragmentId = match[2];
+    let projected: ProjectedEmbed;
     if (index >= MAX_DETAIL_EMBEDS) {
-      const limited = explicitFallback(
+      projected = explicitFallback(
         blockId,
         "limit",
         `EMBED LIMIT · maximum ${MAX_DETAIL_EMBEDS}`,
         fragmentId,
       );
-      output += limited.text;
-      embeds.push(limited.state);
     } else {
       const pending = cache.get(embedReference(blockId, fragmentId))!;
-      const projected = await pending;
-      output += projected.text;
-      embeds.push(projected.state);
+      projected = await pending;
     }
+    const startLine = outputLine;
+    output += projected.text;
+    outputLine += newlineCount(projected.text);
+    embeds.push(projected.state);
+    embedRanges.push({ startLine, endLine: outputLine });
     consumed = start + match[0].length;
   }
   output += projectedSource.slice(consumed);
-  return { text: output, embeds };
+  return { text: output, embeds, embedRanges };
 }

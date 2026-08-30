@@ -2,7 +2,7 @@ import { extractFileAnnotationComment, formatFileAnnotation } from "./annotation
 import { completionTargetAtCursor } from "./completion";
 import { rankBlockFocusMatches, subsequenceScore } from "./block-focus";
 import { layoutDetailEditor } from "./detail-editor-layout";
-import type { DetailEmbedState, DetailReadProjection } from "./detail-embeds";
+import type { DetailEmbedRange, DetailEmbedState, DetailReadProjection } from "./detail-embeds";
 import {
   ensureHeadingFragment,
   fragmentCandidates,
@@ -127,6 +127,8 @@ export interface DetailState {
   resolvedSelectedText: string;
   projectedSelectedText: string;
   embedStates: DetailEmbedState[];
+  embedRanges: DetailEmbedRange[];
+  embedBackgroundEnabled: boolean;
   workIdPrefix: string | null;
   resolvedBreadcrumb: string;
   mode: DetailMode;
@@ -214,6 +216,7 @@ export type DetailIntent =
   | { type: "backlinks.filter.cancel" }
   | { type: "backlinks.sort.cycle" }
   | { type: "backlinks.source.toggle"; blockId?: string }
+  | { type: "embed-background.toggle" }
   | { type: "lock.toggle" }
   | { type: "buffer.insert"; text: string }
   | { type: "buffer.newline" }
@@ -267,7 +270,7 @@ export function detailHelpText(mode: DetailMode): string {
     case "file":
       return "L lock/unlock  ↑↓ lines  o open next unlocked  R reveal  v select  c comment  b block";
     case "preview":
-      return "L lock/unlock  ↑↓ read  e edit  o open next unlocked  R reveal  q tree";
+      return "L lock/unlock  ↑↓ read  E embeds  e edit  o open next unlocked  R reveal  q tree";
   }
 }
 
@@ -318,6 +321,8 @@ export function createDetailController(
     resolvedSelectedText: "",
     projectedSelectedText: "",
     embedStates: [],
+    embedRanges: [],
+    embedBackgroundEnabled: true,
     workIdPrefix: null,
     resolvedBreadcrumb: "",
     mode: "preview",
@@ -383,6 +388,7 @@ export function createDetailController(
     const projection = await effects.projectRead(text, hostBlockId);
     state.projectedSelectedText = projection.text;
     state.embedStates = projection.embeds;
+    state.embedRanges = projection.embedRanges;
     applyResolvedReferences(await effects.resolveReferences(projection.text));
   };
 
@@ -1174,6 +1180,12 @@ export function createDetailController(
         if (state.completion) state.status = "";
         state.completion = null;
         ensureEditorCursorVisible(viewport);
+        break;
+      case "embed-background.toggle":
+        state.embedBackgroundEnabled = !state.embedBackgroundEnabled;
+        state.status = state.embedBackgroundEnabled
+          ? "Embedded item backgrounds shown"
+          : "Embedded item backgrounds hidden";
         break;
       case "preview.navigate":
         navigatePreview(intent.direction, viewport);

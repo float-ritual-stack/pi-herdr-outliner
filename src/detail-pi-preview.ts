@@ -1,4 +1,5 @@
 import {
+  Box,
   Key,
   Markdown,
   matchesKey,
@@ -40,7 +41,8 @@ function renderPreviewDocument(
   );
 }
 
-const PREVIEW_HELP = "b backlinks  / filter  s sort  Tab select  . expand  Enter inspect  R reveal";
+const PREVIEW_HELP =
+  "E embeds  b backlinks  / filter  s sort  Tab select  . expand  Enter inspect  R reveal";
 
 function escapeGeneratedMarkdown(value: string): string {
   return sanitizeMarkdownDocument(value)
@@ -155,9 +157,75 @@ export function renderBacklinksDocument(state: Readonly<DetailState>): string {
   return lines.join("\n");
 }
 
+
+const EMBED_BACKGROUND = (text: string): string => `\x1b[48;5;236m${text}\x1b[0m`;
+
+class EmbedAwareMarkdown implements Component {
+  private text = "";
+  private ranges: ReadonlyArray<{ startLine: number; endLine: number }> = [];
+  private enabled = true;
+  private segments: Component[] = [];
+
+  constructor(private readonly theme: MarkdownTheme) {}
+
+  setEmbedPresentation(
+    ranges: ReadonlyArray<{ startLine: number; endLine: number }>,
+    enabled: boolean,
+  ): void {
+    this.ranges = ranges;
+    this.enabled = enabled;
+  }
+
+  setText(text: string): void {
+    this.text = text;
+    this.rebuild();
+  }
+
+  private rebuild(): void {
+    if (!this.enabled || this.ranges.length === 0) {
+      this.segments = [new Markdown(this.text, 0, 0, this.theme)];
+      return;
+    }
+    const lines = this.text.split(/\r?\n/);
+    const highlighted = new Array<boolean>(lines.length).fill(false);
+    for (const range of this.ranges) {
+      const start = Math.max(0, range.startLine);
+      const end = Math.min(lines.length - 1, range.endLine);
+      for (let line = start; line <= end; line += 1) highlighted[line] = true;
+    }
+    this.segments = [];
+    let start = 0;
+    for (let line = 1; line <= lines.length; line += 1) {
+      if (line < lines.length && highlighted[line] === highlighted[start]) continue;
+      const markdown = new Markdown(
+        lines.slice(start, line).join("\n"),
+        0,
+        0,
+        this.theme,
+      );
+      if (highlighted[start]) {
+        const box = new Box(0, 0, EMBED_BACKGROUND);
+        box.addChild(markdown);
+        this.segments.push(box);
+      } else {
+        this.segments.push(markdown);
+      }
+      start = line;
+    }
+  }
+
+  render(width: number): string[] {
+    return this.segments.flatMap((segment) => segment.render(width));
+  }
+
+  invalidate(): void {
+    for (const segment of this.segments) segment.invalidate();
+  }
+}
+
 class DetailPreviewBody implements Component {
   constructor(
-    private readonly authored: Markdown,
+    private readonly authored: Component,
     private readonly backlinks: Markdown,
   ) {}
 
@@ -197,13 +265,14 @@ class DetailPreviewFooter implements Component {
 }
 
 export class DetailPiPreviewLayout extends VStack {
-  readonly markdown: Markdown;
+  readonly markdown: EmbedAwareMarkdown;
   readonly backlinkMarkdown: Markdown;
   readonly scrollView: ScrollView;
   private renderedSourceText: string | undefined;
   private renderedRawText: string | undefined;
   private renderedWorkIdPrefix: string | null | undefined;
   private renderedBacklinksDocument: string | undefined;
+  private renderedEmbedPresentation: string | undefined;
   private previousSelectionId: string | null | undefined;
   private previousTargetFragmentId: string | null | undefined;
   private previousPreviewOffset: number | undefined;
@@ -221,7 +290,7 @@ export class DetailPiPreviewLayout extends VStack {
     private readonly linksEnabled = process.env.HERDR_ENV === "1",
     private readonly requestRender?: () => void,
   ) {
-    const markdown = new Markdown("", 0, 0, markdownTheme);
+    const markdown = new EmbedAwareMarkdown(markdownTheme);
     const backlinkMarkdown = new Markdown("", 0, 0, {
       ...markdownTheme,
       strikethrough: highlightActiveBacklink,
@@ -284,14 +353,19 @@ export class DetailPiPreviewLayout extends VStack {
       ? this.state.resolvedSelectedText
       : "Select a block in the outliner pane.";
     const rawText = selected && this.linksEnabled ? this.state.projectedSelectedText : sourceText;
+    const embedPresentation = `${this.state.embedBackgroundEnabled}:${
+      this.state.embedRanges.map((range) => `${range.startLine}-${range.endLine}`).join(",")
+    }`;
     const sourceChanged =
       sourceText !== this.renderedSourceText ||
       rawText !== this.renderedRawText ||
-      this.state.workIdPrefix !== this.renderedWorkIdPrefix;
+      this.state.workIdPrefix !== this.renderedWorkIdPrefix ||
+      embedPresentation !== this.renderedEmbedPresentation;
     if (sourceChanged) {
       this.renderedSourceText = sourceText;
       this.renderedRawText = rawText;
       this.renderedWorkIdPrefix = this.state.workIdPrefix;
+      this.renderedEmbedPresentation = embedPresentation;
       const renderedText = selected
         ? renderPreviewDocument(
             sourceText,
@@ -300,6 +374,10 @@ export class DetailPiPreviewLayout extends VStack {
             this.state.workIdPrefix,
           )
         : sourceText;
+      this.markdown.setEmbedPresentation(
+        this.state.embedRanges,
+        this.state.embedBackgroundEnabled,
+      );
       this.markdown.setText(renderedText);
     }
     const backlinksDocument = renderBacklinksDocument(this.state);

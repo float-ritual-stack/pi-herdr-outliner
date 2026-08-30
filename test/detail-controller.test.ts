@@ -99,7 +99,11 @@ function createHarness(
     references: [],
     workIdPrefix: "PIE",
   }),
-  projectRead: DetailEffects["projectRead"] = async (text) => ({ text, embeds: [] }),
+  projectRead: DetailEffects["projectRead"] = async (text) => ({
+    text,
+    embeds: [],
+    embedRanges: [],
+  }),
 ): Harness {
   let selection: SelectionContext = { selected: initial, ancestors: [], children: [] };
   let update: DetailEffects["updateBlock"] = async (input) => makeBlock({
@@ -317,6 +321,7 @@ describe("detail controller projection and deferred refresh", () => {
           count: 1,
           completeness: { kind: "complete" },
         }],
+        embedRanges: [{ startLine: 1, endLine: 2 }],
       }),
     );
 
@@ -331,6 +336,20 @@ describe("detail controller projection and deferred refresh", () => {
     expect(harness.controller.state.context.selected?.text).toBe(selected.text);
     expect(harness.calls.projectedReads).toEqual([selected.text, selected.text]);
     expect(harness.calls.projectedReadHosts).toEqual([selected.id, selected.id]);
+  });
+
+  test("toggles embedded item backgrounds per Detail without changing projection data", async () => {
+    const selected = makeBlock({ text: "Recommendation\n!((view-next))" });
+    const harness = createHarness(selected);
+    await harness.controller.initialize();
+
+    expect(harness.controller.state.embedBackgroundEnabled).toBe(true);
+    await harness.controller.dispatch({ type: "embed-background.toggle" }, viewport);
+    expect(harness.controller.state.embedBackgroundEnabled).toBe(false);
+    expect(harness.controller.state.status).toBe("Embedded item backgrounds hidden");
+    await harness.controller.dispatch({ type: "embed-background.toggle" }, viewport);
+    expect(harness.controller.state.embedBackgroundEnabled).toBe(true);
+    expect(harness.controller.state.status).toBe("Embedded item backgrounds shown");
   });
 
   test("keeps trashed blocks read-only and restores direct Trash roots explicitly", async () => {

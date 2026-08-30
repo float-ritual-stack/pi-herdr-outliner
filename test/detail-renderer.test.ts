@@ -29,6 +29,8 @@ function state(overrides: Partial<DetailState> = {}): DetailState {
     resolvedSelectedText: "",
     projectedSelectedText: "",
     embedStates: [],
+    embedRanges: [],
+    embedBackgroundEnabled: true,
     workIdPrefix: null,
     resolvedBreadcrumb: "",
     mode: "preview",
@@ -73,7 +75,7 @@ describe("detail ANSI renderer", () => {
       "",
       "",
       "",
-      "\x1b[2mL lock/unlock  ↑↓ read  e edit  o open next unlocked  R reveal …\x1b[0m",
+      "\x1b[2mL lock/unlock  ↑↓ read  E embeds  e edit  o open next unlocked …\x1b[0m",
     ].join("\n"));
   });
 
@@ -96,8 +98,29 @@ describe("detail ANSI renderer", () => {
       "resolved three",
       "resolved four",
       "Ready",
-      "\x1b[2mL lock/unlock  ↑↓ read  e edit  o open next unlocked  R reveal …\x1b[0m",
+      "\x1b[2mL lock/unlock  ↑↓ read  E embeds  e edit  o open next unlocked …\x1b[0m",
     ].join("\n"));
+  });
+
+  test("renders full-width embed backgrounds only inside projected line ranges", () => {
+    const selected = block("raw");
+    const detail = state({
+      context: { selected, ancestors: [], children: [] },
+      resolvedSelectedText: "Before\nEmbedded block\nProjected body\nAfter",
+      resolvedBreadcrumb: "Embed demo",
+      embedRanges: [{ startLine: 1, endLine: 2 }],
+    });
+
+    let rendered = renderDetailLines(detail, { width: 32, height: 10 });
+    expect(rendered[3]).toBe("Before");
+    expect(rendered[4]).toContain("\x1b[48;5;236m");
+    expect(rendered[4]).toContain("Embedded block");
+    expect(rendered[5]).toContain("\x1b[48;5;236m");
+    expect(rendered[6]).toBe("After");
+
+    detail.embedBackgroundEnabled = false;
+    rendered = renderDetailLines(detail, { width: 32, height: 10 });
+    expect(rendered.slice(3, 7).some((line) => line.includes("\x1b[48;5;236m"))).toBe(false);
   });
 
   test("fits the cursor and completion inside the exact viewport height", () => {

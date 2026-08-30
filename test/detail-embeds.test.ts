@@ -119,6 +119,7 @@ test("renders a bounded virtual-branch embed without changing authored source", 
     count: 2,
     completeness: { kind: "truncated", limit: 2 },
   }]);
+  expect(projection.embedRanges).toEqual([{ startLine: 1, endLine: 3 }]);
   expect(requester.calls).toContainEqual({
     action: "blocks.query",
     query: { filters: [{ key: "status", value: "next" }], rankViewId: definition.id, limit: 4 },
@@ -206,6 +207,7 @@ test("renders ordinary block Markdown without loading a workspace snapshot or ne
       "After",
     ].join("\n"),
     embeds: [{ blockId: ordinary.id, status: "ready", count: 1 }],
+    embedRanges: [{ startLine: 1, endLine: 4 }],
   });
   expect(requester.calls).not.toContainEqual({ action: "workspace.snapshot" });
   expect(requester.calls).not.toContainEqual({ action: "get", blockId: "nested-target" });
@@ -281,6 +283,12 @@ test("renders exact fragment slices with explicit fragment failures and no recur
       status: "fragment-duplicate",
       count: 0,
     },
+  ]);
+  expect(projection.embedRanges).toEqual([
+    { startLine: 0, endLine: 5 },
+    { startLine: 6, endLine: 8 },
+    { startLine: 9, endLine: 9 },
+    { startLine: 10, endLine: 10 },
   ]);
   expect(requester.calls).not.toContainEqual({ action: "get", blockId: "nested-target" });
   expect(requester.calls.filter((call) =>
@@ -378,6 +386,10 @@ test("renders bounded one-hop relation views over selected stable fragments", as
     call.action === "get" && call.blockId === targetBeta.id
   )).toHaveLength(1);
   expect(requester.calls).not.toContainEqual({ action: "get", blockId: "nested-target" });
+  expect(projection.embedRanges).toEqual([
+    { startLine: 0, endLine: 8 },
+    { startLine: 9, endLine: 16 },
+  ]);
 });
 
 test("hides fragment anchor markers only in the generated read projection", async () => {
@@ -389,6 +401,7 @@ test("hides fragment anchor markers only in the generated read projection", asyn
   expect(projection).toEqual({
     text: "# Heading\n\nParagraph",
     embeds: [],
+    embedRanges: [],
   });
   expect(authored).toContain("^stable-heading");
   expect(requester.calls).toEqual([]);

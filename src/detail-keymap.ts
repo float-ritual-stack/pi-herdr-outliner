@@ -149,6 +149,8 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
       await dispatch({ type: "reference.follow" });
     } else if (isPageNavigationKey(key.name)) {
       await dispatch({ type: "preview.navigate", direction: key.name });
+    } else if (str === "E") {
+      await dispatch({ type: "embed-background.toggle" });
     } else if (str === "e") await dispatch({ type: "edit.begin" });
     else if (str === "f") await dispatch({ type: "view.file" });
     else if (str === "b" && controller.state.mode === "annotation") await dispatch({ type: "view.block" });

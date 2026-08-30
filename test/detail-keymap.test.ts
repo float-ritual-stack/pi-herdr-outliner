@@ -19,6 +19,8 @@ function state(): DetailState {
     resolvedSelectedText: "",
     projectedSelectedText: "",
     embedStates: [],
+    embedRanges: [],
+    embedBackgroundEnabled: true,
     workIdPrefix: null,
     resolvedBreadcrumb: "",
     mode: "edit",
@@ -209,10 +211,12 @@ test("keeps reader Enter inert and reserves e for editing", async () => {
 
   await preview.press({ name: "return" });
   await preview.press({ name: "e" }, "e");
+  await preview.press({ name: "e", shift: true }, "E");
 
   expect(preview.intents).toEqual([
     { type: "redraw" },
     { type: "edit.begin" },
+    { type: "embed-background.toggle" },
   ]);
 });
 

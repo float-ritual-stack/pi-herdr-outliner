@@ -221,6 +221,7 @@ Projected virtual occurrences deliberately constrain hierarchy and collapse. Bra
 | `PageUp` / `PageDown` | Scroll one viewport |
 | `g` / `G` | Top / bottom |
 | Mouse wheel / trackpad | Scroll preview |
+| `E` | Toggle subtle full-width backgrounds around generated embed regions in this Detail |
 | `b` | Expand/collapse the generated Backlinks section; the first expansion loads results lazily |
 | `/` | Edit a fuzzy backlink-source filter; Enter applies and Esc cancels |
 | `s` | Cycle updated/created timestamp sorting in descending/ascending order |
@@ -347,6 +348,11 @@ Generated embed output is read-only, refreshes after canonical content events,
 and is never recursively evaluated. Missing/deleted targets, fragment failures,
 invalid definitions, query failures, truncation, and the 16-embed document limit
 remain explicit.
+
+Generated embed regions use Pi TUI's `Box` background component to preserve
+Markdown styling and wrapped-line boundaries while shading the full available
+width. Shading is enabled by default. `E` toggles it for the current Detail
+process without changing canonical text or any other Detail.
 
 A bounded one-hop relation projection is another canonical definition block:
 

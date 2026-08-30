@@ -33,6 +33,20 @@ function fitDynamicText(value: string, width: number): string {
   return fitToWidth(sanitizeDynamicText(value), width);
 }
 
+const EMBED_BACKGROUND = "\x1b[48;5;236m";
+
+function renderEmbedBackground(line: string, width: number): string {
+  const padding = " ".repeat(Math.max(0, width - visibleWidth(line)));
+  return `${EMBED_BACKGROUND}${
+    line.replaceAll("\x1b[0m", `\x1b[0m${EMBED_BACKGROUND}`)
+  }${padding}\x1b[0m`;
+}
+
+function isEmbeddedLine(state: Readonly<DetailState>, line: number): boolean {
+  return state.embedBackgroundEnabled &&
+    state.embedRanges.some((range) => line >= range.startLine && line <= range.endLine);
+}
+
 function fitBreadcrumb(value: string, width: number): string {
   const safe = sanitizeDynamicText(value || "No block selected");
   if (visibleWidth(safe) <= width) return safe;
@@ -273,10 +287,16 @@ export function renderDetailLines(
       output.push(current ? `\x1b[48;5;238m${prefix}${rendered}\x1b[0m` : `${prefix}${rendered}`);
     }
   } else {
-    for (const line of state.resolvedSelectedText
-      .split(/\r?\n/)
-      .slice(state.previewOffset, state.previewOffset + bodyHeight)) {
-      output.push(renderMarkdownLine(fitDynamicText(line, width)));
+    const lines = state.resolvedSelectedText.split(/\r?\n/);
+    for (
+      let lineIndex = state.previewOffset;
+      lineIndex < Math.min(lines.length, state.previewOffset + bodyHeight);
+      lineIndex += 1
+    ) {
+      const rendered = renderMarkdownLine(fitDynamicText(lines[lineIndex]!, width));
+      output.push(
+        isEmbeddedLine(state, lineIndex) ? renderEmbedBackground(rendered, width) : rendered,
+      );
     }
   }
 

@@ -44,6 +44,8 @@ function state(text: string, rawText = "raw edit source"): DetailState {
     resolvedSelectedText: text,
     projectedSelectedText: rawText,
     embedStates: [],
+    embedRanges: [],
+    embedBackgroundEnabled: true,
     workIdPrefix: "PIE",
     resolvedBreadcrumb: "Resolved block",
     mode: "preview",
@@ -225,6 +227,27 @@ describe("Pi Markdown detail preview", () => {
     } finally {
       setCapabilities(capabilities);
     }
+  });
+
+  test("shades only projected embed lines and can disable the background", () => {
+    const detail = state(
+      "Before\nEmbedded block: ((Demo))\nProjected body\nAfter",
+      "Before\n!((demo-block))\nAfter",
+    );
+    detail.embedRanges = [{ startLine: 1, endLine: 2 }];
+    const layout = previewLayout(detail);
+    layout.syncState();
+
+    let rendered = layout.markdown.render(48);
+    expect(rendered.find((line) => line.includes("Embedded block"))).toContain("\x1b[48;5;236m");
+    expect(rendered.find((line) => line.includes("Projected body"))).toContain("\x1b[48;5;236m");
+    expect(rendered.find((line) => line.includes("Before"))).not.toContain("\x1b[48;5;236m");
+    expect(rendered.find((line) => line.includes("After"))).not.toContain("\x1b[48;5;236m");
+
+    detail.embedBackgroundEnabled = false;
+    layout.syncState();
+    rendered = layout.markdown.render(48);
+    expect(rendered.some((line) => line.includes("\x1b[48;5;236m"))).toBe(false);
   });
 
   test("links each Detail breadcrumb segment to an explicit Tree reveal", () => {

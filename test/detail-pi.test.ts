@@ -29,6 +29,8 @@ function state(overrides: Partial<DetailState> = {}): DetailState {
     resolvedSelectedText: "",
     projectedSelectedText: "",
     embedStates: [],
+    embedRanges: [],
+    embedBackgroundEnabled: true,
     workIdPrefix: null,
     resolvedBreadcrumb: "",
     mode: "preview",
