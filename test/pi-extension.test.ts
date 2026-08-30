@@ -5,6 +5,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import outlinerExtension, {
   containsConfiguredWorkPlaceholder,
+  createOutlinerExtension,
   formatSelection,
   latestAssistantResponse,
   formatWorkPlaceholderNudge,
@@ -742,7 +743,7 @@ test("requires protocol v22, attributes agent creates and page follows, and pres
       parentId: null,
       author: "agent",
       provenance: {
-        actorId: process.env.OMPCODE ? "omp" : "pi",
+        actorId: "pi",
         sessionId: "session-test",
         taskId: "tool-call-test",
       },
@@ -752,7 +753,7 @@ test("requires protocol v22, attributes agent creates and page follows, and pres
       address: "Agent Page",
       author: "agent",
       provenance: {
-        actorId: process.env.OMPCODE ? "omp" : "pi",
+        actorId: "pi",
         sessionId: "session-test",
         taskId: "page-follow-test",
       },
@@ -973,7 +974,7 @@ test("captures through command, tool, and exact standalone dispatch without an a
   } as unknown as ExtensionContext;
 
   try {
-    outlinerExtension(pi);
+    createOutlinerExtension("omp")(pi);
     await commands.get("capture")!.handler("command capture", context);
     await commands.get("send-to-outline")!.handler("", context);
     const toolResult = await tools.get("outliner_capture")!.execute(
@@ -986,7 +987,7 @@ test("captures through command, tool, and exact standalone dispatch without an a
     expect(JSON.parse(toolResult.content[0]!.text)).toEqual({
       blockId: "capture-3",
       inboxBlockId: "inbox",
-      source: process.env.OMPCODE ? "omp" : "pi",
+      source: "omp",
       capturedFromBlockId: selectionBlock.id,
       deduplicated: false,
     });
@@ -1015,34 +1016,34 @@ test("captures through command, tool, and exact standalone dispatch without an a
     expect(captures).toHaveLength(4);
     expect(captures[0]).toMatchObject({
       text: "command capture",
-      source: process.env.OMPCODE ? "omp" : "pi",
+      source: "omp",
       capturedFromBlockId: selectionBlock.id,
       author: "user",
     });
     expect(captures[1]).toEqual(expect.objectContaining({
       text: "Roadmap analysis before the advisory.",
-      source: process.env.OMPCODE ? "omp" : "pi",
+      source: "omp",
       author: "agent",
       provenance: {
-        actorId: process.env.OMPCODE ? "omp" : "pi",
+        actorId: "omp",
         sessionId: "session-capture",
       },
     }));
     expect(captures[2]).toEqual(expect.objectContaining({
       requestId: "stable-tool-request",
       text: "tool capture",
-      source: process.env.OMPCODE ? "omp" : "pi",
+      source: "omp",
       capturedFromBlockId: selectionBlock.id,
       author: "agent",
       provenance: {
-        actorId: process.env.OMPCODE ? "omp" : "pi",
+        actorId: "omp",
         sessionId: "session-capture",
         taskId: "tool-capture",
       },
     }));
     expect(captures[3]).toMatchObject({
       text: "{remember this 🐢}",
-      source: process.env.OMPCODE ? "omp" : "pi",
+      source: "omp",
       author: "user",
     });
     expect(notifications.some(({ message }) => message.includes("Captured to Inbox"))).toBe(true);

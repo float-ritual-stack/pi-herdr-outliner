@@ -54,21 +54,22 @@ const paths = resolvePaths();
 const client = new OutlinerClient(paths.socket);
 let headlessServer: ChildProcess | null = null;
 
-const HOST_ACTOR_ID = process.env.OMPCODE ? "omp" : "pi";
+export type OutlinerHostActorId = "omp" | "pi";
 
 function toolProvenance(
+  actorId: OutlinerHostActorId,
   context: ExtensionContext,
   toolCallId: string,
 ): BlockProvenance {
   return {
-    actorId: HOST_ACTOR_ID,
+    actorId,
     sessionId: context.sessionManager.getSessionId(),
     taskId: toolCallId,
   };
 }
 
-function hostCaptureSource(): CaptureSource {
-  return HOST_ACTOR_ID === "omp" ? "omp" : "pi";
+function hostCaptureSource(actorId: OutlinerHostActorId): CaptureSource {
+  return actorId;
 }
 
 export function latestAssistantResponse(entries: readonly unknown[]): string | null {
@@ -579,7 +580,8 @@ async function reportHerdrTask(
   }
 }
 
-export default function outlinerExtension(pi: ExtensionAPI): void {
+export function createOutlinerExtension(actorId: OutlinerHostActorId) {
+  return function outlinerExtension(pi: ExtensionAPI): void {
   let activeTaskId: string | null = null;
   let focusRegistry: HerdrRuntimeRegistry | null = null;
   let focusRunner: HerdrRegistryRunner | null = null;
@@ -916,7 +918,7 @@ export default function outlinerExtension(pi: ExtensionAPI): void {
       }
       try {
         await ensureService(false);
-        const source = hostCaptureSource();
+        const source = hostCaptureSource(actorId);
         const receipt = await client.request<CaptureReceipt>({
           action: "capture.create",
           requestId: crypto.randomUUID(),
@@ -947,7 +949,7 @@ export default function outlinerExtension(pi: ExtensionAPI): void {
       try {
         await ensureService(false);
         const sessionId = context.sessionManager.getSessionId();
-        const source = hostCaptureSource();
+        const source = hostCaptureSource(actorId);
         const receipt = await client.request<CaptureReceipt>({
           action: "capture.create",
           requestId: crypto.randomUUID(),
@@ -955,7 +957,7 @@ export default function outlinerExtension(pi: ExtensionAPI): void {
           source,
           author: "agent",
           provenance: {
-            actorId: HOST_ACTOR_ID,
+            actorId: actorId,
             sessionId,
             ...(activeTaskId ? { taskId: activeTaskId } : {}),
           },
@@ -1168,7 +1170,7 @@ export default function outlinerExtension(pi: ExtensionAPI): void {
         text: durableArtifactText(params.text, params.type, parentId),
         parentId,
         author: "agent",
-        provenance: toolProvenance(context, toolCallId),
+        provenance: toolProvenance(actorId, context, toolCallId),
       });
       if (params.focus === false) {
         return toolResult({
@@ -1215,7 +1217,7 @@ export default function outlinerExtension(pi: ExtensionAPI): void {
         text: params.text,
         parentId: params.parentId,
         author: "agent",
-        provenance: toolProvenance(context, toolCallId),
+        provenance: toolProvenance(actorId, context, toolCallId),
       });
       return toolResult(block);
     },
@@ -1233,7 +1235,7 @@ export default function outlinerExtension(pi: ExtensionAPI): void {
     }),
     async execute(toolCallId, params, _signal, _onUpdate, context) {
       await ensureService(false);
-      const source = hostCaptureSource();
+      const source = hostCaptureSource(actorId);
       const receipt = await client.request<CaptureReceipt>({
         action: "capture.create",
         requestId:
@@ -1242,7 +1244,7 @@ export default function outlinerExtension(pi: ExtensionAPI): void {
         source,
         capturedFromBlockId: params.capturedFromBlockId ?? await selectedBlockId(),
         author: "agent",
-        provenance: toolProvenance(context, toolCallId),
+        provenance: toolProvenance(actorId, context, toolCallId),
       });
       return textToolResult(JSON.stringify(compactCaptureReceipt(receipt, source), null, 2));
     },
@@ -1270,7 +1272,7 @@ export default function outlinerExtension(pi: ExtensionAPI): void {
         parentId: source.id,
         text,
         author: "agent",
-        provenance: toolProvenance(context, toolCallId),
+        provenance: toolProvenance(actorId, context, toolCallId),
       });
       return toolResult(annotation);
     },
@@ -1386,7 +1388,7 @@ export default function outlinerExtension(pi: ExtensionAPI): void {
             action: "pages.follow",
             address: requireField(params.address, "address"),
             author: "agent",
-            provenance: toolProvenance(context, toolCallId),
+            provenance: toolProvenance(actorId, context, toolCallId),
           }));
         case "complete":
           return toolResult(await client.request({
@@ -1558,7 +1560,7 @@ export default function outlinerExtension(pi: ExtensionAPI): void {
     }
     try {
       await ensureService(false);
-      const source = hostCaptureSource();
+      const source = hostCaptureSource(actorId);
       const receipt = await client.request<CaptureReceipt>({
         action: "capture.create",
         requestId: crypto.randomUUID(),
@@ -1669,4 +1671,7 @@ export default function outlinerExtension(pi: ExtensionAPI): void {
       headlessServer = null;
     }
   });
+  };
 }
+
+export default createOutlinerExtension("pi");
