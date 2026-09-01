@@ -43,6 +43,7 @@ import {
   type CaptureReceipt,
   type CaptureSource,
   type OutlinerClientRegistration,
+  type OutlinerClientRuntime,
   type OutlinerServiceStatus,
   type MutationProvenance,
   type PropertyCatalogItem,
@@ -578,6 +579,26 @@ export function selectRecentFocusedOutlinerClient(
   }
   return undefined;
 }
+export function selectCapturedResponseTree(
+  trees: readonly OutlinerClientRegistration[],
+  hostRuntime: OutlinerClientRuntime | undefined,
+  recentPaneIds: readonly string[],
+): OutlinerClientRegistration | undefined {
+  if (hostRuntime?.tabId) {
+    const sameTab = trees.filter((tree) => {
+      const runtime = tree.runtime;
+      if (!runtime || runtime.tabId !== hostRuntime.tabId) return false;
+      return !hostRuntime.workspaceId || runtime.workspaceId === hostRuntime.workspaceId;
+    });
+    if (sameTab.length === 1) return sameTab[0];
+    if (sameTab.length > 1) {
+      return selectRecentFocusedOutlinerClient(sameTab, recentPaneIds);
+    }
+  }
+  return selectRecentFocusedOutlinerClient(trees, recentPaneIds) ??
+    (trees.length === 1 ? trees[0] : undefined);
+}
+
 
 function boundAgentContext(content: string): string {
   if (content.length <= MAX_SELECTION_CONTEXT_CHARS) return content;
@@ -847,10 +868,12 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
       action: "clients.list",
       role: "tree",
     });
-    const recent = focusRegistry
-      ? selectRecentFocusedOutlinerClient(trees, focusRegistry.recentFocusedPaneIds())
-      : undefined;
-    const target = recent ?? (trees.length === 1 ? trees[0] : undefined);
+    const recentPaneIds = focusRegistry?.recentFocusedPaneIds() ?? [];
+    const target = selectCapturedResponseTree(
+      trees,
+      currentPaneIdentity(),
+      recentPaneIds,
+    );
     if (!target) return false;
     await client.request({ action: "selection.set", blockId });
     await client.request({

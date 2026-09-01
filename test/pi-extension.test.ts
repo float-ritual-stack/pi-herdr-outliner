@@ -13,6 +13,7 @@ import outlinerExtension, {
   latestAssistantResponse,
   formatWorkPlaceholderNudge,
   selectRecentFocusedOutlinerClient,
+  selectCapturedResponseTree,
 } from "../pi-extension/index";
 import { OutlinerClient, type RequestInput } from "../src/client";
 import { parseProperties, patchPropertyText } from "../src/properties";
@@ -1537,4 +1538,54 @@ test("selects the most recently focused registered Outliner client", () => {
     clients,
     ["agent-pane", "unknown-pane"],
   )).toBeUndefined();
+});
+
+test("prefers the unique Tree in the host tab before cross-tab focus history", () => {
+  const trees: OutlinerClientRegistration[] = [
+    {
+      clientId: "same-tab",
+      role: "tree",
+      contextId: "same",
+      runtime: { paneId: "pane-same", workspaceId: "workspace", tabId: "tab-a" },
+    },
+    {
+      clientId: "other-tab",
+      role: "tree",
+      contextId: "other",
+      runtime: { paneId: "pane-other", workspaceId: "workspace", tabId: "tab-b" },
+    },
+  ];
+
+  expect(selectCapturedResponseTree(
+    trees,
+    { paneId: "host", workspaceId: "workspace", tabId: "tab-a" },
+    ["pane-other"],
+  )).toBe(trees[0]);
+});
+
+test("uses same-tab focus history only when that tab has multiple Trees", () => {
+  const trees: OutlinerClientRegistration[] = [
+    {
+      clientId: "first",
+      role: "tree",
+      contextId: "first",
+      runtime: { paneId: "pane-first", workspaceId: "workspace", tabId: "tab-a" },
+    },
+    {
+      clientId: "second",
+      role: "tree",
+      contextId: "second",
+      runtime: { paneId: "pane-second", workspaceId: "workspace", tabId: "tab-a" },
+    },
+    {
+      clientId: "other-tab",
+      role: "tree",
+      contextId: "other",
+      runtime: { paneId: "pane-other", workspaceId: "workspace", tabId: "tab-b" },
+    },
+  ];
+  const host = { paneId: "host", workspaceId: "workspace", tabId: "tab-a" };
+
+  expect(selectCapturedResponseTree(trees, host, ["pane-other", "pane-second"])).toBe(trees[1]);
+  expect(selectCapturedResponseTree(trees, host, ["pane-other"])).toBeUndefined();
 });
