@@ -20,6 +20,7 @@ import {
   type OutlinerRequest,
   type RoadmapItemCreateReceipt,
   type OutlinerResponse,
+  type SelectionContext,
 } from "./types";
 
 export class OutlinerServer {
@@ -423,12 +424,16 @@ export class OutlinerServer {
         case "browsing-context.get": {
           const contextId = this.normalizeContextId(request.contextId);
           const blockId = this.browsingContextTargets.get(contextId) ?? null;
-          result = {
-            contextId,
-            target: blockId
-              ? this.store.blockContext(blockId)
-              : { selected: null, ancestors: [], children: [] },
-          };
+          let target: SelectionContext = { selected: null, ancestors: [], children: [] };
+          if (blockId) {
+            try {
+              target = this.store.blockContext(blockId);
+            } catch (error) {
+              if (!(error instanceof Error) || error.message !== `Block not found: ${blockId}`) throw error;
+              this.browsingContextTargets.delete(contextId);
+            }
+          }
+          result = { contextId, target };
           break;
         }
         case "browsing-context.publish": {
@@ -729,10 +734,10 @@ export class OutlinerServer {
       }
       case "browsing-context.publish": {
         const published = response.result as BrowsingContextPublication;
-        if (!published.preview) return null;
-        domain = "ui";
+        domain = "browsing-context";
+        contextId = published.contextId;
         blockId = request.blockId ?? undefined;
-        command = published.preview.command;
+        command = published.preview?.command;
         break;
       }
       default:
@@ -754,11 +759,25 @@ export class OutlinerServer {
     this.pruneDestroyedSubscribers();
     const envelope: OutlinerEventEnvelope = { event };
     const line = `${JSON.stringify(envelope)}\n`;
+    const contextLine = event.domain === "browsing-context"
+      ? `${JSON.stringify({ event: { ...event, command: undefined } } satisfies OutlinerEventEnvelope)}\n`
+      : line;
     for (const [subscriber, client] of this.subscribers) {
       if (event.domain === "ui" && event.command?.targetClientId !== client.clientId) {
         continue;
       }
-      if (event.domain === "browsing-context" && event.contextId !== client.contextId) {
+      if (event.domain === "browsing-context") {
+        if (event.contextId === client.contextId) subscriber.write(contextLine);
+        if (event.command?.targetClientId === client.clientId) {
+          subscriber.write(`${JSON.stringify({
+            event: {
+              ...event,
+              id: crypto.randomUUID(),
+              domain: "ui",
+              contextId: undefined,
+            },
+          } satisfies OutlinerEventEnvelope)}\n`);
+        }
         continue;
       }
       subscriber.write(line);

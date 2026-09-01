@@ -332,7 +332,7 @@ export class OutlinerActionKeymap {
     const applicable = ACTIONS.filter((action) => actionApplies(action, surface, mode));
     const matched = applicable.find((action) => this.bindings(action.id).includes(chord));
     if (matched) {
-      const canonical = triggerForChord(matched.defaultChords[0]!);
+      const canonical = triggerForChord(matched.defaultChords[0] ?? chord);
       return { actionId: matched.id, ...canonical, suppressed: false };
     }
     const ownedDefault = applicable.some((action) =>
@@ -370,8 +370,9 @@ export class OutlinerActionKeymap {
     return action;
   }
 
-  canonicalInput(actionId: string): { str: string; key: TerminalKey } {
-    return triggerForChord(this.action(actionId).defaultChords[0]!);
+  canonicalInput(actionId: string): { str: string; key: TerminalKey } | null {
+    const chord = this.action(actionId).defaultChords[0] ?? this.bindings(actionId)[0];
+    return chord ? triggerForChord(chord) : null;
   }
   boundInput(actionId: string): { str: string; key: TerminalKey } | null {
     const chord = this.bindings(actionId)[0];

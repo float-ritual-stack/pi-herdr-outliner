@@ -1179,8 +1179,8 @@ export class OutlinerStore {
       if (!allocator) {
         throw new Error("Configure the project Work-ID prefix before allocation");
       }
-      const workIdProperties = block.properties.flatMap((property, ordinal) =>
-        property.key === "work-id" ? [{ ordinal, value: property.value }] : []
+      const workIdProperties = parsePropertyRecords(block.text).filter(
+        (property) => property.scope === "block" && property.key === "work-id",
       );
       const replacesPlaceholder =
         workIdProperties.length === 1 &&

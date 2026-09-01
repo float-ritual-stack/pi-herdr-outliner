@@ -82,6 +82,20 @@ describe("Outliner action keymap", () => {
       suppressed: true,
     });
   });
+  test("uses rebound chords for actions without defaults", () => {
+    const keymap = new OutlinerActionKeymap("<test>", { "tree.detail.right": ["Alt+D"] });
+    expect(keymap.canonicalize("tree", "browse", "", { name: "d", meta: true })).toMatchObject({
+      actionId: "tree.detail.right",
+      str: "",
+      key: { name: "d", meta: true },
+      suppressed: false,
+    });
+    expect(keymap.canonicalInput("tree.detail.right")).toEqual({
+      str: "",
+      key: { name: "d", meta: true },
+    });
+    expect(new OutlinerActionKeymap("<test>").canonicalInput("tree.detail.right")).toBeNull();
+  });
 
   test("rejects active-scope collisions and missing cancel routes", () => {
     expect(() => new OutlinerActionKeymap("<test>", {

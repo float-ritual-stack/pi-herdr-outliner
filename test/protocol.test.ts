@@ -537,9 +537,8 @@ test("isolates browsing-context targets and events across same-workspace client 
     client: { clientId: "detail-first", role: "detail", contextId: "context-first" },
     onConnect: firstConnected.resolve,
     onEvent: (event) => {
-      if (event.domain !== "ui") return;
       firstEvents.push(event);
-      firstReceived.resolve();
+      if (event.domain === "ui") firstReceived.resolve();
     },
   });
   const secondWatcher = client.watch({
@@ -570,6 +569,11 @@ test("isolates browsing-context targets and events across same-workspace client 
   await Bun.sleep(20);
   expect(firstEvents).toEqual([
     expect.objectContaining({
+      domain: "browsing-context",
+      contextId: "context-first",
+      blockId: first.id,
+    }),
+    expect.objectContaining({
       domain: "ui",
       blockId: first.id,
       command: expect.objectContaining({
@@ -597,6 +601,14 @@ test("isolates browsing-context targets and events across same-workspace client 
   }>({ action: "browsing-context.get", contextId: "context-second" });
   expect(firstContext.target.selected?.id).toBe(first.id);
   expect(secondContext.target.selected?.id).toBe(second.id);
+
+  store.delete(first.id);
+  store.purge(first.id, first.id.slice(0, 8));
+  const purgedContext = await client.request<{
+    contextId: string;
+    target: SelectionContext;
+  }>({ action: "browsing-context.get", contextId: "context-first" });
+  expect(purgedContext.target).toEqual({ selected: null, ancestors: [], children: [] });
 });
 
 test("prunes destroyed client registrations before listing or targeting", () => {

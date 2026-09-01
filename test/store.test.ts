@@ -1212,6 +1212,17 @@ Second paragraph`;
     expect(allocation.block.text).not.toContain("PIE-XXX");
     expect(allocation.block.properties.filter(({ key }) => key === "work-id")).toHaveLength(1);
 
+    const shiftedPlaceholder = store.create(
+      "Body [note::keep] more text\nwork-id:: PIE-XXX",
+    );
+    const shiftedAllocation = store.allocateWorkId(
+      shiftedPlaceholder.id,
+      shiftedPlaceholder.updatedAt,
+    );
+    expect(shiftedAllocation.block.text).toBe(
+      "Body [note::keep] more text\nwork-id:: PIE-002",
+    );
+
     expect(() =>
       store.allocateWorkId(wrongPrefix.id, wrongPrefix.updatedAt)
     ).toThrow("already has a Work ID");

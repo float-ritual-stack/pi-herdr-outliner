@@ -53,7 +53,11 @@ function createFixture(): VisibleBlock[] {
   return Array.from({ length: blockCount }, (_, index) => {
     const groupOffset = index % 120;
     const depth = groupOffset === 0 ? 0 : groupOffset < 12 ? 1 : 2;
-    const parentIndex = depth === 0 ? null : depth === 1 ? index - groupOffset : index - (groupOffset % 12);
+    const parentIndex = depth === 0
+      ? null
+      : depth === 1
+        ? index - groupOffset
+        : index - groupOffset + 1 + ((groupOffset - 12) % 11);
     const id = `block-${index.toString().padStart(6, "0")}`;
     const subject = `PIE-${(index % 2_000).toString().padStart(3, "0")} realistic outline item ${index}`;
     const text = index % 97 === 0
