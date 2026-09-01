@@ -1,3 +1,6 @@
+import type { PageAddressMatch } from "./types";
+import { workIdReferences } from "./work-ids";
+
 export type CompletionTargetKind = "page" | "block" | "file";
 
 export interface CompletionTarget {
@@ -16,6 +19,60 @@ const TARGET_SYNTAX: ReadonlyArray<{
   { kind: "block", opening: "((", closing: "))" },
   { kind: "file", opening: "[file::", closing: "]" },
 ];
+export interface PageAddressCompletion {
+  label: string;
+  insertion: string;
+}
+
+export function pageCompletionLookupQuery(
+  authoredQuery: string,
+  workIdPrefix: string | null,
+): string {
+  const separator = authoredQuery.indexOf("|");
+  if (separator >= 0) return authoredQuery.slice(0, separator).trim();
+  const workIds = workIdPrefix ? workIdReferences(authoredQuery, workIdPrefix) : [];
+  return workIds.length === 1 ? workIds[0]!.workId : authoredQuery.trim();
+}
+
+export function pageAddressCompletion(
+  address: PageAddressMatch,
+  authoredQuery: string,
+  workIdPrefix: string | null,
+): PageAddressCompletion {
+  const title = address.title.trim();
+  const normalizedTitle = title.toLocaleLowerCase();
+  const normalizedAddress = address.address.toLocaleLowerCase();
+  const label = address.kind === "work-id" &&
+      (
+        normalizedTitle === normalizedAddress ||
+        normalizedTitle.startsWith(`${normalizedAddress} `)
+      )
+    ? title
+    : `${address.address} — ${title}`;
+  if (address.kind !== "work-id") {
+    return { label, insertion: `[[${address.address}]]` };
+  }
+
+  const separator = authoredQuery.indexOf("|");
+  const workIds = workIdPrefix ? workIdReferences(authoredQuery, workIdPrefix) : [];
+  const authoredLabel = separator >= 0
+    ? authoredQuery.slice(separator + 1).trim()
+    : workIds.length === 1 &&
+        workIds[0]!.workId === address.address &&
+        authoredQuery.trim() !== address.address
+      ? authoredQuery.trim()
+      : title;
+  const safeLabel = authoredLabel && !/[\]\r\n]/.test(authoredLabel)
+    ? authoredLabel
+    : null;
+  return {
+    label,
+    insertion: safeLabel
+      ? `[[${address.address}|${safeLabel}]]`
+      : `[[${address.address}]]`,
+  };
+}
+
 
 export function completionTargetAtCursor(
   line: string,

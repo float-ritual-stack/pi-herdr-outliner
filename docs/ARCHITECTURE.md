@@ -24,6 +24,7 @@ flowchart LR
 - one [`OutlinerStore`](../src/store.ts),
 - one [`OutlinerServer`](../src/server.ts),
 - the workspace Unix socket,
+- an ephemeral browsing-context target registry,
 - service-pane registration, and
 - the optional Herdr runtime-registry runner.
 
@@ -38,9 +39,9 @@ The service is the only process that opens the workspace SQLite database. It log
 - [`virtual-branches.ts`](../src/virtual-branches.ts) for projections, and
 - [`OutlinerClient.watch()`](../src/client.ts) for reactive updates.
 
-Tree holds no canonical block state. It reconstructs canonical data from service snapshots and events, then owns its cursor, occurrence selection, filter, collapsed canonical IDs, multiline-expanded row IDs, viewport, and explicit-navigation history in-process. Closing a Tree discards only that Tree's presentation state.
+Tree holds no canonical block state. It reconstructs canonical data from service snapshots and events, then owns its cursor, occurrence selection, filter, collapsed canonical IDs, multiline-expanded row IDs, viewport, explicit-navigation history, and browsing-context publication in-process. Closing a Tree discards only that Tree's presentation state.
 
-Cursor changes publish the selected canonical block as shared workspace context. Selection broadcasts update that context without moving another Tree's cursor or projection. Exact-client `focus` and `reveal` commands move only their addressed Tree and locally expand ancestors when required.
+Cursor changes publish the selected canonical block together with the source Tree client ID. The service retains the browsing-context target and emits a `preview` UI command to the first spatially unlocked Detail in the same tab; preview never focuses the destination. Global `selection` events are ignored by Tree panes. Tree `Enter` dispatches `open` to focus the same unlocked reader without entering edit mode. Exact-client `focus` and `reveal` commands move only their addressed Tree and locally expand ancestors when required. The legacy saved workspace selection may seed a newly created Tree once, but it is not continuing pane authority.
 
 PageUp/PageDown move the selected expanded row's offset by one Tree body viewport and clamp to its wrapped row count. Cursor changes, multiline expansion changes, and reconnects reset the offset.
 
@@ -48,14 +49,66 @@ PageUp/PageDown move the selected expanded row's offset by one Tree body viewpor
 
 [`src/detail-main.ts`](../src/detail-main.ts) selects the Pi TUI Detail implementation, which separates:
 
-- [`DetailController`](../src/detail-controller.ts) — modes, effects, optimistic saves, completion, file/annotation behavior, and cursor visibility;
-- [`detail-pi.ts`](../src/detail-pi.ts) — terminal lifecycle, input, and Pi layout switching;
-- [`detail-pi-preview.ts`](../src/detail-pi-preview.ts) — Markdown `ScrollView` preview;
+- [`DetailController`](../src/detail-controller.ts) — modes, effects, optimistic saves, PreviewRegion actions, property-inspector state, lazy backlink state, file/annotation behavior, and cursor visibility;
+- [`detail-pi.ts`](../src/detail-pi.ts) — terminal lifecycle, input, Pi layout switching, and dedicated-inspector startup;
+- [`detail-pi-preview.ts`](../src/detail-pi-preview.ts) — authored Markdown, callouts, property rows, and generated Backlinks in one `ScrollView`;
 - [`detail-editor-layout.ts`](../src/detail-editor-layout.ts) — grapheme-safe wrapped visual rows, cursor mapping, and selection spans;
 - [`detail-renderer.ts`](../src/detail-renderer.ts) — fixed custom frames for edit, comment, file, and annotation modes; and
 - [`text-buffer.ts`](../src/text-buffer.ts) — raw text, grapheme/word movement, and selections.
 
 The legacy ANSI Detail entrypoint remains available in [`src/detail.ts`](../src/detail.ts), but the Herdr manifest starts [`src/detail-main.ts`](../src/detail-main.ts).
+
+Detail owns an exact target, a bounded in-process target history, and a visible
+`Unlocked | Locked` state. An unlocked Detail is eligible for same-tab Tree
+previews and reference opens. Ordinary navigation, including navigation
+originating inside a locked Detail, can target only an unlocked Detail. A locked
+Detail also rejects directly addressed ordinary `preview` and `open` commands;
+if no suitable Detail is unlocked, dispatch fails without replacing any anchor.
+`L`, `i`, `Ctrl+L`, or `Meta+L` locks the current target as a context anchor; the
+same command unlocks it. Block editing and annotation commenting lock before
+opening a mutable buffer. Ordinary `open` focuses its unlocked destination but
+leaves it unlocked. Reader `Enter` activates the focused PreviewRegion and is inert when no actionable region is focused.
+Closing Detail discards its target, history, and lock state.
+
+The generated Backlinks section is collapsed by default and therefore performs
+no relation query during ordinary Tree cursor previews. Expansion calls the
+bounded `references.backlinks` action, caches the result by exact target, and
+invalidates it on canonical content/address events. One relation primitive
+reverses exact block references, normalized page addresses, Work IDs, and
+block-valued properties such as `[source-block::<block-id>]`. Each projected
+source carries canonical created/updated timestamps plus normalized relation
+groups. Detail keeps only transient filter, sort, selection, and per-source
+disclosure state: fuzzy matching spans source title, parent context, relation
+type, and snippets; sorting cycles created/updated timestamps in both
+directions. The authored Markdown and generated backlink Markdown remain
+separate components; edit/save paths only read canonical block text. `Tab`
+selects generated sources, `.` toggles the selected source's occurrence rows,
+`Enter` inspects one, and `R` reveals one. The generated `+`/`−` controls use a
+Detail-local action URI and do not enter canonical text. Backlink source links
+carry a transient `preserveSource` constraint. The service excludes the source
+client before choosing the first other unlocked same-tab Detail and fails
+explicitly if none remains.
+
+Obsidian-style callouts are parsed into source-spanned PreviewRegions with stable
+parent/child identity. Nested callout bodies remain Pi Markdown, `+`/`-` fold
+markers produce ephemeral disclosure, and generated action links never enter
+canonical text. Generated embed backgrounds compose with callout bodies rather
+than replacing them.
+Callout presentation is a Detail-process theme boundary. `OUTLINER_CALLOUT_THEME`
+is parsed once at startup into validated partial overrides for canonical type
+styles and the neutral fallback. Rendering reapplies each card's foreground and
+background after nested Markdown resets, pads every card row to the available
+terminal width, and keeps aliases on their canonical style. Invalid colors,
+multi-column glyphs, alias-specific keys, and unknown fields retain defaults.
+
+The read-only property inspector calls the same scoped property parser used by
+the property index and retains every occurrence's scope, ordinal, line/column,
+span, syntax, placement, and typed target. `p` toggles the inline disclosure;
+`P` launches a locked dedicated Detail presentation for the same block/model.
+Filter, grouping, focus, and viewport state are process-local. Actionable
+block/page/Work-ID values use the existing reference resolver and `open | reveal`
+routing; plain values remain nonnavigable. Neither presentation owns or rewrites
+canonical source.
 
 ### Pi / OMP extension
 
@@ -77,10 +130,13 @@ ${OUTLINER_STATE_DIR:-~/.local/state/pi-herdr-outliner}/<workspace-hash>/
 ```
 
 The directory contains the SQLite database, Unix socket, and remembered
-**service-pane** metadata. Tree and Detail identity is never stored in
-role-keyed pane files. Every process must resolve the same workspace root;
+**service-pane** metadata. Every process must resolve the same workspace root;
 Herdr pane commands explicitly pass the invoking pane's foreground working
 directory to new plugin panes.
+
+A workspace root scopes canonical data, not browsing authority. Tree/Detail
+client identity, browsing-context identity, targets, histories, tab numbers,
+labels, and pane titles are not stored in role-keyed files or canonical tables.
 
 ## Canonical data model
 
@@ -102,17 +158,17 @@ The SQLite schema is created in [`OutlinerStore.migrate()`](../src/store.ts):
 
 ### `block_properties`
 
-Derived index of eligible `[key::value]` tokens. `(block_id, key, ordinal)` preserves repeated keys and text order. `(key, value)` is indexed for queries.
+Derived, lossless index of deliberate non-literal property records. Each row stores `(block_id, ordinal)`, normalized key/value, raw source text, UTF-16 span, line/column, placement, syntax, and `block | line | inline` scope. `(scope, key, value, block_id)` supports scoped queries while preserving repeated keys and text order.
 
-Canonical text is authoritative. Property updates patch text with optimistic concurrency, then re-index it. The parser version is persisted in `metadata`; a newer parser can rebuild the derived index without changing canonical block timestamps.
+Canonical text is authoritative. Property updates patch text with optimistic concurrency, then re-index it. The parser version is persisted in `metadata`; schema or parser changes rebuild the derived index from every canonical block without changing block timestamps. Literal property-looking text inside inline code, fenced code, or escaped bracket syntax is not indexed.
 
-Literal property-looking text inside inline code, fenced code, or escaped syntax is not indexed.
+Scope classification is structural. After leading blank lines, the first nonblank line may be a subject or a property-only line. A trailing bracket run on the subject and the first contiguous property-only run after the optional subject are block metadata. Once a blank or non-property body line ends that preamble, later bare `key:: value` records are line-scoped and bracket records are inline-scoped, including later standalone bracket-only lines.
 
 ### Other tables
 
-- `metadata` — service sequence, parser version, and navigation cursor.
-- `selection` — one published canonical workspace-context block.
-- `navigation_history` — the latest 200 canonical workspace-context visits for Detail navigation; Trees maintain independent in-process histories.
+- `metadata` — service sequence, parser version, and legacy navigation cursor.
+- `selection` — legacy workspace selection used by CLI/agent context and as an optional one-time seed for a new Tree; never live pane authority.
+- `navigation_history` — legacy workspace-selection history for compatibility clients; Tree and Detail panes maintain independent in-process histories.
 - `virtual_occurrence_ranks` — durable `(virtual-branch ID, canonical block ID) -> branch-local rank`; both foreign keys cascade on deletion.
 - `page_addresses` — unique normalized symbolic address to canonical block mapping for page declarations, Work IDs, and explicit aliases; foreign keys cascade only on physical purge.
 - `reserved_work_ids` — immutable Work-ID reservation ledger with the original canonical owner UUID retained after purge.
@@ -120,44 +176,59 @@ Literal property-looking text inside inline code, fenced code, or escaped syntax
 
 ## Protocol
 
-The current protocol version is `12`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
+The current protocol version is `18`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
 
 ### Important request families
 
 - health: `ping`
-- canonical reads: `get`, `children`, `workspace.snapshot`
+- canonical reads: `get`, `children`, `blocks.context`, `workspace.snapshot`
 - bounded search: `blocks.query`
+- browsing contexts and Tree previews: `browsing-context.get`, `browsing-context.publish`
+- typed navigation: `navigation.resolve` preflight and `navigation.dispatch` with `preview | open | reveal`, plus optional transient source preservation
 - selection-neutral capture: `capture.create`
 - mutations: `create`, `update`, `move`, `delete` (move to Trash), `trash.restore`, `trash.purge`
 - properties: `properties.patch`, `properties.catalog`
 - virtual ordering: `virtual.occurrences.reorder`
-- references: `references.resolve`
+- references: `references.resolve`, `references.backlinks`
 - symbolic addresses: `pages.resolve`, `pages.follow`, `pages.complete`, `pages.rename`, `pages.alias`, `pages.remove`
 - Work IDs: `work-ids.status`, `work-ids.configure`, `work-ids.allocate`
-- selection: `selection.get`, `selection.set`
-- navigation: `navigation.state`, `navigation.back`, `navigation.forward`
-- reactive clients: `events.subscribe`, `clients.list`
+- legacy workspace selection/history: `selection.get`, `selection.set`, `navigation.state`, `navigation.back`, `navigation.forward`
+- reactive clients: `events.subscribe`, `clients.list`, `clients.update`
 - exact-client behavior: `ui.command.send`
 
 ### Live client identity
 
 Each Tree and Detail process generates a fresh client UUID and registers
-`{ clientId, role, runtime? }` on `events.subscribe`. Runtime pane, terminal,
-workspace, and tab fields are advisory snapshots for diagnostics; Herdr remains
-the authority for current pane identity, placement, and focus.
+`{ clientId, role, contextId, locked?, runtime? }` on `events.subscribe`.
+Details register unlocked and publish every explicit lock-state transition
+through `clients.update`. `open-here` generates one context UUID and passes it
+to the Tree and Detail it creates. Standalone processes use their client UUID
+as a private context.
+
+Runtime pane, terminal, workspace, tab, and pane-coordinate fields are advisory
+topology snapshots. The service orders same-tab Detail candidates by horizontal
+then vertical pane position, with client ID only as a deterministic fallback.
+Herdr remains authoritative for current placement and focus.
 
 The subscription socket owns its registration. The service rejects duplicate
-live client IDs and removes exactly that socket's entry on disconnect, so a
-late close cannot delete a replacement process or sibling. `clients.list`
-returns the live registry, optionally filtered by role.
+live client IDs and removes exactly that socket's registration. When the last
+subscriber for a browsing context disconnects, its target is pruned.
+`clients.list` returns the live registry, optionally filtered by role.
 
-`content`, `selection`, and `view` events remain broadcasts. Trees treat
-`selection` events as workspace-context publication rather than cursor movement.
-A `ui` command contains `targetClientId` and is written only to that registered
-socket. Callers that have only a role resolve it only when exactly one matching
-client is live; otherwise they require an explicit client ID. Tree and Detail
-recover their current pane through Herdr when handling focus instead of treating
-the registration snapshot as a durable pane handle.
+`content`, legacy `selection`, and `view` events are workspace broadcasts. A
+`ui` command is written only to its `targetClientId`.
+
+For `preview` and `open`, `navigation.resolve` and `navigation.dispatch` select
+the first unlocked Detail in the source's current tab. Locked Details and every
+other tab/workspace are excluded. If the source lacks Herdr topology, its
+browsing context is the fallback pool boundary. When the pool exists but every
+Detail is locked, navigation fails with an instruction to unlock one or open
+another Detail; no anchor is overwritten. `reveal` targets the source Tree,
+then one same-context Tree, then one unambiguous same-tab Tree. There are no
+persisted or manual per-source open routes.
+
+Dangling page activation preflights the destination before transactional
+create-on-follow, so an exhausted unlocked pool cannot create content.
 
 ### Agent provenance
 
@@ -174,11 +245,11 @@ Herdr recognizes plain terminal text as a URL only for `http://` and `https://`.
 - `pi-outliner://work/<PIE-NNN>` — resolve-only Work-ID registry lookup;
 - `pi-outliner://page/<encoded-address>` — unique symbolic page resolution and explicit create-on-follow.
 
-Inside the live panes, navigation stays in-process. Tree enables SGR mouse reporting, keeps the last rendered frame, resolves an unmodified primary click against that frame's OSC 8 cell metadata, and delegates to `navigateOutlinerLink`. Detail supplies the same helper as Pi TUI's `openUrl` callback. Exact block and resolved symbolic links select one canonical UUID directly, so deleted targets cannot degrade into fuzzy text matches. Deleted targets open read-only in Detail; active targets send exact Tree focus/reveal.
+Inside live panes, reference activation resolves one exact canonical block and sends `navigation.dispatch` with the originating client ID. Keyboard `o`, ordinary mouse clicks, and Pi TUI's `openUrl` emit `open`; `R` emits `reveal`. Detail breadcrumb links explicitly emit `reveal`, so selecting an ancestor moves the paired Tree rather than opening another Detail. Generated backlink links add `preserveSource`, which filters the originating Detail out before unlocked-pool selection without creating a persistent route. The service emits one exact-client `ui` event and does not mutate workspace-global selection. Deleted targets retain exact identity and therefore open read-only rather than degrading into fuzzy text matches.
 
 Authored text is sanitized before link generation. Tree adds OSC 8 only after plain-text wrapping/truncation; Detail generates safe Markdown links after sanitization. Under `HERDR_ENV=1`, Detail enables Pi TUI hyperlink emission because nested panes advertise generic `TERM=xterm-256color` even though Herdr captures OSC 8 metadata. Tree ignores modified, release, motion, and wheel reports for link activation; Shift remains available for terminal-native selection.
 
-The `outliner-navigation` manifest handler and `src/herdr-link-open.ts` remain the external/interoperability path for rendered output outside the active TUI. They validate/decode the private URI, resolve the clicked pane workspace, and enter the same shared navigation helper. `[[address]]` remains visible when dangling; the explicit follow action creates exactly one root stub through the transactional registry path.
+The `outliner-navigation` manifest handler and [`src/herdr-link-open.ts`](../src/herdr-link-open.ts) are the external Herdr path. They validate/decode the private URI, resolve the invoking pane to its live source registration, and dispatch through the same route. `[[address]]` remains visible when dangling; explicit activation creates exactly one root stub through the transactional registry path before navigation dispatch.
 
 
 ### macOS native URL bridge
@@ -217,13 +288,14 @@ interface BlockSearchQuery {
   subtreeRootId?: string;
   rankViewId?: string;
   includeDeleted?: "roots" | "all";
+  propertyScope?: "block" | "line" | "inline" | "all";
   limit: number;
 }
 ```
 
-The service normalizes every query before regular graph traversal or ranked virtual-branch SQL. It validates limits from 1 through 1000 without clamping, lowercases property keys, preserves exact interior value spaces, distinguishes presence from equality, removes exact duplicate clauses, validates subtree roots, and translates the reserved `deleted=true` compatibility filter into explicit deleted-root mode.
+The service normalizes every query before regular graph traversal or ranked virtual-branch SQL. It validates limits from 1 through 1000 without clamping, lowercases property keys, preserves exact interior value spaces, distinguishes presence from equality, removes exact duplicate clauses, validates `propertyScope`, validates subtree roots, and translates the reserved `deleted=true` compatibility filter into explicit deleted-root mode.
 
-Human text surfaces share one minimal property-filter parser: whitespace-separated positive-AND clauses, `key` presence, `key=value`/`key::value` equality, and double-quoted spaced values with `\\` and `\"` escapes. Tree and Pi commands use the expression parser; each repeated CLI `--filter` is parsed as one clause so a shell-quoted value containing spaces remains exact. Virtual branches persist the canonical expression in `[query::…]`. Agent tools remain structured and bypass the shorthand.
+Property filters default to block metadata. Explicit `line`, `inline`, or `all` queries use the same derived index and return matching record context—scope, ordinal, line, column, and source span—on each result. Human text surfaces share one minimal property-filter parser: whitespace-separated positive-AND clauses, `key` presence, `key=value`/`key::value` equality, and double-quoted spaced values with `\\` and `\"` escapes. Tree and Pi commands use the expression parser; each repeated CLI `--filter` is parsed as one clause so a shell-quoted value containing spaces remains exact. Virtual branches persist the canonical expression in `[query::…]`; their omitted scope therefore remains block-only. Agent tools remain structured and bypass the shorthand.
 
 `workspace.snapshot.view.query` uses the same model for bounded Tree filtering while retaining a separate complete physical collection for canonical ancestry and projection construction. `rankViewId` is internal projection context and is rejected from snapshot queries.
 
@@ -251,19 +323,30 @@ Store startup creates one canonical `Inbox [type::inbox] [system-view::inbox]` w
 
 ## Reactive flow
 
-1. A client obtains a workspace snapshot.
-2. It subscribes with a fresh process identity and role.
-3. Mutations occur through RPC.
-4. The service broadcasts `content`, `selection`, and `view` events, while
-   delivering each `ui` command only to its `targetClientId`.
-5. Tree and Detail reload or perform the addressed UI command.
-6. On reconnect, the same process re-registers its identity; a restarted
-   process generates a new identity and reconstructs from canonical service
-   state.
+1. A client obtains a workspace snapshot or exact block context.
+2. It registers a fresh process identity, role, browsing-context identity, and
+   Detail lock state.
+3. Tree publishes its local cursor with its source client identity.
+4. The service retains the context target, chooses the first spatially unlocked
+   same-tab Detail, and sends that one client a `preview` UI command.
+5. Canonical mutations broadcast `content` events to every client under the
+   workspace root; receiving content refreshes data but never transfers browsing
+   authority.
+6. Exact `ui` commands are delivered only to their target client.
+7. On service reconnect, Detail republishes its lock state and Tree republishes
+   its retained cursor. A restarted process receives a new client identity;
+   `open-here` creates a new pair context.
 
-While Detail is editing/commenting, content refreshes are marked pending instead of replacing the active raw buffer. Save uses `expectedUpdatedAt`; conflicts preserve the buffer and surface the error. Esc cancels the buffer, after which pending selection can reload.
+While Detail is editing/commenting, it is locked before the mutable buffer
+opens. Content and exact-target refreshes are marked pending instead of
+replacing that buffer. Save uses `expectedUpdatedAt`; conflicts preserve the
+buffer and surface the error.
 
-Navigation history is service-owned and shares the canonical selection path used by Tree, Detail, goto, direct links, and agents. A distinct non-null `selection.set` appends a visit. `navigation.back` and `navigation.forward` move a persisted cursor without appending; a later selection truncates the forward branch. The store retains 200 rows. Soft-deleted targets remain addressable and open read-only in Detail; purge nulls their history foreign keys and traversal skips those rows.
+Tree and Detail navigation histories are process-local and bounded to 200 exact
+targets. History navigation does not change Detail lock state. Soft-deleted
+targets remain exact and read-only; purged targets surface as unavailable.
+Legacy service-owned `selection` history remains only for CLI/agent
+compatibility.
 
 ## Properties and references
 
@@ -273,11 +356,22 @@ Properties are Roam-style textual metadata:
 Question [type::question] [status::open]
 ```
 
-Query filters compare indexed keys and optional exact values. Property patches address token ordinals so an agent can replace/remove/append metadata without rewriting unrelated prose.
+Every deliberate non-literal property is indexed with source context, but normal block semantics and query filters use only block-scoped metadata. Callers must explicitly request line/inline/all scope for body annotations, and those query results identify the matched records. Property patches address global indexed ordinals so an agent can replace/remove/append metadata without rewriting unrelated prose.
 
 Exact references use `((block-id))`. Read paths replace a resolvable ID with the target’s first non-property content line. Edit paths retain the raw ID. Dangling exact references remain unchanged.
 
 Symbolic references use `[[address]]`. The registry compares trimmed, Unicode-normalized, caseless, whitespace-collapsed keys while preserving the authored address label. One `[page::address]` declaration registers a page; `[work-id::PIE-NNN]` registers the same canonical block under its Work ID. Bare Work IDs navigate through a resolve-only registry path rather than fuzzy goto, and unresolved Work-ID-shaped addresses cannot create page stubs. Parsing and ordinary saves never create a referenced block. `pages.follow` transactionally resolves or creates one ordinary root stub. General edits cannot silently change or remove a registered declaration: `pages.rename` uses optimistic concurrency, changes the primary declaration, and retains the former address as an alias; `pages.alias` adds another explicit address; `pages.remove` explicitly unregisters an alias or primary declaration. Registry rebuilds preserve aliases.
+
+[`reference-occurrences.ts`](../src/reference-occurrences.ts) is the shared pure
+scanner for actionable exact, page, and bare Work-ID occurrences. It excludes
+inline/fenced/indented code, authored Markdown links, and property tokens before
+either first-reference navigation or backlink reversal consumes occurrences.
+[`backlinks.ts`](../src/backlinks.ts) owns the reusable reverse-relation
+primitive: symbolic occurrences resolve through the address registry, repeated
+occurrences group under one source, snippets and source rows are bounded, and
+deleted source inclusion is explicit. `references.backlinks` is the current
+delivery seam; a later typed block-set source must call this same primitive
+rather than implement a second resolver.
 
 Work-ID allocation is workspace-scoped and transactional. A one-time v9 migration adopts a clean existing reservation prefix; an empty or ambiguous legacy workspace requires explicit `work-ids.configure`, and later manual values never auto-configure on restart. Prefix configuration can be corrected until the chosen prefix owns an immutable reservation. The allocator tracks the next number monotonically and formats a minimum three-digit suffix. Allocation uses optimistic block concurrency, appends canonical text, rebuilds the property/address indexes, and reserves the ID with its owning UUID in one transaction. Canonical manual declarations for the configured prefix pass through the same ownership, sequence, and never-reuse enforcement. Malformed, noncanonical, duplicate legacy, and out-of-prefix values remain indexed inert metadata rather than blocking startup or text saves. Existing valid legacy Work-ID addresses for other prefixes are retained, but bare Work-ID linking and new allocation are scoped to the configured prefix.
 
@@ -315,16 +409,34 @@ Optional properties:
 - `[create::key=value]` — one property applied to new canonical children.
 - `[create-parent::<block-id>]` — physical parent for branch-created blocks.
 
-Tree queries the service and inserts disposable occurrence rows. Each occurrence carries:
+Tree builds canonical parent-to-children adjacency once from the complete physical
+snapshot, never from the collapse-pruned visible collection. It queries, ranks,
+deduplicates, and bounds matched roots first, then allocates read-only contextual
+descendants through relative depth 2. The branch reserves every bounded root before
+using the remaining portion of its 1,000-row budget for descendants in
+ranked-root/canonical-preorder order. Disclosure is applied only after allocation,
+so collapse state cannot redirect the budget to a different root.
 
-- `rowId` — occurrence identity,
-- `canonicalId` — mutation target,
-- `viewId` — virtual branch definition, and
-- canonical `Block` data.
+A root occurrence carries `(viewId, canonicalId)` identity. A contextual descendant
+carries `(viewId, matchRootCanonicalId, canonicalId)` identity plus its contextual
+parent row ID. Consequently, one canonical child can appear beneath a matched
+ancestor and as an independent matched root without identity collision. A physical
+virtual-definition block encountered as a descendant is an inert leaf and never
+recurses.
 
-Occurrences do not have hierarchy. Tree allows canonical edit/reveal and explicit canonical deletion, rejects projected indent, outdent, and collapse, and maps `Shift+Up` / `Shift+Down` to branch-local reorder.
+Context disclosure and multiline expansion are Tree-local ephemeral state.
+`Left`, `Right`, `Space`, and disclosure-marker mouse clicks operate on contextual
+row and parent identities; canonical edit, reveal, and explicit deletion still
+target `canonicalId`. Projected indent/outdent and add operations remain disabled.
 
-`workspace.snapshot` carries every persisted occurrence rank in the same transactional read as the block graph. Tree supplies the branch `viewId` on its bounded match query; storage orders matching ranked blocks first, then deterministic unranked results, and returns only the configured window plus overflow detection. Projection reapplies the snapshot ranks defensively before the branch limit. Reorder ranks the complete currently projected sibling sequence without changing canonical parents/positions or another branch. Rank rows survive temporary query mismatches and cascade when either the branch definition or canonical block is deleted.
+Branch count, completeness, persisted ranks, and `Shift+Up` / `Shift+Down` reorder
+remain root-only. Root-query truncation is distinct from depth and 1,000-row budget
+truncation, and all three are surfaced. `workspace.snapshot` carries every
+persisted occurrence rank in the same transactional read as the block graph.
+Projection reapplies those ranks defensively before the root limit. Reorder changes
+only the complete matched-root sequence, never contextual descendants, canonical
+parents/positions, or another branch. Rank rows survive temporary query mismatches
+and cascade when either the branch definition or canonical block is deleted.
 
 ## Detail rendering and editing invariants
 
@@ -334,6 +446,8 @@ Occurrences do not have hierarchy. Tree allows canonical edit/reveal and explici
 - Header and footer remain fixed while the primary `ScrollView` scrolls.
 - Raw source and Markdown renders are cached when unchanged.
 - Selection changes and transitions into preview reset scroll to the top.
+- Callouts, Backlinks, and property-inspector rows reconcile through one ordered PreviewRegion focus/action state.
+- Embed source ranges remain decorated when their generated text appears inside a callout body.
 
 ### Editor
 
@@ -361,11 +475,15 @@ The service stores annotation blocks; it does not modify source files.
 
 1. Reuse or open the service pane in a tab.
 2. Wait for a compatible protocol response.
-3. Reuse or open Tree beside the invoking pane.
-4. Reuse or open Detail beneath Tree.
-5. Focus Tree unless `OUTLINER_FOCUS=0`.
+3. For `open-here`, generate a browsing-context UUID.
+4. Open Tree beside the invoking pane with that UUID.
+5. Open Detail beneath Tree with the same UUID.
+6. Focus Tree.
 
-Pane IDs are read from Herdr responses and persisted as hints. Stale hints are validated and replaced; IDs are never predicted.
+Each `open-here` invocation creates a new pair even under the same workspace
+root. Closing both clients prunes the context. Renaming or renumbering tabs and
+panes has no effect because labels are not identity. Pane IDs are read from
+Herdr responses and never predicted.
 
 After deploying a merged change, restart Detail, Tree, and service in that order, invoke the plugin action, wait for `herdr_registry_ready`, and exercise the changed surface.
 
@@ -396,6 +514,6 @@ pi-extension/index.ts         Pi/OMP commands, tools, context hook
 
 ## Accepted designs not yet implemented
 
-The durable roadmap lives in the outliner workboard. Current accepted designs include normalized bounded query construction, deterministic agent work-placeholder resolution, backlinks, scoped property semantics, retained Detail targets, projected canonical descendants, and projected-child creation.
+The durable roadmap lives in the outliner workboard. Current accepted designs include normalized bounded query construction, deterministic agent work-placeholder resolution, and projected-child creation.
 
 Do not describe these as shipped behavior until their roadmap items are Complete on main.

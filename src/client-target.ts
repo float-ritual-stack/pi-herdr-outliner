@@ -33,6 +33,20 @@ export async function requireUniqueClientId(
   );
 }
 
+export async function requireContextClientId(
+  requester: OutlinerRequester,
+  role: OutlinerClientRole,
+  contextId: string,
+): Promise<string> {
+  const clients = (await listLiveClients(requester, role))
+    .filter((client) => client.contextId === contextId);
+  if (clients.length === 1) return clients[0]!.clientId;
+  if (clients.length === 0) {
+    throw new Error(`No live ${role} client is registered in this browsing context`);
+  }
+  throw new Error(`Multiple live ${role} clients are registered in this browsing context`);
+}
+
 export async function requireClientIdForRole(
   requester: OutlinerRequester,
   clientId: string,
@@ -64,6 +78,17 @@ export async function sendUniqueClientCommand(
   command: Omit<OutlinerUiCommand, "targetClientId">,
 ): Promise<string> {
   const clientId = await requireUniqueClientId(requester, role);
+  await sendClientCommand(requester, clientId, command);
+  return clientId;
+}
+
+export async function sendContextClientCommand(
+  requester: OutlinerRequester,
+  role: OutlinerClientRole,
+  contextId: string,
+  command: Omit<OutlinerUiCommand, "targetClientId">,
+): Promise<string> {
+  const clientId = await requireContextClientId(requester, role, contextId);
   await sendClientCommand(requester, clientId, command);
   return clientId;
 }

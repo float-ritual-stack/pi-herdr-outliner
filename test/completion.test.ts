@@ -1,5 +1,10 @@
 import { expect, test } from "bun:test";
-import { completionTargetAtCursor, completionWindow } from "../src/completion";
+import {
+  completionTargetAtCursor,
+  completionWindow,
+  pageAddressCompletion,
+  pageCompletionLookupQuery,
+} from "../src/completion";
 
 test("keeps the selected completion inside a fixed-size visible window", () => {
   expect(completionWindow(20, 0, 6)).toEqual({ start: 0, end: 6 });
@@ -33,6 +38,28 @@ test("finds page, block, and file completion targets at the cursor", () => {
     query: "docs/mis",
   });
 });
+test("normalizes titled Work-ID completion without changing the canonical target", () => {
+  const match = {
+    address: "PIE-123",
+    normalizedAddress: "pie-123",
+    blockId: "work-123",
+    kind: "work-id" as const,
+    title: "PIE-123 — Stable links",
+  };
+  expect(pageCompletionLookupQuery("some title - PIE-123", "PIE")).toBe("PIE-123");
+  expect(pageCompletionLookupQuery("PIE-123|custom", "PIE")).toBe("PIE-123");
+  expect(pageAddressCompletion(match, "some title - PIE-123", "PIE")).toEqual({
+    label: "PIE-123 — Stable links",
+    insertion: "[[PIE-123|some title - PIE-123]]",
+  });
+  expect(pageAddressCompletion(match, "PIE-12", "PIE").insertion).toBe(
+    "[[PIE-123|PIE-123 — Stable links]]",
+  );
+  expect(pageAddressCompletion(match, "PIE-123|custom label", "PIE").insertion).toBe(
+    "[[PIE-123|custom label]]",
+  );
+});
+
 
 test("uses the nearest unclosed target on the current line", () => {
   const line = "Closed [[page]] and [file::docs/ with [[nested";

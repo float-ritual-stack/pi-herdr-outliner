@@ -1,13 +1,81 @@
 import { expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  configureCurrentPaneRightClick,
   currentPaneRuntime,
   focusCurrentPane,
+  openDetailPane,
+  outlinerRightClickOwnership,
+  pluginClickedUrl,
+  pluginInvocationPaneId,
+  pluginInvocationWorkspaceRoot,
   removeLegacyClientPaneStates,
   resolveServicePaneId,
 } from "../src/pane-control";
+test("recovers action context from the underlying pane when a modal has no pane env", () => {
+  const env = {
+    HERDR_PLUGIN_CONTEXT_JSON: JSON.stringify({
+      clicked_url: "pi-outliner://block/target",
+      focused_pane_id: "w1:p7",
+      focused_pane_cwd: "/workspace/project",
+      workspace_cwd: "/workspace",
+    }),
+  };
+
+  expect(pluginInvocationPaneId(env)).toBe("w1:p7");
+  expect(pluginInvocationWorkspaceRoot(env, "/plugin/root")).toBe("/workspace/project");
+  expect(pluginInvocationPaneId({
+    ...env,
+    HERDR_PANE_ID: "w1:p8",
+  })).toBe("w1:p7");
+});
+
+test("rejects malformed plugin action context instead of using the plugin cwd", () => {
+  expect(() => pluginInvocationPaneId({
+    HERDR_PLUGIN_CONTEXT_JSON: "[]",
+  })).toThrow("Herdr supplied invalid plugin context");
+});
+test("validates Outliner right-click ownership", () => {
+  expect(outlinerRightClickOwnership({})).toBe("herdr");
+  expect(outlinerRightClickOwnership({ OUTLINER_RIGHT_CLICK: "OUTLINER" })).toBe("outliner");
+  expect(() => outlinerRightClickOwnership({ OUTLINER_RIGHT_CLICK: "menu" })).toThrow(
+    "OUTLINER_RIGHT_CLICK must be herdr or outliner",
+  );
+});
+test("registers and restores Herdr pane-owned secondary click", () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-outliner-right-click-"));
+  const herdr = join(directory, "fake-herdr");
+  const logPath = join(directory, "calls.jsonl");
+  const originalHerdrEnv = process.env.HERDR_ENV;
+  try {
+    process.env.HERDR_ENV = "1";
+    writeFileSync(
+      herdr,
+      `#!/usr/bin/env bun
+import { appendFileSync } from "node:fs";
+appendFileSync(${JSON.stringify(logPath)}, JSON.stringify(process.argv.slice(2)) + "\\n");
+`,
+    );
+    chmodSync(herdr, 0o755);
+    configureCurrentPaneRightClick("outliner", herdr);
+    configureCurrentPaneRightClick("herdr", herdr);
+    const calls = readFileSync(logPath, "utf8").trim().split("\n").map(
+      (line) => JSON.parse(line) as string[],
+    );
+    expect(calls).toEqual([
+      ["pane", "input", "--current", "--right-click", "pane"],
+      ["pane", "input", "--current", "--right-click", "herdr"],
+    ]);
+  } finally {
+    if (originalHerdrEnv === undefined) delete process.env.HERDR_ENV;
+    else process.env.HERDR_ENV = originalHerdrEnv;
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 
 test("keeps standalone focus inert and treats failed Herdr metadata as optional", () => {
   const originalHerdrEnv = process.env.HERDR_ENV;
@@ -23,6 +91,161 @@ test("keeps standalone focus inert and treats failed Herdr metadata as optional"
   } finally {
     if (originalHerdrEnv === undefined) delete process.env.HERDR_ENV;
     else process.env.HERDR_ENV = originalHerdrEnv;
+  }
+});
+
+test("ignores focus misses for manual panes outside the plugin registry", () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-outliner-pane-focus-"));
+  const herdr = join(directory, "fake-herdr");
+  const originalHerdrEnv = process.env.HERDR_ENV;
+  try {
+    process.env.HERDR_ENV = "1";
+    writeFileSync(
+      herdr,
+      `#!/usr/bin/env bun
+const args = process.argv.slice(2);
+if (args[0] === "pane" && args[1] === "current") {
+  console.log(JSON.stringify({ result: { pane: { pane_id: "w1:p2" } } }));
+} else if (args[0] === "plugin") {
+  console.error(JSON.stringify({ error: { code: "plugin_pane_not_found" } }));
+  process.exit(1);
+}
+`,
+    );
+    chmodSync(herdr, 0o755);
+
+    expect(() => focusCurrentPane(herdr)).not.toThrow();
+    const probe = spawnSync(
+      process.execPath,
+      ["--eval", `import { focusCurrentPane } from "./src/pane-control.ts"; focusCurrentPane(${JSON.stringify(herdr)});`],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: { ...process.env, HERDR_ENV: "1" },
+      },
+    );
+    expect(probe.status).toBe(0);
+    expect(probe.stderr).toBe("");
+  } finally {
+    if (originalHerdrEnv === undefined) delete process.env.HERDR_ENV;
+    else process.env.HERDR_ENV = originalHerdrEnv;
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("opens and focuses a dedicated property inspector through the Detail pane entrypoint", () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-outliner-detail-pane-"));
+  const herdr = join(directory, "fake-herdr");
+  const logPath = join(directory, "calls.jsonl");
+  const originalHerdrEnv = process.env.HERDR_ENV;
+  const originalPaneId = process.env.HERDR_PANE_ID;
+  const originalStateDir = process.env.OUTLINER_STATE_DIR;
+  try {
+    process.env.HERDR_ENV = "1";
+    process.env.HERDR_PANE_ID = "w1:p2";
+    process.env.OUTLINER_STATE_DIR = "/tmp/outliner-state";
+    writeFileSync(
+      herdr,
+      `#!/usr/bin/env bun
+import { appendFileSync } from "node:fs";
+const args = process.argv.slice(2);
+appendFileSync(${JSON.stringify(logPath)}, JSON.stringify(args) + "\\n");
+if (args[0] === "pane" && args[1] === "current") {
+  console.log(JSON.stringify({ result: { pane: { pane_id: "w1:p2", workspace_id: "w1", tab_id: "w1:t1" } } }));
+} else if (args[0] === "pane" && args[1] === "layout") {
+  console.log(JSON.stringify({ result: { layout: { panes: [{ pane_id: "w1:p2", rect: { x: 0, y: 0 } }] } } }));
+} else if (args[0] === "plugin" && args[1] === "pane" && args[2] === "open") {
+  console.log(JSON.stringify({ result: { plugin_pane: { pane: { pane_id: "w1:p3", workspace_id: "w1", tab_id: "w1:t1" } } } }));
+} else if (args[0] === "plugin" && args[1] === "pane" && args[2] === "focus") {
+  console.log(JSON.stringify({ result: { type: "ok" } }));
+}
+`,
+    );
+    chmodSync(herdr, 0o755);
+
+    expect(openDetailPane({
+      workspaceRoot: "/workspace",
+      browsingContextId: "independent-context",
+      propertyInspectorBlockId: "block-property-heavy",
+      direction: "right",
+    }, herdr)).toBe("w1:p3");
+
+    const calls = readFileSync(logPath, "utf8").trim().split("\n").map(
+      (line) => JSON.parse(line) as string[],
+    );
+    expect(calls).toContainEqual([
+      "plugin",
+      "pane",
+      "open",
+      "--plugin",
+      "float.pi-outliner",
+      "--entrypoint",
+      "detail",
+      "--env",
+      "OUTLINER_WORKSPACE_ROOT=/workspace",
+      "--env",
+      "OUTLINER_BROWSING_CONTEXT_ID=independent-context",
+      "--env",
+      "OUTLINER_DETAIL_PRESENTATION=property-inspector",
+      "--env",
+      "OUTLINER_DETAIL_TARGET_BLOCK_ID=block-property-heavy",
+      "--env",
+      "OUTLINER_DETAIL_RENDERER=pi-tui",
+      "--placement",
+      "split",
+      "--target-pane",
+      "w1:p2",
+      "--direction",
+      "right",
+      "--cwd",
+      "/workspace",
+      "--no-focus",
+      "--env",
+      "OUTLINER_STATE_DIR=/tmp/outliner-state",
+    ]);
+    expect(calls.at(-1)).toEqual(["plugin", "pane", "focus", "w1:p3"]);
+  } finally {
+    if (originalHerdrEnv === undefined) delete process.env.HERDR_ENV;
+    else process.env.HERDR_ENV = originalHerdrEnv;
+    if (originalPaneId === undefined) delete process.env.HERDR_PANE_ID;
+    else process.env.HERDR_PANE_ID = originalPaneId;
+    if (originalStateDir === undefined) delete process.env.OUTLINER_STATE_DIR;
+    else process.env.OUTLINER_STATE_DIR = originalStateDir;
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("captures current pane coordinates for spatial Detail ordering", () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-outliner-pane-layout-"));
+  const herdr = join(directory, "fake-herdr");
+  const originalHerdrEnv = process.env.HERDR_ENV;
+  try {
+    process.env.HERDR_ENV = "1";
+    writeFileSync(
+      herdr,
+      `#!/usr/bin/env bun
+const args = process.argv.slice(2);
+if (args[0] === "pane" && args[1] === "current") {
+  console.log(JSON.stringify({ result: { pane: { pane_id: "w1:p2", terminal_id: "term-2", workspace_id: "w1", tab_id: "w1:t1" } } }));
+} else if (args[0] === "pane" && args[1] === "layout") {
+  console.log(JSON.stringify({ result: { layout: { panes: [{ pane_id: "w1:p2", rect: { x: 42, y: 7 } }] } } }));
+}
+`,
+    );
+    chmodSync(herdr, 0o755);
+
+    expect(currentPaneRuntime(herdr)).toEqual({
+      paneId: "w1:p2",
+      terminalId: "term-2",
+      workspaceId: "w1",
+      tabId: "w1:t1",
+      paneX: 42,
+      paneY: 7,
+    });
+  } finally {
+    if (originalHerdrEnv === undefined) delete process.env.HERDR_ENV;
+    else process.env.HERDR_ENV = originalHerdrEnv;
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 

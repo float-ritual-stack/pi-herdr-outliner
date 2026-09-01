@@ -128,6 +128,17 @@ export class TextBuffer {
     if (!this.hasSelection) this.clearSelectionAnchor();
   }
 
+  placeCursor(row: number, column: number): void {
+    const safeRow = Math.max(0, Math.min(Math.floor(row), this.lines.length - 1));
+    const line = this.lines[safeRow] ?? "";
+    this.row = safeRow;
+    this.column = clampToGraphemeStart(
+      line,
+      Math.max(0, Math.min(Math.floor(column), line.length)),
+    );
+    this.clearSelection();
+  }
+
   insert(value: string): void {
     const normalized = value.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
     if (!normalized) return;
@@ -164,6 +175,20 @@ export class TextBuffer {
     this.clearSelectionAnchor();
     this.lines[this.row] = line.slice(0, safeStart) + value + line.slice(safeEnd);
     this.column = safeStart + value.length;
+  }
+
+  replaceLine(row: number, value: string): void {
+    if (!Number.isInteger(row) || row < 0 || row >= this.lines.length) {
+      throw new Error(`Text buffer line is unavailable: ${row + 1}`);
+    }
+    if (value.includes("\n") || value.includes("\r")) {
+      throw new Error("Text buffer line replacement cannot contain a newline");
+    }
+    if (this.lines[row] === value) return;
+    this.recordEdit(null);
+    this.clearSelectionAnchor();
+    this.lines[row] = value;
+    if (row === this.row) this.column = Math.min(this.column, value.length);
   }
 
   newline(): void {

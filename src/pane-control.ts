@@ -7,6 +7,7 @@ import { Parse } from "typebox/value";
 import type { OutlinerClientRuntime } from "./types";
 
 export type PaneEntrypoint = "service" | "outliner" | "detail";
+export type OutlinerRightClickOwnership = "herdr" | "outliner";
 
 const PaneStateSchema = Type.Object({
   paneId: Type.String(),
@@ -34,6 +35,11 @@ const PaneGetResponseSchema = Type.Object({
 const PaneCurrentResponseSchema = Type.Object({
   result: Type.Object({ pane: HerdrPaneSchema }),
 });
+const PluginPaneOpenResponseSchema = Type.Object({
+  result: Type.Object({
+    plugin_pane: Type.Object({ pane: HerdrPaneSchema }),
+  }),
+});
 const WorkspaceListResponseSchema = Type.Object({
   result: Type.Object({
     workspaces: Type.Array(Type.Object({ workspace_id: Type.String() })),
@@ -42,14 +48,78 @@ const WorkspaceListResponseSchema = Type.Object({
 const PaneListResponseSchema = Type.Object({
   result: Type.Object({ panes: Type.Array(HerdrPaneSchema) }),
 });
+const PaneLayoutResponseSchema = Type.Object({
+  result: Type.Object({
+    layout: Type.Object({
+      panes: Type.Array(Type.Object({
+        pane_id: Type.String(),
+        rect: Type.Object({
+          x: Type.Number(),
+          y: Type.Number(),
+        }),
+      })),
+    }),
+  }),
+});
 
 const SERVICE_PANE_LABEL = "Outliner Service";
 const HERDR_COMMAND_TIMEOUT_MS = 2_000;
+const OUTLINER_PLUGIN_ID = "float.pi-outliner";
+
+interface HerdrPluginContext {
+  clicked_url?: string;
+  focused_pane_cwd?: string;
+  focused_pane_id?: string;
+  workspace_cwd?: string;
+}
+
+function pluginContext(
+  env: NodeJS.ProcessEnv,
+): HerdrPluginContext {
+  const encoded = env.HERDR_PLUGIN_CONTEXT_JSON;
+  if (!encoded) return {};
+  try {
+    const parsed: unknown = JSON.parse(encoded);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      throw new Error("context must be an object");
+    }
+    return parsed as HerdrPluginContext;
+  } catch {
+    throw new Error("Herdr supplied invalid plugin context");
+  }
+}
+
+export function pluginInvocationPaneId(
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  return pluginContext(env).focused_pane_id?.trim() ||
+    env.HERDR_PANE_ID?.trim() ||
+    undefined;
+}
+
+export function pluginInvocationWorkspaceRoot(
+  env: NodeJS.ProcessEnv = process.env,
+  fallback = process.cwd(),
+): string {
+  const context = pluginContext(env);
+  return context.focused_pane_cwd?.trim() ||
+    context.workspace_cwd?.trim() ||
+    fallback;
+}
+
+export function pluginClickedUrl(
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  return pluginContext(env).clicked_url?.trim() ||
+    env.HERDR_PLUGIN_CLICKED_URL?.trim() ||
+    undefined;
+}
 
 function invokeHerdr(herdr: string, args: string[]): string {
   return execFileSync(herdr, args, {
     encoding: "utf8",
     timeout: HERDR_COMMAND_TIMEOUT_MS,
+    stdio: ["ignore", "pipe", "pipe"],
   });
 }
 
@@ -69,9 +139,56 @@ export function currentPaneRuntime(
   try {
     const output = invokeHerdr(herdr, ["pane", "current", "--current"]);
     const pane = Parse(PaneCurrentResponseSchema, JSON.parse(output)).result.pane;
-    return runtimeFromPane(pane);
+    const runtime = runtimeFromPane(pane);
+    try {
+      const layoutOutput = invokeHerdr(herdr, ["pane", "layout", "--pane", pane.pane_id]);
+      const layout = Parse(PaneLayoutResponseSchema, JSON.parse(layoutOutput)).result.layout;
+      const positioned = layout.panes.find((candidate) => candidate.pane_id === pane.pane_id);
+      if (positioned) {
+        runtime.paneX = positioned.rect.x;
+        runtime.paneY = positioned.rect.y;
+      }
+    } catch {
+      // Pane identity remains useful when spatial metadata is unavailable.
+    }
+    return runtime;
   } catch {
     return undefined;
+  }
+}
+export function outlinerRightClickOwnership(
+  env: NodeJS.ProcessEnv = process.env,
+): OutlinerRightClickOwnership {
+  const value = env.OUTLINER_RIGHT_CLICK?.trim().toLowerCase() || "herdr";
+  if (value === "herdr" || value === "outliner") return value;
+  throw new Error("OUTLINER_RIGHT_CLICK must be herdr or outliner");
+}
+
+export function configureCurrentPaneRightClick(
+  ownership: OutlinerRightClickOwnership,
+  herdr = process.env.HERDR_BIN_PATH ?? "herdr",
+): void {
+  if (process.env.HERDR_ENV !== "1") return;
+  invokeHerdr(herdr, [
+    "pane",
+    "input",
+    "--current",
+    "--right-click",
+    ownership === "outliner" ? "pane" : "herdr",
+  ]);
+}
+
+export function paneLabel(
+  paneId: string,
+  herdr = process.env.HERDR_BIN_PATH ?? "herdr",
+): string | null {
+  if (process.env.HERDR_ENV !== "1") return null;
+  try {
+    const output = invokeHerdr(herdr, ["pane", "get", paneId]);
+    const pane = Parse(PaneGetResponseSchema, JSON.parse(output)).result.pane;
+    return pane.label?.trim() || null;
+  } catch {
+    return null;
   }
 }
 
@@ -81,7 +198,80 @@ export function focusCurrentPane(
   if (process.env.HERDR_ENV !== "1") return;
   const paneId = currentPaneRuntime(herdr)?.paneId;
   if (!paneId) throw new Error("Current Herdr pane identity is unavailable");
-  invokeHerdr(herdr, ["plugin", "pane", "focus", paneId]);
+  try {
+    invokeHerdr(herdr, ["plugin", "pane", "focus", paneId]);
+  } catch (error) {
+    const stderr = typeof error === "object" && error !== null && "stderr" in error
+      ? String(error.stderr)
+      : "";
+    if (!stderr.includes('"code":"plugin_pane_not_found"')) throw error;
+    // Manual panes can receive navigation but have no plugin focus handle.
+  }
+}
+
+export interface OpenDetailPaneOptions {
+  workspaceRoot: string;
+  browsingContextId: string;
+  propertyInspectorBlockId?: string;
+  direction?: "right" | "down";
+}
+
+export function openDetailPane(
+  options: OpenDetailPaneOptions,
+  herdr = process.env.HERDR_BIN_PATH ?? "herdr",
+): string {
+  if (process.env.HERDR_ENV !== "1") {
+    throw new Error("Creating a Detail pane requires Herdr");
+  }
+  const sourcePaneId = process.env.HERDR_PANE_ID ?? currentPaneRuntime(herdr)?.paneId;
+  if (!sourcePaneId) throw new Error("Current Herdr pane identity is unavailable");
+  const args = [
+    "plugin",
+    "pane",
+    "open",
+    "--plugin",
+    OUTLINER_PLUGIN_ID,
+    "--entrypoint",
+    "detail",
+    "--env",
+    `OUTLINER_WORKSPACE_ROOT=${options.workspaceRoot}`,
+    "--env",
+    `OUTLINER_BROWSING_CONTEXT_ID=${options.browsingContextId}`,
+  ];
+  if (options.propertyInspectorBlockId !== undefined) {
+    const blockId = options.propertyInspectorBlockId.trim();
+    if (!blockId) throw new Error("Property inspector block ID cannot be empty");
+    args.push(
+      "--env",
+      "OUTLINER_DETAIL_PRESENTATION=property-inspector",
+      "--env",
+      `OUTLINER_DETAIL_TARGET_BLOCK_ID=${blockId}`,
+      "--env",
+      "OUTLINER_DETAIL_RENDERER=pi-tui",
+    );
+  }
+  args.push(
+    "--placement",
+    "split",
+    "--target-pane",
+    sourcePaneId,
+    "--direction",
+    options.direction ?? "down",
+    "--cwd",
+    options.workspaceRoot,
+    "--no-focus",
+  );
+  for (const name of [
+    "OUTLINER_STATE_DIR",
+    "OUTLINER_KEYBINDINGS_PATH",
+    "OUTLINER_RIGHT_CLICK",
+  ] as const) {
+    if (process.env[name]) args.push("--env", `${name}=${process.env[name]}`);
+  }
+  const output = invokeHerdr(herdr, args);
+  const pane = Parse(PluginPaneOpenResponseSchema, JSON.parse(output)).result.plugin_pane.pane;
+  invokeHerdr(herdr, ["plugin", "pane", "focus", pane.pane_id]);
+  return pane.pane_id;
 }
 
 function paneMatchesState(

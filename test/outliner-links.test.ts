@@ -43,6 +43,37 @@ describe("outliner link URIs", () => {
       kind: "work",
       value: "ABC-001",
     });
+    expect(parseOutlinerLinkUri(
+      outlinerLinkUri("block", blockId, { preserveSource: true }),
+    )).toEqual({
+      kind: "block",
+      value: blockId,
+      preserveSource: true,
+    });
+    expect(parseOutlinerLinkUri(
+      outlinerLinkUri("block", blockId, { intent: "reveal" }),
+    )).toEqual({
+      kind: "block",
+      value: blockId,
+      intent: "reveal",
+    });
+  });
+
+  test("round-trips validated block fragments without using URL hashes", () => {
+    const blockId = "550e8400-e29b-41d4-a716-446655440000";
+    const uri = outlinerLinkUri("block", blockId, { fragmentId: "durable-decision" });
+    expect(uri).toContain("?fragment=durable-decision");
+    expect(parseOutlinerLinkUri(uri)).toEqual({
+      kind: "block",
+      value: blockId,
+      fragmentId: "durable-decision",
+    });
+    expect(() => outlinerLinkUri("page", "Roadmap", { fragmentId: "decision" })).toThrow(
+      "Invalid outliner fragment target",
+    );
+    expect(() => parseOutlinerLinkUri(
+      "pi-outliner://block/550e8400-e29b-41d4-a716-446655440000?fragment=bad%20id",
+    )).toThrow("Invalid outliner link navigation constraints");
   });
 
   test("rejects web URLs, unsupported kinds, malformed IDs, and URL decorations", () => {
@@ -55,6 +86,8 @@ describe("outliner link URIs", () => {
       "pi-outliner://goto/value#fragment",
       "pi-outliner://goto/%1B%5B31mowned",
       "pi-outliner://goto/value%7F",
+      "pi-outliner://block/550e8400-e29b-41d4-a716-446655440000?preserveSource=0",
+      "pi-outliner://block/550e8400-e29b-41d4-a716-446655440000?other=1",
     ]) {
       expect(() => parseOutlinerLinkUri(uri)).toThrow();
     }
@@ -103,7 +136,7 @@ describe("outliner link URIs", () => {
           } as T;
         }
         if (input.action === "clients.list") {
-          return [{ clientId: "tree-client", role: "tree" }] as T;
+          return [{ clientId: "tree-client", role: "tree", contextId: "tree-client" }] as T;
         }
         return {} as T;
       },
@@ -167,6 +200,124 @@ describe("outliner link URIs", () => {
     ]);
   });
 
+  test("dispatches typed navigation from the originating pane without global selection", async () => {
+    const target = block(
+      "550e8400-e29b-41d4-a716-446655440000",
+      "Origin-routed target",
+    );
+    const calls: RequestInput[] = [];
+    const requester = {
+      async request<T>(input: RequestInput): Promise<T> {
+        calls.push(input);
+        if (input.action === "get") return target as T;
+        if (input.action === "navigation.dispatch") {
+          return {
+            sourceClientId: input.sourceClientId,
+            targetClientId: "detail-c",
+            intent: input.intent,
+            resolution: "unlocked",
+            command: {
+              targetClientId: "detail-c",
+              command: input.intent,
+              blockId: input.blockId,
+            },
+          } as T;
+        }
+        throw new Error(`Unexpected request: ${input.action}`);
+      },
+    };
+
+    await expect(navigateOutlinerLink(
+      requester,
+      outlinerLinkUri("block", target.id),
+      { sourceClientId: "tree-a", intent: "preview" },
+    )).resolves.toEqual({
+      kind: "block",
+      id: target.id,
+      title: "Origin-routed target",
+      targetClientId: "detail-c",
+      intent: "preview",
+      resolution: "unlocked",
+    });
+    expect(calls).toEqual([
+      { action: "get", blockId: target.id },
+      {
+        action: "navigation.dispatch",
+        sourceClientId: "tree-a",
+        blockId: target.id,
+        intent: "preview",
+      },
+    ]);
+  });
+
+  test("dispatches exact fragment identity from linked references", async () => {
+    const target = block(
+      "550e8400-e29b-41d4-a716-446655440000",
+      "Target\n\n## Decision ^durable-decision",
+    );
+    const calls: RequestInput[] = [];
+    const requester = {
+      async request<T>(input: RequestInput): Promise<T> {
+        calls.push(input);
+        if (input.action === "get") return target as T;
+        if (input.action === "navigation.dispatch") {
+          return {
+            sourceClientId: input.sourceClientId,
+            targetClientId: "detail-c",
+            intent: input.intent,
+            resolution: "unlocked",
+            command: {
+              targetClientId: "detail-c",
+              command: input.intent,
+              blockId: input.blockId,
+              fragmentId: input.fragmentId,
+            },
+          } as T;
+        }
+        throw new Error(`Unexpected request: ${input.action}`);
+      },
+    };
+
+    await navigateOutlinerLink(
+      requester,
+      outlinerLinkUri("block", target.id, { fragmentId: "durable-decision" }),
+      { sourceClientId: "detail-a" },
+    );
+
+    expect(calls).toEqual([
+      { action: "get", blockId: target.id },
+      {
+        action: "navigation.dispatch",
+        sourceClientId: "detail-a",
+        blockId: target.id,
+        fragmentId: "durable-decision",
+        intent: "open",
+      },
+    ]);
+  });
+
+  test("does not create a dangling page when every Detail is locked", async () => {
+    const calls: RequestInput[] = [];
+    const requester = {
+      async request<T>(input: RequestInput): Promise<T> {
+        calls.push(input);
+        if (input.action === "navigation.resolve") {
+          throw new Error("All Details in this tab are locked · unlock one or open another Detail");
+        }
+        throw new Error(`Unexpected request: ${input.action}`);
+      },
+    };
+
+    await expect(navigateOutlinerLink(
+      requester,
+      outlinerLinkUri("page", "Future"),
+      { sourceClientId: "tree-a", intent: "open" },
+    )).rejects.toThrow("All Details in this tab are locked");
+    expect(calls).toEqual([
+      { action: "navigation.resolve", sourceClientId: "tree-a", intent: "open" },
+    ]);
+  });
+
   test("does not create a missing page before resolving Tree ambiguity", async () => {
     const calls: RequestInput[] = [];
     const requester = {
@@ -181,8 +332,8 @@ describe("outliner link URIs", () => {
         }
         if (input.action === "clients.list") {
           return [
-            { clientId: "tree-a", role: "tree" },
-            { clientId: "tree-b", role: "tree" },
+            { clientId: "tree-a", role: "tree", contextId: "tree-a" },
+            { clientId: "tree-b", role: "tree", contextId: "tree-b" },
           ] as T;
         }
         throw new Error(`Unexpected request: ${input.action}`);
@@ -213,7 +364,7 @@ describe("outliner link URIs", () => {
         calls.push(input);
         if (input.action === "get") return target as T;
         if (input.action === "clients.list") {
-          return [{ clientId: "detail-client", role: "detail" }] as T;
+          return [{ clientId: "detail-client", role: "detail", contextId: "detail-client" }] as T;
         }
         return {} as T;
       },
@@ -303,6 +454,69 @@ describe("outliner link rendering", () => {
       outlinerLinkUri("block", targetId),
     );
   });
+  test("gives titled page links precedence over nested Work-ID styling", () => {
+    const raw =
+      `[[PIE-123|some title · PIE-123]] and PIE-123 and ((${targetId}))`;
+    const titledTarget = block(targetId, "Target decision · PIE-123 [type::decision]");
+    const resolved = raw.replace(`((${targetId}))`, "((Target decision · PIE-123))");
+    const linker = createOutlinerTextLinker(
+      raw,
+      (id) => id === targetId ? titledTarget : null,
+      "PIE",
+    );
+    const rendered = linker.link(resolved);
+
+    expect(stripTerminalSequences(rendered)).toBe(resolved);
+    expect(getOsc8LinkAtColumn(rendered, 3)).toBe(outlinerLinkUri("page", "PIE-123"));
+    expect(getOsc8LinkAtColumn(rendered, resolved.indexOf("some title") + 2)).toBe(
+      outlinerLinkUri("page", "PIE-123"),
+    );
+    expect(getOsc8LinkAtColumn(rendered, resolved.indexOf("and PIE-123") + 6)).toBe(
+      outlinerLinkUri("work", "PIE-123"),
+    );
+    expect(getOsc8LinkAtColumn(rendered, resolved.indexOf("Target decision") + 2)).toBe(
+      outlinerLinkUri("block", targetId),
+    );
+    expect(firstOutlinerReference(raw, "PIE")).toEqual({
+      kind: "page",
+      value: "PIE-123",
+    });
+  });
+
+  test("preserves heading and callout structure around titled links", () => {
+    const raw = [
+      "# [[PIE-123|Heading label]]",
+      "> [!note]",
+      "> [[PIE-123|Callout label]]",
+    ].join("\n");
+    const linked = linkOutlinerMarkdown(raw, raw, "PIE");
+
+    expect(linked).toContain(
+      `# [[[PIE-123|Heading label\\]\\]](${outlinerLinkUri("page", "PIE-123")})`,
+    );
+    expect(linked).toContain(
+      `> [[[PIE-123|Callout label\\]\\]](${outlinerLinkUri("page", "PIE-123")})`,
+    );
+    expect(linked.match(/pi-outliner:\/\/page\//g)).toHaveLength(2);
+    expect(linked).not.toContain(outlinerLinkUri("work", "PIE-123"));
+  });
+
+
+  test("links resolved durable fragments to fragment-aware block URIs", () => {
+    const anchored = block(targetId, "Target decision\n\n## Durable ^durable");
+    const raw = `((${targetId}^durable))`;
+    const resolved = "((Target decision^durable))";
+    const linker = createOutlinerTextLinker(raw, () => anchored);
+    const rendered = linker.link(resolved);
+
+    expect(stripTerminalSequences(rendered)).toBe(resolved);
+    expect(getOsc8LinkAtColumn(rendered, 3)).toBe(
+      outlinerLinkUri("block", targetId, { fragmentId: "durable" }),
+    );
+    expect(linkOutlinerMarkdown(resolved, raw)).toContain(
+      outlinerLinkUri("block", targetId, { fragmentId: "durable" }),
+    );
+  });
 
   test("consumes protected references before linking later rendered rows", () => {
     const firstId = "550e8400-e29b-41d4-a716-446655440001";
@@ -386,6 +600,11 @@ describe("outliner link rendering", () => {
     expect(firstOutlinerReference("PIE-132 without brackets", "PIE")).toEqual({
       kind: "work",
       value: "PIE-132",
+    });
+    expect(firstOutlinerReference("((target01^decision))")).toEqual({
+      kind: "block",
+      value: "target01",
+      fragmentId: "decision",
     });
   });
 

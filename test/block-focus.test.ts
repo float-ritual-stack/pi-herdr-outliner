@@ -116,7 +116,7 @@ test("focuses only an unambiguous match through selection and Tree reveal", asyn
       calls.push(input);
       if (input.action === "workspace.snapshot") return snapshot as T;
       if (input.action === "clients.list") {
-        return [{ clientId: "tree-client", role: "tree" }] as T;
+        return [{ clientId: "tree-client", role: "tree", contextId: "tree-client" }] as T;
       }
       return {} as T;
     },
@@ -155,7 +155,7 @@ test("rejects an explicit goto target that is not a live Tree client", async () 
         } as T;
       }
       if (input.action === "clients.list") {
-        return [{ clientId: "tree-client", role: "tree" }] as T;
+        return [{ clientId: "tree-client", role: "tree", contextId: "tree-client" }] as T;
       }
       return {} as T;
     },
@@ -183,8 +183,8 @@ test("refuses an implicit goto when multiple Tree clients are live", async () =>
       }
       if (input.action === "clients.list") {
         return [
-          { clientId: "tree-a", role: "tree" },
-          { clientId: "tree-b", role: "tree" },
+          { clientId: "tree-a", role: "tree", contextId: "tree-a" },
+          { clientId: "tree-b", role: "tree", contextId: "tree-b" },
         ] as T;
       }
       return {} as T;

@@ -75,6 +75,18 @@ describe("TextBuffer word motion and selection", () => {
 });
 
 describe("TextBuffer undo and redo", () => {
+  test("replaces an arbitrary line as an undoable edit without moving another-line cursor", () => {
+    const buffer = new TextBuffer("first\nsecond");
+    buffer.moveEnd();
+
+    buffer.replaceLine(1, "second ^stable");
+
+    expect(buffer.text).toBe("first\nsecond ^stable");
+    expect({ row: buffer.row, column: buffer.column }).toEqual({ row: 0, column: 5 });
+    expect(buffer.undo()).toBe(true);
+    expect(buffer.text).toBe("first\nsecond");
+  });
+
   test("coalesces consecutive grapheme typing and restores it with one undo", () => {
     const buffer = new TextBuffer();
     buffer.insert("a");

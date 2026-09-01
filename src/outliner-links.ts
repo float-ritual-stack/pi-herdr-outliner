@@ -5,16 +5,33 @@ import {
   type BlockFocusRequester,
 } from "./block-focus";
 import { requireUniqueClientId, sendClientCommand } from "./client-target";
-import { blockDisplayTitle, blockReferenceIds } from "./references";
-import { isWorkIdAddress, pageAddressReferences } from "./page-addresses";
-import type { Block, PageAddressFollowResult, PageAddressResolution } from "./types";
-import { workIdReferences } from "./work-ids";
+import { isFragmentId, resolveFragment } from "./fragments";
+import {
+  blockDisplayTitle,
+  blockReferenceOccurrences,
+} from "./references";
+import {
+  outlinerReferenceOccurrences,
+  protectedMarkdownRanges,
+  rangesOverlap,
+  type TextRange,
+} from "./reference-occurrences";
+import {
+  dispatchNavigation,
+  resolveNavigationDestination,
+} from "./navigation-routes";
+import { isWorkIdAddress } from "./page-addresses";
+import type {
+  Block,
+  OutlinerNavigationIntent,
+  PageAddressFollowResult,
+  PageAddressResolution,
+} from "./types";
 
 const OUTLINER_SCHEME = "pi-outliner:";
 const BLOCK_ID_PATTERN = /^[A-Za-z0-9_-]{8,}$/;
 const BLOCK_ID_TOKEN_PATTERN = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
 
-const RAW_BLOCK_REFERENCE_PATTERN = /\(\(([A-Za-z0-9_-]{8,})\)\)/g;
 const TERMINAL_CONTROL_PATTERN = /[\u0000-\u001f\u007f]/;
 
 export type OutlinerLinkKind = "block" | "goto" | "page" | "work";
@@ -22,6 +39,9 @@ export type OutlinerLinkKind = "block" | "goto" | "page" | "work";
 export interface OutlinerLinkTarget {
   kind: OutlinerLinkKind;
   value: string;
+  fragmentId?: string;
+  preserveSource?: boolean;
+  intent?: "reveal";
 }
 
 export interface OutlinerLinkNavigation {
@@ -30,6 +50,9 @@ export interface OutlinerLinkNavigation {
   title: string;
   deleted?: boolean;
   created?: boolean;
+  targetClientId?: string;
+  intent?: OutlinerNavigationIntent;
+  resolution?: "unlocked" | "self" | "context" | "same-tab";
 }
 
 interface LinkSpan {
@@ -38,12 +61,16 @@ interface LinkSpan {
   uri: string;
 }
 
-interface TextRange {
-  start: number;
-  end: number;
-}
 
-export function outlinerLinkUri(kind: OutlinerLinkKind, value: string): string {
+export function outlinerLinkUri(
+  kind: OutlinerLinkKind,
+  value: string,
+  options: {
+    preserveSource?: boolean;
+    intent?: "reveal";
+    fragmentId?: string;
+  } = {},
+): string {
   const normalized = value.trim();
   if (TERMINAL_CONTROL_PATTERN.test(normalized)) {
     throw new Error("Outliner link target contains terminal control characters");
@@ -55,7 +82,15 @@ export function outlinerLinkUri(kind: OutlinerLinkKind, value: string): string {
   ) {
     throw new Error(`Invalid outliner ${kind} target: ${normalized}`);
   }
-  return `${OUTLINER_SCHEME}//${kind}/${encodeURIComponent(normalized)}`;
+  if (options.fragmentId && (kind !== "block" || !isFragmentId(options.fragmentId))) {
+    throw new Error(`Invalid outliner fragment target: ${options.fragmentId}`);
+  }
+  const query = new URLSearchParams();
+  if (options.preserveSource) query.set("preserveSource", "1");
+  if (options.intent) query.set("intent", options.intent);
+  if (options.fragmentId) query.set("fragment", options.fragmentId);
+  const suffix = query.size > 0 ? `?${query}` : "";
+  return `${OUTLINER_SCHEME}//${kind}/${encodeURIComponent(normalized)}${suffix}`;
 }
 
 export function parseOutlinerLinkUri(uri: string): OutlinerLinkTarget {
@@ -68,7 +103,6 @@ export function parseOutlinerLinkUri(uri: string): OutlinerLinkTarget {
     parsed.username ||
     parsed.password ||
     parsed.port ||
-    parsed.search ||
     parsed.hash
   ) {
     throw new Error("Invalid outliner link URI");
@@ -84,6 +118,23 @@ export function parseOutlinerLinkUri(uri: string): OutlinerLinkTarget {
   } catch {
     throw new Error("Invalid outliner link encoding");
   }
+  const preserveSourceValues = parsed.searchParams.getAll("preserveSource");
+  const intentValues = parsed.searchParams.getAll("intent");
+  const fragmentValues = parsed.searchParams.getAll("fragment");
+  if (
+    [...parsed.searchParams.keys()].some((key) =>
+      key !== "preserveSource" && key !== "intent" && key !== "fragment"
+    ) ||
+    preserveSourceValues.length > 1 ||
+    (preserveSourceValues.length === 1 && preserveSourceValues[0] !== "1") ||
+    intentValues.length > 1 ||
+    (intentValues.length === 1 && intentValues[0] !== "reveal") ||
+    fragmentValues.length > 1 ||
+    (fragmentValues.length === 1 &&
+      (kind !== "block" || !isFragmentId(fragmentValues[0]!)))
+  ) {
+    throw new Error("Invalid outliner link navigation constraints");
+  }
   if (
     !value ||
     TERMINAL_CONTROL_PATTERN.test(value) ||
@@ -92,13 +143,65 @@ export function parseOutlinerLinkUri(uri: string): OutlinerLinkTarget {
   ) {
     throw new Error(`Invalid outliner ${kind} target`);
   }
-  return { kind, value };
+  return {
+    kind,
+    value,
+    ...(fragmentValues.length === 1 ? { fragmentId: fragmentValues[0] } : {}),
+    ...(preserveSourceValues.length === 1 ? { preserveSource: true } : {}),
+    ...(intentValues.length === 1 ? { intent: "reveal" as const } : {}),
+  };
+}
+
+export interface ResolvedOutlinerLinkTarget {
+  block: Block;
+  fragmentId?: string;
+  created?: boolean;
+}
+
+export async function resolveOutlinerLinkTarget(
+  requester: BlockFocusRequester,
+  target: OutlinerLinkTarget,
+): Promise<ResolvedOutlinerLinkTarget> {
+  if (target.kind === "goto") {
+    throw new Error("Fuzzy goto links require a Tree destination");
+  }
+  if (target.kind === "block") {
+    const block = await requester.request<Block>({ action: "get", blockId: target.value });
+    if (!target.fragmentId) return { block };
+    const fragment = resolveFragment(block.text, target.fragmentId);
+    if (fragment.status === "missing") {
+      throw new Error(`Fragment not found: ${target.value}^${target.fragmentId}`);
+    }
+    if (fragment.status === "duplicate") {
+      throw new Error(`Fragment is duplicated: ${target.value}^${target.fragmentId}`);
+    }
+    return { block, fragmentId: target.fragmentId };
+  }
+  const resolution = await requester.request<PageAddressResolution>({
+    action: "pages.resolve",
+    address: target.value,
+  });
+  if (resolution.block) return { block: resolution.block };
+  if (target.kind === "work") {
+    throw new Error(`Work ID address is unresolved: ${target.value}`);
+  }
+  const followed = await requester.request<PageAddressFollowResult>({
+    action: "pages.follow",
+    address: target.value,
+  });
+  if (!followed.block) throw new Error(`Page address did not resolve: ${target.value}`);
+  return { block: followed.block, ...(followed.created ? { created: true } : {}) };
 }
 
 export async function navigateOutlinerLink(
   requester: BlockFocusRequester,
   uri: string,
-  targets: { treeClientId?: string; detailClientId?: string } = {},
+  targets: {
+    treeClientId?: string;
+    detailClientId?: string;
+    sourceClientId?: string;
+    intent?: OutlinerNavigationIntent;
+  } = {},
 ): Promise<OutlinerLinkNavigation> {
   const target = parseOutlinerLinkUri(uri);
   if (target.kind === "goto") {
@@ -116,6 +219,39 @@ export async function navigateOutlinerLink(
       kind: "goto",
       id: focused.resolution.match.block.id,
       title: focused.resolution.match.title,
+    };
+  }
+
+  if (targets.sourceClientId) {
+    const intent = target.intent ?? targets.intent ?? "open";
+    if (target.kind === "page") {
+      await resolveNavigationDestination(
+        requester,
+        targets.sourceClientId,
+        intent,
+        { preserveSource: target.preserveSource },
+      );
+    }
+    const resolved = await resolveOutlinerLinkTarget(requester, target);
+    const dispatched = await dispatchNavigation(
+      requester,
+      targets.sourceClientId,
+      resolved.block.id,
+      intent,
+      {
+        preserveSource: target.preserveSource,
+        fragmentId: resolved.fragmentId,
+      },
+    );
+    return {
+      kind: target.kind,
+      id: resolved.block.id,
+      title: blockDisplayTitle(resolved.block),
+      targetClientId: dispatched.targetClientId,
+      intent: dispatched.intent,
+      resolution: dispatched.resolution,
+      ...(resolved.block.effectiveDeletedRootId ? { deleted: true } : {}),
+      ...(resolved.created ? { created: true } : {}),
     };
   }
 
@@ -146,7 +282,7 @@ export async function navigateOutlinerLink(
     if (!resolution.block) throw new Error(`Work ID address is unresolved: ${target.value}`);
     block = resolution.block;
   } else {
-    block = await requester.request<Block>({ action: "get", blockId: target.value });
+    block = (await resolveOutlinerLinkTarget(requester, target)).block;
   }
   if (block.effectiveDeletedRootId) {
     const detailClientId =
@@ -155,6 +291,7 @@ export async function navigateOutlinerLink(
     await sendClientCommand(requester, detailClientId, {
       command: "focus",
       blockId: block.id,
+      ...(target.fragmentId ? { fragmentId: target.fragmentId } : {}),
     });
     return {
       kind: target.kind,
@@ -170,6 +307,7 @@ export async function navigateOutlinerLink(
   await sendClientCommand(requester, treeClientId, {
     command: "focus",
     blockId: block.id,
+    ...(target.fragmentId ? { fragmentId: target.fragmentId } : {}),
   });
   return {
     kind: target.kind,
@@ -179,88 +317,22 @@ export async function navigateOutlinerLink(
   };
 }
 
-function protectedMarkdownRanges(text: string): TextRange[] {
-  const ranges: TextRange[] = [];
-  let activeFence: { marker: string; length: number } | null = null;
-  let lineStart = 0;
-  for (const line of text.split("\n")) {
-    const lineEnd = lineStart + line.length;
-    if (activeFence) {
-      ranges.push({ start: lineStart, end: lineEnd });
-      const closing = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line)?.[1];
-      if (
-        closing &&
-        closing[0] === activeFence.marker &&
-        closing.length >= activeFence.length
-      ) {
-        activeFence = null;
-      }
-    } else {
-      const opening = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
-      if (opening) {
-        ranges.push({ start: lineStart, end: lineEnd });
-        activeFence = { marker: opening[0], length: opening.length };
-      } else if (/^( {4}|\t)/.test(line)) {
-        ranges.push({ start: lineStart, end: lineEnd });
-      }
-    }
-    lineStart = lineEnd + 1;
-  }
-  for (const pattern of [/(`+)[^\n]*?\1/g, /!?\[[^\]\n]*\]\([^)\n]*\)/g]) {
-    for (const match of text.matchAll(pattern)) {
-      ranges.push({ start: match.index, end: match.index + match[0].length });
-    }
-  }
-  return ranges;
-}
-
-function pageSyntaxRanges(text: string): TextRange[] {
-  return [...text.matchAll(/\[\[[^\r\n]*?(?:\]\]|(?=\r?$))/gm)].map((match) => ({
-    start: match.index,
-    end: match.index + match[0].length,
-  }));
-}
-
-function overlaps(left: TextRange, right: TextRange): boolean {
-  return left.start < right.end && right.start < left.end;
-}
 
 export function firstOutlinerReference(
   text: string,
   workIdPrefix: string | null = null,
 ): OutlinerLinkTarget | null {
-  const candidates: Array<OutlinerLinkTarget & TextRange> = [];
-  for (const match of text.matchAll(RAW_BLOCK_REFERENCE_PATTERN)) {
-    candidates.push({
+  const first = outlinerReferenceOccurrences(text, workIdPrefix)[0];
+  if (!first) return null;
+  if (first.kind === "block") {
+    return {
       kind: "block",
-      value: match[1],
-      start: match.index,
-      end: match.index + match[0].length,
-    });
+      value: first.blockId,
+      ...(first.fragmentId ? { fragmentId: first.fragmentId } : {}),
+    };
   }
-  for (const reference of pageAddressReferences(text)) {
-    candidates.push({
-      kind: "page",
-      value: reference.displayAddress,
-      start: reference.start,
-      end: reference.end,
-    });
-  }
-  const pageRanges = pageSyntaxRanges(text);
-  for (const reference of workIdPrefix ? workIdReferences(text, workIdPrefix) : []) {
-    const range = { start: reference.start, end: reference.end };
-    if (pageRanges.some((pageRange) => overlaps(range, pageRange))) continue;
-    candidates.push({
-      kind: "work",
-      value: reference.workId,
-      ...range,
-    });
-  }
-  const protectedRanges = protectedMarkdownRanges(text);
-  const first = candidates
-    .filter((candidate) => !protectedRanges.some((range) => overlaps(candidate, range)))
-    .sort((left, right) => left.start - right.start)[0];
-  return first ? { kind: first.kind, value: first.value } : null;
+  if (first.kind === "page") return { kind: "page", value: first.address };
+  return { kind: "work", value: first.address };
 }
 
 function genericLinkSpans(
@@ -269,21 +341,20 @@ function genericLinkSpans(
   workIdPrefix: string | null,
 ): LinkSpan[] {
   const spans: LinkSpan[] = [];
-  const pageRanges = pageSyntaxRanges(text);
-  for (const reference of pageAddressReferences(text)) {
-    spans.push({
-      start: reference.start,
-      end: reference.end,
-      uri: outlinerLinkUri("page", reference.displayAddress),
-    });
-  }
-  for (const reference of workIdPrefix ? workIdReferences(text, workIdPrefix) : []) {
-    const range = { start: reference.start, end: reference.end };
-    if (pageRanges.some((pageRange) => overlaps(range, pageRange))) continue;
-    spans.push({
-      ...range,
-      uri: outlinerLinkUri("work", reference.workId),
-    });
+  for (const reference of outlinerReferenceOccurrences(text, workIdPrefix)) {
+    if (reference.kind === "page") {
+      spans.push({
+        start: reference.start,
+        end: reference.end,
+        uri: outlinerLinkUri("page", reference.address),
+      });
+    } else if (reference.kind === "work-id") {
+      spans.push({
+        start: reference.start,
+        end: reference.end,
+        uri: outlinerLinkUri("work", reference.address),
+      });
+    }
   }
   for (const match of text.matchAll(BLOCK_ID_TOKEN_PATTERN)) {
     if (!canLinkBlock(match[0])) continue;
@@ -308,8 +379,8 @@ function selectLinkSpans(
     ...exactSpans,
     ...genericLinkSpans(text, canLinkBlock, workIdPrefix),
   ]) {
-    if (protectedRanges.some((range) => overlaps(span, range))) continue;
-    if (selected.some((existing) => overlaps(span, existing))) continue;
+    if (protectedRanges.some((range) => rangesOverlap(span, range))) continue;
+    if (selected.some((existing) => rangesOverlap(span, existing))) continue;
     selected.push(span);
   }
   return selected.sort((left, right) => left.start - right.start);
@@ -340,17 +411,19 @@ function resolvedReferenceSpans(rawText: string, resolvedText: string): LinkSpan
   const spans: LinkSpan[] = [];
   let rawCursor = 0;
   let resolvedCursor = 0;
-  for (const match of rawText.matchAll(RAW_BLOCK_REFERENCE_PATTERN)) {
-    resolvedCursor += match.index - rawCursor;
+  for (const reference of blockReferenceOccurrences(rawText)) {
+    resolvedCursor += reference.start - rawCursor;
     if (!resolvedText.startsWith("((", resolvedCursor)) return [];
     const end = resolvedText.indexOf("))", resolvedCursor + 2);
     if (end < 0) return [];
     spans.push({
       start: resolvedCursor,
       end: end + 2,
-      uri: outlinerLinkUri("block", match[1]),
+      uri: outlinerLinkUri("block", reference.blockId, {
+        fragmentId: reference.fragmentId,
+      }),
     });
-    rawCursor = match.index + match[0].length;
+    rawCursor = reference.end;
     resolvedCursor = end + 2;
   }
   return spans;
@@ -379,14 +452,39 @@ export function createOutlinerTextLinker(
   lookup: (blockId: string) => Block | null,
   workIdPrefix: string | null = null,
 ): OutlinerTextLinker {
-  const references = blockReferenceIds(rawText).map((blockId) => {
-    const target = lookup(blockId);
-    const title = target
-      ? `${blockDisplayTitle(target)}${target.effectiveDeletedRootId ? " · Trash" : ""}`
-      : blockId;
+  const references = blockReferenceOccurrences(rawText).map((reference) => {
+    const target = lookup(reference.blockId);
+    const fragmentSuffix = reference.fragmentId ? `^${reference.fragmentId}` : "";
+    if (!target) {
+      return {
+        visible: `((${reference.blockId}${fragmentSuffix}))`,
+        uri: null,
+      };
+    }
+    const title = blockDisplayTitle(target);
+    if (target.effectiveDeletedRootId) {
+      return {
+        visible: `((${title}${fragmentSuffix} · Trash))`,
+        uri: outlinerLinkUri("block", reference.blockId, {
+          fragmentId: reference.fragmentId,
+        }),
+      };
+    }
+    if (reference.fragmentId) {
+      const fragment = resolveFragment(target.text, reference.fragmentId);
+      if (fragment.status !== "resolved") {
+        const state = fragment.status === "missing" ? "Missing fragment" : "Duplicate fragment";
+        return {
+          visible: `((${title}${fragmentSuffix} · ${state}))`,
+          uri: null,
+        };
+      }
+    }
     return {
-      visible: `((${title}))`,
-      uri: target ? outlinerLinkUri("block", blockId) : null,
+      visible: `((${title}${fragmentSuffix}))`,
+      uri: outlinerLinkUri("block", reference.blockId, {
+        fragmentId: reference.fragmentId,
+      }),
     };
   });
   const consumedReferences = new Set<number>();

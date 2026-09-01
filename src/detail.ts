@@ -1,17 +1,23 @@
 import { emitKeypressEvents } from "node:readline";
 import { setTimeout as sleep } from "node:timers/promises";
 import { OutlinerClient, type OutlinerWatcher } from "./client";
-import { sendUniqueClientCommand } from "./client-target";
+import { OutlinerActionKeymap } from "./outliner-actions";
+import { sendContextClientCommand } from "./client-target";
 import {
   createDetailController,
   type DetailEffects,
   type DetailViewport,
 } from "./detail-controller";
+import { projectDetailRead } from "./detail-embeds";
 import { createDetailKeyHandler } from "./detail-keymap";
 import { renderDetailAnsi } from "./detail-renderer";
 import { completeReferencedPaths, readReferencedFile } from "./files";
-import { navigateOutlinerLink, outlinerLinkUri } from "./outliner-links";
-import { currentPaneRuntime, focusCurrentPane } from "./pane-control";
+import { resolveOutlinerLinkTarget } from "./outliner-links";
+import {
+  dispatchNavigation,
+  resolveNavigationDestination,
+} from "./navigation-routes";
+import { currentPaneRuntime, focusCurrentPane, openDetailPane } from "./pane-control";
 import { resolvePaths } from "./paths";
 import {
   BRACKETED_PASTE_DISABLE,
@@ -21,8 +27,9 @@ import {
 } from "./terminal";
 import {
   OUTLINER_PROTOCOL_VERSION,
+  type BacklinkCollection,
   type Block,
-  type NavigationState,
+  type BrowsingContextState,
   type PageAddressCollection,
   type OutlinerServiceStatus,
   type ResolvedBlockReferences,
@@ -33,6 +40,17 @@ import {
 const paths = resolvePaths();
 const client = new OutlinerClient(paths.socket);
 const clientId = crypto.randomUUID();
+const browsingContextId = process.env.OUTLINER_BROWSING_CONTEXT_ID?.trim() || clientId;
+const actionKeymap = OutlinerActionKeymap.load();
+const detailPresentation = process.env.OUTLINER_DETAIL_PRESENTATION?.trim() || "block";
+if (detailPresentation !== "block" && detailPresentation !== "property-inspector") {
+  throw new Error(`Unsupported Detail presentation: ${detailPresentation}`);
+}
+const dedicatedPropertyBlockId =
+  process.env.OUTLINER_DETAIL_TARGET_BLOCK_ID?.trim() || null;
+if (detailPresentation === "property-inspector" && !dedicatedPropertyBlockId) {
+  throw new Error("Dedicated property inspector requires a target block ID");
+}
 let stopping = false;
 let watcher: OutlinerWatcher | null = null;
 let workQueue = Promise.resolve();
@@ -51,32 +69,67 @@ function errorMessage(error: unknown): string {
 
 const effects: DetailEffects = {
   clientId,
+  browsingContextId,
   focusSelf() {
     if (process.env.HERDR_ENV === "1") focusCurrentPane();
   },
-  async getSelection() {
-    return client.request<SelectionContext>({ action: "selection.get" });
+  async getBrowsingContext() {
+    const browsingContext = await client.request<BrowsingContextState>({
+      action: "browsing-context.get",
+      contextId: browsingContextId,
+    });
+    if (!dedicatedPropertyBlockId) return browsingContext;
+    return {
+      ...browsingContext,
+      target: await client.request<SelectionContext>({
+        action: "blocks.context",
+        blockId: dedicatedPropertyBlockId,
+      }),
+    };
   },
-  async setSelection(blockId) {
-    await client.request({ action: "selection.set", blockId });
+  async getBlockContext(blockId) {
+    return client.request<SelectionContext>({ action: "blocks.context", blockId });
+  },
+  async setLocked(locked) {
+    await client.request({ action: "clients.update", clientId, locked });
+  },
+  async setCurrentBlock(currentBlockId) {
+    await client.request({ action: "clients.update", clientId, currentBlockId });
+  },
+  dispatchNavigation(blockId, intent, options) {
+    return dispatchNavigation(client, clientId, blockId, intent, options);
+  },
+  resolveNavigation(intent, options) {
+    return resolveNavigationDestination(client, clientId, intent, options);
   },
   async resolveReferences(text) {
     return client.request<ResolvedBlockReferences>({ action: "references.resolve", text });
   },
+  projectRead(text) {
+    return projectDetailRead(client, text);
+  },
+  async queryBacklinks(query) {
+    return client.request<BacklinkCollection>({ action: "references.backlinks", query });
+  },
   async updateBlock(input) {
-    return client.request<Block>({ action: "update", ...input });
+    return client.request<Block>({
+      action: "update",
+      ...input,
+      mutation: { author: "user", actorId: "detail" },
+    });
+  },
+  async patchProperties(input) {
+    return client.request<Block>({
+      action: "properties.patch",
+      ...input,
+      mutation: { author: "user", actorId: "detail" },
+    });
   },
   async restoreBlock(blockId) {
     return client.request<Block>({ action: "trash.restore", blockId });
   },
-  async navigateHistory(direction) {
-    const action = direction === "back" ? "navigation.back" : "navigation.forward";
-    return client.request<NavigationState>({ action });
-  },
-  async followReference(target) {
-    await navigateOutlinerLink(client, outlinerLinkUri(target.kind, target.value), {
-      detailClientId: clientId,
-    });
+  async resolveReference(target) {
+    return resolveOutlinerLinkTarget(client, target);
   },
   async createBlock(input) {
     return client.request<Block>({ action: "create", ...input });
@@ -94,15 +147,32 @@ const effects: DetailEffects = {
     return completeReferencedPaths(query, paths.workspaceRoot);
   },
   async focusOutliner() {
-    await sendUniqueClientCommand(client, "tree", { command: "focus" });
+    await sendContextClientCommand(client, "tree", browsingContextId, { command: "focus" });
+  },
+  openPropertyInspectorPane(blockId) {
+    return openDetailPane({
+      workspaceRoot: paths.workspaceRoot,
+      browsingContextId,
+      propertyInspectorBlockId: blockId,
+    });
   },
 };
 
 function draw(): void {
-  process.stdout.write(renderDetailAnsi(controller.state, viewport()));
+  process.stdout.write(renderDetailAnsi(controller.state, viewport(), {
+    helpText: actionKeymap.helpText("detail", controller.state.mode),
+  }));
 }
 
-const controller = createDetailController(effects, draw);
+const controller = createDetailController(
+  effects,
+  draw,
+  {
+    propertyInspectorPresentation: detailPresentation === "property-inspector"
+      ? "dedicated"
+      : "inline",
+  },
+);
 
 function enqueueWork(task: () => void | Promise<void>): void {
   workQueue = workQueue.then(task).catch((error) => {
@@ -133,6 +203,8 @@ function startWatcher(): void {
     client: {
       clientId,
       role: "detail",
+      contextId: browsingContextId,
+      locked: detailPresentation === "property-inspector",
       runtime: currentPaneRuntime(),
     },
     onConnect: () => enqueueWork(() => controller.onServiceConnect(viewport())),
@@ -151,7 +223,7 @@ function stop(): void {
   process.exit(0);
 }
 
-const handleKeypress = createDetailKeyHandler({ controller, viewport, stop });
+const handleKeypress = createDetailKeyHandler({ controller, viewport, stop, actionKeymap });
 
 async function initialize(): Promise<void> {
   await waitForService();

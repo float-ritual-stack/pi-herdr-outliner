@@ -44,6 +44,8 @@ export interface HerdrRegistryRunnerOptions {
   minBackoffMs?: number;
   maxBackoffMs?: number;
   diagnostic?: (record: Record<string, unknown>) => void;
+  eventTypes?: readonly string[];
+  includePaneAgentStatus?: boolean;
 }
 
 interface WireRecord {
@@ -190,6 +192,8 @@ export class HerdrRegistryRunner {
   private readonly replayMaxMs: number;
   private readonly minBackoffMs: number;
   private readonly maxBackoffMs: number;
+  private readonly eventTypes: readonly string[];
+  private readonly includePaneAgentStatus: boolean;
   private readonly diagnostic: (record: Record<string, unknown>) => void;
   private readonly abort = new AbortController();
   private readonly active = new Set<NdjsonConnection>();
@@ -209,6 +213,8 @@ export class HerdrRegistryRunner {
     this.replayMaxMs = options.replayMaxMs ?? 60_000;
     this.minBackoffMs = options.minBackoffMs ?? 250;
     this.maxBackoffMs = options.maxBackoffMs ?? 2_000;
+    this.eventTypes = options.eventTypes ?? STRUCTURAL_SUBSCRIPTIONS;
+    this.includePaneAgentStatus = options.includePaneAgentStatus ?? true;
     this.diagnostic = options.diagnostic ?? ((record) => console.log(JSON.stringify(record)));
   }
 
@@ -312,8 +318,10 @@ export class HerdrRegistryRunner {
     const connection = await this.open();
     const id = this.nextId("events.subscribe");
     const subscriptions = [
-      ...STRUCTURAL_SUBSCRIPTIONS.map((type) => ({ type })),
-      ...snapshot.panes.map((pane) => ({ type: "pane.agent_status_changed", pane_id: pane.pane_id })),
+      ...this.eventTypes.map((type) => ({ type })),
+      ...(this.includePaneAgentStatus
+        ? snapshot.panes.map((pane) => ({ type: "pane.agent_status_changed", pane_id: pane.pane_id }))
+        : []),
     ];
     connection.send({ id, method: "events.subscribe", params: { subscriptions } });
     try {

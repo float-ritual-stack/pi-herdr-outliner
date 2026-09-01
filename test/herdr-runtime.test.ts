@@ -73,6 +73,38 @@ test("runner parses fragmented and coalesced NDJSON after a settling snapshot", 
   await runner.stop();
 });
 
+test("runner can subscribe only to pane focus events", async () => {
+  const registry = new HerdrRuntimeRegistry();
+  const ready = Promise.withResolvers<void>();
+  let subscriptionParams: unknown;
+  const factory: HerdrSocketFactory = async () => new FakeSocket((request, socket) => {
+    if (request.method === "ping") {
+      socket.sendJson(response(request, { type: "pong", version: "0.8.2", protocol: 20 }));
+    } else if (request.method === "session.snapshot") {
+      socket.sendJson(response(request, { type: "session_snapshot", snapshot: snapshot("focus") }));
+    } else {
+      subscriptionParams = request.params;
+      socket.sendJson(response(request, { type: "subscription_started" }));
+    }
+  });
+  const runner = new HerdrRegistryRunner(registry, "fake", {
+    socketFactory: factory,
+    replayQuietMs: 0,
+    eventTypes: ["pane.focused"],
+    includePaneAgentStatus: false,
+    diagnostic: (record) => {
+      if (record.status === "herdr_registry_ready") ready.resolve();
+    },
+  });
+
+  runner.start();
+  await ready.promise;
+  expect(subscriptionParams).toEqual({
+    subscriptions: [{ type: "pane.focused" }],
+  });
+  await runner.stop();
+});
+
 test("subscription ACK timeout marks stale and reconnects with bounded delay", async () => {
   const registry = new HerdrRuntimeRegistry();
   const ready = Promise.withResolvers<void>();

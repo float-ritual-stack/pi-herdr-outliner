@@ -409,6 +409,7 @@ export class HerdrRuntimeRegistry {
   focusedTabId: string | null = null;
   focusedPaneId: string | null = null;
   private exitedPanes = new Map<string, ExitedPaneIdentity>();
+  private focusedPaneHistory: string[] = [];
 
   replaceSnapshot(snapshot: HerdrSessionSnapshot): void {
     if (!isRecord(snapshot) || typeof snapshot.version !== "string" || typeof snapshot.protocol !== "number") {
@@ -432,6 +433,7 @@ export class HerdrRuntimeRegistry {
     this.commit(state);
     this.generation += 1;
     this.phase = "ready";
+    if (state.focusedPaneId) this.recordFocusedPane(state.focusedPaneId);
   }
 
   markStale(): void {
@@ -440,6 +442,10 @@ export class HerdrRuntimeRegistry {
 
   paneIdForTerminal(terminalId: string): string | undefined {
     return this.terminalIndex.get(terminalId);
+  }
+
+  recentFocusedPaneIds(): string[] {
+    return [...this.focusedPaneHistory].reverse();
   }
 
   applyEvent(message: unknown): HerdrApplyResult {
@@ -460,12 +466,20 @@ export class HerdrRuntimeRegistry {
       this.reduce(state, event, data);
       validateState(state);
       this.commit(state);
+      if (event === "pane_focused") this.recordFocusedPane(stringField(data, "pane_id"));
       const topologyChanged =
         panesBefore.size !== state.panes.size || [...panesBefore].some((paneId) => !state.panes.has(paneId));
       return { kind: "applied", topologyChanged };
     } catch (error) {
       return { kind: "resync", reason: error instanceof Error ? error.message : String(error) };
     }
+  }
+
+  private recordFocusedPane(paneId: string): void {
+    const existing = this.focusedPaneHistory.indexOf(paneId);
+    if (existing !== -1) this.focusedPaneHistory.splice(existing, 1);
+    this.focusedPaneHistory.push(paneId);
+    if (this.focusedPaneHistory.length > 64) this.focusedPaneHistory.shift();
   }
 
   private reduce(state: RegistryState, event: string, data: Record<string, unknown>): void {

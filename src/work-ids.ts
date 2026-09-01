@@ -22,6 +22,18 @@ export function normalizeWorkIdPrefix(input: string): string {
 }
 
 
+export function formatWorkIdPlaceholder(prefix: string): string {
+  return `${normalizeWorkIdPrefix(prefix)}-XXX`;
+}
+
+export function containsWorkIdPlaceholder(text: string, configuredPrefix: string): boolean {
+  const placeholder = formatWorkIdPlaceholder(configuredPrefix);
+  const pattern = new RegExp(
+    `(?<![A-Za-z0-9-])${placeholder}(?![A-Za-z0-9-])`,
+  );
+  return pattern.test(text);
+}
+
 export function formatWorkId(prefix: string, number: number): string {
   const normalizedPrefix = normalizeWorkIdPrefix(prefix);
   if (!Number.isSafeInteger(number) || number < 1) {
@@ -42,6 +54,13 @@ export function parseWorkId(input: string): ParsedWorkId | null {
 export function isCanonicalWorkId(input: string): boolean {
   const parsed = parseWorkId(input);
   return parsed !== null && parsed.workId === input.trim();
+}
+
+export function isConfiguredWorkIdPlaceholder(
+  input: string,
+  configuredPrefix: string,
+): boolean {
+  return input.trim() === formatWorkIdPlaceholder(configuredPrefix);
 }
 
 export function workIdReferences(

@@ -1,8 +1,14 @@
-import type {
-  DetailBufferMoveDirection,
-  DetailController,
-  DetailIntent,
-  DetailViewport,
+import {
+  DEFAULT_OUTLINER_ACTION_KEYMAP,
+  type OutlinerActionKeymap,
+  type OutlinerActionMenuItem,
+} from "./outliner-actions";
+import {
+  visibleBacklinkSources,
+  type DetailBufferMoveDirection,
+  type DetailController,
+  type DetailIntent,
+  type DetailViewport,
 } from "./detail-controller";
 import {
   historyNavigationDirection,
@@ -15,13 +21,24 @@ export interface DetailKeymapOptions {
   controller: DetailController;
   viewport(): DetailViewport;
   stop(): void;
+  actionKeymap?: OutlinerActionKeymap;
+  openActionMenu?(
+    items: readonly OutlinerActionMenuItem[],
+    invoke: (actionId: string) => Promise<void>,
+  ): void;
+  focusDraftSplit?(): void;
+  navigatePreview?(direction: "up" | "down" | "pageup" | "pagedown" | "top" | "bottom"): void;
+  executeAction?(actionId: string): boolean | Promise<boolean>;
 }
 
-export type DetailKeyHandler = (
-  str: string,
-  key: TerminalKey,
-  inputAction: TerminalInputAction,
-) => Promise<void>;
+export interface DetailKeyHandler {
+  (
+    str: string,
+    key: TerminalKey,
+    inputAction: TerminalInputAction,
+  ): Promise<void>;
+  invoke(actionId: string): Promise<void>;
+}
 
 type PageNavigationKey = "up" | "down" | "pageup" | "pagedown";
 
@@ -31,6 +48,27 @@ function isPageNavigationKey(name: string | undefined): name is PageNavigationKe
 
 export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyHandler {
   const { controller, stop, viewport } = options;
+  const actionKeymap = options.actionKeymap ?? DEFAULT_OUTLINER_ACTION_KEYMAP;
+  let handleKeypress: DetailKeyHandler;
+  let forcedActionId: string | null = null;
+
+  async function invokeAction(actionId: string): Promise<void> {
+    if (await options.executeAction?.(actionId)) return;
+    const input = actionKeymap.defaultInput(actionId);
+    if (!input) {
+      await controller.dispatch({
+        type: "status.set",
+        message: `${actionKeymap.action(actionId).label} has no direct invocation`,
+      }, viewport());
+      return;
+    }
+    forcedActionId = actionId;
+    try {
+      await handleKeypress(input.str, input.key, "pass");
+    } finally {
+      forcedActionId = null;
+    }
+  }
 
   async function dispatch(intent: DetailIntent): Promise<void> {
     await controller.dispatch(intent, viewport());
@@ -117,18 +155,144 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
     else await dispatch({ type: "redraw" });
   }
 
+  function propertyInspectorActive(): boolean {
+    return controller.state.propertyInspector.presentation === "dedicated" ||
+      controller.state.propertyInspector.expanded;
+  }
+
+  function focusedPropertyOccurrence(): string | null {
+    const region = controller.state.previewRegions.regions.find(
+      (candidate) => candidate.id === controller.state.previewRegions.focusedRegionId,
+    );
+    return region?.kind === "property-entry" ? region.id : null;
+  }
+
+  async function handlePropertyEditKey(str: string, key: TerminalKey): Promise<void> {
+    if (key.name === "return") {
+      await dispatch({ type: "property-inspector.edit.commit" });
+      return;
+    }
+    if (key.name === "escape" || (key.ctrl && key.name === "c")) {
+      await dispatch({ type: "property-inspector.edit.cancel" });
+      if (controller.state.refreshPending) await controller.refreshPendingSelection();
+      return;
+    }
+    if ((key.meta && key.name === "a") || (key.ctrl && key.name === "a")) {
+      await dispatch({ type: "property-inspector.edit.select-all" });
+      return;
+    }
+    if (key.name === "backspace") {
+      await dispatch({ type: "property-inspector.edit.backspace" });
+      return;
+    }
+    if (key.name === "delete") {
+      await dispatch({ type: "property-inspector.edit.delete" });
+      return;
+    }
+    if (
+      key.name === "left" ||
+      key.name === "right" ||
+      key.name === "home" ||
+      key.name === "end"
+    ) {
+      await dispatch({ type: "property-inspector.edit.move", direction: key.name });
+      return;
+    }
+    if (isPrintableInput(str, key)) {
+      await dispatch({ type: "property-inspector.edit.insert", text: str });
+      return;
+    }
+    await dispatch({ type: "redraw" });
+  }
+
   async function handlePreviewKey(str: string, key: TerminalKey): Promise<void> {
+    const dedicatedInspector =
+      controller.state.propertyInspector.presentation === "dedicated";
+    if (controller.state.propertyInspector.filterDraft !== null) {
+      if (key.name === "return") {
+        await dispatch({ type: "property-inspector.filter.commit" });
+      } else if (key.name === "escape") {
+        await dispatch({ type: "property-inspector.filter.cancel" });
+      } else if (key.name === "backspace") {
+        await dispatch({ type: "property-inspector.filter.backspace" });
+      } else if (isPrintableInput(str, key)) {
+        await dispatch({ type: "property-inspector.filter.input", text: str });
+      } else await dispatch({ type: "redraw" });
+      return;
+    }
+    if (controller.state.backlinks.filterDraft !== null) {
+      if (key.name === "return") await dispatch({ type: "backlinks.filter.commit" });
+      else if (key.name === "escape") await dispatch({ type: "backlinks.filter.cancel" });
+      else if (key.name === "backspace") await dispatch({ type: "backlinks.filter.backspace" });
+      else if (isPrintableInput(str, key)) {
+        await dispatch({ type: "backlinks.filter.input", text: str });
+      } else await dispatch({ type: "redraw" });
+      return;
+    }
     const direction = historyNavigationDirection(key);
     if (direction) {
       await dispatch({ type: direction === "back" ? "navigation.back" : "navigation.forward" });
-    } else if (str === "o") {
+    } else if (key.name === "tab") {
+      await dispatch({ type: "preview.focus.move", delta: key.shift ? -1 : 1 });
+    } else if (key.name === "return") {
+      if (focusedPropertyOccurrence()) {
+        await dispatch({ type: "property-inspector.edit.begin" });
+      } else {
+        await dispatch({ type: "preview.activate" });
+      }
+    } else if (
+      str === "/" && propertyInspectorActive() &&
+      (!controller.state.backlinks.expanded || focusedPropertyOccurrence() !== null ||
+        dedicatedInspector)
+    ) {
+      await dispatch({ type: "property-inspector.filter.begin" });
+    } else if (str === "/" && controller.state.backlinks.expanded) {
+      await dispatch({ type: "backlinks.filter.begin" });
+    } else if (str === "G" && propertyInspectorActive()) {
+      await dispatch({ type: "property-inspector.group.cycle" });
+    } else if (str === "s" && controller.state.backlinks.expanded) {
+      await dispatch({ type: "backlinks.sort.cycle" });
+    } else if (str === "." && controller.state.backlinks.expanded) {
+      await dispatch({ type: "backlinks.source.toggle" });
+    } else if (str === "p" && !dedicatedInspector) {
+      await dispatch({ type: "property-inspector.disclosure.toggle" });
+    } else if (
+      dedicatedInspector &&
+      isPageNavigationKey(key.name)
+    ) {
+      await dispatch({ type: "property-inspector.viewport.navigate", direction: key.name });
+    } else if (
+      dedicatedInspector &&
+      str === "g"
+    ) {
+      await dispatch({ type: "property-inspector.viewport.navigate", direction: "home" });
+    } else if (str === "o" && focusedPropertyOccurrence()) {
+      await dispatch({
+        type: "property-inspector.target.open",
+        occurrenceId: focusedPropertyOccurrence()!,
+        intent: "open",
+      });
+    } else if (str === "o" && !dedicatedInspector) {
       await dispatch({ type: "reference.follow" });
     } else if (isPageNavigationKey(key.name)) {
       await dispatch({ type: "preview.navigate", direction: key.name });
-    } else if (key.name === "return" || str === "e") await dispatch({ type: "edit.begin" });
-    else if (str === "f") await dispatch({ type: "view.file" });
-    else if (str === "b" && controller.state.mode === "annotation") await dispatch({ type: "view.block" });
-    else await dispatch({ type: "redraw" });
+    } else if (str === "E" && !dedicatedInspector) {
+      await dispatch({ type: "embed-background.toggle" });
+    } else if (str === "e" && focusedPropertyOccurrence()) {
+      await dispatch({ type: "property-inspector.edit.begin" });
+    } else if (str === "e" && !dedicatedInspector) {
+      await dispatch({ type: "edit.begin" });
+    } else if (str === "f" && !dedicatedInspector) {
+      await dispatch({ type: "view.file" });
+    } else if (
+      str === "b" &&
+      !dedicatedInspector &&
+      controller.state.mode === "annotation"
+    ) {
+      await dispatch({ type: "view.block" });
+    } else if (str === "b" && !dedicatedInspector) {
+      await dispatch({ type: "backlinks.toggle" });
+    } else await dispatch({ type: "redraw" });
   }
 
   async function handleFileKey(str: string, key: TerminalKey): Promise<void> {
@@ -147,10 +311,77 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
     else await dispatch({ type: "redraw" });
   }
 
-  return async (str, key, inputAction) => {
+
+  handleKeypress = (async (str, key, inputAction) => {
     if (inputAction === "suppress") return;
+    const mode = controller.state.mode;
+    const mapped = forcedActionId
+      ? {
+        actionId: forcedActionId,
+        ...actionKeymap.defaultInput(forcedActionId)!,
+        suppressed: false,
+      }
+      : actionKeymap.canonicalize("detail", mode, str, key);
+    if (mapped.suppressed) return;
+    if (!forcedActionId && mapped.actionId) {
+      await invokeAction(mapped.actionId);
+      return;
+    }
+    str = mapped.str;
+    key = mapped.key;
+    if (mapped.actionId === "detail.menu.open") {
+      options.openActionMenu?.(
+        actionKeymap.menuItems("detail", mode),
+        invokeAction,
+      );
+      return;
+    }
+    if (mapped.actionId === "detail.keymap.reload") {
+      const result = actionKeymap.reload();
+      await dispatch({
+        type: "status.set",
+        message: result.ok ? "Outliner keymap reloaded" : `Keymap unchanged: ${result.error}`,
+      });
+      return;
+    }
+    if (mapped.actionId === "detail.split.focus") {
+      options.focusDraftSplit?.();
+      return;
+    }
+    if (mapped.actionId === "detail.split.link") {
+      await dispatch({ type: "draft-preview.link.toggle" });
+      return;
+    }
+    const previewDirection = {
+      "detail.preview.up": "up",
+      "detail.preview.down": "down",
+      "detail.preview.pageup": "pageup",
+      "detail.preview.pagedown": "pagedown",
+      "detail.preview.top": "top",
+      "detail.preview.bottom": "bottom",
+    }[mapped.actionId ?? ""] as
+      | "up"
+      | "down"
+      | "pageup"
+      | "pagedown"
+      | "top"
+      | "bottom"
+      | undefined;
+    if (
+      previewDirection &&
+      options.navigatePreview &&
+      mode === "preview" &&
+      controller.state.propertyInspector.presentation !== "dedicated"
+    ) {
+      options.navigatePreview(previewDirection);
+      return;
+    }
     if (key.ctrl && key.name === "q") {
       stop();
+      return;
+    }
+    if (controller.state.propertyInspector.edit) {
+      await handlePropertyEditKey(str, key);
       return;
     }
     if (key.ctrl && key.name === "c") {
@@ -160,6 +391,36 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
     }
     if (controller.isBufferMode()) {
       await handleBufferKey(str, key, inputAction === "modified-enter");
+      return;
+    }
+    if (str === "P") {
+      await dispatch({ type: "property-inspector.pane.open" });
+      return;
+    }
+    if (
+      str === "L" ||
+      str === "i" ||
+      ((key.ctrl || key.meta) && key.name === "l")
+    ) {
+      await dispatch({ type: "lock.toggle" });
+      return;
+    }
+    if (str === "R") {
+      const occurrenceId = focusedPropertyOccurrence();
+      if (occurrenceId) {
+        await dispatch({
+          type: "property-inspector.target.open",
+          occurrenceId,
+          intent: "reveal",
+        });
+      } else {
+        await dispatch(
+          controller.state.backlinks.expanded &&
+              visibleBacklinkSources(controller.state.backlinks).length > 0
+            ? { type: "backlinks.reveal" }
+            : { type: "reference.reveal" },
+        );
+      }
       return;
     }
     if (key.name === "q") {
@@ -175,5 +436,7 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
     } else {
       await handlePreviewKey(str, key);
     }
-  };
+  }) as DetailKeyHandler;
+  handleKeypress.invoke = invokeAction;
+  return handleKeypress;
 }

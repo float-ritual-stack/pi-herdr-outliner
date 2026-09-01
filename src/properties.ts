@@ -3,13 +3,14 @@ import type {
   PropertyFilter,
   PropertyPatchOperation,
   PropertyPlacement,
-  PropertyToken,
+  PropertyQueryScope,
+  PropertyRecord,
 } from "./types";
 
 const PROPERTY_PATTERN = /\[([A-Za-z][A-Za-z0-9_.-]*)::([^\]\r\n]+)\]/g;
 const PROPERTY_KEY_PATTERN = /^[A-Za-z][A-Za-z0-9_.-]*$/;
 
-export const PROPERTY_PARSER_VERSION = 1;
+export const PROPERTY_PARSER_VERSION = 2;
 
 interface SourceRange {
   start: number;
@@ -30,6 +31,8 @@ interface PropertyMatch {
   match: RegExpExecArray;
   start: number;
 }
+
+type PropertyCandidate = Omit<PropertyRecord, "ordinal" | "scope">;
 
 function createPropertyPattern(): RegExp {
   return new RegExp(PROPERTY_PATTERN.source, "g");
@@ -168,7 +171,70 @@ function removeRanges(text: string, ranges: SourceRange[], start = 0, end = text
   return parts.join("");
 }
 
-export function parsePropertyTokens(text: string): PropertyToken[] {
+function propertyCandidateLines(
+  candidates: readonly PropertyCandidate[],
+): Map<number, PropertyCandidate[]> {
+  const byLine = new Map<number, PropertyCandidate[]>();
+  for (const candidate of candidates) {
+    const lineCandidates = byLine.get(candidate.line);
+    if (lineCandidates) lineCandidates.push(candidate);
+    else byLine.set(candidate.line, [candidate]);
+  }
+  return byLine;
+}
+
+function lineContainsOnlyProperties(
+  text: string,
+  line: SourceLine,
+  candidates: readonly PropertyCandidate[],
+): boolean {
+  if (candidates.length === 0) return false;
+  let cursor = line.start;
+  for (const candidate of candidates) {
+    if (containsNonWhitespace(text, cursor, candidate.start)) return false;
+    cursor = candidate.end;
+  }
+  return !containsNonWhitespace(text, cursor, line.contentEnd);
+}
+
+function offsetInRanges(offset: number, ranges: readonly SourceRange[]): boolean {
+  return ranges.some((range) => range.start <= offset && offset < range.end);
+}
+
+function parseBarePropertyCandidate(
+  text: string,
+  line: SourceLine,
+  lineIndex: number,
+  literalRanges: readonly SourceRange[],
+  bracketCandidates: readonly PropertyCandidate[],
+): PropertyCandidate | null {
+  const content = text.slice(line.start, line.contentEnd);
+  const match = /^([ \t]*)([A-Za-z][A-Za-z0-9_.-]*)::[ \t]*/.exec(content);
+  if (!match) return null;
+
+  const start = line.start + match[1].length;
+  if (offsetInRanges(start, literalRanges)) return null;
+  const valueStart = line.start + match[0].length;
+  const firstBracket = bracketCandidates.find((candidate) => candidate.start >= valueStart);
+  let end = firstBracket?.start ?? line.contentEnd;
+  while (end > valueStart && /[ \t]/.test(text[end - 1])) end -= 1;
+  const value = text.slice(valueStart, end).trim();
+  if (!value) return null;
+
+  return {
+    key: match[2].toLowerCase(),
+    value,
+    raw: text.slice(start, end),
+    start,
+    end,
+    line: lineIndex,
+    column: start - line.start,
+    placement: "metadata-line",
+    syntax: "bare",
+  };
+}
+
+export function parsePropertyRecords(text: string): PropertyRecord[] {
   const literalRanges = scanPropertyLiteralRanges(text);
   const matches: PropertyMatch[] = [];
   let literalIndex = 0;
@@ -182,8 +248,8 @@ export function parsePropertyTokens(text: string): PropertyToken[] {
     if (!isLiteral && !hasOddBackslashEscape(text, start)) matches.push({ match, start });
   }
 
-  const tokens: PropertyToken[] = [];
   const lines = sourceLines(text);
+  const bracketCandidates: PropertyCandidate[] = [];
   for (let lineIndex = 0, matchIndex = 0; lineIndex < lines.length; lineIndex += 1) {
     const line = lines[lineIndex];
     const lineMatches: PropertyMatch[] = [];
@@ -216,38 +282,102 @@ export function parsePropertyTokens(text: string): PropertyToken[] {
       const { match, start } = lineMatches[index];
       const raw = match[0];
       let placement: PropertyPlacement = "inline";
-      if (metadataLine) {
-        placement = "metadata-line";
-      } else if (trailingMetadata[index]) {
-        placement = "trailing-metadata";
-      }
-      tokens.push({
+      if (metadataLine) placement = "metadata-line";
+      else if (trailingMetadata[index]) placement = "trailing-metadata";
+      bracketCandidates.push({
         key: match[1].toLowerCase(),
         value: match[2].trim(),
-        ordinal: tokens.length,
         raw,
         start,
         end: start + raw.length,
         line: lineIndex,
         column: start - line.start,
         placement,
+        syntax: "bracket",
       });
     }
   }
 
-  return tokens;
+  const bracketCandidatesByLine = propertyCandidateLines(bracketCandidates);
+  const bareCandidates = lines.flatMap((line, lineIndex) => {
+    const candidate = parseBarePropertyCandidate(
+      text,
+      line,
+      lineIndex,
+      literalRanges,
+      bracketCandidatesByLine.get(lineIndex) ?? [],
+    );
+    return candidate ? [candidate] : [];
+  });
+  const candidates = [...bracketCandidates, ...bareCandidates].sort(
+    (left, right) => left.start - right.start,
+  );
+  const candidatesByLine = propertyCandidateLines(candidates);
+  const purePropertyLines = new Set<number>();
+  for (const [lineIndex, lineCandidates] of candidatesByLine) {
+    if (lineContainsOnlyProperties(text, lines[lineIndex], lineCandidates)) {
+      purePropertyLines.add(lineIndex);
+    }
+  }
+
+  const firstNonblankLine = lines.findIndex((line) =>
+    containsNonWhitespace(text, line.start, line.contentEnd)
+  );
+  let subjectLine = -1;
+  let preambleStart = -1;
+  if (firstNonblankLine >= 0) {
+    if (purePropertyLines.has(firstNonblankLine)) {
+      preambleStart = firstNonblankLine;
+    } else {
+      subjectLine = firstNonblankLine;
+      let cursor = firstNonblankLine + 1;
+      while (
+        cursor < lines.length &&
+        !containsNonWhitespace(text, lines[cursor].start, lines[cursor].contentEnd)
+      ) {
+        cursor += 1;
+      }
+      if (purePropertyLines.has(cursor)) preambleStart = cursor;
+    }
+  }
+
+  let preambleEnd = preambleStart;
+  while (preambleEnd >= 0 && purePropertyLines.has(preambleEnd + 1)) {
+    preambleEnd += 1;
+  }
+
+  return candidates.map((candidate, ordinal) => {
+    let scope: PropertyRecord["scope"];
+    if (
+      preambleStart >= 0 &&
+      candidate.line >= preambleStart &&
+      candidate.line <= preambleEnd
+    ) {
+      scope = "block";
+    } else if (
+      candidate.line === subjectLine &&
+      candidate.syntax === "bracket" &&
+      candidate.placement === "trailing-metadata"
+    ) {
+      scope = "block";
+    } else {
+      scope = candidate.syntax === "bare" ? "line" : "inline";
+    }
+    return { ...candidate, ordinal, scope };
+  });
 }
 
 export function parseProperties(text: string): BlockProperty[] {
-  return parsePropertyTokens(text).map(({ key, value }) => ({ key, value }));
+  return parsePropertyRecords(text)
+    .filter((property) => property.scope === "block")
+    .map(({ key, value }) => ({ key, value }));
 }
-
 export function stripPropertyTokens(text: string): string {
-  return removeRanges(text, parsePropertyTokens(text));
+  return removeRanges(text, parsePropertyRecords(text));
 }
 
 export function firstLineWithoutPropertyTokens(text: string): string | undefined {
-  const tokens = parsePropertyTokens(text);
+  const tokens = parsePropertyRecords(text);
   let tokenIndex = 0;
   for (const line of sourceLines(text)) {
     const firstLineToken = tokenIndex;
@@ -289,7 +419,7 @@ export function formatProperty(property: BlockProperty): string {
 }
 
 export function patchPropertyText(text: string, operations: PropertyPatchOperation[]): string {
-  const tokens = parsePropertyTokens(text);
+  const tokens = parsePropertyRecords(text);
   const mutations: Array<{ start: number; end: number; replacement: string }> = [];
   const touchedOrdinals = new Set<number>();
   const appends: BlockProperty[] = [];
@@ -318,7 +448,10 @@ export function patchPropertyText(text: string, operations: PropertyPatchOperati
     if (operationKind === "replace") {
       const key = "key" in tokenOperation ? tokenOperation.key ?? token.key : token.key;
       const value = "value" in tokenOperation ? tokenOperation.value : token.value;
-      replacement = formatProperty({ key, value });
+      const validated = validateProperty(key, value);
+      replacement = token.syntax === "bare"
+        ? `${validated.key}:: ${validated.value}`
+        : formatProperty(validated);
     }
     mutations.push({ start: token.start, end: token.end, replacement });
   }
@@ -330,7 +463,9 @@ export function patchPropertyText(text: string, operations: PropertyPatchOperati
   if (appends.length === 0) return patched;
 
   const appendedText = appends.map(formatProperty).join(" ");
-  const metadataToken = parsePropertyTokens(patched).find((token) => token.placement === "metadata-line");
+  const metadataToken = parsePropertyRecords(patched).find(
+    (token) => token.scope === "block" && token.placement === "metadata-line",
+  );
   if (metadataToken) {
     const lineEnd = patched.indexOf("\n", metadataToken.end);
     let insertion = lineEnd < 0 ? patched.length : lineEnd;
@@ -359,17 +494,45 @@ export function patchPropertyText(text: string, operations: PropertyPatchOperati
   return `${patched.slice(0, firstLineEnd)}${lineBreak}${appendedText}${patched.slice(firstLineEnd)}`;
 }
 
-
-export function matchesFilters(properties: BlockProperty[], filters: PropertyFilter[]): boolean {
-  return filters.every((filter) =>
-    properties.some(
-      (property) =>
+export function matchingPropertyRecords(
+  properties: readonly PropertyRecord[],
+  filters: readonly PropertyFilter[],
+  propertyScope: PropertyQueryScope = "block",
+): PropertyRecord[] {
+  const scoped = propertyScope === "all"
+    ? properties
+    : properties.filter((property) => property.scope === propertyScope);
+  if (filters.length === 0) return [...scoped];
+  return scoped.filter((property) =>
+    filters.some(
+      (filter) =>
         property.key === filter.key &&
-        (filter.value === undefined || property.value.toLowerCase() === filter.value.toLowerCase()),
-    ),
+        (filter.value === undefined ||
+          property.value.toLowerCase() === filter.value.toLowerCase()),
+    )
   );
 }
 
-export function getProperty(properties: BlockProperty[], key: string): string | undefined {
+export function matchesFilters(
+  properties: readonly (BlockProperty | PropertyRecord)[],
+  filters: readonly PropertyFilter[],
+  propertyScope: PropertyQueryScope = "block",
+): boolean {
+  const scoped = propertyScope === "all"
+    ? properties
+    : properties.filter((property) =>
+      ("scope" in property ? property.scope : "block") === propertyScope
+    );
+  return filters.every((filter) =>
+    scoped.some(
+      (property) =>
+        property.key === filter.key &&
+        (filter.value === undefined ||
+          property.value.toLowerCase() === filter.value.toLowerCase()),
+    )
+  );
+}
+
+export function getProperty(properties: readonly BlockProperty[], key: string): string | undefined {
   return properties.find((property) => property.key === key.toLowerCase())?.value;
 }

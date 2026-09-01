@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { OutlinerActionKeymap, type OutlinerActionMenuItem } from "../src/outliner-actions";
 import type {
   DetailController,
   DetailIntent,
@@ -11,7 +12,16 @@ import type { TerminalKey } from "../src/terminal";
 function state(): DetailState {
   return {
     context: { selected: null, ancestors: [], children: [] },
+    targetBlockId: null,
+    targetFragmentId: null,
+    connectionMode: "unlocked",
+    canNavigateBack: false,
+    canNavigateForward: false,
     resolvedSelectedText: "",
+    projectedSelectedText: "",
+    embedStates: [],
+    embedRanges: [],
+    embedBackgroundEnabled: true,
     workIdPrefix: null,
     resolvedBreadcrumb: "",
     mode: "edit",
@@ -27,12 +37,48 @@ function state(): DetailState {
     status: "",
     busy: false,
     refreshPending: false,
+    backlinks: {
+      expanded: false,
+      loading: false,
+      collection: null,
+      selectedIndex: 0,
+      error: "",
+      filter: "",
+      filterDraft: null,
+      sortField: "updated",
+      sortDirection: "desc",
+      expandedSourceIds: new Set(),
+    },
+    propertyInspector: {
+      presentation: "inline",
+      model: null,
+      expanded: false,
+      groupBy: null,
+      filter: "",
+      filterDraft: null,
+      viewportOffset: 0,
+      edit: null,
+    },
+    previewRegions: {
+      regions: [],
+      focusedRegionId: null,
+      disclosureOverrides: new Map(),
+    },
   };
 }
 
 function harness(
   detailState: DetailState = state(),
   bufferMode = true,
+  options: {
+    actionKeymap?: OutlinerActionKeymap;
+    openActionMenu?: (
+      items: readonly OutlinerActionMenuItem[],
+      invoke: (actionId: string) => Promise<void>,
+    ) => void;
+    navigatePreview?: (direction: "up" | "down" | "pageup" | "pagedown" | "top" | "bottom") => void;
+    executeAction?: (actionId: string) => boolean | Promise<boolean>;
+  } = {},
 ): {
   intents: DetailIntent[];
   press(key: TerminalKey, str?: string): Promise<void>;
@@ -45,6 +91,7 @@ function harness(
     async dispatch(intent) {
       intents.push(intent);
     },
+    setPreviewRegions() {},
     async onServiceEvent() {},
     async onServiceConnect() {},
     onServiceDisconnect() {},
@@ -55,12 +102,81 @@ function harness(
     controller,
     viewport: () => ({ width: 80, height: 24 }),
     stop() {},
+    ...options,
   });
   return {
     intents,
     press: (key, str = "") => handler(str, key, "pass"),
   };
 }
+
+test("remaps preview and editor actions while suppressing stale defaults", async () => {
+  const editKeymap = new OutlinerActionKeymap("<test>", {
+    "detail.buffer.save": ["x"],
+  });
+  const editor = harness(state(), true, { actionKeymap: editKeymap });
+  await editor.press({ name: "x" }, "x");
+  await editor.press({ name: "s", ctrl: true });
+  expect(editor.intents).toEqual([{ type: "buffer.save" }]);
+
+  const previewState = state();
+  previewState.mode = "preview";
+  const directions: string[] = [];
+  const previewKeymap = new OutlinerActionKeymap("<test>", {
+    "detail.edit.begin": ["x"],
+    "detail.preview.down": ["j"],
+  });
+  const preview = harness(previewState, false, {
+    actionKeymap: previewKeymap,
+    navigatePreview: (direction) => directions.push(direction),
+  });
+  await preview.press({ name: "x" }, "x");
+  await preview.press({ name: "e" }, "e");
+  await preview.press({ name: "j" }, "j");
+  await preview.press({ name: "down" });
+  expect(preview.intents).toEqual([{ type: "edit.begin" }]);
+  expect(directions).toEqual(["down"]);
+});
+
+test("routes the draft scroll link toggle through the action registry", async () => {
+  const editor = harness();
+  await editor.press({ name: "l", ctrl: true });
+  expect(editor.intents).toEqual([{ type: "draft-preview.link.toggle" }]);
+  expect(new OutlinerActionKeymap("<test>").menuItems("detail", "edit")).toContainEqual(
+    expect.objectContaining({
+      id: "detail.split.link",
+      binding: "⌃L",
+    }),
+  );
+});
+
+test("opens the contextual menu and invokes its selected action through effective bindings", async () => {
+  const detailState = state();
+  detailState.mode = "preview";
+  let menuItems: readonly OutlinerActionMenuItem[] = [];
+  let invoke: (actionId: string) => Promise<void> = async () => {
+    throw new Error("Action menu did not open");
+  };
+  const executed: string[] = [];
+  const detail = harness(detailState, false, {
+    openActionMenu: (items, nextInvoke) => {
+      menuItems = items;
+      invoke = nextInvoke;
+    },
+    executeAction: (actionId) => {
+      if (actionId !== "detail.pane.right") return false;
+      executed.push(actionId);
+      return true;
+    },
+  });
+
+  await detail.press({ name: "?" }, "?");
+  expect(menuItems.some((item) => item.id === "detail.edit.begin")).toBe(true);
+  await invoke("detail.edit.begin");
+  await invoke("detail.pane.right");
+  expect(detail.intents).toEqual([{ type: "edit.begin" }]);
+  expect(executed).toEqual(["detail.pane.right"]);
+});
 
 test("maps word, line, selection, and select-all controls to explicit intents", async () => {
   const detail = harness();
@@ -150,6 +266,7 @@ test("maps preview and file navigation history and reference-follow bindings", a
   await preview.press({ name: "b", meta: true });
   await preview.press({ name: "f", meta: true });
   await preview.press({ name: "o" }, "o");
+  await preview.press({ name: "i" }, "i");
 
   expect(preview.intents).toEqual([
     { type: "navigation.back" },
@@ -157,6 +274,7 @@ test("maps preview and file navigation history and reference-follow bindings", a
     { type: "navigation.back" },
     { type: "navigation.forward" },
     { type: "reference.follow" },
+    { type: "lock.toggle" },
   ]);
 
   const fileState = state();
@@ -172,9 +290,227 @@ test("maps preview and file navigation history and reference-follow bindings", a
 
   await file.press({ name: "left", meta: true });
   await file.press({ name: "o" }, "o");
+  await file.press({ name: "i" }, "i");
 
   expect(file.intents).toEqual([
     { type: "navigation.back" },
     { type: "reference.follow" },
+    { type: "lock.toggle" },
+  ]);
+});
+
+test("activates the focused preview region and reserves e for editing", async () => {
+  const previewState = state();
+  previewState.mode = "preview";
+  const preview = harness(previewState, false);
+
+  await preview.press({ name: "return" });
+  await preview.press({ name: "e" }, "e");
+  await preview.press({ name: "e", shift: true }, "E");
+
+  expect(preview.intents).toEqual([
+    { type: "preview.activate" },
+    { type: "edit.begin" },
+    { type: "embed-background.toggle" },
+  ]);
+});
+
+test("maps preview b to the lazy backlink section", async () => {
+  const previewState = state();
+  previewState.mode = "preview";
+  const preview = harness(previewState, false);
+
+  await preview.press({ name: "b" }, "b");
+
+  expect(preview.intents).toEqual([{ type: "backlinks.toggle" }]);
+});
+
+test("selects, inspects, and reveals expanded backlink rows", async () => {
+  const previewState = state();
+  previewState.mode = "preview";
+  previewState.backlinks = {
+    expanded: true,
+    loading: false,
+    selectedIndex: 0,
+    error: "",
+    filter: "",
+    filterDraft: null,
+    sortField: "updated",
+    sortDirection: "desc",
+    expandedSourceIds: new Set(),
+    collection: {
+      targetBlockId: "target-block",
+      sources: [{
+        blockId: "source-block",
+        title: "Source",
+        parentContext: "Top level",
+        occurrenceCount: 1,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-02T00:00:00.000Z",
+        referenceGroups: [{ kind: "block", count: 1 }],
+        occurrences: [],
+        occurrencesTruncated: false,
+      }],
+      completeness: { kind: "complete" },
+    },
+  };
+  const preview = harness(previewState, false);
+
+  await preview.press({ name: "tab" });
+  await preview.press({ name: "tab", shift: true });
+  await preview.press({ name: "return" });
+  await preview.press({ name: "r", shift: true }, "R");
+
+  expect(preview.intents).toEqual([
+    { type: "preview.focus.move", delta: 1 },
+    { type: "preview.focus.move", delta: -1 },
+    { type: "preview.activate" },
+    { type: "backlinks.reveal" },
+  ]);
+});
+
+test("maps backlink filter, sort, and disclosure controls", async () => {
+  const previewState = state();
+  previewState.mode = "preview";
+  previewState.backlinks.expanded = true;
+  const preview = harness(previewState, false);
+
+  await preview.press({ name: "/" }, "/");
+  previewState.backlinks.filterDraft = "";
+  await preview.press({ name: "g" }, "g");
+  await preview.press({ name: "backspace" });
+  await preview.press({ name: "return" });
+  previewState.backlinks.filterDraft = null;
+  await preview.press({ name: "s" }, "s");
+  await preview.press({ name: "." }, ".");
+
+  expect(preview.intents).toEqual([
+    { type: "backlinks.filter.begin" },
+    { type: "backlinks.filter.input", text: "g" },
+    { type: "backlinks.filter.backspace" },
+    { type: "backlinks.filter.commit" },
+    { type: "backlinks.sort.cycle" },
+    { type: "backlinks.source.toggle" },
+  ]);
+});
+
+test("maps lock shortcuts and reveal without a destination picker", async () => {
+  const previewState = state();
+  previewState.mode = "preview";
+  const preview = harness(previewState, false);
+
+  await preview.press({ name: "r", shift: true }, "R");
+  await preview.press({ name: "l", shift: true }, "L");
+  await preview.press({ name: "i" }, "i");
+  await preview.press({ name: "l", ctrl: true });
+  await preview.press({ name: "l", meta: true });
+
+  expect(preview.intents).toEqual([
+    { type: "reference.reveal" },
+    { type: "lock.toggle" },
+    { type: "lock.toggle" },
+    { type: "lock.toggle" },
+    { type: "lock.toggle" },
+  ]);
+});
+
+test("maps property inspector disclosure, pane, grouping, filtering, target, and viewport keys", async () => {
+  const previewState = state();
+  previewState.mode = "preview";
+  previewState.propertyInspector.expanded = true;
+  previewState.previewRegions = {
+    regions: [{
+      id: "property:source:related-to:0:10-20",
+      kind: "property-entry",
+      sourceSpan: { start: 10, end: 20, startLine: 1, endLine: 1 },
+      parentId: "property-inspector",
+      childIds: [],
+      focusable: true,
+      disclosure: null,
+      activation: {
+        type: "property-inspector.target.open",
+        occurrenceId: "property:source:related-to:0:10-20",
+      },
+    }],
+    focusedRegionId: "property:source:related-to:0:10-20",
+    disclosureOverrides: new Map(),
+  };
+  const preview = harness(previewState, false);
+
+  await preview.press({ name: "return" });
+  await preview.press({ name: "e" }, "e");
+  await preview.press({ name: "o" }, "o");
+  await preview.press({ name: "p" }, "p");
+  await preview.press({ name: "p", shift: true }, "P");
+  await preview.press({ name: "g", shift: true }, "G");
+  await preview.press({ name: "/" }, "/");
+  previewState.propertyInspector.filterDraft = "";
+  await preview.press({ name: "r" }, "r");
+  await preview.press({ name: "backspace" });
+  await preview.press({ name: "return" });
+  previewState.propertyInspector.filterDraft = null;
+  await preview.press({ name: "r", shift: true }, "R");
+
+  expect(preview.intents).toEqual([
+    { type: "property-inspector.edit.begin" },
+    { type: "property-inspector.edit.begin" },
+    {
+      type: "property-inspector.target.open",
+      occurrenceId: "property:source:related-to:0:10-20",
+      intent: "open",
+    },
+    { type: "property-inspector.disclosure.toggle" },
+    { type: "property-inspector.pane.open" },
+    { type: "property-inspector.group.cycle" },
+    { type: "property-inspector.filter.begin" },
+    { type: "property-inspector.filter.input", text: "r" },
+    { type: "property-inspector.filter.backspace" },
+    { type: "property-inspector.filter.commit" },
+    {
+      type: "property-inspector.target.open",
+      occurrenceId: "property:source:related-to:0:10-20",
+      intent: "reveal",
+    },
+  ]);
+
+  previewState.propertyInspector.presentation = "dedicated";
+  const dedicated = harness(previewState, false);
+  await dedicated.press({ name: "down" });
+  await dedicated.press({ name: "pagedown" });
+  await dedicated.press({ name: "g" }, "g");
+  expect(dedicated.intents).toEqual([
+    { type: "property-inspector.viewport.navigate", direction: "down" },
+    { type: "property-inspector.viewport.navigate", direction: "pagedown" },
+    { type: "property-inspector.viewport.navigate", direction: "home" },
+  ]);
+});
+
+test("maps property value editing keys without entering the full block editor", async () => {
+  const detailState = state();
+  detailState.propertyInspector.edit = {
+    occurrenceId: "property:block-1:status:0:8-25",
+    ordinal: 0,
+    blockId: "block-1",
+    expectedUpdatedAt: "version-1",
+    buffer: new TextBuffer("planned"),
+  };
+  const detail = harness(detailState, false);
+
+  await detail.press({ name: "a", ctrl: true });
+  await detail.press({ name: undefined }, "x");
+  await detail.press({ name: "left" });
+  await detail.press({ name: "backspace" });
+  await detail.press({ name: "delete" });
+  await detail.press({ name: "return" });
+  await detail.press({ name: "escape" });
+
+  expect(detail.intents).toEqual([
+    { type: "property-inspector.edit.select-all" },
+    { type: "property-inspector.edit.insert", text: "x" },
+    { type: "property-inspector.edit.move", direction: "left" },
+    { type: "property-inspector.edit.backspace" },
+    { type: "property-inspector.edit.delete" },
+    { type: "property-inspector.edit.commit" },
+    { type: "property-inspector.edit.cancel" },
   ]);
 });

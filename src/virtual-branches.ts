@@ -3,7 +3,7 @@ import {
   parsePropertyFilterClause,
   parsePropertyFilterExpression,
 } from "./block-query";
-import { parsePropertyTokens, patchPropertyText } from "./properties";
+import { parsePropertyRecords, patchPropertyText } from "./properties";
 import type {
   Block,
   BlockCollectionCompleteness,
@@ -18,6 +18,8 @@ import type {
 const DEFAULT_VIRTUAL_BRANCH_LIMIT = 200;
 const MAX_VIRTUAL_BRANCH_LIMIT = MAX_BLOCK_QUERY_LIMIT;
 const VIRTUAL_BRANCH_TYPE = "virtual-branch";
+export const VIRTUAL_BRANCH_MAX_RELATIVE_DEPTH = 2;
+export const VIRTUAL_BRANCH_MAX_ROWS = 1_000;
 
 interface TreeRowBase {
   readonly rowId: string;
@@ -30,11 +32,13 @@ interface TreeRowBase {
 
 export interface TreePresentationState {
   readonly collapsedBlockIds: ReadonlySet<string>;
+  readonly collapsedOccurrenceRowIds?: ReadonlySet<string>;
   readonly multilineExpandedRowIds: ReadonlySet<string>;
 }
 
 const EMPTY_TREE_PRESENTATION_STATE: TreePresentationState = {
   collapsedBlockIds: new Set(),
+  collapsedOccurrenceRowIds: new Set(),
   multilineExpandedRowIds: new Set(),
 };
 
@@ -46,7 +50,10 @@ export interface PhysicalTreeRow extends TreeRowBase {
 export interface VirtualBranchOccurrenceRow extends TreeRowBase {
   readonly kind: "occurrence";
   readonly viewId: string;
-  readonly hasChildren: false;
+  readonly matchRootCanonicalId: string;
+  readonly parentRowId: string;
+  readonly relativeDepth: number;
+  readonly collapsed: boolean;
 }
 
 export type TreeRow = PhysicalTreeRow | VirtualBranchOccurrenceRow;
@@ -67,16 +74,26 @@ export interface VirtualBranchConfigResult {
   creationErrors: string[];
 }
 
+export interface VirtualBranchTruncation {
+  readonly rootQuery: boolean;
+  readonly depth: boolean;
+  readonly budget: boolean;
+}
+
 export interface VirtualBranchState extends VirtualBranchConfigResult {
   queryError: string | null;
   count: number;
+  descendantCount: number;
   completeness: BlockCollectionCompleteness | null;
+  truncation: VirtualBranchTruncation;
   queried: boolean;
 }
 
 export interface VirtualBranchProjection {
   rows: TreeRow[];
   branchStates: Map<string, VirtualBranchState>;
+  physicalRowCount: number;
+  occurrenceRowCount: number;
 }
 
 export type VirtualBranchQueryEffect = (
@@ -85,7 +102,9 @@ export type VirtualBranchQueryEffect = (
 
 export function virtualBranchStateLabel(state: VirtualBranchState): string {
   const indicators = [`V:${state.count}`];
-  if (state.completeness?.kind === "truncated") indicators.push("TRUNCATED");
+  if (state.truncation.rootQuery) indicators.push("ROOT TRUNCATED");
+  if (state.truncation.depth) indicators.push("DEPTH TRUNCATED");
+  if (state.truncation.budget) indicators.push("BUDGET TRUNCATED");
   if (state.configurationErrors.length > 0) indicators.push("CONFIG ERROR");
   if (state.queryError) indicators.push("QUERY ERROR");
   if (state.config?.readOnly) indicators.push("READ-ONLY");
@@ -139,6 +158,12 @@ export function isVirtualBranchDefinition(block: Block): boolean {
 
 export function isVirtualBranchOccurrence(row: TreeRow): row is VirtualBranchOccurrenceRow {
   return row.kind === "occurrence";
+}
+
+export function isVirtualBranchRootOccurrence(
+  row: TreeRow,
+): row is VirtualBranchOccurrenceRow {
+  return row.kind === "occurrence" && row.relativeDepth === 0;
 }
 
 function physicalTreeRow(
@@ -266,8 +291,8 @@ export function buildVirtualBranchCreationText(
     throw new Error("Virtual branch is read-only");
   }
 
-  const matchingTokens = parsePropertyTokens(text).filter(
-    (token) => token.key === createProperty.key,
+  const matchingTokens = parsePropertyRecords(text).filter(
+    (token) => token.scope === "block" && token.key === createProperty.key,
   );
   if (matchingTokens.length > 1) {
     throw new Error(`Creation text has more than one ${createProperty.key} property`);
@@ -282,37 +307,82 @@ export function buildVirtualBranchCreationText(
   ]);
 }
 
+const NO_VIRTUAL_BRANCH_TRUNCATION: VirtualBranchTruncation = {
+  rootQuery: false,
+  depth: false,
+  budget: false,
+};
+
 function initialBranchState(result: VirtualBranchConfigResult): VirtualBranchState {
   return {
     ...result,
     queryError: null,
     count: 0,
+    descendantCount: 0,
     completeness: null,
+    truncation: NO_VIRTUAL_BRANCH_TRUNCATION,
     queried: false,
   };
 }
 
-function occurrenceRows(
-  definition: PhysicalTreeRow,
+interface ContextualDescendant {
+  readonly block: VisibleBlock;
+  readonly parentCanonicalId: string;
+  readonly relativeDepth: number;
+}
+
+interface CanonicalContext {
+  readonly descendants: readonly ContextualDescendant[];
+  readonly depthTruncated: boolean;
+  readonly overflow: boolean;
+}
+
+interface CanonicalAdjacency {
+  readonly childrenByParentId: ReadonlyMap<string, readonly VisibleBlock[]>;
+  readonly contextByRootId: Map<string, CanonicalContext>;
+}
+
+function buildCanonicalAdjacency(blocks: readonly VisibleBlock[]): CanonicalAdjacency {
+  const childrenByParentId = new Map<string, VisibleBlock[]>();
+  for (const block of blocks) {
+    if (!block.parentId) continue;
+    const siblings = childrenByParentId.get(block.parentId);
+    if (siblings) siblings.push(block);
+    else childrenByParentId.set(block.parentId, [block]);
+  }
+  return { childrenByParentId, contextByRootId: new Map() };
+}
+
+function rootOccurrenceRowId(viewId: string, canonicalId: string): string {
+  return `occurrence:${viewId}:${canonicalId}`;
+}
+
+function descendantOccurrenceRowId(
+  viewId: string,
+  matchRootCanonicalId: string,
+  canonicalId: string,
+): string {
+  return `occurrence:${viewId}:${matchRootCanonicalId}:${canonicalId}`;
+}
+
+function rankedDeduplicatedRoots(
+  definitionId: string,
   matches: readonly VisibleBlock[],
-  limit: number,
   ranks: readonly VirtualOccurrenceRank[],
-  presentation: TreePresentationState,
-): { rows: VirtualBranchOccurrenceRow[]; hasMore: boolean } {
-  const definitionId = definition.canonicalId;
+): VisibleBlock[] {
   const seenCanonicalIds = new Set<string>();
-  const eligible: VisibleBlock[] = [];
+  const roots: VisibleBlock[] = [];
   for (const block of matches) {
     if (block.id === definitionId || seenCanonicalIds.has(block.id)) continue;
     seenCanonicalIds.add(block.id);
-    eligible.push(block);
+    roots.push(block);
   }
   const rankByBlockId = new Map(
     ranks
       .filter((entry) => entry.viewId === definitionId)
       .map((entry) => [entry.blockId, entry.rank]),
   );
-  eligible.sort((left, right) => {
+  roots.sort((left, right) => {
     const leftRank = rankByBlockId.get(left.id);
     const rightRank = rankByBlockId.get(right.id);
     if (leftRank === undefined && rightRank === undefined) return 0;
@@ -320,21 +390,150 @@ function occurrenceRows(
     if (rightRank === undefined) return -1;
     return leftRank - rightRank || left.id.localeCompare(right.id);
   });
+  return roots;
+}
+
+function canonicalContext(
+  root: VisibleBlock,
+  adjacency: CanonicalAdjacency,
+): CanonicalContext {
+  const cached = adjacency.contextByRootId.get(root.id);
+  if (cached) return cached;
+
+  const descendants: ContextualDescendant[] = [];
+  let depthTruncated = false;
+  let overflow = false;
+
+  function visit(block: VisibleBlock, relativeDepth: number): boolean {
+    if (relativeDepth > 0 && isVirtualBranchDefinition(block)) return false;
+    const children = adjacency.childrenByParentId.get(block.id) ?? [];
+    if (relativeDepth >= VIRTUAL_BRANCH_MAX_RELATIVE_DEPTH) {
+      if (children.length > 0) depthTruncated = true;
+      return overflow && depthTruncated;
+    }
+    for (const child of children) {
+      if (descendants.length <= VIRTUAL_BRANCH_MAX_ROWS) {
+        descendants.push({
+          block: child,
+          parentCanonicalId: block.id,
+          relativeDepth: relativeDepth + 1,
+        });
+      } else {
+        overflow = true;
+      }
+      if (visit(child, relativeDepth + 1)) return true;
+    }
+    return overflow && depthTruncated;
+  }
+
+  visit(root, 0);
+  const context = { descendants, depthTruncated, overflow };
+  adjacency.contextByRootId.set(root.id, context);
+  return context;
+}
+
+interface AllocatedOccurrence {
+  readonly rowId: string;
+  readonly canonicalId: string;
+  readonly viewId: string;
+  readonly matchRootCanonicalId: string;
+  readonly parentRowId: string;
+  readonly relativeDepth: number;
+  readonly block: VisibleBlock;
+}
+
+function allocateOccurrenceRows(
+  definition: PhysicalTreeRow,
+  roots: readonly VisibleBlock[],
+  adjacency: CanonicalAdjacency,
+  presentation: TreePresentationState,
+): {
+  readonly rows: VirtualBranchOccurrenceRow[];
+  readonly descendantCount: number;
+  readonly depthTruncated: boolean;
+  readonly budgetTruncated: boolean;
+} {
+  const viewId = definition.canonicalId;
+  const allocatedRoots: AllocatedOccurrence[] = roots.map((block) => ({
+    rowId: rootOccurrenceRowId(viewId, block.id),
+    canonicalId: block.id,
+    viewId,
+    matchRootCanonicalId: block.id,
+    parentRowId: definition.rowId,
+    relativeDepth: 0,
+    block,
+  }));
+  const descendantCapacity = VIRTUAL_BRANCH_MAX_ROWS - allocatedRoots.length;
+  const allocatedDescendants: AllocatedOccurrence[] = [];
+  let depthTruncated = false;
+  let budgetTruncated = false;
+
+  for (const root of roots) {
+    const context = canonicalContext(root, adjacency);
+    if (context.depthTruncated) depthTruncated = true;
+    const remaining = descendantCapacity - allocatedDescendants.length;
+    const take = Math.min(remaining, context.descendants.length);
+    if (context.overflow || take < context.descendants.length) budgetTruncated = true;
+    const rootRowId = rootOccurrenceRowId(viewId, root.id);
+    for (let index = 0; index < take; index += 1) {
+      const contextual = context.descendants[index]!;
+      const parentRowId = contextual.relativeDepth === 1
+        ? rootRowId
+        : descendantOccurrenceRowId(viewId, root.id, contextual.parentCanonicalId);
+      allocatedDescendants.push({
+        rowId: descendantOccurrenceRowId(viewId, root.id, contextual.block.id),
+        canonicalId: contextual.block.id,
+        viewId,
+        matchRootCanonicalId: root.id,
+        parentRowId,
+        relativeDepth: contextual.relativeDepth,
+        block: contextual.block,
+      });
+    }
+  }
+
+  const childCountByParentRowId = new Map<string, number>();
+  for (const descendant of allocatedDescendants) {
+    childCountByParentRowId.set(
+      descendant.parentRowId,
+      (childCountByParentRowId.get(descendant.parentRowId) ?? 0) + 1,
+    );
+  }
+  const allocated = [...allocatedRoots, ...allocatedDescendants];
+  const rowById = new Map<string, VirtualBranchOccurrenceRow>();
+  const childrenByParentRowId = new Map<string, VirtualBranchOccurrenceRow[]>();
+  for (const occurrence of allocated) {
+    const hasChildren = (childCountByParentRowId.get(occurrence.rowId) ?? 0) > 0;
+    const row: VirtualBranchOccurrenceRow = {
+      kind: "occurrence",
+      ...occurrence,
+      depth: definition.depth + 1 + occurrence.relativeDepth,
+      hasChildren,
+      collapsed: hasChildren &&
+        (presentation.collapsedOccurrenceRowIds?.has(occurrence.rowId) ?? false),
+      multilineExpanded: presentation.multilineExpandedRowIds.has(occurrence.rowId),
+    };
+    rowById.set(row.rowId, row);
+    const siblings = childrenByParentRowId.get(row.parentRowId);
+    if (siblings) siblings.push(row);
+    else childrenByParentRowId.set(row.parentRowId, [row]);
+  }
+
+  const rows: VirtualBranchOccurrenceRow[] = [];
+  function appendVisible(row: VirtualBranchOccurrenceRow): void {
+    rows.push(row);
+    if (row.collapsed) return;
+    for (const child of childrenByParentRowId.get(row.rowId) ?? []) appendVisible(child);
+  }
+  for (const root of allocatedRoots) {
+    const row = rowById.get(root.rowId);
+    if (row) appendVisible(row);
+  }
   return {
-    rows: eligible.slice(0, limit).map((block) => {
-      const rowId = `occurrence:${definitionId}:${block.id}`;
-      return {
-        kind: "occurrence",
-        rowId,
-        canonicalId: block.id,
-        viewId: definitionId,
-        block,
-        depth: definition.depth + 1,
-        hasChildren: false,
-        multilineExpanded: presentation.multilineExpandedRowIds.has(rowId),
-      };
-    }),
-    hasMore: eligible.length > limit,
+    rows,
+    descendantCount: allocatedDescendants.length,
+    depthTruncated,
+    budgetTruncated,
   };
 }
 
@@ -347,6 +546,7 @@ interface ProjectedVirtualBranch {
 async function projectVirtualBranch(
   definition: PhysicalTreeRow,
   physicalBlocks: readonly VisibleBlock[],
+  adjacency: CanonicalAdjacency,
   queryBlocks: VirtualBranchQueryEffect,
   ranks: readonly VirtualOccurrenceRank[],
   presentation: TreePresentationState,
@@ -354,34 +554,38 @@ async function projectVirtualBranch(
   const definitionId = definition.canonicalId;
   const parsed = parseVirtualBranchConfig(definition.block, physicalBlocks);
   const initialState = initialBranchState(parsed);
-  if (!parsed.config || definition.collapsed) {
-    return { definitionId, rows: [], state: initialState };
-  }
+  if (!parsed.config) return { definitionId, rows: [], state: initialState };
 
   try {
     const result = await queryBlocks({
       filters: parsed.config.filters,
       rankViewId: definitionId,
-      limit: parsed.config.limit + 2,
+      limit: MAX_BLOCK_QUERY_LIMIT,
     });
-    const projected = occurrenceRows(
-      definition,
-      result.blocks,
-      parsed.config.limit,
-      ranks,
-      presentation,
+    const eligibleRoots = rankedDeduplicatedRoots(definitionId, result.blocks, ranks);
+    const roots = eligibleRoots.slice(
+      0,
+      Math.min(parsed.config.limit, VIRTUAL_BRANCH_MAX_ROWS),
     );
-    const completeness: BlockCollectionCompleteness =
-      projected.hasMore || result.completeness.kind === "truncated"
-        ? { kind: "truncated", limit: parsed.config.limit }
-        : { kind: "complete" };
+    const rootQueryTruncated =
+      eligibleRoots.length > parsed.config.limit || result.completeness.kind === "truncated";
+    const allocated = allocateOccurrenceRows(definition, roots, adjacency, presentation);
+    const completeness: BlockCollectionCompleteness = rootQueryTruncated
+      ? { kind: "truncated", limit: parsed.config.limit }
+      : { kind: "complete" };
     return {
       definitionId,
-      rows: projected.rows,
+      rows: allocated.rows,
       state: {
         ...initialState,
-        count: projected.rows.length,
+        count: roots.length,
+        descendantCount: allocated.descendantCount,
         completeness,
+        truncation: {
+          rootQuery: rootQueryTruncated,
+          depth: allocated.depthTruncated,
+          budget: allocated.budgetTruncated,
+        },
         queried: true,
       },
     };
@@ -426,9 +630,17 @@ export async function projectVirtualBranches(
     presentation,
   );
   const definitions = physicalRows.filter((row) => isVirtualBranchDefinition(row.block));
+  const adjacency = buildCanonicalAdjacency(physicalBlocks);
   const projected = await Promise.all(
     definitions.map((definition) =>
-      projectVirtualBranch(definition, physicalBlocks, queryBlocks, ranks, presentation)
+      projectVirtualBranch(
+        definition,
+        physicalBlocks,
+        adjacency,
+        queryBlocks,
+        ranks,
+        presentation,
+      )
     ),
   );
   const branchStates = new Map<string, VirtualBranchState>();
@@ -439,9 +651,18 @@ export async function projectVirtualBranches(
   }
 
   const rows: TreeRow[] = [];
+  let occurrenceRowCount = 0;
   for (const physical of physicalRows) {
     rows.push(physical);
-    rows.push(...(occurrences.get(physical.canonicalId) ?? []));
+    if (physical.collapsed) continue;
+    const branchRows = occurrences.get(physical.canonicalId) ?? [];
+    rows.push(...branchRows);
+    occurrenceRowCount += branchRows.length;
   }
-  return { rows, branchStates };
+  return {
+    rows,
+    branchStates,
+    physicalRowCount: physicalRows.length,
+    occurrenceRowCount,
+  };
 }

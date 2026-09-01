@@ -8,12 +8,16 @@ import { OutlinerServer } from "../src/server";
 import { OutlinerStore } from "../src/store";
 import { OUTLINER_PROTOCOL_VERSION } from "../src/types";
 import type {
+  BacklinkCollection,
+  BlockEditActivityPage,
   Block,
   CaptureReceipt,
+  BrowsingContextPublication,
   OutlinerEvent,
   OutlinerClientRegistration,
   OutlinerRequest,
   OutlinerResponse,
+  OutlinerNavigationDispatch,
   NavigationState,
   PageAddressCollection,
   PageAddressFollowResult,
@@ -22,7 +26,9 @@ import type {
   PageAddressRemoval,
   OutlinerServiceStatus,
   PropertyCatalogItem,
+  SelectionContext,
   VisibleBlockCollection,
+  RoadmapItemCreateReceipt,
   WorkIdAllocation,
   WorkIdAllocatorStatus,
   WorkspaceSnapshot,
@@ -49,7 +55,7 @@ test("serves mutations and property queries over the local socket", async () => 
   const client = new OutlinerClient(socket);
   const service = await client.request<OutlinerServiceStatus>({ action: "ping" });
   expect(service).toEqual({ status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION });
-  expect(service.protocolVersion).toBe(13);
+  expect(service.protocolVersion).toBe(25);
   const provenance = {
     actorId: "omp",
     sessionId: "session-1",
@@ -127,6 +133,39 @@ test("serves mutations and property queries over the local socket", async () => 
     reservedCount: 1,
     observedPrefixes: ["PIE"],
   });
+  const workQueue = await client.request<Block>({
+    action: "create",
+    text: "Protocol work queue [type::work-queue] [project::pi-outliner]",
+  });
+  const lane = await client.request<Block>({
+    action: "create",
+    text: "Unprioritized [type::virtual-branch] [query::work-stage=unprioritized]",
+  });
+  const roadmapReceipt = await client.request<RoadmapItemCreateReceipt>({
+    action: "roadmap.items.create",
+    input: {
+      title: "Round-trip atomic roadmap creation",
+      priority: "high",
+      project: "pi-outliner",
+      arc: "protocol",
+      tracks: ["core"],
+    },
+    author: "agent",
+    provenance,
+  });
+  expect(roadmapReceipt).toMatchObject({
+    workId: "PIE-002",
+    workQueueId: workQueue.id,
+    block: {
+      parentId: workQueue.id,
+      actorId: "omp",
+      properties: expect.arrayContaining([
+        { key: "work-stage", value: "unprioritized" },
+        { key: "work-id", value: "PIE-002" },
+      ]),
+    },
+    memberships: [{ viewId: lane.id, title: "Unprioritized" }],
+  });
 
   expect(matches.blocks.some((candidate) => candidate.id === block.id)).toBe(true);
   expect(matches.completeness).toEqual({ kind: "truncated", limit: 1 });
@@ -151,6 +190,23 @@ test("serves mutations and property queries over the local socket", async () => 
   });
   expect(resolved.workIdPrefix).toBe("PIE");
   expect(resolved.text).toBe("See ((Waiting for user))");
+  const backlinkSource = await client.request<Block>({
+    action: "create",
+    text: `Protocol backlink source\n((${block.id}))`,
+  });
+  const backlinks = await client.request<BacklinkCollection>({
+    action: "references.backlinks",
+    query: { targetBlockId: block.id, limit: 10 },
+  });
+  expect(backlinks).toMatchObject({
+    targetBlockId: block.id,
+    sources: [{
+      blockId: backlinkSource.id,
+      title: "Protocol backlink source",
+      occurrenceCount: 1,
+    }],
+    completeness: { kind: "complete" },
+  });
   const dangling = await client.request<PageAddressResolution>({
     action: "pages.resolve",
     address: "Protocol Page",
@@ -245,16 +301,64 @@ test("serves mutations and property queries over the local socket", async () => 
       { op: "replace", ordinal: 1, value: "doing" },
       { op: "append", key: "priority", value: "high" },
     ],
+    mutation: { author: "agent", ...provenance },
   });
   expect(patched.text).toBe(
     "Waiting for user [type::question] [status::doing]\n[priority::high]",
   );
+  const userUpdated = await client.request<Block>({
+    action: "update",
+    blockId: patched.id,
+    text: `${patched.text}\nUser note`,
+    expectedUpdatedAt: patched.updatedAt,
+    mutation: { author: "user", actorId: "detail" },
+  });
+  const activity = await client.request<BlockEditActivityPage>({
+    action: "activity.recent",
+    author: "user",
+    limit: 5,
+  });
+  expect(activity.entries).toHaveLength(1);
+  expect(activity.entries[0]).toMatchObject({
+    block: { id: userUpdated.id, text: userUpdated.text },
+    author: "user",
+    actorId: "detail",
+    kind: "text",
+  });
   const catalog = await client.request<PropertyCatalogItem[]>({
     action: "properties.catalog",
     key: "status",
     prefix: "do",
   });
   expect(catalog).toEqual([{ key: "status", value: "doing", count: 1 }]);
+  const scoped = await client.request<Block>({
+    action: "create",
+    text: "Scoped protocol\n\nBody [note::detail]",
+  });
+  expect((await client.request<VisibleBlockCollection>({
+    action: "blocks.query",
+    query: { filters: [{ key: "note", value: "detail" }], limit: 10 },
+  })).blocks).toEqual([]);
+  expect((await client.request<VisibleBlockCollection>({
+    action: "blocks.query",
+    query: {
+      filters: [{ key: "note", value: "detail" }],
+      propertyScope: "inline",
+      limit: 10,
+    },
+  })).blocks).toEqual([
+    expect.objectContaining({
+      id: scoped.id,
+      propertyMatches: [
+        expect.objectContaining({ key: "note", scope: "inline", line: 2 }),
+      ],
+    }),
+  ]);
+  expect(await client.request<PropertyCatalogItem[]>({
+    action: "properties.catalog",
+    key: "note",
+    propertyScope: "all",
+  })).toEqual([{ key: "note", value: "detail", count: 1 }]);
   const trashTarget = await client.request<Block>({
     action: "create",
     text: "Protocol Trash target [work-id::PIE-998]",
@@ -279,6 +383,7 @@ test("serves mutations and property queries over the local socket", async () => 
     client.request({ action: "get", blockId: trashTarget.id }),
   ).rejects.toThrow("Block not found");
 });
+
 
 test("rejects malformed socket responses instead of crashing the client", async () => {
   const directory = mkdtempSync(join(tmpdir(), "pi-outliner-malformed-"));
@@ -312,7 +417,7 @@ test("streams workspace mutations and transient UI commands to subscribers", asy
   const received = Promise.withResolvers<void>();
   const events: OutlinerEvent[] = [];
   const watcher = client.watch({
-    client: { clientId: "event-detail", role: "detail" },
+    client: { clientId: "event-detail", role: "detail", contextId: "event-detail" },
     onConnect: connected.resolve,
     onEvent: (event) => {
       events.push(event);
@@ -413,6 +518,99 @@ test("streams workspace mutations and transient UI commands to subscribers", asy
   ]);
 });
 
+test("isolates browsing-context targets and events across same-workspace client pairs", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-outliner-contexts-"));
+  const store = new OutlinerStore(join(directory, "outliner.sqlite"));
+  const socket = join(directory, "outliner.sock");
+  const server = new OutlinerServer(store, socket);
+  await server.start();
+  const first = store.create("First context target");
+  const second = store.create("Second context target");
+  const client = new OutlinerClient(socket);
+  const firstConnected = Promise.withResolvers<void>();
+  const secondConnected = Promise.withResolvers<void>();
+  const firstReceived = Promise.withResolvers<void>();
+  const secondReceived = Promise.withResolvers<void>();
+  const firstEvents: OutlinerEvent[] = [];
+  const secondEvents: OutlinerEvent[] = [];
+  const firstWatcher = client.watch({
+    client: { clientId: "detail-first", role: "detail", contextId: "context-first" },
+    onConnect: firstConnected.resolve,
+    onEvent: (event) => {
+      firstEvents.push(event);
+      if (event.domain === "ui") firstReceived.resolve();
+    },
+  });
+  const secondWatcher = client.watch({
+    client: { clientId: "detail-second", role: "detail", contextId: "context-second" },
+    onConnect: secondConnected.resolve,
+    onEvent: (event) => {
+      if (event.domain !== "ui") return;
+      secondEvents.push(event);
+      secondReceived.resolve();
+    },
+  });
+  cleanups.push(async () => {
+    firstWatcher.stop();
+    secondWatcher.stop();
+    await server.close();
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  await Promise.all([firstConnected.promise, secondConnected.promise]);
+  await client.request({
+    action: "browsing-context.publish",
+    sourceClientId: "detail-first",
+    contextId: "context-first",
+    blockId: first.id,
+  });
+  await firstReceived.promise;
+  await Bun.sleep(20);
+  expect(firstEvents).toEqual([
+    expect.objectContaining({
+      domain: "browsing-context",
+      contextId: "context-first",
+      blockId: first.id,
+    }),
+    expect.objectContaining({
+      domain: "ui",
+      blockId: first.id,
+      command: expect.objectContaining({
+        targetClientId: "detail-first",
+        command: "preview",
+      }),
+    }),
+  ]);
+  expect(secondEvents).toEqual([]);
+
+  await client.request({
+    action: "browsing-context.publish",
+    sourceClientId: "detail-second",
+    contextId: "context-second",
+    blockId: second.id,
+  });
+  await secondReceived.promise;
+  const firstContext = await client.request<{
+    contextId: string;
+    target: SelectionContext;
+  }>({ action: "browsing-context.get", contextId: "context-first" });
+  const secondContext = await client.request<{
+    contextId: string;
+    target: SelectionContext;
+  }>({ action: "browsing-context.get", contextId: "context-second" });
+  expect(firstContext.target.selected?.id).toBe(first.id);
+  expect(secondContext.target.selected?.id).toBe(second.id);
+
+  store.delete(first.id);
+  store.purge(first.id, first.id.slice(0, 8));
+  const purgedContext = await client.request<{
+    contextId: string;
+    target: SelectionContext;
+  }>({ action: "browsing-context.get", contextId: "context-first" });
+  expect(purgedContext.target).toEqual({ selected: null, ancestors: [], children: [] });
+});
+
 test("prunes destroyed client registrations before listing or targeting", () => {
   const directory = mkdtempSync(join(tmpdir(), "pi-outliner-destroyed-client-"));
   const store = new OutlinerStore(join(directory, "outliner.sqlite"));
@@ -423,7 +621,7 @@ test("prunes destroyed client registrations before listing or targeting", () => 
   const subscribers = (server as unknown as {
     subscribers: Map<Socket, OutlinerClientRegistration>;
   }).subscribers;
-  subscribers.set(socket, { clientId: "destroyed-tree", role: "tree" });
+  subscribers.set(socket, { clientId: "destroyed-tree", role: "tree", contextId: "destroyed-tree" });
 
   expect(server.handle({ id: "list", action: "clients.list" })).toEqual({
     id: "list",
@@ -454,26 +652,10 @@ test("registers multiple live clients, targets one recipient, broadcasts content
   await server.start();
   const client = new OutlinerClient(socket);
   const registrations = [
-    {
-      clientId: "tree-a",
-      role: "tree" as const,
-      runtime: { paneId: "pane-tree-a", workspaceId: "workspace-a", tabId: "tab-a" },
-    },
-    {
-      clientId: "tree-b",
-      role: "tree" as const,
-      runtime: { paneId: "pane-tree-b", workspaceId: "workspace-b", tabId: "tab-b" },
-    },
-    {
-      clientId: "detail-a",
-      role: "detail" as const,
-      runtime: { paneId: "pane-detail-a", workspaceId: "workspace-a", tabId: "tab-a" },
-    },
-    {
-      clientId: "detail-b",
-      role: "detail" as const,
-      runtime: { paneId: "pane-detail-b", workspaceId: "workspace-b", tabId: "tab-b" },
-    },
+    { clientId: "tree-a", role: "tree" as const, contextId: "tree-a", runtime: { paneId: "pane-tree-a", workspaceId: "workspace-a", tabId: "tab-a" } },
+    { clientId: "tree-b", role: "tree" as const, contextId: "tree-b", runtime: { paneId: "pane-tree-b", workspaceId: "workspace-b", tabId: "tab-b" } },
+    { clientId: "detail-a", role: "detail" as const, contextId: "detail-a", locked: false, runtime: { paneId: "pane-detail-a", workspaceId: "workspace-a", tabId: "tab-a" } },
+    { clientId: "detail-b", role: "detail" as const, contextId: "detail-b", locked: false, runtime: { paneId: "pane-detail-b", workspaceId: "workspace-b", tabId: "tab-b" } },
   ];
   const events = new Map(registrations.map(({ clientId }) => [clientId, [] as OutlinerEvent[]]));
   const connected = Promise.withResolvers<void>();
@@ -520,10 +702,10 @@ test("registers multiple live clients, targets one recipient, broadcasts content
   ]);
   expect(await client.request<{ subscribed: boolean; client: OutlinerClientRegistration }>({
     action: "events.subscribe",
-    client: { clientId: " normalized-client ", role: "detail", runtime: {} },
+    client: { clientId: " normalized-client ", role: "detail", contextId: " normalized-client ", locked: false, runtime: {} },
   })).toEqual({
     subscribed: true,
-    client: { clientId: "normalized-client", role: "detail" },
+    client: { clientId: "normalized-client", role: "detail", contextId: "normalized-client", locked: false },
   });
   await expect(client.request({
     action: "clients.list",
@@ -555,11 +737,7 @@ test("registers multiple live clients, targets one recipient, broadcasts content
   });
   await expect(client.request({
     action: "events.subscribe",
-    client: {
-      clientId: "invalid-runtime",
-      role: "tree",
-      runtime: { obsoletePaneState: "pane" },
-    } as unknown as OutlinerClientRegistration,
+    client: { clientId: "invalid-runtime", role: "tree", contextId: "invalid-runtime", runtime: { obsoletePaneState: "pane" } } as unknown as OutlinerClientRegistration,
   })).rejects.toThrow("Invalid client runtime obsoletePaneState");
   await expect(client.request({
     action: "ui.command.send",
@@ -582,11 +760,7 @@ test("registers multiple live clients, targets one recipient, broadcasts content
   const replacementEvents: OutlinerEvent[] = [];
   const replacementReceived = Promise.withResolvers<void>();
   const replacement = new OutlinerClient(socket).watch({
-    client: {
-      clientId: "tree-a-restarted",
-      role: "tree",
-      runtime: { paneId: "pane-tree-a-next", workspaceId: "workspace-a", tabId: "tab-a" },
-    },
+    client: { clientId: "tree-a-restarted", role: "tree", contextId: "tree-a-restarted", runtime: { paneId: "pane-tree-a-next", workspaceId: "workspace-a", tabId: "tab-a" } },
     onConnect: replacementConnected.resolve,
     onEvent: (event) => {
       replacementEvents.push(event);
@@ -628,7 +802,7 @@ test("watchers reconnect and resubscribe after the service restarts", async () =
   const disconnected = Promise.withResolvers<void>();
   const reconnected = Promise.withResolvers<void>();
   const watcher = new OutlinerClient(socket).watch({
-    client: { clientId: "reconnecting-tree", role: "tree" },
+    client: { clientId: "reconnecting-tree", role: "tree", contextId: "reconnecting-tree" },
     onConnect: () => {
       connectionCount += 1;
       if (connectionCount === 1) firstConnection.resolve();
@@ -678,7 +852,7 @@ test("watchers reconnect when a subscription is not acknowledged", async () => {
   await listening.promise;
 
   const watcher = new OutlinerClient(socketPath).watch({
-    client: { clientId: "ack-tree", role: "tree" },
+    client: { clientId: "ack-tree", role: "tree", contextId: "ack-tree" },
     onConnect: reconnected.resolve,
     onEvent: () => {},
   });
@@ -719,7 +893,7 @@ test("stopping a connected watcher does not report a disconnect", async () => {
   await listening.promise;
 
   const watcher = new OutlinerClient(socketPath).watch({
-    client: { clientId: "stop-tree", role: "tree" },
+    client: { clientId: "stop-tree", role: "tree", contextId: "stop-tree" },
     onConnect: connected.resolve,
     onDisconnect: () => {
       disconnectCount += 1;
@@ -739,4 +913,162 @@ test("stopping a connected watcher does not report a disconnect", async () => {
   await connectionClosed.promise;
 
   expect(disconnectCount).toBe(0);
+});
+
+test("routes previews and opens to the first spatially unlocked Detail", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-outliner-routes-"));
+  const store = new OutlinerStore(join(directory, "outliner.sqlite"));
+  const target = store.create("Navigation target\n\n## Decision ^durable-decision");
+  const socket = join(directory, "outliner.sock");
+  const server = new OutlinerServer(store, socket);
+  await server.start();
+
+  const registrations: OutlinerClientRegistration[] = [
+    { clientId: "tree-a", role: "tree", contextId: "context-a", runtime: { workspaceId: "ws", tabId: "tab-1", paneId: "pane-a", paneX: 0, paneY: 0 } },
+    { clientId: "tree-b", role: "tree", contextId: "context-b", runtime: { workspaceId: "ws", tabId: "tab-1", paneId: "pane-b", paneX: 0, paneY: 20 } },
+    { clientId: "detail-c", role: "detail", contextId: "context-a", locked: false, runtime: { workspaceId: "ws", tabId: "tab-1", paneId: "pane-c", paneX: 40, paneY: 0 } },
+    { clientId: "detail-d", role: "detail", contextId: "context-d", locked: false, runtime: { workspaceId: "ws", tabId: "tab-1", paneId: "pane-d", paneX: 80, paneY: 0 } },
+    { clientId: "tree-oi", role: "tree", contextId: "context-oi", runtime: { workspaceId: "ws", tabId: "tab-oi", paneId: "pane-oi-tree", paneX: 0, paneY: 0 } },
+    { clientId: "detail-oi", role: "detail", contextId: "context-oi", locked: false, runtime: { workspaceId: "ws", tabId: "tab-oi", paneId: "pane-oi-detail", paneX: 40, paneY: 0 } },
+  ];
+  const connected = registrations.map(() => Promise.withResolvers<void>());
+  const received = new Map<string, OutlinerEvent[]>();
+  const watchers = registrations.map((registration, index) =>
+    new OutlinerClient(socket).watch({
+      client: registration,
+      onConnect: connected[index]!.resolve,
+      onEvent: (event) => {
+        const events = received.get(registration.clientId) ?? [];
+        events.push(event);
+        received.set(registration.clientId, events);
+      },
+    })
+  );
+  cleanups.push(async () => {
+    for (const watcher of watchers) await watcher.stop();
+    await server.close();
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  await Promise.all(connected.map(({ promise }) => promise));
+  const client = new OutlinerClient(socket);
+
+  const firstOpen = await client.request<OutlinerNavigationDispatch>({
+    action: "navigation.dispatch",
+    sourceClientId: "tree-a",
+    blockId: target.id,
+    intent: "open",
+  });
+  expect(firstOpen).toMatchObject({
+    targetClientId: "detail-c",
+    resolution: "unlocked",
+    command: { targetClientId: "detail-c", command: "open", blockId: target.id },
+  });
+  const fragmentOpen = await client.request<OutlinerNavigationDispatch>({
+    action: "navigation.dispatch",
+    sourceClientId: "tree-a",
+    blockId: target.id,
+    fragmentId: "durable-decision",
+    intent: "open",
+  });
+  expect(fragmentOpen.command).toEqual({
+    targetClientId: "detail-c",
+    command: "open",
+    blockId: target.id,
+    fragmentId: "durable-decision",
+  });
+  await expect(client.request({
+    action: "navigation.dispatch",
+    sourceClientId: "tree-a",
+    blockId: target.id,
+    fragmentId: "stale-decision",
+    intent: "open",
+  })).rejects.toThrow(`Fragment not found: ${target.id}^stale-decision`);
+
+  const sourcePreservingOpen = await client.request<OutlinerNavigationDispatch>({
+    action: "navigation.dispatch",
+    sourceClientId: "detail-c",
+    blockId: target.id,
+    intent: "open",
+    preserveSource: true,
+  });
+  expect(sourcePreservingOpen).toMatchObject({
+    sourceClientId: "detail-c",
+    targetClientId: "detail-d",
+    resolution: "unlocked",
+  });
+
+  await client.request({
+    action: "clients.update",
+    clientId: "detail-c",
+    locked: true,
+    currentBlockId: target.id,
+  });
+  expect(
+    (await client.request<OutlinerClientRegistration[]>({ action: "clients.list" }))
+      .find(({ clientId }) => clientId === "detail-c"),
+  ).toMatchObject({ locked: true, currentBlockId: target.id });
+  const nextOpen = await client.request<OutlinerNavigationDispatch>({
+    action: "navigation.dispatch",
+    sourceClientId: "detail-c",
+    blockId: target.id,
+    intent: "open",
+  });
+  expect(nextOpen).toMatchObject({
+    targetClientId: "detail-d",
+    resolution: "unlocked",
+  });
+
+  const published = await client.request<BrowsingContextPublication>({
+    action: "browsing-context.publish",
+    sourceClientId: "tree-a",
+    contextId: "context-a",
+    blockId: target.id,
+  });
+  expect(published.preview).toMatchObject({
+    targetClientId: "detail-d",
+    command: { targetClientId: "detail-d", command: "preview", blockId: target.id },
+  });
+
+  const otherTab = await client.request<OutlinerNavigationDispatch>({
+    action: "navigation.dispatch",
+    sourceClientId: "tree-oi",
+    blockId: target.id,
+    intent: "open",
+  });
+  expect(otherTab.targetClientId).toBe("detail-oi");
+
+  const reveal = await client.request<OutlinerNavigationDispatch>({
+    action: "navigation.dispatch",
+    sourceClientId: "tree-a",
+    blockId: target.id,
+    intent: "reveal",
+  });
+  expect(reveal).toMatchObject({
+    targetClientId: "tree-a",
+    resolution: "self",
+  });
+
+  await client.request({ action: "clients.update", clientId: "detail-d", locked: true });
+  await expect(client.request({
+    action: "navigation.dispatch",
+    sourceClientId: "tree-b",
+    blockId: target.id,
+    intent: "open",
+  })).rejects.toThrow("All Details in this tab are locked · unlock one or open another Detail");
+  await expect(client.request({
+    action: "navigation.dispatch",
+    sourceClientId: "detail-c",
+    blockId: target.id,
+    intent: "open",
+    preserveSource: true,
+  })).rejects.toThrow(
+    "No other unlocked Detail is available · unlock one or open another Detail",
+  );
+
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  expect(received.get("detail-c")?.some((event) => event.command?.command === "open")).toBe(true);
+  expect(received.get("detail-d")?.some((event) => event.command?.command === "open")).toBe(true);
+  expect(received.get("detail-d")?.some((event) => event.command?.command === "preview")).toBe(true);
+  expect(received.get("detail-oi")?.some((event) => event.command?.command === "open")).toBe(true);
 });

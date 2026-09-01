@@ -6,8 +6,8 @@ const requester = {
   async request<T>(input: RequestInput): Promise<T> {
     if (input.action !== "clients.list") throw new Error(`Unexpected request: ${input.action}`);
     return [
-      { clientId: "tree-client", role: "tree" },
-      { clientId: "detail-client", role: "detail" },
+      { clientId: "tree-client", role: "tree", contextId: "tree-client" },
+      { clientId: "detail-client", role: "detail", contextId: "detail-client" },
     ] as T;
   },
 };

@@ -1,7 +1,13 @@
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "bun:test";
 import type { DetailState } from "../src/detail-controller";
 import { createPiDetailInputListener, decodePiDetailInput } from "../src/detail-pi-input";
-import { DetailPiComponent } from "../src/detail-pi-renderer";
+import {
+  DETAIL_DRAFT_SPLIT_MIN_WIDTH,
+  DetailPiComponent,
+  DetailPiDraftSplitLayout,
+  detailDraftSplitWidths,
+} from "../src/detail-pi-renderer";
 import { TextBuffer } from "../src/text-buffer";
 import type { Block } from "../src/types";
 
@@ -21,7 +27,16 @@ function block(text: string): Block {
 function state(overrides: Partial<DetailState> = {}): DetailState {
   return {
     context: { selected: null, ancestors: [], children: [] },
+    targetBlockId: null,
+    targetFragmentId: null,
+    connectionMode: "unlocked",
+    canNavigateBack: false,
+    canNavigateForward: false,
     resolvedSelectedText: "",
+    projectedSelectedText: "",
+    embedStates: [],
+    embedRanges: [],
+    embedBackgroundEnabled: true,
     workIdPrefix: null,
     resolvedBreadcrumb: "",
     mode: "preview",
@@ -37,6 +52,33 @@ function state(overrides: Partial<DetailState> = {}): DetailState {
     status: "",
     busy: false,
     refreshPending: false,
+    backlinks: {
+      expanded: false,
+      loading: false,
+      collection: null,
+      selectedIndex: 0,
+      error: "",
+      filter: "",
+      filterDraft: null,
+      sortField: "updated",
+      sortDirection: "desc",
+      expandedSourceIds: new Set(),
+    },
+    propertyInspector: {
+      presentation: "inline",
+      model: null,
+      expanded: false,
+      groupBy: null,
+      filter: "",
+      filterDraft: null,
+      viewportOffset: 0,
+      edit: null,
+    },
+    previewRegions: {
+      regions: [],
+      focusedRegionId: null,
+      disclosureOverrides: new Map(),
+    },
     ...overrides,
   };
 }
@@ -131,16 +173,61 @@ describe("Pi TUI Detail component", () => {
     expect(rendered).not.toContain("resolved display source");
   });
 
+  test("allocates stable equal draft panes above the responsive breakpoint", () => {
+    const widths: number[] = [];
+    function pane(text: string) {
+      return {
+        render(width: number): string[] {
+          widths.push(width);
+          return [text.repeat(width)];
+        },
+        invalidate(): void {},
+      };
+    }
+    const split = new DetailPiDraftSplitLayout(pane("E"), pane("P"));
+    split.setWidth(DETAIL_DRAFT_SPLIT_MIN_WIDTH);
+
+    const rendered = split.render(DETAIL_DRAFT_SPLIT_MIN_WIDTH);
+
+    expect(detailDraftSplitWidths(DETAIL_DRAFT_SPLIT_MIN_WIDTH)).toEqual({
+      editor: 50,
+      preview: 49,
+    });
+    expect(widths.slice(-2)).toEqual([50, 49]);
+    expect(visibleWidth(rendered[0])).toBe(DETAIL_DRAFT_SPLIT_MIN_WIDTH);
+  });
+
+  test("marks the focused split region and advertises local focus routing", () => {
+    const detailState = state({
+      context: { selected: block("draft"), ancestors: [], children: [] },
+      mode: "edit",
+      buffer: new TextBuffer("draft"),
+      connectionMode: "locked",
+    });
+    const component = new DetailPiComponent({
+      state: detailState,
+      height: () => 8,
+      header: () => ({ surface: "○ Edit", focused: false }),
+      helpPrefix: () => "^W focus",
+    });
+
+    const rendered = component.render(50).join("\n");
+
+    expect(rendered).toContain("○ Edit · Locked");
+    expect(rendered).toContain("^W focus");
+  });
+
   test("global input consumes presses, filters releases, and permits Pi overlays", () => {
     const enqueued: string[] = [];
     let overlay = false;
     const listener = createPiDetailInputListener(
       (data) => enqueued.push(data),
-      () => overlay,
+      (data) => overlay || data.startsWith("\x1b[<0;"),
     );
 
     expect(listener("x")).toEqual({ consume: true });
     expect(listener("\x1b[103;1:3u")).toEqual({ consume: true });
+    expect(listener("\x1b[<0;80;8M")).toBeUndefined();
     overlay = true;
     expect(listener("search")).toBeUndefined();
     expect(enqueued).toEqual(["x"]);
