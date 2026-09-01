@@ -613,7 +613,7 @@ describe("createTreeController", () => {
       quickLineCount: 2,
     });
     await controller.handleKeypress("", { name: "up" }, "pass");
-    expect(controller.view().quickInput).toBe("First line");
+    expect(controller.view().quickInput).toBe("First line\x1b[A\x03");
     await controller.handleKeypress("", { name: "down" }, "pass");
     await controller.handleKeypress("", { name: "return" }, "pass");
 
