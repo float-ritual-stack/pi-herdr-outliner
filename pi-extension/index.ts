@@ -27,7 +27,8 @@ import { OutlinerClient } from "../src/client";
 import { HerdrRuntimeRegistry } from "../src/herdr-registry";
 import { HerdrRegistryRunner } from "../src/herdr-runtime";
 import { resolvePaths } from "../src/paths";
-import { getProperty } from "../src/properties";
+import { currentPaneIdentity } from "../src/pane-control";
+import { getProperty, parsePropertyRecords } from "../src/properties";
 import { blockDisplayTitle } from "../src/references";
 import {
   containsWorkIdPlaceholder,
@@ -484,7 +485,18 @@ const ACTIVITY_WATERMARK_ENTRY_TYPE = "pi-outliner.activity-watermark";
 const INITIAL_ACTIVITY_HORIZON_MS = 7 * 24 * 60 * 60 * 1_000;
 const OUTLINER_PRESENCE_SOURCE = "float.pi-outliner.agent";
 const OUTLINER_PRESENCE_TTL_MS = 600_000;
+const HERDR_METADATA_DIAGNOSTIC_LIMIT = 512;
 let herdrMetadataSequence = 0;
+
+function reportHerdrMetadataFailure(error: unknown): void {
+  const reason = error instanceof Error ? error.message : String(error);
+  const diagnostic = `Pi Outliner Herdr metadata unavailable: ${reason}`;
+  console.error(
+    diagnostic.length <= HERDR_METADATA_DIAGNOSTIC_LIMIT
+      ? diagnostic
+      : `${diagnostic.slice(0, HERDR_METADATA_DIAGNOSTIC_LIMIT - 1)}…`,
+  );
+}
 
 type DurableArtifactType =
   | "field-note"
@@ -578,15 +590,17 @@ function propertyTransition(
   key: string,
   value: string,
 ): PropertyPatchOperation {
-  const ordinals = block.properties.flatMap((property, ordinal) =>
-    property.key === key ? [ordinal] : []
-  );
-  if (ordinals.length > 1) {
-    throw new Error(`Roadmap item has duplicate [${key}::…] properties: ${block.id}`);
+  let ordinal: number | undefined;
+  for (const property of parsePropertyRecords(block.text)) {
+    if (property.scope !== "block" || property.key !== key) continue;
+    if (ordinal !== undefined) {
+      throw new Error(`Roadmap item has duplicate [${key}::…] properties: ${block.id}`);
+    }
+    ordinal = property.ordinal;
   }
-  return ordinals.length === 1
-    ? { op: "replace", ordinal: ordinals[0]!, value }
-    : { op: "append", key, value };
+  return ordinal === undefined
+    ? { op: "append", key, value }
+    : { op: "replace", ordinal, value };
 }
 
 function formatContext(
@@ -729,8 +743,16 @@ async function reportHerdrTask(
   task: Block | null,
   activity: "working" | "idle" | "clear",
 ): Promise<boolean> {
-  const paneId = process.env.HERDR_PANE_ID;
-  if (process.env.HERDR_ENV !== "1" || !paneId) return false;
+  if (process.env.HERDR_ENV !== "1") return false;
+  let paneId: string;
+  try {
+    const identity = currentPaneIdentity();
+    if (!identity?.paneId) throw new Error("Current Herdr pane identity is unavailable");
+    paneId = identity.paneId;
+  } catch (error) {
+    reportHerdrMetadataFailure(error);
+    return false;
+  }
   const args = [
     "pane",
     "report-metadata",
@@ -767,7 +789,8 @@ async function reportHerdrTask(
       timeout: 1_000,
     });
     return true;
-  } catch {
+  } catch (error) {
+    reportHerdrMetadataFailure(error);
     return false;
   }
 }

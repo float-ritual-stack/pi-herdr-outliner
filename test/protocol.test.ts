@@ -4,6 +4,7 @@ import { createConnection, createServer, Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { OutlinerClient } from "../src/client";
+import { HerdrRuntimeRegistry, type HerdrSessionSnapshot } from "../src/herdr-registry";
 import { OutlinerServer } from "../src/server";
 import { OutlinerStore } from "../src/store";
 import { OUTLINER_PROTOCOL_VERSION } from "../src/types";
@@ -425,7 +426,7 @@ test("streams workspace mutations and transient UI commands to subscribers", asy
     },
   });
   cleanups.push(async () => {
-    watcher.stop();
+    await watcher.stop();
     await server.close();
     store.close();
     rmSync(directory, { recursive: true, force: true });
@@ -551,8 +552,7 @@ test("isolates browsing-context targets and events across same-workspace client 
     },
   });
   cleanups.push(async () => {
-    firstWatcher.stop();
-    secondWatcher.stop();
+    await Promise.all([firstWatcher.stop(), secondWatcher.stop()]);
     await server.close();
     store.close();
     rmSync(directory, { recursive: true, force: true });
@@ -769,14 +769,9 @@ test("registers multiple live clients, targets one recipient, broadcasts content
   });
   watchers.push(replacement);
   await replacementConnected.promise;
-  let clientsAfterRestart: Array<{ clientId: string }> = [];
-  for (let turn = 0; turn < 100; turn += 1) {
-    clientsAfterRestart = await client.request<Array<{ clientId: string }>>({
-      action: "clients.list",
-    });
-    if (!clientsAfterRestart.some(({ clientId }) => clientId === "tree-a")) break;
-    await new Promise<void>((resolve) => setImmediate(resolve));
-  }
+  const clientsAfterRestart = await client.request<Array<{ clientId: string }>>({
+    action: "clients.list",
+  });
   expect(clientsAfterRestart.some(({ clientId }) => clientId === "tree-a")).toBe(false);
   expect(clientsAfterRestart).toEqual(
     expect.arrayContaining([
@@ -812,7 +807,7 @@ test("watchers reconnect and resubscribe after the service restarts", async () =
     onEvent: () => {},
   });
   cleanups.push(async () => {
-    watcher.stop();
+    await watcher.stop();
     if (running) await server.close();
     store.close();
     rmSync(directory, { recursive: true, force: true });
@@ -857,7 +852,7 @@ test("watchers reconnect when a subscription is not acknowledged", async () => {
     onEvent: () => {},
   });
   cleanups.push(async () => {
-    watcher.stop();
+    await watcher.stop();
     const closed = Promise.withResolvers<void>();
     server.close((error) => (error ? closed.reject(error) : closed.resolve()));
     await closed.promise;
@@ -901,7 +896,7 @@ test("stopping a connected watcher does not report a disconnect", async () => {
     onEvent: () => {},
   });
   cleanups.push(async () => {
-    watcher.stop();
+    await watcher.stop();
     const closed = Promise.withResolvers<void>();
     server.close((error) => (error ? closed.reject(error) : closed.resolve()));
     await closed.promise;
@@ -909,7 +904,7 @@ test("stopping a connected watcher does not report a disconnect", async () => {
   });
 
   await connected.promise;
-  watcher.stop();
+  await watcher.stop();
   await connectionClosed.promise;
 
   expect(disconnectCount).toBe(0);
@@ -933,6 +928,19 @@ test("routes previews and opens to the first spatially unlocked Detail", async (
   ];
   const connected = registrations.map(() => Promise.withResolvers<void>());
   const received = new Map<string, OutlinerEvent[]>();
+  const pendingCommands: Array<{
+    clientId: string;
+    command: NonNullable<OutlinerEvent["command"]>["command"];
+    resolve: (event: OutlinerEvent) => void;
+  }> = [];
+  const nextCommand = (
+    clientId: string,
+    command: NonNullable<OutlinerEvent["command"]>["command"],
+  ): Promise<OutlinerEvent> => {
+    const received = Promise.withResolvers<OutlinerEvent>();
+    pendingCommands.push({ clientId, command, resolve: received.resolve });
+    return received.promise;
+  };
   const watchers = registrations.map((registration, index) =>
     new OutlinerClient(socket).watch({
       client: registration,
@@ -941,6 +949,12 @@ test("routes previews and opens to the first spatially unlocked Detail", async (
         const events = received.get(registration.clientId) ?? [];
         events.push(event);
         received.set(registration.clientId, events);
+        const pendingIndex = pendingCommands.findIndex((pending) =>
+          pending.clientId === registration.clientId &&
+          event.domain === "ui" &&
+          event.command?.command === pending.command
+        );
+        if (pendingIndex !== -1) pendingCommands.splice(pendingIndex, 1)[0]!.resolve(event);
       },
     })
   );
@@ -953,17 +967,26 @@ test("routes previews and opens to the first spatially unlocked Detail", async (
   await Promise.all(connected.map(({ promise }) => promise));
   const client = new OutlinerClient(socket);
 
+  const launchClients = await client.request<OutlinerClientRegistration[]>({
+    action: "clients.list",
+  });
+  expect(launchClients.find(({ clientId }) => clientId === "tree-a")?.runtime)
+    .toEqual(registrations[0]!.runtime);
+
+  const firstOpenReceived = nextCommand("detail-c", "open");
   const firstOpen = await client.request<OutlinerNavigationDispatch>({
     action: "navigation.dispatch",
     sourceClientId: "tree-a",
     blockId: target.id,
     intent: "open",
   });
+  await firstOpenReceived;
   expect(firstOpen).toMatchObject({
     targetClientId: "detail-c",
     resolution: "unlocked",
     command: { targetClientId: "detail-c", command: "open", blockId: target.id },
   });
+  const fragmentOpenReceived = nextCommand("detail-c", "open");
   const fragmentOpen = await client.request<OutlinerNavigationDispatch>({
     action: "navigation.dispatch",
     sourceClientId: "tree-a",
@@ -971,6 +994,7 @@ test("routes previews and opens to the first spatially unlocked Detail", async (
     fragmentId: "durable-decision",
     intent: "open",
   });
+  await fragmentOpenReceived;
   expect(fragmentOpen.command).toEqual({
     targetClientId: "detail-c",
     command: "open",
@@ -985,6 +1009,7 @@ test("routes previews and opens to the first spatially unlocked Detail", async (
     intent: "open",
   })).rejects.toThrow(`Fragment not found: ${target.id}^stale-decision`);
 
+  const sourcePreservingOpenReceived = nextCommand("detail-d", "open");
   const sourcePreservingOpen = await client.request<OutlinerNavigationDispatch>({
     action: "navigation.dispatch",
     sourceClientId: "detail-c",
@@ -992,6 +1017,7 @@ test("routes previews and opens to the first spatially unlocked Detail", async (
     intent: "open",
     preserveSource: true,
   });
+  await sourcePreservingOpenReceived;
   expect(sourcePreservingOpen).toMatchObject({
     sourceClientId: "detail-c",
     targetClientId: "detail-d",
@@ -1008,42 +1034,50 @@ test("routes previews and opens to the first spatially unlocked Detail", async (
     (await client.request<OutlinerClientRegistration[]>({ action: "clients.list" }))
       .find(({ clientId }) => clientId === "detail-c"),
   ).toMatchObject({ locked: true, currentBlockId: target.id });
+  const nextOpenReceived = nextCommand("detail-d", "open");
   const nextOpen = await client.request<OutlinerNavigationDispatch>({
     action: "navigation.dispatch",
     sourceClientId: "detail-c",
     blockId: target.id,
     intent: "open",
   });
+  await nextOpenReceived;
   expect(nextOpen).toMatchObject({
     targetClientId: "detail-d",
     resolution: "unlocked",
   });
 
+  const previewReceived = nextCommand("detail-d", "preview");
   const published = await client.request<BrowsingContextPublication>({
     action: "browsing-context.publish",
     sourceClientId: "tree-a",
     contextId: "context-a",
     blockId: target.id,
   });
+  await previewReceived;
   expect(published.preview).toMatchObject({
     targetClientId: "detail-d",
     command: { targetClientId: "detail-d", command: "preview", blockId: target.id },
   });
 
+  const otherTabOpenReceived = nextCommand("detail-oi", "open");
   const otherTab = await client.request<OutlinerNavigationDispatch>({
     action: "navigation.dispatch",
     sourceClientId: "tree-oi",
     blockId: target.id,
     intent: "open",
   });
+  await otherTabOpenReceived;
   expect(otherTab.targetClientId).toBe("detail-oi");
 
+  const revealReceived = nextCommand("tree-a", "reveal");
   const reveal = await client.request<OutlinerNavigationDispatch>({
     action: "navigation.dispatch",
     sourceClientId: "tree-a",
     blockId: target.id,
     intent: "reveal",
   });
+  await revealReceived;
   expect(reveal).toMatchObject({
     targetClientId: "tree-a",
     resolution: "self",
@@ -1066,9 +1100,252 @@ test("routes previews and opens to the first spatially unlocked Detail", async (
     "No other unlocked Detail is available · unlock one or open another Detail",
   );
 
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  expect(pendingCommands).toEqual([]);
   expect(received.get("detail-c")?.some((event) => event.command?.command === "open")).toBe(true);
   expect(received.get("detail-d")?.some((event) => event.command?.command === "open")).toBe(true);
   expect(received.get("detail-d")?.some((event) => event.command?.command === "preview")).toBe(true);
   expect(received.get("detail-oi")?.some((event) => event.command?.command === "open")).toBe(true);
+});
+
+test("reconciles long-lived clients against live Herdr pane topology", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-outliner-live-topology-"));
+  const store = new OutlinerStore(join(directory, "outliner.sqlite"));
+  const socket = join(directory, "outliner.sock");
+  const registry = new HerdrRuntimeRegistry();
+  const replaceTopology = (panes: Array<{
+    paneId: string;
+    terminalId: string;
+    workspaceId: string;
+    tabId: string;
+    x?: number;
+    y?: number;
+  }>): void => {
+    const tabs = [...new Map(panes.map((pane) => [
+      pane.tabId,
+      { tab_id: pane.tabId, workspace_id: pane.workspaceId },
+    ])).values()];
+    const workspaces = [...new Map(tabs.map((tab) => [
+      tab.workspace_id,
+      { workspace_id: tab.workspace_id, active_tab_id: tab.tab_id },
+    ])).values()];
+    registry.replaceSnapshot({
+      version: "test",
+      protocol: 1,
+      workspaces,
+      tabs,
+      panes: panes.map((pane) => ({
+        pane_id: pane.paneId,
+        terminal_id: pane.terminalId,
+        workspace_id: pane.workspaceId,
+        tab_id: pane.tabId,
+      })),
+      layouts: tabs.map((tab) => {
+        const tabPanes = panes.filter((pane) => pane.tabId === tab.tab_id);
+        return {
+          workspace_id: tab.workspace_id,
+          tab_id: tab.tab_id,
+          focused_pane_id: tabPanes[0]!.paneId,
+          panes: tabPanes.map((pane) => ({
+            pane_id: pane.paneId,
+            ...(pane.x !== undefined && pane.y !== undefined
+              ? { rect: { x: pane.x, y: pane.y } }
+              : {}),
+          })),
+        };
+      }),
+      agents: [],
+    } satisfies HerdrSessionSnapshot);
+  };
+  const server = new OutlinerServer(store, socket, registry);
+  await server.start();
+
+  const registrations: OutlinerClientRegistration[] = [
+    {
+      clientId: "tree-live",
+      role: "tree",
+      contextId: "live",
+      runtime: {
+        paneId: "tree-pane-at-launch",
+        terminalId: "term-tree",
+        workspaceId: "ws-at-launch",
+        tabId: "tab-at-launch",
+        paneX: 900,
+        paneY: 900,
+      },
+    },
+    {
+      clientId: "detail-a-live",
+      role: "detail",
+      contextId: "live",
+      locked: false,
+      runtime: {
+        paneId: "detail-a-at-launch",
+        terminalId: "term-a",
+        workspaceId: "ws-at-launch",
+        tabId: "tab-at-launch",
+        paneX: 900,
+        paneY: 900,
+      },
+    },
+    {
+      clientId: "detail-b-live",
+      role: "detail",
+      contextId: "live",
+      locked: false,
+      runtime: {
+        paneId: "detail-b-at-launch",
+        terminalId: "term-b",
+        workspaceId: "ws-at-launch",
+        tabId: "tab-at-launch",
+        paneX: 900,
+        paneY: 900,
+      },
+    },
+    {
+      clientId: "detail-unresolved",
+      role: "detail",
+      contextId: "unresolved",
+      locked: false,
+      runtime: {
+        paneId: "fallback-pane",
+        terminalId: "term-not-live",
+        workspaceId: "fallback-workspace",
+        tabId: "fallback-tab",
+        paneX: 12,
+        paneY: 34,
+      },
+    },
+  ];
+  const connected = registrations.map(() => Promise.withResolvers<void>());
+  let connectionCount = 0;
+  const watchers = registrations.map((registration, index) =>
+    new OutlinerClient(socket).watch({
+      client: registration,
+      onConnect: () => {
+        connectionCount += 1;
+        connected[index]!.resolve();
+      },
+      onEvent: () => {},
+    })
+  );
+  cleanups.push(async () => {
+    await Promise.all(watchers.map((watcher) => watcher.stop()));
+    await server.close();
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  await Promise.all(connected.map(({ promise }) => promise));
+  const client = new OutlinerClient(socket);
+
+  const unavailableClients = await client.request<OutlinerClientRegistration[]>({
+    action: "clients.list",
+  });
+  expect(unavailableClients.find(({ clientId }) => clientId === "tree-live")?.runtime)
+    .toEqual({ terminalId: "term-tree" });
+  await expect(client.request({
+    action: "navigation.resolve",
+    sourceClientId: "tree-live",
+    intent: "open",
+  })).rejects.toThrow("No Detail is available in this tab · open another Detail");
+
+  replaceTopology([
+    { paneId: "tree-pane-old", terminalId: "term-tree", workspaceId: "ws-old", tabId: "tab-old", x: 0, y: 0 },
+    { paneId: "detail-a-old", terminalId: "term-a", workspaceId: "ws-old", tabId: "tab-old", x: 40, y: 0 },
+    { paneId: "detail-b-old", terminalId: "term-b", workspaceId: "ws-old", tabId: "tab-old", x: 80, y: 0 },
+  ]);
+
+  const initialClients = await client.request<OutlinerClientRegistration[]>({
+    action: "clients.list",
+  });
+  expect(initialClients.find(({ clientId }) => clientId === "tree-live")?.runtime).toEqual({
+    paneId: "tree-pane-old",
+    terminalId: "term-tree",
+    workspaceId: "ws-old",
+    tabId: "tab-old",
+    paneX: 0,
+    paneY: 0,
+  });
+  expect(initialClients.find(({ clientId }) => clientId === "detail-unresolved")?.runtime)
+    .toEqual({ terminalId: "term-not-live" });
+  expect(await client.request<OutlinerNavigationDispatch>({
+    action: "navigation.resolve",
+    sourceClientId: "tree-live",
+    intent: "open",
+  })).toMatchObject({ targetClientId: "detail-a-live" });
+
+  registry.markStale();
+  const staleClients = await client.request<OutlinerClientRegistration[]>({
+    action: "clients.list",
+  });
+  expect(staleClients.find(({ clientId }) => clientId === "tree-live")?.runtime)
+    .toEqual({ terminalId: "term-tree" });
+  await expect(client.request({
+    action: "navigation.resolve",
+    sourceClientId: "tree-live",
+    intent: "open",
+  })).rejects.toThrow("No Detail is available in this tab · open another Detail");
+
+  replaceTopology([
+    { paneId: "tree-pane-renamed", terminalId: "term-tree", workspaceId: "ws-new", tabId: "tab-new", x: 0, y: 0 },
+    { paneId: "detail-b-renamed", terminalId: "term-b", workspaceId: "ws-new", tabId: "tab-new", x: 30, y: 0 },
+    { paneId: "detail-a-renamed", terminalId: "term-a", workspaceId: "ws-old", tabId: "tab-old", x: 10, y: 0 },
+  ]);
+  const movedClients = await client.request<OutlinerClientRegistration[]>({
+    action: "clients.list",
+  });
+  expect(movedClients.find(({ clientId }) => clientId === "tree-live")?.runtime).toEqual({
+    paneId: "tree-pane-renamed",
+    terminalId: "term-tree",
+    workspaceId: "ws-new",
+    tabId: "tab-new",
+    paneX: 0,
+    paneY: 0,
+  });
+  expect(await client.request<OutlinerNavigationDispatch>({
+    action: "navigation.resolve",
+    sourceClientId: "tree-live",
+    intent: "open",
+  })).toMatchObject({ targetClientId: "detail-b-live" });
+
+  replaceTopology([
+    { paneId: "tree-pane-final", terminalId: "term-tree", workspaceId: "ws-new", tabId: "tab-new" },
+    { paneId: "detail-b-final", terminalId: "term-b", workspaceId: "ws-new", tabId: "tab-new", x: 80, y: 0 },
+    { paneId: "detail-a-final", terminalId: "term-a", workspaceId: "ws-new", tabId: "tab-new", x: 20, y: 0 },
+  ]);
+  const reorderedClients = await client.request<OutlinerClientRegistration[]>({
+    action: "clients.list",
+  });
+  expect(reorderedClients.find(({ clientId }) => clientId === "tree-live")?.runtime).toEqual({
+    paneId: "tree-pane-final",
+    terminalId: "term-tree",
+    workspaceId: "ws-new",
+    tabId: "tab-new",
+  });
+  expect(await client.request<OutlinerNavigationDispatch>({
+    action: "navigation.resolve",
+    sourceClientId: "tree-live",
+    intent: "open",
+  })).toMatchObject({ targetClientId: "detail-a-live" });
+
+  replaceTopology([
+    { paneId: "tree-pane-only", terminalId: "term-tree", workspaceId: "ws-new", tabId: "tab-new", x: 0, y: 0 },
+  ]);
+  const vanishedClients = await client.request<OutlinerClientRegistration[]>({
+    action: "clients.list",
+  });
+  expect(vanishedClients.find(({ clientId }) => clientId === "detail-a-live")?.runtime)
+    .toEqual({ terminalId: "term-a" });
+  expect(vanishedClients.find(({ clientId }) => clientId === "detail-b-live")?.runtime)
+    .toEqual({ terminalId: "term-b" });
+  await expect(client.request({
+    action: "navigation.resolve",
+    sourceClientId: "tree-live",
+    intent: "open",
+  })).rejects.toThrow("No Detail is available in this tab · open another Detail");
+  await expect(client.request({
+    action: "navigation.resolve",
+    sourceClientId: "detail-a-live",
+    intent: "reveal",
+  })).rejects.toThrow("No Tree destination is available in this pane's context or tab");
+  expect(connectionCount).toBe(registrations.length);
 });

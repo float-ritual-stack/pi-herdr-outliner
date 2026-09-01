@@ -140,11 +140,11 @@ export function resolveDetailCalloutTheme(overrides: unknown): DetailCalloutThem
       fallback = resolveStyleOverride(name, fallback, value, errors);
       continue;
     }
-    const base = types[name];
-    if (!base) {
+    if (!Object.hasOwn(types, name)) {
       errors.push(`${name} is not a canonical callout type`);
       continue;
     }
+    const base = types[name]!;
     types[name] = resolveStyleOverride(name, base, value, errors);
   }
   return { theme: { types, fallback }, errors };
@@ -169,5 +169,7 @@ export function detailCalloutStyle(
   theme: DetailCalloutTheme,
   canonicalType: string,
 ): DetailCalloutStyle {
-  return theme.types[canonicalType] ?? theme.fallback;
+  return Object.hasOwn(theme.types, canonicalType)
+    ? theme.types[canonicalType]!
+    : theme.fallback;
 }

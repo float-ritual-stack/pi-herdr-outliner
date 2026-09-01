@@ -122,6 +122,31 @@ describe("semantic backlink relation", () => {
     )).toBe(true);
   });
 
+  test("includes nested-list references while excluding multiline indented code", () => {
+    const workspace = store();
+    const target = workspace.create("Nested target");
+    const source = workspace.create([
+      "Nested source",
+      "- Parent item",
+      `    - Nested item ((${target.id}))`,
+      `    continuation ((${target.id}))`,
+      "Outside paragraph",
+      "",
+      "    literal code",
+      `    ((${target.id}))`,
+      "    literal tail",
+    ].join("\n"));
+
+    const result = workspace.queryBacklinks({ targetBlockId: target.id, limit: 10 });
+
+    expect(result.sources).toHaveLength(1);
+    expect(result.sources[0]).toMatchObject({
+      blockId: source.id,
+      occurrenceCount: 2,
+      referenceGroups: [{ kind: "block", count: 2 }],
+    });
+  });
+
   test("disambiguates duplicate titles by parent context and truncates source rows", () => {
     const workspace = store();
     const target = workspace.create("Target");

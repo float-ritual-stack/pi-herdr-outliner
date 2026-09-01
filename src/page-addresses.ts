@@ -1,10 +1,12 @@
+import { PROPERTY_PARSER_VERSION } from "./properties";
+
 import { isCanonicalWorkId } from "./work-ids";
 
 const CONTROL_PATTERN = /[\u0000-\u001f\u007f]/;
 const PAGE_ADDRESS_PATTERN = /\[\[([^\]\r\n]+)\]\]/g;
 
 export const PAGE_ADDRESS_MAX_LENGTH = 512;
-export const PAGE_ADDRESS_REGISTRY_VERSION = 1;
+export const PAGE_ADDRESS_REGISTRY_VERSION = PROPERTY_PARSER_VERSION;
 
 export interface NormalizedPageAddress {
   displayAddress: string;

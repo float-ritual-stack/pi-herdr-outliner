@@ -13,6 +13,7 @@ import {
   type DetailCalloutRegion,
 } from "./detail-callouts";
 import type { DetailCalloutTheme } from "./detail-callout-theme";
+import { detailEmbedIds } from "./detail-embeds";
 import { linkOutlinerMarkdown, outlinerLinkUri } from "./outliner-links";
 import {
   visibleBacklinkSources,
@@ -29,6 +30,7 @@ import {
   detailPropertyInspectorRegions,
   renderPropertyInspectorDocument,
 } from "./detail-pi-renderer";
+import { stripFragmentAnchors } from "./fragments";
 import { propertyInspectorAuthoredText } from "./property-inspector";
 import {
   renderDetailFooter,
@@ -44,6 +46,82 @@ export interface DetailDraftProjection {
   rawText: string;
   embedRanges: DetailState["embedRanges"];
   workIdPrefix: string | null;
+}
+
+function sourceLineStarts(text: string): number[] {
+  const starts = [0];
+  for (let index = text.indexOf("\n"); index >= 0; index = text.indexOf("\n", index + 1)) {
+    starts.push(index + 1);
+  }
+  return starts;
+}
+
+function sourceLineAt(starts: readonly number[], offset: number): number {
+  let low = 0;
+  let high = starts.length;
+  while (low + 1 < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (starts[middle]! <= offset) low = middle;
+    else high = middle;
+  }
+  return low;
+}
+
+function embedSourceLines(text: string): number[] {
+  const starts = sourceLineStarts(text);
+  const lines: number[] = [];
+  let cursor = 0;
+  for (const id of detailEmbedIds(text)) {
+    const start = text.indexOf(`!((${id}`, cursor);
+    if (start < 0) continue;
+    lines.push(sourceLineAt(starts, start));
+    cursor = start + id.length + 3;
+  }
+  return lines;
+}
+
+function projectedSourceLine(
+  authoredText: string,
+  embedRanges: DetailState["embedRanges"],
+  sourceLine: number,
+): number {
+  const target = Math.max(0, Math.floor(sourceLine));
+  const embedLines = embedSourceLines(stripFragmentAnchors(authoredText));
+  let projected = target;
+  for (let index = 0; index < embedRanges.length; index += 1) {
+    const embedLine = embedLines[index];
+    if (embedLine === undefined || embedLine > target) break;
+    const range = embedRanges[index]!;
+    if (embedLine === target) return range.startLine;
+    projected += range.endLine - range.startLine;
+  }
+  return projected;
+}
+
+function sourcePrefixThroughLine(text: string, line: number): string {
+  const starts = sourceLineStarts(text);
+  const start = starts[Math.max(0, Math.min(Math.floor(line), starts.length - 1))]!;
+  const newline = text.indexOf("\n", start);
+  let end = newline;
+  if (newline < 0) end = text.length;
+  else if (newline > start && text[newline - 1] === "\r") end -= 1;
+  return text.slice(0, end);
+}
+
+function lineAfterMetadataRemoval(text: string, line: number): number {
+  const filtered = propertyInspectorAuthoredText(sourcePrefixThroughLine(text, line));
+  if (!filtered) return 0;
+  return sourceLineStarts(filtered).length - 1;
+}
+
+function remapEmbedRangesAfterMetadataRemoval(
+  text: string,
+  ranges: DetailState["embedRanges"],
+): DetailState["embedRanges"] {
+  return ranges.map((range) => ({
+    startLine: lineAfterMetadataRemoval(text, range.startLine),
+    endLine: lineAfterMetadataRemoval(text, range.endLine),
+  }));
 }
 
 export function nearestDraftSourceLine(
@@ -112,6 +190,45 @@ function renderPreviewDocument(
     workIdPrefix,
   );
 }
+
+function renderedAuthoredCallouts(
+  authored: readonly DetailCalloutRegion[],
+  renderedText: string,
+  renderedLineForAuthoredLine: (line: number) => number,
+  theme?: DetailCalloutTheme,
+): DetailCalloutRegion[] {
+  const rendered = parseDetailCallouts(renderedText, theme);
+  const used = new Set<number>();
+  const matched: DetailCalloutRegion[] = [];
+  for (const origin of authored) {
+    const headerLine = renderedLineForAuthoredLine(origin.headerLine);
+    const index = rendered.findIndex((candidate, candidateIndex) =>
+      !used.has(candidateIndex) &&
+      candidate.headerLine === headerLine &&
+      candidate.canonicalType === origin.canonicalType &&
+      candidate.depth === origin.depth
+    );
+    if (index < 0) continue;
+    used.add(index);
+    const projected = rendered[index]!;
+    matched.push({
+      ...projected,
+      id: origin.id,
+      parentId: origin.parentId,
+      childIds: origin.childIds,
+      activation: projected.activation
+        ? { type: "callout.disclosure.toggle", regionId: origin.id }
+        : null,
+    });
+  }
+  const matchedIds = new Set(matched.map((region) => region.id));
+  return matched.map((region) => ({
+    ...region,
+    parentId: region.parentId && matchedIds.has(region.parentId) ? region.parentId : null,
+    childIds: region.childIds.filter((id) => matchedIds.has(id)),
+  }));
+}
+
 const PREVIEW_HELP = DEFAULT_OUTLINER_ACTION_KEYMAP.helpText("detail", "preview");
 const ACTIVE_SELECTION_STYLE = "\x1b[1;97;48;5;24m";
 const RESET_STYLE = "\x1b[0m";
@@ -371,6 +488,8 @@ export class DetailPiPreviewLayout extends VStack {
   private renderedCalloutSource: string | undefined;
   private calloutRegions: DetailCalloutRegion[] = [];
   private renderedCalloutRegions: DetailCalloutRegion[] = [];
+  private renderedDocumentText = "";
+  private renderedFragmentSourceLine = 0;
   private previousSelectionId: string | null | undefined;
   private previousTargetFragmentId: string | null | undefined;
   private previousPreviewOffset: number | undefined;
@@ -601,6 +720,7 @@ export class DetailPiPreviewLayout extends VStack {
     if (selectionChanged && draftText !== null) this.resetDraftProjectionState();
     let sourceText: string;
     let rawText: string;
+    let projectionRawText: string;
     let embedRanges: DetailState["embedRanges"];
     let workIdPrefix: string | null;
     if (draftText !== null) {
@@ -609,7 +729,8 @@ export class DetailPiPreviewLayout extends VStack {
         ? this.draftProjection
         : null;
       sourceText = projection?.sourceText ?? draftText;
-      rawText = this.linksEnabled ? projection?.rawText ?? draftText : sourceText;
+      projectionRawText = projection?.rawText ?? draftText;
+      rawText = this.linksEnabled ? projectionRawText : sourceText;
       embedRanges = projection?.embedRanges ?? [];
       workIdPrefix = projection?.workIdPrefix ?? this.state.workIdPrefix;
     } else {
@@ -617,15 +738,45 @@ export class DetailPiPreviewLayout extends VStack {
       sourceText = selected
         ? this.state.resolvedSelectedText
         : "Select a block in the outliner pane.";
-      rawText = selected && this.linksEnabled ? this.state.projectedSelectedText : sourceText;
+      projectionRawText = selected ? this.state.projectedSelectedText : sourceText;
+      rawText = selected && this.linksEnabled ? projectionRawText : sourceText;
       embedRanges = this.state.embedRanges;
       workIdPrefix = this.state.workIdPrefix;
     }
-    if (draftText === null && selected) {
-      sourceText = propertyInspectorAuthoredText(sourceText);
-      rawText = propertyInspectorAuthoredText(rawText);
-    }
+    const projectedTextBeforeMetadataRemoval = projectionRawText;
     const authoredCalloutSource = draftText ?? selected?.text ?? sourceText;
+    const projectedEmbedRanges = embedRanges;
+    let metadataRemoved = false;
+    if (draftText === null && selected) {
+      const filteredSourceText = propertyInspectorAuthoredText(sourceText);
+      const filteredProjectionRawText = propertyInspectorAuthoredText(
+        projectedTextBeforeMetadataRemoval,
+      );
+      metadataRemoved = filteredProjectionRawText !== projectedTextBeforeMetadataRemoval;
+      if (metadataRemoved) {
+        embedRanges = remapEmbedRangesAfterMetadataRemoval(
+          projectedTextBeforeMetadataRemoval,
+          embedRanges,
+        );
+      }
+      sourceText = filteredSourceText;
+      projectionRawText = filteredProjectionRawText;
+      rawText = this.linksEnabled
+        ? filteredProjectionRawText
+        : filteredSourceText;
+    }
+    const renderedLineForAuthoredLine = (line: number): number => {
+      const projected = projectedSourceLine(
+        authoredCalloutSource,
+        projectedEmbedRanges,
+        line,
+      );
+      if (!metadataRemoved) return projected;
+      return lineAfterMetadataRemoval(projectedTextBeforeMetadataRemoval, projected);
+    };
+    this.renderedFragmentSourceLine = this.state.targetFragmentId
+      ? renderedLineForAuthoredLine(this.state.previewOffset)
+      : 0;
 
     const embedPresentation = `${this.state.embedBackgroundEnabled}:${
       embedRanges.map((range) => `${range.startLine}-${range.endLine}`).join(",")
@@ -664,18 +815,13 @@ export class DetailPiPreviewLayout extends VStack {
           sanitizeMarkdownDocument(this.draftProjectionError).replace(/\r?\n/g, " ")
         }`
         : document;
-      const authoredCalloutIds = new Set(
-        this.calloutRegions.map((region) => region.id),
-      );
-      this.renderedCalloutRegions = parseDetailCallouts(
+      this.renderedDocumentText = renderedText;
+      this.renderedCalloutRegions = renderedAuthoredCallouts(
+        this.calloutRegions,
         renderedText,
+        renderedLineForAuthoredLine,
         this.options.calloutTheme,
-      )
-        .filter((region) => authoredCalloutIds.has(region.id))
-        .map((region) => ({
-          ...region,
-          childIds: region.childIds.filter((id) => authoredCalloutIds.has(id)),
-        }));
+      );
       this.markdown.setContent(
         renderedText,
         embedRanges,
@@ -769,17 +915,21 @@ export class DetailPiPreviewLayout extends VStack {
       return false;
     }
     const contentWidth = this.scrollView.getContentWidth(width);
-    const inspectorHeight =
+    const inspectorLines =
       this.state.context.selected && !(this.options.splitActive?.() ?? false)
-        ? this.inspectorMarkdown.render(contentWidth).length + 1
-        : 0;
-    const contentHeight = this.markdown.render(contentWidth).length +
+        ? this.inspectorMarkdown.render(contentWidth)
+        : [];
+    const inspectorHeight = inspectorLines.length > 0 ? inspectorLines.length + 1 : 0;
+    const renderedDocument = this.markdown.renderWithSourceLineRows(contentWidth);
+    const contentHeight = renderedDocument.lines.length +
       inspectorHeight + 1 + this.backlinkMarkdown.render(contentWidth).length;
     this.scrollView.updateLayout(contentHeight, this.scrollView.viewportHeight, () => {});
     this.pendingFragmentScroll = false;
     const previousScrollTop = this.scrollView.scrollTop;
+    const fragmentRow =
+      renderedDocument.sourceLineRows[this.renderedFragmentSourceLine] ?? 0;
     this.scrollView.scrollTo(
-      this.state.targetFragmentId ? this.state.previewOffset : 0,
+      this.state.targetFragmentId ? inspectorHeight + fragmentRow : 0,
     );
     return this.scrollView.scrollTop !== previousScrollTop;
   }

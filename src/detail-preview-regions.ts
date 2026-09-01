@@ -150,14 +150,20 @@ export function reconcilePreviewRegions(
   state: PreviewRegionState,
   regions: readonly PreviewRegion[],
 ): void {
-  state.regions = regions.map((region) => ({
-    ...region,
-    childIds: [...region.childIds],
-    disclosure: region.disclosure && {
-      ...region.disclosure,
-      expanded: state.disclosureOverrides.get(region.id) ?? region.disclosure.defaultExpanded,
-    },
-  }));
+  state.regions = regions.map((region) => {
+    const disclosure = region.disclosure
+      ? {
+          ...region.disclosure,
+          expanded: state.disclosureOverrides.get(region.id) ??
+            region.disclosure.expanded,
+        }
+      : null;
+    return {
+      ...region,
+      childIds: [...region.childIds],
+      disclosure,
+    };
+  });
   const focusable = visibleFocusableRegions(state.regions);
   if (!focusable.some((region) => region.id === state.focusedRegionId)) {
     state.focusedRegionId = null;

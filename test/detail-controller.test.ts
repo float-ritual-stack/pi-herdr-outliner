@@ -726,6 +726,54 @@ describe("detail controller projection and deferred refresh", () => {
     expect(harness.calls.selections).toBe(loads);
     expect(harness.calls.currentBlocks).toEqual([block.id]);
   });
+  test("keeps disclosure overrides on refresh but clears them for an exact target change", async () => {
+    const harness = createHarness(makeBlock());
+    const region = {
+      id: "callout:0:note",
+      kind: "callout" as const,
+      sourceSpan: { start: 0, end: 10, startLine: 0, endLine: 0 },
+      parentId: null,
+      childIds: [],
+      focusable: true,
+      disclosure: { defaultExpanded: false, expanded: false },
+      activation: {
+        type: "callout.disclosure.toggle" as const,
+        regionId: "callout:0:note",
+      },
+    };
+    await harness.controller.initialize();
+    harness.controller.setPreviewRegions([region]);
+    await harness.controller.dispatch({
+      type: "preview.action",
+      action: region.activation,
+    }, viewport);
+    expect(harness.controller.state.previewRegions.disclosureOverrides.get(region.id))
+      .toBe(true);
+
+    await harness.controller.onServiceEvent(
+      event("ui", {
+        targetClientId: "detail-test",
+        command: "preview",
+        blockId: "other-block",
+      }),
+      viewport,
+    );
+    expect(harness.controller.state.targetBlockId).toBe("other-block");
+    expect(harness.controller.state.previewRegions.disclosureOverrides.size).toBe(0);
+
+    harness.controller.setPreviewRegions([region]);
+    await harness.controller.dispatch({
+      type: "preview.action",
+      action: region.activation,
+    }, viewport);
+    await harness.controller.onServiceEvent(event("content"), viewport);
+    harness.controller.setPreviewRegions([region]);
+    expect(harness.controller.state.previewRegions.disclosureOverrides.get(region.id))
+      .toBe(true);
+    expect(harness.controller.state.previewRegions.regions[0]!.disclosure?.expanded)
+      .toBe(true);
+  });
+
 });
 
 describe("detail controller saves and annotations", () => {
@@ -1540,5 +1588,54 @@ describe("Detail property inspector integration", () => {
       controller.state.propertyInspector.model!.entries[0]!.occurrenceId,
     );
     expect(controller.isBufferMode()).toBe(false);
+  });
+
+  test("consumes queued navigation before projecting a property update for the old target", async () => {
+    const sourceBlock = makeBlock({
+      id: "property-source",
+      text: "Subject [status::planned]",
+    });
+    const harness = createHarness(
+      sourceBlock,
+      null,
+      async (text) => ({ text: `resolved:${text}`, references: [] }),
+      async (text, hostBlockId) => {
+        if (hostBlockId === sourceBlock.id && text.includes("[status::complete]")) {
+          throw new Error("stale edited-target projection");
+        }
+        return { text, embeds: [], embedRanges: [] };
+      },
+    );
+    const controller = createDetailController(harness.effects, undefined, {
+      propertyInspectorPresentation: "dedicated",
+    });
+    await controller.initialize();
+    const status = controller.state.propertyInspector.model!.entries[0]!;
+    controller.state.previewRegions.focusedRegionId = status.occurrenceId;
+    await controller.dispatch({ type: "property-inspector.edit.begin" }, viewport);
+    await controller.dispatch({ type: "property-inspector.edit.select-all" }, viewport);
+    await controller.dispatch({
+      type: "property-inspector.edit.insert",
+      text: "complete",
+    }, viewport);
+    await controller.onServiceEvent(
+      event("ui", {
+        targetClientId: "detail-test",
+        command: "edit",
+        blockId: "other-block",
+      }),
+      viewport,
+    );
+    expect(controller.state.refreshPending).toBe(true);
+
+    await controller.dispatch({ type: "property-inspector.edit.commit" }, viewport);
+
+    expect(controller.state.refreshPending).toBe(false);
+    expect(controller.state.targetBlockId).toBe("other-block");
+    expect(controller.state.context.selected?.id).toBe("other-block");
+    expect(controller.state.previewRegions.focusedRegionId).toBeNull();
+    expect(controller.state.propertyInspector.edit).toBeNull();
+    expect(controller.state.projectedSelectedText).toBe("Target other-block");
+    expect(harness.calls.projectedReadHosts).toEqual(["property-source", "other-block"]);
   });
 });

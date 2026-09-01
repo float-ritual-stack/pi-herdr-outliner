@@ -38,6 +38,20 @@ description = "Focus an existing Detail in this tab, preferring the Tree-linked 
 contexts = ["workspace", "tab", "pane"]
 command = ["bun", "run", "src/herdr-open.ts", "--mode", "ensure-detail"]
 
+[[actions]]
+id = "open-here"
+title = "Outliner: open here"
+description = "Open a Tree and linked Detail beside the current pane."
+contexts = ["workspace", "tab", "pane"]
+command = ["bun", "run", "src/herdr-open.ts", "--mode", "open-here"]
+
+[[actions]]
+id = "open-layout"
+title = "Outliner: open working layout"
+description = "Open a Tree, two Details, and the current shell in the standard working layout."
+contexts = ["workspace", "tab", "pane"]
+command = ["bun", "run", "src/herdr-open.ts", "--mode", "open-layout"]
+
 [[link_handlers]]
 id = "outliner-navigation"
 title = "Navigate Outliner"

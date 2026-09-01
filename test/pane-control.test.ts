@@ -5,6 +5,7 @@ import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   configureCurrentPaneRightClick,
+  currentPaneIdentity,
   currentPaneRuntime,
   focusCurrentPane,
   openDetailPane,
@@ -77,33 +78,118 @@ appendFileSync(${JSON.stringify(logPath)}, JSON.stringify(process.argv.slice(2))
 });
 
 
-test("keeps standalone focus inert and treats failed Herdr metadata as optional", () => {
+test("keeps standalone pane behavior compatible and fails live lookup visibly", () => {
   const originalHerdrEnv = process.env.HERDR_ENV;
+  const originalPaneId = process.env.HERDR_PANE_ID;
   try {
+    delete process.env.HERDR_PANE_ID;
     delete process.env.HERDR_ENV;
+    expect(currentPaneRuntime("/missing/herdr")).toBeUndefined();
     expect(() => focusCurrentPane("/missing/herdr")).not.toThrow();
 
     process.env.HERDR_ENV = "1";
-    expect(currentPaneRuntime("/missing/herdr")).toBeUndefined();
+    expect(() => currentPaneRuntime("/missing/herdr")).toThrow(
+      "Current Herdr pane identity is unavailable",
+    );
     expect(() => focusCurrentPane("/missing/herdr")).toThrow(
       "Current Herdr pane identity is unavailable",
     );
   } finally {
     if (originalHerdrEnv === undefined) delete process.env.HERDR_ENV;
     else process.env.HERDR_ENV = originalHerdrEnv;
+    if (originalPaneId === undefined) delete process.env.HERDR_PANE_ID;
+    else process.env.HERDR_PANE_ID = originalPaneId;
+  }
+});
+
+test("never focuses the launch pane after a transient live identity failure", () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-outliner-pane-fallback-"));
+  const herdr = join(directory, "fake-herdr");
+  const logPath = join(directory, "calls.jsonl");
+  const originalHerdrEnv = process.env.HERDR_ENV;
+  const originalPaneId = process.env.HERDR_PANE_ID;
+  try {
+    process.env.HERDR_ENV = "1";
+    process.env.HERDR_PANE_ID = "w1:launch";
+    writeFileSync(
+      herdr,
+      `#!/usr/bin/env bun
+import { appendFileSync } from "node:fs";
+const args = process.argv.slice(2);
+appendFileSync(${JSON.stringify(logPath)}, JSON.stringify(args) + "\\n");
+if (args[0] === "pane" && args[1] === "current") process.exit(1);
+console.log(JSON.stringify({ result: { type: "ok" } }));
+`,
+    );
+    chmodSync(herdr, 0o755);
+    expect(() => focusCurrentPane(herdr)).toThrow(
+      "Current Herdr pane identity is unavailable",
+    );
+    expect(readFileSync(logPath, "utf8").trim().split("\n").map(
+      (line) => JSON.parse(line) as string[],
+    )).toEqual([
+      ["pane", "current", "--current"],
+    ]);
+  } finally {
+    if (originalHerdrEnv === undefined) delete process.env.HERDR_ENV;
+    else process.env.HERDR_ENV = originalHerdrEnv;
+    if (originalPaneId === undefined) delete process.env.HERDR_PANE_ID;
+    else process.env.HERDR_PANE_ID = originalPaneId;
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("never splits from the launch pane after a malformed live identity response", () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-outliner-pane-malformed-"));
+  const herdr = join(directory, "fake-herdr");
+  const logPath = join(directory, "calls.jsonl");
+  const originalHerdrEnv = process.env.HERDR_ENV;
+  const originalPaneId = process.env.HERDR_PANE_ID;
+  try {
+    process.env.HERDR_ENV = "1";
+    process.env.HERDR_PANE_ID = "w1:launch";
+    writeFileSync(
+      herdr,
+      `#!/usr/bin/env bun
+import { appendFileSync } from "node:fs";
+const args = process.argv.slice(2);
+appendFileSync(${JSON.stringify(logPath)}, JSON.stringify(args) + "\\n");
+console.log(JSON.stringify({ result: { pane: { pane_id: 42 } } }));
+`,
+    );
+    chmodSync(herdr, 0o755);
+
+    expect(() => openDetailPane({
+      workspaceRoot: "/workspace",
+      browsingContextId: "context",
+    }, herdr)).toThrow("Current Herdr pane identity is unavailable");
+    expect(readFileSync(logPath, "utf8").trim().split("\n").map(
+      (line) => JSON.parse(line) as string[],
+    )).toEqual([
+      ["pane", "current", "--current"],
+    ]);
+  } finally {
+    if (originalHerdrEnv === undefined) delete process.env.HERDR_ENV;
+    else process.env.HERDR_ENV = originalHerdrEnv;
+    if (originalPaneId === undefined) delete process.env.HERDR_PANE_ID;
+    else process.env.HERDR_PANE_ID = originalPaneId;
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 
 test("ignores focus misses for manual panes outside the plugin registry", () => {
   const directory = mkdtempSync(join(tmpdir(), "pi-outliner-pane-focus-"));
-  const herdr = join(directory, "fake-herdr");
+  const logPath = join(directory, "calls.jsonl");
+  const herdr = join(directory, "herdr");
   const originalHerdrEnv = process.env.HERDR_ENV;
   try {
     process.env.HERDR_ENV = "1";
     writeFileSync(
       herdr,
       `#!/usr/bin/env bun
+import { appendFileSync } from "node:fs";
 const args = process.argv.slice(2);
+appendFileSync(${JSON.stringify(logPath)}, JSON.stringify(args) + "\\n");
 if (args[0] === "pane" && args[1] === "current") {
   console.log(JSON.stringify({ result: { pane: { pane_id: "w1:p2" } } }));
 } else if (args[0] === "plugin") {
@@ -125,6 +211,10 @@ if (args[0] === "pane" && args[1] === "current") {
       },
     );
     expect(probe.status).toBe(0);
+    const calls = readFileSync(logPath, "utf8").trim().split("\n").map(
+      (line) => JSON.parse(line) as string[],
+    );
+    expect(calls.filter((args) => args[0] === "pane" && args[1] === "layout")).toEqual([]);
     expect(probe.stderr).toBe("");
   } finally {
     if (originalHerdrEnv === undefined) delete process.env.HERDR_ENV;
@@ -133,7 +223,7 @@ if (args[0] === "pane" && args[1] === "current") {
   }
 });
 
-test("opens and focuses a dedicated property inspector through the Detail pane entrypoint", () => {
+test("opens a property inspector from the moved pane's live identity", () => {
   const directory = mkdtempSync(join(tmpdir(), "pi-outliner-detail-pane-"));
   const herdr = join(directory, "fake-herdr");
   const logPath = join(directory, "calls.jsonl");
@@ -151,9 +241,7 @@ import { appendFileSync } from "node:fs";
 const args = process.argv.slice(2);
 appendFileSync(${JSON.stringify(logPath)}, JSON.stringify(args) + "\\n");
 if (args[0] === "pane" && args[1] === "current") {
-  console.log(JSON.stringify({ result: { pane: { pane_id: "w1:p2", workspace_id: "w1", tab_id: "w1:t1" } } }));
-} else if (args[0] === "pane" && args[1] === "layout") {
-  console.log(JSON.stringify({ result: { layout: { panes: [{ pane_id: "w1:p2", rect: { x: 0, y: 0 } }] } } }));
+  console.log(JSON.stringify({ result: { pane: { pane_id: "w1:p9", terminal_id: "term-live", workspace_id: "w1", tab_id: "w1:t1" } } }));
 } else if (args[0] === "plugin" && args[1] === "pane" && args[2] === "open") {
   console.log(JSON.stringify({ result: { plugin_pane: { pane: { pane_id: "w1:p3", workspace_id: "w1", tab_id: "w1:t1" } } } }));
 } else if (args[0] === "plugin" && args[1] === "pane" && args[2] === "focus") {
@@ -194,7 +282,7 @@ if (args[0] === "pane" && args[1] === "current") {
       "--placement",
       "split",
       "--target-pane",
-      "w1:p2",
+      "w1:p9",
       "--direction",
       "right",
       "--cwd",
@@ -204,6 +292,7 @@ if (args[0] === "pane" && args[1] === "current") {
       "OUTLINER_STATE_DIR=/tmp/outliner-state",
     ]);
     expect(calls.at(-1)).toEqual(["plugin", "pane", "focus", "w1:p3"]);
+    expect(calls.filter((args) => args[0] === "pane" && args[1] === "layout")).toEqual([]);
   } finally {
     if (originalHerdrEnv === undefined) delete process.env.HERDR_ENV;
     else process.env.HERDR_ENV = originalHerdrEnv;
@@ -218,13 +307,16 @@ if (args[0] === "pane" && args[1] === "current") {
 test("captures current pane coordinates for spatial Detail ordering", () => {
   const directory = mkdtempSync(join(tmpdir(), "pi-outliner-pane-layout-"));
   const herdr = join(directory, "fake-herdr");
+  const logPath = join(directory, "calls.jsonl");
   const originalHerdrEnv = process.env.HERDR_ENV;
   try {
     process.env.HERDR_ENV = "1";
     writeFileSync(
       herdr,
       `#!/usr/bin/env bun
+import { appendFileSync } from "node:fs";
 const args = process.argv.slice(2);
+appendFileSync(${JSON.stringify(logPath)}, JSON.stringify(args) + "\\n");
 if (args[0] === "pane" && args[1] === "current") {
   console.log(JSON.stringify({ result: { pane: { pane_id: "w1:p2", terminal_id: "term-2", workspace_id: "w1", tab_id: "w1:t1" } } }));
 } else if (args[0] === "pane" && args[1] === "layout") {
@@ -233,6 +325,16 @@ if (args[0] === "pane" && args[1] === "current") {
 `,
     );
     chmodSync(herdr, 0o755);
+
+    expect(currentPaneIdentity(herdr)).toEqual({
+      paneId: "w1:p2",
+      terminalId: "term-2",
+      workspaceId: "w1",
+      tabId: "w1:t1",
+    });
+    expect(readFileSync(logPath, "utf8").trim().split("\n").map(
+      (line) => JSON.parse(line) as string[],
+    )).toEqual([["pane", "current", "--current"]]);
 
     expect(currentPaneRuntime(herdr)).toEqual({
       paneId: "w1:p2",

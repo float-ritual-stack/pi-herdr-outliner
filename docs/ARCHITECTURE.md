@@ -11,7 +11,7 @@ flowchart LR
     Tree[Tree pane] -->|snapshot + events + commands| Service
     Detail[Detail pane] -->|snapshot + events + commands| Service
     Service[Outliner service] --> Store[(SQLite store)]
-    Service --> Registry[Disposable Herdr runtime registry]
+    Service --> Registry[Ephemeral live Herdr runtime registry]
     Herdr[Herdr plugin action] --> Service
     Herdr --> Tree
     Herdr --> Detail
@@ -26,7 +26,7 @@ flowchart LR
 - the workspace Unix socket,
 - an ephemeral browsing-context target registry,
 - service-pane registration, and
-- the optional Herdr runtime-registry runner.
+- the live Herdr runtime-registry runner when Herdr is available.
 
 The service is the only process that opens the workspace SQLite database. It logs the resolved socket and database paths after startup and handles orderly shutdown on `SIGINT`, `SIGTERM`, or `SIGHUP`.
 
@@ -176,7 +176,7 @@ Scope classification is structural. After leading blank lines, the first nonblan
 
 ## Protocol
 
-The current protocol version is `18`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
+The current protocol version is `25`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
 
 ### Important request families
 
@@ -205,10 +205,13 @@ through `clients.update`. `open-here` generates one context UUID and passes it
 to the Tree and Detail it creates. Standalone processes use their client UUID
 as a private context.
 
-Runtime pane, terminal, workspace, tab, and pane-coordinate fields are advisory
-topology snapshots. The service orders same-tab Detail candidates by horizontal
-then vertical pane position, with client ID only as a deterministic fallback.
-Herdr remains authoritative for current placement and focus.
+Client registrations retain terminal identity as their stable Herdr join key.
+When Herdr is available, the service reconciles pane, workspace, tab, and
+coordinate fields from the live runtime registry before returning client reads;
+launch-time runtime fields are only a fallback. The service orders same-tab
+Detail candidates by horizontal then vertical pane position, with client ID only
+as a deterministic fallback. Herdr remains authoritative for current placement
+and focus.
 
 The subscription socket owns its registration. The service rejects duplicate
 live client IDs and removes exactly that socket's registration. When the last
@@ -471,19 +474,35 @@ The service stores annotation blocks; it does not modify source files.
 
 ## Herdr lifecycle
 
-[`src/herdr-open.ts`](../src/herdr-open.ts) enforces service-first startup:
+[`src/herdr-open.ts`](../src/herdr-open.ts) enforces service-first startup for
+the four actions exported by the plugin manifest:
 
-1. Reuse or open the service pane in a tab.
-2. Wait for a compatible protocol response.
-3. For `open-here`, generate a browsing-context UUID.
-4. Open Tree beside the invoking pane with that UUID.
-5. Open Detail beneath Tree with the same UUID.
-6. Focus Tree.
+- `open` reuses or opens the service, then focuses the Tree selected by invoking
+  pane, unambiguous current tab, workspace, or project. If none exists, it runs
+  the same pair creation as `open-here`; ambiguity is an error.
+- `ensure-detail` applies the same Tree selection, focuses an existing Detail in
+  that Tree's tab (preferring its context, unlocked state, and spatial order),
+  or opens one below the Tree with the Tree's browsing context. With no Tree it
+  opens a complete pair.
+- `open-here` always generates a browsing-context UUID, opens a Tree to the right
+  of the invoking pane and a Detail below that Tree with the same UUID, and
+  focuses the Tree.
+- `open-layout` requires an otherwise empty tab. It retains the invoking shell,
+  creates a Tree and primary Detail in one context plus a second Detail in an
+  independent context, applies the `detail-b` four-pane layout, and focuses the
+  Tree.
 
 Each `open-here` invocation creates a new pair even under the same workspace
 root. Closing both clients prunes the context. Renaming or renumbering tabs and
 panes has no effect because labels are not identity. Pane IDs are read from
 Herdr responses and never predicted.
+
+Layout reshaping is serialized on Linux and macOS with an atomic lock directory.
+Its path appends `.layout.lock` to `HERDR_SOCKET_PATH`, or to
+`~/.config/herdr/herdr.sock` when that variable is absent. Acquisition has a
+bounded 30-second wait, recovers dead or stale owners, and releases in a
+`finally` path. Timeout and errors remain visible; layout mutation never runs
+unlocked and does not depend on the external `flock` utility.
 
 After deploying a merged change, restart Detail, Tree, and service in that order, invoke the plugin action, wait for `herdr_registry_ready`, and exercise the changed surface.
 
@@ -508,12 +527,12 @@ src/detail-pi*.ts             Pi TUI preview/input/frame integration
 src/detail-editor-layout.ts   wrapped visual rows and selections
 src/text-buffer.ts            raw editor state
 src/herdr-open.ts             plugin pane orchestration
-src/herdr-registry.ts         disposable runtime metadata
+src/herdr-registry.ts         ephemeral live Herdr runtime metadata
 pi-extension/index.ts         Pi/OMP commands, tools, context hook
 ```
 
 ## Accepted designs not yet implemented
 
-The durable roadmap lives in the outliner workboard. Current accepted designs include normalized bounded query construction, deterministic agent work-placeholder resolution, and projected-child creation.
+The durable roadmap lives in the outliner workboard. The current accepted design not yet implemented is projected-child creation.
 
-Do not describe these as shipped behavior until their roadmap items are Complete on main.
+Do not describe it as shipped behavior until its roadmap item is Complete on main.

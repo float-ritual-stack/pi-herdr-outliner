@@ -126,6 +126,17 @@ test("creates a stable unique heading anchor only when explicitly requested", ()
   });
 });
 
+test("creates alphanumeric IDs without changing authored line separators", () => {
+  const source = "# First\r\n\r\n## _Private\nTail\r\n";
+  const created = ensureHeadingFragment(source, 2);
+
+  expect(created.fragmentId).toBe("private");
+  expect(created.text).toBe("# First\r\n\r\n## _Private ^private\nTail\r\n");
+  expect(fragmentAnchors(created.text)[0]?.markerStart).toBe(
+    created.text.indexOf(" ^private"),
+  );
+});
+
 test("parses heading-search and durable fragment completion queries", () => {
   expect(parseFragmentCompletionQuery("roadmap#decision")).toEqual({
     blockQuery: "roadmap",

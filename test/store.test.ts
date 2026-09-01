@@ -1127,6 +1127,41 @@ Second paragraph`;
     rmSync(directory, { recursive: true, force: true });
   });
 
+  test("correlates legacy Work-ID reservations with matching block-scoped declarations", () => {
+    const store = makeStore();
+    const directory = stores[stores.length - 1].directory;
+    const path = join(directory, "outliner.sqlite");
+    const first = store.create("First owner [work-id::PIE-701]");
+    const second = store.create("Second owner [work-id::PIE-702]");
+    store.create("Inline claim\nBody text [work-id::PIE-703]");
+    store.database.exec(`
+      DROP TABLE reserved_work_ids;
+      CREATE TABLE reserved_work_ids (
+        work_id TEXT PRIMARY KEY,
+        reserved_at TEXT NOT NULL
+      );
+      INSERT INTO reserved_work_ids (work_id, reserved_at) VALUES
+        ('PIE-701', '2026-01-01T00:00:00.000Z'),
+        ('PIE-702', '2026-01-01T00:00:00.000Z'),
+        ('PIE-703', '2026-01-01T00:00:00.000Z'),
+        ('PIE-799', '2026-01-01T00:00:00.000Z');
+    `);
+    store.close();
+
+    const reopened = new OutlinerStore(path);
+    stores[stores.length - 1].store = reopened;
+    expect(
+      reopened.database.query(
+        "SELECT work_id, block_id FROM reserved_work_ids ORDER BY work_id",
+      ).all(),
+    ).toEqual([
+      { work_id: "PIE-701", block_id: first.id },
+      { work_id: "PIE-702", block_id: second.id },
+      { work_id: "PIE-703", block_id: null },
+      { work_id: "PIE-799", block_id: null },
+    ]);
+  });
+
   test("allocates monotonic project Work IDs transactionally", async () => {
     const store = makeStore();
     const first = store.create("First opted-in work item");
@@ -1838,6 +1873,77 @@ Second paragraph`;
     ).toEqual({ value: String(PAGE_ADDRESS_REGISTRY_VERSION) });
     expect(reopened.resolvePageAddress("pie-777").block?.id).toBe(work.id);
     expect(reopened.resolvePageAddress("migrated alias").block?.id).toBe(page.id);
+  });
+
+  test("rebuilds registry-v1 addresses after parser-v2 scope migration exactly once", () => {
+    const store = makeStore();
+    const directory = stores[stores.length - 1].directory;
+    const path = join(directory, "outliner.sqlite");
+    store.configureWorkIdPrefix("PIE");
+    const canonicalPage = store.create("Canonical page [page::Canonical Metadata]");
+    const inlinePage = store.create("Inline page\nBody text [page::Inline Metadata]");
+    const canonicalWork = store.create("Canonical work\n[work-id::PIE-811]");
+    const inlineWork = store.create("Inline work\nBody text [work-id::PIE-812]");
+
+    store.database.query(
+      "UPDATE block_properties SET scope = 'block' WHERE block_id IN (?, ?)",
+    ).run(inlinePage.id, inlineWork.id);
+    store.database.query(
+      "INSERT INTO page_addresses (normalized_address, display_address, block_id, kind) VALUES (?, ?, ?, ?)",
+    ).run("inline metadata", "Inline Metadata", inlinePage.id, "page");
+    store.database.query(
+      "INSERT INTO page_addresses (normalized_address, display_address, block_id, kind) VALUES (?, ?, ?, ?)",
+    ).run("pie-812", "PIE-812", inlineWork.id, "work-id");
+    store.database.query(
+      "UPDATE metadata SET value = '1' WHERE key = 'property_parser_version'",
+    ).run();
+    store.database.query(
+      "UPDATE metadata SET value = '1' WHERE key = 'page_address_registry_version'",
+    ).run();
+    store.close();
+
+    const reopened = new OutlinerStore(path);
+    stores[stores.length - 1].store = reopened;
+    expect(reopened.resolvePageAddress("Canonical Metadata").block?.id).toBe(
+      canonicalPage.id,
+    );
+    expect(reopened.resolvePageAddress("PIE-811").block?.id).toBe(canonicalWork.id);
+    expect(reopened.resolvePageAddress("Inline Metadata").status).toBe("missing");
+    expect(reopened.resolvePageAddress("PIE-812").status).toBe("missing");
+    expect(reopened.require(inlinePage.id).properties).toEqual([]);
+    expect(reopened.require(inlineWork.id).properties).toEqual([]);
+    expect(
+      reopened.database.query(
+        "SELECT key, value FROM metadata WHERE key IN ('property_parser_version', 'page_address_registry_version') ORDER BY key",
+      ).all(),
+    ).toEqual([
+      {
+        key: "page_address_registry_version",
+        value: String(PAGE_ADDRESS_REGISTRY_VERSION),
+      },
+      {
+        key: "property_parser_version",
+        value: String(PROPERTY_PARSER_VERSION),
+      },
+    ]);
+    const migratedSequence = reopened.sequence;
+    const migratedAddresses = reopened.database
+      .query(
+        "SELECT normalized_address, display_address, block_id, kind FROM page_addresses WHERE block_id IN (?, ?, ?, ?) ORDER BY normalized_address",
+      )
+      .all(canonicalPage.id, inlinePage.id, canonicalWork.id, inlineWork.id);
+
+    reopened.close();
+    const reopenedAgain = new OutlinerStore(path);
+    stores[stores.length - 1].store = reopenedAgain;
+    expect(reopenedAgain.sequence).toBe(migratedSequence);
+    expect(
+      reopenedAgain.database.query(
+        "SELECT normalized_address, display_address, block_id, kind FROM page_addresses WHERE block_id IN (?, ?, ?, ?) ORDER BY normalized_address",
+      ).all(canonicalPage.id, inlinePage.id, canonicalWork.id, inlineWork.id),
+    ).toEqual(migratedAddresses);
+    expect(reopenedAgain.resolvePageAddress("Inline Metadata").status).toBe("missing");
+    expect(reopenedAgain.resolvePageAddress("PIE-812").status).toBe("missing");
   });
 
   test("preserves registered deleted addresses across registry rebuilds", () => {

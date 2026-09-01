@@ -1,4 +1,7 @@
-import { expect, test } from "bun:test";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { expect, spyOn, test } from "bun:test";
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -12,6 +15,7 @@ import outlinerExtension, {
   selectRecentFocusedOutlinerClient,
 } from "../pi-extension/index";
 import { OutlinerClient, type RequestInput } from "../src/client";
+import { parseProperties, patchPropertyText } from "../src/properties";
 import { OUTLINER_PROTOCOL_VERSION } from "../src/types";
 import type {
   BlockEditActivityPage,
@@ -444,23 +448,22 @@ test("drives an explicit task through context, focus, durable proof, and complet
     context: ExtensionContext,
   ) => Promise<unknown> | unknown;
 
+  const taskText = [
+    "PIE-144 — Agent [context::inline-before] workflow [type::roadmap-item]",
+    "owner:: evan",
+    "[status::planned] [priority::high]",
+    "[work-stage::next] [work-id::PIE-144] [depends-on::dependency-id]",
+  ].join("\n");
+
   let task: Block = {
     id: "task-id",
     parentId: null,
     position: 0,
-    text:
-      "PIE-144 — Agent workflow [type::roadmap-item] [status::planned] [priority::high] [work-stage::next] [work-id::PIE-144] [depends-on::dependency-id]",
+    text: taskText,
     author: "agent",
     createdAt: "created",
     updatedAt: "v1",
-    properties: [
-      { key: "type", value: "roadmap-item" },
-      { key: "status", value: "planned" },
-      { key: "priority", value: "high" },
-      { key: "work-stage", value: "next" },
-      { key: "work-id", value: "PIE-144" },
-      { key: "depends-on", value: "dependency-id" },
-    ],
+    properties: parseProperties(taskText),
   };
   const dependency: Block = {
     ...task,
@@ -475,9 +478,31 @@ test("drives an explicit task through context, focus, durable proof, and complet
   const requests: RequestInput[] = [];
   const sessionEntries: Array<Record<string, unknown>> = [];
   const statuses: Array<string | undefined> = [];
+  const diagnostic = spyOn(console, "error").mockImplementation(() => {});
   const originalRequest = OutlinerClient.prototype.request;
   const originalHerdrEnv = process.env.HERDR_ENV;
-  process.env.HERDR_ENV = "0";
+  const originalHerdrBinPath = process.env.HERDR_BIN_PATH;
+  const originalHerdrPaneId = process.env.HERDR_PANE_ID;
+  const herdrDirectory = mkdtempSync(join(tmpdir(), "pi-outliner-extension-herdr-"));
+  const herdr = join(herdrDirectory, "fake-herdr");
+  const herdrLog = join(herdrDirectory, "calls.jsonl");
+  const herdrFailureMarker = join(herdrDirectory, "failed-current-pane");
+  writeFileSync(
+    herdr,
+    [
+      "#!/usr/bin/env bun",
+      'import { appendFileSync, existsSync, writeFileSync } from "node:fs";',
+      "const args = process.argv.slice(2);",
+      `appendFileSync(${JSON.stringify(herdrLog)}, JSON.stringify(args) + "\\n");`,
+      `if (args[0] === "pane" && args[1] === "current" && !existsSync(${JSON.stringify(herdrFailureMarker)})) { writeFileSync(${JSON.stringify(herdrFailureMarker)}, "failed"); console.error("x".repeat(900)); process.exit(1); }`,
+      'console.log(JSON.stringify({ result: { pane: { pane_id: "moved-pane", terminal_id: "stable-terminal", workspace_id: "workspace", tab_id: "tab" } } }));',
+      "",
+    ].join("\n"),
+  );
+  chmodSync(herdr, 0o755);
+  process.env.HERDR_ENV = "1";
+  process.env.HERDR_BIN_PATH = herdr;
+  process.env.HERDR_PANE_ID = "launch-pane";
 
   OutlinerClient.prototype.request = async function <T>(input: RequestInput): Promise<T> {
     requests.push(input);
@@ -516,18 +541,13 @@ test("drives an explicit task through context, focus, durable proof, and complet
     }
     if (input.action === "properties.patch") {
       expect(input.blockId).toBe(task.id);
-      const properties = task.properties.map((property) => ({ ...property }));
-      for (const operation of input.operations) {
-        if (operation.op === "replace") {
-          properties[operation.ordinal] = {
-            key: operation.key ?? properties[operation.ordinal]!.key,
-            value: operation.value,
-          };
-        } else if (operation.op === "append") {
-          properties.push({ key: operation.key, value: operation.value });
-        }
-      }
-      task = { ...task, properties, updatedAt: task.updatedAt === "v1" ? "v2" : "v3" };
+      const text = patchPropertyText(task.text, input.operations);
+      task = {
+        ...task,
+        text,
+        properties: parseProperties(text),
+        updatedAt: `v${Number(task.updatedAt.slice(1)) + 1}`,
+      };
       return task as T;
     }
     if (input.action === "get") {
@@ -641,8 +661,44 @@ test("drives an explicit task through context, focus, durable proof, and complet
         context,
       )).content[0]!.text,
     );
-    expect(started).toMatchObject({ blockId: task.id, workId: "PIE-144", stage: "doing" });
+    expect(started).toMatchObject({
+      blockId: task.id,
+      workId: "PIE-144",
+      stage: "doing",
+      presenceReported: false,
+    });
     expect(statuses.at(-1)).toBe("PIE-144");
+    const paused = JSON.parse(
+      (await tools.get("outliner_task")!.execute(
+        "pause-task",
+        { operation: "pause" },
+        undefined,
+        undefined,
+        context,
+      )).content[0]!.text,
+    );
+    expect(paused).toMatchObject({
+      blockId: task.id,
+      workId: "PIE-144",
+      stage: "next",
+      presenceReported: true,
+    });
+
+    const restarted = JSON.parse(
+      (await tools.get("outliner_task")!.execute(
+        "restart-task",
+        { operation: "start", address: "PIE-144" },
+        undefined,
+        undefined,
+        context,
+      )).content[0]!.text,
+    );
+    expect(restarted).toMatchObject({
+      blockId: task.id,
+      workId: "PIE-144",
+      stage: "doing",
+      presenceReported: true,
+    });
 
     const beforeResult = await handlers.get("before_agent_start")!({
       systemPrompt: "base prompt",
@@ -653,6 +709,7 @@ test("drives an explicit task through context, focus, durable proof, and complet
     expect(beforeResult.systemPrompt).toContain("Completed dependency · status=complete");
     expect(beforeResult.systemPrompt).toContain("outliner_publish");
 
+    process.env.HERDR_ENV = "0";
     const focused = JSON.parse(
       (await tools.get("outliner_focus")!.execute(
         "focus-task",
@@ -684,6 +741,7 @@ test("drives an explicit task through context, focus, durable proof, and complet
       type: "implementation-proof",
       focused: true,
     });
+    process.env.HERDR_ENV = "1";
     const create = requests.find(
       (request): request is Extract<RequestInput, { action: "create" }> =>
         request.action === "create",
@@ -707,7 +765,10 @@ test("drives an explicit task through context, focus, durable proof, and complet
       status: "complete",
       proofBlockId: "proof-id",
     });
+    expect(completed.presenceReported).toBe(true);
     expect(sessionEntries.map((entry) => entry.data)).toEqual([
+      { version: 1, blockId: task.id },
+      { version: 1, blockId: null },
       { version: 1, blockId: task.id },
       { version: 1, blockId: null },
     ]);
@@ -716,11 +777,58 @@ test("drives an explicit task through context, focus, durable proof, and complet
       { key: "status", value: "complete" },
       { key: "proof", value: "proof-id" },
     ]));
+    expect(task.text).toContain("[context::inline-before]");
+    expect(task.properties).toEqual(expect.arrayContaining([
+      { key: "priority", value: "high" },
+      { key: "owner", value: "evan" },
+    ]));
+    const transitions = requests.filter(
+      (request): request is Extract<RequestInput, { action: "properties.patch" }> =>
+        request.action === "properties.patch",
+    );
+    expect(transitions.map(({ operations }) => operations)).toEqual([
+      [{ op: "replace", ordinal: 5, value: "doing" }],
+      [{ op: "replace", ordinal: 5, value: "next" }],
+      [{ op: "replace", ordinal: 5, value: "doing" }],
+      [
+        { op: "replace", ordinal: 3, value: "complete" },
+        { op: "replace", ordinal: 5, value: "done" },
+        { op: "append", key: "proof", value: "proof-id" },
+      ],
+    ]);
+    const herdrCalls = readFileSync(herdrLog, "utf8").trim().split("\n").map(
+      (line) => JSON.parse(line) as string[],
+    );
+    const currentPaneCalls = herdrCalls.filter(
+      (args) => args[0] === "pane" && args[1] === "current",
+    );
+    expect(currentPaneCalls).toHaveLength(4);
+    const metadataCalls = herdrCalls.filter(
+      (args) => args[0] === "pane" && args[1] === "report-metadata",
+    );
+    expect(metadataCalls).toHaveLength(3);
+    expect(metadataCalls.map((args) => args[2])).toEqual([
+      "moved-pane",
+      "moved-pane",
+      "moved-pane",
+    ]);
+    expect(metadataCalls.some((args) => args.includes("launch-pane"))).toBe(false);
+    expect(diagnostic).toHaveBeenCalledTimes(1);
+    const identityDiagnostic = String(diagnostic.mock.calls[0]![0]);
+    expect(identityDiagnostic).toContain("Current Herdr pane identity is unavailable");
+    expect(identityDiagnostic).toHaveLength(512);
+    expect(identityDiagnostic).toEndWith("…");
     expect(statuses.at(-1)).toBeUndefined();
   } finally {
     OutlinerClient.prototype.request = originalRequest;
+    diagnostic.mockRestore();
     if (originalHerdrEnv === undefined) delete process.env.HERDR_ENV;
     else process.env.HERDR_ENV = originalHerdrEnv;
+    if (originalHerdrBinPath === undefined) delete process.env.HERDR_BIN_PATH;
+    else process.env.HERDR_BIN_PATH = originalHerdrBinPath;
+    if (originalHerdrPaneId === undefined) delete process.env.HERDR_PANE_ID;
+    else process.env.HERDR_PANE_ID = originalHerdrPaneId;
+    rmSync(herdrDirectory, { recursive: true, force: true });
   }
 });
 

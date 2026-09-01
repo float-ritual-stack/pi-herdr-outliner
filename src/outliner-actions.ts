@@ -217,16 +217,21 @@ export function normalizeActionChord(input: string): string {
 
 export function actionChordForInput(str: string | undefined, key: TerminalKey): string | null {
   const text = str ?? "";
+  const uppercasePrintable = /^[A-Z]$/.test(text);
+  const bareQuestionMark = text === "?";
   let name = key.name ? canonicalKeyName(key.name) : "";
-  if (!name && text.length === 1) name = text;
+  if (uppercasePrintable) name = text.toLowerCase();
+  else if (bareQuestionMark) name = text;
+  else if (!name && text.length === 1) name = text;
   if (!name) return null;
   if (name.length !== 1 && !NAMED_ACTION_KEYS.has(name)) return null;
   const modifiers: string[] = [];
   if (key.ctrl) modifiers.push("Ctrl");
   if (key.meta) modifiers.push("Alt");
-  const implicitShift = text.length === 1 && /[A-Z?]/.test(text) && text !== name;
-  if (key.shift || implicitShift) modifiers.push("Shift");
-  if (name.length === 1 && !key.ctrl && !key.meta) name = text || name;
+  if (uppercasePrintable || (key.shift && !bareQuestionMark)) modifiers.push("Shift");
+  if (name.length === 1 && !key.ctrl && !key.meta) {
+    name = uppercasePrintable ? text.toLowerCase() : text || name;
+  }
   return normalizeActionChord([...modifiers, name].join("+"));
 }
 
@@ -277,6 +282,17 @@ export function resolveOutlinerKeymapPath(env: NodeJS.ProcessEnv = process.env):
   return join(configHome, "pi-herdr-outliner", "keybindings.json");
 }
 
+const KEYMAP_STARTUP_DIAGNOSTIC_LIMIT = 512;
+
+function reportKeymapStartupFailure(path: string, error: unknown): void {
+  const reason = error instanceof Error ? error.message : String(error);
+  const diagnostic = `Pi Outliner keymap ${path} is invalid; using defaults: ${reason}`;
+  const bounded = diagnostic.length <= KEYMAP_STARTUP_DIAGNOSTIC_LIMIT
+    ? diagnostic
+    : `${diagnostic.slice(0, KEYMAP_STARTUP_DIAGNOSTIC_LIMIT - 1)}…`;
+  console.error(bounded);
+}
+
 export class OutlinerActionKeymap {
   #bindings = new Map<string, readonly string[]>();
 
@@ -290,7 +306,8 @@ export class OutlinerActionKeymap {
       return new OutlinerActionKeymap(path, JSON.parse(readFileSync(path, "utf8")));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return new OutlinerActionKeymap(path);
-      throw error;
+      reportKeymapStartupFailure(path, error);
+      return new OutlinerActionKeymap(path);
     }
   }
 

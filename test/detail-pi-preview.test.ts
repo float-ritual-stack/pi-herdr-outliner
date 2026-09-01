@@ -289,6 +289,37 @@ describe("Pi Markdown detail preview", () => {
     expect(rendered.some((line) => line.includes("\x1b[48;5;236m"))).toBe(false);
   });
 
+  test("remaps embed decoration after removing block metadata lines", () => {
+    const canonical = [
+      "[type::fixture]",
+      "",
+      "Before",
+      "!((embed-block))",
+      "After",
+    ].join("\n");
+    const projected = [
+      "[type::fixture]",
+      "",
+      "Before",
+      "Embedded block",
+      "Projected body",
+      "After",
+    ].join("\n");
+    const detail = state(projected, canonical);
+    detail.projectedSelectedText = projected;
+    detail.embedRanges = [{ startLine: 3, endLine: 4 }];
+    const layout = previewLayout(detail);
+    layout.syncState();
+
+    const rendered = layout.markdown.render(48);
+    const lineContaining = (text: string): string =>
+      rendered.find((line) => stripTerminalSequences(line).includes(text))!;
+    expect(lineContaining("Embedded block")).toContain("\x1b[48;5;236m");
+    expect(lineContaining("Projected body")).toContain("\x1b[48;5;236m");
+    expect(lineContaining("Before")).not.toContain("\x1b[48;5;236m");
+    expect(lineContaining("After")).not.toContain("\x1b[48;5;236m");
+  });
+
   test("decorates post-parse structural blocks without breaking Markdown context", () => {
     const document = [
       "Before",
@@ -355,6 +386,53 @@ describe("Pi Markdown detail preview", () => {
       expect(lineContaining("Before")).not.toContain("\x1b[48;5;236m");
       expect(lineContaining("After")).not.toContain("\x1b[48;5;236m");
     }
+  });
+
+  test("preserves CRLF source slices and offsets while decorating Markdown tokens", () => {
+    const document = "Before\r\n\r\n> Embedded\r\n> body\r\n\r\nAfter\r\n";
+    const segments = sourceSpannedMarkdownSegments(document, [{
+      startLine: 2,
+      endLine: 3,
+    }]);
+
+    expect(segments.map((segment) => segment.text).join("")).toBe(document);
+    expect(segments.every((segment) =>
+      segment.text === document.slice(segment.span.start, segment.span.end)
+    )).toBe(true);
+    expect(
+      segments.filter((segment) => segment.decorated).map((segment) => segment.text).join(""),
+    ).toBe("> Embedded\r\n> body");
+  });
+
+  test("correlates authored callouts by projected origin instead of colliding positions", () => {
+    const canonical = [
+      "!((embed-block))",
+      "",
+      "> [!note]- Authored",
+      "> authored body",
+    ].join("\n");
+    const projected = [
+      "> [!note]+ Generated",
+      "> generated body",
+      "",
+      "> [!note]- Authored",
+      "> authored body",
+    ].join("\n");
+    const detail = state(projected, canonical);
+    detail.projectedSelectedText = projected;
+    detail.embedRanges = [{ startLine: 0, endLine: 1 }];
+    const layout = previewLayout(detail);
+
+    const rendered = layout.render(60).map(stripTerminalSequences).join("\n");
+    expect(rendered).toContain("Generated");
+    expect(rendered).toContain("generated body");
+    expect(rendered).toContain("Authored");
+    expect(rendered).not.toContain("authored body");
+    expect(
+      detail.previewRegions.regions.filter((region) => region.kind === "callout").map((region) =>
+        region.id
+      ),
+    ).toEqual(["callout:0:note"]);
   });
 
   test("links each Detail breadcrumb segment to an explicit Tree reveal", () => {
@@ -471,17 +549,125 @@ describe("Pi Markdown detail preview", () => {
     detail.targetFragmentId = "decision";
     detail.previewOffset = 15;
     layout.render(20);
-    expect(layout.scrollView.scrollTop).toBe(15);
+    expect(layout.scrollView.scrollTop).toBe(19);
 
     layout.scrollView.scrollBy(2);
     detail.status = "ordinary status update";
     layout.render(20);
-    expect(layout.scrollView.scrollTop).toBe(17);
+    expect(layout.scrollView.scrollTop).toBe(21);
 
     detail.resolvedSelectedText = `new leading line\n${detail.resolvedSelectedText}`;
     detail.previewOffset = 16;
     layout.render(20);
-    expect(layout.scrollView.scrollTop).toBe(16);
+    expect(layout.scrollView.scrollTop).toBe(20);
+  });
+
+  test("maps fragment lines through embed projection and wrapped Markdown rows", () => {
+    const canonical = [
+      "!((embed-block))",
+      "",
+      "## Target ^target",
+      ...Array.from({ length: 16 }, (_, index) => `tail ${index}`),
+    ].join("\n");
+    const projected = [
+      "A generated embed line long enough to wrap over several rendered rows",
+      "generated second",
+      "generated third",
+      "",
+      "## Target",
+      ...Array.from({ length: 16 }, (_, index) => `tail ${index}`),
+    ].join("\n");
+    const detail = state(projected, canonical);
+    detail.projectedSelectedText = projected;
+    detail.embedRanges = [{ startLine: 0, endLine: 2 }];
+    const layout = previewLayout(detail);
+    layout.scrollView.setScrollbar("hidden");
+    const contentHeight = renderedDocument(layout, 18).length;
+    layout.scrollView.updateLayout(contentHeight, 5, () => {});
+
+    detail.targetFragmentId = "target";
+    detail.previewOffset = 2;
+    layout.render(18);
+
+    const inspectorHeight = layout.inspectorMarkdown.render(18).length + 1;
+    const expectedSourceRow = draftSourceRowAnchors(
+      projected,
+      18,
+      plainMarkdownTheme,
+    )[4]!;
+    const renderedTargetRow = layout.markdown.render(18).findIndex((line) =>
+      stripTerminalSequences(line).includes("Target")
+    );
+    expect(expectedSourceRow).toBe(renderedTargetRow);
+    expect(inspectorHeight + expectedSourceRow).toBeGreaterThan(detail.previewOffset);
+    expect(layout.scrollView.scrollTop).toBe(inspectorHeight + renderedTargetRow);
+  });
+
+  test("maps a fragment below a collapsed callout to the displayed row", () => {
+    const canonical = [
+      "Before",
+      "",
+      "> [!note]- Hidden details",
+      "> A hidden line that would wrap across several rows in the preview.",
+      "> Another hidden line.",
+      "",
+      "## Target ^target",
+      ...Array.from({ length: 16 }, (_, index) => `tail ${index}`),
+    ].join("\n");
+    const projected = canonical.replace(" ^target", "");
+    const detail = state(projected, canonical);
+    detail.projectedSelectedText = projected;
+    detail.targetFragmentId = "target";
+    detail.previewOffset = 6;
+    const layout = previewLayout(detail);
+    layout.scrollView.setScrollbar("hidden");
+    const contentHeight = renderedDocument(layout, 18).length;
+    layout.scrollView.updateLayout(contentHeight, 5, () => {});
+
+    layout.render(18);
+
+    const rendered = layout.markdown.render(18);
+    const targetRow = rendered.findIndex((line) =>
+      stripTerminalSequences(line).includes("Target")
+    );
+    const inspectorLines = layout.inspectorMarkdown.render(18);
+    const inspectorHeight = inspectorLines.length > 0 ? inspectorLines.length + 1 : 0;
+    expect(rendered.some((line) =>
+      stripTerminalSequences(line).includes("A hidden line")
+    )).toBe(false);
+    expect(layout.scrollView.scrollTop).toBe(inspectorHeight + targetRow);
+  });
+
+  test("maps a fragment after a fenced block using the full rendered document", () => {
+    const canonical = [
+      "A paragraph whose words wrap onto several displayed rows at this width.",
+      "",
+      "```ts",
+      "const deliberatelyLongName = 'a value that wraps';",
+      "```",
+      "## Target ^target",
+      ...Array.from({ length: 16 }, (_, index) => `tail ${index}`),
+    ].join("\n");
+    const projected = canonical.replace(" ^target", "");
+    const detail = state(projected, canonical);
+    detail.projectedSelectedText = projected;
+    detail.targetFragmentId = "target";
+    detail.previewOffset = 5;
+    const layout = previewLayout(detail);
+    layout.scrollView.setScrollbar("hidden");
+    const contentHeight = renderedDocument(layout, 18).length;
+    layout.scrollView.updateLayout(contentHeight, 5, () => {});
+
+    layout.render(18);
+
+    const rendered = layout.markdown.render(18);
+    const targetRow = rendered.findIndex((line) =>
+      stripTerminalSequences(line).includes("Target")
+    );
+    const inspectorLines = layout.inspectorMarkdown.render(18);
+    const inspectorHeight = inspectorLines.length > 0 ? inspectorLines.length + 1 : 0;
+    expect(targetRow).toBeGreaterThan(detail.previewOffset);
+    expect(layout.scrollView.scrollTop).toBe(inspectorHeight + targetRow);
   });
 
   test("without links, updates Markdown only when the resolved source changes", () => {
