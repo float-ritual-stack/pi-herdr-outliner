@@ -25,20 +25,23 @@ The project started as a small Friday-night experiment and grew into a durable w
 
 - SQLite-backed hierarchical blocks with stable UUIDs, sibling order, authors, timestamps, and one canonical graph per workspace root.
 - Workspace-isolated service and runtime paths.
-- JSON-lines RPC protocol v22 over a Unix socket.
+- JSON-lines RPC protocol v23 over a Unix socket.
 - Reactive canonical content/view broadcasts, per-process Tree/Detail registration with Detail lock availability, exact-client UI commands, and source-aware `preview | open | reveal` navigation.
 - Each Tree owns its cursor, occurrence selection, filter, viewport, collapsed rows, multiline expansion, explicit-navigation history, and browsing context; moving a Tree previews only in the first unlocked same-tab Detail and never replaces a locked anchor.
 - Indexed `[property::value]` metadata with optimistic property patching and catalog queries.
 - Exact block and fragment references using `((block-id))` and `((block-id^fragment-id))`, resolved to display titles in read mode while raw text remains editable.
 - Unique normalized symbolic addresses from explicit `[page::address]` declarations and Work IDs, with aliases, explicit removal, bounded completion, dangling links, and transactional create-on-follow.
 - Workspace-scoped monotonic Work-ID allocation adopts a clean existing prefix or requires explicit configuration, optimistically assigns the next immutable ID, and never reuses reserved or purged identifiers.
+- Atomic canonical roadmap-item creation discovers the single project work queue, validates UUID relationships and complete routing metadata, allocates the immutable Work ID, and returns matching virtual-branch memberships in one transaction.
 - Plain-clickable Work IDs, canonical UUIDs, exact references, and `[[address]]` links inside Tree/Detail, with OSC 8 `pi-outliner://` links retained for external terminal interoperability.
-- Property-driven virtual branches with canonical projected occurrences, property-aware creation, and persisted branch-local occurrence order.
-- Agent-authored blocks retain immutable actor, session, and originating tool-call/task provenance while preserving the coarse `agent` author role.
+- Property-driven virtual branches with ranked canonical roots, read-only contextual descendants through relative depth 2, independent occurrence disclosure, a 1,000-row branch budget, property-aware creation, and persisted root ordering.
+- Agent-created blocks retain immutable creator provenance. Every later text or property mutation records its own `user`, `agent`, or `system` identity plus available actor, session, and task IDs, so edit attribution never depends on the creator.
 - Recoverable deletion preserves canonical structure and identity, excludes Trash content from normal queries/completions, and requires explicit identifier-confirmed purge.
 - Idempotent zero-context-loss Tree capture writes ordinary canonical children under one stable workspace Inbox without moving selection or navigation history.
 - Client-local multiline-expanded Tree rows support viewport-sized intra-block PageUp/PageDown without changing the Tree cursor.
 - Pi Markdown preview with line, page, endpoint, and mouse/trackpad scrolling.
+- Detail renders source-spanned Markdown, nested Obsidian callouts, generated embeds, Backlinks, and a structured property inspector through one PreviewRegion focus/action model while canonical source remains authoritative.
+- The property inspector preserves repeated keys and block/line/inline scope, offers inline disclosure plus a locked dedicated Detail pane, and routes typed block/page/Work-ID values through existing navigation.
 - Grapheme-safe wrapped Detail editing, word motion, selection, deletion, bounded per-session undo/redo, completion, optimistic save, and whole-session Esc cancellation.
 - Each Detail visibly reports `Unlocked` or `Locked`; unlocked Details form a spatial preview/open pool, while locked Details retain exact context anchors.
 - Referenced text/Markdown file viewing and durable line-range annotations.
@@ -164,7 +167,38 @@ The CLI resolves the same workspace-scoped socket and database as the service. `
 
 ## Keyboard controls
 
-The footer in each pane is authoritative and context-sensitive. These are the primary controls.
+The footer in each pane is generated from the effective action registry and is
+authoritative for the current mode. The tables below list defaults. Press `?`
+or click the pane-corner `[⋯]` target to open the same contextual action menu.
+Type to fuzzy-filter action labels, descriptions, bindings, and IDs; Backspace
+edits the query. Use Up/Down and Enter, click an action, or press Esc to close.
+The menu also includes currently unbound actions.
+
+Herdr owns secondary-click by default. Set `OUTLINER_RIGHT_CLICK=outliner` when
+launching Tree and Detail to make content secondary-click open the same menu at
+the pointer. Outliner registers `right_click=pane` only while it is running and
+restores `herdr` on exit; the surrounding pane frame remains Herdr-owned in
+either mode.
+
+Override bindings with
+`$XDG_CONFIG_HOME/pi-herdr-outliner/keybindings.json` (falling back to
+`~/.config/pi-herdr-outliner/keybindings.json`), or set
+`OUTLINER_KEYBINDINGS_PATH`. The file is a JSON object from stable action ID to
+an array of chords; an empty array leaves that action unbound:
+
+```json
+{
+  "tree.move.down": ["j"],
+  "detail.edit.begin": ["x"],
+  "detail.preview.down": ["j"],
+  "detail.buffer.save": ["Ctrl+S"],
+  "tree.file.open": []
+}
+```
+
+`Ctrl+R` reloads the file in browse/preview modes. Reload is atomic: malformed
+chords, unknown action IDs, active-scope collisions, or removing the only
+cancel route rejects the entire candidate and preserves the prior bindings.
 
 ### Tree browse mode
 
@@ -240,6 +274,32 @@ Projected virtual occurrences deliberately constrain hierarchy and collapse. Bra
 
 Detail navigation history is local to that Detail process and retains at most 200 exact targets. Opening a reference, receiving an exact target, or following the paired Tree records a visit. Back/forward pins the historical target so a later Tree cursor event cannot immediately replace it. Soft-deleted targets reopen read-only; a purged target remains visible as unavailable. Closing Detail discards this history.
 
+Detail parses the complete projected Markdown document before applying generated
+embed decoration. Exact character and line spans are recovered from the parsed
+block stream, then only decoration boundaries are rendered as separate Pi
+Markdown components. This keeps following authored text outside a lifted table,
+list, quote, or code fence while preserving structural syntax and full-width
+embed backgrounds at narrow and wide terminal widths.
+
+#### Callout appearance
+
+Detail gives each canonical Obsidian callout type a terminal-safe one-column glyph
+and a semantic foreground, card background, and accent rail. Aliases such as
+`faq`, `attention`, and `check` inherit the `question`, `warning`, and `success`
+styles. Unknown types keep their authored title and use the neutral fallback.
+
+Set `OUTLINER_CALLOUT_THEME` on the Herdr process to override only the roles you
+need. Values are JSON, colors are `#RRGGBB`, glyphs must occupy exactly one
+terminal column, and keys must be canonical types or `fallback`:
+
+```sh
+OUTLINER_CALLOUT_THEME='{"warning":{"background":"#302714","accent":"#FFD166","glyph":"!"},"fallback":{"accent":"#8B98A5"}}' herdr
+```
+
+Invalid fields retain their defaults and emit a startup diagnostic instead of
+making the Detail unreadable. Configuration affects presentation only; authored
+callout syntax and fold state remain unchanged.
+
 Backlinks are a generated read projection beneath the canonical Markdown
 document. The collapsed section performs no reference scan. Expanding it asks
 the service for at most 50 source blocks and groups repeated exact, page,
@@ -268,10 +328,16 @@ reveals it in Tree.
 | `Ctrl+Shift+Z` or `Ctrl+Y` | Redo |
 | `Backspace` / `Delete` | Delete selection or one grapheme |
 | `Tab` or `Ctrl+Space` | Open completion in block edit mode |
+| `Ctrl+W` | Move focus between the wide editor and draft preview |
+| `Ctrl+L` | Toggle source-line-linked editor/preview scrolling |
 | `Ctrl+S` | Save block or add annotation |
 | `Esc` | Cancel the complete edit session and return to Tree |
 
-Long physical lines wrap without changing raw text. Continuation rows remain associated with one physical line number, and the viewport follows the active cursor edge.
+Long physical lines wrap without changing raw text. Continuation rows remain associated with one physical line number, and keyboard cursor movement keeps the active edge visible.
+
+In edit mode, wheel/trackpad input scrolls the region under the pointer. Editor scrolling changes only its visual viewport; it never moves the text cursor. The next keyboard cursor movement restores cursor-follow. A primary click in the editor maps through headers, split geometry, line-number width, wrapping, tabs, grapheme boundaries, and Unicode display width to a valid source position. Preview clicks retain their existing link and region actions.
+
+Wide split scrolling is independent by default. `Ctrl+L` enables an ephemeral linked mode, shown by `↔` in the editor header. Linked movement uses draft source-line anchors rather than proportional row offsets; generated projections without a shared raw-source anchor leave the peer unchanged. Link state and manual viewport state reset on edit-session or viewport changes and never modify block text.
 
 Undo history is bounded to the current edit/comment session. Consecutive typing and deletion coalesce; cursor/selection state is restored; a divergent edit clears redo. Save or Esc-cancel ends the history.
 
@@ -283,7 +349,7 @@ A block stores canonical text plus structural fields. Properties are written dir
 Investigate page navigation [type::roadmap-item] [status::planned] [work-stage::next]
 ```
 
-Eligible property tokens are indexed in `block_properties`; canonical `Block.text` remains the source of truth. Literal examples inside inline/fenced code are not indexed.
+Every deliberate non-literal property is indexed in `block_properties`; canonical `Block.text` remains the source of truth. The first contiguous property-only run after an optional subject line is block metadata, as is the trailing bracket-property run on the subject. Bare `key:: value` properties later in the body have `line` scope; later bracket tokens have `inline` scope. Literal examples inside inline/fenced code and escaped bracket syntax are not indexed.
 
 ### Bounded block queries
 
@@ -297,7 +363,7 @@ status::"in review" type::roadmap-item
 
 Whitespace separates clauses outside double quotes. `key` checks property presence; `key=value` and `key::value` check case-insensitive exact equality. Double-quoted values preserve spaces and support only `\\` and `\"` escapes. Invalid syntax reports a character position instead of becoming an accidental query. OR, NOT, ranges, grouping, aggregation, sorting, and reference traversal are intentionally not supported.
 
-Text substring, subtree root, deleted-content mode, projection rank context, and limit remain explicit structured fields rather than reserved filter words. Every query carries a limit from 1 through 1000 and returns `complete` or `truncated` metadata. Tree `/` mode uses the indexed property catalog for key/value completion; agents call `outliner_query` with structured filters and never parse the shorthand.
+Property filters and catalogs default to `block` scope, so body examples and line-local annotations cannot silently change workflow semantics. Callers can explicitly request `block`, `line`, `inline`, or `all` through `propertyScope`; broader block-query results include each matching record’s scope, ordinal, line, column, and source span. Text substring, subtree root, deleted-content mode, projection rank context, and limit remain explicit structured fields rather than reserved filter words. Every query carries a limit from 1 through 1000 and returns `complete` or `truncated` metadata. Tree `/` mode uses the block-scoped property catalog for key/value completion; agents call `outliner_query` with structured filters and never parse the shorthand. CLI `list` exposes the same choice as `--property-scope`.
 
 ### Quick capture Inbox
 
@@ -407,9 +473,23 @@ Spaced values use the same canonical filter syntax:
 [query::status="in progress" project=pi-outliner]
 ```
 
-Matches appear as disposable `◇` occurrences. Creating beneath the branch creates one canonical block under `create-parent` and applies the configured property. The same canonical block may appear in multiple branches.
+Matches appear as disposable `◇` root occurrences. Each matched root also projects
+its canonical descendants as read-only context through relative depth 2. Context
+has independent, ephemeral disclosure; `Left` and `Right` navigate its projected
+parent/children without changing canonical text or storage. A canonical block may
+therefore appear beneath a matched ancestor and independently as a matched root,
+and may still appear in multiple branches.
 
-`Shift+Up` / `Shift+Down` reorders projected siblings within that branch using persisted occurrence ranks. Canonical parent/position order stays unchanged, and ranks survive temporary query mismatches.
+Each branch reserves its bounded, ranked, deduplicated roots before allocating
+contextual descendants in ranked-root/canonical-preorder order. Roots and context
+share a 1,000-row budget. Physical virtual-branch definitions reached as context
+are inert leaves. Root-query, depth, and row-budget truncation are reported
+separately, and allocation does not depend on disclosure state.
+
+`Shift+Up` / `Shift+Down` reorders matched roots within that branch using persisted
+occurrence ranks. Contextual descendants never participate. Canonical
+parent/position order stays unchanged, and ranks survive temporary query
+mismatches.
 
 ## Agent integration
 
@@ -422,10 +502,13 @@ The project Pi extension is auto-discovered through [`.pi/extensions/outliner.ts
 - `/outliner-filter`
 - `/capture <text>`
 - `/send-to-outline`
+- `/roadmap-item <create|update|promote|rank> <details>` through the bundled prompt template
 - `outliner_task`
 - `outliner_focus`
 - `outliner_publish`
 - `outliner_create`
+- `outliner_roadmap_create`
+- `outliner_branch_rank`
 - `outliner_capture`
 - `outliner_update`
 - `outliner_property_patch`
@@ -440,9 +523,15 @@ The project Pi extension is auto-discovered through [`.pi/extensions/outliner.ts
 
 `outliner_query` accepts structured filters such as `{ key: "status", value: "in progress" }`, plus optional text and subtree fields. The service normalizes keys/values and applies the same bounded semantics used by human surfaces. `outliner_focus` targets an explicit or unique live Tree client and returns compact structural context.
 
+`outliner_roadmap_create` is the canonical new-work path: it fails without a partial block or consumed Work ID when queue discovery, metadata, or relationship validation fails. New work defaults to `unprioritized`. `outliner_branch_rank` updates only persisted virtual occurrence ranks; it neither moves canonical blocks nor changes `work-stage`, and ranks remain available across temporary query mismatches.
+
 `outliner_task` persists one active roadmap block per Pi session. Starting moves its canonical `work-stage` to `doing`; pausing returns it to `next`; completion requires a child or `source-block` proof, moves the item to `done`, and clears the session binding. Agent lifecycle events only project working/idle presence into Herdr metadata—they never infer semantic completion.
 
-Before each agent turn, the extension uses Herdr pane-focus history to locate the most recently focused registered Outliner client, reads that client's browsing context, and injects the focused block body, breadcrumb, properties, and children. A different active task is appended as separate session context rather than replacing the user's focus. Without a focused Outliner client it falls back to the active task and then the legacy shared selection. [`outliner-workflow`](pi-extension/skills/outliner-workflow/SKILL.md) defines when to publish durable findings, decisions, roadmap reviews, syntheses, progress, and implementation proof through `outliner_publish` rather than leaving useful workspace knowledge only in chat. Context and presence integration fail open when their optional surfaces are unavailable. Deterministic `PREFIX-XXX` nudging remains tracked by PIE-152.
+Before each agent turn, the extension uses Herdr pane-focus history to locate the most recently focused registered Outliner client, reads that client's browsing context, and injects the focused block body, breadcrumb, properties, and children. A different active task is appended as separate session context rather than replacing the user's focus. Without a focused Outliner client it falls back to the active task and then the legacy shared selection.
+
+The same bounded context budget can include up to five distinct blocks recently edited by the user. The first turn considers a seven-day horizon; later turns request only activity newer than a session-persisted cursor. Entries use current block text, deduplicate the focused block and active task, and report exact UUID and edit time. Failed or timed-out activity queries add nothing and do not advance the cursor. Agent and system mutations never enter this user-activity section.
+
+[`outliner-workflow`](pi-extension/skills/outliner-workflow/SKILL.md) defines when to publish durable findings, decisions, roadmap reviews, syntheses, progress, and implementation proof through `outliner_publish` rather than leaving useful workspace knowledge only in chat. Context and presence integration fail open when their optional surfaces are unavailable. Deterministic `PREFIX-XXX` nudging remains tracked by PIE-152.
 
 ## Persistence and isolation
 
@@ -471,7 +560,13 @@ Back up `outliner.sqlite` before experimenting with migrations. Do not copy a li
 ```sh
 bun run check
 bun test
+bun run profile:tree
 ```
+
+The deterministic Tree profile defaults to 24,000 physical blocks and five
+200-root virtual branches. The current performance guardrails are p95 below
+50 ms for projection/controller initialization, 5 ms for viewport layout/render,
+and 1 ms for input handling; generated terminal-frame writes stay below 1 ms.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the workboard lifecycle, verification rules, and PR/restart workflow. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for service boundaries, protocol flow, persistence, projections, and failure behavior.
 

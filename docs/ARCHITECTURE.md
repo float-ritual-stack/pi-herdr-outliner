@@ -49,9 +49,9 @@ PageUp/PageDown move the selected expanded row's offset by one Tree body viewpor
 
 [`src/detail-main.ts`](../src/detail-main.ts) selects the Pi TUI Detail implementation, which separates:
 
-- [`DetailController`](../src/detail-controller.ts) — modes, effects, optimistic saves, completion, lazy backlink state, file/annotation behavior, and cursor visibility;
-- [`detail-pi.ts`](../src/detail-pi.ts) — terminal lifecycle, input, and Pi layout switching;
-- [`detail-pi-preview.ts`](../src/detail-pi-preview.ts) — separate authored and generated-backlink Markdown components in one `ScrollView`;
+- [`DetailController`](../src/detail-controller.ts) — modes, effects, optimistic saves, PreviewRegion actions, property-inspector state, lazy backlink state, file/annotation behavior, and cursor visibility;
+- [`detail-pi.ts`](../src/detail-pi.ts) — terminal lifecycle, input, Pi layout switching, and dedicated-inspector startup;
+- [`detail-pi-preview.ts`](../src/detail-pi-preview.ts) — authored Markdown, callouts, property rows, and generated Backlinks in one `ScrollView`;
 - [`detail-editor-layout.ts`](../src/detail-editor-layout.ts) — grapheme-safe wrapped visual rows, cursor mapping, and selection spans;
 - [`detail-renderer.ts`](../src/detail-renderer.ts) — fixed custom frames for edit, comment, file, and annotation modes; and
 - [`text-buffer.ts`](../src/text-buffer.ts) — raw text, grapheme/word movement, and selections.
@@ -67,7 +67,7 @@ if no suitable Detail is unlocked, dispatch fails without replacing any anchor.
 `L`, `i`, `Ctrl+L`, or `Meta+L` locks the current target as a context anchor; the
 same command unlocks it. Block editing and annotation commenting lock before
 opening a mutable buffer. Ordinary `open` focuses its unlocked destination but
-leaves it unlocked. Reader `Enter` is inert.
+leaves it unlocked. Reader `Enter` activates the focused PreviewRegion and is inert when no actionable region is focused.
 Closing Detail discards its target, history, and lock state.
 
 The generated Backlinks section is collapsed by default and therefore performs
@@ -88,6 +88,27 @@ Detail-local action URI and do not enter canonical text. Backlink source links
 carry a transient `preserveSource` constraint. The service excludes the source
 client before choosing the first other unlocked same-tab Detail and fails
 explicitly if none remains.
+
+Obsidian-style callouts are parsed into source-spanned PreviewRegions with stable
+parent/child identity. Nested callout bodies remain Pi Markdown, `+`/`-` fold
+markers produce ephemeral disclosure, and generated action links never enter
+canonical text. Generated embed backgrounds compose with callout bodies rather
+than replacing them.
+Callout presentation is a Detail-process theme boundary. `OUTLINER_CALLOUT_THEME`
+is parsed once at startup into validated partial overrides for canonical type
+styles and the neutral fallback. Rendering reapplies each card's foreground and
+background after nested Markdown resets, pads every card row to the available
+terminal width, and keeps aliases on their canonical style. Invalid colors,
+multi-column glyphs, alias-specific keys, and unknown fields retain defaults.
+
+The read-only property inspector calls the same scoped property parser used by
+the property index and retains every occurrence's scope, ordinal, line/column,
+span, syntax, placement, and typed target. `p` toggles the inline disclosure;
+`P` launches a locked dedicated Detail presentation for the same block/model.
+Filter, grouping, focus, and viewport state are process-local. Actionable
+block/page/Work-ID values use the existing reference resolver and `open | reveal`
+routing; plain values remain nonnavigable. Neither presentation owns or rewrites
+canonical source.
 
 ### Pi / OMP extension
 
@@ -137,11 +158,11 @@ The SQLite schema is created in [`OutlinerStore.migrate()`](../src/store.ts):
 
 ### `block_properties`
 
-Derived index of eligible `[key::value]` tokens. `(block_id, key, ordinal)` preserves repeated keys and text order. `(key, value)` is indexed for queries.
+Derived, lossless index of deliberate non-literal property records. Each row stores `(block_id, ordinal)`, normalized key/value, raw source text, UTF-16 span, line/column, placement, syntax, and `block | line | inline` scope. `(scope, key, value, block_id)` supports scoped queries while preserving repeated keys and text order.
 
-Canonical text is authoritative. Property updates patch text with optimistic concurrency, then re-index it. The parser version is persisted in `metadata`; a newer parser can rebuild the derived index without changing canonical block timestamps.
+Canonical text is authoritative. Property updates patch text with optimistic concurrency, then re-index it. The parser version is persisted in `metadata`; schema or parser changes rebuild the derived index from every canonical block without changing block timestamps. Literal property-looking text inside inline code, fenced code, or escaped bracket syntax is not indexed.
 
-Literal property-looking text inside inline code, fenced code, or escaped syntax is not indexed.
+Scope classification is structural. After leading blank lines, the first nonblank line may be a subject or a property-only line. A trailing bracket run on the subject and the first contiguous property-only run after the optional subject are block metadata. Once a blank or non-property body line ends that preamble, later bare `key:: value` records are line-scoped and bracket records are inline-scoped, including later standalone bracket-only lines.
 
 ### Other tables
 
@@ -267,13 +288,14 @@ interface BlockSearchQuery {
   subtreeRootId?: string;
   rankViewId?: string;
   includeDeleted?: "roots" | "all";
+  propertyScope?: "block" | "line" | "inline" | "all";
   limit: number;
 }
 ```
 
-The service normalizes every query before regular graph traversal or ranked virtual-branch SQL. It validates limits from 1 through 1000 without clamping, lowercases property keys, preserves exact interior value spaces, distinguishes presence from equality, removes exact duplicate clauses, validates subtree roots, and translates the reserved `deleted=true` compatibility filter into explicit deleted-root mode.
+The service normalizes every query before regular graph traversal or ranked virtual-branch SQL. It validates limits from 1 through 1000 without clamping, lowercases property keys, preserves exact interior value spaces, distinguishes presence from equality, removes exact duplicate clauses, validates `propertyScope`, validates subtree roots, and translates the reserved `deleted=true` compatibility filter into explicit deleted-root mode.
 
-Human text surfaces share one minimal property-filter parser: whitespace-separated positive-AND clauses, `key` presence, `key=value`/`key::value` equality, and double-quoted spaced values with `\\` and `\"` escapes. Tree and Pi commands use the expression parser; each repeated CLI `--filter` is parsed as one clause so a shell-quoted value containing spaces remains exact. Virtual branches persist the canonical expression in `[query::…]`. Agent tools remain structured and bypass the shorthand.
+Property filters default to block metadata. Explicit `line`, `inline`, or `all` queries use the same derived index and return matching record context—scope, ordinal, line, column, and source span—on each result. Human text surfaces share one minimal property-filter parser: whitespace-separated positive-AND clauses, `key` presence, `key=value`/`key::value` equality, and double-quoted spaced values with `\\` and `\"` escapes. Tree and Pi commands use the expression parser; each repeated CLI `--filter` is parsed as one clause so a shell-quoted value containing spaces remains exact. Virtual branches persist the canonical expression in `[query::…]`; their omitted scope therefore remains block-only. Agent tools remain structured and bypass the shorthand.
 
 `workspace.snapshot.view.query` uses the same model for bounded Tree filtering while retaining a separate complete physical collection for canonical ancestry and projection construction. `rankViewId` is internal projection context and is rejected from snapshot queries.
 
@@ -334,7 +356,7 @@ Properties are Roam-style textual metadata:
 Question [type::question] [status::open]
 ```
 
-Query filters compare indexed keys and optional exact values. Property patches address token ordinals so an agent can replace/remove/append metadata without rewriting unrelated prose.
+Every deliberate non-literal property is indexed with source context, but normal block semantics and query filters use only block-scoped metadata. Callers must explicitly request line/inline/all scope for body annotations, and those query results identify the matched records. Property patches address global indexed ordinals so an agent can replace/remove/append metadata without rewriting unrelated prose.
 
 Exact references use `((block-id))`. Read paths replace a resolvable ID with the target’s first non-property content line. Edit paths retain the raw ID. Dangling exact references remain unchanged.
 
@@ -387,16 +409,34 @@ Optional properties:
 - `[create::key=value]` — one property applied to new canonical children.
 - `[create-parent::<block-id>]` — physical parent for branch-created blocks.
 
-Tree queries the service and inserts disposable occurrence rows. Each occurrence carries:
+Tree builds canonical parent-to-children adjacency once from the complete physical
+snapshot, never from the collapse-pruned visible collection. It queries, ranks,
+deduplicates, and bounds matched roots first, then allocates read-only contextual
+descendants through relative depth 2. The branch reserves every bounded root before
+using the remaining portion of its 1,000-row budget for descendants in
+ranked-root/canonical-preorder order. Disclosure is applied only after allocation,
+so collapse state cannot redirect the budget to a different root.
 
-- `rowId` — occurrence identity,
-- `canonicalId` — mutation target,
-- `viewId` — virtual branch definition, and
-- canonical `Block` data.
+A root occurrence carries `(viewId, canonicalId)` identity. A contextual descendant
+carries `(viewId, matchRootCanonicalId, canonicalId)` identity plus its contextual
+parent row ID. Consequently, one canonical child can appear beneath a matched
+ancestor and as an independent matched root without identity collision. A physical
+virtual-definition block encountered as a descendant is an inert leaf and never
+recurses.
 
-Occurrences do not have hierarchy. Tree allows canonical edit/reveal and explicit canonical deletion, rejects projected indent, outdent, and collapse, and maps `Shift+Up` / `Shift+Down` to branch-local reorder.
+Context disclosure and multiline expansion are Tree-local ephemeral state.
+`Left`, `Right`, `Space`, and disclosure-marker mouse clicks operate on contextual
+row and parent identities; canonical edit, reveal, and explicit deletion still
+target `canonicalId`. Projected indent/outdent and add operations remain disabled.
 
-`workspace.snapshot` carries every persisted occurrence rank in the same transactional read as the block graph. Tree supplies the branch `viewId` on its bounded match query; storage orders matching ranked blocks first, then deterministic unranked results, and returns only the configured window plus overflow detection. Projection reapplies the snapshot ranks defensively before the branch limit. Reorder ranks the complete currently projected sibling sequence without changing canonical parents/positions or another branch. Rank rows survive temporary query mismatches and cascade when either the branch definition or canonical block is deleted.
+Branch count, completeness, persisted ranks, and `Shift+Up` / `Shift+Down` reorder
+remain root-only. Root-query truncation is distinct from depth and 1,000-row budget
+truncation, and all three are surfaced. `workspace.snapshot` carries every
+persisted occurrence rank in the same transactional read as the block graph.
+Projection reapplies those ranks defensively before the root limit. Reorder changes
+only the complete matched-root sequence, never contextual descendants, canonical
+parents/positions, or another branch. Rank rows survive temporary query mismatches
+and cascade when either the branch definition or canonical block is deleted.
 
 ## Detail rendering and editing invariants
 
@@ -406,6 +446,8 @@ Occurrences do not have hierarchy. Tree allows canonical edit/reveal and explici
 - Header and footer remain fixed while the primary `ScrollView` scrolls.
 - Raw source and Markdown renders are cached when unchanged.
 - Selection changes and transitions into preview reset scroll to the top.
+- Callouts, Backlinks, and property-inspector rows reconcile through one ordered PreviewRegion focus/action state.
+- Embed source ranges remain decorated when their generated text appears inside a callout body.
 
 ### Editor
 
@@ -472,6 +514,6 @@ pi-extension/index.ts         Pi/OMP commands, tools, context hook
 
 ## Accepted designs not yet implemented
 
-The durable roadmap lives in the outliner workboard. Current accepted designs include normalized bounded query construction, deterministic agent work-placeholder resolution, backlinks, scoped property semantics, origin-aware link routing, projected canonical descendants, and projected-child creation.
+The durable roadmap lives in the outliner workboard. Current accepted designs include normalized bounded query construction, deterministic agent work-placeholder resolution, and projected-child creation.
 
 Do not describe these as shipped behavior until their roadmap items are Complete on main.
