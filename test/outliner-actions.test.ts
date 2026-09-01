@@ -41,6 +41,7 @@ describe("Outliner action keymap", () => {
     expect(actionChordForInput("R", { name: "r", shift: true })).toBe("Shift+R");
     expect(actionChordForInput("R", { name: "R" })).toBe("Shift+R");
     expect(actionChordForInput("?", { name: "/", shift: true })).toBe("?");
+    expect(actionChordForInput(" ", {})).toBe("Space");
     expect(actionChordForInput(undefined, { name: "down", sequence: "\x1b[B" })).toBe("ArrowDown");
     expect(actionChordForInput(undefined, {})).toBeNull();
     expect(actionChordForInput(undefined, { name: "undefined" })).toBeNull();

@@ -219,9 +219,11 @@ export function actionChordForInput(str: string | undefined, key: TerminalKey): 
   const text = str ?? "";
   const uppercasePrintable = /^[A-Z]$/.test(text);
   const bareQuestionMark = text === "?";
+  const bareSpace = text === " ";
   let name = key.name ? canonicalKeyName(key.name) : "";
   if (uppercasePrintable) name = text.toLowerCase();
   else if (bareQuestionMark) name = text;
+  else if (bareSpace) name = "Space";
   else if (!name && text.length === 1) name = text;
   if (!name) return null;
   if (name.length !== 1 && !NAMED_ACTION_KEYS.has(name)) return null;
