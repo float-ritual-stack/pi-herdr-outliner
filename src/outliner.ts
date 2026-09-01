@@ -1,4 +1,5 @@
 import { emitKeypressEvents } from "node:readline";
+import { PassThrough } from "node:stream";
 import { setTimeout as sleep } from "node:timers/promises";
 import { StdinBuffer } from "@earendil-works/pi-tui";
 import { OutlinerClient, type OutlinerWatcher, type RequestInput } from "./client";
@@ -35,6 +36,8 @@ const actionKeymap = OutlinerActionKeymap.load();
 const rightClickOwnership = outlinerRightClickOwnership();
 const mouseEnabled = process.env.HERDR_ENV === "1";
 const mouseInput = mouseEnabled ? new StdinBuffer() : null;
+const keyboardInput = mouseEnabled ? new PassThrough() : null;
+const keypressInput = keyboardInput ?? process.stdin;
 const enableMouse = "\x1b[?1000h\x1b[?1006h";
 const disableMouse = "\x1b[?1006l\x1b[?1000l";
 let watcher: OutlinerWatcher | null = null;
@@ -74,6 +77,7 @@ function stop(): void {
   watcher?.stop();
   if (process.stdin.isTTY) process.stdin.setRawMode(false);
   mouseInput?.destroy();
+  keyboardInput?.destroy();
   process.stdin.off("data", handleRawInput);
   process.stdout.write(`${mouseEnabled ? disableMouse : ""}\x1b[?25h\x1b[?1049l`);
   process.exit(0);
@@ -175,7 +179,11 @@ function handleMouseSequence(sequence: string): void {
   });
 }
 
-mouseInput?.on("data", handleMouseSequence);
+mouseInput?.on("data", (sequence) => {
+  if (isTreeMouseSequence(sequence)) handleMouseSequence(sequence);
+  else keyboardInput?.write(sequence);
+});
+mouseInput?.on("paste", (text) => keyboardInput?.write(text));
 
 function startWatcher(): void {
   let runtime: ReturnType<typeof currentPaneRuntime>;
@@ -211,7 +219,7 @@ try {
   process.exit(1);
 }
 
-emitKeypressEvents(process.stdin);
+emitKeypressEvents(keypressInput);
 if (process.stdin.isTTY) process.stdin.setRawMode(true);
 process.stdout.write(`\x1b[?1049h\x1b[?25l${mouseEnabled ? enableMouse : ""}`);
 if (mouseInput) process.stdin.on("data", handleRawInput);
@@ -220,7 +228,7 @@ process.on("SIGINT", stop);
 process.on("SIGTERM", stop);
 process.on("SIGHUP", stop);
 
-process.stdin.on("keypress", (str: string | undefined, key: TerminalKey) => {
+keypressInput.on("keypress", (str: string | undefined, key: TerminalKey) => {
   const text = str ?? "";
   const sequence = key.sequence ?? text;
   if (!sequence && !key.name) return;

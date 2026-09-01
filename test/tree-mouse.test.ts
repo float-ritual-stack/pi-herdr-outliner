@@ -1,4 +1,4 @@
-import { hyperlink } from "@earendil-works/pi-tui";
+import { hyperlink, StdinBuffer } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "bun:test";
 import {
   isTreeMouseSequence,
@@ -52,6 +52,22 @@ describe("Tree mouse parsing", () => {
   test("identifies complete SGR mouse reports", () => {
     expect(isTreeMouseSequence("\x1b[<64;4;3M")).toBe(true);
     expect(isTreeMouseSequence("down")).toBe(false);
+  });
+  test("buffers mouse reports away from printable Tree input", () => {
+    const input = new StdinBuffer();
+    const mouse: string[] = [];
+    const keyboard: string[] = [];
+    input.on("data", (sequence) => {
+      (isTreeMouseSequence(sequence) ? mouse : keyboard).push(sequence);
+    });
+
+    input.process("\x1b[<0;30");
+    input.process(";2M\x1b[<0;30;2m");
+    input.process("x");
+
+    expect(mouse).toEqual(["\x1b[<0;30;2M", "\x1b[<0;30;2m"]);
+    expect(keyboard).toEqual(["x"]);
+    input.destroy();
   });
 });
 
