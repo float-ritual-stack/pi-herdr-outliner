@@ -598,6 +598,12 @@ describe("createTreeController", () => {
 
     await controller.handleKeypress("c", { name: "c" }, "pass");
     await controller.handleKeypress("First line", { sequence: "First line" }, "pass");
+    controller.handlePaste("\x1b[A\x03");
+    expect(controller.view()).toMatchObject({
+      mode: "capture",
+      quickInput: "First line\x1b[A\x03",
+      selectedIndex: 0,
+    });
     await controller.handleKeypress("", { name: "return", shift: true }, "modified-enter");
     await controller.handleKeypress("Second line", { sequence: "Second line" }, "pass");
     expect(controller.view()).toMatchObject({
@@ -615,7 +621,7 @@ describe("createTreeController", () => {
     expect(captureCall).toEqual({
       action: "capture.create",
       requestId: expect.any(String),
-      text: "First line\nSecond line",
+      text: "First line\x1b[A\x03\nSecond line",
       source: "tree",
       capturedFromBlockId: origin.id,
       author: "user",

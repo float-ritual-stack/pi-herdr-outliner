@@ -183,7 +183,7 @@ mouseInput?.on("data", (sequence) => {
   if (isTreeMouseSequence(sequence)) handleMouseSequence(sequence);
   else keyboardInput?.write(sequence);
 });
-mouseInput?.on("paste", (text) => keyboardInput?.write(text));
+mouseInput?.on("paste", (text) => enqueueWork(() => controller.handlePaste(text)));
 
 function startWatcher(): void {
   let runtime: ReturnType<typeof currentPaneRuntime>;
