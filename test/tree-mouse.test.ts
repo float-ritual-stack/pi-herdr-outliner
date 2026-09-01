@@ -2,7 +2,9 @@ import { hyperlink } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "bun:test";
 import {
   isTreeMouseSequence,
+  treeDisclosureAtClick,
   parseTreePlainClick,
+  parseTreeSecondaryClick,
   parseTreeWheel,
   treeLinkAtClick,
 } from "../src/tree-mouse";
@@ -20,6 +22,13 @@ describe("Tree mouse parsing", () => {
       expect(parseTreePlainClick(sequence)).toBeNull();
     }
   });
+  test("recognizes only an unmodified secondary-button press for pane-owned menus", () => {
+    expect(parseTreeSecondaryClick("\x1b[<2;9;4M")).toEqual({ column: 8, row: 3 });
+    expect(parseTreeSecondaryClick("\x1b[<0;9;4M")).toBeNull();
+    expect(parseTreeSecondaryClick("\x1b[<18;9;4M")).toBeNull();
+    expect(parseTreeSecondaryClick("\x1b[<2;9;4m")).toBeNull();
+  });
+
 
   test("maps only unmodified vertical wheel presses", () => {
     expect(parseTreeWheel("\x1b[<64;4;3M")).toBe("up");
@@ -43,6 +52,22 @@ describe("Tree mouse parsing", () => {
   test("identifies complete SGR mouse reports", () => {
     expect(isTreeMouseSequence("\x1b[<64;4;3M")).toBe(true);
     expect(isTreeMouseSequence("down")).toBe(false);
+  });
+});
+
+describe("Tree mouse disclosure hit testing", () => {
+  test("returns the contextual row identity only from its disclosure marker", () => {
+    const targets = [
+      null,
+      null,
+      { rowId: "occurrence:view:root:child", disclosureColumn: 4 },
+    ];
+
+    expect(treeDisclosureAtClick(targets, "\x1b[<0;5;3M")).toBe(
+      "occurrence:view:root:child",
+    );
+    expect(treeDisclosureAtClick(targets, "\x1b[<0;6;3M")).toBeNull();
+    expect(treeDisclosureAtClick(targets, "\x1b[<0;5;2M")).toBeNull();
   });
 });
 

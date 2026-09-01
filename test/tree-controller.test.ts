@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { RequestInput } from "../src/client";
+import { OutlinerActionKeymap } from "../src/outliner-actions";
 import { createTreeController, type TreeControllerEffects } from "../src/tree-controller";
 import { layoutExpandedBlock } from "../src/tree-layout";
 import { decorateVirtualBranchDefinitionText } from "../src/virtual-branches";
@@ -64,6 +65,7 @@ interface Harness {
   effects: TreeControllerEffects;
   readonly focused: Array<"detail" | "outliner">;
   readonly createdDetails: string[];
+  readonly createdDetailDirections: Array<"right" | "down">;
   invalidations: number;
   stops: number;
 }
@@ -76,6 +78,7 @@ function harness(
     calls: [],
     focused: [],
     createdDetails: [],
+    createdDetailDirections: [],
     invalidations: 0,
     stops: 0,
     effects: {
@@ -128,8 +131,9 @@ function harness(
           throw new Error("not configured");
         },
       },
-      createDetailPane: async (blockId) => {
+      createDetailPane: async (blockId, direction = "down") => {
         result.createdDetails.push(blockId);
+        result.createdDetailDirections.push(direction);
       },
       focusSelf: () => result.focused.push("outliner"),
       terminalWidth: () => 80,
@@ -154,6 +158,42 @@ function lastCall(calls: readonly RequestInput[], action: RequestInput["action"]
 }
 
 describe("createTreeController", () => {
+  test("remaps browse actions, suppresses stale defaults, and invokes the action menu", async () => {
+    const first = block("first");
+    const second = block("second", { position: 1 });
+    const fake = harness((input) =>
+      input.action === "workspace.snapshot" ? snapshot([first, second], first) : undefined
+    );
+    fake.effects = {
+      ...fake.effects,
+      actionKeymap: new OutlinerActionKeymap("<test>", {
+        "tree.move.down": ["j"],
+      }),
+    };
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+
+    await controller.handleKeypress("j", { name: "j" }, "pass");
+    expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe("second");
+    await controller.handleKeypress("", { name: "down" }, "pass");
+    expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe("second");
+
+    await controller.handleAction("tree.menu.open");
+    expect(controller.view().mode).toBe("action-menu");
+    expect(controller.view().actionMenuItems?.length).toBeGreaterThan(0);
+    await controller.handleKeypress("dtrt", {}, "pass");
+    expect(controller.view().actionMenuQuery).toBe("dtrt");
+    expect(controller.view().actionMenuItems?.[0]?.id).toBe("tree.detail.right");
+    expect(controller.view().actionMenuItems?.length).toBeLessThan(
+      fake.effects.actionKeymap!.menuItems("tree", "browse").length,
+    );
+    await controller.handleKeypress("", { name: "backspace" }, "pass");
+    expect(controller.view().actionMenuQuery).toBe("dtr");
+    await controller.handleAction("tree.detail.right");
+    expect(fake.createdDetailDirections).toEqual(["right"]);
+    expect(controller.view().mode).toBe("browse");
+  });
+
   test("uses snapshot selection initially and preserves the current visible selection on refresh", async () => {
     const first = block("first");
     const second = block("second", { position: 1 });
@@ -402,7 +442,7 @@ describe("createTreeController", () => {
     await controller.handleKeypress("D", { name: "d", shift: true }, "pass");
 
     expect(fake.createdDetails).toEqual([root.id]);
-    expect(controller.view().status).toBe("Opened new independent Detail for Root");
+    expect(controller.view().status).toBe("Opened new independent Detail down for Root");
     expect(fake.calls.some(({ action }) => action === "navigation.dispatch")).toBe(false);
   });
 
@@ -993,6 +1033,45 @@ describe("createTreeController", () => {
     await controller.handleKeypress("", { name: "tab" }, "pass");
     expect(controller.view().quickInput).toBe("[[home]]");
   });
+  test("normalizes Work-ID convenience completion to a titled canonical wikilink", async () => {
+    const selected = block("selected", {
+      text: "[[some title - PIE-175",
+      displayText: "[[some title - PIE-175",
+    });
+    const fake = harness((input) => {
+      if (input.action === "workspace.snapshot") {
+        return { ...snapshot([selected], selected), workIdPrefix: "PIE" };
+      }
+      if (input.action === "pages.complete") {
+        return {
+          addresses: [{
+            address: "PIE-175",
+            normalizedAddress: "pie-175",
+            blockId: "pie-175-id",
+            kind: "work-id",
+            title: "PIE-175 — Stable links",
+          }],
+          completeness: { kind: "complete" },
+        };
+      }
+      return undefined;
+    });
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+    await controller.handleKeypress("e", { name: "e" }, "pass");
+
+    await controller.handleKeypress("", { name: "tab" }, "pass");
+    expect(fake.calls.filter((call) => call.action === "pages.complete")).toContainEqual({
+      action: "pages.complete",
+      query: "PIE-175",
+      limit: 20,
+    });
+    await controller.handleKeypress("", { name: "tab" }, "pass");
+    expect(controller.view().quickInput).toBe(
+      "[[PIE-175|some title - PIE-175]]",
+    );
+  });
+
 
   test("honors key precedence for close and detail-toggle inputs", async () => {
     const selected = block("selected");
@@ -1504,6 +1583,7 @@ describe("createTreeController", () => {
       blockId: "card",
       text: "Card!",
       expectedUpdatedAt: "2026-08-22T00:00:00.000Z",
+      mutation: { author: "user", actorId: "tree" },
     });
     expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe(
       "occurrence:view:card",
@@ -1863,6 +1943,70 @@ describe("createTreeController", () => {
     await controller.handleKeypress("", { name: "left" }, "pass");
     expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe("view");
     expect(fake.calls.at(-1)).toEqual({ action: "browsing-context.publish", sourceClientId: "tree-test", contextId: "tree-test-context", blockId: "view" });
+  });
+
+
+  test("navigates and discloses contextual descendants by row identity", async () => {
+    const definition = block("view", {
+      properties: [
+        { key: "type", value: "virtual-branch" },
+        { key: "query", value: "status=Doing" },
+      ],
+    });
+    const first = block("first", {
+      hasChildren: true,
+      properties: [{ key: "status", value: "Doing" }],
+    });
+    const child = block("child", {
+      parentId: first.id,
+      depth: 1,
+    });
+    const second = block("second", {
+      position: 1,
+      properties: [{ key: "status", value: "Doing" }],
+    });
+    const physical = [definition, first, child, second];
+    const fake = harness((input) => {
+      if (input.action === "workspace.snapshot") return snapshot(physical, definition);
+      if (input.action === "blocks.query") {
+        return { blocks: [first, second], completeness: { kind: "complete" } };
+      }
+      return undefined;
+    });
+    const controller = createTreeController(fake.effects);
+    const rootRowId = "occurrence:view:first";
+    const childRowId = "occurrence:view:first:child";
+
+    await controller.initialize();
+    await controller.handleKeypress("", { name: "down" }, "pass");
+    await controller.handleKeypress("", { name: "right" }, "pass");
+    expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe(childRowId);
+
+    await controller.handleServiceEvent(event("content"));
+    expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe(childRowId);
+    fake.calls.length = 0;
+    await controller.handleKeypress("", { name: "down", shift: true }, "pass");
+    expect(controller.view().status).toBe(
+      "Virtual occurrence reorder is disabled; canonical hierarchy unchanged",
+    );
+    expect(fake.calls.some((call) => call.action === "virtual.occurrences.reorder")).toBe(false);
+
+    await controller.handleKeypress("", { name: "left" }, "pass");
+    expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe(rootRowId);
+    await controller.handleKeypress("", { name: "left" }, "pass");
+    expect(controller.view().rows[controller.view().selectedIndex]).toEqual(
+      expect.objectContaining({ rowId: rootRowId, collapsed: true, hasChildren: true }),
+    );
+    expect(controller.view().rows.some((row) => row.rowId === childRowId)).toBe(false);
+    await controller.handleKeypress("", { name: "right" }, "pass");
+    await controller.handleKeypress("", { name: "right" }, "pass");
+    expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe(childRowId);
+
+    await controller.handleDisclosure(rootRowId);
+    expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe(rootRowId);
+    expect(controller.view().rows.some((row) => row.rowId === childRowId)).toBe(false);
+    await controller.handleDisclosure(rootRowId);
+    expect(controller.view().rows.some((row) => row.rowId === childRowId)).toBe(true);
   });
 
   test("restores Trash roots and requires the exact identifier for permanent purge", async () => {

@@ -9,6 +9,7 @@ import { OutlinerStore } from "../src/store";
 import { OUTLINER_PROTOCOL_VERSION } from "../src/types";
 import type {
   BacklinkCollection,
+  BlockEditActivityPage,
   Block,
   CaptureReceipt,
   BrowsingContextPublication,
@@ -27,6 +28,7 @@ import type {
   PropertyCatalogItem,
   SelectionContext,
   VisibleBlockCollection,
+  RoadmapItemCreateReceipt,
   WorkIdAllocation,
   WorkIdAllocatorStatus,
   WorkspaceSnapshot,
@@ -53,7 +55,7 @@ test("serves mutations and property queries over the local socket", async () => 
   const client = new OutlinerClient(socket);
   const service = await client.request<OutlinerServiceStatus>({ action: "ping" });
   expect(service).toEqual({ status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION });
-  expect(service.protocolVersion).toBe(22);
+  expect(service.protocolVersion).toBe(25);
   const provenance = {
     actorId: "omp",
     sessionId: "session-1",
@@ -130,6 +132,39 @@ test("serves mutations and property queries over the local socket", async () => 
     nextWorkId: "PIE-002",
     reservedCount: 1,
     observedPrefixes: ["PIE"],
+  });
+  const workQueue = await client.request<Block>({
+    action: "create",
+    text: "Protocol work queue [type::work-queue] [project::pi-outliner]",
+  });
+  const lane = await client.request<Block>({
+    action: "create",
+    text: "Unprioritized [type::virtual-branch] [query::work-stage=unprioritized]",
+  });
+  const roadmapReceipt = await client.request<RoadmapItemCreateReceipt>({
+    action: "roadmap.items.create",
+    input: {
+      title: "Round-trip atomic roadmap creation",
+      priority: "high",
+      project: "pi-outliner",
+      arc: "protocol",
+      tracks: ["core"],
+    },
+    author: "agent",
+    provenance,
+  });
+  expect(roadmapReceipt).toMatchObject({
+    workId: "PIE-002",
+    workQueueId: workQueue.id,
+    block: {
+      parentId: workQueue.id,
+      actorId: "omp",
+      properties: expect.arrayContaining([
+        { key: "work-stage", value: "unprioritized" },
+        { key: "work-id", value: "PIE-002" },
+      ]),
+    },
+    memberships: [{ viewId: lane.id, title: "Unprioritized" }],
   });
 
   expect(matches.blocks.some((candidate) => candidate.id === block.id)).toBe(true);
@@ -266,16 +301,64 @@ test("serves mutations and property queries over the local socket", async () => 
       { op: "replace", ordinal: 1, value: "doing" },
       { op: "append", key: "priority", value: "high" },
     ],
+    mutation: { author: "agent", ...provenance },
   });
   expect(patched.text).toBe(
     "Waiting for user [type::question] [status::doing]\n[priority::high]",
   );
+  const userUpdated = await client.request<Block>({
+    action: "update",
+    blockId: patched.id,
+    text: `${patched.text}\nUser note`,
+    expectedUpdatedAt: patched.updatedAt,
+    mutation: { author: "user", actorId: "detail" },
+  });
+  const activity = await client.request<BlockEditActivityPage>({
+    action: "activity.recent",
+    author: "user",
+    limit: 5,
+  });
+  expect(activity.entries).toHaveLength(1);
+  expect(activity.entries[0]).toMatchObject({
+    block: { id: userUpdated.id, text: userUpdated.text },
+    author: "user",
+    actorId: "detail",
+    kind: "text",
+  });
   const catalog = await client.request<PropertyCatalogItem[]>({
     action: "properties.catalog",
     key: "status",
     prefix: "do",
   });
   expect(catalog).toEqual([{ key: "status", value: "doing", count: 1 }]);
+  const scoped = await client.request<Block>({
+    action: "create",
+    text: "Scoped protocol\n\nBody [note::detail]",
+  });
+  expect((await client.request<VisibleBlockCollection>({
+    action: "blocks.query",
+    query: { filters: [{ key: "note", value: "detail" }], limit: 10 },
+  })).blocks).toEqual([]);
+  expect((await client.request<VisibleBlockCollection>({
+    action: "blocks.query",
+    query: {
+      filters: [{ key: "note", value: "detail" }],
+      propertyScope: "inline",
+      limit: 10,
+    },
+  })).blocks).toEqual([
+    expect.objectContaining({
+      id: scoped.id,
+      propertyMatches: [
+        expect.objectContaining({ key: "note", scope: "inline", line: 2 }),
+      ],
+    }),
+  ]);
+  expect(await client.request<PropertyCatalogItem[]>({
+    action: "properties.catalog",
+    key: "note",
+    propertyScope: "all",
+  })).toEqual([{ key: "note", value: "detail", count: 1 }]);
   const trashTarget = await client.request<Block>({
     action: "create",
     text: "Protocol Trash target [work-id::PIE-998]",

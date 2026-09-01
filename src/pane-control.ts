@@ -7,6 +7,7 @@ import { Parse } from "typebox/value";
 import type { OutlinerClientRuntime } from "./types";
 
 export type PaneEntrypoint = "service" | "outliner" | "detail";
+export type OutlinerRightClickOwnership = "herdr" | "outliner";
 
 const PaneStateSchema = Type.Object({
   paneId: Type.String(),
@@ -65,6 +66,55 @@ const SERVICE_PANE_LABEL = "Outliner Service";
 const HERDR_COMMAND_TIMEOUT_MS = 2_000;
 const OUTLINER_PLUGIN_ID = "float.pi-outliner";
 
+interface HerdrPluginContext {
+  clicked_url?: string;
+  focused_pane_cwd?: string;
+  focused_pane_id?: string;
+  workspace_cwd?: string;
+}
+
+function pluginContext(
+  env: NodeJS.ProcessEnv,
+): HerdrPluginContext {
+  const encoded = env.HERDR_PLUGIN_CONTEXT_JSON;
+  if (!encoded) return {};
+  try {
+    const parsed: unknown = JSON.parse(encoded);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      throw new Error("context must be an object");
+    }
+    return parsed as HerdrPluginContext;
+  } catch {
+    throw new Error("Herdr supplied invalid plugin context");
+  }
+}
+
+export function pluginInvocationPaneId(
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  return pluginContext(env).focused_pane_id?.trim() ||
+    env.HERDR_PANE_ID?.trim() ||
+    undefined;
+}
+
+export function pluginInvocationWorkspaceRoot(
+  env: NodeJS.ProcessEnv = process.env,
+  fallback = process.cwd(),
+): string {
+  const context = pluginContext(env);
+  return context.focused_pane_cwd?.trim() ||
+    context.workspace_cwd?.trim() ||
+    fallback;
+}
+
+export function pluginClickedUrl(
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  return pluginContext(env).clicked_url?.trim() ||
+    env.HERDR_PLUGIN_CLICKED_URL?.trim() ||
+    undefined;
+}
+
 function invokeHerdr(herdr: string, args: string[]): string {
   return execFileSync(herdr, args, {
     encoding: "utf8",
@@ -106,6 +156,27 @@ export function currentPaneRuntime(
     return undefined;
   }
 }
+export function outlinerRightClickOwnership(
+  env: NodeJS.ProcessEnv = process.env,
+): OutlinerRightClickOwnership {
+  const value = env.OUTLINER_RIGHT_CLICK?.trim().toLowerCase() || "herdr";
+  if (value === "herdr" || value === "outliner") return value;
+  throw new Error("OUTLINER_RIGHT_CLICK must be herdr or outliner");
+}
+
+export function configureCurrentPaneRightClick(
+  ownership: OutlinerRightClickOwnership,
+  herdr = process.env.HERDR_BIN_PATH ?? "herdr",
+): void {
+  if (process.env.HERDR_ENV !== "1") return;
+  invokeHerdr(herdr, [
+    "pane",
+    "input",
+    "--current",
+    "--right-click",
+    ownership === "outliner" ? "pane" : "herdr",
+  ]);
+}
 
 export function paneLabel(
   paneId: string,
@@ -141,6 +212,8 @@ export function focusCurrentPane(
 export interface OpenDetailPaneOptions {
   workspaceRoot: string;
   browsingContextId: string;
+  propertyInspectorBlockId?: string;
+  direction?: "right" | "down";
 }
 
 export function openDetailPane(
@@ -164,18 +237,36 @@ export function openDetailPane(
     `OUTLINER_WORKSPACE_ROOT=${options.workspaceRoot}`,
     "--env",
     `OUTLINER_BROWSING_CONTEXT_ID=${options.browsingContextId}`,
+  ];
+  if (options.propertyInspectorBlockId !== undefined) {
+    const blockId = options.propertyInspectorBlockId.trim();
+    if (!blockId) throw new Error("Property inspector block ID cannot be empty");
+    args.push(
+      "--env",
+      "OUTLINER_DETAIL_PRESENTATION=property-inspector",
+      "--env",
+      `OUTLINER_DETAIL_TARGET_BLOCK_ID=${blockId}`,
+      "--env",
+      "OUTLINER_DETAIL_RENDERER=pi-tui",
+    );
+  }
+  args.push(
     "--placement",
     "split",
     "--target-pane",
     sourcePaneId,
     "--direction",
-    "down",
+    options.direction ?? "down",
     "--cwd",
     options.workspaceRoot,
     "--no-focus",
-  ];
-  if (process.env.OUTLINER_STATE_DIR) {
-    args.push("--env", `OUTLINER_STATE_DIR=${process.env.OUTLINER_STATE_DIR}`);
+  );
+  for (const name of [
+    "OUTLINER_STATE_DIR",
+    "OUTLINER_KEYBINDINGS_PATH",
+    "OUTLINER_RIGHT_CLICK",
+  ] as const) {
+    if (process.env[name]) args.push("--env", `${name}=${process.env[name]}`);
   }
   const output = invokeHerdr(herdr, args);
   const pane = Parse(PluginPaneOpenResponseSchema, JSON.parse(output)).result.plugin_pane.pane;

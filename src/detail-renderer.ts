@@ -101,7 +101,11 @@ function fitLinkedBreadcrumb(state: Readonly<DetailState>, width: number): strin
 
 export interface DetailHeaderOptions {
   linkBreadcrumbs?: boolean;
+  surface?: string;
+  focused?: boolean;
 }
+const DETAIL_ACTION_MENU_URI = "pi-outliner-action:detail.menu.open";
+const detailActionMenuLink = `\x1b]8;;${DETAIL_ACTION_MENU_URI}\x1b\\[⋯]\x1b]8;;\x1b\\`;
 
 export function renderDetailHeader(
   state: Readonly<DetailState>,
@@ -109,17 +113,23 @@ export function renderDetailHeader(
   options: DetailHeaderOptions = {},
 ): string[] {
   const connection = state.connectionMode === "locked" ? "Locked" : "Unlocked";
-  const label = `Detail · ${connection}`;
+  const label = `${options.surface ?? "Detail"} · ${connection}`;
   const breadcrumb = state.targetFragmentId
     ? `${state.resolvedBreadcrumb} · ^${state.targetFragmentId}`
     : state.resolvedBreadcrumb;
-  const header = width <= label.length + 2
-    ? `\x1b[1;36m${fitToWidth(label, width)}\x1b[0m`
-    : `\x1b[1;36m${label}\x1b[0m  \x1b[2m${
-      options.linkBreadcrumbs
-        ? fitLinkedBreadcrumb(state, Math.max(1, width - label.length - 2))
-        : fitBreadcrumb(breadcrumb, Math.max(1, width - label.length - 2))
-    }\x1b[0m`;
+  const labelStyle = options.focused === false ? "\x1b[2;36m" : "\x1b[1;36m";
+  let header: string;
+  const menuWidth = 5;
+  if (width <= label.length + menuWidth + 2) {
+    const labelWidth = Math.max(1, width - menuWidth);
+    header = `${labelStyle}${fitToWidth(label, labelWidth)}\x1b[0m ${detailActionMenuLink}`;
+  } else {
+    const breadcrumbWidth = Math.max(1, width - label.length - menuWidth - 2);
+    const renderedBreadcrumb = options.linkBreadcrumbs
+      ? fitLinkedBreadcrumb(state, breadcrumbWidth)
+      : fitBreadcrumb(breadcrumb, breadcrumbWidth);
+    header = `${labelStyle}${label}\x1b[0m ${detailActionMenuLink} \x1b[2m${renderedBreadcrumb}\x1b[0m`;
+  }
   return [
     "",
     header,
@@ -235,14 +245,21 @@ export function buildDetailAnnotationView(
   return output;
 }
 
+export interface DetailRenderOptions {
+  header?: DetailHeaderOptions;
+  helpPrefix?: string;
+  helpText?: string;
+}
+
 export function renderDetailLines(
   state: Readonly<DetailState>,
   viewport: DetailViewport,
+  options: DetailRenderOptions = {},
 ): string[] {
   const width = viewport.width;
   const height = viewport.height;
   const bodyHeight = Math.max(1, height - 5);
-  const output = renderDetailHeader(state, width);
+  const output = renderDetailHeader(state, width, options.header);
 
   if (!state.context.selected) {
     output.push("Select a block in the outliner pane.");
@@ -301,7 +318,11 @@ export function renderDetailLines(
   }
 
   while (output.length < height - 2) output.push("");
-  output.push(...renderDetailFooter(state, width));
+  const helpText = options.helpText ??
+    (options.helpPrefix
+      ? `${options.helpPrefix}  ${detailHelpText(state.mode)}`
+      : detailHelpText(state.mode));
+  output.push(...renderDetailFooter(state, width, state.mode, helpText));
   if (output.length <= height) return output;
   if (height <= 1) return output.slice(0, Math.max(0, height));
   const footerCount = Math.min(2, height - 1);
@@ -311,8 +332,9 @@ export function renderDetailLines(
 export function renderDetailAnsi(
   state: Readonly<DetailState>,
   viewport: DetailViewport,
+  options: DetailRenderOptions = {},
 ): string {
-  const lines = renderDetailLines(state, viewport);
+  const lines = renderDetailLines(state, viewport, options);
   lines[0] = `${ESC}H${ESC}2J`;
   return lines.join("\n");
 }

@@ -1,9 +1,19 @@
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { getOsc8LinkAtColumn, stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "bun:test";
+import { DEFAULT_OUTLINER_ACTION_KEYMAP } from "../src/outliner-actions";
 import type { DetailState } from "../src/detail-controller";
 import { renderDetailAnsi, renderDetailLines } from "../src/detail-renderer";
 import { TextBuffer } from "../src/text-buffer";
 import type { Block } from "../src/types";
+const ACTION_MENU = "\x1b]8;;pi-outliner-action:detail.menu.open\x1b\\[⋯]\x1b]8;;\x1b\\";
+const detailHeader = (breadcrumb: string): string =>
+  `\x1b[1;36mDetail · Unlocked\x1b[0m ${ACTION_MENU} \x1b[2m${breadcrumb}\x1b[0m`;
+const detailHelp = (mode: "preview" | "edit", width: number): string =>
+  `\x1b[2m${truncateToWidth(
+    DEFAULT_OUTLINER_ACTION_KEYMAP.helpText("detail", mode),
+    width,
+    "…",
+  ).replaceAll("\x1b[0m", "")}\x1b[0m`;
 
 function block(text: string, properties: Block["properties"] = []): Block {
   return {
@@ -58,6 +68,21 @@ function state(overrides: Partial<DetailState> = {}): DetailState {
       sortDirection: "desc",
       expandedSourceIds: new Set(),
     },
+    propertyInspector: {
+      presentation: "inline",
+      model: null,
+      expanded: false,
+      groupBy: null,
+      filter: "",
+      filterDraft: null,
+      viewportOffset: 0,
+      edit: null,
+    },
+    previewRegions: {
+      regions: [],
+      focusedRegionId: null,
+      disclosureOverrides: new Map(),
+    },
     ...overrides,
   };
 }
@@ -69,15 +94,23 @@ describe("detail ANSI renderer", () => {
 
     expect(rendered).toBe([
       "\x1b[H\x1b[2J",
-      "\x1b[1;36mDetail · Unlocked\x1b[0m  \x1b[2mNo block selected\x1b[0m",
+      detailHeader("No block selected"),
       "─".repeat(width),
       "Select a block in the outliner pane.",
       "",
       "",
       "",
-      "\x1b[2mL lock/unlock  ↑↓ read  E embeds  e edit  o open next unlocked …\x1b[0m",
+      detailHelp("preview", 64),
     ].join("\n"));
   });
+  test("exposes the pane action menu as a clickable header target", () => {
+    const header = renderDetailLines(state(), { width: 64, height: 8 })[1]!;
+    const column = stripTerminalSequences(header).indexOf("[⋯]") + 1;
+    expect(getOsc8LinkAtColumn(header, column)).toBe(
+      "pi-outliner-action:detail.menu.open",
+    );
+  });
+
 
   test("renders resolved preview text while retaining the fixed viewport height", () => {
     const selected = block("raw one\nraw two\nraw three\nraw four");
@@ -92,13 +125,13 @@ describe("detail ANSI renderer", () => {
 
     expect(rendered).toBe([
       "\x1b[H\x1b[2J",
-      "\x1b[1;36mDetail · Unlocked\x1b[0m  \x1b[2mResolved title · ^resolved-section\x1b[0m",
+      detailHeader("Resolved title · ^resolved-section"),
       "─".repeat(64),
       "resolved two",
       "resolved three",
       "resolved four",
       "Ready",
-      "\x1b[2mL lock/unlock  ↑↓ read  E embeds  e edit  o open next unlocked …\x1b[0m",
+      detailHelp("preview", 64),
     ].join("\n"));
   });
 
@@ -155,14 +188,14 @@ describe("detail ANSI renderer", () => {
 
     expect(rendered).toBe([
       "\x1b[H\x1b[2J",
-      "\x1b[1;36mDetail · Unlocked\x1b[0m  \x1b[2mBlock\x1b[0m",
+      detailHeader("Block"),
       "─".repeat(32),
       "   4 four▏",
       "\x1b[2mCompletions 2/2\x1b[0m",
       "  First",
       "\x1b[7m› Second\x1b[0m",
       "",
-      "\x1b[2m^Z/⌘Z undo  ^⇧Z/^Y redo  ⌥←→ wo…\x1b[0m",
+      detailHelp("edit", 32),
     ].join("\n"));
     expect(rendered.split("\n")).toHaveLength(9);
     expect({
@@ -193,11 +226,11 @@ describe("detail ANSI renderer", () => {
 
     expect(rendered).toBe([
       "\x1b[H\x1b[2J",
-      "\x1b[1;36mDetail · Unlocked\x1b[0m  \x1b[2mBlock\x1b[0m",
+      detailHeader("Block"),
       "─".repeat(32),
       "   1 alpha▏",
       "",
-      "\x1b[2m^Z/⌘Z undo  ^⇧Z/^Y redo  ⌥←→ wo…\x1b[0m",
+      detailHelp("edit", 32),
     ].join("\n"));
     expect(rendered.split("\n")).toHaveLength(6);
   });

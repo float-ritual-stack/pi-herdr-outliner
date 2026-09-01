@@ -6,6 +6,7 @@ import {
   type PropertyReferenceOccurrence,
 } from "./reference-occurrences";
 import { blockDisplayTitle } from "./references";
+import { workIdReferences } from "./work-ids";
 import type {
   BacklinkCollection,
   BacklinkOccurrence,
@@ -44,6 +45,7 @@ export function normalizeBacklinkQuery(query: BacklinkQuery): BacklinkQuery {
 function occurrenceTarget(
   occurrence: BacklinkRelationOccurrence,
   addressTargets: ReadonlyMap<string, string>,
+  workIdPrefix: string | null,
 ): string | undefined {
   if (occurrence.kind === "block" || occurrence.kind === "property") {
     return occurrence.blockId;
@@ -51,7 +53,12 @@ function occurrenceTarget(
   const normalizedAddress = occurrence.kind === "page"
     ? occurrence.normalizedAddress
     : normalizePageAddress(occurrence.address).normalizedAddress;
-  return addressTargets.get(normalizedAddress);
+  const exact = addressTargets.get(normalizedAddress);
+  if (exact || occurrence.kind !== "page" || !workIdPrefix) return exact;
+  const embeddedWorkIds = workIdReferences(occurrence.address, workIdPrefix);
+  return embeddedWorkIds.length === 1
+    ? addressTargets.get(normalizePageAddress(embeddedWorkIds[0]!.workId).normalizedAddress)
+    : undefined;
 }
 
 function occurrenceSnippet(text: string, start: number, end: number): string {
@@ -183,7 +190,8 @@ export function resolveBacklinkRelation(input: BacklinkRelationInput): BacklinkC
     ]
       .sort((left, right) => left.start - right.start)
       .filter(
-        (occurrence) => occurrenceTarget(occurrence, input.addressTargets) === input.target.id,
+        (occurrence) =>
+          occurrenceTarget(occurrence, input.addressTargets, input.workIdPrefix) === input.target.id,
       );
     if (occurrences.length === 0) continue;
     matches.push(backlinkSource(source, input.target, occurrences, input.blocksById));

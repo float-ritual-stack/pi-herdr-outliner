@@ -25,41 +25,21 @@ command = ["bun", "run", "src/detail-main.ts"]
 
 
 [[actions]]
-id = "open-layout"
-title = "Outliner: open Tree + two Details working layout"
-description = "Build the standard four-pane Outliner layout in an otherwise empty tab."
+id = "open"
+title = "Outliner: open or focus"
+description = "Focus the Outliner in this project, or open a Tree and linked Detail when none exists."
 contexts = ["workspace", "tab", "pane"]
-command = ["bun", "run", "src/herdr-open.ts", "--mode", "open-layout"]
-
-[[actions]]
-id = "layout-detail-a"
-title = "Outliner layout: Detail A full height"
-description = "Keep the shell on the right and make the Detail sharing the Tree context full height."
-contexts = ["workspace", "tab", "pane"]
-command = ["bun", "run", "src/herdr-layout-action.ts", "detail-a"]
-
-[[actions]]
-id = "layout-detail-b"
-title = "Outliner layout: Detail B full height"
-description = "Keep the shell on the right and make the secondary Detail full height."
-contexts = ["workspace", "tab", "pane"]
-command = ["bun", "run", "src/herdr-layout-action.ts", "detail-b"]
-
-[[actions]]
-id = "layout-tree-wide"
-title = "Outliner layout: Tree wide, Details underneath"
-description = "Span the Tree across the Outliner area with Detail A and Detail B underneath."
-contexts = ["workspace", "tab", "pane"]
-command = ["bun", "run", "src/herdr-layout-action.ts", "tree-wide"]
-
-[[actions]]
-id = "navigate"
-title = "Internal: handle pi-outliner:// link"
-contexts = ["pane"]
 command = ["bun", "run", "src/herdr-link-open.ts"]
+
+[[actions]]
+id = "ensure-detail"
+title = "Outliner: open or focus Detail"
+description = "Focus an existing Detail in this tab, preferring the Tree-linked one, or create one when the tab has none."
+contexts = ["workspace", "tab", "pane"]
+command = ["bun", "run", "src/herdr-open.ts", "--mode", "ensure-detail"]
 
 [[link_handlers]]
 id = "outliner-navigation"
 title = "Navigate Outliner"
 pattern = "^pi-outliner://(block|goto|page|work)/[^[:space:]]+$"
-action = "navigate"
+action = "open"

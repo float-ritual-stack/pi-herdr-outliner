@@ -15,6 +15,7 @@ import {
   type OutlinerLayoutPanes,
   type ResolvedOutlinerClient,
 } from "./herdr-layout";
+import { pluginInvocationPaneId } from "./pane-control";
 import { resolvePaths } from "./paths";
 import type { OutlinerClientRegistration } from "./types";
 
@@ -254,7 +255,7 @@ async function applyLayout(name: OutlinerLayoutName, args: readonly string[]): P
     panes = explicit;
     focusPaneId = explicit.focusPaneId;
   } else {
-    const invocationPaneId = process.env.HERDR_PANE_ID;
+    const invocationPaneId = pluginInvocationPaneId();
     if (!invocationPaneId) throw new Error("Outliner layout action requires Herdr pane context");
     ({ workspaceId, tabId, panes, focusPaneId } = await resolveLiveComposition(api, invocationPaneId));
   }

@@ -1,7 +1,16 @@
+import { DEFAULT_OUTLINER_ACTION_KEYMAP } from "./outliner-actions";
 import { extractFileAnnotationComment, formatFileAnnotation } from "./annotations";
-import { completionTargetAtCursor } from "./completion";
+import {
+  completionTargetAtCursor,
+  pageAddressCompletion,
+  pageCompletionLookupQuery,
+} from "./completion";
 import { rankBlockFocusMatches, subsequenceScore } from "./block-focus";
-import { layoutDetailEditor } from "./detail-editor-layout";
+import {
+  detailEditorPositionAtVisualPoint,
+  detailEditorVisualRowForSourceLine,
+  layoutDetailEditor,
+} from "./detail-editor-layout";
 import type { DetailEmbedRange, DetailEmbedState, DetailReadProjection } from "./detail-embeds";
 import {
   ensureHeadingFragment,
@@ -12,6 +21,23 @@ import {
 import type { ReferencedFile, ReferencedPathCandidate } from "./files";
 import { firstOutlinerReference, type OutlinerLinkTarget } from "./outliner-links";
 import { getProperty } from "./properties";
+import {
+  createPropertyInspectorModel,
+  filterPropertyInspectorEntries,
+  type PropertyInspectorEntry,
+  type PropertyInspectorGroupBy,
+  type PropertyInspectorModel,
+  type PropertyInspectorTarget,
+} from "./property-inspector";
+import {
+  focusedPreviewRegion,
+  movePreviewRegionFocus,
+  reconcilePreviewRegions,
+  togglePreviewRegionDisclosure,
+  type PreviewRegion,
+  type PreviewRegionAction,
+  type PreviewRegionState,
+} from "./detail-preview-regions";
 import { blockDisplayTitle } from "./references";
 import { TextBuffer } from "./text-buffer";
 import type {
@@ -23,6 +49,7 @@ import type {
   BrowsingContextState,
   PageAddressCollection,
   OutlinerEvent,
+  PropertyPatchOperation,
   SelectionContext,
   OutlinerNavigationDispatch,
   OutlinerNavigationResolution,
@@ -42,6 +69,7 @@ export type DetailConnectionMode = "unlocked" | "locked";
 
 export interface DetailViewport {
   width: number;
+  editorWidth?: number;
   height: number;
 }
 
@@ -76,6 +104,7 @@ export interface DetailBacklinkState {
   expanded: boolean;
   loading: boolean;
   collection: BacklinkCollection | null;
+
   selectedIndex: number;
   error: string;
   filter: string;
@@ -83,6 +112,57 @@ export interface DetailBacklinkState {
   sortField: DetailBacklinkSortField;
   sortDirection: DetailBacklinkSortDirection;
   expandedSourceIds: Set<string>;
+}
+export type DetailPropertyInspectorPresentation = "inline" | "dedicated";
+
+export interface DetailPropertyValueEdit {
+  occurrenceId: string;
+  ordinal: number;
+  blockId: string;
+  expectedUpdatedAt: string;
+  buffer: TextBuffer;
+}
+
+export interface DetailPropertyInspectorState {
+  presentation: DetailPropertyInspectorPresentation;
+  model: PropertyInspectorModel | null;
+  expanded: boolean;
+  groupBy: PropertyInspectorGroupBy | null;
+  filter: string;
+  filterDraft: string | null;
+  viewportOffset: number;
+  edit: DetailPropertyValueEdit | null;
+}
+
+export interface DetailControllerOptions {
+  propertyInspectorPresentation?: DetailPropertyInspectorPresentation;
+}
+
+export function visiblePropertyInspectorEntries(
+  inspector: Readonly<DetailPropertyInspectorState>,
+): PropertyInspectorEntry[] {
+  if (!inspector.model) return [];
+  return filterPropertyInspectorEntries(inspector.model.entries, {
+    query: inspector.filterDraft ?? inspector.filter,
+  });
+}
+
+export function propertyInspectorTargetLink(
+  target: PropertyInspectorTarget,
+  options: { preserveSource?: boolean; intent?: "reveal" } = {},
+): OutlinerLinkTarget {
+  if (target.kind === "block") {
+    return {
+      kind: "block",
+      value: target.blockId,
+      ...(target.fragmentId ? { fragmentId: target.fragmentId } : {}),
+      ...options,
+    };
+  }
+  if (target.kind === "work-id") {
+    return { kind: "work", value: target.workId, ...options };
+  }
+  return { kind: "page", value: target.address, ...options };
 }
 
 
@@ -136,6 +216,8 @@ export interface DetailState {
   referencedFile: ReferencedFile | null;
   previewOffset: number;
   editorVisualOffset: number;
+  editorViewportManual?: boolean;
+  draftPreviewLinked?: boolean;
   fileOffset: number;
   fileCursor: number;
   selectionAnchor: number | null;
@@ -145,6 +227,8 @@ export interface DetailState {
   busy: boolean;
   refreshPending: boolean;
   backlinks: DetailBacklinkState;
+  propertyInspector: DetailPropertyInspectorState;
+  previewRegions: PreviewRegionState;
 }
 
 export interface DetailEffects {
@@ -172,6 +256,11 @@ export interface DetailEffects {
     text: string;
     expectedUpdatedAt: string;
   }): Promise<Block>;
+  patchProperties(input: {
+    blockId: string;
+    expectedUpdatedAt: string;
+    operations: PropertyPatchOperation[];
+  }): Promise<Block>;
   createBlock(input: {
     parentId: string;
     text: string;
@@ -184,6 +273,7 @@ export interface DetailEffects {
   readFile(block: Block): ReferencedFile;
   completeFiles(query: string): ReferencedPathCandidate[];
   focusOutliner(): Promise<void>;
+  openPropertyInspectorPane(blockId: string): string;
 }
 
 export type DetailBufferMoveDirection =
@@ -216,6 +306,27 @@ export type DetailIntent =
   | { type: "backlinks.filter.cancel" }
   | { type: "backlinks.sort.cycle" }
   | { type: "backlinks.source.toggle"; blockId?: string }
+  | { type: "preview.focus.move"; delta: -1 | 1 }
+  | { type: "preview.activate" }
+  | { type: "preview.action"; action: PreviewRegionAction }
+  | { type: "property-inspector.disclosure.toggle" }
+  | { type: "property-inspector.pane.open" }
+  | { type: "property-inspector.target.open"; occurrenceId: string; intent: "open" | "reveal" }
+  | { type: "property-inspector.group.cycle" }
+  | { type: "property-inspector.filter.begin" }
+  | { type: "property-inspector.filter.input"; text: string }
+  | { type: "property-inspector.filter.backspace" }
+  | { type: "property-inspector.filter.commit" }
+  | { type: "property-inspector.filter.cancel" }
+  | { type: "property-inspector.viewport.navigate"; direction: "up" | "down" | "pageup" | "pagedown" | "home" | "end" }
+  | { type: "property-inspector.edit.begin" }
+  | { type: "property-inspector.edit.insert"; text: string }
+  | { type: "property-inspector.edit.backspace" }
+  | { type: "property-inspector.edit.delete" }
+  | { type: "property-inspector.edit.move"; direction: "left" | "right" | "home" | "end" }
+  | { type: "property-inspector.edit.commit" }
+  | { type: "property-inspector.edit.cancel" }
+  | { type: "property-inspector.edit.select-all" }
   | { type: "embed-background.toggle" }
   | { type: "lock.toggle" }
   | { type: "buffer.insert"; text: string }
@@ -227,6 +338,10 @@ export type DetailIntent =
   | { type: "buffer.undo" }
   | { type: "buffer.redo" }
   | { type: "buffer.save" }
+  | { type: "editor.viewport.scroll"; delta: number }
+  | { type: "editor.viewport.anchor"; sourceLine: number }
+  | { type: "editor.cursor.place"; visualRow: number; contentColumn: number }
+  | { type: "draft-preview.link.toggle" }
   | { type: "buffer.cancel" }
   | { type: "completion.open" }
   | { type: "completion.move"; delta: -1 | 1 }
@@ -239,6 +354,7 @@ export type DetailIntent =
   | { type: "view.block" }
   | { type: "focus.outliner"; announce?: boolean }
   | { type: "viewport.changed" }
+  | { type: "status.set"; message: string }
   | { type: "redraw" };
 
 export interface DetailController {
@@ -246,6 +362,7 @@ export interface DetailController {
   initialize(): Promise<void>;
   isBufferMode(): boolean;
   dispatch(intent: DetailIntent, viewport: DetailViewport): Promise<void>;
+  setPreviewRegions(regions: readonly PreviewRegion[]): void;
   onServiceEvent(event: OutlinerEvent, viewport: DetailViewport): Promise<void>;
   onServiceConnect(viewport: DetailViewport): Promise<void>;
   onServiceDisconnect(): void;
@@ -260,18 +377,7 @@ export function detailDisplayMode(block: Block | null): "preview" | "file" | "an
 }
 
 export function detailHelpText(mode: DetailMode): string {
-  switch (mode) {
-    case "edit":
-      return "^Z/⌘Z undo  ^⇧Z/^Y redo  ⌥←→ word  Home/End line  ⇧Arrows select  Del  ^S save  Tab complete  Esc cancel";
-    case "comment":
-      return "^Z/⌘Z undo  ^⇧Z/^Y redo  ⌥←→ word  Home/End line  ⇧Arrows select  Del  ^S add annotation  Esc cancel";
-    case "annotation":
-      return "L lock/unlock  ↑↓ read  e edit  o open next unlocked  R reveal  f source  b block";
-    case "file":
-      return "L lock/unlock  ↑↓ lines  o open next unlocked  R reveal  v select  c comment  b block";
-    case "preview":
-      return "L lock/unlock  ↑↓ read  E embeds  e edit  o open next unlocked  R reveal  q tree";
-  }
+  return DEFAULT_OUTLINER_ACTION_KEYMAP.helpText("detail", mode);
 }
 
 export function selectedDetailFileRange(state: Readonly<DetailState>): DetailLineRange | null {
@@ -310,12 +416,13 @@ function pageSize(viewport: DetailViewport): number {
 export function createDetailController(
   effects: DetailEffects,
   onChange: (state: Readonly<DetailState>) => void = () => {},
+  options: DetailControllerOptions = {},
 ): DetailController {
   const state: DetailState = {
     context: { selected: null, ancestors: [], children: [] },
     targetBlockId: null,
     targetFragmentId: null,
-    connectionMode: "unlocked",
+    connectionMode: options.propertyInspectorPresentation === "dedicated" ? "locked" : "unlocked",
     canNavigateBack: false,
     canNavigateForward: false,
     resolvedSelectedText: "",
@@ -330,6 +437,8 @@ export function createDetailController(
     referencedFile: null,
     previewOffset: 0,
     editorVisualOffset: 0,
+    editorViewportManual: false,
+    draftPreviewLinked: false,
     fileOffset: 0,
     fileCursor: 0,
     selectionAnchor: null,
@@ -350,6 +459,21 @@ export function createDetailController(
       sortDirection: "desc",
       expandedSourceIds: new Set(),
     },
+    propertyInspector: {
+      presentation: options.propertyInspectorPresentation ?? "inline",
+      model: null,
+      expanded: options.propertyInspectorPresentation === "dedicated",
+      groupBy: null,
+      filter: "",
+      filterDraft: null,
+      viewportOffset: 0,
+      edit: null,
+    },
+    previewRegions: {
+      regions: [],
+      focusedRegionId: null,
+      disclosureOverrides: new Map(),
+    },
   };
   const navigationHistory: DetailNavigationEntry[] = [];
   let navigationIndex = -1;
@@ -357,7 +481,8 @@ export function createDetailController(
   let serviceConnected = false;
 
   const emit = (): void => onChange(state);
-  const isBufferMode = (): boolean => state.mode === "edit" || state.mode === "comment";
+  const isBufferMode = (): boolean =>
+    state.mode === "edit" || state.mode === "comment" || state.propertyInspector.edit !== null;
 
   const refreshBreadcrumb = (): void => {
     const titles = state.context.ancestors.map(blockDisplayTitle);
@@ -400,6 +525,18 @@ export function createDetailController(
     state.backlinks.filter = "";
     state.backlinks.filterDraft = null;
     state.backlinks.expandedSourceIds.clear();
+  };
+
+  const syncPropertyInspector = (block: Block | null, targetChanged: boolean): void => {
+    state.propertyInspector.model = block
+      ? createPropertyInspectorModel(block.id, block.text)
+      : null;
+    if (!targetChanged) return;
+    state.propertyInspector.filter = "";
+    state.propertyInspector.filterDraft = null;
+    state.propertyInspector.edit = null;
+    state.propertyInspector.viewportOffset = 0;
+    state.previewRegions.focusedRegionId = null;
   };
 
   const selectedBacklinkSource = (): BacklinkSource | undefined =>
@@ -488,6 +625,7 @@ export function createDetailController(
     else syncNavigationState();
     if (!force && !changed) return;
     if (changed) state.status = "";
+    syncPropertyInspector(next.selected, targetChanged);
 
     if (next.selected) {
       await applyReadProjection(next.selected.text, next.selected.id);
@@ -509,8 +647,9 @@ export function createDetailController(
           : `Missing fragment · ^${fragmentId}`;
       }
     }
-    state.completion = null;
-    state.mode = detailDisplayMode(next.selected);
+    state.mode = state.propertyInspector.presentation === "dedicated"
+      ? "preview"
+      : detailDisplayMode(next.selected);
     if (next.selected?.deletedAt) {
       state.status = "In Trash — read-only · r restore";
     } else if (next.selected?.effectiveDeletedRootId) {
@@ -542,6 +681,7 @@ export function createDetailController(
     } catch {
       if (record) recordNavigation(state.targetBlockId, state.targetFragmentId);
       state.context = { selected: null, ancestors: [], children: [] };
+      syncPropertyInspector(null, true);
       await effects.setCurrentBlock(null);
       state.targetBlockId = blockId;
       state.targetFragmentId = fragmentId;
@@ -593,14 +733,19 @@ export function createDetailController(
     else await loadCurrentTarget(true);
   };
 
-  const ensureEditorCursorVisible = (viewport: DetailViewport): void => {
-    const visibleHeight = detailVisibleEditorHeight(state, viewport);
-    const layout = layoutDetailEditor(
+  const editorLayout = (viewport: DetailViewport) =>
+    layoutDetailEditor(
       state.buffer.lines,
       state.buffer.row,
       state.buffer.column,
-      viewport.width,
+      viewport.editorWidth ?? viewport.width,
+      state.buffer.selectionRange,
     );
+
+  const ensureEditorCursorVisible = (viewport: DetailViewport): void => {
+    state.editorViewportManual = false;
+    const visibleHeight = detailVisibleEditorHeight(state, viewport);
+    const layout = editorLayout(viewport);
     const maxOffset = Math.max(0, layout.rows.length - visibleHeight);
     state.editorVisualOffset = Math.max(
       0,
@@ -640,10 +785,75 @@ export function createDetailController(
     state.buffer.row = state.buffer.lines.length - 1;
     state.buffer.moveEnd();
     state.editorVisualOffset = 0;
+    state.editorViewportManual = false;
+    state.draftPreviewLinked = false;
     state.completion = null;
     state.mode = "edit";
     state.status = "Locked for editing";
     ensureEditorCursorVisible(viewport);
+  };
+
+  const beginPropertyEdit = async (): Promise<void> => {
+    const selected = state.context.selected;
+    if (!selected) {
+      state.status = "No selected block to edit";
+      return;
+    }
+    if (selected.deletedAt || selected.effectiveDeletedRootId) {
+      state.status = "Block is in Trash; restore before editing";
+      return;
+    }
+    const focusedId = state.previewRegions.focusedRegionId;
+    const entry = state.propertyInspector.model?.entries.find(
+      (candidate) => candidate.occurrenceId === focusedId,
+    );
+    if (!entry) {
+      state.status = "Focus a property value before editing";
+      return;
+    }
+    await setLocked(true);
+    const buffer = new TextBuffer(entry.value);
+    buffer.moveEnd();
+    state.propertyInspector.edit = {
+      occurrenceId: entry.occurrenceId,
+      ordinal: entry.ordinal,
+      blockId: selected.id,
+      expectedUpdatedAt: selected.updatedAt,
+      buffer,
+    };
+    state.status = `Editing ${entry.key} · ↵ save · ⎋ cancel`;
+  };
+
+  const cancelPropertyEdit = (): void => {
+    state.propertyInspector.edit = null;
+    state.status = "Property edit cancelled";
+  };
+
+  const commitPropertyEdit = async (): Promise<void> => {
+    const edit = state.propertyInspector.edit;
+    if (!edit || state.busy) return;
+    state.busy = true;
+    try {
+      const updated = await effects.patchProperties({
+        blockId: edit.blockId,
+        expectedUpdatedAt: edit.expectedUpdatedAt,
+        operations: [{ op: "replace", ordinal: edit.ordinal, value: edit.buffer.text }],
+      });
+      state.propertyInspector.edit = null;
+      state.context = { ...state.context, selected: updated };
+      syncPropertyInspector(updated, false);
+      await applyReadProjection(updated.text, updated.id);
+      refreshBreadcrumb();
+      const editedEntry = state.propertyInspector.model?.entries[edit.ordinal];
+      state.previewRegions.focusedRegionId = editedEntry?.occurrenceId ?? "property-inspector";
+      state.status = editedEntry
+        ? `Updated ${editedEntry.key}`
+        : "Updated property";
+    } catch (error) {
+      state.status = errorMessage(error);
+    } finally {
+      state.busy = false;
+    }
   };
 
   const beginComment = async (): Promise<void> => {
@@ -657,6 +867,8 @@ export function createDetailController(
     state.annotationRange = range;
     state.buffer = new TextBuffer();
     state.editorVisualOffset = 0;
+    state.editorViewportManual = false;
+    state.draftPreviewLinked = false;
     state.completion = null;
     state.mode = "comment";
     state.status = `Locked · commenting on ${state.referencedFile.sourcePath}:${range.startLine}-${range.endLine}`;
@@ -665,7 +877,7 @@ export function createDetailController(
   const focusOutliner = async (announce: boolean): Promise<void> => {
     try {
       await effects.focusOutliner();
-      if (announce) state.status = "Focus returned to outliner; Ctrl+Q closes detail";
+      if (announce) state.status = "Focus returned to outliner; ⌃Q closes detail";
     } catch (error) {
       state.status = errorMessage(error);
     }
@@ -724,7 +936,7 @@ export function createDetailController(
     const line = state.buffer.lines[state.buffer.row];
     const target = completionTargetAtCursor(line, state.buffer.column);
     if (!target) {
-      state.status = "Type [[page, ((block, or [file::path before requesting completion";
+      state.status = "Type [[named address]], [[target|label]], or ((fuzzy block))";
       return;
     }
 
@@ -737,21 +949,13 @@ export function createDetailController(
         insertion: `[file::${candidate.sourcePath}${candidate.isDirectory ? "" : "]"}`,
       }));
     } else if (target.kind === "page") {
-      const collection = await effects.queryPageAddresses(target.query || undefined, 20);
-      items = collection.addresses.map((address) => {
-        const title = address.title.trim();
-        const normalizedTitle = title.toLocaleLowerCase();
-        const normalizedAddress = address.address.toLocaleLowerCase();
-        return {
-          label: normalizedTitle === normalizedAddress ||
-              normalizedTitle.startsWith(`${normalizedAddress} `)
-            ? title
-            : `${address.address} — ${title}`,
-          insertion: address.kind === "work-id"
-            ? `((${address.blockId}))`
-            : `[[${address.address}]]`,
-        };
-      });
+      const collection = await effects.queryPageAddresses(
+        pageCompletionLookupQuery(target.query, state.workIdPrefix) || undefined,
+        20,
+      );
+      items = collection.addresses.map((address) =>
+        pageAddressCompletion(address, target.query, state.workIdPrefix)
+      );
       if (collection.completeness.kind === "truncated") {
         completionStatus = `Showing first ${collection.completeness.limit} matches`;
       }
@@ -827,7 +1031,8 @@ export function createDetailController(
           state.status = "No matching files";
           break;
         case "page":
-          state.status = "No matching page addresses";
+          state.status =
+            "No matching named addresses; [[target|label]] labels a target, ((...)) searches blocks";
           break;
         case "block":
           state.status = emptyStatus || "No matching blocks";
@@ -976,11 +1181,224 @@ export function createDetailController(
         break;
       }
       case "lock.toggle": {
+        if (state.propertyInspector.presentation === "dedicated") {
+          state.status = "Dedicated property inspector remains locked";
+          break;
+        }
         const locked = state.connectionMode !== "locked";
         await setLocked(locked);
         state.status = locked
           ? "Locked this block · previews use the next unlocked Detail"
           : "Unlocked · available for previews and opens";
+        break;
+      }
+      case "preview.focus.move": {
+        const region = movePreviewRegionFocus(state.previewRegions, intent.delta);
+        if (region?.kind === "backlink-source") {
+          const blockId = region.activation?.type === "backlink.open"
+            ? region.activation.blockId
+            : null;
+          const index = visibleBacklinkSources(state.backlinks)
+            .findIndex((source) => source.blockId === blockId);
+          if (index >= 0) state.backlinks.selectedIndex = index;
+        }
+        break;
+      }
+      case "preview.activate": {
+        const action = focusedPreviewRegion(state.previewRegions)?.activation;
+        if (action) await dispatch({ type: "preview.action", action }, viewport);
+        break;
+      }
+      case "preview.action":
+        switch (intent.action.type) {
+          case "callout.disclosure.toggle":
+            togglePreviewRegionDisclosure(state.previewRegions, intent.action.regionId);
+            break;
+          case "backlinks.disclosure.toggle":
+            await dispatch({ type: "backlinks.toggle" }, viewport);
+            break;
+          case "backlink.source.disclosure.toggle":
+            await dispatch({
+              type: "backlinks.source.toggle",
+              blockId: intent.action.blockId,
+            }, viewport);
+            break;
+          case "backlink.open": {
+            const blockId = intent.action.blockId;
+            const source = visibleBacklinkSources(state.backlinks)
+              .find((candidate) => candidate.blockId === blockId);
+            if (!source) {
+              state.status = "Backlink source is no longer visible";
+              break;
+            }
+            await effects.dispatchNavigation(
+              source.blockId,
+              "open",
+              { preserveSource: true },
+            );
+            state.status = `Opened ${source.title} in another unlocked Detail`;
+            break;
+          }
+          case "property-inspector.disclosure.toggle":
+            await dispatch({ type: "property-inspector.disclosure.toggle" }, viewport);
+            break;
+          case "property-inspector.pane.open":
+            await dispatch({ type: "property-inspector.pane.open" }, viewport);
+            break;
+          case "property-inspector.target.open":
+            await dispatch({
+              type: "property-inspector.target.open",
+              occurrenceId: intent.action.occurrenceId,
+              intent: "open",
+            }, viewport);
+            break;
+        }
+        break;
+      case "property-inspector.disclosure.toggle": {
+        if (state.propertyInspector.presentation === "dedicated") {
+          state.status = "Dedicated property inspector remains expanded";
+          break;
+        }
+        const expanded = togglePreviewRegionDisclosure(
+          state.previewRegions,
+          "property-inspector",
+        );
+        state.propertyInspector.expanded = expanded ?? !state.propertyInspector.expanded;
+        state.previewRegions.disclosureOverrides.set(
+          "property-inspector",
+          state.propertyInspector.expanded,
+        );
+        state.status = state.propertyInspector.expanded
+          ? "Properties expanded"
+          : "Properties collapsed";
+        break;
+      }
+      case "property-inspector.pane.open": {
+        const blockId = state.propertyInspector.model?.blockId;
+        if (!blockId) {
+          state.status = "No selected block to inspect";
+          break;
+        }
+        effects.openPropertyInspectorPane(blockId);
+        state.status = "Opened dedicated property inspector";
+        break;
+      }
+      case "property-inspector.edit.begin":
+        await beginPropertyEdit();
+        break;
+      case "property-inspector.edit.insert":
+        state.propertyInspector.edit?.buffer.insert(intent.text);
+        break;
+      case "property-inspector.edit.backspace":
+        state.propertyInspector.edit?.buffer.backspace();
+        break;
+      case "property-inspector.edit.delete":
+        state.propertyInspector.edit?.buffer.deleteForward();
+        break;
+      case "property-inspector.edit.move": {
+        const buffer = state.propertyInspector.edit?.buffer;
+        if (!buffer) break;
+        if (intent.direction === "left") buffer.moveLeft();
+        else if (intent.direction === "right") buffer.moveRight();
+        else if (intent.direction === "home") buffer.moveHome();
+        else buffer.moveEnd();
+        break;
+      }
+      case "property-inspector.edit.select-all":
+        state.propertyInspector.edit?.buffer.selectAll();
+        break;
+      case "property-inspector.edit.commit":
+        await commitPropertyEdit();
+        break;
+      case "property-inspector.edit.cancel":
+        cancelPropertyEdit();
+        break;
+      case "property-inspector.target.open": {
+        const entry = state.propertyInspector.model?.entries.find(
+          (candidate) => candidate.occurrenceId === intent.occurrenceId,
+        );
+        if (!entry) {
+          state.status = "Property occurrence is no longer available";
+          break;
+        }
+        if (!entry.target) {
+          state.status = `${entry.key} has no navigation target`;
+          break;
+        }
+        await dispatch({
+          type: "reference.open",
+          target: propertyInspectorTargetLink(entry.target, {
+            preserveSource: state.propertyInspector.presentation === "dedicated",
+            ...(intent.intent === "reveal" ? { intent: "reveal" as const } : {}),
+          }),
+        }, viewport);
+        break;
+      }
+      case "property-inspector.group.cycle": {
+        const groups: Array<PropertyInspectorGroupBy | null> = [
+          null,
+          "key",
+          "scope",
+          "target",
+        ];
+        const current = groups.indexOf(state.propertyInspector.groupBy);
+        state.propertyInspector.groupBy = groups[(current + 1) % groups.length]!;
+        state.propertyInspector.viewportOffset = 0;
+        state.status = state.propertyInspector.groupBy
+          ? `Properties grouped by ${state.propertyInspector.groupBy}`
+          : "Property grouping cleared";
+        break;
+      }
+      case "property-inspector.filter.begin":
+        state.propertyInspector.filterDraft = state.propertyInspector.filter;
+        state.status = "Filtering properties";
+        break;
+      case "property-inspector.filter.input":
+        state.propertyInspector.filterDraft = `${
+          state.propertyInspector.filterDraft ?? ""
+        }${intent.text}`;
+        state.propertyInspector.viewportOffset = 0;
+        break;
+      case "property-inspector.filter.backspace":
+        state.propertyInspector.filterDraft = (
+          state.propertyInspector.filterDraft ?? ""
+        ).slice(0, -1);
+        state.propertyInspector.viewportOffset = 0;
+        break;
+      case "property-inspector.filter.commit":
+        state.propertyInspector.filter = (
+          state.propertyInspector.filterDraft ?? ""
+        ).trim();
+        state.propertyInspector.filterDraft = null;
+        state.propertyInspector.viewportOffset = 0;
+        state.status = state.propertyInspector.filter
+          ? `Filtered properties by “${state.propertyInspector.filter}”`
+          : "Property filter cleared";
+        break;
+      case "property-inspector.filter.cancel":
+        state.propertyInspector.filterDraft = null;
+        state.status = "Property filter unchanged";
+        break;
+      case "property-inspector.viewport.navigate": {
+        const maximum = Math.max(
+          0,
+          visiblePropertyInspectorEntries(state.propertyInspector).length * 2 + 8 -
+            pageSize(viewport),
+        );
+        const amount = intent.direction === "pageup" || intent.direction === "pagedown"
+          ? pageSize(viewport)
+          : 1;
+        if (intent.direction === "home") state.propertyInspector.viewportOffset = 0;
+        else if (intent.direction === "end") state.propertyInspector.viewportOffset = maximum;
+        else {
+          const delta = intent.direction === "up" || intent.direction === "pageup"
+            ? -amount
+            : amount;
+          state.propertyInspector.viewportOffset = Math.max(
+            0,
+            Math.min(maximum, state.propertyInspector.viewportOffset + delta),
+          );
+        }
         break;
       }
       case "backlinks.toggle":
@@ -1132,6 +1550,54 @@ export function createDetailController(
         ensureEditorCursorVisible(viewport);
         break;
       }
+      case "editor.viewport.scroll": {
+        const layout = editorLayout(viewport);
+        const visibleHeight = detailVisibleEditorHeight(state, viewport);
+        const maxOffset = Math.max(0, layout.rows.length - visibleHeight);
+        state.editorVisualOffset = Math.max(
+          0,
+          Math.min(maxOffset, state.editorVisualOffset + Math.trunc(intent.delta)),
+        );
+        state.editorViewportManual = true;
+        break;
+      }
+      case "editor.viewport.anchor": {
+        const layout = editorLayout(viewport);
+        const visualRow = detailEditorVisualRowForSourceLine(layout, intent.sourceLine);
+        if (visualRow !== null) {
+          const maxOffset = Math.max(
+            0,
+            layout.rows.length - detailVisibleEditorHeight(state, viewport),
+          );
+          state.editorVisualOffset = Math.max(0, Math.min(maxOffset, visualRow));
+          state.editorViewportManual = true;
+        }
+        break;
+      }
+      case "editor.cursor.place": {
+        const layout = editorLayout(viewport);
+        const position = detailEditorPositionAtVisualPoint(
+          layout,
+          state.buffer.lines,
+          intent.visualRow,
+          intent.contentColumn,
+        );
+        state.buffer.placeCursor(position.row, position.column);
+        state.completion = null;
+        ensureEditorCursorVisible(viewport);
+        break;
+      }
+      case "draft-preview.link.toggle":
+        if ((viewport.editorWidth ?? viewport.width) >= viewport.width) {
+          state.draftPreviewLinked = false;
+          state.status = "Linked scrolling requires the wide draft preview";
+          break;
+        }
+        state.draftPreviewLinked = !state.draftPreviewLinked;
+        state.status = state.draftPreviewLinked
+          ? "Draft preview scrolling linked by source line"
+          : "Draft preview scrolling independent";
+        break;
       case "buffer.select-all":
         state.buffer.selectAll();
         ensureEditorCursorVisible(viewport);
@@ -1212,8 +1678,13 @@ export function createDetailController(
         await focusOutliner(intent.announce ?? false);
         break;
       case "viewport.changed":
+        state.draftPreviewLinked = false;
+        state.editorViewportManual = false;
         if (isBufferMode()) ensureEditorCursorVisible(viewport);
         else if (state.mode === "file" && state.referencedFile) ensureFileCursorVisible(viewport);
+        break;
+      case "status.set":
+        state.status = intent.message;
         break;
       case "redraw":
         break;
@@ -1230,6 +1701,9 @@ export function createDetailController(
     },
     isBufferMode,
     dispatch,
+    setPreviewRegions(regions) {
+      reconcilePreviewRegions(state.previewRegions, regions);
+    },
     async onServiceEvent(event, viewport) {
       if (event.domain === "ui") {
         const command = event.command;

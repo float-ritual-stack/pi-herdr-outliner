@@ -23,6 +23,11 @@ export interface DetailEditorLayout {
   contentWidth: number;
 }
 
+export interface DetailEditorPosition {
+  row: number;
+  column: number;
+}
+
 interface Segment {
   text: string;
   width: number;
@@ -187,4 +192,43 @@ export function layoutDetailEditor(
 
 function segmentWidth(row: DetailEditorVisualRow): number {
   return row.endColumn - row.startColumn;
+}
+
+export function detailEditorPositionAtVisualPoint(
+  layout: Readonly<DetailEditorLayout>,
+  lines: readonly string[],
+  visualRow: number,
+  contentColumn: number,
+): DetailEditorPosition {
+  const row = layout.rows[Math.max(0, Math.min(Math.floor(visualRow), layout.rows.length - 1))];
+  if (!row) return { row: 0, column: 0 };
+  const line = lines[row.logicalRow] ?? "";
+  const targetDisplayColumn = Math.min(
+    row.endColumn,
+    row.startColumn + Math.max(0, Math.floor(contentColumn)),
+  );
+  let sourceColumn = 0;
+  let displayColumn = 0;
+  for (const grapheme of graphemeSegmenter.segment(line)) {
+    const nextDisplayColumn = displayColumn + visibleWidth(sanitizeDynamicText(grapheme.segment));
+    const nextSourceColumn = grapheme.index + grapheme.segment.length;
+    if (targetDisplayColumn < nextDisplayColumn) {
+      sourceColumn = targetDisplayColumn - displayColumn >=
+          (nextDisplayColumn - displayColumn) / 2
+        ? nextSourceColumn
+        : grapheme.index;
+      return { row: row.logicalRow, column: sourceColumn };
+    }
+    sourceColumn = nextSourceColumn;
+    displayColumn = nextDisplayColumn;
+  }
+  return { row: row.logicalRow, column: line.length };
+}
+
+export function detailEditorVisualRowForSourceLine(
+  layout: Readonly<DetailEditorLayout>,
+  logicalRow: number,
+): number | null {
+  const index = layout.rows.findIndex((row) => row.logicalRow >= logicalRow);
+  return index < 0 ? null : index;
 }

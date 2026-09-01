@@ -12,9 +12,12 @@ import outlinerExtension, {
   selectRecentFocusedOutlinerClient,
 } from "../pi-extension/index";
 import { OutlinerClient, type RequestInput } from "../src/client";
+import { OUTLINER_PROTOCOL_VERSION } from "../src/types";
 import type {
+  BlockEditActivityPage,
   Block,
   OutlinerClientRegistration,
+  RoadmapItemCreateInput,
   SelectionContext,
   VisibleBlockCollection,
 } from "../src/types";
@@ -97,6 +100,8 @@ test("registers the workspace commands and annotation-aware tools", () => {
     "outliner_focus",
     "outliner_publish",
     "outliner_create",
+    "outliner_roadmap_create",
+    "outliner_branch_rank",
     "outliner_capture",
     "outliner_annotate_file",
     "outliner_update",
@@ -260,7 +265,8 @@ test("nudges once per turn from prompt, focused block, or outliner tool text", a
     expect(containsConfiguredWorkPlaceholder("[[OTHER-XXX]]", "PIE")).toBe(false);
     expect(
       requests.every(({ action }) =>
-        action === "selection.get" || action === "work-ids.status"
+        action === "selection.get" || action === "work-ids.status" ||
+        action === "activity.recent"
       ),
     ).toBe(true);
   } finally {
@@ -270,7 +276,149 @@ test("nudges once per turn from prompt, focused block, or outliner tool text", a
   }
 });
 
+test("injects bounded user edit activity, deduplicates selection, and restores its watermark", async () => {
+  type EventHandler = (
+    event: Record<string, unknown>,
+    context: ExtensionContext,
+  ) => Promise<unknown> | unknown;
+  const handlers = new Map<string, EventHandler>();
+  const appended: Array<{ type: string; data: unknown }> = [];
+  const activityRequests: RequestInput[] = [];
+  const originalRequest = OutlinerClient.prototype.request;
+  const originalHerdrEnv = process.env.HERDR_ENV;
+  process.env.HERDR_ENV = "0";
+  let activityPage: BlockEditActivityPage = {
+    cursor: 11,
+    entries: [
+      {
+        cursor: 11,
+        block: {
+          id: "recent-block",
+          parentId: null,
+          position: 0,
+          text: `Recent title\n${"context ".repeat(100)}`,
+          author: "agent",
+          actorId: "omp",
+          createdAt: "created",
+          updatedAt: "updated",
+          properties: [],
+        },
+        author: "user",
+        actorId: "detail",
+        kind: "text",
+        editedAt: "2026-09-01T01:02:03.000Z",
+      },
+      {
+        cursor: 10,
+        block: {
+          id: "focused-block",
+          parentId: null,
+          position: 0,
+          text: "Focused title",
+          author: "user",
+          createdAt: "created",
+          updatedAt: "updated",
+          properties: [],
+        },
+        author: "user",
+        actorId: "tree",
+        kind: "text",
+        editedAt: "2026-09-01T01:00:00.000Z",
+      },
+    ],
+  };
+  OutlinerClient.prototype.request = async function <T>(input: RequestInput): Promise<T> {
+    if (input.action === "selection.get") {
+      return {
+        selected: {
+          id: "focused-block",
+          parentId: null,
+          position: 0,
+          text: `Focused title\n${"body ".repeat(500)}`,
+          author: "user",
+          createdAt: "created",
+          updatedAt: "updated",
+          properties: [],
+        },
+        ancestors: [],
+        children: [],
+      } as T;
+    }
+    if (input.action === "activity.recent") {
+      activityRequests.push(input);
+      return activityPage as T;
+    }
+    if (input.action === "work-ids.status") throw new Error("not configured");
+    throw new Error(`Unexpected request: ${input.action}`);
+  };
+  const pi = {
+    registerCommand() {},
+    registerTool() {},
+    registerEntryRenderer() {},
+    on(name: string, handler: EventHandler) {
+      handlers.set(name, handler);
+    },
+    appendEntry(type: string, data: unknown) {
+      appended.push({ type, data });
+    },
+  } as unknown as ExtensionAPI;
+  const context = {
+    sessionManager: {
+      getSessionId: () => "restored-session",
+      getBranch: () => [{
+        type: "custom",
+        customType: "pi-outliner.activity-watermark",
+        data: { version: 1, cursor: 7 },
+      }],
+    },
+    ui: {
+      setStatus() {},
+      notify() {},
+    },
+  } as unknown as ExtensionContext;
+
+  try {
+    createOutlinerExtension("omp")(pi);
+    await handlers.get("session_start")!({}, context);
+    const first = await handlers.get("before_agent_start")!({
+      systemPrompt: "base",
+      prompt: "continue",
+    }, context) as { systemPrompt: string };
+    expect(activityRequests[0]).toMatchObject({
+      action: "activity.recent",
+      afterCursor: 7,
+      limit: 5,
+      author: "user",
+    });
+    expect(first.systemPrompt).toContain("Recently user-edited Outliner blocks:");
+    expect(first.systemPrompt).toContain(
+      "[recent-block] Recent title · edited 2026-09-01T01:02:03.000Z",
+    );
+    expect(first.systemPrompt.match(/\[focused-block\]/g)).toHaveLength(1);
+    expect(first.systemPrompt.length).toBeLessThanOrEqual(4_010);
+    expect(appended).toContainEqual({
+      type: "pi-outliner.activity-watermark",
+      data: { version: 1, cursor: 11 },
+    });
+
+    activityPage = { entries: [], cursor: 11 };
+    await handlers.get("before_agent_start")!({
+      systemPrompt: "base",
+      prompt: "continue",
+    }, context);
+    expect(activityRequests[1]).toMatchObject({
+      action: "activity.recent",
+      afterCursor: 11,
+    });
+    expect(appended).toHaveLength(1);
+  } finally {
+    OutlinerClient.prototype.request = originalRequest;
+    if (originalHerdrEnv === undefined) delete process.env.HERDR_ENV;
+    else process.env.HERDR_ENV = originalHerdrEnv;
+  }
+});
 test("drives an explicit task through context, focus, durable proof, and completion", async () => {
+
   interface ToolDefinition {
     name: string;
     execute(
@@ -334,7 +482,7 @@ test("drives an explicit task through context, focus, durable proof, and complet
   OutlinerClient.prototype.request = async function <T>(input: RequestInput): Promise<T> {
     requests.push(input);
     if (input.action === "ping") {
-      return { status: "ready", protocolVersion: 22 } as T;
+      return { status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION } as T;
     }
     if (input.action === "pages.resolve") {
       return (input.address === "PIE-144"
@@ -468,12 +616,20 @@ test("drives an explicit task through context, focus, durable proof, and complet
     outlinerExtension(pi);
     const resources = await handlers.get("resources_discover")!({}, context) as {
       skillPaths: string[];
+      promptPaths: string[];
     };
     expect(resources.skillPaths[0]).toEndWith(
       "pi-extension/skills/outliner-workflow/SKILL.md",
     );
     expect(resources.skillPaths[1]).toEndWith(
       "pi-extension/skills/work-placeholder-resolver/SKILL.md",
+    );
+    expect(resources.promptPaths).toHaveLength(2);
+    expect(resources.promptPaths[0]).toEndWith(
+      "pi-extension/prompts/roadmap-item.md",
+    );
+    expect(resources.promptPaths[1]).toEndWith(
+      "pi-extension/prompts/roadmap-report.md",
     );
 
     const started = JSON.parse(
@@ -568,7 +724,7 @@ test("drives an explicit task through context, focus, durable proof, and complet
   }
 });
 
-test("requires protocol v22, attributes agent creates and page follows, and presents bounded query results", async () => {
+test("requires the current protocol, attributes agent creates and page follows, and presents bounded query results", async () => {
   const collection: VisibleBlockCollection = {
     blocks: [
       {
@@ -587,7 +743,7 @@ test("requires protocol v22, attributes agent creates and page follows, and pres
     ],
     completeness: { kind: "truncated", limit: 20 },
   };
-  let protocolVersion = 22;
+  let protocolVersion: number = OUTLINER_PROTOCOL_VERSION;
   let queryCollection = collection;
   let queryError: Error | undefined;
   const requests: RequestInput[] = [];
@@ -598,7 +754,23 @@ test("requires protocol v22, attributes agent creates and page follows, and pres
       if (queryError) throw queryError;
       return queryCollection as unknown as T;
     }
+    if (input.action === "properties.catalog") return [] as T;
     if (input.action === "create") return {} as T;
+    if (input.action === "roadmap.items.create") {
+      return {
+        workId: "PIE-153",
+        workQueueId: "work-queue",
+        block: { id: "roadmap-block" },
+        memberships: [{ viewId: "next-view", title: "Next" }],
+      } as T;
+    }
+    if (input.action === "virtual.occurrences.reorder") {
+      return input.orderedBlockIds.map((blockId, rank) => ({
+        viewId: input.viewId,
+        blockId,
+        rank,
+      })) as T;
+    }
     if (input.action === "pages.follow") return { created: true } as T;
     if (input.action === "work-ids.status") return { prefix: "PIE" } as T;
     if (input.action === "work-ids.configure") return { prefix: input.prefix } as T;
@@ -632,9 +804,11 @@ test("requires protocol v22, attributes agent creates and page follows, and pres
     name: string;
     execute(
       id: string,
-      params: {
+      params: Partial<RoadmapItemCreateInput> & {
         text?: string;
         limit?: number;
+        key?: string;
+        propertyScope?: "block" | "line" | "inline" | "all";
         parentId?: string | null;
         operation?: "follow" | "status" | "configure" | "allocate";
         address?: string;
@@ -642,6 +816,8 @@ test("requires protocol v22, attributes agent creates and page follows, and pres
         expectedUpdatedAt?: string;
         prefix?: string;
         role?: "tree" | "detail";
+        viewId?: string;
+        orderedBlockIds?: string[];
       },
       signal?: AbortSignal,
       onUpdate?: unknown,
@@ -700,7 +876,14 @@ test("requires protocol v22, attributes agent creates and page follows, and pres
       },
     });
     queryError = undefined;
-    const result = await tools.get("outliner_query")!.execute("query-id", { text: "Matching" });
+    const result = await tools.get("outliner_query")!.execute("query-id", {
+      text: "Matching",
+      propertyScope: "inline",
+    });
+    await tools.get("outliner_property_catalog")!.execute("catalog-id", {
+      key: "status",
+      propertyScope: "all",
+    });
     await tools.get("outliner_create")!.execute(
       "tool-call-test",
       { text: "Agent-created artifact", parentId: null },
@@ -718,6 +901,28 @@ test("requires protocol v22, attributes agent creates and page follows, and pres
     await tools.get("outliner_work_id")!.execute("work-status", {
       operation: "status",
     });
+    const roadmapResult = await tools.get("outliner_roadmap_create")!.execute(
+      "roadmap-create-test",
+      {
+        title: "Atomic roadmap",
+        body: "Complete contract",
+        priority: "high",
+        project: "pi-outliner",
+        arc: "safety-agency",
+        tracks: ["interactive-documents"],
+        relatedTo: ["related-block"],
+      },
+      undefined,
+      undefined,
+      context,
+    );
+    const rankResult = await tools.get("outliner_branch_rank")!.execute(
+      "rank-test",
+      {
+        viewId: "next-view",
+        orderedBlockIds: ["roadmap-block", "other-block"],
+      },
+    );
     await tools.get("outliner_work_id")!.execute("work-configure", {
       operation: "configure",
       prefix: "PIE",
@@ -763,9 +968,14 @@ test("requires protocol v22, attributes agent creates and page follows, and pres
       },
       {
         action: "blocks.query",
-        query: { text: "Matching", limit: 100 },
+        query: { text: "Matching", propertyScope: "inline", limit: 100 },
       },
     ]);
+    expect(requests.find((request) => request.action === "properties.catalog")).toEqual({
+      action: "properties.catalog",
+      key: "status",
+      propertyScope: "all",
+    });
     expect(requests.find((request) => request.action === "create")).toEqual({
       action: "create",
       text: "Agent-created artifact",
@@ -802,6 +1012,42 @@ test("requires protocol v22, attributes agent creates and page follows, and pres
     expect(requests.find((request) => request.action === "clients.list")).toEqual({
       action: "clients.list",
       role: "tree",
+    });
+    expect(requests.find((request) => request.action === "roadmap.items.create")).toEqual({
+      action: "roadmap.items.create",
+      input: {
+        title: "Atomic roadmap",
+        body: "Complete contract",
+        priority: "high",
+        project: "pi-outliner",
+        arc: "safety-agency",
+        tracks: ["interactive-documents"],
+        relatedTo: ["related-block"],
+      },
+      author: "agent",
+      provenance: {
+        actorId: "pi",
+        sessionId: "session-test",
+        taskId: "roadmap-create-test",
+      },
+    });
+    expect(requests.find((request) =>
+      request.action === "virtual.occurrences.reorder"
+    )).toEqual({
+      action: "virtual.occurrences.reorder",
+      viewId: "next-view",
+      orderedBlockIds: ["roadmap-block", "other-block"],
+    });
+    expect(JSON.parse(roadmapResult.content[0]!.text)).toMatchObject({
+      workId: "PIE-153",
+      workQueueId: "work-queue",
+    });
+    expect(JSON.parse(rankResult.content[0]!.text)).toEqual({
+      viewId: "next-view",
+      ranks: [
+        { viewId: "next-view", blockId: "roadmap-block", rank: 0 },
+        { viewId: "next-view", blockId: "other-block", rank: 1 },
+      ],
     });
     expect(widgets).toEqual([
       {
@@ -852,7 +1098,7 @@ test("requires protocol v22, attributes agent creates and page follows, and pres
     expect(largeEnvelope.presentation.omitted).toBeGreaterThan(0);
     protocolVersion = 5;
     await expect(tools.get("outliner_query")!.execute("incompatible-query", {})).rejects.toThrow(
-      "Incompatible outliner protocol 5; expected 22",
+      "Incompatible outliner protocol 5; expected 25",
     );
   } finally {
     OutlinerClient.prototype.request = originalRequest;
@@ -908,7 +1154,7 @@ test("captures through command, tool, and exact standalone dispatch without an a
   OutlinerClient.prototype.request = async function <T>(input: RequestInput): Promise<T> {
     requests.push(input);
     if (input.action === "ping") {
-      return { status: "ready", protocolVersion: 22 } as T;
+      return { status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION } as T;
     }
     if (input.action === "selection.get") {
       return {

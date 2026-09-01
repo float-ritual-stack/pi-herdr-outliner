@@ -36,16 +36,20 @@ import {
 import {
   OUTLINER_PROTOCOL_VERSION,
   type Block,
+  type BlockEditActivityPage,
   type BlockProvenance,
   type BrowsingContextState,
   type CaptureReceipt,
   type CaptureSource,
   type OutlinerClientRegistration,
   type OutlinerServiceStatus,
+  type MutationProvenance,
   type PropertyCatalogItem,
   type PageAddressResolution,
   type PropertyPatchOperation,
   type SelectionContext,
+  type RoadmapItemCreateReceipt,
+  type VirtualOccurrenceRank,
   type VisibleBlockCollection,
   type WorkIdAllocatorStatus,
   type WorkspaceSnapshot,
@@ -68,6 +72,19 @@ function toolProvenance(
     actorId,
     sessionId: context.sessionManager.getSessionId(),
     taskId: toolCallId,
+  };
+}
+
+function agentMutation(
+  actorId: OutlinerHostActorId,
+  context: ExtensionContext,
+  taskId?: string,
+): MutationProvenance {
+  return {
+    author: "agent",
+    actorId,
+    sessionId: context.sessionManager.getSessionId(),
+    ...(taskId ? { taskId } : {}),
   };
 }
 
@@ -463,6 +480,8 @@ async function ensureService(focus: boolean): Promise<void> {
 
 const MAX_SELECTION_CONTEXT_CHARS = 4_000;
 const ACTIVE_TASK_ENTRY_TYPE = "pi-outliner.active-task";
+const ACTIVITY_WATERMARK_ENTRY_TYPE = "pi-outliner.activity-watermark";
+const INITIAL_ACTIVITY_HORIZON_MS = 7 * 24 * 60 * 60 * 1_000;
 const OUTLINER_PRESENCE_SOURCE = "float.pi-outliner.agent";
 const OUTLINER_PRESENCE_TTL_MS = 600_000;
 let herdrMetadataSequence = 0;
@@ -479,6 +498,27 @@ type DurableArtifactType =
 interface ActiveTaskEntryData {
   version: 1;
   blockId: string | null;
+}
+
+interface ActivityWatermarkEntryData {
+  version: 1;
+  cursor: number;
+}
+
+function restoredActivityCursor(entries: readonly unknown[]): number | null {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (typeof entry !== "object" || entry === null) continue;
+    const record = entry as Record<string, unknown>;
+    if (record.type !== "custom" || record.customType !== ACTIVITY_WATERMARK_ENTRY_TYPE) continue;
+    const data = record.data;
+    if (typeof data !== "object" || data === null) return null;
+    const state = data as Partial<ActivityWatermarkEntryData>;
+    return state.version === 1 && Number.isSafeInteger(state.cursor) && (state.cursor ?? -1) >= 0
+      ? state.cursor!
+      : null;
+  }
+  return null;
 }
 
 function restoredActiveTaskId(entries: readonly unknown[]): string | null {
@@ -736,6 +776,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
   return function outlinerExtension(pi: ExtensionAPI): void {
   let activeTaskId: string | null = null;
   let focusRegistry: HerdrRuntimeRegistry | null = null;
+  let activityCursor: number | null = null;
   let focusRunner: HerdrRegistryRunner | null = null;
   let workPlaceholderNudgedThisTurn = false;
 
@@ -841,6 +882,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
         blockId: task.id,
         expectedUpdatedAt: task.updatedAt,
         operations: [propertyTransition(task, "work-stage", "doing")],
+        mutation: agentMutation(actorId, context, "outliner-task:start"),
       });
     persistActiveTask(updated.id);
     const activity = context.isIdle?.() === false ? "working" : "idle";
@@ -862,6 +904,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
       blockId: task.id,
       expectedUpdatedAt: task.updatedAt,
       operations: [propertyTransition(task, "work-stage", "next")],
+      mutation: agentMutation(actorId, context, "outliner-task:pause"),
     });
     persistActiveTask(null);
     const presenceReported = await presentTask(context, null, "clear");
@@ -905,6 +948,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
       blockId: task.id,
       expectedUpdatedAt: task.updatedAt,
       operations,
+      mutation: agentMutation(actorId, context, "outliner-task:complete"),
     });
     persistActiveTask(null);
     const presenceReported = await presentTask(context, null, "clear");
@@ -986,6 +1030,53 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
     );
   }
 
+  async function recentUserActivityContext(): Promise<string> {
+    const focused = await lastFocusedPaneContext();
+    const selected = focused?.selected ?? (
+      activeTaskId
+        ? null
+        : (await client.request<SelectionContext>({ action: "selection.get" }, 250)).selected
+    );
+    const excluded = new Set(
+      [selected?.id, activeTaskId].filter((id): id is string => Boolean(id)),
+    );
+    const request = activityCursor === null
+      ? {
+          action: "activity.recent" as const,
+          since: new Date(Date.now() - INITIAL_ACTIVITY_HORIZON_MS).toISOString(),
+          limit: 5,
+          author: "user" as const,
+        }
+      : {
+          action: "activity.recent" as const,
+          afterCursor: activityCursor,
+          limit: 5,
+          author: "user" as const,
+        };
+    const activity = await client.request<BlockEditActivityPage>(request, 250);
+    if (activity.cursor !== activityCursor) {
+      activityCursor = activity.cursor;
+      pi.appendEntry<ActivityWatermarkEntryData>(ACTIVITY_WATERMARK_ENTRY_TYPE, {
+        version: 1,
+        cursor: activity.cursor,
+      });
+    }
+    const entries = activity.entries
+      .filter((entry) => !excluded.has(entry.block.id))
+      .map((entry) => {
+        const summary = entry.kind === "properties" && entry.block.properties.length > 0
+          ? entry.block.properties
+            .slice(0, 4)
+            .map((property) => `${property.key}=${property.value}`)
+            .join(", ")
+          : entry.block.text.replace(/\s+/g, " ").trim().slice(0, 240);
+        return `- [${entry.block.id}] ${blockDisplayTitle(entry.block)} · edited ${entry.editedAt}${summary ? ` · ${summary}` : ""}`;
+      });
+    return entries.length > 0
+      ? `Recently user-edited Outliner blocks:\n${entries.join("\n")}`
+      : "";
+  }
+
   async function selectedAgentBlockText(): Promise<string> {
     const focused = await lastFocusedPaneContext();
     if (focused?.selected) return focused.selected.text;
@@ -1005,11 +1096,17 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
         "SKILL.md",
       ),
     ],
+    promptPaths: [
+      join(extensionRoot, "pi-extension", "prompts", "roadmap-item.md"),
+      join(extensionRoot, "pi-extension", "prompts", "roadmap-report.md"),
+    ],
   }));
 
   pi.on("session_start", async (_event, context) => {
     startFocusTracker();
-    activeTaskId = restoredActiveTaskId(context.sessionManager.getBranch());
+    const sessionEntries = context.sessionManager.getBranch();
+    activeTaskId = restoredActiveTaskId(sessionEntries);
+    activityCursor = restoredActivityCursor(sessionEntries);
     if (!activeTaskId) {
       await presentTask(context, null, "clear");
       return;
@@ -1415,6 +1512,76 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
   });
 
   pi.registerTool({
+    ...outlinerToolPresentation("Outliner Roadmap Create"),
+    name: "outliner_roadmap_create",
+    label: "Outliner Roadmap Create",
+    description:
+      "Atomically create a canonical roadmap item under the project's work queue with an immutable Work ID and complete routing metadata",
+    promptSnippet:
+      "Create roadmap work atomically; default new work to unprioritized unless promotion was explicitly requested",
+    parameters: Type.Object({
+      title: Type.String({ description: "Concise title without a Work ID or property tokens" }),
+      body: Type.Optional(Type.String({ description: "Detailed contract, context, and acceptance criteria" })),
+      priority: Type.Union([
+        Type.Literal("high"),
+        Type.Literal("medium"),
+        Type.Literal("low"),
+      ]),
+      workStage: Type.Optional(Type.Union([
+        Type.Literal("unprioritized"),
+        Type.Literal("next"),
+        Type.Literal("doing"),
+        Type.Literal("review"),
+        Type.Literal("validate"),
+        Type.Literal("later"),
+      ])),
+      project: Type.String(),
+      arc: Type.String(),
+      tracks: Type.Array(Type.String(), { minItems: 1 }),
+      dependsOn: Type.Optional(Type.Array(Type.String())),
+      relatedTo: Type.Optional(Type.Array(Type.String())),
+      sourceBlockId: Type.Optional(Type.String()),
+    }),
+    async execute(toolCallId, params, _signal, _onUpdate, context) {
+      await ensureService(false);
+      const receipt = await client.request<RoadmapItemCreateReceipt>({
+        action: "roadmap.items.create",
+        input: params,
+        author: "agent",
+        provenance: toolProvenance(actorId, context, toolCallId),
+      });
+      return toolResult(receipt);
+    },
+  });
+
+  pi.registerTool({
+    ...outlinerToolPresentation("Outliner Branch Rank"),
+    name: "outliner_branch_rank",
+    label: "Outliner Branch Rank",
+    description:
+      "Replace the explicit occurrence order for a virtual branch without moving canonical blocks or changing work-stage",
+    promptSnippet:
+      "Rank roadmap items inside a virtual lane or track separately from canonical hierarchy and stage",
+    parameters: Type.Object({
+      viewId: Type.String({ description: "Canonical virtual-branch block UUID" }),
+      orderedBlockIds: Type.Array(Type.String(), {
+        minItems: 1,
+        description:
+          "Canonical block UUIDs in desired relative order; omitted existing ranks retain their relative slots",
+      }),
+    }),
+    async execute(_id, params) {
+      await ensureService(false);
+      const ranks = await client.request<VirtualOccurrenceRank[]>({
+        action: "virtual.occurrences.reorder",
+        viewId: params.viewId,
+        orderedBlockIds: params.orderedBlockIds,
+      });
+      return toolResult({ viewId: params.viewId, ranks });
+    },
+  });
+
+  pi.registerTool({
     ...outlinerToolPresentation("Outliner Capture"),
     name: "outliner_capture",
     label: "Outliner Capture",
@@ -1482,7 +1649,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
       text: Type.String(),
       expectedUpdatedAt: Type.String(),
     }),
-    async execute(_id, params) {
+    async execute(toolCallId, params, _signal, _onUpdate, context) {
       await ensureService(false);
       return toolResult(
         await client.request<Block>({
@@ -1490,6 +1657,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
           blockId: params.blockId,
           text: params.text,
           expectedUpdatedAt: params.expectedUpdatedAt,
+          mutation: agentMutation(actorId, context, toolCallId),
         }),
       );
     },
@@ -1506,7 +1674,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
       expectedUpdatedAt: Type.String(),
       operations: Type.Array(propertyPatchOperationSchema, { minItems: 1 }),
     }),
-    async execute(_id, params) {
+    async execute(toolCallId, params, _signal, _onUpdate, context) {
       await ensureService(false);
       return toolResult(
         await client.request<Block>({
@@ -1514,6 +1682,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
           blockId: params.blockId,
           expectedUpdatedAt: params.expectedUpdatedAt,
           operations: params.operations,
+          mutation: agentMutation(actorId, context, toolCallId),
         }),
       );
     },
@@ -1523,12 +1692,21 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
     ...outlinerToolPresentation("Outliner Property Catalog"),
     name: "outliner_property_catalog",
     label: "Outliner Property Catalog",
-    description: "List observed property key/value pairs with occurrence counts",
-    promptSnippet: "Inspect observed outliner property keys and values",
+    description:
+      "List observed property key/value pairs with occurrence counts; defaults to block metadata",
+    promptSnippet: "Inspect observed outliner property keys and values by scope",
     parameters: Type.Object({
       key: Type.Optional(Type.String()),
       prefix: Type.Optional(Type.String()),
       limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+      propertyScope: Type.Optional(
+        Type.Union([
+          Type.Literal("block"),
+          Type.Literal("line"),
+          Type.Literal("inline"),
+          Type.Literal("all"),
+        ]),
+      ),
     }),
     async execute(_id, params) {
       await ensureService(false);
@@ -1671,8 +1849,8 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
     name: "outliner_query",
     label: "Outliner Query",
     description:
-      "Query blocks by text and indexed inline properties; returns completeness metadata for bounded results",
-    promptSnippet: "Query shared blocks by text or [property::value]",
+      "Query blocks by text and scoped properties; property filters default to block metadata and return match context for broader scopes",
+    promptSnippet: "Query shared blocks by text or scoped property",
     parameters: Type.Object({
       text: Type.Optional(Type.String()),
       filters: Type.Optional(
@@ -1684,6 +1862,14 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
         ),
       ),
       subtreeRootId: Type.Optional(Type.String()),
+      propertyScope: Type.Optional(
+        Type.Union([
+          Type.Literal("block"),
+          Type.Literal("line"),
+          Type.Literal("inline"),
+          Type.Literal("all"),
+        ]),
+      ),
       limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
     }),
     async execute(_id, params) {
@@ -1810,11 +1996,17 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
   pi.on("before_agent_start", async (event) => {
     workPlaceholderNudgedThisTurn = false;
     let context = "";
+    let activity = "";
     let selectedText = "";
     try {
       context = await agentWorkspaceContext();
     } catch {
       // The outliner remains optional until a task or workspace is explicitly opened.
+    }
+    try {
+      activity = await recentUserActivityContext();
+    } catch {
+      // Activity context is advisory; a failed query must not advance its watermark.
     }
     try {
       selectedText = await selectedAgentBlockText();
@@ -1839,7 +2031,8 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
     } catch {
       // A missing allocator configuration cannot define the canonical placeholder prefix.
     }
-    const additions = [context, nudge].filter(Boolean);
+    const workspace = boundAgentContext([context, activity].filter(Boolean).join("\n\n"));
+    const additions = [workspace, nudge].filter(Boolean);
     if (additions.length > 0) {
       return { systemPrompt: `${event.systemPrompt}\n\n${additions.join("\n\n")}` };
     }

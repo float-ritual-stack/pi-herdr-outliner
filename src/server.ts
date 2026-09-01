@@ -18,6 +18,7 @@ import {
   type OutlinerNavigationIntent,
   type PageAddressFollowResult,
   type OutlinerRequest,
+  type RoadmapItemCreateReceipt,
   type OutlinerResponse,
 } from "./types";
 
@@ -510,6 +511,13 @@ export class OutlinerServer {
             request.provenance,
           );
           break;
+        case "roadmap.items.create":
+          result = this.store.createRoadmapItem(
+            request.input,
+            request.author,
+            request.provenance,
+          );
+          break;
         case "capture.create":
           result = this.store.capture(
             request.requestId,
@@ -521,7 +529,12 @@ export class OutlinerServer {
           );
           break;
         case "update":
-          result = this.store.update(request.blockId, request.text, request.expectedUpdatedAt);
+          result = this.store.update(
+            request.blockId,
+            request.text,
+            request.expectedUpdatedAt,
+            request.mutation,
+          );
           break;
         case "move":
           result = this.store.move(request.blockId, request.parentId, request.position);
@@ -595,10 +608,24 @@ export class OutlinerServer {
             request.blockId,
             request.expectedUpdatedAt,
             request.operations,
+            request.mutation,
           );
           break;
+        case "activity.recent":
+          result = this.store.recentEditActivity({
+            afterCursor: request.afterCursor,
+            since: request.since,
+            limit: request.limit,
+            author: request.author,
+          });
+          break;
         case "properties.catalog":
-          result = this.store.propertyCatalog(request.key, request.prefix, request.limit);
+          result = this.store.propertyCatalog(
+            request.key,
+            request.prefix,
+            request.limit,
+            request.propertyScope,
+          );
           break;
         case "selection.get":
           result = this.store.getSelection();
@@ -640,6 +667,10 @@ export class OutlinerServer {
       case "create":
         domain = "content";
         blockId = (response.result as Block).id;
+        break;
+      case "roadmap.items.create":
+        domain = "content";
+        blockId = (response.result as RoadmapItemCreateReceipt).block.id;
         break;
       case "capture.create": {
         const receipt = response.result as CaptureReceipt;

@@ -454,6 +454,53 @@ describe("outliner link rendering", () => {
       outlinerLinkUri("block", targetId),
     );
   });
+  test("gives titled page links precedence over nested Work-ID styling", () => {
+    const raw =
+      `[[PIE-123|some title · PIE-123]] and PIE-123 and ((${targetId}))`;
+    const titledTarget = block(targetId, "Target decision · PIE-123 [type::decision]");
+    const resolved = raw.replace(`((${targetId}))`, "((Target decision · PIE-123))");
+    const linker = createOutlinerTextLinker(
+      raw,
+      (id) => id === targetId ? titledTarget : null,
+      "PIE",
+    );
+    const rendered = linker.link(resolved);
+
+    expect(stripTerminalSequences(rendered)).toBe(resolved);
+    expect(getOsc8LinkAtColumn(rendered, 3)).toBe(outlinerLinkUri("page", "PIE-123"));
+    expect(getOsc8LinkAtColumn(rendered, resolved.indexOf("some title") + 2)).toBe(
+      outlinerLinkUri("page", "PIE-123"),
+    );
+    expect(getOsc8LinkAtColumn(rendered, resolved.indexOf("and PIE-123") + 6)).toBe(
+      outlinerLinkUri("work", "PIE-123"),
+    );
+    expect(getOsc8LinkAtColumn(rendered, resolved.indexOf("Target decision") + 2)).toBe(
+      outlinerLinkUri("block", targetId),
+    );
+    expect(firstOutlinerReference(raw, "PIE")).toEqual({
+      kind: "page",
+      value: "PIE-123",
+    });
+  });
+
+  test("preserves heading and callout structure around titled links", () => {
+    const raw = [
+      "# [[PIE-123|Heading label]]",
+      "> [!note]",
+      "> [[PIE-123|Callout label]]",
+    ].join("\n");
+    const linked = linkOutlinerMarkdown(raw, raw, "PIE");
+
+    expect(linked).toContain(
+      `# [[[PIE-123|Heading label\\]\\]](${outlinerLinkUri("page", "PIE-123")})`,
+    );
+    expect(linked).toContain(
+      `> [[[PIE-123|Callout label\\]\\]](${outlinerLinkUri("page", "PIE-123")})`,
+    );
+    expect(linked.match(/pi-outliner:\/\/page\//g)).toHaveLength(2);
+    expect(linked).not.toContain(outlinerLinkUri("work", "PIE-123"));
+  });
+
 
   test("links resolved durable fragments to fragment-aware block URIs", () => {
     const anchored = block(targetId, "Target decision\n\n## Durable ^durable");

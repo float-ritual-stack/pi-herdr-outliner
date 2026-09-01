@@ -1,7 +1,9 @@
-import { getOsc8LinkAtColumn, stripTerminalSequences } from "@earendil-works/pi-tui";
+import { getOsc8LinkAtColumn, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "bun:test";
+import { DEFAULT_OUTLINER_ACTION_KEYMAP } from "../src/outliner-actions";
 import type { TreeView } from "../src/tree-controller";
 import { renderTreeFrame } from "../src/tree-renderer";
+import { truncate } from "../src/terminal";
 import type { VisibleBlock } from "../src/types";
 import type {
   PhysicalTreeRow,
@@ -55,9 +57,13 @@ function occurrence(
     rowId: `occurrence:${viewId}:${canonical.id}`,
     canonicalId: canonical.id,
     viewId,
+    matchRootCanonicalId: canonical.id,
+    parentRowId: viewId,
+    relativeDepth: 0,
     block: canonical,
     depth,
     hasChildren: false,
+    collapsed: false,
     multilineExpanded,
   };
 }
@@ -83,7 +89,9 @@ function branchState(overrides: Partial<VirtualBranchState> = {}): VirtualBranch
     creationErrors: [],
     queryError: null,
     count: 0,
+    descendantCount: 0,
     completeness: { kind: "complete" },
+    truncation: { rootQuery: false, depth: false, budget: false },
     queried: true,
     ...overrides,
   };
@@ -103,6 +111,8 @@ function view(
         row.block,
       ]),
     ),
+    physicalRowCount: rows.filter((row) => row.kind === "physical").length,
+    occurrenceRowCount: rows.filter((row) => row.kind === "occurrence").length,
     workIdPrefix: "PIE",
     visibleCompleteness: { kind: "complete" },
     branchStates: new Map(),
@@ -125,10 +135,10 @@ function view(
   };
 }
 
-const HELP =
-  "↑↓ browse/preview  Enter read  e edit  D new Detail  o open next unlocked  R reveal  g goto";
-const NARROW_HELP =
-  "↑↓ browse/preview  Enter read  e edit  D new Detail  o open next unlocked  R re…";
+const HELP = DEFAULT_OUTLINER_ACTION_KEYMAP.helpText("tree", "browse");
+const NARROW_HELP = truncate(HELP, 80);
+const PANE_MENU = "\x1b]8;;pi-outliner-action:tree.menu.open\x1b\\[⋯]\x1b]8;;\x1b\\";
+const HEADER = `\x1b[1;36mOutliner\x1b[0m  \x1b[2m/w\x1b[0m  ${PANE_MENU}`;
 
 describe("renderTreeFrame", () => {
   test("renders a representative browse frame exactly", () => {
@@ -145,10 +155,11 @@ describe("renderTreeFrame", () => {
     const rendered = renderTreeFrame(view([root, child]), 80, 9);
 
     expect(rendered).toEqual({
+      mouseTargets: expect.any(Array),
       scrollStartEntryIndex: 0,
       frame: [
         "\x1b[H\x1b[2J",
-        "\x1b[1;36mOutliner\x1b[0m  \x1b[2m/w\x1b[0m",
+        HEADER,
         "\x1b[2m2 physical blocks · 0 projected occurrences\x1b[0m",
         "─".repeat(80),
         "\x1b[48;5;238m\x1b[1m▾ Root   \x1b[0m",
@@ -159,6 +170,28 @@ describe("renderTreeFrame", () => {
       ].join("\n"),
     });
   });
+  test("renders a narrow keyboard menu with clickable pane and action links", () => {
+    const rendered = renderTreeFrame(view([], {
+      mode: "action-menu",
+      actionMenuItems: DEFAULT_OUTLINER_ACTION_KEYMAP.menuItems("tree", "browse"),
+      actionMenuIndex: 0,
+      actionMenuOrigin: { column: 5, row: 5 },
+      status: "Choose an action",
+    }), 40, 9).frame.split("\n");
+    const header = rendered[1]!;
+    const menuColumn = stripTerminalSequences(header).indexOf("[⋯]") + 1;
+    expect(getOsc8LinkAtColumn(header, menuColumn)).toBe(
+      "pi-outliner-action:tree.menu.open",
+    );
+    expect(rendered.join("\n")).toContain("pi-outliner-action:tree.edit");
+    expect(rendered[6]).toStartWith("     ");
+    expect(rendered.at(-1)).toContain("↵ invoke");
+    expect(rendered.map((line) => ({
+      text: stripTerminalSequences(line),
+      width: visibleWidth(line),
+    })).filter((line) => line.width > 40)).toEqual([]);
+  });
+
 
   test("renders work IDs and canonical UUIDs as OSC 8 outliner links", () => {
     const id = "550e8400-e29b-41d4-a716-446655440000";
@@ -245,9 +278,7 @@ describe("renderTreeFrame", () => {
       "  │ line 8",
     ]);
     expect(rendered.at(-2)).toBe("Expanded block rows 5-8/12");
-    expect(rendered.at(-1)).toBe(
-      "\x1b[2mEnter read  e edit  D new Detail  PgUp/…\x1b[0m",
-    );
+    expect(rendered.at(-1)).toBe(`\x1b[2m${truncate(HELP, 40)}\x1b[0m`);
   });
 
   test("places an add-child editor before existing descendants and renders completion rows", () => {
@@ -283,7 +314,7 @@ describe("renderTreeFrame", () => {
     ]);
     expect(rendered[8]).toBe("  • Existing   ");
     expect(rendered.at(-2)).toBe(
-      "Quick edit: ←→ cursor  Tab complete  Enter save  Shift+Enter/Ctrl+E multiline  Esc cancel",
+      truncate(DEFAULT_OUTLINER_ACTION_KEYMAP.helpText("tree", "add-child"), 80),
     );
   });
 
@@ -340,7 +371,11 @@ describe("renderTreeFrame", () => {
       ["valid", branchState({ count: 1 })],
       [
         "limited",
-        branchState({ count: 2, completeness: { kind: "truncated", limit: 2 } }),
+        branchState({
+          count: 2,
+          completeness: { kind: "truncated", limit: 2 },
+          truncation: { rootQuery: true, depth: false, budget: false },
+        }),
       ],
       [
         "invalid",
@@ -364,20 +399,21 @@ describe("renderTreeFrame", () => {
     const rendered = renderTreeFrame(view(rows, { branchStates }), 200, 12);
 
     expect(rendered).toEqual({
+      mouseTargets: expect.any(Array),
       scrollStartEntryIndex: 0,
       frame: [
         "\x1b[H\x1b[2J",
-        "\x1b[1;36mOutliner\x1b[0m  \x1b[2m/w\x1b[0m",
+        HEADER,
         "\x1b[2m5 physical blocks · 1 projected occurrence\x1b[0m",
         "─".repeat(200),
         "\x1b[48;5;238m\x1b[1m▾ Valid [V:1]   \x1b[0m",
         "  ◇ Card   ",
-        "• Limited [V:2 · TRUNCATED]   ",
+        "• Limited [V:2 · ROOT TRUNCATED]   ",
         "• Invalid [V:0 · CONFIG ERROR]   ",
         "• Failed [V:0 · QUERY ERROR]   ",
         "• Read only [V:0 · READ-ONLY]   ",
         "ready",
-        `\x1b[2m${HELP}\x1b[0m`,
+        `\x1b[2m${truncate(HELP, 200)}\x1b[0m`,
       ].join("\n"),
     });
     expect(valid.displayText).toBe("Valid");
@@ -405,16 +441,17 @@ describe("renderTreeFrame", () => {
     );
 
     expect(rendered).toEqual({
+      mouseTargets: expect.any(Array),
       scrollStartEntryIndex: 0,
       frame: [
         "\x1b[H\x1b[2J",
-        "\x1b[1;36mOutliner\x1b[0m  \x1b[2m/w\x1b[0m",
+        HEADER,
         "\x1b[2m1 physical block · 1 projected occurrence\x1b[0m",
         "─".repeat(80),
         "▾ Definition [V:1]   ",
         "\x1b[48;5;238m\x1b[1m  ◇ Canonical   \x1b[0m",
         "ready",
-        "\x1b[2m◇ occurrence  Enter read  e edit  D new Detail  o open next unlocked  R reveal\x1b[0m",
+        `\x1b[2m${NARROW_HELP}\x1b[0m`,
       ].join("\n"),
     });
     expect(rendered.frame).not.toContain("▸ Canonical");
@@ -454,7 +491,7 @@ describe("renderTreeFrame", () => {
     }), 120, 8).frame;
 
     expect(frame).toContain(
-      "Create canonical under Inbox · sets [status::active] · Enter save · Esc cancel",
+      "Create canonical under Inbox · sets [status::active] · ↵ save · ⎋ cancel",
     );
   });
 
@@ -557,8 +594,8 @@ describe("renderTreeFrame", () => {
       8,
     ).frame.split("\n");
     expect(captureFrame.at(-2)).toBe("\x1b[1mCapture 2/2:\x1b[0m Second line▏");
-    expect(captureFrame.at(-1)).toContain(
-      "type/paste  ↑↓ lines  Shift+Enter/Ctrl+E newline  Enter capture  Esc cancel",
+    expect(captureFrame.at(-1)).toBe(
+      `\x1b[2m${truncate(DEFAULT_OUTLINER_ACTION_KEYMAP.helpText("tree", "capture"), 100)}\x1b[0m`,
     );
 
     const gotoFrame = renderTreeFrame(
@@ -587,7 +624,7 @@ describe("renderTreeFrame", () => {
       "Goto:\x1b[0m road rev▏  1/1 40bd0864 · Roadmap review after the graveyard walk",
     );
     expect(gotoFrame.at(-1)).toBe(
-      "\x1b[2mtype ID/text  ↑↓ choose  Tab cycle  Enter jump  Esc cancel\x1b[0m",
+      `\x1b[2m${truncate(DEFAULT_OUTLINER_ACTION_KEYMAP.helpText("tree", "goto"), 100)}\x1b[0m`,
     );
 
     const deleteFrame = renderTreeFrame(view([selected], { mode: "delete" }), 80, 8).frame.split("\n");
@@ -606,7 +643,7 @@ describe("renderTreeFrame", () => {
       8,
     ).frame.split("\n");
     expect(purgeFrame.at(-2)).toContain("Purge PIE-999:");
-    expect(purgeFrame.at(-1)).toContain("type exact identifier");
+    expect(purgeFrame.at(-1)).toContain("↵ save");
 
     const viewer = renderTreeFrame(
       view([selected], {
@@ -625,7 +662,7 @@ describe("renderTreeFrame", () => {
       "\x1b[1;36m# Heading\x1b[0m",
       "\x1b[33m-\x1b[0m item",
       "",
-      "\x1b[2m↑↓ scroll  g/G ends  Esc close  1/2\x1b[0m",
+      `\x1b[2m${truncate(DEFAULT_OUTLINER_ACTION_KEYMAP.helpText("tree", "viewer"), 20)}\x1b[0m`,
     ].join("\n"));
   });
 
@@ -641,5 +678,76 @@ describe("renderTreeFrame", () => {
     const up = renderTreeFrame(view(rows, { selectedIndex: 0 }), 40, 8, down.scrollStartEntryIndex);
     expect(up.scrollStartEntryIndex).toBe(0);
     expect(up.frame).toContain("\x1b[48;5;238m\x1b[1m• row-0");
+  });
+
+  test("bounds block rendering work when selection jumps across a large complete projection", () => {
+    let displayTextReads = 0;
+    const rows = Array.from({ length: 20_000 }, (_, index) => {
+      const candidate = block(`large-${index}`, { position: index });
+      Object.defineProperty(candidate, "displayText", {
+        get() {
+          displayTextReads += 1;
+          return candidate.text;
+        },
+      });
+      return candidate;
+    });
+
+    const rendered = renderTreeFrame(view(rows, { selectedIndex: 15_000 }), 80, 10, 0);
+
+    expect(rendered.scrollStartEntryIndex).toBe(14_997);
+    expect(rendered.frame).toContain("\x1b[48;5;238m\x1b[1m• large-15000");
+    expect(displayTextReads).toBeLessThanOrEqual(4);
+  });
+
+  test("recomputes viewport bounds after width, expansion, and projection replacement", () => {
+    const longText = Array.from({ length: 24 }, () => "wrapping").join(" ");
+    const expanded = physical(block("expanded", { text: longText, displayText: longText }), {
+      multilineExpanded: true,
+    });
+    const selected = physical(block("selected"));
+    const expandedView = view([expanded, selected], { selectedIndex: 1 });
+
+    const wide = renderTreeFrame(expandedView, 100, 10, 0);
+    expect(wide.scrollStartEntryIndex).toBe(0);
+    const narrow = renderTreeFrame(expandedView, 20, 10, wide.scrollStartEntryIndex);
+    expect(narrow.scrollStartEntryIndex).toBe(1);
+    expect(narrow.frame).toContain("\x1b[48;5;238m\x1b[1m• selected");
+
+    const replacement = view([block("filtered-content")], { selectedIndex: 0 });
+    const replaced = renderTreeFrame(replacement, 20, 10, 15_000);
+    expect(replaced.scrollStartEntryIndex).toBe(0);
+    expect(replaced.frame).toContain("1 physical block");
+    expect(replaced.frame).toContain("\x1b[48;5;238m\x1b[1m• filtered-content");
+    expect(replaced.frame).not.toContain("selected");
+  });
+
+  test("renders contextual disclosure markers with exact mouse row targets", () => {
+    const definition = block("view", { hasChildren: true });
+    const canonicalRoot = block("root", { hasChildren: true });
+    const canonicalChild = block("child");
+    const root: VirtualBranchOccurrenceRow = {
+      ...occurrence(definition.id, canonicalRoot),
+      hasChildren: true,
+    };
+    const child: VirtualBranchOccurrenceRow = {
+      ...occurrence(definition.id, canonicalChild, 2),
+      rowId: "occurrence:view:root:child",
+      matchRootCanonicalId: root.canonicalId,
+      parentRowId: root.rowId,
+      relativeDepth: 1,
+    };
+
+    const rendered = renderTreeFrame(
+      view([physical(definition), root, child]),
+      80,
+      9,
+    );
+
+    expect(rendered.frame).toContain("  ▾ root");
+    expect(rendered.mouseTargets.find((target) => target?.rowId === root.rowId)).toEqual({
+      rowId: root.rowId,
+      disclosureColumn: 2,
+    });
   });
 });

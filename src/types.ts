@@ -6,14 +6,40 @@ export interface BlockProvenance {
   taskId?: string;
 }
 
+export interface MutationProvenance {
+  author: BlockAuthor;
+  actorId?: string;
+  sessionId?: string;
+  taskId?: string;
+}
+
+export interface BlockEditActivity {
+  cursor: number;
+  block: Block;
+  author: BlockAuthor;
+  actorId?: string;
+  sessionId?: string;
+  taskId?: string;
+  kind: "text" | "properties";
+  editedAt: string;
+}
+
+export interface BlockEditActivityPage {
+  entries: BlockEditActivity[];
+  cursor: number;
+}
+
 export interface BlockProperty {
   key: string;
   value: string;
 }
 
 export type PropertyPlacement = "inline" | "trailing-metadata" | "metadata-line";
+export type PropertyScope = "block" | "line" | "inline";
+export type PropertyQueryScope = PropertyScope | "all";
+export type PropertySyntax = "bracket" | "bare";
 
-export interface PropertyToken extends BlockProperty {
+export interface PropertyRecord extends BlockProperty {
   ordinal: number;
   raw: string;
   start: number;
@@ -21,6 +47,17 @@ export interface PropertyToken extends BlockProperty {
   line: number;
   column: number;
   placement: PropertyPlacement;
+  scope: PropertyScope;
+  syntax: PropertySyntax;
+}
+
+export interface PropertyMatchContext extends BlockProperty {
+  ordinal: number;
+  start: number;
+  end: number;
+  line: number;
+  column: number;
+  scope: PropertyScope;
 }
 
 export type PropertyPatchOperation =
@@ -130,6 +167,42 @@ export interface WorkIdAllocation {
   block: Block;
 }
 
+export type RoadmapItemPriority = "high" | "medium" | "low";
+
+export type RoadmapWorkStage =
+  | "unprioritized"
+  | "next"
+  | "doing"
+  | "review"
+  | "validate"
+  | "later";
+
+export interface RoadmapItemCreateInput {
+  title: string;
+  body?: string;
+  priority: RoadmapItemPriority;
+  workStage?: RoadmapWorkStage;
+  project: string;
+  arc: string;
+  tracks: string[];
+  dependsOn?: string[];
+  relatedTo?: string[];
+  sourceBlockId?: string;
+}
+
+export interface RoadmapBranchMembership {
+  viewId: string;
+  title: string;
+  rank?: number;
+}
+
+export interface RoadmapItemCreateReceipt {
+  workId: string;
+  workQueueId: string;
+  block: Block;
+  memberships: RoadmapBranchMembership[];
+}
+
 export interface PropertyFilter {
   key: string;
   value?: string;
@@ -139,6 +212,7 @@ export interface PropertyFilter {
 export interface BlockTraversalOptions {
   filters?: PropertyFilter[];
   subtreeRootId?: string;
+  propertyScope?: PropertyQueryScope;
 }
 
 export interface BlockSearchQuery {
@@ -147,6 +221,7 @@ export interface BlockSearchQuery {
   subtreeRootId?: string;
   rankViewId?: string;
   includeDeleted?: "roots" | "all";
+  propertyScope?: PropertyQueryScope;
   limit: number;
 }
 
@@ -159,6 +234,7 @@ export interface VisibleBlock extends Block {
   deletedDescendantCount?: number;
   hasChildren: boolean;
   displayText: string;
+  propertyMatches?: PropertyMatchContext[];
 }
 
 export interface VisibleBlockCollection {
@@ -241,7 +317,7 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 22;
+export const OUTLINER_PROTOCOL_VERSION = 25;
 
 
 export interface OutlinerServiceStatus {
@@ -300,6 +376,13 @@ export type OutlinerRequest =
     }
   | {
       id: string;
+      action: "roadmap.items.create";
+      input: RoadmapItemCreateInput;
+      author?: BlockAuthor;
+      provenance?: BlockProvenance;
+    }
+  | {
+      id: string;
       action: "capture.create";
       requestId: string;
       text: string;
@@ -308,7 +391,14 @@ export type OutlinerRequest =
       author?: BlockAuthor;
       provenance?: BlockProvenance;
     }
-  | { id: string; action: "update"; blockId: string; text: string; expectedUpdatedAt?: string }
+  | {
+      id: string;
+      action: "update";
+      blockId: string;
+      text: string;
+      expectedUpdatedAt?: string;
+      mutation: MutationProvenance;
+    }
   | { id: string; action: "move"; blockId: string; parentId: string | null; position?: number }
   | { id: string; action: "delete"; blockId: string }
   | { id: string; action: "trash.restore"; blockId: string }
@@ -351,8 +441,24 @@ export type OutlinerRequest =
       blockId: string;
       expectedUpdatedAt: string;
       operations: PropertyPatchOperation[];
+      mutation: MutationProvenance;
     }
-  | { id: string; action: "properties.catalog"; key?: string; prefix?: string; limit?: number }
+  | {
+      id: string;
+      action: "activity.recent";
+      afterCursor?: number;
+      since?: string;
+      limit?: number;
+      author?: BlockAuthor;
+    }
+  | {
+      id: string;
+      action: "properties.catalog";
+      key?: string;
+      prefix?: string;
+      limit?: number;
+      propertyScope?: PropertyQueryScope;
+    }
   | { id: string; action: "selection.get" }
   | { id: string; action: "selection.set"; blockId: string | null }
   | { id: string; action: "navigation.state" }

@@ -1,3 +1,9 @@
+import { truncateToWidth } from "@earendil-works/pi-tui";
+import {
+  actionMenuItemText,
+  DEFAULT_OUTLINER_ACTION_KEYMAP,
+  outlinerActionLink,
+} from "./outliner-actions";
 import { completionWindow } from "./completion";
 import { createOutlinerTextLinker } from "./outliner-links";
 import { quickInsertionPoint } from "./quick-edit";
@@ -6,6 +12,7 @@ import { layoutExpandedBlock } from "./tree-layout";
 import { renderMarkdownLine, truncate } from "./terminal";
 import type { Block, VisibleBlock } from "./types";
 import type { TreeQuickCompletion, TreeView } from "./tree-controller";
+import type { TreeMouseTarget } from "./tree-mouse";
 import {
   decorateVirtualBranchDefinitionText,
   virtualBranchStateLabel,
@@ -18,10 +25,15 @@ function countLabel(count: number, singular: string): string {
 }
 
 function branchStatusText(state: VirtualBranchState): string {
-  const details = [countLabel(state.count, "projected occurrence")];
-  if (state.completeness?.kind === "truncated") {
-    details.push(`TRUNCATED at ${state.completeness.limit}`);
+  const details = [
+    countLabel(state.count, "matched root"),
+    countLabel(state.descendantCount, "contextual descendant"),
+  ];
+  if (state.truncation.rootQuery) {
+    details.push(`ROOT QUERY TRUNCATED at ${state.completeness?.kind === "truncated" ? state.completeness.limit : state.count}`);
   }
+  if (state.truncation.depth) details.push("DESCENDANTS TRUNCATED at relative depth 2");
+  if (state.truncation.budget) details.push("PROJECTION TRUNCATED at 1000 rows");
   if (state.configurationErrors.length > 0) {
     details.push(`CONFIG ERROR: ${state.configurationErrors.join("; ")}`);
   }
@@ -42,7 +54,7 @@ function virtualBranchCreationHelp(
   if (!config || config.readOnly || !config.create || !config.createParentId) return null;
   const parent = physicalBlocksById.get(config.createParentId);
   const parentTitle = parent ? blockDisplayTitle(parent) : config.createParentId;
-  return `Create canonical under ${parentTitle} · sets [${config.create.key}::${config.create.value}] · Enter save · Esc cancel`;
+  return `Create canonical under ${parentTitle} · sets [${config.create.key}::${config.create.value}] · ↵ save · ⎋ cancel`;
 }
 
 function isCanonicalDescendant(
@@ -87,6 +99,7 @@ type TreeRenderEntry =
 export interface TreeRenderResult {
   readonly frame: string;
   readonly scrollStartEntryIndex: number;
+  readonly mouseTargets: readonly (TreeMouseTarget | null | undefined)[];
 }
 
 function renderQuickInputRow(
@@ -139,6 +152,7 @@ export function renderTreeFrame(
   initialScrollStartEntryIndex = 0,
 ): TreeRenderResult {
   const output: string[] = [`${ESC}H${ESC}2J`];
+  const mouseTargets: Array<TreeMouseTarget | null | undefined> = [];
 
   if (view.mode === "viewer") {
     output.push(`\x1b[1m${truncate(view.viewerPath, width)}\x1b[0m`);
@@ -149,29 +163,76 @@ export function renderTreeFrame(
     }
     while (output.length < height - 1) output.push("");
     output.push(
-      `\x1b[2m↑↓ scroll  g/G ends  Esc close  ${view.viewerOffset + 1}/${Math.max(1, view.viewerLines.length)}\x1b[0m`,
+      `\x1b[2m${truncate(
+        view.actionHelpText ?? DEFAULT_OUTLINER_ACTION_KEYMAP.helpText("tree", "viewer"),
+        width,
+      )}\x1b[0m`,
     );
-    return { frame: output.join("\n"), scrollStartEntryIndex: initialScrollStartEntryIndex };
+    return {
+      frame: output.join("\n"),
+      scrollStartEntryIndex: initialScrollStartEntryIndex,
+      mouseTargets,
+    };
   }
 
+  const paneMenu = outlinerActionLink("tree.menu.open", "[⋯]");
   output.push(
-    `\x1b[1;36mOutliner\x1b[0m  \x1b[2m${truncate(view.workspaceRoot, Math.max(10, width - 20))}\x1b[0m`,
+    `\x1b[1;36mOutliner\x1b[0m  \x1b[2m${truncate(view.workspaceRoot, Math.max(10, width - 25))}\x1b[0m  ${paneMenu}`,
   );
   const filterLabel = view.activeFilter ? `  \x1b[33mfilter: ${view.activeFilter}\x1b[0m` : "";
   const truncationLabel =
     view.visibleCompleteness.kind === "truncated"
       ? `  \x1b[33mWARNING: truncated at ${view.visibleCompleteness.limit}\x1b[0m`
       : "";
-  const physicalCount = view.rows.reduce((count, row) => count + Number(row.kind === "physical"), 0);
-  const occurrenceCount = view.rows.length - physicalCount;
-  output.push(
+  const physicalCount = view.physicalRowCount;
+  const occurrenceCount = view.occurrenceRowCount;
+  output.push(truncateToWidth(
     `\x1b[2m${countLabel(physicalCount, "physical block")} · ${countLabel(
       occurrenceCount,
       "projected occurrence",
     )}${filterLabel}\x1b[0m${truncationLabel}`,
-  );
+    width,
+  ));
   output.push("─".repeat(width));
   const bodyHeight = Math.max(1, height - 6);
+  if (view.mode === "action-menu") {
+    const actionMenuItems = view.actionMenuItems ?? [];
+    const actionMenuIndex = view.actionMenuIndex ?? 0;
+    const actionMenuQuery = view.actionMenuQuery ?? "";
+    const originRow = view.actionMenuOrigin
+      ? Math.max(0, Math.min(bodyHeight - 1, view.actionMenuOrigin.row - 3))
+      : 0;
+    const menuColumn = view.actionMenuOrigin
+      ? Math.max(0, Math.min(view.actionMenuOrigin.column, Math.max(0, width - 24)))
+      : 0;
+    const menuHeight = Math.max(1, bodyHeight - originRow);
+    const menuWidth = Math.max(1, width - menuColumn);
+    const window = completionWindow(
+      actionMenuItems.length,
+      actionMenuIndex,
+      menuHeight,
+    );
+    for (let row = 0; row < originRow; row += 1) output.push("");
+    for (let index = window.start; index < window.end; index++) {
+      const item = actionMenuItems[index]!;
+      const text = actionMenuItemText(item);
+      const linked = outlinerActionLink(item.id, truncate(text, Math.max(1, menuWidth - 2)));
+      const prefix = " ".repeat(menuColumn);
+      output.push(
+        `${prefix}${index === actionMenuIndex ? `\x1b[7m› ${linked}\x1b[0m` : `  ${linked}`}`,
+      );
+    }
+    while (output.length < height - 2) output.push("");
+    const selected = actionMenuItems[actionMenuIndex];
+    const description = selected ? ` · ${selected.description}` : "";
+    output.push(truncate(`Find: ${actionMenuQuery}▏${description}`, width));
+    output.push(`\x1b[2m${truncate("↑↓ choose  ↵ invoke  ⎋ close", width)}\x1b[0m`);
+    return {
+      frame: output.join("\n"),
+      scrollStartEntryIndex: initialScrollStartEntryIndex,
+      mouseTargets,
+    };
+  }
   const selectedExpandedInfo = {
     current: null as { offset: number; end: number; total: number } | null,
   };
@@ -183,11 +244,18 @@ export function renderTreeFrame(
     view.mode === "add-child" || view.mode === "add-sibling"
       ? quickInsertionPoint(view.rows, view.selectedIndex, view.mode, rowIsVisualDescendant)
       : null;
-  const entries: TreeRenderEntry[] = [];
-  for (let index = 0; index <= view.rows.length; index++) {
-    if (insertionPoint?.gap === index) entries.push({ kind: "quick", depth: insertionPoint.depth });
-    if (index < view.rows.length) entries.push({ kind: "block", blockIndex: index });
+  const quickEntryIndex = insertionPoint?.gap ?? -1;
+  const entryCount = view.rows.length + Number(insertionPoint !== null);
+  function entryAt(index: number): TreeRenderEntry {
+    if (insertionPoint && index === quickEntryIndex) {
+      return { kind: "quick", depth: insertionPoint.depth };
+    }
+    return {
+      kind: "block",
+      blockIndex: insertionPoint && index > quickEntryIndex ? index - 1 : index,
+    };
   }
+
 
   const renderedRows: Array<string[] | undefined> = [];
   function getBlockRows(index: number): string[] {
@@ -197,7 +265,7 @@ export function renderTreeFrame(
     const row = view.rows[index];
     const block = row.block;
     let marker = row.kind === "occurrence" ? "◇" : "•";
-    if (row.kind === "physical" && row.hasChildren) marker = row.collapsed ? "▸" : "▾";
+    if (row.hasChildren) marker = row.collapsed ? "▸" : "▾";
     const author = AUTHOR_MARKERS[block.author];
     const editingInline = view.mode === "edit" && index === view.selectedIndex;
     if (editingInline) {
@@ -285,31 +353,68 @@ export function renderTreeFrame(
     ];
   }
 
-  function isTargetEntry(entry: TreeRenderEntry): boolean {
-    if (insertionPoint) return entry.kind === "quick";
-    return entry.kind === "block" && entry.blockIndex === view.selectedIndex;
+  function getEntryHeight(entryIndex: number): number {
+    const entry = entryAt(entryIndex);
+    if (entry.kind === "quick") return getEntryRows(entry).length;
+    const row = view.rows[entry.blockIndex];
+    const editingInline = view.mode === "edit" && entry.blockIndex === view.selectedIndex;
+    return row.multilineExpanded || editingInline ? getEntryRows(entry).length : 1;
   }
-  const targetEntryIndex = Math.max(0, entries.findIndex(isTargetEntry));
-  let scrollStartEntryIndex = initialScrollStartEntryIndex;
-  if (targetEntryIndex < scrollStartEntryIndex) scrollStartEntryIndex = targetEntryIndex;
-  if (scrollStartEntryIndex < targetEntryIndex) {
+
+  const targetEntryIndex = insertionPoint
+    ? quickEntryIndex
+    : Math.max(0, view.selectedIndex + Number(quickEntryIndex >= 0 && view.selectedIndex >= quickEntryIndex));
+  let scrollStartEntryIndex = Math.max(
+    0,
+    Math.min(initialScrollStartEntryIndex, Math.max(0, entryCount - 1)),
+  );
+  if (targetEntryIndex < scrollStartEntryIndex) {
+    scrollStartEntryIndex = targetEntryIndex;
+  } else if (scrollStartEntryIndex < targetEntryIndex) {
     let requiredHeight = 0;
-    for (let index = scrollStartEntryIndex; index <= targetEntryIndex; index++) {
-      requiredHeight += getEntryRows(entries[index]).length;
+    let scanIndex = scrollStartEntryIndex;
+    while (scanIndex <= targetEntryIndex && requiredHeight <= bodyHeight) {
+      requiredHeight += getEntryHeight(scanIndex);
+      scanIndex += 1;
     }
-    while (requiredHeight > bodyHeight && scrollStartEntryIndex < targetEntryIndex) {
-      requiredHeight -= getEntryRows(entries[scrollStartEntryIndex]).length;
-      scrollStartEntryIndex += 1;
+    if (scanIndex <= targetEntryIndex) {
+      scrollStartEntryIndex = targetEntryIndex;
+      requiredHeight = getEntryHeight(targetEntryIndex);
+      while (scrollStartEntryIndex > 0) {
+        const previousHeight = getEntryHeight(scrollStartEntryIndex - 1);
+        if (requiredHeight + previousHeight > bodyHeight) break;
+        scrollStartEntryIndex -= 1;
+        requiredHeight += previousHeight;
+      }
+    } else {
+      while (requiredHeight > bodyHeight && scrollStartEntryIndex < targetEntryIndex) {
+        requiredHeight -= getEntryHeight(scrollStartEntryIndex);
+        scrollStartEntryIndex += 1;
+      }
     }
   }
 
   let renderedBodyLines = 0;
-  for (let entryIndex = scrollStartEntryIndex; entryIndex < entries.length; entryIndex++) {
+  for (let entryIndex = scrollStartEntryIndex; entryIndex < entryCount; entryIndex++) {
     if (renderedBodyLines >= bodyHeight) break;
-    const entryRows = getEntryRows(entries[entryIndex]);
+    const entry = entryAt(entryIndex);
+    const entryRows = getEntryRows(entry);
     for (let lineIndex = 0; lineIndex < entryRows.length; lineIndex++) {
       if (renderedBodyLines >= bodyHeight) break;
       const line = entryRows[lineIndex];
+      if (entry.kind === "block" && lineIndex === 0) {
+        const row = view.rows[entry.blockIndex];
+        const disclosureMarkerVisible =
+          !row.multilineExpanded ||
+          entry.blockIndex !== view.selectedIndex ||
+          view.expandedBlockOffset === 0;
+        if (row.hasChildren && disclosureMarkerVisible) {
+          mouseTargets[output.length] = {
+            rowId: row.rowId,
+            disclosureColumn: row.depth * 2,
+          };
+        }
+      }
       output.push(
         entryIndex === targetEntryIndex && lineIndex === 0
           ? `\x1b[48;5;238m\x1b[1m${line}\x1b[0m`
@@ -346,7 +451,10 @@ export function renderTreeFrame(
     output.push(
       creationHelp
         ? truncate(creationHelp, width)
-        : "Quick edit: ←→ cursor  Tab complete  Enter save  Shift+Enter/Ctrl+E multiline  Esc cancel",
+        : truncate(
+          view.actionHelpText ?? DEFAULT_OUTLINER_ACTION_KEYMAP.helpText("tree", view.mode),
+          width,
+        ),
     );
   } else if (view.mode === "purge") {
     const required =
@@ -388,20 +496,8 @@ export function renderTreeFrame(
       (selectedBranchState ? branchStatusText(selectedBranchState) : "");
     output.push(truncate(contextualStatus, width));
   }
-  let help: string;
-  if (view.mode === "capture") {
-    help = "type/paste  ↑↓ lines  Shift+Enter/Ctrl+E newline  Enter capture  Esc cancel";
-  } else if (view.mode === "purge") {
-    help = "type exact identifier  Enter permanently purge  Esc cancel";
-  } else if (view.mode === "goto") {
-    help = "type ID/text  ↑↓ choose  Tab cycle  Enter jump  Esc cancel";
-  } else if (expandedScrollable) {
-    help = "Enter read  e edit  D new Detail  PgUp/PgDn scroll  o open next unlocked  R reveal";
-  } else if (selectedRow?.kind === "occurrence") {
-    help = "◇ occurrence  Enter read  e edit  D new Detail  o open next unlocked  R reveal";
-  } else {
-    help = "↑↓ browse/preview  Enter read  e edit  D new Detail  o open next unlocked  R reveal  g goto";
-  }
+  const help = view.actionHelpText ??
+    DEFAULT_OUTLINER_ACTION_KEYMAP.helpText("tree", view.mode);
   output.push(`\x1b[2m${truncate(help, width)}\x1b[0m`);
-  return { frame: output.join("\n"), scrollStartEntryIndex };
+  return { frame: output.join("\n"), scrollStartEntryIndex, mouseTargets };
 }

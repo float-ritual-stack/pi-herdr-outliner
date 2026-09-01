@@ -1,9 +1,23 @@
 import { normalizePropertyKey } from "./properties";
-import type { BlockSearchQuery, PropertyFilter } from "./types";
+import type { BlockSearchQuery, PropertyFilter, PropertyQueryScope } from "./types";
 
 export const MAX_BLOCK_QUERY_LIMIT = 1000;
 
 const BOOLEAN_OPERATORS = new Set(["and", "not", "or"]);
+const PROPERTY_QUERY_SCOPES = new Set<PropertyQueryScope>([
+  "block",
+  "line",
+  "inline",
+  "all",
+]);
+
+export function normalizePropertyQueryScope(value: unknown): PropertyQueryScope {
+  if (typeof value !== "string" || !PROPERTY_QUERY_SCOPES.has(value as PropertyQueryScope)) {
+    throw new Error(`Invalid property scope: ${String(value)}`);
+  }
+  return value as PropertyQueryScope;
+}
+
 
 export class BlockQuerySyntaxError extends Error {
   constructor(
@@ -283,12 +297,16 @@ export function normalizeBlockSearchQuery(
   const text = query.text?.trim() || undefined;
   const subtreeRootId = query.subtreeRootId?.trim() || undefined;
   const rankViewId = query.rankViewId?.trim() || undefined;
+  const propertyScope = query.propertyScope === undefined
+    ? undefined
+    : normalizePropertyQueryScope(query.propertyScope);
 
   return {
     ...(filters.length > 0 ? { filters } : {}),
     ...(text ? { text } : {}),
     ...(subtreeRootId ? { subtreeRootId } : {}),
     ...(rankViewId ? { rankViewId } : {}),
+    ...(propertyScope ? { propertyScope } : {}),
     ...(includeDeleted ? { includeDeleted } : {}),
     limit: query.limit,
   };

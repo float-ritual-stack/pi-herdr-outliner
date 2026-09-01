@@ -2,13 +2,16 @@ import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { resolveBacklinkRelation } from "./backlinks";
-import { normalizeBlockSearchQuery } from "./block-query";
+import {
+  normalizeBlockSearchQuery,
+  parsePropertyFilterExpression,
+} from "./block-query";
 import {
   firstLineWithoutPropertyTokens,
   formatProperty,
+  matchingPropertyRecords,
   matchesFilters,
-  parseProperties,
-  parsePropertyTokens,
+  parsePropertyRecords,
   patchPropertyText,
   PROPERTY_PARSER_VERSION,
 } from "./properties";
@@ -27,37 +30,52 @@ import {
   isConfiguredWorkIdPlaceholder,
   normalizeWorkIdPrefix,
   parseWorkId,
+  workIdReferences,
   type ParsedWorkId,
 } from "./work-ids";
 import type {
-  Block,
   BacklinkCollection,
   BacklinkQuery,
+  Block,
   BlockAuthor,
-  CaptureReceipt,
-  CaptureSource,
-  BlockProvenance,
   BlockProperty,
+  BlockProvenance,
+  BlockEditActivity,
+  BlockEditActivityPage,
   BlockSearchQuery,
   BlockTraversalOptions,
+  CaptureReceipt,
+  CaptureSource,
   NavigationState,
+  MutationProvenance,
   PageAddressCollection,
   PageAddressFollowResult,
-  PageAddressRemoval,
   PageAddressKind,
   PageAddressMatch,
   PageAddressRecord,
+  PageAddressRemoval,
   PageAddressResolution,
   PropertyCatalogItem,
+  PropertyFilter,
+  PropertyPlacement,
+  PropertyQueryScope,
+  PropertyRecord,
+  PropertyScope,
+  PropertySyntax,
   PropertyPatchOperation,
-  SelectionContext,
   ResolvedBlockReferences,
+  RoadmapBranchMembership,
+  RoadmapItemCreateInput,
+  RoadmapItemCreateReceipt,
+  RoadmapItemPriority,
+  RoadmapWorkStage,
+  SelectionContext,
+  VirtualOccurrenceRank,
   VisibleBlock,
   VisibleBlockCollection,
-  VirtualOccurrenceRank,
-  WorkspaceSnapshot,
   WorkIdAllocation,
   WorkIdAllocatorStatus,
+  WorkspaceSnapshot,
   WorkspaceSnapshotView,
 } from "./types";
 
@@ -85,6 +103,15 @@ interface PropertyRow {
   block_id: string;
   key: string;
   value: string;
+  ordinal: number;
+  raw: string;
+  start: number;
+  end: number;
+  line: number;
+  column: number;
+  placement: PropertyPlacement;
+  scope: PropertyScope;
+  syntax: PropertySyntax;
 }
 
 interface PageAddressRow {
@@ -114,9 +141,49 @@ interface VisibleBlockRow extends BlockRow {
   has_children: number;
 }
 
+interface BlockEditActivityRow {
+  activity_id: number;
+  block_id: string;
+  author: BlockAuthor;
+  actor_id: string | null;
+  session_id: string | null;
+  task_id: string | null;
+  kind: "text" | "properties";
+  edited_at: string;
+}
+
 interface LoadedGraph {
   byId: Map<string, Block>;
   byParent: Map<string | null, Block[]>;
+  propertyRecordsByBlock: Map<string, PropertyRecord[]>;
+}
+function propertyRecordFromRow(row: PropertyRow): PropertyRecord {
+  return {
+    key: row.key,
+    value: row.value,
+    ordinal: row.ordinal,
+    raw: row.raw,
+    start: row.start,
+    end: row.end,
+    line: row.line,
+    column: row.column,
+    placement: row.placement,
+    scope: row.scope,
+    syntax: row.syntax,
+  };
+}
+
+function propertyMatchContexts(records: readonly PropertyRecord[]) {
+  return records.map(({ key, value, ordinal, start, end, line, column, scope }) => ({
+    key,
+    value,
+    ordinal,
+    start,
+    end,
+    line,
+    column,
+    scope,
+  }));
 }
 
 interface LoadedGraphTraversalOptions extends BlockTraversalOptions {
@@ -152,6 +219,35 @@ function normalizeCreatorProvenance(
   };
 }
 
+function normalizeMutationProvenance(
+  mutation: MutationProvenance,
+): {
+  author: BlockAuthor;
+  actorId: string | null;
+  sessionId: string | null;
+  taskId: string | null;
+} {
+  if (!mutation || !["user", "agent", "system"].includes(mutation.author)) {
+    throw new Error("Mutation provenance must identify user, agent, or system");
+  }
+  const normalizeOptionalId = (value: string | undefined, label: string): string | null => {
+    if (value === undefined) return null;
+    const normalized = value.trim();
+    if (!normalized) throw new Error(`${label} cannot be empty`);
+    return normalized;
+  };
+  const actorId = normalizeOptionalId(mutation.actorId, "Mutation actorId");
+  if (mutation.author === "agent" && actorId === null) {
+    throw new Error("Agent mutation provenance requires actorId");
+  }
+  return {
+    author: mutation.author,
+    actorId,
+    sessionId: normalizeOptionalId(mutation.sessionId, "Mutation sessionId"),
+    taskId: normalizeOptionalId(mutation.taskId, "Mutation taskId"),
+  };
+}
+
 const CAPTURE_SOURCES = new Set<CaptureSource>(["tree", "pi", "omp", "cli", "external"]);
 
 function normalizeCaptureRequestId(requestId: string): string {
@@ -163,6 +259,81 @@ function normalizeCaptureRequestId(requestId: string): string {
     throw new Error("Capture requestId must be 1-200 printable characters");
   }
   return normalized;
+}
+
+const ROADMAP_PRIORITIES: Record<RoadmapItemPriority, true> = {
+  high: true,
+  medium: true,
+  low: true,
+};
+const ROADMAP_WORK_STAGES: Record<RoadmapWorkStage, true> = {
+  unprioritized: true,
+  next: true,
+  doing: true,
+  review: true,
+  validate: true,
+  later: true,
+};
+const RESERVED_ROADMAP_PROPERTY_KEYS: Record<string, true> = {
+  type: true,
+  status: true,
+  priority: true,
+  "work-stage": true,
+  project: true,
+  arc: true,
+  track: true,
+  "depends-on": true,
+  "related-to": true,
+  "source-block": true,
+  "work-id": true,
+};
+
+const CANONICAL_BLOCK_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function normalizeRoadmapText(value: unknown, label: string): string {
+  if (typeof value !== "string") throw new Error(`${label} must be a string`);
+  const normalized = value.trim();
+  if (!normalized) throw new Error(`${label} cannot be empty`);
+  if (/[\u0000-\u001f\u007f]/.test(normalized)) {
+    throw new Error(`${label} must be a single printable line`);
+  }
+  return normalized;
+}
+
+function normalizeRoadmapValues(values: unknown, label: string): string[] {
+  if (!Array.isArray(values) || values.length === 0) {
+    throw new Error(`${label} must contain at least one value`);
+  }
+  return [...new Set(values.map((value) => normalizeRoadmapText(value, label)))];
+}
+
+function normalizeRoadmapRelationshipId(value: unknown, label: string): string {
+  const blockId = normalizeRoadmapText(value, label);
+  if (!CANONICAL_BLOCK_ID_PATTERN.test(blockId)) {
+    throw new Error(`${label} must contain canonical block UUIDs: ${blockId}`);
+  }
+  return blockId;
+}
+
+function normalizeRoadmapRelationshipIds(
+  values: unknown,
+  label: string,
+): string[] {
+  if (values === undefined) return [];
+  if (!Array.isArray(values)) throw new Error(`${label} must be an array`);
+  return [...new Set(values.map((value) => normalizeRoadmapRelationshipId(value, label)))];
+}
+
+function assertNoReservedRoadmapProperties(title: string, body: string): void {
+  const reservedProperty = parsePropertyRecords(`${title}\n${body}`).find(
+    (property) => RESERVED_ROADMAP_PROPERTY_KEYS[property.key] === true,
+  );
+  if (reservedProperty) {
+    throw new Error(
+      `Roadmap title and body cannot include reserved property: ${reservedProperty.key}`,
+    );
+  }
 }
 
 export class OutlinerStore {
@@ -221,11 +392,121 @@ export class OutlinerStore {
           now,
           now,
         );
-      this.replaceProperties(id, parseProperties(text));
+      this.replaceProperties(id, parsePropertyRecords(text));
       this.bumpSequence();
     })();
 
     return this.require(id);
+  }
+
+  createRoadmapItem(
+    input: RoadmapItemCreateInput,
+    author: BlockAuthor = "user",
+    provenance?: BlockProvenance,
+  ): RoadmapItemCreateReceipt {
+    if (!input || typeof input !== "object") {
+      throw new Error("Roadmap item input must be an object");
+    }
+    const title = normalizeRoadmapText(input.title, "Roadmap title");
+    let body = "";
+    if (input.body !== undefined) {
+      if (typeof input.body !== "string") {
+        throw new Error("Roadmap body must be a string");
+      }
+      body = input.body.trim();
+    }
+    const priority = input.priority;
+    if (ROADMAP_PRIORITIES[priority] !== true) {
+      throw new Error(`Invalid roadmap priority: ${String(priority)}`);
+    }
+    const workStage = input.workStage ?? "unprioritized";
+    if (ROADMAP_WORK_STAGES[workStage] !== true) {
+      throw new Error(`Invalid roadmap work stage: ${String(workStage)}`);
+    }
+    const project = normalizeRoadmapText(input.project, "Roadmap project");
+    const arc = normalizeRoadmapText(input.arc, "Roadmap arc");
+    const tracks = normalizeRoadmapValues(input.tracks, "Roadmap tracks");
+    const dependsOn = normalizeRoadmapRelationshipIds(input.dependsOn, "dependsOn");
+    const relatedTo = normalizeRoadmapRelationshipIds(input.relatedTo, "relatedTo");
+    const sourceBlockId = input.sourceBlockId === undefined
+      ? undefined
+      : normalizeRoadmapRelationshipId(input.sourceBlockId, "sourceBlockId");
+    const creator = normalizeCreatorProvenance(author, provenance);
+    assertNoReservedRoadmapProperties(title, body);
+
+    return this.database.transaction(() => {
+      const workQueues = this.database.query(
+        "SELECT DISTINCT block.id FROM blocks block JOIN block_properties type_property ON type_property.block_id = block.id AND type_property.scope = 'block' AND type_property.key = 'type' AND type_property.value = 'work-queue' JOIN block_properties project_property ON project_property.block_id = block.id AND project_property.scope = 'block' AND project_property.key = 'project' AND project_property.value = ? WHERE block.effective_deleted_root_id IS NULL ORDER BY block.id",
+      ).all(project) as Array<{ id: string }>;
+      if (workQueues.length !== 1) {
+        throw new Error(
+          `Expected exactly one active work queue for project ${project}; found ${workQueues.length}`,
+        );
+      }
+      const workQueueId = workQueues[0]!.id;
+      const allocator = this.workIdAllocatorFromCurrentRead();
+      if (!allocator) {
+        throw new Error("Configure the project Work-ID prefix before creating roadmap items");
+      }
+      for (const blockId of [...dependsOn, ...relatedTo, ...(sourceBlockId ? [sourceBlockId] : [])]) {
+        const target = this.getFromCurrentRead(blockId);
+        if (!target) throw new Error(`Relationship target not found: ${blockId}`);
+        if (target.effectiveDeletedRootId) {
+          throw new Error(`Relationship target is in Trash: ${blockId}`);
+        }
+      }
+
+      let nextNumber = allocator.next_number;
+      let workId = formatWorkId(allocator.prefix, nextNumber);
+      while (this.reservedWorkIdOwnerFromCurrentRead(workId) !== undefined) {
+        nextNumber += 1;
+        workId = formatWorkId(allocator.prefix, nextNumber);
+      }
+      const properties: BlockProperty[] = [
+        { key: "type", value: "roadmap-item" },
+        { key: "status", value: "planned" },
+        { key: "priority", value: priority },
+        { key: "work-stage", value: workStage },
+        { key: "project", value: project },
+        { key: "arc", value: arc },
+        ...tracks.map((value) => ({ key: "track", value })),
+        ...dependsOn.map((value) => ({ key: "depends-on", value })),
+        ...relatedTo.map((value) => ({ key: "related-to", value })),
+        ...(sourceBlockId ? [{ key: "source-block", value: sourceBlockId }] : []),
+        { key: "work-id", value: workId },
+      ];
+      const metadata = properties.map(formatProperty).join(" ");
+      const text = `${workId} — ${title} ${metadata}${body ? `\n\n${body}` : ""}`;
+      const id = crypto.randomUUID();
+      const now = new Date().toISOString();
+      const position = this.database.query(
+        "SELECT COALESCE(MAX(position), -1) + 1 AS position FROM blocks WHERE parent_id IS ?",
+      ).get(workQueueId) as { position: number };
+      this.database.query(
+        "INSERT INTO blocks (id, parent_id, position, text, author, actor_id, session_id, task_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      ).run(
+        id,
+        workQueueId,
+        position.position,
+        text,
+        author,
+        creator.actorId,
+        creator.sessionId,
+        creator.taskId,
+        now,
+        now,
+      );
+      this.replaceProperties(id, parsePropertyRecords(text));
+      this.bumpSequence();
+      const block = this.getFromCurrentRead(id);
+      if (!block) throw new Error(`Roadmap item was not created: ${id}`);
+      return {
+        workId,
+        workQueueId,
+        block,
+        memberships: this.roadmapBranchMembershipsFromCurrentRead(block),
+      };
+    })();
   }
 
   capture(
@@ -276,7 +557,7 @@ export class OutlinerStore {
           : []),
       ].join(" ");
       const block = this.create(
-        `${normalizedText}\n${metadata}`,
+        `${metadata}\n${normalizedText}`,
         inbox.id,
         author,
         provenance,
@@ -290,15 +571,36 @@ export class OutlinerStore {
     })();
   }
 
-  update(id: string, text: string, expectedUpdatedAt?: string): Block {
+  update(
+    id: string,
+    text: string,
+    expectedUpdatedAt: string | undefined = undefined,
+    mutation: MutationProvenance = { author: "system" },
+    kind: "text" | "properties" = "text",
+  ): Block {
     const existing = this.requireActive(id);
     if (expectedUpdatedAt && existing.updatedAt !== expectedUpdatedAt) {
       throw new Error(`Block changed since editing began: ${id}`);
     }
+    const provenance = normalizeMutationProvenance(mutation);
     const timestamp = Math.max(Date.now(), Date.parse(existing.updatedAt) + 1);
+    const editedAt = new Date(timestamp).toISOString();
     this.database.transaction(() => {
-      this.database.query("UPDATE blocks SET text = ?, updated_at = ? WHERE id = ?").run(text, new Date(timestamp).toISOString(), id);
-      this.replaceProperties(id, parseProperties(text));
+      this.database.query("UPDATE blocks SET text = ?, updated_at = ? WHERE id = ?").run(text, editedAt, id);
+      this.replaceProperties(id, parsePropertyRecords(text));
+      this.database.query(`
+        INSERT INTO block_edit_activity
+          (block_id, author, actor_id, session_id, task_id, kind, edited_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        id,
+        provenance.author,
+        provenance.actorId,
+        provenance.sessionId,
+        provenance.taskId,
+        kind,
+        editedAt,
+      );
       this.bumpSequence();
     })();
     return this.require(id);
@@ -308,6 +610,7 @@ export class OutlinerStore {
     id: string,
     expectedUpdatedAt: string,
     operations: PropertyPatchOperation[],
+    mutation: MutationProvenance = { author: "system" },
   ): Block {
     if (operations.length === 0) throw new Error("Property patch requires at least one operation");
     const existing = this.requireActive(id);
@@ -315,28 +618,96 @@ export class OutlinerStore {
       throw new Error(`Block changed since editing began: ${id}`);
     }
     const text = patchPropertyText(existing.text, operations);
-    return this.update(id, text, expectedUpdatedAt);
+    return this.update(id, text, expectedUpdatedAt, mutation, "properties");
+  }
+
+  recentEditActivity(options: {
+    afterCursor?: number;
+    since?: string;
+    limit?: number;
+    author?: BlockAuthor;
+  } = {}): BlockEditActivityPage {
+    const afterCursor = options.afterCursor ?? 0;
+    if (!Number.isSafeInteger(afterCursor) || afterCursor < 0) {
+      throw new Error("Activity cursor must be a non-negative safe integer");
+    }
+    const limit = Math.min(options.limit ?? 5, 100);
+    if (!Number.isInteger(limit) || limit <= 0) {
+      throw new Error("Activity limit must be a positive integer");
+    }
+    const author = options.author ?? "user";
+    if (!["user", "agent", "system"].includes(author)) {
+      throw new Error("Activity author must be user, agent, or system");
+    }
+    const since = options.since ?? "0000-01-01T00:00:00.000Z";
+    if (options.since !== undefined && !Number.isFinite(Date.parse(options.since))) {
+      throw new Error("Activity since must be an ISO timestamp");
+    }
+    const cursorRow = this.database.query(`
+      SELECT COALESCE(MAX(activity_id), ?) AS cursor
+      FROM block_edit_activity
+      WHERE activity_id > ? AND author = ? AND edited_at >= ?
+    `).get(afterCursor, afterCursor, author, since) as { cursor: number };
+    const rows = this.database.query(`
+      SELECT activity_id, block_id, author, actor_id, session_id, task_id, kind, edited_at
+      FROM block_edit_activity
+      WHERE activity_id IN (
+        SELECT MAX(activity_id)
+        FROM block_edit_activity
+        WHERE activity_id > ? AND author = ? AND edited_at >= ?
+        GROUP BY block_id
+      )
+      ORDER BY activity_id DESC, block_id ASC
+      LIMIT ?
+    `).all(afterCursor, author, since, limit) as BlockEditActivityRow[];
+    const entries = rows.flatMap((row): BlockEditActivity[] => {
+      const block = this.get(row.block_id);
+      if (!block || block.effectiveDeletedRootId) return [];
+      return [{
+        cursor: row.activity_id,
+        block,
+        author: row.author,
+        ...(row.actor_id ? { actorId: row.actor_id } : {}),
+        ...(row.session_id ? { sessionId: row.session_id } : {}),
+        ...(row.task_id ? { taskId: row.task_id } : {}),
+        kind: row.kind,
+        editedAt: row.edited_at,
+      }];
+    });
+    return { entries, cursor: cursorRow.cursor };
   }
 
   propertyCatalog(
     key?: string,
     prefix = "",
     requestedLimit = 50,
+    requestedScope: PropertyQueryScope = "block",
   ): PropertyCatalogItem[] {
+    if (!["block", "line", "inline", "all"].includes(requestedScope)) {
+      throw new Error(`Invalid property scope: ${requestedScope}`);
+    }
     const limit = Math.max(1, Math.min(100, Math.floor(requestedLimit)));
     const normalizedPrefix = prefix.toLowerCase();
+    const scopeClause = requestedScope === "all" ? "" : "AND property.scope = ?";
+    const scopeParameters = requestedScope === "all" ? [] : [requestedScope];
     if (key) {
       return this.database
         .query(
-          "SELECT property.key, property.value, COUNT(*) AS count FROM block_properties property JOIN blocks block ON block.id = property.block_id WHERE block.effective_deleted_root_id IS NULL AND property.key = ? AND SUBSTR(LOWER(property.value), 1, LENGTH(?)) = ? GROUP BY property.key, property.value ORDER BY count DESC, LOWER(property.value), property.value LIMIT ?",
+          `SELECT property.key, property.value, COUNT(*) AS count FROM block_properties property JOIN blocks block ON block.id = property.block_id WHERE block.effective_deleted_root_id IS NULL AND property.key = ? AND SUBSTR(LOWER(property.value), 1, LENGTH(?)) = ? ${scopeClause} GROUP BY property.key, property.value ORDER BY count DESC, LOWER(property.value), property.value LIMIT ?`,
         )
-        .all(key.toLowerCase(), normalizedPrefix, normalizedPrefix, limit) as PropertyCatalogItem[];
+        .all(
+          key.toLowerCase(),
+          normalizedPrefix,
+          normalizedPrefix,
+          ...scopeParameters,
+          limit,
+        ) as PropertyCatalogItem[];
     }
     return this.database
       .query(
-        "SELECT property.key, property.value, COUNT(*) AS count FROM block_properties property JOIN blocks block ON block.id = property.block_id WHERE block.effective_deleted_root_id IS NULL AND SUBSTR(property.key, 1, LENGTH(?)) = ? GROUP BY property.key, property.value ORDER BY count DESC, property.key, LOWER(property.value), property.value LIMIT ?",
+        `SELECT property.key, property.value, COUNT(*) AS count FROM block_properties property JOIN blocks block ON block.id = property.block_id WHERE block.effective_deleted_root_id IS NULL AND SUBSTR(property.key, 1, LENGTH(?)) = ? ${scopeClause} GROUP BY property.key, property.value ORDER BY count DESC, property.key, LOWER(property.value), property.value LIMIT ?`,
       )
-      .all(normalizedPrefix, normalizedPrefix, limit) as PropertyCatalogItem[];
+      .all(normalizedPrefix, normalizedPrefix, ...scopeParameters, limit) as PropertyCatalogItem[];
   }
 
   move(id: string, parentId: string | null, requestedPosition?: number): Block {
@@ -416,7 +787,7 @@ export class OutlinerStore {
       const subtree = this.subtreeIdsFromCurrentRead(id);
       const placeholders = subtree.map(() => "?").join(", ");
       const reserved = this.database.query(
-        `SELECT block_id, value FROM block_properties WHERE key = 'work-id' AND block_id IN (${placeholders})`,
+        `SELECT block_id, value FROM block_properties WHERE scope = 'block' AND key = 'work-id' AND block_id IN (${placeholders})`,
       ).all(...subtree) as Array<{ block_id: string; value: string }>;
       for (const row of reserved) {
         const parsed = parseWorkId(row.value);
@@ -522,7 +893,7 @@ export class OutlinerStore {
 
   resolvePageAddress(address: string): PageAddressResolution {
     return this.database.transaction(() =>
-      this.resolvePageAddressFromCurrentRead(normalizePageAddress(address))
+      this.resolveAuthoredPageAddressFromCurrentRead(normalizePageAddress(address))
     )();
   }
 
@@ -533,10 +904,18 @@ export class OutlinerStore {
   ): PageAddressFollowResult {
     return this.database.transaction(() => {
       const normalized = normalizePageAddress(address);
-      const existing = this.resolvePageAddressFromCurrentRead(normalized);
+      const existing = this.resolveAuthoredPageAddressFromCurrentRead(normalized);
       if (existing.status !== "missing") return { ...existing, created: false };
-      const parsedWorkId = parseWorkId(normalized.displayAddress);
       const allocator = this.workIdAllocatorFromCurrentRead();
+      const embeddedWorkIds = allocator
+        ? workIdReferences(normalized.displayAddress, allocator.prefix)
+        : [];
+      if (embeddedWorkIds.length === 1) {
+        throw new Error(
+          `Unresolved Work ID cannot create a page stub: ${embeddedWorkIds[0]!.workId}`,
+        );
+      }
+      const parsedWorkId = parseWorkId(normalized.displayAddress);
       const canonicalWorkId = parsedWorkId?.workId ===
           normalized.displayAddress.toUpperCase()
         ? parsedWorkId
@@ -620,7 +999,9 @@ export class OutlinerStore {
       if (block.updatedAt !== expectedUpdatedAt) {
         throw new Error(`Block changed since editing began: ${blockId}`);
       }
-      const pageTokens = parsePropertyTokens(block.text).filter((token) => token.key === "page");
+      const pageTokens = parsePropertyRecords(block.text).filter(
+        (token) => token.scope === "block" && token.key === "page",
+      );
       if (pageTokens.length !== 1) {
         throw new Error(`Page rename requires exactly one [page::address] declaration: ${blockId}`);
       }
@@ -664,7 +1045,7 @@ export class OutlinerStore {
       const timestamp = new Date(Math.max(Date.now(), Date.parse(block.updatedAt) + 1)).toISOString();
       this.database.query("UPDATE blocks SET text = ?, updated_at = ? WHERE id = ?")
         .run(nextText, timestamp, blockId);
-      this.replaceProperties(blockId, parseProperties(nextText));
+      this.replaceProperties(blockId, parsePropertyRecords(nextText));
       this.bumpSequence();
       const renamed: PageAddressRecord = {
         address: nextAddress.displayAddress,
@@ -730,7 +1111,8 @@ export class OutlinerStore {
 
       let updated = block;
       if (row.kind === "page") {
-        const token = parsePropertyTokens(block.text).find((candidate) =>
+        const token = parsePropertyRecords(block.text).find((candidate) =>
+          candidate.scope === "block" &&
           candidate.key === "page" &&
           normalizePageAddress(candidate.value).normalizedAddress === row.normalized_address
         );
@@ -739,7 +1121,7 @@ export class OutlinerStore {
         const timestamp = new Date(Math.max(Date.now(), Date.parse(block.updatedAt) + 1)).toISOString();
         this.database.query("UPDATE blocks SET text = ?, updated_at = ? WHERE id = ?")
           .run(nextText, timestamp, blockId);
-        this.replaceProperties(blockId, parseProperties(nextText));
+        this.replaceProperties(blockId, parsePropertyRecords(nextText));
         updated = this.getFromCurrentRead(blockId)!;
       }
       this.bumpSequence();
@@ -820,14 +1202,14 @@ export class OutlinerStore {
       const updatedAt = new Date(
         Math.max(Date.now(), Date.parse(block.updatedAt) + 1),
       ).toISOString();
-      const properties = parseProperties(nextText);
+      const properties = parsePropertyRecords(nextText);
       this.database.query("UPDATE blocks SET text = ?, updated_at = ? WHERE id = ?")
         .run(nextText, updatedAt, blockId);
       this.replaceProperties(blockId, properties);
       this.bumpSequence();
       return {
         workId,
-        block: { ...block, text: nextText, updatedAt, properties },
+        block: this.getFromCurrentRead(blockId)!,
       };
     })();
   }
@@ -869,6 +1251,7 @@ export class OutlinerStore {
       }
       const blocks = this.traverseLoadedGraph(this.loadGraph(), {
         filters: query.filters,
+        propertyScope: query.propertyScope,
         subtreeRootId: query.subtreeRootId,
         text: query.text,
         stopAfterMatches: query.limit + 1,
@@ -894,6 +1277,7 @@ export class OutlinerStore {
       }
       const matched = this.traverseLoadedGraph(graph, {
         filters: query?.filters,
+        propertyScope: query?.propertyScope,
         subtreeRootId: query?.subtreeRootId,
         text: query?.text,
         stopAfterMatches: query ? query.limit + 1 : undefined,
@@ -989,18 +1373,21 @@ export class OutlinerStore {
     if (query.subtreeRootId) parameters.push(query.subtreeRootId);
     parameters.push(rankViewId);
     const predicates: string[] = [];
+    const propertyScope = query.propertyScope ?? "block";
+    const propertyScopePredicate = propertyScope === "all" ? "" : " AND property.scope = ?";
     for (const filter of query.filters ?? []) {
       if (filter.value === undefined) {
         predicates.push(
-          "EXISTS (SELECT 1 FROM block_properties property WHERE property.block_id = block.id AND property.key = ?)",
+          `EXISTS (SELECT 1 FROM block_properties property WHERE property.block_id = block.id AND property.key = ?${propertyScopePredicate})`,
         );
         parameters.push(filter.key);
       } else {
         predicates.push(
-          "EXISTS (SELECT 1 FROM block_properties property WHERE property.block_id = block.id AND property.key = ? AND LOWER(property.value) = LOWER(?))",
+          `EXISTS (SELECT 1 FROM block_properties property WHERE property.block_id = block.id AND property.key = ? AND LOWER(property.value) = LOWER(?)${propertyScopePredicate})`,
         );
         parameters.push(filter.key, filter.value);
       }
+      if (propertyScope !== "all") parameters.push(propertyScope);
     }
     predicates.push("block.effective_deleted_root_id IS NULL");
     if (query.text) {
@@ -1041,7 +1428,11 @@ export class OutlinerStore {
         LIMIT ?
       `)
       .all(...parameters) as VisibleBlockRow[];
-    const blocks = this.hydrateVisibleRowsFromCurrentRead(rows.slice(0, query.limit));
+    const blocks = this.hydrateVisibleRowsFromCurrentRead(
+      rows.slice(0, query.limit),
+      query.filters ?? [],
+      propertyScope,
+    );
     return {
       blocks,
       completeness: rows.length > query.limit
@@ -1050,22 +1441,32 @@ export class OutlinerStore {
     };
   }
 
-  private hydrateVisibleRowsFromCurrentRead(rows: readonly VisibleBlockRow[]): VisibleBlock[] {
+  private hydrateVisibleRowsFromCurrentRead(
+    rows: readonly VisibleBlockRow[],
+    filters: readonly PropertyFilter[],
+    propertyScope: PropertyQueryScope,
+  ): VisibleBlock[] {
     if (rows.length === 0) return [];
     const placeholders = rows.map(() => "?").join(", ");
     const propertyRows = this.database
       .query(
-        `SELECT block_id, key, value FROM block_properties WHERE block_id IN (${placeholders}) ORDER BY block_id, ordinal`,
+        `SELECT block_id, key, value, ordinal, raw, start, end, line, column, placement, scope, syntax FROM block_properties WHERE block_id IN (${placeholders}) ORDER BY block_id, ordinal`,
       )
       .all(...rows.map((row) => row.id)) as PropertyRow[];
-    const propertiesByBlock = new Map<string, BlockProperty[]>();
+    const recordsByBlock = new Map<string, PropertyRecord[]>();
     for (const row of propertyRows) {
-      const properties = propertiesByBlock.get(row.block_id);
-      if (properties) properties.push({ key: row.key, value: row.value });
-      else propertiesByBlock.set(row.block_id, [{ key: row.key, value: row.value }]);
+      const records = recordsByBlock.get(row.block_id);
+      if (records) records.push(propertyRecordFromRow(row));
+      else recordsByBlock.set(row.block_id, [propertyRecordFromRow(row)]);
     }
     return rows.map((row) => {
-      const block = this.hydrate(row, propertiesByBlock.get(row.id) ?? []);
+      const records = recordsByBlock.get(row.id) ?? [];
+      const block = this.hydrate(
+        row,
+        records
+          .filter((record) => record.scope === "block")
+          .map(({ key, value }) => ({ key, value })),
+      );
       return {
         ...block,
         depth: row.depth,
@@ -1074,6 +1475,13 @@ export class OutlinerStore {
           block.text,
           (blockId) => this.getFromCurrentRead(blockId),
         ),
+        ...(propertyScope !== "block" && filters.length > 0
+          ? {
+              propertyMatches: propertyMatchContexts(
+                matchingPropertyRecords(records, filters, propertyScope),
+              ),
+            }
+          : {}),
       };
     });
   }
@@ -1181,16 +1589,21 @@ export class OutlinerStore {
   private loadGraph(): LoadedGraph {
     const rows = this.database.query("SELECT * FROM blocks ORDER BY position, created_at").all() as BlockRow[];
     const propertyRows = this.database
-      .query("SELECT block_id, key, value FROM block_properties ORDER BY block_id, ordinal")
+      .query(
+        "SELECT block_id, key, value, ordinal, raw, start, end, line, column, placement, scope, syntax FROM block_properties ORDER BY block_id, ordinal",
+      )
       .all() as PropertyRow[];
+    const propertyRecordsByBlock = new Map<string, PropertyRecord[]>();
     const propertiesByBlock = new Map<string, BlockProperty[]>();
-    for (const { block_id: blockId, key, value } of propertyRows) {
-      const properties = propertiesByBlock.get(blockId);
-      if (properties) {
-        properties.push({ key, value });
-      } else {
-        propertiesByBlock.set(blockId, [{ key, value }]);
-      }
+    for (const row of propertyRows) {
+      const record = propertyRecordFromRow(row);
+      const records = propertyRecordsByBlock.get(row.block_id);
+      if (records) records.push(record);
+      else propertyRecordsByBlock.set(row.block_id, [record]);
+      if (record.scope !== "block") continue;
+      const properties = propertiesByBlock.get(row.block_id);
+      if (properties) properties.push({ key: record.key, value: record.value });
+      else propertiesByBlock.set(row.block_id, [{ key: record.key, value: record.value }]);
     }
 
     const blocks = rows.map((row) => this.hydrate(row, propertiesByBlock.get(row.id) ?? []));
@@ -1206,7 +1619,7 @@ export class OutlinerStore {
       }
     }
 
-    return { byId, byParent };
+    return { byId, byParent, propertyRecordsByBlock };
   }
 
   private traverseLoadedGraph(
@@ -1216,6 +1629,7 @@ export class OutlinerStore {
     const blocks: VisibleBlock[] = [];
     const filterText = options.text?.toLowerCase();
     const deletedMode = options.deletedMode ?? "active";
+    const propertyScope = options.propertyScope ?? "block";
     const visit = (block: Block, depth: number): boolean => {
       const effectivelyDeleted = Boolean(block.effectiveDeletedRootId);
       if (deletedMode === "active" && effectivelyDeleted) return false;
@@ -1231,9 +1645,11 @@ export class OutlinerStore {
           deletionMatches = effectivelyDeleted;
           break;
       }
+      const propertyRecords = graph.propertyRecordsByBlock.get(block.id) ?? [];
       const matches =
         deletionMatches &&
-        (!options.filters?.length || matchesFilters(block.properties, options.filters)) &&
+        (!options.filters?.length ||
+          matchesFilters(propertyRecords, options.filters, propertyScope)) &&
         (!filterText || block.text.toLowerCase().includes(filterText));
       if (matches) {
         const children = (graph.byParent.get(block.id) ?? []).filter((child) =>
@@ -1256,6 +1672,13 @@ export class OutlinerStore {
             block.text,
             (blockId) => graph.byId.get(blockId) ?? null,
           ),
+          ...(propertyScope !== "block" && options.filters?.length
+            ? {
+                propertyMatches: propertyMatchContexts(
+                  matchingPropertyRecords(propertyRecords, options.filters, propertyScope),
+                ),
+              }
+            : {}),
         });
         if (options.stopAfterMatches !== undefined && blocks.length >= options.stopAfterMatches) {
           return true;
@@ -1323,9 +1746,16 @@ export class OutlinerStore {
         key TEXT NOT NULL,
         value TEXT NOT NULL,
         ordinal INTEGER NOT NULL,
-        PRIMARY KEY (block_id, key, ordinal)
+        raw TEXT NOT NULL,
+        start INTEGER NOT NULL,
+        end INTEGER NOT NULL,
+        line INTEGER NOT NULL,
+        column INTEGER NOT NULL,
+        placement TEXT NOT NULL CHECK (placement IN ('inline', 'trailing-metadata', 'metadata-line')),
+        scope TEXT NOT NULL CHECK (scope IN ('block', 'line', 'inline')),
+        syntax TEXT NOT NULL CHECK (syntax IN ('bracket', 'bare')),
+        PRIMARY KEY (block_id, ordinal)
       );
-      CREATE INDEX IF NOT EXISTS properties_key_value ON block_properties(key, value);
       CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       INSERT OR IGNORE INTO metadata (key, value) VALUES ('sequence', '0');
       CREATE TABLE IF NOT EXISTS selection (
@@ -1375,11 +1805,25 @@ export class OutlinerStore {
         inbox_block_id TEXT NOT NULL,
         created_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS block_edit_activity (
+        activity_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        block_id TEXT NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
+        author TEXT NOT NULL CHECK (author IN ('user', 'agent', 'system')),
+        actor_id TEXT,
+        session_id TEXT,
+        task_id TEXT,
+        kind TEXT NOT NULL CHECK (kind IN ('text', 'properties')),
+        edited_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS block_edit_activity_author_cursor
+        ON block_edit_activity(author, activity_id DESC);
+      CREATE INDEX IF NOT EXISTS block_edit_activity_block_cursor
+        ON block_edit_activity(block_id, activity_id DESC);
     `);
     this.migrateBlockStateColumns();
     this.retireTreePresentationState();
-    this.migrateWorkIdStateColumns();
     this.migratePropertyIndex();
+    this.migrateWorkIdStateColumns();
     this.migrateWorkIdReservations();
     this.reconcileWorkIdAllocator();
     this.migratePageAddressRegistry();
@@ -1446,8 +1890,8 @@ export class OutlinerStore {
           SELECT property.block_id
           FROM block_properties property
           JOIN blocks block ON block.id = property.block_id
-          WHERE property.key = 'work-id'
-            AND UPPER(property.value) = UPPER(reserved_work_ids.work_id)
+          WHERE property.scope = 'block'
+            AND property.key = 'work-id'
           ORDER BY (block.effective_deleted_root_id IS NOT NULL), property.block_id
           LIMIT 1
         )
@@ -1481,15 +1925,63 @@ export class OutlinerStore {
           `Database property parser version ${storedVersion} is newer than supported version ${PROPERTY_PARSER_VERSION}`,
         );
       }
-      if (storedVersion === PROPERTY_PARSER_VERSION) return;
+
+      const columns = new Set(
+        (
+          this.database.query("PRAGMA table_info(block_properties)").all() as Array<{
+            name: string;
+          }>
+        ).map((column) => column.name),
+      );
+      const requiredColumns = [
+        "block_id",
+        "key",
+        "value",
+        "ordinal",
+        "raw",
+        "start",
+        "end",
+        "line",
+        "column",
+        "placement",
+        "scope",
+        "syntax",
+      ];
+      const schemaCurrent = requiredColumns.every((column) => columns.has(column));
+      if (schemaCurrent && storedVersion === PROPERTY_PARSER_VERSION) return;
 
       const existingBlocks = this.database.query("SELECT id, text FROM blocks ORDER BY id").all() as Array<{
         id: string;
         text: string;
       }>;
-      this.database.query("DELETE FROM block_properties").run();
+      if (!schemaCurrent) {
+        this.database.exec(`
+          DROP TABLE block_properties;
+          CREATE TABLE block_properties (
+            block_id TEXT NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
+            key TEXT NOT NULL,
+            value TEXT NOT NULL,
+            ordinal INTEGER NOT NULL,
+            raw TEXT NOT NULL,
+            start INTEGER NOT NULL,
+            end INTEGER NOT NULL,
+            line INTEGER NOT NULL,
+            column INTEGER NOT NULL,
+            placement TEXT NOT NULL CHECK (placement IN ('inline', 'trailing-metadata', 'metadata-line')),
+            scope TEXT NOT NULL CHECK (scope IN ('block', 'line', 'inline')),
+            syntax TEXT NOT NULL CHECK (syntax IN ('bracket', 'bare')),
+            PRIMARY KEY (block_id, ordinal)
+          );
+        `);
+      } else {
+        this.database.query("DELETE FROM block_properties").run();
+      }
+      this.database.exec(`
+        CREATE INDEX IF NOT EXISTS properties_scope_key_value
+          ON block_properties(scope, key, value, block_id);
+      `);
       for (const block of existingBlocks) {
-        this.replacePropertyIndex(block.id, parseProperties(block.text));
+        this.replacePropertyIndex(block.id, parsePropertyRecords(block.text));
       }
       this.database
         .query(
@@ -1503,7 +1995,7 @@ export class OutlinerStore {
   private migrateWorkIdReservations(): void {
     this.database.transaction(() => {
       const rows = this.database.query(
-        "SELECT property.block_id, property.value FROM block_properties property JOIN blocks block ON block.id = property.block_id WHERE property.key = 'work-id' AND block.effective_deleted_root_id IS NULL ORDER BY property.block_id",
+        "SELECT property.block_id, property.value FROM block_properties property JOIN blocks block ON block.id = property.block_id WHERE property.scope = 'block' AND property.key = 'work-id' AND block.effective_deleted_root_id IS NULL ORDER BY property.block_id",
       ).all() as Array<{ block_id: string; value: string }>;
       for (const row of rows) {
         const parsed = parseWorkId(row.value);
@@ -1593,8 +2085,8 @@ export class OutlinerStore {
       ).all() as PageAddressRow[];
       this.database.query("DELETE FROM page_addresses").run();
       const rows = this.database.query(
-        "SELECT property.block_id, property.key, property.value FROM block_properties property JOIN blocks block ON block.id = property.block_id WHERE block.effective_deleted_root_id IS NULL AND property.key IN ('page', 'work-id') ORDER BY property.block_id, property.ordinal",
-      ).all() as PropertyRow[];
+        "SELECT property.block_id, property.key, property.value FROM block_properties property JOIN blocks block ON block.id = property.block_id WHERE block.effective_deleted_root_id IS NULL AND property.scope = 'block' AND property.key IN ('page', 'work-id') ORDER BY property.block_id, property.ordinal",
+      ).all() as Array<{ block_id: string; key: string; value: string }>;
       const propertiesByBlock = new Map<string, BlockProperty[]>();
       for (const row of rows) {
         const properties = propertiesByBlock.get(row.block_id) ?? [];
@@ -1628,7 +2120,7 @@ export class OutlinerStore {
   private captureInboxesFromCurrentRead(): Block[] {
     const rows = this.database
       .query(
-        "SELECT DISTINCT property.block_id FROM block_properties property JOIN blocks block ON block.id = property.block_id WHERE property.key = 'system-view' AND LOWER(property.value) = 'inbox' AND block.effective_deleted_root_id IS NULL ORDER BY block.created_at, block.id",
+        "SELECT DISTINCT property.block_id FROM block_properties property JOIN blocks block ON block.id = property.block_id WHERE property.scope = 'block' AND property.key = 'system-view' AND LOWER(property.value) = 'inbox' AND block.effective_deleted_root_id IS NULL ORDER BY block.created_at, block.id",
       )
       .all() as Array<{ block_id: string }>;
     return rows
@@ -1686,9 +2178,11 @@ export class OutlinerStore {
       properties ??
       (
         this.database
-          .query("SELECT block_id, key, value FROM block_properties WHERE block_id = ? ORDER BY ordinal")
-          .all(row.id) as PropertyRow[]
-      ).map(({ key, value }) => ({ key, value }));
+          .query(
+            "SELECT key, value FROM block_properties WHERE block_id = ? AND scope = 'block' ORDER BY ordinal",
+          )
+          .all(row.id) as BlockProperty[]
+      );
     return {
       id: row.id,
       parentId: row.parent_id,
@@ -1766,7 +2260,7 @@ export class OutlinerStore {
 
   private registerConfiguredWorkIdAddressesFromCurrentRead(prefix: string): void {
     const rows = this.database.query(
-      "SELECT DISTINCT property.block_id FROM block_properties property JOIN blocks block ON block.id = property.block_id WHERE property.key = 'work-id' AND block.effective_deleted_root_id IS NULL ORDER BY property.block_id",
+      "SELECT DISTINCT property.block_id FROM block_properties property JOIN blocks block ON block.id = property.block_id WHERE property.scope = 'block' AND property.key = 'work-id' AND block.effective_deleted_root_id IS NULL ORDER BY property.block_id",
     ).all() as Array<{ block_id: string }>;
     for (const row of rows) {
       const block = this.getFromCurrentRead(row.block_id);
@@ -1836,6 +2330,27 @@ export class OutlinerStore {
         "UPDATE work_id_allocator SET next_number = ? WHERE singleton = 1",
       ).run(parsed.number + 1);
     }
+  }
+
+  private resolveAuthoredPageAddressFromCurrentRead(
+    normalized: NormalizedPageAddress,
+  ): PageAddressResolution {
+    const exact = this.resolvePageAddressFromCurrentRead(normalized);
+    if (exact.status !== "missing") return exact;
+    const allocator = this.workIdAllocatorFromCurrentRead();
+    if (!allocator) return exact;
+    const embeddedWorkIds = workIdReferences(normalized.displayAddress, allocator.prefix);
+    if (embeddedWorkIds.length !== 1) return exact;
+    const resolved = this.resolvePageAddressFromCurrentRead(
+      normalizePageAddress(embeddedWorkIds[0]!.workId),
+    );
+    return resolved.status === "missing"
+      ? exact
+      : {
+          ...resolved,
+          address: normalized.displayAddress,
+          normalizedAddress: normalized.normalizedAddress,
+        };
   }
 
   private resolvePageAddressFromCurrentRead(
@@ -2003,21 +2518,37 @@ export class OutlinerStore {
 
   private replacePropertyIndex(
     blockId: string,
-    properties: BlockProperty[],
+    properties: readonly PropertyRecord[],
   ): void {
     this.database.query("DELETE FROM block_properties WHERE block_id = ?").run(blockId);
     const insert = this.database.query(
-      "INSERT INTO block_properties (block_id, key, value, ordinal) VALUES (?, ?, ?, ?)",
+      "INSERT INTO block_properties (block_id, key, value, ordinal, raw, start, end, line, column, placement, scope, syntax) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     );
-    properties.forEach((property, ordinal) =>
-      insert.run(blockId, property.key, property.value, ordinal)
-    );
+    for (const property of properties) {
+      insert.run(
+        blockId,
+        property.key,
+        property.value,
+        property.ordinal,
+        property.raw,
+        property.start,
+        property.end,
+        property.line,
+        property.column,
+        property.placement,
+        property.scope,
+        property.syntax,
+      );
+    }
   }
 
-  private replaceProperties(blockId: string, properties: BlockProperty[]): void {
+  private replaceProperties(blockId: string, properties: readonly PropertyRecord[]): void {
     this.replacePropertyIndex(blockId, properties);
+    const blockProperties = properties
+      .filter((property) => property.scope === "block")
+      .map(({ key, value }) => ({ key, value }));
     const allocator = this.workIdAllocatorFromCurrentRead();
-    for (const property of properties) {
+    for (const property of blockProperties) {
       if (property.key !== "work-id") continue;
       const parsed = parseWorkId(property.value);
       if (
@@ -2028,7 +2559,38 @@ export class OutlinerStore {
         this.reserveWorkIdForBlockFromCurrentRead(blockId, parsed.workId);
       }
     }
-    this.syncDeclaredPageAddresses(blockId, properties);
+    this.syncDeclaredPageAddresses(blockId, blockProperties);
+  }
+
+  private roadmapBranchMembershipsFromCurrentRead(
+    block: Block,
+  ): RoadmapBranchMembership[] {
+    const rows = this.database.query(
+      "SELECT DISTINCT block.id FROM blocks block JOIN block_properties property ON property.block_id = block.id AND property.scope = 'block' AND property.key = 'type' AND property.value = 'virtual-branch' WHERE block.effective_deleted_root_id IS NULL ORDER BY block.position, block.created_at, block.id",
+    ).all() as Array<{ id: string }>;
+    const memberships: RoadmapBranchMembership[] = [];
+    for (const row of rows) {
+      const branch = this.getFromCurrentRead(row.id);
+      if (!branch) continue;
+      const queries = branch.properties.filter((property) => property.key === "query");
+      if (queries.length !== 1) continue;
+      let filters: PropertyFilter[];
+      try {
+        filters = parsePropertyFilterExpression(queries[0]!.value);
+      } catch {
+        continue;
+      }
+      if (!matchesFilters(block.properties, filters)) continue;
+      const rank = this.database.query(
+        "SELECT rank FROM virtual_occurrence_ranks WHERE view_id = ? AND block_id = ?",
+      ).get(branch.id, block.id) as { rank: number } | null;
+      memberships.push({
+        viewId: branch.id,
+        title: firstLineWithoutPropertyTokens(branch.text)?.trim() || branch.id,
+        ...(rank ? { rank: rank.rank } : {}),
+      });
+    }
+    return memberships;
   }
 
   private subtreeIdsFromCurrentRead(rootId: string): string[] {

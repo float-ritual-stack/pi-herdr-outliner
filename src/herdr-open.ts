@@ -4,8 +4,16 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { OutlinerClient } from "./client";
 import { listLiveClients, sendClientCommand } from "./client-target";
-import { selectTreeClient } from "./herdr-open-policy";
-import { type PaneEntrypoint, resolveServicePaneId } from "./pane-control";
+import {
+  selectExistingDetailClient,
+  selectTreeClientForInvocation,
+} from "./herdr-open-policy";
+import {
+  pluginInvocationPaneId,
+  pluginInvocationWorkspaceRoot,
+  type PaneEntrypoint,
+  resolveServicePaneId,
+} from "./pane-control";
 import { resolvePaths } from "./paths";
 import {
   OUTLINER_PROTOCOL_VERSION,
@@ -24,6 +32,8 @@ interface PaneDetailsResponse {
       label?: string;
       foreground_cwd?: string;
       cwd?: string;
+      workspace_id?: string;
+      tab_id?: string;
     };
   };
 }
@@ -47,7 +57,7 @@ interface LayoutActionResponse {
 
 const herdr = process.env.HERDR_BIN_PATH ?? "herdr";
 const pluginId = process.env.HERDR_PLUGIN_ID ?? "float.pi-outliner";
-const currentPaneId = process.env.HERDR_PANE_ID;
+const currentPaneId = pluginInvocationPaneId();
 const HERDR_SYNC_TIMEOUT_MS = 2_000;
 const modeArgument = process.argv.indexOf("--mode");
 const mode =
@@ -56,6 +66,7 @@ const mode =
     : process.argv[modeArgument + 1];
 if (
   mode !== "focus-or-open" &&
+  mode !== "ensure-detail" &&
   mode !== "open-here" &&
   mode !== "open-layout" &&
   mode !== "focus-existing" &&
@@ -71,20 +82,25 @@ if (clientArgument >= 0 && !requestedClientId) {
 }
 if (
   requestedClientId &&
-  (mode === "open-here" || mode === "open-layout" || mode === "service-only")
+  (
+    mode === "open-here" ||
+    mode === "open-layout" ||
+    mode === "service-only"
+  )
 ) {
   throw new Error(`--client cannot be used with --mode ${mode}`);
 }
 if (process.env.HERDR_ENV !== "1") throw new Error("The outliner workspace action must run inside Herdr");
 
-let workspaceRoot = process.cwd();
+let workspaceRoot = pluginInvocationWorkspaceRoot();
+let invocationPane: NonNullable<PaneDetailsResponse["result"]>["pane"];
 if (currentPaneId) {
   const paneOutput = execFileSync(herdr, ["pane", "get", currentPaneId], {
     encoding: "utf8",
     timeout: HERDR_SYNC_TIMEOUT_MS,
   });
-  const paneResponse = JSON.parse(paneOutput) as PaneDetailsResponse;
-  workspaceRoot = paneResponse.result?.pane?.foreground_cwd ?? paneResponse.result?.pane?.cwd ?? workspaceRoot;
+  invocationPane = (JSON.parse(paneOutput) as PaneDetailsResponse).result?.pane;
+  workspaceRoot = invocationPane?.foreground_cwd ?? invocationPane?.cwd ?? workspaceRoot;
 }
 
 const paths = resolvePaths({ ...process.env, OUTLINER_WORKSPACE_ROOT: workspaceRoot });
@@ -192,6 +208,18 @@ const servicePane =
   openPane("service", { placement: "tab" });
 await waitForService();
 
+function invocationTarget(): {
+  paneId?: string;
+  tabId?: string;
+  workspaceId?: string;
+} {
+  return {
+    ...(currentPaneId ? { paneId: currentPaneId } : {}),
+    ...(invocationPane?.tab_id ? { tabId: invocationPane.tab_id } : {}),
+    ...(invocationPane?.workspace_id ? { workspaceId: invocationPane.workspace_id } : {}),
+  };
+}
+
 async function focusExisting(
   trees?: OutlinerClientRegistration[],
 ): Promise<{
@@ -201,7 +229,11 @@ async function focusExisting(
 }> {
   const liveTrees =
     trees ?? await listLiveClients(new OutlinerClient(paths.socket), "tree");
-  const selected = selectTreeClient(liveTrees, requestedClientId);
+  const selected = selectTreeClientForInvocation(
+    liveTrees,
+    invocationTarget(),
+    requestedClientId,
+  );
   await sendClientCommand(new OutlinerClient(paths.socket), selected.clientId, {
     command: "focus",
   });
@@ -236,6 +268,69 @@ function openHere(): {
     timeout: HERDR_SYNC_TIMEOUT_MS,
   });
   return { servicePane, outlinerPane, detailPane, browsingContextId, workspaceRoot };
+}
+
+async function ensureDetail(): Promise<{
+  servicePane: string;
+  treePane: string;
+  detailPane: string;
+  browsingContextId: string;
+  opened: boolean;
+  workspaceRoot: string;
+}> {
+  const client = new OutlinerClient(paths.socket);
+  const clients = await listLiveClients(client);
+  const trees = clients.filter((candidate) => candidate.role === "tree");
+  if (trees.length === 0 && !requestedClientId) {
+    const opened = openHere();
+    return {
+      servicePane: opened.servicePane,
+      treePane: opened.outlinerPane,
+      detailPane: opened.detailPane,
+      browsingContextId: opened.browsingContextId,
+      opened: true,
+      workspaceRoot,
+    };
+  }
+  const tree = selectTreeClientForInvocation(
+    trees,
+    invocationTarget(),
+    requestedClientId,
+  );
+  const treePane = tree.runtime?.paneId;
+  if (!treePane) throw new Error("The selected Outliner Tree has no live Herdr pane");
+  const existing = selectExistingDetailClient(clients, tree);
+  if (existing) {
+    await sendClientCommand(client, existing.clientId, { command: "focus" });
+    const detailPane = existing.runtime?.paneId;
+    if (!detailPane) throw new Error("The selected Outliner Detail has no live Herdr pane");
+    return {
+      servicePane,
+      treePane,
+      detailPane,
+      browsingContextId: existing.contextId,
+      opened: false,
+      workspaceRoot,
+    };
+  }
+  const detailPane = openPane("detail", {
+    placement: "split",
+    targetPane: treePane,
+    direction: "down",
+    env: { OUTLINER_BROWSING_CONTEXT_ID: tree.contextId },
+  });
+  execFileSync(herdr, ["plugin", "pane", "focus", detailPane], {
+    stdio: "ignore",
+    timeout: HERDR_SYNC_TIMEOUT_MS,
+  });
+  return {
+    servicePane,
+    treePane,
+    detailPane,
+    browsingContextId: tree.contextId,
+    opened: true,
+    workspaceRoot,
+  };
 }
 
 function openWorkingLayout(): {
@@ -316,6 +411,8 @@ if (mode === "service-only") {
   result = openWorkingLayout();
 } else if (mode === "open-here") {
   result = openHere();
+} else if (mode === "ensure-detail") {
+  result = await ensureDetail();
 } else if (mode === "focus-existing") {
   result = await focusExisting();
 } else {

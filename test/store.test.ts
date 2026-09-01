@@ -19,6 +19,19 @@ function makeStore(): OutlinerStore {
   stores.push({ store, directory });
   return store;
 }
+function insertIndexedProperty(
+  store: OutlinerStore,
+  blockId: string,
+  key: string,
+  value: string,
+  ordinal: number,
+): void {
+  const raw = `[${key}::${value}]`;
+  store.database.query(
+    "INSERT INTO block_properties (block_id, key, value, ordinal, raw, start, end, line, column, placement, scope, syntax) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 'metadata-line', 'block', 'bracket')",
+  ).run(blockId, key, value, ordinal, raw, ordinal * 100, ordinal * 100 + raw.length, ordinal);
+}
+
 
 afterEach(() => {
   for (const entry of stores.splice(0)) {
@@ -108,7 +121,9 @@ describe("OutlinerStore", () => {
       block: expect.objectContaining({
         parentId: inbox[0]!.id,
         author: "user",
-        text: expect.stringContaining("First line\nSecond line"),
+        text: expect.stringMatching(
+          /^\[type::capture] .*\nFirst line\nSecond line$/,
+        ),
         properties: expect.arrayContaining([
           { key: "type", value: "capture" },
           { key: "status", value: "unprocessed" },
@@ -169,28 +184,117 @@ describe("OutlinerStore", () => {
     );
     expect(store.children(inbox.id)).toEqual([]);
   });
-  test("keeps literal property examples out of indexed queries", () => {
+  test("keeps property-shaped literals out and exposes explicit inline matches", () => {
     const store = makeStore();
     const block = store.create([
-      "Examples `[status::inline]`",
+      "Examples `[status::inline-literal]`",
       String.raw`Escaped \[status::escaped]`,
       "```text",
       "[status::fenced]",
       "```",
-      "[status::real]",
+      "[status::body-inline]",
     ].join("\n"));
 
-    expect(store.require(block.id).properties).toEqual([{ key: "status", value: "real" }]);
-    for (const value of ["inline", "escaped", "fenced"]) {
+    expect(store.require(block.id).properties).toEqual([]);
+    for (const value of ["inline-literal", "escaped", "fenced", "body-inline"]) {
       expect(store.queryBlocks({
         filters: [{ key: "status", value }],
         limit: 10,
       }).blocks).toEqual([]);
     }
-    expect(store.queryBlocks({
-      filters: [{ key: "status", value: "real" }],
+    const explicit = store.queryBlocks({
+      filters: [{ key: "status", value: "body-inline" }],
+      propertyScope: "inline",
       limit: 10,
-    }).blocks.map(({ id }) => id)).toContain(block.id);
+    }).blocks;
+    expect(explicit).toEqual([
+      expect.objectContaining({
+        id: block.id,
+        propertyMatches: [
+          expect.objectContaining({
+            key: "status",
+            value: "body-inline",
+            ordinal: 0,
+            line: 5,
+            scope: "inline",
+          }),
+        ],
+      }),
+    ]);
+  });
+
+  test("queries and catalogs line and inline properties only when requested", () => {
+    const store = makeStore();
+    const block = store.create([
+      "Scoped [kind::scope-test]",
+      "",
+      "Body [status::body-only]",
+      "owner:: scoped-owner",
+    ].join("\n"));
+    const rankView = store.create("Scoped rank [type::virtual-branch]");
+
+    expect(store.require(block.id).properties).toEqual([
+      { key: "kind", value: "scope-test" },
+    ]);
+    for (const filter of [
+      { key: "status", value: "body-only" },
+      { key: "owner", value: "scoped-owner" },
+    ]) {
+      expect(store.queryBlocks({ filters: [filter], limit: 10 }).blocks).toEqual([]);
+    }
+    expect(store.queryBlocks({
+      filters: [{ key: "status", value: "body-only" }],
+      propertyScope: "inline",
+      rankViewId: rankView.id,
+      limit: 10,
+    }).blocks).toEqual([
+      expect.objectContaining({
+        id: block.id,
+        propertyMatches: [
+          expect.objectContaining({ key: "status", scope: "inline", line: 2 }),
+        ],
+      }),
+    ]);
+    expect(store.queryBlocks({
+      filters: [{ key: "owner", value: "scoped-owner" }],
+      propertyScope: "line",
+      limit: 10,
+    }).blocks).toEqual([
+      expect.objectContaining({
+        id: block.id,
+        propertyMatches: [
+          expect.objectContaining({ key: "owner", scope: "line", line: 3 }),
+        ],
+      }),
+    ]);
+    expect(store.queryBlocks({
+      filters: [
+        { key: "status", value: "body-only" },
+        { key: "owner", value: "scoped-owner" },
+      ],
+      propertyScope: "all",
+      limit: 10,
+    }).blocks).toEqual([
+      expect.objectContaining({
+        id: block.id,
+        propertyMatches: [
+          expect.objectContaining({ key: "status", scope: "inline" }),
+          expect.objectContaining({ key: "owner", scope: "line" }),
+        ],
+      }),
+    ]);
+    expect(store.propertyCatalog("status", "body-only")).toEqual([]);
+    expect(store.propertyCatalog("status", "body-only", 50, "all")).toEqual([
+      { key: "status", value: "body-only", count: 1 },
+    ]);
+    expect(store.propertyCatalog("owner", "scoped-owner", 50, "line")).toEqual([
+      { key: "owner", value: "scoped-owner", count: 1 },
+    ]);
+    expect(() => store.queryBlocks({
+      filters: [{ key: "status" }],
+      propertyScope: "invalid" as never,
+      limit: 10,
+    })).toThrow("Invalid property scope: invalid");
   });
 
   test("preserves multiline block content and indexes properties across lines", () => {
@@ -432,6 +536,73 @@ Second paragraph`;
       sessionId: "session-1",
       taskId: "tool-call-1",
     }));
+  });
+
+  test("queries distinct recent edits by mutation provenance and advances a cursor", () => {
+    const store = makeStore();
+    const agentCreated = store.create("Agent-created note", null, "agent", { actorId: "omp" });
+    const userCreated = store.create("User-created note");
+    const other = store.create("Other note [status::open]");
+
+    const firstUserEdit = store.update(
+      agentCreated.id,
+      "Agent-created note edited by user",
+      agentCreated.updatedAt,
+      { author: "user", actorId: "detail" },
+    );
+    store.update(
+      userCreated.id,
+      "User-created note edited by agent",
+      userCreated.updatedAt,
+      { author: "agent", actorId: "omp", sessionId: "session-1", taskId: "call-1" },
+    );
+    const secondUserEdit = store.update(
+      agentCreated.id,
+      "Newest user text",
+      firstUserEdit.updatedAt,
+      { author: "user", actorId: "tree" },
+    );
+    const patched = store.patchProperties(
+      other.id,
+      other.updatedAt,
+      [{ op: "replace", ordinal: 0, value: "done" }],
+      { author: "user", actorId: "detail" },
+    );
+
+    const page = store.recentEditActivity({ author: "user", limit: 5 });
+    expect(page.entries.map((entry) => entry.block.id)).toEqual([other.id, agentCreated.id]);
+    expect(page.entries[0]).toMatchObject({
+      block: { id: other.id, text: patched.text },
+      author: "user",
+      actorId: "detail",
+      kind: "properties",
+    });
+    expect(page.entries[1]).toMatchObject({
+      block: { id: agentCreated.id, text: secondUserEdit.text },
+      author: "user",
+      actorId: "tree",
+      kind: "text",
+    });
+    expect(page.entries.every((entry) => entry.block.id !== userCreated.id)).toBe(true);
+
+    const next = store.recentEditActivity({ author: "user", afterCursor: page.cursor });
+    expect(next).toEqual({ entries: [], cursor: page.cursor });
+    const afterWatermark = store.update(
+      userCreated.id,
+      "Now edited by user",
+      store.require(userCreated.id).updatedAt,
+      { author: "user", actorId: "detail" },
+    );
+    const incremental = store.recentEditActivity({
+      author: "user",
+      afterCursor: page.cursor,
+    });
+    expect(incremental.entries).toHaveLength(1);
+    expect(incremental.entries[0]?.block).toMatchObject({
+      id: userCreated.id,
+      text: afterWatermark.text,
+    });
+    expect(incremental.cursor).toBeGreaterThan(page.cursor);
   });
 
   test("adds provenance columns to an existing block database", () => {
@@ -863,7 +1034,16 @@ Second paragraph`;
     ].join("\n"));
     const updatedAt = block.updatedAt;
 
-    originalStore.database.query("DELETE FROM block_properties WHERE block_id = ?").run(block.id);
+    originalStore.database.exec(`
+      DROP TABLE block_properties;
+      CREATE TABLE block_properties (
+        block_id TEXT NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
+        key TEXT NOT NULL,
+        value TEXT NOT NULL,
+        ordinal INTEGER NOT NULL,
+        PRIMARY KEY (block_id, key, ordinal)
+      );
+    `);
     originalStore.database
       .query(
         "INSERT INTO block_properties (block_id, key, value, ordinal) VALUES (?, 'obsolete', 'literal', 0)",
@@ -885,7 +1065,7 @@ Second paragraph`;
     expect(reopened.require(block.id)).toEqual(
       expect.objectContaining({
         updatedAt,
-        properties: [{ key: "status", value: "current" }],
+        properties: [],
       }),
     );
     expect(reopened.queryBlocks({
@@ -894,6 +1074,11 @@ Second paragraph`;
     }).blocks).toEqual([]);
     expect(reopened.queryBlocks({
       filters: [{ key: "status", value: "current" }],
+      limit: 10,
+    }).blocks).toEqual([]);
+    expect(reopened.queryBlocks({
+      filters: [{ key: "status", value: "current" }],
+      propertyScope: "inline",
       limit: 10,
     }).blocks.map(({ id }) => id)).toContain(block.id);
     const versionRow = reopened.database
@@ -1052,6 +1237,133 @@ Second paragraph`;
   });
 
 
+  test("atomically creates canonical roadmap items with allocator and branch receipts", () => {
+    const store = makeStore();
+    store.configureWorkIdPrefix("PIE");
+    const queue = store.create(
+      "Pi Outliner work [type::work-queue] [project::pi-outliner]",
+    );
+    const unprioritized = store.create(
+      "Unprioritized [type::virtual-branch] [query::work-stage=unprioritized]",
+    );
+    const safety = store.create(
+      "Safety [type::virtual-branch] [query::track=safety]",
+    );
+    const source = store.create("Source note");
+
+    const receipt = store.createRoadmapItem(
+      {
+        title: "Make roadmap mutation atomic",
+        body: "Acceptance: no partial block or consumed Work ID on failure.",
+        priority: "high",
+        project: "pi-outliner",
+        arc: "safety-agency",
+        tracks: ["safety", "safety"],
+        relatedTo: [source.id],
+        sourceBlockId: source.id,
+      },
+      "agent",
+      { actorId: "pi", sessionId: "session", taskId: "tool-call" },
+    );
+
+    expect(receipt).toMatchObject({
+      workId: "PIE-001",
+      workQueueId: queue.id,
+      block: {
+        parentId: queue.id,
+        author: "agent",
+        actorId: "pi",
+        sessionId: "session",
+        taskId: "tool-call",
+      },
+    });
+    expect(receipt.block.text).toStartWith("PIE-001 — Make roadmap mutation atomic ");
+    expect(receipt.block.text).toContain(
+      "\n\nAcceptance: no partial block or consumed Work ID on failure.",
+    );
+    expect(receipt.block.properties).toEqual([
+      { key: "type", value: "roadmap-item" },
+      { key: "status", value: "planned" },
+      { key: "priority", value: "high" },
+      { key: "work-stage", value: "unprioritized" },
+      { key: "project", value: "pi-outliner" },
+      { key: "arc", value: "safety-agency" },
+      { key: "track", value: "safety" },
+      { key: "related-to", value: source.id },
+      { key: "source-block", value: source.id },
+      { key: "work-id", value: "PIE-001" },
+    ]);
+    expect(receipt.memberships).toEqual([
+      { viewId: unprioritized.id, title: "Unprioritized" },
+      { viewId: safety.id, title: "Safety" },
+    ]);
+    expect(store.workIdAllocatorStatus().nextWorkId).toBe("PIE-002");
+    expect(store.resolvePageAddress("PIE-001").block?.id).toBe(receipt.block.id);
+
+    const beforeFailure = store.queryBlocks({
+      filters: [{ key: "type", value: "roadmap-item" }],
+      limit: 10,
+    }).blocks;
+    expect(() =>
+      store.createRoadmapItem({
+        title: "Invalid relationship",
+        priority: "medium",
+        project: "pi-outliner",
+        arc: "safety-agency",
+        tracks: ["safety"],
+        dependsOn: ["00000000-0000-4000-8000-000000000000"],
+      })
+    ).toThrow("Relationship target not found");
+    expect(store.queryBlocks({
+      filters: [{ key: "type", value: "roadmap-item" }],
+      limit: 10,
+    }).blocks).toEqual(beforeFailure);
+    expect(store.workIdAllocatorStatus().nextWorkId).toBe("PIE-002");
+
+    store.create("Duplicate queue [type::work-queue] [project::pi-outliner]");
+    expect(() =>
+      store.createRoadmapItem({
+        title: "Ambiguous queue",
+        priority: "low",
+        project: "pi-outliner",
+        arc: "safety-agency",
+        tracks: ["safety"],
+      })
+    ).toThrow("Expected exactly one active work queue");
+    expect(store.workIdAllocatorStatus().nextWorkId).toBe("PIE-002");
+  });
+
+  test("rejects reserved roadmap properties without stripping other property text", () => {
+    const store = makeStore();
+    store.configureWorkIdPrefix("PIE");
+    store.create("Pi Outliner work [type::work-queue] [project::pi-outliner]");
+    const baseInput = {
+      priority: "medium" as const,
+      project: "pi-outliner",
+      arc: "safety-agency",
+      tracks: ["safety"],
+    };
+
+    expect(() => store.createRoadmapItem({
+      ...baseInput,
+      title: "Duplicate priority [priority::low]",
+    })).toThrow("reserved property: priority");
+    expect(() => store.createRoadmapItem({
+      ...baseInput,
+      title: "Duplicate Work ID",
+      body: "Do not reserve [work-id::PIE-999]",
+    })).toThrow("reserved property: work-id");
+
+    const receipt = store.createRoadmapItem({
+      ...baseInput,
+      title: "Keep metadata [audience::agents]",
+      body: "Acceptance [outcome::clear]",
+    });
+    expect(receipt.block.text).toContain("[audience::agents]");
+    expect(receipt.block.text).toContain("[outcome::clear]");
+    expect(receipt.workId).toBe("PIE-001");
+  });
+
   test("protects reserved IDs before configuration and does not auto-adopt later typos", () => {
     const store = makeStore();
     const directory = stores[stores.length - 1].directory;
@@ -1192,9 +1504,8 @@ Second paragraph`;
     store.database.query(
       "UPDATE blocks SET text = ? WHERE id = ?",
     ).run("Copied [work-id::PIE-001] [work-id::todo-later]", duplicate.id);
-    store.database.query(
-      "INSERT INTO block_properties (block_id, key, value, ordinal) VALUES (?, 'work-id', 'PIE-001', 0), (?, 'work-id', 'todo-later', 1)",
-    ).run(duplicate.id, duplicate.id);
+    insertIndexedProperty(store, duplicate.id, "work-id", "PIE-001", 0);
+    insertIndexedProperty(store, duplicate.id, "work-id", "todo-later", 1);
     store.database.query(
       "DELETE FROM metadata WHERE key = 'work_id_allocator_migration_version'",
     ).run();
@@ -1225,9 +1536,8 @@ Second paragraph`;
     store.database.query(
       "UPDATE blocks SET text = ? WHERE id = ?",
     ).run("Legacy [work-id::PIE-123] [work-id::not-an-id]", legacy.id);
-    store.database.query(
-      "INSERT INTO block_properties (block_id, key, value, ordinal) VALUES (?, 'work-id', 'PIE-123', 0), (?, 'work-id', 'not-an-id', 1)",
-    ).run(legacy.id, legacy.id);
+    insertIndexedProperty(store, legacy.id, "work-id", "PIE-123", 0);
+    insertIndexedProperty(store, legacy.id, "work-id", "not-an-id", 1);
     store.delete(legacy.id);
 
     store.purge(legacy.id, "PIE-123");
@@ -1329,6 +1639,34 @@ Second paragraph`;
       completeness: { kind: "complete" },
     });
   });
+  test("resolves one embedded configured Work ID after exact page addresses", () => {
+    const store = makeStore();
+    store.configureWorkIdPrefix("PIE");
+    const work = store.create("Work target [work-id::PIE-123]");
+    store.create("Other target [work-id::PIE-124]");
+    const exact = store.create("Exact authored page [page::PIE-123 - Exact page]");
+
+    expect(store.resolvePageAddress("PIE-123 - some title")).toMatchObject({
+      address: "PIE-123 - some title",
+      normalizedAddress: "pie-123 - some title",
+      status: "resolved",
+      registeredAddress: "PIE-123",
+      kind: "work-id",
+      block: { id: work.id },
+    });
+    expect(store.resolvePageAddress("some title - PIE-123").block?.id).toBe(work.id);
+    expect(store.resolvePageAddress("PIE-123 - Exact page")).toMatchObject({
+      kind: "page",
+      block: { id: exact.id },
+    });
+    expect(store.resolvePageAddress("PIE-123 and PIE-124")).toMatchObject({
+      status: "missing",
+    });
+    expect(() => store.followPageAddress("some title - PIE-404")).toThrow(
+      "Unresolved Work ID cannot create a page stub: PIE-404",
+    );
+  });
+
 
   test("uses Unicode caseless normalization for symbolic uniqueness", () => {
     const store = makeStore();
@@ -1536,9 +1874,8 @@ Second paragraph`;
     const legacy = store.create("Legacy source");
     const legacyText = "Legacy source [page::One] [page::Two]";
     store.database.query("UPDATE blocks SET text = ? WHERE id = ?").run(legacyText, legacy.id);
-    store.database.query(
-      "INSERT INTO block_properties (block_id, key, value, ordinal) VALUES (?, 'page', 'One', 0), (?, 'page', 'Two', 1)",
-    ).run(legacy.id, legacy.id);
+    insertIndexedProperty(store, legacy.id, "page", "One", 0);
+    insertIndexedProperty(store, legacy.id, "page", "Two", 1);
     store.delete(legacy.id);
     store.database.query("DELETE FROM page_addresses").run();
     store.database.query(
@@ -1562,12 +1899,8 @@ Second paragraph`;
     const path = join(directory, "outliner.sqlite");
     const first = store.create("First");
     const second = store.create("Second");
-    store.database.query(
-      "INSERT INTO block_properties (block_id, key, value, ordinal) VALUES (?, 'page', 'Same Page', 0)",
-    ).run(first.id);
-    store.database.query(
-      "INSERT INTO block_properties (block_id, key, value, ordinal) VALUES (?, 'page', 'same   page', 0)",
-    ).run(second.id);
+    insertIndexedProperty(store, first.id, "page", "Same Page", 0);
+    insertIndexedProperty(store, second.id, "page", "same   page", 0);
     store.database.query("DELETE FROM page_addresses").run();
     store.database.query("DELETE FROM metadata WHERE key = 'page_address_registry_version'").run();
     store.close();

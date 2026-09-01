@@ -14,10 +14,10 @@ const BRACKETED_PASTE_END = "\x1b[201~";
 
 export function createPiDetailInputListener(
   onInput: (data: string) => void,
-  shouldPassThrough?: () => boolean,
+  shouldPassThrough?: (data: string) => boolean,
 ): TuiInputListener {
   return (data) => {
-    if (shouldPassThrough?.()) return undefined;
+    if (shouldPassThrough?.(data)) return undefined;
     if (!isKeyRelease(data)) onInput(data);
     return { consume: true };
   };

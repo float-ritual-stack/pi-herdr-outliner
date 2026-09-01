@@ -1,5 +1,5 @@
 import { pageAddressReferences } from "./page-addresses";
-import { parsePropertyTokens } from "./properties";
+import { parsePropertyRecords } from "./properties";
 import { blockReferenceOccurrences } from "./references";
 import { workIdReferences } from "./work-ids";
 
@@ -85,7 +85,7 @@ export function pageSyntaxRanges(text: string): TextRange[] {
 }
 
 export function propertyReferenceOccurrences(text: string): PropertyReferenceOccurrence[] {
-  return parsePropertyTokens(text).map((token) => ({
+  return parsePropertyRecords(text).map((token) => ({
     kind: "property",
     propertyKey: token.key,
     blockId: token.value,
@@ -124,7 +124,7 @@ export function outlinerReferenceOccurrences(
 
   const protectedRanges = [
     ...protectedMarkdownRanges(text),
-    ...parsePropertyTokens(text).map((token) => ({ start: token.start, end: token.end })),
+    ...parsePropertyRecords(text).map((token) => ({ start: token.start, end: token.end })),
   ];
   return candidates
     .filter((candidate) => !protectedRanges.some((range) => rangesOverlap(candidate, range)))

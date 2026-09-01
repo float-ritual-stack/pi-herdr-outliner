@@ -4,12 +4,78 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  configureCurrentPaneRightClick,
   currentPaneRuntime,
   focusCurrentPane,
   openDetailPane,
+  outlinerRightClickOwnership,
+  pluginClickedUrl,
+  pluginInvocationPaneId,
+  pluginInvocationWorkspaceRoot,
   removeLegacyClientPaneStates,
   resolveServicePaneId,
 } from "../src/pane-control";
+test("recovers action context from the underlying pane when a modal has no pane env", () => {
+  const env = {
+    HERDR_PLUGIN_CONTEXT_JSON: JSON.stringify({
+      clicked_url: "pi-outliner://block/target",
+      focused_pane_id: "w1:p7",
+      focused_pane_cwd: "/workspace/project",
+      workspace_cwd: "/workspace",
+    }),
+  };
+
+  expect(pluginInvocationPaneId(env)).toBe("w1:p7");
+  expect(pluginInvocationWorkspaceRoot(env, "/plugin/root")).toBe("/workspace/project");
+  expect(pluginInvocationPaneId({
+    ...env,
+    HERDR_PANE_ID: "w1:p8",
+  })).toBe("w1:p7");
+});
+
+test("rejects malformed plugin action context instead of using the plugin cwd", () => {
+  expect(() => pluginInvocationPaneId({
+    HERDR_PLUGIN_CONTEXT_JSON: "[]",
+  })).toThrow("Herdr supplied invalid plugin context");
+});
+test("validates Outliner right-click ownership", () => {
+  expect(outlinerRightClickOwnership({})).toBe("herdr");
+  expect(outlinerRightClickOwnership({ OUTLINER_RIGHT_CLICK: "OUTLINER" })).toBe("outliner");
+  expect(() => outlinerRightClickOwnership({ OUTLINER_RIGHT_CLICK: "menu" })).toThrow(
+    "OUTLINER_RIGHT_CLICK must be herdr or outliner",
+  );
+});
+test("registers and restores Herdr pane-owned secondary click", () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-outliner-right-click-"));
+  const herdr = join(directory, "fake-herdr");
+  const logPath = join(directory, "calls.jsonl");
+  const originalHerdrEnv = process.env.HERDR_ENV;
+  try {
+    process.env.HERDR_ENV = "1";
+    writeFileSync(
+      herdr,
+      `#!/usr/bin/env bun
+import { appendFileSync } from "node:fs";
+appendFileSync(${JSON.stringify(logPath)}, JSON.stringify(process.argv.slice(2)) + "\\n");
+`,
+    );
+    chmodSync(herdr, 0o755);
+    configureCurrentPaneRightClick("outliner", herdr);
+    configureCurrentPaneRightClick("herdr", herdr);
+    const calls = readFileSync(logPath, "utf8").trim().split("\n").map(
+      (line) => JSON.parse(line) as string[],
+    );
+    expect(calls).toEqual([
+      ["pane", "input", "--current", "--right-click", "pane"],
+      ["pane", "input", "--current", "--right-click", "herdr"],
+    ]);
+  } finally {
+    if (originalHerdrEnv === undefined) delete process.env.HERDR_ENV;
+    else process.env.HERDR_ENV = originalHerdrEnv;
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 
 test("keeps standalone focus inert and treats failed Herdr metadata as optional", () => {
   const originalHerdrEnv = process.env.HERDR_ENV;
@@ -67,7 +133,7 @@ if (args[0] === "pane" && args[1] === "current") {
   }
 });
 
-test("opens and focuses a Detail pane with an independent browsing context", () => {
+test("opens and focuses a dedicated property inspector through the Detail pane entrypoint", () => {
   const directory = mkdtempSync(join(tmpdir(), "pi-outliner-detail-pane-"));
   const herdr = join(directory, "fake-herdr");
   const logPath = join(directory, "calls.jsonl");
@@ -100,6 +166,8 @@ if (args[0] === "pane" && args[1] === "current") {
     expect(openDetailPane({
       workspaceRoot: "/workspace",
       browsingContextId: "independent-context",
+      propertyInspectorBlockId: "block-property-heavy",
+      direction: "right",
     }, herdr)).toBe("w1:p3");
 
     const calls = readFileSync(logPath, "utf8").trim().split("\n").map(
@@ -117,12 +185,18 @@ if (args[0] === "pane" && args[1] === "current") {
       "OUTLINER_WORKSPACE_ROOT=/workspace",
       "--env",
       "OUTLINER_BROWSING_CONTEXT_ID=independent-context",
+      "--env",
+      "OUTLINER_DETAIL_PRESENTATION=property-inspector",
+      "--env",
+      "OUTLINER_DETAIL_TARGET_BLOCK_ID=block-property-heavy",
+      "--env",
+      "OUTLINER_DETAIL_RENDERER=pi-tui",
       "--placement",
       "split",
       "--target-pane",
       "w1:p2",
       "--direction",
-      "down",
+      "right",
       "--cwd",
       "/workspace",
       "--no-focus",

@@ -2,11 +2,14 @@ import { describe, expect, test } from "bun:test";
 import {
   createDetailController,
   visibleBacklinkSources,
+  type DetailControllerOptions,
   type DetailEffects,
   type DetailViewport,
 } from "../src/detail-controller";
+import { detailPropertyInspectorRegions } from "../src/detail-pi-renderer";
 import type { ReferencedFile } from "../src/files";
 import type { OutlinerLinkTarget } from "../src/outliner-links";
+import { patchPropertyText } from "../src/properties";
 import type {
   BacklinkCollection,
   BacklinkQuery,
@@ -65,6 +68,7 @@ interface Harness {
     projectedReads: string[];
     projectedReadHosts: Array<string | undefined>;
     updates: Array<{ blockId: string; text: string; expectedUpdatedAt: string }>;
+    propertyPatches: Array<Parameters<DetailEffects["patchProperties"]>[0]>;
     creates: Array<{ parentId: string; text: string; author: "user" }>;
     restores: string[];
     histories: Array<"back" | "forward">;
@@ -82,6 +86,7 @@ interface Harness {
     selfFocuses: number;
     locks: boolean[];
     currentBlocks: Array<string | null>;
+    propertyInspectorPanes: string[];
   };
   setSelection(selection: SelectionContext): void;
   setUpdate(implementation: DetailEffects["updateBlock"]): void;
@@ -104,6 +109,7 @@ function createHarness(
     embeds: [],
     embedRanges: [],
   }),
+  controllerOptions: DetailControllerOptions = {},
 ): Harness {
   let selection: SelectionContext = { selected: initial, ancestors: [], children: [] };
   let update: DetailEffects["updateBlock"] = async (input) => makeBlock({
@@ -134,6 +140,8 @@ function createHarness(
     selfFocuses: 0,
     locks: [],
     currentBlocks: [],
+    propertyInspectorPanes: [],
+    propertyPatches: [],
   };
   const effects: DetailEffects = {
     clientId: "detail-test",
@@ -208,6 +216,21 @@ function createHarness(
       calls.updates.push(input);
       return update(input);
     },
+    async patchProperties(input) {
+      calls.propertyPatches.push(input);
+      const current = selection.selected?.id === input.blockId
+        ? selection.selected
+        : makeBlock({ id: input.blockId });
+      const updated = makeBlock({
+        ...current,
+        text: patchPropertyText(current.text, input.operations),
+        updatedAt: "version-2",
+      });
+      if (selection.selected?.id === input.blockId) {
+        selection = { ...selection, selected: updated };
+      }
+      return updated;
+    },
     async restoreBlock(blockId) {
       calls.restores.push(blockId);
       if (selection.selected?.id === blockId) {
@@ -255,9 +278,13 @@ function createHarness(
       calls.focuses += 1;
       if (focusError) throw focusError;
     },
+    openPropertyInspectorPane(blockId) {
+      calls.propertyInspectorPanes.push(blockId);
+      return "pane-inspector";
+    },
   };
   return {
-    controller: createDetailController(effects),
+    controller: createDetailController(effects, undefined, controllerOptions),
     effects,
     calls,
     setSelection(next) {
@@ -305,6 +332,58 @@ describe("detail controller projection and deferred refresh", () => {
     await harness.controller.dispatch({ type: "edit.begin" }, viewport);
     expect(harness.controller.state.buffer.text).toBe("Raw ((reference))");
     expect(harness.controller.state.mode).toBe("edit");
+  });
+
+  test("keeps wheel viewport movement independent until cursor input resumes following", async () => {
+    const text = Array.from({ length: 30 }, (_, index) => `line ${index}`).join("\n");
+    const harness = createHarness(makeBlock({ text }));
+    const smallViewport: DetailViewport = { width: 24, editorWidth: 24, height: 10 };
+    await harness.controller.initialize();
+    await harness.controller.dispatch({ type: "edit.begin" }, smallViewport);
+    const cursor = {
+      row: harness.controller.state.buffer.row,
+      column: harness.controller.state.buffer.column,
+    };
+    const cursorOffset = harness.controller.state.editorVisualOffset;
+
+    await harness.controller.dispatch(
+      { type: "editor.viewport.scroll", delta: -4 },
+      smallViewport,
+    );
+    expect(harness.controller.state.editorVisualOffset).toBe(cursorOffset - 4);
+    expect(harness.controller.state.editorViewportManual).toBe(true);
+    expect({
+      row: harness.controller.state.buffer.row,
+      column: harness.controller.state.buffer.column,
+    }).toEqual(cursor);
+
+    await harness.controller.dispatch(
+      { type: "buffer.move", direction: "left" },
+      smallViewport,
+    );
+    expect(harness.controller.state.editorViewportManual).toBe(false);
+    expect(harness.controller.state.editorVisualOffset).toBe(cursorOffset);
+
+    await harness.controller.dispatch(
+      { type: "editor.cursor.place", visualRow: 0, contentColumn: 0 },
+      smallViewport,
+    );
+    expect({
+      row: harness.controller.state.buffer.row,
+      column: harness.controller.state.buffer.column,
+    }).toEqual({ row: 0, column: 0 });
+    expect(harness.controller.state.editorVisualOffset).toBe(0);
+
+    const originalText = harness.controller.state.buffer.text;
+    await harness.controller.dispatch({ type: "draft-preview.link.toggle" }, {
+      ...smallViewport,
+      width: 120,
+      editorWidth: 60,
+    });
+    expect(harness.controller.state.draftPreviewLinked).toBe(true);
+    expect(harness.controller.state.buffer.text).toBe(originalText);
+    await harness.controller.dispatch({ type: "viewport.changed" }, smallViewport);
+    expect(harness.controller.state.draftPreviewLinked).toBe(false);
   });
   test("refreshes generated read projection on content events without changing canonical text", async () => {
     const selected = makeBlock({ text: "Recommendation\n!((view-next))" });
@@ -885,7 +964,7 @@ describe("detail controller completion, navigation, and focus", () => {
     expect(harness.controller.state.status).toBe("");
   });
 
-  test("accepts Work-ID page completion as an exact titled block reference", async () => {
+  test("accepts Work-ID completion as a titled canonical wikilink", async () => {
     const harness = createHarness(makeBlock({ text: "See [[PIE-126" }));
     harness.setPageQueryResults([{
       addresses: [{
@@ -905,7 +984,9 @@ describe("detail controller completion, navigation, and focus", () => {
     );
     await harness.controller.dispatch({ type: "completion.accept" }, viewport);
 
-    expect(harness.controller.state.buffer.text).toBe("See ((target-block-126))");
+    expect(harness.controller.state.buffer.text).toBe(
+      "See [[PIE-126|PIE-126 — Render oversized Tree expansions]]",
+    );
   });
 
   test("creates a stable heading anchor only when fragment completion is accepted", async () => {
@@ -1318,5 +1399,146 @@ describe("detail backlink loading and navigation", () => {
     );
     harness.controller.state.backlinks.filter = "PIE-151";
     expect(visibleBacklinkSources(harness.controller.state.backlinks)).toEqual([]);
+  });
+});
+
+describe("Detail property inspector integration", () => {
+  const relatedBlockId = "550e8400-e29b-41d4-a716-446655440010";
+  const source = [
+    "PIE-154 property fixture [type::design-note]",
+    `[related-to:: ${relatedBlockId}]`,
+    "[related-to:: 550e8400-e29b-41d4-a716-446655440011]",
+    "[page:: Planning / Inbox]",
+    "",
+    "ctx:: body-line",
+    "Body [work-id:: PIE-171] [unknown-key:: kept]",
+  ].join("\n");
+
+  test("keeps inspector interaction ephemeral and routes typed targets through Detail navigation", async () => {
+    const harness = createHarness(makeBlock({ id: "property-source", text: source }));
+    const controller = createDetailController(harness.effects, undefined, {
+      propertyInspectorPresentation: "dedicated",
+    });
+    await controller.initialize();
+
+    expect(controller.state.connectionMode).toBe("locked");
+    expect(controller.state.propertyInspector.model?.canonicalText).toBe(source);
+    expect(controller.state.propertyInspector.model?.entries.map((entry) => entry.scope))
+      .toEqual(["block", "block", "block", "block", "line", "inline", "inline"]);
+
+    await controller.dispatch({ type: "property-inspector.group.cycle" }, viewport);
+    await controller.dispatch({ type: "property-inspector.filter.begin" }, viewport);
+    await controller.dispatch({ type: "property-inspector.filter.input", text: "related" }, viewport);
+    await controller.dispatch({ type: "property-inspector.filter.commit" }, viewport);
+    await controller.dispatch({ type: "property-inspector.viewport.navigate", direction: "down" }, viewport);
+    await controller.dispatch({ type: "property-inspector.pane.open" }, viewport);
+
+    const target = controller.state.propertyInspector.model?.entries.find(
+      (entry) => entry.value === relatedBlockId,
+    );
+    expect(target?.target?.kind).toBe("block");
+    await controller.dispatch({
+      type: "property-inspector.target.open",
+      occurrenceId: target!.occurrenceId,
+      intent: "open",
+    }, viewport);
+    const pageTarget = controller.state.propertyInspector.model!.entries.find(
+      (entry) => entry.target?.kind === "page",
+    )!;
+    const workTarget = controller.state.propertyInspector.model!.entries.find(
+      (entry) => entry.target?.kind === "work-id",
+    )!;
+    for (const entry of [pageTarget, workTarget]) {
+      await controller.dispatch({
+        type: "property-inspector.target.open",
+        occurrenceId: entry.occurrenceId,
+        intent: "open",
+      }, viewport);
+    }
+    const plain = controller.state.propertyInspector.model!.entries.find(
+      (entry) => entry.key === "unknown-key",
+    )!;
+    const followedBeforePlain = harness.calls.followedReferences.length;
+    await controller.dispatch({
+      type: "property-inspector.target.open",
+      occurrenceId: plain.occurrenceId,
+      intent: "open",
+    }, viewport);
+
+    expect(harness.calls.propertyInspectorPanes).toEqual(["property-source"]);
+    expect(harness.calls.followedReferences).toContainEqual({
+      kind: "block",
+      value: relatedBlockId,
+      preserveSource: true,
+    });
+    expect(harness.calls.followedReferences).toContainEqual({
+      kind: "page",
+      value: "Planning / Inbox",
+      preserveSource: true,
+    });
+    expect(harness.calls.followedReferences).toContainEqual({
+      kind: "work",
+      value: "PIE-171",
+      preserveSource: true,
+    });
+    expect(harness.calls.followedReferences).toHaveLength(followedBeforePlain);
+    expect(controller.state.status).toBe("unknown-key has no navigation target");
+    expect(harness.calls.updates).toEqual([]);
+    expect(controller.state.context.selected?.text).toBe(source);
+  });
+
+
+  test("tabs to the inline disclosure and expands it with activation", async () => {
+    const harness = createHarness(makeBlock({ text: "Subject [status::planned]" }));
+    const controller = harness.controller;
+    await controller.initialize();
+    controller.setPreviewRegions(detailPropertyInspectorRegions(controller.state));
+
+    await controller.dispatch({ type: "preview.focus.move", delta: 1 }, viewport);
+    expect(controller.state.previewRegions.focusedRegionId).toBe("property-inspector");
+    await controller.dispatch({ type: "preview.activate" }, viewport);
+    expect(controller.state.propertyInspector.expanded).toBe(true);
+
+    controller.setPreviewRegions(detailPropertyInspectorRegions(controller.state));
+    await controller.dispatch({ type: "preview.focus.move", delta: 1 }, viewport);
+    expect(controller.state.previewRegions.focusedRegionId).toBe(
+      controller.state.propertyInspector.model!.entries[0]!.occurrenceId,
+    );
+  });
+  test("edits one focused property through an optimistic canonical patch", async () => {
+    const canonical = "Subject [status::planned] [owner::evan]";
+    const harness = createHarness(makeBlock({ id: "property-source", text: canonical }));
+    const controller = createDetailController(harness.effects, undefined, {
+      propertyInspectorPresentation: "dedicated",
+    });
+    await controller.initialize();
+    const status = controller.state.propertyInspector.model!.entries[0]!;
+    controller.state.previewRegions.focusedRegionId = status.occurrenceId;
+
+    await controller.dispatch({ type: "property-inspector.edit.begin" }, viewport);
+    expect(controller.isBufferMode()).toBe(true);
+    expect(controller.state.connectionMode).toBe("locked");
+    expect(controller.state.propertyInspector.edit?.buffer.text).toBe("planned");
+    await controller.dispatch({ type: "property-inspector.edit.select-all" }, viewport);
+    await controller.dispatch({ type: "property-inspector.edit.insert", text: "complete" }, viewport);
+    expect(controller.state.context.selected?.text).toBe(canonical);
+
+    await controller.dispatch({ type: "property-inspector.edit.commit" }, viewport);
+
+    expect(harness.calls.propertyPatches).toEqual([{
+      blockId: "property-source",
+      expectedUpdatedAt: "version-1",
+      operations: [{ op: "replace", ordinal: 0, value: "complete" }],
+    }]);
+    expect(controller.state.context.selected?.text).toBe(
+      "Subject [status::complete] [owner::evan]",
+    );
+    expect(controller.state.propertyInspector.model?.entries.map((entry) => entry.value))
+      .toEqual(["complete", "evan"]);
+    expect(controller.state.propertyInspector.edit).toBeNull();
+    expect(controller.state.previewRegions.focusedRegionId).toBe(
+      controller.state.propertyInspector.model!.entries[0]!.occurrenceId,
+    );
+    expect(controller.isBufferMode()).toBe(false);
   });
 });

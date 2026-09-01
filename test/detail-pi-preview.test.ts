@@ -10,12 +10,21 @@ import { describe, expect, test } from "bun:test";
 import type { DetailState } from "../src/detail-controller";
 import {
   DetailPiPreviewLayout,
+  draftSourceRowAnchors,
+  nearestDraftSourceLine,
   detailBacklinkToggleUri,
   parseDetailPreviewActionUri,
   renderBacklinksDocument,
   sanitizeMarkdownDocument,
 } from "../src/detail-pi-preview";
+import {
+  detailPropertyInspectorRegions,
+  renderPropertyInspectorDocument,
+} from "../src/detail-pi-renderer";
+import { createPropertyInspectorModel } from "../src/property-inspector";
+import { previewRegionActionUri } from "../src/detail-preview-regions";
 import { outlinerLinkUri } from "../src/outliner-links";
+import { sourceSpannedMarkdownSegments } from "../src/source-spanned-markdown";
 import { TextBuffer } from "../src/text-buffer";
 import type { Block } from "../src/types";
 
@@ -72,6 +81,21 @@ function state(text: string, rawText = "raw edit source"): DetailState {
       sortField: "updated",
       sortDirection: "desc",
       expandedSourceIds: new Set(),
+    },
+    propertyInspector: {
+      presentation: "inline",
+      model: null,
+      expanded: false,
+      groupBy: null,
+      filter: "",
+      filterDraft: null,
+      viewportOffset: 0,
+      edit: null,
+    },
+    previewRegions: {
+      regions: [],
+      focusedRegionId: null,
+      disclosureOverrides: new Map(),
     },
   };
 }
@@ -135,6 +159,21 @@ describe("Pi Markdown detail preview", () => {
     expect(lines[listStart + 1]).toMatch(/^  \S/);
   });
 
+  test("maps linked draft scrolling through source-line anchors rather than proportional offsets", () => {
+    const source = [
+      "A deliberately long first source line that wraps several times.",
+      "short",
+      "Another source line with **Markdown** and more wrapping.",
+    ].join("\n");
+    const anchors = draftSourceRowAnchors(source, 14, plainMarkdownTheme);
+    expect(anchors).toHaveLength(3);
+    expect(anchors[1]).toBeGreaterThan(1);
+    expect(anchors[2]).toBeGreaterThan(anchors[1]!);
+    expect(nearestDraftSourceLine(anchors, anchors[1]!)).toBe(1);
+    expect(nearestDraftSourceLine(anchors, anchors[2]! - 1)).toBe(1);
+    expect(nearestDraftSourceLine([], 4)).toBeNull();
+  });
+
   test("keeps the custom header, rule, status, and help outside the document body", () => {
     const detail = state("Body text");
     detail.status = "Ready";
@@ -144,7 +183,7 @@ describe("Pi Markdown detail preview", () => {
     expect(lines[1]).toContain("Detail · Unlocked");
     expect(lines[2]).toBe("─".repeat(32));
     expect(lines.at(-2)).toBe("Ready");
-    expect(lines.at(-1)).toContain("b backlinks");
+    expect(lines.at(-1)).toContain("e edit");
     expect(lines.at(-1)).not.toContain("Enter edit");
     expect(previewLayout(detail).scrollView.scrollbar).toBe("always");
   });
@@ -248,6 +287,74 @@ describe("Pi Markdown detail preview", () => {
     layout.syncState();
     rendered = layout.markdown.render(48);
     expect(rendered.some((line) => line.includes("\x1b[48;5;236m"))).toBe(false);
+  });
+
+  test("decorates post-parse structural blocks without breaking Markdown context", () => {
+    const document = [
+      "Before",
+      "",
+      "> Quoted embed",
+      "> continuation",
+      "",
+      "- list embed",
+      "- second item",
+      "",
+      "```ts",
+      "const answer = 42;",
+      "```",
+      "",
+      "| Name | Value |",
+      "| --- | --- |",
+      "| Embed | yes |",
+      "",
+      "After",
+    ].join("\n");
+    const ranges = [
+      { startLine: 2, endLine: 3 },
+      { startLine: 5, endLine: 6 },
+      { startLine: 8, endLine: 10 },
+      { startLine: 12, endLine: 14 },
+    ];
+    const segments = sourceSpannedMarkdownSegments(document, ranges);
+    expect(segments.map((segment) => segment.text).join("")).toBe(document);
+    expect(segments.every((segment) =>
+      segment.text === document.slice(segment.span.start, segment.span.end)
+    )).toBe(true);
+    expect(segments.filter((segment) => segment.decorated).map((segment) =>
+      segment.text.trim()
+    )).toEqual([
+      "> Quoted embed\n> continuation",
+      "- list embed\n- second item",
+      "```ts\nconst answer = 42;\n```",
+      "| Name | Value |\n| --- | --- |\n| Embed | yes |",
+    ]);
+
+    const detail = state(document, document);
+    detail.embedRanges = ranges;
+    const layout = previewLayout(detail);
+    layout.syncState();
+
+    for (const width of [32, 80]) {
+      const rendered = layout.markdown.render(width);
+      function lineContaining(text: string): string | undefined {
+        return rendered.find((line) => stripTerminalSequences(line).includes(text));
+      }
+      expect(stripTerminalSequences(lineContaining("Quoted embed")!)).toContain(
+        "│ Quoted embed",
+      );
+      expect(stripTerminalSequences(lineContaining("list embed")!)).toContain(
+        "- list embed",
+      );
+      expect(stripTerminalSequences(lineContaining("answer = 42")!)).toContain(
+        "const answer = 42;",
+      );
+      expect(stripTerminalSequences(lineContaining("Embed")!)).toContain("Embed");
+      for (const text of ["Quoted embed", "list embed", "answer = 42", "Embed"]) {
+        expect(lineContaining(text)).toContain("\x1b[48;5;236m");
+      }
+      expect(lineContaining("Before")).not.toContain("\x1b[48;5;236m");
+      expect(lineContaining("After")).not.toContain("\x1b[48;5;236m");
+    }
   });
 
   test("links each Detail breadcrumb segment to an explicit Tree reveal", () => {
@@ -380,11 +487,11 @@ describe("Pi Markdown detail preview", () => {
   test("without links, updates Markdown only when the resolved source changes", () => {
     const detail = state("Initial **document**");
     const layout = previewLayout(detail);
-    const originalSetText = layout.markdown.setText.bind(layout.markdown);
+    const originalSetContent = layout.markdown.setContent.bind(layout.markdown);
     let updates = 0;
-    layout.markdown.setText = (text: string): void => {
+    layout.markdown.setContent = (text, ranges, enabled): void => {
       updates += 1;
-      originalSetText(text);
+      originalSetContent(text, ranges, enabled);
     };
 
     layout.render(40);
@@ -399,6 +506,235 @@ describe("Pi Markdown detail preview", () => {
     const lines = renderedDocument(layout, 80);
     expect(updates).toBe(2);
     expect(lines.map((line) => line.trim()).join(" ")).toContain("complete ending");
+  });
+  test("renders a clickable unsaved draft and restores canonical preview on cancel", () => {
+    const capabilities = getCapabilities();
+    setCapabilities({ ...capabilities, hyperlinks: true });
+    try {
+      const targetId = "550e8400-e29b-41d4-a716-446655440000";
+      const detail = state("Canonical preview", "Canonical source");
+      detail.mode = "edit";
+      detail.buffer = new TextBuffer(`Unsaved ((${targetId})) draft`);
+      let editing = true;
+      const layout = new DetailPiPreviewLayout(
+        detail,
+        plainMarkdownTheme,
+        true,
+        undefined,
+        { draftText: () => editing ? detail.buffer.text : null },
+      );
+      layout.setActive(true);
+      layout.syncState();
+
+      const draftLine = layout.markdown.render(80).find((line) =>
+        stripTerminalSequences(line).includes("Unsaved")
+      );
+      expect(draftLine).toBeDefined();
+      const draftText = stripTerminalSequences(draftLine!);
+      expect(getOsc8LinkAtColumn(draftLine!, draftText.indexOf(targetId) + 2)).toBe(
+        `pi-outliner://block/${targetId}`,
+      );
+
+      editing = false;
+      detail.mode = "preview";
+      layout.syncState();
+      const canonical = layout.markdown.render(80).map(stripTerminalSequences).join(" ");
+      expect(canonical).toContain("Canonical preview");
+      expect(canonical).not.toContain("Unsaved");
+    } finally {
+      setCapabilities(capabilities);
+    }
+  });
+
+  test("replaces the immediate draft with its generated read projection", async () => {
+    const detail = state("Canonical preview", "Canonical source");
+    detail.mode = "edit";
+    detail.buffer = new TextBuffer("!((view-next))");
+    const projected = Promise.withResolvers<void>();
+    const layout = new DetailPiPreviewLayout(
+      detail,
+      plainMarkdownTheme,
+      false,
+      projected.resolve,
+      {
+        draftText: () => detail.buffer.text,
+        projectionDelayMs: 0,
+        async projectDraft(text) {
+          expect(text).toBe("!((view-next))");
+          return {
+            sourceText: "Embedded draft result",
+            rawText: text,
+            embedRanges: [{ startLine: 0, endLine: 0 }],
+            workIdPrefix: null,
+          };
+        },
+      },
+    );
+    layout.setActive(true);
+    layout.syncState();
+    expect(layout.markdown.render(80).map(stripTerminalSequences).join(" ")).toContain(
+      "!((view-next))",
+    );
+
+    await projected.promise;
+
+    expect(layout.markdown.render(80).map(stripTerminalSequences).join(" ")).toContain(
+      "Embedded draft result",
+    );
+  });
+
+  test("retries a failed draft projection after leaving and re-entering edit mode", async () => {
+    const detail = state("Canonical preview", "Canonical source");
+    detail.mode = "edit";
+    detail.buffer = new TextBuffer("draft source");
+    let editing = true;
+    let attempts = 0;
+    const firstFinished = Promise.withResolvers<void>();
+    const retryFinished = Promise.withResolvers<void>();
+    const layout = new DetailPiPreviewLayout(
+      detail,
+      plainMarkdownTheme,
+      false,
+      () => {
+        if (attempts === 1) firstFinished.resolve();
+        else if (attempts === 2) retryFinished.resolve();
+      },
+      {
+        draftText: () => editing ? detail.buffer.text : null,
+        projectionDelayMs: 0,
+        async projectDraft(text) {
+          attempts += 1;
+          if (attempts === 1) throw new Error("temporary projection failure");
+          return {
+            sourceText: "Recovered draft projection",
+            rawText: text,
+            embedRanges: [],
+            workIdPrefix: null,
+          };
+        },
+      },
+    );
+    layout.setActive(true);
+    layout.syncState();
+
+    await firstFinished.promise;
+    expect(renderedDocument(layout, 80).join(" ")).toContain(
+      "Draft preview error: temporary projection failure",
+    );
+
+    editing = false;
+    detail.mode = "preview";
+    layout.syncState();
+    expect(renderedDocument(layout, 80).join(" ")).toContain("Canonical preview");
+
+    editing = true;
+    detail.mode = "edit";
+    layout.syncState();
+    await retryFinished.promise;
+
+    expect(attempts).toBe(2);
+    expect(renderedDocument(layout, 80).join(" ")).toContain(
+      "Recovered draft projection",
+    );
+  });
+
+  test("restarts an in-flight projection after split deactivation", async () => {
+    const detail = state("Canonical preview", "Canonical source");
+    detail.mode = "edit";
+    detail.buffer = new TextBuffer("unchanged draft");
+    let attempts = 0;
+    const firstStarted = Promise.withResolvers<void>();
+    const firstResponse = Promise.withResolvers<void>();
+    const retryFinished = Promise.withResolvers<void>();
+    const layout = new DetailPiPreviewLayout(
+      detail,
+      plainMarkdownTheme,
+      false,
+      () => {
+        if (attempts === 2) retryFinished.resolve();
+      },
+      {
+        draftText: () => detail.buffer.text,
+        projectionDelayMs: 0,
+        async projectDraft(text) {
+          attempts += 1;
+          if (attempts === 1) {
+            firstStarted.resolve();
+            await firstResponse.promise;
+            return {
+              sourceText: "Stale projection",
+              rawText: text,
+              embedRanges: [],
+              workIdPrefix: null,
+            };
+          }
+          return {
+            sourceText: "Restarted projection",
+            rawText: text,
+            embedRanges: [],
+            workIdPrefix: null,
+          };
+        },
+      },
+    );
+    layout.setActive(true);
+    layout.syncState();
+    await firstStarted.promise;
+
+    layout.setActive(false);
+    firstResponse.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    layout.setActive(true);
+    layout.syncState();
+    await retryFinished.promise;
+
+    expect(attempts).toBe(2);
+    expect(renderedDocument(layout, 80).join(" ")).toContain("Restarted projection");
+  });
+
+  test("does not reuse a same-text projection across selected blocks", async () => {
+    const detail = state("Canonical preview", "same draft");
+    detail.mode = "edit";
+    detail.buffer = new TextBuffer("same draft");
+    let attempts = 0;
+    const firstFinished = Promise.withResolvers<void>();
+    const secondFinished = Promise.withResolvers<void>();
+    const layout = new DetailPiPreviewLayout(
+      detail,
+      plainMarkdownTheme,
+      false,
+      () => {
+        if (attempts === 1) firstFinished.resolve();
+        else if (attempts === 2) secondFinished.resolve();
+      },
+      {
+        draftText: () => detail.buffer.text,
+        projectionDelayMs: 0,
+        async projectDraft(text) {
+          attempts += 1;
+          return {
+            sourceText: `Projection for ${detail.context.selected?.id}`,
+            rawText: text,
+            embedRanges: [],
+            workIdPrefix: null,
+          };
+        },
+      },
+    );
+    layout.setActive(true);
+    layout.syncState();
+    await firstFinished.promise;
+    expect(renderedDocument(layout, 80).join(" ")).toContain("Projection for block-1");
+
+    detail.context.selected = block("block-2", "same draft");
+    layout.syncState();
+    await secondFinished.promise;
+
+    const rendered = renderedDocument(layout, 80).join(" ");
+    expect(attempts).toBe(2);
+    expect(rendered).toContain("Projection for block-2");
+    expect(rendered).not.toContain("Projection for block-1");
   });
 });
 
@@ -479,7 +815,7 @@ describe("generated backlink preview", () => {
     expect(highlighted).toContain("\x1b[1;97;48;5;24m");
     expect(generated).toContain(detailBacklinkToggleUri("source-target"));
     expect(parseDetailPreviewActionUri(detailBacklinkToggleUri("source-target"))).toEqual({
-      kind: "backlink-toggle",
+      type: "backlink.source.disclosure.toggle",
       blockId: "source-target",
     });
     detail.backlinks.expandedSourceIds.clear();
@@ -585,5 +921,269 @@ describe("generated backlink preview", () => {
     const empty = renderBacklinksDocument(detail);
     expect(empty).toContain("Target is in Trash");
     expect(empty).toContain("No backlinks");
+  });
+});
+
+describe("structured property inspector presentations", () => {
+  const relationshipIds = [
+    "550e8400-e29b-41d4-a716-446655440010",
+    "550e8400-e29b-41d4-a716-446655440011",
+  ];
+  const canonical = [
+    "PIE-154 property fixture [type::design-note]",
+    `[related-to:: ${relationshipIds[0]}]`,
+    `[related-to:: ${relationshipIds[1]}]`,
+    "[page:: Planning / Inbox]",
+    "",
+    "ctx:: body-line",
+    "Body [work-id:: PIE-171] [unknown-key:: kept]",
+    "",
+    "> [!note]+ Existing callout",
+    "> unchanged",
+  ].join("\n");
+
+  function propertyState(presentation: "inline" | "dedicated"): DetailState {
+    const detail = state("> [!note]+ Existing callout\n> unchanged", canonical);
+    detail.propertyInspector = {
+      presentation,
+      model: createPropertyInspectorModel(detail.context.selected!.id, canonical),
+      expanded: true,
+      groupBy: null,
+      filter: "",
+      filterDraft: null,
+      viewportOffset: 0,
+      edit: null,
+    };
+    return detail;
+  }
+
+  test("uses one canonical model for inline and dedicated rows without losing occurrence data", () => {
+    const inline = propertyState("inline");
+    const dedicated = propertyState("dedicated");
+    const inlineEntries = detailPropertyInspectorRegions(inline)
+      .filter((region) => region.kind === "property-entry");
+    const dedicatedEntries = detailPropertyInspectorRegions(dedicated)
+      .filter((region) => region.kind === "property-entry");
+
+    expect(inlineEntries.map((region) => region.id)).toEqual(
+      inline.propertyInspector.model!.entries.map((entry) => entry.occurrenceId),
+    );
+    expect(dedicatedEntries.map((region) => region.id)).toEqual(
+      inlineEntries.map((region) => region.id),
+    );
+    expect(inline.propertyInspector.model?.entries.map((entry) => entry.scope))
+      .toEqual(["block", "block", "block", "block", "line", "inline", "inline"]);
+    expect(
+      inline.propertyInspector.model?.entries
+        .filter((entry) => entry.key === "related-to")
+        .map((entry) => entry.value),
+    ).toEqual(relationshipIds);
+    expect(inline.propertyInspector.model?.canonicalText).toBe(canonical);
+    expect(inline.context.selected?.text).toBe(canonical);
+  });
+
+  test("renders responsive table columns and typed target actions", () => {
+    const detail = propertyState("inline");
+    const regions = detailPropertyInspectorRegions(detail);
+    const model = detail.propertyInspector.model!;
+    for (const entry of model.entries) {
+      const region = regions.find((candidate) => candidate.id === entry.occurrenceId)!;
+      expect(region.sourceSpan).toMatchObject({
+        start: entry.start,
+        end: entry.end,
+        startLine: entry.line,
+      });
+      if (entry.target) {
+        expect(region.activation).toEqual({
+          type: "property-inspector.target.open",
+          occurrenceId: entry.occurrenceId,
+        });
+      } else expect(region.activation).toBeNull();
+    }
+
+    const wide = renderPropertyInspectorDocument(detail, 100);
+    const narrow = renderPropertyInspectorDocument(detail, 36);
+    expect(wide).toContain("| Property | Value | Scope | Source |");
+    expect(wide).toContain("| **related-to** |");
+    expect(wide).toContain("#1 · L2:C1");
+    expect(wide).toContain("unknown-key");
+    expect(narrow).toContain("| Property | Value | Source |");
+    expect(narrow).not.toContain("| Property | Value | Scope | Source |");
+    const typed = model.entries.find((entry) => entry.target?.kind === "work-id")!;
+    const uri = previewRegionActionUri({
+      type: "property-inspector.target.open",
+      occurrenceId: typed.occurrenceId,
+    });
+    expect(parseDetailPreviewActionUri(uri)).toEqual({
+      type: "property-inspector.target.open",
+      occurrenceId: typed.occurrenceId,
+    });
+    expect(detail.context.selected?.text).toBe(canonical);
+  });
+
+  test("uses the Backlinks active background for the focused property row", () => {
+    const detail = propertyState("dedicated");
+    const entry = detail.propertyInspector.model!.entries[0]!;
+    detail.previewRegions.focusedRegionId = entry.occurrenceId;
+    const layout = new DetailPiPreviewLayout(detail, plainMarkdownTheme, false);
+
+    const activeRow = layout.render(100).find((line) =>
+      stripTerminalSequences(line).includes("▶ type")
+    );
+    expect(activeRow).toContain("\x1b[1;97;48;5;24m");
+  });
+
+  test("renders the focused property value as an in-place editable table cell", () => {
+    const detail = propertyState("dedicated");
+    const entry = detail.propertyInspector.model!.entries[0]!;
+    const buffer = new TextBuffer("design-note-updated");
+    buffer.moveEnd();
+    detail.propertyInspector.edit = {
+      occurrenceId: entry.occurrenceId,
+      ordinal: entry.ordinal,
+      blockId: detail.context.selected!.id,
+      expectedUpdatedAt: detail.context.selected!.updatedAt,
+      buffer,
+    };
+    detail.previewRegions.focusedRegionId = entry.occurrenceId;
+
+    const document = renderPropertyInspectorDocument(detail, 100);
+    expect(document).toContain("Editing type");
+    expect(document).toContain("✎ design-note-updated▏");
+    expect(document).toContain("↵ save · ⎋ cancel");
+  });
+
+  test("adds inspector regions beside existing callout and Backlinks regions", () => {
+    const detail = propertyState("inline");
+    const layout = new DetailPiPreviewLayout(detail, plainMarkdownTheme, false);
+    const rendered = layout.render(80).map(stripTerminalSequences).join("\n");
+    const kinds = new Set(detail.previewRegions.regions.map((region) => region.kind));
+
+    expect(kinds).toContain("callout");
+    expect(kinds).toContain("property-inspector");
+    expect(kinds).toContain("property-entry");
+    expect(kinds).toContain("backlinks");
+    expect(rendered).toContain("Existing callout");
+    expect(rendered).toContain("Properties");
+    expect(rendered).toContain("Backlinks");
+    expect(detail.context.selected?.text).toBe(canonical);
+  });
+
+  test("places a collapsible property panel before authored content and hides duplicate block metadata", () => {
+    const detail = state(canonical, canonical);
+    detail.propertyInspector = propertyState("inline").propertyInspector;
+    detail.propertyInspector.expanded = false;
+    const layout = previewLayout(detail);
+
+    const collapsed = layout.render(100).map(stripTerminalSequences).join("\n");
+    expect(collapsed.indexOf("Properties")).toBeLessThan(
+      collapsed.indexOf("PIE-154 property fixture"),
+    );
+    expect(collapsed).not.toContain("[type::design-note]");
+    expect(collapsed).not.toContain("[related-to::");
+    expect(collapsed).toContain("ctx:: body-line");
+    expect(collapsed).toContain("[work-id:: PIE-171]");
+    expect(collapsed).not.toContain("│ Property");
+
+    detail.propertyInspector.expanded = true;
+    const expanded = layout.render(100).map(stripTerminalSequences).join("\n");
+    expect(expanded).toContain("│ Property");
+    expect(expanded.indexOf("│ Property")).toBeLessThan(
+      expanded.indexOf("PIE-154 property fixture"),
+    );
+    expect(detail.context.selected?.text).toBe(canonical);
+  });
+
+  test("keeps callout PreviewRegion spans anchored to authored source", () => {
+    const targetId = "550e8400-e29b-41d4-a716-446655440000";
+    const canonical = [
+      `Before ((${targetId}))`,
+      "> [!note]+ Exact span",
+      `> Body ((${targetId}))`,
+    ].join("\n");
+    const resolved = [
+      "Before a substantially longer resolved reference title",
+      "> [!note]+ Exact span",
+      "> Body another substantially longer resolved reference title",
+    ].join("\n");
+    const detail = state(resolved, canonical);
+    detail.context.selected!.id = targetId;
+    detail.targetBlockId = targetId;
+    const layout = new DetailPiPreviewLayout(
+      detail,
+      plainMarkdownTheme,
+      true,
+    );
+
+    layout.render(80);
+
+    const callout = detail.previewRegions.regions.find((region) =>
+      region.kind === "callout"
+    );
+    expect(callout?.sourceSpan).not.toBeNull();
+    expect(
+      canonical.slice(callout!.sourceSpan!.start, callout!.sourceSpan!.end),
+    ).toBe([
+      "> [!note]+ Exact span",
+      `> Body ((${targetId}))`,
+    ].join("\n"));
+    expect(layout.markdown.render(80).join("\n")).toContain("Exact span");
+  });
+
+  test("synchronizes dedicated inspector content before layout-node rendering", () => {
+    const detail = propertyState("dedicated");
+    const layout = previewLayout(detail);
+
+    layout.syncState(80);
+
+    expect(
+      layout.inspectorMarkdown
+        .render(layout.scrollView.getContentWidth(80))
+        .map(stripTerminalSequences)
+        .join("\n"),
+    ).toContain("Properties");
+  });
+
+  test("scrolls focused property rows into view at narrow and wide widths", () => {
+    const canonical = [
+      "Many properties",
+      ...Array.from(
+        { length: 20 },
+        (_, index) => `[field-${index}::value-${index}]`,
+      ),
+    ].join("\n");
+
+    for (const width of [40, 100]) {
+      const detail = state(canonical, canonical);
+      detail.propertyInspector = {
+        presentation: "dedicated",
+        model: createPropertyInspectorModel(
+          detail.context.selected!.id,
+          canonical,
+        ),
+        expanded: true,
+        groupBy: "key",
+        filter: "",
+        filterDraft: null,
+        viewportOffset: 0,
+        edit: null,
+      };
+      const layout = previewLayout(detail);
+      layout.render(width);
+      const contentWidth = layout.scrollView.getContentWidth(width);
+      const contentHeight = layout.inspectorMarkdown.render(contentWidth).length;
+      layout.scrollView.updateLayout(contentHeight, 6, () => {});
+      const lastEntry = detail.propertyInspector.model!.entries.at(-1)!;
+      detail.previewRegions.focusedRegionId = lastEntry.occurrenceId;
+
+      layout.render(width);
+
+      const selectedRow = layout.inspectorMarkdown.render(contentWidth)
+        .findIndex((line) => line.includes("▶ "));
+      expect(selectedRow).toBeGreaterThanOrEqual(layout.scrollView.scrollTop);
+      expect(selectedRow).toBeLessThan(
+        layout.scrollView.scrollTop + layout.scrollView.viewportHeight,
+      );
+    }
   });
 });

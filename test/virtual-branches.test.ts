@@ -205,7 +205,7 @@ describe("virtual branch projection", () => {
       [next, doing, nextCard, doingCard, after],
       [next, doing, nextCard, doingCard, after],
       async ({ filters, limit, rankViewId }) => {
-        expect(limit).toBe(202);
+        expect(limit).toBe(1_000);
         const status = filters?.[0]?.value;
         if (status === "Next") {
           expect(rankViewId).toBe(next.id);
@@ -233,6 +233,8 @@ describe("virtual branch projection", () => {
       "doing-card",
       "after",
     ]);
+    expect(projection.physicalRowCount).toBe(5);
+    expect(projection.occurrenceRowCount).toBe(2);
     const occurrence = projection.rows[1]!;
     expect(isVirtualBranchOccurrence(occurrence)).toBe(true);
     if (!isVirtualBranchOccurrence(occurrence)) throw new Error("Expected occurrence");
@@ -273,7 +275,7 @@ describe("virtual branch projection", () => {
       physical,
       physical,
       async ({ limit, rankViewId }) => {
-        expect(limit).toBe(4);
+        expect(limit).toBe(1_000);
         expect(rankViewId === firstView.id || rankViewId === secondView.id).toBe(true);
         return complete([first, second, third]);
       },
@@ -298,17 +300,21 @@ describe("virtual branch projection", () => {
     });
   });
 
-  test("does not query collapsed definitions", async () => {
+  test("allocates collapsed definitions independently before applying disclosure", async () => {
     const collapsed = visibleBlock("collapsed-view", [
       { key: "type", value: "virtual-branch" },
       { key: "query", value: "status=Done" },
     ]);
+    const match = visibleBlock("match");
+    let queryCalls = 0;
 
     const projection = await projectVirtualBranches(
       [collapsed],
-      [collapsed],
-      async () => {
-        throw new Error("collapsed branch queried");
+      [collapsed, match],
+      async ({ limit }) => {
+        queryCalls += 1;
+        expect(limit).toBe(1_000);
+        return complete([match]);
       },
       [],
       {
@@ -317,12 +323,15 @@ describe("virtual branch projection", () => {
       },
     );
 
+    expect(queryCalls).toBe(1);
     expect(projection.rows.map((row) => row.rowId)).toEqual(["collapsed-view"]);
+    expect(projection.occurrenceRowCount).toBe(0);
     expect(projection.branchStates.get("collapsed-view")).toEqual(expect.objectContaining({
-      queried: false,
-      count: 0,
+      queried: true,
+      count: 1,
+      descendantCount: 0,
       queryError: null,
-      completeness: null,
+      completeness: { kind: "complete" },
     }));
   });
 
@@ -354,6 +363,7 @@ describe("virtual branch projection", () => {
       queryError: null,
       count: 2,
       completeness: { kind: "truncated", limit: 2 },
+      truncation: { rootQuery: true, depth: false, budget: false },
     }));
     expect(projection.rows.filter(isVirtualBranchOccurrence).map((row) => row.rowId)).toEqual([
       "occurrence:limited-view:one",
@@ -372,7 +382,7 @@ describe("virtual branch projection", () => {
     const physical = [definition, first, second];
 
     const projection = await projectVirtualBranches(physical, physical, async ({ limit }) => {
-      expect(limit).toBe(4);
+      expect(limit).toBe(1_000);
       return complete([definition, first, second]);
     });
 
@@ -403,6 +413,209 @@ describe("virtual branch projection", () => {
       readOnly: false,
     }));
     expect(projection.branchStates.get("view")?.creationErrors).toEqual([]);
+  });
+
+  test("keeps contextual identity while preserving a descendant as an independent root", async () => {
+    const definition = visibleBlock("view", [
+      { key: "type", value: "virtual-branch" },
+      { key: "query", value: "status=next" },
+    ]);
+    const root = visibleBlock("root", [], { hasChildren: true });
+    const child = visibleBlock("child", [], {
+      parentId: root.id,
+      position: 0,
+      depth: 1,
+      hasChildren: true,
+    });
+    const grandchild = visibleBlock("grandchild", [], {
+      parentId: child.id,
+      position: 0,
+      depth: 2,
+      hasChildren: true,
+    });
+    const tooDeep = visibleBlock("too-deep", [], {
+      parentId: grandchild.id,
+      position: 0,
+      depth: 3,
+    });
+    const inertDefinition = visibleBlock("inert-view", [
+      { key: "type", value: "virtual-branch" },
+      { key: "query", value: "status=other" },
+    ], {
+      parentId: root.id,
+      position: 1,
+      depth: 1,
+      hasChildren: true,
+    });
+    const inertChild = visibleBlock("inert-child", [], {
+      parentId: inertDefinition.id,
+      depth: 2,
+    });
+    const physical = [
+      definition,
+      root,
+      child,
+      grandchild,
+      tooDeep,
+      inertDefinition,
+      inertChild,
+    ];
+
+    const projection = await projectVirtualBranches(
+      [definition, root],
+      physical,
+      async () => complete([root, child]),
+    );
+    const occurrences = projection.rows.filter(isVirtualBranchOccurrence);
+
+    expect(occurrences.map((row) => row.rowId)).toEqual([
+      "occurrence:view:root",
+      "occurrence:view:root:child",
+      "occurrence:view:root:grandchild",
+      "occurrence:view:root:inert-view",
+      "occurrence:view:child",
+      "occurrence:view:child:grandchild",
+      "occurrence:view:child:too-deep",
+    ]);
+    expect(occurrences[1]).toEqual(expect.objectContaining({
+      canonicalId: child.id,
+      matchRootCanonicalId: root.id,
+      parentRowId: "occurrence:view:root",
+      relativeDepth: 1,
+      hasChildren: true,
+    }));
+    expect(occurrences[4]).toEqual(expect.objectContaining({
+      canonicalId: child.id,
+      matchRootCanonicalId: child.id,
+      parentRowId: definition.id,
+      relativeDepth: 0,
+      hasChildren: true,
+    }));
+    expect(occurrences.some((row) => row.canonicalId === inertChild.id)).toBe(false);
+    expect(occurrences.some((row) =>
+      row.matchRootCanonicalId === root.id && row.canonicalId === tooDeep.id
+    )).toBe(false);
+    expect(projection.branchStates.get(definition.id)).toEqual(expect.objectContaining({
+      count: 2,
+      descendantCount: 5,
+      truncation: { rootQuery: false, depth: true, budget: false },
+    }));
+  });
+
+  test("reserves roots before deterministic descendant allocation independent of disclosure", async () => {
+    const definition = visibleBlock("budget-view", [
+      { key: "type", value: "virtual-branch" },
+      { key: "query", value: "status=next" },
+      { key: "limit", value: "2" },
+    ]);
+    const firstRoot = visibleBlock("first-root", [], { hasChildren: true });
+    const secondRoot = visibleBlock("second-root", [], { hasChildren: true });
+    const firstChildren = Array.from({ length: 600 }, (_, index) =>
+      visibleBlock(`first-${index}`, [], {
+        parentId: firstRoot.id,
+        position: index,
+        depth: 1,
+      })
+    );
+    const secondChildren = Array.from({ length: 600 }, (_, index) =>
+      visibleBlock(`second-${index}`, [], {
+        parentId: secondRoot.id,
+        position: index,
+        depth: 1,
+      })
+    );
+    const physical = [definition, firstRoot, ...firstChildren, secondRoot, ...secondChildren];
+    const query = async () => complete([firstRoot, secondRoot]);
+
+    const expanded = await projectVirtualBranches(physical, physical, query);
+    const collapsed = await projectVirtualBranches(
+      physical,
+      physical,
+      query,
+      [],
+      {
+        collapsedBlockIds: new Set(),
+        collapsedOccurrenceRowIds: new Set(["occurrence:budget-view:first-root"]),
+        multilineExpandedRowIds: new Set(),
+      },
+    );
+    const expandedOccurrences = expanded.rows.filter(isVirtualBranchOccurrence);
+    const collapsedOccurrences = collapsed.rows.filter(isVirtualBranchOccurrence);
+
+    expect(expandedOccurrences).toHaveLength(1_000);
+    expect(expandedOccurrences[0]?.canonicalId).toBe(firstRoot.id);
+    expect(expandedOccurrences[601]?.canonicalId).toBe(secondRoot.id);
+    expect(expandedOccurrences.at(-1)?.canonicalId).toBe("second-397");
+    expect(collapsedOccurrences.map((row) => row.rowId)).toEqual(
+      expandedOccurrences
+        .filter((row) =>
+          row.rowId === "occurrence:budget-view:first-root" ||
+          row.matchRootCanonicalId !== firstRoot.id
+        )
+        .map((row) => row.rowId),
+    );
+    expect(collapsedOccurrences[0]).toEqual(expect.objectContaining({
+      rowId: "occurrence:budget-view:first-root",
+      collapsed: true,
+      hasChildren: true,
+    }));
+    expect(expanded.branchStates.get(definition.id)).toEqual(expect.objectContaining({
+      count: 2,
+      descendantCount: 998,
+      truncation: { rootQuery: false, depth: false, budget: true },
+    }));
+    expect(collapsed.branchStates.get(definition.id)).toEqual(
+      expanded.branchStates.get(definition.id),
+    );
+  });
+
+  test("reuses one bounded canonical context traversal across branches with the same root", async () => {
+    const firstView = visibleBlock("first-view", [
+      { key: "type", value: "virtual-branch" },
+      { key: "query", value: "status=next" },
+    ]);
+    const secondView = visibleBlock("second-view", [
+      { key: "type", value: "virtual-branch" },
+      { key: "query", value: "status=next" },
+    ]);
+    const root = visibleBlock("shared-root", [], { hasChildren: true });
+    const child = visibleBlock("shared-child", [], {
+      parentId: root.id,
+      depth: 1,
+      hasChildren: true,
+    });
+    const grandchild = visibleBlock("shared-grandchild", [], {
+      parentId: child.id,
+      depth: 2,
+    });
+    let childPropertyReads = 0;
+    let grandchildPropertyReads = 0;
+    Object.defineProperty(child, "properties", {
+      configurable: true,
+      get() {
+        childPropertyReads += 1;
+        return [];
+      },
+    });
+    Object.defineProperty(grandchild, "properties", {
+      configurable: true,
+      get() {
+        grandchildPropertyReads += 1;
+        return [];
+      },
+    });
+    const physical = [firstView, secondView, root, child, grandchild];
+
+    const projection = await projectVirtualBranches(
+      [firstView, secondView],
+      physical,
+      async () => complete([root]),
+    );
+
+    expect(projection.branchStates.get(firstView.id)?.descendantCount).toBe(2);
+    expect(projection.branchStates.get(secondView.id)?.descendantCount).toBe(2);
+    expect(childPropertyReads).toBe(1);
+    expect(grandchildPropertyReads).toBe(1);
   });
 });
 

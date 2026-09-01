@@ -7,7 +7,16 @@ export interface TreeMouseClick {
   row: number;
 }
 
+export interface TreeMouseTarget {
+  readonly rowId: string;
+  readonly disclosureColumn: number;
+}
+
 export type TreeWheelDirection = "up" | "down";
+
+export interface TreeWheelEvent extends TreeMouseClick {
+  direction: TreeWheelDirection;
+}
 
 export function isTreeMouseSequence(sequence: string): boolean {
   return SGR_MOUSE_PATTERN.test(sequence);
@@ -23,17 +32,39 @@ export function parseTreePlainClick(sequence: string): TreeMouseClick | null {
   if (column < 0 || row < 0) return null;
   return { column, row };
 }
-
-export function parseTreeWheel(sequence: string): TreeWheelDirection | null {
+export function parseTreeSecondaryClick(sequence: string): TreeMouseClick | null {
   const match = SGR_MOUSE_PATTERN.exec(sequence);
   if (!match || match[4] !== "M") return null;
-  const column = Number.parseInt(match[2], 10);
-  const row = Number.parseInt(match[3], 10);
-  if (column < 1 || row < 1) return null;
   const button = Number.parseInt(match[1], 10);
-  if (button === 64) return "up";
-  if (button === 65) return "down";
-  return null;
+  if (button !== 2) return null;
+  const column = Number.parseInt(match[2], 10) - 1;
+  const row = Number.parseInt(match[3], 10) - 1;
+  return column >= 0 && row >= 0 ? { column, row } : null;
+}
+
+export function parseTreeWheelEvent(sequence: string): TreeWheelEvent | null {
+  const match = SGR_MOUSE_PATTERN.exec(sequence);
+  if (!match || match[4] !== "M") return null;
+  const column = Number.parseInt(match[2], 10) - 1;
+  const row = Number.parseInt(match[3], 10) - 1;
+  if (column < 0 || row < 0) return null;
+  const button = Number.parseInt(match[1], 10);
+  const direction = button === 64 ? "up" : button === 65 ? "down" : null;
+  return direction ? { direction, column, row } : null;
+}
+
+export function parseTreeWheel(sequence: string): TreeWheelDirection | null {
+  return parseTreeWheelEvent(sequence)?.direction ?? null;
+}
+
+export function treeDisclosureAtClick(
+  targets: readonly (TreeMouseTarget | null | undefined)[],
+  sequence: string,
+): string | null {
+  const click = parseTreePlainClick(sequence);
+  if (!click) return null;
+  const target = targets[click.row];
+  return target && click.column === target.disclosureColumn ? target.rowId : null;
 }
 
 export function treeLinkAtClick(

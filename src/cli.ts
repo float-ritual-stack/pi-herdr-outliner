@@ -1,5 +1,5 @@
 import { parseArgs } from "node:util";
-import { parsePropertyFilterClause } from "./block-query";
+import { normalizePropertyQueryScope, parsePropertyFilterClause } from "./block-query";
 import {
   focusBlockByQuery,
   formatBlockFocusMatch,
@@ -33,6 +33,7 @@ switch (command) {
         text: { type: "string" },
         limit: { type: "string" },
         subtree: { type: "string" },
+        "property-scope": { type: "string" },
       },
       strict: true,
     });
@@ -42,6 +43,9 @@ switch (command) {
       filters,
       text: values.text,
       subtreeRootId: values.subtree,
+      propertyScope: values["property-scope"] === undefined
+        ? undefined
+        : normalizePropertyQueryScope(values["property-scope"]),
       limit,
     };
     request = { action: "blocks.query", query };
@@ -109,7 +113,12 @@ switch (command) {
       strict: true,
     });
     if (!values.id || values.text === undefined) throw new Error("update requires --id and --text");
-    request = { action: "update", blockId: values.id, text: values.text };
+    request = {
+      action: "update",
+      blockId: values.id,
+      text: values.text,
+      mutation: { author: "user", actorId: "cli" },
+    };
     break;
   }
   case "move": {

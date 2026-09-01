@@ -1,6 +1,7 @@
 import { emitKeypressEvents } from "node:readline";
 import { setTimeout as sleep } from "node:timers/promises";
 import { OutlinerClient, type OutlinerWatcher } from "./client";
+import { OutlinerActionKeymap } from "./outliner-actions";
 import { sendContextClientCommand } from "./client-target";
 import {
   createDetailController,
@@ -16,7 +17,7 @@ import {
   dispatchNavigation,
   resolveNavigationDestination,
 } from "./navigation-routes";
-import { currentPaneRuntime, focusCurrentPane } from "./pane-control";
+import { currentPaneRuntime, focusCurrentPane, openDetailPane } from "./pane-control";
 import { resolvePaths } from "./paths";
 import {
   BRACKETED_PASTE_DISABLE,
@@ -40,6 +41,16 @@ const paths = resolvePaths();
 const client = new OutlinerClient(paths.socket);
 const clientId = crypto.randomUUID();
 const browsingContextId = process.env.OUTLINER_BROWSING_CONTEXT_ID?.trim() || clientId;
+const actionKeymap = OutlinerActionKeymap.load();
+const detailPresentation = process.env.OUTLINER_DETAIL_PRESENTATION?.trim() || "block";
+if (detailPresentation !== "block" && detailPresentation !== "property-inspector") {
+  throw new Error(`Unsupported Detail presentation: ${detailPresentation}`);
+}
+const dedicatedPropertyBlockId =
+  process.env.OUTLINER_DETAIL_TARGET_BLOCK_ID?.trim() || null;
+if (detailPresentation === "property-inspector" && !dedicatedPropertyBlockId) {
+  throw new Error("Dedicated property inspector requires a target block ID");
+}
 let stopping = false;
 let watcher: OutlinerWatcher | null = null;
 let workQueue = Promise.resolve();
@@ -63,10 +74,18 @@ const effects: DetailEffects = {
     if (process.env.HERDR_ENV === "1") focusCurrentPane();
   },
   async getBrowsingContext() {
-    return client.request<BrowsingContextState>({
+    const browsingContext = await client.request<BrowsingContextState>({
       action: "browsing-context.get",
       contextId: browsingContextId,
     });
+    if (!dedicatedPropertyBlockId) return browsingContext;
+    return {
+      ...browsingContext,
+      target: await client.request<SelectionContext>({
+        action: "blocks.context",
+        blockId: dedicatedPropertyBlockId,
+      }),
+    };
   },
   async getBlockContext(blockId) {
     return client.request<SelectionContext>({ action: "blocks.context", blockId });
@@ -93,7 +112,18 @@ const effects: DetailEffects = {
     return client.request<BacklinkCollection>({ action: "references.backlinks", query });
   },
   async updateBlock(input) {
-    return client.request<Block>({ action: "update", ...input });
+    return client.request<Block>({
+      action: "update",
+      ...input,
+      mutation: { author: "user", actorId: "detail" },
+    });
+  },
+  async patchProperties(input) {
+    return client.request<Block>({
+      action: "properties.patch",
+      ...input,
+      mutation: { author: "user", actorId: "detail" },
+    });
   },
   async restoreBlock(blockId) {
     return client.request<Block>({ action: "trash.restore", blockId });
@@ -119,13 +149,30 @@ const effects: DetailEffects = {
   async focusOutliner() {
     await sendContextClientCommand(client, "tree", browsingContextId, { command: "focus" });
   },
+  openPropertyInspectorPane(blockId) {
+    return openDetailPane({
+      workspaceRoot: paths.workspaceRoot,
+      browsingContextId,
+      propertyInspectorBlockId: blockId,
+    });
+  },
 };
 
 function draw(): void {
-  process.stdout.write(renderDetailAnsi(controller.state, viewport()));
+  process.stdout.write(renderDetailAnsi(controller.state, viewport(), {
+    helpText: actionKeymap.helpText("detail", controller.state.mode),
+  }));
 }
 
-const controller = createDetailController(effects, draw);
+const controller = createDetailController(
+  effects,
+  draw,
+  {
+    propertyInspectorPresentation: detailPresentation === "property-inspector"
+      ? "dedicated"
+      : "inline",
+  },
+);
 
 function enqueueWork(task: () => void | Promise<void>): void {
   workQueue = workQueue.then(task).catch((error) => {
@@ -157,7 +204,7 @@ function startWatcher(): void {
       clientId,
       role: "detail",
       contextId: browsingContextId,
-      locked: false,
+      locked: detailPresentation === "property-inspector",
       runtime: currentPaneRuntime(),
     },
     onConnect: () => enqueueWork(() => controller.onServiceConnect(viewport())),
@@ -176,7 +223,7 @@ function stop(): void {
   process.exit(0);
 }
 
-const handleKeypress = createDetailKeyHandler({ controller, viewport, stop });
+const handleKeypress = createDetailKeyHandler({ controller, viewport, stop, actionKeymap });
 
 async function initialize(): Promise<void> {
   await waitForService();

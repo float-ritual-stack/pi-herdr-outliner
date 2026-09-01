@@ -12,6 +12,7 @@ export interface NormalizedPageAddress {
 }
 
 export interface PageAddressReference extends NormalizedPageAddress {
+  label?: string;
   start: number;
   end: number;
 }
@@ -51,9 +52,15 @@ export function tryNormalizePageAddress(input: string): NormalizedPageAddress | 
 export function pageAddressReferences(text: string): PageAddressReference[] {
   const references: PageAddressReference[] = [];
   for (const match of text.matchAll(PAGE_ADDRESS_PATTERN)) {
+    const authored = match[1]!;
+    const separator = authored.indexOf("|");
+    const target = separator < 0 ? authored : authored.slice(0, separator);
+    const label = separator < 0 ? undefined : authored.slice(separator + 1).trim();
+    if (separator >= 0 && !label) continue;
     try {
       references.push({
-        ...normalizePageAddress(match[1]),
+        ...normalizePageAddress(target),
+        ...(label ? { label } : {}),
         start: match.index,
         end: match.index + match[0].length,
       });

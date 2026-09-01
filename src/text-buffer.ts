@@ -128,6 +128,17 @@ export class TextBuffer {
     if (!this.hasSelection) this.clearSelectionAnchor();
   }
 
+  placeCursor(row: number, column: number): void {
+    const safeRow = Math.max(0, Math.min(Math.floor(row), this.lines.length - 1));
+    const line = this.lines[safeRow] ?? "";
+    this.row = safeRow;
+    this.column = clampToGraphemeStart(
+      line,
+      Math.max(0, Math.min(Math.floor(column), line.length)),
+    );
+    this.clearSelection();
+  }
+
   insert(value: string): void {
     const normalized = value.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
     if (!normalized) return;

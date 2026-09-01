@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import {
-  parsePropertyTokens,
+  parsePropertyRecords,
+  parseProperties,
   patchPropertyText,
   stripProperties,
   stripPropertyTokens,
@@ -14,7 +15,7 @@ test("records lossless property spans and placement", () => {
     "[status::open] [owner::evan]",
     "Body [inline::yes] after",
   ].join("\n");
-  const tokens = parsePropertyTokens(text);
+  const tokens = parsePropertyRecords(text);
 
   expect(tokens.map(({ key, ordinal, line, column, placement }) => ({
     key,
@@ -31,6 +32,58 @@ test("records lossless property spans and placement", () => {
   ]);
   for (const token of tokens) expect(text.slice(token.start, token.end)).toBe(token.raw);
 });
+test("classifies the metadata preamble separately from body properties", () => {
+  const text = [
+    "",
+    "# Subject [type::roadmap-item]",
+    "",
+    "[status::planned]",
+    "owner:: evan",
+    "",
+    "Body [work-stage::next]",
+    "ctx:: later [tag::body]",
+    "[late::inline]",
+  ].join("\n");
+
+  expect(parsePropertyRecords(text).map(({ key, value, scope, syntax, line }) => ({
+    key,
+    value,
+    scope,
+    syntax,
+    line,
+  }))).toEqual([
+    { key: "type", value: "roadmap-item", scope: "block", syntax: "bracket", line: 1 },
+    { key: "status", value: "planned", scope: "block", syntax: "bracket", line: 3 },
+    { key: "owner", value: "evan", scope: "block", syntax: "bare", line: 4 },
+    { key: "work-stage", value: "next", scope: "inline", syntax: "bracket", line: 6 },
+    { key: "ctx", value: "later", scope: "line", syntax: "bare", line: 7 },
+    { key: "tag", value: "body", scope: "inline", syntax: "bracket", line: 7 },
+    { key: "late", value: "inline", scope: "inline", syntax: "bracket", line: 8 },
+  ]);
+  expect(parseProperties(text)).toEqual([
+    { key: "type", value: "roadmap-item" },
+    { key: "status", value: "planned" },
+    { key: "owner", value: "evan" },
+  ]);
+});
+
+test("uses an initial property-only run as block metadata", () => {
+  const records = parsePropertyRecords(
+    "\n[status::open]\nowner:: evan\n\nBody\n[late::inline]",
+  );
+  expect(records.map(({ key, scope }) => ({ key, scope }))).toEqual([
+    { key: "status", scope: "block" },
+    { key: "owner", scope: "block" },
+    { key: "late", scope: "inline" },
+  ]);
+});
+
+test("preserves bare property syntax when patching", () => {
+  expect(patchPropertyText("Title\nowner:: evan", [
+    { op: "replace", ordinal: 0, value: "daisy" },
+  ])).toBe("Title\nowner:: daisy");
+});
+
 
 test("patches exact tokens and appends to an existing metadata line", () => {
   const text = [
@@ -83,7 +136,7 @@ test("ignores fenced code while indexing properties after a closing fence", () =
     "    [indented::eligible]",
   ].join("\n");
 
-  expect(parsePropertyTokens(text).map(({ key, value }) => ({ key, value }))).toEqual([
+  expect(parsePropertyRecords(text).map(({ key, value }) => ({ key, value }))).toEqual([
     { key: "real", value: "after-backtick" },
     { key: "also-real", value: "after-tilde" },
     { key: "indented", value: "eligible" },
@@ -91,7 +144,7 @@ test("ignores fenced code while indexing properties after a closing fence", () =
 });
 
 test("treats an unclosed fence as literal through the end of the block", () => {
-  expect(parsePropertyTokens("Title [real::yes]\n~~~js\n[fake::no]\n[still-fake::no]")).toEqual([
+  expect(parsePropertyRecords("Title [real::yes]\n~~~js\n[fake::no]\n[still-fake::no]")).toEqual([
     expect.objectContaining({ key: "real", ordinal: 0 }),
   ]);
 });
@@ -105,7 +158,7 @@ test("ignores equal-length inline code spans, including spans crossing lines", (
     "[third::real]",
   ].join("\n");
 
-  expect(parsePropertyTokens(text).map(({ key, ordinal, line }) => ({ key, ordinal, line }))).toEqual([
+  expect(parsePropertyRecords(text).map(({ key, ordinal, line }) => ({ key, ordinal, line }))).toEqual([
     { key: "first", ordinal: 0, line: 0 },
     { key: "second", ordinal: 1, line: 2 },
     { key: "third", ordinal: 2, line: 4 },
@@ -114,12 +167,12 @@ test("ignores equal-length inline code spans, including spans crossing lines", (
 
 test("uses odd and even backslash parity for escaped property openers", () => {
   const text = String.raw`\[odd::no] \\[even::yes] \\\[odd-three::no] \\\\[even-four::yes]`;
-  expect(parsePropertyTokens(text).map(({ key }) => key)).toEqual(["even", "even-four"]);
+  expect(parsePropertyRecords(text).map(({ key }) => key)).toEqual(["even", "even-four"]);
 });
 
 test("preserves UTF-16 CRLF offsets and exact spans beside inline literals", () => {
   const text = "😀\r\n`[fake::x]`[real::yes]\r\n[second::ok]";
-  const tokens = parsePropertyTokens(text);
+  const tokens = parsePropertyRecords(text);
 
   expect(tokens.map(({ key, ordinal, line, column, start, end, placement }) => ({
     key,
@@ -180,7 +233,7 @@ test("patch ordinals exclude literal tokens and preserve exact adjacent source",
 test("appends to eligible metadata instead of property-shaped literals", () => {
   const text = "Title\n`[fake::literal]`\n[status::open]\nBody";
   expect(patchPropertyText(text, [{ op: "append", key: "owner", value: "evan" }])).toBe(
-    "Title\n`[fake::literal]`\n[status::open] [owner::evan]\nBody",
+    "Title\n[owner::evan]\n`[fake::literal]`\n[status::open]\nBody",
   );
 });
 
