@@ -286,7 +286,7 @@ const KEYMAP_STARTUP_DIAGNOSTIC_LIMIT = 512;
 
 function reportKeymapStartupFailure(path: string, error: unknown): void {
   const reason = error instanceof Error ? error.message : String(error);
-  const diagnostic = `Pi Outliner keymap ${path} is invalid; using defaults: ${reason}`;
+  const diagnostic = `Pi Outliner keymap ${path} could not be loaded; using defaults: ${reason}`;
   const bounded = diagnostic.length <= KEYMAP_STARTUP_DIAGNOSTIC_LIMIT
     ? diagnostic
     : `${diagnostic.slice(0, KEYMAP_STARTUP_DIAGNOSTIC_LIMIT - 1)}…`;

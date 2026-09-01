@@ -321,13 +321,19 @@ async function waitForService(): Promise<void> {
 }
 
 function startWatcher(): void {
+  let runtime: ReturnType<typeof currentPaneRuntime>;
+  try {
+    runtime = currentPaneRuntime();
+  } catch (error) {
+    console.error(errorMessage(error));
+  }
   watcher = client.watch({
     client: {
       clientId,
       role: "detail",
       contextId: browsingContextId,
       locked: detailPresentation === "property-inspector",
-      runtime: currentPaneRuntime(),
+      runtime,
     },
     onConnect: () => enqueueWork(() => controller.onServiceConnect(viewport())),
     onDisconnect: () => enqueueWork(() => controller.onServiceDisconnect()),

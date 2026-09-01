@@ -178,12 +178,18 @@ function handleMouseSequence(sequence: string): void {
 mouseInput?.on("data", handleMouseSequence);
 
 function startWatcher(): void {
+  let runtime: ReturnType<typeof currentPaneRuntime>;
+  try {
+    runtime = currentPaneRuntime();
+  } catch (error) {
+    console.error(errorMessage(error));
+  }
   watcher = client.watch({
     client: {
       clientId,
       role: "tree",
       contextId: browsingContextId,
-      runtime: currentPaneRuntime(),
+      runtime,
     },
     onConnect: () => enqueueWork(() => controller.handleConnect()),
     onDisconnect: () => enqueueWork(() => controller.handleDisconnect()),

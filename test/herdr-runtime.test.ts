@@ -139,7 +139,7 @@ test("continuous pane and agent status updates do not delay structural settling"
   const runner = new HerdrRegistryRunner(registry, "fake", {
     socketFactory: factory,
     replayQuietMs: 20,
-    replayMaxMs: 70,
+    replayMaxMs: 200,
     minBackoffMs: 1,
     maxBackoffMs: 2,
     diagnostic: (record) => {

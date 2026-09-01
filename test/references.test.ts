@@ -213,4 +213,26 @@ describe("reference occurrence Markdown protection", () => {
       },
     ]);
   });
+
+  test("handles CRLF fence endings and blank lines", () => {
+    const hiddenId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const visibleId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    const visibleReference = `((${visibleId}))`;
+    const text = [
+      "```md",
+      `hidden ((${hiddenId}))`,
+      "```",
+      "",
+      `Visible ${visibleReference}`,
+    ].join("\r\n");
+
+    expect(outlinerReferenceOccurrences(text)).toEqual([
+      {
+        kind: "block",
+        blockId: visibleId,
+        start: text.indexOf(visibleReference),
+        end: text.indexOf(visibleReference) + visibleReference.length,
+      },
+    ]);
+  });
 });

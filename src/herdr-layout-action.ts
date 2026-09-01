@@ -281,6 +281,9 @@ export async function withLayoutLock<T>(
     const recoveryOwner = tryAcquireRecoveryClaim(lockPath);
     if (recoveryOwner) {
       let replacement: LayoutLockOwner | undefined;
+      let claimReleaseError: unknown;
+      let claimReleaseFailed = false;
+      let replacementReleaseAttempted = false;
       try {
         const observed = readLayoutLockState(lockPath);
         if (
@@ -297,21 +300,31 @@ export async function withLayoutLock<T>(
           }
         }
       } finally {
-        if (recoveryClaimIsOwned(lockPath, recoveryOwner)) {
-          try {
+        try {
+          if (recoveryClaimIsOwned(lockPath, recoveryOwner)) {
             releaseRecoveryClaim(lockPath, recoveryOwner);
-          } catch (error) {
-            if (replacement) {
-              releaseLayoutLock(lockPath, replacement);
-              replacement = undefined;
-            }
-            throw error;
+          } else if (replacement) {
+            replacementReleaseAttempted = true;
+            releaseLayoutLock(lockPath, replacement);
+            replacement = undefined;
           }
-        } else if (replacement) {
-          releaseLayoutLock(lockPath, replacement);
-          replacement = undefined;
+        } catch (error) {
+          claimReleaseFailed = true;
+          claimReleaseError = error;
+          if (replacement && !replacementReleaseAttempted) {
+            try {
+              releaseLayoutLock(lockPath, replacement);
+            } catch (replacementError) {
+              claimReleaseError = new AggregateError(
+                [error, replacementError],
+                `Outliner layout recovery claim and replacement lock releases both failed for ${lockPath}`,
+              );
+            }
+            replacement = undefined;
+          }
         }
       }
+      if (claimReleaseFailed) throw claimReleaseError;
       if (replacement) {
         owner = replacement;
         break;

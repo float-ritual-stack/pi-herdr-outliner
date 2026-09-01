@@ -74,7 +74,7 @@ function fenceMarker(
   closing = false,
 ): string | null {
   const match = closing
-    ? /^([ \t]*)(`{3,}|~{3,})[ \t]*$/.exec(line)
+    ? /^([ \t]*)(`{3,}|~{3,})[ \t]*\r?$/.exec(line)
     : /^([ \t]*)(`{3,}|~{3,})/.exec(line);
   if (!match) return null;
   const relativeIndent = indentationColumns(match[1]) - contentIndent;
@@ -105,7 +105,7 @@ export function protectedMarkdownRanges(text: string): TextRange[] {
         activeFence = null;
         canStartIndentedCode = true;
       }
-    } else if (/^[ \t]*$/.test(line)) {
+    } else if (/^[ \t]*\r?$/.test(line)) {
       canStartIndentedCode = true;
     } else {
       const indent = indentationColumns(/^[ \t]*/.exec(line)?.[0] ?? "");

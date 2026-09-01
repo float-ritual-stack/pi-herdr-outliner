@@ -12,9 +12,9 @@ mkdirSync(paths.stateDir, { recursive: true });
 const paneStatePath = join(paths.stateDir, "service-pane.json");
 const store = new OutlinerStore(paths.database);
 const herdrRegistry = new HerdrRuntimeRegistry();
-const server = new OutlinerServer(store, paths.socket, herdrRegistry);
 const herdrSocketPath = process.env.HERDR_SOCKET_PATH;
 const herdrRunner = herdrSocketPath === undefined ? null : new HerdrRegistryRunner(herdrRegistry, herdrSocketPath);
+const server = new OutlinerServer(store, paths.socket, herdrRunner ? herdrRegistry : undefined);
 let ownsPaneState = false;
 try {
   await server.start();
