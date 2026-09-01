@@ -421,7 +421,7 @@ function outlinerToolPresentation(label: string) {
 function assertCompatibleProtocol(service: OutlinerServiceStatus): void {
   if (service.protocolVersion !== OUTLINER_PROTOCOL_VERSION) {
     throw new Error(
-      `Incompatible outliner protocol ${service.protocolVersion}; expected ${OUTLINER_PROTOCOL_VERSION}`,
+      `Outliner protocol ${service.protocolVersion} does not match this session's extension protocol ${OUTLINER_PROTOCOL_VERSION}. Run /reload, then retry.`,
     );
   }
 }
