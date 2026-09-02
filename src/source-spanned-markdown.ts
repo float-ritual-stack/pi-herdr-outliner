@@ -31,9 +31,9 @@ export interface SourceSpannedMarkdownSegment {
   decorated: boolean;
 }
 
-export interface SourceSpannedMarkdownRender {
+export interface SourceSpannedMarkdownRowRender {
   lines: string[];
-  sourceLineRows: number[];
+  sourceLineRow: number;
 }
 
 const markdownParser = new Marked();
@@ -120,25 +120,24 @@ function markdownRenderBlocks(text: string): MarkdownRenderBlock[] {
   return blocks;
 }
 
-function markdownBlockRowCounts(
+function markdownBlockRowCount(
   blocks: readonly MarkdownRenderBlock[],
+  index: number,
   width: number,
   theme: MarkdownTheme,
-): number[] {
-  return blocks.map((block, index) => {
-    const next = blocks[index + 1];
-    if (!next) return new Markdown(block.text, 0, 0, theme).render(width).length;
-    const nextRows = new Markdown(next.text, 0, 0, theme).render(width).length;
-    const combinedRows = new Markdown(
-      block.text + next.text,
-      0,
-      0,
-      theme,
-    ).render(width).length;
-    return Math.max(0, combinedRows - nextRows);
-  });
+): number {
+  const block = blocks[index]!;
+  const next = blocks[index + 1];
+  if (!next) return new Markdown(block.text, 0, 0, theme).render(width).length;
+  const nextRows = new Markdown(next.text, 0, 0, theme).render(width).length;
+  const combinedRows = new Markdown(
+    block.text + next.text,
+    0,
+    0,
+    theme,
+  ).render(width).length;
+  return Math.max(0, combinedRows - nextRows);
 }
-
 
 function markdownRowsBeforeBlockLine(
   block: MarkdownRenderBlock,
@@ -163,37 +162,28 @@ function markdownRowsBeforeBlockLine(
   return Math.max(0, new Markdown(completed, 0, 0, theme).render(width).length - 1);
 }
 
-function assignMarkdownRows(
-  rows: Array<number | undefined>,
+function markdownRowBeforeSourceLine(
   text: string,
-  sourceLine: number,
-  renderedRow: number,
+  line: number,
   width: number,
   theme: MarkdownTheme,
-): void {
+): number {
   const blocks = markdownRenderBlocks(text);
-  const rowCounts = markdownBlockRowCounts(blocks, width, theme);
-  let row = renderedRow;
+  let row = 0;
   for (let index = 0; index < blocks.length; index += 1) {
     const block = blocks[index]!;
-    for (let line = block.startLine; line <= block.endLine; line += 1) {
-      rows[sourceLine + line] ??= row +
-        markdownRowsBeforeBlockLine(block, line, width, theme);
+    if (line < block.startLine) return row;
+    if (line <= block.endLine) {
+      return row + markdownRowsBeforeBlockLine(block, line, width, theme);
     }
-    row += rowCounts[index]!;
+    row += markdownBlockRowCount(blocks, index, width, theme);
   }
+  return row;
 }
 
-function fillSourceRows(
-  rows: Array<number | undefined>,
-  renderedLineCount: number,
-): number[] {
-  let row = 0;
-  for (let line = 0; line < rows.length; line += 1) {
-    if (rows[line] !== undefined) row = rows[line]!;
-    else rows[line] = row;
-  }
-  return rows.map((value) => Math.min(value ?? 0, renderedLineCount));
+interface SourceRowTraversal {
+  nextRow: number;
+  targetRow?: number;
 }
 
 function sourceSpan(
@@ -341,20 +331,21 @@ function calloutBodyLine(
   return `${text}${hasNewline ? "\n" : ""}`;
 }
 
-function assignMarkdownLineRange(
-  rows: Array<number | undefined>,
+function traverseMarkdownLineRange(
   source: string,
   starts: readonly number[],
   startLine: number,
   endLine: number,
   quoteDepth: number,
+  targetLine: number,
   renderedRow: number,
   width: number,
   theme: MarkdownTheme,
   ranges: readonly MarkdownLineRange[],
   decorationEnabled: boolean,
-): number {
+): SourceRowTraversal {
   let row = renderedRow;
+  let targetRow: number | undefined;
   let groupStart = startLine;
   while (groupStart < endLine) {
     const decorated = decoratedAtLine(groupStart, ranges, decorationEnabled);
@@ -365,15 +356,18 @@ function assignMarkdownLineRange(
     ) {
       groupEnd += 1;
     }
-    let text = "";
-    for (let line = groupStart; line < groupEnd; line += 1) {
-      text += calloutBodyLine(source, starts, line, quoteDepth);
+    const text = Array.from(
+      { length: groupEnd - groupStart },
+      (_, offset) => calloutBodyLine(source, starts, groupStart + offset, quoteDepth),
+    ).join("");
+    if (targetLine >= groupStart && targetLine < groupEnd) {
+      targetRow = row +
+        markdownRowBeforeSourceLine(text, targetLine - groupStart, width, theme);
     }
-    assignMarkdownRows(rows, text, groupStart, row, width, theme);
     row += new Markdown(text, 0, 0, theme).render(width).length;
     groupStart = groupEnd;
   }
-  return row;
+  return { nextRow: row, targetRow };
 }
 
 function calloutExpanded(
@@ -384,76 +378,98 @@ function calloutExpanded(
   return live.disclosure?.expanded ?? true;
 }
 
-function assignCalloutRows(
-  rows: Array<number | undefined>,
+function indexCalloutsByParent(
+  callouts: readonly DetailCalloutRegion[],
+): ReadonlyMap<string | null, readonly DetailCalloutRegion[]> {
+  const childrenByParent = new Map<string | null, DetailCalloutRegion[]>();
+  for (const callout of callouts) {
+    const children = childrenByParent.get(callout.parentId) ?? [];
+    children.push(callout);
+    childrenByParent.set(callout.parentId, children);
+  }
+  for (const children of childrenByParent.values()) {
+    children.sort((left, right) => left.headerLine - right.headerLine);
+  }
+  return childrenByParent;
+}
+
+function traverseCalloutRows(
   source: string,
   starts: readonly number[],
   region: DetailCalloutRegion,
-  callouts: readonly DetailCalloutRegion[],
+  childrenByParent: ReadonlyMap<string | null, readonly DetailCalloutRegion[]>,
   previewRegions: Readonly<PreviewRegionState>,
+  targetLine: number,
   renderedRow: number,
   width: number,
   theme: MarkdownTheme,
   ranges: readonly MarkdownLineRange[],
   decorationEnabled: boolean,
-): number {
+): SourceRowTraversal {
   const endLine = region.sourceSpan!.endLine;
-  rows[region.headerLine] ??= renderedRow;
   if (!calloutExpanded(region, previewRegions)) {
-    for (let line = region.headerLine + 1; line <= endLine; line += 1) {
-      rows[line] ??= renderedRow;
-    }
-    return renderedRow + 1;
+    return {
+      nextRow: renderedRow + 1,
+      targetRow: targetLine >= region.headerLine && targetLine <= endLine
+        ? renderedRow
+        : undefined,
+    };
   }
 
   let row = renderedRow + 1;
+  let targetRow = targetLine === region.headerLine ? renderedRow : undefined;
   let cursor = region.headerLine + 1;
   const bodyWidth = Math.max(1, width - 2);
-  const children = callouts
-    .filter((candidate) => candidate.parentId === region.id)
-    .sort((left, right) => left.headerLine - right.headerLine);
-  for (const child of children) {
-    row = assignMarkdownLineRange(
-      rows,
+  for (const child of childrenByParent.get(region.id) ?? []) {
+    const beforeChild = traverseMarkdownLineRange(
       source,
       starts,
       cursor,
       child.headerLine,
       region.depth,
+      targetLine,
       row,
       bodyWidth,
       theme,
       ranges,
       decorationEnabled,
     );
-    row = assignCalloutRows(
-      rows,
+    row = beforeChild.nextRow;
+    targetRow ??= beforeChild.targetRow;
+    const childRows = traverseCalloutRows(
       source,
       starts,
       child,
-      callouts,
+      childrenByParent,
       previewRegions,
+      targetLine,
       row,
       bodyWidth,
       theme,
       ranges,
       decorationEnabled,
     );
+    row = childRows.nextRow;
+    targetRow ??= childRows.targetRow;
     cursor = child.sourceSpan!.endLine + 1;
   }
-  return assignMarkdownLineRange(
-    rows,
+  const tail = traverseMarkdownLineRange(
     source,
     starts,
     cursor,
     endLine + 1,
     region.depth,
+    targetLine,
     row,
     bodyWidth,
     theme,
     ranges,
     decorationEnabled,
   );
+  return {
+    nextRow: tail.nextRow,
+    targetRow: targetRow ?? tail.targetRow,
+  };
 }
 
 export class SourceSpannedMarkdown implements Component {
@@ -516,75 +532,98 @@ export class SourceSpannedMarkdown implements Component {
     });
   }
 
-  renderWithSourceLineRows(width: number): SourceSpannedMarkdownRender {
+  renderWithSourceLineRow(
+    width: number,
+    sourceLine: number,
+  ): SourceSpannedMarkdownRowRender {
     const lines = this.render(width);
     const starts = lineStarts(this.sourceText);
-    const rows: Array<number | undefined> = Array.from({ length: starts.length });
+    const targetLine = Math.max(0, Math.min(Math.trunc(sourceLine), starts.length - 1));
     let row = 0;
     if (this.calloutDocument && this.previewRegions) {
       let cursor = 0;
-      const roots = this.callouts
-        .filter((region) => region.parentId === null)
-        .sort((left, right) => left.headerLine - right.headerLine);
-      for (const root of roots) {
-        row = assignMarkdownLineRange(
-          rows,
+      const childrenByParent = indexCalloutsByParent(this.callouts);
+      for (const root of childrenByParent.get(null) ?? []) {
+        const beforeRoot = traverseMarkdownLineRange(
           this.sourceText,
           starts,
           cursor,
           root.headerLine,
           0,
+          targetLine,
           row,
           width,
           this.theme,
           this.ranges,
           this.decorationEnabled,
         );
-        row = assignCalloutRows(
-          rows,
+        if (beforeRoot.targetRow !== undefined) {
+          return {
+            lines,
+            sourceLineRow: Math.min(beforeRoot.targetRow, lines.length),
+          };
+        }
+        row = beforeRoot.nextRow;
+        const rootRows = traverseCalloutRows(
           this.sourceText,
           starts,
           root,
-          this.callouts,
+          childrenByParent,
           this.previewRegions,
+          targetLine,
           row,
           width,
           this.theme,
           this.ranges,
           this.decorationEnabled,
         );
+        if (rootRows.targetRow !== undefined) {
+          return {
+            lines,
+            sourceLineRow: Math.min(rootRows.targetRow, lines.length),
+          };
+        }
+        row = rootRows.nextRow;
         cursor = root.sourceSpan!.endLine + 1;
       }
-      assignMarkdownLineRange(
-        rows,
+      const tail = traverseMarkdownLineRange(
         this.sourceText,
         starts,
         cursor,
         starts.length,
         0,
+        targetLine,
         row,
         width,
         this.theme,
         this.ranges,
         this.decorationEnabled,
       );
-    } else {
-      for (const segment of this.segments) {
-        assignMarkdownRows(
-          rows,
-          segment.text,
-          segment.span.startLine,
-          row,
-          width,
-          this.theme,
-        );
-        row += segment.component.render(width).length;
-      }
+      return {
+        lines,
+        sourceLineRow: Math.min(tail.targetRow ?? tail.nextRow, lines.length),
+      };
     }
-    return {
-      lines,
-      sourceLineRows: fillSourceRows(rows, lines.length),
-    };
+
+    for (const segment of this.segments) {
+      if (targetLine < segment.span.startLine) break;
+      if (targetLine <= segment.span.endLine) {
+        return {
+          lines,
+          sourceLineRow: Math.min(
+            row + markdownRowBeforeSourceLine(
+              segment.text,
+              targetLine - segment.span.startLine,
+              width,
+              this.theme,
+            ),
+            lines.length,
+          ),
+        };
+      }
+      row += segment.component.render(width).length;
+    }
+    return { lines, sourceLineRow: Math.min(row, lines.length) };
   }
 
   render(width: number): string[] {

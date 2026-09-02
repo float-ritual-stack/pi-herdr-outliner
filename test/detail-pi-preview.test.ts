@@ -1,12 +1,14 @@
 import {
   getCapabilities,
   getOsc8LinkAtColumn,
+  Markdown,
   setCapabilities,
   stripTerminalSequences,
   visibleWidth,
   type MarkdownTheme,
 } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "bun:test";
+import { parseDetailCallouts } from "../src/detail-callouts";
 import type { DetailState } from "../src/detail-controller";
 import {
   DetailPiPreviewLayout,
@@ -24,7 +26,10 @@ import {
 import { createPropertyInspectorModel } from "../src/property-inspector";
 import { previewRegionActionUri } from "../src/detail-preview-regions";
 import { outlinerLinkUri } from "../src/outliner-links";
-import { sourceSpannedMarkdownSegments } from "../src/source-spanned-markdown";
+import {
+  SourceSpannedMarkdown,
+  sourceSpannedMarkdownSegments,
+} from "../src/source-spanned-markdown";
 import { TextBuffer } from "../src/text-buffer";
 import type { Block } from "../src/types";
 
@@ -630,6 +635,7 @@ describe("Pi Markdown detail preview", () => {
     const targetRow = rendered.findIndex((line) =>
       stripTerminalSequences(line).includes("Target")
     );
+    expect(targetRow).toBeGreaterThanOrEqual(0);
     const inspectorLines = layout.inspectorMarkdown.render(18);
     const inspectorHeight = inspectorLines.length > 0 ? inspectorLines.length + 1 : 0;
     expect(rendered.some((line) =>
@@ -668,6 +674,75 @@ describe("Pi Markdown detail preview", () => {
     const inspectorHeight = inspectorLines.length > 0 ? inspectorLines.length + 1 : 0;
     expect(targetRow).toBeGreaterThan(detail.previewOffset);
     expect(layout.scrollView.scrollTop).toBe(inspectorHeight + targetRow);
+  });
+
+  test("maps one requested source line without quadratic Markdown prefix work", () => {
+    const originalRender = Markdown.prototype.render;
+    function measuredMapping(lineCount: number): { row: number; work: number } {
+      let work = 0;
+      Markdown.prototype.render = function (width: number): string[] {
+        work += (this as unknown as { text: string }).text.length;
+        return originalRender.call(this, width);
+      };
+      try {
+        const text = Array.from(
+          { length: lineCount },
+          (_, index) => `source line ${index} contains enough words to wrap`,
+        ).join("\n");
+        const markdown = new SourceSpannedMarkdown(plainMarkdownTheme, (value) => value);
+        markdown.setContent(text, [], false);
+        const rendered = markdown.renderWithSourceLineRow(24, lineCount - 1);
+        return { row: rendered.sourceLineRow, work };
+      } finally {
+        Markdown.prototype.render = originalRender;
+      }
+    }
+
+    const small = measuredMapping(80);
+    const large = measuredMapping(160);
+    expect(small.row).toBeGreaterThan(0);
+    expect(large.row).toBeGreaterThan(small.row);
+    expect(large.work).toBeLessThan(small.work * 3);
+  });
+
+  test("indexes sibling callouts once when mapping a source row", () => {
+    function measuredMapping(calloutCount: number): { row: number; accesses: number } {
+      const source = [
+        ...Array.from(
+          { length: calloutCount },
+          (_, index) => `> [!note] Callout ${index}\n> body ${index}`,
+        ),
+        "## Target",
+      ].join("\n");
+      const parsed = parseDetailCallouts(source);
+      let accesses = 0;
+      const callouts = new Proxy(parsed, {
+        get(target, property, receiver) {
+          if (typeof property === "string" && /^\d+$/.test(property)) accesses += 1;
+          return Reflect.get(target, property, receiver);
+        },
+      });
+      const previewRegions = {
+        regions: parsed,
+        focusedRegionId: null,
+        disclosureOverrides: new Map(),
+      };
+      const markdown = new SourceSpannedMarkdown(
+        plainMarkdownTheme,
+        (value) => value,
+        previewRegions,
+      );
+      markdown.setContent(source, [], false, callouts);
+      accesses = 0;
+      const rendered = markdown.renderWithSourceLineRow(40, calloutCount * 2);
+      return { row: rendered.sourceLineRow, accesses };
+    }
+
+    const small = measuredMapping(40);
+    const large = measuredMapping(80);
+    expect(small.row).toBeGreaterThan(0);
+    expect(large.row).toBeGreaterThan(small.row);
+    expect(large.accesses).toBeLessThan(small.accesses * 3);
   });
 
   test("without links, updates Markdown only when the resolved source changes", () => {

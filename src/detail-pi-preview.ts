@@ -920,14 +920,16 @@ export class DetailPiPreviewLayout extends VStack {
         ? this.inspectorMarkdown.render(contentWidth)
         : [];
     const inspectorHeight = inspectorLines.length > 0 ? inspectorLines.length + 1 : 0;
-    const renderedDocument = this.markdown.renderWithSourceLineRows(contentWidth);
+    const renderedDocument = this.markdown.renderWithSourceLineRow(
+      contentWidth,
+      this.renderedFragmentSourceLine,
+    );
     const contentHeight = renderedDocument.lines.length +
       inspectorHeight + 1 + this.backlinkMarkdown.render(contentWidth).length;
     this.scrollView.updateLayout(contentHeight, this.scrollView.viewportHeight, () => {});
     this.pendingFragmentScroll = false;
     const previousScrollTop = this.scrollView.scrollTop;
-    const fragmentRow =
-      renderedDocument.sourceLineRows[this.renderedFragmentSourceLine] ?? 0;
+    const fragmentRow = renderedDocument.sourceLineRow;
     this.scrollView.scrollTo(
       this.state.targetFragmentId ? inspectorHeight + fragmentRow : 0,
     );
