@@ -163,6 +163,69 @@ test("continuous pane and agent status updates do not delay structural settling"
   await runner.stop();
 });
 
+test("topology changes resubscribe without making the validated registry unavailable", async () => {
+  const registry = new HerdrRuntimeRegistry();
+  const initial = snapshot("topology");
+  const addedPane = {
+    ...initial.panes[0]!,
+    pane_id: "p-topology-added",
+    terminal_id: "term-topology-added",
+  };
+  const expanded: HerdrSessionSnapshot = {
+    ...initial,
+    panes: [...initial.panes, addedPane],
+    layouts: [{
+      ...initial.layouts[0]!,
+      panes: [...initial.layouts[0]!.panes, { pane_id: addedPane.pane_id }],
+    }],
+  };
+  const resubscribed = Promise.withResolvers<void>();
+  const diagnostics: Record<string, unknown>[] = [];
+  let topologyChanged = false;
+  let subscriptions = 0;
+  let firstSubscription: FakeSocket | null = null;
+  const factory: HerdrSocketFactory = async () => new FakeSocket((request, socket) => {
+    if (request.method === "ping") {
+      socket.sendJson(response(request, { type: "pong", version: "0.8.2", protocol: 20 }));
+    } else if (request.method === "session.snapshot") {
+      socket.sendJson(response(request, {
+        type: "session_snapshot",
+        snapshot: topologyChanged ? expanded : initial,
+      }));
+    } else {
+      subscriptions += 1;
+      socket.sendJson(response(request, { type: "subscription_started" }));
+      firstSubscription ??= socket;
+    }
+  });
+  const runner = new HerdrRegistryRunner(registry, "fake", {
+    socketFactory: factory,
+    replayQuietMs: 0,
+    minBackoffMs: 10_000,
+    diagnostic: (record) => {
+      diagnostics.push(record);
+      if (record.status !== "herdr_registry_ready") return;
+      if (record.generation === 1) {
+        topologyChanged = true;
+        firstSubscription?.sendJson({
+          event: "pane_created",
+          data: { type: "pane_created", pane: addedPane },
+        });
+      } else if (record.generation === 2) {
+        resubscribed.resolve();
+      }
+    },
+  });
+
+  runner.start();
+  await resubscribed.promise;
+  expect(subscriptions).toBe(2);
+  expect(diagnostics.some((record) => record.status === "herdr_registry_stale")).toBe(false);
+  expect(registry.phase).toBe("ready");
+  expect(registry.paneIdForTerminal(addedPane.terminal_id)).toBe(addedPane.pane_id);
+  await runner.stop();
+});
+
 test("runner can subscribe only to pane focus events", async () => {
   const registry = new HerdrRuntimeRegistry();
   const ready = Promise.withResolvers<void>();

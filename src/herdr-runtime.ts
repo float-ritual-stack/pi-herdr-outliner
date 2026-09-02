@@ -328,7 +328,7 @@ export class HerdrRegistryRunner {
         const message = await subscription.messages.next(2_147_483_647, "Herdr event");
         const result = this.registry.applyEvent(message);
         if (result.kind === "resync") throw new Error(`Herdr registry resync: ${result.reason}`);
-        if (result.topologyChanged) throw new Error("Herdr pane topology changed");
+        if (result.topologyChanged) return;
       }
     } finally {
       this.close(subscription);
