@@ -378,11 +378,26 @@ function calloutExpanded(
   return live.disclosure?.expanded ?? true;
 }
 
+function indexCalloutsByParent(
+  callouts: readonly DetailCalloutRegion[],
+): ReadonlyMap<string | null, readonly DetailCalloutRegion[]> {
+  const childrenByParent = new Map<string | null, DetailCalloutRegion[]>();
+  for (const callout of callouts) {
+    const children = childrenByParent.get(callout.parentId) ?? [];
+    children.push(callout);
+    childrenByParent.set(callout.parentId, children);
+  }
+  for (const children of childrenByParent.values()) {
+    children.sort((left, right) => left.headerLine - right.headerLine);
+  }
+  return childrenByParent;
+}
+
 function traverseCalloutRows(
   source: string,
   starts: readonly number[],
   region: DetailCalloutRegion,
-  callouts: readonly DetailCalloutRegion[],
+  childrenByParent: ReadonlyMap<string | null, readonly DetailCalloutRegion[]>,
   previewRegions: Readonly<PreviewRegionState>,
   targetLine: number,
   renderedRow: number,
@@ -405,10 +420,7 @@ function traverseCalloutRows(
   let targetRow = targetLine === region.headerLine ? renderedRow : undefined;
   let cursor = region.headerLine + 1;
   const bodyWidth = Math.max(1, width - 2);
-  const children = callouts
-    .filter((candidate) => candidate.parentId === region.id)
-    .sort((left, right) => left.headerLine - right.headerLine);
-  for (const child of children) {
+  for (const child of childrenByParent.get(region.id) ?? []) {
     const beforeChild = traverseMarkdownLineRange(
       source,
       starts,
@@ -428,7 +440,7 @@ function traverseCalloutRows(
       source,
       starts,
       child,
-      callouts,
+      childrenByParent,
       previewRegions,
       targetLine,
       row,
@@ -530,10 +542,8 @@ export class SourceSpannedMarkdown implements Component {
     let row = 0;
     if (this.calloutDocument && this.previewRegions) {
       let cursor = 0;
-      const roots = this.callouts
-        .filter((region) => region.parentId === null)
-        .sort((left, right) => left.headerLine - right.headerLine);
-      for (const root of roots) {
+      const childrenByParent = indexCalloutsByParent(this.callouts);
+      for (const root of childrenByParent.get(null) ?? []) {
         const beforeRoot = traverseMarkdownLineRange(
           this.sourceText,
           starts,
@@ -558,7 +568,7 @@ export class SourceSpannedMarkdown implements Component {
           this.sourceText,
           starts,
           root,
-          this.callouts,
+          childrenByParent,
           this.previewRegions,
           targetLine,
           row,

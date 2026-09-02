@@ -8,6 +8,7 @@ import {
   type MarkdownTheme,
 } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "bun:test";
+import { parseDetailCallouts } from "../src/detail-callouts";
 import type { DetailState } from "../src/detail-controller";
 import {
   DetailPiPreviewLayout,
@@ -702,6 +703,46 @@ describe("Pi Markdown detail preview", () => {
     expect(small.row).toBeGreaterThan(0);
     expect(large.row).toBeGreaterThan(small.row);
     expect(large.work).toBeLessThan(small.work * 3);
+  });
+
+  test("indexes sibling callouts once when mapping a source row", () => {
+    function measuredMapping(calloutCount: number): { row: number; accesses: number } {
+      const source = [
+        ...Array.from(
+          { length: calloutCount },
+          (_, index) => `> [!note] Callout ${index}\n> body ${index}`,
+        ),
+        "## Target",
+      ].join("\n");
+      const parsed = parseDetailCallouts(source);
+      let accesses = 0;
+      const callouts = new Proxy(parsed, {
+        get(target, property, receiver) {
+          if (typeof property === "string" && /^\d+$/.test(property)) accesses += 1;
+          return Reflect.get(target, property, receiver);
+        },
+      });
+      const previewRegions = {
+        regions: parsed,
+        focusedRegionId: null,
+        disclosureOverrides: new Map(),
+      };
+      const markdown = new SourceSpannedMarkdown(
+        plainMarkdownTheme,
+        (value) => value,
+        previewRegions,
+      );
+      markdown.setContent(source, [], false, callouts);
+      accesses = 0;
+      const rendered = markdown.renderWithSourceLineRow(40, calloutCount * 2);
+      return { row: rendered.sourceLineRow, accesses };
+    }
+
+    const small = measuredMapping(40);
+    const large = measuredMapping(80);
+    expect(small.row).toBeGreaterThan(0);
+    expect(large.row).toBeGreaterThan(small.row);
+    expect(large.accesses).toBeLessThan(small.accesses * 3);
   });
 
   test("without links, updates Markdown only when the resolved source changes", () => {
