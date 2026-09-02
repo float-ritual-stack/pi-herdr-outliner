@@ -1892,6 +1892,7 @@ export class OutlinerStore {
           JOIN blocks block ON block.id = property.block_id
           WHERE property.scope = 'block'
             AND property.key = 'work-id'
+            AND TRIM(property.value) = reserved_work_ids.work_id
           ORDER BY (block.effective_deleted_root_id IS NOT NULL), property.block_id
           LIMIT 1
         )

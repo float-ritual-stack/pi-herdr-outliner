@@ -607,12 +607,13 @@ export function createDetailController(
     fragmentId: string | null = null,
   ): Promise<void> => {
     state.refreshPending = false;
-    const targetChanged = next.selected?.id !== state.context.selected?.id;
+    const targetChanged = (next.selected?.id ?? null) !== state.targetBlockId;
     const fragmentChanged = fragmentId !== state.targetFragmentId;
     const changed =
       targetChanged ||
       fragmentChanged ||
       next.selected?.updatedAt !== state.context.selected?.updatedAt;
+    if (targetChanged) state.previewRegions.disclosureOverrides.clear();
     if (targetChanged || next.selected?.updatedAt !== state.context.selected?.updatedAt) {
       invalidateBacklinks();
     }
@@ -679,6 +680,9 @@ export function createDetailController(
         fragmentId,
       );
     } catch {
+      if (blockId !== state.targetBlockId) {
+        state.previewRegions.disclosureOverrides.clear();
+      }
       if (record) recordNavigation(state.targetBlockId, state.targetFragmentId);
       state.context = { selected: null, ancestors: [], children: [] };
       syncPropertyInspector(null, true);
@@ -840,6 +844,10 @@ export function createDetailController(
         operations: [{ op: "replace", ordinal: edit.ordinal, value: edit.buffer.text }],
       });
       state.propertyInspector.edit = null;
+      if (state.refreshPending) {
+        await refreshPendingTarget();
+        return;
+      }
       state.context = { ...state.context, selected: updated };
       syncPropertyInspector(updated, false);
       await applyReadProjection(updated.text, updated.id);

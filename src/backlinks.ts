@@ -1,4 +1,5 @@
 import { normalizePageAddress } from "./page-addresses";
+import { parsePropertyRecords } from "./properties";
 import {
   outlinerReferenceOccurrences,
   propertyReferenceOccurrences,
@@ -184,9 +185,10 @@ export function resolveBacklinkRelation(input: BacklinkRelationInput): BacklinkC
   const matches: BacklinkSource[] = [];
   for (const source of input.orderedBlocks) {
     if (source.effectiveDeletedRootId && !query.includeDeleted) continue;
+    const propertyRecords = parsePropertyRecords(source.text);
     const occurrences = [
-      ...outlinerReferenceOccurrences(source.text, input.workIdPrefix),
-      ...propertyReferenceOccurrences(source.text),
+      ...outlinerReferenceOccurrences(source.text, input.workIdPrefix, propertyRecords),
+      ...propertyReferenceOccurrences(source.text, propertyRecords),
     ]
       .sort((left, right) => left.start - right.start)
       .filter(

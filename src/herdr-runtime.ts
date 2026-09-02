@@ -56,6 +56,37 @@ function isRecord(value: unknown): value is WireRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function isReplayNonBarrier(value: unknown): boolean {
+  if (!isRecord(value) || !isRecord(value.data)) return false;
+  if (value.event === "pane.agent_status_changed") {
+    return (
+      typeof value.data.pane_id === "string" &&
+      value.data.pane_id.length > 0 &&
+      typeof value.data.agent_status === "string" &&
+      (
+        value.data.workspace_id === undefined ||
+        (
+          typeof value.data.workspace_id === "string" &&
+          value.data.workspace_id.length > 0
+        )
+      )
+    );
+  }
+  if (value.event !== "pane_updated" || value.data.type !== "pane_updated") return false;
+  const pane = value.data.pane;
+  return (
+    isRecord(pane) &&
+    typeof pane.pane_id === "string" &&
+    pane.pane_id.length > 0 &&
+    typeof pane.terminal_id === "string" &&
+    pane.terminal_id.length > 0 &&
+    typeof pane.workspace_id === "string" &&
+    pane.workspace_id.length > 0 &&
+    typeof pane.tab_id === "string" &&
+    pane.tab_id.length > 0
+  );
+}
+
 function defaultSocketFactory(
   path: string,
   onSocket?: (socket: Duplex) => void,
@@ -109,18 +140,31 @@ class MessageQueue {
     return promise;
   }
   async discardUntilQuiet(quietMs: number, maxMs: number): Promise<void> {
-    this.values.length = 0;
-    if (quietMs <= 0) return;
+    if (quietMs <= 0) {
+      this.values.length = 0;
+      return;
+    }
     const deadline = Date.now() + maxMs;
+    let quietDeadline = Date.now() + quietMs;
     for (;;) {
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) throw new Error("Herdr retained event replay did not settle");
+      if (this.values.some((value) => !isReplayNonBarrier(value))) {
+        quietDeadline = Date.now() + quietMs;
+      }
+      this.values.length = 0;
+
+      const now = Date.now();
+      if (now >= deadline) throw new Error("Herdr retained event replay did not settle");
+      if (now >= quietDeadline) return;
       try {
-        await this.next(Math.min(quietMs, remaining), "Herdr retained event replay");
-        this.values.length = 0;
+        const value = await this.next(
+          Math.min(quietDeadline - now, deadline - now),
+          "Herdr retained event replay",
+        );
+        if (!isReplayNonBarrier(value)) quietDeadline = Date.now() + quietMs;
       } catch (error) {
-        if (error instanceof Error && error.message === "Herdr retained event replay timeout") return;
-        throw error;
+        if (!(error instanceof Error) || error.message !== "Herdr retained event replay timeout") {
+          throw error;
+        }
       }
     }
   }
@@ -284,7 +328,7 @@ export class HerdrRegistryRunner {
         const message = await subscription.messages.next(2_147_483_647, "Herdr event");
         const result = this.registry.applyEvent(message);
         if (result.kind === "resync") throw new Error(`Herdr registry resync: ${result.reason}`);
-        if (result.topologyChanged) throw new Error("Herdr pane topology changed");
+        if (result.topologyChanged) return;
       }
     } finally {
       this.close(subscription);

@@ -73,6 +73,159 @@ test("runner parses fragmented and coalesced NDJSON after a settling snapshot", 
   await runner.stop();
 });
 
+test("continuous pane and agent status updates do not delay structural settling", async () => {
+  const registry = new HerdrRuntimeRegistry();
+  const ready = Promise.withResolvers<void>();
+  const diagnostics: Record<string, unknown>[] = [];
+  const settledSnapshot = snapshot("status");
+  const updatedPane = { ...settledSnapshot.panes[0]!, agent_status: "working" };
+  let subscriptions = 0;
+  let snapshotRequests = 0;
+  let updateCycles = 0;
+  let replayTrafficActive = false;
+  let replayTrafficActiveAtReady = false;
+  let structuralSent = false;
+  let structuralSeenBeforeSettledSnapshot = false;
+  const factory: HerdrSocketFactory = async () => new FakeSocket((request, socket) => {
+    if (request.method === "ping") {
+      socket.sendJson(response(request, { type: "pong", version: "0.8.2", protocol: 20 }));
+    } else if (request.method === "session.snapshot") {
+      snapshotRequests += 1;
+      if (snapshotRequests === 2) {
+        structuralSeenBeforeSettledSnapshot = structuralSent;
+      }
+      socket.sendJson(response(request, { type: "session_snapshot", snapshot: settledSnapshot }));
+    } else {
+      subscriptions += 1;
+      socket.sendJson(response(request, { type: "subscription_started" }));
+      if (subscriptions === 1) {
+        replayTrafficActive = true;
+        const sendUpdates = (): void => {
+          if (!replayTrafficActive) return;
+          updateCycles += 1;
+          socket.sendJson({
+            event: "pane.agent_status_changed",
+            data: {
+              pane_id: "p-status",
+              workspace_id: "w-status",
+              agent_status: "working",
+              agent: "claude",
+            },
+          });
+          socket.sendJson({
+            event: "pane_updated",
+            data: {
+              type: "pane_updated",
+              pane: updatedPane,
+            },
+          });
+          if (updateCycles === 10) {
+            structuralSent = true;
+            socket.sendJson({
+              event: "pane_focused",
+              data: {
+                type: "pane_focused",
+                pane_id: "p-status",
+                workspace_id: "w-status",
+              },
+            });
+          }
+          setImmediate(sendUpdates);
+        };
+        setImmediate(sendUpdates);
+      }
+    }
+  });
+  const runner = new HerdrRegistryRunner(registry, "fake", {
+    socketFactory: factory,
+    replayQuietMs: 20,
+    replayMaxMs: 200,
+    minBackoffMs: 1,
+    maxBackoffMs: 2,
+    diagnostic: (record) => {
+      diagnostics.push(record);
+      if (record.status === "herdr_registry_stale") replayTrafficActive = false;
+      if (record.status === "herdr_registry_ready") {
+        replayTrafficActiveAtReady = replayTrafficActive;
+        replayTrafficActive = false;
+        ready.resolve();
+      }
+    },
+  });
+
+  runner.start();
+  await ready.promise;
+  expect(subscriptions).toBe(1);
+  expect(replayTrafficActiveAtReady).toBe(true);
+  expect(structuralSeenBeforeSettledSnapshot).toBe(true);
+  expect(diagnostics.some((record) => record.status === "herdr_registry_stale")).toBe(false);
+  expect(registry.phase).toBe("ready");
+  await runner.stop();
+});
+
+test("topology changes resubscribe without making the validated registry unavailable", async () => {
+  const registry = new HerdrRuntimeRegistry();
+  const initial = snapshot("topology");
+  const addedPane = {
+    ...initial.panes[0]!,
+    pane_id: "p-topology-added",
+    terminal_id: "term-topology-added",
+  };
+  const expanded: HerdrSessionSnapshot = {
+    ...initial,
+    panes: [...initial.panes, addedPane],
+    layouts: [{
+      ...initial.layouts[0]!,
+      panes: [...initial.layouts[0]!.panes, { pane_id: addedPane.pane_id }],
+    }],
+  };
+  const resubscribed = Promise.withResolvers<void>();
+  const diagnostics: Record<string, unknown>[] = [];
+  let topologyChanged = false;
+  let subscriptions = 0;
+  let firstSubscription: FakeSocket | null = null;
+  const factory: HerdrSocketFactory = async () => new FakeSocket((request, socket) => {
+    if (request.method === "ping") {
+      socket.sendJson(response(request, { type: "pong", version: "0.8.2", protocol: 20 }));
+    } else if (request.method === "session.snapshot") {
+      socket.sendJson(response(request, {
+        type: "session_snapshot",
+        snapshot: topologyChanged ? expanded : initial,
+      }));
+    } else {
+      subscriptions += 1;
+      socket.sendJson(response(request, { type: "subscription_started" }));
+      firstSubscription ??= socket;
+    }
+  });
+  const runner = new HerdrRegistryRunner(registry, "fake", {
+    socketFactory: factory,
+    replayQuietMs: 0,
+    minBackoffMs: 10_000,
+    diagnostic: (record) => {
+      diagnostics.push(record);
+      if (record.status !== "herdr_registry_ready") return;
+      if (record.generation === 1) {
+        topologyChanged = true;
+        firstSubscription?.sendJson({
+          event: "pane_created",
+          data: { type: "pane_created", pane: addedPane },
+        });
+      } else if (record.generation === 2) {
+        resubscribed.resolve();
+      }
+    },
+  });
+
+  runner.start();
+  await resubscribed.promise;
+  expect(subscriptions).toBe(2);
+  expect(diagnostics.some((record) => record.status === "herdr_registry_stale")).toBe(false);
+  expect(registry.phase).toBe("ready");
+  expect(registry.paneIdForTerminal(addedPane.terminal_id)).toBe(addedPane.pane_id);
+  await runner.stop();
+});
+
 test("runner can subscribe only to pane focus events", async () => {
   const registry = new HerdrRuntimeRegistry();
   const ready = Promise.withResolvers<void>();

@@ -59,6 +59,7 @@ const herdr = process.env.HERDR_BIN_PATH ?? "herdr";
 const pluginId = process.env.HERDR_PLUGIN_ID ?? "float.pi-outliner";
 const currentPaneId = pluginInvocationPaneId();
 const HERDR_SYNC_TIMEOUT_MS = 2_000;
+const HERDR_LAYOUT_TIMEOUT_MS = 60_000;
 const modeArgument = process.argv.indexOf("--mode");
 const mode =
   modeArgument < 0
@@ -381,7 +382,7 @@ function openWorkingLayout(): {
     ],
     {
       encoding: "utf8",
-      timeout: 30_000,
+      timeout: HERDR_LAYOUT_TIMEOUT_MS,
       env: process.env,
     },
   );

@@ -20,6 +20,7 @@ import {
   previewRegionActionUri,
   reconcilePreviewRegions,
   togglePreviewRegionDisclosure,
+  type PreviewRegion,
   type PreviewRegionState,
 } from "../src/detail-preview-regions";
 
@@ -116,6 +117,21 @@ describe("Detail Obsidian callouts", () => {
         { canonicalType: "warning", title: "Warning", icon: "!" },
         { canonicalType: "ship-status", title: "Fleet", icon: "●" },
       ]);
+  });
+
+  test("treats inherited callout type names as unknown", () => {
+    const regions = parseDetailCallouts([
+      "> [!constructor] Constructor",
+      "> [!toString] Stringifier",
+      "> [!__proto__] Prototype",
+    ].join("\n"));
+
+    expect(regions.map((region) => region.icon)).toEqual(["●", "●", "●"]);
+    expect(resolveDetailCalloutTheme({
+      constructor: { glyph: "X" },
+    }).errors).toEqual([
+      "constructor is not a canonical callout type",
+    ]);
   });
 
   test("merges canonical style overrides while rejecting unsafe colors and glyphs", () => {
@@ -281,6 +297,39 @@ describe("Detail Obsidian callouts", () => {
 
     togglePreviewRegionDisclosure(state, regions[0]!.id);
     reconcilePreviewRegions(state, regions);
+    expect(state.focusedRegionId).toBeNull();
+  });
+
+  test("preserves producer disclosure and exposes expanded backlink children to focus", () => {
+    const regions: PreviewRegion[] = [{
+      id: "backlinks",
+      kind: "backlinks",
+      sourceSpan: null,
+      parentId: null,
+      childIds: ["backlink:source"],
+      focusable: false,
+      disclosure: { defaultExpanded: false, expanded: true },
+      activation: { type: "backlinks.disclosure.toggle" },
+    }, {
+      id: "backlink:source",
+      kind: "backlink-source",
+      sourceSpan: null,
+      parentId: "backlinks",
+      childIds: [],
+      focusable: true,
+      disclosure: { defaultExpanded: false, expanded: false },
+      activation: { type: "backlink.open", blockId: "source" },
+    }];
+    const state = regionState();
+
+    reconcilePreviewRegions(state, regions);
+
+    expect(state.regions[0]!.disclosure?.expanded).toBe(true);
+    expect(movePreviewRegionFocus(state, 1)?.id).toBe("backlink:source");
+
+    state.disclosureOverrides.set("backlinks", false);
+    reconcilePreviewRegions(state, regions);
+    expect(state.regions[0]!.disclosure?.expanded).toBe(false);
     expect(state.focusedRegionId).toBeNull();
   });
 

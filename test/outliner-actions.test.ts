@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import {
   actionChordForInput,
   displayActionChord,
@@ -27,10 +27,21 @@ function temporaryKeymap(contents: unknown): string {
   return path;
 }
 
+function temporaryRawKeymap(contents: string): string {
+  const directory = mkdtempSync(join(tmpdir(), "outliner-keymap-"));
+  temporaryDirectories.push(directory);
+  const path = join(directory, "keybindings.json");
+  writeFileSync(path, contents);
+  return path;
+}
+
 describe("Outliner action keymap", () => {
   test("normalizes terminal inputs and configurable chords", () => {
     expect(normalizeActionChord("control+shift+r")).toBe("Ctrl+Shift+R");
     expect(actionChordForInput("R", { name: "r", shift: true })).toBe("Shift+R");
+    expect(actionChordForInput("R", { name: "R" })).toBe("Shift+R");
+    expect(actionChordForInput("?", { name: "/", shift: true })).toBe("?");
+    expect(actionChordForInput(" ", {})).toBe("Space");
     expect(actionChordForInput(undefined, { name: "down", sequence: "\x1b[B" })).toBe("ArrowDown");
     expect(actionChordForInput(undefined, {})).toBeNull();
     expect(actionChordForInput(undefined, { name: "undefined" })).toBeNull();
@@ -78,6 +89,26 @@ describe("Outliner action keymap", () => {
       suppressed: false,
     });
     expect(keymap.canonicalize("tree", "browse", "e", { name: "e" })).toMatchObject({
+      actionId: null,
+      suppressed: true,
+    });
+  });
+
+  test("rebinds and disables Shift-letter actions for uppercase Pi input", () => {
+    const rebound = new OutlinerActionKeymap("<test>", {
+      "tree.detail.new": ["Shift+X"],
+    });
+    expect(rebound.canonicalize("tree", "browse", "X", { name: "X" })).toMatchObject({
+      actionId: "tree.detail.new",
+      suppressed: false,
+    });
+    expect(rebound.canonicalize("tree", "browse", "D", { name: "D" })).toMatchObject({
+      actionId: null,
+      suppressed: true,
+    });
+
+    const unbound = new OutlinerActionKeymap("<test>", { "tree.detail.new": [] });
+    expect(unbound.canonicalize("tree", "browse", "D", { name: "D" })).toMatchObject({
       actionId: null,
       suppressed: true,
     });
@@ -131,6 +162,27 @@ describe("Outliner action keymap", () => {
       error: "Unknown Outliner action ID: unknown.action",
     });
     expect(keymap.primaryBinding("detail.edit.begin")).toBe("x");
+  });
+
+  test("falls back to defaults with bounded diagnostics when startup keymaps are invalid", () => {
+    const parseFailure = temporaryRawKeymap(`{"tree.edit": ${"x".repeat(700)}}`);
+    const validationFailure = temporaryKeymap({ "unknown.action": ["z"] });
+    const diagnostic = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(OutlinerActionKeymap.load({
+        OUTLINER_KEYBINDINGS_PATH: parseFailure,
+      }).primaryBinding("tree.edit")).toBe("e");
+      expect(OutlinerActionKeymap.load({
+        OUTLINER_KEYBINDINGS_PATH: validationFailure,
+      }).primaryBinding("tree.edit")).toBe("e");
+      expect(diagnostic).toHaveBeenCalledTimes(2);
+      for (const call of diagnostic.mock.calls) {
+        expect(String(call[0])).toContain("using defaults");
+        expect(String(call[0]).length).toBeLessThanOrEqual(512);
+      }
+    } finally {
+      diagnostic.mockRestore();
+    }
   });
 
   test("resolves XDG and explicit keymap paths", () => {

@@ -6,6 +6,7 @@ import {
   resolveBlockReferences,
   resolveBlockReferencesWithStatus,
 } from "../src/references";
+import { outlinerReferenceOccurrences } from "../src/reference-occurrences";
 import type { Block } from "../src/types";
 
 const target: Block = {
@@ -109,5 +110,129 @@ describe("block reference rendering", () => {
       `((${target.id}^durable-section))`,
       () => duplicate,
     ).references[0]?.status).toBe("duplicate");
+  });
+});
+
+describe("reference occurrence Markdown protection", () => {
+  test("finds nested-list references without exposing multiline indented code", () => {
+    const blockId = "22222222-2222-4222-8222-222222222222";
+    const text = [
+      "- Parent item",
+      `    - Nested item ((${blockId}))`,
+      `    continuation ((${blockId}))`,
+      "",
+      "      nested literal code",
+      `      ((${blockId}))`,
+      "      nested literal tail",
+      "Outside paragraph",
+      "",
+      "    literal code",
+      `    ((${blockId}))`,
+      "    literal tail",
+    ].join("\n");
+
+    expect(outlinerReferenceOccurrences(text)).toEqual([
+      expect.objectContaining({ kind: "block", blockId }),
+      expect.objectContaining({ kind: "block", blockId }),
+    ]);
+  });
+
+  test("excludes references inside fences nested through multiple list levels", () => {
+    const beforeId = "33333333-3333-4333-8333-333333333333";
+    const hiddenId = "44444444-4444-4444-8444-444444444444";
+    const afterId = "55555555-5555-4555-8555-555555555555";
+    const beforeReference = `((${beforeId}))`;
+    const afterReference = `((${afterId}))`;
+    const text = [
+      `- Parent prose ${beforeReference}`,
+      "  - Nested item",
+      "    - Deep item",
+      "         ```md",
+      `      hidden ((${hiddenId}))`,
+      `         still hidden ((${hiddenId}))`,
+      "        ```",
+      `      Adjacent prose ${afterReference}`,
+    ].join("\n");
+
+    expect(outlinerReferenceOccurrences(text)).toEqual([
+      {
+        kind: "block",
+        blockId: beforeId,
+        start: text.indexOf(beforeReference),
+        end: text.indexOf(beforeReference) + beforeReference.length,
+      },
+      {
+        kind: "block",
+        blockId: afterId,
+        start: text.indexOf(afterReference),
+        end: text.indexOf(afterReference) + afterReference.length,
+      },
+    ]);
+  });
+
+  test("protects a nested list item's fenced body until its relative closing fence", () => {
+    const hiddenId = "66666666-6666-4666-8666-666666666666";
+    const adjacentId = "77777777-7777-4777-8777-777777777777";
+    const adjacentReference = `((${adjacentId}))`;
+    const text = [
+      "- Parent item",
+      "  - Nested item",
+      "    - ~~~",
+      `      hidden ((${hiddenId}))`,
+      "        ~~~",
+      `    - Adjacent item ${adjacentReference}`,
+    ].join("\n");
+
+    expect(outlinerReferenceOccurrences(text)).toEqual([
+      {
+        kind: "block",
+        blockId: adjacentId,
+        start: text.indexOf(adjacentReference),
+        end: text.indexOf(adjacentReference) + adjacentReference.length,
+      },
+    ]);
+  });
+
+  test("keeps top-level fences protected while emitting following prose references", () => {
+    const hiddenId = "88888888-8888-4888-8888-888888888888";
+    const visibleId = "99999999-9999-4999-8999-999999999999";
+    const visibleReference = `((${visibleId}))`;
+    const text = [
+      "   ```md",
+      `hidden ((${hiddenId}))`,
+      " ```",
+      `Visible ${visibleReference}`,
+    ].join("\n");
+
+    expect(outlinerReferenceOccurrences(text)).toEqual([
+      {
+        kind: "block",
+        blockId: visibleId,
+        start: text.indexOf(visibleReference),
+        end: text.indexOf(visibleReference) + visibleReference.length,
+      },
+    ]);
+  });
+
+  test("handles CRLF fence endings and blank lines", () => {
+    const hiddenId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const visibleId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    const visibleReference = `((${visibleId}))`;
+    const text = [
+      "```md",
+      `hidden ((${hiddenId}))`,
+      "```",
+      "",
+      `Visible ${visibleReference}`,
+    ].join("\r\n");
+
+    expect(outlinerReferenceOccurrences(text)).toEqual([
+      {
+        kind: "block",
+        blockId: visibleId,
+        start: text.indexOf(visibleReference),
+        end: text.indexOf(visibleReference) + visibleReference.length,
+      },
+    ]);
   });
 });

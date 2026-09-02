@@ -132,30 +132,42 @@ function runtimeFromPane(pane: HerdrPane): OutlinerClientRuntime {
   };
 }
 
-export function currentPaneRuntime(
+export function currentPaneIdentity(
   herdr = process.env.HERDR_BIN_PATH ?? "herdr",
 ): OutlinerClientRuntime | undefined {
   if (process.env.HERDR_ENV !== "1") return undefined;
   try {
     const output = invokeHerdr(herdr, ["pane", "current", "--current"]);
     const pane = Parse(PaneCurrentResponseSchema, JSON.parse(output)).result.pane;
-    const runtime = runtimeFromPane(pane);
-    try {
-      const layoutOutput = invokeHerdr(herdr, ["pane", "layout", "--pane", pane.pane_id]);
-      const layout = Parse(PaneLayoutResponseSchema, JSON.parse(layoutOutput)).result.layout;
-      const positioned = layout.panes.find((candidate) => candidate.pane_id === pane.pane_id);
-      if (positioned) {
-        runtime.paneX = positioned.rect.x;
-        runtime.paneY = positioned.rect.y;
-      }
-    } catch {
-      // Pane identity remains useful when spatial metadata is unavailable.
-    }
-    return runtime;
-  } catch {
-    return undefined;
+    if (!pane.pane_id.trim()) throw new Error("Herdr returned an empty current pane ID");
+    return runtimeFromPane(pane);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`Current Herdr pane identity is unavailable: ${reason}`);
   }
 }
+
+export function currentPaneRuntime(
+  herdr = process.env.HERDR_BIN_PATH ?? "herdr",
+): OutlinerClientRuntime | undefined {
+  const runtime = currentPaneIdentity(herdr);
+  if (!runtime) return undefined;
+  const paneId = runtime.paneId;
+  if (!paneId) return runtime;
+  try {
+    const layoutOutput = invokeHerdr(herdr, ["pane", "layout", "--pane", paneId]);
+    const layout = Parse(PaneLayoutResponseSchema, JSON.parse(layoutOutput)).result.layout;
+    const positioned = layout.panes.find((candidate) => candidate.pane_id === paneId);
+    if (positioned) {
+      runtime.paneX = positioned.rect.x;
+      runtime.paneY = positioned.rect.y;
+    }
+  } catch {
+    // Pane identity remains useful when spatial metadata is unavailable.
+  }
+  return runtime;
+}
+
 export function outlinerRightClickOwnership(
   env: NodeJS.ProcessEnv = process.env,
 ): OutlinerRightClickOwnership {
@@ -196,7 +208,7 @@ export function focusCurrentPane(
   herdr = process.env.HERDR_BIN_PATH ?? "herdr",
 ): void {
   if (process.env.HERDR_ENV !== "1") return;
-  const paneId = currentPaneRuntime(herdr)?.paneId;
+  const paneId = currentPaneIdentity(herdr)?.paneId;
   if (!paneId) throw new Error("Current Herdr pane identity is unavailable");
   try {
     invokeHerdr(herdr, ["plugin", "pane", "focus", paneId]);
@@ -223,7 +235,7 @@ export function openDetailPane(
   if (process.env.HERDR_ENV !== "1") {
     throw new Error("Creating a Detail pane requires Herdr");
   }
-  const sourcePaneId = process.env.HERDR_PANE_ID ?? currentPaneRuntime(herdr)?.paneId;
+  const sourcePaneId = currentPaneIdentity(herdr)?.paneId;
   if (!sourcePaneId) throw new Error("Current Herdr pane identity is unavailable");
   const args = [
     "plugin",

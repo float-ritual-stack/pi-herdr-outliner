@@ -46,12 +46,10 @@ function normalize(value: string): string {
   return value.normalize("NFKC").toLocaleLowerCase().replace(/\s+/g, " ").trim();
 }
 
-function lineOffsets(lines: readonly string[]): number[] {
-  const offsets: number[] = [];
-  let offset = 0;
-  for (const line of lines) {
-    offsets.push(offset);
-    offset += line.length + 1;
+function lineOffsets(text: string): number[] {
+  const offsets = [0];
+  for (let index = text.indexOf("\n"); index >= 0; index = text.indexOf("\n", index + 1)) {
+    offsets.push(index + 1);
   }
   return offsets;
 }
@@ -89,7 +87,7 @@ export function isFragmentId(value: string): boolean {
 
 export function fragmentAnchors(text: string): FragmentAnchor[] {
   const lines = text.split(/\r?\n/);
-  const offsets = lineOffsets(lines);
+  const offsets = lineOffsets(text);
   const anchors: FragmentAnchor[] = [];
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
     const line = lines[lineIndex]!;
@@ -214,7 +212,7 @@ function fragmentSlug(label: string): string {
     .replace(/[\u0300-\u036f]/g, "")
     .toLocaleLowerCase()
     .replace(/[^a-z0-9_-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
+    .replace(/^[-_]+|-+$/g, "")
     .slice(0, 48);
   return slug || "fragment";
 }
@@ -242,8 +240,13 @@ export function ensureHeadingFragment(
 
   const usedIds = new Set(fragmentAnchors(text).map((anchor) => anchor.id));
   const fragmentId = uniqueFragmentId(fragmentSlug(heading[2]!), usedIds);
-  lines[lineIndex] = `${content} ^${fragmentId}`;
-  return { text: lines.join("\n"), fragmentId, created: true };
+  const start = lineOffsets(text)[lineIndex]!;
+  return {
+    text: text.slice(0, start) + `${content} ^${fragmentId}` +
+      text.slice(start + line.length),
+    fragmentId,
+    created: true,
+  };
 }
 
 export function stripFragmentAnchors(text: string): string {

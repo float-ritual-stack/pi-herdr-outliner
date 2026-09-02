@@ -142,6 +142,7 @@ export interface TreeController {
   view(): TreeView;
   initialize(): Promise<void>;
   handleKeypress(str: string, key: TerminalKey, inputAction: TerminalInputAction): Promise<void>;
+  handlePaste(text: string): void;
   handleDisclosure(rowId: string): Promise<void>;
   handleAction(actionId: string, origin?: { column: number; row: number }): Promise<void>;
   handleServiceEvent(event: OutlinerEvent): Promise<void>;
@@ -1261,6 +1262,16 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     await handleKeypress(input.str, input.key, "pass", false);
   }
 
+  function handlePaste(text: string): void {
+    if (mode === "action-menu") {
+      updateActionMenuQuery(actionMenuQuery + text);
+    } else if (mode !== "browse" && mode !== "delete" && mode !== "viewer") {
+      quickBuffer.insert(text);
+      if (mode === "goto") refreshGotoCompletion();
+    }
+    effects.invalidate();
+  }
+
   async function handleKeypress(
     str: string,
     key: TerminalKey,
@@ -1637,6 +1648,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     view,
     initialize,
     handleKeypress,
+    handlePaste,
     handleDisclosure,
     handleAction,
     handleServiceEvent,

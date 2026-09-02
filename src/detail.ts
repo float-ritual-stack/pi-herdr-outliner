@@ -105,8 +105,8 @@ const effects: DetailEffects = {
   async resolveReferences(text) {
     return client.request<ResolvedBlockReferences>({ action: "references.resolve", text });
   },
-  projectRead(text) {
-    return projectDetailRead(client, text);
+  projectRead(text, hostBlockId) {
+    return projectDetailRead(client, text, { hostBlockId });
   },
   async queryBacklinks(query) {
     return client.request<BacklinkCollection>({ action: "references.backlinks", query });
@@ -199,13 +199,19 @@ async function waitForService(): Promise<void> {
 }
 
 function startWatcher(): void {
+  let runtime: ReturnType<typeof currentPaneRuntime>;
+  try {
+    runtime = currentPaneRuntime();
+  } catch (error) {
+    console.error(errorMessage(error));
+  }
   watcher = client.watch({
     client: {
       clientId,
       role: "detail",
       contextId: browsingContextId,
       locked: detailPresentation === "property-inspector",
-      runtime: currentPaneRuntime(),
+      runtime,
     },
     onConnect: () => enqueueWork(() => controller.onServiceConnect(viewport())),
     onDisconnect: () => enqueueWork(() => controller.onServiceDisconnect()),

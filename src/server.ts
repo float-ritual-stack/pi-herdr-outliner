@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
 import { dirname } from "node:path";
+import type { HerdrRuntimeRegistry } from "./herdr-registry";
 import { isFragmentId, resolveFragment } from "./fragments";
 import { OutlinerStore } from "./store";
 import {
@@ -31,6 +32,7 @@ export class OutlinerServer {
   constructor(
     readonly store: OutlinerStore,
     readonly socketPath: string,
+    readonly herdrRegistry?: HerdrRuntimeRegistry,
   ) {}
 
   async start(): Promise<void> {
@@ -217,17 +219,79 @@ export class OutlinerServer {
       ...(currentBlockId ? { currentBlockId } : {}),
       ...(runtime ? { runtime } : {}),
     };
-    this.subscribers.set(socket, normalized);
-    return normalized;
+    const stored = this.herdrRegistry === undefined
+      ? normalized
+      : this.withoutTopology(normalized);
+    this.subscribers.set(socket, stored);
+    return this.reconcileClientRuntime(stored);
+  }
+
+  private withoutTopology(
+    client: OutlinerClientRegistration,
+  ): OutlinerClientRegistration {
+    const terminalId = client.runtime?.terminalId;
+    const registration = { ...client };
+    delete registration.runtime;
+    return terminalId === undefined
+      ? registration
+      : { ...registration, runtime: { terminalId } };
+  }
+
+  private reconcileClientRuntime(
+    client: OutlinerClientRegistration,
+  ): OutlinerClientRegistration {
+    const registry = this.herdrRegistry;
+    if (registry === undefined) return client;
+
+    const unavailable = this.withoutTopology(client);
+    const terminalId = unavailable.runtime?.terminalId;
+    if (registry.phase !== "ready" || terminalId === undefined) return unavailable;
+
+    const paneId = registry.paneIdForTerminal(terminalId);
+    const pane = paneId === undefined ? undefined : registry.panes.get(paneId);
+    if (pane === undefined) return unavailable;
+
+    const positioned = registry.layouts.get(pane.tab_id)?.panes
+      .find((candidate) => candidate.pane_id === pane.pane_id);
+    const rect = positioned?.rect;
+    const hasCoordinates = (
+      typeof rect === "object" &&
+      rect !== null &&
+      typeof rect.x === "number" &&
+      Number.isFinite(rect.x) &&
+      rect.x >= 0 &&
+      typeof rect.y === "number" &&
+      Number.isFinite(rect.y) &&
+      rect.y >= 0
+    );
+    return {
+      ...client,
+      runtime: {
+        paneId: pane.pane_id,
+        terminalId: pane.terminal_id,
+        workspaceId: pane.workspace_id,
+        tabId: pane.tab_id,
+        ...(hasCoordinates ? { paneX: rect.x, paneY: rect.y } : {}),
+      },
+    };
   }
 
   private listClients(role?: OutlinerClientRole): OutlinerClientRegistration[] {
     this.pruneDestroyedSubscribers();
     return [...this.subscribers.values()]
+      .map((client) => this.reconcileClientRuntime(client))
       .filter((client) => role === undefined || client.role === role)
       .sort((left, right) =>
         left.role.localeCompare(right.role) || left.clientId.localeCompare(right.clientId)
       );
+  }
+
+  private hasAvailableTopology(client: OutlinerClientRegistration): boolean {
+    return this.herdrRegistry === undefined || Boolean(
+      client.runtime?.paneId &&
+      client.runtime.workspaceId &&
+      client.runtime.tabId
+    );
   }
 
   private hasClient(clientId: string): boolean {
@@ -261,7 +325,7 @@ export class OutlinerServer {
         updated.currentBlockId = this.normalizeClientBlockId(update.currentBlockId);
       }
       this.subscribers.set(socket, updated);
-      return updated;
+      return this.reconcileClientRuntime(updated);
     }
     throw new Error(`Client is not registered: ${clientId}`);
   }
@@ -297,7 +361,9 @@ export class OutlinerServer {
   }
 
   private detailPool(source: OutlinerClientRegistration): OutlinerClientRegistration[] {
-    const details = this.listClients("detail");
+    if (!this.hasAvailableTopology(source)) return [];
+    const details = this.listClients("detail")
+      .filter((client) => this.hasAvailableTopology(client));
     const candidates = source.runtime?.workspaceId && source.runtime.tabId
       ? details.filter((client) => this.sameTab(source, client))
       : details.filter((client) => client.contextId === source.contextId);
@@ -348,6 +414,9 @@ export class OutlinerServer {
     if (intent !== "reveal") {
       return this.resolveUnlockedDetail(source, intent, preserveSource);
     }
+    if (!this.hasAvailableTopology(source)) {
+      throw new Error("No Tree destination is available in this pane's context or tab");
+    }
     if (source.role === "tree") {
       return {
         sourceClientId,
@@ -357,6 +426,7 @@ export class OutlinerServer {
       };
     }
     const contextCandidates = this.listClients("tree")
+      .filter((client) => this.hasAvailableTopology(client))
       .filter((client) => client.contextId === source.contextId);
     if (contextCandidates.length === 1) {
       return {
@@ -367,6 +437,7 @@ export class OutlinerServer {
       };
     }
     const sameTabCandidates = this.listClients("tree")
+      .filter((client) => this.hasAvailableTopology(client))
       .filter((client) => this.sameTab(source, client));
     if (sameTabCandidates.length === 1) {
       return {

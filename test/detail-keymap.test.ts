@@ -224,12 +224,14 @@ test("retains save, completion, insertion, and delete bindings", async () => {
   await detail.press({ name: "s", ctrl: true });
   await detail.press({ name: "tab" });
   await detail.press({ name: "x" }, "x");
+  await detail.press({}, " ");
   await detail.press({ name: "delete" });
 
   expect(detail.intents).toEqual([
     { type: "buffer.save" },
     { type: "completion.open" },
     { type: "buffer.insert", text: "x" },
+    { type: "buffer.insert", text: " " },
     { type: "buffer.delete" },
   ]);
 });

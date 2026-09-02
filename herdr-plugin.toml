@@ -38,6 +38,20 @@ description = "Focus an existing Detail in this tab, preferring the Tree-linked 
 contexts = ["workspace", "tab", "pane"]
 command = ["bun", "run", "src/herdr-open.ts", "--mode", "ensure-detail"]
 
+[[actions]]
+id = "open-here"
+title = "Outliner: open new Tree + Detail here"
+description = "Always open a new Tree and linked Detail beside the invoking pane."
+contexts = ["workspace", "tab", "pane"]
+command = ["bun", "run", "src/herdr-open.ts", "--mode", "open-here"]
+
+[[actions]]
+id = "open-layout"
+title = "Outliner: build working layout in empty tab"
+description = "In a tab containing only the invoking pane, add a Tree and two Details in the standard layout."
+contexts = ["workspace", "tab", "pane"]
+command = ["bun", "run", "src/herdr-open.ts", "--mode", "open-layout"]
+
 [[link_handlers]]
 id = "outliner-navigation"
 title = "Navigate Outliner"

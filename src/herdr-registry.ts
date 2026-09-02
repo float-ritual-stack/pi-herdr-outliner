@@ -31,6 +31,11 @@ export interface HerdrPane extends HerdrRecord {
 
 export interface HerdrLayoutPane extends HerdrRecord {
   pane_id: string;
+  rect?: {
+    x: number;
+    y: number;
+    [key: string]: unknown;
+  };
 }
 
 export interface HerdrLayout extends HerdrRecord {

@@ -25,7 +25,7 @@ The project started as a small Friday-night experiment and grew into a durable w
 
 - SQLite-backed hierarchical blocks with stable UUIDs, sibling order, authors, timestamps, and one canonical graph per workspace root.
 - Workspace-isolated service and runtime paths.
-- JSON-lines RPC protocol v23 over a Unix socket.
+- JSON-lines RPC protocol v25 over a Unix socket.
 - Reactive canonical content/view broadcasts, per-process Tree/Detail registration with Detail lock availability, exact-client UI commands, and source-aware `preview | open | reveal` navigation.
 - Each Tree owns its cursor, occurrence selection, filter, viewport, collapsed rows, multiline expansion, explicit-navigation history, and browsing context; moving a Tree previews only in the first unlocked same-tab Detail and never replaces a locked anchor.
 - Indexed `[property::value]` metadata with optimistic property patching and catalog queries.
@@ -45,11 +45,11 @@ The project started as a small Friday-night experiment and grew into a durable w
 - Grapheme-safe wrapped Detail editing, word motion, selection, deletion, bounded per-session undo/redo, completion, optimistic save, and whole-session Esc cancellation.
 - Each Detail visibly reports `Unlocked` or `Locked`; unlocked Details form a spatial preview/open pool, while locked Details retain exact context anchors.
 - Referenced text/Markdown file viewing and durable line-range annotations.
-- Herdr-owned pane placement/focus and current-pane recovery, one remembered service pane, per-process live client discovery, and a disposable runtime registry.
-- Pi/OMP commands, tools, and selection-context injection.
-- A disposable Pi report pane shows only the latest settled assistant message in service memory; selection-aware promotion creates an ordinary provenance-bearing agent block, while replacement, discard, pane close, and service restart leave no canonical report artifact.
+- Herdr-owned pane placement/focus and current-pane recovery, one remembered service pane, per-process live client discovery, and an ephemeral runtime registry.
+- Pi/OMP commands, tools, selection-context injection, canonical `/send-to-outline` capture, and deterministic configured `PREFIX-XXX` work-placeholder nudging.
 
-Planned work is tracked inside the outliner itself. Notable accepted designs include normalized query construction, agent-assisted `PREFIX-XXX` placeholder resolution, backlinks, scoped property semantics, and projected canonical descendants.
+Planned work is tracked inside the outliner itself; this document describes only
+behavior already shipped on the current branch.
 
 ## Quick start
 
@@ -77,18 +77,35 @@ Inside a Herdr-managed pane:
 herdr plugin action invoke open --plugin float.pi-outliner
 ```
 
-The action preserves one **Outliner Service** tab. With no live Tree it opens an
-**Outliner** Tree and **Outliner Detail** split beside the invoking pane, then
-focuses the new Tree. With one live Tree it focuses that exact client. With
-multiple live Trees it fails explicitly and lists client IDs instead of choosing
-an arbitrary pane.
+The manifest exposes four workspace/tab/pane actions:
 
-Use `open-here` to create another Tree/Detail pair in the current tab. Every
-invocation creates a fresh ephemeral browsing context shared only by that pair.
+- `open` preserves one **Outliner Service** tab. With no live Tree it opens an
+  **Outliner** Tree and **Outliner Detail** beside the invoking pane with one
+  fresh browsing context, then focuses the Tree. Otherwise it selects the Tree
+  by the invoking pane, then an unambiguous Tree in the current tab, workspace,
+  or project, and focuses that exact client. Ambiguity fails explicitly.
+- `ensure-detail` applies the same Tree selection. It focuses an existing Detail
+  in that Tree's tab, preferring the Tree's browsing context, an unlocked pane,
+  and then spatial pane order; if the tab has none, it opens one below the Tree
+  in the Tree's context. With no Tree it opens a complete pair.
+- `open-here` always creates a new Tree/Detail pair beside the invoking pane in
+  the current tab. The pair shares a fresh ephemeral browsing context and the
+  new Tree receives focus.
+- `open-layout` requires an otherwise empty current tab. It retains the invoking
+  shell, creates a Tree and primary Detail in one browsing context plus a second
+  Detail in an independent browsing context, applies the `detail-b` four-pane
+  working layout, and focuses the Tree.
+
+Invoke any action as
+`herdr plugin action invoke <action> --plugin float.pi-outliner`. Layout
+reshaping is serialized across Linux and macOS by an atomic lock directory keyed
+to the Herdr socket. Acquisition waits at most 30 seconds and recovers a dead or
+stale owner; timeout or failure is visible, and layout mutation never runs
+unlocked.
+
 Tab labels, tab numbers, pane titles, and labels such as `oi` are display
-metadata—not routing keys. `focus-existing` focuses the unique Tree. The CLI and
-Pi/OMP `outliner_clients` tool expose live client and context IDs for diagnostics
-and explicit targeting.
+metadata—not routing keys. The CLI and Pi/OMP `outliner_clients` tool expose
+live client and context IDs for diagnostics and explicit targeting.
 
 When the project Pi extension is loaded, `/outliner` performs the same
 focus-or-open action. The project-local `/outline` command in
@@ -384,11 +401,15 @@ CLI accepts `--text`, explicit `--stdin`, or automatic non-TTY stdin/heredoc inp
 The Pi extension registers `/capture` and `outliner_capture`. An exact standalone `float.dispatch(…)` input is intercepted by the Pi/OMP input hook, durably captured, acknowledged, and handled without starting an agent turn. Embedded/conversational markers are left untouched; malformed markers report a warning and continue as ordinary input.
 
 `/send-to-outline` copies the latest completed assistant Markdown from the
-current Pi/OMP session into Inbox as an agent-authored capture with session
-provenance. It then focuses the new canonical block and opens it in the first
-available Detail, so links, backlinks, block references, embeds, and bounded
-queries use the ordinary Detail projection. Responses remain chat-only unless
-the command is invoked; there is no disposable report slot or report pane.
+current Pi/OMP session into Inbox as an ordinary agent-authored canonical
+capture with session provenance. Capture succeeds independently of presentation.
+When a recently focused or unique Tree is available, the command focuses the new
+block there and dispatches an ordinary open to the first eligible Detail; if
+Tree or Detail routing is unavailable, the durable Inbox block remains and the
+command reports that presentation failure. Links, backlinks, block references,
+embeds, and bounded queries therefore use the ordinary Detail projection.
+Responses remain chat-only unless the command is invoked; there is no disposable
+report slot or report pane.
 
 Exact references use stable block IDs:
 
@@ -531,7 +552,7 @@ Before each agent turn, the extension uses Herdr pane-focus history to locate th
 
 The same bounded context budget can include up to five distinct blocks recently edited by the user. The first turn considers a seven-day horizon; later turns request only activity newer than a session-persisted cursor. Entries use current block text, deduplicate the focused block and active task, and report exact UUID and edit time. Failed or timed-out activity queries add nothing and do not advance the cursor. Agent and system mutations never enter this user-activity section.
 
-[`outliner-workflow`](pi-extension/skills/outliner-workflow/SKILL.md) defines when to publish durable findings, decisions, roadmap reviews, syntheses, progress, and implementation proof through `outliner_publish` rather than leaving useful workspace knowledge only in chat. Context and presence integration fail open when their optional surfaces are unavailable. Deterministic `PREFIX-XXX` nudging remains tracked by PIE-152.
+[`outliner-workflow`](pi-extension/skills/outliner-workflow/SKILL.md) defines when to publish durable findings, decisions, roadmap reviews, syntheses, progress, and implementation proof through `outliner_publish` rather than leaving useful workspace knowledge only in chat. Context and presence integration fail open when their optional surfaces are unavailable. Deterministic configured `PREFIX-XXX` nudging is shipped: the extension inspects prompts, focused block text, and textual `outliner_*` tool results and injects at most one resolver reminder per turn without performing the resolution itself.
 
 ## Persistence and isolation
 
