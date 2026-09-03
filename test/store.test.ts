@@ -153,6 +153,17 @@ describe("OutlinerStore", () => {
     expect(store.getSelection().selected?.id).toBe(source.id);
   });
 
+  test("preserves CRLF capture boundaries without adding a carriage return to the title", () => {
+    const store = makeStore();
+
+    const receipt = store.capture("capture-request-crlf", "First line\r\nSecond line", "cli");
+
+    expect(receipt.block.text).toMatch(
+      /^First line \[type::capture] .*\r\nSecond line$/,
+    );
+    expect(receipt.block.text).not.toContain("First line\r ");
+  });
+
   test("rejects invalid capture input and ambiguous Inbox markers without partial writes", () => {
     const store = makeStore();
     const inbox = store.queryBlocks({
