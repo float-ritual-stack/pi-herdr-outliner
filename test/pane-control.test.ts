@@ -8,8 +8,9 @@ import {
   currentPaneIdentity,
   currentPaneRuntime,
   focusCurrentPane,
-  openDetailPane,
+  openBacklinkPeekPopup,
   openCapturePopup,
+  openDetailPane,
   outlinerRightClickOwnership,
   pluginClickedUrl,
   pluginInvocationPaneId,
@@ -298,6 +299,22 @@ if (args[0] === "pane" && args[1] === "current") {
     ]);
     expect(calls.at(-1)).toEqual(["plugin", "pane", "focus", "w1:p3"]);
     expect(calls.filter((args) => args[0] === "pane" && args[1] === "layout")).toEqual([]);
+
+    openDetailPane({
+      workspaceRoot: "/workspace",
+      browsingContextId: "new-context",
+      targetPaneId: "w1:explicit-source",
+      direction: "right",
+    }, herdr);
+    const explicitTargetCalls = readFileSync(logPath, "utf8").trim().split("\n").map(
+      (line) => JSON.parse(line) as string[],
+    );
+    const explicitTargetOpen = explicitTargetCalls.at(-2)!;
+    expect(explicitTargetOpen).toContain("OUTLINER_BROWSING_CONTEXT_ID=new-context");
+    expect(explicitTargetOpen.slice(
+      explicitTargetOpen.indexOf("--target-pane"),
+      explicitTargetOpen.indexOf("--target-pane") + 2,
+    )).toEqual(["--target-pane", "w1:explicit-source"]);
   } finally {
     if (originalHerdrEnv === undefined) delete process.env.HERDR_ENV;
     else process.env.HERDR_ENV = originalHerdrEnv;
@@ -438,7 +455,7 @@ if (args[0] === "pane" && args[1] === "list") console.log(JSON.stringify({ resul
   }
 });
 
-test("opens quick capture through the manifest-owned Herdr popup placement", () => {
+test("opens transient panes through manifest-owned Herdr popup placement", () => {
   const directory = mkdtempSync(join(tmpdir(), "pi-outliner-capture-pane-"));
   const herdr = join(directory, "fake-herdr");
   const logPath = join(directory, "calls.jsonl");
@@ -480,6 +497,32 @@ if (args[0] === "plugin" && args[1] === "pane" && args[2] === "open") {
       .toMatch(/^OUTLINER_CAPTURE_REQUEST_ID=[0-9a-f-]{36}$/);
     expect(openCall).toContain("--focus");
     expect(openCall).not.toContain("--placement");
+
+    openBacklinkPeekPopup({
+      workspaceRoot: "/workspace",
+      browsingContextId: "context-one",
+      sourceClientId: "detail-one",
+      targetBlockId: "hub",
+      selectedSourceBlockId: "source-two",
+      filter: "road map",
+      sortField: "created",
+      sortDirection: "asc",
+    }, herdr);
+    const backlinkCalls = readFileSync(logPath, "utf8").trim().split("\n").map(
+      (line) => JSON.parse(line) as string[],
+    );
+    const backlinkOpen = backlinkCalls.at(-1)!;
+    expect(backlinkOpen).toContain("backlink-peek");
+    expect(backlinkOpen).toContain("OUTLINER_WORKSPACE_ROOT=/workspace");
+    expect(backlinkOpen).toContain("OUTLINER_BROWSING_CONTEXT_ID=context-one");
+    expect(backlinkOpen).toContain("OUTLINER_BACKLINK_SOURCE_CLIENT_ID=detail-one");
+    expect(backlinkOpen).toContain("OUTLINER_BACKLINK_TARGET_BLOCK_ID=hub");
+    expect(backlinkOpen).toContain("OUTLINER_BACKLINK_SELECTED_SOURCE_ID=source-two");
+    expect(backlinkOpen).toContain("OUTLINER_BACKLINK_FILTER=road map");
+    expect(backlinkOpen).toContain("OUTLINER_BACKLINK_SORT_FIELD=created");
+    expect(backlinkOpen).toContain("OUTLINER_BACKLINK_SORT_DIRECTION=asc");
+    expect(backlinkOpen).toContain("--focus");
+    expect(backlinkOpen).not.toContain("--placement");
   } finally {
     if (originalHerdrEnv === undefined) delete process.env.HERDR_ENV;
     else process.env.HERDR_ENV = originalHerdrEnv;

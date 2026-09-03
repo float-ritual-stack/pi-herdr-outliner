@@ -6,7 +6,7 @@ import { Type, type Static } from "typebox";
 import { Parse } from "typebox/value";
 import type { OutlinerClientRuntime } from "./types";
 
-export type PaneEntrypoint = "service" | "outliner" | "detail" | "capture";
+export type PaneEntrypoint = "service" | "outliner" | "detail" | "capture" | "backlink-peek";
 export type OutlinerRightClickOwnership = "herdr" | "outliner";
 
 const PaneStateSchema = Type.Object({
@@ -225,6 +225,7 @@ export interface OpenDetailPaneOptions {
   workspaceRoot: string;
   browsingContextId: string;
   propertyInspectorBlockId?: string;
+  targetPaneId?: string;
   direction?: "right" | "down";
 }
 
@@ -235,8 +236,8 @@ export function openDetailPane(
   if (process.env.HERDR_ENV !== "1") {
     throw new Error("Creating a Detail pane requires Herdr");
   }
-  const sourcePaneId = currentPaneIdentity(herdr)?.paneId;
-  if (!sourcePaneId) throw new Error("Current Herdr pane identity is unavailable");
+  const sourcePaneId = options.targetPaneId?.trim() || currentPaneIdentity(herdr)?.paneId;
+  if (!sourcePaneId) throw new Error("Target Herdr pane identity is unavailable");
   const args = [
     "plugin",
     "pane",
@@ -287,6 +288,58 @@ export function openDetailPane(
   const pane = Parse(PluginPaneOpenResponseSchema, JSON.parse(output)).result.plugin_pane.pane;
   invokeHerdr(herdr, ["plugin", "pane", "focus", pane.pane_id]);
   return pane.pane_id;
+}
+
+export interface OpenBacklinkPeekPopupOptions {
+  workspaceRoot: string;
+  browsingContextId: string;
+  sourceClientId: string;
+  targetBlockId: string;
+  selectedSourceBlockId: string;
+  filter: string;
+  sortField: "created" | "updated";
+  sortDirection: "asc" | "desc";
+}
+
+export function openBacklinkPeekPopup(
+  options: OpenBacklinkPeekPopupOptions,
+  herdr = process.env.HERDR_BIN_PATH ?? "herdr",
+): void {
+  if (process.env.HERDR_ENV !== "1") {
+    throw new Error("Backlink peek popup requires Herdr");
+  }
+  const args = [
+    "plugin",
+    "pane",
+    "open",
+    "--plugin",
+    OUTLINER_PLUGIN_ID,
+    "--entrypoint",
+    "backlink-peek",
+    "--env",
+    `OUTLINER_WORKSPACE_ROOT=${options.workspaceRoot}`,
+    "--env",
+    `OUTLINER_BROWSING_CONTEXT_ID=${options.browsingContextId}`,
+    "--env",
+    `OUTLINER_BACKLINK_SOURCE_CLIENT_ID=${options.sourceClientId}`,
+    "--env",
+    `OUTLINER_BACKLINK_TARGET_BLOCK_ID=${options.targetBlockId}`,
+    "--env",
+    `OUTLINER_BACKLINK_SELECTED_SOURCE_ID=${options.selectedSourceBlockId}`,
+    "--env",
+    `OUTLINER_BACKLINK_FILTER=${options.filter}`,
+    "--env",
+    `OUTLINER_BACKLINK_SORT_FIELD=${options.sortField}`,
+    "--env",
+    `OUTLINER_BACKLINK_SORT_DIRECTION=${options.sortDirection}`,
+    "--cwd",
+    options.workspaceRoot,
+    "--focus",
+  ];
+  if (process.env.OUTLINER_STATE_DIR) {
+    args.push("--env", `OUTLINER_STATE_DIR=${process.env.OUTLINER_STATE_DIR}`);
+  }
+  invokeHerdr(herdr, args);
 }
 
 export interface OpenCapturePopupOptions {

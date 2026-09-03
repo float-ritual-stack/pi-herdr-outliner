@@ -80,7 +80,7 @@ function embedSourceLines(text: string): number[] {
   return lines;
 }
 
-function projectedSourceLine(
+export function projectedSourceLine(
   authoredText: string,
   embedRanges: DetailState["embedRanges"],
   sourceLine: number,
@@ -188,7 +188,7 @@ interface MarkdownFence {
   length: number;
 }
 
-function detailMarkdownPresentation(value: string): string {
+export function detailMarkdownPresentation(value: string): string {
   let fence: MarkdownFence | null = null;
   return value.split(/(?<=\n)/).map((sourceLine, index) => {
     const newline = sourceLine.endsWith("\r\n")

@@ -56,7 +56,7 @@ test("serves mutations and property queries over the local socket", async () => 
   const client = new OutlinerClient(socket);
   const service = await client.request<OutlinerServiceStatus>({ action: "ping" });
   expect(service).toEqual({ status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION });
-  expect(service.protocolVersion).toBe(25);
+  expect(service.protocolVersion).toBe(26);
   const provenance = {
     actorId: "omp",
     sessionId: "session-1",
@@ -642,6 +642,147 @@ test("prunes destroyed client registrations before listing or targeting", () => 
 
   store.close();
   rmSync(directory, { recursive: true, force: true });
+});
+
+test("validates direct popup commands and targets only the invoking Detail", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-outliner-popup-commands-"));
+  const store = new OutlinerStore(join(directory, "outliner.sqlite"));
+  const target = store.create("Backlink target");
+  const source = store.create(`Backlink source ((${target.id}))`);
+  const socket = join(directory, "outliner.sock");
+  const server = new OutlinerServer(store, socket);
+  await server.start();
+  const client = new OutlinerClient(socket);
+  const connected = Promise.withResolvers<void>();
+  const received = Promise.withResolvers<void>();
+  const events: OutlinerEvent[] = [];
+  let connectionCount = 0;
+  const registrations: OutlinerClientRegistration[] = [
+    {
+      clientId: "popup-detail",
+      role: "detail",
+      contextId: "popup-context",
+      locked: false,
+      runtime: { paneId: "detail-pane", workspaceId: "workspace", tabId: "tab" },
+    },
+    {
+      clientId: "popup-tree",
+      role: "tree",
+      contextId: "tree-context",
+      runtime: { paneId: "tree-pane", workspaceId: "workspace", tabId: "tab" },
+    },
+  ];
+  const watchers = registrations.map((registration) =>
+    new OutlinerClient(socket).watch({
+      client: registration,
+      onConnect: () => {
+        connectionCount += 1;
+        if (connectionCount === registrations.length) connected.resolve();
+      },
+      onEvent: (event) => {
+        if (registration.clientId !== "popup-detail" || event.domain !== "ui") return;
+        events.push(event);
+        if (events.length === 2) received.resolve();
+      },
+    })
+  );
+  cleanups.push(async () => {
+    await Promise.all(watchers.map((watcher) => watcher.stop()));
+    await server.close();
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  await connected.promise;
+
+  for (const invalid of ["false", null]) {
+    await expect(client.request({
+      action: "browsing-context.publish",
+      sourceClientId: "popup-detail",
+      contextId: `invalid-dispatch-${String(invalid)}`,
+      blockId: source.id,
+      dispatchPreview: invalid,
+    } as never)).rejects.toThrow("Browsing context dispatchPreview must be boolean");
+  }
+
+  const seeded = await client.request<BrowsingContextPublication>({
+    action: "browsing-context.publish",
+    sourceClientId: "popup-detail",
+    contextId: "seeded-detail-context",
+    blockId: source.id,
+    dispatchPreview: false,
+  });
+  expect(seeded).toEqual({
+    contextId: "seeded-detail-context",
+    target: store.blockContext(source.id),
+  });
+  expect(await client.request<{ contextId: string; target: SelectionContext }>({
+    action: "browsing-context.get",
+    contextId: "seeded-detail-context",
+  })).toEqual({
+    contextId: "seeded-detail-context",
+    target: store.blockContext(source.id),
+  });
+
+  await client.request({
+    action: "ui.command.send",
+    command: { targetClientId: "popup-detail", command: "open", blockId: source.id },
+  });
+  await client.request({
+    action: "ui.command.send",
+    command: {
+      targetClientId: "popup-detail",
+      command: "backlinks.select",
+      targetBlockId: target.id,
+      sourceBlockId: source.id,
+    },
+  });
+  await received.promise;
+  expect(events.map((event) => event.command)).toEqual([
+    { targetClientId: "popup-detail", command: "open", blockId: source.id },
+    {
+      targetClientId: "popup-detail",
+      command: "backlinks.select",
+      targetBlockId: target.id,
+      sourceBlockId: source.id,
+    },
+  ]);
+  expect(events[1]?.blockId).toBe(target.id);
+
+  await expect(client.request({
+    action: "ui.command.send",
+    command: { targetClientId: "popup-tree", command: "open", blockId: source.id },
+  })).rejects.toThrow("Direct open target must be a Detail client");
+  await expect(client.request({
+    action: "ui.command.send",
+    command: {
+      targetClientId: "popup-tree",
+      command: "backlinks.select",
+      targetBlockId: target.id,
+      sourceBlockId: source.id,
+    },
+  })).rejects.toThrow("Backlink selection target must be a Detail client");
+  await expect(client.request({
+    action: "ui.command.send",
+    command: { targetClientId: "popup-detail", command: "open", blockId: "missing-block" },
+  })).rejects.toThrow("Block not found: missing-block");
+  await expect(client.request({
+    action: "ui.command.send",
+    command: {
+      targetClientId: "popup-detail",
+      command: "backlinks.select",
+      targetBlockId: target.id,
+    } as never,
+  })).rejects.toThrow("Backlink selection requires target and source block IDs");
+
+  await client.request({
+    action: "clients.update",
+    clientId: "popup-detail",
+    locked: true,
+  });
+  await expect(client.request({
+    action: "ui.command.send",
+    command: { targetClientId: "popup-detail", command: "open", blockId: source.id },
+  })).rejects.toThrow("Invoking Detail is locked");
 });
 
 test("registers multiple live clients, targets one recipient, broadcasts content, and cleans up exact connections", async () => {

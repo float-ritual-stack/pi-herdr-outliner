@@ -508,6 +508,12 @@ export class OutlinerServer {
           break;
         }
         case "browsing-context.publish": {
+          if (
+            request.dispatchPreview !== undefined &&
+            typeof request.dispatchPreview !== "boolean"
+          ) {
+            throw new Error("Browsing context dispatchPreview must be boolean");
+          }
           const contextId = this.normalizeContextId(request.contextId);
           const target = request.blockId
             ? this.store.blockContext(request.blockId)
@@ -515,7 +521,7 @@ export class OutlinerServer {
           this.browsingContextTargets.set(contextId, request.blockId);
           let preview: OutlinerNavigationDispatch | undefined;
           let unavailable: string | undefined;
-          if (request.blockId) {
+          if (request.blockId && request.dispatchPreview !== false) {
             try {
               const route = this.resolveNavigationTarget(request.sourceClientId, "preview");
               preview = {
@@ -564,9 +570,28 @@ export class OutlinerServer {
           } satisfies OutlinerNavigationDispatch;
           break;
         }
-        case "ui.command.send":
+        case "ui.command.send": {
           if (!this.hasClient(request.command.targetClientId)) {
             throw new Error(`Target client is not registered: ${request.command.targetClientId}`);
+          }
+          const target = this.clientById(request.command.targetClientId);
+          if (request.command.command === "open") {
+            if (target.role !== "detail") {
+              throw new Error("Direct open target must be a Detail client");
+            }
+            if (target.locked) throw new Error("Invoking Detail is locked");
+            if (!request.command.blockId) throw new Error("Direct open requires a block ID");
+            this.store.require(request.command.blockId);
+          }
+          if (request.command.command === "backlinks.select") {
+            if (target.role !== "detail") {
+              throw new Error("Backlink selection target must be a Detail client");
+            }
+            if (!request.command.targetBlockId || !request.command.sourceBlockId) {
+              throw new Error("Backlink selection requires target and source block IDs");
+            }
+            this.store.require(request.command.targetBlockId);
+            this.store.require(request.command.sourceBlockId);
           }
           if (request.command.fragmentId) {
             if (!request.command.blockId) {
@@ -576,6 +601,7 @@ export class OutlinerServer {
           }
           result = { accepted: true, command: request.command };
           break;
+        }
         case "get":
           result = this.store.require(request.blockId);
           break;
@@ -793,7 +819,7 @@ export class OutlinerServer {
         break;
       case "ui.command.send":
         domain = "ui";
-        blockId = request.command.blockId;
+        blockId = request.command.blockId ?? request.command.targetBlockId;
         command = request.command;
         break;
       case "navigation.dispatch": {

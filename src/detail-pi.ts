@@ -57,6 +57,7 @@ import {
   configureCurrentPaneRightClick,
   currentPaneRuntime,
   focusCurrentPane,
+  openBacklinkPeekPopup,
   openDetailPane,
   outlinerRightClickOwnership,
 } from "./pane-control";
@@ -242,6 +243,12 @@ const effects: DetailEffects = {
   },
   async queryBacklinks(query) {
     return client.request<BacklinkCollection>({ action: "references.backlinks", query });
+  },
+  openBacklinkPeek(input) {
+    openBacklinkPeekPopup({
+      workspaceRoot: paths.workspaceRoot,
+      ...input,
+    });
   },
   async updateBlock(input) {
     return client.request<Block>({

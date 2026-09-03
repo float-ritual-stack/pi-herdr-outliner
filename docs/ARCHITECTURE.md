@@ -52,6 +52,7 @@ PageUp/PageDown move the selected expanded row's offset by one Tree body viewpor
 - [`DetailController`](../src/detail-controller.ts) — modes, effects, optimistic saves, PreviewRegion actions, property-inspector state, lazy backlink state, file/annotation behavior, and cursor visibility;
 - [`detail-pi.ts`](../src/detail-pi.ts) — terminal lifecycle, input, Pi layout switching, and dedicated-inspector startup;
 - [`detail-pi-preview.ts`](../src/detail-pi-preview.ts) — authored Markdown, callouts, property rows, and generated Backlinks in one `ScrollView`;
+- [`backlink-peek.ts`](../src/backlink-peek.ts) and [`backlink-peek-main.ts`](../src/backlink-peek-main.ts) — immutable source-set traversal, reversible outcomes, and the non-routable Herdr preview surface;
 - [`detail-editor-layout.ts`](../src/detail-editor-layout.ts) — grapheme-safe wrapped visual rows, cursor mapping, and selection spans;
 - [`detail-renderer.ts`](../src/detail-renderer.ts) — fixed custom frames for edit, comment, file, and annotation modes; and
 - [`text-buffer.ts`](../src/text-buffer.ts) — raw text, grapheme/word movement, and selections.
@@ -83,11 +84,14 @@ type, and snippets; sorting cycles created/updated timestamps in both
 directions. The authored Markdown and generated backlink Markdown remain
 separate components; edit/save paths only read canonical block text. `Tab`
 selects generated sources, `.` toggles the selected source's occurrence rows,
-`Enter` inspects one, and `R` reveals one. The generated `+`/`−` controls use a
-Detail-local action URI and do not enter canonical text. Backlink source links
-carry a transient `preserveSource` constraint. The service excludes the source
-client before choosing the first other unlocked same-tab Detail and fails
-explicitly if none remains.
+`Enter` opens a non-routable Herdr popup, and `R` reveals one. The popup captures
+the visible filtered/sorted source set, renders one source at a time, and moves
+only within that snapshot. `Esc` sends an exact-client `backlinks.select`
+command before closing, `Enter` directly opens the source in the invoking
+unlocked Detail, and `Shift+Enter` seeds a fresh browsing context without a
+source preview dispatch before opening a new Detail beside the invoker. The
+generated `+`/`−` controls use a Detail-local action URI and do not enter
+canonical text.
 
 Obsidian-style callouts are parsed into source-spanned PreviewRegions with stable
 parent/child identity. Nested callout bodies remain Pi Markdown, `+`/`-` fold
@@ -248,7 +252,7 @@ Herdr recognizes plain terminal text as a URL only for `http://` and `https://`.
 - `pi-outliner://work/<PIE-NNN>` — resolve-only Work-ID registry lookup;
 - `pi-outliner://page/<encoded-address>` — unique symbolic page resolution and explicit create-on-follow.
 
-Inside live panes, reference activation resolves one exact canonical block and sends `navigation.dispatch` with the originating client ID. Keyboard `o`, ordinary mouse clicks, and Pi TUI's `openUrl` emit `open`; `R` emits `reveal`. Detail breadcrumb links explicitly emit `reveal`, so selecting an ancestor moves the paired Tree rather than opening another Detail. Generated backlink links add `preserveSource`, which filters the originating Detail out before unlocked-pool selection without creating a persistent route. The service emits one exact-client `ui` event and does not mutate workspace-global selection. Deleted targets retain exact identity and therefore open read-only rather than degrading into fuzzy text matches.
+Inside live panes, reference activation resolves one exact canonical block and sends `navigation.dispatch` with the originating client ID. Keyboard `o`, ordinary mouse clicks, and Pi TUI's `openUrl` emit `open`; `R` emits `reveal`. Detail breadcrumb links explicitly emit `reveal`, so selecting an ancestor moves the paired Tree rather than opening another Detail. Generated backlink activation is local: it opens a non-routable popup with the exact source client, target, selected row, filter, and sort snapshot. Cancel emits `backlinks.select`; commit sends a validated direct `open`; explicit new-Detail creation publishes a context with `dispatchPreview: false` before launching the pane. These exact-client commands do not mutate workspace-global selection. Deleted targets retain exact identity and therefore open read-only rather than degrading into fuzzy text matches.
 
 Authored text is sanitized before link generation. Tree adds OSC 8 only after plain-text wrapping/truncation; Detail generates safe Markdown links after sanitization. Under `HERDR_ENV=1`, Detail enables Pi TUI hyperlink emission because nested panes advertise generic `TERM=xterm-256color` even though Herdr captures OSC 8 metadata. Tree ignores modified, release, motion, and wheel reports for link activation; Shift remains available for terminal-native selection.
 

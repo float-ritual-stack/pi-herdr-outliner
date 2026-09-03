@@ -87,6 +87,7 @@ interface Harness {
     locks: boolean[];
     currentBlocks: Array<string | null>;
     propertyInspectorPanes: string[];
+    backlinkPeeks: Array<Parameters<DetailEffects["openBacklinkPeek"]>[0]>;
   };
   setSelection(selection: SelectionContext): void;
   setUpdate(implementation: DetailEffects["updateBlock"]): void;
@@ -142,6 +143,7 @@ function createHarness(
     currentBlocks: [],
     propertyInspectorPanes: [],
     propertyPatches: [],
+    backlinkPeeks: [],
   };
   const effects: DetailEffects = {
     clientId: "detail-test",
@@ -203,6 +205,9 @@ function createHarness(
         sources: [],
         completeness: { kind: "complete" },
       };
+    },
+    openBacklinkPeek(input) {
+      calls.backlinkPeeks.push(input);
     },
     async resolveNavigation(intent) {
       return {
@@ -1343,7 +1348,7 @@ describe("detail backlink loading and navigation", () => {
     });
   });
 
-  test("navigates the selected backlink through explicit inspect and reveal actions", async () => {
+  test("peeks the selected backlink and preserves explicit reveal navigation", async () => {
     const hub = makeBlock({ id: "hub-block", text: "Hub" });
     const harness = createHarness(hub);
     harness.setBacklinkResults([{
@@ -1381,12 +1386,67 @@ describe("detail backlink loading and navigation", () => {
     await harness.controller.dispatch({ type: "backlinks.reveal" }, viewport);
 
     expect(harness.controller.state.backlinks.selectedIndex).toBe(1);
+    expect(harness.calls.backlinkPeeks).toEqual([{
+      sourceClientId: "detail-test",
+      browsingContextId: "context-test",
+      targetBlockId: "hub-block",
+      selectedSourceBlockId: "source-two",
+      filter: "",
+      sortField: "updated",
+      sortDirection: "desc",
+    }]);
     expect(harness.calls.navigationDispatches).toEqual([
-      { blockId: "source-two", intent: "open", preserveSource: true },
       { blockId: "source-two", intent: "reveal", preserveSource: false },
     ]);
     expect(harness.controller.state.context.selected?.id).toBe(hub.id);
     expect(harness.controller.state.status).toBe("Revealed Source two");
+  });
+
+  test("restores the exact inline backlink row after a popup selection command", async () => {
+    const hub = makeBlock({ id: "hub-block", text: "Hub" });
+    const harness = createHarness(hub);
+    harness.setBacklinkResults([{
+      targetBlockId: hub.id,
+      sources: [
+        {
+          blockId: "source-one",
+          title: "Source one",
+          parentContext: "Top level",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-02T00:00:00.000Z",
+          occurrenceCount: 1,
+          referenceGroups: [{ kind: "block", count: 1 }],
+          occurrences: [],
+          occurrencesTruncated: false,
+        },
+        {
+          blockId: "source-two",
+          title: "Source two",
+          parentContext: "Top level",
+          createdAt: "2026-01-02T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+          occurrenceCount: 1,
+          referenceGroups: [{ kind: "block", count: 1 }],
+          occurrences: [],
+          occurrencesTruncated: false,
+        },
+      ],
+      completeness: { kind: "complete" },
+    }]);
+    await harness.controller.initialize();
+    await harness.controller.dispatch({ type: "backlinks.toggle" }, viewport);
+
+    await harness.controller.onServiceEvent(event("ui", {
+      targetClientId: "detail-test",
+      command: "backlinks.select",
+      targetBlockId: hub.id,
+      sourceBlockId: "source-two",
+    }), viewport);
+
+    expect(harness.controller.state.context.selected?.id).toBe(hub.id);
+    expect(harness.controller.state.backlinks.selectedIndex).toBe(1);
+    expect(harness.controller.state.previewRegions.focusedRegionId).toBe("backlink:source-two");
+    expect(harness.calls.selfFocuses).toBe(1);
   });
 
   test("filters fuzzily, cycles timestamp sorting, and toggles source detail", async () => {
