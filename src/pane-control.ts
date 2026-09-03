@@ -6,7 +6,7 @@ import { Type, type Static } from "typebox";
 import { Parse } from "typebox/value";
 import type { OutlinerClientRuntime } from "./types";
 
-export type PaneEntrypoint = "service" | "outliner" | "detail";
+export type PaneEntrypoint = "service" | "outliner" | "detail" | "capture";
 export type OutlinerRightClickOwnership = "herdr" | "outliner";
 
 const PaneStateSchema = Type.Object({
@@ -284,6 +284,42 @@ export function openDetailPane(
   const pane = Parse(PluginPaneOpenResponseSchema, JSON.parse(output)).result.plugin_pane.pane;
   invokeHerdr(herdr, ["plugin", "pane", "focus", pane.pane_id]);
   return pane.pane_id;
+}
+
+export interface OpenCapturePopupOptions {
+  workspaceRoot: string;
+  capturedFromBlockId: string;
+}
+
+export function openCapturePopup(
+  options: OpenCapturePopupOptions,
+  herdr = process.env.HERDR_BIN_PATH ?? "herdr",
+): void {
+  if (process.env.HERDR_ENV !== "1") {
+    throw new Error("Quick capture popup requires Herdr");
+  }
+  const args = [
+    "plugin",
+    "pane",
+    "open",
+    "--plugin",
+    OUTLINER_PLUGIN_ID,
+    "--entrypoint",
+    "capture",
+    "--env",
+    `OUTLINER_WORKSPACE_ROOT=${options.workspaceRoot}`,
+    "--env",
+    `OUTLINER_CAPTURE_FROM_BLOCK_ID=${options.capturedFromBlockId}`,
+    "--env",
+    `OUTLINER_CAPTURE_REQUEST_ID=${crypto.randomUUID()}`,
+    "--cwd",
+    options.workspaceRoot,
+    "--focus",
+  ];
+  if (process.env.OUTLINER_STATE_DIR) {
+    args.push("--env", `OUTLINER_STATE_DIR=${process.env.OUTLINER_STATE_DIR}`);
+  }
+  invokeHerdr(herdr, args);
 }
 
 function paneMatchesState(

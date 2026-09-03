@@ -9,6 +9,7 @@ import {
   currentPaneRuntime,
   focusCurrentPane,
   openDetailPane,
+  openCapturePopup,
   outlinerRightClickOwnership,
   pluginClickedUrl,
   pluginInvocationPaneId,
@@ -425,5 +426,58 @@ if (args[0] === "pane" && args[1] === "list") console.log(JSON.stringify({ resul
     if (previousSocketPath === undefined) delete process.env.HERDR_SOCKET_PATH;
     else process.env.HERDR_SOCKET_PATH = previousSocketPath;
     rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("opens quick capture through the manifest-owned Herdr popup placement", () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-outliner-capture-pane-"));
+  const herdr = join(directory, "fake-herdr");
+  const logPath = join(directory, "calls.jsonl");
+  const originalHerdrEnv = process.env.HERDR_ENV;
+  const originalPaneId = process.env.HERDR_PANE_ID;
+  const originalStateDir = process.env.OUTLINER_STATE_DIR;
+  try {
+    process.env.HERDR_ENV = "1";
+    process.env.HERDR_PANE_ID = "w1:p2";
+    process.env.OUTLINER_STATE_DIR = "/tmp/outliner-state";
+    writeFileSync(
+      herdr,
+      `#!/usr/bin/env bun
+import { appendFileSync } from "node:fs";
+const args = process.argv.slice(2);
+appendFileSync(${JSON.stringify(logPath)}, JSON.stringify(args) + "\\n");
+if (args[0] === "plugin" && args[1] === "pane" && args[2] === "open") {
+  console.log(JSON.stringify({ result: { type: "ok" } }));
+}
+`,
+    );
+    chmodSync(herdr, 0o755);
+
+    openCapturePopup({
+      workspaceRoot: "/workspace",
+      capturedFromBlockId: "origin",
+    }, herdr);
+
+    const calls = readFileSync(logPath, "utf8").trim().split("\n").map(
+      (line) => JSON.parse(line) as string[],
+    );
+    const openCall = calls.find(
+      (args) => args[0] === "plugin" && args[1] === "pane" && args[2] === "open",
+    )!;
+    expect(openCall).toContain("capture");
+    expect(openCall).toContain("OUTLINER_WORKSPACE_ROOT=/workspace");
+    expect(openCall).toContain("OUTLINER_CAPTURE_FROM_BLOCK_ID=origin");
+    expect(openCall.find((argument) => argument.startsWith("OUTLINER_CAPTURE_REQUEST_ID=")))
+      .toMatch(/^OUTLINER_CAPTURE_REQUEST_ID=[0-9a-f-]{36}$/);
+    expect(openCall).toContain("--focus");
+    expect(openCall).not.toContain("--placement");
+  } finally {
+    if (originalHerdrEnv === undefined) delete process.env.HERDR_ENV;
+    else process.env.HERDR_ENV = originalHerdrEnv;
+    if (originalPaneId === undefined) delete process.env.HERDR_PANE_ID;
+    else process.env.HERDR_PANE_ID = originalPaneId;
+    if (originalStateDir === undefined) delete process.env.OUTLINER_STATE_DIR;
+    else process.env.OUTLINER_STATE_DIR = originalStateDir;
+    rmSync(directory, { recursive: true, force: true });
   }
 });

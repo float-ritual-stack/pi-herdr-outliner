@@ -5,11 +5,11 @@ import {
 } from "./outliner-actions";
 import {
   visibleBacklinkSources,
-  type DetailBufferMoveDirection,
   type DetailController,
   type DetailIntent,
   type DetailViewport,
 } from "./detail-controller";
+import { textBufferEditorCommand } from "./text-buffer-editor";
 import {
   historyNavigationDirection,
   isPrintableInput,
@@ -87,27 +87,18 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
     else await dispatch({ type: "redraw" });
   }
 
-  function wordMotionDirection(key: TerminalKey): DetailBufferMoveDirection | null {
-    if (!key.ctrl && !key.meta) return null;
-    if (key.name === "left" || key.name === "b") return "word-left";
-    if (key.name === "right" || key.name === "f") return "word-right";
-    return null;
-  }
 
   async function handleBufferKey(str: string, key: TerminalKey, modifiedEnter: boolean): Promise<void> {
-    if ((key.ctrl || key.meta) && key.name === "z") {
-      await dispatch({ type: key.shift ? "buffer.redo" : "buffer.undo" });
-      return;
-    }
-    if (key.ctrl && key.name === "y") {
-      await dispatch({ type: "buffer.redo" });
+    const command = textBufferEditorCommand(str, key, modifiedEnter);
+    if (command.type === "undo" || command.type === "redo") {
+      await dispatch({ type: command.type === "undo" ? "buffer.undo" : "buffer.redo" });
       return;
     }
     if (controller.state.completion) {
       await handleCompletionKey(key);
       return;
     }
-    if (key.ctrl && key.name === "s") {
+    if (command.type === "save") {
       await dispatch({ type: "buffer.save" });
       return;
     }
@@ -118,41 +109,29 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
       await dispatch({ type: "completion.open" });
       return;
     }
-    if (key.name === "escape") {
+    if (command.type === "cancel") {
       await cancelBuffer();
       return;
     }
-    if ((key.meta && key.name === "a") || (key.ctrl && key.shift && key.name === "a")) {
+    if (command.type === "select-all") {
       await dispatch({ type: "buffer.select-all" });
-      return;
+    } else if (command.type === "move") {
+      await dispatch({
+        type: "buffer.move",
+        direction: command.direction,
+        extend: command.extend,
+      });
+    } else if (command.type === "newline") {
+      await dispatch({ type: "buffer.newline" });
+    } else if (command.type === "backspace") {
+      await dispatch({ type: "buffer.backspace" });
+    } else if (command.type === "delete") {
+      await dispatch({ type: "buffer.delete" });
+    } else if (command.type === "insert") {
+      await dispatch({ type: "buffer.insert", text: command.text });
+    } else {
+      await dispatch({ type: "redraw" });
     }
-    if (key.ctrl && key.name === "a") {
-      await dispatch({ type: "buffer.move", direction: "home", extend: key.shift });
-      return;
-    }
-    if (key.ctrl && key.name === "e") {
-      await dispatch({ type: "buffer.move", direction: "end", extend: key.shift });
-      return;
-    }
-    const wordDirection = wordMotionDirection(key);
-    if (wordDirection) {
-      await dispatch({ type: "buffer.move", direction: wordDirection, extend: key.shift });
-      return;
-    }
-    if (key.name === "return" || modifiedEnter) await dispatch({ type: "buffer.newline" });
-    else if (key.name === "backspace") await dispatch({ type: "buffer.backspace" });
-    else if (key.name === "delete") await dispatch({ type: "buffer.delete" });
-    else if (
-      key.name === "left" ||
-      key.name === "right" ||
-      key.name === "up" ||
-      key.name === "down" ||
-      key.name === "home" ||
-      key.name === "end"
-    ) {
-      await dispatch({ type: "buffer.move", direction: key.name, extend: key.shift });
-    } else if (isPrintableInput(str, key)) await dispatch({ type: "buffer.insert", text: str });
-    else await dispatch({ type: "redraw" });
   }
 
   function propertyInspectorActive(): boolean {

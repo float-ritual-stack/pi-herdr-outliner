@@ -98,8 +98,12 @@ test("captures literal multiline heredoc/stdin content and prints a compact rece
     capturedFromBlockId: origin.id,
     deduplicated: false,
   }));
-  expect(store.require(receipt.blockId).text).toContain(
-    "A multiline thought.\n\n- literal $VARIABLE\n- literal $(command)\n- queer techno 🐢",
+  const storedText = store.require(receipt.blockId).text;
+  expect(storedText).toMatch(
+    /^A multiline thought\. \[type::capture] \[status::unprocessed] \[capture-source::cli] /,
+  );
+  expect(storedText.slice(storedText.indexOf("\n"))).toBe(
+    "\n\n- literal $VARIABLE\n- literal $(command)\n- queer techno 🐢",
   );
   expect(store.getSelection().selected?.id).toBe(origin.id);
 

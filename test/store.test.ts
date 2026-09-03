@@ -122,7 +122,7 @@ describe("OutlinerStore", () => {
         parentId: inbox[0]!.id,
         author: "user",
         text: expect.stringMatching(
-          /^\[type::capture] .*\nFirst line\nSecond line$/,
+          /^First line \[type::capture] .*\nSecond line$/,
         ),
         properties: expect.arrayContaining([
           { key: "type", value: "capture" },
@@ -151,6 +151,17 @@ describe("OutlinerStore", () => {
     });
     expect(store.children(inbox[0]!.id).map((block) => block.id)).toEqual([receipt.block.id]);
     expect(store.getSelection().selected?.id).toBe(source.id);
+  });
+
+  test("preserves CRLF capture boundaries without adding a carriage return to the title", () => {
+    const store = makeStore();
+
+    const receipt = store.capture("capture-request-crlf", "First line\r\nSecond line", "cli");
+
+    expect(receipt.block.text).toMatch(
+      /^First line \[type::capture] .*\r\nSecond line$/,
+    );
+    expect(receipt.block.text).not.toContain("First line\r ");
   });
 
   test("rejects invalid capture input and ambiguous Inbox markers without partial writes", () => {

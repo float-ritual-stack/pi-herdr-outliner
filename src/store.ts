@@ -556,8 +556,13 @@ export class OutlinerStore {
           ? [formatProperty({ key: "captured-from", value: capturedFromBlockId })]
           : []),
       ].join(" ");
+      const firstNewlineIndex = normalizedText.search(/\r?\n/);
+      const firstLine =
+        firstNewlineIndex === -1 ? normalizedText : normalizedText.slice(0, firstNewlineIndex);
+      const remainingText =
+        firstNewlineIndex === -1 ? "" : normalizedText.slice(firstNewlineIndex);
       const block = this.create(
-        `${metadata}\n${normalizedText}`,
+        `${firstLine} ${metadata}${remainingText}`,
         inbox.id,
         author,
         provenance,
