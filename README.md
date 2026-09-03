@@ -138,13 +138,15 @@ unlock the pane to make it eligible again.
 `o`, plain-clicked references, and external Herdr link activation open in the
 first unlocked same-tab Detail and focus it without locking it. `R` reveals the
 reference in the paired or unique same-tab Tree. Manual per-source destination
-routes and temporary Peek mode do not exist. If every same-tab Detail is locked,
-the source shows **All Details in this tab are locked — unlock one or open
-another Detail** and preserves every anchor.
-Backlink rows use the same unlocked same-tab pool with a source-preserving
-constraint: the originating Detail is excluded before destination selection. If
-no other unlocked Detail exists, activation fails without replacing the
-backlink hub.
+routes do not exist. If every same-tab Detail is locked, the source shows **All
+Details in this tab are locked — unlock one or open another Detail** and
+preserves every anchor.
+
+Activating an inline Backlinks source opens a transient preview over the
+invoking Detail instead of consuming another reader. `Left` and `Right` traverse
+the captured filtered/sorted source set. `Esc` restores the exact inline row
+without navigation, `Enter` commits the preview into the invoking Detail, and
+`Shift+Enter` opens an explicit new Detail while the hub remains unchanged.
 
 Closing a pair discards its browsing context. Renaming its tab or panes changes
 nothing. A newly opened pair receives a new context and initially seeds its Tree
@@ -285,7 +287,11 @@ Projected virtual occurrences deliberately constrain hierarchy and collapse. Bra
 | `s` | Cycle updated/created timestamp sorting in descending/ascending order |
 | `Tab` / `Shift+Tab` | Select the next / previous backlink source while Backlinks is expanded |
 | `.` | Expand/collapse occurrence details for the selected backlink source |
-| `Enter` | Inspect the selected backlink source in another unlocked Detail while preserving this hub |
+| `Enter` | Peek at the focused backlink source without navigating this Detail |
+| Peek: `Left` / `Right` | Preview the previous / next source in the captured filtered/sorted set |
+| Peek: `Esc` | Cancel, restore the exact inline source row, and leave this Detail unchanged |
+| Peek: `Enter` | Open the previewed source in this Detail; `Option+Left` returns through local history |
+| Peek: `Shift+Enter` | Open the previewed source in an explicit new Detail and preserve this hub |
 | `e` | Lock this Detail and edit raw canonical text |
 | `f` | Open referenced file |
 | `o` | Open the first authored reference in the first unlocked same-tab Detail; the destination remains unlocked |
@@ -335,9 +341,12 @@ occurrence text. `s` cycles updated/created timestamp sorting in both
 directions. `.` or the clickable `+`/`−` disclosure expands only the selected
 source's occurrence snippets. Results are cached for that target and
 invalidated by canonical content/address events. Generated rows never enter the
-edit buffer or saved `Block.text`; `Enter` or a row click opens its source in
-another unlocked Detail while preserving the current hub, and `R` explicitly
-reveals it in Tree.
+edit buffer or saved `Block.text`; `Enter` or a row click opens a reversible
+preview over the invoking Detail. The popup captures the current filtered/sorted
+source set once: `Left`/`Right` traverse it, `Esc` restores the exact inline row
+without navigation, `Enter` commits into the invoking Detail, and `Shift+Enter`
+seeds an explicit new Detail without changing the hub. `R` still reveals the
+selected source in Tree.
 
 ### Detail edit and comment modes
 

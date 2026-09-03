@@ -31,6 +31,14 @@ width = "72%"
 height = "64%"
 command = ["bun", "run", "src/capture-main.ts"]
 
+[[panes]]
+id = "backlink-peek"
+title = "Backlink Peek"
+placement = "popup"
+width = "78%"
+height = "76%"
+command = ["bun", "run", "src/backlink-peek-main.ts"]
+
 
 [[actions]]
 id = "open"

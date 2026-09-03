@@ -1,3 +1,4 @@
+import type { BacklinkPeekLaunch } from "./backlink-peek";
 import { DEFAULT_OUTLINER_ACTION_KEYMAP } from "./outliner-actions";
 import { extractFileAnnotationComment, formatFileAnnotation } from "./annotations";
 import {
@@ -251,6 +252,7 @@ export interface DetailEffects {
   resolveReferences(text: string): Promise<ResolvedBlockReferences>;
   projectRead(text: string, hostBlockId?: string): Promise<DetailReadProjection>;
   queryBacklinks(query: BacklinkQuery): Promise<BacklinkCollection>;
+  openBacklinkPeek(input: BacklinkPeekLaunch): void;
   updateBlock(input: {
     blockId: string;
     text: string;
@@ -1233,18 +1235,14 @@ export function createDetailController(
             break;
           case "backlink.open": {
             const blockId = intent.action.blockId;
-            const source = visibleBacklinkSources(state.backlinks)
-              .find((candidate) => candidate.blockId === blockId);
-            if (!source) {
+            const index = visibleBacklinkSources(state.backlinks)
+              .findIndex((candidate) => candidate.blockId === blockId);
+            if (index < 0) {
               state.status = "Backlink source is no longer visible";
               break;
             }
-            await effects.dispatchNavigation(
-              source.blockId,
-              "open",
-              { preserveSource: true },
-            );
-            state.status = `Opened ${source.title} in another unlocked Detail`;
+            state.backlinks.selectedIndex = index;
+            await dispatch({ type: "backlinks.open" }, viewport);
             break;
           }
           case "property-inspector.disclosure.toggle":
@@ -1482,23 +1480,33 @@ export function createDetailController(
         }
         break;
       }
-      case "backlinks.open":
+      case "backlinks.open": {
+        const source = selectedBacklinkSource();
+        const targetBlockId = state.targetBlockId;
+        if (!source || !targetBlockId) {
+          state.status = "No backlink source selected";
+          break;
+        }
+        effects.openBacklinkPeek({
+          sourceClientId: effects.clientId,
+          browsingContextId: effects.browsingContextId,
+          targetBlockId,
+          selectedSourceBlockId: source.blockId,
+          filter: state.backlinks.filter,
+          sortField: state.backlinks.sortField,
+          sortDirection: state.backlinks.sortDirection,
+        });
+        state.status = `Peeking ${source.title}`;
+        break;
+      }
       case "backlinks.reveal": {
         const source = selectedBacklinkSource();
         if (!source) {
           state.status = "No backlink source selected";
           break;
         }
-        const navigationIntent: OutlinerNavigationIntent =
-          intent.type === "backlinks.reveal" ? "reveal" : "open";
-        await effects.dispatchNavigation(
-          source.blockId,
-          navigationIntent,
-          navigationIntent === "open" ? { preserveSource: true } : undefined,
-        );
-        state.status = navigationIntent === "open"
-          ? `Opened ${source.title} in another unlocked Detail`
-          : `Revealed ${source.title}`;
+        await effects.dispatchNavigation(source.blockId, "reveal");
+        state.status = `Revealed ${source.title}`;
         break;
       }
       case "comment.begin":
@@ -1716,6 +1724,23 @@ export function createDetailController(
       if (event.domain === "ui") {
         const command = event.command;
         if (!command || command.targetClientId !== effects.clientId) return;
+        if (command.command === "backlinks.select") {
+          if (
+            command.targetBlockId === state.targetBlockId &&
+            command.sourceBlockId
+          ) {
+            await loadBacklinks();
+            const index = visibleBacklinkSources(state.backlinks)
+              .findIndex((source) => source.blockId === command.sourceBlockId);
+            if (index >= 0) {
+              state.backlinks.selectedIndex = index;
+              state.previewRegions.focusedRegionId = `backlink:${command.sourceBlockId}`;
+            }
+          }
+          effects.focusSelf();
+          emit();
+          return;
+        }
         if (
           state.connectionMode === "locked" &&
           (command.command === "preview" || command.command === "open")

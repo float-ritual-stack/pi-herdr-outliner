@@ -17,7 +17,12 @@ import {
   dispatchNavigation,
   resolveNavigationDestination,
 } from "./navigation-routes";
-import { currentPaneRuntime, focusCurrentPane, openDetailPane } from "./pane-control";
+import {
+  currentPaneRuntime,
+  focusCurrentPane,
+  openBacklinkPeekPopup,
+  openDetailPane,
+} from "./pane-control";
 import { resolvePaths } from "./paths";
 import {
   BRACKETED_PASTE_DISABLE,
@@ -110,6 +115,12 @@ const effects: DetailEffects = {
   },
   async queryBacklinks(query) {
     return client.request<BacklinkCollection>({ action: "references.backlinks", query });
+  },
+  openBacklinkPeek(input) {
+    openBacklinkPeekPopup({
+      workspaceRoot: paths.workspaceRoot,
+      ...input,
+    });
   },
   async updateBlock(input) {
     return client.request<Block>({
