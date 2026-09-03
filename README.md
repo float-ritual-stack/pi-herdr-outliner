@@ -229,7 +229,7 @@ cancel route rejects the entire candidate and preserves the prior bindings.
 | `Shift+D` | Create and focus a new independent Detail pane on the selected block |
 | `e` | Edit a single-line block inline; open and lock a multiline block in the first unlocked Detail |
 | `a` / `s` | Add child / sibling |
-| `c` | Open quick capture; Shift+Enter/Ctrl+E adds a line, Enter saves to Inbox, Esc cancels |
+| `c` | Open the Herdr quick-capture popup; Enter adds a line, Ctrl+S saves to Inbox, Esc cancels |
 | `Tab` / `Shift+Tab` | Indent / outdent |
 | `Space` | Toggle collapse |
 | `.` or `Command+.` | Expand/collapse multiline block detail in Tree |
@@ -384,17 +384,16 @@ Property filters and catalogs default to `block` scope, so body examples and lin
 
 ### Quick capture Inbox
 
-Tree `c` opens a pane-local capture composer without navigating away from the selected row. Single-line typing and multiline paste are supported; Shift+Enter or Ctrl+E adds a line, Enter submits, and Esc/Ctrl+C cancels.
+Tree `c` opens the manifest-owned Herdr popup without navigating away from the selected row. The popup reuses the Detail multiline editor’s `TextBuffer`, command mapping, wrapping, cursor, selection, and row renderer: Enter adds a line, Ctrl+S explicitly saves, and Esc/Ctrl+C cancels. Multiline paste is preserved. A failed save leaves the full draft and request identity in the popup for a safe retry.
 
 `capture.create` writes one ordinary canonical child beneath the active `[system-view::inbox]` block. Tree, CLI, Pi/OMP tools/commands, and exact standalone dispatch markers are adapters over this same mutation. Captures include:
 
 ```text
-[type::capture] [status::unprocessed]
-[capture-source::tree] [captured-at::<ISO timestamp>]
-[captured-from::<optional canonical block UUID>]
+Useful title [type::capture] [status::unprocessed] [capture-source::tree] [captured-at::<ISO timestamp>] [captured-from::<optional canonical block UUID>]
+Optional supporting detail on later lines.
 ```
 
-The optional captured-from block is context evidence, not the capture’s parent. The Inbox can be renamed or moved while retaining its canonical identity. Persistent request receipts make retries idempotent across reconnects and service restarts. Capture never changes workspace selection/history; the Tree restores the exact prior row and shows a compact receipt. Routing, enrichment, Inbox processing, and concrete third-party launcher integrations remain later work.
+The optional captured-from block is context evidence, not the capture’s parent. Lifecycle metadata is a trailing block-scoped property run on the first authored line, so the useful title remains first; compact Tree rows hide that metadata and supporting lines until expanded. The Inbox can be renamed or moved while retaining its canonical identity. Persistent request receipts make retries idempotent across reconnects and service restarts. Capture never changes workspace selection/history; the Tree restores the exact prior row and shows a compact receipt. Routing, enrichment, Inbox processing, and concrete third-party launcher integrations remain later work.
 
 CLI accepts `--text`, explicit `--stdin`, or automatic non-TTY stdin/heredoc input. `--request-id` provides caller-controlled retry identity and `--captured-from` records optional context. Receipt JSON is written to stdout; service failure exits nonzero without a local fallback.
 

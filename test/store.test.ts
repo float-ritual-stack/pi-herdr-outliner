@@ -122,7 +122,7 @@ describe("OutlinerStore", () => {
         parentId: inbox[0]!.id,
         author: "user",
         text: expect.stringMatching(
-          /^\[type::capture] .*\nFirst line\nSecond line$/,
+          /^First line \[type::capture] .*\nSecond line$/,
         ),
         properties: expect.arrayContaining([
           { key: "type", value: "capture" },

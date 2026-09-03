@@ -11,6 +11,7 @@ import {
   currentPaneRuntime,
   focusCurrentPane,
   openDetailPane,
+  openCapturePopup as openHerdrCapturePopup,
   outlinerRightClickOwnership,
 } from "./pane-control";
 import { resolvePaths } from "./paths";
@@ -111,6 +112,12 @@ const controller = createTreeController({
       workspaceRoot: paths.workspaceRoot,
       browsingContextId: detailContextId,
       direction,
+    });
+  },
+  async openCapturePopup(capturedFromBlockId) {
+    openHerdrCapturePopup({
+      workspaceRoot: paths.workspaceRoot,
+      capturedFromBlockId,
     });
   },
   focusSelf() {

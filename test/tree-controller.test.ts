@@ -66,6 +66,7 @@ interface Harness {
   readonly focused: Array<"detail" | "outliner">;
   readonly createdDetails: string[];
   readonly createdDetailDirections: Array<"right" | "down">;
+  readonly openedCaptures: string[];
   invalidations: number;
   stops: number;
 }
@@ -79,6 +80,7 @@ function harness(
     focused: [],
     createdDetails: [],
     createdDetailDirections: [],
+    openedCaptures: [],
     invalidations: 0,
     stops: 0,
     effects: {
@@ -134,6 +136,9 @@ function harness(
       createDetailPane: async (blockId, direction = "down") => {
         result.createdDetails.push(blockId);
         result.createdDetailDirections.push(direction);
+      },
+      openCapturePopup: async (capturedFromBlockId) => {
+        result.openedCaptures.push(capturedFromBlockId);
       },
       focusSelf: () => result.focused.push("outliner"),
       terminalWidth: () => 80,
@@ -576,102 +581,40 @@ describe("createTreeController", () => {
     expect(controller.view().status).toContain("Invalid filter:");
   });
 
-  test("captures multiline text without moving the selected Tree row", async () => {
+  test("opens a Herdr capture popup without moving the selected Tree row", async () => {
     const origin = block("origin", { text: "Deep origin" });
-    const captured = block("capture", {
-      parentId: "inbox",
-      text: "First line\nSecond line [type::capture]",
-    });
-    const fake = harness((input) => {
-      if (input.action === "workspace.snapshot") return snapshot([origin], origin);
-      if (input.action === "capture.create") {
-        return {
-          block: captured,
-          inboxBlockId: "inbox",
-          deduplicated: false,
-        };
-      }
-      return undefined;
-    });
+    const fake = harness((input) =>
+      input.action === "workspace.snapshot" ? snapshot([origin], origin) : undefined
+    );
     const controller = createTreeController(fake.effects);
     await controller.initialize();
 
     await controller.handleKeypress("c", { name: "c" }, "pass");
-    await controller.handleKeypress("First line", { sequence: "First line" }, "pass");
-    controller.handlePaste("\x1b[A\x03");
-    expect(controller.view()).toMatchObject({
-      mode: "capture",
-      quickInput: "First line\x1b[A\x03",
-      selectedIndex: 0,
-    });
-    await controller.handleKeypress("", { name: "return", shift: true }, "modified-enter");
-    await controller.handleKeypress("Second line", { sequence: "Second line" }, "pass");
-    expect(controller.view()).toMatchObject({
-      mode: "capture",
-      quickInput: "Second line",
-      quickRow: 1,
-      quickLineCount: 2,
-    });
-    await controller.handleKeypress("", { name: "up" }, "pass");
-    expect(controller.view().quickInput).toBe("First line\x1b[A\x03");
-    await controller.handleKeypress("", { name: "down" }, "pass");
-    await controller.handleKeypress("", { name: "return" }, "pass");
 
-    const captureCall = fake.calls.find((call) => call.action === "capture.create");
-    expect(captureCall).toEqual({
-      action: "capture.create",
-      requestId: expect.any(String),
-      text: "First line\x1b[A\x03\nSecond line",
-      source: "tree",
-      capturedFromBlockId: origin.id,
-      author: "user",
-    });
+    expect(fake.openedCaptures).toEqual([origin.id]);
+    expect(fake.calls.some((call) => call.action === "capture.create")).toBe(false);
     expect(controller.view().mode).toBe("browse");
     expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe(origin.id);
-    expect(controller.view().status).toBe("Captured to Inbox · capture");
+    expect(controller.view().status).toBe("Opened quick capture popup");
     expect(fake.calls.filter((call) => call.action === "browsing-context.publish")).toHaveLength(1);
-
-    await controller.handleKeypress("c", { name: "c" }, "pass");
-    await controller.handleKeypress("Cancelled", { sequence: "Cancelled" }, "pass");
-    await controller.handleKeypress("", { name: "escape" }, "pass");
-    expect(fake.calls.filter((call) => call.action === "capture.create")).toHaveLength(1);
-    expect(controller.view().mode).toBe("browse");
-    expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe(origin.id);
   });
 
-  test("keeps capture text and request identity across a failed retry", async () => {
+  test("keeps Tree selection stable when the capture popup cannot open", async () => {
     const origin = block("origin");
-    const captured = block("captured-id", { parentId: "inbox" });
-    let attempts = 0;
-    const requestIds: string[] = [];
-    const fake = harness((input) => {
-      if (input.action === "workspace.snapshot") return snapshot([origin], origin);
-      if (input.action === "capture.create") {
-        attempts += 1;
-        requestIds.push(input.requestId);
-        if (attempts === 1) throw new Error("connection lost after submit");
-        return { block: captured, inboxBlockId: "inbox", deduplicated: true };
-      }
-      return undefined;
-    });
+    const fake = harness((input) =>
+      input.action === "workspace.snapshot" ? snapshot([origin], origin) : undefined
+    );
+    fake.effects.openCapturePopup = async () => {
+      throw new Error("popup unavailable");
+    };
     const controller = createTreeController(fake.effects);
     await controller.initialize();
 
     await controller.handleKeypress("c", { name: "c" }, "pass");
-    await controller.handleKeypress("Retry me", { sequence: "Retry me" }, "pass");
-    await controller.handleKeypress("", { name: "return" }, "pass");
-    expect(controller.view()).toMatchObject({
-      mode: "capture",
-      quickInput: "Retry me",
-      status: "Capture failed: connection lost after submit",
-    });
-    await controller.handleKeypress("", { name: "return" }, "pass");
 
-    expect(requestIds).toHaveLength(2);
-    expect(requestIds[0]).toBe(requestIds[1]);
     expect(controller.view().mode).toBe("browse");
-    expect(controller.view().status).toBe("Capture already saved · captured");
-    expect(fake.calls.filter((call) => call.action === "browsing-context.publish")).toHaveLength(1);
+    expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe(origin.id);
+    expect(controller.view().status).toBe("popup unavailable");
   });
 
   test("installs visible completeness and the distinct complete physical collection", async () => {

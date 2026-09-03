@@ -316,7 +316,7 @@ interface CaptureReceipt {
 
 `capture_requests` persists request ID → block/Inbox receipts without a foreign-key cascade. A retry returns the original block with `deduplicated: true`, including after reconnect/service restart, and emits no second content event. A purged receipt target fails explicitly rather than creating a duplicate.
 
-Capture text remains ordinary editable/movable content. The service appends indexed lifecycle/context properties (`type=capture`, `status=unprocessed`, source, timestamp, optional captured-from UUID) and stores immutable agent provenance through the existing block fields. The mutation never calls selection or navigation operations.
+Capture text remains ordinary editable/movable content. The service preserves authored newlines and appends indexed lifecycle/context properties (`type=capture`, `status=unprocessed`, source, timestamp, optional captured-from UUID) as the trailing block-scoped property run on the first authored line. This keeps the useful title first while retaining query semantics. Immutable agent provenance stays in the existing block fields, and the mutation never calls selection or navigation operations.
 
 
 Capture adapters remain clients. CLI text/stdin/heredoc, Pi/OMP `/capture`, `outliner_capture`, and standalone `float.dispatch(…)` interception all send one `capture.create` request and return the same compact receipt. Adapter differences are limited to source, author/provenance, optional captured-from context, and request-ID generation.
@@ -491,6 +491,8 @@ the four actions exported by the plugin manifest:
   creates a Tree and primary Detail in one context plus a second Detail in an
   independent context, applies the `detail-b` four-pane layout, and focuses the
   Tree.
+
+Tree quick capture opens the manifest `capture` entrypoint with Herdr `placement = "popup"` anchored to the active Tree. The popup process reuses the same text-buffer command mapping, layout, and editor-row renderer as Detail; only Ctrl+S save and Esc/Ctrl+C cancellation are wired to `capture.create` and popup exit. It is not a Tree or Detail registry client and never changes browsing context or selection.
 
 Each `open-here` invocation creates a new pair even under the same workspace
 root. Closing both clients prunes the context. Renaming or renumbering tabs and

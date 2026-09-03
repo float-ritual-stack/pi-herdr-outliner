@@ -121,8 +121,6 @@ function view(
     mode: "browse",
     quickInput: "",
     quickColumn: 0,
-    quickRow: 0,
-    quickLineCount: 1,
     quickCompletion: null,
     viewerLines: [],
     viewerPath: "",
@@ -582,21 +580,6 @@ describe("renderTreeFrame", () => {
       "Invalid filter: Unterminated quoted filter value at character 8",
     );
 
-    const captureFrame = renderTreeFrame(
-      view([selected], {
-        mode: "capture",
-        quickInput: "Second line",
-        quickRow: 1,
-        quickLineCount: 2,
-        status: "",
-      }),
-      100,
-      8,
-    ).frame.split("\n");
-    expect(captureFrame.at(-2)).toBe("\x1b[1mCapture 2/2:\x1b[0m Second line▏");
-    expect(captureFrame.at(-1)).toBe(
-      `\x1b[2m${truncate(DEFAULT_OUTLINER_ACTION_KEYMAP.helpText("tree", "capture"), 100)}\x1b[0m`,
-    );
 
     const gotoFrame = renderTreeFrame(
       view([selected], {
@@ -664,6 +647,22 @@ describe("renderTreeFrame", () => {
       "",
       `\x1b[2m${truncate(DEFAULT_OUTLINER_ACTION_KEYMAP.helpText("tree", "viewer"), 20)}\x1b[0m`,
     ].join("\n"));
+  });
+
+  test("uses authored capture titles in compact Tree rows", () => {
+    const capture = block("capture", {
+      text: "Useful title [type::capture] [status::unprocessed]\nSupporting detail",
+      displayText: "Useful title [type::capture] [status::unprocessed]\nSupporting detail",
+      properties: [
+        { key: "type", value: "capture" },
+        { key: "status", value: "unprocessed" },
+      ],
+    });
+
+    const compact = renderTreeFrame(view([capture]), 80, 8).frame;
+    expect(compact).toContain("Useful title");
+    expect(compact).not.toContain("[type::capture]");
+    expect(compact).not.toContain("Supporting detail");
   });
 
   test("returns logical scroll state that keeps the selected row visible in either direction", () => {

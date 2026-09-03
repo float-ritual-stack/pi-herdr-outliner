@@ -37,7 +37,6 @@ import {
 import { TextBuffer } from "./text-buffer";
 import type {
   Block,
-  CaptureReceipt,
   BlockCollectionCompleteness,
   OutlinerEvent,
   OutlinerNavigationIntent,
@@ -67,7 +66,6 @@ export type TreeInputMode =
   | "edit"
   | "add-child"
   | "add-sibling"
-  | "capture"
   | "filter"
   | "goto"
   | "purge";
@@ -102,8 +100,6 @@ export interface TreeView {
   readonly mode: TreeMode;
   readonly quickInput: string;
   readonly quickColumn: number;
-  readonly quickRow: number;
-  readonly quickLineCount: number;
   readonly quickCompletion: TreeQuickCompletion | null;
   readonly viewerLines: readonly string[];
   readonly viewerPath: string;
@@ -130,6 +126,7 @@ export interface TreeControllerEffects {
   request<T>(input: RequestInput): Promise<T>;
   readonly filesystem: TreeFilesystem;
   createDetailPane(blockId: string, direction?: "right" | "down"): Promise<void>;
+  openCapturePopup(capturedFromBlockId: string): Promise<void>;
   focusSelf(): void;
   terminalWidth(): number;
   terminalHeight(): number;
@@ -245,9 +242,6 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   let mode: TreeMode = "browse";
   let quickBuffer = new TextBuffer();
   let quickCompletion: MutableQuickCompletion | null = null;
-  let captureRequestId: string | null = null;
-  let captureOriginRowId: string | null = null;
-  let captureFromBlockId: string | undefined;
   let viewerLines: string[] = [];
   let viewerPath = "";
   let viewerOffset = 0;
@@ -292,8 +286,6 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       mode,
       quickInput: quickInputText(),
       quickColumn: quickBuffer.column,
-      quickRow: quickBuffer.row,
-      quickLineCount: quickBuffer.lines.length,
       quickCompletion,
       viewerLines,
       viewerPath,
@@ -438,11 +430,6 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     quickCompletion = null;
   }
 
-  function resetCaptureDraft(): void {
-    captureRequestId = null;
-    captureOriginRowId = null;
-    captureFromBlockId = undefined;
-  }
 
   function moveQuickCompletion(delta: number, wrap = false): void {
     if (!quickCompletion) return;
@@ -689,41 +676,6 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   }
 
   async function finishInput(): Promise<void> {
-    if (mode === "capture") {
-      const text = quickBuffer.text.trim();
-      if (!text) {
-        status = "Capture text cannot be empty";
-        effects.invalidate();
-        return;
-      }
-      const requestId = captureRequestId ?? crypto.randomUUID();
-      captureRequestId = requestId;
-      let receipt: CaptureReceipt;
-      try {
-        receipt = await effects.request<CaptureReceipt>({
-          action: "capture.create",
-          requestId,
-          text,
-          source: "tree",
-          capturedFromBlockId: captureFromBlockId,
-          author: "user",
-        });
-      } catch (error) {
-        status = `Capture failed: ${errorMessage(error)}`;
-        effects.invalidate();
-        return;
-      }
-      const originRowId = captureOriginRowId;
-      mode = "browse";
-      resetQuickEditor();
-      resetCaptureDraft();
-      await reload(originRowId, { exactRowIdOnly: true });
-      status = receipt.deduplicated
-        ? `Capture already saved · ${receipt.block.id.slice(0, 8)}`
-        : `Captured to Inbox · ${receipt.block.id.slice(0, 8)}`;
-      effects.invalidate();
-      return;
-    }
     if (mode === "filter") {
       const candidate = quickInputText().trim();
       try {
@@ -1295,9 +1247,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     }
     if (key.ctrl && key.name === "c") {
       if (mode !== "browse") {
-        const wasCapture = mode === "capture";
         mode = "browse";
-        if (wasCapture) resetCaptureDraft();
         resetQuickEditor();
         if (refreshPending) await reload();
       } else {
@@ -1400,31 +1350,18 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         return;
       }
 
-      if (mode === "capture" && detailHandoffRequested) {
-        quickBuffer.newline();
-        effects.invalidate();
-        return;
-      }
       if (mode !== "filter" && mode !== "purge" && detailHandoffRequested) {
         await handoffToDetail();
         return;
       }
-      if (mode === "capture" && (key.name === "up" || key.name === "down")) {
-        if (key.name === "up") quickBuffer.moveUp();
-        else quickBuffer.moveDown();
-        effects.invalidate();
-        return;
-      }
       if (key.name === "escape") {
-        const wasCapture = mode === "capture";
         mode = "browse";
         resetQuickEditor();
-        if (wasCapture) resetCaptureDraft();
         if (refreshPending) await reload();
       } else if (key.name === "return") {
         await finishInput();
         return;
-      } else if (key.name === "tab" && mode !== "purge" && mode !== "capture") {
+      } else if (key.name === "tab" && mode !== "purge") {
         await openQuickCompletion();
       } else {
         updateQuickBuffer(str, key);
@@ -1584,11 +1521,13 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       effects.invalidate();
       return;
     } else if (str === "c" && selected) {
-      status = "";
-      captureRequestId = crypto.randomUUID();
-      captureOriginRowId = selected.rowId;
-      captureFromBlockId = selected.canonicalId;
-      await beginInput("capture");
+      try {
+        await effects.openCapturePopup(selected.canonicalId);
+        status = "Opened quick capture popup";
+      } catch (error) {
+        status = errorMessage(error);
+      }
+      effects.invalidate();
       return;
     } else if (str === "a" && selected) {
       if (isVirtualBranchOccurrence(selected)) {

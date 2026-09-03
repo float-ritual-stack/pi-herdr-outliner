@@ -7,6 +7,7 @@ import {
 import { completionWindow } from "./completion";
 import { createOutlinerTextLinker } from "./outliner-links";
 import { quickInsertionPoint } from "./quick-edit";
+import { firstLineWithoutPropertyTokens } from "./properties";
 import { blockDisplayTitle } from "./references";
 import { layoutExpandedBlock } from "./tree-layout";
 import { renderMarkdownLine, truncate } from "./terminal";
@@ -120,6 +121,7 @@ function renderQuickInputRow(
   const content = `${visible.slice(0, cursor)}▏${visible.slice(cursor)}`;
   return truncate(`${prefix}${content}${suffix}`, width);
 }
+
 
 function renderQuickCompletionRows(
   completion: TreeQuickCompletion | null,
@@ -291,7 +293,11 @@ export function renderTreeFrame(
     } else if (block.effectiveDeletedRootId) {
       trashLabel = "  [Trash]";
     }
-    const blockText = `${block.displayText}${trashLabel}`;
+    const compactText =
+      block.properties.some((property) => property.key === "type" && property.value === "capture")
+        ? firstLineWithoutPropertyTokens(block.displayText)?.trim() || block.id
+        : block.displayText;
+    const blockText = `${row.multilineExpanded ? block.displayText : compactText}${trashLabel}`;
     let result: string[];
     if (!row.multilineExpanded && branchState) {
       const prefix = `${"  ".repeat(row.depth)}${marker} `;
@@ -439,15 +445,7 @@ export function renderTreeFrame(
     view.mode === "add-child"
       ? virtualBranchCreationHelp(selectedBranchState, view.physicalBlocksById)
       : null;
-  if (view.mode === "capture") {
-    const label = `Capture ${view.quickRow + 1}/${view.quickLineCount}`;
-    output.push(
-      `\x1b[1m${label}:\x1b[0m ${truncate(
-        `${view.quickInput}▏${view.status ? `  ${view.status}` : ""}`,
-        Math.max(1, width - label.length - 3),
-      )}`,
-    );
-  } else if (view.mode === "edit" || view.mode === "add-child" || view.mode === "add-sibling") {
+  if (view.mode === "edit" || view.mode === "add-child" || view.mode === "add-sibling") {
     output.push(
       creationHelp
         ? truncate(creationHelp, width)

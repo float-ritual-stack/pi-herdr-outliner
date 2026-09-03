@@ -1,6 +1,5 @@
 import {
   hyperlink,
-  sliceByColumn,
   truncateToWidth,
   visibleWidth,
 } from "@earendil-works/pi-tui";
@@ -15,11 +14,8 @@ import {
   type DetailState,
   type DetailViewport,
 } from "./detail-controller";
-import {
-  layoutDetailEditor,
-  type DetailEditorLayout,
-  type DetailEditorVisualRow,
-} from "./detail-editor-layout";
+import { layoutDetailEditor } from "./detail-editor-layout";
+import { renderTextBufferEditorRow } from "./text-buffer-editor";
 import { renderMarkdownLine, sanitizeDynamicText } from "./terminal";
 
 const ESC = "\x1b[";
@@ -149,51 +145,6 @@ export function renderDetailFooter(
   ];
 }
 
-function renderEditorText(
-  row: DetailEditorVisualRow,
-  startColumn: number,
-  endColumn: number,
-): string {
-  const { selectionStartColumn, selectionEndColumn } = row;
-  if (
-    selectionStartColumn === null ||
-    selectionEndColumn === null ||
-    selectionEndColumn <= startColumn ||
-    selectionStartColumn >= endColumn
-  ) {
-    return sliceByColumn(row.text, startColumn, endColumn - startColumn, true);
-  }
-
-  const selectedStart = Math.max(startColumn, selectionStartColumn);
-  const selectedEnd = Math.min(endColumn, selectionEndColumn);
-  const before = sliceByColumn(row.text, startColumn, selectedStart - startColumn, true);
-  const selected = sliceByColumn(row.text, selectedStart, selectedEnd - selectedStart, true);
-  const after = sliceByColumn(row.text, selectedEnd, endColumn - selectedEnd, true);
-  return `${before}\x1b[7m${selected}\x1b[0m${after}`;
-}
-
-function renderEditorRow(
-  layout: DetailEditorLayout,
-  row: DetailEditorVisualRow,
-  visualRowIndex: number,
-): string {
-  const prefix = row.continuation
-    ? " ".repeat(layout.lineNumberWidth + 1)
-    : `${String(row.logicalRow + 1).padStart(layout.lineNumberWidth)} `;
-  const rowWidth = row.endColumn - row.startColumn;
-  if (visualRowIndex !== layout.cursorRow) {
-    return `${prefix}${renderEditorText(row, 0, rowWidth)}`;
-  }
-
-  const before = renderEditorText(row, 0, layout.cursorColumn);
-  const afterWidth = Math.max(0, layout.contentWidth - visibleWidth(before) - 1);
-  const after = renderEditorText(
-    row,
-    layout.cursorColumn,
-    Math.min(rowWidth, layout.cursorColumn + afterWidth),
-  );
-  return `${prefix}${before}▏${after}`;
-}
 
 function appendCompletion(
   output: string[],
@@ -277,7 +228,7 @@ export function renderDetailLines(
       state.editorVisualOffset + editorHeight,
     );
     visibleRows.forEach((row, index) => {
-      output.push(renderEditorRow(layout, row, state.editorVisualOffset + index));
+      output.push(renderTextBufferEditorRow(layout, row, state.editorVisualOffset + index));
     });
     appendCompletion(output, state, width, height);
   } else if (state.mode === "annotation") {
