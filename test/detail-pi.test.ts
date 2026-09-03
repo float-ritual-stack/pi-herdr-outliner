@@ -1,4 +1,4 @@
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "bun:test";
 import type { DetailState } from "../src/detail-controller";
 import { createPiDetailInputListener, decodePiDetailInput } from "../src/detail-pi-input";
@@ -150,9 +150,10 @@ describe("Pi TUI Detail component", () => {
     const lines = component.render(64);
 
     expect(lines).toHaveLength(8);
-    expect(lines[0]).toBe("");
+    expect(lines[0]).toContain("No block selected");
+    expect(lines[0]).not.toContain("Detail");
+    expect(lines[0]).not.toContain("Unlocked");
     expect(lines.some((line) => line.includes("\x1b[2J"))).toBe(false);
-    expect(lines[1]).toContain("Detail");
   });
 
   test("keeps edit mode on the custom frame and raw buffer source", () => {
@@ -212,8 +213,10 @@ describe("Pi TUI Detail component", () => {
     });
 
     const rendered = component.render(50).join("\n");
+    const visible = stripTerminalSequences(rendered);
 
-    expect(rendered).toContain("○ Edit · Locked");
+    expect(visible).toContain("○ Edit · draft");
+    expect(visible).toContain("🔒");
     expect(rendered).toContain("^W focus");
   });
 

@@ -7,6 +7,7 @@ import { extractFileAnnotationComment } from "./annotations";
 import { completionWindow } from "./completion";
 import { outlinerLinkUri } from "./outliner-links";
 import { blockDisplayTitle } from "./references";
+import { outlinerActionLink } from "./outliner-actions";
 import {
   detailHelpText,
   detailVisibleEditorHeight,
@@ -44,7 +45,8 @@ function isEmbeddedLine(state: Readonly<DetailState>, line: number): boolean {
 }
 
 function fitBreadcrumb(value: string, width: number): string {
-  const safe = sanitizeDynamicText(value || "No block selected");
+  const safe = sanitizeDynamicText(value);
+  if (!safe || width <= 0) return "";
   if (visibleWidth(safe) <= width) return safe;
   const segments = safe.split(" › ");
   let suffix = segments.pop() ?? safe;
@@ -57,79 +59,196 @@ function fitBreadcrumb(value: string, width: number): string {
   return fitToWidth(`… › ${suffix}`, width);
 }
 
-function fitLinkedBreadcrumb(state: Readonly<DetailState>, width: number): string {
-  const blocks = [
-    ...state.context.ancestors,
-    ...(state.context.selected
-      ? [{ ...state.context.selected, text: state.resolvedSelectedText }]
-      : []),
-  ];
-  if (blocks.length === 0) return fitBreadcrumb(state.resolvedBreadcrumb, width);
+function detailTitle(state: Readonly<DetailState>): string {
+  const selected = state.context.selected;
+  const breadcrumbTitle = state.resolvedBreadcrumb
+    .split(" › ")
+    .at(-1)
+    ?.trim();
+  const title = selected
+    ? breadcrumbTitle || blockDisplayTitle(selected)
+    : state.resolvedBreadcrumb || "No block selected";
+  return state.targetFragmentId ? `${title} · ^${state.targetFragmentId}` : title;
+}
 
-  const titles = blocks.map((block, index) => {
-    const title = sanitizeDynamicText(blockDisplayTitle(block));
-    return state.targetFragmentId && index === blocks.length - 1
-      ? `${title} · ^${state.targetFragmentId}`
-      : title;
-  });
+function renderDetailTitle(
+  state: Readonly<DetailState>,
+  width: number,
+  linksEnabled: boolean,
+  focused: boolean | undefined,
+): string {
+  const safe = sanitizeDynamicText(detailTitle(state));
+  const fitted = fitToWidth(safe, width);
+  const linked = linksEnabled && state.context.selected
+    ? hyperlink(
+      fitted,
+      outlinerLinkUri("block", state.context.selected.id, {
+        intent: "reveal",
+        ...(state.targetFragmentId ? { fragmentId: state.targetFragmentId } : {}),
+      }),
+    )
+    : fitted;
+  const style = focused === false ? "\x1b[2;37m" : "\x1b[1;97m";
+  return `${style}${linked}\x1b[0m`;
+}
+
+function fitLinkedAncestors(state: Readonly<DetailState>, width: number): string {
+  const blocks = state.context.ancestors;
+  if (blocks.length === 0 || width <= 0) return "";
+  const titles = blocks.map((block) => sanitizeDynamicText(blockDisplayTitle(block)));
   let start = titles.length - 1;
-  let suffix = titles[start];
+  let suffix = titles[start]!;
   while (start > 0) {
     const candidate = `${titles[start - 1]} › ${suffix}`;
     if (visibleWidth(`… › ${candidate}`) > width) break;
     start -= 1;
     suffix = candidate;
   }
-  const linked = blocks.slice(start).map((block, index) => {
-    const blockIndex = start + index;
-    return hyperlink(
-      titles[blockIndex],
-      outlinerLinkUri("block", block.id, {
-        intent: "reveal",
-        ...(state.targetFragmentId && blockIndex === blocks.length - 1
-          ? { fragmentId: state.targetFragmentId }
-          : {}),
-      }),
-    );
-  }).join(" › ");
+  const linked = blocks.slice(start).map((block, index) =>
+    hyperlink(
+      titles[start + index]!,
+      outlinerLinkUri("block", block.id, { intent: "reveal" }),
+    )
+  ).join(" › ");
   return fitToWidth(`${start > 0 ? "… › " : ""}${linked}`, width);
+}
+
+function renderAncestors(
+  state: Readonly<DetailState>,
+  width: number,
+  linksEnabled: boolean,
+): string {
+  if (width <= 0) return "";
+  if (linksEnabled) return fitLinkedAncestors(state, width);
+  const breadcrumb = state.context.ancestors
+    .map((block) => blockDisplayTitle(block))
+    .join(" › ");
+  return fitBreadcrumb(breadcrumb, width);
+}
+
+export const DEFAULT_DETAIL_HEADER_PROPERTY_KEYS = [
+  "status",
+  "work-stage",
+  "priority",
+  "track",
+] as const;
+
+export function parseDetailHeaderPropertyKeys(
+  value: string | undefined,
+): readonly string[] | undefined {
+  if (value === undefined) return undefined;
+  const keys: string[] = [];
+  const seen = new Set<string>();
+  for (const candidate of value.split(",")) {
+    const key = candidate.trim().toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    keys.push(key);
+  }
+  return keys;
+}
+
+interface DetailPropertySummarySegment {
+  plain: string;
+  rendered: string;
+}
+
+function propertySummarySegments(
+  state: Readonly<DetailState>,
+  keys: readonly string[],
+): DetailPropertySummarySegment[] {
+  const properties = state.context.selected?.properties ?? [];
+  return keys.flatMap((key) => {
+    const values = [...new Set(
+      properties
+        .filter((property) => property.key.toLowerCase() === key)
+        .map((property) => sanitizeDynamicText(property.value))
+        .filter(Boolean),
+    )];
+    if (values.length === 0) return [];
+    const label = key === "work-stage" ? "stage" : key;
+    const value = values.join(", ");
+    return [{
+      plain: `${label} ${value}`,
+      rendered: `\x1b[2m${label}\x1b[0m \x1b[36m${value}\x1b[0m`,
+    }];
+  });
+}
+
+function renderDetailMetadata(
+  state: Readonly<DetailState>,
+  width: number,
+  options: DetailHeaderOptions,
+): string {
+  const keys = options.propertyKeys ?? DEFAULT_DETAIL_HEADER_PROPERTY_KEYS;
+  const segments = propertySummarySegments(state, keys);
+  while (
+    segments.length > 1 &&
+    visibleWidth(segments.map((segment) => segment.plain).join(" · ")) > width
+  ) {
+    segments.pop();
+  }
+  let summary = segments.map((segment) => segment.rendered).join(" \x1b[2m·\x1b[0m ");
+  if (visibleWidth(summary) > width) summary = fitToWidth(summary, width);
+
+  const separator = "  \x1b[2m·\x1b[0m  ";
+  const ancestorWidth = width - visibleWidth(summary) -
+    (summary ? visibleWidth(separator) : 0);
+  const ancestors = ancestorWidth >= 8
+    ? renderAncestors(state, ancestorWidth, options.linkBreadcrumbs === true)
+    : "";
+  const metadata = `${summary}${summary && ancestors ? separator : ""}${
+    ancestors ? `\x1b[2m${ancestors}\x1b[0m` : ""
+  }`;
+  return fitToWidth(metadata, width);
 }
 
 export interface DetailHeaderOptions {
   linkBreadcrumbs?: boolean;
   surface?: string;
   focused?: boolean;
+  propertyKeys?: readonly string[];
 }
-const DETAIL_ACTION_MENU_URI = "pi-outliner-action:detail.menu.open";
-const detailActionMenuLink = `\x1b]8;;${DETAIL_ACTION_MENU_URI}\x1b\\[⋯]\x1b]8;;\x1b\\`;
+
+function renderHeaderControls(state: Readonly<DetailState>): string {
+  const locked = state.connectionMode === "locked";
+  const lock = outlinerActionLink(
+    "detail.lock.toggle",
+    `${locked ? "\x1b[33m🔒" : "\x1b[32m🔓"}\x1b[0m`,
+  );
+  const menu = outlinerActionLink("detail.menu.open", "\x1b[2;36m[⋯]\x1b[0m");
+  return `${lock} ${menu}`;
+}
+
+function alignHeaderControls(left: string, controls: string, width: number): string {
+  const controlsWidth = visibleWidth(controls);
+  if (controlsWidth >= width) return fitToWidth(controls, width);
+  const leftWidth = Math.max(1, width - controlsWidth - 1);
+  const fittedLeft = fitToWidth(left, leftWidth);
+  const padding = " ".repeat(Math.max(1, width - visibleWidth(fittedLeft) - controlsWidth));
+  return `${fittedLeft}${padding}${controls}`;
+}
 
 export function renderDetailHeader(
   state: Readonly<DetailState>,
   width: number,
   options: DetailHeaderOptions = {},
 ): string[] {
-  const connection = state.connectionMode === "locked" ? "Locked" : "Unlocked";
-  const label = `${options.surface ?? "Detail"} · ${connection}`;
-  const breadcrumb = state.targetFragmentId
-    ? `${state.resolvedBreadcrumb} · ^${state.targetFragmentId}`
-    : state.resolvedBreadcrumb;
-  const labelStyle = options.focused === false ? "\x1b[2;36m" : "\x1b[1;36m";
-  let header: string;
-  const menuWidth = 5;
-  if (width <= label.length + menuWidth + 2) {
-    const labelWidth = Math.max(1, width - menuWidth);
-    header = `${labelStyle}${fitToWidth(label, labelWidth)}\x1b[0m ${detailActionMenuLink}`;
-  } else {
-    const breadcrumbWidth = Math.max(1, width - label.length - menuWidth - 2);
-    const renderedBreadcrumb = options.linkBreadcrumbs
-      ? fitLinkedBreadcrumb(state, breadcrumbWidth)
-      : fitBreadcrumb(breadcrumb, breadcrumbWidth);
-    header = `${labelStyle}${label}\x1b[0m ${detailActionMenuLink} \x1b[2m${renderedBreadcrumb}\x1b[0m`;
-  }
+  const title = renderDetailTitle(
+    state,
+    width,
+    options.linkBreadcrumbs === true,
+    options.focused,
+  );
+  const surface = options.surface?.trim();
+  const surfaceStyle = options.focused === false ? "\x1b[2;36m" : "\x1b[36m";
+  const left = surface
+    ? `${surfaceStyle}${fitDynamicText(surface, width)}\x1b[0m \x1b[2m·\x1b[0m ${title}`
+    : title;
   return [
-    "",
-    header,
-    "─".repeat(width),
+    alignHeaderControls(left, renderHeaderControls(state), width),
+    renderDetailMetadata(state, width, options),
+    `\x1b[2m${"─".repeat(width)}\x1b[0m`,
   ];
 }
 
@@ -286,6 +405,6 @@ export function renderDetailAnsi(
   options: DetailRenderOptions = {},
 ): string {
   const lines = renderDetailLines(state, viewport, options);
-  lines[0] = `${ESC}H${ESC}2J`;
+  lines[0] = `${ESC}H${ESC}2J${lines[0] ?? ""}`;
   return lines.join("\n");
 }

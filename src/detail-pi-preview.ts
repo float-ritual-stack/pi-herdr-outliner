@@ -168,6 +168,7 @@ export interface DetailPiPreviewOptions {
   setRegions?(regions: readonly PreviewRegion[]): void;
   calloutTheme?: DetailCalloutTheme;
   helpText?(): string;
+  headerPropertyKeys?: readonly string[];
 }
 
 export function sanitizeMarkdownDocument(value: string): string {
@@ -439,6 +440,7 @@ class DetailPreviewHeader implements Component {
   render(width: number): string[] {
     const header: DetailHeaderOptions = {
       linkBreadcrumbs: this.linksEnabled,
+      propertyKeys: this.options.headerPropertyKeys,
     };
     const split = this.options.splitActive?.() ?? false;
     if (this.state.propertyInspector.presentation === "dedicated") {

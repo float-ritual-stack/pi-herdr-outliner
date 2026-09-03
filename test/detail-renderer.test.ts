@@ -2,12 +2,25 @@ import { getOsc8LinkAtColumn, stripTerminalSequences, truncateToWidth, visibleWi
 import { describe, expect, test } from "bun:test";
 import { DEFAULT_OUTLINER_ACTION_KEYMAP } from "../src/outliner-actions";
 import type { DetailState } from "../src/detail-controller";
-import { renderDetailAnsi, renderDetailLines } from "../src/detail-renderer";
+import {
+  parseDetailHeaderPropertyKeys,
+  renderDetailAnsi,
+  renderDetailLines,
+} from "../src/detail-renderer";
 import { TextBuffer } from "../src/text-buffer";
 import type { Block } from "../src/types";
-const ACTION_MENU = "\x1b]8;;pi-outliner-action:detail.menu.open\x1b\\[⋯]\x1b]8;;\x1b\\";
-const detailHeader = (breadcrumb: string): string =>
-  `\x1b[1;36mDetail · Unlocked\x1b[0m ${ACTION_MENU} \x1b[2m${breadcrumb}\x1b[0m`;
+const ACTION_MENU = "\x1b]8;;pi-outliner-action:detail.menu.open\x1b\\\x1b[2;36m[⋯]\x1b[0m\x1b]8;;\x1b\\";
+const UNLOCKED = "\x1b]8;;pi-outliner-action:detail.lock.toggle\x1b\\\x1b[32m🔓\x1b[0m\x1b]8;;\x1b\\";
+const detailHeader = (title: string, width: number): string[] => {
+  const controls = `${UNLOCKED} ${ACTION_MENU}`;
+  return [
+    `\x1b[1;97m${title}\x1b[0m${
+      " ".repeat(Math.max(1, width - visibleWidth(title) - visibleWidth(controls)))
+    }${controls}`,
+    "",
+    `\x1b[2m${"─".repeat(width)}\x1b[0m`,
+  ];
+};
 const detailHelp = (mode: "preview" | "edit", width: number): string =>
   `\x1b[2m${truncateToWidth(
     DEFAULT_OUTLINER_ACTION_KEYMAP.helpText("detail", mode),
@@ -92,10 +105,11 @@ describe("detail ANSI renderer", () => {
     const width = 64;
     const rendered = renderDetailAnsi(state(), { width, height: 8 });
 
+    const [header, metadata, rule] = detailHeader("No block selected", width);
     expect(rendered).toBe([
-      "\x1b[H\x1b[2J",
-      detailHeader("No block selected"),
-      "─".repeat(width),
+      `\x1b[H\x1b[2J${header}`,
+      metadata,
+      rule,
       "Select a block in the outliner pane.",
       "",
       "",
@@ -103,12 +117,48 @@ describe("detail ANSI renderer", () => {
       detailHelp("preview", 64),
     ].join("\n"));
   });
-  test("exposes the pane action menu as a clickable header target", () => {
-    const header = renderDetailLines(state(), { width: 64, height: 8 })[1]!;
-    const column = stripTerminalSequences(header).indexOf("[⋯]") + 1;
-    expect(getOsc8LinkAtColumn(header, column)).toBe(
+  test("right-aligns clickable lock and action-menu controls", () => {
+    const header = renderDetailLines(state(), { width: 64, height: 8 })[0]!;
+    const visible = stripTerminalSequences(header);
+    expect(visible.endsWith("🔓 [⋯]")).toBe(true);
+    expect(getOsc8LinkAtColumn(header, visible.indexOf("🔓"))).toBe(
+      "pi-outliner-action:detail.lock.toggle",
+    );
+    expect(getOsc8LinkAtColumn(header, visible.indexOf("[⋯]") + 1)).toBe(
       "pi-outliner-action:detail.menu.open",
     );
+  });
+
+  test("puts configured properties on one compact line beneath the title", () => {
+    const selected = block("Roadmap item", [
+      { key: "status", value: "planned" },
+      { key: "work-stage", value: "doing" },
+      { key: "priority", value: "high" },
+      { key: "track", value: "interactive-documents" },
+    ]);
+    const detail = state({
+      context: {
+        selected,
+        ancestors: [block("Pi Outliner Workboard")],
+        children: [],
+      },
+      resolvedSelectedText: selected.text,
+    });
+
+    const lines = renderDetailLines(detail, { width: 100, height: 8 });
+    expect(stripTerminalSequences(lines[0]!)).toStartWith("Roadmap item");
+    expect(stripTerminalSequences(lines[1]!)).toBe(
+      "status planned · stage doing · priority high · track interactive-documents" +
+        "  ·  Pi Outliner Workboard",
+    );
+    expect(lines.every((line) => visibleWidth(line) <= 100)).toBe(true);
+
+    const configured = renderDetailLines(
+      detail,
+      { width: 28, height: 8 },
+      { header: { propertyKeys: ["work-stage"] } },
+    );
+    expect(stripTerminalSequences(configured[1]!)).toStartWith("stage doing  ·  ");
   });
 
 
@@ -123,10 +173,14 @@ describe("detail ANSI renderer", () => {
       status: "Ready",
     }), { width: 64, height: 8 });
 
+    const [header, metadata, rule] = detailHeader(
+      "Resolved title · ^resolved-section",
+      64,
+    );
     expect(rendered).toBe([
-      "\x1b[H\x1b[2J",
-      detailHeader("Resolved title · ^resolved-section"),
-      "─".repeat(64),
+      `\x1b[H\x1b[2J${header}`,
+      metadata,
+      rule,
       "resolved two",
       "resolved three",
       "resolved four",
@@ -186,10 +240,11 @@ describe("detail ANSI renderer", () => {
 
     const rendered = renderDetailAnsi(detail, { width: 32, height: 9 });
 
+    const [header, metadata, rule] = detailHeader("Block", 32);
     expect(rendered).toBe([
-      "\x1b[H\x1b[2J",
-      detailHeader("Block"),
-      "─".repeat(32),
+      `\x1b[H\x1b[2J${header}`,
+      metadata,
+      rule,
       "   4 four▏",
       "\x1b[2mCompletions 2/2\x1b[0m",
       "  First",
@@ -224,10 +279,11 @@ describe("detail ANSI renderer", () => {
       },
     }), { width: 32, height: 6 });
 
+    const [header, metadata, rule] = detailHeader("Block", 32);
     expect(rendered).toBe([
-      "\x1b[H\x1b[2J",
-      detailHeader("Block"),
-      "─".repeat(32),
+      `\x1b[H\x1b[2J${header}`,
+      metadata,
+      rule,
       "   1 alpha▏",
       "",
       detailHelp("edit", 32),
@@ -382,16 +438,27 @@ test("renders a selection across wrapped rows with the cursor at its active edge
   expect(lines.slice(3, 6).every((line) => visibleWidth(line) <= 18)).toBe(true);
 });
 
-test("labels Detail availability directly", () => {
+test("renders lock state as a compact clickable icon", () => {
   const unlocked = renderDetailLines(
     state({ connectionMode: "unlocked" }),
     { width: 80, height: 8 },
-  ).join("\n");
+  )[0]!;
   const locked = renderDetailLines(
     state({ connectionMode: "locked" }),
     { width: 80, height: 8 },
-  ).join("\n");
+  )[0]!;
 
-  expect(unlocked).toContain("Detail · Unlocked");
-  expect(locked).toContain("Detail · Locked");
+  expect(stripTerminalSequences(unlocked)).toContain("🔓");
+  expect(stripTerminalSequences(locked)).toContain("🔒");
+  expect(unlocked).not.toContain("Detail");
+  expect(unlocked).not.toContain("Unlocked");
+});
+
+test("parses configured Detail header properties deterministically", () => {
+  expect(parseDetailHeaderPropertyKeys(undefined)).toBeUndefined();
+  expect(parseDetailHeaderPropertyKeys("work-stage, owner, work-stage")).toEqual([
+    "work-stage",
+    "owner",
+  ]);
+  expect(parseDetailHeaderPropertyKeys("")).toEqual([]);
 });

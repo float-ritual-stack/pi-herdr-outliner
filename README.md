@@ -197,6 +197,13 @@ the pointer. Outliner registers `right_click=pane` only while it is running and
 restores `herdr` on exit; the surrounding pane frame remains Herdr-owned in
 either mode.
 
+Detail keeps the selected title prominent, places configured block properties on
+one compact line beneath it, and right-aligns the clickable `🔓`/`🔒` lock and
+`[⋯]` action controls. Set `OUTLINER_DETAIL_HEADER_PROPERTIES` on the Herdr
+process to a comma-separated property order; the default is
+`status,work-stage,priority,track`. An explicit empty value hides the property
+summary. Lower-priority fields are omitted first when the pane narrows.
+
 Override bindings with
 `$XDG_CONFIG_HOME/pi-herdr-outliner/keybindings.json` (falling back to
 `~/.config/pi-herdr-outliner/keybindings.json`), or set
