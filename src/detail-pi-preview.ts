@@ -146,11 +146,19 @@ export function draftSourceRowAnchors(
   theme: MarkdownTheme,
 ): number[] {
   const contentWidth = Math.max(1, Math.floor(width));
+  const lines = detailMarkdownPresentation(sourceText).split(/\r?\n/);
   const anchors: number[] = [];
   let renderedRow = 0;
-  for (const line of sourceText.split(/\r?\n/)) {
+  for (const [index, line] of lines.entries()) {
     anchors.push(renderedRow);
     renderedRow += Math.max(1, new Markdown(line || " ", 0, 0, theme).render(contentWidth).length);
+    if (
+      /^ {0,3}#{1,6}[ \t]+/.test(line) &&
+      index + 1 < lines.length &&
+      lines[index + 1] !== ""
+    ) {
+      renderedRow += 1;
+    }
   }
   return anchors;
 }
@@ -175,6 +183,52 @@ export function sanitizeMarkdownDocument(value: string): string {
   return sanitizeDynamicText(value, true);
 }
 
+interface MarkdownFence {
+  marker: "`" | "~";
+  length: number;
+}
+
+function detailMarkdownPresentation(value: string): string {
+  let fence: MarkdownFence | null = null;
+  return value.split(/(?<=\n)/).map((sourceLine, index) => {
+    const newline = sourceLine.endsWith("\r\n")
+      ? "\r\n"
+      : sourceLine.endsWith("\n")
+      ? "\n"
+      : "";
+    const line = newline ? sourceLine.slice(0, -newline.length) : sourceLine;
+    const fenceMatch = /^((?: {0,3}>[ \t]?)* {0,3})(`{3,}|~{3,})/.exec(line);
+    if (fence) {
+      if (
+        fenceMatch &&
+        fenceMatch[2]![0] === fence.marker &&
+        fenceMatch[2]!.length >= fence.length
+      ) {
+        fence = null;
+      }
+      return sourceLine;
+    }
+    if (fenceMatch) {
+      fence = {
+        marker: fenceMatch[2]![0] as MarkdownFence["marker"],
+        length: fenceMatch[2]!.length,
+      };
+      return sourceLine;
+    }
+
+    const heading = /^((?: {0,3}>[ \t]?)* {0,3})(#{1,6})[ \t]+(.*)$/.exec(line);
+    if (index === 0 && line.trim()) {
+      const title = heading && heading[1] === "" ? heading[3]! : line;
+      return `# ${title}${newline}`;
+    }
+    if (heading && heading[2]!.length >= 3) {
+      const depth = heading[2]!.length;
+      return `${heading[1]}## ${"›".repeat(depth - 2)} ${heading[3]}${newline}`;
+    }
+    return sourceLine;
+  }).join("");
+}
+
 function renderPreviewDocument(
   sourceText: string,
   rawText: string,
@@ -182,14 +236,15 @@ function renderPreviewDocument(
   workIdPrefix: string | null,
 ): string {
   const sanitizedSource = sanitizeMarkdownDocument(sourceText);
-  if (!linksEnabled) return sanitizedSource;
-
-  // Authored text must be sanitized before adding trusted, generated Markdown links.
-  return linkOutlinerMarkdown(
-    sanitizedSource,
-    sanitizeMarkdownDocument(rawText),
-    workIdPrefix,
-  );
+  // Sanitize authored text before generated links or presentation-only Markdown are added.
+  const rendered = linksEnabled
+    ? linkOutlinerMarkdown(
+        sanitizedSource,
+        sanitizeMarkdownDocument(rawText),
+        workIdPrefix,
+      )
+    : sanitizedSource;
+  return detailMarkdownPresentation(rendered);
 }
 
 function renderedAuthoredCallouts(
@@ -384,6 +439,44 @@ function applyEmbedBackground(text: string): string {
   return `\x1b[48;5;236m${text}\x1b[0m`;
 }
 
+interface InlinePreviewArrangement {
+  lines: string[];
+  inspectorStart: number;
+  mapAuthoredRow(row: number): number;
+}
+
+function arrangeInlinePreview(
+  authored: readonly string[],
+  inspector: readonly string[],
+): InlinePreviewArrangement {
+  if (inspector.length === 0) {
+    return {
+      lines: [...authored],
+      inspectorStart: authored.length,
+      mapAuthoredRow: (row) => row,
+    };
+  }
+  const blank = authored.findIndex((line) => sanitizeDynamicText(line).trim() === "");
+  const titleEnd = blank < 0 ? authored.length : blank;
+  const bodyStart = blank < 0 ? authored.length : blank + 1;
+  const title = authored.slice(0, titleEnd);
+  const body = authored.slice(bodyStart);
+  const lines = [...title];
+  if (title.length > 0) lines.push("");
+  const inspectorStart = lines.length;
+  lines.push(...inspector);
+  const renderedBodyStart = lines.length + (body.length > 0 ? 1 : 0);
+  if (body.length > 0) lines.push("", ...body);
+  return {
+    lines,
+    inspectorStart,
+    mapAuthoredRow: (row) => {
+      if (row < bodyStart) return Math.min(row, titleEnd);
+      return renderedBodyStart + row - bodyStart;
+    },
+  };
+}
+
 class DetailPreviewBody implements Component {
   constructor(
     private readonly authored: Component,
@@ -414,11 +507,9 @@ class DetailPreviewBody implements Component {
     const inspector = this.renderInspector(width);
     if (this.dedicatedInspector()) return inspector;
     const authored = this.authored.render(width);
-    const lines = this.includeInspector() ? inspector : [];
-    if (authored.length > 0) {
-      if (lines.length > 0) lines.push("");
-      lines.push(...authored);
-    }
+    const lines = this.includeInspector()
+      ? arrangeInlinePreview(authored, inspector).lines
+      : [...authored];
     if (this.includeBacklinks()) lines.push("", ...this.backlinks.render(width));
     return lines;
   }
@@ -921,19 +1012,19 @@ export class DetailPiPreviewLayout extends VStack {
       this.state.context.selected && !(this.options.splitActive?.() ?? false)
         ? this.inspectorMarkdown.render(contentWidth)
         : [];
-    const inspectorHeight = inspectorLines.length > 0 ? inspectorLines.length + 1 : 0;
     const renderedDocument = this.markdown.renderWithSourceLineRow(
       contentWidth,
       this.renderedFragmentSourceLine,
     );
-    const contentHeight = renderedDocument.lines.length +
-      inspectorHeight + 1 + this.backlinkMarkdown.render(contentWidth).length;
+    const arrangement = arrangeInlinePreview(renderedDocument.lines, inspectorLines);
+    const contentHeight = arrangement.lines.length +
+      1 + this.backlinkMarkdown.render(contentWidth).length;
     this.scrollView.updateLayout(contentHeight, this.scrollView.viewportHeight, () => {});
     this.pendingFragmentScroll = false;
     const previousScrollTop = this.scrollView.scrollTop;
-    const fragmentRow = renderedDocument.sourceLineRow;
+    const fragmentRow = arrangement.mapAuthoredRow(renderedDocument.sourceLineRow);
     this.scrollView.scrollTo(
-      this.state.targetFragmentId ? inspectorHeight + fragmentRow : 0,
+      this.state.targetFragmentId ? fragmentRow : 0,
     );
     return this.scrollView.scrollTop !== previousScrollTop;
   }
@@ -947,8 +1038,12 @@ export class DetailPiPreviewLayout extends VStack {
     if (selectedLine < 0) return false;
 
     this.pendingBacklinkSelectionScroll = false;
-    const selectedRow = this.markdown.render(contentWidth).length + 1 +
-      this.inspectorMarkdown.render(contentWidth).length + 1 + selectedLine;
+    const inspector = this.state.context.selected && !(this.options.splitActive?.() ?? false)
+      ? this.inspectorMarkdown.render(contentWidth)
+      : [];
+    const selectedRow =
+      arrangeInlinePreview(this.markdown.render(contentWidth), inspector).lines.length +
+      1 + selectedLine;
     const previousScrollTop = this.scrollView.scrollTop;
     if (selectedRow < previousScrollTop) {
       this.scrollView.scrollTo(selectedRow);
@@ -970,10 +1065,14 @@ export class DetailPiPreviewLayout extends VStack {
       return false;
     }
     this.pendingPropertySelectionScroll = false;
+    const inspector = this.inspectorMarkdown.render(contentWidth);
     const selectedRow =
       this.state.propertyInspector.presentation === "dedicated"
         ? selectedLine
-        : this.markdown.render(contentWidth).length + 1 + selectedLine;
+        : arrangeInlinePreview(
+            this.markdown.render(contentWidth),
+            inspector,
+          ).inspectorStart + selectedLine;
     const previousScrollTop = this.scrollView.scrollTop;
     if (selectedRow < previousScrollTop) {
       this.scrollView.scrollTo(selectedRow);
