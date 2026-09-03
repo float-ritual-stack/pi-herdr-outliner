@@ -179,13 +179,14 @@ describe("Pi Markdown detail preview", () => {
     expect(nearestDraftSourceLine([], 4)).toBeNull();
   });
 
-  test("keeps the custom header, rule, status, and help outside the document body", () => {
+  test("keeps dense header chrome, status, and help outside the document body", () => {
     const detail = state("Body text");
     detail.status = "Ready";
     const lines = previewLayout(detail).render(32).map(stripTerminalSequences);
 
-    expect(lines[0]).toBe("");
-    expect(lines[1]).toContain("Detail · Unlocked");
+    expect(lines[0]).toContain("Resolved block");
+    expect(lines[0]).toMatch(/🔓 \[⋯\]$/);
+    expect(lines[1]).toBe("");
     expect(lines[2]).toBe("─".repeat(32));
     expect(lines.at(-2)).toBe("Ready");
     expect(lines.at(-1)).toContain("e edit");
@@ -193,13 +194,22 @@ describe("Pi Markdown detail preview", () => {
     expect(previewLayout(detail).scrollView.scrollbar).toBe("always");
   });
 
-  test("keeps the selected breadcrumb leaf visible in a narrow header", () => {
-    const detail = state("Body text");
+  test("prioritizes the selected title over a deep breadcrumb", () => {
+    const detail = state("Selected leaf");
+    detail.context = {
+      selected: block("selected", "Selected leaf"),
+      ancestors: [
+        block("workspace", "A very long workspace title"),
+        block("parent", "A very long parent title"),
+      ],
+      children: [],
+    };
     detail.resolvedBreadcrumb =
       "A very long workspace title › A very long parent title › Selected leaf";
     const lines = previewLayout(detail).render(42).map(stripTerminalSequences);
 
-    expect(lines[1]).toContain("… › Selected leaf");
+    expect(lines[0]).toStartWith("Selected leaf");
+    expect(lines[1]).toContain("… › A very long parent title");
   });
 
   test("sanitizes the complete resolved document before Markdown parses it", () => {
@@ -440,7 +450,7 @@ describe("Pi Markdown detail preview", () => {
     ).toEqual(["callout:0:note"]);
   });
 
-  test("links each Detail breadcrumb segment to an explicit Tree reveal", () => {
+  test("links the primary title and each visible ancestor to explicit Tree reveals", () => {
     const capabilities = getCapabilities();
     setCapabilities({ ...capabilities, hyperlinks: true });
     try {
@@ -450,14 +460,23 @@ describe("Pi Markdown detail preview", () => {
         ancestors: [block("parent-001", "Parent page")],
         children: [],
       };
-      const line = new DetailPiPreviewLayout(detail, plainMarkdownTheme, true).render(80)[1]!;
-      const visible = stripTerminalSequences(line);
+      detail.resolvedBreadcrumb = "Parent page › Selected leaf";
+      const lines = new DetailPiPreviewLayout(
+        detail,
+        plainMarkdownTheme,
+        true,
+      ).render(80);
+      const title = lines[0]!;
+      const metadata = lines[1]!;
 
-      expect(getOsc8LinkAtColumn(line, visible.indexOf("Parent page") + 2)).toBe(
-        outlinerLinkUri("block", "parent-001", { intent: "reveal" }),
-      );
-      expect(getOsc8LinkAtColumn(line, visible.indexOf("Selected leaf") + 2)).toBe(
+      expect(getOsc8LinkAtColumn(title, 2)).toBe(
         outlinerLinkUri("block", "selected-01", { intent: "reveal" }),
+      );
+      const visibleMetadata = stripTerminalSequences(metadata);
+      expect(
+        getOsc8LinkAtColumn(metadata, visibleMetadata.indexOf("Parent page") + 2),
+      ).toBe(
+        outlinerLinkUri("block", "parent-001", { intent: "reveal" }),
       );
     } finally {
       setCapabilities(capabilities);
@@ -1338,7 +1357,7 @@ describe("structured property inspector presentations", () => {
 
     const collapsed = layout.render(100).map(stripTerminalSequences).join("\n");
     expect(collapsed.indexOf("Properties")).toBeLessThan(
-      collapsed.indexOf("PIE-154 property fixture"),
+      collapsed.lastIndexOf("PIE-154 property fixture"),
     );
     expect(collapsed).not.toContain("[type::design-note]");
     expect(collapsed).not.toContain("[related-to::");
@@ -1350,7 +1369,7 @@ describe("structured property inspector presentations", () => {
     const expanded = layout.render(100).map(stripTerminalSequences).join("\n");
     expect(expanded).toContain("│ Property");
     expect(expanded.indexOf("│ Property")).toBeLessThan(
-      expanded.indexOf("PIE-154 property fixture"),
+      expanded.lastIndexOf("PIE-154 property fixture"),
     );
     expect(detail.context.selected?.text).toBe(canonical);
   });

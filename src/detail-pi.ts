@@ -51,6 +51,7 @@ import {
   DetailPiDraftSplitLayout,
   detailDraftSplitWidths,
 } from "./detail-pi-renderer";
+import { parseDetailHeaderPropertyKeys } from "./detail-renderer";
 import { completeReferencedPaths, readReferencedFile } from "./files";
 import {
   configureCurrentPaneRightClick,
@@ -124,6 +125,9 @@ if (calloutThemeResolution.errors.length > 0) {
     `Callout theme: ${shown.join("; ")}${omitted > 0 ? `; ${omitted} more` : ""}\n`,
   );
 }
+const detailHeaderPropertyKeys = parseDetailHeaderPropertyKeys(
+  process.env.OUTLINER_DETAIL_HEADER_PROPERTIES,
+);
 
 const paths = resolvePaths();
 const client = new OutlinerClient(paths.socket);
@@ -689,10 +693,15 @@ const customFrame = new DetailPiComponent({
   state: controller.state,
   height: () => terminal.rows,
   header: () => {
-    if (!draftSplitActive()) return undefined;
+    const propertyKeys = detailHeaderPropertyKeys;
+    if (!draftSplitActive()) return { propertyKeys };
     const focused = draftSplitFocus === "editor";
     const linked = controller.state.draftPreviewLinked ? "↔ " : "";
-    return { surface: `${linked}${focused ? "●" : "○"} Edit`, focused };
+    return {
+      surface: `${linked}${focused ? "●" : "○"} Edit`,
+      focused,
+      propertyKeys,
+    };
   },
   helpText: () => actionKeymap.helpText("detail", controller.state.mode),
 });
@@ -703,6 +712,7 @@ const preview = new DetailPiPreviewLayout(
   () => tui.requestRender(),
   {
     calloutTheme: calloutThemeResolution.theme,
+    headerPropertyKeys: detailHeaderPropertyKeys,
     draftText: () => draftSplitActive() ? controller.state.buffer.text : null,
     async projectDraft(text) {
       const projection = await effects.projectRead(

@@ -277,8 +277,11 @@ export function openDetailPane(
     "OUTLINER_STATE_DIR",
     "OUTLINER_KEYBINDINGS_PATH",
     "OUTLINER_RIGHT_CLICK",
+    "OUTLINER_DETAIL_HEADER_PROPERTIES",
   ] as const) {
-    if (process.env[name]) args.push("--env", `${name}=${process.env[name]}`);
+    if (process.env[name] !== undefined) {
+      args.push("--env", `${name}=${process.env[name]}`);
+    }
   }
   const output = invokeHerdr(herdr, args);
   const pane = Parse(PluginPaneOpenResponseSchema, JSON.parse(output)).result.plugin_pane.pane;
