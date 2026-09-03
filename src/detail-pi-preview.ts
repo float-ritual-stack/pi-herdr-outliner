@@ -80,7 +80,7 @@ function embedSourceLines(text: string): number[] {
   return lines;
 }
 
-function projectedSourceLine(
+export function projectedSourceLine(
   authoredText: string,
   embedRanges: DetailState["embedRanges"],
   sourceLine: number,

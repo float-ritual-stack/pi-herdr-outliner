@@ -4,7 +4,10 @@ import {
   truncateToWidth,
   type MarkdownTheme,
 } from "@earendil-works/pi-tui";
-import { detailMarkdownPresentation } from "./detail-pi-preview";
+import {
+  detailMarkdownPresentation,
+  sanitizeMarkdownDocument,
+} from "./detail-pi-preview";
 import type { TerminalInputAction, TerminalKey } from "./terminal";
 import type { BacklinkSource, Block } from "./types";
 
@@ -87,7 +90,7 @@ export class BacklinkPeekController {
       await this.confirm();
       return;
     }
-    const page = Math.max(1, viewportHeight - 5);
+    const page = Math.max(1, viewportHeight - 6);
     if (key.name === "up") this.scrollBy(-1);
     else if (key.name === "down") this.scrollBy(1);
     else if (key.name === "pageup") this.scrollBy(-page);
@@ -213,9 +216,13 @@ export function renderBacklinkPeekFrame(
 
   const bodyHeight = Math.max(1, height - 6);
   const previewText = controller.preview?.text ?? "_No preview available._";
-  const markdown = new Markdown(detailMarkdownPresentation(previewText), 0, 0, theme);
+  const markdown = new Markdown(
+    detailMarkdownPresentation(sanitizeMarkdownDocument(previewText)),
+    0,
+    0,
+    theme,
+  );
   const rendered = markdown.render(Math.max(1, width));
-  controller.clampScroll(rendered.length, bodyHeight);
   output.push(...rendered.slice(controller.scrollOffset, controller.scrollOffset + bodyHeight));
   while (output.length < height - 2) output.push("");
   const status = controller.loading ? controller.status || "Loading…" : controller.status;

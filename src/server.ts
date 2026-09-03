@@ -508,6 +508,12 @@ export class OutlinerServer {
           break;
         }
         case "browsing-context.publish": {
+          if (
+            request.dispatchPreview !== undefined &&
+            typeof request.dispatchPreview !== "boolean"
+          ) {
+            throw new Error("Browsing context dispatchPreview must be boolean");
+          }
           const contextId = this.normalizeContextId(request.contextId);
           const target = request.blockId
             ? this.store.blockContext(request.blockId)

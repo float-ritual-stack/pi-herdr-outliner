@@ -694,6 +694,16 @@ test("validates direct popup commands and targets only the invoking Detail", asy
   });
   await connected.promise;
 
+  for (const invalid of ["false", null]) {
+    await expect(client.request({
+      action: "browsing-context.publish",
+      sourceClientId: "popup-detail",
+      contextId: `invalid-dispatch-${String(invalid)}`,
+      blockId: source.id,
+      dispatchPreview: invalid,
+    } as never)).rejects.toThrow("Browsing context dispatchPreview must be boolean");
+  }
+
   const seeded = await client.request<BrowsingContextPublication>({
     action: "browsing-context.publish",
     sourceClientId: "popup-detail",

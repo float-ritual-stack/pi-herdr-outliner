@@ -7,6 +7,7 @@ import {
   type BacklinkPeekPreview,
 } from "./backlink-peek";
 import { OutlinerClient } from "./client";
+import { projectedSourceLine } from "./detail-pi-preview";
 import { listLiveClients } from "./client-target";
 import { visibleBacklinkSources, type DetailBacklinkState } from "./detail-controller";
 import { projectDetailRead } from "./detail-embeds";
@@ -98,9 +99,10 @@ async function sourcePreview(source: BacklinkSource): Promise<BacklinkPeekPrevie
     text: projection.text,
   });
   const occurrence = source.occurrences[0];
-  const sourceLine = occurrence
+  const authoredSourceLine = occurrence
     ? block.text.slice(0, occurrence.start).split(/\r?\n/).length - 1
     : 0;
+  const sourceLine = projectedSourceLine(block.text, projection.embedRanges, authoredSourceLine);
   return { block, text: resolved.text, sourceLine };
 }
 

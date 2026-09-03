@@ -1,10 +1,30 @@
+import type { MarkdownTheme } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "bun:test";
 import {
   BacklinkPeekController,
+  renderBacklinkPeekFrame,
   type BacklinkPeekEffects,
   type BacklinkPeekPreview,
 } from "../src/backlink-peek";
+import { projectedSourceLine } from "../src/detail-pi-preview";
 import type { BacklinkSource, Block } from "../src/types";
+
+const plainMarkdownTheme: MarkdownTheme = {
+  heading: (text) => text,
+  link: (text) => text,
+  linkUrl: (text) => text,
+  code: (text) => text,
+  codeBlock: (text) => text,
+  codeBlockBorder: (text) => text,
+  quote: (text) => text,
+  quoteBorder: (text) => text,
+  hr: (text) => text,
+  listBullet: (text) => text,
+  bold: (text) => text,
+  italic: (text) => text,
+  strikethrough: (text) => text,
+  underline: (text) => text,
+};
 
 function block(id: string, text = id): Block {
   return {
@@ -118,6 +138,39 @@ describe("backlink peek controller", () => {
     expect(state.controller.selectedSource?.blockId).toBe("three");
     expect(state.calls.loaded).toEqual(["two", "one", "two", "three"]);
     expect(state.controller.status).toBe("Last backlink source");
+  });
+
+  test("scrolls by the rendered body height", async () => {
+    const state = harness();
+    await state.controller.initialize();
+
+    await state.controller.handleKeypress("", { name: "pagedown" }, "pass", 10);
+
+    expect(state.controller.scrollOffset).toBe(5);
+  });
+
+  test("sanitizes canonical text before rendering Markdown", async () => {
+    const state = harness();
+    await state.controller.initialize();
+    state.controller.preview = {
+      block: block("two"),
+      text: "\u001b]0;malicious-title\u0007# Safe content",
+      sourceLine: 0,
+    };
+    state.controller.scrollOffset = 0;
+
+    const frame = renderBacklinkPeekFrame(state.controller, 80, 12, plainMarkdownTheme);
+
+    expect(frame).toContain("Safe content");
+    expect(frame).not.toContain("\u001b]0;malicious-title\u0007");
+  });
+
+  test("maps authored occurrence lines through preceding embed expansion", () => {
+    const embedId = "3a0530ad-6bb9-4d3a-842d-08ea53654ea8";
+    const authored = `Before\n!((${embedId}))\nAfter`;
+
+    expect(projectedSourceLine(authored, [{ startLine: 1, endLine: 4 }], 1)).toBe(1);
+    expect(projectedSourceLine(authored, [{ startLine: 1, endLine: 4 }], 2)).toBe(5);
   });
 
   test("cancel restores the currently previewed inline row before closing", async () => {
