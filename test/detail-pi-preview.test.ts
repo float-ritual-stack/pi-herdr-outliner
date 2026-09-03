@@ -143,6 +143,41 @@ describe("Pi Markdown detail preview", () => {
     ).toContain("Body rendered by the child Markdown component");
   });
 
+  test("promotes the block title and replaces deep heading hashes without changing source", () => {
+    const source = [
+      "Block title",
+      "",
+      "## Section",
+      "### Subsection",
+      "#### Detail",
+      "",
+      "```md",
+      "### literal code",
+      "```",
+    ].join("\n");
+    const detail = state(source, source);
+    const styledTheme: MarkdownTheme = {
+      ...plainMarkdownTheme,
+      heading: (text) => `\x1b[38;5;214m${text}\x1b[39m`,
+      bold: (text) => `\x1b[1m${text}\x1b[22m`,
+      underline: (text) => `\x1b[4m${text}\x1b[24m`,
+    };
+    const layout = new DetailPiPreviewLayout(detail, styledTheme, false);
+
+    layout.syncState();
+    const raw = layout.markdown.render(80);
+    const visible = raw.map((line) => stripTerminalSequences(line).trimEnd());
+
+    expect(raw[0]).toContain("\x1b[4m");
+    expect(visible[0]!.trimEnd()).toBe("Block title");
+    expect(visible).toContain("Section");
+    expect(visible).toContain("› Subsection");
+    expect(visible).toContain("›› Detail");
+    expect(visible).not.toContain("### Subsection");
+    expect(visible.some((line) => line.includes("### literal code"))).toBe(true);
+    expect(detail.context.selected?.text).toBe(source);
+  });
+
   test("wraps long document lines without ellipsizing and hangs list continuations", () => {
     const detail = state([
       "A deliberately long paragraph with enough words to wrap across several terminal rows without losing its ending.",
@@ -573,17 +608,25 @@ describe("Pi Markdown detail preview", () => {
     detail.targetFragmentId = "decision";
     detail.previewOffset = 15;
     layout.render(20);
-    expect(layout.scrollView.scrollTop).toBe(19);
+    const targetRow = layout.markdown.render(20).findIndex((line) =>
+      stripTerminalSequences(line).includes("line 15")
+    );
+    const inspectorHeight = layout.inspectorMarkdown.render(20).length + 1;
+    expect(layout.scrollView.scrollTop).toBe(inspectorHeight + targetRow);
+    const initialScrollTop = layout.scrollView.scrollTop;
 
     layout.scrollView.scrollBy(2);
     detail.status = "ordinary status update";
     layout.render(20);
-    expect(layout.scrollView.scrollTop).toBe(21);
+    expect(layout.scrollView.scrollTop).toBe(initialScrollTop + 2);
 
     detail.resolvedSelectedText = `new leading line\n${detail.resolvedSelectedText}`;
     detail.previewOffset = 16;
     layout.render(20);
-    expect(layout.scrollView.scrollTop).toBe(20);
+    const shiftedTargetRow = layout.markdown.render(20).findIndex((line) =>
+      stripTerminalSequences(line).includes("line 15")
+    );
+    expect(layout.scrollView.scrollTop).toBe(inspectorHeight + shiftedTargetRow);
   });
 
   test("maps fragment lines through embed projection and wrapped Markdown rows", () => {
@@ -1349,28 +1392,27 @@ describe("structured property inspector presentations", () => {
     expect(detail.context.selected?.text).toBe(canonical);
   });
 
-  test("places a collapsible property panel before authored content and hides duplicate block metadata", () => {
+  test("places the promoted title above Properties and hides duplicate block metadata", () => {
     const detail = state(canonical, canonical);
     detail.propertyInspector = propertyState("inline").propertyInspector;
     detail.propertyInspector.expanded = false;
     const layout = previewLayout(detail);
 
     const collapsed = layout.render(100).map(stripTerminalSequences).join("\n");
-    expect(collapsed.indexOf("Properties")).toBeLessThan(
-      collapsed.lastIndexOf("PIE-154 property fixture"),
-    );
+    const collapsedTitle = collapsed.lastIndexOf("PIE-154 property fixture");
+    expect(collapsedTitle).toBeGreaterThanOrEqual(0);
+    expect(collapsedTitle).toBeLessThan(collapsed.indexOf("Properties"));
+    expect(collapsed.indexOf("Properties")).toBeLessThan(collapsed.indexOf("ctx:: body-line"));
     expect(collapsed).not.toContain("[type::design-note]");
     expect(collapsed).not.toContain("[related-to::");
-    expect(collapsed).toContain("ctx:: body-line");
     expect(collapsed).toContain("[work-id:: PIE-171]");
     expect(collapsed).not.toContain("│ Property");
 
     detail.propertyInspector.expanded = true;
     const expanded = layout.render(100).map(stripTerminalSequences).join("\n");
-    expect(expanded).toContain("│ Property");
-    expect(expanded.indexOf("│ Property")).toBeLessThan(
-      expanded.lastIndexOf("PIE-154 property fixture"),
-    );
+    const expandedTitle = expanded.lastIndexOf("PIE-154 property fixture");
+    expect(expandedTitle).toBeLessThan(expanded.indexOf("│ Property"));
+    expect(expanded.indexOf("│ Property")).toBeLessThan(expanded.indexOf("ctx:: body-line"));
     expect(detail.context.selected?.text).toBe(canonical);
   });
 
@@ -1465,5 +1507,51 @@ describe("structured property inspector presentations", () => {
         layout.scrollView.scrollTop + layout.scrollView.viewportHeight,
       );
     }
+  });
+
+  test("scrolls a focused inline property row from beneath the document title", () => {
+    const canonical = [
+      "Inline properties",
+      ...Array.from(
+        { length: 20 },
+        (_, index) => `[field-${index}::value-${index}]`,
+      ),
+      "",
+      "Body",
+    ].join("\n");
+    const detail = state(canonical, canonical);
+    detail.propertyInspector = {
+      presentation: "inline",
+      model: createPropertyInspectorModel(
+        detail.context.selected!.id,
+        canonical,
+      ),
+      expanded: true,
+      groupBy: "key",
+      filter: "",
+      filterDraft: null,
+      viewportOffset: 0,
+      edit: null,
+    };
+    const layout = previewLayout(detail);
+    const width = 40;
+    layout.render(width);
+    const contentWidth = layout.scrollView.getContentWidth(width);
+    const authored = layout.markdown.render(contentWidth);
+    const inspector = layout.inspectorMarkdown.render(contentWidth);
+    layout.scrollView.updateLayout(authored.length + inspector.length + 1, 6, () => {});
+    const lastEntry = detail.propertyInspector.model!.entries.at(-1)!;
+    detail.previewRegions.focusedRegionId = lastEntry.occurrenceId;
+
+    layout.render(width);
+
+    const titleEnd = authored.findIndex((line) => stripTerminalSequences(line).trim() === "");
+    const selectedLine = layout.inspectorMarkdown.render(contentWidth)
+      .findIndex((line) => line.includes("▶ "));
+    const selectedRow = titleEnd + 1 + selectedLine;
+    expect(selectedRow).toBeGreaterThanOrEqual(layout.scrollView.scrollTop);
+    expect(selectedRow).toBeLessThan(
+      layout.scrollView.scrollTop + layout.scrollView.viewportHeight,
+    );
   });
 });
