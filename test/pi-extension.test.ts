@@ -1195,6 +1195,9 @@ test("drives an explicit task through context, focus, durable proof, and complet
     );
     expect(focused).toMatchObject({ focused: true, blockId: task.id });
     expect(focused.context).toContain("Selected: [task-id]");
+    const uiCommandsBeforePublish = requests.filter(
+      (request) => request.action === "ui.command.send",
+    ).length;
 
     const published = JSON.parse(
       (await tools.get("outliner_publish")!.execute(
@@ -1213,8 +1216,11 @@ test("drives an explicit task through context, focus, durable proof, and complet
       blockId: "proof-id",
       parentId: task.id,
       type: "implementation-proof",
-      focused: true,
+      focused: false,
     });
+    expect(requests.filter((request) => request.action === "ui.command.send")).toHaveLength(
+      uiCommandsBeforePublish,
+    );
     process.env.HERDR_ENV = "1";
     const create = requests.find(
       (request): request is Extract<RequestInput, { action: "create" }> =>
