@@ -233,11 +233,13 @@ test("opens a property inspector from the moved pane's live identity", () => {
   const originalPaneId = process.env.HERDR_PANE_ID;
   const originalStateDir = process.env.OUTLINER_STATE_DIR;
   const originalHeaderProperties = process.env.OUTLINER_DETAIL_HEADER_PROPERTIES;
+  const originalDestinationTimeout = process.env.OUTLINER_OPEN_DESTINATION_TIMEOUT_MS;
   try {
     process.env.HERDR_ENV = "1";
     process.env.HERDR_PANE_ID = "w1:p2";
     process.env.OUTLINER_STATE_DIR = "/tmp/outliner-state";
     process.env.OUTLINER_DETAIL_HEADER_PROPERTIES = "work-stage,status";
+    process.env.OUTLINER_OPEN_DESTINATION_TIMEOUT_MS = "9000";
     writeFileSync(
       herdr,
       `#!/usr/bin/env bun
@@ -296,6 +298,8 @@ if (args[0] === "pane" && args[1] === "current") {
       "OUTLINER_STATE_DIR=/tmp/outliner-state",
       "--env",
       "OUTLINER_DETAIL_HEADER_PROPERTIES=work-stage,status",
+      "--env",
+      "OUTLINER_OPEN_DESTINATION_TIMEOUT_MS=9000",
     ]);
     expect(calls.at(-1)).toEqual(["plugin", "pane", "focus", "w1:p3"]);
     expect(calls.filter((args) => args[0] === "pane" && args[1] === "layout")).toEqual([]);
@@ -326,6 +330,11 @@ if (args[0] === "pane" && args[1] === "current") {
       delete process.env.OUTLINER_DETAIL_HEADER_PROPERTIES;
     } else {
       process.env.OUTLINER_DETAIL_HEADER_PROPERTIES = originalHeaderProperties;
+    }
+    if (originalDestinationTimeout === undefined) {
+      delete process.env.OUTLINER_OPEN_DESTINATION_TIMEOUT_MS;
+    } else {
+      process.env.OUTLINER_OPEN_DESTINATION_TIMEOUT_MS = originalDestinationTimeout;
     }
     rmSync(directory, { recursive: true, force: true });
   }
@@ -462,10 +471,12 @@ test("opens transient panes through manifest-owned Herdr popup placement", () =>
   const originalHerdrEnv = process.env.HERDR_ENV;
   const originalPaneId = process.env.HERDR_PANE_ID;
   const originalStateDir = process.env.OUTLINER_STATE_DIR;
+  const originalDestinationTimeout = process.env.OUTLINER_OPEN_DESTINATION_TIMEOUT_MS;
   try {
     process.env.HERDR_ENV = "1";
     process.env.HERDR_PANE_ID = "w1:p2";
     process.env.OUTLINER_STATE_DIR = "/tmp/outliner-state";
+    process.env.OUTLINER_OPEN_DESTINATION_TIMEOUT_MS = "9000";
     writeFileSync(
       herdr,
       `#!/usr/bin/env bun
@@ -521,6 +532,7 @@ if (args[0] === "plugin" && args[1] === "pane" && args[2] === "open") {
     expect(backlinkOpen).toContain("OUTLINER_BACKLINK_FILTER=road map");
     expect(backlinkOpen).toContain("OUTLINER_BACKLINK_SORT_FIELD=created");
     expect(backlinkOpen).toContain("OUTLINER_BACKLINK_SORT_DIRECTION=asc");
+    expect(backlinkOpen).toContain("OUTLINER_OPEN_DESTINATION_TIMEOUT_MS=9000");
     expect(backlinkOpen).toContain("--focus");
     expect(backlinkOpen).not.toContain("--placement");
   } finally {
@@ -530,6 +542,11 @@ if (args[0] === "plugin" && args[1] === "pane" && args[2] === "open") {
     else process.env.HERDR_PANE_ID = originalPaneId;
     if (originalStateDir === undefined) delete process.env.OUTLINER_STATE_DIR;
     else process.env.OUTLINER_STATE_DIR = originalStateDir;
+    if (originalDestinationTimeout === undefined) {
+      delete process.env.OUTLINER_OPEN_DESTINATION_TIMEOUT_MS;
+    } else {
+      process.env.OUTLINER_OPEN_DESTINATION_TIMEOUT_MS = originalDestinationTimeout;
+    }
     rmSync(directory, { recursive: true, force: true });
   }
 });

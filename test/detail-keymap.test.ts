@@ -6,6 +6,7 @@ import type {
   DetailState,
 } from "../src/detail-controller";
 import { createDetailKeyHandler } from "../src/detail-keymap";
+import { createOpenDestinationChooserState } from "../src/open-destination-chooser";
 import { TextBuffer } from "../src/text-buffer";
 import type { TerminalKey } from "../src/terminal";
 
@@ -64,6 +65,7 @@ function state(): DetailState {
       focusedRegionId: null,
       disclosureOverrides: new Map(),
     },
+    destinationChooser: createOpenDestinationChooserState(),
   };
 }
 
@@ -82,8 +84,10 @@ function harness(
 ): {
   intents: DetailIntent[];
   press(key: TerminalKey, str?: string): Promise<void>;
+  chooserInputs: Array<{ str: string; key: TerminalKey }>;
 } {
   const intents: DetailIntent[] = [];
+  const chooserInputs: Array<{ str: string; key: TerminalKey }> = [];
   const controller: DetailController = {
     state: detailState,
     async initialize() {},
@@ -92,6 +96,10 @@ function harness(
       intents.push(intent);
     },
     setPreviewRegions() {},
+    async handleDestinationChooserKeypress(str, key) {
+      chooserInputs.push({ str, key });
+      return true;
+    },
     async onServiceEvent() {},
     async onServiceConnect() {},
     onServiceDisconnect() {},
@@ -105,6 +113,7 @@ function harness(
     ...options,
   });
   return {
+    chooserInputs,
     intents,
     press: (key, str = "") => handler(str, key, "pass"),
   };
@@ -515,4 +524,16 @@ test("maps property value editing keys without entering the full block editor", 
     { type: "property-inspector.edit.commit" },
     { type: "property-inspector.edit.cancel" },
   ]);
+});
+
+test("an active destination chooser owns input before keymap actions", async () => {
+  const detailState = state();
+  detailState.mode = "preview";
+  detailState.destinationChooser.active = true;
+  const stateHarness = harness(detailState, false);
+
+  await stateHarness.press({ name: "o" }, "o");
+
+  expect(stateHarness.chooserInputs).toEqual([{ str: "o", key: { name: "o" } }]);
+  expect(stateHarness.intents).toEqual([]);
 });

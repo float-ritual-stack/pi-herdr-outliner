@@ -8,6 +8,7 @@ import {
   DetailPiDraftSplitLayout,
   detailDraftSplitWidths,
 } from "../src/detail-pi-renderer";
+import { createOpenDestinationChooserState } from "../src/open-destination-chooser";
 import { TextBuffer } from "../src/text-buffer";
 import type { Block } from "../src/types";
 
@@ -79,6 +80,7 @@ function state(overrides: Partial<DetailState> = {}): DetailState {
       focusedRegionId: null,
       disclosureOverrides: new Map(),
     },
+    destinationChooser: createOpenDestinationChooserState(),
     ...overrides,
   };
 }

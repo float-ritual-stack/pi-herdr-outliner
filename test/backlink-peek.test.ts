@@ -258,7 +258,11 @@ describe("backlink peek controller", () => {
     expect(state.controller.destinationChooserOpen).toBe(true);
     expect(state.calls.restored).toEqual(["two"]);
     expect(state.calls.openedFirst).toEqual(["two"]);
-    expect(state.controller.status).toBe("No unlocked Detail is available · choose ⇧R, R, or D");
+    expect(state.controller.status).toBe("No unlocked Detail is available · choose ⇧R, r, or d");
+    expect(state.calls.closes).toBe(0);
+
+    await state.controller.handleKeypress("q", { name: "q" }, "pass", 20);
+    expect(state.controller.destinationChooserOpen).toBe(true);
     expect(state.calls.closes).toBe(0);
 
     await state.controller.handleKeypress("", { name: "escape" }, "pass", 20);

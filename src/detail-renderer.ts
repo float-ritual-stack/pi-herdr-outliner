@@ -16,6 +16,7 @@ import {
   type DetailViewport,
 } from "./detail-controller";
 import { layoutDetailEditor } from "./detail-editor-layout";
+import { openDestinationChooserHelp } from "./open-destination-chooser";
 import { renderTextBufferEditorRow } from "./text-buffer-editor";
 import { renderMarkdownLine, sanitizeDynamicText } from "./terminal";
 
@@ -258,9 +259,18 @@ export function renderDetailFooter(
   mode: DetailState["mode"] = state.mode,
   helpText = detailHelpText(mode),
 ): string[] {
+  const destinationChooserOpen = state.destinationChooser.active;
   return [
-    fitDynamicText(state.status, width),
-    `\x1b[2m${fitToWidth(helpText, width)}\x1b[0m`,
+    fitDynamicText(
+      destinationChooserOpen ? state.destinationChooser.status : state.status,
+      width,
+    ),
+    `\x1b[2m${
+      fitToWidth(
+        destinationChooserOpen ? openDestinationChooserHelp() : helpText,
+        width,
+      )
+    }\x1b[0m`,
   ];
 }
 

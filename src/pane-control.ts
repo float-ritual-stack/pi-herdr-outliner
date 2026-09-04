@@ -279,6 +279,7 @@ export function openDetailPane(
     "OUTLINER_KEYBINDINGS_PATH",
     "OUTLINER_RIGHT_CLICK",
     "OUTLINER_DETAIL_HEADER_PROPERTIES",
+    "OUTLINER_OPEN_DESTINATION_TIMEOUT_MS",
   ] as const) {
     if (process.env[name] !== undefined) {
       args.push("--env", `${name}=${process.env[name]}`);
@@ -336,8 +337,13 @@ export function openBacklinkPeekPopup(
     options.workspaceRoot,
     "--focus",
   ];
-  if (process.env.OUTLINER_STATE_DIR) {
-    args.push("--env", `OUTLINER_STATE_DIR=${process.env.OUTLINER_STATE_DIR}`);
+  for (const name of [
+    "OUTLINER_STATE_DIR",
+    "OUTLINER_OPEN_DESTINATION_TIMEOUT_MS",
+  ] as const) {
+    if (process.env[name] !== undefined) {
+      args.push("--env", `${name}=${process.env[name]}`);
+    }
   }
   invokeHerdr(herdr, args);
 }

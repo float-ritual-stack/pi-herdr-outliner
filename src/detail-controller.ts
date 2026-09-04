@@ -21,6 +21,13 @@ import {
 } from "./fragments";
 import type { ReferencedFile, ReferencedPathCandidate } from "./files";
 import { firstOutlinerReference, type OutlinerLinkTarget } from "./outliner-links";
+import {
+  createOpenDestinationChooserState,
+  OpenDestinationChooser,
+  type OpenDestinationChooserState,
+  type OpenDestinationScheduler,
+  type OpenDestinationTarget,
+} from "./open-destination-chooser";
 import { getProperty } from "./properties";
 import {
   createPropertyInspectorModel,
@@ -41,6 +48,7 @@ import {
 } from "./detail-preview-regions";
 import { blockDisplayTitle } from "./references";
 import { TextBuffer } from "./text-buffer";
+import type { TerminalKey } from "./terminal";
 import type {
   BacklinkCollection,
   BacklinkSource,
@@ -137,6 +145,8 @@ export interface DetailPropertyInspectorState {
 
 export interface DetailControllerOptions {
   propertyInspectorPresentation?: DetailPropertyInspectorPresentation;
+  destinationTimeoutMs?: number;
+  destinationScheduler?: OpenDestinationScheduler;
 }
 
 export function visiblePropertyInspectorEntries(
@@ -230,6 +240,7 @@ export interface DetailState {
   backlinks: DetailBacklinkState;
   propertyInspector: DetailPropertyInspectorState;
   previewRegions: PreviewRegionState;
+  destinationChooser: OpenDestinationChooserState;
 }
 
 export interface DetailEffects {
@@ -253,6 +264,7 @@ export interface DetailEffects {
   projectRead(text: string, hostBlockId?: string): Promise<DetailReadProjection>;
   queryBacklinks(query: BacklinkQuery): Promise<BacklinkCollection>;
   openBacklinkPeek(input: BacklinkPeekLaunch): void;
+  openDetailPane(blockId: string, direction: "right" | "down"): void | Promise<void>;
   updateBlock(input: {
     blockId: string;
     text: string;
@@ -367,6 +379,7 @@ export interface DetailController {
   dispatch(intent: DetailIntent, viewport: DetailViewport): Promise<void>;
   setPreviewRegions(regions: readonly PreviewRegion[]): void;
   onServiceEvent(event: OutlinerEvent, viewport: DetailViewport): Promise<void>;
+  handleDestinationChooserKeypress(str: string, key: TerminalKey): Promise<boolean>;
   onServiceConnect(viewport: DetailViewport): Promise<void>;
   onServiceDisconnect(): void;
   onServiceError(error: unknown): void;
@@ -421,6 +434,7 @@ export function createDetailController(
   onChange: (state: Readonly<DetailState>) => void = () => {},
   options: DetailControllerOptions = {},
 ): DetailController {
+  const destinationChooserState = createOpenDestinationChooserState();
   const state: DetailState = {
     context: { selected: null, ancestors: [], children: [] },
     targetBlockId: null,
@@ -477,11 +491,14 @@ export function createDetailController(
       focusedRegionId: null,
       disclosureOverrides: new Map(),
     },
+    destinationChooser: destinationChooserState,
   };
   const navigationHistory: DetailNavigationEntry[] = [];
   let navigationIndex = -1;
   let pendingUiCommand: OutlinerUiCommand | null = null;
   let serviceConnected = false;
+  let destinationChooser: OpenDestinationChooser | undefined;
+  const destinationReferences = new WeakMap<OpenDestinationTarget, OutlinerLinkTarget>();
 
   const emit = (): void => onChange(state);
   const isBufferMode = (): boolean =>
@@ -616,6 +633,7 @@ export function createDetailController(
       targetChanged ||
       fragmentChanged ||
       next.selected?.updatedAt !== state.context.selected?.updatedAt;
+    if (targetChanged) destinationChooser?.dispose();
     if (targetChanged) state.previewRegions.disclosureOverrides.clear();
     if (targetChanged || next.selected?.updatedAt !== state.context.selected?.updatedAt) {
       invalidateBacklinks();
@@ -732,6 +750,65 @@ export function createDetailController(
     );
     return true;
   };
+
+  destinationChooser = new OpenDestinationChooser({
+    beforeOpen: async (target) => {
+      const reference = destinationReferences.get(target);
+      if (!reference) return;
+      const resolved = await effects.resolveReference(reference);
+      target.blockId = resolved.block.id;
+      target.title = blockDisplayTitle(resolved.block);
+    },
+    replace: async (target) => {
+      if (isBufferMode()) {
+        throw new Error("Finish or cancel the active edit before replacing this Detail");
+      }
+      await applyNavigationCommand({
+        targetClientId: effects.clientId,
+        command: "replace",
+        blockId: target.blockId,
+        ...(target.fragmentId ? { fragmentId: target.fragmentId } : {}),
+      });
+      state.status = state.connectionMode === "locked"
+        ? "Replaced here · remains locked · L unlocks this block"
+        : "Replaced here · still unlocked · L locks this block";
+    },
+    openFirstUnlocked: async (target) => {
+      try {
+        const dispatched = await effects.dispatchNavigation(target.blockId, "open", {
+          ...(target.fragmentId ? { fragmentId: target.fragmentId } : {}),
+        });
+        if (dispatched.targetClientId === effects.clientId) {
+          await applyNavigationCommand(dispatched.command);
+        }
+        state.status = `Opened ${target.title} in first unlocked Detail`;
+        return true;
+      } catch (error) {
+        if (
+          errorMessage(error) ===
+            "All Details in this tab are locked · unlock one or open another Detail"
+        ) {
+          return false;
+        }
+        throw error;
+      }
+    },
+    openNewDetail: async (target, direction) => {
+      await effects.openDetailPane(target.blockId, direction);
+      state.status = direction === "right"
+        ? `Opened ${target.title} to the right`
+        : `Opened ${target.title} below`;
+    },
+    invalidate: emit,
+  }, {
+    state: destinationChooserState,
+    ...(options.destinationTimeoutMs === undefined
+      ? {}
+      : { timeoutMs: options.destinationTimeoutMs }),
+    ...(options.destinationScheduler === undefined
+      ? {}
+      : { scheduler: options.destinationScheduler }),
+  });
 
   const refreshPendingTarget = async (): Promise<void> => {
     const command = pendingUiCommand;
@@ -1150,45 +1227,36 @@ export function createDetailController(
           state.status = "Selected block has no block or page references";
           break;
         }
-        const preserveSource = intent.type === "reference.open" &&
-          intent.target.preserveSource === true;
         const navigationIntent: OutlinerNavigationIntent =
           intent.type === "reference.reveal" ||
             (intent.type === "reference.open" && intent.target.intent === "reveal")
             ? "reveal"
             : "open";
+        if (navigationIntent === "open" && isBufferMode()) {
+          state.status = "Finish or cancel the active edit before opening another target";
+          break;
+        }
+        const fragmentId = reference.kind === "block" ? reference.fragmentId : undefined;
+        if (navigationIntent === "open") {
+          const target: OpenDestinationTarget = {
+            blockId: reference.value,
+            title: reference.value,
+            ...(fragmentId ? { fragmentId } : {}),
+          };
+          destinationReferences.set(target, reference);
+          destinationChooser!.open(target);
+          break;
+        }
         if (reference.kind === "page") {
-          await effects.resolveNavigation(navigationIntent, { preserveSource });
+          await effects.resolveNavigation("reveal");
         }
         const resolved = await effects.resolveReference(reference);
-        const dispatched = await effects.dispatchNavigation(
+        await effects.dispatchNavigation(
           resolved.block.id,
-          navigationIntent,
-          {
-            preserveSource,
-            fragmentId: reference.kind === "block" ? reference.fragmentId : undefined,
-          },
+          "reveal",
+          fragmentId ? { fragmentId } : {},
         );
-        if (dispatched.targetClientId === effects.clientId && navigationIntent === "open") {
-          const applied = await applyNavigationCommand({
-            targetClientId: effects.clientId,
-            command: "open",
-            blockId: resolved.block.id,
-            ...(reference.kind === "block" && reference.fragmentId
-              ? { fragmentId: reference.fragmentId }
-              : {}),
-          });
-          if (!applied) {
-            state.status = "Locked · ordinary navigation preserved this Detail";
-            break;
-          }
-        }
-        const verb = navigationIntent === "open"
-          ? resolved.created ? "Created and opened" : "Opened"
-          : "Revealed";
-        state.status = navigationIntent === "open"
-          ? `${verb} ${blockDisplayTitle(resolved.block)} in first unlocked Detail`
-          : `${verb} ${blockDisplayTitle(resolved.block)}`;
+        state.status = `Revealed ${blockDisplayTitle(resolved.block)}`;
         break;
       }
       case "lock.toggle": {
@@ -1745,6 +1813,9 @@ export function createDetailController(
     dispatch,
     setPreviewRegions(regions) {
       reconcilePreviewRegions(state.previewRegions, regions);
+    },
+    handleDestinationChooserKeypress(str, key) {
+      return destinationChooser!.handleKeypress(str, key);
     },
     async onServiceEvent(event, viewport) {
       if (event.domain === "ui") {

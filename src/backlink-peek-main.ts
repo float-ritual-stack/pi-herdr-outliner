@@ -13,6 +13,7 @@ import { visibleBacklinkSources, type DetailBacklinkState } from "./detail-contr
 import { projectDetailRead } from "./detail-embeds";
 import { openDetailPane } from "./pane-control";
 import { resolvePaths } from "./paths";
+import { openDestinationTimeoutFromEnvironment } from "./open-destination-chooser";
 import {
   BRACKETED_PASTE_DISABLE,
   BRACKETED_PASTE_ENABLE,
@@ -58,6 +59,9 @@ function parseLaunch(): BacklinkPeekLaunch {
 
 const launch = parseLaunch();
 const paths = resolvePaths();
+const destinationTimeoutMs = openDestinationTimeoutFromEnvironment(
+  process.env.OUTLINER_OPEN_DESTINATION_TIMEOUT_MS,
+);
 const client = new OutlinerClient(paths.socket);
 const collection = await client.request<BacklinkCollection>({
   action: "references.backlinks",
@@ -180,6 +184,7 @@ const controller = new BacklinkPeekController(
       draw();
     },
   },
+  destinationTimeoutMs,
 );
 
 function draw(): void {

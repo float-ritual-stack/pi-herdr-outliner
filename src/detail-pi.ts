@@ -68,6 +68,7 @@ import {
   resolveNavigationDestination,
 } from "./navigation-routes";
 import { resolvePaths } from "./paths";
+import { openDestinationTimeoutFromEnvironment } from "./open-destination-chooser";
 import {
   isTreeMouseSequence,
   parseTreePlainClick,
@@ -131,6 +132,9 @@ if (calloutThemeResolution.errors.length > 0) {
 }
 const detailHeaderPropertyKeys = parseDetailHeaderPropertyKeys(
   process.env.OUTLINER_DETAIL_HEADER_PROPERTIES,
+);
+const destinationTimeoutMs = openDestinationTimeoutFromEnvironment(
+  process.env.OUTLINER_OPEN_DESTINATION_TIMEOUT_MS,
 );
 
 const paths = resolvePaths();
@@ -213,6 +217,25 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+async function openTargetInNewDetail(
+  blockId: string,
+  direction: "right" | "down",
+): Promise<void> {
+  const contextId = crypto.randomUUID();
+  await client.request({
+    action: "browsing-context.publish",
+    sourceClientId: clientId,
+    contextId,
+    blockId,
+    dispatchPreview: false,
+  });
+  openDetailPane({
+    workspaceRoot: paths.workspaceRoot,
+    browsingContextId: contextId,
+    direction,
+  });
+}
+
 const effects: DetailEffects = {
   clientId,
   browsingContextId,
@@ -263,6 +286,7 @@ const effects: DetailEffects = {
       ...input,
     });
   },
+  openDetailPane: openTargetInNewDetail,
   async updateBlock(input) {
     return client.request<Block>({
       action: "update",
@@ -321,6 +345,7 @@ const controller = createDetailController(
     propertyInspectorPresentation: detailPresentation === "property-inspector"
       ? "dedicated"
       : "inline",
+    destinationTimeoutMs,
   },
 );
 
@@ -630,18 +655,7 @@ async function executeMenuAction(actionId: string): Promise<boolean> {
     await controller.dispatch({ type: "status.set", message: "No block selected" }, viewport());
     return true;
   }
-  const contextId = crypto.randomUUID();
-  await client.request({
-    action: "browsing-context.publish",
-    sourceClientId: clientId,
-    contextId,
-    blockId,
-  });
-  openDetailPane({
-    workspaceRoot: paths.workspaceRoot,
-    browsingContextId: contextId,
-    direction,
-  });
+  await openTargetInNewDetail(blockId, direction);
   return true;
 }
 

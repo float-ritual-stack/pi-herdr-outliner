@@ -293,6 +293,14 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
 
   handleKeypress = (async (str, key, inputAction) => {
     if (inputAction === "suppress") return;
+    if (controller.state.destinationChooser.active) {
+      await controller.handleDestinationChooserKeypress(str, key);
+      return;
+    }
+    if (key.ctrl && key.name === "q") {
+      stop();
+      return;
+    }
     const mode = controller.state.mode;
     const mapped = forcedActionId
       ? {
@@ -353,10 +361,6 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
       controller.state.propertyInspector.presentation !== "dedicated"
     ) {
       options.navigatePreview(previewDirection);
-      return;
-    }
-    if (key.ctrl && key.name === "q") {
-      stop();
       return;
     }
     if (controller.state.propertyInspector.edit) {

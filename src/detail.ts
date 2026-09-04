@@ -24,6 +24,7 @@ import {
   openDetailPane,
 } from "./pane-control";
 import { resolvePaths } from "./paths";
+import { openDestinationTimeoutFromEnvironment } from "./open-destination-chooser";
 import {
   BRACKETED_PASTE_DISABLE,
   BRACKETED_PASTE_ENABLE,
@@ -47,6 +48,9 @@ const client = new OutlinerClient(paths.socket);
 const clientId = crypto.randomUUID();
 const browsingContextId = process.env.OUTLINER_BROWSING_CONTEXT_ID?.trim() || clientId;
 const actionKeymap = OutlinerActionKeymap.load();
+const destinationTimeoutMs = openDestinationTimeoutFromEnvironment(
+  process.env.OUTLINER_OPEN_DESTINATION_TIMEOUT_MS,
+);
 const detailPresentation = process.env.OUTLINER_DETAIL_PRESENTATION?.trim() || "block";
 if (detailPresentation !== "block" && detailPresentation !== "property-inspector") {
   throw new Error(`Unsupported Detail presentation: ${detailPresentation}`);
@@ -70,6 +74,25 @@ function viewport(): DetailViewport {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+async function openTargetInNewDetail(
+  blockId: string,
+  direction: "right" | "down",
+): Promise<void> {
+  const contextId = crypto.randomUUID();
+  await client.request({
+    action: "browsing-context.publish",
+    sourceClientId: clientId,
+    contextId,
+    blockId,
+    dispatchPreview: false,
+  });
+  openDetailPane({
+    workspaceRoot: paths.workspaceRoot,
+    browsingContextId: contextId,
+    direction,
+  });
 }
 
 const effects: DetailEffects = {
@@ -122,6 +145,7 @@ const effects: DetailEffects = {
       ...input,
     });
   },
+  openDetailPane: openTargetInNewDetail,
   async updateBlock(input) {
     return client.request<Block>({
       action: "update",
@@ -182,6 +206,7 @@ const controller = createDetailController(
     propertyInspectorPresentation: detailPresentation === "property-inspector"
       ? "dedicated"
       : "inline",
+    destinationTimeoutMs,
   },
 );
 

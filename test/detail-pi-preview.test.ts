@@ -29,6 +29,7 @@ import {
   resolvePreviewPointerAction,
 } from "../src/detail-preview-regions";
 import { outlinerLinkUri } from "../src/outliner-links";
+import { createOpenDestinationChooserState } from "../src/open-destination-chooser";
 import {
   SourceSpannedMarkdown,
   sourceSpannedMarkdownSegments,
@@ -105,6 +106,7 @@ function state(text: string, rawText = "raw edit source"): DetailState {
       focusedRegionId: null,
       disclosureOverrides: new Map(),
     },
+    destinationChooser: createOpenDestinationChooserState(),
   };
 }
 
