@@ -692,6 +692,101 @@ describe("detail controller projection and deferred refresh", () => {
     expect(harness.calls.locks).toEqual([true, false]);
   });
 
+  test("routes plain-click links directly to the first unlocked Detail", async () => {
+    const source = makeBlock({ id: "plain-source", text: "See ((plain-target#decision))" });
+    const harness = createHarness(source);
+    await harness.controller.initialize();
+
+    await harness.controller.dispatch({
+      type: "reference.open",
+      target: { kind: "block", value: "plain-target", fragmentId: "decision" },
+      routing: "first-unlocked",
+    }, viewport);
+
+    expect(harness.controller.state.destinationChooser.active).toBe(false);
+    expect(harness.calls.navigationDispatches).toEqual([{
+      blockId: "plain-target",
+      intent: "open",
+      preserveSource: false,
+      fragmentId: "decision",
+    }]);
+    expect(harness.controller.state.context.selected?.id).toBe("plain-target");
+    expect(harness.controller.state.targetFragmentId).toBe("decision");
+  });
+
+  test("opens the chooser without replacing a locked anchor when no Detail is available", async () => {
+    const source = makeBlock({ id: "locked-source", text: "See ((locked-target))" });
+    const harness = createHarness(source);
+    await harness.controller.initialize();
+    await harness.controller.dispatch({ type: "lock.toggle" }, viewport);
+    harness.effects.dispatchNavigation = async () => {
+      throw new Error(
+        "All Details in this tab are locked · unlock one or open another Detail",
+      );
+    };
+
+    await harness.controller.dispatch({
+      type: "reference.open",
+      target: { kind: "block", value: "locked-target" },
+      routing: "first-unlocked",
+    }, viewport);
+
+    expect(harness.controller.state.destinationChooser.active).toBe(true);
+    expect(harness.controller.state.context.selected?.id).toBe(source.id);
+    expect(harness.controller.state.connectionMode).toBe("locked");
+    expect(harness.calls.openedDetails).toEqual([]);
+  });
+  test("defers chooser routing without navigating an available Detail", async () => {
+    const source = makeBlock({ id: "modified-source", text: "See ((modified-target))" });
+    const harness = createHarness(source);
+    await harness.controller.initialize();
+
+    await harness.controller.dispatch({
+      type: "reference.open",
+      target: { kind: "block", value: "modified-target" },
+      routing: "chooser",
+    }, viewport);
+
+    expect(harness.controller.state.destinationChooser.active).toBe(true);
+    expect(harness.calls.navigationDispatches).toEqual([]);
+    expect(harness.controller.state.context.selected?.id).toBe(source.id);
+  });
+
+  test("keeps missing targets and mutable buffers safe on plain-click routing", async () => {
+    const editing = createHarness(makeBlock({
+      id: "editing-source",
+      text: "See ((editing-target))",
+    }));
+    await editing.controller.initialize();
+    await editing.controller.dispatch({ type: "edit.begin" }, viewport);
+    await editing.controller.dispatch({
+      type: "reference.open",
+      target: { kind: "block", value: "editing-target" },
+      routing: "first-unlocked",
+    }, viewport);
+    expect(editing.calls.navigationDispatches).toEqual([]);
+    expect(editing.controller.state.destinationChooser.active).toBe(false);
+    expect(editing.controller.state.status).toBe(
+      "Finish or cancel the active edit before opening another target",
+    );
+
+    const missing = createHarness(makeBlock({
+      id: "missing-source",
+      text: "See ((missing-target))",
+    }));
+    await missing.controller.initialize();
+    missing.effects.resolveReference = async () => {
+      throw new Error("No block matches missing-target");
+    };
+    await expect(missing.controller.dispatch({
+      type: "reference.open",
+      target: { kind: "block", value: "missing-target" },
+      routing: "first-unlocked",
+    }, viewport)).rejects.toThrow("No block matches missing-target");
+    expect(missing.calls.navigationDispatches).toEqual([]);
+    expect(missing.controller.state.context.selected?.id).toBe("missing-source");
+  });
+
   test("keeps a locked Detail unchanged until a destination is confirmed", async () => {
     const source = makeBlock({ id: "source-block", text: "See ((target01))" });
     const harness = createHarness(source);
@@ -1832,6 +1927,7 @@ describe("detail backlink loading and navigation", () => {
     expect(harness.controller.state.backlinks.expandedSourceIds).toEqual(
       new Set(["gamma-source"]),
     );
+
     harness.controller.state.backlinks.filter = "PIE-151";
     expect(visibleBacklinkSources(harness.controller.state.backlinks)).toEqual([]);
   });
@@ -1848,6 +1944,34 @@ describe("Detail property inspector integration", () => {
     "ctx:: body-line",
     "Body [work-id:: PIE-171] [unknown-key:: kept]",
   ].join("\n");
+
+  test("routes a plain-click typed Property target to the first unlocked Detail", async () => {
+    const targetId = "8a3a9c31-58ff-48d1-9d25-95db5f78e9eb";
+    const harness = createHarness(makeBlock({
+      id: "property-source",
+      text: `Property source\n[related-to::${targetId}]`,
+    }));
+    await harness.controller.initialize();
+    const entry = harness.controller.state.propertyInspector.model?.entries.find(
+      (candidate) => candidate.target?.kind === "block",
+    );
+    expect(entry).toBeDefined();
+
+    await harness.controller.dispatch({
+      type: "property-inspector.target.open",
+      occurrenceId: entry!.occurrenceId,
+      intent: "open",
+      routing: "first-unlocked",
+    }, viewport);
+
+    expect(harness.controller.state.destinationChooser.active).toBe(false);
+    expect(harness.calls.navigationDispatches).toEqual([{
+      blockId: targetId,
+      intent: "open",
+      preserveSource: false,
+    }]);
+    expect(harness.controller.state.context.selected?.id).toBe(targetId);
+  });
 
   test("unlocks a dedicated inspector and opens its current target in a sibling Detail", async () => {
     const harness = createHarness(makeBlock({ id: "property-source", text: source }));

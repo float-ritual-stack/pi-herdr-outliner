@@ -8,7 +8,11 @@ import {
   type TuiInputListener,
 } from "@earendil-works/pi-tui";
 import type { TerminalInputAction, TerminalKey } from "./terminal";
-import { isTreeMouseSequence } from "./tree-mouse";
+import {
+  isTreeMouseSequence,
+  parseTreePrimaryClick,
+  treeClickActivates,
+} from "./tree-mouse";
 
 const BRACKETED_PASTE_START = "\x1b[200~";
 const BRACKETED_PASTE_END = "\x1b[201~";
@@ -26,6 +30,22 @@ export function createPiDetailInputListener(
 
 export function detailChooserOwnsPiInput(data: string): boolean {
   return !isTreeMouseSequence(data);
+}
+export interface PiDetailLinkClick {
+  readonly activate: boolean;
+  readonly routing: "first-unlocked" | "chooser";
+  readonly suppress: boolean;
+}
+
+export function piDetailLinkClick(data: string): PiDetailLinkClick | null {
+  const click = parseTreePrimaryClick(data);
+  if (!click) return null;
+  const activate = treeClickActivates(click);
+  return {
+    activate,
+    routing: activate ? "chooser" : "first-unlocked",
+    suppress: click.shift && !activate,
+  };
 }
 
 export type PiDetailInput =
