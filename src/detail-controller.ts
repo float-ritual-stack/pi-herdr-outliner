@@ -319,6 +319,7 @@ export type DetailIntent =
   | { type: "reference.follow" }
   | { type: "reference.open"; target: OutlinerLinkTarget }
   | { type: "reference.reveal" }
+  | { type: "current.reveal" }
   | { type: "backlinks.move"; delta: -1 | 1 }
   | { type: "backlinks.open" }
   | { type: "backlinks.reveal" }
@@ -1230,6 +1231,16 @@ export function createDetailController(
           target.fragmentId,
         );
         state.status = direction < 0 ? "Navigation back" : "Navigation forward";
+        break;
+      }
+      case "current.reveal": {
+        const current = state.context.selected;
+        if (!current) {
+          state.status = "No block selected";
+          break;
+        }
+        await effects.dispatchNavigation(current.id, "reveal");
+        state.status = `Revealed ${blockDisplayTitle(current)}`;
         break;
       }
       case "reference.open":

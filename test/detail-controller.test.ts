@@ -522,6 +522,25 @@ describe("detail controller projection and deferred refresh", () => {
     expect(harness.calls.creates).toEqual([]);
   });
 
+  test("reveals the current Detail target without following its references", async () => {
+    const source = makeBlock({ id: "current-block", text: "See ((target01))" });
+    const harness = createHarness(source);
+    await harness.controller.initialize();
+    await harness.controller.dispatch({ type: "lock.toggle" }, viewport);
+
+    await harness.controller.dispatch({ type: "current.reveal" }, viewport);
+
+    expect(harness.calls.navigationDispatches).toEqual([{
+      blockId: source.id,
+      intent: "reveal",
+      preserveSource: false,
+    }]);
+    expect(harness.calls.followedReferences).toEqual([]);
+    expect(harness.controller.state.context.selected?.id).toBe(source.id);
+    expect(harness.controller.state.connectionMode).toBe("locked");
+    expect(harness.controller.state.status).toBe("Revealed See ((target01))");
+  });
+
   test("keeps navigation history local and loads deleted targets read-only", async () => {
     const source = makeBlock({ text: "See ((target01))" });
     const harness = createHarness(source);
