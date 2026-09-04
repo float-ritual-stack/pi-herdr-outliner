@@ -14,6 +14,7 @@ import {
   openCapturePopup as openHerdrCapturePopup,
   outlinerRightClickOwnership,
 } from "./pane-control";
+import { parsePropertySummaryKeys } from "./property-summary";
 import { resolvePaths } from "./paths";
 import { TerminalInputDecoder, type TerminalKey } from "./terminal";
 import { createTreeController, type TreeController } from "./tree-controller";
@@ -37,6 +38,9 @@ const clientId = crypto.randomUUID();
 const browsingContextId = process.env.OUTLINER_BROWSING_CONTEXT_ID?.trim() || clientId;
 const inputDecoder = new TerminalInputDecoder();
 const actionKeymap = OutlinerActionKeymap.load();
+const propertySummaryKeys = parsePropertySummaryKeys(
+  process.env.OUTLINER_PROPERTY_SUMMARY_KEYS,
+);
 const rightClickOwnership = outlinerRightClickOwnership();
 const mouseEnabled = process.env.HERDR_ENV === "1";
 const mouseInput = mouseEnabled ? new StdinBuffer() : null;
@@ -61,6 +65,7 @@ function draw(): void {
     process.stdout.columns ?? 100,
     process.stdout.rows ?? 30,
     scrollStartEntryIndex,
+    { propertyKeys: propertySummaryKeys },
   );
   renderedFrameLines = result.frame.split("\n");
   renderedMouseTargets = result.mouseTargets;

@@ -57,7 +57,7 @@ import {
   DetailPiDraftSplitLayout,
   detailDraftSplitWidths,
 } from "./detail-pi-renderer";
-import { parseDetailHeaderPropertyKeys } from "./detail-renderer";
+import { parsePropertySummaryKeys } from "./property-summary";
 import { completeReferencedPaths, readReferencedFile } from "./files";
 import {
   configureCurrentPaneRightClick,
@@ -135,8 +135,8 @@ if (calloutThemeResolution.errors.length > 0) {
     `Callout theme: ${shown.join("; ")}${omitted > 0 ? `; ${omitted} more` : ""}\n`,
   );
 }
-const detailHeaderPropertyKeys = parseDetailHeaderPropertyKeys(
-  process.env.OUTLINER_DETAIL_HEADER_PROPERTIES,
+const detailHeaderPropertyKeys = parsePropertySummaryKeys(
+  process.env.OUTLINER_PROPERTY_SUMMARY_KEYS,
 );
 const destinationTimeoutMs = openDestinationTimeoutFromEnvironment(
   process.env.OUTLINER_OPEN_DESTINATION_TIMEOUT_MS,

@@ -1,4 +1,4 @@
-import { truncateToWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import {
   actionMenuItemText,
   DEFAULT_OUTLINER_ACTION_KEYMAP,
@@ -8,6 +8,10 @@ import { completionWindow } from "./completion";
 import { createOutlinerTextLinker } from "./outliner-links";
 import { quickInsertionPoint } from "./quick-edit";
 import { firstLineWithoutPropertyTokens } from "./properties";
+import {
+  DEFAULT_PROPERTY_SUMMARY_KEYS,
+  propertySummarySegments,
+} from "./property-summary";
 import { blockDisplayTitle } from "./references";
 import { layoutExpandedBlock } from "./tree-layout";
 import { renderMarkdownLine, truncate } from "./terminal";
@@ -103,6 +107,94 @@ export interface TreeRenderResult {
   readonly mouseTargets: readonly (TreeMouseTarget | null | undefined)[];
 }
 
+export interface TreeRenderOptions {
+  readonly propertyKeys?: readonly string[];
+}
+
+function propertyKeysForRow(
+  view: TreeView,
+  row: TreeRow,
+  options: TreeRenderOptions,
+): readonly string[] {
+  if (row.kind === "occurrence") {
+    const configured = view.branchStates.get(row.viewId)?.config?.summaryPropertyKeys;
+    if (configured !== undefined) return configured;
+  }
+  return options.propertyKeys ?? DEFAULT_PROPERTY_SUMMARY_KEYS;
+}
+
+function collapsedBlockTitle(block: VisibleBlock): string {
+  if (block.properties.length === 0) return block.displayText.replace(/\r?\n/g, " ↵ ");
+  return firstLineWithoutPropertyTokens(block.displayText)?.trim() || block.id;
+}
+
+function renderSummarySegment(label: string, value: string): string {
+  return `\x1b[2m${label}\x1b[0m \x1b[36m${value}\x1b[0m`;
+}
+
+function renderCollapsedRow(
+  prefix: string,
+  title: string,
+  summary: readonly { label: string; value: string; plain: string }[],
+  fixedSuffix: string,
+  optionalSuffix: string,
+  width: number,
+): string {
+  let suffix = `${fixedSuffix}${optionalSuffix}`;
+  let available = Math.max(1, width - visibleWidth(prefix) - visibleWidth(suffix));
+  const segments = [...summary];
+  const separator = "  ";
+  const plainSummary = () => segments.map((segment) => segment.plain).join(" · ");
+  if (
+    segments.length > 0 &&
+    optionalSuffix &&
+    visibleWidth(title) + visibleWidth(separator) + visibleWidth(plainSummary()) > available
+  ) {
+    suffix = fixedSuffix;
+    available = Math.max(1, width - visibleWidth(prefix) - visibleWidth(suffix));
+  }
+
+  while (
+    segments.length > 1 &&
+    visibleWidth(title) + visibleWidth(separator) + visibleWidth(plainSummary()) > available
+  ) {
+    segments.pop();
+  }
+
+  if (segments.length === 0) {
+    if (!fixedSuffix) return truncate(`${prefix}${title}${suffix}`, width);
+    return truncateToWidth(`${prefix}${truncateToWidth(title, available)}${suffix}`, width);
+  }
+
+  const renderedSummary = () =>
+    segments
+      .map((segment) => renderSummarySegment(segment.label, segment.value))
+      .join(" \x1b[2m·\x1b[0m ");
+  if (
+    visibleWidth(title) + visibleWidth(separator) + visibleWidth(plainSummary()) <= available
+  ) {
+    return truncateToWidth(`${prefix}${title}${separator}${renderedSummary()}${suffix}`, width);
+  }
+
+  const contentWidth = Math.max(1, available - visibleWidth(separator));
+  const titleFloor = Math.min(
+    visibleWidth(title),
+    4,
+    Math.max(1, contentWidth - 1),
+  );
+  const summaryWidth = Math.min(
+    visibleWidth(plainSummary()),
+    Math.max(1, contentWidth - titleFloor),
+  );
+  const titleWidth = Math.max(1, contentWidth - summaryWidth);
+  return truncateToWidth(
+    `${prefix}${truncateToWidth(title, titleWidth)}${separator}${
+      truncateToWidth(renderedSummary(), summaryWidth)
+    }${suffix}`,
+    width,
+  );
+}
+
 function renderQuickInputRow(
   quickInput: string,
   quickColumn: number,
@@ -152,6 +244,7 @@ export function renderTreeFrame(
   width: number,
   height: number,
   initialScrollStartEntryIndex = 0,
+  options: TreeRenderOptions = {},
 ): TreeRenderResult {
   const output: string[] = [`${ESC}H${ESC}2J`];
   const mouseTargets: Array<TreeMouseTarget | null | undefined> = [];
@@ -293,58 +386,56 @@ export function renderTreeFrame(
     } else if (block.effectiveDeletedRootId) {
       trashLabel = "  [Trash]";
     }
-    const compactText =
-      block.properties.some((property) => property.key === "type" && property.value === "capture")
-        ? firstLineWithoutPropertyTokens(block.displayText)?.trim() || block.id
-        : block.displayText;
-    const blockText = `${row.multilineExpanded ? block.displayText : compactText}${trashLabel}`;
     let result: string[];
-    if (!row.multilineExpanded && branchState) {
+    if (!row.multilineExpanded) {
       const prefix = `${"  ".repeat(row.depth)}${marker} `;
-      const suffix = `  ${author}`;
-      const badge = truncate(
-        virtualBranchStateLabel(branchState),
-        Math.max(1, width - prefix.length - suffix.length),
+      const branchBadge = branchState ? virtualBranchStateLabel(branchState) : "";
+      const fixedSuffix = `${branchBadge}${trashLabel}`;
+      const optionalSuffix = `  ${author}`;
+      const summary = propertySummarySegments(
+        block.properties,
+        propertyKeysForRow(view, row, options),
       );
-      const titleWidth = Math.max(1, width - prefix.length - suffix.length - badge.length);
-      const title = truncate(blockText.replace(/\r?\n/g, " ↵ "), titleWidth);
-      result = [linker.link(truncate(`${prefix}${title}${badge}${suffix}`, width))];
-    } else {
-      const displayText = decorateVirtualBranchDefinitionText(blockText, branchState);
-      if (row.multilineExpanded) {
-        const expandedRows = layoutExpandedBlock({
-          text: displayText,
-          width,
-          depth: row.depth,
-          marker,
-          author,
-        }).map((renderedRow, rowIndex) => {
-          const linkedText = linker.link(renderedRow.text);
-          const text = rowIndex === 0 ? linkedText : renderMarkdownLine(linkedText);
-          return `${renderedRow.prefix}${text}${renderedRow.suffix}`;
-        });
-        if (index === view.selectedIndex) {
-          const maxOffset = Math.max(0, expandedRows.length - bodyHeight);
-          const offset = Math.min(view.expandedBlockOffset, maxOffset);
-          const end = Math.min(expandedRows.length, offset + bodyHeight);
-          selectedExpandedInfo.current = {
-            offset,
-            end,
-            total: expandedRows.length,
-          };
-          result = expandedRows.slice(offset, end);
-        } else {
-          result = expandedRows;
-        }
-      } else {
-        result = [
-          linker.link(
-            truncate(
-              `${"  ".repeat(row.depth)}${marker} ${displayText.replace(/\r?\n/g, " ↵ ")}  ${author}`,
-              width,
-            ),
+      result = [
+        linker.link(
+          renderCollapsedRow(
+            prefix,
+            collapsedBlockTitle(block),
+            summary,
+            fixedSuffix,
+            optionalSuffix,
+            width,
           ),
-        ];
+        ),
+      ];
+    } else {
+      const displayText = decorateVirtualBranchDefinitionText(
+        `${block.displayText}${trashLabel}`,
+        branchState,
+      );
+      const expandedRows = layoutExpandedBlock({
+        text: displayText,
+        width,
+        depth: row.depth,
+        marker,
+        author,
+      }).map((renderedRow, rowIndex) => {
+        const linkedText = linker.link(renderedRow.text);
+        const text = rowIndex === 0 ? linkedText : renderMarkdownLine(linkedText);
+        return `${renderedRow.prefix}${text}${renderedRow.suffix}`;
+      });
+      if (index === view.selectedIndex) {
+        const maxOffset = Math.max(0, expandedRows.length - bodyHeight);
+        const offset = Math.min(view.expandedBlockOffset, maxOffset);
+        const end = Math.min(expandedRows.length, offset + bodyHeight);
+        selectedExpandedInfo.current = {
+          offset,
+          end,
+          total: expandedRows.length,
+        };
+        result = expandedRows.slice(offset, end);
+      } else {
+        result = expandedRows;
       }
     }
     renderedRows[index] = result;

@@ -284,7 +284,7 @@ export function openDetailPane(
     "OUTLINER_STATE_DIR",
     "OUTLINER_KEYBINDINGS_PATH",
     "OUTLINER_RIGHT_CLICK",
-    "OUTLINER_DETAIL_HEADER_PROPERTIES",
+    "OUTLINER_PROPERTY_SUMMARY_KEYS",
     "OUTLINER_OPEN_DESTINATION_TIMEOUT_MS",
   ] as const) {
     if (process.env[name] !== undefined) {

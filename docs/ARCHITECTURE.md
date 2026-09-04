@@ -126,6 +126,13 @@ existing keyboard reference route to resolve and dispatch `open | reveal`;
 plain values remain nonnavigable. Neither presentation owns or rewrites
 canonical source.
 
+Tree rows and the Detail header derive compact summaries from the same canonical
+block-property array. `OUTLINER_PROPERTY_SUMMARY_KEYS` supplies the
+workspace-ordered allowlist; virtual branches can override it for their
+occurrences with `[summary-properties::…]`. Width fitting drops trailing
+configured fields before truncating the property-free Tree title. Summary
+rendering is presentation-only and never reparses into or mutates source.
+
 ### Pi / OMP extension
 
 [`pi-extension/index.ts`](../pi-extension/index.ts) is a host adapter. It:
@@ -435,6 +442,7 @@ Optional properties:
 - `[direction::asc]` or `[direction::desc]` — timestamp direction; requires `sort` and defaults to `desc`.
 - `[create::key=value]` — one property applied to new canonical children.
 - `[create-parent::<block-id>]` — physical parent for branch-created blocks.
+- `[summary-properties::key,key,…]` — ordered Tree summary allowlist for projected occurrences in this view.
 
 Tree builds canonical parent-to-children adjacency once from the complete physical
 snapshot, never from the collapse-pruned visible collection. It queries, ranks,

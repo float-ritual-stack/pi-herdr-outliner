@@ -68,6 +68,7 @@ describe("virtual branch definitions", () => {
       { key: "create", value: "status=Doing" },
       { key: "create-parent", value: parent.id },
       { key: "limit", value: "40" },
+      { key: "summary-properties", value: "work-stage, status, work-stage" },
     ]);
 
     expect(parseVirtualBranchConfig(definition, [definition, parent])).toEqual({
@@ -81,6 +82,7 @@ describe("virtual branch definitions", () => {
         ],
         sort: null,
         limit: 40,
+        summaryPropertyKeys: ["work-stage", "status"],
         create: { key: "status", value: "Doing" },
         createParentId: "inbox",
         readOnly: false,

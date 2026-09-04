@@ -3,11 +3,11 @@ import { describe, expect, test } from "bun:test";
 import { DEFAULT_OUTLINER_ACTION_KEYMAP } from "../src/outliner-actions";
 import type { DetailState } from "../src/detail-controller";
 import {
-  parseDetailHeaderPropertyKeys,
   renderDetailAnsi,
   renderDetailLines,
 } from "../src/detail-renderer";
 import { createOpenDestinationChooserState } from "../src/open-destination-chooser";
+import { parsePropertySummaryKeys } from "../src/property-summary";
 import { TextBuffer } from "../src/text-buffer";
 import type { Block } from "../src/types";
 const ACTION_MENU = "\x1b]8;;pi-outliner-action:detail.menu.open\x1b\\\x1b[2;36m[⋯]\x1b[0m\x1b]8;;\x1b\\";
@@ -457,12 +457,12 @@ test("renders lock state as a compact clickable icon", () => {
 });
 
 test("parses configured Detail header properties deterministically", () => {
-  expect(parseDetailHeaderPropertyKeys(undefined)).toBeUndefined();
-  expect(parseDetailHeaderPropertyKeys("work-stage, owner, work-stage")).toEqual([
+  expect(parsePropertySummaryKeys(undefined)).toBeUndefined();
+  expect(parsePropertySummaryKeys("work-stage, owner, work-stage")).toEqual([
     "work-stage",
     "owner",
   ]);
-  expect(parseDetailHeaderPropertyKeys("")).toEqual([]);
+  expect(parsePropertySummaryKeys("")).toEqual([]);
 });
 
 test("renders the shared destination prompt over ordinary Detail help", () => {
