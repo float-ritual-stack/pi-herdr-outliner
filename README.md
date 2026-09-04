@@ -135,20 +135,25 @@ appears in the next unlocked Detail. Entering block edit or annotation-comment
 mode locks the Detail automatically. Locking never silently expires; explicitly
 unlock the pane to make it eligible again.
 
-`o`, plain-clicked references, and external Herdr link activation open in the
-first unlocked same-tab Detail and focus it without locking it. `R` reveals the
-reference in the paired or unique same-tab Tree. If every same-tab Detail is
-locked, ordinary reference navigation reports **All Details in this tab are
-locked — unlock one or open another Detail** and preserves every anchor.
+`o`, plain-clicked references, and typed Property targets inside Detail open one
+destination chooser without navigating first. `Shift+R` explicitly replaces
+the current Detail while preserving its lock state, `f` uses the first unlocked
+same-tab Detail, `r` splits right, and `d` splits down. `Enter` uses the first
+unlocked Detail or creates a right split when none is available. `f` remains in
+the chooser when every Detail is locked, so fallback topology is always an
+explicit choice. `Esc` dismisses without resolving or opening the target. `R`
+outside the chooser reveals the reference in the paired or unique same-tab Tree.
+Block-fragment targets retain their exact anchor across every destination.
 
 Activating an inline Backlinks source opens a transient preview over the
 invoking Detail instead of consuming another reader. `Left` and `Right` traverse
 the captured filtered/sorted source set. `Esc` restores the exact inline row
-without navigation. `Enter` opens a destination chooser: `Shift+R` explicitly
-replaces the invoking Detail while preserving its lock state, `f` uses the first
-unlocked same-tab Detail, `r` splits right, and `d` splits down. Pressing `Enter`
-again uses the first unlocked Detail or creates a right split when none is
-available.
+without navigation. `Enter` opens the same destination chooser used by Detail
+references and typed Property targets.
+
+An idle chooser dismisses after 7,500 ms. Any chooser input resets the timer.
+Set `OUTLINER_OPEN_DESTINATION_TIMEOUT_MS` on the Herdr process to an integer
+from 1,000 through 60,000 milliseconds; invalid values retain the default.
 
 Closing a pair discards its browsing context. Renaming its tab or panes changes
 nothing. A newly opened pair receives a new context and initially seeds its Tree
@@ -299,12 +304,12 @@ Projected virtual occurrences deliberately constrain hierarchy and collapse. Bra
 | `Enter` | Peek at the focused backlink source without navigating this Detail |
 | Peek: `Left` / `Right` | Preview the previous / next source in the captured filtered/sorted set |
 | Peek: `Esc` | Cancel, restore the exact inline source row, and leave this Detail unchanged |
-| Peek: `Enter` | Choose the destination; press `Enter` again for the default: first unlocked Detail, otherwise split right |
+| Peek: `Enter` | Open the shared destination chooser |
 | Chooser: `Shift+R` / `f` / `r` / `d` | Replace this Detail / first unlocked Detail / split right / split down |
-| Chooser: `Esc` | Close the chooser and return to the preview |
+| Chooser: `Enter` / `Esc` | Use the default destination / dismiss without navigation |
 | `e` | Lock this Detail and edit raw canonical text |
 | `f` | Open referenced file |
-| `o` | Open the first authored reference in the first unlocked same-tab Detail; the destination remains unlocked |
+| `o` | Open the first authored reference in the shared destination chooser |
 | `R` | Reveal the selected backlink source when expanded; otherwise reveal the first authored reference in the paired or unique same-tab Tree |
 | `L`, `i`, `Ctrl+L`, or `Command/Meta+L` | Lock this block as an anchor, or unlock the Detail for previews and opens |
 | `Option+Left` / `Option+Right` | Move backward / forward through this Detail's local history without changing lock state |

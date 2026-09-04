@@ -8,6 +8,11 @@ import {
   detailMarkdownPresentation,
   sanitizeMarkdownDocument,
 } from "./detail-pi-preview";
+import {
+  createOpenDestinationChooserState,
+  OpenDestinationChooser,
+  openDestinationChooserHelp,
+} from "./open-destination-chooser";
 import type { TerminalInputAction, TerminalKey } from "./terminal";
 import type { BacklinkSource, Block } from "./types";
 
@@ -27,12 +32,6 @@ export interface BacklinkPeekPreview {
   sourceLine: number;
 }
 
-export type BacklinkPeekDestination =
-  | "default"
-  | "replace"
-  | "first-unlocked"
-  | "split-right"
-  | "split-down";
 
 export interface BacklinkPeekEffects {
   loadSource(source: BacklinkSource): Promise<BacklinkPeekPreview>;
@@ -53,7 +52,8 @@ export class BacklinkPeekController {
   scrollOffset = 0;
   status = "";
   loading = false;
-  destinationChooserOpen = false;
+  readonly destinationChooserState = createOpenDestinationChooserState();
+  private readonly destinationChooser: OpenDestinationChooser;
   private closed = false;
 
   constructor(
@@ -61,13 +61,37 @@ export class BacklinkPeekController {
     readonly sources: readonly BacklinkSource[],
     selectedSourceBlockId: string,
     private readonly effects: BacklinkPeekEffects,
+    destinationTimeoutMs?: number,
   ) {
     const selectedIndex = sources.findIndex((source) => source.blockId === selectedSourceBlockId);
     this.selectedIndex = selectedIndex < 0 ? 0 : selectedIndex;
+    this.destinationChooser = new OpenDestinationChooser({
+      beforeOpen: async (target, destination) => {
+        if (destination !== "replace") await effects.restoreSelection(target.blockId);
+      },
+      replace: (target) => effects.replaceSource(target.blockId),
+      openFirstUnlocked: (target) => effects.openInFirstUnlocked(target.blockId),
+      openNewDetail: (target, direction) => effects.openInNewDetail(target.blockId, direction),
+      opened: () => {
+        this.closed = true;
+        effects.close();
+      },
+      invalidate: () => {
+        this.status = this.destinationChooserState.status;
+        effects.invalidate();
+      },
+    }, {
+      state: this.destinationChooserState,
+      ...(destinationTimeoutMs === undefined ? {} : { timeoutMs: destinationTimeoutMs }),
+    });
   }
 
   get selectedSource(): BacklinkSource | undefined {
     return this.sources[this.selectedIndex];
+  }
+
+  get destinationChooserOpen(): boolean {
+    return this.destinationChooserState.active;
   }
 
   async initialize(): Promise<void> {
@@ -81,32 +105,16 @@ export class BacklinkPeekController {
     viewportHeight: number,
   ): Promise<void> {
     if (this.closed || inputAction === "suppress") return;
-    if ((key.ctrl && key.name === "c") || str === "q") {
+    if (key.ctrl && key.name === "c") {
       await this.cancel();
       return;
     }
-    if (this.destinationChooserOpen) {
-      if (key.name === "escape") {
-        this.destinationChooserOpen = false;
-        this.status = "";
-        this.effects.invalidate();
-        return;
-      }
-      if (this.loading) return;
-      if (key.name === "return") {
-        await this.openDestination("default");
-        return;
-      }
-      const destination = str === "R"
-        ? "replace"
-        : str.toLowerCase() === "f"
-        ? "first-unlocked"
-        : str.toLowerCase() === "r"
-        ? "split-right"
-        : str.toLowerCase() === "d"
-        ? "split-down"
-        : null;
-      if (destination) await this.openDestination(destination);
+    if (this.destinationChooserState.active) {
+      await this.destinationChooser.handleKeypress(str, key);
+      return;
+    }
+    if (str === "q") {
+      await this.cancel();
       return;
     }
     if (key.name === "escape") {
@@ -123,9 +131,10 @@ export class BacklinkPeekController {
       return;
     }
     if (key.name === "return") {
-      this.destinationChooserOpen = true;
-      this.status = "Choose destination · default: first unlocked, otherwise split right";
-      this.effects.invalidate();
+      const source = this.selectedSource;
+      if (source) {
+        this.destinationChooser.open({ blockId: source.blockId, title: source.title });
+      }
       return;
     }
     const page = Math.max(1, viewportHeight - 6);
@@ -185,6 +194,7 @@ export class BacklinkPeekController {
 
   private async cancel(): Promise<void> {
     const source = this.selectedSource;
+    this.destinationChooser.dispose();
     this.closed = true;
     if (source) {
       try {
@@ -196,48 +206,6 @@ export class BacklinkPeekController {
     this.effects.close();
   }
 
-  private async openDestination(destination: BacklinkPeekDestination): Promise<void> {
-    const source = this.selectedSource;
-    if (!source) return;
-    this.loading = true;
-    this.status = destination === "replace"
-      ? `Replacing this Detail with ${source.title}…`
-      : destination === "first-unlocked"
-      ? `Opening ${source.title} in the first unlocked Detail…`
-      : destination === "split-down"
-      ? `Opening ${source.title} below…`
-      : destination === "split-right"
-      ? `Opening ${source.title} to the right…`
-      : `Opening ${source.title}…`;
-    this.effects.invalidate();
-    try {
-      if (destination === "replace") {
-        await this.effects.replaceSource(source.blockId);
-      } else {
-        await this.effects.restoreSelection(source.blockId);
-        if (destination === "first-unlocked") {
-          if (!(await this.effects.openInFirstUnlocked(source.blockId))) {
-            this.loading = false;
-            this.status = "No unlocked Detail is available · choose ⇧R, R, or D";
-            this.effects.invalidate();
-            return;
-          }
-        } else if (destination === "split-down") {
-          await this.effects.openInNewDetail(source.blockId, "down");
-        } else if (destination === "split-right") {
-          await this.effects.openInNewDetail(source.blockId, "right");
-        } else if (!(await this.effects.openInFirstUnlocked(source.blockId))) {
-          await this.effects.openInNewDetail(source.blockId, "right");
-        }
-      }
-      this.closed = true;
-      this.effects.close();
-    } catch (error) {
-      this.loading = false;
-      this.status = `Open failed: ${error instanceof Error ? error.message : String(error)}`;
-      this.effects.invalidate();
-    }
-  }
 }
 
 function occurrenceSummary(source: BacklinkSource): string {
@@ -271,11 +239,15 @@ export function renderBacklinkPeekFrame(
   const rendered = markdown.render(Math.max(1, width));
   output.push(...rendered.slice(controller.scrollOffset, controller.scrollOffset + bodyHeight));
   while (output.length < height - 2) output.push("");
-  const status = controller.loading ? controller.status || "Loading…" : controller.status;
+  const status = controller.destinationChooserState.active
+    ? controller.destinationChooserState.status
+    : controller.loading
+    ? controller.status || "Loading…"
+    : controller.status;
   output.push(truncateToWidth(`\x1b[2m${stripTerminalSequences(status)}\x1b[0m`, width));
   output.push(truncateToWidth(
-    controller.destinationChooserOpen
-      ? "⇧R replace here  f first unlocked  r split right  d split down  Esc close  Enter default"
+    controller.destinationChooserState.active
+      ? openDestinationChooserHelp()
       : "Esc cancel  ←/→ peek  ↑/↓ scroll  Enter choose destination",
     width,
   ));

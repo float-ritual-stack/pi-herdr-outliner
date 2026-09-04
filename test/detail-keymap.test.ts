@@ -6,6 +6,7 @@ import type {
   DetailState,
 } from "../src/detail-controller";
 import { createDetailKeyHandler } from "../src/detail-keymap";
+import { createOpenDestinationChooserState } from "../src/open-destination-chooser";
 import { TextBuffer } from "../src/text-buffer";
 import type { TerminalKey } from "../src/terminal";
 
@@ -64,6 +65,7 @@ function state(): DetailState {
       focusedRegionId: null,
       disclosureOverrides: new Map(),
     },
+    destinationChooser: createOpenDestinationChooserState(),
   };
 }
 
@@ -81,9 +83,13 @@ function harness(
   } = {},
 ): {
   intents: DetailIntent[];
-  press(key: TerminalKey, str?: string): Promise<void>;
+  press(key: TerminalKey, str?: string, inputAction?: "pass" | "suppress"): Promise<void>;
+  chooserInputs: Array<{ str: string; key: TerminalKey }>;
+  stops: { count: number };
 } {
   const intents: DetailIntent[] = [];
+  const chooserInputs: Array<{ str: string; key: TerminalKey }> = [];
+  const stops = { count: 0 };
   const controller: DetailController = {
     state: detailState,
     async initialize() {},
@@ -92,6 +98,10 @@ function harness(
       intents.push(intent);
     },
     setPreviewRegions() {},
+    async handleDestinationChooserKeypress(str, key) {
+      chooserInputs.push({ str, key });
+      return true;
+    },
     async onServiceEvent() {},
     async onServiceConnect() {},
     onServiceDisconnect() {},
@@ -101,12 +111,16 @@ function harness(
   const handler = createDetailKeyHandler({
     controller,
     viewport: () => ({ width: 80, height: 24 }),
-    stop() {},
+    stop() {
+      stops.count += 1;
+    },
     ...options,
   });
   return {
+    chooserInputs,
     intents,
-    press: (key, str = "") => handler(str, key, "pass"),
+    press: (key, str = "", inputAction = "pass") => handler(str, key, inputAction),
+    stops,
   };
 }
 
@@ -515,4 +529,22 @@ test("maps property value editing keys without entering the full block editor", 
     { type: "property-inspector.edit.commit" },
     { type: "property-inspector.edit.cancel" },
   ]);
+});
+
+test("an active destination chooser owns input before keymap actions", async () => {
+  const detailState = state();
+  detailState.mode = "preview";
+  detailState.destinationChooser.active = true;
+  const stateHarness = harness(detailState, false);
+
+  await stateHarness.press({ name: "o" }, "o");
+  await stateHarness.press({ name: "ignored" }, "", "suppress");
+  await stateHarness.press({ name: "q", ctrl: true });
+
+  expect(stateHarness.chooserInputs).toEqual([
+    { str: "o", key: { name: "o" } },
+    { str: "", key: { name: "input" } },
+  ]);
+  expect(stateHarness.stops.count).toBe(1);
+  expect(stateHarness.intents).toEqual([]);
 });

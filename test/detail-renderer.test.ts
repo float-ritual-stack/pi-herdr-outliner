@@ -7,6 +7,7 @@ import {
   renderDetailAnsi,
   renderDetailLines,
 } from "../src/detail-renderer";
+import { createOpenDestinationChooserState } from "../src/open-destination-chooser";
 import { TextBuffer } from "../src/text-buffer";
 import type { Block } from "../src/types";
 const ACTION_MENU = "\x1b]8;;pi-outliner-action:detail.menu.open\x1b\\\x1b[2;36m[⋯]\x1b[0m\x1b]8;;\x1b\\";
@@ -96,6 +97,7 @@ function state(overrides: Partial<DetailState> = {}): DetailState {
       focusedRegionId: null,
       disclosureOverrides: new Map(),
     },
+    destinationChooser: createOpenDestinationChooserState(),
     ...overrides,
   };
 }
@@ -461,4 +463,23 @@ test("parses configured Detail header properties deterministically", () => {
     "owner",
   ]);
   expect(parseDetailHeaderPropertyKeys("")).toEqual([]);
+});
+
+test("renders the shared destination prompt over ordinary Detail help", () => {
+  const detailState = state({
+    status: "Ordinary status",
+    destinationChooser: {
+      active: true,
+      loading: false,
+      target: { blockId: "target-1", title: "Target" },
+      status: "Choose destination",
+    },
+  });
+
+  const rendered = renderDetailLines(detailState, { width: 100, height: 8 }).map(
+    stripTerminalSequences,
+  );
+  expect(rendered.at(-2)).toContain("Choose destination");
+  expect(rendered.at(-1)).toContain("f first unlocked");
+  expect(rendered.at(-1)).toContain("Enter default");
 });

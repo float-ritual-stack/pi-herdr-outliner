@@ -225,6 +225,7 @@ export interface OpenDetailPaneOptions {
   workspaceRoot: string;
   browsingContextId: string;
   propertyInspectorBlockId?: string;
+  targetFragmentId?: string;
   targetPaneId?: string;
   direction?: "right" | "down";
 }
@@ -263,6 +264,11 @@ export function openDetailPane(
       "OUTLINER_DETAIL_RENDERER=pi-tui",
     );
   }
+  if (options.targetFragmentId !== undefined) {
+    const fragmentId = options.targetFragmentId.trim();
+    if (!fragmentId) throw new Error("Detail target fragment ID cannot be empty");
+    args.push("--env", `OUTLINER_DETAIL_TARGET_FRAGMENT_ID=${fragmentId}`);
+  }
   args.push(
     "--placement",
     "split",
@@ -279,6 +285,7 @@ export function openDetailPane(
     "OUTLINER_KEYBINDINGS_PATH",
     "OUTLINER_RIGHT_CLICK",
     "OUTLINER_DETAIL_HEADER_PROPERTIES",
+    "OUTLINER_OPEN_DESTINATION_TIMEOUT_MS",
   ] as const) {
     if (process.env[name] !== undefined) {
       args.push("--env", `${name}=${process.env[name]}`);
@@ -336,8 +343,13 @@ export function openBacklinkPeekPopup(
     options.workspaceRoot,
     "--focus",
   ];
-  if (process.env.OUTLINER_STATE_DIR) {
-    args.push("--env", `OUTLINER_STATE_DIR=${process.env.OUTLINER_STATE_DIR}`);
+  for (const name of [
+    "OUTLINER_STATE_DIR",
+    "OUTLINER_OPEN_DESTINATION_TIMEOUT_MS",
+  ] as const) {
+    if (process.env[name] !== undefined) {
+      args.push("--env", `${name}=${process.env[name]}`);
+    }
   }
   invokeHerdr(herdr, args);
 }

@@ -89,6 +89,11 @@ interface Harness {
     currentBlocks: Array<string | null>;
     propertyInspectorPanes: string[];
     backlinkPeeks: Array<Parameters<DetailEffects["openBacklinkPeek"]>[0]>;
+    openedDetails: Array<{
+      blockId: string;
+      direction: "right" | "down";
+      fragmentId?: string;
+    }>;
   };
   setSelection(selection: SelectionContext): void;
   setUpdate(implementation: DetailEffects["updateBlock"]): void;
@@ -145,6 +150,7 @@ function createHarness(
     propertyInspectorPanes: [],
     propertyPatches: [],
     backlinkPeeks: [],
+    openedDetails: [],
   };
   const effects: DetailEffects = {
     clientId: "detail-test",
@@ -209,6 +215,13 @@ function createHarness(
     },
     openBacklinkPeek(input) {
       calls.backlinkPeeks.push(input);
+    },
+    openDetailPane(blockId, direction, fragmentId) {
+      calls.openedDetails.push({
+        blockId,
+        direction,
+        ...(fragmentId ? { fragmentId } : {}),
+      });
     },
     async resolveNavigation(intent) {
       return {
@@ -479,6 +492,12 @@ describe("detail controller projection and deferred refresh", () => {
     await harness.controller.initialize();
 
     await harness.controller.dispatch({ type: "reference.follow" }, viewport);
+    expect(harness.controller.state.destinationChooser).toMatchObject({
+      active: true,
+      target: { blockId: "target01" },
+    });
+    expect(harness.controller.state.context.selected?.id).toBe(source.id);
+    await harness.controller.handleDestinationChooserKeypress("", { name: "return" });
     expect(harness.calls.followedReferences).toEqual([{ kind: "block", value: "target01" }]);
     expect(harness.controller.state.context.selected?.id).toBe("target01");
     expect(harness.controller.state.connectionMode).toBe("unlocked");
@@ -520,6 +539,8 @@ describe("detail controller projection and deferred refresh", () => {
     harness.setSelection({ selected: target, ancestors: [], children: [] });
 
     await harness.controller.dispatch({ type: "reference.follow" }, viewport);
+    expect(harness.calls.navigationDispatches).toEqual([]);
+    await harness.controller.handleDestinationChooserKeypress("", { name: "return" });
 
     expect(harness.calls.followedReferences).toEqual([{
       kind: "block",
@@ -567,6 +588,8 @@ describe("detail controller projection and deferred refresh", () => {
       type: "reference.open",
       target: { kind: "block", value: "linked-block" },
     }, viewport);
+    expect(harness.controller.state.context.selected?.id).toBe(previewed.id);
+    await harness.controller.handleDestinationChooserKeypress("", { name: "return" });
     expect(harness.controller.state.context.selected?.id).toBe("linked-block");
 
     await harness.controller.dispatch({ type: "navigation.back" }, viewport);
@@ -614,7 +637,7 @@ describe("detail controller projection and deferred refresh", () => {
     expect(harness.calls.locks).toEqual([true, false]);
   });
 
-  test("keeps a locked Detail unchanged when an ordinary link resolves back to itself", async () => {
+  test("keeps a locked Detail unchanged until a destination is confirmed", async () => {
     const source = makeBlock({ id: "source-block", text: "See ((target01))" });
     const harness = createHarness(source);
     await harness.controller.initialize();
@@ -624,9 +647,154 @@ describe("detail controller projection and deferred refresh", () => {
 
     expect(harness.controller.state.context.selected?.id).toBe(source.id);
     expect(harness.controller.state.connectionMode).toBe("locked");
-    expect(harness.controller.state.status).toBe(
-      "Locked · ordinary navigation preserved this Detail",
+    expect(harness.controller.state.destinationChooser.active).toBe(true);
+    expect(harness.calls.navigationDispatches).toEqual([]);
+    await harness.controller.handleDestinationChooserKeypress("", { name: "escape" });
+    expect(harness.controller.state.context.selected?.id).toBe(source.id);
+    expect(harness.controller.state.connectionMode).toBe("locked");
+  });
+
+  test("replaces a locked Detail only after explicit Shift+R", async () => {
+    const source = makeBlock({ id: "locked-source", text: "See ((target01))" });
+    const harness = createHarness(source);
+    await harness.controller.initialize();
+    await harness.controller.dispatch({ type: "lock.toggle" }, viewport);
+    await harness.controller.dispatch({ type: "reference.follow" }, viewport);
+
+    expect(harness.controller.state.context.selected?.id).toBe(source.id);
+    await harness.controller.handleDestinationChooserKeypress("R", {
+      name: "r",
+      shift: true,
+    });
+
+    expect(harness.controller.state.context.selected?.id).toBe("target01");
+    expect(harness.controller.state.connectionMode).toBe("locked");
+    expect(harness.calls.navigationDispatches).toEqual([]);
+  });
+
+  test("routes explicit split choices without mutating the current Detail", async () => {
+    for (const [input, direction] of [
+      ["r", "right"],
+      ["d", "down"],
+    ] as const) {
+      const source = makeBlock({ id: `source-${direction}`, text: "See ((target01))" });
+      const harness = createHarness(source);
+      await harness.controller.initialize();
+      await harness.controller.dispatch({ type: "reference.follow" }, viewport);
+      await harness.controller.handleDestinationChooserKeypress(input, { name: input });
+
+      expect(harness.calls.openedDetails).toEqual([{ blockId: "target01", direction }]);
+      expect(harness.controller.state.context.selected?.id).toBe(source.id);
+      expect(harness.controller.state.destinationChooser.active).toBe(false);
+    }
+  });
+
+  test("preserves fragment identity in explicit and fallback splits", async () => {
+    const source = makeBlock({ text: "See ((target01^decision))" });
+
+    const explicit = createHarness(source);
+    await explicit.controller.initialize();
+    await explicit.controller.dispatch({ type: "reference.follow" }, viewport);
+    await explicit.controller.handleDestinationChooserKeypress("d", { name: "d" });
+    expect(explicit.calls.openedDetails).toEqual([{
+      blockId: "target01",
+      direction: "down",
+      fragmentId: "decision",
+    }]);
+
+    const fallback = createHarness(source);
+    fallback.effects.dispatchNavigation = async () => {
+      throw new Error("All Details in this tab are locked · unlock one or open another Detail");
+    };
+    await fallback.controller.initialize();
+    await fallback.controller.dispatch({ type: "reference.follow" }, viewport);
+    await fallback.controller.handleDestinationChooserKeypress("", { name: "return" });
+    expect(fallback.calls.openedDetails).toEqual([{
+      blockId: "target01",
+      direction: "right",
+      fragmentId: "decision",
+    }]);
+  });
+
+  test("applies a split Detail's startup fragment once", async () => {
+    const target = makeBlock({
+      id: "target01",
+      text: "Target\n\n## Decision ^decision\nBody",
+    });
+    const harness = createHarness(
+      target,
+      null,
+      undefined,
+      undefined,
+      { initialTargetFragmentId: "decision" },
     );
+
+    await harness.controller.initialize();
+
+    expect(harness.controller.state.targetFragmentId).toBe("decision");
+    expect(harness.controller.state.previewOffset).toBe(2);
+  });
+
+  test("keeps explicit first-unlocked choice available after all Details reject it", async () => {
+    const source = makeBlock({ text: "See ((target01))" });
+    const harness = createHarness(source);
+    harness.effects.dispatchNavigation = async () => {
+      throw new Error("All Details in this tab are locked · unlock one or open another Detail");
+    };
+    await harness.controller.initialize();
+    await harness.controller.dispatch({ type: "reference.follow" }, viewport);
+    await harness.controller.handleDestinationChooserKeypress("f", { name: "f" });
+
+    expect(harness.controller.state.destinationChooser.active).toBe(true);
+    expect(harness.controller.state.destinationChooser.status).toContain(
+      "No unlocked Detail is available",
+    );
+    expect(harness.calls.openedDetails).toEqual([]);
+    expect(harness.controller.state.context.selected?.id).toBe(source.id);
+  });
+
+  test("dismisses a pending destination choice on timeout and target change", async () => {
+    let dismissOnIdle = () => {};
+    const source = makeBlock({ id: "source-block", text: "See ((target01))" });
+    const harness = createHarness(
+      source,
+      null,
+      undefined,
+      undefined,
+      {
+        destinationTimeoutMs: 1_000,
+        destinationScheduler: {
+          set(callback) {
+            dismissOnIdle = callback;
+            return callback;
+          },
+          clear() {},
+        },
+      },
+    );
+    await harness.controller.initialize();
+    await harness.controller.dispatch({ type: "reference.follow" }, viewport);
+    dismissOnIdle();
+    expect(harness.controller.state.destinationChooser.active).toBe(false);
+    expect(harness.calls.navigationDispatches).toEqual([]);
+    expect(harness.calls.followedReferences).toEqual([]);
+
+    await harness.controller.dispatch({ type: "reference.follow" }, viewport);
+    harness.setSelection({
+      selected: makeBlock({ id: "other-target", text: "Other" }),
+      ancestors: [],
+      children: [],
+    });
+    await harness.controller.onServiceEvent(
+      event("ui", {
+        targetClientId: "detail-test",
+        command: "preview",
+        blockId: "other-target",
+      }),
+      viewport,
+    );
+    expect(harness.controller.state.destinationChooser.active).toBe(false);
+    expect(harness.calls.followedReferences).toEqual([]);
   });
 
   test("follows symbolic references through the page-address path", async () => {
@@ -635,6 +803,8 @@ describe("detail controller projection and deferred refresh", () => {
 
     await harness.controller.dispatch({ type: "reference.follow" }, viewport);
 
+    expect(harness.calls.followedReferences).toEqual([]);
+    await harness.controller.handleDestinationChooserKeypress("f", { name: "f" });
     expect(harness.calls.followedReferences).toEqual([{
       kind: "page",
       value: "Future Page",
@@ -652,6 +822,8 @@ describe("detail controller projection and deferred refresh", () => {
     await harness.controller.dispatch({ type: "reference.follow" }, viewport);
 
     expect(harness.controller.state.workIdPrefix).toBe("ABC");
+    expect(harness.calls.followedReferences).toEqual([]);
+    await harness.controller.handleDestinationChooserKeypress("f", { name: "f" });
     expect(harness.calls.followedReferences).toEqual([{
       kind: "work",
       value: "ABC-001",
@@ -1347,13 +1519,16 @@ describe("detail backlink loading and navigation", () => {
         preserveSource: true,
       },
     }, viewport);
+    expect(harness.calls.navigationDispatches).toEqual([]);
+    expect(harness.controller.state.context.selected?.id).toBe(source.id);
+    await harness.controller.handleDestinationChooserKeypress("f", { name: "f" });
 
     expect(harness.calls.navigationDispatches).toEqual([{
       blockId: "source-block",
       intent: "open",
-      preserveSource: true,
+      preserveSource: false,
     }]);
-    expect(harness.controller.state.context.selected?.id).toBe(source.id);
+    expect(harness.controller.state.context.selected?.id).toBe("source-block");
     expect(harness.controller.state.status).toContain("first unlocked Detail");
 
     await harness.controller.dispatch({
@@ -1577,6 +1752,7 @@ describe("Detail property inspector integration", () => {
       occurrenceId: target!.occurrenceId,
       intent: "open",
     }, viewport);
+    await controller.handleDestinationChooserKeypress("r", { name: "r" });
     const pageTarget = controller.state.propertyInspector.model!.entries.find(
       (entry) => entry.target?.kind === "page",
     )!;
@@ -1589,6 +1765,7 @@ describe("Detail property inspector integration", () => {
         occurrenceId: entry.occurrenceId,
         intent: "open",
       }, viewport);
+      await controller.handleDestinationChooserKeypress("r", { name: "r" });
     }
     const plain = controller.state.propertyInspector.model!.entries.find(
       (entry) => entry.key === "unknown-key",

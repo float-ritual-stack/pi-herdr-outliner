@@ -52,6 +52,7 @@ PageUp/PageDown move the selected expanded row's offset by one Tree body viewpor
 - [`DetailController`](../src/detail-controller.ts) — modes, effects, optimistic saves, PreviewRegion actions, property-inspector state, lazy backlink state, file/annotation behavior, and cursor visibility;
 - [`detail-pi.ts`](../src/detail-pi.ts) — terminal lifecycle, input, Pi layout switching, and dedicated-inspector startup;
 - [`detail-pi-preview.ts`](../src/detail-pi-preview.ts) — authored Markdown, callouts, property rows, and generated Backlinks in one `ScrollView`;
+- [`open-destination-chooser.ts`](../src/open-destination-chooser.ts) — shared destination state, fixed key handling, routing fallback, and idle dismissal for every open-capable Detail surface;
 - [`backlink-peek.ts`](../src/backlink-peek.ts) and [`backlink-peek-main.ts`](../src/backlink-peek-main.ts) — immutable source-set traversal, reversible outcomes, and the non-routable Herdr preview surface;
 - [`detail-editor-layout.ts`](../src/detail-editor-layout.ts) — grapheme-safe wrapped visual rows, cursor mapping, and selection spans;
 - [`detail-renderer.ts`](../src/detail-renderer.ts) — fixed custom frames for edit, comment, file, and annotation modes; and
@@ -61,15 +62,23 @@ The legacy ANSI Detail entrypoint remains available in [`src/detail.ts`](../src/
 
 Detail owns an exact target, a bounded in-process target history, and a visible
 `Unlocked | Locked` state. An unlocked Detail is eligible for same-tab Tree
-previews and reference opens. Ordinary navigation, including navigation
-originating inside a locked Detail, can target only an unlocked Detail. A locked
-Detail also rejects directly addressed ordinary `preview` and `open` commands;
-if no suitable Detail is unlocked, dispatch fails without replacing any anchor.
-`L`, `i`, `Ctrl+L`, or `Meta+L` locks the current target as a context anchor; the
-same command unlocks it. Block editing and annotation commenting lock before
-opening a mutable buffer. Ordinary `open` focuses its unlocked destination but
-leaves it unlocked. Reader `Enter` activates the focused PreviewRegion and is inert when no actionable region is focused.
-Closing Detail discards its target, history, and lock state.
+previews and confirmed reference opens. Ordinary navigation can target only an
+unlocked Detail. A locked Detail also rejects directly addressed ordinary
+`preview` and `open` commands; explicit `replace` alone may retarget it without
+changing its lock state. `L`, `i`, `Ctrl+L`, or `Meta+L` toggles the current
+target's lock. Block editing and annotation commenting lock before opening a
+mutable buffer.
+
+Authored block/page/Work-ID links and typed Property targets bind one target to
+the shared destination chooser before resolution or navigation. `Shift+R`
+replaces the current Detail, `f` dispatches to the first spatially unlocked
+same-tab Detail, and `r`/`d` create an independent right/down Detail. `Enter`
+uses the first unlocked destination and falls back to a right split; explicit
+`f` never falls back. Block-fragment identity is carried through replace,
+first-unlocked, and split routes. `Esc`, target changes, pane exit, or the
+configurable idle timeout dispose the bound target without navigation. Chooser
+input is consumed before the ordinary Detail keymap and resets the idle timer.
+Closing Detail discards its target, history, chooser, and lock state.
 
 The generated Backlinks section is collapsed by default and therefore performs
 no relation query during ordinary Tree cursor previews. Expansion calls the
@@ -88,13 +97,11 @@ source's occurrence rows, `Enter` or a Ctrl/Meta-click opens a non-routable
 Herdr popup, and `R` reveals one. The popup captures the visible filtered/sorted
 source set, renders one source at a time, and moves only within that snapshot.
 `Esc` sends an exact-client `backlinks.select` command before closing. `Enter`
-opens a destination chooser instead of immediately mutating pane topology:
-`Shift+R` sends an explicit `replace` to the invoking Detail without clearing
-its lock, `f` dispatches `open` to the first spatially unlocked same-tab Detail,
-and `r`/`d` seed a fresh browsing context without a source preview dispatch
-before splitting right/down beside the invoker. A second `Enter` uses the first
-unlocked Detail or falls back to a right split. The generated `+`/`−` controls
-use a Detail-local action URI and do not enter canonical text.
+opens the shared destination chooser instead of immediately mutating pane
+topology. Backlink Peek supplies reversible source-selection behavior to the
+same chooser used by authored Detail links and typed Property targets. Splits
+seed a fresh browsing context without a source preview dispatch. The generated
+`+`/`−` controls use a Detail-local action URI and do not enter canonical text.
 
 Obsidian-style callouts are parsed into source-spanned PreviewRegions with stable
 parent/child identity. Nested callout bodies remain Pi Markdown, `+`/`-` fold
@@ -239,8 +246,10 @@ another Detail; no anchor is overwritten. `reveal` targets the source Tree,
 then one same-context Tree, then one unambiguous same-tab Tree. There are no
 persisted or manual per-source open routes.
 
-Dangling page activation preflights the destination before transactional
-create-on-follow, so an exhausted unlocked pool cannot create content.
+Direct dangling page activation preflights the unlocked destination before
+transactional create-on-follow. Detail chooser activation instead defers
+resolution and create-on-follow until a destination is confirmed, so dismissal
+and idle expiry leave canonical content unchanged.
 
 ### Agent provenance
 
@@ -257,7 +266,7 @@ Herdr recognizes plain terminal text as a URL only for `http://` and `https://`.
 - `pi-outliner://work/<PIE-NNN>` — resolve-only Work-ID registry lookup;
 - `pi-outliner://page/<encoded-address>` — unique symbolic page resolution and explicit create-on-follow.
 
-Inside live panes, reference activation resolves one exact canonical block and sends `navigation.dispatch` with the originating client ID. Keyboard `o`, Ctrl/Meta-click in Tree, authored Detail links, and Pi TUI's `openUrl` emit `open`; `R` emits `reveal`. A plain Tree-row click changes Tree selection and publishes that canonical row to its linked Detail. Ctrl/Meta-click selects and opens the canonical row unless the clicked cell carries a reference target, which opens instead. Detail breadcrumb links explicitly emit `reveal`, so selecting an ancestor moves the paired Tree rather than opening another Detail. Generated Backlink and Property links resolve first to local PreviewRegion focus on plain click; Ctrl/Meta-click activates the focused source or typed target. Generated backlink activation opens a non-routable popup with the exact source client, target, selected row, filter, and sort snapshot. Cancel emits `backlinks.select`; commit sends a validated direct `open`; explicit new-Detail creation publishes a context with `dispatchPreview: false` before launching the pane. These exact-client commands do not mutate workspace-global selection. Deleted exact targets can still open read-only; page and Work-ID targets reject deleted canonical blocks before navigation.
+Inside live panes, reference activation carries one exact canonical target identity. Tree keyboard `o` and Ctrl/Meta-click resolve and dispatch `open`; `R` dispatches `reveal`. Authored Detail links, typed Property targets, and Pi TUI's Detail `openUrl` bind the unresolved target to the shared destination chooser, which resolves and dispatches only after confirmation. A plain Tree-row click changes Tree selection and publishes that canonical row to its linked Detail. Ctrl/Meta-click selects and opens the canonical row unless the clicked cell carries a reference target, which opens instead. Detail breadcrumb links explicitly emit `reveal`, so selecting an ancestor moves the paired Tree rather than opening another Detail. Generated Backlink and Property links resolve first to local PreviewRegion focus on plain click; Ctrl/Meta-click activates the focused source or typed target.
 
 Authored text is sanitized before link generation. Tree adds OSC 8 only after plain-text wrapping/truncation; Detail generates safe Markdown links after sanitization. Under `HERDR_ENV=1`, Detail enables Pi TUI hyperlink emission because nested panes advertise generic `TERM=xterm-256color` even though Herdr captures OSC 8 metadata. Tree accepts unmodified and Ctrl/Meta primary-button presses, uses rendered row identity independently from link hit testing, and ignores release, motion, and wheel reports for activation. Shift remains available for terminal-native selection.
 

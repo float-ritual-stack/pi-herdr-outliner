@@ -1,13 +1,19 @@
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "bun:test";
 import type { DetailState } from "../src/detail-controller";
-import { createPiDetailInputListener, decodePiDetailInput } from "../src/detail-pi-input";
+import {
+  createPiDetailInputListener,
+  decodePiDetailInput,
+  detailChooserOwnsPiInput,
+  piDetailChooserInput,
+} from "../src/detail-pi-input";
 import {
   DETAIL_DRAFT_SPLIT_MIN_WIDTH,
   DetailPiComponent,
   DetailPiDraftSplitLayout,
   detailDraftSplitWidths,
 } from "../src/detail-pi-renderer";
+import { createOpenDestinationChooserState } from "../src/open-destination-chooser";
 import { TextBuffer } from "../src/text-buffer";
 import type { Block } from "../src/types";
 
@@ -79,6 +85,7 @@ function state(overrides: Partial<DetailState> = {}): DetailState {
       focusedRegionId: null,
       disclosureOverrides: new Map(),
     },
+    destinationChooser: createOpenDestinationChooserState(),
     ...overrides,
   };
 }
@@ -225,12 +232,24 @@ describe("Pi TUI Detail component", () => {
     let overlay = false;
     const listener = createPiDetailInputListener(
       (data) => enqueued.push(data),
-      (data) => overlay || data.startsWith("\x1b[<0;"),
+      (data) => overlay || !detailChooserOwnsPiInput(data),
     );
 
     expect(listener("x")).toEqual({ consume: true });
     expect(listener("\x1b[103;1:3u")).toEqual({ consume: true });
     expect(listener("\x1b[<0;80;8M")).toBeUndefined();
+    expect(detailChooserOwnsPiInput("\x1b[<0;80;8M")).toBe(false);
+    expect(detailChooserOwnsPiInput("f")).toBe(true);
+    expect(piDetailChooserInput({
+      kind: "key",
+      str: "R",
+      key: { name: "r", shift: true },
+      inputAction: "suppress",
+    })).toEqual({ str: "", key: { name: "input" } });
+    expect(piDetailChooserInput({ kind: "paste", text: "ignored" })).toEqual({
+      str: "",
+      key: { name: "paste" },
+    });
     overlay = true;
     expect(listener("search")).toBeUndefined();
     expect(enqueued).toEqual(["x"]);

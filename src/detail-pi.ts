@@ -40,7 +40,12 @@ import {
 import { detailCalloutThemeFromEnvironment } from "./detail-callout-theme";
 import { projectDetailRead } from "./detail-embeds";
 import { createDetailKeyHandler } from "./detail-keymap";
-import { createPiDetailInputListener, decodePiDetailInput } from "./detail-pi-input";
+import {
+  createPiDetailInputListener,
+  decodePiDetailInput,
+  detailChooserOwnsPiInput,
+  piDetailChooserInput,
+} from "./detail-pi-input";
 import {
   DetailPiPreviewLayout,
   parseDetailPreviewActionUri,
@@ -68,6 +73,7 @@ import {
   resolveNavigationDestination,
 } from "./navigation-routes";
 import { resolvePaths } from "./paths";
+import { openDestinationTimeoutFromEnvironment } from "./open-destination-chooser";
 import {
   isTreeMouseSequence,
   parseTreePlainClick,
@@ -132,6 +138,9 @@ if (calloutThemeResolution.errors.length > 0) {
 const detailHeaderPropertyKeys = parseDetailHeaderPropertyKeys(
   process.env.OUTLINER_DETAIL_HEADER_PROPERTIES,
 );
+const destinationTimeoutMs = openDestinationTimeoutFromEnvironment(
+  process.env.OUTLINER_OPEN_DESTINATION_TIMEOUT_MS,
+);
 
 const paths = resolvePaths();
 const client = new OutlinerClient(paths.socket);
@@ -149,6 +158,8 @@ const dedicatedPropertyBlockId =
 if (detailPresentation === "property-inspector" && !dedicatedPropertyBlockId) {
   throw new Error("Dedicated property inspector requires a target block ID");
 }
+const initialTargetFragmentId =
+  process.env.OUTLINER_DETAIL_TARGET_FRAGMENT_ID?.trim() || undefined;
 configureCurrentPaneRightClick(rightClickOwnership);
 let pendingLinkClick = { activate: false, suppress: false };
 const terminal = new ProcessTerminal();
@@ -159,6 +170,10 @@ const tui = new DetailTuiAltScreen(terminal, false, undefined, {
     pendingLinkClick = { activate: false, suppress: false };
     if (pointer.suppress || stopping) return;
     enqueueWork(async () => {
+      if (controller.state.destinationChooser.active) {
+        await controller.handleDestinationChooserKeypress("", { name: "pointer" });
+        return;
+      }
       if (url.startsWith("pi-outliner-action:")) {
         await invokeDetailAction(url.slice("pi-outliner-action:".length));
         return;
@@ -213,6 +228,27 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+async function openTargetInNewDetail(
+  blockId: string,
+  direction: "right" | "down",
+  fragmentId?: string,
+): Promise<void> {
+  const contextId = crypto.randomUUID();
+  await client.request({
+    action: "browsing-context.publish",
+    sourceClientId: clientId,
+    contextId,
+    blockId,
+    dispatchPreview: false,
+  });
+  openDetailPane({
+    workspaceRoot: paths.workspaceRoot,
+    browsingContextId: contextId,
+    direction,
+    ...(fragmentId ? { targetFragmentId: fragmentId } : {}),
+  });
+}
+
 const effects: DetailEffects = {
   clientId,
   browsingContextId,
@@ -263,6 +299,7 @@ const effects: DetailEffects = {
       ...input,
     });
   },
+  openDetailPane: openTargetInNewDetail,
   async updateBlock(input) {
     return client.request<Block>({
       action: "update",
@@ -321,6 +358,8 @@ const controller = createDetailController(
     propertyInspectorPresentation: detailPresentation === "property-inspector"
       ? "dedicated"
       : "inline",
+    destinationTimeoutMs,
+    initialTargetFragmentId,
   },
 );
 
@@ -599,6 +638,10 @@ function shouldPassDetailInputToTui(data: string): boolean {
       suppress: primaryClick.shift && !activate,
     };
   }
+  if (
+    controller.state.destinationChooser.active &&
+    detailChooserOwnsPiInput(data)
+  ) return false;
   if (tui.hasOverlay()) return true;
   if (!isTreeMouseSequence(data)) return false;
   if (parseTreeSecondaryClick(data) && rightClickOwnership === "outliner") return false;
@@ -630,18 +673,7 @@ async function executeMenuAction(actionId: string): Promise<boolean> {
     await controller.dispatch({ type: "status.set", message: "No block selected" }, viewport());
     return true;
   }
-  const contextId = crypto.randomUUID();
-  await client.request({
-    action: "browsing-context.publish",
-    sourceClientId: clientId,
-    contextId,
-    blockId,
-  });
-  openDetailPane({
-    workspaceRoot: paths.workspaceRoot,
-    browsingContextId: contextId,
-    direction,
-  });
+  await openTargetInNewDetail(blockId, direction);
   return true;
 }
 
@@ -660,6 +692,22 @@ invokeDetailAction = async (actionId) => {
   await handleKeypress.invoke(actionId);
 };
 async function handleInput(data: string): Promise<void> {
+  if (controller.state.destinationChooser.active) {
+    const chooserInput = decodePiDetailInput(data);
+    if (
+      chooserInput.kind === "key" &&
+      chooserInput.inputAction !== "suppress" &&
+      chooserInput.key.ctrl &&
+      chooserInput.key.name === "q"
+    ) {
+      await stop();
+      return;
+    }
+    pendingLinkClick = { activate: false, suppress: false };
+    const forwarded = piDetailChooserInput(chooserInput);
+    await controller.handleDestinationChooserKeypress(forwarded.str, forwarded.key);
+    return;
+  }
   const secondaryClick = parseTreeSecondaryClick(data);
   if (secondaryClick && rightClickOwnership === "outliner") {
     showActionMenu(
