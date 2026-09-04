@@ -7,6 +7,7 @@ import {
   visibleBacklinkSources,
   type DetailController,
   type DetailIntent,
+  type DetailState,
   type DetailViewport,
 } from "./detail-controller";
 import { textBufferEditorCommand } from "./text-buffer-editor";
@@ -28,7 +29,6 @@ export interface DetailKeymapOptions {
   ): void;
   focusDraftSplit?(): void;
   navigatePreview?(direction: "up" | "down" | "pageup" | "pagedown" | "top" | "bottom"): void;
-  executeAction?(actionId: string): boolean | Promise<boolean>;
 }
 
 export interface DetailKeyHandler {
@@ -46,6 +46,12 @@ function isPageNavigationKey(name: string | undefined): name is PageNavigationKe
   return name === "up" || name === "down" || name === "pageup" || name === "pagedown";
 }
 
+export function detailActionMode(
+  state: Pick<DetailState, "mode" | "propertyInspector">,
+): string {
+  return state.propertyInspector.presentation === "dedicated" ? "property" : state.mode;
+}
+
 export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyHandler {
   const { controller, stop, viewport } = options;
   const actionKeymap = options.actionKeymap ?? DEFAULT_OUTLINER_ACTION_KEYMAP;
@@ -53,7 +59,6 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
   let forcedActionId: string | null = null;
 
   async function invokeAction(actionId: string): Promise<void> {
-    if (await options.executeAction?.(actionId)) return;
     const input = actionKeymap.defaultInput(actionId);
     if (!input) {
       await controller.dispatch({
@@ -305,14 +310,15 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
     }
     if (inputAction === "suppress") return;
     const mode = controller.state.mode;
+    const actionMode = detailActionMode(controller.state);
     const mapped = forcedActionId
       ? {
         actionId: forcedActionId,
         ...actionKeymap.defaultInput(forcedActionId)!,
         suppressed: false,
       }
-      : actionKeymap.canonicalize("detail", mode, str, key);
-    if (mapped.suppressed) return;
+      : actionKeymap.canonicalize("detail", actionMode, str, key);
+    if (!forcedActionId && mapped.suppressed) return;
     if (!forcedActionId && mapped.actionId) {
       await invokeAction(mapped.actionId);
       return;
@@ -321,9 +327,20 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
     key = mapped.key;
     if (mapped.actionId === "detail.menu.open") {
       options.openActionMenu?.(
-        actionKeymap.menuItems("detail", mode),
+        actionKeymap.menuItems("detail", actionMode),
         invokeAction,
       );
+      return;
+    }
+    if (mapped.actionId === "detail.property.close") {
+      stop();
+      return;
+    }
+    if (mapped.actionId === "detail.pane.right" || mapped.actionId === "detail.pane.below") {
+      await dispatch({
+        type: "pane.open",
+        direction: mapped.actionId === "detail.pane.right" ? "right" : "down",
+      });
       return;
     }
     if (mapped.actionId === "detail.keymap.reload") {

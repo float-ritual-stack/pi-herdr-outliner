@@ -292,7 +292,7 @@ export interface DetailEffects {
   readFile(block: Block): ReferencedFile;
   completeFiles(query: string): ReferencedPathCandidate[];
   focusOutliner(): Promise<void>;
-  openPropertyInspectorPane(blockId: string): string;
+  openPropertyInspectorPane(blockId: string): string | Promise<string>;
 }
 
 export type DetailBufferMoveDirection =
@@ -331,6 +331,7 @@ export type DetailIntent =
   | { type: "preview.action"; action: PreviewRegionAction }
   | { type: "property-inspector.disclosure.toggle" }
   | { type: "property-inspector.pane.open" }
+  | { type: "pane.open"; direction: "right" | "down" }
   | { type: "property-inspector.target.open"; occurrenceId: string; intent: "open" | "reveal" }
   | { type: "property-inspector.group.cycle" }
   | { type: "property-inspector.filter.begin" }
@@ -1267,11 +1268,23 @@ export function createDetailController(
         state.status = `Revealed ${blockDisplayTitle(resolved.block)}`;
         break;
       }
-      case "lock.toggle": {
-        if (state.propertyInspector.presentation === "dedicated") {
-          state.status = "Dedicated property inspector remains locked";
+      case "pane.open": {
+        const target = state.context.selected;
+        if (!target) {
+          state.status = "No block selected";
           break;
         }
+        await effects.openDetailPane(
+          target.id,
+          intent.direction,
+          state.targetFragmentId ?? undefined,
+        );
+        state.status = intent.direction === "right"
+          ? `Opened ${blockDisplayTitle(target)} to the right`
+          : `Opened ${blockDisplayTitle(target)} below`;
+        break;
+      }
+      case "lock.toggle": {
         const locked = state.connectionMode !== "locked";
         await setLocked(locked);
         state.status = locked
@@ -1387,7 +1400,7 @@ export function createDetailController(
           state.status = "No selected block to inspect";
           break;
         }
-        effects.openPropertyInspectorPane(blockId);
+        await effects.openPropertyInspectorPane(blockId);
         state.status = "Opened dedicated property inspector";
         break;
       }

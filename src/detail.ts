@@ -9,7 +9,7 @@ import {
   type DetailViewport,
 } from "./detail-controller";
 import { projectDetailRead } from "./detail-embeds";
-import { createDetailKeyHandler } from "./detail-keymap";
+import { createDetailKeyHandler, detailActionMode } from "./detail-keymap";
 import { renderDetailAnsi } from "./detail-renderer";
 import { completeReferencedPaths, readReferencedFile } from "./files";
 import { resolveOutlinerLinkTarget } from "./outliner-links";
@@ -110,7 +110,7 @@ const effects: DetailEffects = {
       action: "browsing-context.get",
       contextId: browsingContextId,
     });
-    if (!dedicatedPropertyBlockId) return browsingContext;
+    if (!dedicatedPropertyBlockId || browsingContext.target.selected) return browsingContext;
     return {
       ...browsingContext,
       target: await client.request<SelectionContext>({
@@ -188,10 +188,18 @@ const effects: DetailEffects = {
   async focusOutliner() {
     await sendContextClientCommand(client, "tree", browsingContextId, { command: "focus" });
   },
-  openPropertyInspectorPane(blockId) {
+  async openPropertyInspectorPane(blockId) {
+    const contextId = crypto.randomUUID();
+    await client.request({
+      action: "browsing-context.publish",
+      sourceClientId: clientId,
+      contextId,
+      blockId,
+      dispatchPreview: false,
+    });
     return openDetailPane({
       workspaceRoot: paths.workspaceRoot,
-      browsingContextId,
+      browsingContextId: contextId,
       propertyInspectorBlockId: blockId,
     });
   },
@@ -199,7 +207,7 @@ const effects: DetailEffects = {
 
 function draw(): void {
   process.stdout.write(renderDetailAnsi(controller.state, viewport(), {
-    helpText: actionKeymap.helpText("detail", controller.state.mode),
+    helpText: actionKeymap.helpText("detail", detailActionMode(controller.state)),
   }));
 }
 

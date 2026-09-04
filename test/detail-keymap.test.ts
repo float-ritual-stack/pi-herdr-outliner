@@ -79,7 +79,6 @@ function harness(
       invoke: (actionId: string) => Promise<void>,
     ) => void;
     navigatePreview?: (direction: "up" | "down" | "pageup" | "pagedown" | "top" | "bottom") => void;
-    executeAction?: (actionId: string) => boolean | Promise<boolean>;
   } = {},
 ): {
   intents: DetailIntent[];
@@ -164,6 +163,47 @@ test("routes the draft scroll link toggle through the action registry", async ()
   );
 });
 
+test("opens direction-aware Detail splits from preview bindings", async () => {
+  const detailState = state();
+  detailState.mode = "preview";
+  detailState.context.selected = {
+    id: "block-1",
+    parentId: null,
+    position: 0,
+    text: "Block",
+    author: "user",
+    createdAt: "created",
+    updatedAt: "updated",
+    properties: [],
+  };
+  const detail = harness(detailState, false);
+
+  await detail.press({ name: "right", meta: true, shift: true });
+  await detail.press({ name: "down", meta: true, shift: true });
+
+  expect(detail.intents).toEqual([
+    { type: "pane.open", direction: "right" },
+    { type: "pane.open", direction: "down" },
+  ]);
+});
+
+test("uses q to close a dedicated Property Detail without changing ordinary q", async () => {
+  const propertyState = state();
+  propertyState.mode = "preview";
+  propertyState.propertyInspector.presentation = "dedicated";
+  const property = harness(propertyState, false);
+  await property.press({ name: "q" }, "q");
+  expect(property.stops.count).toBe(1);
+  expect(property.intents).toEqual([]);
+
+  const ordinaryState = state();
+  ordinaryState.mode = "preview";
+  const ordinary = harness(ordinaryState, false);
+  await ordinary.press({ name: "q" }, "q");
+  expect(ordinary.stops.count).toBe(0);
+  expect(ordinary.intents).toEqual([{ type: "focus.outliner", announce: true }]);
+});
+
 test("opens the contextual menu and invokes its selected action through effective bindings", async () => {
   const detailState = state();
   detailState.mode = "preview";
@@ -171,16 +211,10 @@ test("opens the contextual menu and invokes its selected action through effectiv
   let invoke: (actionId: string) => Promise<void> = async () => {
     throw new Error("Action menu did not open");
   };
-  const executed: string[] = [];
   const detail = harness(detailState, false, {
     openActionMenu: (items, nextInvoke) => {
       menuItems = items;
       invoke = nextInvoke;
-    },
-    executeAction: (actionId) => {
-      if (actionId !== "detail.pane.right") return false;
-      executed.push(actionId);
-      return true;
     },
   });
 
@@ -188,8 +222,10 @@ test("opens the contextual menu and invokes its selected action through effectiv
   expect(menuItems.some((item) => item.id === "detail.edit.begin")).toBe(true);
   await invoke("detail.edit.begin");
   await invoke("detail.pane.right");
-  expect(detail.intents).toEqual([{ type: "edit.begin" }]);
-  expect(executed).toEqual(["detail.pane.right"]);
+  expect(detail.intents).toEqual([
+    { type: "edit.begin" },
+    { type: "pane.open", direction: "right" },
+  ]);
 });
 
 test("maps word, line, selection, and select-all controls to explicit intents", async () => {
