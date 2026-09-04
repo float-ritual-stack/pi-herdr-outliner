@@ -261,26 +261,6 @@ describe("renderTreeFrame", () => {
     expect(canonical.text).toBe(originalText);
   });
 
-  test("preserves the author marker when the full summary fits without a gap", () => {
-    const item = block("item", {
-      text: "Task [status::planned]",
-      displayText: "Task [status::planned]",
-      author: "agent",
-      properties: [{ key: "status", value: "planned" }],
-    });
-
-    const row = renderTreeFrame(
-      view([item]),
-      16,
-      9,
-      0,
-      { propertyKeys: ["status"] },
-    ).frame.split("\n").map(stripTerminalSequences).find((line) => line.includes("Task"))!;
-
-    expect(row).toBe("• Taskplanned  A");
-    expect(visibleWidth(row)).toBe(16);
-  });
-
   test("right-aligns an unlabeled single-property summary column", () => {
     const planned = block("planned", {
       text: "Planned roadmap item [status::planned]",

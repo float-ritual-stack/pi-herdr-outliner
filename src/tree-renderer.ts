@@ -151,7 +151,7 @@ function renderCollapsedRow(
   if (
     segments.length > 0 &&
     optionalSuffix &&
-    visibleWidth(title) + visibleWidth(plainSummary()) > available
+    visibleWidth(title) + visibleWidth(separator) + visibleWidth(plainSummary()) > available
   ) {
     suffix = fixedSuffix;
     available = Math.max(1, width - visibleWidth(prefix) - visibleWidth(suffix));
