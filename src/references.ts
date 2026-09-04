@@ -8,6 +8,8 @@ import type {
 
 const BLOCK_REFERENCE_PATTERN =
   /\(\(([A-Za-z0-9_-]{8,})(?:\^([A-Za-z0-9][A-Za-z0-9_-]{0,63}))?(?:\|((?:(?!\)\))[^\r\n])+))?\)\)/g;
+const TITLED_BLOCK_REFERENCE_ENVELOPE_PATTERN =
+  /\(\([A-Za-z0-9_-]{8,}(?:\^[A-Za-z0-9][A-Za-z0-9_-]{0,63})?\|[\s\S]*?\)\)/g;
 
 export interface BlockReferenceOccurrence {
   blockId: string;
@@ -20,6 +22,13 @@ export interface BlockReferenceOccurrence {
 export function blockDisplayTitle(block: Block): string {
   const firstContentLine = firstLineWithoutPropertyTokens(stripFragmentAnchors(block.text));
   return firstContentLine?.replace(/\s{2,}/g, " ").trim() || block.id;
+}
+
+export function titledBlockReferenceEnvelopeRanges(text: string): Array<{ start: number; end: number }> {
+  return [...text.matchAll(TITLED_BLOCK_REFERENCE_ENVELOPE_PATTERN)].map((match) => ({
+    start: match.index,
+    end: match.index + match[0].length,
+  }));
 }
 
 export function blockReferenceOccurrences(text: string): BlockReferenceOccurrence[] {

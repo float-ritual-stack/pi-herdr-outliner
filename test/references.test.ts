@@ -237,6 +237,14 @@ describe("reference occurrence Markdown protection", () => {
       expect.objectContaining({ kind: "block", blockId }),
     ]);
   });
+  test("does not scan nested references in malformed titled envelopes", () => {
+    const invalid = `((${target.id}|line one\n[[Page]] PIE-123))`;
+
+    expect(blockReferenceOccurrences(invalid)).toEqual([]);
+    expect(resolveBlockReferences(invalid, () => target)).toBe(invalid);
+    expect(outlinerReferenceOccurrences(invalid, "PIE")).toEqual([]);
+  });
+
   test("excludes titled references in protected spans without leaking label syntax", () => {
     const visibleId = "23232323-2323-4232-8232-232323232323";
     const hiddenId = "24242424-2424-4242-8242-242424242424";

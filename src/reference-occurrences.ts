@@ -1,7 +1,10 @@
 import { pageAddressReferences } from "./page-addresses";
 import { parsePropertyRecords } from "./properties";
 import type { PropertyRecord } from "./types";
-import { blockReferenceOccurrences } from "./references";
+import {
+  blockReferenceOccurrences,
+  titledBlockReferenceEnvelopeRanges,
+} from "./references";
 import { workIdReferences } from "./work-ids";
 
 export interface TextRange {
@@ -190,10 +193,13 @@ export function outlinerReferenceOccurrences(
   propertyRecords: readonly PropertyRecord[] = parsePropertyRecords(text),
 ): OutlinerReferenceOccurrence[] {
   const blockReferences = blockReferenceOccurrences(text);
-  const blockReferenceRanges = blockReferences.map((reference) => ({
-    start: reference.start,
-    end: reference.end,
-  }));
+  const blockReferenceRanges = [
+    ...blockReferences.map((reference) => ({
+      start: reference.start,
+      end: reference.end,
+    })),
+    ...titledBlockReferenceEnvelopeRanges(text),
+  ];
   const candidates: OutlinerReferenceOccurrence[] = blockReferences.map(
     (reference) => ({ kind: "block", ...reference }),
   );
