@@ -170,6 +170,10 @@ const tui = new DetailTuiAltScreen(terminal, false, undefined, {
     pendingLinkClick = { activate: false, suppress: false };
     if (pointer.suppress || stopping) return;
     enqueueWork(async () => {
+      if (controller.state.destinationChooser.active) {
+        await controller.handleDestinationChooserKeypress("", { name: "pointer" });
+        return;
+      }
       if (url.startsWith("pi-outliner-action:")) {
         await invokeDetailAction(url.slice("pi-outliner-action:".length));
         return;
