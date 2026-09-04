@@ -1219,6 +1219,28 @@ describe("detail controller completion, navigation, and focus", () => {
     expect(harness.calls.locks).toEqual([]);
   });
 
+  test("an explicit replace retargets the invoking Detail without clearing its lock", async () => {
+    const first = makeBlock();
+    const second = makeBlock({ id: "block-2", text: "second", updatedAt: "version-2" });
+    const harness = createHarness(first);
+    await harness.controller.initialize();
+    await harness.controller.dispatch({ type: "lock.toggle" }, viewport);
+    harness.setSelection({ selected: second, ancestors: [], children: [] });
+
+    await harness.controller.onServiceEvent(
+      event("ui", { targetClientId: "detail-test", command: "replace", blockId: second.id }),
+      viewport,
+    );
+
+    expect(harness.controller.state.context.selected?.id).toBe(second.id);
+    expect(harness.controller.state.connectionMode).toBe("locked");
+    expect(harness.controller.state.status).toBe(
+      "Replaced here · remains locked · L unlocks this block",
+    );
+    expect(harness.calls.selfFocuses).toBe(1);
+    expect(harness.calls.locks).toEqual([true]);
+  });
+
   test("entering edit mode locks the current Detail anchor", async () => {
     const harness = createHarness(makeBlock());
     await harness.controller.initialize();

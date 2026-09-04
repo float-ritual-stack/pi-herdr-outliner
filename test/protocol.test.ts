@@ -56,7 +56,7 @@ test("serves mutations and property queries over the local socket", async () => 
   const client = new OutlinerClient(socket);
   const service = await client.request<OutlinerServiceStatus>({ action: "ping" });
   expect(service).toEqual({ status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION });
-  expect(service.protocolVersion).toBe(27);
+  expect(service.protocolVersion).toBe(28);
   const provenance = {
     actorId: "omp",
     sessionId: "session-1",
@@ -655,6 +655,7 @@ test("validates direct popup commands and targets only the invoking Detail", asy
   const client = new OutlinerClient(socket);
   const connected = Promise.withResolvers<void>();
   const received = Promise.withResolvers<void>();
+  const replaced = Promise.withResolvers<void>();
   const events: OutlinerEvent[] = [];
   let connectionCount = 0;
   const registrations: OutlinerClientRegistration[] = [
@@ -683,6 +684,7 @@ test("validates direct popup commands and targets only the invoking Detail", asy
         if (registration.clientId !== "popup-detail" || event.domain !== "ui") return;
         events.push(event);
         if (events.length === 2) received.resolve();
+        if (events.length === 3) replaced.resolve();
       },
     })
   );
@@ -783,6 +785,16 @@ test("validates direct popup commands and targets only the invoking Detail", asy
     action: "ui.command.send",
     command: { targetClientId: "popup-detail", command: "open", blockId: source.id },
   })).rejects.toThrow("Invoking Detail is locked");
+  await client.request({
+    action: "ui.command.send",
+    command: { targetClientId: "popup-detail", command: "replace", blockId: source.id },
+  });
+  await replaced.promise;
+  expect(events[2]?.command).toEqual({
+    targetClientId: "popup-detail",
+    command: "replace",
+    blockId: source.id,
+  });
 });
 
 test("registers multiple live clients, targets one recipient, broadcasts content, and cleans up exact connections", async () => {

@@ -575,12 +575,20 @@ export class OutlinerServer {
             throw new Error(`Target client is not registered: ${request.command.targetClientId}`);
           }
           const target = this.clientById(request.command.targetClientId);
-          if (request.command.command === "open") {
+          if (
+            request.command.command === "open" ||
+            request.command.command === "replace"
+          ) {
+            const operation = request.command.command === "replace" ? "replace" : "open";
             if (target.role !== "detail") {
-              throw new Error("Direct open target must be a Detail client");
+              throw new Error(`Direct ${operation} target must be a Detail client`);
             }
-            if (target.locked) throw new Error("Invoking Detail is locked");
-            if (!request.command.blockId) throw new Error("Direct open requires a block ID");
+            if (operation === "open" && target.locked) {
+              throw new Error("Invoking Detail is locked");
+            }
+            if (!request.command.blockId) {
+              throw new Error(`Direct ${operation} requires a block ID`);
+            }
             this.store.require(request.command.blockId);
           }
           if (request.command.command === "backlinks.select") {
