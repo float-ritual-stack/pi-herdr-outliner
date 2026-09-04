@@ -129,8 +129,9 @@ canonical source.
 Tree rows and the Detail header derive compact summaries from the same canonical
 block-property array. `OUTLINER_PROPERTY_SUMMARY_KEYS` supplies the
 workspace-ordered allowlist; virtual branches can override it for their
-occurrences with `[summary-properties::…]`. Width fitting drops trailing
-configured fields before truncating the property-free Tree title. Summary
+occurrences with `[summary-properties::…]`. Tree width fitting right-aligns the
+summary region, omits the label after fitting leaves one property, and drops
+trailing configured fields before truncating the property-free title. Summary
 rendering is presentation-only and never reparses into or mutates source.
 
 ### Pi / OMP extension

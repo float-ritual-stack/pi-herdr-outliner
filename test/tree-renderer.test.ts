@@ -186,10 +186,13 @@ describe("renderTreeFrame", () => {
 
     const wide = renderTreeFrame(view([roadmap]), 140, 8).frame.split("\n");
     const wideRow = wide.find((line) => stripTerminalSequences(line).includes("PIE-196"))!;
-    expect(stripTerminalSequences(wideRow)).toContain(
-      "PIE-196 — Property summaries  status planned · stage next · priority high · track interactive-documents",
+    const wideText = stripTerminalSequences(wideRow);
+    expect(wideText).toContain("PIE-196 — Property summaries");
+    expect(wideText).toContain(
+      "status planned · stage next · priority high · track interactive-documents",
     );
-    expect(stripTerminalSequences(wideRow)).not.toContain("[status::");
+    expect(wideText).not.toContain("[status::");
+    expect(visibleWidth(wideRow)).toBe(140);
 
     const medium = renderTreeFrame(view([roadmap]), 80, 8).frame.split("\n");
     const mediumRow = medium.find((line) => stripTerminalSequences(line).includes("PIE-196"))!;
@@ -199,14 +202,15 @@ describe("renderTreeFrame", () => {
 
     const narrow = renderTreeFrame(view([roadmap]), 42, 8).frame.split("\n");
     const narrowRow = narrow.find((line) => stripTerminalSequences(line).includes("PIE-196"))!;
-    expect(stripTerminalSequences(narrowRow)).toContain("status planned");
+    expect(stripTerminalSequences(narrowRow)).toContain("planned");
+    expect(stripTerminalSequences(narrowRow)).not.toContain("status planned");
     expect(visibleWidth(narrowRow)).toBeLessThanOrEqual(42);
     expect(narrow.filter((line) => stripTerminalSequences(line).includes("PIE-196"))).toHaveLength(1);
     expect(narrowRow).toStartWith("\x1b[48;5;238m\x1b[1m");
 
     const minimum = renderTreeFrame(view([roadmap]), 18, 8).frame.split("\n");
     const minimumRow = minimum[4]!;
-    expect(stripTerminalSequences(minimumRow)).toContain("status");
+    expect(stripTerminalSequences(minimumRow)).toContain("planned");
     expect(visibleWidth(minimumRow)).toBeLessThanOrEqual(18);
   });
 
@@ -248,11 +252,64 @@ describe("renderTreeFrame", () => {
       rendered.find((line) => stripTerminalSequences(line).startsWith("  ◇ Roadmap"))!,
     );
 
-    expect(canonicalRow).toContain("priority high");
+    expect(canonicalRow).toContain("high");
+    expect(canonicalRow).not.toContain("priority high");
     expect(canonicalRow).not.toContain("status done");
-    expect(occurrenceRow).toContain("track delivery");
+    expect(occurrenceRow).toContain("delivery");
+    expect(occurrenceRow).not.toContain("track delivery");
     expect(occurrenceRow).not.toContain("priority high");
     expect(canonical.text).toBe(originalText);
+  });
+
+  test("right-aligns an unlabeled single-property summary column", () => {
+    const planned = block("planned", {
+      text: "Planned roadmap item [status::planned]",
+      displayText: "Planned roadmap item [status::planned]",
+      properties: [{ key: "status", value: "planned" }],
+    });
+    const proposed = block("proposed", {
+      text: "Short [status::proposed]",
+      displayText: "Short [status::proposed]",
+      properties: [{ key: "status", value: "proposed" }],
+    });
+
+    const rendered = renderTreeFrame(
+      view([planned, proposed]),
+      60,
+      9,
+      0,
+      { propertyKeys: ["status"] },
+    ).frame.split("\n").map(stripTerminalSequences);
+    const plannedRow = rendered.find((line) => line.includes("Planned roadmap item"))!;
+    const proposedRow = rendered.find((line) => line.includes("Short"))!;
+
+    expect(plannedRow).not.toContain("status planned");
+    expect(proposedRow).not.toContain("status proposed");
+    expect(plannedRow.indexOf("planned") + "planned".length).toBe(
+      proposedRow.indexOf("proposed") + "proposed".length,
+    );
+    expect(visibleWidth(plannedRow)).toBe(60);
+    expect(visibleWidth(proposedRow)).toBe(60);
+  });
+
+  test("keeps the author marker only when title, gap, and summary all fit", () => {
+    const item = block("item", {
+      text: "Task [status::planned]",
+      displayText: "Task [status::planned]",
+      author: "agent",
+      properties: [{ key: "status", value: "planned" }],
+    });
+    const rowAt = (width: number) =>
+      renderTreeFrame(
+        view([item]),
+        width,
+        9,
+        0,
+        { propertyKeys: ["status"] },
+      ).frame.split("\n").map(stripTerminalSequences).find((line) => line.includes("Task"))!;
+
+    expect(rowAt(18)).toBe("• Task  planned  A");
+    expect(rowAt(17)).toBe("• Task    planned");
   });
   test("renders a narrow keyboard menu with clickable pane and action links", () => {
     const rendered = renderTreeFrame(view([], {
