@@ -529,7 +529,7 @@ describe("detail controller projection and deferred refresh", () => {
   });
 
   test("follows a durable fragment reference to its anchored preview line", async () => {
-    const source = makeBlock({ text: "See ((target01^decision))" });
+    const source = makeBlock({ text: "See ((target01^decision|the approved boundary))" });
     const target = makeBlock({
       id: "target01",
       text: "Target\n\nIntro\n\n## Decision ^decision\nBody",

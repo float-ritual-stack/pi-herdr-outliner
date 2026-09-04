@@ -22,6 +22,7 @@ export type OutlinerReferenceOccurrence =
       kind: "page";
       address: string;
       normalizedAddress: string;
+      label?: string;
       start: number;
       end: number;
     }
@@ -199,6 +200,7 @@ export function outlinerReferenceOccurrences(
       kind: "page",
       address: reference.displayAddress,
       normalizedAddress: reference.normalizedAddress,
+      ...(reference.label ? { label: reference.label } : {}),
       start: reference.start,
       end: reference.end,
     });

@@ -59,7 +59,8 @@ export interface OutlinerLinkNavigation {
 interface LinkSpan {
   start: number;
   end: number;
-  uri: string;
+  uri: string | null;
+  presentation?: string;
 }
 
 
@@ -351,6 +352,7 @@ function genericLinkSpans(
         start: reference.start,
         end: reference.end,
         uri: outlinerLinkUri("page", reference.address),
+        presentation: reference.label ?? reference.address,
       });
     } else if (reference.kind === "work-id") {
       spans.push({
@@ -398,13 +400,17 @@ function renderLinkSpans(
   text: string,
   spans: readonly LinkSpan[],
   renderLink: (visible: string, uri: string) => string,
+  usePresentation = false,
 ): string {
   if (spans.length === 0) return text;
   let result = "";
   let cursor = 0;
   for (const span of spans) {
     result += text.slice(cursor, span.start);
-    result += renderLink(text.slice(span.start, span.end), span.uri);
+    const visible = usePresentation && span.presentation !== undefined
+      ? span.presentation
+      : text.slice(span.start, span.end);
+    result += span.uri ? renderLink(visible, span.uri) : visible;
     cursor = span.end;
   }
   return result + text.slice(cursor);
@@ -423,6 +429,14 @@ function resolvedReferenceSpans(rawText: string, resolvedText: string): LinkSpan
     resolvedCursor += reference.start - rawCursor;
     const authored = rawText.slice(reference.start, reference.end);
     if (resolvedText.startsWith(authored, resolvedCursor)) {
+      if (reference.label !== undefined) {
+        spans.push({
+          start: resolvedCursor,
+          end: resolvedCursor + authored.length,
+          uri: null,
+          presentation: `${reference.label} · Missing target`,
+        });
+      }
       rawCursor = reference.end;
       resolvedCursor += authored.length;
       continue;
@@ -436,6 +450,7 @@ function resolvedReferenceSpans(rawText: string, resolvedText: string): LinkSpan
       uri: outlinerLinkUri("block", reference.blockId, {
         fragmentId: reference.fragmentId,
       }),
+      presentation: resolvedText.slice(resolvedCursor + 2, end),
     });
     rawCursor = reference.end;
     resolvedCursor = end + 2;
@@ -447,6 +462,7 @@ export function linkOutlinerMarkdown(
   resolvedText: string,
   rawText: string,
   workIdPrefix: string | null = null,
+  linksEnabled = true,
 ): string {
   const spans = selectLinkSpans(
     resolvedText,
@@ -454,7 +470,12 @@ export function linkOutlinerMarkdown(
     () => true,
     workIdPrefix,
   );
-  return renderLinkSpans(resolvedText, spans, markdownLink);
+  return renderLinkSpans(
+    resolvedText,
+    spans,
+    linksEnabled ? markdownLink : (visible) => visible,
+    true,
+  );
 }
 
 export interface OutlinerTextLinker {
