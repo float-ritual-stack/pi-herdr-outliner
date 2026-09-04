@@ -95,6 +95,22 @@ export interface CaptureReceipt {
   deduplicated: boolean;
 }
 
+export type DeliveryStage = "work" | "review" | "validate" | "complete";
+
+export interface DeliveryEnsureInput {
+  taskBlockId: string;
+  deliveryKey: string;
+  repository: string;
+  baseBranch: string;
+  workBranch: string;
+}
+
+export interface DeliveryReceipt {
+  task: Block;
+  delivery: Block;
+  created: boolean;
+}
+
 export type OutlinerClientRole = "tree" | "detail";
 
 export type OutlinerNavigationIntent = "preview" | "open" | "reveal";
@@ -326,7 +342,7 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 28;
+export const OUTLINER_PROTOCOL_VERSION = 29;
 
 
 export interface OutlinerServiceStatus {
@@ -388,6 +404,13 @@ export type OutlinerRequest =
       id: string;
       action: "roadmap.items.create";
       input: RoadmapItemCreateInput;
+      author?: BlockAuthor;
+      provenance?: BlockProvenance;
+    }
+  | {
+      id: string;
+      action: "deliveries.ensure";
+      input: DeliveryEnsureInput;
       author?: BlockAuthor;
       provenance?: BlockProvenance;
     }

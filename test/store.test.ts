@@ -41,6 +41,45 @@ afterEach(() => {
 });
 
 describe("OutlinerStore", () => {
+  test("creates one immutable delivery identity per task and delivery key", () => {
+    const store = makeStore();
+    const task = store.create(
+      "PIE-182 lifecycle [type::roadmap-item] [work-id::PIE-182] [work-stage::next]",
+    );
+    const input = {
+      taskBlockId: task.id,
+      deliveryKey: "PIE-182/enforcement",
+      repository: "float-ritual-stack/pi-herdr-outliner",
+      baseBranch: "main",
+      workBranch: "feature/pie-182-lifecycle-enforcement",
+    };
+
+    const created = store.ensureDelivery(input, "agent", {
+      actorId: "omp",
+      sessionId: "session-1",
+      taskId: "start",
+    });
+    expect(created.created).toBe(true);
+    expect(created.delivery.parentId).toBe(task.id);
+    expect(created.delivery.properties).toEqual([
+      { key: "type", value: "delivery" },
+      { key: "delivery-key", value: "PIE-182/enforcement" },
+      { key: "repository", value: "float-ritual-stack/pi-herdr-outliner" },
+      { key: "base-branch", value: "main" },
+      { key: "work-branch", value: "feature/pie-182-lifecycle-enforcement" },
+      { key: "delivery-stage", value: "work" },
+    ]);
+    expect(created.delivery.properties.some((property) => property.key === "work-id")).toBe(false);
+
+    const reused = store.ensureDelivery(input);
+    expect(reused.created).toBe(false);
+    expect(reused.delivery.id).toBe(created.delivery.id);
+    expect(() => store.ensureDelivery({
+      ...input,
+      workBranch: "feature/pie-182-conflict",
+    })).toThrow("Delivery PIE-182/enforcement has conflicting work-branch");
+  });
+
   test("indexes inline properties and combines filters", () => {
     const store = makeStore();
     const workspace = store
