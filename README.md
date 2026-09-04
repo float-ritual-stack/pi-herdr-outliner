@@ -206,12 +206,15 @@ the pointer. Outliner registers `right_click=pane` only while it is running and
 restores `herdr` on exit; the surrounding pane frame remains Herdr-owned in
 either mode.
 
-Detail keeps the selected title prominent, places configured block properties on
-one compact line beneath it, and right-aligns the clickable `🔓`/`🔒` lock and
-`[⋯]` action controls. Set `OUTLINER_DETAIL_HEADER_PROPERTIES` on the Herdr
-process to a comma-separated property order; the default is
-`status,work-stage,priority,track`. An explicit empty value hides the property
-summary. Lower-priority fields are omitted first when the pane narrows.
+Tree and Detail expose configured block properties as compact one-line summaries.
+Set `OUTLINER_PROPERTY_SUMMARY_KEYS` on the Herdr process to a comma-separated
+property order; the default is `status,work-stage,priority,track`. An explicit
+empty value hides summaries. Detail places the summary beneath its prominent
+title. Collapsed Tree rows place it beside the property-free title, remove
+lower-priority fields before truncating the title, and never add a second row.
+The complete authored metadata remains available in expanded rows and the
+property inspector. Detail also right-aligns the clickable `🔓`/`🔒` lock and
+`[⋯]` action controls.
 
 Override bindings with
 `$XDG_CONFIG_HOME/pi-herdr-outliner/keybindings.json` (falling back to
@@ -521,6 +524,7 @@ Next
 [sort::updated]
 [direction::desc]
 [limit::20]
+[summary-properties::work-stage,status,priority]
 ```
 
 Spaced values use the same canonical filter syntax:
@@ -528,6 +532,11 @@ Spaced values use the same canonical filter syntax:
 ```text
 [query::status="in progress" project=pi-outliner]
 ```
+
+A virtual branch can override the workspace Tree summary order for its projected
+occurrences with `[summary-properties::key,key,…]`. The override is
+presentation-only; ordinary and projected rows continue to read the same
+canonical parsed properties.
 
 Matches appear as disposable `◇` root occurrences. Each matched root also projects
 its canonical descendants as read-only context through relative depth 2. Context

@@ -4,6 +4,7 @@ import {
   parsePropertyFilterExpression,
 } from "./block-query";
 import { parsePropertyRecords, patchPropertyText } from "./properties";
+import { parsePropertySummaryKeys } from "./property-summary";
 import type {
   BlockQuerySort,
   Block,
@@ -68,6 +69,7 @@ export interface VirtualBranchConfig {
   create: BlockProperty | null;
   createParentId: string | null;
   readOnly: boolean;
+  summaryPropertyKeys?: readonly string[];
 }
 
 export interface VirtualBranchConfigResult {
@@ -257,6 +259,16 @@ export function parseVirtualBranchConfig(
     }
   }
 
+  const summaryProperties = singleProperty(
+    definition,
+    "summary-properties",
+    false,
+    configurationErrors,
+  );
+  const summaryPropertyKeys = summaryProperties
+    ? parsePropertySummaryKeys(summaryProperties.value) ?? []
+    : undefined;
+
   const createProperty = singleProperty(definition, "create", false, creationErrors);
   let create: BlockProperty | null = null;
   if (createProperty) {
@@ -301,6 +313,7 @@ export function parseVirtualBranchConfig(
       filters,
       sort,
       limit,
+      ...(summaryPropertyKeys === undefined ? {} : { summaryPropertyKeys }),
       create,
       createParentId,
       readOnly: create === null || createParentId === null || creationErrors.length > 0,

@@ -17,6 +17,10 @@ import {
 } from "./detail-controller";
 import { layoutDetailEditor } from "./detail-editor-layout";
 import { openDestinationChooserHelp } from "./open-destination-chooser";
+import {
+  DEFAULT_PROPERTY_SUMMARY_KEYS,
+  propertySummarySegments,
+} from "./property-summary";
 import { renderTextBufferEditorRow } from "./text-buffer-editor";
 import { renderMarkdownLine, sanitizeDynamicText } from "./terminal";
 
@@ -127,69 +131,23 @@ function renderAncestors(
   return fitBreadcrumb(breadcrumb, width);
 }
 
-export const DEFAULT_DETAIL_HEADER_PROPERTY_KEYS = [
-  "status",
-  "work-stage",
-  "priority",
-  "track",
-] as const;
-
-export function parseDetailHeaderPropertyKeys(
-  value: string | undefined,
-): readonly string[] | undefined {
-  if (value === undefined) return undefined;
-  const keys: string[] = [];
-  const seen = new Set<string>();
-  for (const candidate of value.split(",")) {
-    const key = candidate.trim().toLowerCase();
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    keys.push(key);
-  }
-  return keys;
-}
-
-interface DetailPropertySummarySegment {
-  plain: string;
-  rendered: string;
-}
-
-function propertySummarySegments(
-  state: Readonly<DetailState>,
-  keys: readonly string[],
-): DetailPropertySummarySegment[] {
-  const properties = state.context.selected?.properties ?? [];
-  return keys.flatMap((key) => {
-    const values = [...new Set(
-      properties
-        .filter((property) => property.key.toLowerCase() === key)
-        .map((property) => sanitizeDynamicText(property.value))
-        .filter(Boolean),
-    )];
-    if (values.length === 0) return [];
-    const label = key === "work-stage" ? "stage" : key;
-    const value = values.join(", ");
-    return [{
-      plain: `${label} ${value}`,
-      rendered: `\x1b[2m${label}\x1b[0m \x1b[36m${value}\x1b[0m`,
-    }];
-  });
-}
 
 function renderDetailMetadata(
   state: Readonly<DetailState>,
   width: number,
   options: DetailHeaderOptions,
 ): string {
-  const keys = options.propertyKeys ?? DEFAULT_DETAIL_HEADER_PROPERTY_KEYS;
-  const segments = propertySummarySegments(state, keys);
+  const keys = options.propertyKeys ?? DEFAULT_PROPERTY_SUMMARY_KEYS;
+  const segments = propertySummarySegments(state.context.selected?.properties ?? [], keys);
   while (
     segments.length > 1 &&
     visibleWidth(segments.map((segment) => segment.plain).join(" · ")) > width
   ) {
     segments.pop();
   }
-  let summary = segments.map((segment) => segment.rendered).join(" \x1b[2m·\x1b[0m ");
+  let summary = segments
+    .map((segment) => `\x1b[2m${segment.label}\x1b[0m \x1b[36m${segment.value}\x1b[0m`)
+    .join(" \x1b[2m·\x1b[0m ");
   if (visibleWidth(summary) > width) summary = fitToWidth(summary, width);
 
   const separator = "  \x1b[2m·\x1b[0m  ";

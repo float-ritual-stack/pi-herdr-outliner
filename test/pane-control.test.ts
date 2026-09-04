@@ -232,13 +232,13 @@ test("opens a property inspector from the moved pane's live identity", () => {
   const originalHerdrEnv = process.env.HERDR_ENV;
   const originalPaneId = process.env.HERDR_PANE_ID;
   const originalStateDir = process.env.OUTLINER_STATE_DIR;
-  const originalHeaderProperties = process.env.OUTLINER_DETAIL_HEADER_PROPERTIES;
+  const originalSummaryProperties = process.env.OUTLINER_PROPERTY_SUMMARY_KEYS;
   const originalDestinationTimeout = process.env.OUTLINER_OPEN_DESTINATION_TIMEOUT_MS;
   try {
     process.env.HERDR_ENV = "1";
     process.env.HERDR_PANE_ID = "w1:p2";
     process.env.OUTLINER_STATE_DIR = "/tmp/outliner-state";
-    process.env.OUTLINER_DETAIL_HEADER_PROPERTIES = "work-stage,status";
+    process.env.OUTLINER_PROPERTY_SUMMARY_KEYS = "work-stage,status";
     process.env.OUTLINER_OPEN_DESTINATION_TIMEOUT_MS = "9000";
     writeFileSync(
       herdr,
@@ -297,7 +297,7 @@ if (args[0] === "pane" && args[1] === "current") {
       "--env",
       "OUTLINER_STATE_DIR=/tmp/outliner-state",
       "--env",
-      "OUTLINER_DETAIL_HEADER_PROPERTIES=work-stage,status",
+      "OUTLINER_PROPERTY_SUMMARY_KEYS=work-stage,status",
       "--env",
       "OUTLINER_OPEN_DESTINATION_TIMEOUT_MS=9000",
     ]);
@@ -328,10 +328,10 @@ if (args[0] === "pane" && args[1] === "current") {
     else process.env.HERDR_PANE_ID = originalPaneId;
     if (originalStateDir === undefined) delete process.env.OUTLINER_STATE_DIR;
     else process.env.OUTLINER_STATE_DIR = originalStateDir;
-    if (originalHeaderProperties === undefined) {
-      delete process.env.OUTLINER_DETAIL_HEADER_PROPERTIES;
+    if (originalSummaryProperties === undefined) {
+      delete process.env.OUTLINER_PROPERTY_SUMMARY_KEYS;
     } else {
-      process.env.OUTLINER_DETAIL_HEADER_PROPERTIES = originalHeaderProperties;
+      process.env.OUTLINER_PROPERTY_SUMMARY_KEYS = originalSummaryProperties;
     }
     if (originalDestinationTimeout === undefined) {
       delete process.env.OUTLINER_OPEN_DESTINATION_TIMEOUT_MS;

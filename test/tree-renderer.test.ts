@@ -169,6 +169,92 @@ describe("renderTreeFrame", () => {
       ].join("\n"),
     });
   });
+
+  test("fits ordered property summaries into one-line canonical rows", () => {
+    const roadmap = block("roadmap", {
+      text:
+        "PIE-196 — Property summaries [status::planned] [work-stage::next] [priority::high] [track::interactive-documents]",
+      displayText:
+        "PIE-196 — Property summaries [status::planned] [work-stage::next] [priority::high] [track::interactive-documents]",
+      properties: [
+        { key: "status", value: "planned" },
+        { key: "work-stage", value: "next" },
+        { key: "priority", value: "high" },
+        { key: "track", value: "interactive-documents" },
+      ],
+    });
+
+    const wide = renderTreeFrame(view([roadmap]), 140, 8).frame.split("\n");
+    const wideRow = wide.find((line) => stripTerminalSequences(line).includes("PIE-196"))!;
+    expect(stripTerminalSequences(wideRow)).toContain(
+      "PIE-196 — Property summaries  status planned · stage next · priority high · track interactive-documents",
+    );
+    expect(stripTerminalSequences(wideRow)).not.toContain("[status::");
+
+    const medium = renderTreeFrame(view([roadmap]), 80, 8).frame.split("\n");
+    const mediumRow = medium.find((line) => stripTerminalSequences(line).includes("PIE-196"))!;
+    expect(stripTerminalSequences(mediumRow)).toContain("PIE-196 — Property summaries");
+    expect(stripTerminalSequences(mediumRow)).toContain("status planned");
+    expect(stripTerminalSequences(mediumRow)).not.toContain("track interactive-documents");
+
+    const narrow = renderTreeFrame(view([roadmap]), 42, 8).frame.split("\n");
+    const narrowRow = narrow.find((line) => stripTerminalSequences(line).includes("PIE-196"))!;
+    expect(stripTerminalSequences(narrowRow)).toContain("status planned");
+    expect(visibleWidth(narrowRow)).toBeLessThanOrEqual(42);
+    expect(narrow.filter((line) => stripTerminalSequences(line).includes("PIE-196"))).toHaveLength(1);
+    expect(narrowRow).toStartWith("\x1b[48;5;238m\x1b[1m");
+
+    const minimum = renderTreeFrame(view([roadmap]), 18, 8).frame.split("\n");
+    const minimumRow = minimum[4]!;
+    expect(stripTerminalSequences(minimumRow)).toContain("status");
+    expect(visibleWidth(minimumRow)).toBeLessThanOrEqual(18);
+  });
+
+  test("applies workspace and virtual-view property allowlists without changing source", () => {
+    const canonical = block("canonical", {
+      text: "Roadmap card [status::done] [priority::high] [track::delivery]",
+      displayText: "Roadmap card [status::done] [priority::high] [track::delivery]",
+
+      properties: [
+        { key: "status", value: "done" },
+        { key: "priority", value: "high" },
+        { key: "track", value: "delivery" },
+      ],
+    });
+    const originalText = canonical.text;
+    const rows = [physical(canonical), occurrence("definition", canonical)];
+    const branchStates = new Map([
+      [
+        "definition",
+        branchState({
+          config: {
+            ...branchConfig,
+            viewId: "definition",
+            summaryPropertyKeys: ["track"],
+          },
+        }),
+      ],
+    ]);
+    const rendered = renderTreeFrame(
+      view(rows, { branchStates }),
+      100,
+      9,
+      0,
+      { propertyKeys: ["priority"] },
+    ).frame.split("\n");
+    const canonicalRow = stripTerminalSequences(
+      rendered.find((line) => stripTerminalSequences(line).startsWith("• Roadmap"))!,
+    );
+    const occurrenceRow = stripTerminalSequences(
+      rendered.find((line) => stripTerminalSequences(line).startsWith("  ◇ Roadmap"))!,
+    );
+
+    expect(canonicalRow).toContain("priority high");
+    expect(canonicalRow).not.toContain("status done");
+    expect(occurrenceRow).toContain("track delivery");
+    expect(occurrenceRow).not.toContain("priority high");
+    expect(canonical.text).toBe(originalText);
+  });
   test("renders a narrow keyboard menu with clickable pane and action links", () => {
     const rendered = renderTreeFrame(view([], {
       mode: "action-menu",
