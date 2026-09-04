@@ -21,6 +21,7 @@ const DEFAULT_VIRTUAL_BRANCH_LIMIT = 200;
 const MAX_VIRTUAL_BRANCH_LIMIT = MAX_BLOCK_QUERY_LIMIT;
 const VIRTUAL_BRANCH_TYPE = "virtual-branch";
 export const VIRTUAL_BRANCH_MAX_RELATIVE_DEPTH = 2;
+export const VIRTUAL_BRANCH_MAX_NESTING_DEPTH = 4;
 export const VIRTUAL_BRANCH_MAX_ROWS = 1_000;
 
 interface TreeRowBase {
@@ -648,6 +649,117 @@ async function projectVirtualBranch(
     };
   }
 }
+interface NestedOccurrenceComposition {
+  readonly rows: VirtualBranchOccurrenceRow[];
+  readonly depthTruncated: boolean;
+  readonly budgetTruncated: boolean;
+}
+
+function composeNestedOccurrences(
+  rootViewId: string,
+  rootDefinitionDepth: number,
+  projectedByViewId: ReadonlyMap<string, readonly VirtualBranchOccurrenceRow[]>,
+  presentation: TreePresentationState,
+): NestedOccurrenceComposition {
+  const childrenByView = new Map<string, Map<string, VirtualBranchOccurrenceRow[]>>();
+  for (const [viewId, rows] of projectedByViewId) {
+    const children = new Map<string, VirtualBranchOccurrenceRow[]>();
+    for (const row of rows) {
+      const siblings = children.get(row.parentRowId);
+      if (siblings) siblings.push(row);
+      else children.set(row.parentRowId, [row]);
+    }
+    childrenByView.set(viewId, children);
+  }
+
+  const composed: VirtualBranchOccurrenceRow[] = [];
+  let depthTruncated = false;
+  let budgetTruncated = false;
+
+  function appendBranch(
+    viewId: string,
+    parentRowId: string,
+    parentDepth: number,
+    nestingDepth: number,
+    rowIdPrefix: string,
+    activeViewIds: ReadonlySet<string>,
+  ): void {
+    const children = childrenByView.get(viewId);
+    if (!children) return;
+    for (const root of children.get(viewId) ?? []) {
+      appendOccurrence(
+        root,
+        children,
+        parentRowId,
+        parentDepth + 1,
+        nestingDepth,
+        rowIdPrefix,
+        activeViewIds,
+      );
+    }
+  }
+
+  function appendOccurrence(
+    source: VirtualBranchOccurrenceRow,
+    sourceChildren: ReadonlyMap<string, readonly VirtualBranchOccurrenceRow[]>,
+    parentRowId: string,
+    depth: number,
+    nestingDepth: number,
+    rowIdPrefix: string,
+    activeViewIds: ReadonlySet<string>,
+  ): void {
+    if (composed.length >= VIRTUAL_BRANCH_MAX_ROWS) {
+      budgetTruncated = true;
+      return;
+    }
+    const rowId = rowIdPrefix ? `${rowIdPrefix}/${source.rowId}` : source.rowId;
+    const physicalChildren = sourceChildren.get(source.rowId) ?? [];
+    const nestedRoots = childrenByView.get(source.canonicalId)?.get(source.canonicalId) ?? [];
+    const cycle = activeViewIds.has(source.canonicalId);
+    const canNest = nestedRoots.length > 0 && !cycle &&
+      nestingDepth < VIRTUAL_BRANCH_MAX_NESTING_DEPTH;
+    if (nestedRoots.length > 0 && !canNest) depthTruncated = true;
+    const hasChildren = source.hasChildren || canNest;
+    const collapsed = hasChildren &&
+      (presentation.collapsedOccurrenceRowIds?.has(rowId) ?? false);
+    const row: VirtualBranchOccurrenceRow = {
+      ...source,
+      rowId,
+      parentRowId,
+      depth,
+      hasChildren,
+      collapsed,
+    };
+    composed.push(row);
+    if (collapsed) return;
+
+    for (const child of physicalChildren) {
+      appendOccurrence(
+        child,
+        sourceChildren,
+        rowId,
+        depth + 1,
+        nestingDepth,
+        rowIdPrefix,
+        activeViewIds,
+      );
+    }
+    if (!canNest) return;
+    const nestedActiveViewIds = new Set(activeViewIds);
+    nestedActiveViewIds.add(source.canonicalId);
+    appendBranch(
+      source.canonicalId,
+      rowId,
+      depth,
+      nestingDepth + 1,
+      rowId,
+      nestedActiveViewIds,
+    );
+  }
+
+  appendBranch(rootViewId, rootViewId, rootDefinitionDepth, 0, "", new Set([rootViewId]));
+  return { rows: composed, depthTruncated, budgetTruncated };
+}
 
 function pruneCollapsedPhysicalBlocks(
   blocks: readonly VisibleBlock[],
@@ -702,9 +814,27 @@ export async function projectVirtualBranches(
   for (const physical of physicalRows) {
     rows.push(physical);
     if (physical.collapsed) continue;
-    const branchRows = occurrences.get(physical.canonicalId) ?? [];
-    rows.push(...branchRows);
-    occurrenceRowCount += branchRows.length;
+    const composition = composeNestedOccurrences(
+      physical.canonicalId,
+      physical.depth,
+      occurrences,
+      presentation,
+    );
+    rows.push(...composition.rows);
+    occurrenceRowCount += composition.rows.length;
+    if (composition.depthTruncated || composition.budgetTruncated) {
+      const state = branchStates.get(physical.canonicalId);
+      if (state) {
+        branchStates.set(physical.canonicalId, {
+          ...state,
+          truncation: {
+            ...state.truncation,
+            depth: state.truncation.depth || composition.depthTruncated,
+            budget: state.truncation.budget || composition.budgetTruncated,
+          },
+        });
+      }
+    }
   }
   return {
     rows,

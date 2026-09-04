@@ -134,6 +134,18 @@ summary region, omits the label after fitting leaves one property, and drops
 trailing configured fields before truncating the property-free title. Summary
 rendering is presentation-only and never reparses into or mutates source.
 
+The Tree's fixed semantic treatment reads only that same direct property array.
+Blocked, doing/active, review/validate, done/complete, and unprioritized map to
+bounded one-column glyph/color roles with explicit precedence; selected-row
+background is reapplied after inline ANSI resets. Canonical rows and virtual
+occurrences therefore share presentation without a renderer-local query model.
+
+Projected virtual branches may compose a nested virtual definition for up to
+four branch boundaries. Deterministic contextual row IDs preserve independent
+disclosure state. Active-view cycle detection and the 1,000-row allocation
+budget bound recursive hubs, and truncation propagates to the outer branch
+state.
+
 ### Pi / OMP extension
 
 [`pi-extension/index.ts`](../pi-extension/index.ts) is the shared host adapter. It:

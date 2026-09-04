@@ -493,6 +493,86 @@ describe("virtual branch projection", () => {
     expect(projection.branchStates.get("view")?.creationErrors).toEqual([]);
   });
 
+  test("nests bounded virtual projections inside projected hub descendants", async () => {
+    const hubs = visibleBlock("hubs", [
+      { key: "type", value: "virtual-branch" },
+      { key: "query", value: "type=hub" },
+    ]);
+    const roadmap = visibleBlock("roadmap", [{ key: "type", value: "hub" }], {
+      hasChildren: true,
+    });
+    const deliveryFlow = visibleBlock("delivery-flow", [], {
+      parentId: roadmap.id,
+      depth: 1,
+      hasChildren: true,
+    });
+    const next = visibleBlock("next", [
+      { key: "type", value: "virtual-branch" },
+      { key: "query", value: "work-stage=next" },
+    ], {
+      parentId: deliveryFlow.id,
+      depth: 2,
+    });
+    const item = visibleBlock("pie-195", [{ key: "work-stage", value: "next" }]);
+    const physical = [hubs, roadmap, deliveryFlow, next, item];
+
+    const projection = await projectVirtualBranches(
+      physical,
+      physical,
+      async (query) => complete(
+        query.filters?.some((filter) => filter.key === "type" && filter.value === "hub")
+          ? [roadmap]
+          : [item],
+      ),
+    );
+    const occurrences = projection.rows.filter(isVirtualBranchOccurrence);
+    const nestedDefinition = occurrences.find((row) =>
+      row.viewId === hubs.id && row.canonicalId === next.id
+    );
+    const nestedItem = occurrences.find((row) =>
+      row.viewId === next.id && row.canonicalId === item.id &&
+      row.parentRowId === nestedDefinition?.rowId
+    );
+
+    expect(nestedDefinition).toEqual(expect.objectContaining({
+      depth: 3,
+      hasChildren: true,
+    }));
+    expect(nestedItem).toEqual(expect.objectContaining({
+      depth: 4,
+      relativeDepth: 0,
+      matchRootCanonicalId: item.id,
+    }));
+    expect(projection.branchStates.get(hubs.id)?.truncation.depth).toBe(false);
+  });
+  test("cuts nested projection cycles at the active view boundary", async () => {
+    const first = visibleBlock("first-view", [
+      { key: "type", value: "virtual-branch" },
+      { key: "query", value: "status=first" },
+    ]);
+    const second = visibleBlock("second-view", [
+      { key: "type", value: "virtual-branch" },
+      { key: "query", value: "status=second" },
+    ]);
+    const projection = await projectVirtualBranches(
+      [first, second],
+      [first, second],
+      async (query) => complete(
+        query.filters?.some((filter) => filter.value === "first")
+          ? [second]
+          : [first],
+      ),
+    );
+    const firstRows = projection.rows.filter((row) =>
+      isVirtualBranchOccurrence(row) && row.rowId.startsWith("occurrence:first-view:")
+    );
+
+    expect(firstRows.map((row) => row.canonicalId)).toEqual([second.id, first.id]);
+    expect(firstRows[1]).toEqual(expect.objectContaining({ hasChildren: false }));
+    expect(projection.branchStates.get(first.id)?.truncation.depth).toBe(true);
+  });
+
+
   test("keeps contextual identity while preserving a descendant as an independent root", async () => {
     const definition = visibleBlock("view", [
       { key: "type", value: "virtual-branch" },

@@ -2,7 +2,7 @@ import { getOsc8LinkAtColumn, stripTerminalSequences, visibleWidth } from "@eare
 import { describe, expect, test } from "bun:test";
 import { DEFAULT_OUTLINER_ACTION_KEYMAP } from "../src/outliner-actions";
 import type { TreeView } from "../src/tree-controller";
-import { renderTreeFrame } from "../src/tree-renderer";
+import { renderTreeFrame, treeSemanticState } from "../src/tree-renderer";
 import { truncate } from "../src/terminal";
 import type { VisibleBlock } from "../src/types";
 import type {
@@ -169,6 +169,71 @@ describe("renderTreeFrame", () => {
       ].join("\n"),
     });
   });
+  test("renders fixed status treatments with deterministic precedence", () => {
+    const semantic = [
+      block("blocked", {
+        text: "Blocked item [status::blocked] [work-stage::doing]",
+        displayText: "Blocked item [status::blocked] [work-stage::doing]",
+        properties: [
+          { key: "status", value: "blocked" },
+          { key: "work-stage", value: "doing" },
+        ],
+      }),
+      block("doing", {
+        text: "Doing item [work-stage::doing]",
+        displayText: "Doing item [work-stage::doing]",
+        properties: [{ key: "work-stage", value: "doing" }],
+      }),
+      block("review", {
+        text: "Review item [work-stage::review]",
+        displayText: "Review item [work-stage::review]",
+        properties: [{ key: "work-stage", value: "review" }],
+      }),
+      block("done", {
+        text: "Done item [status::complete]",
+        displayText: "Done item [status::complete]",
+        properties: [{ key: "status", value: "complete" }],
+      }),
+      block("pool", {
+        text: "Pool item [work-stage::unprioritized]",
+        displayText: "Pool item [work-stage::unprioritized]",
+        properties: [{ key: "work-stage", value: "unprioritized" }],
+      }),
+    ];
+    const neutral = block("neutral", {
+      text: "Neutral item [status::planned] [work-stage::next]",
+      displayText: "Neutral item [status::planned] [work-stage::next]",
+      properties: [
+        { key: "status", value: "planned" },
+        { key: "work-stage", value: "next" },
+      ],
+    });
+    const rows = [neutral, ...semantic, occurrence("definition", semantic[3]!, 1)];
+    const original = rows.map((row) => isTreeRow(row) ? row.block.text : row.text);
+    const rendered = renderTreeFrame(view(rows), 80, 14).frame.split("\n");
+    const plain = rendered.map(stripTerminalSequences);
+
+    expect(semantic.map(treeSemanticState)).toEqual([
+      "blocked",
+      "doing",
+      "review",
+      "done",
+      "unprioritized",
+    ]);
+    expect(treeSemanticState(neutral)).toBeNull();
+    expect(plain.some((line) => line.includes("! Blocked item"))).toBe(true);
+    expect(plain.some((line) => line.includes("● Doing item"))).toBe(true);
+    expect(plain.some((line) => line.includes("◆ Review item"))).toBe(true);
+    expect(plain.filter((line) => line.includes("✓ Done item"))).toHaveLength(2);
+    expect(plain.some((line) => line.includes("· Pool item"))).toBe(true);
+    expect(plain.some((line) => line.includes("• Neutral item"))).toBe(true);
+    expect(rows.map((row) => isTreeRow(row) ? row.block.text : row.text)).toEqual(original);
+
+    const selected = renderTreeFrame(view([semantic[0]!]), 42, 8).frame.split("\n")[4]!;
+    expect(selected).toContain("\x1b[48;5;238m\x1b[1m• \x1b[1;31m! Blocked item");
+    expect(selected).toContain("\x1b[0m\x1b[48;5;238m\x1b[1m");
+    expect(visibleWidth(selected)).toBeLessThanOrEqual(42);
+  });
 
   test("fits ordered property summaries into one-line canonical rows", () => {
     const roadmap = block("roadmap", {
@@ -246,10 +311,10 @@ describe("renderTreeFrame", () => {
       { propertyKeys: ["priority"] },
     ).frame.split("\n");
     const canonicalRow = stripTerminalSequences(
-      rendered.find((line) => stripTerminalSequences(line).startsWith("• Roadmap"))!,
+      rendered.find((line) => stripTerminalSequences(line).startsWith("• ✓ Roadmap"))!,
     );
     const occurrenceRow = stripTerminalSequences(
-      rendered.find((line) => stripTerminalSequences(line).startsWith("  ◇ Roadmap"))!,
+      rendered.find((line) => stripTerminalSequences(line).startsWith("  ◇ ✓ Roadmap"))!,
     );
 
     expect(canonicalRow).toContain("high");

@@ -96,6 +96,59 @@ const AUTHOR_MARKERS: Record<Block["author"], string> = {
   system: "S",
   user: " ",
 };
+export type TreeSemanticState = "blocked" | "doing" | "review" | "done" | "unprioritized";
+
+interface TreeSemanticTreatment {
+  readonly glyph: string;
+  readonly sgr: string;
+}
+
+const TREE_SEMANTIC_TREATMENTS: Record<TreeSemanticState, TreeSemanticTreatment> = {
+  blocked: { glyph: "!", sgr: `${ESC}1;31m` },
+  doing: { glyph: "●", sgr: `${ESC}1;36m` },
+  review: { glyph: "◆", sgr: `${ESC}35m` },
+  done: { glyph: "✓", sgr: `${ESC}2;32m` },
+  unprioritized: { glyph: "·", sgr: `${ESC}2m` },
+};
+
+export function treeSemanticState(block: Pick<Block, "properties">): TreeSemanticState | null {
+  const values = (key: string) =>
+    block.properties
+      .filter((property) => property.key === key)
+      .map((property) => property.value.toLowerCase());
+  const status = values("status");
+  const stage = values("work-stage");
+  if (status.includes("blocked") || stage.includes("blocked")) return "blocked";
+  if (
+    status.some((value) => value === "active" || value === "doing" || value === "in-progress") ||
+    stage.includes("doing")
+  ) return "doing";
+  if (status.includes("review") || stage.some((value) => value === "review" || value === "validate")) {
+    return "review";
+  }
+  if (
+    status.some((value) => value === "done" || value === "complete") ||
+    stage.some((value) => value === "done" || value === "complete")
+  ) return "done";
+  if (status.includes("unprioritized") || stage.includes("unprioritized")) return "unprioritized";
+  return null;
+}
+
+function semanticText(text: string, treatment: TreeSemanticTreatment | null): string {
+  if (!treatment) return text;
+  const newline = text.search(/\r?\n/);
+  const firstLine = newline < 0 ? text : text.slice(0, newline);
+  const remainder = newline < 0 ? "" : text.slice(newline);
+  return `${treatment.sgr}${treatment.glyph} ${firstLine}${ESC}0m${remainder}`;
+}
+
+const SELECTED_ROW_STYLE = `${ESC}48;5;238m${ESC}1m`;
+
+function applySelectedRow(line: string): string {
+  return `${SELECTED_ROW_STYLE}${
+    line.replaceAll(`${ESC}0m`, `${ESC}0m${SELECTED_ROW_STYLE}`)
+  }${ESC}0m`;
+}
 
 type TreeRenderEntry =
   | { kind: "block"; blockIndex: number }
@@ -394,6 +447,10 @@ export function renderTreeFrame(
     } else if (block.effectiveDeletedRootId) {
       trashLabel = "  [Trash]";
     }
+    const semanticState = block.deletedAt || block.effectiveDeletedRootId
+      ? null
+      : treeSemanticState(block);
+    const semanticTreatment = semanticState ? TREE_SEMANTIC_TREATMENTS[semanticState] : null;
     let result: string[];
     if (!row.multilineExpanded) {
       const prefix = `${"  ".repeat(row.depth)}${marker} `;
@@ -408,7 +465,7 @@ export function renderTreeFrame(
         linker.link(
           renderCollapsedRow(
             prefix,
-            collapsedBlockTitle(block),
+            semanticText(collapsedBlockTitle(block), semanticTreatment),
             summary,
             fixedSuffix,
             optionalSuffix,
@@ -418,7 +475,7 @@ export function renderTreeFrame(
       ];
     } else {
       const displayText = decorateVirtualBranchDefinitionText(
-        `${block.displayText}${trashLabel}`,
+        `${semanticText(block.displayText, semanticTreatment)}${trashLabel}`,
         branchState,
       );
       const expandedRows = layoutExpandedBlock({
@@ -523,7 +580,7 @@ export function renderTreeFrame(
       }
       output.push(
         entryIndex === targetEntryIndex && lineIndex === 0
-          ? `\x1b[48;5;238m\x1b[1m${line}\x1b[0m`
+          ? applySelectedRow(line)
           : line,
       );
       renderedBodyLines += 1;

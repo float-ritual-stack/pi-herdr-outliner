@@ -217,6 +217,18 @@ The complete authored metadata remains available in expanded rows and the
 property inspector. Detail also right-aligns the clickable `🔓`/`🔒` lock and
 `[⋯]` action controls.
 
+Tree rows also apply a fixed presentation-only treatment to direct canonical
+`status` and `work-stage` values. Blocked, doing/active, review/validate,
+done/complete, and unprioritized rows receive distinct one-column glyphs and
+semantic terminal colors; unknown, planned, and absent values remain neutral.
+Blocked wins over active state, selection keeps its background across inline
+styles, and canonical plus projected occurrences use the same derived treatment.
+
+Virtual branches compose other virtual branches encountered inside projected
+hub descendants through four bounded nesting levels. Cycle detection and the
+existing 1,000-row projection budget remain hard stops; the branch badge reports
+depth or budget truncation rather than silently recursing without bound.
+
 Override bindings with
 `$XDG_CONFIG_HOME/pi-herdr-outliner/keybindings.json` (falling back to
 `~/.config/pi-herdr-outliner/keybindings.json`), or set
