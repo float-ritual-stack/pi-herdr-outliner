@@ -43,8 +43,10 @@ import {
   createPiDetailInputListener,
   detailChooserOwnsPiInput,
   piDetailChooserInput,
+  piDetailLinkClick,
   PiDetailInputStreamDecoder,
   type PiDetailInput,
+  type PiDetailLinkClick,
 } from "./detail-pi-input";
 import {
   DetailPiPreviewLayout,
@@ -82,7 +84,6 @@ import {
   parseTreePrimaryPointer,
   parseTreeSecondaryClick,
   parseTreeWheelEvent,
-  treeClickActivates,
   type TreeMouseClick,
 } from "./tree-mouse";
 import { osc52ClipboardWrite } from "./terminal";
@@ -164,14 +165,18 @@ if (detailPresentation === "property-inspector" && !dedicatedPropertyBlockId) {
 const initialTargetFragmentId =
   process.env.OUTLINER_DETAIL_TARGET_FRAGMENT_ID?.trim() || undefined;
 configureCurrentPaneRightClick(rightClickOwnership);
-let pendingLinkClick = { activate: false, suppress: false };
+let pendingLinkClick: PiDetailLinkClick = {
+  activate: false,
+  routing: "first-unlocked",
+  suppress: false,
+};
 const terminal = new ProcessTerminal();
 const inputStream = new PiDetailInputStreamDecoder();
 const tui = new DetailTuiAltScreen(terminal, false, undefined, {
   mouse: true,
   openUrl(url) {
     const pointer = pendingLinkClick;
-    pendingLinkClick = { activate: false, suppress: false };
+    pendingLinkClick = { activate: false, routing: "first-unlocked", suppress: false };
     if (pointer.suppress || stopping) return;
     enqueueWork(async () => {
       if (controller.state.destinationChooser.active) {
@@ -188,7 +193,11 @@ const tui = new DetailTuiAltScreen(terminal, false, undefined, {
         await controller.dispatch(
           resolution.type === "focus"
             ? { type: "preview.focus.set", regionId: resolution.regionId }
-            : { type: "preview.action", action: resolution.action },
+            : {
+                type: "preview.action",
+                action: resolution.action,
+                ...(resolution.routing ? { routing: resolution.routing } : {}),
+              },
           viewport(),
         );
         return;
@@ -196,6 +205,7 @@ const tui = new DetailTuiAltScreen(terminal, false, undefined, {
       await controller.dispatch({
         type: "reference.open",
         target: parseOutlinerLinkUri(url),
+        routing: pointer.routing,
       }, viewport());
     });
   },
@@ -705,14 +715,8 @@ async function handleDetailMouse(data: string): Promise<boolean> {
 }
 
 function shouldPassDetailInputToTui(data: string): boolean {
-  const primaryClick = parseTreePrimaryClick(data);
-  if (primaryClick) {
-    const activate = treeClickActivates(primaryClick);
-    pendingLinkClick = {
-      activate,
-      suppress: primaryClick.shift && !activate,
-    };
-  }
+  const linkClick = piDetailLinkClick(data);
+  if (linkClick) pendingLinkClick = linkClick;
   if (
     controller.state.destinationChooser.active &&
     detailChooserOwnsPiInput(data)
@@ -762,7 +766,7 @@ async function handleDecodedInput(input: PiDetailInput): Promise<void> {
       await stop();
       return;
     }
-    pendingLinkClick = { activate: false, suppress: false };
+    pendingLinkClick = { activate: false, routing: "first-unlocked", suppress: false };
     const forwarded = piDetailChooserInput(input);
     await controller.handleDestinationChooserKeypress(forwarded.str, forwarded.key);
     return;

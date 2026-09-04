@@ -119,7 +119,11 @@ export function parsePreviewRegionActionUri(uri: string): PreviewRegionAction | 
 
 export type PreviewPointerResolution =
   | { type: "focus"; regionId: string }
-  | { type: "activate"; action: PreviewRegionAction };
+  | {
+      type: "activate";
+      action: PreviewRegionAction;
+      routing?: "first-unlocked" | "chooser";
+    };
 
 export function resolvePreviewPointerAction(
   action: PreviewRegionAction,
@@ -131,8 +135,12 @@ export function resolvePreviewPointerAction(
   if (!activate && action.type === "backlink.open") {
     return { type: "focus", regionId: `backlink:${action.blockId}` };
   }
-  if (!activate && action.type === "property-inspector.target.open") {
-    return { type: "focus", regionId: action.occurrenceId };
+  if (action.type === "property-inspector.target.open") {
+    return {
+      type: "activate",
+      action,
+      routing: activate ? "chooser" : "first-unlocked",
+    };
   }
   return { type: "activate", action };
 }

@@ -7,6 +7,7 @@ import {
   PiDetailInputStreamDecoder,
   detailChooserOwnsPiInput,
   piDetailChooserInput,
+  piDetailLinkClick,
 } from "../src/detail-pi-input";
 import {
   DETAIL_DRAFT_SPLIT_MIN_WIDTH,
@@ -93,6 +94,24 @@ function state(overrides: Partial<DetailState> = {}): DetailState {
 }
 
 describe("Pi TUI Detail input", () => {
+  test("preserves plain, Ctrl, and Meta click routing across the Pi input boundary", () => {
+    expect(piDetailLinkClick("\x1b[<0;4;3M")).toEqual({
+      activate: false,
+      routing: "first-unlocked",
+      suppress: false,
+    });
+    expect(piDetailLinkClick("\x1b[<16;4;3M")).toEqual({
+      activate: true,
+      routing: "chooser",
+      suppress: false,
+    });
+    expect(piDetailLinkClick("\x1b[<8;4;3M")).toEqual({
+      activate: true,
+      routing: "chooser",
+      suppress: false,
+    });
+  });
+
   test("decodes paste, control, navigation, modified Enter, and printable input", () => {
     expect(decodePiDetailInput("\x1b[200~first\nsecond\x1b[201~")).toEqual({
       kind: "paste",

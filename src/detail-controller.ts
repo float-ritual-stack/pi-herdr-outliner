@@ -310,6 +310,8 @@ export type DetailBufferMoveDirection =
   | "word-left"
   | "word-right";
 
+export type DetailOpenRouting = "first-unlocked" | "chooser";
+
 export type DetailIntent =
   | { type: "edit.begin" }
   | { type: "trash.restore" }
@@ -317,7 +319,7 @@ export type DetailIntent =
   | { type: "navigation.back" }
   | { type: "navigation.forward" }
   | { type: "reference.follow" }
-  | { type: "reference.open"; target: OutlinerLinkTarget }
+  | { type: "reference.open"; target: OutlinerLinkTarget; routing?: DetailOpenRouting }
   | { type: "reference.reveal" }
   | { type: "current.reveal" }
   | { type: "backlinks.move"; delta: -1 | 1 }
@@ -334,11 +336,11 @@ export type DetailIntent =
   | { type: "preview.focus.move"; delta: -1 | 1 }
   | { type: "preview.focus.set"; regionId: string }
   | { type: "preview.activate" }
-  | { type: "preview.action"; action: PreviewRegionAction }
+  | { type: "preview.action"; action: PreviewRegionAction; routing?: DetailOpenRouting }
   | { type: "property-inspector.disclosure.toggle" }
   | { type: "property-inspector.pane.open" }
   | { type: "pane.open"; direction: "right" | "down" }
-  | { type: "property-inspector.target.open"; occurrenceId: string; intent: "open" | "reveal" }
+  | { type: "property-inspector.target.open"; occurrenceId: string; intent: "open" | "reveal"; routing?: DetailOpenRouting }
   | { type: "property-inspector.group.cycle" }
   | { type: "property-inspector.filter.begin" }
   | { type: "property-inspector.filter.input"; text: string }
@@ -768,13 +770,44 @@ export function createDetailController(
     return true;
   };
 
+  const resolveDestinationTarget = async (
+    target: OpenDestinationTarget,
+    reference: OutlinerLinkTarget,
+  ): Promise<void> => {
+    const resolved = await effects.resolveReference(reference);
+    target.blockId = resolved.block.id;
+    target.title = blockDisplayTitle(resolved.block);
+  };
+
+  const openFirstUnlocked = async (
+    target: OpenDestinationTarget,
+    preserveSource = false,
+  ): Promise<boolean> => {
+    try {
+      const dispatched = await effects.dispatchNavigation(target.blockId, "open", {
+        ...(preserveSource ? { preserveSource: true } : {}),
+        ...(target.fragmentId ? { fragmentId: target.fragmentId } : {}),
+      });
+      if (dispatched.targetClientId === effects.clientId) {
+        await applyNavigationCommand(dispatched.command);
+      }
+      state.status = `Opened ${target.title} in first unlocked Detail`;
+      return true;
+    } catch (error) {
+      if (
+        errorMessage(error) ===
+          "All Details in this tab are locked · unlock one or open another Detail"
+      ) {
+        return false;
+      }
+      throw error;
+    }
+  };
+
   destinationChooser = new OpenDestinationChooser({
     beforeOpen: async (target) => {
       const reference = destinationReferences.get(target);
-      if (!reference) return;
-      const resolved = await effects.resolveReference(reference);
-      target.blockId = resolved.block.id;
-      target.title = blockDisplayTitle(resolved.block);
+      if (reference) await resolveDestinationTarget(target, reference);
     },
     replace: async (target) => {
       if (isBufferMode()) {
@@ -790,26 +823,11 @@ export function createDetailController(
         ? "Replaced here · remains locked · L unlocks this block"
         : "Replaced here · still unlocked · L locks this block";
     },
-    openFirstUnlocked: async (target) => {
-      try {
-        const dispatched = await effects.dispatchNavigation(target.blockId, "open", {
-          ...(target.fragmentId ? { fragmentId: target.fragmentId } : {}),
-        });
-        if (dispatched.targetClientId === effects.clientId) {
-          await applyNavigationCommand(dispatched.command);
-        }
-        state.status = `Opened ${target.title} in first unlocked Detail`;
-        return true;
-      } catch (error) {
-        if (
-          errorMessage(error) ===
-            "All Details in this tab are locked · unlock one or open another Detail"
-        ) {
-          return false;
-        }
-        throw error;
-      }
-    },
+    openFirstUnlocked: (target) =>
+      openFirstUnlocked(
+        target,
+        destinationReferences.get(target)?.preserveSource === true,
+      ),
     openNewDetail: async (target, direction) => {
       await effects.openDetailPane(target.blockId, direction, target.fragmentId);
       state.status = direction === "right"
@@ -1277,8 +1295,18 @@ export function createDetailController(
             title: reference.value,
             ...(fragmentId ? { fragmentId } : {}),
           };
-          destinationReferences.set(target, reference);
-          destinationChooser!.open(target);
+          const routing = intent.type === "reference.open"
+            ? intent.routing ?? "chooser"
+            : "chooser";
+          if (routing === "chooser") {
+            destinationReferences.set(target, reference);
+            destinationChooser!.open(target);
+          } else {
+            await resolveDestinationTarget(target, reference);
+            if (!await openFirstUnlocked(target, reference.preserveSource === true)) {
+              destinationChooser!.open(target);
+            }
+          }
           break;
         }
         if (reference.kind === "page") {
@@ -1396,6 +1424,7 @@ export function createDetailController(
               type: "property-inspector.target.open",
               occurrenceId: intent.action.occurrenceId,
               intent: "open",
+              ...(intent.routing ? { routing: intent.routing } : {}),
             }, viewport);
             break;
         }
@@ -1477,6 +1506,7 @@ export function createDetailController(
             preserveSource: state.propertyInspector.presentation === "dedicated",
             ...(intent.intent === "reveal" ? { intent: "reveal" as const } : {}),
           }),
+          routing: intent.routing ?? "chooser",
         }, viewport);
         break;
       }

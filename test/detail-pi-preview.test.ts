@@ -1414,8 +1414,23 @@ describe("structured property inspector presentations", () => {
       type: "property-inspector.target.open",
       occurrenceId: typed.occurrenceId,
     }, false)).toEqual({
-      type: "focus",
-      regionId: typed.occurrenceId,
+      type: "activate",
+      action: {
+        type: "property-inspector.target.open",
+        occurrenceId: typed.occurrenceId,
+      },
+      routing: "first-unlocked",
+    });
+    expect(resolvePreviewPointerAction({
+      type: "property-inspector.target.open",
+      occurrenceId: typed.occurrenceId,
+    }, true)).toEqual({
+      type: "activate",
+      action: {
+        type: "property-inspector.target.open",
+        occurrenceId: typed.occurrenceId,
+      },
+      routing: "chooser",
     });
     expect(detail.context.selected?.text).toBe(canonical);
   });
