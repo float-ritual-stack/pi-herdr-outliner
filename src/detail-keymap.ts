@@ -292,11 +292,14 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
 
 
   handleKeypress = (async (str, key, inputAction) => {
-    if (inputAction === "suppress") return;
     if (controller.state.destinationChooser.active) {
-      await controller.handleDestinationChooserKeypress(str, key);
+      await controller.handleDestinationChooserKeypress(
+        inputAction === "suppress" ? "" : str,
+        inputAction === "suppress" ? { name: "input" } : key,
+      );
       return;
     }
+    if (inputAction === "suppress") return;
     if (key.ctrl && key.name === "q") {
       stop();
       return;

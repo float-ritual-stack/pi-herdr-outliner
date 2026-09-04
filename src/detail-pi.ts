@@ -163,6 +163,10 @@ const tui = new DetailTuiAltScreen(terminal, false, undefined, {
     pendingLinkClick = { activate: false, suppress: false };
     if (pointer.suppress || stopping) return;
     enqueueWork(async () => {
+      if (controller.state.destinationChooser.active) {
+        await controller.handleDestinationChooserKeypress("", { name: "pointer" });
+        return;
+      }
       if (url.startsWith("pi-outliner-action:")) {
         await invokeDetailAction(url.slice("pi-outliner-action:".length));
         return;
@@ -624,6 +628,7 @@ function shouldPassDetailInputToTui(data: string): boolean {
       suppress: primaryClick.shift && !activate,
     };
   }
+  if (controller.state.destinationChooser.active) return false;
   if (tui.hasOverlay()) return true;
   if (!isTreeMouseSequence(data)) return false;
   if (parseTreeSecondaryClick(data) && rightClickOwnership === "outliner") return false;
@@ -674,6 +679,15 @@ invokeDetailAction = async (actionId) => {
   await handleKeypress.invoke(actionId);
 };
 async function handleInput(data: string): Promise<void> {
+  if (controller.state.destinationChooser.active) {
+    pendingLinkClick = { activate: false, suppress: false };
+    const chooserInput = decodePiDetailInput(data);
+    await controller.handleDestinationChooserKeypress(
+      chooserInput.kind === "key" ? chooserInput.str : "",
+      chooserInput.kind === "key" ? chooserInput.key : { name: "paste" },
+    );
+    return;
+  }
   const secondaryClick = parseTreeSecondaryClick(data);
   if (secondaryClick && rightClickOwnership === "outliner") {
     showActionMenu(

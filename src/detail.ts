@@ -292,6 +292,10 @@ async function handleInput(str: string, key: TerminalKey): Promise<void> {
   if (pendingPaste !== null) {
     const text = pendingPaste;
     pendingPaste = null;
+    if (controller.state.destinationChooser.active) {
+      await controller.handleDestinationChooserKeypress("", { name: "paste" });
+      return;
+    }
     if (controller.isBufferMode()) {
       await controller.dispatch({ type: "buffer.insert", text }, viewport());
     }

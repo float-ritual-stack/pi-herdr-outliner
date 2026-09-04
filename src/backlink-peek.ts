@@ -104,11 +104,15 @@ export class BacklinkPeekController {
     inputAction: TerminalInputAction,
     viewportHeight: number,
   ): Promise<void> {
-    if (this.closed || inputAction === "suppress") return;
+    if (this.closed) return;
     if (this.destinationChooserState.active) {
-      await this.destinationChooser.handleKeypress(str, key);
+      await this.destinationChooser.handleKeypress(
+        inputAction === "suppress" ? "" : str,
+        inputAction === "suppress" ? { name: "input" } : key,
+      );
       return;
     }
+    if (inputAction === "suppress") return;
     if ((key.ctrl && key.name === "c") || str === "q") {
       await this.cancel();
       return;
