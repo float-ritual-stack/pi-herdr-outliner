@@ -23,9 +23,22 @@ import {
   parsePropertyFilterExpression,
 } from "../src/block-query";
 import { parseStandaloneDispatchMarker } from "../src/dispatch-marker";
+import {
+  deliveryIdentities,
+  deterministicDeliveryIdentity,
+  parseDeliveryIdentity,
+  selectActiveDelivery,
+  type DeliveryIdentity,
+} from "../src/delivery-lifecycle";
 import { OutlinerClient } from "../src/client";
 import { HerdrRuntimeRegistry } from "../src/herdr-registry";
 import { HerdrRegistryRunner } from "../src/herdr-runtime";
+import {
+  discoverBaseBranch,
+  inspectPullRequest,
+  orientDeliveryBranch,
+  type PullRequestSnapshot,
+} from "./delivery-lifecycle";
 import { inspectWorkEnvironment, type ExtensionExec } from "./work-environment";
 import { resolvePaths } from "../src/paths";
 import { currentPaneIdentity } from "../src/pane-control";
@@ -39,6 +52,7 @@ import {
   classifyWorkEnvironment,
   type WorkOrientation,
   workEnvironmentStatus,
+  workIdFromBranch,
 } from "../src/work-environment";
 import {
   OUTLINER_PROTOCOL_VERSION,
@@ -48,6 +62,7 @@ import {
   type BrowsingContextState,
   type CaptureReceipt,
   type CaptureSource,
+  type DeliveryReceipt,
   type OutlinerClientRegistration,
   type OutlinerClientRuntime,
   type OutlinerServiceStatus,
@@ -822,6 +837,32 @@ async function reportHerdrTask(
   }
 }
 
+export function containsTaskStartToolCall(value: unknown, depth = 0): boolean {
+  if (depth > 8 || !value || typeof value !== "object") return false;
+  if (Array.isArray(value)) {
+    return value.some((item) => containsTaskStartToolCall(item, depth + 1));
+  }
+  const record = value as Record<string, unknown>;
+  const name = record.name ?? record.toolName;
+  const input = record.arguments ?? record.input;
+  if (
+    name === "outliner_task" &&
+    input &&
+    typeof input === "object" &&
+    !Array.isArray(input) &&
+    (input as Record<string, unknown>).operation === "start"
+  ) return true;
+  return Object.values(record).some((item) => containsTaskStartToolCall(item, depth + 1));
+}
+
+export function isLifecycleMutationTool(toolName: string, input: unknown): boolean {
+  const leaf = toolName.split(/[.:/]/).at(-1);
+  if (leaf === "bash" || leaf === "edit" || leaf === "write") return true;
+  if (leaf !== "github" || !input || typeof input !== "object") return false;
+  const operation = (input as Record<string, unknown>).op;
+  return operation === "pr_create" || operation === "pr_push";
+}
+
 export function createOutlinerExtension(actorId: OutlinerHostActorId) {
   return function outlinerExtension(pi: ExtensionAPI): void {
   let activeTaskId: string | null = null;
@@ -923,6 +964,265 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
     return orientation;
   }
 
+  async function taskDeliveryChildren(task: Block): Promise<Block[]> {
+    return client.request<Block[]>({ action: "children", parentId: task.id });
+  }
+
+  async function patchBlockProperties(
+    block: Block,
+    values: Readonly<Record<string, string>>,
+    context: ExtensionContext,
+    taskId: string,
+  ): Promise<Block> {
+    const operations = Object.entries(values).flatMap(([key, value]) =>
+      getProperty(block.properties, key) === value
+        ? []
+        : [propertyTransition(block, key, value)]
+    );
+    if (operations.length === 0) return block;
+    return client.request<Block>({
+      action: "properties.patch",
+      blockId: block.id,
+      expectedUpdatedAt: block.updatedAt,
+      operations,
+      mutation: agentMutation(actorId, context, taskId),
+    });
+  }
+
+  async function ensureTaskDelivery(
+    task: Block,
+    context: ExtensionContext,
+    requested: {
+      deliveryKey?: string;
+      baseBranch?: string;
+      workBranch?: string;
+    } = {},
+  ): Promise<{ delivery: DeliveryIdentity; orientation: WorkOrientation }> {
+    const exec = hostExec();
+    if (!exec) throw new Error("This host does not expose pi.exec for delivery orientation");
+    const snapshot = await inspectWorkEnvironment(exec, context.cwd, context.signal);
+    if (!snapshot.root || !snapshot.repository) {
+      throw new Error("Task delivery requires a Git repository with an origin remote");
+    }
+    const identifier = requireRoadmapTask(task);
+    const children = await taskDeliveryChildren(task);
+    let delivery = selectActiveDelivery(children, snapshot.repository, snapshot.branch);
+    if (!delivery) {
+      const generated = deterministicDeliveryIdentity(identifier);
+      const branchIdentifier = workIdFromBranch(snapshot.branch);
+      const workBranch = requested.workBranch ??
+        (branchIdentifier === identifier ? snapshot.branch! : generated.workBranch);
+      const baseBranch = requested.baseBranch ??
+        await discoverBaseBranch(exec, snapshot, context.signal);
+      const receipt = await client.request<DeliveryReceipt>({
+        action: "deliveries.ensure",
+        input: {
+          taskBlockId: task.id,
+          deliveryKey: requested.deliveryKey ?? generated.deliveryKey,
+          repository: snapshot.repository,
+          baseBranch,
+          workBranch,
+        },
+        author: "agent",
+        provenance: toolProvenance(actorId, context, "outliner-delivery:ensure"),
+      });
+      delivery = parseDeliveryIdentity(receipt.delivery);
+    } else if (
+      requested.deliveryKey && requested.deliveryKey !== delivery.key ||
+      requested.baseBranch && requested.baseBranch !== delivery.baseBranch ||
+      requested.workBranch && requested.workBranch !== delivery.workBranch
+    ) {
+      throw new Error(`Requested delivery identity conflicts with ${delivery.key}`);
+    }
+    const oriented = await orientDeliveryBranch(
+      exec,
+      context.cwd,
+      delivery,
+      snapshot,
+      context.signal,
+    );
+    const orientation = classifyWorkEnvironment(oriented.snapshot, identifier);
+    if (
+      orientation.classification !== "oriented" ||
+      oriented.snapshot.repository !== delivery.repository ||
+      oriented.snapshot.branch !== delivery.workBranch
+    ) {
+      throw new Error(`Delivery ${delivery.key} is not oriented to its recorded repository and branch`);
+    }
+    context.ui.setStatus("pi-outliner-work", workEnvironmentStatus(orientation));
+    return { delivery, orientation };
+  }
+
+  async function currentDelivery(
+    task: Block,
+    context: ExtensionContext,
+  ): Promise<{ delivery: DeliveryIdentity | null; orientation: WorkOrientation | null }> {
+    const exec = hostExec();
+    if (!exec) return { delivery: null, orientation: null };
+    const snapshot = await inspectWorkEnvironment(exec, context.cwd, context.signal);
+    const orientation = classifyWorkEnvironment(snapshot, requireRoadmapTask(task));
+    const delivery = selectActiveDelivery(
+      await taskDeliveryChildren(task),
+      snapshot.repository,
+      snapshot.branch,
+    );
+    return { delivery, orientation };
+  }
+
+  async function syncDelivery(
+    task: Block,
+    context: ExtensionContext,
+  ): Promise<{
+    task: Block;
+    delivery: DeliveryIdentity | null;
+    pullRequest: PullRequestSnapshot | null;
+  }> {
+    const current = await currentDelivery(task, context);
+    if (!current.delivery) return { task, delivery: null, pullRequest: null };
+    const exec = hostExec();
+    if (!exec) throw new Error("This host does not expose pi.exec for delivery synchronization");
+    const pullRequest = await inspectPullRequest(
+      exec,
+      current.delivery,
+      context.cwd,
+      context.signal,
+    );
+    if (!pullRequest) return { task, delivery: current.delivery, pullRequest: null };
+    const nextStage = current.delivery.stage === "complete"
+      ? "complete"
+      : pullRequest.state === "MERGED" && pullRequest.mergeCommit
+        ? "validate"
+        : "review";
+    const values: Record<string, string> = {
+      "delivery-stage": nextStage,
+      "pull-request-number": String(pullRequest.number),
+      "pull-request-url": pullRequest.url,
+      "pull-request-state": pullRequest.state.toLowerCase(),
+    };
+    if (pullRequest.mergeCommit) values["merge-commit"] = pullRequest.mergeCommit;
+    const updatedDelivery = await patchBlockProperties(
+      current.delivery.block,
+      values,
+      context,
+      "outliner-delivery:sync",
+    );
+    const taskStage = getProperty(task.properties, "work-stage");
+    const nextTaskStage = nextStage === "validate"
+      ? "validate"
+      : nextStage === "review"
+        ? "review"
+        : taskStage;
+    const updatedTask = nextTaskStage && nextTaskStage !== taskStage
+      ? await patchBlockProperties(
+        task,
+        { "work-stage": nextTaskStage },
+        context,
+        "outliner-delivery:sync",
+      )
+      : task;
+    const delivery = parseDeliveryIdentity(updatedDelivery);
+    context.ui.setStatus(
+      "pi-outliner-delivery",
+      `${delivery.key} · ${delivery.stage} · PR #${pullRequest.number}`,
+    );
+    return { task: updatedTask, delivery, pullRequest };
+  }
+
+  async function overrideDeliveryPolicy(
+    task: Block,
+    reasonValue: string,
+    context: ExtensionContext,
+  ): Promise<DeliveryIdentity> {
+    const reason = reasonValue.trim();
+    if (!reason || reason.length > 500 || /[\u0000-\u001f\u007f]/.test(reason)) {
+      throw new Error("Lifecycle override reason must be 1-500 printable characters");
+    }
+    const current = await currentDelivery(task, context);
+    if (!current.delivery) throw new Error("No active delivery record to override");
+    const ui = context.ui as {
+      confirm?: (title: string, message: string) => Promise<boolean>;
+    };
+    if (typeof ui.confirm !== "function") {
+      throw new Error("Lifecycle override requires an interactive owner confirmation");
+    }
+    const approved = await ui.confirm(
+      "Override delivery lifecycle?",
+      `${current.delivery.key}: ${reason}`,
+    );
+    if (!approved) throw new Error("Lifecycle override was not approved");
+    const updated = await patchBlockProperties(
+      current.delivery.block,
+      {
+        "lifecycle-override": "active",
+        "lifecycle-override-reason": reason,
+        "lifecycle-override-at": new Date().toISOString(),
+      },
+      context,
+      "outliner-delivery:override",
+    );
+    return parseDeliveryIdentity(updated);
+  }
+
+  async function lifecyclePolicyState(context: ExtensionContext): Promise<{
+    task: Block | null;
+    delivery: DeliveryIdentity | null;
+    violation: string | null;
+  }> {
+    const task = await currentTask();
+    if (!task) return { task: null, delivery: null, violation: null };
+    const current = await currentDelivery(task, context);
+    const delivery = current.delivery;
+    if (!delivery) {
+      return {
+        task,
+        delivery: null,
+        violation: `Active task ${requireRoadmapTask(task)} has no durable delivery record`,
+      };
+    }
+    if (delivery.overrideReason) return { task, delivery, violation: null };
+    if (!current.orientation) {
+      return { task, delivery, violation: "Live Git orientation is unavailable" };
+    }
+    const snapshot = current.orientation.snapshot;
+    if (snapshot.repository !== delivery.repository) {
+      return {
+        task,
+        delivery,
+        violation:
+          `Delivery ${delivery.key} requires repository ${delivery.repository}; found ${snapshot.repository ?? "non-Git cwd"}`,
+      };
+    }
+    if (snapshot.branch !== delivery.workBranch) {
+      return {
+        task,
+        delivery,
+        violation:
+          `Delivery ${delivery.key} requires branch ${delivery.workBranch}; found ${snapshot.branch ?? "detached HEAD"}`,
+      };
+    }
+    return { task, delivery, violation: null };
+  }
+
+  function pullRequestToolViolation(
+    delivery: DeliveryIdentity,
+    input: unknown,
+  ): string | null {
+    if (!input || typeof input !== "object") return null;
+    const values = input as Record<string, unknown>;
+    if (values.op !== "pr_create") return null;
+    const checks: Array<[string, unknown, string]> = [
+      ["repo", values.repo, delivery.repository],
+      ["base", values.base, delivery.baseBranch],
+      ["head", values.head, delivery.workBranch],
+    ];
+    for (const [name, actual, expected] of checks) {
+      if (actual !== undefined && actual !== expected) {
+        return `Pull-request ${name} must be ${expected}; received ${String(actual)}`;
+      }
+    }
+    return null;
+  }
+
   async function presentTask(
     context: ExtensionContext,
     task: Block | null,
@@ -945,6 +1245,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
     if (stage === "done" || stage === "complete") {
       throw new Error(`Cannot start completed task: ${workId(task) ?? task.id}`);
     }
+    const { delivery } = await ensureTaskDelivery(task, context);
     const updated = stage === "doing"
       ? task
       : await client.request<Block>({
@@ -961,6 +1262,10 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
       blockId: updated.id,
       workId: requireRoadmapTask(updated),
       stage: getProperty(updated.properties, "work-stage"),
+      deliveryKey: delivery.key,
+      repository: delivery.repository,
+      baseBranch: delivery.baseBranch,
+      workBranch: delivery.workBranch,
       presenceReported,
     };
   }
@@ -995,8 +1300,21 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
 
   async function completeTask(proofBlockId: string, context: ExtensionContext) {
     await ensureService(false);
-    const task = await currentTask();
-    if (!task) throw new Error("No active Outliner task");
+    const activeTask = await currentTask();
+    if (!activeTask) throw new Error("No active Outliner task");
+    const synchronized = await syncDelivery(activeTask, context);
+    const task = synchronized.task;
+    if (
+      synchronized.delivery &&
+      (
+        ![ "validate", "complete" ].includes(synchronized.delivery.stage) ||
+        !synchronized.delivery.mergeCommit
+      )
+    ) {
+      throw new Error(
+        `Delivery ${synchronized.delivery.key} must have a merged PR and reach Validate before completion`,
+      );
+    }
     const proof = await client.request<Block>({ action: "get", blockId: proofBlockId });
     if (proof.effectiveDeletedRootId) throw new Error(`Proof block is in Trash: ${proof.id}`);
     const linkedProof = proof.parentId === task.id ||
@@ -1012,6 +1330,14 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
     ];
     if (!task.properties.some((property) => property.key === "proof" && property.value === proof.id)) {
       operations.push({ op: "append", key: "proof", value: proof.id });
+    }
+    if (synchronized.delivery?.stage === "validate") {
+      await patchBlockProperties(
+        synchronized.delivery.block,
+        { "delivery-stage": "complete" },
+        context,
+        "outliner-task:complete",
+      );
     }
     const updated = await client.request<Block>({
       action: "properties.patch",
@@ -1185,6 +1511,13 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
         await ensureService(false);
         task = await currentTask();
         if (task) await presentTask(context, task, "idle");
+        if (task) {
+          const current = await currentDelivery(task, context);
+          context.ui.setStatus(
+            "pi-outliner-delivery",
+            current.delivery ? `${current.delivery.key} · ${current.delivery.stage}` : undefined,
+          );
+        }
       } catch {
         context.ui.setStatus("pi-outliner-task", activeTaskId.slice(0, 8));
       }
@@ -1195,6 +1528,24 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
       context.ui.setStatus("pi-outliner-work", undefined);
     }
   });
+
+  async function gateSessionChange(context: ExtensionContext) {
+    if (!activeTaskId) return;
+    try {
+      const state = await lifecyclePolicyState(context);
+      if (!state.violation) return;
+      context.ui.notify(`Session change blocked: ${state.violation}`, "error");
+      return { cancel: true as const };
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      context.ui.notify(`Session change blocked: ${reason}`, "error");
+      return { cancel: true as const };
+    }
+  }
+
+  pi.on("session_before_switch", async (_event, context) => gateSessionChange(context));
+  pi.on("session_before_fork", async (_event, context) => gateSessionChange(context));
+  pi.on("session_before_tree", async (_event, context) => gateSessionChange(context));
   pi.registerCommand("outliner", {
     description: "Open or focus the persistent Herdr outliner pane",
     handler: async (_args, ctx) => {
@@ -1453,6 +1804,76 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
         return toolResult(await completeTask(params.proofBlockId, context));
       }
       return toolResult(await clearTask(context));
+    },
+  });
+
+  pi.registerTool({
+    ...outlinerToolPresentation("Outliner Delivery"),
+    name: "outliner_delivery",
+    label: "Outliner Delivery",
+    description:
+      "Inspect, ensure, synchronize, or explicitly override the active task's durable delivery lifecycle",
+    promptSnippet:
+      "Keep one recorded repository, base branch, work branch, PR, and lifecycle stage per delivery",
+    parameters: Type.Object({
+      operation: Type.Union([
+        Type.Literal("status"),
+        Type.Literal("ensure"),
+        Type.Literal("sync"),
+        Type.Literal("override"),
+      ]),
+      deliveryKey: Type.Optional(Type.String()),
+      baseBranch: Type.Optional(Type.String()),
+      workBranch: Type.Optional(Type.String()),
+      reason: Type.Optional(Type.String()),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, context) {
+      await ensureService(false);
+      const task = await currentTask();
+      if (!task) throw new Error("No active Outliner task");
+      if (params.operation === "ensure") {
+        const ensured = await ensureTaskDelivery(task, context, {
+          ...(params.deliveryKey ? { deliveryKey: params.deliveryKey } : {}),
+          ...(params.baseBranch ? { baseBranch: params.baseBranch } : {}),
+          ...(params.workBranch ? { workBranch: params.workBranch } : {}),
+        });
+        return toolResult({
+          blockId: ensured.delivery.block.id,
+          deliveryKey: ensured.delivery.key,
+          repository: ensured.delivery.repository,
+          baseBranch: ensured.delivery.baseBranch,
+          workBranch: ensured.delivery.workBranch,
+          stage: ensured.delivery.stage,
+        });
+      }
+      if (params.operation === "sync") {
+        return toolResult(await syncDelivery(task, context));
+      }
+      if (params.operation === "override") {
+        if (!params.reason) throw new Error("outliner_delivery override requires reason");
+        const delivery = await overrideDeliveryPolicy(task, params.reason, context);
+        return toolResult({
+          blockId: delivery.block.id,
+          deliveryKey: delivery.key,
+          stage: delivery.stage,
+          overrideReason: delivery.overrideReason,
+        });
+      }
+      const current = await currentDelivery(task, context);
+      return toolResult(current.delivery
+        ? {
+          blockId: current.delivery.block.id,
+          deliveryKey: current.delivery.key,
+          repository: current.delivery.repository,
+          baseBranch: current.delivery.baseBranch,
+          workBranch: current.delivery.workBranch,
+          stage: current.delivery.stage,
+          pullRequestNumber: current.delivery.pullRequestNumber,
+          pullRequestUrl: current.delivery.pullRequestUrl,
+          mergeCommit: current.delivery.mergeCommit,
+          overrideReason: current.delivery.overrideReason,
+        }
+        : { blockId: null });
     },
   });
 
@@ -2048,6 +2469,42 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
     }
   });
 
+  pi.on("tool_call", async (event, context) => {
+    if (!isLifecycleMutationTool(event.toolName, event.input)) return;
+    const entries = context.sessionManager.getBranch();
+    if (containsTaskStartToolCall(entries.at(-1))) {
+      return {
+        block: true,
+        reason:
+          "Task start and repository mutation cannot be sibling tool calls; start the task, observe its delivery branch, then mutate in a later turn",
+      };
+    }
+    if (!activeTaskId) return;
+    try {
+      const state = await lifecyclePolicyState(context);
+      if (state.violation) {
+        return { block: true, reason: `Delivery lifecycle blocked mutation: ${state.violation}` };
+      }
+      if (state.delivery) {
+        const pullRequestViolation = pullRequestToolViolation(state.delivery, event.input);
+        if (pullRequestViolation) {
+          return {
+            block: true,
+            reason: `Delivery lifecycle blocked pull-request creation: ${pullRequestViolation}`,
+          };
+        }
+      }
+    } catch (error) {
+      return {
+        block: true,
+        reason:
+          `Delivery lifecycle preflight failed closed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+      };
+    }
+  });
+
   pi.on("tool_result", async (event) => {
     if (workPlaceholderNudgedThisTurn || !event.toolName.startsWith("outliner_")) return;
     const text = textualToolResult(event.content);
@@ -2110,6 +2567,12 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
     }
     try {
       const task = await currentTask();
+      if (task) await syncDelivery(task, extensionContext);
+    } catch {
+      // Live Git/GitHub synchronization is retried on the next turn or explicit delivery sync.
+    }
+    try {
+      const task = await currentTask();
       const orientation = await refreshWorkEnvironment(extensionContext, task);
       if (orientation) {
         const changed = orientation.fingerprint !== lastEnvironmentFingerprint;
@@ -2126,7 +2589,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
         lastEnvironmentFingerprint = orientation.fingerprint;
       }
     } catch {
-      // Repository orientation is advisory in this read-only substrate.
+      // Preserve the base prompt when repository orientation cannot be inspected.
     }
     const workspace = boundAgentContext([workspaceContext, activity].filter(Boolean).join("\n\n"));
     const additions = [workspace, environment, nudge].filter(Boolean);

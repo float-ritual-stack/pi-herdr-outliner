@@ -25,7 +25,7 @@ The project started as a small Friday-night experiment and grew into a durable w
 
 - SQLite-backed hierarchical blocks with stable UUIDs, sibling order, authors, timestamps, and one canonical graph per workspace root.
 - Workspace-isolated service and runtime paths.
-- JSON-lines RPC protocol v28 over a Unix socket.
+- JSON-lines RPC protocol v29 over a Unix socket.
 - Reactive canonical content/view broadcasts, per-process Tree/Detail registration with Detail lock availability, exact-client UI commands, and source-aware `preview | open | reveal` navigation.
 - Each Tree owns its cursor, occurrence selection, filter, viewport, collapsed rows, multiline expansion, explicit-navigation history, and browsing context; moving a Tree previews only in the first unlocked same-tab Detail and never replaces a locked anchor.
 - Indexed `[property::value]` metadata with optimistic property patching and catalog queries.
@@ -573,6 +573,7 @@ The project Pi extension is auto-discovered through [`.pi/extensions/outliner.ts
 - `/send-to-outline`
 - `/roadmap-item <create|update|promote|rank> <details>` through the bundled prompt template
 - `outliner_task`
+- `outliner_delivery`
 - `outliner_focus`
 - `outliner_publish`
 - `outliner_create`
@@ -594,17 +595,43 @@ The project Pi extension is auto-discovered through [`.pi/extensions/outliner.ts
 
 `outliner_roadmap_create` is the canonical new-work path: it fails without a partial block or consumed Work ID when queue discovery, metadata, or relationship validation fails. New work defaults to `unprioritized`. `outliner_branch_rank` updates only persisted virtual occurrence ranks; it neither moves canonical blocks nor changes `work-stage`, and ranks remain available across temporary query mismatches.
 
-`outliner_task` persists one active roadmap block per Pi session. Starting moves its canonical `work-stage` to `doing`; pausing returns it to `next`; completion requires a child or `source-block` proof, moves the item to `done`, and clears the session binding. Agent lifecycle events only project working/idle presence into Herdr metadata—they never infer semantic completion.
+`outliner_task` persists one active roadmap block per Pi session. Starting a
+code-delivery item first transactionally ensures one canonical child
+`[type::delivery]` record, then safely attaches or creates its recorded
+Work-ID-bearing branch, and only then moves `work-stage` to `doing`. Reentry
+reuses the same repository, base branch, and work branch. Pausing returns the
+task to `next`. Completion still requires a child or `source-block` proof; when
+a delivery exists it additionally requires an observed merged PR and the
+Validate stage before moving the delivery to Complete, the task to `done`, and
+clearing the session binding. Agent lifecycle events never infer semantic
+completion.
 
-With an active code-delivery task, the shared Pi/OMP extension also inspects the
-invocation-local Git checkout through the host's bounded `pi.exec` API. Every
-turn receives one compact repository/branch/dirty/ahead orientation line.
-Working on `main`, a different Work-ID branch, detached HEAD, or a non-Git
-directory adds explicit reorientation guidance; unchanged valid state stays
-quiet beyond the one-line invariant. A Work-ID branch without an active task
-suggests an explicit resume and never binds automatically. This first lifecycle
-slice is read-only: it does not switch branches, stage, stash, commit, or open
-pull requests.
+The durable delivery block owns `delivery-key`, `repository`, `base-branch`,
+`work-branch`, `delivery-stage`, and observed pull-request facts. It never owns
+another `work-id`. `outliner_delivery` exposes status, deterministic ensure,
+live GitHub synchronization, and one owner-confirmed policy override with a
+printable reason. Git and GitHub remain authoritative for branch, PR, review,
+and merge facts; the Outliner stores identity and observed lifecycle state.
+
+The shared Pi/OMP extension inspects the invocation-local checkout through
+bounded, argument-array `pi.exec` calls. Every active-task turn receives a
+compact repository/branch/dirty/ahead invariant. Task start reuses a recorded
+local or remote branch, creates a missing branch from the recorded base, and
+returns another-worktree paths instead of stealing them. Dirty wrong branches,
+detached HEAD, wrong repositories, missing bases, and Git conflicts leave both
+Git and roadmap stage unchanged. It never stages, stashes, commits, or opens a
+pull request.
+
+While a delivery is unoriented, `tool_call` blocks file/shell mutation and
+matching GitHub PR creation fails preflight. Task start and mutation cannot be
+sibling tool calls. Session switch, fork, and tree navigation use the same
+gate. Read-only inspection and the lifecycle repair tools remain available.
+An explicit owner-confirmed override changes those policy gates while retaining
+the observed facts and durable reason.
+
+An exact open PR advances Doing to Review; its exact merged commit advances
+Review to Validate. Repeated sync and session reentry select the same delivery
+identity and are idempotent.
 
 Before each agent turn, the extension uses Herdr pane-focus history to locate the most recently focused registered Outliner client, reads that client's browsing context, and injects the focused block body, breadcrumb, properties, and children. A different active task is appended as separate session context rather than replacing the user's focus. Without a focused Outliner client it falls back to the active task and then the legacy shared selection.
 
