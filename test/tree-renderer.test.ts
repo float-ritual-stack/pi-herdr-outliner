@@ -175,8 +175,8 @@ describe("renderTreeFrame", () => {
         text: "Blocked item [status::blocked] [work-stage::doing]",
         displayText: "Blocked item [status::blocked] [work-stage::doing]",
         properties: [
-          { key: "status", value: "blocked" },
-          { key: "work-stage", value: "doing" },
+          { key: "Status", value: "blocked" },
+          { key: "WORK-STAGE", value: "doing" },
         ],
       }),
       block("doing", {

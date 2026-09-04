@@ -114,7 +114,7 @@ const TREE_SEMANTIC_TREATMENTS: Record<TreeSemanticState, TreeSemanticTreatment>
 export function treeSemanticState(block: Pick<Block, "properties">): TreeSemanticState | null {
   const values = (key: string) =>
     block.properties
-      .filter((property) => property.key === key)
+      .filter((property) => property.key.toLowerCase() === key)
       .map((property) => property.value.toLowerCase());
   const status = values("status");
   const stage = values("work-stage");
