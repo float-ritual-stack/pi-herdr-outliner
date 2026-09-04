@@ -216,6 +216,7 @@ export function renderDetailFooter(
   width: number,
   mode: DetailState["mode"] = state.mode,
   helpText = detailHelpText(mode),
+  chooserHelpText = openDestinationChooserHelp(),
 ): string[] {
   const destinationChooserOpen = state.destinationChooser.active;
   return [
@@ -225,7 +226,7 @@ export function renderDetailFooter(
     ),
     `\x1b[2m${
       fitToWidth(
-        destinationChooserOpen ? openDestinationChooserHelp() : helpText,
+        destinationChooserOpen ? chooserHelpText : helpText,
         width,
       )
     }\x1b[0m`,
@@ -287,6 +288,7 @@ export interface DetailRenderOptions {
   header?: DetailHeaderOptions;
   helpPrefix?: string;
   helpText?: string;
+  chooserHelpText?: string;
 }
 
 export function renderDetailLines(
@@ -360,7 +362,13 @@ export function renderDetailLines(
     (options.helpPrefix
       ? `${options.helpPrefix}  ${detailHelpText(state.mode)}`
       : detailHelpText(state.mode));
-  output.push(...renderDetailFooter(state, width, state.mode, helpText));
+  output.push(...renderDetailFooter(
+    state,
+    width,
+    state.mode,
+    helpText,
+    options.chooserHelpText,
+  ));
   if (output.length <= height) return output;
   if (height <= 1) return output.slice(0, Math.max(0, height));
   const footerCount = Math.min(2, height - 1);

@@ -208,6 +208,7 @@ const effects: DetailEffects = {
 function draw(): void {
   process.stdout.write(renderDetailAnsi(controller.state, viewport(), {
     helpText: actionKeymap.helpText("detail", detailActionMode(controller.state)),
+    chooserHelpText: controller.destinationChooserHelpText(),
   }));
 }
 
@@ -220,6 +221,7 @@ const controller = createDetailController(
       : "inline",
     destinationTimeoutMs,
     initialTargetFragmentId,
+    actionKeymap,
   },
 );
 

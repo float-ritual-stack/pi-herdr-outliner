@@ -11,8 +11,12 @@ import {
 import {
   createOpenDestinationChooserState,
   OpenDestinationChooser,
-  openDestinationChooserHelp,
 } from "./open-destination-chooser";
+import {
+  DEFAULT_OUTLINER_ACTION_KEYMAP,
+  displayActionChord,
+  type OutlinerActionKeymap,
+} from "./outliner-actions";
 import type { TerminalInputAction, TerminalKey } from "./terminal";
 import type { BacklinkSource, Block } from "./types";
 
@@ -45,6 +49,11 @@ export interface BacklinkPeekEffects {
   close(): void;
   invalidate(): void;
 }
+export interface BacklinkPeekOptions {
+  destinationTimeoutMs?: number;
+  actionKeymap?: OutlinerActionKeymap;
+}
+
 
 export class BacklinkPeekController {
   selectedIndex: number;
@@ -54,6 +63,7 @@ export class BacklinkPeekController {
   loading = false;
   readonly destinationChooserState = createOpenDestinationChooserState();
   private readonly destinationChooser: OpenDestinationChooser;
+  private readonly actionKeymap: OutlinerActionKeymap;
   private closed = false;
 
   constructor(
@@ -61,10 +71,11 @@ export class BacklinkPeekController {
     readonly sources: readonly BacklinkSource[],
     selectedSourceBlockId: string,
     private readonly effects: BacklinkPeekEffects,
-    destinationTimeoutMs?: number,
+    options: BacklinkPeekOptions = {},
   ) {
     const selectedIndex = sources.findIndex((source) => source.blockId === selectedSourceBlockId);
     this.selectedIndex = selectedIndex < 0 ? 0 : selectedIndex;
+    this.actionKeymap = options.actionKeymap ?? DEFAULT_OUTLINER_ACTION_KEYMAP;
     this.destinationChooser = new OpenDestinationChooser({
       beforeOpen: async (target, destination) => {
         if (destination !== "replace") await effects.restoreSelection(target.blockId);
@@ -82,7 +93,10 @@ export class BacklinkPeekController {
       },
     }, {
       state: this.destinationChooserState,
-      ...(destinationTimeoutMs === undefined ? {} : { timeoutMs: destinationTimeoutMs }),
+      ...(options.destinationTimeoutMs === undefined
+        ? {}
+        : { timeoutMs: options.destinationTimeoutMs }),
+      actionKeymap: this.actionKeymap,
     });
   }
 
@@ -92,6 +106,16 @@ export class BacklinkPeekController {
 
   get destinationChooserOpen(): boolean {
     return this.destinationChooserState.active;
+  }
+
+  get destinationChooserHelpText(): string {
+    return this.destinationChooser.helpText();
+  }
+
+  get directOpenHelpText(): string {
+    const right = displayActionChord(this.actionKeymap.primaryBinding("detail.pane.right"));
+    const down = displayActionChord(this.actionKeymap.primaryBinding("detail.pane.below"));
+    return `${right} right  ${down} down`;
   }
 
   async initialize(): Promise<void> {
@@ -111,6 +135,18 @@ export class BacklinkPeekController {
     }
     if (this.destinationChooserState.active) {
       await this.destinationChooser.handleKeypress(str, key);
+      return;
+    }
+    const directional = this.actionKeymap.canonicalize("detail", "destination", str, key);
+    if (
+      directional.actionId === "detail.pane.right" ||
+      directional.actionId === "detail.pane.below"
+    ) {
+      const source = this.selectedSource;
+      if (source) {
+        this.destinationChooser.open({ blockId: source.blockId, title: source.title });
+        await this.destinationChooser.handleKeypress(str, key);
+      }
       return;
     }
     if (str === "q") {
@@ -247,8 +283,8 @@ export function renderBacklinkPeekFrame(
   output.push(truncateToWidth(`\x1b[2m${stripTerminalSequences(status)}\x1b[0m`, width));
   output.push(truncateToWidth(
     controller.destinationChooserState.active
-      ? openDestinationChooserHelp()
-      : "Esc cancel  ←/→ peek  ↑/↓ scroll  Enter choose destination",
+      ? controller.destinationChooserHelpText
+      : `Esc cancel  ←/→ peek  ↑/↓ scroll  ${controller.directOpenHelpText}  Enter choose destination`,
     width,
   ));
   return output.join("\n");

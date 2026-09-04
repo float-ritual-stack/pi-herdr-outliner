@@ -1,5 +1,8 @@
 import type { BacklinkPeekLaunch } from "./backlink-peek";
-import { DEFAULT_OUTLINER_ACTION_KEYMAP } from "./outliner-actions";
+import {
+  DEFAULT_OUTLINER_ACTION_KEYMAP,
+  type OutlinerActionKeymap,
+} from "./outliner-actions";
 import { extractFileAnnotationComment, formatFileAnnotation } from "./annotations";
 import {
   completionTargetAtCursor,
@@ -148,6 +151,7 @@ export interface DetailControllerOptions {
   destinationTimeoutMs?: number;
   initialTargetFragmentId?: string;
   destinationScheduler?: OpenDestinationScheduler;
+  actionKeymap?: OutlinerActionKeymap;
 }
 
 export function visiblePropertyInspectorEntries(
@@ -386,6 +390,7 @@ export interface DetailController {
   setPreviewRegions(regions: readonly PreviewRegion[]): void;
   onServiceEvent(event: OutlinerEvent, viewport: DetailViewport): Promise<void>;
   handleDestinationChooserKeypress(str: string, key: TerminalKey): Promise<boolean>;
+  destinationChooserHelpText(): string;
   onServiceConnect(viewport: DetailViewport): Promise<void>;
   onServiceDisconnect(): void;
   onServiceError(error: unknown): void;
@@ -817,6 +822,7 @@ export function createDetailController(
     ...(options.destinationScheduler === undefined
       ? {}
       : { scheduler: options.destinationScheduler }),
+    actionKeymap: options.actionKeymap,
   });
 
   const refreshPendingTarget = async (): Promise<void> => {
@@ -1837,6 +1843,9 @@ export function createDetailController(
     },
     handleDestinationChooserKeypress(str, key) {
       return destinationChooser!.handleKeypress(str, key);
+    },
+    destinationChooserHelpText() {
+      return destinationChooser!.helpText();
     },
     async onServiceEvent(event, viewport) {
       if (event.domain === "ui") {

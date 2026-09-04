@@ -6,6 +6,7 @@ import {
   type BacklinkPeekEffects,
   type BacklinkPeekPreview,
 } from "../src/backlink-peek";
+import { OutlinerActionKeymap } from "../src/outliner-actions";
 import { projectedSourceLine } from "../src/detail-pi-preview";
 import type { BacklinkSource, Block } from "../src/types";
 
@@ -68,7 +69,7 @@ interface Harness {
   failReplace(message: string): void;
 }
 
-function harness(selected = "two"): Harness {
+function harness(selected = "two", actionKeymap?: OutlinerActionKeymap): Harness {
   const calls: Harness["calls"] = {
     loaded: [],
     restored: [],
@@ -112,6 +113,7 @@ function harness(selected = "two"): Harness {
       [source("one"), source("two"), source("three")],
       selected,
       effects,
+      { ...(actionKeymap ? { actionKeymap } : {}) },
     ),
     calls,
     setFirstUnlockedAvailable(available) {
@@ -246,6 +248,48 @@ describe("backlink peek controller", () => {
     await down.controller.handleKeypress("d", { name: "d" }, "pass", 20);
     expect(down.calls.openedNew).toEqual([{ sourceBlockId: "two", direction: "down" }]);
   });
+  test("applies configured directional chooser bindings inside the peek popup", async () => {
+    const actionKeymap = new OutlinerActionKeymap("<test>", {
+      "detail.pane.right": ["Shift+ArrowRight"],
+      "detail.pane.below": ["Shift+ArrowDown"],
+    });
+    for (const [keyName, direction] of [
+      ["right", "right"],
+      ["down", "down"],
+    ] as const) {
+      const state = harness("two", actionKeymap);
+      await state.controller.initialize();
+      await state.controller.handleKeypress("\r", { name: "return" }, "pass", 20);
+      await state.controller.handleKeypress(
+        "",
+        { name: keyName, shift: true },
+        "pass",
+        20,
+      );
+      expect(state.calls.openedNew).toEqual([{ sourceBlockId: "two", direction }]);
+    }
+  });
+  test("opens the current popup source directly with configured direction keys", async () => {
+    const actionKeymap = new OutlinerActionKeymap("<test>", {
+      "detail.pane.right": ["Shift+ArrowRight"],
+      "detail.pane.below": ["Shift+ArrowDown"],
+    });
+    const state = harness("two", actionKeymap);
+    await state.controller.initialize();
+
+    await state.controller.handleKeypress(
+      "",
+      { name: "right", shift: true },
+      "pass",
+      20,
+    );
+
+    expect(state.calls.restored).toEqual(["two"]);
+    expect(state.calls.openedNew).toEqual([{ sourceBlockId: "two", direction: "right" }]);
+    expect(state.calls.closes).toBe(1);
+  });
+
+
 
   test("keeps the chooser open when no explicit unlocked destination exists", async () => {
     const state = harness();
@@ -258,7 +302,9 @@ describe("backlink peek controller", () => {
     expect(state.controller.destinationChooserOpen).toBe(true);
     expect(state.calls.restored).toEqual(["two"]);
     expect(state.calls.openedFirst).toEqual(["two"]);
-    expect(state.controller.status).toBe("No unlocked Detail is available · choose ⇧R, r, or d");
+    expect(state.controller.status).toBe(
+      "No unlocked Detail is available · choose replace or a split direction",
+    );
     expect(state.calls.closes).toBe(0);
 
     await state.controller.handleKeypress("q", { name: "q" }, "pass", 20);

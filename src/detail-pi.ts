@@ -368,6 +368,7 @@ const controller = createDetailController(
       : "inline",
     destinationTimeoutMs,
     initialTargetFragmentId,
+    actionKeymap,
   },
 );
 
@@ -798,6 +799,7 @@ const preview = new DetailPiPreviewLayout(
     splitActive: draftSplitActive,
     focused: () => draftSplitFocus === "preview",
     helpText: () => actionKeymap.helpText("detail", detailActionMode(controller.state)),
+    chooserHelpText: () => controller.destinationChooserHelpText(),
     setRegions: (regions) => controller.setPreviewRegions(regions),
   },
 );
