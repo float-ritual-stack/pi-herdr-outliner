@@ -87,11 +87,14 @@ plain source-row click selects generated sources, `.` toggles the selected
 source's occurrence rows, `Enter` or a Ctrl/Meta-click opens a non-routable
 Herdr popup, and `R` reveals one. The popup captures the visible filtered/sorted
 source set, renders one source at a time, and moves only within that snapshot.
-`Esc` sends an exact-client `backlinks.select` command before closing, `Enter`
-directly opens the source in the invoking unlocked Detail, and `Shift+Enter`
-seeds a fresh browsing context without a source preview dispatch before opening
-a new Detail beside the invoker. The generated `+`/`−` controls use a
-Detail-local action URI and do not enter canonical text.
+`Esc` sends an exact-client `backlinks.select` command before closing. `Enter`
+opens a destination chooser instead of immediately mutating pane topology:
+`Shift+R` sends an explicit `replace` to the invoking Detail without clearing
+its lock, `f` dispatches `open` to the first spatially unlocked same-tab Detail,
+and `r`/`d` seed a fresh browsing context without a source preview dispatch
+before splitting right/down beside the invoker. A second `Enter` uses the first
+unlocked Detail or falls back to a right split. The generated `+`/`−` controls
+use a Detail-local action URI and do not enter canonical text.
 
 Obsidian-style callouts are parsed into source-spanned PreviewRegions with stable
 parent/child identity. Nested callout bodies remain Pi Markdown, `+`/`-` fold
@@ -182,7 +185,7 @@ Scope classification is structural. After leading blank lines, the first nonblan
 
 ## Protocol
 
-The current protocol version is `27`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
+The current protocol version is `28`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
 
 ### Important request families
 
@@ -200,7 +203,7 @@ The current protocol version is `27`, defined in [`src/types.ts`](../src/types.t
 - Work IDs: `work-ids.status`, `work-ids.configure`, `work-ids.allocate`
 - legacy workspace selection/history: `selection.get`, `selection.set`, `navigation.state`, `navigation.back`, `navigation.forward`
 - reactive clients: `events.subscribe`, `clients.list`, `clients.update`
-- exact-client behavior: `ui.command.send`
+- exact-client behavior: `ui.command.send`; `open` respects the destination lock, while explicit `replace` retargets the invoking Detail and preserves that lock state
 
 ### Live client identity
 

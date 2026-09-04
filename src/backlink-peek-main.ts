@@ -123,17 +123,36 @@ const controller = new BacklinkPeekController(
         },
       });
     },
-    async openInSource(sourceBlockId) {
+    async replaceSource(sourceBlockId) {
       await client.request({
         action: "ui.command.send",
         command: {
           targetClientId: launch.sourceClientId,
-          command: "open",
+          command: "replace",
           blockId: sourceBlockId,
         },
       });
     },
-    async openInNewDetail(sourceBlockId) {
+    async openInFirstUnlocked(sourceBlockId) {
+      try {
+        await client.request({
+          action: "navigation.dispatch",
+          sourceClientId: launch.sourceClientId,
+          blockId: sourceBlockId,
+          intent: "open",
+        });
+        return true;
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          error.message === "All Details in this tab are locked · unlock one or open another Detail"
+        ) {
+          return false;
+        }
+        throw error;
+      }
+    },
+    async openInNewDetail(sourceBlockId, direction) {
       const sourceClient = (await listLiveClients(client, "detail"))
         .find((candidate) => candidate.clientId === launch.sourceClientId);
       if (!sourceClient) throw new Error("Invoking Detail is no longer available");
@@ -151,7 +170,7 @@ const controller = new BacklinkPeekController(
         workspaceRoot: paths.workspaceRoot,
         browsingContextId: contextId,
         targetPaneId,
-        direction: "right",
+        direction,
       });
     },
     close() {

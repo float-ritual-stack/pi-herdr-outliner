@@ -25,7 +25,7 @@ The project started as a small Friday-night experiment and grew into a durable w
 
 - SQLite-backed hierarchical blocks with stable UUIDs, sibling order, authors, timestamps, and one canonical graph per workspace root.
 - Workspace-isolated service and runtime paths.
-- JSON-lines RPC protocol v27 over a Unix socket.
+- JSON-lines RPC protocol v28 over a Unix socket.
 - Reactive canonical content/view broadcasts, per-process Tree/Detail registration with Detail lock availability, exact-client UI commands, and source-aware `preview | open | reveal` navigation.
 - Each Tree owns its cursor, occurrence selection, filter, viewport, collapsed rows, multiline expansion, explicit-navigation history, and browsing context; moving a Tree previews only in the first unlocked same-tab Detail and never replaces a locked anchor.
 - Indexed `[property::value]` metadata with optimistic property patching and catalog queries.
@@ -137,16 +137,18 @@ unlock the pane to make it eligible again.
 
 `o`, plain-clicked references, and external Herdr link activation open in the
 first unlocked same-tab Detail and focus it without locking it. `R` reveals the
-reference in the paired or unique same-tab Tree. Manual per-source destination
-routes do not exist. If every same-tab Detail is locked, the source shows **All
-Details in this tab are locked — unlock one or open another Detail** and
-preserves every anchor.
+reference in the paired or unique same-tab Tree. If every same-tab Detail is
+locked, ordinary reference navigation reports **All Details in this tab are
+locked — unlock one or open another Detail** and preserves every anchor.
 
 Activating an inline Backlinks source opens a transient preview over the
 invoking Detail instead of consuming another reader. `Left` and `Right` traverse
 the captured filtered/sorted source set. `Esc` restores the exact inline row
-without navigation, `Enter` commits the preview into the invoking Detail, and
-`Shift+Enter` opens an explicit new Detail while the hub remains unchanged.
+without navigation. `Enter` opens a destination chooser: `Shift+R` explicitly
+replaces the invoking Detail while preserving its lock state, `f` uses the first
+unlocked same-tab Detail, `r` splits right, and `d` splits down. Pressing `Enter`
+again uses the first unlocked Detail or creates a right split when none is
+available.
 
 Closing a pair discards its browsing context. Renaming its tab or panes changes
 nothing. A newly opened pair receives a new context and initially seeds its Tree
@@ -297,8 +299,9 @@ Projected virtual occurrences deliberately constrain hierarchy and collapse. Bra
 | `Enter` | Peek at the focused backlink source without navigating this Detail |
 | Peek: `Left` / `Right` | Preview the previous / next source in the captured filtered/sorted set |
 | Peek: `Esc` | Cancel, restore the exact inline source row, and leave this Detail unchanged |
-| Peek: `Enter` | Open the previewed source in this Detail; `Option+Left` returns through local history |
-| Peek: `Shift+Enter` | Open the previewed source in an explicit new Detail and preserve this hub |
+| Peek: `Enter` | Choose the destination; press `Enter` again for the default: first unlocked Detail, otherwise split right |
+| Chooser: `Shift+R` / `f` / `r` / `d` | Replace this Detail / first unlocked Detail / split right / split down |
+| Chooser: `Esc` | Close the chooser and return to the preview |
 | `e` | Lock this Detail and edit raw canonical text |
 | `f` | Open referenced file |
 | `o` | Open the first authored reference in the first unlocked same-tab Detail; the destination remains unlocked |
@@ -351,10 +354,12 @@ invalidated by canonical content/address events. Generated rows never enter the
 edit buffer or saved `Block.text`; clicking a source row selects and highlights
 it, while `Enter` or `Ctrl`/`Meta`-click opens a reversible preview over the
 invoking Detail. The popup captures the current filtered/sorted source set once:
-`Left`/`Right` traverse it, `Esc` restores the exact inline row without
-navigation, `Enter` commits into the invoking Detail, and `Shift+Enter` seeds an
-explicit new Detail without changing the hub. `R` still reveals the selected
-source in Tree.
+`Left`/`Right` traverse it and `Esc` restores the exact inline row without
+navigation. `Enter` opens the destination chooser. `Shift+R` replaces the
+invoking Detail regardless of lock state, `f` uses the first unlocked Detail,
+`r` splits right, and `d` splits down. A second `Enter` uses the first unlocked
+Detail or falls back to a right split. `R` outside the popup still reveals the
+selected source in Tree.
 
 ### Detail edit and comment modes
 

@@ -326,7 +326,7 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 27;
+export const OUTLINER_PROTOCOL_VERSION = 28;
 
 
 export interface OutlinerServiceStatus {
@@ -524,7 +524,7 @@ export interface WorkspaceSnapshot {
 
 export interface OutlinerUiCommand {
   targetClientId: string;
-  command: "edit" | "reveal" | "focus" | "preview" | "open" | "backlinks.select";
+  command: "edit" | "reveal" | "focus" | "preview" | "open" | "replace" | "backlinks.select";
   blockId?: string;
   fragmentId?: string;
   targetBlockId?: string;

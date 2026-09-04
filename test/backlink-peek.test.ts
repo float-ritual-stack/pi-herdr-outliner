@@ -58,26 +58,28 @@ interface Harness {
   calls: {
     loaded: string[];
     restored: string[];
-    openedHere: string[];
-    openedNew: string[];
+    replaced: string[];
+    openedFirst: string[];
+    openedNew: Array<{ sourceBlockId: string; direction: "right" | "down" }>;
     closes: number;
     invalidations: number;
   };
-  failOpenHere(message: string): void;
-  failOpenNew(message: string): void;
+  setFirstUnlockedAvailable(available: boolean): void;
+  failReplace(message: string): void;
 }
 
 function harness(selected = "two"): Harness {
   const calls: Harness["calls"] = {
     loaded: [],
     restored: [],
-    openedHere: [],
+    replaced: [],
+    openedFirst: [],
     openedNew: [],
     closes: 0,
     invalidations: 0,
   };
-  let openHereError: Error | null = null;
-  let openNewError: Error | null = null;
+  let firstUnlockedAvailable = true;
+  let replaceError: Error | null = null;
   const effects: BacklinkPeekEffects = {
     async loadSource(item): Promise<BacklinkPeekPreview> {
       calls.loaded.push(item.blockId);
@@ -86,13 +88,16 @@ function harness(selected = "two"): Harness {
     async restoreSelection(sourceBlockId) {
       calls.restored.push(sourceBlockId);
     },
-    async openInSource(sourceBlockId) {
-      calls.openedHere.push(sourceBlockId);
-      if (openHereError) throw openHereError;
+    async replaceSource(sourceBlockId) {
+      calls.replaced.push(sourceBlockId);
+      if (replaceError) throw replaceError;
     },
-    async openInNewDetail(sourceBlockId) {
-      calls.openedNew.push(sourceBlockId);
-      if (openNewError) throw openNewError;
+    async openInFirstUnlocked(sourceBlockId) {
+      calls.openedFirst.push(sourceBlockId);
+      return firstUnlockedAvailable;
+    },
+    async openInNewDetail(sourceBlockId, direction) {
+      calls.openedNew.push({ sourceBlockId, direction });
     },
     close() {
       calls.closes += 1;
@@ -109,11 +114,11 @@ function harness(selected = "two"): Harness {
       effects,
     ),
     calls,
-    failOpenHere(message) {
-      openHereError = new Error(message);
+    setFirstUnlockedAvailable(available) {
+      firstUnlockedAvailable = available;
     },
-    failOpenNew(message) {
-      openNewError = new Error(message);
+    failReplace(message) {
+      replaceError = new Error(message);
     },
   };
 }
@@ -181,49 +186,99 @@ describe("backlink peek controller", () => {
     await state.controller.handleKeypress("", { name: "escape" }, "pass", 20);
 
     expect(state.calls.restored).toEqual(["three"]);
-    expect(state.calls.openedHere).toEqual([]);
+    expect(state.calls.replaced).toEqual([]);
+    expect(state.calls.openedFirst).toEqual([]);
     expect(state.calls.openedNew).toEqual([]);
     expect(state.calls.closes).toBe(1);
   });
 
-  test("enter commits directly into the invoking Detail", async () => {
+  test("enter opens the destination chooser and enter again uses the first unlocked Detail", async () => {
     const state = harness();
     await state.controller.initialize();
 
     await state.controller.handleKeypress("\r", { name: "return" }, "pass", 20);
 
-    expect(state.calls.openedHere).toEqual(["two"]);
-    expect(state.calls.restored).toEqual([]);
-    expect(state.calls.closes).toBe(1);
-  });
-
-  test("modified enter restores the row and opens an explicit new Detail", async () => {
-    const state = harness();
-    await state.controller.initialize();
-    await state.controller.move(-1);
-
-    await state.controller.handleKeypress("", { name: "return" }, "modified-enter", 20);
-
-    expect(state.calls.restored).toEqual(["one"]);
-    expect(state.calls.openedNew).toEqual(["one"]);
-    expect(state.calls.openedHere).toEqual([]);
-    expect(state.calls.closes).toBe(1);
-  });
-
-  test("keeps the popup open when a commit is rejected", async () => {
-    const state = harness();
-    state.failOpenHere("invoking Detail is locked");
-    await state.controller.initialize();
-
-    await state.controller.handleKeypress("\r", { name: "return" }, "pass", 20);
-
-    expect(state.calls.openedHere).toEqual(["two"]);
+    expect(state.controller.destinationChooserOpen).toBe(true);
+    expect(state.calls.openedFirst).toEqual([]);
     expect(state.calls.closes).toBe(0);
-    expect(state.controller.loading).toBe(false);
-    expect(state.controller.status).toBe("Open failed: invoking Detail is locked");
+    const chooserFrame = renderBacklinkPeekFrame(state.controller, 100, 12, plainMarkdownTheme);
+    expect(chooserFrame).toContain("f first unlocked");
+    expect(chooserFrame).toContain("Enter default");
+
+    await state.controller.handleKeypress("\r", { name: "return" }, "pass", 20);
+
+    expect(state.calls.openedFirst).toEqual(["two"]);
+    expect(state.calls.openedNew).toEqual([]);
+    expect(state.calls.closes).toBe(1);
+  });
+
+  test("the default falls back to a right split when every Detail is locked", async () => {
+    const state = harness();
+    state.setFirstUnlockedAvailable(false);
+    await state.controller.initialize();
+
+    await state.controller.handleKeypress("\r", { name: "return" }, "pass", 20);
+    await state.controller.handleKeypress("\r", { name: "return" }, "pass", 20);
+
+    expect(state.calls.openedFirst).toEqual(["two"]);
+    expect(state.calls.openedNew).toEqual([{ sourceBlockId: "two", direction: "right" }]);
+    expect(state.calls.closes).toBe(1);
+  });
+
+  test("routes replace and split destination keys without an Enter modifier", async () => {
+    const replace = harness();
+    await replace.controller.initialize();
+    await replace.controller.handleKeypress("\r", { name: "return" }, "pass", 20);
+    await replace.controller.handleKeypress("R", { name: "r", shift: true }, "pass", 20);
+    expect(replace.calls.replaced).toEqual(["two"]);
+    expect(replace.calls.restored).toEqual([]);
+
+    const right = harness();
+    await right.controller.initialize();
+    await right.controller.handleKeypress("\r", { name: "return" }, "pass", 20);
+    await right.controller.handleKeypress("r", { name: "r" }, "pass", 20);
+    expect(right.calls.openedNew).toEqual([{ sourceBlockId: "two", direction: "right" }]);
+
+    const down = harness();
+    await down.controller.initialize();
+    await down.controller.handleKeypress("\r", { name: "return" }, "modified-enter", 20);
+    expect(down.controller.destinationChooserOpen).toBe(true);
+    await down.controller.handleKeypress("d", { name: "d" }, "pass", 20);
+    expect(down.calls.openedNew).toEqual([{ sourceBlockId: "two", direction: "down" }]);
+  });
+
+  test("keeps the chooser open when no explicit unlocked destination exists", async () => {
+    const state = harness();
+    state.setFirstUnlockedAvailable(false);
+    await state.controller.initialize();
+    await state.controller.handleKeypress("\r", { name: "return" }, "pass", 20);
+
+    await state.controller.handleKeypress("f", { name: "f" }, "pass", 20);
+
+    expect(state.controller.destinationChooserOpen).toBe(true);
+    expect(state.calls.restored).toEqual(["two"]);
+    expect(state.calls.openedFirst).toEqual(["two"]);
+    expect(state.controller.status).toBe("No unlocked Detail is available · choose ⇧R, R, or D");
+    expect(state.calls.closes).toBe(0);
 
     await state.controller.handleKeypress("", { name: "escape" }, "pass", 20);
-    expect(state.calls.restored).toEqual(["two"]);
+    expect(state.controller.destinationChooserOpen).toBe(false);
+    expect(state.calls.closes).toBe(0);
+    await state.controller.handleKeypress("", { name: "escape" }, "pass", 20);
     expect(state.calls.closes).toBe(1);
+  });
+
+  test("keeps the chooser open when replace is rejected", async () => {
+    const state = harness();
+    state.failReplace("source Detail disappeared");
+    await state.controller.initialize();
+    await state.controller.handleKeypress("\r", { name: "return" }, "pass", 20);
+
+    await state.controller.handleKeypress("R", { name: "r", shift: true }, "pass", 20);
+
+    expect(state.calls.replaced).toEqual(["two"]);
+    expect(state.calls.closes).toBe(0);
+    expect(state.controller.loading).toBe(false);
+    expect(state.controller.status).toBe("Open failed: source Detail disappeared");
   });
 });

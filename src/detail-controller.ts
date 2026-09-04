@@ -1786,6 +1786,10 @@ export function createDetailController(
             state.status = command.fragmentId
               ? `Opened fragment · ^${command.fragmentId} · line ${state.previewOffset + 1} · still unlocked`
               : "Opened here · still unlocked · L locks this block";
+          } else if (command.command === "replace") {
+            state.status = state.connectionMode === "locked"
+              ? "Replaced here · remains locked · L unlocks this block"
+              : "Replaced here · still unlocked · L locks this block";
           }
         }
         if (command.command === "edit") await beginEdit(viewport);
