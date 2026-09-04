@@ -39,10 +39,12 @@ export type PiDetailInput =
 
 export class PiDetailInputStreamDecoder {
   #paste: string | null = null;
+  #pending = "";
 
   push(data: string): PiDetailInput[] {
     const inputs: PiDetailInput[] = [];
-    let remaining = data;
+    let remaining = this.#pending + data;
+    this.#pending = "";
     while (remaining.length > 0) {
       if (this.#paste !== null) {
         this.#paste += remaining;
@@ -57,7 +59,14 @@ export class PiDetailInputStreamDecoder {
 
       const start = remaining.indexOf(BRACKETED_PASTE_START);
       if (start < 0) {
-        inputs.push(decodePiDetailInput(remaining));
+        const pendingLength = trailingPrefixLength(remaining, BRACKETED_PASTE_START);
+        if (pendingLength > 0) {
+          const complete = remaining.slice(0, -pendingLength);
+          if (complete.length > 0) inputs.push(decodePiDetailInput(complete));
+          this.#pending = remaining.slice(-pendingLength);
+        } else {
+          inputs.push(decodePiDetailInput(remaining));
+        }
         break;
       }
       if (start > 0) inputs.push(decodePiDetailInput(remaining.slice(0, start)));
@@ -66,6 +75,24 @@ export class PiDetailInputStreamDecoder {
     }
     return inputs;
   }
+
+  flush(): PiDetailInput[] {
+    if (this.#pending.length === 0) return [];
+    const pending = this.#pending;
+    this.#pending = "";
+    return [decodePiDetailInput(pending)];
+  }
+}
+
+function trailingPrefixLength(data: string, marker: string): number {
+  for (
+    let length = Math.min(data.length, marker.length - 1);
+    length > 0;
+    length -= 1
+  ) {
+    if (data.endsWith(marker.slice(0, length))) return length;
+  }
+  return 0;
 }
 
 export function piDetailChooserInput(

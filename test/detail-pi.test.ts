@@ -153,14 +153,17 @@ describe("Pi TUI Detail input", () => {
 
   test("reassembles bracketed paste across marker and payload chunks", () => {
     const decoder = new PiDetailInputStreamDecoder();
-    expect(decoder.push("\x1b[200~")).toEqual([]);
-    expect(decoder.push("first\n")).toEqual([]);
+    expect(decoder.push("\x1b")).toEqual([]);
+    expect(decoder.push("[200~first\n")).toEqual([]);
     expect(decoder.push("second\x1b[20")).toEqual([]);
     expect(decoder.push("1~")).toEqual([{
       kind: "paste",
       text: "first\nsecond",
     }]);
-    expect(new PiDetailInputStreamDecoder().push("\x1b")).toMatchObject([{
+
+    const escapeDecoder = new PiDetailInputStreamDecoder();
+    expect(escapeDecoder.push("\x1b")).toEqual([]);
+    expect(escapeDecoder.flush()).toMatchObject([{
       kind: "key",
       key: { name: "escape" },
     }]);
