@@ -375,7 +375,7 @@ export type DetailIntent =
   | { type: "completion.move"; delta: -1 | 1 }
   | { type: "completion.accept" }
   | { type: "completion.dismiss" }
-  | { type: "preview.navigate"; direction: "up" | "down" | "pageup" | "pagedown" }
+  | { type: "preview.navigate"; direction: "up" | "down" | "pageup" | "pagedown" | "top" | "bottom" }
   | { type: "file.navigate"; direction: "up" | "down" | "pageup" | "pagedown" | "home" | "end" }
   | { type: "file.selection.toggle" }
   | { type: "view.file" }
@@ -1174,16 +1174,22 @@ export function createDetailController(
   };
 
   const navigatePreview = (
-    direction: "up" | "down" | "pageup" | "pagedown",
+    direction: "up" | "down" | "pageup" | "pagedown" | "top" | "bottom",
     viewport: DetailViewport,
   ): void => {
     const lineCount = state.mode === "annotation"
       ? detailAnnotationLineCount(state)
       : state.resolvedSelectedText.split(/\r?\n/).length;
     const maximum = Math.max(0, lineCount - 1);
-    const amount = direction === "pageup" || direction === "pagedown" ? pageSize(viewport) : 1;
-    const delta = direction === "up" || direction === "pageup" ? -amount : amount;
-    state.previewOffset = Math.max(0, Math.min(maximum, state.previewOffset + delta));
+    if (direction === "top") state.previewOffset = 0;
+    else if (direction === "bottom") state.previewOffset = maximum;
+    else {
+      const amount = direction === "pageup" || direction === "pagedown"
+        ? pageSize(viewport)
+        : 1;
+      const delta = direction === "up" || direction === "pageup" ? -amount : amount;
+      state.previewOffset = Math.max(0, Math.min(maximum, state.previewOffset + delta));
+    }
   };
 
   const navigateFile = (

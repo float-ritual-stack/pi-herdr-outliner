@@ -148,6 +148,42 @@ describe("Outliner action keymap", () => {
       "detail.cancel": [],
     })).toThrow("Detail editor modes require a keyboard-accessible cancel action");
   });
+  test("resolves the same chord by explicit active-scope order", () => {
+    const keymap = new OutlinerActionKeymap("<test>", {
+      "detail.edit.begin": ["x"],
+      "detail.property.filter": ["x"],
+      "detail.backlinks.filter": ["x"],
+    });
+
+    expect(keymap.resolve(
+      "detail",
+      ["backlinks", "property-inspector", "preview"],
+      "x",
+      { name: "x" },
+    )).toEqual({ actionId: "detail.backlinks.filter", suppressed: false });
+    expect(keymap.resolve(
+      "detail",
+      ["property-inspector", "backlinks", "preview"],
+      "x",
+      { name: "x" },
+    )).toEqual({ actionId: "detail.property.filter", suppressed: false });
+    expect(keymap.resolve("detail", ["preview"], "x", { name: "x" })).toEqual({
+      actionId: "detail.edit.begin",
+      suppressed: false,
+    });
+  });
+  test("suppresses a rebound higher-scope default before lower-scope fallback", () => {
+    const keymap = new OutlinerActionKeymap("<test>", {
+      "detail.property.group": ["x"],
+    });
+
+    expect(keymap.resolve(
+      "detail",
+      ["property-inspector", "preview"],
+      "G",
+      { name: "G" },
+    )).toEqual({ actionId: null, suppressed: true });
+  });
   test("reports unbound actions accurately in helpers and menus", () => {
     const keymap = new OutlinerActionKeymap("<test>", { "tree.edit": [] });
     expect(keymap.helpText("tree", "browse", ["tree.edit"])).toBe("unbound edit");

@@ -192,6 +192,14 @@ Type to fuzzy-filter action labels, descriptions, bindings, and IDs; Backspace
 edits the query. Use Up/Down and Enter, click an action, or press Esc to close.
 The menu also includes currently unbound actions.
 
+Detail resolves each terminal chord once against an ordered context stack:
+global close, active chooser/filter/completion/editor, focused projection, then
+the base preview, annotation, file, or Property mode. Resolution produces a
+semantic action ID that keyboard input, rebound chords, the action menu, and
+clickable action links execute through one direct dispatcher; resolved actions
+are never converted back into synthetic keystrokes. Only input not owned by an
+application action reaches the active text editor or transient text field.
+
 Herdr owns secondary-click by default. Set `OUTLINER_RIGHT_CLICK=outliner` when
 launching Tree and Detail to make content secondary-click open the same menu at
 the pointer. Outliner registers `right_click=pane` only while it is running and

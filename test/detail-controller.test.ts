@@ -971,6 +971,20 @@ describe("detail controller projection and deferred refresh", () => {
     }
   });
 
+  test("jumps preview navigation to semantic top and bottom boundaries", async () => {
+    const harness = createHarness(
+      makeBlock({ text: "one\ntwo\nthree\nfour" }),
+      null,
+      async (text) => ({ text, references: [] }),
+    );
+    await harness.controller.initialize();
+
+    await harness.controller.dispatch({ type: "preview.navigate", direction: "bottom" }, viewport);
+    expect(harness.controller.state.previewOffset).toBe(3);
+    await harness.controller.dispatch({ type: "preview.navigate", direction: "top" }, viewport);
+    expect(harness.controller.state.previewOffset).toBe(0);
+  });
+
   test("defers content and detail UI commands while editing, then refreshes after cancel", async () => {
     const harness = createHarness(makeBlock());
     await harness.controller.initialize();
