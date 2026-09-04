@@ -44,6 +44,13 @@ function escapeInspectorMarkdown(value: string): string {
     .replace(/([|`*_[\]<>~])/g, "\\$1");
 }
 
+function propertyEntryFocusUri(entry: PropertyInspectorEntry): string {
+  return previewRegionActionUri({
+    type: "preview.region.focus",
+    regionId: entry.occurrenceId,
+  });
+}
+
 function propertyEntryValue(
   state: Readonly<DetailState>,
   entry: PropertyInspectorEntry,
@@ -57,7 +64,7 @@ function propertyEntryValue(
     }`;
   }
   const value = escapeInspectorMarkdown(entry.value) || "_empty_";
-  if (!entry.target) return value;
+  if (!entry.target) return `[${value}](${propertyEntryFocusUri(entry)})`;
   return `[${value}](${
     previewRegionActionUri({
       type: "property-inspector.target.open",
@@ -180,13 +187,16 @@ function propertyTableLines(
     ];
   for (const entry of entries) {
     const marker = focusedId === entry.occurrenceId ? "▶ " : "";
-    const key = `${marker}**${escapeInspectorMarkdown(entry.key)}**`;
+    const focusUri = propertyEntryFocusUri(entry);
+    const key = `${marker}[**${escapeInspectorMarkdown(entry.key)}**](${focusUri})`;
     const value = propertyEntryValue(state, entry);
     const source = `#${entry.ordinal} · L${entry.line + 1}:C${entry.column + 1}`;
+    const scope = `[${entry.scope}](${focusUri})`;
+    const sourceLink = `[${source}](${focusUri})`;
     lines.push(
       narrow
-        ? `| ${key} | ${value} | ${entry.scope} · ${source} |`
-        : `| ${key} | ${value} | ${entry.scope} | ${source} |`,
+        ? `| ${key} | ${value} | ${scope} · ${sourceLink} |`
+        : `| ${key} | ${value} | ${scope} | ${sourceLink} |`,
     );
   }
   return lines;

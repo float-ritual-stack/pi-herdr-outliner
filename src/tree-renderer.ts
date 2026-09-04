@@ -408,18 +408,19 @@ export function renderTreeFrame(
     for (let lineIndex = 0; lineIndex < entryRows.length; lineIndex++) {
       if (renderedBodyLines >= bodyHeight) break;
       const line = entryRows[lineIndex];
-      if (entry.kind === "block" && lineIndex === 0) {
+      if (entry.kind === "block") {
         const row = view.rows[entry.blockIndex];
         const disclosureMarkerVisible =
-          !row.multilineExpanded ||
-          entry.blockIndex !== view.selectedIndex ||
-          view.expandedBlockOffset === 0;
-        if (row.hasChildren && disclosureMarkerVisible) {
-          mouseTargets[output.length] = {
-            rowId: row.rowId,
-            disclosureColumn: row.depth * 2,
-          };
-        }
+          lineIndex === 0 &&
+          (!row.multilineExpanded ||
+            entry.blockIndex !== view.selectedIndex ||
+            view.expandedBlockOffset === 0);
+        mouseTargets[output.length] = {
+          rowId: row.rowId,
+          disclosureColumn: row.hasChildren && disclosureMarkerVisible
+            ? row.depth * 2
+            : -1,
+        };
       }
       output.push(
         entryIndex === targetEntryIndex && lineIndex === 0

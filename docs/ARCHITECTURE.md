@@ -82,16 +82,16 @@ groups. Detail keeps only transient filter, sort, selection, and per-source
 disclosure state: fuzzy matching spans source title, parent context, relation
 type, and snippets; sorting cycles created/updated timestamps in both
 directions. The authored Markdown and generated backlink Markdown remain
-separate components; edit/save paths only read canonical block text. `Tab`
-selects generated sources, `.` toggles the selected source's occurrence rows,
-`Enter` opens a non-routable Herdr popup, and `R` reveals one. The popup captures
-the visible filtered/sorted source set, renders one source at a time, and moves
-only within that snapshot. `Esc` sends an exact-client `backlinks.select`
-command before closing, `Enter` directly opens the source in the invoking
-unlocked Detail, and `Shift+Enter` seeds a fresh browsing context without a
-source preview dispatch before opening a new Detail beside the invoker. The
-generated `+`/`−` controls use a Detail-local action URI and do not enter
-canonical text.
+separate components; edit/save paths only read canonical block text. `Tab` or a
+plain source-row click selects generated sources, `.` toggles the selected
+source's occurrence rows, `Enter` or a Ctrl/Meta-click opens a non-routable
+Herdr popup, and `R` reveals one. The popup captures the visible filtered/sorted
+source set, renders one source at a time, and moves only within that snapshot.
+`Esc` sends an exact-client `backlinks.select` command before closing, `Enter`
+directly opens the source in the invoking unlocked Detail, and `Shift+Enter`
+seeds a fresh browsing context without a source preview dispatch before opening
+a new Detail beside the invoker. The generated `+`/`−` controls use a
+Detail-local action URI and do not enter canonical text.
 
 Obsidian-style callouts are parsed into source-spanned PreviewRegions with stable
 parent/child identity. Nested callout bodies remain Pi Markdown, `+`/`-` fold
@@ -109,9 +109,11 @@ The read-only property inspector calls the same scoped property parser used by
 the property index and retains every occurrence's scope, ordinal, line/column,
 span, syntax, placement, and typed target. `p` toggles the inline disclosure;
 `P` launches a locked dedicated Detail presentation for the same block/model.
-Filter, grouping, focus, and viewport state are process-local. Actionable
-block/page/Work-ID values use the existing reference resolver and `open | reveal`
-routing; plain values remain nonnavigable. Neither presentation owns or rewrites
+Filter, grouping, focus, and viewport state are process-local. Every rendered
+property cell carries a Detail-local focus action so a plain click highlights
+the occurrence. Actionable block/page/Work-ID values use Ctrl/Meta-click or the
+existing keyboard reference route to resolve and dispatch `open | reveal`;
+plain values remain nonnavigable. Neither presentation owns or rewrites
 canonical source.
 
 ### Pi / OMP extension
@@ -252,9 +254,9 @@ Herdr recognizes plain terminal text as a URL only for `http://` and `https://`.
 - `pi-outliner://work/<PIE-NNN>` — resolve-only Work-ID registry lookup;
 - `pi-outliner://page/<encoded-address>` — unique symbolic page resolution and explicit create-on-follow.
 
-Inside live panes, reference activation resolves one exact canonical block and sends `navigation.dispatch` with the originating client ID. Keyboard `o`, ordinary mouse clicks, and Pi TUI's `openUrl` emit `open`; `R` emits `reveal`. Detail breadcrumb links explicitly emit `reveal`, so selecting an ancestor moves the paired Tree rather than opening another Detail. Generated backlink activation is local: it opens a non-routable popup with the exact source client, target, selected row, filter, and sort snapshot. Cancel emits `backlinks.select`; commit sends a validated direct `open`; explicit new-Detail creation publishes a context with `dispatchPreview: false` before launching the pane. These exact-client commands do not mutate workspace-global selection. Deleted targets retain exact identity and therefore open read-only rather than degrading into fuzzy text matches.
+Inside live panes, reference activation resolves one exact canonical block and sends `navigation.dispatch` with the originating client ID. Keyboard `o`, Ctrl/Meta-click in Tree, authored Detail links, and Pi TUI's `openUrl` emit `open`; `R` emits `reveal`. A plain Tree-row click changes Tree selection and publishes that canonical row to its linked Detail. Ctrl/Meta-click selects and opens the canonical row unless the clicked cell carries a reference target, which opens instead. Detail breadcrumb links explicitly emit `reveal`, so selecting an ancestor moves the paired Tree rather than opening another Detail. Generated Backlink and Property links resolve first to local PreviewRegion focus on plain click; Ctrl/Meta-click activates the focused source or typed target. Generated backlink activation opens a non-routable popup with the exact source client, target, selected row, filter, and sort snapshot. Cancel emits `backlinks.select`; commit sends a validated direct `open`; explicit new-Detail creation publishes a context with `dispatchPreview: false` before launching the pane. These exact-client commands do not mutate workspace-global selection. Deleted exact targets can still open read-only; page and Work-ID targets reject deleted canonical blocks before navigation.
 
-Authored text is sanitized before link generation. Tree adds OSC 8 only after plain-text wrapping/truncation; Detail generates safe Markdown links after sanitization. Under `HERDR_ENV=1`, Detail enables Pi TUI hyperlink emission because nested panes advertise generic `TERM=xterm-256color` even though Herdr captures OSC 8 metadata. Tree ignores modified, release, motion, and wheel reports for link activation; Shift remains available for terminal-native selection.
+Authored text is sanitized before link generation. Tree adds OSC 8 only after plain-text wrapping/truncation; Detail generates safe Markdown links after sanitization. Under `HERDR_ENV=1`, Detail enables Pi TUI hyperlink emission because nested panes advertise generic `TERM=xterm-256color` even though Herdr captures OSC 8 metadata. Tree accepts unmodified and Ctrl/Meta primary-button presses, uses rendered row identity independently from link hit testing, and ignores release, motion, and wheel reports for activation. Shift remains available for terminal-native selection.
 
 The `outliner-navigation` manifest handler and [`src/herdr-link-open.ts`](../src/herdr-link-open.ts) are the external Herdr path. They validate/decode the private URI, resolve the invoking pane to its live source registration, and dispatch through the same route. `[[address]]` remains visible when dangling; explicit activation creates exactly one root stub through the transactional registry path before navigation dispatch.
 

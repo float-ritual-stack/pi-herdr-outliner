@@ -4,9 +4,12 @@ import {
   isTreeMouseSequence,
   treeDisclosureAtClick,
   parseTreePlainClick,
+  parseTreePrimaryClick,
   parseTreeSecondaryClick,
   parseTreeWheel,
   treeLinkAtClick,
+  treeClickActivates,
+  treeRowAtClick,
 } from "../src/tree-mouse";
 
 describe("Tree mouse parsing", () => {
@@ -21,6 +24,27 @@ describe("Tree mouse parsing", () => {
     ]) {
       expect(parseTreePlainClick(sequence)).toBeNull();
     }
+  });
+
+  test("decodes Ctrl and Meta primary clicks without treating Shift as activation", () => {
+    expect(parseTreePrimaryClick("\x1b[<16;4;3M")).toEqual({
+      column: 3,
+      row: 2,
+      shift: false,
+      meta: false,
+      ctrl: true,
+    });
+    expect(parseTreePrimaryClick("\x1b[<8;4;3M")).toEqual({
+      column: 3,
+      row: 2,
+      shift: false,
+      meta: true,
+      ctrl: false,
+    });
+    expect(parseTreePrimaryClick("\x1b[<4;4;3M")?.shift).toBe(true);
+    expect(treeClickActivates(parseTreePrimaryClick("\x1b[<16;4;3M")!)).toBe(true);
+    expect(treeClickActivates(parseTreePrimaryClick("\x1b[<8;4;3M")!)).toBe(true);
+    expect(treeClickActivates(parseTreePrimaryClick("\x1b[<4;4;3M")!)).toBe(false);
   });
   test("recognizes only an unmodified secondary-button press for pane-owned menus", () => {
     expect(parseTreeSecondaryClick("\x1b[<2;9;4M")).toEqual({ column: 8, row: 3 });
@@ -71,19 +95,26 @@ describe("Tree mouse parsing", () => {
   });
 });
 
-describe("Tree mouse disclosure hit testing", () => {
-  test("returns the contextual row identity only from its disclosure marker", () => {
-    const targets = [
-      null,
-      null,
-      { rowId: "occurrence:view:root:child", disclosureColumn: 4 },
-    ];
+describe("Tree mouse row hit testing", () => {
+  const targets = [
+    null,
+    { rowId: "plain-row", disclosureColumn: -1 },
+    { rowId: "occurrence:view:root:child", disclosureColumn: 4 },
+  ];
 
+  test("returns row identity for plain and modified primary clicks", () => {
+    expect(treeRowAtClick(targets, "\x1b[<0;2;2M")).toBe("plain-row");
+    expect(treeRowAtClick(targets, "\x1b[<16;6;3M")).toBe(
+      "occurrence:view:root:child",
+    );
+  });
+
+  test("returns disclosure identity only from an unmodified marker click", () => {
     expect(treeDisclosureAtClick(targets, "\x1b[<0;5;3M")).toBe(
       "occurrence:view:root:child",
     );
     expect(treeDisclosureAtClick(targets, "\x1b[<0;6;3M")).toBeNull();
-    expect(treeDisclosureAtClick(targets, "\x1b[<0;5;2M")).toBeNull();
+    expect(treeDisclosureAtClick(targets, "\x1b[<16;5;3M")).toBeNull();
   });
 });
 
@@ -94,6 +125,6 @@ describe("Tree mouse link hit testing", () => {
 
     expect(treeLinkAtClick(lines, "\x1b[<0;5;2M")).toBe(uri);
     expect(treeLinkAtClick(lines, "\x1b[<0;1;2M")).toBeNull();
-    expect(treeLinkAtClick(lines, "\x1b[<16;5;2M")).toBeNull();
+    expect(treeLinkAtClick(lines, "\x1b[<16;5;2M")).toBe(uri);
   });
 });

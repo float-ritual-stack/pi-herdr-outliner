@@ -24,7 +24,10 @@ import {
   renderPropertyInspectorDocument,
 } from "../src/detail-pi-renderer";
 import { createPropertyInspectorModel } from "../src/property-inspector";
-import { previewRegionActionUri } from "../src/detail-preview-regions";
+import {
+  previewRegionActionUri,
+  resolvePreviewPointerAction,
+} from "../src/detail-preview-regions";
 import { outlinerLinkUri } from "../src/outliner-links";
 import {
   SourceSpannedMarkdown,
@@ -1121,10 +1124,18 @@ describe("generated backlink preview", () => {
     };
     layout.syncState();
 
+    const backlinkAction = { type: "backlink.open", blockId: "source-target" } as const;
+    const backlinkUri = previewRegionActionUri(backlinkAction);
     const generated = renderBacklinksDocument(detail);
-    expect(generated).toContain(
-      outlinerLinkUri("block", "source-target", { preserveSource: true }),
-    );
+    expect(generated.match(new RegExp(backlinkUri, "g"))).toHaveLength(2);
+    expect(resolvePreviewPointerAction(backlinkAction, false)).toEqual({
+      type: "focus",
+      regionId: "backlink:source-target",
+    });
+    expect(resolvePreviewPointerAction(backlinkAction, true)).toEqual({
+      type: "activate",
+      action: backlinkAction,
+    });
     expect(generated).toContain("Additional occurrences omitted");
     expect(generated).toContain("Showing first 1 source blocks");
     expect(generated).toContain("source-block property ×2");
@@ -1327,7 +1338,7 @@ describe("structured property inspector presentations", () => {
     const wide = renderPropertyInspectorDocument(detail, 100);
     const narrow = renderPropertyInspectorDocument(detail, 36);
     expect(wide).toContain("| Property | Value | Scope | Source |");
-    expect(wide).toContain("| **related-to** |");
+    expect(wide).toContain("| [**related-to**](pi-outliner-detail://focus/");
     expect(wide).toContain("#1 · L2:C1");
     expect(wide).toContain("unknown-key");
     expect(narrow).toContain("| Property | Value | Source |");
@@ -1340,6 +1351,21 @@ describe("structured property inspector presentations", () => {
     expect(parseDetailPreviewActionUri(uri)).toEqual({
       type: "property-inspector.target.open",
       occurrenceId: typed.occurrenceId,
+    });
+    const focusUri = previewRegionActionUri({
+      type: "preview.region.focus",
+      regionId: typed.occurrenceId,
+    });
+    expect(parseDetailPreviewActionUri(focusUri)).toEqual({
+      type: "preview.region.focus",
+      regionId: typed.occurrenceId,
+    });
+    expect(resolvePreviewPointerAction({
+      type: "property-inspector.target.open",
+      occurrenceId: typed.occurrenceId,
+    }, false)).toEqual({
+      type: "focus",
+      regionId: typed.occurrenceId,
     });
     expect(detail.context.selected?.text).toBe(canonical);
   });
