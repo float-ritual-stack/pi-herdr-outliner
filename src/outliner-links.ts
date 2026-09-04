@@ -8,6 +8,7 @@ import { requireUniqueClientId, sendClientCommand } from "./client-target";
 import { isFragmentId, resolveFragment } from "./fragments";
 import {
   blockDisplayTitle,
+  blockReferenceEnvelopeRanges,
   blockReferenceOccurrences,
 } from "./references";
 import {
@@ -341,6 +342,9 @@ function genericLinkSpans(
   workIdPrefix: string | null,
 ): LinkSpan[] {
   const spans: LinkSpan[] = [];
+  const blockReferenceRanges = blockReferenceEnvelopeRanges(text).filter((range) =>
+    text.slice(range.start, range.end).includes("|")
+  );
   for (const reference of outlinerReferenceOccurrences(text, workIdPrefix)) {
     if (reference.kind === "page") {
       spans.push({
@@ -357,7 +361,11 @@ function genericLinkSpans(
     }
   }
   for (const match of text.matchAll(BLOCK_ID_TOKEN_PATTERN)) {
-    if (!canLinkBlock(match[0])) continue;
+    const range = { start: match.index, end: match.index + match[0].length };
+    if (
+      blockReferenceRanges.some((reference) => rangesOverlap(reference, range)) ||
+      !canLinkBlock(match[0])
+    ) continue;
     spans.push({
       start: match.index,
       end: match.index + match[0].length,
@@ -413,6 +421,12 @@ function resolvedReferenceSpans(rawText: string, resolvedText: string): LinkSpan
   let resolvedCursor = 0;
   for (const reference of blockReferenceOccurrences(rawText)) {
     resolvedCursor += reference.start - rawCursor;
+    const authored = rawText.slice(reference.start, reference.end);
+    if (resolvedText.startsWith(authored, resolvedCursor)) {
+      rawCursor = reference.end;
+      resolvedCursor += authored.length;
+      continue;
+    }
     if (!resolvedText.startsWith("((", resolvedCursor)) return [];
     const end = resolvedText.indexOf("))", resolvedCursor + 2);
     if (end < 0) return [];
@@ -457,14 +471,17 @@ export function createOutlinerTextLinker(
     const fragmentSuffix = reference.fragmentId ? `^${reference.fragmentId}` : "";
     if (!target) {
       return {
-        visible: `((${reference.blockId}${fragmentSuffix}))`,
+        visible:
+          `((${reference.blockId}${fragmentSuffix}${reference.label !== undefined ? `|${reference.label}` : ""}))`,
         uri: null,
       };
     }
     const title = blockDisplayTitle(target);
+    const presentation = reference.label ?? title;
     if (target.effectiveDeletedRootId) {
       return {
-        visible: `((${title}${fragmentSuffix} · Trash))`,
+        visible:
+          `((${presentation}${reference.label === undefined ? fragmentSuffix : ""} · Trash))`,
         uri: outlinerLinkUri("block", reference.blockId, {
           fragmentId: reference.fragmentId,
         }),
@@ -475,13 +492,14 @@ export function createOutlinerTextLinker(
       if (fragment.status !== "resolved") {
         const state = fragment.status === "missing" ? "Missing fragment" : "Duplicate fragment";
         return {
-          visible: `((${title}${fragmentSuffix} · ${state}))`,
+          visible:
+            `((${presentation}${reference.label === undefined ? fragmentSuffix : ""} · ${state}))`,
           uri: null,
         };
       }
     }
     return {
-      visible: `((${title}${fragmentSuffix}))`,
+      visible: `((${presentation}${reference.label === undefined ? fragmentSuffix : ""}))`,
       uri: outlinerLinkUri("block", reference.blockId, {
         fragmentId: reference.fragmentId,
       }),

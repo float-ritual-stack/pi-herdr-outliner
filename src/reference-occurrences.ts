@@ -1,7 +1,7 @@
 import { pageAddressReferences } from "./page-addresses";
 import { parsePropertyRecords } from "./properties";
 import type { PropertyRecord } from "./types";
-import { blockReferenceOccurrences } from "./references";
+import { blockReferenceEnvelopeRanges, blockReferenceOccurrences } from "./references";
 import { workIdReferences } from "./work-ids";
 
 export interface TextRange {
@@ -14,6 +14,7 @@ export type OutlinerReferenceOccurrence =
       kind: "block";
       blockId: string;
       fragmentId?: string;
+      label?: string;
       start: number;
       end: number;
     }
@@ -188,7 +189,9 @@ export function outlinerReferenceOccurrences(
   workIdPrefix: string | null = null,
   propertyRecords: readonly PropertyRecord[] = parsePropertyRecords(text),
 ): OutlinerReferenceOccurrence[] {
-  const candidates: OutlinerReferenceOccurrence[] = blockReferenceOccurrences(text).map(
+  const blockReferences = blockReferenceOccurrences(text);
+  const blockReferenceRanges = blockReferenceEnvelopeRanges(text);
+  const candidates: OutlinerReferenceOccurrence[] = blockReferences.map(
     (reference) => ({ kind: "block", ...reference }),
   );
   for (const reference of pageAddressReferences(text)) {
@@ -217,6 +220,10 @@ export function outlinerReferenceOccurrences(
     ...propertyRecords.map((token) => ({ start: token.start, end: token.end })),
   ];
   return candidates
-    .filter((candidate) => !protectedRanges.some((range) => rangesOverlap(candidate, range)))
+    .filter((candidate) =>
+      (candidate.kind === "block" ||
+        !blockReferenceRanges.some((range) => rangesOverlap(candidate, range))) &&
+      !protectedRanges.some((range) => rangesOverlap(candidate, range))
+    )
     .sort((left, right) => left.start - right.start);
 }
