@@ -214,7 +214,6 @@ describe("renderTreeFrame", () => {
     const canonical = block("canonical", {
       text: "Roadmap card [status::done] [priority::high] [track::delivery]",
       displayText: "Roadmap card [status::done] [priority::high] [track::delivery]",
-
       properties: [
         { key: "status", value: "done" },
         { key: "priority", value: "high" },
