@@ -639,7 +639,7 @@ export function createDetailController(
       targetChanged ||
       fragmentChanged ||
       next.selected?.updatedAt !== state.context.selected?.updatedAt;
-    if (targetChanged) destinationChooser?.dispose();
+    if (targetChanged || fragmentChanged) destinationChooser?.dispose();
     if (targetChanged) state.previewRegions.disclosureOverrides.clear();
     if (targetChanged || next.selected?.updatedAt !== state.context.selected?.updatedAt) {
       invalidateBacklinks();
