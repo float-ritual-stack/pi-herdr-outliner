@@ -8,9 +8,11 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import outlinerExtension, {
   containsConfiguredWorkPlaceholder,
+  containsTaskStartToolCall,
   createOutlinerExtension,
   formatSelection,
   latestAssistantResponse,
+  isLifecycleMutationTool,
   formatWorkPlaceholderNudge,
   selectRecentFocusedOutlinerClient,
   selectCapturedResponseTree,
@@ -102,6 +104,7 @@ test("registers the workspace commands and annotation-aware tools", () => {
   ]);
   expect(registeredTools.map((definition) => definition.name)).toEqual([
     "outliner_task",
+    "outliner_delivery",
     "outliner_focus",
     "outliner_publish",
     "outliner_create",
@@ -555,6 +558,226 @@ test("orients Pi and OMP sessions from live Git state without mutating the repos
     else process.env.HERDR_ENV = originalHerdrEnv;
   }
 });
+test("gates Pi and OMP mutation and session changes against durable delivery identity", async () => {
+  const originalRequest = OutlinerClient.prototype.request;
+  const originalHerdrEnv = process.env.HERDR_ENV;
+  process.env.HERDR_ENV = "0";
+  const taskText =
+    "PIE-182 lifecycle [type::roadmap-item] [work-id::PIE-182] [work-stage::doing]";
+  const task: Block = {
+    id: "task-pie-182",
+    parentId: null,
+    position: 0,
+    text: taskText,
+    author: "agent",
+    createdAt: "created",
+    updatedAt: "task-v1",
+    properties: parseProperties(taskText),
+  };
+
+  try {
+    for (const actor of ["pi", "omp"] as const) {
+      let branch = "feature/pie-182-lifecycle";
+      let deliveryText = [
+        "Delivery PIE-182/enforcement",
+        "[type::delivery] [delivery-key::PIE-182/enforcement]",
+        "[repository::org/repo] [base-branch::main]",
+        "[work-branch::feature/pie-182-lifecycle] [delivery-stage::work]",
+      ].join(" ");
+      let delivery: Block = {
+        id: `delivery-${actor}`,
+        parentId: task.id,
+        position: 0,
+        text: deliveryText,
+        author: "agent",
+        createdAt: "created",
+        updatedAt: "delivery-v1",
+        properties: parseProperties(deliveryText),
+      };
+      OutlinerClient.prototype.request = async function <T>(input: RequestInput): Promise<T> {
+        if (input.action === "ping") {
+          return { status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION } as T;
+        }
+        if (input.action === "get") return task as T;
+        if (input.action === "children") return [delivery] as T;
+        if (input.action === "properties.patch") {
+          expect(input.blockId).toBe(delivery.id);
+          deliveryText = patchPropertyText(delivery.text, input.operations);
+          delivery = {
+            ...delivery,
+            text: deliveryText,
+            properties: parseProperties(deliveryText),
+            updatedAt: `${delivery.updatedAt}-next`,
+          };
+          return delivery as T;
+        }
+        throw new Error(`Unexpected request: ${input.action}`);
+      };
+
+      type EventHandler = (
+        event: Record<string, unknown>,
+        context: ExtensionContext,
+      ) => Promise<unknown> | unknown;
+      const handlers = new Map<string, EventHandler>();
+      interface LifecycleTool {
+        execute(
+          id: string,
+          params: Record<string, unknown>,
+          signal: AbortSignal | undefined,
+          onUpdate: unknown,
+          context: ExtensionContext,
+        ): Promise<{ content: Array<{ type: string; text: string }> }>;
+      }
+      const tools = new Map<string, LifecycleTool>();
+      const sessionEntries: Array<Record<string, unknown>> = [{
+        type: "custom",
+        customType: "pi-outliner.active-task",
+        data: { version: 1, blockId: task.id },
+      }];
+      const confirmations: string[] = [];
+      const pi = {
+        registerCommand() {},
+        registerTool(definition: { name: string } & LifecycleTool) {
+          tools.set(definition.name, definition);
+        },
+        registerEntryRenderer() {},
+        appendEntry() {},
+        on(name: string, handler: EventHandler) {
+          handlers.set(name, handler);
+        },
+        async exec(command: string, args: string[]) {
+          expect(command).toBe("git");
+          if (args.includes("--show-toplevel")) {
+            return { stdout: "/repo\n", stderr: "", code: 0, killed: false };
+          }
+          if (args.includes("status")) {
+            return {
+              stdout: [
+                "# branch.oid abcdef1234567890",
+                `# branch.head ${branch}`,
+                "# branch.ab +0 -0",
+                "",
+              ].join("\n"),
+              stderr: "",
+              code: 0,
+              killed: false,
+            };
+          }
+          if (args.includes("remote.origin.url")) {
+            return {
+              stdout: "git@github.com:org/repo.git\n",
+              stderr: "",
+              code: 0,
+              killed: false,
+            };
+          }
+          throw new Error(`Unexpected Git call: ${args.join(" ")}`);
+        },
+      } as unknown as ExtensionAPI;
+      const context = {
+        cwd: "/repo",
+        signal: undefined,
+        sessionManager: {
+          getSessionId: () => `${actor}-session`,
+          getBranch: () => sessionEntries,
+        },
+        ui: {
+          setStatus() {},
+          notify() {},
+          async confirm(_title: string, message: string) {
+            confirmations.push(message);
+            return true;
+          },
+        },
+      } as unknown as ExtensionContext;
+
+      createOutlinerExtension(actor)(pi);
+      await handlers.get("session_start")!({}, context);
+      const toolCall = handlers.get("tool_call")!;
+      expect(await toolCall({ toolName: "read", input: { path: "src" } }, context)).toBeUndefined();
+      expect(await toolCall({ toolName: "write", input: { path: "src/a.ts" } }, context))
+        .toBeUndefined();
+      expect(await toolCall({
+        toolName: "github",
+        input: { op: "pr_create", repo: "org/repo", head: "feature/pie-182-lifecycle" },
+      }, context)).toEqual(expect.objectContaining({
+        block: true,
+        reason: expect.stringContaining("base must be explicitly set to main"),
+      }));
+      expect(await toolCall({
+        toolName: "github",
+        input: { op: "pr_create", repo: "org/repo", base: "main", head: "wrong" },
+      }, context)).toEqual(expect.objectContaining({
+        block: true,
+        reason: expect.stringContaining("head must be explicitly set to feature/pie-182-lifecycle"),
+      }));
+
+      branch = "main";
+      expect(await toolCall({ toolName: "write", input: { path: "src/a.ts" } }, context))
+        .toEqual(expect.objectContaining({
+          block: true,
+          reason: expect.stringContaining("requires branch feature/pie-182-lifecycle"),
+        }));
+      expect(await handlers.get("session_before_switch")!({}, context)).toEqual({ cancel: true });
+      expect(await handlers.get("session_before_fork")!({}, context)).toEqual({ cancel: true });
+      expect(await handlers.get("session_before_tree")!({}, context)).toEqual({ cancel: true });
+
+      await tools.get("outliner_delivery")!.execute(
+        "override",
+        { operation: "override", reason: "Owner-approved emergency repair" },
+        undefined,
+        undefined,
+        context,
+      );
+      expect(confirmations).toEqual([
+        "PIE-182/enforcement: Owner-approved emergency repair",
+      ]);
+      expect(delivery.properties).toEqual(expect.arrayContaining([
+        { key: "lifecycle-override", value: "active" },
+        { key: "lifecycle-override-reason", value: "Owner-approved emergency repair" },
+      ]));
+      expect(await toolCall({ toolName: "write", input: { path: "src/a.ts" } }, context))
+        .toBeUndefined();
+      expect(await handlers.get("session_before_switch")!({}, context)).toBeUndefined();
+
+      sessionEntries.push({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [{
+            type: "toolCall",
+            name: "outliner_task",
+            arguments: { operation: "start", address: "PIE-200" },
+          }],
+        },
+      });
+      expect(await toolCall({ toolName: "write", input: { path: "src/a.ts" } }, context))
+        .toEqual(expect.objectContaining({
+          block: true,
+          reason: expect.stringContaining("cannot be sibling tool calls"),
+        }));
+    }
+  } finally {
+    OutlinerClient.prototype.request = originalRequest;
+    if (originalHerdrEnv === undefined) delete process.env.HERDR_ENV;
+    else process.env.HERDR_ENV = originalHerdrEnv;
+  }
+});
+
+test("recognizes lifecycle mutation tools and nested task-start calls", () => {
+  expect(isLifecycleMutationTool("functions.write", {})).toBe(true);
+  expect(isLifecycleMutationTool("read", {})).toBe(false);
+  expect(isLifecycleMutationTool("github", { op: "pr_create" })).toBe(true);
+  expect(containsTaskStartToolCall({
+    message: {
+      content: [{
+        name: "outliner_task",
+        input: { operation: "start", address: "PIE-200" },
+      }],
+    },
+  })).toBe(true);
+});
+
 test("drives an explicit task through context, focus, durable proof, and completion", async () => {
 
   interface ToolDefinition {
@@ -562,7 +785,15 @@ test("drives an explicit task through context, focus, durable proof, and complet
     execute(
       id: string,
       params: {
-        operation?: "status" | "start" | "pause" | "complete" | "clear";
+        operation?:
+          | "status"
+          | "start"
+          | "pause"
+          | "complete"
+          | "clear"
+          | "ensure"
+          | "sync"
+          | "override";
         address?: string;
         proofBlockId?: string;
         query?: string;
@@ -607,6 +838,8 @@ test("drives an explicit task through context, focus, durable proof, and complet
     properties: [{ key: "status", value: "complete" }],
   };
   let artifact: Block | null = null;
+  let deliveryRecord: Block | null = null;
+  let pullRequestState: "none" | "open" | "merged" = "none";
   const tools = new Map<string, ToolDefinition>();
   const handlers = new Map<string, EventHandler>();
   const requests: RequestInput[] = [];
@@ -660,13 +893,18 @@ test("drives an explicit task through context, focus, durable proof, and complet
         }) as T;
     }
     if (input.action === "workspace.snapshot") {
-      const blocks = [task, dependency, ...(artifact ? [artifact] : [])];
+      const blocks = [
+        task,
+        dependency,
+        ...(deliveryRecord ? [deliveryRecord] : []),
+        ...(artifact ? [artifact] : []),
+      ];
       return {
         physical: {
           blocks: blocks.map((block) => ({
             ...block,
             depth: 0,
-            hasChildren: block.id === task.id && artifact !== null,
+            hasChildren: block.id === task.id && (artifact !== null || deliveryRecord !== null),
             displayText: block.text,
           })),
           completeness: { kind: "complete" },
@@ -674,21 +912,59 @@ test("drives an explicit task through context, focus, durable proof, and complet
       } as unknown as T;
     }
     if (input.action === "properties.patch") {
-      expect(input.blockId).toBe(task.id);
-      const text = patchPropertyText(task.text, input.operations);
-      task = {
-        ...task,
+      const target = input.blockId === task.id
+        ? task
+        : input.blockId === deliveryRecord?.id
+        ? deliveryRecord
+        : null;
+      if (!target) throw new Error(`Unknown patch target: ${input.blockId}`);
+      const text = patchPropertyText(target.text, input.operations);
+      const updated = {
+        ...target,
         text,
         properties: parseProperties(text),
-        updatedAt: `v${Number(task.updatedAt.slice(1)) + 1}`,
+        updatedAt: `v${Number(target.updatedAt.slice(1)) + 1}`,
       };
-      return task as T;
+      if (target.id === task.id) task = updated;
+      else deliveryRecord = updated;
+      return updated as T;
+    }
+    if (input.action === "deliveries.ensure") {
+      if (deliveryRecord) {
+        return { task, delivery: deliveryRecord, created: false } as T;
+      }
+      const { deliveryKey, repository, baseBranch, workBranch } = input.input;
+      const text = [
+        `Delivery ${deliveryKey}`,
+        `[type::delivery] [delivery-key::${deliveryKey}]`,
+        `[repository::${repository}] [base-branch::${baseBranch}]`,
+        `[work-branch::${workBranch}] [delivery-stage::work]`,
+      ].join(" ");
+      deliveryRecord = {
+        id: "delivery-id",
+        parentId: task.id,
+        position: 0,
+        text,
+        author: "agent",
+        createdAt: "created",
+        updatedAt: "v1",
+        properties: parseProperties(text),
+      };
+      return { task, delivery: deliveryRecord, created: true } as T;
+    }
+    if (input.action === "children") {
+      return [
+        ...(deliveryRecord ? [deliveryRecord] : []),
+        ...(artifact ? [artifact] : []),
+      ] as T;
     }
     if (input.action === "get") {
       const block = input.blockId === task.id
         ? task
         : input.blockId === dependency.id
         ? dependency
+        : deliveryRecord?.id === input.blockId
+        ? deliveryRecord
         : artifact?.id === input.blockId
         ? artifact
         : null;
@@ -751,8 +1027,58 @@ test("drives an explicit task through context, focus, durable proof, and complet
     appendEntry(customType: string, data: unknown) {
       sessionEntries.push({ type: "custom", customType, data });
     },
+    async exec(command: string, args: string[]) {
+      if (command === "gh") {
+        return {
+          stdout: pullRequestState === "none"
+            ? "[]"
+            : JSON.stringify([{
+              number: 44,
+              url: "https://github.com/org/repo/pull/44",
+              state: pullRequestState === "merged" ? "MERGED" : "OPEN",
+              baseRefName: "main",
+              headRefName: "feature/pie-144-lifecycle",
+              reviewDecision: pullRequestState === "merged" ? "APPROVED" : "",
+              mergeCommit: pullRequestState === "merged" ? { oid: "merge-commit" } : null,
+            }]),
+          stderr: "",
+          code: 0,
+          killed: false,
+        };
+      }
+      if (args.includes("--show-toplevel")) {
+        return { stdout: "/repo\n", stderr: "", code: 0, killed: false };
+      }
+      if (args.includes("status")) {
+        return {
+          stdout: [
+            "# branch.oid 1234567890abcdef",
+            "# branch.head feature/pie-144-lifecycle",
+            "# branch.ab +0 -0",
+            "",
+          ].join("\n"),
+          stderr: "",
+          code: 0,
+          killed: false,
+        };
+      }
+      if (args.includes("remote.origin.url")) {
+        return {
+          stdout: "git@github.com:org/repo.git\n",
+          stderr: "",
+          code: 0,
+          killed: false,
+        };
+      }
+      if (args.includes("symbolic-ref")) {
+        return { stdout: "origin/main\n", stderr: "", code: 0, killed: false };
+      }
+      throw new Error(`Unexpected lifecycle command: ${command} ${args.join(" ")}`);
+    },
   } as unknown as ExtensionAPI;
   const context = {
+    cwd: "/repo",
+    signal: undefined,
     isIdle: () => false,
     sessionManager: {
       getSessionId: () => "session-workflow",
@@ -843,6 +1169,20 @@ test("drives an explicit task through context, focus, durable proof, and complet
     expect(beforeResult.systemPrompt).toContain("Completed dependency · status=complete");
     expect(beforeResult.systemPrompt).toContain("outliner_publish");
 
+    pullRequestState = "open";
+    const reviewing = JSON.parse(
+      (await tools.get("outliner_delivery")!.execute(
+        "sync-open-pr",
+        { operation: "sync" },
+        undefined,
+        undefined,
+        context,
+      )).content[0]!.text,
+    );
+    expect(reviewing.pullRequest).toMatchObject({ number: 44, state: "OPEN" });
+    expect(reviewing.task.properties).toContainEqual({ key: "work-stage", value: "review" });
+    expect(reviewing.delivery.stage).toBe("review");
+
     process.env.HERDR_ENV = "0";
     const focused = JSON.parse(
       (await tools.get("outliner_focus")!.execute(
@@ -884,6 +1224,7 @@ test("drives an explicit task through context, focus, durable proof, and complet
     expect(create.text).toContain("[type::implementation-proof]");
     expect(create.text).toContain(`[source-block::${task.id}]`);
 
+    pullRequestState = "merged";
     const completed = JSON.parse(
       (await tools.get("outliner_task")!.execute(
         "complete-task",
@@ -918,12 +1259,14 @@ test("drives an explicit task through context, focus, durable proof, and complet
     ]));
     const transitions = requests.filter(
       (request): request is Extract<RequestInput, { action: "properties.patch" }> =>
-        request.action === "properties.patch",
+        request.action === "properties.patch" && request.blockId === task.id,
     );
     expect(transitions.map(({ operations }) => operations)).toEqual([
       [{ op: "replace", ordinal: 5, value: "doing" }],
       [{ op: "replace", ordinal: 5, value: "next" }],
       [{ op: "replace", ordinal: 5, value: "doing" }],
+      [{ op: "replace", ordinal: 5, value: "review" }],
+      [{ op: "replace", ordinal: 5, value: "validate" }],
       [
         { op: "replace", ordinal: 3, value: "complete" },
         { op: "replace", ordinal: 5, value: "done" },
@@ -1340,7 +1683,7 @@ test("requires the current protocol, attributes agent creates and page follows, 
     expect(largeEnvelope.presentation.omitted).toBeGreaterThan(0);
     protocolVersion = 5;
     await expect(tools.get("outliner_query")!.execute("incompatible-query", {})).rejects.toThrow(
-      "Outliner protocol 5 does not match this session's extension protocol 28. Run /reload, then retry.",
+      "Outliner protocol 5 does not match this session's extension protocol 29. Run /reload, then retry.",
     );
   } finally {
     OutlinerClient.prototype.request = originalRequest;

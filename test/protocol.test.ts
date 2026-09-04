@@ -13,6 +13,7 @@ import type {
   BlockEditActivityPage,
   Block,
   CaptureReceipt,
+  DeliveryReceipt,
   BrowsingContextPublication,
   OutlinerEvent,
   OutlinerClientRegistration,
@@ -41,6 +42,48 @@ afterEach(async () => {
 });
 
 
+test("round-trips idempotent delivery identity over protocol v29", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-outliner-delivery-protocol-"));
+  const store = new OutlinerStore(join(directory, "outliner.sqlite"));
+  const socket = join(directory, "outliner.sock");
+  const server = new OutlinerServer(store, socket);
+  await server.start();
+  cleanups.push(async () => {
+    await server.close();
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const task = store.create(
+    "PIE-182 lifecycle [type::roadmap-item] [work-id::PIE-182] [work-stage::next]",
+  );
+  const sequenceBefore = store.sequence;
+  const client = new OutlinerClient(socket);
+  const input = {
+    taskBlockId: task.id,
+    deliveryKey: "PIE-182/enforcement",
+    repository: "float-ritual-stack/pi-herdr-outliner",
+    baseBranch: "main",
+    workBranch: "feature/pie-182-lifecycle-enforcement",
+  };
+
+  const created = await client.request<DeliveryReceipt>({
+    action: "deliveries.ensure",
+    input,
+    author: "agent",
+    provenance: { actorId: "omp", sessionId: "session-1", taskId: "start" },
+  });
+  const reused = await client.request<DeliveryReceipt>({
+    action: "deliveries.ensure",
+    input,
+  });
+
+  expect(created.created).toBe(true);
+  expect(reused.created).toBe(false);
+  expect(reused.delivery.id).toBe(created.delivery.id);
+  expect(store.sequence).toBe(sequenceBefore + 1);
+});
+
+
 test("serves mutations and property queries over the local socket", async () => {
   const directory = mkdtempSync(join(tmpdir(), "pi-outliner-protocol-"));
   const store = new OutlinerStore(join(directory, "outliner.sqlite"));
@@ -56,7 +99,7 @@ test("serves mutations and property queries over the local socket", async () => 
   const client = new OutlinerClient(socket);
   const service = await client.request<OutlinerServiceStatus>({ action: "ping" });
   expect(service).toEqual({ status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION });
-  expect(service.protocolVersion).toBe(28);
+  expect(service.protocolVersion).toBe(29);
   const provenance = {
     actorId: "omp",
     sessionId: "session-1",

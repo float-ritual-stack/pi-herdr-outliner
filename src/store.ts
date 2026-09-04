@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { resolveBacklinkRelation } from "./backlinks";
+import { isValidGitBranchName } from "./delivery-lifecycle";
 import {
   normalizeBlockSearchQuery,
   parsePropertyFilterExpression,
@@ -47,6 +48,8 @@ import type {
   CaptureReceipt,
   CaptureSource,
   NavigationState,
+  DeliveryEnsureInput,
+  DeliveryReceipt,
   MutationProvenance,
   PageAddressCollection,
   PageAddressFollowResult,
@@ -519,6 +522,90 @@ export class OutlinerStore {
         block,
         memberships: this.roadmapBranchMembershipsFromCurrentRead(block),
       };
+    })();
+  }
+
+  ensureDelivery(
+    input: DeliveryEnsureInput,
+    author: BlockAuthor = "agent",
+    provenance?: BlockProvenance,
+  ): DeliveryReceipt {
+    if (!input || typeof input !== "object") {
+      throw new Error("Delivery input must be an object");
+    }
+    const taskBlockId = normalizeRoadmapText(input.taskBlockId, "Delivery task block ID");
+    const deliveryKey = normalizeRoadmapText(input.deliveryKey, "Delivery key");
+    const repository = normalizeRoadmapText(input.repository, "Delivery repository");
+    const baseBranch = normalizeRoadmapText(input.baseBranch, "Delivery base branch");
+    const workBranch = normalizeRoadmapText(input.workBranch, "Delivery work branch");
+    if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
+      throw new Error(`Delivery repository must be owner/name: ${repository}`);
+    }
+    if (!isValidGitBranchName(baseBranch)) {
+      throw new Error(`Invalid delivery base branch: ${baseBranch}`);
+    }
+    if (!isValidGitBranchName(workBranch)) {
+      throw new Error(`Invalid delivery work branch: ${workBranch}`);
+    }
+
+    return this.database.transaction((): DeliveryReceipt => {
+      const task = this.requireActive(taskBlockId);
+      const type = task.properties.filter((property) => property.key === "type");
+      const identifiers = task.properties.filter((property) => property.key === "work-id");
+      if (type.length !== 1 || type[0]!.value !== "roadmap-item") {
+        throw new Error(`Delivery parent is not a roadmap item: ${task.id}`);
+      }
+      if (identifiers.length !== 1) {
+        throw new Error(`Delivery parent must have exactly one Work ID: ${task.id}`);
+      }
+      const identifier = identifiers[0]!.value.toUpperCase();
+      if (!deliveryKey.toUpperCase().startsWith(`${identifier}/`)) {
+        throw new Error(`Delivery key must begin with ${identifier}/: ${deliveryKey}`);
+      }
+
+      const matches = this.childrenFromCurrentRead(task.id).filter((child) => {
+        const isDelivery = child.properties.some((property) =>
+          property.key === "type" && property.value === "delivery"
+        );
+        const hasKey = child.properties.some((property) =>
+          property.key === "delivery-key" && property.value === deliveryKey
+        );
+        return isDelivery && hasKey;
+      });
+      if (matches.length > 1) {
+        throw new Error(`Duplicate delivery key beneath task ${task.id}: ${deliveryKey}`);
+      }
+      const existing = matches[0];
+      if (existing) {
+        const immutable: Array<[string, string]> = [
+          ["repository", repository],
+          ["base-branch", baseBranch],
+          ["work-branch", workBranch],
+        ];
+        for (const [key, expected] of immutable) {
+          const values = existing.properties.filter((property) => property.key === key);
+          if (values.length !== 1 || values[0]!.value !== expected) {
+            throw new Error(`Delivery ${deliveryKey} has conflicting ${key}`);
+          }
+        }
+        return { task, delivery: existing, created: false };
+      }
+
+      const metadata = [
+        formatProperty({ key: "type", value: "delivery" }),
+        formatProperty({ key: "delivery-key", value: deliveryKey }),
+        formatProperty({ key: "repository", value: repository }),
+        formatProperty({ key: "base-branch", value: baseBranch }),
+        formatProperty({ key: "work-branch", value: workBranch }),
+        formatProperty({ key: "delivery-stage", value: "work" }),
+      ].join(" ");
+      const delivery = this.create(
+        `Delivery ${deliveryKey} ${metadata}`,
+        task.id,
+        author,
+        provenance,
+      );
+      return { task, delivery, created: true };
     })();
   }
 

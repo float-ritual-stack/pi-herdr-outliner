@@ -9,6 +9,7 @@ import {
   type Block,
   type BrowsingContextPublication,
   type CaptureReceipt,
+  type DeliveryReceipt,
   type NavigationState,
   type OutlinerClientRegistration,
   type OutlinerClientRole,
@@ -628,6 +629,13 @@ export class OutlinerServer {
             request.provenance,
           );
           break;
+        case "deliveries.ensure":
+          result = this.store.ensureDelivery(
+            request.input,
+            request.author,
+            request.provenance,
+          );
+          break;
         case "capture.create":
           result = this.store.capture(
             request.requestId,
@@ -782,6 +790,13 @@ export class OutlinerServer {
         domain = "content";
         blockId = (response.result as RoadmapItemCreateReceipt).block.id;
         break;
+      case "deliveries.ensure": {
+        const receipt = response.result as DeliveryReceipt;
+        if (!receipt.created) return null;
+        domain = "content";
+        blockId = receipt.delivery.id;
+        break;
+      }
       case "capture.create": {
         const receipt = response.result as CaptureReceipt;
         if (receipt.deduplicated) return null;

@@ -10,11 +10,20 @@ Treat the Outliner as the primary artifact surface and chat as the conversationa
 ## Establish the task
 
 1. Call `outliner_task` with `operation: "status"` before task-oriented work.
-2. Start an explicitly named roadmap item with `operation: "start"` and its Work ID, full block ID, or unambiguous title when no task is active.
-3. Refuse to silently switch away from an active task. Complete, pause, or explicitly clear it first.
-4. Treat the injected active-task context as bounded orientation, not the entire record. Query or focus blocks when more context is required.
+2. Start an explicitly named roadmap item with `operation: "start"` and its Work ID, full block ID, or unambiguous title when no task is active. For code delivery, this records and orients the repository, base branch, and Work-ID branch before Doing.
+3. Never pair task start and mutation as sibling tool calls. Start, observe the returned delivery identity, then mutate in a later turn.
+4. Refuse to silently switch away from an active task. Complete, pause, or explicitly clear it first.
+5. Treat the injected active-task context as bounded orientation, not the entire record. Query or focus blocks when more context is required.
 
 Use `pause` to return unfinished work to Next. Use `clear` only to repair session binding without changing roadmap metadata.
+
+## Keep delivery identity exact
+
+1. Use `outliner_delivery status` before PR or merge work.
+2. Treat its repository, base branch, and work branch as immutable for that delivery. Reentry must reuse them.
+3. Use `outliner_delivery sync` after opening or merging the exact PR. Live Git and GitHub facts are authoritative; never fabricate PR state in Outliner properties.
+4. Do not stage, stash, commit, or open a PR through lifecycle automation.
+5. If a policy gate must be bypassed, use the single `override` operation with an explicit reason and owner confirmation. An override changes policy only; it does not change observed Git or GitHub facts.
 
 ## Create and update roadmap work
 
@@ -99,9 +108,10 @@ Do not publish raw chain-of-thought, tentative guesses, repetitive tool output, 
 ## Complete safely
 
 1. Exercise the changed behavior.
-2. Publish an `implementation-proof` block beneath the active roadmap item.
-3. Call `outliner_task` with `operation: "complete"` and the proof block ID.
-4. Let the task tool move canonical metadata to complete/done and clear session presence.
-5. Leave a concise chat response pointing to the focused durable artifact.
+2. Synchronize an active delivery through Review to Validate after its exact PR merges.
+3. Publish an `implementation-proof` block beneath the active roadmap item.
+4. Call `outliner_task` with `operation: "complete"` and the proof block ID.
+5. Let the task tool require merged delivery facts when present, move canonical metadata to complete/done, and clear session presence.
+6. Leave a concise chat response pointing to the focused durable artifact.
 
 Never infer semantic completion from `agent_end`, `agent_settled`, idle state, or the absence of further tool calls. Completion requires an explicit tool action and linked proof.

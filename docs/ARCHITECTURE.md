@@ -141,16 +141,26 @@ rendering is presentation-only and never reparses into or mutates source.
 - starts or locates the service,
 - opens Herdr panes through the plugin action,
 - exposes Outliner tools and commands,
-- injects bounded selection context before agent turns, and
-- inspects the live invocation-local Git checkout through `pi.exec`.
+- injects bounded selection context before agent turns,
+- inspects the live invocation-local Git checkout through `pi.exec`, and
+- enforces the recorded delivery branch, PR, and session lifecycle.
 
 [`pi-extension/work-environment.ts`](../pi-extension/work-environment.ts) uses
-argument-array `git -C <ctx.cwd>` calls with cancellation and short timeouts.
+argument-array Git calls rooted at `ctx.cwd`, with cancellation, bounded
+timeouts, fsmonitor disabled, and no optional status locks.
 [`src/work-environment.ts`](../src/work-environment.ts) classifies active-task
 orientation without host or Git side effects. Session start refreshes compact UI
-status; each active-task turn receives the same bounded invariant and actionable
-guidance while the checkout is on the default branch, mismatched, detached, or
-outside Git. This substrate is deliberately read-only.
+status; each active-task turn receives the same bounded invariant.
+
+[`src/delivery-lifecycle.ts`](../src/delivery-lifecycle.ts) parses strict
+canonical delivery records and selects the one incomplete identity or the exact
+checkout match. [`pi-extension/delivery-lifecycle.ts`](../pi-extension/delivery-lifecycle.ts)
+discovers the base, inspects worktree occupancy, safely reuses or creates the
+recorded branch, and reads exact PR state through `gh`. The host adapter ensures
+the delivery before branch mutation and changes the roadmap to Doing only after
+both durable identity and Git orientation succeed. Tool/session gates fail
+closed; reads and lifecycle repair remain available. Git operations never
+stage, stash, or commit.
 
 Persistence, protocol, and rendering do not depend on the agent process surviving.
 
@@ -219,6 +229,7 @@ The current protocol version is `28`, defined in [`src/types.ts`](../src/types.t
 - browsing contexts and Tree previews: `browsing-context.get`, `browsing-context.publish`
 - typed navigation: `navigation.resolve` preflight and `navigation.dispatch` with `preview | open | reveal`, plus optional transient source preservation
 - selection-neutral capture: `capture.create`
+- delivery identity: `deliveries.ensure`
 - mutations: `create`, `update`, `move`, `delete` (move to Trash), `trash.restore`, `trash.purge`
 - properties: `properties.patch`, `properties.catalog`
 - virtual ordering: `virtual.occurrences.reorder`
