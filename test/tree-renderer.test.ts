@@ -291,6 +291,26 @@ describe("renderTreeFrame", () => {
     expect(visibleWidth(plannedRow)).toBe(60);
     expect(visibleWidth(proposedRow)).toBe(60);
   });
+
+  test("keeps the author marker only when title, gap, and summary all fit", () => {
+    const item = block("item", {
+      text: "Task [status::planned]",
+      displayText: "Task [status::planned]",
+      author: "agent",
+      properties: [{ key: "status", value: "planned" }],
+    });
+    const rowAt = (width: number) =>
+      renderTreeFrame(
+        view([item]),
+        width,
+        9,
+        0,
+        { propertyKeys: ["status"] },
+      ).frame.split("\n").map(stripTerminalSequences).find((line) => line.includes("Task"))!;
+
+    expect(rowAt(18)).toBe("• Task  planned  A");
+    expect(rowAt(17)).toBe("• Task    planned");
+  });
   test("renders a narrow keyboard menu with clickable pane and action links", () => {
     const rendered = renderTreeFrame(view([], {
       mode: "action-menu",
