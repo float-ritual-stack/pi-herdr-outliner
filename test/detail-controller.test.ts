@@ -6,6 +6,7 @@ import {
   type DetailEffects,
   type DetailViewport,
 } from "../src/detail-controller";
+import { OutlinerActionKeymap } from "../src/outliner-actions";
 import { detailBacklinkRegions } from "../src/detail-pi-preview";
 import { detailPropertyInspectorRegions } from "../src/detail-pi-renderer";
 import type { ReferencedFile } from "../src/files";
@@ -688,6 +689,31 @@ describe("detail controller projection and deferred refresh", () => {
       expect(harness.controller.state.destinationChooser.active).toBe(false);
     }
   });
+  test("uses configured directional bindings in the Detail destination chooser", async () => {
+    const actionKeymap = new OutlinerActionKeymap("<test>", {
+      "detail.pane.right": ["Shift+ArrowRight"],
+      "detail.pane.below": ["Shift+ArrowDown"],
+    });
+    for (const [keyName, direction] of [
+      ["right", "right"],
+      ["down", "down"],
+    ] as const) {
+      const source = makeBlock({ id: `source-${direction}`, text: "See ((target01))" });
+      const harness = createHarness(source);
+      const controller = createDetailController(harness.effects, undefined, { actionKeymap });
+      await controller.initialize();
+      await controller.dispatch({ type: "reference.follow" }, viewport);
+      await controller.handleDestinationChooserKeypress("", {
+        name: keyName,
+        shift: true,
+      });
+
+      expect(harness.calls.openedDetails).toEqual([{ blockId: "target01", direction }]);
+      expect(controller.state.context.selected?.id).toBe(source.id);
+      expect(controller.state.destinationChooser.active).toBe(false);
+    }
+  });
+
 
   test("preserves fragment identity in explicit and fallback splits", async () => {
     const source = makeBlock({ text: "See ((target01^decision))" });

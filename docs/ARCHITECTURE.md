@@ -72,7 +72,9 @@ mutable buffer.
 Authored block/page/Work-ID links and typed Property targets bind one target to
 the shared destination chooser before resolution or navigation. `Shift+R`
 replaces the current Detail, `f` dispatches to the first spatially unlocked
-same-tab Detail, and `r`/`d` create an independent right/down Detail. `Enter`
+same-tab Detail, and the configured Detail right/down bindings or legacy `r`/`d`
+create an independent right/down Detail. The Backlink Peek popup accepts the
+same configured direction bindings directly and from its chooser. `Enter`
 uses the first unlocked destination and falls back to a right split; explicit
 `f` never falls back. Block-fragment identity is carried through replace,
 first-unlocked, and split routes. `Esc`, target changes, pane exit, or the

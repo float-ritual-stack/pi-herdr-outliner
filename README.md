@@ -313,7 +313,8 @@ Projected virtual occurrences deliberately constrain hierarchy and collapse. Bra
 | Peek: `Left` / `Right` | Preview the previous / next source in the captured filtered/sorted set |
 | Peek: `Esc` | Cancel, restore the exact inline source row, and leave this Detail unchanged |
 | Peek: `Enter` | Open the shared destination chooser |
-| Chooser: `Shift+R` / `f` / `r` / `d` | Replace this Detail / first unlocked Detail / split right / split down |
+| Peek: configured Detail right/below binding | Open the current preview directly in a new right/down Detail |
+| Chooser: configured Detail right/below binding or `r` / `d`; `Shift+R` / `f` | Split right/down; replace this Detail / use first unlocked Detail |
 | Chooser: `Enter` / `Esc` | Use the default destination / dismiss without navigation |
 | `e` | Lock this Detail and edit raw canonical text |
 | `f` | Open referenced file |

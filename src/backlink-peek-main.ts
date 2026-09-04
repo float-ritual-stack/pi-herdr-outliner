@@ -7,6 +7,7 @@ import {
   type BacklinkPeekPreview,
 } from "./backlink-peek";
 import { OutlinerClient } from "./client";
+import { OutlinerActionKeymap } from "./outliner-actions";
 import { projectedSourceLine } from "./detail-pi-preview";
 import { listLiveClients } from "./client-target";
 import { visibleBacklinkSources, type DetailBacklinkState } from "./detail-controller";
@@ -62,6 +63,7 @@ const paths = resolvePaths();
 const destinationTimeoutMs = openDestinationTimeoutFromEnvironment(
   process.env.OUTLINER_OPEN_DESTINATION_TIMEOUT_MS,
 );
+const actionKeymap = OutlinerActionKeymap.load();
 const client = new OutlinerClient(paths.socket);
 const collection = await client.request<BacklinkCollection>({
   action: "references.backlinks",
@@ -184,7 +186,7 @@ const controller = new BacklinkPeekController(
       draw();
     },
   },
-  destinationTimeoutMs,
+  { destinationTimeoutMs, actionKeymap },
 );
 
 function draw(): void {

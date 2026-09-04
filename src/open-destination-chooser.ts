@@ -1,3 +1,8 @@
+import {
+  DEFAULT_OUTLINER_ACTION_KEYMAP,
+  displayActionChord,
+  type OutlinerActionKeymap,
+} from "./outliner-actions";
 import type { TerminalKey } from "./terminal";
 
 export const DEFAULT_OPEN_DESTINATION_TIMEOUT_MS = 7_500;
@@ -45,6 +50,7 @@ export interface OpenDestinationChooserOptions {
   timeoutMs?: number;
   scheduler?: OpenDestinationScheduler;
   state?: OpenDestinationChooserState;
+  actionKeymap?: OutlinerActionKeymap;
 }
 
 const defaultScheduler: OpenDestinationScheduler = {
@@ -66,14 +72,19 @@ export function createOpenDestinationChooserState(): OpenDestinationChooserState
   return { active: false, loading: false, target: null, status: "" };
 }
 
-export function openDestinationChooserHelp(): string {
-  return "⇧R replace here  f first unlocked  r split right  d split down  Esc close  Enter default";
+export function openDestinationChooserHelp(
+  actionKeymap: OutlinerActionKeymap = DEFAULT_OUTLINER_ACTION_KEYMAP,
+): string {
+  const right = displayActionChord(actionKeymap.primaryBinding("detail.pane.right"));
+  const down = displayActionChord(actionKeymap.primaryBinding("detail.pane.below"));
+  return `⇧R replace here  f first unlocked  ${right}/r split right  ${down}/d split down  Esc close  Enter default`;
 }
 
 export class OpenDestinationChooser {
   readonly state: OpenDestinationChooserState;
   private readonly timeoutMs: number;
   private readonly scheduler: OpenDestinationScheduler;
+  private readonly actionKeymap: OutlinerActionKeymap;
   private timer: unknown;
   private targetGeneration = 0;
   private timerGeneration = 0;
@@ -85,6 +96,7 @@ export class OpenDestinationChooser {
     this.state = options.state ?? createOpenDestinationChooserState();
     this.timeoutMs = options.timeoutMs ?? DEFAULT_OPEN_DESTINATION_TIMEOUT_MS;
     this.scheduler = options.scheduler ?? defaultScheduler;
+    this.actionKeymap = options.actionKeymap ?? DEFAULT_OUTLINER_ACTION_KEYMAP;
   }
 
   open(target: OpenDestinationTarget): void {
@@ -96,6 +108,9 @@ export class OpenDestinationChooser {
     this.state.status = "Choose destination · default: first unlocked, otherwise split right";
     this.scheduleDismissal();
     this.effects.invalidate();
+  }
+  helpText(): string {
+    return openDestinationChooserHelp(this.actionKeymap);
   }
 
   async handleKeypress(str: string, key: TerminalKey): Promise<boolean> {
@@ -110,7 +125,12 @@ export class OpenDestinationChooser {
       await this.openDestination("default");
       return true;
     }
-    const destination = str === "R"
+    const mapped = this.actionKeymap.canonicalize("detail", "destination", str, key);
+    const destination = mapped.actionId === "detail.pane.right"
+      ? "split-right"
+      : mapped.actionId === "detail.pane.below"
+      ? "split-down"
+      : str === "R"
       ? "replace"
       : str.toLowerCase() === "f"
       ? "first-unlocked"
@@ -179,7 +199,7 @@ export class OpenDestinationChooser {
         }
         if (!opened) {
           this.state.loading = false;
-          this.state.status = "No unlocked Detail is available · choose ⇧R, r, or d";
+          this.state.status = "No unlocked Detail is available · choose replace or a split direction";
           this.scheduleDismissal();
           this.effects.invalidate();
           return;

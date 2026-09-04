@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { OutlinerActionKeymap } from "../src/outliner-actions";
 import {
   DEFAULT_OPEN_DESTINATION_TIMEOUT_MS,
   OpenDestinationChooser,
@@ -30,7 +31,11 @@ class FakeScheduler implements OpenDestinationScheduler {
 
 const target: OpenDestinationTarget = { blockId: "target-1", title: "Target one" };
 
-function harness(options: { firstUnlocked?: boolean; scheduler?: FakeScheduler } = {}) {
+function harness(options: {
+  firstUnlocked?: boolean;
+  scheduler?: FakeScheduler;
+  actionKeymap?: OutlinerActionKeymap;
+} = {}) {
   const calls: Array<string> = [];
   const chooser = new OpenDestinationChooser({
     beforeOpen: (_target, destination) => {
@@ -53,6 +58,7 @@ function harness(options: { firstUnlocked?: boolean; scheduler?: FakeScheduler }
   }, {
     timeoutMs: 7_500,
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
+    ...(options.actionKeymap ? { actionKeymap: options.actionKeymap } : {}),
   });
   return { chooser, calls };
 }
@@ -119,6 +125,25 @@ describe("open destination chooser", () => {
       expect(state.chooser.state.active).toBe(false);
     }
   });
+  test("uses configured directional bindings and reports them in chooser help", async () => {
+    const actionKeymap = new OutlinerActionKeymap("<test>", {
+      "detail.pane.right": ["Shift+ArrowRight"],
+      "detail.pane.below": ["Shift+ArrowDown"],
+    });
+    for (const [keyName, direction] of [
+      ["right", "right"],
+      ["down", "down"],
+    ] as const) {
+      const state = harness({ actionKeymap });
+      state.chooser.open(target);
+      await state.chooser.handleKeypress("", { name: keyName, shift: true });
+      expect(state.calls).toContain(`split:${direction}:target-1`);
+    }
+    expect(harness({ actionKeymap }).chooser.helpText()).toContain(
+      "⇧→/r split right  ⇧↓/d split down",
+    );
+  });
+
 
   test("consumes input, resets idle dismissal, and rejects stale timers", async () => {
     const scheduler = new FakeScheduler();

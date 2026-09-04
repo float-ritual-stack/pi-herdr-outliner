@@ -176,6 +176,7 @@ export interface DetailPiPreviewOptions {
   setRegions?(regions: readonly PreviewRegion[]): void;
   calloutTheme?: DetailCalloutTheme;
   helpText?(): string;
+  chooserHelpText?(): string;
   headerPropertyKeys?: readonly string[];
 }
 
@@ -560,6 +561,7 @@ class DetailPreviewFooter implements Component {
       width,
       "preview",
       this.options.helpText?.() ?? PREVIEW_HELP,
+      this.options.chooserHelpText?.(),
     );
   }
 

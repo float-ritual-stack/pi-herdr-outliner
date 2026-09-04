@@ -101,6 +101,9 @@ function harness(
       chooserInputs.push({ str, key });
       return true;
     },
+    destinationChooserHelpText() {
+      return "";
+    },
     async onServiceEvent() {},
     async onServiceConnect() {},
     onServiceDisconnect() {},
