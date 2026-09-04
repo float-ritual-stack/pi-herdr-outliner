@@ -266,29 +266,77 @@ describe("Pi Markdown detail preview", () => {
     expect(rendered).not.toContain("payload");
   });
 
-  test("renders generated outliner Markdown links as OSC 8 hyperlinks in Herdr", () => {
+  test("renders clean semantic links while preserving exact authored source", () => {
     const capabilities = getCapabilities();
     setCapabilities({ ...capabilities, hyperlinks: true });
     try {
       const targetId = "550e8400-e29b-41d4-a716-446655440000";
+      const raw = [
+        "PIE-133",
+        `((${targetId}|the **approved** boundary))`,
+        "[[Decision Log|supporting context]]",
+      ].join(" and ");
       const detail = state(
-        "PIE-133 and ((Target decision))",
-        `PIE-133 and ((${targetId}))`,
+        "PIE-133 and ((the **approved** boundary)) and [[Decision Log|supporting context]]",
+        raw,
       );
       const layout = new DetailPiPreviewLayout(detail, plainMarkdownTheme, true);
       layout.syncState();
       const rendered = layout.markdown.render(80);
       const line = rendered.find((candidate) =>
-        stripTerminalSequences(candidate).includes("PIE-133 and")
+        stripTerminalSequences(candidate).includes("approved")
       );
       expect(line).toBeDefined();
       const visible = stripTerminalSequences(line!);
-      expect(getOsc8LinkAtColumn(line!, visible.indexOf("PIE-133") + 2)).toBe(
-        "pi-outliner://work/PIE-133",
-      );
-      expect(getOsc8LinkAtColumn(line!, visible.indexOf("Target decision") + 2)).toBe(
+      expect(visible).not.toContain("((");
+      expect(visible).not.toContain("[[");
+      expect(getOsc8LinkAtColumn(line!, visible.indexOf("approved") + 2)).toBe(
         `pi-outliner://block/${targetId}`,
       );
+      expect(getOsc8LinkAtColumn(line!, visible.indexOf("supporting") + 2)).toBe(
+        outlinerLinkUri("page", "Decision Log"),
+      );
+      expect(detail.context.selected?.text).toBe(raw);
+
+      const fallback = new DetailPiPreviewLayout(detail, plainMarkdownTheme, false);
+      fallback.syncState();
+      const fallbackLine = fallback.markdown.render(80).find((candidate) =>
+        stripTerminalSequences(candidate).includes("approved")
+      )!;
+      const fallbackVisible = stripTerminalSequences(fallbackLine);
+      expect(fallbackVisible).not.toContain("((");
+      expect(fallbackVisible).not.toContain("[[");
+      expect(getOsc8LinkAtColumn(fallbackLine, fallbackVisible.indexOf("approved"))).toBeUndefined();
+    } finally {
+      setCapabilities(capabilities);
+    }
+  });
+  test("keeps clean titled links actionable when narrow preview rows wrap", () => {
+    const capabilities = getCapabilities();
+    setCapabilities({ ...capabilities, hyperlinks: true });
+    try {
+      const targetId = "550e8400-e29b-41d4-a716-446655440000";
+      const label = "a deliberately long approved boundary explanation";
+      const detail = state(
+        `Preview title\n((${label}))`,
+        `Preview title\n((${targetId}|${label}))`,
+      );
+      const layout = new DetailPiPreviewLayout(detail, plainMarkdownTheme, true);
+      layout.syncState();
+      const rendered = layout.markdown.renderWithSourceLineRow(22, 1);
+      const visible = rendered.lines.map(stripTerminalSequences);
+      const labelRows = rendered.lines.filter((line) =>
+        /deliberately|approved|boundary|explanation/.test(stripTerminalSequences(line))
+      );
+
+      expect(visible.join("\n")).not.toContain("((");
+      expect(rendered.sourceLineRow).toBeGreaterThan(0);
+      expect(labelRows.length).toBeGreaterThan(1);
+      expect(labelRows.every((line) => {
+        const text = stripTerminalSequences(line);
+        const contentColumn = text.search(/\S/);
+        return getOsc8LinkAtColumn(line, contentColumn) === `pi-outliner://block/${targetId}`;
+      })).toBe(true);
     } finally {
       setCapabilities(capabilities);
     }

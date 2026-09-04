@@ -237,14 +237,14 @@ function renderPreviewDocument(
 ): string {
   const sanitizedSource = sanitizeMarkdownDocument(sourceText);
   // Sanitize authored text before generated links or presentation-only Markdown are added.
-  const rendered = linksEnabled
-    ? linkOutlinerMarkdown(
-        sanitizedSource,
-        sanitizeMarkdownDocument(rawText),
-        workIdPrefix,
-      )
-    : sanitizedSource;
-  return detailMarkdownPresentation(rendered);
+  return detailMarkdownPresentation(
+    linkOutlinerMarkdown(
+      sanitizedSource,
+      sanitizeMarkdownDocument(rawText),
+      workIdPrefix,
+      linksEnabled,
+    ),
+  );
 }
 
 function renderedAuthoredCallouts(
@@ -824,7 +824,7 @@ export class DetailPiPreviewLayout extends VStack {
         : null;
       sourceText = projection?.sourceText ?? draftText;
       projectionRawText = projection?.rawText ?? draftText;
-      rawText = this.linksEnabled ? projectionRawText : sourceText;
+      rawText = projectionRawText;
       embedRanges = projection?.embedRanges ?? [];
       workIdPrefix = projection?.workIdPrefix ?? this.state.workIdPrefix;
     } else {
@@ -833,7 +833,7 @@ export class DetailPiPreviewLayout extends VStack {
         ? this.state.resolvedSelectedText
         : "Select a block in the outliner pane.";
       projectionRawText = selected ? this.state.projectedSelectedText : sourceText;
-      rawText = selected && this.linksEnabled ? projectionRawText : sourceText;
+      rawText = selected ? projectionRawText : sourceText;
       embedRanges = this.state.embedRanges;
       workIdPrefix = this.state.workIdPrefix;
     }
@@ -855,9 +855,7 @@ export class DetailPiPreviewLayout extends VStack {
       }
       sourceText = filteredSourceText;
       projectionRawText = filteredProjectionRawText;
-      rawText = this.linksEnabled
-        ? filteredProjectionRawText
-        : filteredSourceText;
+      rawText = filteredProjectionRawText;
     }
     const renderedLineForAuthoredLine = (line: number): number => {
       const projected = projectedSourceLine(

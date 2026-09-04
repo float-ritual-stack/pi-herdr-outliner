@@ -492,10 +492,10 @@ describe("outliner link rendering", () => {
     const linked = linkOutlinerMarkdown(raw, raw, "PIE");
 
     expect(linked).toContain(
-      `# [[[PIE-123|Heading label\\]\\]](${outlinerLinkUri("page", "PIE-123")})`,
+      `# [Heading label](${outlinerLinkUri("page", "PIE-123")})`,
     );
     expect(linked).toContain(
-      `> [[[PIE-123|Callout label\\]\\]](${outlinerLinkUri("page", "PIE-123")})`,
+      `> [Callout label](${outlinerLinkUri("page", "PIE-123")})`,
     );
     expect(linked.match(/pi-outliner:\/\/page\//g)).toHaveLength(2);
     expect(linked).not.toContain(outlinerLinkUri("work", "PIE-123"));
@@ -516,6 +516,25 @@ describe("outliner link rendering", () => {
     expect(linkOutlinerMarkdown(resolved, raw)).toContain(
       outlinerLinkUri("block", targetId, { fragmentId: "durable" }),
     );
+  });
+  test("presents block and page links without authored delimiters in Detail Markdown", () => {
+    const raw = [
+      `((${targetId}^durable|the **approved** boundary))`,
+      "[[Decision Log|supporting context]]",
+    ].join(" and ");
+    const resolved = "((the **approved** boundary)) and [[Decision Log|supporting context]]";
+    const linked = linkOutlinerMarkdown(resolved, raw, "PIE");
+
+    expect(linked).toContain(
+      `[the **approved** boundary](${
+        outlinerLinkUri("block", targetId, { fragmentId: "durable" })
+      })`,
+    );
+    expect(linked).toContain(
+      `[supporting context](${outlinerLinkUri("page", "Decision Log")})`,
+    );
+    expect(linked).not.toContain("((");
+    expect(linked).not.toContain("[[");
   });
   test("links titled references by canonical block and fragment identity", () => {
     const secondId = "550e8400-e29b-41d4-a716-446655440001";
@@ -562,8 +581,8 @@ describe("outliner link rendering", () => {
     const missing = linkOutlinerMarkdown(raw, raw, "PIE");
     const invalid = `((${targetId}|))`;
 
-    expect(stripTerminalSequences(missing)).toBe(raw);
-    expect(getOsc8LinkAtColumn(missing, raw.indexOf(targetId) + 2)).toBeUndefined();
+    expect(stripTerminalSequences(missing)).toBe("missing label · Missing target");
+    expect(getOsc8LinkAtColumn(missing, 2)).toBeUndefined();
     expect(firstOutlinerReference(invalid, "PIE")).toBeNull();
     expect(createOutlinerTextLinker(invalid, () => target).link(invalid)).toBe(invalid);
   });
@@ -619,7 +638,7 @@ describe("outliner link rendering", () => {
 
     expect(linked).toContain(`[PIE-133](${outlinerLinkUri("work", "PIE-133")})`);
     expect(linked).toContain(
-      `[((Target decision))](${outlinerLinkUri("block", targetId)})`,
+      `[Target decision](${outlinerLinkUri("block", targetId)})`,
     );
     expect(linked).toContain(`\`PIE-999 ${targetId}\``);
     expect(linked).toContain("[existing](https://example.com/PIE-998)");
@@ -633,7 +652,7 @@ describe("outliner link rendering", () => {
     const raw = "[[Future Page]] and `[[Literal Page]]`";
     const linked = linkOutlinerMarkdown(raw, raw);
 
-    expect(linked).toContain(`[[[Future Page\\]\\]](${outlinerLinkUri("page", "Future Page")})`);
+    expect(linked).toContain(`[Future Page](${outlinerLinkUri("page", "Future Page")})`);
     expect(linked).toContain("`[[Literal Page]]`");
     expect(linked).not.toContain(outlinerLinkUri("page", "Literal Page"));
   });
