@@ -135,12 +135,21 @@ rendering is presentation-only and never reparses into or mutates source.
 
 ### Pi / OMP extension
 
-[`pi-extension/index.ts`](../pi-extension/index.ts) is a host adapter. It:
+[`pi-extension/index.ts`](../pi-extension/index.ts) is the shared host adapter. It:
 
 - starts or locates the service,
 - opens Herdr panes through the plugin action,
-- exposes outliner tools and commands, and
-- injects bounded selection context before agent turns.
+- exposes Outliner tools and commands,
+- injects bounded selection context before agent turns, and
+- inspects the live invocation-local Git checkout through `pi.exec`.
+
+[`pi-extension/work-environment.ts`](../pi-extension/work-environment.ts) uses
+argument-array `git -C <ctx.cwd>` calls with cancellation and short timeouts.
+[`src/work-environment.ts`](../src/work-environment.ts) classifies active-task
+orientation without host or Git side effects. Session start refreshes compact UI
+status; each active-task turn receives the same bounded invariant and actionable
+guidance while the checkout is on the default branch, mismatched, detached, or
+outside Git. This substrate is deliberately read-only.
 
 Persistence, protocol, and rendering do not depend on the agent process surviving.
 

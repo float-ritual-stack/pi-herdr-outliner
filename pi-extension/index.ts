@@ -26,6 +26,7 @@ import { parseStandaloneDispatchMarker } from "../src/dispatch-marker";
 import { OutlinerClient } from "../src/client";
 import { HerdrRuntimeRegistry } from "../src/herdr-registry";
 import { HerdrRegistryRunner } from "../src/herdr-runtime";
+import { inspectWorkEnvironment, type ExtensionExec } from "./work-environment";
 import { resolvePaths } from "../src/paths";
 import { currentPaneIdentity } from "../src/pane-control";
 import { getProperty, parsePropertyRecords } from "../src/properties";
@@ -34,6 +35,11 @@ import {
   containsWorkIdPlaceholder,
   formatWorkIdPlaceholder,
 } from "../src/work-ids";
+import {
+  classifyWorkEnvironment,
+  type WorkOrientation,
+  workEnvironmentStatus,
+} from "../src/work-environment";
 import {
   OUTLINER_PROTOCOL_VERSION,
   type Block,
@@ -823,6 +829,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
   let activityCursor: number | null = null;
   let focusRunner: HerdrRegistryRunner | null = null;
   let workPlaceholderNudgedThisTurn = false;
+  let lastEnvironmentFingerprint: string | null = null;
 
   if (typeof (pi as { registerEntryRenderer?: unknown }).registerEntryRenderer === "function") {
     pi.registerEntryRenderer<OutlinerCaptureReceiptEntry>(
@@ -897,6 +904,23 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
   async function currentTask(): Promise<Block | null> {
     if (!activeTaskId) return null;
     return client.request<Block>({ action: "get", blockId: activeTaskId });
+  }
+
+  function hostExec(): ExtensionExec | null {
+    const candidate = (pi as { exec?: ExtensionExec }).exec;
+    return typeof candidate === "function" ? candidate.bind(pi) : null;
+  }
+
+  async function refreshWorkEnvironment(
+    context: ExtensionContext,
+    task: Block | null,
+  ): Promise<WorkOrientation | null> {
+    const exec = hostExec();
+    if (!exec) return null;
+    const snapshot = await inspectWorkEnvironment(exec, context.cwd, context.signal);
+    const orientation = classifyWorkEnvironment(snapshot, task ? workId(task) ?? null : null);
+    context.ui.setStatus("pi-outliner-work", workEnvironmentStatus(orientation));
+    return orientation;
   }
 
   async function presentTask(
@@ -1153,16 +1177,22 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
     const sessionEntries = context.sessionManager.getBranch();
     activeTaskId = restoredActiveTaskId(sessionEntries);
     activityCursor = restoredActivityCursor(sessionEntries);
+    let task: Block | null = null;
     if (!activeTaskId) {
       await presentTask(context, null, "clear");
-      return;
+    } else {
+      try {
+        await ensureService(false);
+        task = await currentTask();
+        if (task) await presentTask(context, task, "idle");
+      } catch {
+        context.ui.setStatus("pi-outliner-task", activeTaskId.slice(0, 8));
+      }
     }
     try {
-      await ensureService(false);
-      const task = await currentTask();
-      if (task) await presentTask(context, task, "idle");
+      await refreshWorkEnvironment(context, task);
     } catch {
-      context.ui.setStatus("pi-outliner-task", activeTaskId.slice(0, 8));
+      context.ui.setStatus("pi-outliner-work", undefined);
     }
   });
   pi.registerCommand("outliner", {
@@ -2039,13 +2069,14 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
     }
   });
 
-  pi.on("before_agent_start", async (event) => {
+  pi.on("before_agent_start", async (event, extensionContext) => {
     workPlaceholderNudgedThisTurn = false;
-    let context = "";
+    let workspaceContext = "";
     let activity = "";
     let selectedText = "";
+    let environment = "";
     try {
-      context = await agentWorkspaceContext();
+      workspaceContext = await agentWorkspaceContext();
     } catch {
       // The outliner remains optional until a task or workspace is explicitly opened.
     }
@@ -2077,8 +2108,28 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
     } catch {
       // A missing allocator configuration cannot define the canonical placeholder prefix.
     }
-    const workspace = boundAgentContext([context, activity].filter(Boolean).join("\n\n"));
-    const additions = [workspace, nudge].filter(Boolean);
+    try {
+      const task = await currentTask();
+      const orientation = await refreshWorkEnvironment(extensionContext, task);
+      if (orientation) {
+        const changed = orientation.fingerprint !== lastEnvironmentFingerprint;
+        const broken = orientation.classification !== "oriented" &&
+          orientation.classification !== "clear";
+        if (orientation.activeWorkId) {
+          environment = [
+            orientation.summary,
+            orientation.guidance && (broken || changed) ? orientation.guidance : "",
+          ].filter(Boolean).join("\n");
+        } else if (orientation.guidance && changed) {
+          environment = orientation.guidance;
+        }
+        lastEnvironmentFingerprint = orientation.fingerprint;
+      }
+    } catch {
+      // Repository orientation is advisory in this read-only substrate.
+    }
+    const workspace = boundAgentContext([workspaceContext, activity].filter(Boolean).join("\n\n"));
+    const additions = [workspace, environment, nudge].filter(Boolean);
     if (additions.length > 0) {
       return { systemPrompt: `${event.systemPrompt}\n\n${additions.join("\n\n")}` };
     }
