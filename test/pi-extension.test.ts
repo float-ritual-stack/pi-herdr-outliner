@@ -422,6 +422,139 @@ test("injects bounded user edit activity, deduplicates selection, and restores i
     else process.env.HERDR_ENV = originalHerdrEnv;
   }
 });
+
+test("orients Pi and OMP sessions from live Git state without mutating the repository", async () => {
+  type EventHandler = (event: any, context: ExtensionContext) => Promise<unknown> | unknown;
+  const originalRequest = OutlinerClient.prototype.request;
+  const originalHerdrEnv = process.env.HERDR_ENV;
+  const task: Block = {
+    id: "task-pie-182",
+    parentId: null,
+    position: 0,
+    text: "PIE-182 lifecycle [type::roadmap-item] [work-id::PIE-182] [work-stage::doing]",
+    author: "agent",
+    createdAt: "created",
+    updatedAt: "updated",
+    properties: [
+      { key: "type", value: "roadmap-item" },
+      { key: "work-id", value: "PIE-182" },
+      { key: "work-stage", value: "doing" },
+    ],
+  };
+  OutlinerClient.prototype.request = async function <T>(input: RequestInput): Promise<T> {
+    if (input.action === "ping") {
+      return { protocolVersion: OUTLINER_PROTOCOL_VERSION } as T;
+    }
+    if (input.action === "get") return task as T;
+    if (input.action === "blocks.context") {
+      return { selected: task, ancestors: [], children: [] } as T;
+    }
+    if (input.action === "activity.recent") {
+      return { entries: [], cursor: 0 } as T;
+    }
+    if (input.action === "work-ids.status") throw new Error("not configured");
+    throw new Error(`Unexpected request: ${input.action}`);
+  };
+  process.env.HERDR_ENV = "0";
+
+  try {
+    for (const actor of ["pi", "omp"] as const) {
+      const handlers = new Map<string, EventHandler>();
+      const statuses: Array<[string, string | undefined]> = [];
+      let branch = "feature/pie-182-lifecycle-status";
+      const pi = {
+        registerCommand() {},
+        registerTool() {},
+        registerEntryRenderer() {},
+        appendEntry() {},
+        on(name: string, handler: EventHandler) {
+          handlers.set(name, handler);
+        },
+        async exec(_command: string, args: string[]) {
+          if (args.includes("--show-toplevel")) {
+            return { stdout: "/repo\n", stderr: "", code: 0, killed: false };
+          }
+          if (args.includes("status")) {
+            return {
+              stdout: [
+                "# branch.oid 1234567890abcdef",
+                `# branch.head ${branch}`,
+                "# branch.ab +0 -0",
+                "",
+              ].join("\n"),
+              stderr: "",
+              code: 0,
+              killed: false,
+            };
+          }
+          if (args.includes("remote.origin.url")) {
+            return {
+              stdout: "git@github.com:float-ritual-stack/pi-herdr-outliner.git\n",
+              stderr: "",
+              code: 0,
+              killed: false,
+            };
+          }
+          throw new Error(`Unexpected Git invocation: ${args.join(" ")}`);
+        },
+      } as unknown as ExtensionAPI;
+      const context = {
+        cwd: "/repo",
+        signal: undefined,
+        isIdle: () => true,
+        sessionManager: {
+          getSessionId: () => `${actor}-session`,
+          getBranch: () => [{
+            type: "custom",
+            customType: "pi-outliner.active-task",
+            data: { version: 1, blockId: task.id },
+          }],
+        },
+        ui: {
+          setStatus(key: string, value: string | undefined) {
+            statuses.push([key, value]);
+          },
+          notify() {},
+        },
+      } as unknown as ExtensionContext;
+
+      createOutlinerExtension(actor)(pi);
+      await handlers.get("session_start")!({}, context);
+      expect(statuses).toContainEqual([
+        "pi-outliner-work",
+        "PIE-182 · feature/pie-182-lifecycle-status · clean",
+      ]);
+
+      const beforeAgentStart = handlers.get("before_agent_start")!;
+      const first = await beforeAgentStart({
+        systemPrompt: "base",
+        prompt: "continue",
+      }, context) as { systemPrompt: string };
+      expect(first.systemPrompt).toContain(
+        "Work environment: PIE-182 · repo float-ritual-stack/pi-herdr-outliner · branch feature/pie-182-lifecycle-status · clean · ahead 0 · behind 0",
+      );
+      expect(first.systemPrompt).not.toContain("Reorientation required");
+
+      branch = "main";
+      const mismatched = await beforeAgentStart({
+        systemPrompt: "base",
+        prompt: "continue",
+      }, context) as { systemPrompt: string };
+      expect(mismatched.systemPrompt).toContain(
+        "Reorientation required before task work: active task PIE-182; current branch main",
+      );
+      const repeated = await beforeAgentStart({
+        systemPrompt: "base",
+        prompt: "continue",
+      }, context) as { systemPrompt: string };
+      expect(repeated.systemPrompt).toContain("Reorientation required before task work");
+    }
+  } finally {
+    OutlinerClient.prototype.request = originalRequest;
+    if (originalHerdrEnv === undefined) delete process.env.HERDR_ENV;
+    else process.env.HERDR_ENV = originalHerdrEnv;
+  }
+});
 test("drives an explicit task through context, focus, durable proof, and completion", async () => {
 
   interface ToolDefinition {

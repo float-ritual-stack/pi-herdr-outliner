@@ -595,6 +595,16 @@ The project Pi extension is auto-discovered through [`.pi/extensions/outliner.ts
 
 `outliner_task` persists one active roadmap block per Pi session. Starting moves its canonical `work-stage` to `doing`; pausing returns it to `next`; completion requires a child or `source-block` proof, moves the item to `done`, and clears the session binding. Agent lifecycle events only project working/idle presence into Herdr metadata—they never infer semantic completion.
 
+With an active code-delivery task, the shared Pi/OMP extension also inspects the
+invocation-local Git checkout through the host's bounded `pi.exec` API. Every
+turn receives one compact repository/branch/dirty/ahead orientation line.
+Working on `main`, a different Work-ID branch, detached HEAD, or a non-Git
+directory adds explicit reorientation guidance; unchanged valid state stays
+quiet beyond the one-line invariant. A Work-ID branch without an active task
+suggests an explicit resume and never binds automatically. This first lifecycle
+slice is read-only: it does not switch branches, stage, stash, commit, or open
+pull requests.
+
 Before each agent turn, the extension uses Herdr pane-focus history to locate the most recently focused registered Outliner client, reads that client's browsing context, and injects the focused block body, breadcrumb, properties, and children. A different active task is appended as separate session context rather than replacing the user's focus. Without a focused Outliner client it falls back to the active task and then the legacy shared selection.
 
 The same bounded context budget can include up to five distinct blocks recently edited by the user. The first turn considers a seven-day horizon; later turns request only activity newer than a session-persisted cursor. Entries use current block text, deduplicate the focused block and active task, and report exact UUID and edit time. Failed or timed-out activity queries add nothing and do not advance the cursor. Agent and system mutations never enter this user-activity section.
