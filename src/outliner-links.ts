@@ -31,6 +31,7 @@ import type {
 const OUTLINER_SCHEME = "pi-outliner:";
 const BLOCK_ID_PATTERN = /^[A-Za-z0-9_-]{8,}$/;
 const BLOCK_ID_TOKEN_PATTERN = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
+const BLOCK_REFERENCE_ENVELOPE_PATTERN = /\(\([^\r\n]*?\)\)/g;
 
 const TERMINAL_CONTROL_PATTERN = /[\u0000-\u001f\u007f]/;
 
@@ -341,6 +342,12 @@ function genericLinkSpans(
   workIdPrefix: string | null,
 ): LinkSpan[] {
   const spans: LinkSpan[] = [];
+  const blockReferenceRanges: Array<{ start: number; end: number }> = [];
+  for (const match of text.matchAll(BLOCK_REFERENCE_ENVELOPE_PATTERN)) {
+    if (match[0].includes("|")) {
+      blockReferenceRanges.push({ start: match.index, end: match.index + match[0].length });
+    }
+  }
   for (const reference of outlinerReferenceOccurrences(text, workIdPrefix)) {
     if (reference.kind === "page") {
       spans.push({
@@ -357,7 +364,11 @@ function genericLinkSpans(
     }
   }
   for (const match of text.matchAll(BLOCK_ID_TOKEN_PATTERN)) {
-    if (!canLinkBlock(match[0])) continue;
+    const range = { start: match.index, end: match.index + match[0].length };
+    if (
+      blockReferenceRanges.some((reference) => rangesOverlap(reference, range)) ||
+      !canLinkBlock(match[0])
+    ) continue;
     spans.push({
       start: match.index,
       end: match.index + match[0].length,
@@ -413,6 +424,12 @@ function resolvedReferenceSpans(rawText: string, resolvedText: string): LinkSpan
   let resolvedCursor = 0;
   for (const reference of blockReferenceOccurrences(rawText)) {
     resolvedCursor += reference.start - rawCursor;
+    const authored = rawText.slice(reference.start, reference.end);
+    if (resolvedText.startsWith(authored, resolvedCursor)) {
+      rawCursor = reference.end;
+      resolvedCursor += authored.length;
+      continue;
+    }
     if (!resolvedText.startsWith("((", resolvedCursor)) return [];
     const end = resolvedText.indexOf("))", resolvedCursor + 2);
     if (end < 0) return [];
@@ -457,14 +474,17 @@ export function createOutlinerTextLinker(
     const fragmentSuffix = reference.fragmentId ? `^${reference.fragmentId}` : "";
     if (!target) {
       return {
-        visible: `((${reference.blockId}${fragmentSuffix}))`,
+        visible:
+          `((${reference.blockId}${fragmentSuffix}${reference.label !== undefined ? `|${reference.label}` : ""}))`,
         uri: null,
       };
     }
     const title = blockDisplayTitle(target);
+    const presentation = reference.label ?? title;
     if (target.effectiveDeletedRootId) {
       return {
-        visible: `((${title}${fragmentSuffix} · Trash))`,
+        visible:
+          `((${presentation}${reference.label === undefined ? fragmentSuffix : ""} · Trash))`,
         uri: outlinerLinkUri("block", reference.blockId, {
           fragmentId: reference.fragmentId,
         }),
@@ -475,13 +495,14 @@ export function createOutlinerTextLinker(
       if (fragment.status !== "resolved") {
         const state = fragment.status === "missing" ? "Missing fragment" : "Duplicate fragment";
         return {
-          visible: `((${title}${fragmentSuffix} · ${state}))`,
+          visible:
+            `((${presentation}${reference.label === undefined ? fragmentSuffix : ""} · ${state}))`,
           uri: null,
         };
       }
     }
     return {
-      visible: `((${title}${fragmentSuffix}))`,
+      visible: `((${presentation}${reference.label === undefined ? fragmentSuffix : ""}))`,
       uri: outlinerLinkUri("block", reference.blockId, {
         fragmentId: reference.fragmentId,
       }),

@@ -28,6 +28,45 @@ describe("block reference rendering", () => {
     expect(rendered).toBe("See ((Referenced decision)) for context");
     expect(blockDisplayTitle(target)).toBe("Referenced decision");
   });
+  test("keeps titled reference identity separate from authored presentation", () => {
+    const label = "the **decision** | PIE-123";
+    const raw = `See ((${target.id}|${label}))`;
+    const resolved = resolveBlockReferencesWithStatus(
+      raw,
+      (id) => id === target.id ? target : null,
+    );
+
+    expect(resolved).toEqual({
+      text: `See ((${label}))`,
+      references: [{
+        blockId: target.id,
+        label,
+        status: "resolved",
+        title: "Referenced decision",
+      }],
+    });
+    expect(blockReferenceOccurrences(raw)).toEqual([{
+      blockId: target.id,
+      label,
+      start: 4,
+      end: raw.length,
+    }]);
+    expect(outlinerReferenceOccurrences(raw, "PIE")).toEqual([{
+      kind: "block",
+      blockId: target.id,
+      label,
+      start: 4,
+      end: raw.length,
+    }]);
+    for (const invalid of [
+      `((${target.id}|))`,
+      `((${target.id}|   ))`,
+      `((${target.id}|line one\nline two))`,
+    ]) {
+      expect(blockReferenceOccurrences(invalid)).toEqual([]);
+      expect(resolveBlockReferences(invalid, () => target)).toBe(invalid);
+    }
+  });
 
   test("chooses a title after whole-block indexed-span stripping", () => {
     const literalTitle = {
@@ -55,6 +94,35 @@ describe("block reference rendering", () => {
 
     expect(resolveBlockReferences(text, () => null)).toBe(text);
     expect(blockReferenceIds(text)).toEqual([missing]);
+  });
+  test("keeps missing titled references raw and labels deleted targets explicitly", () => {
+    const missing = "22222222-2222-4222-8222-222222222222";
+    const rawMissing = `((${missing}|still understandable))`;
+    expect(resolveBlockReferencesWithStatus(rawMissing, () => null)).toEqual({
+      text: rawMissing,
+      references: [{
+        blockId: missing,
+        label: "still understandable",
+        status: "missing",
+      }],
+    });
+
+    const deleted = { ...target, effectiveDeletedRootId: "trash-root" };
+    expect(
+      resolveBlockReferencesWithStatus(
+        `((${target.id}|deleted explanation))`,
+        () => deleted,
+      ),
+    ).toEqual({
+      text: "((deleted explanation · Trash))",
+      references: [{
+        blockId: target.id,
+        label: "deleted explanation",
+        status: "deleted",
+        title: "Referenced decision",
+        deletionRootId: "trash-root",
+      }],
+    });
   });
 
   test("resolves durable fragments and reports stale or duplicate anchors explicitly", () => {
@@ -111,6 +179,39 @@ describe("block reference rendering", () => {
       () => duplicate,
     ).references[0]?.status).toBe("duplicate");
   });
+  test("retains titled fragment diagnostics without treating labels as identity", () => {
+    const anchored = {
+      ...target,
+      text: "Referenced decision\n\n## Durable section ^durable-section",
+    };
+    const resolved = resolveBlockReferencesWithStatus(
+      [
+        `((${target.id}^durable-section|why this boundary exists))`,
+        `((${target.id}^stale-section|stale explanation))`,
+      ].join(" "),
+      () => anchored,
+    );
+
+    expect(resolved.text).toBe(
+      "((why this boundary exists)) ((stale explanation · Missing fragment))",
+    );
+    expect(resolved.references).toEqual([
+      {
+        blockId: target.id,
+        fragmentId: "durable-section",
+        label: "why this boundary exists",
+        status: "resolved",
+        title: "Referenced decision",
+      },
+      {
+        blockId: target.id,
+        fragmentId: "stale-section",
+        label: "stale explanation",
+        status: "stale",
+        title: "Referenced decision",
+      },
+    ]);
+  });
 });
 
 describe("reference occurrence Markdown protection", () => {
@@ -135,6 +236,26 @@ describe("reference occurrence Markdown protection", () => {
       expect.objectContaining({ kind: "block", blockId }),
       expect.objectContaining({ kind: "block", blockId }),
     ]);
+  });
+  test("excludes titled references in protected spans without leaking label syntax", () => {
+    const visibleId = "23232323-2323-4232-8232-232323232323";
+    const hiddenId = "24242424-2424-4242-8242-242424242424";
+    const visible = `((${visibleId}|visible **context** PIE-123))`;
+    const text = [
+      `\`((${hiddenId}|hidden PIE-999))\``,
+      "```md",
+      `((${hiddenId}|hidden [[Page]]))`,
+      "```",
+      visible,
+    ].join("\n");
+
+    expect(outlinerReferenceOccurrences(text, "PIE")).toEqual([{
+      kind: "block",
+      blockId: visibleId,
+      label: "visible **context** PIE-123",
+      start: text.indexOf(visible),
+      end: text.indexOf(visible) + visible.length,
+    }]);
   });
 
   test("excludes references inside fences nested through multiple list levels", () => {

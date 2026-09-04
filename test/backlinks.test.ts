@@ -62,6 +62,31 @@ describe("semantic backlink relation", () => {
     expect(result.sources[0]!.occurrences[0]!.snippet).toContain("((Target decision))");
     expect(result.sources[0]!.occurrences[0]!.snippet).not.toContain(target.id);
   });
+  test("keeps duplicate titled labels attached to their canonical targets", () => {
+    const workspace = store();
+    const first = workspace.create("First target");
+    const second = workspace.create("Second target");
+    workspace.configureWorkIdPrefix("PIE");
+    const source = workspace.create(
+      `Source ((${first.id}|same **label** PIE-999)) and ((${second.id}|same **label** PIE-999))`,
+    );
+
+    const firstBacklinks = workspace.queryBacklinks({ targetBlockId: first.id, limit: 10 });
+    const secondBacklinks = workspace.queryBacklinks({ targetBlockId: second.id, limit: 10 });
+    expect(firstBacklinks.sources).toHaveLength(1);
+    expect(secondBacklinks.sources).toHaveLength(1);
+    expect(firstBacklinks.sources[0]).toEqual(expect.objectContaining({
+      blockId: source.id,
+      occurrenceCount: 1,
+    }));
+    expect(secondBacklinks.sources[0]).toEqual(expect.objectContaining({
+      blockId: source.id,
+      occurrenceCount: 1,
+    }));
+    expect(firstBacklinks.sources[0]!.occurrences[0]!.snippet).toContain(
+      "((same **label** PIE-999))",
+    );
+  });
 
   test("keeps fragment backlinks attached to canonical targets across heading renames", () => {
     const workspace = store();

@@ -517,6 +517,56 @@ describe("outliner link rendering", () => {
       outlinerLinkUri("block", targetId, { fragmentId: "durable" }),
     );
   });
+  test("links titled references by canonical block and fragment identity", () => {
+    const secondId = "550e8400-e29b-41d4-a716-446655440001";
+    const raw = [
+      `((${targetId}^durable|same **label** PIE-123))`,
+      `((${secondId}|same **label** PIE-123))`,
+    ].join(" ");
+    const resolved = [
+      "((same **label** PIE-123))",
+      "((same **label** PIE-123))",
+    ].join(" ");
+    const linker = createOutlinerTextLinker(
+      raw,
+      (id) => id === targetId
+        ? block(targetId, "Target\n\n## Durable ^durable")
+        : id === secondId
+          ? block(secondId, "Other")
+          : null,
+      "PIE",
+    );
+    const rendered = linker.link(resolved);
+    const firstLabel = resolved.indexOf("same");
+    const secondLabel = resolved.lastIndexOf("same");
+
+    expect(stripTerminalSequences(rendered)).toBe(resolved);
+    expect(getOsc8LinkAtColumn(rendered, firstLabel + 2)).toBe(
+      outlinerLinkUri("block", targetId, { fragmentId: "durable" }),
+    );
+    expect(getOsc8LinkAtColumn(rendered, secondLabel + 2)).toBe(
+      outlinerLinkUri("block", secondId),
+    );
+    expect(getOsc8LinkAtColumn(rendered, resolved.indexOf("PIE-123") + 2)).toBe(
+      outlinerLinkUri("block", targetId, { fragmentId: "durable" }),
+    );
+    expect(firstOutlinerReference(raw, "PIE")).toEqual({
+      kind: "block",
+      value: targetId,
+      fragmentId: "durable",
+    });
+  });
+
+  test("leaves missing and invalid titled references visible but nonactionable", () => {
+    const raw = `((${targetId}|missing label))`;
+    const missing = linkOutlinerMarkdown(raw, raw, "PIE");
+    const invalid = `((${targetId}|))`;
+
+    expect(stripTerminalSequences(missing)).toBe(raw);
+    expect(getOsc8LinkAtColumn(missing, raw.indexOf(targetId) + 2)).toBeUndefined();
+    expect(firstOutlinerReference(invalid, "PIE")).toBeNull();
+    expect(createOutlinerTextLinker(invalid, () => target).link(invalid)).toBe(invalid);
+  });
 
   test("consumes protected references before linking later rendered rows", () => {
     const firstId = "550e8400-e29b-41d4-a716-446655440001";

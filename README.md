@@ -463,10 +463,10 @@ report slot or report pane.
 Exact references use stable block IDs:
 
 ```text
-Depends on ((516e1754-7741-4c9e-83a6-7b703a8f0798))
+Depends on ((516e1754-7741-4c9e-83a6-7b703a8f0798|the approved boundary))
 ```
 
-Read views resolve exact-reference titles while edit views retain raw IDs. Symbolic links use `[[address]]`; a block registers an address through `[page::address]`, and existing Work IDs participate in the same unique normalized registry. Accepting completion for a Work-ID address inserts its exact `((block-id))` reference, so read mode renders the full current block title instead of only the identifier; ordinary pages and aliases retain `[[address]]`. Parsing or saving a dangling link never creates content. Only explicit follow creates a root stub, transactionally; unresolved Work-ID-shaped addresses fail instead of squatting the stable Work-ID namespace. Explicit rename preserves the old address as an alias, and explicit removal unregisters an alias or primary declaration. Deleted targets remain resolvable and purged targets become dangling.
+Exact references accept `((block-id))`, `((block-id|label))`, `((block-id^fragment-id))`, and `((block-id^fragment-id|label))`. The optional authored label controls only presentation: following and backlinks retain the canonical block ID and optional fragment. Read views resolve untitled references to current target titles and titled references to their labels; edit views, exports, and storage retain the exact raw syntax. A label cannot be empty, whitespace-only, multiline, or contain the closing `))` delimiter. Symbolic links use `[[address]]`; a block registers an address through `[page::address]`, and existing Work IDs participate in the same unique normalized registry. Accepting completion for a Work-ID address inserts its exact `((block-id))` reference, so read mode renders the full current block title instead of only the identifier; ordinary pages and aliases retain `[[address]]`. Parsing or saving a dangling link never creates content. Only explicit follow creates a root stub, transactionally; unresolved Work-ID-shaped addresses fail instead of squatting the stable Work-ID namespace. Explicit rename preserves the old address as an alias, and explicit removal unregisters an alias or primary declaration. Deleted targets remain resolvable and purged targets become dangling.
 
 Stable fragments are inline anchors attached to a heading or paragraph terminus:
 `## Description ^description`. Read mode hides the marker. Exact links use

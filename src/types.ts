@@ -331,6 +331,7 @@ export interface VirtualOccurrenceRank {
 export interface BlockReferenceResolution {
   blockId: string;
   fragmentId?: string;
+  label?: string;
   status: "resolved" | "deleted" | "missing" | "stale" | "duplicate";
   title?: string;
   deletionRootId?: string;

@@ -83,7 +83,10 @@ function humanizedReferenceLabel(
   targetTitle: string,
 ): string {
   if (occurrence.kind === "block") {
-    return `((${targetTitle}${occurrence.fragmentId ? `^${occurrence.fragmentId}` : ""}))`;
+    const visible = occurrence.label ?? targetTitle;
+    return `((${visible}${
+      occurrence.label === undefined && occurrence.fragmentId ? `^${occurrence.fragmentId}` : ""
+    }))`;
   }
   if (occurrence.kind === "property") return `[${occurrence.propertyKey}::${targetTitle}]`;
   return source.text.slice(occurrence.start, occurrence.end);
