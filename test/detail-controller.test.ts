@@ -1973,6 +1973,35 @@ describe("Detail property inspector integration", () => {
     expect(harness.controller.state.context.selected?.id).toBe(targetId);
   });
 
+  test("preserves a dedicated inspector when directly routing a typed target", async () => {
+    const targetId = "8a3a9c31-58ff-48d1-9d25-95db5f78e9eb";
+    const harness = createHarness(makeBlock({
+      id: "property-source",
+      text: `Property source\n[related-to::${targetId}]`,
+    }));
+    const controller = createDetailController(harness.effects, undefined, {
+      propertyInspectorPresentation: "dedicated",
+    });
+    await controller.initialize();
+    const entry = controller.state.propertyInspector.model?.entries.find(
+      (candidate) => candidate.target?.kind === "block",
+    );
+
+    await controller.dispatch({
+      type: "property-inspector.target.open",
+      occurrenceId: entry!.occurrenceId,
+      intent: "open",
+      routing: "first-unlocked",
+    }, viewport);
+
+    expect(harness.calls.navigationDispatches).toEqual([{
+      blockId: targetId,
+      intent: "open",
+      preserveSource: true,
+    }]);
+    expect(controller.state.context.selected?.id).toBe("property-source");
+  });
+
   test("unlocks a dedicated inspector and opens its current target in a sibling Detail", async () => {
     const harness = createHarness(makeBlock({ id: "property-source", text: source }));
     const controller = createDetailController(harness.effects, undefined, {

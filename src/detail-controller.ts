@@ -780,8 +780,10 @@ export function createDetailController(
   };
 
   const openFirstUnlocked = async (target: OpenDestinationTarget): Promise<boolean> => {
+    const reference = destinationReferences.get(target);
     try {
       const dispatched = await effects.dispatchNavigation(target.blockId, "open", {
+        ...(reference?.preserveSource ? { preserveSource: true } : {}),
         ...(target.fragmentId ? { fragmentId: target.fragmentId } : {}),
       });
       if (dispatched.targetClientId === effects.clientId) {
@@ -1294,6 +1296,7 @@ export function createDetailController(
             destinationReferences.set(target, reference);
             destinationChooser!.open(target);
           } else {
+            destinationReferences.set(target, reference);
             await resolveDestinationTarget(target, reference);
             if (!await openFirstUnlocked(target)) destinationChooser!.open(target);
           }
