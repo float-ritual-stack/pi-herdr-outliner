@@ -75,7 +75,8 @@ export class OpenDestinationChooser {
   private readonly timeoutMs: number;
   private readonly scheduler: OpenDestinationScheduler;
   private timer: unknown;
-  private generation = 0;
+  private targetGeneration = 0;
+  private timerGeneration = 0;
 
   constructor(
     private readonly effects: OpenDestinationChooserEffects,
@@ -88,7 +89,7 @@ export class OpenDestinationChooser {
 
   open(target: OpenDestinationTarget): void {
     this.clearTimer();
-    this.generation += 1;
+    this.targetGeneration += 1;
     this.state.active = true;
     this.state.loading = false;
     this.state.target = target;
@@ -125,7 +126,7 @@ export class OpenDestinationChooser {
   dismiss(): void {
     if (!this.state.active && !this.state.target) return;
     this.clearTimer();
-    this.generation += 1;
+    this.targetGeneration += 1;
     this.state.active = false;
     this.state.loading = false;
     this.state.target = null;
@@ -135,7 +136,7 @@ export class OpenDestinationChooser {
 
   dispose(): void {
     this.clearTimer();
-    this.generation += 1;
+    this.targetGeneration += 1;
     this.state.active = false;
     this.state.loading = false;
     this.state.target = null;
@@ -145,9 +146,9 @@ export class OpenDestinationChooser {
   private async openDestination(destination: OpenDestination): Promise<void> {
     const target = this.state.target;
     if (!target) return;
-    const operationGeneration = this.generation;
+    const operationGeneration = this.targetGeneration;
     const isCurrent = (): boolean =>
-      operationGeneration === this.generation &&
+      operationGeneration === this.targetGeneration &&
       this.state.active &&
       this.state.target === target;
     this.state.loading = true;
@@ -215,11 +216,11 @@ export class OpenDestinationChooser {
   private scheduleDismissal(): void {
     this.clearTimer();
     if (!this.state.active) return;
-    const generation = ++this.generation;
+    const generation = ++this.timerGeneration;
     this.timer = this.scheduler.set(() => {
-      if (generation !== this.generation || !this.state.active) return;
+      if (generation !== this.timerGeneration || !this.state.active) return;
       this.timer = undefined;
-      this.generation += 1;
+      this.targetGeneration += 1;
       this.state.active = false;
       this.state.loading = false;
       this.state.target = null;

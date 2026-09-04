@@ -89,7 +89,11 @@ interface Harness {
     currentBlocks: Array<string | null>;
     propertyInspectorPanes: string[];
     backlinkPeeks: Array<Parameters<DetailEffects["openBacklinkPeek"]>[0]>;
-    openedDetails: Array<{ blockId: string; direction: "right" | "down" }>;
+    openedDetails: Array<{
+      blockId: string;
+      direction: "right" | "down";
+      fragmentId?: string;
+    }>;
   };
   setSelection(selection: SelectionContext): void;
   setUpdate(implementation: DetailEffects["updateBlock"]): void;
@@ -212,8 +216,12 @@ function createHarness(
     openBacklinkPeek(input) {
       calls.backlinkPeeks.push(input);
     },
-    openDetailPane(blockId, direction) {
-      calls.openedDetails.push({ blockId, direction });
+    openDetailPane(blockId, direction, fragmentId) {
+      calls.openedDetails.push({
+        blockId,
+        direction,
+        ...(fragmentId ? { fragmentId } : {}),
+      });
     },
     async resolveNavigation(intent) {
       return {
@@ -679,6 +687,52 @@ describe("detail controller projection and deferred refresh", () => {
       expect(harness.controller.state.context.selected?.id).toBe(source.id);
       expect(harness.controller.state.destinationChooser.active).toBe(false);
     }
+  });
+
+  test("preserves fragment identity in explicit and fallback splits", async () => {
+    const source = makeBlock({ text: "See ((target01^decision))" });
+
+    const explicit = createHarness(source);
+    await explicit.controller.initialize();
+    await explicit.controller.dispatch({ type: "reference.follow" }, viewport);
+    await explicit.controller.handleDestinationChooserKeypress("d", { name: "d" });
+    expect(explicit.calls.openedDetails).toEqual([{
+      blockId: "target01",
+      direction: "down",
+      fragmentId: "decision",
+    }]);
+
+    const fallback = createHarness(source);
+    fallback.effects.dispatchNavigation = async () => {
+      throw new Error("All Details in this tab are locked · unlock one or open another Detail");
+    };
+    await fallback.controller.initialize();
+    await fallback.controller.dispatch({ type: "reference.follow" }, viewport);
+    await fallback.controller.handleDestinationChooserKeypress("", { name: "return" });
+    expect(fallback.calls.openedDetails).toEqual([{
+      blockId: "target01",
+      direction: "right",
+      fragmentId: "decision",
+    }]);
+  });
+
+  test("applies a split Detail's startup fragment once", async () => {
+    const target = makeBlock({
+      id: "target01",
+      text: "Target\n\n## Decision ^decision\nBody",
+    });
+    const harness = createHarness(
+      target,
+      null,
+      undefined,
+      undefined,
+      { initialTargetFragmentId: "decision" },
+    );
+
+    await harness.controller.initialize();
+
+    expect(harness.controller.state.targetFragmentId).toBe("decision");
+    expect(harness.controller.state.previewOffset).toBe(2);
   });
 
   test("keeps explicit first-unlocked choice available after all Details reject it", async () => {

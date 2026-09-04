@@ -175,6 +175,37 @@ describe("open destination chooser", () => {
     expect(chooser.state.active).toBe(false);
   });
 
+  test("input during an in-flight destination only resets its timer", async () => {
+    const scheduler = new FakeScheduler();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const calls: string[] = [];
+    const chooser = new OpenDestinationChooser({
+      beforeOpen: async () => {
+        await gate;
+      },
+      replace: () => {
+        calls.push("replace");
+      },
+      openFirstUnlocked: () => true,
+      openNewDetail: () => {},
+      invalidate: () => {},
+    }, { scheduler, timeoutMs: 7_500 });
+    chooser.open(target);
+    const pending = chooser.handleKeypress("R", { name: "r", shift: true });
+    await chooser.handleKeypress("x", { name: "x" });
+    scheduler.fire(1);
+    expect(chooser.state.active).toBe(true);
+
+    release();
+    await pending;
+
+    expect(calls).toEqual(["replace"]);
+    expect(chooser.state.active).toBe(false);
+  });
+
   test("idle timeout cancels an in-flight destination before it can dispatch", async () => {
     const scheduler = new FakeScheduler();
     let release!: () => void;

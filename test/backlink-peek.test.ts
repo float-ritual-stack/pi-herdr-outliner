@@ -272,6 +272,17 @@ describe("backlink peek controller", () => {
     expect(state.calls.closes).toBe(1);
   });
 
+  test("Ctrl+C remains an emergency popup cancel while the chooser is active", async () => {
+    const state = harness();
+    await state.controller.initialize();
+    await state.controller.handleKeypress("\r", { name: "return" }, "pass", 20);
+
+    await state.controller.handleKeypress("", { name: "c", ctrl: true }, "pass", 20);
+
+    expect(state.calls.closes).toBe(1);
+    expect(state.controller.destinationChooserOpen).toBe(false);
+  });
+
   test("keeps the chooser open when replace is rejected", async () => {
     const state = harness();
     state.failReplace("source Detail disappeared");

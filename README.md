@@ -143,6 +143,7 @@ unlocked Detail or creates a right split when none is available. `f` remains in
 the chooser when every Detail is locked, so fallback topology is always an
 explicit choice. `Esc` dismisses without resolving or opening the target. `R`
 outside the chooser reveals the reference in the paired or unique same-tab Tree.
+Block-fragment targets retain their exact anchor across every destination.
 
 Activating an inline Backlinks source opens a transient preview over the
 invoking Detail instead of consuming another reader. `Left` and `Right` traverse

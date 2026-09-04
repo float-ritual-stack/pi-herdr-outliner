@@ -105,6 +105,10 @@ export class BacklinkPeekController {
     viewportHeight: number,
   ): Promise<void> {
     if (this.closed) return;
+    if (key.ctrl && key.name === "c") {
+      await this.cancel();
+      return;
+    }
     if (this.destinationChooserState.active) {
       await this.destinationChooser.handleKeypress(
         inputAction === "suppress" ? "" : str,
@@ -113,7 +117,7 @@ export class BacklinkPeekController {
       return;
     }
     if (inputAction === "suppress") return;
-    if ((key.ctrl && key.name === "c") || str === "q") {
+    if (str === "q") {
       await this.cancel();
       return;
     }

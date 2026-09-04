@@ -153,6 +153,8 @@ const dedicatedPropertyBlockId =
 if (detailPresentation === "property-inspector" && !dedicatedPropertyBlockId) {
   throw new Error("Dedicated property inspector requires a target block ID");
 }
+const initialTargetFragmentId =
+  process.env.OUTLINER_DETAIL_TARGET_FRAGMENT_ID?.trim() || undefined;
 configureCurrentPaneRightClick(rightClickOwnership);
 let pendingLinkClick = { activate: false, suppress: false };
 const terminal = new ProcessTerminal();
@@ -224,6 +226,7 @@ function errorMessage(error: unknown): string {
 async function openTargetInNewDetail(
   blockId: string,
   direction: "right" | "down",
+  fragmentId?: string,
 ): Promise<void> {
   const contextId = crypto.randomUUID();
   await client.request({
@@ -237,6 +240,7 @@ async function openTargetInNewDetail(
     workspaceRoot: paths.workspaceRoot,
     browsingContextId: contextId,
     direction,
+    ...(fragmentId ? { targetFragmentId: fragmentId } : {}),
   });
 }
 
@@ -350,6 +354,7 @@ const controller = createDetailController(
       ? "dedicated"
       : "inline",
     destinationTimeoutMs,
+    initialTargetFragmentId,
   },
 );
 
@@ -680,8 +685,16 @@ invokeDetailAction = async (actionId) => {
 };
 async function handleInput(data: string): Promise<void> {
   if (controller.state.destinationChooser.active) {
-    pendingLinkClick = { activate: false, suppress: false };
     const chooserInput = decodePiDetailInput(data);
+    if (
+      chooserInput.kind === "key" &&
+      chooserInput.key.ctrl &&
+      chooserInput.key.name === "q"
+    ) {
+      await stop();
+      return;
+    }
+    pendingLinkClick = { activate: false, suppress: false };
     await controller.handleDestinationChooserKeypress(
       chooserInput.kind === "key" ? chooserInput.str : "",
       chooserInput.kind === "key" ? chooserInput.key : { name: "paste" },

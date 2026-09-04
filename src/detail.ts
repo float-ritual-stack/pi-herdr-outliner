@@ -60,6 +60,8 @@ const dedicatedPropertyBlockId =
 if (detailPresentation === "property-inspector" && !dedicatedPropertyBlockId) {
   throw new Error("Dedicated property inspector requires a target block ID");
 }
+const initialTargetFragmentId =
+  process.env.OUTLINER_DETAIL_TARGET_FRAGMENT_ID?.trim() || undefined;
 let stopping = false;
 let watcher: OutlinerWatcher | null = null;
 let workQueue = Promise.resolve();
@@ -79,6 +81,7 @@ function errorMessage(error: unknown): string {
 async function openTargetInNewDetail(
   blockId: string,
   direction: "right" | "down",
+  fragmentId?: string,
 ): Promise<void> {
   const contextId = crypto.randomUUID();
   await client.request({
@@ -92,6 +95,7 @@ async function openTargetInNewDetail(
     workspaceRoot: paths.workspaceRoot,
     browsingContextId: contextId,
     direction,
+    ...(fragmentId ? { targetFragmentId: fragmentId } : {}),
   });
 }
 
@@ -207,6 +211,7 @@ const controller = createDetailController(
       ? "dedicated"
       : "inline",
     destinationTimeoutMs,
+    initialTargetFragmentId,
   },
 );
 

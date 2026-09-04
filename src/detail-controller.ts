@@ -146,6 +146,7 @@ export interface DetailPropertyInspectorState {
 export interface DetailControllerOptions {
   propertyInspectorPresentation?: DetailPropertyInspectorPresentation;
   destinationTimeoutMs?: number;
+  initialTargetFragmentId?: string;
   destinationScheduler?: OpenDestinationScheduler;
 }
 
@@ -264,7 +265,11 @@ export interface DetailEffects {
   projectRead(text: string, hostBlockId?: string): Promise<DetailReadProjection>;
   queryBacklinks(query: BacklinkQuery): Promise<BacklinkCollection>;
   openBacklinkPeek(input: BacklinkPeekLaunch): void;
-  openDetailPane(blockId: string, direction: "right" | "down"): void | Promise<void>;
+  openDetailPane(
+    blockId: string,
+    direction: "right" | "down",
+    fragmentId?: string,
+  ): void | Promise<void>;
   updateBlock(input: {
     blockId: string;
     text: string;
@@ -499,6 +504,7 @@ export function createDetailController(
   let serviceConnected = false;
   let destinationChooser: OpenDestinationChooser | undefined;
   const destinationReferences = new WeakMap<OpenDestinationTarget, OutlinerLinkTarget>();
+  let startupTargetFragmentId = options.initialTargetFragmentId ?? null;
 
   const emit = (): void => onChange(state);
   const isBufferMode = (): boolean =>
@@ -684,7 +690,9 @@ export function createDetailController(
 
   const loadBrowsingContext = async (force = false): Promise<void> => {
     const browsingContext = await effects.getBrowsingContext();
-    await applyTarget(browsingContext.target, force);
+    const fragmentId = startupTargetFragmentId;
+    startupTargetFragmentId = null;
+    await applyTarget(browsingContext.target, force, true, fragmentId);
   };
 
   const loadBlock = async (
@@ -794,7 +802,7 @@ export function createDetailController(
       }
     },
     openNewDetail: async (target, direction) => {
-      await effects.openDetailPane(target.blockId, direction);
+      await effects.openDetailPane(target.blockId, direction, target.fragmentId);
       state.status = direction === "right"
         ? `Opened ${target.title} to the right`
         : `Opened ${target.title} below`;

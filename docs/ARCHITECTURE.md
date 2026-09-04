@@ -74,10 +74,11 @@ the shared destination chooser before resolution or navigation. `Shift+R`
 replaces the current Detail, `f` dispatches to the first spatially unlocked
 same-tab Detail, and `r`/`d` create an independent right/down Detail. `Enter`
 uses the first unlocked destination and falls back to a right split; explicit
-`f` never falls back. `Esc`, target changes, pane exit, or the configurable idle
-timeout dispose the bound target without navigation. Chooser input is consumed
-before the ordinary Detail keymap and resets the idle timer. Closing Detail
-discards its target, history, chooser, and lock state.
+`f` never falls back. Block-fragment identity is carried through replace,
+first-unlocked, and split routes. `Esc`, target changes, pane exit, or the
+configurable idle timeout dispose the bound target without navigation. Chooser
+input is consumed before the ordinary Detail keymap and resets the idle timer.
+Closing Detail discards its target, history, chooser, and lock state.
 
 The generated Backlinks section is collapsed by default and therefore performs
 no relation query during ordinary Tree cursor previews. Expansion calls the

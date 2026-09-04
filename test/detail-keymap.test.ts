@@ -85,9 +85,11 @@ function harness(
   intents: DetailIntent[];
   press(key: TerminalKey, str?: string, inputAction?: "pass" | "suppress"): Promise<void>;
   chooserInputs: Array<{ str: string; key: TerminalKey }>;
+  stops: { count: number };
 } {
   const intents: DetailIntent[] = [];
   const chooserInputs: Array<{ str: string; key: TerminalKey }> = [];
+  const stops = { count: 0 };
   const controller: DetailController = {
     state: detailState,
     async initialize() {},
@@ -109,13 +111,16 @@ function harness(
   const handler = createDetailKeyHandler({
     controller,
     viewport: () => ({ width: 80, height: 24 }),
-    stop() {},
+    stop() {
+      stops.count += 1;
+    },
     ...options,
   });
   return {
     chooserInputs,
     intents,
     press: (key, str = "", inputAction = "pass") => handler(str, key, inputAction),
+    stops,
   };
 }
 
@@ -534,10 +539,12 @@ test("an active destination chooser owns input before keymap actions", async () 
 
   await stateHarness.press({ name: "o" }, "o");
   await stateHarness.press({ name: "ignored" }, "", "suppress");
+  await stateHarness.press({ name: "q", ctrl: true });
 
   expect(stateHarness.chooserInputs).toEqual([
     { str: "o", key: { name: "o" } },
     { str: "", key: { name: "input" } },
   ]);
+  expect(stateHarness.stops.count).toBe(1);
   expect(stateHarness.intents).toEqual([]);
 });

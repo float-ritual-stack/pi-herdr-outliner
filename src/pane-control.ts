@@ -225,6 +225,7 @@ export interface OpenDetailPaneOptions {
   workspaceRoot: string;
   browsingContextId: string;
   propertyInspectorBlockId?: string;
+  targetFragmentId?: string;
   targetPaneId?: string;
   direction?: "right" | "down";
 }
@@ -262,6 +263,11 @@ export function openDetailPane(
       "--env",
       "OUTLINER_DETAIL_RENDERER=pi-tui",
     );
+  }
+  if (options.targetFragmentId !== undefined) {
+    const fragmentId = options.targetFragmentId.trim();
+    if (!fragmentId) throw new Error("Detail target fragment ID cannot be empty");
+    args.push("--env", `OUTLINER_DETAIL_TARGET_FRAGMENT_ID=${fragmentId}`);
   }
   args.push(
     "--placement",
