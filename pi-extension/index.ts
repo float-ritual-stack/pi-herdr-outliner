@@ -1216,8 +1216,10 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
       ["head", values.head, delivery.workBranch],
     ];
     for (const [name, actual, expected] of checks) {
-      if (actual !== undefined && actual !== expected) {
-        return `Pull-request ${name} must be ${expected}; received ${String(actual)}`;
+      if (actual !== expected) {
+        return `Pull-request ${name} must be explicitly set to ${expected}; received ${
+          actual === undefined ? "no value" : String(actual)
+        }`;
       }
     }
     return null;
@@ -1307,7 +1309,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
     if (
       synchronized.delivery &&
       (
-        ![ "validate", "complete" ].includes(synchronized.delivery.stage) ||
+        !["validate", "complete"].includes(synchronized.delivery.stage) ||
         !synchronized.delivery.mergeCommit
       )
     ) {

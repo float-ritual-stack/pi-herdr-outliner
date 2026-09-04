@@ -78,6 +78,11 @@ describe("OutlinerStore", () => {
       ...input,
       workBranch: "feature/pie-182-conflict",
     })).toThrow("Delivery PIE-182/enforcement has conflicting work-branch");
+    expect(() => store.ensureDelivery({
+      ...input,
+      deliveryKey: "PIE-182/invalid",
+      workBranch: "feature//pie-182",
+    })).toThrow("Invalid delivery work branch");
   });
 
   test("indexes inline properties and combines filters", () => {

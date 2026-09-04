@@ -699,10 +699,17 @@ test("gates Pi and OMP mutation and session changes against durable delivery ide
         .toBeUndefined();
       expect(await toolCall({
         toolName: "github",
+        input: { op: "pr_create", repo: "org/repo", head: "feature/pie-182-lifecycle" },
+      }, context)).toEqual(expect.objectContaining({
+        block: true,
+        reason: expect.stringContaining("base must be explicitly set to main"),
+      }));
+      expect(await toolCall({
+        toolName: "github",
         input: { op: "pr_create", repo: "org/repo", base: "main", head: "wrong" },
       }, context)).toEqual(expect.objectContaining({
         block: true,
-        reason: expect.stringContaining("head must be feature/pie-182-lifecycle"),
+        reason: expect.stringContaining("head must be explicitly set to feature/pie-182-lifecycle"),
       }));
 
       branch = "main";

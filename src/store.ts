@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { resolveBacklinkRelation } from "./backlinks";
+import { isValidGitBranchName } from "./delivery-lifecycle";
 import {
   normalizeBlockSearchQuery,
   parsePropertyFilterExpression,
@@ -540,14 +541,12 @@ export class OutlinerStore {
     if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
       throw new Error(`Delivery repository must be owner/name: ${repository}`);
     }
-    const validBranch = (value: string) =>
-      /^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(value) &&
-      !value.includes("..") &&
-      !value.includes("@{") &&
-      !value.endsWith("/") &&
-      !value.endsWith(".");
-    if (!validBranch(baseBranch)) throw new Error(`Invalid delivery base branch: ${baseBranch}`);
-    if (!validBranch(workBranch)) throw new Error(`Invalid delivery work branch: ${workBranch}`);
+    if (!isValidGitBranchName(baseBranch)) {
+      throw new Error(`Invalid delivery base branch: ${baseBranch}`);
+    }
+    if (!isValidGitBranchName(workBranch)) {
+      throw new Error(`Invalid delivery work branch: ${workBranch}`);
+    }
 
     return this.database.transaction((): DeliveryReceipt => {
       const task = this.requireActive(taskBlockId);

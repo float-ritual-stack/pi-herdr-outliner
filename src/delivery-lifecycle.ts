@@ -1,7 +1,24 @@
-import { parsePropertyRecords } from "./properties";
 import type { Block, DeliveryStage } from "./types";
 
 const DELIVERY_STAGES = new Set<DeliveryStage>(["work", "review", "validate", "complete"]);
+export function isValidGitBranchName(value: string): boolean {
+  if (
+    value.length === 0 ||
+    value.length > 255 ||
+    !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(value) ||
+    value === "@" ||
+    value.includes("..") ||
+    value.includes("@{") ||
+    value.includes("//") ||
+    value.endsWith("/") ||
+    value.endsWith(".")
+  ) return false;
+  return value.split("/").every((component) =>
+    component.length > 0 &&
+    !component.startsWith(".") &&
+    !component.endsWith(".lock")
+  );
+}
 
 export interface DeliveryIdentity {
   readonly block: Block;
@@ -32,6 +49,15 @@ export function parseDeliveryIdentity(block: Block): DeliveryIdentity {
   const repository = singletonProperty(block, "repository")!;
   const baseBranch = singletonProperty(block, "base-branch")!;
   const workBranch = singletonProperty(block, "work-branch")!;
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
+    throw new Error(`Delivery ${key} has invalid repository: ${repository}`);
+  }
+  if (!isValidGitBranchName(baseBranch)) {
+    throw new Error(`Delivery ${key} has invalid base branch: ${baseBranch}`);
+  }
+  if (!isValidGitBranchName(workBranch)) {
+    throw new Error(`Delivery ${key} has invalid work branch: ${workBranch}`);
+  }
   const stageValue = singletonProperty(block, "delivery-stage")!;
   if (!DELIVERY_STAGES.has(stageValue as DeliveryStage)) {
     throw new Error(`Delivery ${key} has invalid stage: ${stageValue}`);
@@ -115,14 +141,4 @@ export function deterministicDeliveryIdentity(workId: string): {
     deliveryKey: `${workId.toUpperCase()}/primary`,
     workBranch: `feature/${normalized}`,
   };
-}
-
-export function propertyOrdinal(block: Block, key: string): number | null {
-  const records = parsePropertyRecords(block.text).filter((property) =>
-    property.scope === "block" && property.key === key
-  );
-  if (records.length > 1) {
-    throw new Error(`Delivery ${block.id} has duplicate [${key}::…] properties`);
-  }
-  return records[0]?.ordinal ?? null;
 }

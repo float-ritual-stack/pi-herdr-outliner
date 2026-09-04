@@ -129,6 +129,15 @@ describe("delivery lifecycle", () => {
       deliveryKey: "PIE-200/primary",
       workBranch: "feature/pie-200",
     });
+    expect(() => parseDeliveryIdentity(block(
+      "invalid",
+      "Delivery invalid",
+      second.properties.map((property) =>
+        property.key === "work-branch"
+          ? { ...property, value: "feature//pie-182" }
+          : property
+      ),
+    ))).toThrow("invalid work branch");
   });
 
   test("creates and reuses a deterministic local work branch", async () => {
