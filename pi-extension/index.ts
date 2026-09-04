@@ -689,7 +689,7 @@ function formatContext(
     children ? `Children:\n${children}` : "Children: none",
     "Use outliner_selection/outliner_query for additional block text.",
     options.workflowReminder
-      ? "Workflow: publish durable plans, roadmap reviews, findings, decisions, handoffs, and proof with outliner_publish; keep ordinary conversational explanation in chat. Use outliner_focus to present the relevant block before narrating it. Never infer task completion from agent lifecycle events."
+      ? "Workflow: publish durable plans, roadmap reviews, findings, decisions, handoffs, and proof with outliner_publish; keep ordinary conversational explanation in chat. Inspect with outliner_selection/outliner_query. Use outliner_focus only when the user explicitly asks to switch the visible Tree context. Never infer task completion from agent lifecycle events."
       : "",
   ].filter(Boolean).join("\n"));
 }
@@ -1884,8 +1884,8 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
     name: "outliner_focus",
     label: "Outliner Focus",
     description:
-      "Focus a block in an explicit or unique live Tree client and return bounded structural context",
-    promptSnippet: "Present an Outliner block before narrating or handing it to the user",
+      "Explicitly focus a block in a live Tree client, switching the user's active Herdr pane, and return bounded structural context",
+    promptSnippet: "Switch the visible Outliner Tree to a block only when the user explicitly asks",
     parameters: Type.Object({
       query: Type.String({ description: "Full ID, short ID prefix, symbolic title, or fuzzy text" }),
       clientId: Type.Optional(
@@ -1941,9 +1941,9 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
         Type.Literal("progress"),
       ]),
       parentId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
-      focus: Type.Optional(Type.Boolean({ description: "Defaults to true" })),
+      focus: Type.Optional(Type.Boolean({ description: "Defaults to false; true switches the user's active Herdr pane" })),
       clientId: Type.Optional(
-        Type.String({ description: "Tree client to focus when multiple clients are live" }),
+        Type.String({ description: "Tree client to focus when focus is true and multiple clients are live" }),
       ),
     }),
     async execute(toolCallId, params, _signal, _onUpdate, context) {
@@ -1958,7 +1958,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
         author: "agent",
         provenance: toolProvenance(actorId, context, toolCallId),
       });
-      if (params.focus === false) {
+      if (params.focus !== true) {
         return toolResult({
           blockId: block.id,
           parentId,
