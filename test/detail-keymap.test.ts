@@ -395,7 +395,7 @@ test("maps preview b to the lazy backlink section", async () => {
   expect(preview.intents).toEqual([{ type: "backlinks.toggle" }]);
 });
 
-test("selects, inspects, and reveals expanded backlink rows", async () => {
+test("keeps Shift+R pane-level while Backlinks are expanded", async () => {
   const previewState = state();
   previewState.mode = "preview";
   previewState.backlinks = {
@@ -435,7 +435,7 @@ test("selects, inspects, and reveals expanded backlink rows", async () => {
     { type: "preview.focus.move", delta: 1 },
     { type: "preview.focus.move", delta: -1 },
     { type: "preview.activate" },
-    { type: "backlinks.reveal" },
+    { type: "current.reveal" },
   ]);
 });
 
@@ -464,7 +464,7 @@ test("maps backlink filter, sort, and disclosure controls", async () => {
   ]);
 });
 
-test("maps lock shortcuts and reveal without a destination picker", async () => {
+test("maps Shift+R to current-block reveal without a destination picker", async () => {
   const previewState = state();
   previewState.mode = "preview";
   const preview = harness(previewState, false);
@@ -476,7 +476,7 @@ test("maps lock shortcuts and reveal without a destination picker", async () => 
   await preview.press({ name: "l", meta: true });
 
   expect(preview.intents).toEqual([
-    { type: "reference.reveal" },
+    { type: "current.reveal" },
     { type: "lock.toggle" },
     { type: "lock.toggle" },
     { type: "lock.toggle" },
@@ -536,11 +536,7 @@ test("maps property inspector disclosure, pane, grouping, filtering, target, and
     { type: "property-inspector.filter.input", text: "r" },
     { type: "property-inspector.filter.backspace" },
     { type: "property-inspector.filter.commit" },
-    {
-      type: "property-inspector.target.open",
-      occurrenceId: "property:source:related-to:0:10-20",
-      intent: "reveal",
-    },
+    { type: "current.reveal" },
   ]);
 
   previewState.propertyInspector.presentation = "dedicated";
@@ -548,10 +544,12 @@ test("maps property inspector disclosure, pane, grouping, filtering, target, and
   await dedicated.press({ name: "down" });
   await dedicated.press({ name: "pagedown" });
   await dedicated.press({ name: "g" }, "g");
+  await dedicated.press({ name: "r", shift: true }, "R");
   expect(dedicated.intents).toEqual([
     { type: "property-inspector.viewport.navigate", direction: "down" },
     { type: "property-inspector.viewport.navigate", direction: "pagedown" },
     { type: "property-inspector.viewport.navigate", direction: "home" },
+    { type: "current.reveal" },
   ]);
 });
 

@@ -320,7 +320,7 @@ Projected virtual occurrences deliberately constrain hierarchy and collapse. Bra
 | `e` | Lock this Detail and edit raw canonical text |
 | `f` | Open referenced file |
 | `o` | Open the first authored reference in the shared destination chooser |
-| `R` | Reveal the selected backlink source when expanded; otherwise reveal the first authored reference in the paired or unique same-tab Tree |
+| `R` | Reveal the block currently shown by this Detail in its paired or unique same-tab Tree |
 | `L`, `i`, `Ctrl+L`, or `Command/Meta+L` | Lock this block as an anchor, or unlock the Detail for previews and opens |
 | `Option+Shift+Right` / `Option+Shift+Down` | Open the current target in a new independent Detail to the right / below |
 | `Option+Left` / `Option+Right` | Move backward / forward through this Detail's local history without changing lock state |

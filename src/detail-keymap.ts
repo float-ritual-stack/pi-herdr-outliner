@@ -4,7 +4,6 @@ import {
   type OutlinerActionMenuItem,
 } from "./outliner-actions";
 import {
-  visibleBacklinkSources,
   type DetailController,
   type DetailIntent,
   type DetailState,
@@ -416,21 +415,7 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
       return;
     }
     if (str === "R") {
-      const occurrenceId = focusedPropertyOccurrence();
-      if (occurrenceId) {
-        await dispatch({
-          type: "property-inspector.target.open",
-          occurrenceId,
-          intent: "reveal",
-        });
-      } else {
-        await dispatch(
-          controller.state.backlinks.expanded &&
-              visibleBacklinkSources(controller.state.backlinks).length > 0
-            ? { type: "backlinks.reveal" }
-            : { type: "reference.reveal" },
-        );
-      }
+      await dispatch({ type: "current.reveal" });
       return;
     }
     if (key.name === "q") {

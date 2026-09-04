@@ -78,6 +78,12 @@ describe("Outliner action keymap", () => {
     expect(action.intent).toBe("detail.edit.begin");
     expect(action.available({ surface: "detail", mode: "preview" })).toBe(true);
     expect(action.available({ surface: "detail", mode: "edit" })).toBe(false);
+    const reveal = keymap.action("detail.current.reveal");
+    expect(reveal.available({ surface: "detail", mode: "preview" })).toBe(true);
+    expect(reveal.available({ surface: "detail", mode: "annotation" })).toBe(true);
+    expect(reveal.available({ surface: "detail", mode: "file" })).toBe(true);
+    expect(reveal.available({ surface: "detail", mode: "property" })).toBe(true);
+    expect(reveal.available({ surface: "detail", mode: "edit" })).toBe(false);
   });
 
 
