@@ -19,9 +19,12 @@ import { TerminalInputDecoder, type TerminalKey } from "./terminal";
 import { createTreeController, type TreeController } from "./tree-controller";
 import {
   isTreeMouseSequence,
+  parseTreePrimaryClick,
   treeDisclosureAtClick,
   parseTreeWheel,
   treeLinkAtClick,
+  treeClickActivates,
+  treeRowAtClick,
   type TreeMouseTarget,
   parseTreeSecondaryClick,
 } from "./tree-mouse";
@@ -168,22 +171,37 @@ function handleMouseSequence(sequence: string): void {
     );
     return;
   }
+  const primaryClick = parseTreePrimaryClick(sequence);
+  if (!primaryClick) return;
+  const activate = treeClickActivates(primaryClick);
+  if (primaryClick.shift && !activate) return;
+
   const disclosureRowId = treeDisclosureAtClick(renderedMouseTargets, sequence);
   if (disclosureRowId) {
     enqueueWork(() => controller.handleDisclosure(disclosureRowId));
     return;
   }
 
-
+  const rowId = treeRowAtClick(renderedMouseTargets, sequence);
   const link = treeLinkAtClick(renderedFrameLines, sequence);
-  if (!link) return;
-  if (link.startsWith("pi-outliner-action:")) {
+  if (link?.startsWith("pi-outliner-action:")) {
     enqueueWork(() => controller.handleAction(link.slice("pi-outliner-action:".length)));
     return;
   }
-  enqueueWork(async () => {
-    await navigateOutlinerLink(client, link, { sourceClientId: clientId, intent: "open" });
-  });
+  if (!activate && rowId) {
+    enqueueWork(() => controller.handleRowClick(rowId));
+    return;
+  }
+  if (link) {
+    enqueueWork(async () => {
+      if (rowId) await controller.handleRowClick(rowId);
+      await navigateOutlinerLink(client, link, { sourceClientId: clientId, intent: "open" });
+    });
+    return;
+  }
+  if (activate && rowId) {
+    enqueueWork(() => controller.handleRowClick(rowId, true));
+  }
 }
 
 mouseInput?.on("data", (sequence) => {

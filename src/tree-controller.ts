@@ -141,6 +141,7 @@ export interface TreeController {
   handleKeypress(str: string, key: TerminalKey, inputAction: TerminalInputAction): Promise<void>;
   handlePaste(text: string): void;
   handleDisclosure(rowId: string): Promise<void>;
+  handleRowClick(rowId: string, activate?: boolean): Promise<void>;
   handleAction(actionId: string, origin?: { column: number; row: number }): Promise<void>;
   handleServiceEvent(event: OutlinerEvent): Promise<void>;
   handleConnect(): Promise<void>;
@@ -1187,6 +1188,21 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     effects.invalidate();
   }
 
+  async function handleRowClick(rowId: string, activate = false): Promise<void> {
+    if (mode !== "browse") return;
+    const rowIndex = rows.findIndex((row) => row.rowId === rowId);
+    if (rowIndex < 0) return;
+    if (rows[selectedIndex]?.rowId !== rowId) resetExpandedBlockPaging();
+    selectedIndex = rowIndex;
+    const visibleCanonicalId = rows[selectedIndex]?.canonicalId ?? null;
+    if (visibleCanonicalId !== lastVisibleCanonicalId) {
+      lastVisibleCanonicalId = visibleCanonicalId;
+      await publishBrowsingContext(visibleCanonicalId);
+    }
+    effects.invalidate();
+    if (activate) await focusDetailReader();
+  }
+
   async function handleAction(
     actionId: string,
     origin?: { column: number; row: number },
@@ -1594,6 +1610,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     handleKeypress,
     handlePaste,
     handleDisclosure,
+    handleRowClick,
     handleAction,
     handleServiceEvent,
     handleConnect,

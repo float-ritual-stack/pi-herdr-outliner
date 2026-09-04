@@ -255,14 +255,19 @@ cancel route rejects the entire candidate and preserves the prior bindings.
 | `p` | Type the work ID/short UUID to permanently purge a Trash root |
 | `Ctrl+Q` | Close the pane |
 
-Plain-click any linked `PIE-NNN`, canonical UUID, exact reference, or symbolic
-`[[address]]` inside Tree or Detail. Clicks open in the first unlocked same-tab
-Detail without changing workspace-global selection. Registered Work IDs resolve
-without fuzzy matching and never create content when missing. Following another
-dangling address creates one canonical page stub before dispatch. Shift remains
-the terminal-native text-selection escape while Tree mouse reporting is active.
-Each Detail breadcrumb segment is an exact link that reveals that ancestor or
-leaf in Tree rather than opening another Detail.
+Plain-clicking a Tree row selects it and publishes that row to its linked Detail.
+`Ctrl`/`Meta`-clicking a Tree row selects and opens it; when the clicked cell is
+an authored `PIE-NNN`, canonical UUID, exact reference, or `[[address]]`, the
+referenced target opens instead. Authored links in Detail retain direct
+plain-click opening. Generated Backlink and Property rows use plain click for
+selection and `Ctrl`/`Meta` click for activation. SGR mouse reporting exposes
+Ctrl and Meta/Alt; Command-click works when the host maps Command to Meta.
+Shift remains the terminal-native text-selection escape while Tree mouse
+reporting is active. Registered Work IDs resolve without fuzzy matching and
+never create content when missing. Following another dangling address creates
+one canonical page stub before dispatch. Each Detail breadcrumb segment is an
+exact link that reveals that ancestor or leaf in Tree rather than opening
+another Detail.
 
 For links rendered outside the active Outliner, the Herdr handler identifies the
 invoking pane's live client and uses the same unlocked-pool routing. On macOS,
@@ -287,6 +292,8 @@ Projected virtual occurrences deliberately constrain hierarchy and collapse. Bra
 | `s` | Cycle updated/created timestamp sorting in descending/ascending order |
 | `Tab` / `Shift+Tab` | Select the next / previous backlink source while Backlinks is expanded |
 | `.` | Expand/collapse occurrence details for the selected backlink source |
+| Backlink/Property row click | Select and highlight that generated row |
+| `Ctrl`/`Meta`-click | Peek a Backlink source or open a typed Property target |
 | `Enter` | Peek at the focused backlink source without navigating this Detail |
 | Peek: `Left` / `Right` | Preview the previous / next source in the captured filtered/sorted set |
 | Peek: `Esc` | Cancel, restore the exact inline source row, and leave this Detail unchanged |
@@ -341,12 +348,13 @@ occurrence text. `s` cycles updated/created timestamp sorting in both
 directions. `.` or the clickable `+`/`−` disclosure expands only the selected
 source's occurrence snippets. Results are cached for that target and
 invalidated by canonical content/address events. Generated rows never enter the
-edit buffer or saved `Block.text`; `Enter` or a row click opens a reversible
-preview over the invoking Detail. The popup captures the current filtered/sorted
-source set once: `Left`/`Right` traverse it, `Esc` restores the exact inline row
-without navigation, `Enter` commits into the invoking Detail, and `Shift+Enter`
-seeds an explicit new Detail without changing the hub. `R` still reveals the
-selected source in Tree.
+edit buffer or saved `Block.text`; clicking a source row selects and highlights
+it, while `Enter` or `Ctrl`/`Meta`-click opens a reversible preview over the
+invoking Detail. The popup captures the current filtered/sorted source set once:
+`Left`/`Right` traverse it, `Esc` restores the exact inline row without
+navigation, `Enter` commits into the invoking Detail, and `Shift+Enter` seeds an
+explicit new Detail without changing the hub. `R` still reveals the selected
+source in Tree.
 
 ### Detail edit and comment modes
 

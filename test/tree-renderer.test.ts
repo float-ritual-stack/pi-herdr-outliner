@@ -749,5 +749,9 @@ describe("renderTreeFrame", () => {
       rowId: root.rowId,
       disclosureColumn: 2,
     });
+    expect(rendered.mouseTargets.find((target) => target?.rowId === child.rowId)).toEqual({
+      rowId: child.rowId,
+      disclosureColumn: -1,
+    });
   });
 });

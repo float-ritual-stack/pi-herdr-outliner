@@ -14,7 +14,7 @@ import {
 } from "./detail-callouts";
 import type { DetailCalloutTheme } from "./detail-callout-theme";
 import { detailEmbedIds } from "./detail-embeds";
-import { linkOutlinerMarkdown, outlinerLinkUri } from "./outliner-links";
+import { linkOutlinerMarkdown } from "./outliner-links";
 import {
   visibleBacklinkSources,
   type DetailState,
@@ -409,14 +409,15 @@ export function renderBacklinksDocument(state: Readonly<DetailState>): string {
       const count = source.occurrenceCount === 1
         ? "1 reference"
         : `${source.occurrenceCount} references`;
-      const uri = outlinerLinkUri("block", source.blockId, { preserveSource: true });
+      const uri = previewRegionActionUri({ type: "backlink.open", blockId: source.blockId });
       const selected = index === backlinks.selectedIndex;
       const active = selected ? "**▶ ACTIVE** " : "";
       const sourceExpanded = backlinks.expandedSourceIds.has(source.blockId);
       const disclosure = detailBacklinkToggleUri(source.blockId);
       const groups = source.referenceGroups.map(backlinkGroupLabel).join(", ");
+      const details = `${context}${trash} · ${count} · ${groups}`;
       const row =
-        `[${sourceExpanded ? "−" : "+"}](${disclosure}) ${active}[${title}](${uri}) — ${context}${trash} · ${count} · ${groups}`;
+        `[${sourceExpanded ? "−" : "+"}](${disclosure}) ${active}[${title}](${uri}) — [${details}](${uri})`;
       lines.push(selected ? `~~${row}~~` : row);
       if (sourceExpanded) {
         for (const occurrence of source.occurrences) {

@@ -45,6 +45,7 @@ import {
   DetailPiPreviewLayout,
   parseDetailPreviewActionUri,
 } from "./detail-pi-preview";
+import { resolvePreviewPointerAction } from "./detail-preview-regions";
 import {
   DETAIL_DRAFT_SPLIT_MIN_WIDTH,
   DetailPiComponent,
@@ -70,8 +71,10 @@ import { resolvePaths } from "./paths";
 import {
   isTreeMouseSequence,
   parseTreePlainClick,
+  parseTreePrimaryClick,
   parseTreeSecondaryClick,
   parseTreeWheelEvent,
+  treeClickActivates,
   type TreeMouseClick,
 } from "./tree-mouse";
 import {
@@ -147,18 +150,28 @@ if (detailPresentation === "property-inspector" && !dedicatedPropertyBlockId) {
   throw new Error("Dedicated property inspector requires a target block ID");
 }
 configureCurrentPaneRightClick(rightClickOwnership);
+let pendingLinkClick = { activate: false, suppress: false };
 const terminal = new ProcessTerminal();
 const tui = new DetailTuiAltScreen(terminal, false, undefined, {
   mouse: true,
   openUrl(url) {
-    if (!stopping) enqueueWork(async () => {
+    const pointer = pendingLinkClick;
+    pendingLinkClick = { activate: false, suppress: false };
+    if (pointer.suppress || stopping) return;
+    enqueueWork(async () => {
       if (url.startsWith("pi-outliner-action:")) {
         await invokeDetailAction(url.slice("pi-outliner-action:".length));
         return;
       }
       const action = parseDetailPreviewActionUri(url);
       if (action) {
-        await controller.dispatch({ type: "preview.action", action }, viewport());
+        const resolution = resolvePreviewPointerAction(action, pointer.activate);
+        await controller.dispatch(
+          resolution.type === "focus"
+            ? { type: "preview.focus.set", regionId: resolution.regionId }
+            : { type: "preview.action", action: resolution.action },
+          viewport(),
+        );
         return;
       }
       await controller.dispatch({
@@ -578,6 +591,14 @@ async function handleDetailMouse(data: string): Promise<boolean> {
 }
 
 function shouldPassDetailInputToTui(data: string): boolean {
+  const primaryClick = parseTreePrimaryClick(data);
+  if (primaryClick) {
+    const activate = treeClickActivates(primaryClick);
+    pendingLinkClick = {
+      activate,
+      suppress: primaryClick.shift && !activate,
+    };
+  }
   if (tui.hasOverlay()) return true;
   if (!isTreeMouseSequence(data)) return false;
   if (parseTreeSecondaryClick(data) && rightClickOwnership === "outliner") return false;

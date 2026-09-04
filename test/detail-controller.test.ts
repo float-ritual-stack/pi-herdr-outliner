@@ -6,6 +6,7 @@ import {
   type DetailEffects,
   type DetailViewport,
 } from "../src/detail-controller";
+import { detailBacklinkRegions } from "../src/detail-pi-preview";
 import { detailPropertyInspectorRegions } from "../src/detail-pi-renderer";
 import type { ReferencedFile } from "../src/files";
 import type { OutlinerLinkTarget } from "../src/outliner-links";
@@ -1381,8 +1382,12 @@ describe("detail backlink loading and navigation", () => {
     }]);
     await harness.controller.initialize();
     await harness.controller.dispatch({ type: "backlinks.toggle" }, viewport);
-    await harness.controller.dispatch({ type: "backlinks.move", delta: 1 }, viewport);
-    await harness.controller.dispatch({ type: "backlinks.open" }, viewport);
+    harness.controller.setPreviewRegions(detailBacklinkRegions(harness.controller.state));
+    await harness.controller.dispatch({
+      type: "preview.focus.set",
+      regionId: "backlink:source-two",
+    }, viewport);
+    await harness.controller.dispatch({ type: "preview.activate" }, viewport);
     await harness.controller.dispatch({ type: "backlinks.reveal" }, viewport);
 
     expect(harness.controller.state.backlinks.selectedIndex).toBe(1);

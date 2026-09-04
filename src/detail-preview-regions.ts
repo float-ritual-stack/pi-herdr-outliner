@@ -14,6 +14,7 @@ export type PreviewRegionKind =
   | "property-entry";
 
 export type PreviewRegionAction =
+  | { type: "preview.region.focus"; regionId: string }
   | { type: "callout.disclosure.toggle"; regionId: string }
   | { type: "backlinks.disclosure.toggle" }
   | { type: "backlink.open"; blockId: string }
@@ -49,6 +50,9 @@ const DETAIL_PREVIEW_SCHEME = "pi-outliner-detail:";
 
 export function previewRegionActionUri(action: PreviewRegionAction): string {
   switch (action.type) {
+    case "preview.region.focus":
+      if (!action.regionId.trim()) throw new Error("Preview region ID cannot be empty");
+      return `${DETAIL_PREVIEW_SCHEME}//focus/${encodeURIComponent(action.regionId)}`;
     case "callout.disclosure.toggle":
       return `${DETAIL_PREVIEW_SCHEME}//callout-toggle/${encodeURIComponent(action.regionId)}`;
     case "backlinks.disclosure.toggle":
@@ -84,6 +88,9 @@ export function parsePreviewRegionActionUri(uri: string): PreviewRegionAction | 
   }
 
   switch (parsed.hostname) {
+    case "focus":
+      if (!value) throw new Error("Invalid Detail preview region");
+      return { type: "preview.region.focus", regionId: value };
     case "callout-toggle":
       if (!value) throw new Error("Invalid Detail callout region");
       return { type: "callout.disclosure.toggle", regionId: value };
@@ -108,6 +115,26 @@ export function parsePreviewRegionActionUri(uri: string): PreviewRegionAction | 
     default:
       throw new Error("Invalid Detail preview action URI");
   }
+}
+
+export type PreviewPointerResolution =
+  | { type: "focus"; regionId: string }
+  | { type: "activate"; action: PreviewRegionAction };
+
+export function resolvePreviewPointerAction(
+  action: PreviewRegionAction,
+  activate: boolean,
+): PreviewPointerResolution {
+  if (action.type === "preview.region.focus") {
+    return { type: "focus", regionId: action.regionId };
+  }
+  if (!activate && action.type === "backlink.open") {
+    return { type: "focus", regionId: `backlink:${action.blockId}` };
+  }
+  if (!activate && action.type === "property-inspector.target.open") {
+    return { type: "focus", regionId: action.occurrenceId };
+  }
+  return { type: "activate", action };
 }
 
 export function focusedPreviewRegion(

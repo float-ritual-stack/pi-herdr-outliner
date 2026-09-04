@@ -309,6 +309,7 @@ export type DetailIntent =
   | { type: "backlinks.sort.cycle" }
   | { type: "backlinks.source.toggle"; blockId?: string }
   | { type: "preview.focus.move"; delta: -1 | 1 }
+  | { type: "preview.focus.set"; regionId: string }
   | { type: "preview.activate" }
   | { type: "preview.action"; action: PreviewRegionAction }
   | { type: "property-inspector.disclosure.toggle" }
@@ -1202,6 +1203,25 @@ export function createDetailController(
           : "Unlocked · available for previews and opens";
         break;
       }
+      case "preview.focus.set": {
+        const region = state.previewRegions.regions.find((candidate) =>
+          candidate.id === intent.regionId && candidate.focusable
+        );
+        if (!region) {
+          state.status = "Preview row is no longer visible";
+          break;
+        }
+        state.previewRegions.focusedRegionId = region.id;
+        if (region.kind === "backlink-source") {
+          const blockId = region.activation?.type === "backlink.open"
+            ? region.activation.blockId
+            : null;
+          const index = visibleBacklinkSources(state.backlinks)
+            .findIndex((source) => source.blockId === blockId);
+          if (index >= 0) state.backlinks.selectedIndex = index;
+        }
+        break;
+      }
       case "preview.focus.move": {
         const region = movePreviewRegionFocus(state.previewRegions, intent.delta);
         if (region?.kind === "backlink-source") {
@@ -1221,6 +1241,12 @@ export function createDetailController(
       }
       case "preview.action":
         switch (intent.action.type) {
+          case "preview.region.focus":
+            await dispatch({
+              type: "preview.focus.set",
+              regionId: intent.action.regionId,
+            }, viewport);
+            break;
           case "callout.disclosure.toggle":
             togglePreviewRegionDisclosure(state.previewRegions, intent.action.regionId);
             break;

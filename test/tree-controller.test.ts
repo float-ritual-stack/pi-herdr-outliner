@@ -223,6 +223,32 @@ describe("createTreeController", () => {
     expect(fake.calls.filter((call) => call.action === "browsing-context.publish")).toHaveLength(1);
   });
 
+  test("selects clicked rows and opens a modified-click row in Detail", async () => {
+    const first = block("first");
+    const second = block("second", { position: 1 });
+    const fake = harness((input) =>
+      input.action === "workspace.snapshot" ? snapshot([first, second], first) : undefined
+    );
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+    fake.calls.length = 0;
+
+    await controller.handleRowClick(second.id);
+    expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe(second.id);
+    expect(lastCall(fake.calls, "browsing-context.publish")).toMatchObject({
+      blockId: second.id,
+    });
+
+    fake.calls.length = 0;
+    await controller.handleRowClick(first.id, true);
+    expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe(first.id);
+    expect(lastCall(fake.calls, "navigation.dispatch")).toMatchObject({
+      blockId: first.id,
+      intent: "open",
+    });
+    expect(controller.view().status).toBe("Reader opened in first unlocked Detail");
+  });
+
   test("fuzzy goto previews candidates and reveals the selected block", async () => {
     const first = block("first", { text: "Inbox", displayText: "Inbox" });
     const target = block("40bd0864-913a-4537-9535-8f96e1b63ef7", {
