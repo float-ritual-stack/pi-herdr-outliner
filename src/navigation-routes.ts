@@ -1,4 +1,4 @@
-import type { OutlinerRequester } from "./client-target";
+import { sendClientCommand, type OutlinerRequester } from "./client-target";
 import type {
   OutlinerNavigationDispatch,
   OutlinerNavigationIntent,
@@ -22,6 +22,15 @@ export async function resolveNavigationDestination(
     intent,
     ...(options.preserveSource ? { preserveSource: true } : {}),
   });
+}
+
+export async function focusTreeForClient(
+  requester: OutlinerRequester,
+  sourceClientId: string,
+): Promise<string> {
+  const route = await resolveNavigationDestination(requester, sourceClientId, "reveal");
+  await sendClientCommand(requester, route.targetClientId, { command: "focus" });
+  return route.targetClientId;
 }
 
 export async function dispatchNavigation(

@@ -1386,7 +1386,7 @@ test("reconciles long-lived clients against live Herdr pane topology", async () 
     {
       clientId: "detail-b-live",
       role: "detail",
-      contextId: "live",
+      contextId: "detail-b-independent",
       locked: false,
       runtime: {
         paneId: "detail-b-at-launch",
@@ -1468,6 +1468,14 @@ test("reconciles long-lived clients against live Herdr pane topology", async () 
     sourceClientId: "tree-live",
     intent: "open",
   })).toMatchObject({ targetClientId: "detail-a-live" });
+  expect(await client.request<OutlinerNavigationDispatch>({
+    action: "navigation.resolve",
+    sourceClientId: "detail-b-live",
+    intent: "reveal",
+  })).toMatchObject({
+    targetClientId: "tree-live",
+    resolution: "same-tab",
+  });
 
   registry.markStale();
   const staleClients = await client.request<OutlinerClientRegistration[]>({
