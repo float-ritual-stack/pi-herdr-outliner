@@ -797,6 +797,37 @@ describe("detail controller projection and deferred refresh", () => {
     expect(harness.calls.followedReferences).toEqual([]);
   });
 
+  test("disposes a pending choice when only the current fragment changes", async () => {
+    const source = makeBlock({
+      id: "source-block",
+      text: "## First ^first\nSee ((target01))\n## Second ^second",
+    });
+    const harness = createHarness(
+      source,
+      null,
+      undefined,
+      undefined,
+      { initialTargetFragmentId: "first" },
+    );
+    await harness.controller.initialize();
+    await harness.controller.dispatch({ type: "reference.follow" }, viewport);
+    expect(harness.controller.state.destinationChooser.active).toBe(true);
+
+    await harness.controller.onServiceEvent(
+      event("ui", {
+        targetClientId: "detail-test",
+        command: "replace",
+        blockId: source.id,
+        fragmentId: "second",
+      }),
+      viewport,
+    );
+
+    expect(harness.controller.state.targetFragmentId).toBe("second");
+    expect(harness.controller.state.destinationChooser.active).toBe(false);
+    expect(harness.calls.followedReferences).toEqual([]);
+  });
+
   test("follows symbolic references through the page-address path", async () => {
     const harness = createHarness(makeBlock({ text: "See [[Future Page]]" }));
     await harness.controller.initialize();
