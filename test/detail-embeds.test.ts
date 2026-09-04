@@ -127,6 +127,39 @@ test("renders a bounded virtual-branch embed without changing authored source", 
   expect(requester.calls).not.toContainEqual({ action: "get", blockId: "nested-target" });
 });
 
+test("requests timestamp ordering before bounding an embedded virtual branch", async () => {
+  const definitionText = [
+    "Recent completions",
+    "[type::virtual-branch]",
+    "[query::status=done]",
+    "[sort::updated]",
+    "[direction::desc]",
+    "[limit::2]",
+  ].join("\n");
+  const definition = block("view-recent", definitionText, parseProperties(definitionText));
+  const newest = block("result-newest", "Newest [status::done]");
+  const older = block("result-older", "Older [status::done]");
+  const requester = new FakeRequester(
+    new Map([definition, newest, older].map((item) => [item.id, item])),
+    new Map([["", {
+      blocks: [visible(newest), visible(older)],
+      completeness: { kind: "complete" },
+    }]]),
+  );
+
+  const projection = await projectDetailRead(requester, "!((view-recent))");
+
+  expect(projection.text).toContain("- ((result-newest))\n- ((result-older))");
+  expect(requester.calls).toContainEqual({
+    action: "blocks.query",
+    query: {
+      filters: [{ key: "status", value: "done" }],
+      sort: { field: "updated", direction: "desc" },
+      limit: 4,
+    },
+  });
+});
+
 test("renders explicit empty, invalid, failed, missing, deleted, and ordinary states", async () => {
   const empty = virtualBranch("view-empty");
   const invalid = block("view-invalid", "Invalid [type::virtual-branch]", [

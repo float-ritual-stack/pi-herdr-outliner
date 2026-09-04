@@ -5,6 +5,7 @@ import {
 } from "./block-query";
 import { parsePropertyRecords, patchPropertyText } from "./properties";
 import type {
+  BlockQuerySort,
   Block,
   BlockCollectionCompleteness,
   BlockProperty,
@@ -62,6 +63,7 @@ export interface VirtualBranchConfig {
   viewId: string;
   query: string;
   filters: PropertyFilter[];
+  sort: BlockQuerySort | null;
   limit: number;
   create: BlockProperty | null;
   createParentId: string | null;
@@ -219,6 +221,31 @@ export function parseVirtualBranchConfig(
     }
   }
 
+  const sortProperty = singleProperty(definition, "sort", false, configurationErrors);
+  const directionProperty = singleProperty(definition, "direction", false, configurationErrors);
+  let sort: BlockQuerySort | null = null;
+  if (!sortProperty && directionProperty) {
+    configurationErrors.push("Virtual branch direction requires a sort property");
+  }
+  if (sortProperty) {
+    const field = sortProperty.value.toLowerCase();
+    const direction = directionProperty?.value.toLowerCase() ?? "desc";
+    if (field !== "created" && field !== "updated") {
+      configurationErrors.push(`Virtual branch sort must be created or updated: ${sortProperty.value}`);
+    }
+    if (direction !== "asc" && direction !== "desc") {
+      configurationErrors.push(
+        `Virtual branch direction must be asc or desc: ${directionProperty?.value}`,
+      );
+    }
+    if (
+      (field === "created" || field === "updated") &&
+      (direction === "asc" || direction === "desc")
+    ) {
+      sort = { field, direction };
+    }
+  }
+
   const limitProperty = singleProperty(definition, "limit", false, configurationErrors);
   let limit = DEFAULT_VIRTUAL_BRANCH_LIMIT;
   if (limitProperty) {
@@ -272,6 +299,7 @@ export function parseVirtualBranchConfig(
       viewId: definition.id,
       query,
       filters,
+      sort,
       limit,
       create,
       createParentId,
@@ -559,10 +587,16 @@ async function projectVirtualBranch(
   try {
     const result = await queryBlocks({
       filters: parsed.config.filters,
-      rankViewId: definitionId,
+      ...(parsed.config.sort
+        ? { sort: parsed.config.sort }
+        : { rankViewId: definitionId }),
       limit: MAX_BLOCK_QUERY_LIMIT,
     });
-    const eligibleRoots = rankedDeduplicatedRoots(definitionId, result.blocks, ranks);
+    const eligibleRoots = rankedDeduplicatedRoots(
+      definitionId,
+      result.blocks,
+      parsed.config.sort ? [] : ranks,
+    );
     const roots = eligibleRoots.slice(
       0,
       Math.min(parsed.config.limit, VIRTUAL_BRANCH_MAX_ROWS),

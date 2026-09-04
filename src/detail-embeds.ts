@@ -136,7 +136,9 @@ async function projectVirtualBranch(
       action: "blocks.query",
       query: {
         filters: parsed.config.filters,
-        rankViewId: definition.id,
+        ...(parsed.config.sort
+          ? { sort: parsed.config.sort }
+          : { rankViewId: definition.id }),
         limit: Math.min(MAX_BLOCK_QUERY_LIMIT, parsed.config.limit + 2),
       },
     });

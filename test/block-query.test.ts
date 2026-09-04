@@ -84,6 +84,23 @@ describe("block query normalization", () => {
     });
   });
 
+  test("normalizes timestamp sorting and rejects rank conflicts", () => {
+    expect(normalizeBlockSearchQuery({
+      filters: [{ key: "status", value: "done" }],
+      sort: { field: "updated", direction: "desc" },
+      limit: 20,
+    })).toEqual({
+      filters: [{ key: "status", value: "done" }],
+      sort: { field: "updated", direction: "desc" },
+      limit: 20,
+    });
+    expect(() => normalizeBlockSearchQuery({
+      rankViewId: "view",
+      sort: { field: "created", direction: "asc" },
+      limit: 20,
+    })).toThrow("Block search cannot combine rankViewId with timestamp sorting");
+  });
+
   test("rejects invalid limits rather than clamping", () => {
     for (const limit of [0, -1, 1.5, Number.NaN, MAX_BLOCK_QUERY_LIMIT + 1]) {
       expect(() => normalizeBlockSearchQuery({ limit })).toThrow(
@@ -126,6 +143,21 @@ describe("block query normalization", () => {
         limit: 20,
       }),
     ).toThrow("Block search text must be a string");
+  });
+
+  test("rejects malformed timestamp sort payloads explicitly", () => {
+    expect(() => normalizeBlockSearchQuery({
+      sort: "updated" as never,
+      limit: 20,
+    })).toThrow("Block search sort must be an object");
+    expect(() => normalizeBlockSearchQuery({
+      sort: { field: "title", direction: "desc" } as never,
+      limit: 20,
+    })).toThrow("Block search sort field must be created or updated");
+    expect(() => normalizeBlockSearchQuery({
+      sort: { field: "updated", direction: "newest" } as never,
+      limit: 20,
+    })).toThrow("Block search sort direction must be asc or desc");
   });
 });
 

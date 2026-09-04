@@ -272,6 +272,22 @@ export function normalizeBlockSearchQuery(
     }
   }
 
+  let sort: BlockSearchQuery["sort"];
+  if (query.sort !== undefined) {
+    if (!query.sort || typeof query.sort !== "object" || Array.isArray(query.sort)) {
+      throw new Error("Block search sort must be an object");
+    }
+    if (query.sort.field !== "created" && query.sort.field !== "updated") {
+      throw new Error(`Block search sort field must be created or updated: ${String(query.sort.field)}`);
+    }
+    if (query.sort.direction !== "asc" && query.sort.direction !== "desc") {
+      throw new Error(
+        `Block search sort direction must be asc or desc: ${String(query.sort.direction)}`,
+      );
+    }
+    sort = { field: query.sort.field, direction: query.sort.direction };
+  }
+
   const filters: PropertyFilter[] = [];
   const seen = new Set<string>();
   let includeDeleted = query.includeDeleted;
@@ -300,6 +316,9 @@ export function normalizeBlockSearchQuery(
   const propertyScope = query.propertyScope === undefined
     ? undefined
     : normalizePropertyQueryScope(query.propertyScope);
+  if (rankViewId && sort) {
+    throw new Error("Block search cannot combine rankViewId with timestamp sorting");
+  }
 
   return {
     ...(filters.length > 0 ? { filters } : {}),
@@ -308,6 +327,7 @@ export function normalizeBlockSearchQuery(
     ...(rankViewId ? { rankViewId } : {}),
     ...(propertyScope ? { propertyScope } : {}),
     ...(includeDeleted ? { includeDeleted } : {}),
+    ...(sort ? { sort } : {}),
     limit: query.limit,
   };
 }

@@ -208,6 +208,14 @@ export interface PropertyFilter {
   value?: string;
 }
 
+export type BlockQuerySortField = "created" | "updated";
+export type BlockQuerySortDirection = "asc" | "desc";
+
+export interface BlockQuerySort {
+  field: BlockQuerySortField;
+  direction: BlockQuerySortDirection;
+}
+
 
 export interface BlockTraversalOptions {
   filters?: PropertyFilter[];
@@ -222,6 +230,7 @@ export interface BlockSearchQuery {
   rankViewId?: string;
   includeDeleted?: "roots" | "all";
   propertyScope?: PropertyQueryScope;
+  sort?: BlockQuerySort;
   limit: number;
 }
 
@@ -317,7 +326,7 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 26;
+export const OUTLINER_PROTOCOL_VERSION = 27;
 
 
 export interface OutlinerServiceStatus {

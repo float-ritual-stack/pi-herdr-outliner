@@ -990,6 +990,11 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     selected: VirtualBranchOccurrenceRow,
     offset: -1 | 1,
   ): Promise<string | null> {
+    const sort = branchStates.get(selected.viewId)?.config?.sort;
+    if (sort) {
+      status = `Virtual branch is sorted by ${sort.field} ${sort.direction}; manual reorder is disabled`;
+      return null;
+    }
     const branchRows = rows.filter(
       (row): row is VirtualBranchOccurrenceRow =>
         isVirtualBranchRootOccurrence(row) && row.viewId === selected.viewId,

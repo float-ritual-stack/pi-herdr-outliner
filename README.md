@@ -34,7 +34,7 @@ The project started as a small Friday-night experiment and grew into a durable w
 - Workspace-scoped monotonic Work-ID allocation adopts a clean existing prefix or requires explicit configuration, optimistically assigns the next immutable ID, and never reuses reserved or purged identifiers.
 - Atomic canonical roadmap-item creation discovers the single project work queue, validates UUID relationships and complete routing metadata, allocates the immutable Work ID, and returns matching virtual-branch memberships in one transaction.
 - Plain-clickable Work IDs, canonical UUIDs, exact references, and `[[address]]` links inside Tree/Detail, with OSC 8 `pi-outliner://` links retained for external terminal interoperability.
-- Property-driven virtual branches with ranked canonical roots, read-only contextual descendants through relative depth 2, independent occurrence disclosure, a 1,000-row branch budget, property-aware creation, and persisted root ordering.
+- Property-driven virtual branches with ranked or timestamp-sorted canonical roots, read-only contextual descendants through relative depth 2, independent occurrence disclosure, a 1,000-row branch budget, property-aware creation, and persisted manual root ordering.
 - Agent-created blocks retain immutable creator provenance. Every later text or property mutation records its own `user`, `agent`, or `system` identity plus available actor, session, and task IDs, so edit attribution never depends on the creator.
 - Recoverable deletion preserves canonical structure and identity, excludes Trash content from normal queries/completions, and requires explicit identifier-confirmed purge.
 - Idempotent zero-context-loss Tree capture writes ordinary canonical children under one stable workspace Inbox without moving selection or navigation history.
@@ -394,9 +394,9 @@ status="in progress" project=pi-outliner
 status::"in review" type::roadmap-item
 ```
 
-Whitespace separates clauses outside double quotes. `key` checks property presence; `key=value` and `key::value` check case-insensitive exact equality. Double-quoted values preserve spaces and support only `\\` and `\"` escapes. Invalid syntax reports a character position instead of becoming an accidental query. OR, NOT, ranges, grouping, aggregation, sorting, and reference traversal are intentionally not supported.
+Whitespace separates clauses outside double quotes. `key` checks property presence; `key=value` and `key::value` check case-insensitive exact equality. Double-quoted values preserve spaces and support only `\\` and `\"` escapes. Invalid syntax reports a character position instead of becoming an accidental query. OR, NOT, ranges, grouping, aggregation, and reference traversal are intentionally not supported by the property expression.
 
-Property filters and catalogs default to `block` scope, so body examples and line-local annotations cannot silently change workflow semantics. Callers can explicitly request `block`, `line`, `inline`, or `all` through `propertyScope`; broader block-query results include each matching record’s scope, ordinal, line, column, and source span. Text substring, subtree root, deleted-content mode, projection rank context, and limit remain explicit structured fields rather than reserved filter words. Every query carries a limit from 1 through 1000 and returns `complete` or `truncated` metadata. Tree `/` mode uses the block-scoped property catalog for key/value completion; agents call `outliner_query` with structured filters and never parse the shorthand. CLI `list` exposes the same choice as `--property-scope`.
+Property filters and catalogs default to `block` scope, so body examples and line-local annotations cannot silently change workflow semantics. Callers can explicitly request `block`, `line`, `inline`, or `all` through `propertyScope`; broader block-query results include each matching record’s scope, ordinal, line, column, and source span. Text substring, subtree root, deleted-content mode, projection rank context, timestamp sort, and limit remain explicit structured fields rather than reserved filter words. Timestamp sorting accepts `created` or `updated` with `asc` or `desc`, orders the full matched collection before applying the limit, and cannot be combined with manual projection ranks. Every query carries a limit from 1 through 1000 and returns `complete` or `truncated` metadata. Tree `/` mode uses the block-scoped property catalog for key/value completion; agents call `outliner_query` with structured filters and never parse the shorthand. CLI `list` exposes the same parser through repeatable `--filter` flags and requires an explicit `--limit`.
 
 ### Quick capture Inbox
 
@@ -500,6 +500,8 @@ Next
 [query::work-stage=next]
 [create::work-stage=next]
 [create-parent::<canonical-work-queue-id>]
+[sort::updated]
+[direction::desc]
 [limit::20]
 ```
 
@@ -516,16 +518,19 @@ parent/children without changing canonical text or storage. A canonical block ma
 therefore appear beneath a matched ancestor and independently as a matched root,
 and may still appear in multiple branches.
 
-Each branch reserves its bounded, ranked, deduplicated roots before allocating
-contextual descendants in ranked-root/canonical-preorder order. Roots and context
-share a 1,000-row budget. Physical virtual-branch definitions reached as context
-are inert leaves. Root-query, depth, and row-budget truncation are reported
-separately, and allocation does not depend on disclosure state.
+Each branch reserves its bounded, deduplicated roots before allocating contextual
+descendants in root/canonical-preorder order. Unsorted branches apply persisted
+manual ranks before the limit. `[sort::created]` and `[sort::updated]` instead
+order the complete match set by timestamp before limiting; `[direction::asc]` or
+`[direction::desc]` chooses the direction and defaults to `desc`. Roots and
+context share a 1,000-row budget. Physical virtual-branch definitions reached as
+context are inert leaves. Root-query, depth, and row-budget truncation are
+reported separately, and allocation does not depend on disclosure state.
 
-`Shift+Up` / `Shift+Down` reorders matched roots within that branch using persisted
-occurrence ranks. Contextual descendants never participate. Canonical
-parent/position order stays unchanged, and ranks survive temporary query
-mismatches.
+`Shift+Up` / `Shift+Down` reorders matched roots within an unsorted branch using
+persisted occurrence ranks. Timestamp-sorted branches disable manual occurrence
+reorder. Contextual descendants never participate. Canonical parent/position
+order stays unchanged, and ranks survive temporary query mismatches.
 
 ## Agent integration
 

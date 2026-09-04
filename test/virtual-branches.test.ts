@@ -79,6 +79,7 @@ describe("virtual branch definitions", () => {
           { key: "project", value: "float" },
           { key: "priority" },
         ],
+        sort: null,
         limit: 40,
         create: { key: "status", value: "Doing" },
         createParentId: "inbox",
@@ -104,6 +105,50 @@ describe("virtual branch definitions", () => {
         { key: "project", value: "pi-outliner" },
       ],
     }));
+  });
+
+  test("parses created and updated sorting with explicit or default direction", () => {
+    const newestUpdated = visibleBlock("newest-updated", [
+      { key: "type", value: "virtual-branch" },
+      { key: "query", value: "status=Done" },
+      { key: "sort", value: "updated" },
+    ]);
+    expect(parseVirtualBranchConfig(newestUpdated, [newestUpdated]).config?.sort).toEqual({
+      field: "updated",
+      direction: "desc",
+    });
+
+    const oldestCreated = visibleBlock("oldest-created", [
+      { key: "type", value: "virtual-branch" },
+      { key: "query", value: "status=Done" },
+      { key: "sort", value: "created" },
+      { key: "direction", value: "asc" },
+    ]);
+    expect(parseVirtualBranchConfig(oldestCreated, [oldestCreated]).config?.sort).toEqual({
+      field: "created",
+      direction: "asc",
+    });
+  });
+
+  test("rejects invalid or unpaired virtual branch sort properties", () => {
+    const invalid = visibleBlock("invalid-sort", [
+      { key: "type", value: "virtual-branch" },
+      { key: "query", value: "status=Done" },
+      { key: "sort", value: "title" },
+      { key: "direction", value: "newest" },
+    ]);
+    expect(parseVirtualBranchConfig(invalid, [invalid]).configurationErrors).toEqual([
+      "Virtual branch sort must be created or updated: title",
+      "Virtual branch direction must be asc or desc: newest",
+    ]);
+
+    const orphanDirection = visibleBlock("orphan-direction", [
+      { key: "type", value: "virtual-branch" },
+      { key: "query", value: "status=Done" },
+      { key: "direction", value: "desc" },
+    ]);
+    expect(parseVirtualBranchConfig(orphanDirection, [orphanDirection]).configurationErrors)
+      .toContain("Virtual branch direction requires a sort property");
   });
 
   test("reports positioned diagnostics for malformed quoted queries", () => {
@@ -298,6 +343,37 @@ describe("virtual branch projection", () => {
       kind: "truncated",
       limit: 2,
     });
+  });
+
+  test("uses timestamp query ordering instead of persisted manual ranks", async () => {
+    const sortedView = visibleBlock("sorted-view", [
+      { key: "type", value: "virtual-branch" },
+      { key: "query", value: "status=Done" },
+      { key: "sort", value: "updated" },
+      { key: "direction", value: "desc" },
+      { key: "limit", value: "2" },
+    ]);
+    const newest = visibleBlock("newest");
+    const older = visibleBlock("older");
+    const projection = await projectVirtualBranches(
+      [sortedView],
+      [sortedView, newest, older],
+      async (query) => {
+        expect(query).toEqual({
+          filters: [{ key: "status", value: "Done" }],
+          sort: { field: "updated", direction: "desc" },
+          limit: 1_000,
+        });
+        return complete([newest, older]);
+      },
+      [{ viewId: sortedView.id, blockId: older.id, rank: 0 }],
+    );
+
+    expect(
+      projection.rows
+        .filter((row) => isVirtualBranchOccurrence(row))
+        .map((row) => row.canonicalId),
+    ).toEqual([newest.id, older.id]);
   });
 
   test("allocates collapsed definitions independently before applying disclosure", async () => {
@@ -624,6 +700,7 @@ describe("virtual branch creation text", () => {
     viewId: "doing-view",
     query: "status=Doing",
     filters: [{ key: "status", value: "Doing" }],
+    sort: null,
     limit: 200,
     create: { key: "status", value: "Doing" },
     createParentId: "inbox",
