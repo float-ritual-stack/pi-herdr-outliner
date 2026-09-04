@@ -40,7 +40,12 @@ import {
 import { detailCalloutThemeFromEnvironment } from "./detail-callout-theme";
 import { projectDetailRead } from "./detail-embeds";
 import { createDetailKeyHandler } from "./detail-keymap";
-import { createPiDetailInputListener, decodePiDetailInput } from "./detail-pi-input";
+import {
+  createPiDetailInputListener,
+  decodePiDetailInput,
+  detailChooserOwnsPiInput,
+  piDetailChooserInput,
+} from "./detail-pi-input";
 import {
   DetailPiPreviewLayout,
   parseDetailPreviewActionUri,
@@ -165,10 +170,6 @@ const tui = new DetailTuiAltScreen(terminal, false, undefined, {
     pendingLinkClick = { activate: false, suppress: false };
     if (pointer.suppress || stopping) return;
     enqueueWork(async () => {
-      if (controller.state.destinationChooser.active) {
-        await controller.handleDestinationChooserKeypress("", { name: "pointer" });
-        return;
-      }
       if (url.startsWith("pi-outliner-action:")) {
         await invokeDetailAction(url.slice("pi-outliner-action:".length));
         return;
@@ -633,7 +634,10 @@ function shouldPassDetailInputToTui(data: string): boolean {
       suppress: primaryClick.shift && !activate,
     };
   }
-  if (controller.state.destinationChooser.active) return false;
+  if (
+    controller.state.destinationChooser.active &&
+    detailChooserOwnsPiInput(data)
+  ) return false;
   if (tui.hasOverlay()) return true;
   if (!isTreeMouseSequence(data)) return false;
   if (parseTreeSecondaryClick(data) && rightClickOwnership === "outliner") return false;
@@ -688,6 +692,7 @@ async function handleInput(data: string): Promise<void> {
     const chooserInput = decodePiDetailInput(data);
     if (
       chooserInput.kind === "key" &&
+      chooserInput.inputAction !== "suppress" &&
       chooserInput.key.ctrl &&
       chooserInput.key.name === "q"
     ) {
@@ -695,10 +700,8 @@ async function handleInput(data: string): Promise<void> {
       return;
     }
     pendingLinkClick = { activate: false, suppress: false };
-    await controller.handleDestinationChooserKeypress(
-      chooserInput.kind === "key" ? chooserInput.str : "",
-      chooserInput.kind === "key" ? chooserInput.key : { name: "paste" },
-    );
+    const forwarded = piDetailChooserInput(chooserInput);
+    await controller.handleDestinationChooserKeypress(forwarded.str, forwarded.key);
     return;
   }
   const secondaryClick = parseTreeSecondaryClick(data);

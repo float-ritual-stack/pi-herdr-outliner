@@ -233,6 +233,7 @@ export class OpenDestinationChooser {
   private clearTimer(): void {
     if (this.timer === undefined) return;
     this.scheduler.clear(this.timer);
+    this.timerGeneration += 1;
     this.timer = undefined;
   }
 }

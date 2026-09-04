@@ -8,6 +8,7 @@ import {
   type TuiInputListener,
 } from "@earendil-works/pi-tui";
 import type { TerminalInputAction, TerminalKey } from "./terminal";
+import { isTreeMouseSequence } from "./tree-mouse";
 
 const BRACKETED_PASTE_START = "\x1b[200~";
 const BRACKETED_PASTE_END = "\x1b[201~";
@@ -23,6 +24,10 @@ export function createPiDetailInputListener(
   };
 }
 
+export function detailChooserOwnsPiInput(data: string): boolean {
+  return !isTreeMouseSequence(data);
+}
+
 export type PiDetailInput =
   | { kind: "paste"; text: string }
   | {
@@ -31,6 +36,15 @@ export type PiDetailInput =
       key: TerminalKey;
       inputAction: TerminalInputAction;
     };
+
+export function piDetailChooserInput(
+  input: PiDetailInput,
+): { str: string; key: TerminalKey } {
+  if (input.kind === "paste") return { str: "", key: { name: "paste" } };
+  return input.inputAction === "suppress"
+    ? { str: "", key: { name: "input" } }
+    : { str: input.str, key: input.key };
+}
 
 interface PiKeyMapping {
   id: KeyId;

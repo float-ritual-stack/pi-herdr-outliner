@@ -175,7 +175,7 @@ describe("open destination chooser", () => {
     expect(chooser.state.active).toBe(false);
   });
 
-  test("input during an in-flight destination only resets its timer", async () => {
+  test("input during an in-flight destination does not cancel it", async () => {
     const scheduler = new FakeScheduler();
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
