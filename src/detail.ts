@@ -2,7 +2,6 @@ import { emitKeypressEvents } from "node:readline";
 import { setTimeout as sleep } from "node:timers/promises";
 import { OutlinerClient, type OutlinerWatcher } from "./client";
 import { OutlinerActionKeymap } from "./outliner-actions";
-import { sendContextClientCommand } from "./client-target";
 import {
   createDetailController,
   type DetailEffects,
@@ -15,6 +14,7 @@ import { completeReferencedPaths, readReferencedFile } from "./files";
 import { resolveOutlinerLinkTarget } from "./outliner-links";
 import {
   dispatchNavigation,
+  focusTreeForClient,
   resolveNavigationDestination,
 } from "./navigation-routes";
 import {
@@ -190,7 +190,7 @@ const effects: DetailEffects = {
     return completeReferencedPaths(query, paths.workspaceRoot);
   },
   async focusOutliner() {
-    await sendContextClientCommand(client, "tree", browsingContextId, { command: "focus" });
+    await focusTreeForClient(client, clientId);
   },
   async openPropertyInspectorPane(blockId) {
     const contextId = crypto.randomUUID();

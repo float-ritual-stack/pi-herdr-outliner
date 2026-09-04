@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import type { RequestInput } from "../src/client";
 import {
   dispatchNavigation,
+  focusTreeForClient,
   resolveNavigationDestination,
 } from "../src/navigation-routes";
 
@@ -27,6 +28,40 @@ test("forwards unlocked-pool navigation resolution", async () => {
     sourceClientId: "tree-a",
     intent: "open",
   }]);
+});
+
+test("focuses the Tree selected by live same-tab routing", async () => {
+  const calls: RequestInput[] = [];
+  const requester = {
+    async request<T>(input: RequestInput): Promise<T> {
+      calls.push(input);
+      if (input.action === "navigation.resolve") {
+        return {
+          sourceClientId: "detail-second",
+          targetClientId: "tree-visible",
+          intent: "reveal",
+          resolution: "same-tab",
+        } as T;
+      }
+      return undefined as T;
+    },
+  };
+
+  await expect(focusTreeForClient(requester, "detail-second")).resolves.toBe("tree-visible");
+  expect(calls).toEqual([
+    {
+      action: "navigation.resolve",
+      sourceClientId: "detail-second",
+      intent: "reveal",
+    },
+    {
+      action: "ui.command.send",
+      command: {
+        targetClientId: "tree-visible",
+        command: "focus",
+      },
+    },
+  ]);
 });
 
 test("forwards a preview dispatch without inventing a destination", async () => {

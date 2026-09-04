@@ -25,7 +25,6 @@ import {
   outlinerActionLink,
   type OutlinerActionMenuItem,
 } from "./outliner-actions";
-import { sendContextClientCommand } from "./client-target";
 import {
   createDetailController,
   type DetailEffects,
@@ -71,6 +70,7 @@ import {
 import { parseOutlinerLinkUri, resolveOutlinerLinkTarget } from "./outliner-links";
 import {
   dispatchNavigation,
+  focusTreeForClient,
   resolveNavigationDestination,
 } from "./navigation-routes";
 import { resolvePaths } from "./paths";
@@ -344,7 +344,7 @@ const effects: DetailEffects = {
     return completeReferencedPaths(query, paths.workspaceRoot);
   },
   async focusOutliner() {
-    await sendContextClientCommand(client, "tree", browsingContextId, { command: "focus" });
+    await focusTreeForClient(client, clientId);
   },
   async openPropertyInspectorPane(blockId) {
     const contextId = crypto.randomUUID();
