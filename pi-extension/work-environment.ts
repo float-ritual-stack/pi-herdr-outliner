@@ -80,7 +80,17 @@ export async function inspectWorkEnvironment(
     const [status, remote] = await Promise.all([
       exec(
         "git",
-        ["-C", cwd, "status", "--porcelain=v2", "--branch", "--untracked-files=normal"],
+        [
+          "--no-optional-locks",
+          "-c",
+          "core.fsmonitor=false",
+          "-C",
+          cwd,
+          "status",
+          "--porcelain=v2",
+          "--branch",
+          "--untracked-files=normal",
+        ],
         options,
       ),
       exec("git", ["-C", cwd, "config", "--get", "remote.origin.url"], options),

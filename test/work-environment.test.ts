@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
@@ -93,6 +93,20 @@ describe("work environment orientation", () => {
     expect(mismatch.classification).toBe("mismatch");
     expect(mismatch.branchWorkId).toBe("PIE-999");
     expect(mismatch.guidance).toContain("current branch fix/pie-999-other");
+  });
+
+  test("does not execute the repository fsmonitor command", async () => {
+    const directory = await repository();
+    const marker = join(directory, "fsmonitor-ran");
+    const probe = join(directory, "fsmonitor-probe");
+    writeFileSync(probe, `#!/bin/sh\n: > "${marker}"\n`);
+    chmodSync(probe, 0o755);
+    await git(directory, "config", "core.fsmonitor", probe);
+
+    const snapshot = await inspectWorkEnvironment(exec, directory);
+
+    expect(snapshot.branch).toBe("main");
+    expect(existsSync(marker)).toBe(false);
   });
 
   test("classifies detached, unbound Work-ID, and non-Git contexts without mutation", async () => {
