@@ -96,10 +96,10 @@ describe("Outliner action keymap", () => {
 
   test("rebinds and disables Shift-letter actions for uppercase Pi input", () => {
     const rebound = new OutlinerActionKeymap("<test>", {
-      "tree.detail.new": ["Shift+X"],
+      "tree.detail.below": ["Shift+X"],
     });
     expect(rebound.canonicalize("tree", "browse", "X", { name: "X" })).toMatchObject({
-      actionId: "tree.detail.new",
+      actionId: "tree.detail.below",
       suppressed: false,
     });
     expect(rebound.canonicalize("tree", "browse", "D", { name: "D" })).toMatchObject({
@@ -107,25 +107,31 @@ describe("Outliner action keymap", () => {
       suppressed: true,
     });
 
-    const unbound = new OutlinerActionKeymap("<test>", { "tree.detail.new": [] });
+    const unbound = new OutlinerActionKeymap("<test>", { "tree.detail.below": [] });
     expect(unbound.canonicalize("tree", "browse", "D", { name: "D" })).toMatchObject({
       actionId: null,
       suppressed: true,
     });
   });
-  test("uses rebound chords for actions without defaults", () => {
+  test("uses direction-aware pane defaults and supports rebound chords", () => {
+    const defaults = new OutlinerActionKeymap("<test>");
+    expect(defaults.primaryBinding("tree.detail.right")).toBe("d");
+    expect(defaults.primaryBinding("tree.detail.below")).toBe("Shift+D");
+    expect(defaults.primaryBinding("tree.delete")).toBe("Delete");
+    expect(defaults.primaryBinding("detail.pane.right")).toBe("Alt+Shift+ArrowRight");
+    expect(defaults.primaryBinding("detail.pane.below")).toBe("Alt+Shift+ArrowDown");
+
     const keymap = new OutlinerActionKeymap("<test>", { "tree.detail.right": ["Alt+D"] });
     expect(keymap.canonicalize("tree", "browse", "", { name: "d", meta: true })).toMatchObject({
       actionId: "tree.detail.right",
-      str: "",
-      key: { name: "d", meta: true },
+      str: "d",
+      key: { name: "d" },
       suppressed: false,
     });
-    expect(keymap.canonicalInput("tree.detail.right")).toEqual({
+    expect(keymap.boundInput("tree.detail.right")).toEqual({
       str: "",
       key: { name: "d", meta: true },
     });
-    expect(new OutlinerActionKeymap("<test>").canonicalInput("tree.detail.right")).toBeNull();
   });
 
   test("rejects active-scope collisions and missing cancel routes", () => {

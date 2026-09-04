@@ -22,13 +22,12 @@ The manifest also ships:
 ```sh
 herdr plugin action invoke ensure-detail --plugin float.pi-outliner
 herdr plugin action invoke open-here --plugin float.pi-outliner
-herdr plugin action invoke open-layout --plugin float.pi-outliner
 ```
 
 `ensure-detail` focuses or creates a Detail for the Tree selected from the
 invoking pane/tab. `open-here` always creates a new linked Tree/Detail browsing
-context beside the invoking pane. `open-layout` requires an otherwise empty tab
-and creates the standard Tree, two-Detail, and retained-shell working layout.
+context beside the invoking pane. Tree `d` / `Shift+D` and Detail
+`Option+Shift+Right` / `Option+Shift+Down` create ordinary independent right/down Details.
 All pane identities come from live Herdr topology rather than labels or
 remembered pane IDs.
 
@@ -140,7 +139,6 @@ Prefer clean cutovers: migrate every caller, test, and import, then remove obsol
 - Measure terminal display columns, not JavaScript string length.
 - Preserve grapheme clusters when wrapping, moving, selecting, and deleting.
 - Keep fixed frame height and cursor visibility across terminal resize.
-- Keep layout reshaping behind the portable atomic Herdr-socket lock. Lock timeout or failure must remain visible, stale/dead owners may be recovered, and mutation must never continue unlocked or depend on an external `flock` binary.
 
 ## Verification
 

@@ -77,7 +77,7 @@ Inside a Herdr-managed pane:
 herdr plugin action invoke open --plugin float.pi-outliner
 ```
 
-The manifest exposes four workspace/tab/pane actions:
+The manifest exposes three workspace/tab/pane actions:
 
 - `open` preserves one **Outliner Service** tab. With no live Tree it opens an
   **Outliner** Tree and **Outliner Detail** beside the invoking pane with one
@@ -91,17 +91,9 @@ The manifest exposes four workspace/tab/pane actions:
 - `open-here` always creates a new Tree/Detail pair beside the invoking pane in
   the current tab. The pair shares a fresh ephemeral browsing context and the
   new Tree receives focus.
-- `open-layout` requires an otherwise empty current tab. It retains the invoking
-  shell, creates a Tree and primary Detail in one browsing context plus a second
-  Detail in an independent browsing context, applies the `detail-b` four-pane
-  working layout, and focuses the Tree.
 
 Invoke any action as
-`herdr plugin action invoke <action> --plugin float.pi-outliner`. Layout
-reshaping is serialized across Linux and macOS by an atomic lock directory keyed
-to the Herdr socket. Acquisition waits at most 30 seconds and recovers a dead or
-stale owner; timeout or failure is visible, and layout mutation never runs
-unlocked.
+`herdr plugin action invoke <action> --plugin float.pi-outliner`.
 
 Tab labels, tab numbers, pane titles, and labels such as `oi` are display
 metadata—not routing keys. The CLI and Pi/OMP `outliner_clients` tool expose
@@ -123,10 +115,10 @@ canonical block in the first unlocked Detail in the same Herdr tab, ordered by
 pane position from left to right and then top to bottom. Preview updates never
 steal focus. Press `Enter` in Tree to focus that reader without locking it.
 
-Press `Shift+D` in Tree to create and focus another Detail below that Tree. The
-new pane receives a fresh browsing context seeded with the selected canonical
-block, so later Tree cursor movement does not replace it. It remains unlocked
-for explicit opens until you lock it.
+Press `d` in Tree to create and focus an independent Detail to the right, or
+`Shift+D` to create it below. The new pane receives a fresh browsing context
+seeded with the selected canonical block, so later Tree cursor movement does
+not replace it. It remains unlocked for explicit opens until you lock it.
 
 When a block becomes a context anchor, focus its Detail and press `L`, `i`,
 `Ctrl+L`, or `Command/Meta+L`. The header changes to **Locked**, and that pane
@@ -258,7 +250,7 @@ cancel route rejects the entire candidate and preserves the prior bindings.
 | `Left` / `Right` | Collapse/go to parent; expand/go to first child |
 | `Shift+Up` / `Shift+Down` | Reorder canonical siblings, or branch-local projected occurrences |
 | `Enter` | Focus the current block in the first unlocked same-tab Detail; remain unlocked |
-| `Shift+D` | Create and focus a new independent Detail pane on the selected block |
+| `d` / `Shift+D` | Create and focus a new independent Detail to the right / below |
 | `e` | Edit a single-line block inline; open and lock a multiline block in the first unlocked Detail |
 | `a` / `s` | Add child / sibling |
 | `c` | Open the Herdr quick-capture popup; Enter adds a line, Ctrl+S saves to Inbox, Esc cancels |
@@ -273,7 +265,7 @@ cancel route rejects the entire candidate and preserves the prior bindings.
 | `Option+Left` / `Option+Right` | Move backward / forward through block navigation history |
 | `/` | Filter visible blocks |
 | `f` | Open a referenced file |
-| `d`, then `y` | Confirm moving the selected canonical subtree to Trash |
+| `Delete`, then `y` | Confirm moving the selected canonical subtree to Trash |
 | `r` | Restore a selected direct Trash root |
 | `p` | Type the work ID/short UUID to permanently purge a Trash root |
 | `Ctrl+Q` | Close the pane |
@@ -328,9 +320,10 @@ Projected virtual occurrences deliberately constrain hierarchy and collapse. Bra
 | `o` | Open the first authored reference in the shared destination chooser |
 | `R` | Reveal the selected backlink source when expanded; otherwise reveal the first authored reference in the paired or unique same-tab Tree |
 | `L`, `i`, `Ctrl+L`, or `Command/Meta+L` | Lock this block as an anchor, or unlock the Detail for previews and opens |
+| `Option+Shift+Right` / `Option+Shift+Down` | Open the current target in a new independent Detail to the right / below |
 | `Option+Left` / `Option+Right` | Move backward / forward through this Detail's local history without changing lock state |
 | `r` | Restore the selected block when it is a direct Trash root |
-| `q` | Focus Tree |
+| `q` | Focus Tree; close a dedicated Property Detail |
 | `Ctrl+Q` | Close Detail |
 
 Detail navigation history is local to that Detail process and retains at most 200 exact targets. Opening a reference, receiving an exact target, or following the paired Tree records a visit. Back/forward pins the historical target so a later Tree cursor event cannot immediately replace it. Soft-deleted targets reopen read-only; a purged target remains visible as unavailable. Closing Detail discards this history.

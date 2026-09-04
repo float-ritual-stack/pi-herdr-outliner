@@ -1755,6 +1755,34 @@ describe("Detail property inspector integration", () => {
     "Body [work-id:: PIE-171] [unknown-key:: kept]",
   ].join("\n");
 
+  test("unlocks a dedicated inspector and opens its current target in a sibling Detail", async () => {
+    const harness = createHarness(makeBlock({ id: "property-source", text: source }));
+    const controller = createDetailController(harness.effects, undefined, {
+      propertyInspectorPresentation: "dedicated",
+    });
+    await controller.initialize();
+
+    await controller.dispatch({ type: "lock.toggle" }, viewport);
+    await controller.onServiceEvent(
+      event("ui", {
+        targetClientId: "detail-test",
+        command: "preview",
+        blockId: "routed-property-target",
+      }),
+      viewport,
+    );
+    await controller.dispatch({ type: "pane.open", direction: "down" }, viewport);
+
+    expect(controller.state.connectionMode).toBe("unlocked");
+    expect(harness.calls.locks).toEqual([false]);
+    expect(controller.state.context.selected?.id).toBe("routed-property-target");
+    expect(harness.calls.openedDetails).toEqual([{
+      blockId: "routed-property-target",
+      direction: "down",
+    }]);
+    expect(controller.state.propertyInspector.presentation).toBe("dedicated");
+  });
+
   test("keeps inspector interaction ephemeral and routes typed targets through Detail navigation", async () => {
     const harness = createHarness(makeBlock({ id: "property-source", text: source }));
     const controller = createDetailController(harness.effects, undefined, {

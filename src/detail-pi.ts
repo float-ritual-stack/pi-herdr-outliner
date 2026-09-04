@@ -39,7 +39,7 @@ import {
 } from "./detail-mouse";
 import { detailCalloutThemeFromEnvironment } from "./detail-callout-theme";
 import { projectDetailRead } from "./detail-embeds";
-import { createDetailKeyHandler } from "./detail-keymap";
+import { createDetailKeyHandler, detailActionMode } from "./detail-keymap";
 import {
   createPiDetailInputListener,
   decodePiDetailInput,
@@ -260,7 +260,7 @@ const effects: DetailEffects = {
       action: "browsing-context.get",
       contextId: browsingContextId,
     });
-    if (!dedicatedPropertyBlockId) return browsingContext;
+    if (!dedicatedPropertyBlockId || browsingContext.target.selected) return browsingContext;
     return {
       ...browsingContext,
       target: await client.request<SelectionContext>({
@@ -338,10 +338,18 @@ const effects: DetailEffects = {
   async focusOutliner() {
     await sendContextClientCommand(client, "tree", browsingContextId, { command: "focus" });
   },
-  openPropertyInspectorPane(blockId) {
+  async openPropertyInspectorPane(blockId) {
+    const contextId = crypto.randomUUID();
+    await client.request({
+      action: "browsing-context.publish",
+      sourceClientId: clientId,
+      contextId,
+      blockId,
+      dispatchPreview: false,
+    });
     return openDetailPane({
       workspaceRoot: paths.workspaceRoot,
-      browsingContextId,
+      browsingContextId: contextId,
       propertyInspectorBlockId: blockId,
     });
   },
@@ -661,21 +669,6 @@ function shouldPassDetailInputToTui(data: string): boolean {
   synchronizeLayout?.();
   return true;
 }
-async function executeMenuAction(actionId: string): Promise<boolean> {
-  const direction = actionId === "detail.pane.right"
-    ? "right"
-    : actionId === "detail.pane.below"
-    ? "down"
-    : null;
-  if (!direction) return false;
-  const blockId = controller.state.context.selected?.id;
-  if (!blockId) {
-    await controller.dispatch({ type: "status.set", message: "No block selected" }, viewport());
-    return true;
-  }
-  await openTargetInNewDetail(blockId, direction);
-  return true;
-}
 
 const handleKeypress = createDetailKeyHandler({
   controller,
@@ -685,7 +678,6 @@ const handleKeypress = createDetailKeyHandler({
   openActionMenu: showActionMenu,
   focusDraftSplit,
   navigatePreview,
-  executeAction: executeMenuAction,
 });
 invokeDetailAction = async (actionId) => {
   closeActionMenu();
@@ -711,7 +703,7 @@ async function handleInput(data: string): Promise<void> {
   const secondaryClick = parseTreeSecondaryClick(data);
   if (secondaryClick && rightClickOwnership === "outliner") {
     showActionMenu(
-      actionKeymap.menuItems("detail", controller.state.mode),
+      actionKeymap.menuItems("detail", detailActionMode(controller.state)),
       invokeDetailAction,
       secondaryClick,
     );
@@ -779,7 +771,7 @@ const customFrame = new DetailPiComponent({
       propertyKeys,
     };
   },
-  helpText: () => actionKeymap.helpText("detail", controller.state.mode),
+  helpText: () => actionKeymap.helpText("detail", detailActionMode(controller.state)),
 });
 const preview = new DetailPiPreviewLayout(
   controller.state,
@@ -805,7 +797,7 @@ const preview = new DetailPiPreviewLayout(
     },
     splitActive: draftSplitActive,
     focused: () => draftSplitFocus === "preview",
-    helpText: () => actionKeymap.helpText("detail", controller.state.mode),
+    helpText: () => actionKeymap.helpText("detail", detailActionMode(controller.state)),
     setRegions: (regions) => controller.setPreviewRegions(regions),
   },
 );

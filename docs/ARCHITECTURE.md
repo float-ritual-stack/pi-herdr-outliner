@@ -543,7 +543,7 @@ The service stores annotation blocks; it does not modify source files.
 ## Herdr lifecycle
 
 [`src/herdr-open.ts`](../src/herdr-open.ts) enforces service-first startup for
-the four actions exported by the plugin manifest:
+the three actions exported by the plugin manifest:
 
 - `open` reuses or opens the service, then focuses the Tree selected by invoking
   pane, unambiguous current tab, workspace, or project. If none exists, it runs
@@ -555,10 +555,6 @@ the four actions exported by the plugin manifest:
 - `open-here` always generates a browsing-context UUID, opens a Tree to the right
   of the invoking pane and a Detail below that Tree with the same UUID, and
   focuses the Tree.
-- `open-layout` requires an otherwise empty tab. It retains the invoking shell,
-  creates a Tree and primary Detail in one context plus a second Detail in an
-  independent context, applies the `detail-b` four-pane layout, and focuses the
-  Tree.
 
 Tree quick capture opens the manifest `capture` entrypoint with Herdr `placement = "popup"` anchored to the active Tree. The popup process reuses the same text-buffer command mapping, layout, and editor-row renderer as Detail; only Ctrl+S save and Esc/Ctrl+C cancellation are wired to `capture.create` and popup exit. It is not a Tree or Detail registry client and never changes browsing context or selection.
 
@@ -567,12 +563,11 @@ root. Closing both clients prunes the context. Renaming or renumbering tabs and
 panes has no effect because labels are not identity. Pane IDs are read from
 Herdr responses and never predicted.
 
-Layout reshaping is serialized on Linux and macOS with an atomic lock directory.
-Its path appends `.layout.lock` to `HERDR_SOCKET_PATH`, or to
-`~/.config/herdr/herdr.sock` when that variable is absent. Acquisition has a
-bounded 30-second wait, recovers dead or stale owners, and releases in a
-`finally` path. Timeout and errors remain visible; layout mutation never runs
-unlocked and does not depend on the external `flock` utility.
+Tree and Detail direction actions call the same `openDetailPane` boundary.
+Every right/down split targets the invoking live pane, seeds a fresh browsing
+context with the current canonical block, launches the ordinary Detail
+entrypoint, and uses the pane ID returned by Herdr. Outliner does not stage
+tabs, reshape an existing layout, or persist physical topology.
 
 After deploying a merged change, restart Detail, Tree, and service in that order, invoke the plugin action, wait for `herdr_registry_ready`, and exercise the changed surface.
 

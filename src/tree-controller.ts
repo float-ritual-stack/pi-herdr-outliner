@@ -1216,8 +1216,8 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       return;
     }
     if (mode === "action-menu") mode = "browse";
-    if (actionId === "tree.detail.right") {
-      await createDetailPane("right");
+    if (actionId === "tree.detail.right" || actionId === "tree.detail.below") {
+      await createDetailPane(actionId === "tree.detail.right" ? "right" : "down");
       return;
     }
     if (actionId === "tree.keymap.reload") {
@@ -1575,10 +1575,13 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     } else if (str === "/") {
       await beginInput("filter", activeFilter);
       return;
-    } else if (str === "D" && selected) {
-      await createDetailPane();
+    } else if (str === "d" && selected) {
+      await createDetailPane("right");
       return;
-    } else if (str === "d" && selected) mode = "delete";
+    } else if (str === "D" && selected) {
+      await createDetailPane("down");
+      return;
+    } else if (key.name === "delete" && selected) mode = "delete";
     else if (str === "f" && selected) openReferencedFile(selected.block);
     else if (str === "L") {
       status = "Lock or unlock from a Detail pane";

@@ -462,7 +462,7 @@ describe("createTreeController", () => {
     expect(controller.view().status).toBe("Lock or unlock from a Detail pane");
     expect(fake.calls.some(({ action }) => action === "navigation.resolve")).toBe(false);
   });
-  test("opens a new independent Detail pane for the selected block with Shift+D", async () => {
+  test("opens right and lower Details while Delete retains confirmation", async () => {
     const root = block("root", { text: "Root", displayText: "Root" });
     const fake = harness((input) =>
       input.action === "workspace.snapshot" ? snapshot([root], root) : undefined
@@ -470,10 +470,14 @@ describe("createTreeController", () => {
     const controller = createTreeController(fake.effects);
     await controller.initialize();
 
+    await controller.handleKeypress("d", { name: "d" }, "pass");
     await controller.handleKeypress("D", { name: "d", shift: true }, "pass");
+    await controller.handleKeypress("", { name: "delete" }, "pass");
 
-    expect(fake.createdDetails).toEqual([root.id]);
-    expect(controller.view().status).toBe("Opened new independent Detail down for Root");
+    expect(fake.createdDetails).toEqual([root.id, root.id]);
+    expect(fake.createdDetailDirections).toEqual(["right", "down"]);
+    expect(controller.view().mode).toBe("delete");
+    expect(fake.calls.some(({ action }) => action === "delete")).toBe(false);
     expect(fake.calls.some(({ action }) => action === "navigation.dispatch")).toBe(false);
   });
 
@@ -1302,7 +1306,7 @@ describe("createTreeController", () => {
     const controller = createTreeController(fake.effects);
     await controller.initialize();
 
-    await controller.handleKeypress("d", { name: "d" }, "pass");
+    await controller.handleKeypress("", { name: "delete" }, "pass");
     await controller.handleKeypress("y", { name: "y" }, "pass");
 
     const deleteIndex = fake.calls.findIndex((call) => call.action === "delete");
@@ -1350,7 +1354,7 @@ describe("createTreeController", () => {
     await controller.handleKeypress("", { name: "down" }, "pass");
     expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe(card.id);
 
-    await controller.handleKeypress("d", { name: "d" }, "pass");
+    await controller.handleKeypress("", { name: "delete" }, "pass");
     await controller.handleKeypress("y", { name: "y" }, "pass");
 
     expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe(successor.id);
@@ -1365,7 +1369,7 @@ describe("createTreeController", () => {
     );
     const controller = createTreeController(fake.effects);
     await controller.initialize();
-    await controller.handleKeypress("d", { name: "d" }, "pass");
+    await controller.handleKeypress("", { name: "delete" }, "pass");
 
     physical = [selected, added];
     await controller.handleServiceEvent(event("content", added.id));
@@ -1398,7 +1402,7 @@ describe("createTreeController", () => {
     const controller = createTreeController(fake.effects);
     await controller.initialize();
 
-    await controller.handleKeypress("d", { name: "d" }, "pass");
+    await controller.handleKeypress("", { name: "delete" }, "pass");
     await controller.handleKeypress("y", { name: "y" }, "pass");
 
     expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe(previous.id);
@@ -1439,7 +1443,7 @@ describe("createTreeController", () => {
     const controller = createTreeController(fake.effects);
     await controller.initialize();
 
-    await controller.handleKeypress("d", { name: "d" }, "pass");
+    await controller.handleKeypress("", { name: "delete" }, "pass");
     await controller.handleKeypress("y", { name: "y" }, "pass");
 
     expect(lastCall(fake.calls, "browsing-context.publish")).toEqual({ action: "browsing-context.publish", sourceClientId: "tree-test", contextId: "tree-test-context", blockId: successor.id });
@@ -1486,7 +1490,7 @@ describe("createTreeController", () => {
     await controller.handleKeypress("", { name: "down" }, "pass");
     expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe("target");
 
-    await controller.handleKeypress("d", { name: "d" }, "pass");
+    await controller.handleKeypress("", { name: "delete" }, "pass");
     await controller.handleKeypress("y", { name: "y" }, "pass");
 
     expect(lastCall(fake.calls, "delete")).toEqual({ action: "delete", blockId: "target" });
@@ -1574,7 +1578,7 @@ describe("createTreeController", () => {
       "occurrence:view:card",
     );
 
-    await controller.handleKeypress("d", { name: "d" }, "pass");
+    await controller.handleKeypress("", { name: "delete" }, "pass");
     await controller.handleKeypress("y", { name: "y" }, "pass");
     expect(lastCall(fake.calls, "delete")).toEqual({
       action: "delete",
