@@ -206,7 +206,7 @@ describe("open destination chooser", () => {
     expect(chooser.state.active).toBe(false);
   });
 
-  test("idle timeout cancels an in-flight destination before it can dispatch", async () => {
+  test("idle timeout does not cancel an in-flight destination", async () => {
     const scheduler = new FakeScheduler();
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
@@ -228,12 +228,13 @@ describe("open destination chooser", () => {
     const pending = chooser.handleKeypress("R", { name: "r", shift: true });
 
     scheduler.fire(1);
-    expect(chooser.state.active).toBe(false);
-    expect(chooser.state.loading).toBe(false);
+    expect(chooser.state.active).toBe(true);
+    expect(chooser.state.loading).toBe(true);
     release();
     await pending;
 
-    expect(calls).toEqual([]);
+    expect(calls).toEqual(["replace"]);
+    expect(chooser.state.active).toBe(false);
   });
 
   test("validates the configurable timeout", () => {

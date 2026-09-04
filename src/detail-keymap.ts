@@ -292,7 +292,7 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
 
 
   handleKeypress = (async (str, key, inputAction) => {
-    if (key.ctrl && key.name === "q") {
+    if (inputAction !== "suppress" && key.ctrl && key.name === "q") {
       stop();
       return;
     }

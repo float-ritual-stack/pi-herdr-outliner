@@ -100,12 +100,12 @@ export class OpenDestinationChooser {
 
   async handleKeypress(str: string, key: TerminalKey): Promise<boolean> {
     if (!this.state.active) return false;
-    this.scheduleDismissal();
     if (key.name === "escape") {
       this.dismiss();
       return true;
     }
     if (this.state.loading) return true;
+    this.scheduleDismissal();
     if (key.name === "return") {
       await this.openDestination("default");
       return true;
@@ -146,6 +146,7 @@ export class OpenDestinationChooser {
   private async openDestination(destination: OpenDestination): Promise<void> {
     const target = this.state.target;
     if (!target) return;
+    this.clearTimer();
     const operationGeneration = this.targetGeneration;
     const isCurrent = (): boolean =>
       operationGeneration === this.targetGeneration &&
