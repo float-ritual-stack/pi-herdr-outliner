@@ -180,7 +180,7 @@ Scope classification is structural. After leading blank lines, the first nonblan
 
 ## Protocol
 
-The current protocol version is `25`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
+The current protocol version is `27`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
 
 ### Important request families
 
