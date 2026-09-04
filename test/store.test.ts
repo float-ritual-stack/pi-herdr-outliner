@@ -100,6 +100,47 @@ describe("OutlinerStore", () => {
     })).toThrow("Block not found: missing-query-root");
   });
 
+  test("sorts by created or updated time before applying the query limit", () => {
+    const store = makeStore();
+    const root = store.create("Timestamp query root");
+    const first = store.create("Timestamp match first", root.id);
+    const second = store.create("Timestamp match second", root.id);
+    const third = store.create("Timestamp match third", root.id);
+    const timestamps = [
+      [first.id, "2026-01-01T00:00:00.000Z", "2026-03-01T00:00:00.000Z"],
+      [second.id, "2026-02-01T00:00:00.000Z", "2026-01-01T00:00:00.000Z"],
+      [third.id, "2026-03-01T00:00:00.000Z", "2026-02-01T00:00:00.000Z"],
+    ] as const;
+    for (const [id, createdAt, updatedAt] of timestamps) {
+      store.database.query(
+        "UPDATE blocks SET created_at = ?, updated_at = ? WHERE id = ?",
+      ).run(createdAt, updatedAt, id);
+    }
+
+    const newestCreated = store.queryBlocks({
+      text: "Timestamp match",
+      subtreeRootId: root.id,
+      sort: { field: "created", direction: "desc" },
+      limit: 2,
+    });
+    expect(newestCreated.blocks.map((block) => block.id)).toEqual([third.id, second.id]);
+    expect(newestCreated.completeness).toEqual({ kind: "truncated", limit: 2 });
+
+    const oldestUpdated = store.readWorkspaceSnapshot({
+      query: {
+        text: "Timestamp match",
+        subtreeRootId: root.id,
+        sort: { field: "updated", direction: "asc" },
+        limit: 2,
+      },
+    });
+    expect(oldestUpdated.visible.blocks.map((block) => block.id)).toEqual([
+      second.id,
+      third.id,
+    ]);
+    expect(oldestUpdated.visible.completeness).toEqual({ kind: "truncated", limit: 2 });
+  });
+
 
   test("captures idempotently into one canonical Inbox without moving selection", () => {
     const store = makeStore();

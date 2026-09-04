@@ -186,6 +186,19 @@ function propertyMatchContexts(records: readonly PropertyRecord[]) {
   }));
 }
 
+function sortQueriedBlocks(
+  blocks: VisibleBlock[],
+  sort: NonNullable<BlockSearchQuery["sort"]>,
+): void {
+  const field = sort.field === "created" ? "createdAt" : "updatedAt";
+  const direction = sort.direction === "asc" ? 1 : -1;
+  blocks.sort((left, right) =>
+    direction * left[field].localeCompare(right[field]) ||
+    direction * left.createdAt.localeCompare(right.createdAt) ||
+    left.id.localeCompare(right.id)
+  );
+}
+
 interface LoadedGraphTraversalOptions extends BlockTraversalOptions {
   text?: string;
   stopAfterMatches?: number;
@@ -1259,9 +1272,10 @@ export class OutlinerStore {
         propertyScope: query.propertyScope,
         subtreeRootId: query.subtreeRootId,
         text: query.text,
-        stopAfterMatches: query.limit + 1,
+        stopAfterMatches: query.sort ? undefined : query.limit + 1,
         deletedMode,
       });
+      if (query.sort) sortQueriedBlocks(blocks, query.sort);
       if (blocks.length <= query.limit) {
         return { blocks, completeness: { kind: "complete" } };
       }
@@ -1285,9 +1299,10 @@ export class OutlinerStore {
         propertyScope: query?.propertyScope,
         subtreeRootId: query?.subtreeRootId,
         text: query?.text,
-        stopAfterMatches: query ? query.limit + 1 : undefined,
+        stopAfterMatches: query?.sort ? undefined : query ? query.limit + 1 : undefined,
         deletedMode: query?.includeDeleted ?? "active",
       });
+      if (query?.sort) sortQueriedBlocks(matched, query.sort);
       const visible: VisibleBlockCollection = query && matched.length > query.limit
         ? {
             blocks: matched.slice(0, query.limit),

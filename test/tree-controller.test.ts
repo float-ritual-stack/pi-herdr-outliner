@@ -1853,6 +1853,41 @@ describe("createTreeController", () => {
     expect(fake.calls.some((call) => call.action === "virtual.occurrences.reorder")).toBe(false);
   });
 
+  test("disables manual occurrence reorder for timestamp-sorted branches", async () => {
+    const definition = block("sorted-view", {
+      properties: [
+        { key: "type", value: "virtual-branch" },
+        { key: "query", value: "status=Done" },
+        { key: "sort", value: "updated" },
+        { key: "direction", value: "desc" },
+      ],
+    });
+    const first = block("newest", { properties: [{ key: "status", value: "Done" }] });
+    const second = block("older", {
+      position: 1,
+      properties: [{ key: "status", value: "Done" }],
+    });
+    const fake = harness((input) => {
+      if (input.action === "workspace.snapshot") return snapshot([definition, first, second]);
+      if (input.action === "blocks.query") {
+        expect(input.query.sort).toEqual({ field: "updated", direction: "desc" });
+        return { blocks: [first, second], completeness: { kind: "complete" } };
+      }
+      return undefined;
+    });
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+    await controller.handleKeypress("", { name: "down" }, "pass");
+    fake.calls.length = 0;
+
+    await controller.handleKeypress("", { name: "down", shift: true }, "pass");
+
+    expect(controller.view().status).toBe(
+      "Virtual branch is sorted by updated desc; manual reorder is disabled",
+    );
+    expect(fake.calls.some((call) => call.action === "virtual.occurrences.reorder")).toBe(false);
+  });
+
   test("keeps occurrence hierarchy effects disabled and left selects its definition", async () => {
     const definition = block("view", {
       properties: [

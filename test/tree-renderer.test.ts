@@ -76,6 +76,7 @@ const branchConfig: VirtualBranchConfig = {
   viewId: "definition",
   query: "",
   filters: [],
+  sort: null,
   limit: 200,
   create: null,
   createParentId: null,

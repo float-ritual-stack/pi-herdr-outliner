@@ -296,11 +296,15 @@ interface BlockSearchQuery {
   rankViewId?: string;
   includeDeleted?: "roots" | "all";
   propertyScope?: "block" | "line" | "inline" | "all";
+  sort?: {
+    field: "created" | "updated";
+    direction: "asc" | "desc";
+  };
   limit: number;
 }
 ```
 
-The service normalizes every query before regular graph traversal or ranked virtual-branch SQL. It validates limits from 1 through 1000 without clamping, lowercases property keys, preserves exact interior value spaces, distinguishes presence from equality, removes exact duplicate clauses, validates `propertyScope`, validates subtree roots, and translates the reserved `deleted=true` compatibility filter into explicit deleted-root mode.
+The service normalizes every query before regular graph traversal or ranked virtual-branch SQL. It validates limits from 1 through 1000 without clamping, lowercases property keys, preserves exact interior value spaces, distinguishes presence from equality, removes exact duplicate clauses, validates `propertyScope`, validates subtree roots, validates timestamp sort fields and directions, rejects timestamp sorting combined with `rankViewId`, and translates the reserved `deleted=true` compatibility filter into explicit deleted-root mode. Created/updated sorting orders every match before limit truncation with a deterministic timestamp/id tie break.
 
 Property filters default to block metadata. Explicit `line`, `inline`, or `all` queries use the same derived index and return matching record context—scope, ordinal, line, column, and source span—on each result. Human text surfaces share one minimal property-filter parser: whitespace-separated positive-AND clauses, `key` presence, `key=value`/`key::value` equality, and double-quoted spaced values with `\\` and `\"` escapes. Tree and Pi commands use the expression parser; each repeated CLI `--filter` is parsed as one clause so a shell-quoted value containing spaces remains exact. Virtual branches persist the canonical expression in `[query::…]`; their omitted scope therefore remains block-only. Agent tools remain structured and bypass the shorthand.
 
@@ -413,6 +417,8 @@ A virtual branch is an ordinary canonical block with exactly one `[type::virtual
 Optional properties:
 
 - `[limit::N]` — bounded query size, from 1 through 1000.
+- `[sort::created]` or `[sort::updated]` — order the complete matched set by timestamp before applying the limit.
+- `[direction::asc]` or `[direction::desc]` — timestamp direction; requires `sort` and defaults to `desc`.
 - `[create::key=value]` — one property applied to new canonical children.
 - `[create-parent::<block-id>]` — physical parent for branch-created blocks.
 
@@ -436,14 +442,15 @@ Context disclosure and multiline expansion are Tree-local ephemeral state.
 row and parent identities; canonical edit, reveal, and explicit deletion still
 target `canonicalId`. Projected indent/outdent and add operations remain disabled.
 
-Branch count, completeness, persisted ranks, and `Shift+Up` / `Shift+Down` reorder
-remain root-only. Root-query truncation is distinct from depth and 1,000-row budget
-truncation, and all three are surfaced. `workspace.snapshot` carries every
-persisted occurrence rank in the same transactional read as the block graph.
-Projection reapplies those ranks defensively before the root limit. Reorder changes
-only the complete matched-root sequence, never contextual descendants, canonical
-parents/positions, or another branch. Rank rows survive temporary query mismatches
-and cascade when either the branch definition or canonical block is deleted.
+Branch count, completeness, and truncation remain root-only. Root-query truncation
+is distinct from depth and 1,000-row budget truncation, and all three are surfaced.
+Unsorted branches use persisted ranks and `Shift+Up` / `Shift+Down` reorder;
+`workspace.snapshot` carries every occurrence rank in the same transactional read
+as the block graph, and projection reapplies those ranks before the root limit.
+Timestamp-sorted branches order all matched roots before the limit, ignore
+persisted ranks, and disable manual occurrence reorder. Rank rows survive
+temporary query mismatches and cascade when either the branch definition or
+canonical block is deleted.
 
 ## Detail rendering and editing invariants
 
