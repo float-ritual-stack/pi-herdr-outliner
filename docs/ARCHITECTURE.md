@@ -60,6 +60,19 @@ PageUp/PageDown move the selected expanded row's offset by one Tree body viewpor
 
 The legacy ANSI Detail entrypoint remains available in [`src/detail.ts`](../src/detail.ts), but the Herdr manifest starts [`src/detail-main.ts`](../src/detail-main.ts).
 
+[`detail-keymap.ts`](../src/detail-keymap.ts) is the scoped Detail command
+router. It computes one ordered context list from controller and projection
+state, resolves a normalized terminal chord to a stable action ID, and executes
+that ID directly as a `DetailIntent` or pane effect. Global close precedes
+transient chooser/filter/completion/editor ownership; focused Property,
+Backlinks, dedicated Property, and draft-preview scopes precede the base
+Detail mode. Scope-disjoint actions may share a chord, with the earlier active
+scope winning and a rebound higher-scope default suppressing lower-scope
+fallback. Keyboard bindings, action-menu selections, and action links call the
+same executor. Raw text and cursor-editing input reaches
+[`text-buffer-editor.ts`](../src/text-buffer-editor.ts) only after command
+resolution declines the chord.
+
 Detail owns an exact target, a bounded in-process target history, and a visible
 `Unlocked | Locked` state. An unlocked Detail is eligible for same-tab Tree
 previews and confirmed reference opens. Ordinary navigation can target only an

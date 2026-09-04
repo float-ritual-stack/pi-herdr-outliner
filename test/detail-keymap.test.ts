@@ -79,10 +79,12 @@ function harness(
       invoke: (actionId: string) => Promise<void>,
     ) => void;
     navigatePreview?: (direction: "up" | "down" | "pageup" | "pagedown" | "top" | "bottom") => void;
+    previewFocused?: () => boolean;
   } = {},
 ): {
   intents: DetailIntent[];
   press(key: TerminalKey, str?: string, inputAction?: "pass" | "suppress"): Promise<void>;
+  invoke(actionId: string): Promise<void>;
   chooserInputs: Array<{ str: string; key: TerminalKey }>;
   stops: { count: number };
 } {
@@ -121,6 +123,7 @@ function harness(
   return {
     chooserInputs,
     intents,
+    invoke: (actionId) => handler.invoke(actionId),
     press: (key, str = "", inputAction = "pass") => handler(str, key, inputAction),
     stops,
   };
@@ -244,6 +247,90 @@ test("opens the contextual menu and invokes its selected action through effectiv
     { type: "edit.begin" },
     { type: "pane.open", direction: "right" },
   ]);
+});
+
+test("invokes semantic actions directly regardless of bindings and reports invalid contexts", async () => {
+  const previewState = state();
+  previewState.mode = "preview";
+  const detail = harness(previewState, false, {
+    actionKeymap: new OutlinerActionKeymap("<test>", {
+      "detail.edit.begin": [],
+    }),
+  });
+
+  await detail.invoke("detail.edit.begin");
+  await detail.press({ name: "e" }, "e");
+  await detail.invoke("detail.buffer.save");
+  await detail.invoke("detail.missing");
+
+  expect(detail.intents).toEqual([
+    { type: "edit.begin" },
+    { type: "status.set", message: "save is unavailable here" },
+    { type: "status.set", message: "Unknown Detail action: detail.missing" },
+  ]);
+});
+
+test("resolves shared chords by ordered Detail context", async () => {
+  const actionKeymap = new OutlinerActionKeymap("<test>", {
+    "detail.edit.begin": ["x"],
+    "detail.property.filter": ["x"],
+    "detail.backlinks.filter": ["x"],
+  });
+  const detailState = state();
+  detailState.mode = "preview";
+  detailState.propertyInspector.expanded = true;
+  detailState.backlinks.expanded = true;
+  const detail = harness(detailState, false, { actionKeymap });
+
+  await detail.press({ name: "x" }, "x");
+  detailState.backlinks.filterDraft = null;
+  detailState.previewRegions = {
+    regions: [{
+      id: "property:source:status:0:0-10",
+      kind: "property-entry",
+      sourceSpan: { start: 0, end: 10, startLine: 0, endLine: 0 },
+      parentId: "property-inspector",
+      childIds: [],
+      focusable: true,
+      disclosure: null,
+      activation: {
+        type: "property-inspector.target.open",
+        occurrenceId: "property:source:status:0:0-10",
+      },
+    }],
+    focusedRegionId: "property:source:status:0:0-10",
+    disclosureOverrides: new Map(),
+  };
+  await detail.press({ name: "x" }, "x");
+  detailState.propertyInspector.filterDraft = null;
+  detailState.propertyInspector.expanded = false;
+  detailState.backlinks.expanded = false;
+  detailState.previewRegions = {
+    regions: [],
+    focusedRegionId: null,
+    disclosureOverrides: new Map(),
+  };
+  await detail.press({ name: "x" }, "x");
+
+  expect(detail.intents).toEqual([
+    { type: "backlinks.filter.begin" },
+    { type: "property-inspector.filter.begin" },
+    { type: "edit.begin" },
+  ]);
+});
+
+test("routes draft-preview commands without mutating the editor buffer", async () => {
+  const directions: string[] = [];
+  const detail = harness(state(), true, {
+    previewFocused: () => true,
+    navigatePreview: (direction) => directions.push(direction),
+  });
+
+  await detail.press({ name: "down" });
+  await detail.press({ name: "x" }, "x");
+
+  expect(directions).toEqual(["down"]);
+  expect(detail.intents).toEqual([{ type: "redraw" }]);
 });
 
 test("maps word, line, selection, and select-all controls to explicit intents", async () => {

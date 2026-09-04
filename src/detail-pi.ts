@@ -39,7 +39,7 @@ import {
 } from "./detail-mouse";
 import { detailCalloutThemeFromEnvironment } from "./detail-callout-theme";
 import { projectDetailRead } from "./detail-embeds";
-import { createDetailKeyHandler, detailActionMode } from "./detail-keymap";
+import { createDetailKeyHandler, detailActionScopes } from "./detail-keymap";
 import {
   createPiDetailInputListener,
   detailChooserOwnsPiInput,
@@ -555,6 +555,13 @@ function navigatePreview(
 ): void {
   preview.navigate(direction);
 }
+function activeDetailActionScopes(): readonly string[] {
+  return detailActionScopes(controller.state, {
+    bufferMode: controller.isBufferMode(),
+    previewFocused: draftSplitActive() && draftSplitFocus === "preview",
+  });
+}
+
 
 function editorSourceLineAtViewport(): number | null {
   const layout = layoutDetailEditor(
@@ -738,6 +745,7 @@ const handleKeypress = createDetailKeyHandler({
   openActionMenu: showActionMenu,
   focusDraftSplit,
   navigatePreview,
+  previewFocused: () => draftSplitActive() && draftSplitFocus === "preview",
 });
 invokeDetailAction = async (actionId) => {
   closeActionMenu();
@@ -766,43 +774,6 @@ async function handleDecodedInput(input: PiDetailInput): Promise<void> {
     return;
   }
 
-  const raw = input.key.sequence ?? input.str;
-  const split = draftSplitActive();
-  const mapped = actionKeymap.canonicalize(
-    "detail",
-    controller.state.mode,
-    input.str,
-    input.key,
-  );
-  if (mapped.suppressed) return;
-  const previewDirection = {
-    "detail.preview.up": "up",
-    "detail.preview.down": "down",
-    "detail.preview.pageup": "pageup",
-    "detail.preview.pagedown": "pagedown",
-  }[mapped.actionId ?? ""] as "up" | "down" | "pageup" | "pagedown" | undefined;
-  if (
-    previewDirection &&
-    controller.state.mode === "preview" &&
-    controller.state.propertyInspector.presentation !== "dedicated"
-  ) {
-    preview.navigate(previewDirection);
-    return;
-  }
-
-  if (split && draftSplitFocus === "preview") {
-    if (mapped.actionId) {
-      await handleKeypress(input.str, input.key, input.inputAction);
-    } else {
-      preview.handleInput(raw);
-      tui.requestRender();
-    }
-    return;
-  }
-  if (!split && preview.handleInput(raw)) {
-    tui.requestRender();
-    return;
-  }
   await handleKeypress(input.str, input.key, input.inputAction);
 }
 
@@ -814,7 +785,7 @@ async function handleInput(data: string): Promise<void> {
   const secondaryClick = parseTreeSecondaryClick(data);
   if (secondaryClick && rightClickOwnership === "outliner") {
     showActionMenu(
-      actionKeymap.menuItems("detail", detailActionMode(controller.state)),
+      actionKeymap.menuItems("detail", activeDetailActionScopes()),
       invokeDetailAction,
       secondaryClick,
     );
@@ -838,7 +809,7 @@ const customFrame = new DetailPiComponent({
       propertyKeys,
     };
   },
-  helpText: () => actionKeymap.helpText("detail", detailActionMode(controller.state)),
+  helpText: () => actionKeymap.helpText("detail", activeDetailActionScopes()),
 });
 const preview = new DetailPiPreviewLayout(
   controller.state,
@@ -864,7 +835,7 @@ const preview = new DetailPiPreviewLayout(
     },
     splitActive: draftSplitActive,
     focused: () => draftSplitFocus === "preview",
-    helpText: () => actionKeymap.helpText("detail", detailActionMode(controller.state)),
+    helpText: () => actionKeymap.helpText("detail", activeDetailActionScopes()),
     chooserHelpText: () => controller.destinationChooserHelpText(),
     setRegions: (regions) => controller.setPreviewRegions(regions),
   },

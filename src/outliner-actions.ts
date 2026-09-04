@@ -40,6 +40,11 @@ export interface CanonicalActionInput {
   key: TerminalKey;
   suppressed: boolean;
 }
+export interface ResolvedActionInput {
+  actionId: string | null;
+  suppressed: boolean;
+}
+
 
 const MODIFIER_ORDER = ["Ctrl", "Alt", "Shift"] as const;
 const KEY_NAMES: Record<string, string> = {
@@ -155,31 +160,55 @@ const ACTION_SPECS = [
   { id: "detail.menu.open", surface: "detail", modes: ["preview", "annotation", "file", "property"], label: "actions", description: "Open contextual actions and effective bindings", defaultChords: ["?"], helpPriority: 25, menuGroup: "System" },
   { id: "detail.keymap.reload", surface: "detail", modes: ["preview", "annotation", "file", "property"], label: "reload keys", description: "Atomically reload the Outliner keymap", defaultChords: ["Ctrl+R"], helpPriority: 5, menuGroup: "System" },
   { id: "detail.focus.tree", surface: "detail", modes: ["preview", "annotation", "file"], label: "Tree", description: "Return focus to Tree", defaultChords: ["q", "Ctrl+C"], helpPriority: 75, menuGroup: "Pane" },
+  { id: "detail.property.focus.tree", surface: "detail", modes: ["property"], label: "Tree", description: "Return focus to Tree from Property Detail", defaultChords: ["Ctrl+C"], helpPriority: 75, menuGroup: "Pane" },
   { id: "detail.property.close", surface: "detail", modes: ["property"], label: "close", description: "Close this dedicated Property Detail", defaultChords: ["q"], helpPriority: 100, menuGroup: "System" },
-  { id: "detail.lock.toggle", surface: "detail", modes: ["preview", "annotation", "file", "property"], label: "lock", description: "Lock or unlock this Detail target", defaultChords: ["Shift+L", "i", "Ctrl+L"], helpPriority: 70, menuGroup: "Pane" },
+  { id: "detail.lock.toggle", surface: "detail", modes: ["preview", "annotation", "file", "property"], label: "lock", description: "Lock or unlock this Detail target", defaultChords: ["Shift+L", "i", "Ctrl+L", "Alt+L"], helpPriority: 70, menuGroup: "Pane" },
   { id: "detail.property.toggle", surface: "detail", modes: ["preview", "annotation"], label: "properties", description: "Expand or collapse Property Detail", defaultChords: ["p"], helpPriority: 65, menuGroup: "View" },
-  { id: "detail.property.pane", surface: "detail", modes: ["preview", "annotation", "file"], label: "property pane", description: "Open a dedicated Property Detail", defaultChords: ["Shift+P"], helpPriority: 45, menuGroup: "Pane" },
+  { id: "detail.property.pane", surface: "detail", modes: ["preview", "annotation", "file", "property"], label: "property pane", description: "Open a dedicated Property Detail", defaultChords: ["Shift+P"], helpPriority: 45, menuGroup: "Pane" },
   { id: "detail.reference.open", surface: "detail", modes: ["preview", "annotation", "file"], label: "open link", description: "Open the focused or first reference", defaultChords: ["o"], helpPriority: 85, menuGroup: "Navigate" },
   { id: "detail.current.reveal", surface: "detail", modes: ["preview", "annotation", "file", "property"], label: "reveal in Tree", description: "Reveal this Detail's current block in Tree", defaultChords: ["Shift+R"], helpPriority: 80, menuGroup: "Navigate" },
+  { id: "detail.navigation.back", surface: "detail", modes: ["preview", "annotation", "file", "property"], label: "back", description: "Return to the previous Detail target", defaultChords: ["Alt+ArrowLeft", "Alt+B"], helpPriority: 78, menuGroup: "Navigate" },
+  { id: "detail.navigation.forward", surface: "detail", modes: ["preview", "annotation", "file", "property"], label: "forward", description: "Advance to the next Detail target", defaultChords: ["Alt+ArrowRight", "Alt+F"], helpPriority: 77, menuGroup: "Navigate" },
   { id: "detail.edit.begin", surface: "detail", modes: ["preview", "annotation"], label: "edit", description: "Edit the current block", defaultChords: ["e"], helpPriority: 95, menuGroup: "Edit" },
   { id: "detail.file.view", surface: "detail", modes: ["preview", "annotation"], label: "file", description: "View the referenced file", defaultChords: ["f"], helpPriority: 50, menuGroup: "View" },
   { id: "detail.block.view", surface: "detail", modes: ["file", "annotation"], label: "block", description: "Return to block preview", defaultChords: ["b"], helpPriority: 60, menuGroup: "View" },
   { id: "detail.backlinks.toggle", surface: "detail", modes: ["preview"], label: "backlinks", description: "Expand or collapse backlinks", defaultChords: ["b"], helpPriority: 55, menuGroup: "View" },
-  { id: "detail.preview.up", surface: "detail", modes: ["preview", "annotation", "file"], label: "up", description: "Scroll up", defaultChords: ["ArrowUp"], helpPriority: 90, menuGroup: "Navigate" },
-  { id: "detail.preview.down", surface: "detail", modes: ["preview", "annotation", "file"], label: "down", description: "Scroll down", defaultChords: ["ArrowDown"], helpPriority: 90, menuGroup: "Navigate" },
-  { id: "detail.preview.pageup", surface: "detail", modes: ["preview", "annotation", "file"], label: "page up", description: "Scroll up by one page", defaultChords: ["PgUp", "Ctrl+U"], helpPriority: 40, menuGroup: "Navigate" },
-  { id: "detail.preview.pagedown", surface: "detail", modes: ["preview", "annotation", "file"], label: "page down", description: "Scroll down by one page", defaultChords: ["PgDown", "Ctrl+D"], helpPriority: 40, menuGroup: "Navigate" },
+  { id: "detail.preview.focus.next", surface: "detail", modes: ["preview", "annotation", "property"], label: "next region", description: "Focus the next interactive preview region", defaultChords: ["Tab"], helpPriority: 72, menuGroup: "Navigate" },
+  { id: "detail.preview.focus.previous", surface: "detail", modes: ["preview", "annotation", "property"], label: "previous region", description: "Focus the previous interactive preview region", defaultChords: ["Shift+Tab"], helpPriority: 71, menuGroup: "Navigate" },
+  { id: "detail.preview.activate", surface: "detail", modes: ["preview", "annotation", "property"], label: "activate", description: "Activate the focused preview region", defaultChords: ["Enter"], helpPriority: 88, menuGroup: "Navigate" },
+  { id: "detail.preview.up", surface: "detail", modes: ["preview", "annotation", "file", "draft-preview"], label: "up", description: "Scroll up", defaultChords: ["ArrowUp"], helpPriority: 90, menuGroup: "Navigate" },
+  { id: "detail.preview.down", surface: "detail", modes: ["preview", "annotation", "file", "draft-preview"], label: "down", description: "Scroll down", defaultChords: ["ArrowDown"], helpPriority: 90, menuGroup: "Navigate" },
+  { id: "detail.preview.pageup", surface: "detail", modes: ["preview", "annotation", "file", "draft-preview"], label: "page up", description: "Scroll up by one page", defaultChords: ["PgUp", "Ctrl+U"], helpPriority: 40, menuGroup: "Navigate" },
+  { id: "detail.preview.pagedown", surface: "detail", modes: ["preview", "annotation", "file", "draft-preview"], label: "page down", description: "Scroll down by one page", defaultChords: ["PgDown", "Ctrl+D"], helpPriority: 40, menuGroup: "Navigate" },
+  { id: "detail.preview.top", surface: "detail", modes: ["preview", "annotation", "file", "draft-preview"], label: "top", description: "Jump to the start of the current content", defaultChords: ["g"], helpPriority: 35, menuGroup: "Navigate" },
+  { id: "detail.preview.bottom", surface: "detail", modes: ["preview", "annotation", "file", "draft-preview"], label: "bottom", description: "Jump to the end of the current content", defaultChords: ["Shift+G"], helpPriority: 35, menuGroup: "Navigate" },
+  { id: "detail.property.edit.begin", surface: "detail", modes: ["property-focused"], label: "edit property", description: "Edit the focused property value", defaultChords: ["Enter", "e"], helpPriority: 96, menuGroup: "Edit" },
+  { id: "detail.property.target.open", surface: "detail", modes: ["property-focused"], label: "open property target", description: "Open the focused property target", defaultChords: ["o"], helpPriority: 86, menuGroup: "Navigate" },
+  { id: "detail.property.filter", surface: "detail", modes: ["property-inspector"], label: "filter properties", description: "Filter visible property entries", defaultChords: ["/"], helpPriority: 68, menuGroup: "View" },
+  { id: "detail.property.group", surface: "detail", modes: ["property-inspector"], label: "group properties", description: "Cycle property grouping", defaultChords: ["Shift+G"], helpPriority: 62, menuGroup: "View" },
+  { id: "detail.property.viewport.up", surface: "detail", modes: ["property"], label: "up", description: "Scroll Property Detail up", defaultChords: ["ArrowUp"], helpPriority: 90, menuGroup: "Navigate" },
+  { id: "detail.property.viewport.down", surface: "detail", modes: ["property"], label: "down", description: "Scroll Property Detail down", defaultChords: ["ArrowDown"], helpPriority: 90, menuGroup: "Navigate" },
+  { id: "detail.property.viewport.pageup", surface: "detail", modes: ["property"], label: "page up", description: "Scroll Property Detail up by one page", defaultChords: ["PgUp"], helpPriority: 40, menuGroup: "Navigate" },
+  { id: "detail.property.viewport.pagedown", surface: "detail", modes: ["property"], label: "page down", description: "Scroll Property Detail down by one page", defaultChords: ["PgDown"], helpPriority: 40, menuGroup: "Navigate" },
+  { id: "detail.property.viewport.top", surface: "detail", modes: ["property"], label: "top", description: "Jump to the start of Property Detail", defaultChords: ["g"], helpPriority: 35, menuGroup: "Navigate" },
+  { id: "detail.property.viewport.bottom", surface: "detail", modes: ["property"], label: "bottom", description: "Jump to the end of Property Detail", defaultChords: ["Shift+G"], helpPriority: 35, menuGroup: "Navigate" },
+  { id: "detail.backlinks.filter", surface: "detail", modes: ["backlinks"], label: "filter backlinks", description: "Filter visible backlink sources", defaultChords: ["/"], helpPriority: 68, menuGroup: "View" },
+  { id: "detail.backlinks.sort", surface: "detail", modes: ["backlinks"], label: "sort backlinks", description: "Cycle backlink sorting", defaultChords: ["s"], helpPriority: 58, menuGroup: "View" },
+  { id: "detail.backlinks.source", surface: "detail", modes: ["backlinks"], label: "source disclosure", description: "Expand or collapse the selected backlink source", defaultChords: ["."], helpPriority: 54, menuGroup: "View" },
+  { id: "detail.embed.toggle", surface: "detail", modes: ["preview", "annotation"], label: "embed background", description: "Toggle embedded result backgrounds", defaultChords: ["Shift+E"], helpPriority: 48, menuGroup: "View" },
+  { id: "detail.file.selection", surface: "detail", modes: ["file"], label: "select line", description: "Toggle file line selection", defaultChords: ["v"], helpPriority: 52, menuGroup: "Edit" },
+  { id: "detail.comment.begin", surface: "detail", modes: ["file"], label: "comment", description: "Comment on the selected file range", defaultChords: ["c"], helpPriority: 51, menuGroup: "Edit" },
+  { id: "detail.trash.restore", surface: "detail", modes: ["trash"], label: "restore", description: "Restore this direct Trash root", defaultChords: ["r"], helpPriority: 64, menuGroup: "Edit" },
   { id: "detail.buffer.save", surface: "detail", modes: ["edit", "comment"], label: "save", description: "Save the current editor", defaultChords: ["Ctrl+S"], helpPriority: 100, menuGroup: "Edit" },
-  { id: "detail.buffer.copy", surface: "detail", modes: ["edit", "comment"], label: "copy", description: "Copy selected source text", defaultChords: ["Ctrl+C"], helpPriority: 90, menuGroup: "Edit" },
+  { id: "detail.buffer.copy", surface: "detail", modes: ["edit", "comment"], label: "copy", description: "Copy selected source text", defaultChords: ["Ctrl+C", "Alt+C"], helpPriority: 90, menuGroup: "Edit" },
   { id: "detail.completion.open", surface: "detail", modes: ["edit"], label: "complete", description: "Open reference completion", defaultChords: ["Tab", "Ctrl+Space"], helpPriority: 85, menuGroup: "Edit" },
-  { id: "detail.buffer.undo", surface: "detail", modes: ["edit", "comment"], label: "undo", description: "Undo the previous source edit", defaultChords: ["Ctrl+Z"], helpPriority: 70, menuGroup: "Edit" },
+  { id: "detail.buffer.undo", surface: "detail", modes: ["edit", "comment"], label: "undo", description: "Undo the previous source edit", defaultChords: ["Ctrl+Z", "Alt+Z"], helpPriority: 70, menuGroup: "Edit" },
   { id: "detail.pane.right", surface: "detail", modes: ["preview", "annotation", "file", "property", "destination"], label: "Detail right", description: "Open this target in a new Detail to the right", defaultChords: ["Alt+Shift+ArrowRight"], helpPriority: 44, menuGroup: "Pane" },
   { id: "detail.pane.below", surface: "detail", modes: ["preview", "annotation", "file", "property", "destination"], label: "Detail below", description: "Open this target in a new Detail below", defaultChords: ["Alt+Shift+ArrowDown"], helpPriority: 43, menuGroup: "Pane" },
-  { id: "detail.buffer.redo", surface: "detail", modes: ["edit", "comment"], label: "redo", description: "Redo the previous source edit", defaultChords: ["Ctrl+Shift+Z", "Ctrl+Y"], helpPriority: 65, menuGroup: "Edit" },
-  { id: "detail.split.focus", surface: "detail", modes: ["edit"], label: "focus pane", description: "Move focus between editor and draft preview", defaultChords: ["Ctrl+W"], helpPriority: 90, menuGroup: "Pane" },
-  { id: "detail.split.link", surface: "detail", modes: ["edit"], label: "link scroll", description: "Link editor and draft preview scrolling by source line", defaultChords: ["Ctrl+L"], helpPriority: 80, menuGroup: "Pane" },
+  { id: "detail.buffer.redo", surface: "detail", modes: ["edit", "comment"], label: "redo", description: "Redo the previous source edit", defaultChords: ["Ctrl+Shift+Z", "Ctrl+Y", "Alt+Shift+Z"], helpPriority: 65, menuGroup: "Edit" },
+  { id: "detail.split.focus", surface: "detail", modes: ["edit", "draft-preview"], label: "focus pane", description: "Move focus between editor and draft preview", defaultChords: ["Ctrl+W"], helpPriority: 90, menuGroup: "Pane" },
+  { id: "detail.split.link", surface: "detail", modes: ["edit", "draft-preview"], label: "link scroll", description: "Link editor and draft preview scrolling by source line", defaultChords: ["Ctrl+L"], helpPriority: 80, menuGroup: "Pane" },
 ] as const satisfies readonly OutlinerActionSpec[];
-
 const ACTIONS: readonly OutlinerActionDefinition[] = ACTION_SPECS.map((action) => ({
   ...action,
   intent: action.id,
@@ -239,12 +268,28 @@ export function actionChordForInput(str: string | undefined, key: TerminalKey): 
   return normalizeActionChord([...modifiers, name].join("+"));
 }
 
+type ActionScopes = string | readonly string[];
+
+function normalizeActionScopes(scopes: ActionScopes): readonly string[] {
+  return typeof scopes === "string" ? [scopes] : scopes;
+}
+
 function actionApplies(
   action: OutlinerActionDefinition,
   surface: OutlinerActionSurface,
-  mode: string,
+  scopes: ActionScopes,
 ): boolean {
-  return action.available({ surface, mode });
+  const activeScopes = normalizeActionScopes(scopes);
+  return action.surface === surface &&
+    (action.modes.includes("*") || activeScopes.some((scope) => action.modes.includes(scope)));
+}
+
+function actionScopeRank(
+  action: OutlinerActionDefinition,
+  scopes: readonly string[],
+): number {
+  if (action.modes.includes("*")) return -1;
+  return scopes.findIndex((scope) => action.modes.includes(scope));
 }
 
 function triggerForChord(chord: string): { str: string; key: TerminalKey } {
@@ -341,6 +386,32 @@ export class OutlinerActionKeymap {
     return this.bindings(actionId)[0] ?? "unbound";
   }
 
+  resolve(
+    surface: OutlinerActionSurface,
+    scopes: ActionScopes,
+    str: string | undefined,
+    key: TerminalKey,
+  ): ResolvedActionInput {
+    const chord = actionChordForInput(str, key);
+    if (!chord) return { actionId: null, suppressed: false };
+    const activeScopes = normalizeActionScopes(scopes);
+    const applicable = this.actions(surface, activeScopes);
+    for (let rank = -1; rank < activeScopes.length; rank += 1) {
+      let ownsDefault = false;
+      for (const action of applicable) {
+        if (actionScopeRank(action, activeScopes) !== rank) continue;
+        if (this.bindings(action.id).includes(chord)) {
+          return { actionId: action.id, suppressed: false };
+        }
+        if (action.defaultChords.some((candidate) => normalizeActionChord(candidate) === chord)) {
+          ownsDefault = true;
+        }
+      }
+      if (ownsDefault) return { actionId: null, suppressed: true };
+    }
+    return { actionId: null, suppressed: false };
+  }
+
   canonicalize(
     surface: OutlinerActionSurface,
     mode: string,
@@ -348,24 +419,24 @@ export class OutlinerActionKeymap {
     key: TerminalKey,
   ): CanonicalActionInput {
     const text = str ?? "";
-    const chord = actionChordForInput(text, key);
-    if (!chord) return { actionId: null, str: text, key, suppressed: false };
-    const applicable = ACTIONS.filter((action) => actionApplies(action, surface, mode));
-    const matched = applicable.find((action) => this.bindings(action.id).includes(chord));
-    if (matched) {
-      const canonical = triggerForChord(matched.defaultChords[0] ?? chord);
-      return { actionId: matched.id, ...canonical, suppressed: false };
+    const resolved = this.resolve(surface, mode, text, key);
+    if (!resolved.actionId) {
+      return resolved.suppressed
+        ? { actionId: null, str: "", key: {}, suppressed: true }
+        : { actionId: null, str: text, key, suppressed: false };
     }
-    const ownedDefault = applicable.some((action) =>
-      action.defaultChords.map(normalizeActionChord).includes(chord)
-    );
-    return ownedDefault
-      ? { actionId: null, str: "", key: {}, suppressed: true }
-      : { actionId: null, str: text, key, suppressed: false };
+    const action = this.action(resolved.actionId);
+    const chord = actionChordForInput(text, key);
+    const canonical = triggerForChord(action.defaultChords[0] ?? chord!);
+    return { actionId: action.id, ...canonical, suppressed: false };
   }
 
-  helpText(surface: OutlinerActionSurface, mode: string, actionIds?: readonly string[]): string {
-    const selected = this.actions(surface, mode)
+  helpText(
+    surface: OutlinerActionSurface,
+    scopes: ActionScopes,
+    actionIds?: readonly string[],
+  ): string {
+    const selected = this.actions(surface, scopes)
       .filter((action) => !actionIds || actionIds.includes(action.id))
       .sort((left, right) => right.helpPriority - left.helpPriority || left.id.localeCompare(right.id));
     return selected
@@ -373,8 +444,8 @@ export class OutlinerActionKeymap {
       .join("  ");
   }
 
-  menuItems(surface: OutlinerActionSurface, mode: string): OutlinerActionMenuItem[] {
-    return this.actions(surface, mode)
+  menuItems(surface: OutlinerActionSurface, scopes: ActionScopes): OutlinerActionMenuItem[] {
+    return this.actions(surface, scopes)
       .sort((left, right) => left.menuGroup.localeCompare(right.menuGroup) || right.helpPriority - left.helpPriority)
       .map((action) => ({
         id: action.id,
@@ -390,6 +461,15 @@ export class OutlinerActionKeymap {
     if (!action) throw new Error(`Unknown Outliner action: ${actionId}`);
     return action;
   }
+  isAvailable(
+    actionId: string,
+    surface: OutlinerActionSurface,
+    scopes: ActionScopes,
+  ): boolean {
+    const action = ACTIONS_BY_ID.get(actionId);
+    return action ? actionApplies(action, surface, scopes) : false;
+  }
+
 
   canonicalInput(actionId: string): { str: string; key: TerminalKey } | null {
     const chord = this.action(actionId).defaultChords[0] ?? this.bindings(actionId)[0];
@@ -400,8 +480,16 @@ export class OutlinerActionKeymap {
     return chord ? triggerForChord(chord) : null;
   }
 
-  private actions(surface: OutlinerActionSurface, mode: string): OutlinerActionDefinition[] {
-    return ACTIONS.filter((action) => actionApplies(action, surface, mode));
+  private actions(
+    surface: OutlinerActionSurface,
+    scopes: ActionScopes,
+  ): OutlinerActionDefinition[] {
+    const activeScopes = normalizeActionScopes(scopes);
+    return ACTIONS
+      .filter((action) => actionApplies(action, surface, activeScopes))
+      .sort((left, right) =>
+        actionScopeRank(left, activeScopes) - actionScopeRank(right, activeScopes)
+      );
   }
   defaultInput(actionId: string): { str: string; key: TerminalKey } | null {
     const chord = this.action(actionId).defaultChords[0];

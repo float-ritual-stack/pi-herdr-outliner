@@ -9,7 +9,7 @@ import {
   type DetailViewport,
 } from "./detail-controller";
 import { projectDetailRead } from "./detail-embeds";
-import { createDetailKeyHandler, detailActionMode } from "./detail-keymap";
+import { createDetailKeyHandler, detailActionScopes } from "./detail-keymap";
 import { renderDetailAnsi } from "./detail-renderer";
 import { completeReferencedPaths, readReferencedFile } from "./files";
 import { resolveOutlinerLinkTarget } from "./outliner-links";
@@ -211,7 +211,9 @@ const effects: DetailEffects = {
 
 function draw(): void {
   process.stdout.write(renderDetailAnsi(controller.state, viewport(), {
-    helpText: actionKeymap.helpText("detail", detailActionMode(controller.state)),
+    helpText: actionKeymap.helpText("detail", detailActionScopes(controller.state, {
+      bufferMode: controller.isBufferMode(),
+    })),
     chooserHelpText: controller.destinationChooserHelpText(),
   }));
 }
