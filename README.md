@@ -210,8 +210,9 @@ Tree and Detail expose configured block properties as compact one-line summaries
 Set `OUTLINER_PROPERTY_SUMMARY_KEYS` on the Herdr process to a comma-separated
 property order; the default is `status,work-stage,priority,track`. An explicit
 empty value hides summaries. Detail places the summary beneath its prominent
-title. Collapsed Tree rows place it beside the property-free title, remove
-lower-priority fields before truncating the title, and never add a second row.
+title. Collapsed Tree rows right-align summaries against the row's available
+width, omit a lone property's repeated key, remove lower-priority fields before
+truncating the title, and never add a second row.
 The complete authored metadata remains available in expanded rows and the
 property inspector. Detail also right-aligns the clickable `🔓`/`🔒` lock and
 `[⋯]` action controls.

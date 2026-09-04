@@ -129,7 +129,8 @@ function collapsedBlockTitle(block: VisibleBlock): string {
 }
 
 function renderSummarySegment(label: string, value: string): string {
-  return `\x1b[2m${label}\x1b[0m \x1b[36m${value}\x1b[0m`;
+  const renderedLabel = label ? `\x1b[2m${label}\x1b[0m ` : "";
+  return `${renderedLabel}\x1b[36m${value}\x1b[0m`;
 }
 
 function renderCollapsedRow(
@@ -144,7 +145,9 @@ function renderCollapsedRow(
   let available = Math.max(1, width - visibleWidth(prefix) - visibleWidth(suffix));
   const segments = [...summary];
   const separator = "  ";
-  const plainSummary = () => segments.map((segment) => segment.plain).join(" · ");
+  const plainSummary = () => segments.length === 1
+    ? segments[0]!.value
+    : segments.map((segment) => segment.plain).join(" · ");
   if (
     segments.length > 0 &&
     optionalSuffix &&
@@ -167,13 +170,18 @@ function renderCollapsedRow(
   }
 
   const renderedSummary = () =>
-    segments
-      .map((segment) => renderSummarySegment(segment.label, segment.value))
-      .join(" \x1b[2m·\x1b[0m ");
+    segments.length === 1
+      ? renderSummarySegment("", segments[0]!.value)
+      : segments
+        .map((segment) => renderSummarySegment(segment.label, segment.value))
+        .join(" \x1b[2m·\x1b[0m ");
   if (
     visibleWidth(title) + visibleWidth(separator) + visibleWidth(plainSummary()) <= available
   ) {
-    return truncateToWidth(`${prefix}${title}${separator}${renderedSummary()}${suffix}`, width);
+    const gap = " ".repeat(
+      available - visibleWidth(title) - visibleWidth(plainSummary()),
+    );
+    return truncateToWidth(`${prefix}${title}${gap}${renderedSummary()}${suffix}`, width);
   }
 
   const contentWidth = Math.max(1, available - visibleWidth(separator));
