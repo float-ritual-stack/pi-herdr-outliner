@@ -8,6 +8,7 @@ import { requireUniqueClientId, sendClientCommand } from "./client-target";
 import { isFragmentId, resolveFragment } from "./fragments";
 import {
   blockDisplayTitle,
+  blockReferenceEnvelopeRanges,
   blockReferenceOccurrences,
 } from "./references";
 import {
@@ -31,7 +32,6 @@ import type {
 const OUTLINER_SCHEME = "pi-outliner:";
 const BLOCK_ID_PATTERN = /^[A-Za-z0-9_-]{8,}$/;
 const BLOCK_ID_TOKEN_PATTERN = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
-const BLOCK_REFERENCE_ENVELOPE_PATTERN = /\(\([^\r\n]*?\)\)/g;
 
 const TERMINAL_CONTROL_PATTERN = /[\u0000-\u001f\u007f]/;
 
@@ -342,12 +342,9 @@ function genericLinkSpans(
   workIdPrefix: string | null,
 ): LinkSpan[] {
   const spans: LinkSpan[] = [];
-  const blockReferenceRanges: Array<{ start: number; end: number }> = [];
-  for (const match of text.matchAll(BLOCK_REFERENCE_ENVELOPE_PATTERN)) {
-    if (match[0].includes("|")) {
-      blockReferenceRanges.push({ start: match.index, end: match.index + match[0].length });
-    }
-  }
+  const blockReferenceRanges = blockReferenceEnvelopeRanges(text).filter((range) =>
+    text.slice(range.start, range.end).includes("|")
+  );
   for (const reference of outlinerReferenceOccurrences(text, workIdPrefix)) {
     if (reference.kind === "page") {
       spans.push({

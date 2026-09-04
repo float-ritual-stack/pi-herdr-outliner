@@ -66,6 +66,12 @@ describe("block reference rendering", () => {
       expect(blockReferenceOccurrences(invalid)).toEqual([]);
       expect(resolveBlockReferences(invalid, () => target)).toBe(invalid);
     }
+    const multiline = `((${target.id}|line one\r\n[[Hidden Page]] PIE-123))`;
+    expect(outlinerReferenceOccurrences(multiline, "PIE")).toEqual([]);
+    expect(
+      outlinerReferenceOccurrences(`${multiline}\r\n[[Visible Page]] PIE-124`, "PIE")
+        .map((reference) => reference.kind),
+    ).toEqual(["page", "work-id"]);
   });
 
   test("chooses a title after whole-block indexed-span stripping", () => {
