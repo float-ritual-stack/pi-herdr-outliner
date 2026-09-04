@@ -9,6 +9,7 @@ import {
 } from "../src/detail-mouse";
 import {
   parseTreePlainClick,
+  parseTreePrimaryPointer,
   parseTreeWheelEvent,
 } from "../src/tree-mouse";
 
@@ -25,6 +26,34 @@ describe("Detail mouse input", () => {
       column: 3,
       row: 8,
     });
+  });
+
+  test("decodes primary pointer down, drag, and release phases", () => {
+    expect(parseTreePrimaryPointer("\x1b[<0;7;5M")).toEqual({
+      column: 6,
+      row: 4,
+      shift: false,
+      meta: false,
+      ctrl: false,
+      phase: "down",
+    });
+    expect(parseTreePrimaryPointer("\x1b[<36;11;9M")).toEqual({
+      column: 10,
+      row: 8,
+      shift: true,
+      meta: false,
+      ctrl: false,
+      phase: "drag",
+    });
+    expect(parseTreePrimaryPointer("\x1b[<0;13;10m")).toEqual({
+      column: 12,
+      row: 9,
+      shift: false,
+      meta: false,
+      ctrl: false,
+      phase: "up",
+    });
+    expect(parseTreePlainClick("\x1b[<32;11;9M")).toBeNull();
   });
 
   test("routes body input by split region and excludes chrome", () => {

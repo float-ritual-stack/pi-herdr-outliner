@@ -53,6 +53,22 @@ describe("TextBuffer word motion and selection", () => {
     expect(buffer.selectionRange).toBeNull();
   });
 
+  test("extends pointer placement into an exact multiline copy range", () => {
+    const buffer = new TextBuffer("alpha beta\ngamma");
+    buffer.placeCursor(0, 2);
+    buffer.placeCursor(1, 3, true);
+
+    expect(buffer.selectionRange).toEqual({
+      start: { row: 0, column: 2 },
+      end: { row: 1, column: 3 },
+    });
+    expect(buffer.selectedText).toBe("pha beta\ngam");
+
+    buffer.placeCursor(0, 1);
+    expect(buffer.selectionRange).toBeNull();
+    expect(buffer.selectedText).toBeNull();
+  });
+
   test("typing replaces the selected range and select-all covers the full buffer", () => {
     const buffer = new TextBuffer("alpha beta\ngamma");
     buffer.selectAll();

@@ -95,6 +95,7 @@ interface Harness {
       direction: "right" | "down";
       fragmentId?: string;
     }>;
+    copiedTexts: string[];
   };
   setSelection(selection: SelectionContext): void;
   setUpdate(implementation: DetailEffects["updateBlock"]): void;
@@ -152,6 +153,7 @@ function createHarness(
     propertyPatches: [],
     backlinkPeeks: [],
     openedDetails: [],
+    copiedTexts: [],
   };
   const effects: DetailEffects = {
     clientId: "detail-test",
@@ -223,6 +225,9 @@ function createHarness(
         direction,
         ...(fragmentId ? { fragmentId } : {}),
       });
+    },
+    copyText(text) {
+      calls.copiedTexts.push(text);
     },
     async resolveNavigation(intent) {
       return {
@@ -352,6 +357,36 @@ describe("detail controller projection and deferred refresh", () => {
     await harness.controller.dispatch({ type: "edit.begin" }, viewport);
     expect(harness.controller.state.buffer.text).toBe("Raw ((reference))");
     expect(harness.controller.state.mode).toBe("edit");
+  });
+
+  test("copies the exact editor selection through the terminal effect", async () => {
+    const harness = createHarness(makeBlock({ text: "alpha beta\ngamma" }));
+    await harness.controller.initialize();
+    await harness.controller.dispatch({ type: "edit.begin" }, viewport);
+    await harness.controller.dispatch({
+      type: "editor.cursor.place",
+      visualRow: 0,
+      contentColumn: 2,
+    }, viewport);
+    await harness.controller.dispatch({
+      type: "editor.cursor.place",
+      visualRow: 1,
+      contentColumn: 3,
+      extend: true,
+    }, viewport);
+
+    await harness.controller.dispatch({ type: "buffer.copy" }, viewport);
+    expect(harness.calls.copiedTexts).toEqual(["pha beta\ngam"]);
+    expect(harness.controller.state.status).toBe("Copied 12 characters");
+
+    await harness.controller.dispatch({
+      type: "editor.cursor.place",
+      visualRow: 0,
+      contentColumn: 0,
+    }, viewport);
+    await harness.controller.dispatch({ type: "buffer.copy" }, viewport);
+    expect(harness.calls.copiedTexts).toEqual(["pha beta\ngam"]);
+    expect(harness.controller.state.status).toBe("No text selected");
   });
 
   test("keeps wheel viewport movement independent until cursor input resumes following", async () => {

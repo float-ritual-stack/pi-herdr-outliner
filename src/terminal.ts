@@ -1,3 +1,5 @@
+import { Buffer } from "node:buffer";
+
 export interface TerminalKey {
   name?: string;
   ctrl?: boolean;
@@ -19,6 +21,11 @@ export const BRACKETED_PASTE_ENABLE = "\x1b[?2004h";
 export const BRACKETED_PASTE_DISABLE = "\x1b[?2004l";
 const BRACKETED_PASTE_START = "\x1b[200~";
 const BRACKETED_PASTE_END = "\x1b[201~";
+
+export function osc52ClipboardWrite(text: string): string {
+  const encoded = Buffer.from(text, "utf8").toString("base64");
+  return `\x1b]52;c;${encoded}\x07`;
+}
 
 function consumeCsi(value: string, start: number): number {
   for (let index = start; index < value.length; index += 1) {

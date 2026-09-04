@@ -274,6 +274,7 @@ export interface DetailEffects {
     direction: "right" | "down",
     fragmentId?: string,
   ): void | Promise<void>;
+  copyText(text: string): void;
   updateBlock(input: {
     blockId: string;
     text: string;
@@ -360,12 +361,13 @@ export type DetailIntent =
   | { type: "buffer.delete" }
   | { type: "buffer.move"; direction: DetailBufferMoveDirection; extend?: boolean }
   | { type: "buffer.select-all" }
+  | { type: "buffer.copy" }
   | { type: "buffer.undo" }
   | { type: "buffer.redo" }
   | { type: "buffer.save" }
   | { type: "editor.viewport.scroll"; delta: number }
   | { type: "editor.viewport.anchor"; sourceLine: number }
-  | { type: "editor.cursor.place"; visualRow: number; contentColumn: number }
+  | { type: "editor.cursor.place"; visualRow: number; contentColumn: number; extend?: boolean }
   | { type: "draft-preview.link.toggle" }
   | { type: "buffer.cancel" }
   | { type: "completion.open" }
@@ -1719,7 +1721,7 @@ export function createDetailController(
           intent.visualRow,
           intent.contentColumn,
         );
-        state.buffer.placeCursor(position.row, position.column);
+        state.buffer.placeCursor(position.row, position.column, intent.extend);
         state.completion = null;
         ensureEditorCursorVisible(viewport);
         break;
@@ -1739,6 +1741,16 @@ export function createDetailController(
         state.buffer.selectAll();
         ensureEditorCursorVisible(viewport);
         break;
+      case "buffer.copy": {
+        const selectedText = state.buffer.selectedText;
+        if (selectedText === null) {
+          state.status = "No text selected";
+        } else {
+          effects.copyText(selectedText);
+          state.status = `Copied ${[...selectedText].length} characters`;
+        }
+        break;
+      }
       case "buffer.undo":
         state.completion = null;
         state.status = state.buffer.undo() ? "Undo" : "Nothing to undo";

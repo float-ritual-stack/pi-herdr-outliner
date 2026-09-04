@@ -359,6 +359,10 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
       await dispatch({ type: "draft-preview.link.toggle" });
       return;
     }
+    if (mapped.actionId === "detail.buffer.copy") {
+      await dispatch({ type: "buffer.copy" });
+      return;
+    }
     const previewDirection = {
       "detail.preview.up": "up",
       "detail.preview.down": "down",
@@ -387,9 +391,12 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
       await handlePropertyEditKey(str, key);
       return;
     }
+    if (controller.isBufferMode() && (key.ctrl || key.meta) && key.name === "c") {
+      await dispatch({ type: "buffer.copy" });
+      return;
+    }
     if (key.ctrl && key.name === "c") {
-      if (controller.isBufferMode()) await cancelBuffer();
-      else await dispatch({ type: "focus.outliner" });
+      await dispatch({ type: "focus.outliner" });
       return;
     }
     if (controller.isBufferMode()) {

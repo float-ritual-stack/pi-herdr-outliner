@@ -37,6 +37,37 @@ export type PiDetailInput =
       inputAction: TerminalInputAction;
     };
 
+export class PiDetailInputStreamDecoder {
+  #paste: string | null = null;
+
+  push(data: string): PiDetailInput[] {
+    const inputs: PiDetailInput[] = [];
+    let remaining = data;
+    while (remaining.length > 0) {
+      if (this.#paste !== null) {
+        this.#paste += remaining;
+        const end = this.#paste.indexOf(BRACKETED_PASTE_END);
+        if (end < 0) break;
+        const trailing = this.#paste.slice(end + BRACKETED_PASTE_END.length);
+        inputs.push({ kind: "paste", text: this.#paste.slice(0, end) });
+        this.#paste = null;
+        remaining = trailing;
+        continue;
+      }
+
+      const start = remaining.indexOf(BRACKETED_PASTE_START);
+      if (start < 0) {
+        inputs.push(decodePiDetailInput(remaining));
+        break;
+      }
+      if (start > 0) inputs.push(decodePiDetailInput(remaining.slice(0, start)));
+      this.#paste = "";
+      remaining = remaining.slice(start + BRACKETED_PASTE_START.length);
+    }
+    return inputs;
+  }
+}
+
 export function piDetailChooserInput(
   input: PiDetailInput,
 ): { str: string; key: TerminalKey } {
@@ -65,6 +96,7 @@ const KEY_MAPPINGS: readonly PiKeyMapping[] = [
   { id: Key.ctrlShift("z"), key: { name: "z", ctrl: true, shift: true } },
   { id: Key.ctrl("y"), key: { name: "y", ctrl: true } },
   { id: Key.super("z"), key: { name: "z", meta: true } },
+  { id: Key.super("c"), key: { name: "c", meta: true } },
   { id: Key.superShift("z"), key: { name: "z", meta: true, shift: true } },
   { id: Key.ctrl("space"), key: { name: "space", ctrl: true } },
   { id: Key.ctrl("a"), key: { name: "a", ctrl: true } },
