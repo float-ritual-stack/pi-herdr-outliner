@@ -115,6 +115,19 @@ export class TextBuffer {
     return anchor !== null && (anchor.row !== this.row || anchor.column !== this.column);
   }
 
+  get selectedText(): string | null {
+    const range = this.selectionRange;
+    if (!range) return null;
+    if (range.start.row === range.end.row) {
+      return this.lines[range.start.row]!.slice(range.start.column, range.end.column);
+    }
+    return [
+      this.lines[range.start.row]!.slice(range.start.column),
+      ...this.lines.slice(range.start.row + 1, range.end.row),
+      this.lines[range.end.row]!.slice(0, range.end.column),
+    ].join("\n");
+  }
+
   clearSelection(): void {
     this.clearSelectionAnchor();
     this.breakHistoryGroup();
@@ -128,15 +141,14 @@ export class TextBuffer {
     if (!this.hasSelection) this.clearSelectionAnchor();
   }
 
-  placeCursor(row: number, column: number): void {
+  placeCursor(row: number, column: number, extend = false): void {
     const safeRow = Math.max(0, Math.min(Math.floor(row), this.lines.length - 1));
     const line = this.lines[safeRow] ?? "";
-    this.row = safeRow;
-    this.column = clampToGraphemeStart(
+    const safeColumn = clampToGraphemeStart(
       line,
       Math.max(0, Math.min(Math.floor(column), line.length)),
     );
-    this.clearSelection();
+    this.moveTo(safeRow, safeColumn, extend);
   }
 
   insert(value: string): void {

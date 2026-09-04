@@ -4,6 +4,7 @@ import type { DetailState } from "../src/detail-controller";
 import {
   createPiDetailInputListener,
   decodePiDetailInput,
+  PiDetailInputStreamDecoder,
   detailChooserOwnsPiInput,
   piDetailChooserInput,
 } from "../src/detail-pi-input";
@@ -15,6 +16,7 @@ import {
 } from "../src/detail-pi-renderer";
 import { createOpenDestinationChooserState } from "../src/open-destination-chooser";
 import { TextBuffer } from "../src/text-buffer";
+import { osc52ClipboardWrite } from "../src/terminal";
 import type { Block } from "../src/types";
 
 function block(text: string): Block {
@@ -143,6 +145,32 @@ describe("Pi TUI Detail input", () => {
       kind: "key",
       key: { name: "b", meta: true },
     });
+    expect(decodePiDetailInput("\x1b[99;9u")).toMatchObject({
+      kind: "key",
+      key: { name: "c", meta: true },
+    });
+  });
+
+  test("reassembles bracketed paste across marker and payload chunks", () => {
+    const decoder = new PiDetailInputStreamDecoder();
+    expect(decoder.push("\x1b[200~")).toEqual([]);
+    expect(decoder.push("first\n")).toEqual([]);
+    expect(decoder.push("second\x1b[20")).toEqual([]);
+    expect(decoder.push("1~")).toEqual([{
+      kind: "paste",
+      text: "first\nsecond",
+    }]);
+    expect(new PiDetailInputStreamDecoder().push("\x1b")).toMatchObject([{
+      kind: "key",
+      key: { name: "escape" },
+    }]);
+  });
+
+  test("encodes copied source text for the terminal clipboard", () => {
+    const text = "pha\n界";
+    expect(osc52ClipboardWrite(text)).toBe(
+      `\x1b]52;c;${Buffer.from(text, "utf8").toString("base64")}\x07`,
+    );
   });
 });
 

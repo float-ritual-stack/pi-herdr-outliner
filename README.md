@@ -278,8 +278,9 @@ plain-click opening. Generated Backlink and Property rows use plain click for
 selection and `Ctrl`/`Meta` click for activation. SGR mouse reporting exposes
 Ctrl and Meta/Alt; Command-click works when the host maps Command to Meta.
 Shift remains the terminal-native text-selection escape while Tree mouse
-reporting is active. Registered Work IDs resolve without fuzzy matching and
-never create content when missing. Following another dangling address creates
+reporting is active; Detail edit mode owns drag selection directly.
+Registered Work IDs resolve without fuzzy matching and never create content when
+missing. Following another dangling address creates
 one canonical page stub before dispatch. Each Detail breadcrumb segment is an
 exact link that reveals that ancestor or leaf in Tree rather than opening
 another Detail.
@@ -384,7 +385,9 @@ selected source in Tree.
 | `Option+Left/Right`, `Ctrl+Left/Right`, `Option+B/F` | Previous/next word start |
 | `Home` / `End`, `Ctrl+A` / `Ctrl+E` | Physical line start / end |
 | `Shift` + a supported motion | Extend selection |
+| Primary-button drag | Select exact authored text across wrapped rows and Unicode graphemes |
 | `Command+A` or `Ctrl+Shift+A` | Select all |
+| `Ctrl+C` or `Command+C` | Copy the selected authored text through the terminal clipboard |
 | `Ctrl/Command+Z` | Undo the previous edit group |
 | `Ctrl+Shift+Z` or `Ctrl+Y` | Redo |
 | `Backspace` / `Delete` | Delete selection or one grapheme |
@@ -394,9 +397,9 @@ selected source in Tree.
 | `Ctrl+S` | Save block or add annotation |
 | `Esc` | Cancel the complete edit session and return to Tree |
 
-Long physical lines wrap without changing raw text. Continuation rows remain associated with one physical line number, and keyboard cursor movement keeps the active edge visible.
+Long physical lines wrap without changing raw text. Continuation rows remain associated with one physical line number, and keyboard or pointer selection maps back to exact authored source. Bracketed paste replaces the selection and remains one edit even when terminal payload chunks arrive separately. Keyboard cursor movement keeps the active edge visible.
 
-In edit mode, wheel/trackpad input scrolls the region under the pointer. Editor scrolling changes only its visual viewport; it never moves the text cursor. The next keyboard cursor movement restores cursor-follow. A primary click in the editor maps through headers, split geometry, line-number width, wrapping, tabs, grapheme boundaries, and Unicode display width to a valid source position. Preview clicks retain their existing link and region actions.
+In edit mode, wheel/trackpad input scrolls the region under the pointer. Editor scrolling changes only its visual viewport; it never moves the text cursor. The next keyboard cursor movement restores cursor-follow. A primary press-drag-release gesture in the editor maps through headers, split geometry, line-number width, wrapping, tabs, grapheme boundaries, and Unicode display width to a valid source range, with edge dragging scrolling the editor viewport. Preview clicks retain their existing link and region actions.
 
 Wide split scrolling is independent by default. `Ctrl+L` enables an ephemeral linked mode, shown by `↔` in the editor header. Linked movement uses draft source-line anchors rather than proportional row offsets; generated projections without a shared raw-source anchor leave the peer unchanged. Link state and manual viewport state reset on edit-session or viewport changes and never modify block text.
 

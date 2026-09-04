@@ -28,6 +28,7 @@ import { openDestinationTimeoutFromEnvironment } from "./open-destination-choose
 import {
   BRACKETED_PASTE_DISABLE,
   BRACKETED_PASTE_ENABLE,
+  osc52ClipboardWrite,
   TerminalInputDecoder,
   type TerminalKey,
 } from "./terminal";
@@ -150,6 +151,9 @@ const effects: DetailEffects = {
     });
   },
   openDetailPane: openTargetInNewDetail,
+  copyText(text) {
+    process.stdout.write(osc52ClipboardWrite(text));
+  },
   async updateBlock(input) {
     return client.request<Block>({
       action: "update",

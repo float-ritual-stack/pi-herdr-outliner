@@ -13,6 +13,10 @@ export interface TreePrimaryClick extends TreeMouseClick {
   readonly ctrl: boolean;
 }
 
+export interface TreePrimaryPointer extends TreePrimaryClick {
+  readonly phase: "down" | "drag" | "up";
+}
+
 export interface TreeMouseTarget {
   readonly rowId: string;
   readonly disclosureColumn: number;
@@ -28,11 +32,11 @@ export function isTreeMouseSequence(sequence: string): boolean {
   return SGR_MOUSE_PATTERN.test(sequence);
 }
 
-export function parseTreePrimaryClick(sequence: string): TreePrimaryClick | null {
+export function parseTreePrimaryPointer(sequence: string): TreePrimaryPointer | null {
   const match = SGR_MOUSE_PATTERN.exec(sequence);
-  if (!match || match[4] !== "M") return null;
+  if (!match) return null;
   const button = Number.parseInt(match[1], 10);
-  if ((button & 3) !== 0 || (button & 32) !== 0 || (button & 64) !== 0) return null;
+  if ((button & 3) !== 0 || (button & 64) !== 0) return null;
   const column = Number.parseInt(match[2], 10) - 1;
   const row = Number.parseInt(match[3], 10) - 1;
   if (column < 0 || row < 0) return null;
@@ -42,6 +46,19 @@ export function parseTreePrimaryClick(sequence: string): TreePrimaryClick | null
     shift: (button & 4) !== 0,
     meta: (button & 8) !== 0,
     ctrl: (button & 16) !== 0,
+    phase: match[4] === "m" ? "up" : (button & 32) !== 0 ? "drag" : "down",
+  };
+}
+
+export function parseTreePrimaryClick(sequence: string): TreePrimaryClick | null {
+  const pointer = parseTreePrimaryPointer(sequence);
+  if (!pointer || pointer.phase !== "down") return null;
+  return {
+    column: pointer.column,
+    row: pointer.row,
+    shift: pointer.shift,
+    meta: pointer.meta,
+    ctrl: pointer.ctrl,
   };
 }
 

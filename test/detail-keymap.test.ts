@@ -166,6 +166,21 @@ test("routes the draft scroll link toggle through the action registry", async ()
   );
 });
 
+test("routes Ctrl+C and Command+C to copy while editing", async () => {
+  const detailState = state();
+  detailState.buffer.placeCursor(0, 1);
+  detailState.buffer.placeCursor(0, 5, true);
+  const detail = harness(detailState);
+
+  await detail.press({ name: "c", ctrl: true });
+  await detail.press({ name: "c", meta: true });
+
+  expect(detail.intents).toEqual([
+    { type: "buffer.copy" },
+    { type: "buffer.copy" },
+  ]);
+});
+
 test("opens direction-aware Detail splits from preview bindings", async () => {
   const detailState = state();
   detailState.mode = "preview";

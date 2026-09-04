@@ -42,9 +42,10 @@ import { projectDetailRead } from "./detail-embeds";
 import { createDetailKeyHandler, detailActionMode } from "./detail-keymap";
 import {
   createPiDetailInputListener,
-  decodePiDetailInput,
   detailChooserOwnsPiInput,
   piDetailChooserInput,
+  PiDetailInputStreamDecoder,
+  type PiDetailInput,
 } from "./detail-pi-input";
 import {
   DetailPiPreviewLayout,
@@ -78,11 +79,13 @@ import {
   isTreeMouseSequence,
   parseTreePlainClick,
   parseTreePrimaryClick,
+  parseTreePrimaryPointer,
   parseTreeSecondaryClick,
   parseTreeWheelEvent,
   treeClickActivates,
   type TreeMouseClick,
 } from "./tree-mouse";
+import { osc52ClipboardWrite } from "./terminal";
 import {
   OUTLINER_PROTOCOL_VERSION,
   type BacklinkCollection,
@@ -163,6 +166,7 @@ const initialTargetFragmentId =
 configureCurrentPaneRightClick(rightClickOwnership);
 let pendingLinkClick = { activate: false, suppress: false };
 const terminal = new ProcessTerminal();
+const inputStream = new PiDetailInputStreamDecoder();
 const tui = new DetailTuiAltScreen(terminal, false, undefined, {
   mouse: true,
   openUrl(url) {
@@ -204,6 +208,7 @@ type DetailDraftSplitFocus = "editor" | "preview";
 
 let draftSplitFocus: DetailDraftSplitFocus = "editor";
 let draftSplitHover: DetailMouseRegion | null = null;
+let editorDragActive = false;
 
 function draftSplitActive(): boolean {
   return controller.state.mode === "edit" &&
@@ -300,6 +305,9 @@ const effects: DetailEffects = {
     });
   },
   openDetailPane: openTargetInNewDetail,
+  copyText(text) {
+    process.stdout.write(osc52ClipboardWrite(text));
+  },
   async updateBlock(input) {
     return client.request<Block>({
       action: "update",
@@ -577,6 +585,29 @@ async function synchronizeEditorFromPreview(): Promise<void> {
   }
 }
 
+function editorPointerLocation(
+  pointer: TreeMouseClick,
+  mouseLayout: {
+    width: number;
+    height: number;
+    editorWidth: number;
+    split: boolean;
+  },
+): { visualRow: number; contentColumn: number } | null {
+  if (detailMouseRegionAt(pointer, mouseLayout) !== "editor") return null;
+  const layout = layoutDetailEditor(
+    controller.state.buffer.lines,
+    controller.state.buffer.row,
+    controller.state.buffer.column,
+    mouseLayout.editorWidth,
+    controller.state.buffer.selectionRange,
+  );
+  return detailEditorPointAtClick(
+    pointer,
+    layout,
+    controller.state.editorVisualOffset,
+  );
+}
 async function handleDetailMouse(data: string): Promise<boolean> {
   if (controller.state.mode !== "edit") return false;
   const split = draftSplitActive();
@@ -589,6 +620,7 @@ async function handleDetailMouse(data: string): Promise<boolean> {
   };
   const wheel = parseTreeWheelEvent(data);
   if (wheel) {
+    editorDragActive = false;
     const region = detailMouseRegionAt(wheel, mouseLayout);
     draftSplitHover = region;
     if (region === "editor") {
@@ -608,33 +640,60 @@ async function handleDetailMouse(data: string): Promise<boolean> {
     }
     return true;
   }
-  const click = parseTreePlainClick(data);
-  if (!click) return false;
-  const region = detailMouseRegionAt(click, mouseLayout);
-  draftSplitHover = region;
-  if (region === "editor") {
-    draftSplitFocus = "editor";
-    const layout = layoutDetailEditor(
-      controller.state.buffer.lines,
-      controller.state.buffer.row,
-      controller.state.buffer.column,
-      viewport().editorWidth ?? viewport().width,
-      controller.state.buffer.selectionRange,
-    );
-    const point = detailEditorPointAtClick(
-      click,
-      layout,
-      controller.state.editorVisualOffset,
-    );
-    await controller.dispatch({ type: "editor.cursor.place", ...point }, viewport());
+
+  const pointer = parseTreePrimaryPointer(data);
+  if (!pointer) return false;
+  if (pointer.phase === "down") {
+    editorDragActive = false;
+    const region = detailMouseRegionAt(pointer, mouseLayout);
+    draftSplitHover = region;
+    if (region === "editor" && !pointer.meta && !pointer.ctrl) {
+      draftSplitFocus = "editor";
+      editorDragActive = true;
+      const location = editorPointerLocation(pointer, mouseLayout);
+      if (location) {
+        await controller.dispatch({
+          type: "editor.cursor.place",
+          ...location,
+          extend: pointer.shift,
+        }, viewport());
+      }
+      return true;
+    }
+    if (region === "preview") {
+      draftSplitFocus = "preview";
+      preview.handleInput(data);
+      tui.requestRender();
+    }
     return true;
   }
-  if (region === "preview") {
-    draftSplitFocus = "preview";
-    preview.handleInput(data);
-    tui.requestRender();
+
+  if (!editorDragActive) return true;
+  const bodyTop = 3;
+  const bodyBottom = terminal.rows - 3;
+  if (bodyBottom < bodyTop) {
+    if (pointer.phase === "up") editorDragActive = false;
     return true;
   }
+  let row = pointer.row;
+  if (row < bodyTop) {
+    await controller.dispatch({ type: "editor.viewport.scroll", delta: -1 }, viewport());
+    row = bodyTop;
+  } else if (row > bodyBottom) {
+    await controller.dispatch({ type: "editor.viewport.scroll", delta: 1 }, viewport());
+    row = bodyBottom;
+  }
+  const column = Math.max(0, Math.min(pointer.column, mouseLayout.editorWidth - 1));
+  const location = editorPointerLocation({ row, column }, mouseLayout);
+  if (location) {
+    await controller.dispatch({
+      type: "editor.cursor.place",
+      ...location,
+      extend: true,
+    }, viewport());
+    synchronizePreviewFromEditor();
+  }
+  if (pointer.phase === "up") editorDragActive = false;
   return true;
 }
 
@@ -684,34 +743,22 @@ invokeDetailAction = async (actionId) => {
   closeActionMenu();
   await handleKeypress.invoke(actionId);
 };
-async function handleInput(data: string): Promise<void> {
+async function handleDecodedInput(input: PiDetailInput): Promise<void> {
   if (controller.state.destinationChooser.active) {
-    const chooserInput = decodePiDetailInput(data);
     if (
-      chooserInput.kind === "key" &&
-      chooserInput.inputAction !== "suppress" &&
-      chooserInput.key.ctrl &&
-      chooserInput.key.name === "q"
+      input.kind === "key" &&
+      input.inputAction !== "suppress" &&
+      input.key.ctrl &&
+      input.key.name === "q"
     ) {
       await stop();
       return;
     }
     pendingLinkClick = { activate: false, suppress: false };
-    const forwarded = piDetailChooserInput(chooserInput);
+    const forwarded = piDetailChooserInput(input);
     await controller.handleDestinationChooserKeypress(forwarded.str, forwarded.key);
     return;
   }
-  const secondaryClick = parseTreeSecondaryClick(data);
-  if (secondaryClick && rightClickOwnership === "outliner") {
-    showActionMenu(
-      actionKeymap.menuItems("detail", detailActionMode(controller.state)),
-      invokeDetailAction,
-      secondaryClick,
-    );
-    return;
-  }
-  if (await handleDetailMouse(data)) return;
-  const input = decodePiDetailInput(data);
   if (input.kind === "paste") {
     if (controller.isBufferMode()) {
       await controller.dispatch({ type: "buffer.insert", text: input.text }, viewport());
@@ -719,6 +766,7 @@ async function handleInput(data: string): Promise<void> {
     return;
   }
 
+  const raw = input.key.sequence ?? input.str;
   const split = draftSplitActive();
   const mapped = actionKeymap.canonicalize(
     "detail",
@@ -746,16 +794,34 @@ async function handleInput(data: string): Promise<void> {
     if (mapped.actionId) {
       await handleKeypress(input.str, input.key, input.inputAction);
     } else {
-      preview.handleInput(data);
+      preview.handleInput(raw);
       tui.requestRender();
     }
     return;
   }
-  if (!split && preview.handleInput(data)) {
+  if (!split && preview.handleInput(raw)) {
     tui.requestRender();
     return;
   }
   await handleKeypress(input.str, input.key, input.inputAction);
+}
+
+async function handleInput(data: string): Promise<void> {
+  if (controller.state.destinationChooser.active) {
+    for (const input of inputStream.push(data)) await handleDecodedInput(input);
+    return;
+  }
+  const secondaryClick = parseTreeSecondaryClick(data);
+  if (secondaryClick && rightClickOwnership === "outliner") {
+    showActionMenu(
+      actionKeymap.menuItems("detail", detailActionMode(controller.state)),
+      invokeDetailAction,
+      secondaryClick,
+    );
+    return;
+  }
+  if (await handleDetailMouse(data)) return;
+  for (const input of inputStream.push(data)) await handleDecodedInput(input);
 }
 
 const customFrame = new DetailPiComponent({
@@ -813,6 +879,7 @@ let previousMode = controller.state.mode;
 
 synchronizeLayout = () => {
   const mode = controller.state.mode;
+  if (mode !== previousMode) editorDragActive = false;
   if (mode === "edit" && previousMode !== "edit") {
     draftSplitFocus = "editor";
     draftSplitHover = null;
