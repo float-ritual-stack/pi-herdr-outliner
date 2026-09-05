@@ -33,6 +33,7 @@ import { createPropertyInspectorModel } from "../src/property-inspector";
 import {
   previewRegionActionUri,
   resolvePreviewPointerAction,
+  togglePreviewRegionDisclosure,
 } from "../src/detail-preview-regions";
 import { outlinerLinkUri } from "../src/outliner-links";
 import { createOpenDestinationChooserState } from "../src/open-destination-chooser";
@@ -532,6 +533,93 @@ describe("Pi Markdown detail preview", () => {
         .map(stripTerminalSequences)
         .join("\n"),
     ).toContain("comment body");
+  });
+
+  test("anchors interactive comment markers in a two-column gutter and expands inline", () => {
+    const raw = [
+      "Title",
+      "",
+      "before",
+      "target phrase",
+      "range line 2",
+      "range line 3",
+      "range line 4",
+      "range line 5",
+      "range line 6",
+      "after",
+    ].join("\n");
+    const detail = state(raw, raw);
+    const annotation = block("annotation-1", "");
+    const leadingAnnotation = block("annotation-2", "");
+    const reply = block("reply-1", "");
+    const start = raw.indexOf("target phrase");
+    const end = raw.indexOf("\nafter");
+    const target = {
+      kind: "block" as const,
+      sourceBlockId: "block-1",
+      anchor: createAnnotationAnchor(raw, start, end, "updated"),
+    };
+    const leadingTarget = {
+      kind: "block" as const,
+      sourceBlockId: "block-1",
+      anchor: createAnnotationAnchor(raw, start - 1, end, "updated"),
+    };
+    detail.annotationThreads = [{
+      block: annotation,
+      target,
+      body: "Check this range.",
+      source: "user",
+      lifecycle: "open",
+      anchorState: "anchored",
+      replies: [{
+        block: reply,
+        target,
+        body: "Verified.",
+        source: "agent",
+        lifecycle: "open",
+        anchorState: "anchored",
+        parentAnnotationId: annotation.id,
+      }],
+    }, {
+      block: leadingAnnotation,
+      target: leadingTarget,
+      body: "Second comment.",
+      source: "agent",
+      lifecycle: "open",
+      anchorState: "anchored",
+      replies: [],
+    }];
+    const layout = previewLayout(detail);
+
+    const collapsed = layout.render(72).map(stripTerminalSequences);
+    const region = detail.previewRegions.regions.find((candidate) =>
+      candidate.kind === "annotation"
+    )!;
+    expect(detail.previewRegions.regions.filter((candidate) =>
+      candidate.kind === "annotation"
+    )).toHaveLength(1);
+    const collapsedTarget = collapsed.find((line) => line.includes("target phrase"))!;
+    expect(collapsedTarget.startsWith("+ ")).toBe(true);
+    expect(collapsed.join("\n")).not.toContain("Comments ·");
+    expect(collapsed.join("\n")).not.toContain("Check this range.");
+
+    layout.scrollView.updateLayout(12, 6, () => {});
+    detail.previewRegions.focusedRegionId = region.id;
+    expect(togglePreviewRegionDisclosure(detail.previewRegions, region.id)).toBe(true);
+    const expanded = layout.render(72).map(stripTerminalSequences);
+    const targetRow = expanded.findIndex((line) => line.includes("target phrase"));
+    const commentRow = expanded.findIndex((line) => line.includes("Check this range."));
+    const afterRow = expanded.findIndex((line) => line.includes("after"));
+    expect(expanded[targetRow]!.startsWith("− ")).toBe(true);
+    expect(commentRow).toBeGreaterThan(targetRow);
+    expect(commentRow).toBeLessThan(afterRow);
+    expect(expanded.join("\n")).toContain("agent: Verified.");
+    expect(expanded.join("\n")).toContain("Second comment.");
+    expect(layout.render(72).every((line) => visibleWidth(line) <= 72)).toBe(true);
+    expect(layout.scrollView.scrollTop).toBeGreaterThan(0);
+    expect(
+      layout.scrollView.render(72).map(stripTerminalSequences).join("\n"),
+    ).toContain("Check this range.");
   });
 
   test("correlates authored callouts by projected origin instead of colliding positions", () => {

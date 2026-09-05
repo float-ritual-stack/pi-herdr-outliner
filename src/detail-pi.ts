@@ -964,6 +964,7 @@ synchronizeLayout = () => {
     preview.applyPendingFragmentScroll(previewWidth);
     if (!split && mode === "preview") {
       preview.ensureBacklinkSelectionVisible(previewWidth);
+      preview.ensureAnnotationSelectionVisible(previewWidth);
     }
   }
 

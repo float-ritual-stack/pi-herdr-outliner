@@ -1155,16 +1155,16 @@ describe("detail controller projection and deferred refresh", () => {
   test("keeps disclosure overrides on refresh but clears them for an exact target change", async () => {
     const harness = createHarness(makeBlock());
     const region = {
-      id: "callout:0:note",
-      kind: "callout" as const,
-      sourceSpan: { start: 0, end: 10, startLine: 0, endLine: 0 },
+      id: "annotation:block-1:0",
+      kind: "annotation" as const,
+      sourceSpan: null,
       parentId: null,
       childIds: [],
       focusable: true,
       disclosure: { defaultExpanded: false, expanded: false },
       activation: {
-        type: "callout.disclosure.toggle" as const,
-        regionId: "callout:0:note",
+        type: "annotation.disclosure.toggle" as const,
+        regionId: "annotation:block-1:0",
       },
     };
     await harness.controller.initialize();

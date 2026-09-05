@@ -45,7 +45,7 @@ The project started as a small Friday-night experiment and grew into a durable w
 - Grapheme-safe wrapped Detail editing, word motion, selection, deletion, bounded per-session undo/redo, completion, optimistic save, and whole-session Esc cancellation.
 - Targeted ephemeral attention marks exact block/file source ranges in one addressed Tree or Detail without mutating content, selection, navigation history, or durable annotations. Marks expire, become stale instead of drifting when source changes, retain one current plus bounded supporting cues, and coalesce missed activity into a return summary.
 - Each Detail visibly reports `Unlocked` or `Locked`; unlocked Details form a spatial preview/open pool, while locked Details retain exact context anchors.
-- Durable UTF-16 source-range annotations for blocks and referenced files, with resilient reanchoring, explicit ambiguous/orphan states, threaded replies, lifecycle/promotion links, compact Detail markers, and exact-range reveal.
+- Durable UTF-16 source-range annotations for blocks and referenced files, with resilient reanchoring, explicit ambiguous/orphan states, threaded replies, lifecycle/promotion links, anchored two-column Detail gutter markers, session-only inline disclosure, and exact-range reveal.
 - Herdr-owned pane placement/focus and current-pane recovery, one remembered service pane, per-process live client discovery, and an ephemeral runtime registry.
 - Pi/OMP commands, tools, selection-context injection, canonical `/send-to-outline` capture, and deterministic configured `PREFIX-XXX` work-placeholder nudging.
 

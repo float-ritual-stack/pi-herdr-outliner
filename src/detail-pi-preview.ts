@@ -4,6 +4,8 @@ import {
   matchesKey,
   ScrollView,
   stripTerminalSequences,
+  truncateToWidth,
+  visibleWidth,
   type Component,
   type MarkdownTheme,
   VStack,
@@ -31,7 +33,6 @@ import {
 } from "./detail-preview-regions";
 import {
   detailPropertyInspectorRegions,
-  renderAnnotationDocument,
   renderPropertyInspectorDocument,
 } from "./detail-pi-renderer";
 import { stripFragmentAnchors } from "./fragments";
@@ -42,8 +43,16 @@ import {
   type DetailHeaderOptions,
 } from "./detail-renderer";
 import { sanitizeDynamicText } from "./terminal";
-import { SourceSpannedMarkdown } from "./source-spanned-markdown";
-import type { AnnotationAnchor, AttentionMark, BacklinkReferenceGroup } from "./types";
+import {
+  SourceSpannedMarkdown,
+  type SourceSpannedMarkdownRowRender,
+} from "./source-spanned-markdown";
+import type {
+  AnnotationAnchor,
+  AnnotationThread,
+  AttentionMark,
+  BacklinkReferenceGroup,
+} from "./types";
 
 export interface DetailDraftProjection {
   sourceText: string;
@@ -554,6 +563,7 @@ interface InlinePreviewArrangement {
   lines: string[];
   inspectorStart: number;
   mapAuthoredRow(row: number): number;
+  authoredRowAt(row: number): number | null;
 }
 
 function arrangeInlinePreview(
@@ -565,27 +575,323 @@ function arrangeInlinePreview(
       lines: [...authored],
       inspectorStart: authored.length,
       mapAuthoredRow: (row) => row,
+      authoredRowAt: (row) => row >= 0 && row < authored.length ? row : null,
     };
   }
   const blank = authored.findIndex((line) => sanitizeDynamicText(line).trim() === "");
   const titleEnd = blank < 0 ? authored.length : blank;
   const bodyStart = blank < 0 ? authored.length : blank + 1;
-  const title = authored.slice(0, titleEnd);
-  const body = authored.slice(bodyStart);
-  const lines = [...title];
-  if (title.length > 0) lines.push("");
+  const lines: string[] = [];
+  const authoredToOutput: number[] = [];
+  const outputToAuthored: Array<number | null> = [];
+  for (let row = 0; row < titleEnd; row += 1) {
+    authoredToOutput[row] = lines.length;
+    lines.push(authored[row]!);
+    outputToAuthored.push(row);
+  }
+  if (titleEnd > 0) {
+    lines.push("");
+    outputToAuthored.push(blank >= 0 ? blank : null);
+  }
   const inspectorStart = lines.length;
-  lines.push(...inspector);
-  const renderedBodyStart = lines.length + (body.length > 0 ? 1 : 0);
-  if (body.length > 0) lines.push("", ...body);
+  for (const line of inspector) {
+    lines.push(line);
+    outputToAuthored.push(null);
+  }
+  if (bodyStart < authored.length) {
+    lines.push("");
+    outputToAuthored.push(blank >= 0 ? blank : null);
+    for (let row = bodyStart; row < authored.length; row += 1) {
+      authoredToOutput[row] = lines.length;
+      lines.push(authored[row]!);
+      outputToAuthored.push(row);
+    }
+  }
   return {
     lines,
     inspectorStart,
-    mapAuthoredRow: (row) => {
-      if (row < bodyStart) return Math.min(row, titleEnd);
-      return renderedBodyStart + row - bodyStart;
-    },
+    mapAuthoredRow: (row) =>
+      authoredToOutput[Math.max(0, Math.min(row, authored.length - 1))] ??
+        Math.min(row, lines.length),
+    authoredRowAt: (row) => outputToAuthored[row] ?? null,
   };
+}
+
+interface DetailAnnotationGroup {
+  regionId: string;
+  startLine: number;
+  endLine: number;
+  sourceLineCount: number;
+  sourceSpan: NonNullable<PreviewRegion["sourceSpan"]>;
+  threads: AnnotationThread[];
+}
+
+interface AnnotationPreviewArrangement {
+  markdownLines: readonly string[];
+  lines: string[];
+  contentWidth: number;
+  mapMarkdownRow(row: number): number;
+  markdownRowAt(row: number): number | null;
+  markerRows: ReadonlyMap<string, number>;
+  panelRows: ReadonlyMap<string, number>;
+}
+
+const ANNOTATION_GUTTER_WIDTH = 2;
+const ANNOTATION_BORDER_STYLE = "\x1b[35m";
+
+function annotationBorder(text: string): string {
+  return `${ANNOTATION_BORDER_STYLE}${text}${RESET_STYLE}`;
+}
+
+function annotationPanelLines(
+  thread: AnnotationThread,
+  index: number,
+  width: number,
+  theme: MarkdownTheme,
+): string[] {
+  const panelWidth = Math.max(1, width);
+  const title =
+    ` Comment ${index + 1} · ${thread.source} · ${thread.anchorState} · ${thread.lifecycle} `;
+  const top = truncateToWidth(
+    `╭${title}${"─".repeat(Math.max(0, panelWidth - visibleWidth(title) - 1))}`,
+    panelWidth,
+  );
+  const body = thread.body.split(/\r?\n/).map(escapeGeneratedMarkdown);
+  for (const reply of thread.replies) {
+    body.push(
+      "",
+      `**${escapeGeneratedMarkdown(reply.source)}:** ${
+        escapeGeneratedMarkdown(reply.body)
+      }`,
+    );
+  }
+  const rendered = new Markdown(body.join("\n"), 0, 0, theme)
+    .render(Math.max(1, panelWidth - 2));
+  return [
+    annotationBorder(top),
+    ...rendered.map((line) => `${annotationBorder("│")} ${line}`),
+    annotationBorder(`╰${"─".repeat(Math.max(0, panelWidth - 1))}`),
+  ];
+}
+
+class DetailAnnotationPreview implements Component {
+  private groups: readonly DetailAnnotationGroup[] = [];
+
+  constructor(
+    private readonly state: Readonly<DetailState>,
+    private readonly markdown: SourceSpannedMarkdown,
+    private readonly theme: MarkdownTheme,
+  ) {}
+
+  setGroups(groups: readonly DetailAnnotationGroup[]): void {
+    this.groups = groups;
+  }
+
+  renderArrangement(width: number): AnnotationPreviewArrangement {
+    const outerWidth = Math.max(1, Math.floor(width));
+    if (this.groups.length === 0) {
+      const lines = this.markdown.render(outerWidth);
+      return {
+        markdownLines: lines,
+        lines,
+        contentWidth: outerWidth,
+        mapMarkdownRow: (row) => Math.max(0, Math.min(row, lines.length)),
+        markdownRowAt: (row) => row >= 0 && row < lines.length ? row : null,
+        markerRows: new Map(),
+        panelRows: new Map(),
+      };
+    }
+
+    const gutterWidth = Math.min(
+      ANNOTATION_GUTTER_WIDTH,
+      Math.max(0, outerWidth - 1),
+    );
+    const contentWidth = outerWidth - gutterWidth;
+    const markdownLines = this.markdown.render(contentWidth);
+    const markers = new Map<number, DetailAnnotationGroup>();
+    const insertions = new Map<
+      number,
+      Array<{ regionId: string; lines: string[] }>
+    >();
+    for (const group of this.groups) {
+      const startRow = this.markdown.sourceLineRow(
+        contentWidth,
+        group.startLine,
+        markdownLines.length,
+      );
+      markers.set(startRow, group);
+      const endBoundary = group.endLine + 1 >= group.sourceLineCount
+        ? markdownLines.length
+        : this.markdown.sourceLineRow(
+          contentWidth,
+          group.endLine + 1,
+          markdownLines.length,
+        );
+      const region = this.state.previewRegions.regions.find((candidate) =>
+        candidate.id === group.regionId
+      );
+      if (!region?.disclosure?.expanded) continue;
+      const insertionRow = Math.max(startRow + 1, endBoundary);
+      const panel = group.threads.flatMap((thread) =>
+        annotationPanelLines(
+          thread,
+          this.state.annotationThreads.indexOf(thread),
+          contentWidth,
+          this.theme,
+        )
+      );
+      const existing = insertions.get(insertionRow) ?? [];
+      existing.push({ regionId: group.regionId, lines: panel });
+      insertions.set(insertionRow, existing);
+    }
+
+    const lines: string[] = [];
+    const markdownRows: Array<number | null> = [];
+    const markdownToOutput: number[] = [];
+    const markerRows = new Map<string, number>();
+    const panelRows = new Map<string, number>();
+    for (let row = 0; row <= markdownLines.length; row += 1) {
+      for (const panel of insertions.get(row) ?? []) {
+        panelRows.set(panel.regionId, lines.length);
+        for (const panelLine of panel.lines) {
+          lines.push(`${" ".repeat(gutterWidth)}${panelLine}`);
+          markdownRows.push(null);
+        }
+      }
+      if (row === markdownLines.length) break;
+      markdownToOutput[row] = lines.length;
+      const group = markers.get(row);
+      let marker = "";
+      if (group && gutterWidth > 0) {
+        const region = this.state.previewRegions.regions.find((candidate) =>
+          candidate.id === group.regionId
+        );
+        const symbol = region?.disclosure?.expanded ? "−" : "+";
+        marker = new Markdown(
+          `[${symbol}](${
+            previewRegionActionUri({
+              type: "annotation.disclosure.toggle",
+              regionId: group.regionId,
+            })
+          })`,
+          0,
+          0,
+          this.theme,
+        ).render(1)[0] ?? symbol;
+        if (this.state.previewRegions.focusedRegionId === group.regionId) {
+          marker = highlightActiveSelection(marker);
+        }
+        markerRows.set(group.regionId, lines.length);
+      }
+      const padding = " ".repeat(Math.max(0, gutterWidth - visibleWidth(marker)));
+      lines.push(`${marker}${padding}${markdownLines[row]}`);
+      markdownRows.push(row);
+    }
+    return {
+      markdownLines,
+      lines,
+      contentWidth,
+      mapMarkdownRow: (row) =>
+        row >= markdownLines.length
+          ? lines.length
+          : markdownToOutput[Math.max(0, row)] ?? 0,
+      markdownRowAt: (row) => markdownRows[row] ?? null,
+      markerRows,
+      panelRows,
+    };
+  }
+
+  render(width: number): string[] {
+    return this.renderArrangement(width).lines;
+  }
+
+  invalidate(): void {
+    this.markdown.invalidate();
+  }
+}
+
+function detailAnnotationGroups(
+  state: Readonly<DetailState>,
+  renderedLineForAuthoredLine: (line: number) => number,
+  renderedSourceLineCount: number,
+): DetailAnnotationGroup[] {
+  const selected = state.context.selected;
+  if (!selected) return [];
+  const starts = sourceLineStarts(selected.text);
+  const groups = new Map<number, DetailAnnotationGroup>();
+  for (const thread of state.annotationThreads) {
+    if (
+      thread.target.kind !== "block" ||
+      thread.target.sourceBlockId !== selected.id
+    ) continue;
+    const anchor = thread.target.anchor;
+    let markerOffset = anchor.start;
+    while (
+      markerOffset < anchor.end &&
+      /\s/.test(selected.text[markerOffset] ?? "")
+    ) markerOffset += 1;
+    const authoredStartLine = sourceLineAt(
+      starts,
+      markerOffset < anchor.end ? markerOffset : anchor.start,
+    );
+    const authoredEndLine = sourceLineAt(
+      starts,
+      Math.max(anchor.start, anchor.end - 1),
+    );
+    const startLine = renderedLineForAuthoredLine(authoredStartLine);
+    const endLine = renderedLineForAuthoredLine(authoredEndLine);
+    const existing = groups.get(startLine);
+    if (existing) {
+      existing.endLine = Math.max(existing.endLine, endLine);
+      existing.sourceSpan.start = Math.min(existing.sourceSpan.start, anchor.start);
+      existing.sourceSpan.end = Math.max(existing.sourceSpan.end, anchor.end);
+      existing.sourceSpan.startLine = Math.min(
+        existing.sourceSpan.startLine,
+        authoredStartLine,
+      );
+      existing.sourceSpan.endLine = Math.max(
+        existing.sourceSpan.endLine,
+        authoredEndLine,
+      );
+      existing.threads.push(thread);
+      continue;
+    }
+    groups.set(startLine, {
+      regionId: `annotation:${selected.id}:${authoredStartLine}`,
+      startLine,
+      endLine,
+      sourceLineCount: renderedSourceLineCount,
+      sourceSpan: {
+        start: anchor.start,
+        end: anchor.end,
+        startLine: authoredStartLine,
+        endLine: authoredEndLine,
+      },
+      threads: [thread],
+    });
+  }
+  return [...groups.values()].sort((left, right) => left.startLine - right.startLine);
+}
+
+function detailAnnotationRegions(
+  groups: readonly DetailAnnotationGroup[],
+): PreviewRegion[] {
+  return groups.map((group) => ({
+    id: group.regionId,
+    kind: "annotation",
+    sourceSpan: group.sourceSpan,
+    parentId: null,
+    childIds: [],
+    focusable: true,
+    disclosure: {
+      defaultExpanded: false,
+      expanded: false,
+    },
+    activation: {
+      type: "annotation.disclosure.toggle",
+      regionId: group.regionId,
+    },
+  }));
 }
 
 class DetailPreviewBody implements Component {
@@ -686,13 +992,13 @@ class DetailPreviewFooter implements Component {
 
 export class DetailPiPreviewLayout extends VStack {
   readonly markdown: SourceSpannedMarkdown;
+  private readonly annotationPreview: DetailAnnotationPreview;
   readonly inspectorMarkdown: Markdown;
   readonly backlinkMarkdown: Markdown;
   readonly scrollView: ScrollView;
   private renderedSourceText: string | undefined;
   private renderedRawText: string | undefined;
   private renderedWorkIdPrefix: string | null | undefined;
-  private renderedAnnotationDocument: string | undefined;
   private renderedBacklinksDocument: string | undefined;
   private renderedInspectorDocument: string | undefined;
   private renderedInspectorWidth: number | undefined;
@@ -708,6 +1014,7 @@ export class DetailPiPreviewLayout extends VStack {
   private pendingAttentionScroll = false;
   private previousSelectionId: string | null | undefined;
   private previousTargetFragmentId: string | null | undefined;
+  private previousAnnotationFocusedExpanded: boolean | undefined;
   private previousPreviewOffset: number | undefined;
   private active: boolean;
   private resetScroll = false;
@@ -716,6 +1023,8 @@ export class DetailPiPreviewLayout extends VStack {
   private pendingBacklinkSelectionScroll = false;
   private previousPropertyFocusedId: string | null = null;
   private pendingPropertySelectionScroll = false;
+  private previousAnnotationFocusedId: string | null = null;
+  private pendingAnnotationSelectionScroll = false;
   private pendingFragmentScroll = false;
   private fragmentRenderScheduled = false;
   private draftProjection: CachedDetailDraftProjection | null = null;
@@ -742,6 +1051,7 @@ export class DetailPiPreviewLayout extends VStack {
       linksEnabled,
       options.calloutTheme,
     );
+    const annotationPreview = new DetailAnnotationPreview(state, markdown, markdownTheme);
     const inspectorMarkdown = new Markdown("", 0, 0, {
       ...markdownTheme,
       linkUrl: () => "",
@@ -753,7 +1063,7 @@ export class DetailPiPreviewLayout extends VStack {
     });
     const body = new DetailPreviewBody(
       state,
-      markdown,
+      annotationPreview,
       inspectorMarkdown,
       backlinkMarkdown,
       () => state.propertyInspector.presentation === "dedicated",
@@ -775,6 +1085,7 @@ export class DetailPiPreviewLayout extends VStack {
       { component: new DetailPreviewFooter(state, options), basis: 2, shrink: 0 },
     ]);
     this.markdown = markdown;
+    this.annotationPreview = annotationPreview;
     this.inspectorMarkdown = inspectorMarkdown;
     this.backlinkMarkdown = backlinkMarkdown;
     this.scrollView = scrollView;
@@ -798,6 +1109,22 @@ export class DetailPiPreviewLayout extends VStack {
     this.requestRender?.();
   }
 
+  private renderAnnotatedWithSourceLineRow(
+    width: number,
+    sourceLine: number,
+  ): SourceSpannedMarkdownRowRender {
+    const arrangement = this.annotationPreview.renderArrangement(width);
+    const markdownRow = this.markdown.sourceLineRow(
+      arrangement.contentWidth,
+      sourceLine,
+      arrangement.markdownLines.length,
+    );
+    return {
+      lines: arrangement.lines,
+      sourceLineRow: arrangement.mapMarkdownRow(markdownRow),
+    };
+  }
+
   draftSourceLineAtScroll(width: number): number | null {
     const anchors = this.currentDraftAnchors(width);
     return anchors ? nearestDraftSourceLine(anchors, this.scrollView.scrollTop) : null;
@@ -807,11 +1134,15 @@ export class DetailPiPreviewLayout extends VStack {
     const sourceText = this.state.context.selected?.text;
     if (!sourceText) return null;
     const contentWidth = this.scrollView.getContentWidth(width);
-    const anchors = draftSourceRowAnchors(sourceText, contentWidth, this.markdownTheme);
+    const annotated = this.annotationPreview.renderArrangement(contentWidth);
+    const anchors = draftSourceRowAnchors(
+      sourceText,
+      annotated.contentWidth,
+      this.markdownTheme,
+    ).map((row) => annotated.mapMarkdownRow(row));
     if (!(this.options.splitActive?.() ?? false)) {
-      const authored = this.markdown.render(contentWidth);
       const inspector = this.inspectorMarkdown.render(contentWidth);
-      const arrangement = arrangeInlinePreview(authored, inspector);
+      const arrangement = arrangeInlinePreview(annotated.lines, inspector);
       for (let index = 0; index < anchors.length; index += 1) {
         anchors[index] = arrangement.mapAuthoredRow(anchors[index]!);
       }
@@ -827,47 +1158,67 @@ export class DetailPiPreviewLayout extends VStack {
     const sourceText = this.state.context.selected?.text;
     if (!sourceText) return null;
     const contentWidth = this.scrollView.getContentWidth(width);
-    const authored = this.markdown.render(contentWidth);
+    const annotated = this.annotationPreview.renderArrangement(contentWidth);
     const inspector = this.inspectorMarkdown.render(contentWidth);
-    const arrangement = (this.options.splitActive?.() ?? false)
+    const split = this.options.splitActive?.() ?? false;
+    const arrangement = split
       ? {
-        lines: authored,
+        lines: annotated.lines,
         mapAuthoredRow: (row: number) => row,
+        authoredRowAt: (row: number) =>
+          row >= 0 && row < annotated.lines.length ? row : null,
       }
-      : arrangeInlinePreview(authored, inspector);
+      : arrangeInlinePreview(annotated.lines, inspector);
     const sourceLines = sourceText.split(/\r?\n/);
-    const anchors = draftSourceRowAnchors(sourceText, contentWidth, this.markdownTheme)
-      .map((row) => arrangement.mapAuthoredRow(row));
+    const markdownAnchors = draftSourceRowAnchors(
+      sourceText,
+      annotated.contentWidth,
+      this.markdownTheme,
+    );
+    const anchors = markdownAnchors
+      .map((row) => arrangement.mapAuthoredRow(annotated.mapMarkdownRow(row)));
     const bodyRow = this.scrollView.scrollTop + Math.max(0, viewportRow - 3);
+    const annotatedRow = arrangement.authoredRowAt(bodyRow);
+    if (annotatedRow === null) return null;
+    const markdownRow = annotated.markdownRowAt(annotatedRow);
+    if (markdownRow === null) return null;
     const sourceLine = nearestDraftSourceLine(anchors, bodyRow);
     if (sourceLine === null) return null;
-    const anchorRow = anchors[sourceLine];
-    if (anchorRow === undefined || bodyRow < anchorRow) return null;
+    const markdownAnchor = markdownAnchors[sourceLine];
+    if (markdownAnchor === undefined || markdownRow < markdownAnchor) return null;
     const projection = markdownTextProjection(sourceLines[sourceLine] ?? "");
     let projectionOffset = 0;
-    for (let row = anchorRow; row <= bodyRow; row += 1) {
-      const rendered = stripTerminalSequences(arrangement.lines[row] ?? "")
+    for (let row = markdownAnchor; row <= markdownRow; row += 1) {
+      const rendered = stripTerminalSequences(annotated.markdownLines[row] ?? "")
         .replace(/^▐ /, "");
       const segment = rendered.trim();
       if (!segment) continue;
       const segmentStart = projection.text.indexOf(segment, projectionOffset);
       if (segmentStart < 0) {
-        if (row !== bodyRow) continue;
-        const ratio = Math.max(0, Math.min(1, viewportColumn / Math.max(1, rendered.length)));
+        if (row !== markdownRow) continue;
+        const contentColumn = Math.max(
+          0,
+          viewportColumn - (contentWidth - annotated.contentWidth),
+        );
+        const ratio = Math.max(0, Math.min(1, contentColumn / Math.max(1, rendered.length)));
         const projectedColumn = Math.round(ratio * projection.text.length);
         return {
           row: sourceLine,
           column: projection.sourceOffsets[projectedColumn] ?? projection.sourceOffsets.at(-1)!,
         };
       }
-      if (row !== bodyRow) {
+      if (row !== markdownRow) {
         projectionOffset = segmentStart + segment.length;
         continue;
       }
       const displayStart = rendered.indexOf(segment);
+      const contentColumn = Math.max(
+        0,
+        viewportColumn - (contentWidth - annotated.contentWidth),
+      );
       const displayColumn = Math.max(0, Math.min(
         segment.length,
-        viewportColumn - displayStart,
+        contentColumn - displayStart,
       ));
       return {
         row: sourceLine,
@@ -1083,19 +1434,16 @@ export class DetailPiPreviewLayout extends VStack {
       (this.calloutRegions.length > 0 || nextCalloutRegions.length > 0);
     this.renderedCalloutSource = authoredCalloutSource;
     this.calloutRegions = nextCalloutRegions;
-    const annotationDocument = draftText === null ? renderAnnotationDocument(this.state) : "";
     const sourceChanged =
       sourceText !== this.renderedSourceText ||
       rawText !== this.renderedRawText ||
       workIdPrefix !== this.renderedWorkIdPrefix ||
-      annotationDocument !== this.renderedAnnotationDocument ||
       embedPresentation !== this.renderedEmbedPresentation ||
       this.draftProjectionError !== this.renderedDraftProjectionError;
     if (sourceChanged || calloutSourceChanged) {
       this.renderedSourceText = sourceText;
       this.renderedRawText = rawText;
       this.renderedWorkIdPrefix = workIdPrefix;
-      this.renderedAnnotationDocument = annotationDocument;
       this.renderedEmbedPresentation = embedPresentation;
       this.renderedDraftProjectionError = this.draftProjectionError;
       const document = selected
@@ -1106,14 +1454,11 @@ export class DetailPiPreviewLayout extends VStack {
             workIdPrefix,
           )
         : sourceText;
-      const decoratedDocument = annotationDocument
-        ? `${document}\n\n---\n\n${annotationDocument}`
-        : document;
       const renderedText = this.draftProjectionError
-        ? `${decoratedDocument}\n\n> Draft preview error: ${
+        ? `${document}\n\n> Draft preview error: ${
           sanitizeMarkdownDocument(this.draftProjectionError).replace(/\r?\n/g, " ")
         }`
-        : decoratedDocument;
+        : document;
       this.renderedDocumentText = renderedText;
       this.renderedCalloutRegions = renderedAuthoredCallouts(
         this.calloutRegions,
@@ -1128,6 +1473,14 @@ export class DetailPiPreviewLayout extends VStack {
         this.renderedCalloutRegions,
       );
     }
+    const annotationGroups = draftText === null
+      ? detailAnnotationGroups(
+        this.state,
+        renderedLineForAuthoredLine,
+        this.renderedDocumentText.split(/\r?\n/).length,
+      )
+      : [];
+    this.annotationPreview.setGroups(annotationGroups);
     const backlinksDocument = renderBacklinksDocument(this.state);
     if (backlinksDocument !== this.renderedBacklinksDocument) {
       this.renderedBacklinksDocument = backlinksDocument;
@@ -1137,6 +1490,7 @@ export class DetailPiPreviewLayout extends VStack {
       ? detailPropertyInspectorRegions(this.state)
       : [
         ...this.calloutRegions,
+        ...detailAnnotationRegions(annotationGroups),
         ...detailPropertyInspectorRegions(this.state),
         ...detailBacklinkRegions(this.state),
       ];
@@ -1154,6 +1508,23 @@ export class DetailPiPreviewLayout extends VStack {
       this.pendingPropertySelectionScroll = true;
     }
     this.previousPropertyFocusedId = focusedPropertyId;
+    const focusedAnnotation = this.state.previewRegions.regions.find((region) =>
+      region.id === this.state.previewRegions.focusedRegionId &&
+      region.kind === "annotation"
+    );
+    const focusedAnnotationId = focusedAnnotation?.id ?? null;
+    const focusedAnnotationExpanded = focusedAnnotation?.disclosure?.expanded;
+    if (
+      focusedAnnotationId !== null &&
+      (
+        focusedAnnotationId !== this.previousAnnotationFocusedId ||
+        focusedAnnotationExpanded !== this.previousAnnotationFocusedExpanded
+      )
+    ) {
+      this.pendingAnnotationSelectionScroll = true;
+    }
+    this.previousAnnotationFocusedId = focusedAnnotationId;
+    this.previousAnnotationFocusedExpanded = focusedAnnotationExpanded;
     const backlinkSelectionChanged =
       this.state.backlinks.selectedIndex !== this.previousBacklinkSelectedIndex;
     if (
@@ -1225,7 +1596,7 @@ export class DetailPiPreviewLayout extends VStack {
       this.state.context.selected && !(this.options.splitActive?.() ?? false)
         ? this.inspectorMarkdown.render(contentWidth)
         : [];
-    const renderedDocument = this.markdown.renderWithSourceLineRow(
+    const renderedDocument = this.renderAnnotatedWithSourceLineRow(
       contentWidth,
       this.renderedFragmentSourceLine,
     );
@@ -1254,7 +1625,7 @@ export class DetailPiPreviewLayout extends VStack {
       this.state.context.selected && !(this.options.splitActive?.() ?? false)
         ? this.inspectorMarkdown.render(contentWidth)
         : [];
-    const renderedDocument = this.markdown.renderWithSourceLineRow(
+    const renderedDocument = this.renderAnnotatedWithSourceLineRow(
       contentWidth,
       this.renderedAttentionSourceLine,
     );
@@ -1267,6 +1638,53 @@ export class DetailPiPreviewLayout extends VStack {
     this.scrollView.scrollTo(arrangement.mapAuthoredRow(renderedDocument.sourceLineRow));
     return this.scrollView.scrollTop !== previousScrollTop;
   }
+
+  ensureAnnotationSelectionVisible(width: number): boolean {
+    if (
+      !this.pendingAnnotationSelectionScroll ||
+      this.scrollView.viewportHeight <= 0
+    ) return false;
+    this.pendingAnnotationSelectionScroll = false;
+    const regionId = this.previousAnnotationFocusedId;
+    if (!regionId) return false;
+    const contentWidth = this.scrollView.getContentWidth(width);
+    const annotated = this.annotationPreview.renderArrangement(contentWidth);
+    const region = this.state.previewRegions.regions.find((candidate) =>
+      candidate.id === regionId
+    );
+    const panelRow = region?.disclosure?.expanded
+      ? annotated.panelRows.get(regionId)
+      : undefined;
+    const targetRow = panelRow ?? annotated.markerRows.get(regionId);
+    if (targetRow === undefined) return false;
+    const inspector = this.state.context.selected && !(this.options.splitActive?.() ?? false)
+      ? this.inspectorMarkdown.render(contentWidth)
+      : [];
+    const arrangement = arrangeInlinePreview(annotated.lines, inspector);
+    const backlinks = this.options.splitActive?.()
+      ? []
+      : this.backlinkMarkdown.render(contentWidth);
+    const contentHeight = arrangement.lines.length +
+      (backlinks.length > 0 ? backlinks.length + 1 : 0);
+    this.scrollView.updateLayout(
+      contentHeight,
+      this.scrollView.viewportHeight,
+      () => {},
+    );
+    const selectedRow = arrangement.mapAuthoredRow(targetRow);
+    const previousScrollTop = this.scrollView.scrollTop;
+    if (panelRow !== undefined) {
+      this.scrollView.scrollTo(
+        Math.max(0, selectedRow - Math.max(1, Math.floor(this.scrollView.viewportHeight / 3))),
+      );
+    } else if (selectedRow < previousScrollTop) {
+      this.scrollView.scrollTo(selectedRow);
+    } else if (selectedRow >= previousScrollTop + this.scrollView.viewportHeight) {
+      this.scrollView.scrollTo(selectedRow - this.scrollView.viewportHeight + 1);
+    }
+    return this.scrollView.scrollTop !== previousScrollTop;
+  }
+
 
   ensureBacklinkSelectionVisible(width: number): boolean {
     if (!this.pendingBacklinkSelectionScroll || this.scrollView.viewportHeight <= 0) return false;
@@ -1281,7 +1699,7 @@ export class DetailPiPreviewLayout extends VStack {
       ? this.inspectorMarkdown.render(contentWidth)
       : [];
     const selectedRow =
-      arrangeInlinePreview(this.markdown.render(contentWidth), inspector).lines.length +
+      arrangeInlinePreview(this.annotationPreview.render(contentWidth), inspector).lines.length +
       1 + selectedLine;
     const previousScrollTop = this.scrollView.scrollTop;
     if (selectedRow < previousScrollTop) {
@@ -1309,7 +1727,7 @@ export class DetailPiPreviewLayout extends VStack {
       this.state.propertyInspector.presentation === "dedicated"
         ? selectedLine
         : arrangeInlinePreview(
-            this.markdown.render(contentWidth),
+            this.annotationPreview.render(contentWidth),
             inspector,
           ).inspectorStart + selectedLine;
     const previousScrollTop = this.scrollView.scrollTop;
@@ -1341,6 +1759,7 @@ export class DetailPiPreviewLayout extends VStack {
     if (this.applyPendingAttentionScroll(width)) lines = super.render(width);
     if (this.ensureBacklinkSelectionVisible(width)) lines = super.render(width);
     if (this.applyPropertyInspectorScroll()) lines = super.render(width);
+    if (this.ensureAnnotationSelectionVisible(width)) lines = super.render(width);
     if (this.ensurePropertySelectionVisible(width)) lines = super.render(width);
     return lines;
   }

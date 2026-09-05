@@ -6,6 +6,7 @@ export interface PreviewSourceSpan {
 }
 
 export type PreviewRegionKind =
+  | "annotation"
   | "callout"
   | "backlinks"
   | "backlink-source"
@@ -15,6 +16,7 @@ export type PreviewRegionKind =
 
 export type PreviewRegionAction =
   | { type: "preview.region.focus"; regionId: string }
+  | { type: "annotation.disclosure.toggle"; regionId: string }
   | { type: "callout.disclosure.toggle"; regionId: string }
   | { type: "backlinks.disclosure.toggle" }
   | { type: "backlink.open"; blockId: string }
@@ -53,6 +55,8 @@ export function previewRegionActionUri(action: PreviewRegionAction): string {
     case "preview.region.focus":
       if (!action.regionId.trim()) throw new Error("Preview region ID cannot be empty");
       return `${DETAIL_PREVIEW_SCHEME}//focus/${encodeURIComponent(action.regionId)}`;
+    case "annotation.disclosure.toggle":
+      return `${DETAIL_PREVIEW_SCHEME}//annotation-toggle/${encodeURIComponent(action.regionId)}`;
     case "callout.disclosure.toggle":
       return `${DETAIL_PREVIEW_SCHEME}//callout-toggle/${encodeURIComponent(action.regionId)}`;
     case "backlinks.disclosure.toggle":
@@ -91,6 +95,9 @@ export function parsePreviewRegionActionUri(uri: string): PreviewRegionAction | 
     case "focus":
       if (!value) throw new Error("Invalid Detail preview region");
       return { type: "preview.region.focus", regionId: value };
+    case "annotation-toggle":
+      if (!value) throw new Error("Invalid Detail annotation region");
+      return { type: "annotation.disclosure.toggle", regionId: value };
     case "callout-toggle":
       if (!value) throw new Error("Invalid Detail callout region");
       return { type: "callout.disclosure.toggle", regionId: value };

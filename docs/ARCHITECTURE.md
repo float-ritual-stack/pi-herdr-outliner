@@ -51,7 +51,7 @@ PageUp/PageDown move the selected expanded row's offset by one Tree body viewpor
 
 - [`DetailController`](../src/detail-controller.ts) — modes, effects, optimistic saves, read-only source-range selection, durable annotation creation/reanchoring/reveal, PreviewRegion actions, property-inspector state, lazy backlink state, file behavior, and cursor visibility;
 - [`detail-pi.ts`](../src/detail-pi.ts) — terminal lifecycle, input, Pi layout switching, and dedicated-inspector startup;
-- [`detail-pi-preview.ts`](../src/detail-pi-preview.ts) — authored Markdown, callouts, property rows, and generated Backlinks in one `ScrollView`;
+- [`detail-pi-preview.ts`](../src/detail-pi-preview.ts) — authored Markdown, anchored annotation gutter markers with inline threaded disclosure, callouts, property rows, and generated Backlinks in one `ScrollView`;
 - [`open-destination-chooser.ts`](../src/open-destination-chooser.ts) — shared destination state, fixed key handling, routing fallback, and idle dismissal for every open-capable Detail surface;
 - [`backlink-peek.ts`](../src/backlink-peek.ts) and [`backlink-peek-main.ts`](../src/backlink-peek-main.ts) — immutable source-set traversal, reversible outcomes, and the non-routable Herdr preview surface;
 - [`detail-editor-layout.ts`](../src/detail-editor-layout.ts) — grapheme-safe wrapped visual rows, cursor mapping, and selection spans;
