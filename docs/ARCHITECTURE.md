@@ -123,6 +123,10 @@ parent/child identity. Nested callout bodies remain Pi Markdown, `+`/`-` fold
 markers produce ephemeral disclosure, and generated action links never enter
 canonical text. Generated embed backgrounds compose with callout bodies rather
 than replacing them.
+Sibling callout spacing follows source-level quote boundaries: adjacent headers
+and quoted blank lines remain visually stacked, while each unquoted blank line
+between root callouts contributes one rendered separator row. Source-line to
+rendered-row mapping counts those rows so exact fragment reveals remain aligned.
 Callout presentation is a Detail-process theme boundary. `OUTLINER_CALLOUT_THEME`
 is parsed once at startup into validated partial overrides for canonical type
 styles and the neutral fallback. Rendering reapplies each card's foreground and

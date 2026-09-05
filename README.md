@@ -352,6 +352,11 @@ and a semantic foreground, card background, and accent rail. Aliases such as
 `faq`, `attention`, and `check` inherit the `question`, `warning`, and `success`
 styles. Unknown types keep their authored title and use the neutral fallback.
 
+Sibling callouts preserve authored whitespace. Adjacent headers—and headers
+separated only by a quoted blank line (`>`)—render as touching cards. One or
+more unquoted blank source lines render as the same number of empty rows between
+the cards.
+
 Set `OUTLINER_CALLOUT_THEME` on the Herdr process to override only the roles you
 need. Values are JSON, colors are `#RRGGBB`, glyphs must occupy exactly one
 terminal column, and keys must be canonical types or `fallback`:

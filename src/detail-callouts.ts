@@ -267,6 +267,16 @@ interface RenderPiece {
   component?: Component;
   child?: CalloutNode;
 }
+class BlankRows implements Component {
+  constructor(private readonly count: number) {}
+
+  render(_width: number): string[] {
+    return Array.from({ length: this.count }, () => "");
+  }
+
+  invalidate(): void {}
+}
+
 const RESET_STYLE = "\x1b[0m";
 
 function trueColorSequence(channel: 38 | 48, color: string): string {
@@ -382,14 +392,23 @@ export class DetailCalloutDocument implements Component {
     const lines = sourceLines(source);
     const roots = regions.filter((region) => region.parentId === null);
     let cursor = 0;
+    let hasPreviousRoot = false;
     for (const root of roots) {
       if (root.headerLine > cursor) {
-        this.pieces.push(...markdownComponents(
-          lines.slice(cursor, root.headerLine),
-          (line) => line.raw,
-          theme,
-          decoration,
-        ).map((component) => ({ component })));
+        const between = lines.slice(cursor, root.headerLine);
+        if (
+          hasPreviousRoot &&
+          between.every((line) => line.quoteDepth === 0 && line.text.trim().length === 0)
+        ) {
+          this.pieces.push({ component: new BlankRows(between.length) });
+        } else {
+          this.pieces.push(...markdownComponents(
+            between,
+            (line) => line.raw,
+            theme,
+            decoration,
+          ).map((component) => ({ component })));
+        }
       }
       this.pieces.push({
         child: new CalloutNode(
@@ -405,6 +424,7 @@ export class DetailCalloutDocument implements Component {
         ),
       });
       cursor = root.sourceSpan!.endLine + 1;
+      hasPreviousRoot = true;
     }
     if (cursor < lines.length) {
       this.pieces.push(...markdownComponents(
