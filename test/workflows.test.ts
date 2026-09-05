@@ -275,12 +275,12 @@ describe("typed outline workflows", () => {
     expect(result.comparison.callscript.modelTurns).toBe(1);
     expect(result.comparison.callscript.operations).toBe(2);
     expect(result.comparison.direct.modelTurns).toBeGreaterThan(1);
-    expect(result.comparison.contextBytesSaved).toBeGreaterThan(10_000);
-    expect(result.comparison.callscript.contextBytes).toBeLessThan(
+    expect(result.comparison.contextBytesSaved).toBe(0);
+    expect(result.comparison.callscript.contextBytes).toBe(
       result.comparison.direct.contextBytes,
     );
     expect(requests.filter((request) => request.action === "workflows.structure")).toHaveLength(2);
-    expect(requests.some((request) => request.action === "get")).toBe(false);
+    expect(requests.filter((request) => request.action === "workflows.get")).toHaveLength(2);
 
     const cancelled = workflows.start(startInput(source.id, "cancelled-run")).run;
     workflows.cancel(cancelled.runId);

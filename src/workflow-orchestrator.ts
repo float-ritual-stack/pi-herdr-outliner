@@ -18,13 +18,12 @@ interface WorkflowOrchestrationResult {
 }
 
 function directMetrics(structure: WorkflowStructure, wallTimeMs: number): WorkflowMetrics {
-  const fullContentBytes = structure.items.reduce((total, item) => total + item.sourceBytes, 0);
   const operations = Math.max(1, structure.items.length + 1);
   return {
     planner: "pi-direct",
     modelTurns: operations,
     operations,
-    contextBytes: structure.contextBytes + fullContentBytes,
+    contextBytes: structure.contextBytes,
     wallTimeMs,
     completeness: structure.completeness,
     artifactQuality: "usable",

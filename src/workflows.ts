@@ -658,6 +658,9 @@ export class WorkflowManager {
 
   previewPromotion(input: WorkflowPromotionInput): WorkflowPromotionPreview {
     const run = this.get(input.runId);
+    if (run.cancellationRequested || run.status === "cancelled" || run.status === "failed") {
+      throw new Error(`Workflow promotion is unavailable from ${run.status}`);
+    }
     if (!run.capabilities.includes("promotion.preview")) throw new Error("Workflow run lacks promotion.preview capability");
     if (!PROMOTION_KINDS.includes(input.kind)) throw new Error(`Unsupported workflow promotion kind: ${String(input.kind)}`);
     const step = run.route.find((candidate) => candidate.stepId === input.stepId);
@@ -705,6 +708,9 @@ export class WorkflowManager {
         };
       }
       const run = this.get(preview.input.runId);
+      if (run.cancellationRequested || run.status === "cancelled" || run.status === "failed") {
+        throw new Error(`Workflow promotion is unavailable from ${run.status}`);
+      }
       if (!run.capabilities.includes("promotion.commit")) {
         throw new Error("Workflow run lacks promotion.commit capability");
       }

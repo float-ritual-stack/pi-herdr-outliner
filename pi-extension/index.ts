@@ -307,7 +307,7 @@ const workflowInvocationSchema = Type.Union([
         key: Type.String(),
         value: Type.Optional(Type.String()),
       }))),
-      limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+      limit: Type.Integer({ minimum: 1, maximum: 100 }),
     }),
   }),
   Type.Object({
@@ -595,6 +595,7 @@ async function runWorkflowOrchestrator(
       cwd: extensionRoot,
       signal,
       maxBuffer: 2 * 1024 * 1024,
+      timeout: 10 * 60 * 1_000,
     },
   );
   try {
