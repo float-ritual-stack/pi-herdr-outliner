@@ -28,6 +28,7 @@ export interface DetailKeymapOptions {
   focusDraftSplit?(): void;
   navigatePreview?(direction: "up" | "down" | "pageup" | "pagedown" | "top" | "bottom"): void;
   previewFocused?(): boolean;
+  annotationSelectionSourceLine?(): number | null;
 }
 
 export interface DetailKeyHandler {
@@ -238,7 +239,10 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
         await dispatch({ type: "edit.begin" });
         return true;
       case "detail.annotation.select":
-        await dispatch({ type: "annotation.selection.begin" });
+        await dispatch({
+          type: "annotation.selection.begin",
+          sourceLine: options.annotationSelectionSourceLine?.() ?? undefined,
+        });
         return true;
       case "detail.annotation.reveal":
         await dispatch({ type: "annotation.reveal" });

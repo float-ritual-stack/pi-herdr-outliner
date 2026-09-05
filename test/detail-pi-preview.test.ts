@@ -1656,6 +1656,65 @@ describe("structured property inspector presentations", () => {
   });
 });
 
+test("keeps reader selection highlighted without changing preview scroll", () => {
+  const raw = Array.from({ length: 40 }, (_, index) =>
+    index === 8 ? "alpha **selected phrase** omega" : `line ${index}`
+  ).join("\n");
+  const detail = state(raw, raw);
+  const layout = previewLayout(detail);
+  layout.scrollView.setScrollbar("hidden");
+  layout.syncState(48);
+  const contentHeight = renderedDocument(layout, 48).length;
+  layout.scrollView.updateLayout(contentHeight, 8, () => {});
+  layout.scrollView.scrollBy(5);
+  const initialScroll = layout.scrollView.scrollTop;
+
+  detail.mode = "select";
+  detail.buffer = new TextBuffer(raw);
+  detail.buffer.placeCursor(8, 8);
+  detail.buffer.placeCursor(8, 23, true);
+  const selecting = layout.scrollView.render(48);
+
+  expect(layout.scrollView.scrollTop).toBe(initialScroll);
+  expect(selecting.some((line) => {
+    const visible = stripTerminalSequences(line);
+    return visible.includes("▐ ") && visible.includes("selected phrase");
+  })).toBe(true);
+
+  const start = raw.indexOf("selected phrase");
+  detail.mode = "comment";
+  detail.annotationDraft = {
+    requestId: "request-1",
+    returnMode: "preview",
+    target: {
+      kind: "block",
+      sourceBlockId: "block-1",
+      anchor: createAnnotationAnchor(raw, start, start + "selected phrase".length, "updated"),
+    },
+  };
+  detail.buffer = new TextBuffer("A contextual comment");
+  layout.syncState(48);
+  const commenting = layout.scrollView.render(48);
+
+  expect(layout.scrollView.scrollTop).toBe(initialScroll);
+  expect(commenting.some((line) => {
+    const visible = stripTerminalSequences(line);
+    return visible.includes("▐ ") && visible.includes("selected phrase");
+  })).toBe(true);
+});
+
+test("maps rendered Markdown points back to UTF-16 source positions", () => {
+  const raw = "1. Open the block in **Detail**.";
+  const detail = state(raw, raw);
+  const layout = previewLayout(detail);
+  layout.syncState(60);
+  layout.render(60);
+
+  const point = layout.sourcePointAtViewport(3, 25, 60);
+
+  expect(point).toEqual({ row: 0, column: raw.indexOf("Detail") + 4 });
+});
+
 test("decorates the exact active attention phrase in Pi preview", () => {
   const detail = state(
     "target phrase then target phrase omega",

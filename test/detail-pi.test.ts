@@ -1,6 +1,7 @@
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "bun:test";
 import { emptyAttentionState } from "../src/attention";
+import { BufferComposer } from "../src/buffer-composer";
 import type { DetailState } from "../src/detail-controller";
 import {
   createPiDetailInputListener,
@@ -230,6 +231,29 @@ describe("Pi TUI Detail component", () => {
     const rendered = component.render(64).join("\n");
     expect(rendered).toContain("raw ((block-id)) source");
     expect(rendered).not.toContain("resolved display source");
+  });
+
+  test("renders a compact contextual buffer with excerpt and semantic actions", () => {
+    const buffer = new TextBuffer("Keep this context.");
+    buffer.placeCursor(0, buffer.text.length);
+    const composer = new BufferComposer(() => ({
+      title: "Comment on selection",
+      context: "Open the block in Detail.\nPress v to select.",
+      buffer,
+      placeholder: "Write a comment…",
+      commitAction: "Ctrl+S",
+      cancelAction: "Esc",
+    }));
+
+    const lines = composer.render(72);
+    const rendered = stripTerminalSequences(lines.join("\n"));
+
+    expect(lines).toHaveLength(7);
+    expect(rendered).toContain("Comment on selection");
+    expect(rendered).toContain("“Open the block in Detail. Press v to select.”");
+    expect(rendered).toContain("Keep this context.");
+    expect(rendered).toContain("Esc cancel · Ctrl+S save");
+    expect(lines.every((line) => visibleWidth(line) === 72)).toBe(true);
   });
 
   test("allocates stable equal draft panes above the responsive breakpoint", () => {

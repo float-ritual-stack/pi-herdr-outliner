@@ -18,6 +18,7 @@ import {
   type TuiInputListener,
 } from "@earendil-works/pi-tui";
 import { OutlinerClient, type OutlinerWatcher } from "./client";
+import { BufferComposer } from "./buffer-composer";
 import {
   actionMenuItemText,
   filterActionMenuItems,
@@ -223,6 +224,7 @@ type DetailDraftSplitFocus = "editor" | "preview";
 let draftSplitFocus: DetailDraftSplitFocus = "editor";
 let draftSplitHover: DetailMouseRegion | null = null;
 let editorDragActive = false;
+let renderedSelectionDragActive = false;
 
 function draftSplitActive(): boolean {
   return controller.state.mode === "edit" &&
@@ -487,6 +489,7 @@ async function stop(exitCode = 0): Promise<void> {
 }
 
 let actionMenuHandle: OverlayHandle | null = null;
+let composerHandle: OverlayHandle | null = null;
 
 function closeActionMenu(): void {
   actionMenuHandle?.hide();
@@ -658,8 +661,40 @@ function editorPointerLocation(
     controller.state.editorVisualOffset,
   );
 }
+async function handleRenderedSelectionMouse(data: string): Promise<boolean> {
+  if (controller.state.mode !== "select") {
+    renderedSelectionDragActive = false;
+    return false;
+  }
+  const pointer = parseTreePrimaryPointer(data);
+  if (!pointer || pointer.meta || pointer.ctrl) return false;
+  const point = preview.sourcePointAtViewport(
+    pointer.row,
+    pointer.column,
+    terminal.columns,
+  );
+  if (!point) return true;
+  if (pointer.phase === "down") {
+    renderedSelectionDragActive = true;
+    await controller.dispatch({
+      type: "annotation.selection.place",
+      ...point,
+      extend: false,
+    }, viewport());
+    return true;
+  }
+  if (!renderedSelectionDragActive) return true;
+  await controller.dispatch({
+    type: "annotation.selection.place",
+    ...point,
+    extend: true,
+  }, viewport());
+  if (pointer.phase === "up") renderedSelectionDragActive = false;
+  return true;
+}
+
 async function handleDetailMouse(data: string): Promise<boolean> {
-  if (controller.state.mode !== "edit" && controller.state.mode !== "select") return false;
+  if (controller.state.mode !== "edit") return false;
   const split = draftSplitActive();
   const widths = detailDraftSplitWidths(terminal.columns);
   const mouseLayout = {
@@ -754,10 +789,13 @@ function shouldPassDetailInputToTui(data: string): boolean {
     controller.state.destinationChooser.active &&
     detailChooserOwnsPiInput(data)
   ) return false;
+  if (actionMenuHandle) return true;
+  if (composerHandle) return false;
   if (tui.hasOverlay()) return true;
   if (!isTreeMouseSequence(data)) return false;
   if (parseTreeSecondaryClick(data) && rightClickOwnership === "outliner") return false;
-  if (controller.state.mode !== "edit" && controller.state.mode !== "select") return true;
+  if (controller.state.mode === "select" && parseTreePrimaryPointer(data)) return false;
+  if (controller.state.mode !== "edit") return true;
   const click = parseTreePlainClick(data);
   if (!click || !draftSplitActive()) return false;
   const widths = detailDraftSplitWidths(terminal.columns);
@@ -783,6 +821,7 @@ const handleKeypress = createDetailKeyHandler({
   focusDraftSplit,
   navigatePreview,
   previewFocused: () => draftSplitActive() && draftSplitFocus === "preview",
+  annotationSelectionSourceLine: () => preview.sourceLineAtScroll(terminal.columns),
 });
 invokeDetailAction = async (actionId) => {
   closeActionMenu();
@@ -828,6 +867,7 @@ async function handleInput(data: string): Promise<void> {
     );
     return;
   }
+  if (await handleRenderedSelectionMouse(data)) return;
   if (await handleDetailMouse(data)) return;
   for (const input of inputStream.push(data)) await handleDecodedInput(input);
 }
@@ -878,6 +918,21 @@ const preview = new DetailPiPreviewLayout(
   },
 );
 const draftSplit = new DetailPiDraftSplitLayout(customFrame, preview);
+const composer = new BufferComposer(() => {
+  const target = controller.state.annotationDraft?.target;
+  const context = target?.anchor.excerpt ?? "";
+  return {
+    title: target?.kind === "file"
+      ? `Comment on ${target.filePath}:${target.startLine}-${target.endLine}`
+      : "Comment on selection",
+    context,
+    buffer: controller.state.buffer,
+    placeholder: "Write a comment…",
+    commitAction: "Ctrl+S",
+    cancelAction: "Esc",
+    viewportOffset: controller.state.editorVisualOffset,
+  };
+});
 let layoutRoot:
   | DetailPiComponent
   | DetailPiPreviewLayout
@@ -895,7 +950,8 @@ synchronizeLayout = () => {
   previousMode = mode;
 
   const split = draftSplitActive();
-  const previewActive = mode === "preview" || split;
+  const previewActive = mode === "preview" || mode === "select" ||
+    mode === "comment" || split;
   preview.setActive(previewActive);
 
   let previewWidth = terminal.columns;
@@ -906,12 +962,26 @@ synchronizeLayout = () => {
   if (previewActive) {
     preview.syncState(previewWidth);
     preview.applyPendingFragmentScroll(previewWidth);
-    if (!split) preview.ensureBacklinkSelectionVisible(previewWidth);
+    if (!split && mode === "preview") {
+      preview.ensureBacklinkSelectionVisible(previewWidth);
+    }
+  }
+
+  if (mode === "comment" && !composerHandle) {
+    composerHandle = tui.showOverlay(composer, {
+      width: "100%",
+      maxHeight: 7,
+      anchor: "bottom-center",
+      nonCapturing: true,
+    });
+  } else if (mode !== "comment" && composerHandle) {
+    composerHandle.hide();
+    composerHandle = null;
   }
 
   let nextRoot: DetailPiComponent | DetailPiPreviewLayout | DetailPiDraftSplitLayout;
   if (split) nextRoot = draftSplit;
-  else if (mode === "preview") nextRoot = preview;
+  else if (previewActive) nextRoot = preview;
   else nextRoot = customFrame;
 
   if (nextRoot !== layoutRoot) {

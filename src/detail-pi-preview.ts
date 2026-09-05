@@ -3,6 +3,7 @@ import {
   Markdown,
   matchesKey,
   ScrollView,
+  stripTerminalSequences,
   type Component,
   type MarkdownTheme,
   VStack,
@@ -42,7 +43,7 @@ import {
 } from "./detail-renderer";
 import { sanitizeDynamicText } from "./terminal";
 import { SourceSpannedMarkdown } from "./source-spanned-markdown";
-import type { BacklinkReferenceGroup } from "./types";
+import type { AnnotationAnchor, AttentionMark, BacklinkReferenceGroup } from "./types";
 
 export interface DetailDraftProjection {
   sourceText: string;
@@ -181,6 +182,111 @@ export interface DetailPiPreviewOptions {
   helpText?(): string;
   chooserHelpText?(): string;
   headerPropertyKeys?: readonly string[];
+}
+
+function annotationSelectionOffsets(state: Readonly<DetailState>): {
+  start: number;
+  end: number;
+} | null {
+  const range = state.buffer.selectionRange;
+  if (!range) return null;
+  const offset = (row: number, column: number): number => {
+    let value = column;
+    for (let index = 0; index < row; index += 1) {
+      value += state.buffer.lines[index]!.length + 1;
+    }
+    return value;
+  };
+  return {
+    start: offset(range.start.row, range.start.column),
+    end: offset(range.end.row, range.end.column),
+  };
+}
+
+function annotationSelectionMark(state: Readonly<DetailState>): AttentionMark | null {
+  const selected = state.context.selected;
+  if (!selected) return null;
+  const target = state.mode === "comment"
+    ? state.annotationDraft?.target
+    : undefined;
+  let anchor: AnnotationAnchor;
+  if (target?.kind === "block") {
+    anchor = target.anchor;
+  } else if (state.mode === "select") {
+    const offsets = annotationSelectionOffsets(state);
+    if (!offsets) return null;
+    anchor = {
+      ...offsets,
+      excerpt: selected.text.slice(offsets.start, offsets.end),
+      contextBefore: "",
+      contextAfter: "",
+      sourceVersion: selected.updatedAt,
+      sourceHash: "",
+    };
+  } else {
+    return null;
+  }
+  return {
+    markId: "local-annotation-selection",
+    targetClientId: state.attention.targetClientId,
+    target: {
+      kind: "block",
+      sourceBlockId: selected.id,
+      sourceVersion: anchor.sourceVersion,
+      sourceHash: anchor.sourceHash,
+      anchor,
+    },
+    tone: "current",
+    role: "current",
+    sender: "Local selection",
+    createdAt: "",
+    expiresAt: "",
+    returnCuePending: false,
+    sourceState: "active",
+  };
+}
+
+interface MarkdownTextProjection {
+  text: string;
+  sourceOffsets: number[];
+}
+
+function markdownTextProjection(source: string): MarkdownTextProjection {
+  const sourceOffsets: number[] = [];
+  let text = "";
+  let index = 0;
+  const heading = /^ {0,3}#{1,6}[ \t]+/.exec(source);
+  if (heading) index = heading[0].length;
+  while (index < source.length) {
+    if (source[index] === "\\" && index + 1 < source.length) {
+      index += 1;
+      sourceOffsets.push(index);
+      text += source[index]!;
+      index += 1;
+      continue;
+    }
+    if (source[index] === "[" || source[index] === "]") {
+      if (source[index] === "]" && source[index + 1] === "(") {
+        const end = source.indexOf(")", index + 2);
+        index = end < 0 ? index + 1 : end + 1;
+      } else {
+        index += 1;
+      }
+      continue;
+    }
+    if (
+      source[index] === "`" || source[index] === "*" ||
+      source[index] === "_" || source[index] === "~"
+    ) {
+      index += 1;
+      continue;
+    }
+    sourceOffsets.push(index);
+    text += source[index]!;
+    index += 1;
+  }
+  sourceOffsets.push(source.length);
+  return { text, sourceOffsets };
 }
 
 export function sanitizeMarkdownDocument(value: string): string {
@@ -514,7 +620,8 @@ class DetailPreviewBody implements Component {
     if (this.dedicatedInspector()) return inspector;
     const authored = decorateAttentionLines(
       this.authored.render(width),
-      currentAttentionMark(this.state.attention, this.state.targetBlockId),
+      annotationSelectionMark(this.state) ??
+        currentAttentionMark(this.state.attention, this.state.targetBlockId),
       width,
       this.state.context.selected?.text,
     );
@@ -694,6 +801,81 @@ export class DetailPiPreviewLayout extends VStack {
   draftSourceLineAtScroll(width: number): number | null {
     const anchors = this.currentDraftAnchors(width);
     return anchors ? nearestDraftSourceLine(anchors, this.scrollView.scrollTop) : null;
+  }
+
+  sourceLineAtScroll(width: number): number | null {
+    const sourceText = this.state.context.selected?.text;
+    if (!sourceText) return null;
+    const contentWidth = this.scrollView.getContentWidth(width);
+    const anchors = draftSourceRowAnchors(sourceText, contentWidth, this.markdownTheme);
+    if (!(this.options.splitActive?.() ?? false)) {
+      const authored = this.markdown.render(contentWidth);
+      const inspector = this.inspectorMarkdown.render(contentWidth);
+      const arrangement = arrangeInlinePreview(authored, inspector);
+      for (let index = 0; index < anchors.length; index += 1) {
+        anchors[index] = arrangement.mapAuthoredRow(anchors[index]!);
+      }
+    }
+    return nearestDraftSourceLine(anchors, this.scrollView.scrollTop);
+  }
+
+  sourcePointAtViewport(
+    viewportRow: number,
+    viewportColumn: number,
+    width: number,
+  ): { row: number; column: number } | null {
+    const sourceText = this.state.context.selected?.text;
+    if (!sourceText) return null;
+    const contentWidth = this.scrollView.getContentWidth(width);
+    const authored = this.markdown.render(contentWidth);
+    const inspector = this.inspectorMarkdown.render(contentWidth);
+    const arrangement = (this.options.splitActive?.() ?? false)
+      ? {
+        lines: authored,
+        mapAuthoredRow: (row: number) => row,
+      }
+      : arrangeInlinePreview(authored, inspector);
+    const sourceLines = sourceText.split(/\r?\n/);
+    const anchors = draftSourceRowAnchors(sourceText, contentWidth, this.markdownTheme)
+      .map((row) => arrangement.mapAuthoredRow(row));
+    const bodyRow = this.scrollView.scrollTop + Math.max(0, viewportRow - 3);
+    const sourceLine = nearestDraftSourceLine(anchors, bodyRow);
+    if (sourceLine === null) return null;
+    const anchorRow = anchors[sourceLine];
+    if (anchorRow === undefined || bodyRow < anchorRow) return null;
+    const projection = markdownTextProjection(sourceLines[sourceLine] ?? "");
+    let projectionOffset = 0;
+    for (let row = anchorRow; row <= bodyRow; row += 1) {
+      const rendered = stripTerminalSequences(arrangement.lines[row] ?? "")
+        .replace(/^▐ /, "");
+      const segment = rendered.trim();
+      if (!segment) continue;
+      const segmentStart = projection.text.indexOf(segment, projectionOffset);
+      if (segmentStart < 0) {
+        if (row !== bodyRow) continue;
+        const ratio = Math.max(0, Math.min(1, viewportColumn / Math.max(1, rendered.length)));
+        const projectedColumn = Math.round(ratio * projection.text.length);
+        return {
+          row: sourceLine,
+          column: projection.sourceOffsets[projectedColumn] ?? projection.sourceOffsets.at(-1)!,
+        };
+      }
+      if (row !== bodyRow) {
+        projectionOffset = segmentStart + segment.length;
+        continue;
+      }
+      const displayStart = rendered.indexOf(segment);
+      const displayColumn = Math.max(0, Math.min(
+        segment.length,
+        viewportColumn - displayStart,
+      ));
+      return {
+        row: sourceLine,
+        column: projection.sourceOffsets[segmentStart + displayColumn] ??
+          projection.sourceOffsets.at(-1)!,
+      };
+    }
+    return { row: sourceLine, column: 0 };
   }
 
   scrollDraftToSourceLine(sourceLine: number, width: number): boolean {

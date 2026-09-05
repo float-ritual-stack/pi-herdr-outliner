@@ -181,10 +181,15 @@ export function normalizeAnnotationCreateInput(input: AnnotationCreateInput): An
 }
 
 function annotationHeading(target: AnnotationTarget): string {
-  const location = target.kind === "file"
-    ? `${target.filePath}:${target.startLine === target.endLine ? target.startLine : `${target.startLine}-${target.endLine}`}`
-    : `block ${target.sourceBlockId} @${target.anchor.start}-${target.anchor.end}`;
-  return `Comment on ${location}`;
+  const excerpt = target.anchor.excerpt.replace(/\s+/g, " ").trim();
+  const quoted = `“${excerpt.length > 72 ? `${excerpt.slice(0, 71)}…` : excerpt}”`;
+  if (target.kind === "file") {
+    const range = target.startLine === target.endLine
+      ? `${target.startLine}`
+      : `${target.startLine}-${target.endLine}`;
+    return `Comment on ${target.filePath}:${range} · ${quoted}`;
+  }
+  return `Comment on ${quoted}`;
 }
 
 function annotationMetadata(

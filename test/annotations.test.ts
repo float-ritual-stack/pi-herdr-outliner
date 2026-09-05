@@ -38,6 +38,9 @@ describe("durable annotation anchors", () => {
       source: "agent",
     });
 
+    expect(text.split("\n")[0]).toBe("Comment on “🧭 and é”");
+    expect(text.split("\n")[0]).not.toContain("22222222-2222-4222-8222-222222222222");
+
     const parsed = parseAnnotationBlock(annotationBlock(text));
     expect(parsed.target.kind).toBe("block");
     expect(parsed.target.anchor).toEqual(anchor);

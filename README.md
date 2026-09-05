@@ -393,7 +393,7 @@ selected source in Tree.
 
 ### Detail source comments
 
-Press `v` in block preview to enter locked, read-only source selection. Shift-motion or primary-button drag selects an exact authored UTF-16 range without entering full edit mode; `c` opens the local comment composer, `Ctrl+S` stores it, and `Esc` cancels without creating a block. File view retains line-range selection with the same `c` composer. Annotation view `r` returns to the source with the resolved block range or file lines selected; ambiguous and orphaned anchors are reported instead of guessed.
+Press `v` in block preview to begin a locked, read-only selection without replacing or reflowing the rendered reader. Shift-motion or primary-button drag selects an exact authored UTF-16 range; the range stays highlighted in place. `c` mounts a reusable contextual buffer over the bottom of the reader, quotes the selected excerpt, and leaves the resource, layout, and scroll position intact. `Ctrl+S` stores the comment and closes the buffer; `Esc` cancels without creating a block. File view retains line-range selection with the same contextual buffer. Annotation view `r` returns to the source with the resolved block range or file lines selected; ambiguous and orphaned anchors are reported instead of guessed.
 
 ### Detail edit and comment modes
 
