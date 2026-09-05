@@ -516,6 +516,24 @@ describe("Pi Markdown detail preview", () => {
     ).toBe("> Embedded\r\n> body");
   });
 
+  test("recovers a final lazy blockquote token without a trailing newline", () => {
+    const document = "> 1. Open. 2. Press \\*\\*\\`v\\`\\*\\*.\ncomment body";
+    const segments = sourceSpannedMarkdownSegments(document, []);
+
+    expect(segments.map((segment) => segment.text).join("")).toBe(document);
+    expect(segments.every((segment) =>
+      segment.text === document.slice(segment.span.start, segment.span.end)
+    )).toBe(true);
+
+    const markdown = new SourceSpannedMarkdown(plainMarkdownTheme, (value) => value);
+    markdown.setContent(document, [], false);
+    expect(
+      markdown.renderWithSourceLineRow(40, 1).lines
+        .map(stripTerminalSequences)
+        .join("\n"),
+    ).toContain("comment body");
+  });
+
   test("correlates authored callouts by projected origin instead of colliding positions", () => {
     const canonical = [
       "!((embed-block))",
