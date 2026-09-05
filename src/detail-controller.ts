@@ -345,9 +345,10 @@ export type DetailOpenRouting = "first-unlocked" | "chooser";
 
 export type DetailIntent =
   | { type: "edit.begin" }
-  | { type: "annotation.selection.begin" }
+  | { type: "annotation.selection.begin"; sourceLine?: number; sourceColumn?: number }
+  | { type: "annotation.selection.place"; row: number; column: number; extend?: boolean }
   | { type: "trash.restore" }
-  | { type: "comment.begin" }
+  | { type: "comment.begin"; sourceRange?: { start: number; end: number } }
   | { type: "navigation.back" }
   | { type: "navigation.forward" }
   | { type: "reference.follow" }
@@ -1123,7 +1124,10 @@ export function createDetailController(
     }
   };
 
-  const beginAnnotationSelection = async (): Promise<void> => {
+  const beginAnnotationSelection = async (
+    sourceLine = 0,
+    sourceColumn = 0,
+  ): Promise<void> => {
     const selected = state.context.selected;
     if (!selected || selected.effectiveDeletedRootId) {
       state.status = "Block is in Trash; restore before adding annotations";
@@ -1131,16 +1135,19 @@ export function createDetailController(
     }
     await setLocked(true);
     state.buffer = new TextBuffer(selected.text);
+    state.buffer.placeCursor(sourceLine, sourceColumn);
     state.editorVisualOffset = 0;
     state.editorViewportManual = false;
     state.draftPreviewLinked = false;
     state.completion = null;
     state.annotationDraft = undefined;
     state.mode = "select";
-    state.status = "Locked · select source text, then press c to comment";
+    state.status = "Locked · extend the rendered selection, then press c";
   };
 
-  const beginComment = async (): Promise<void> => {
+  const beginComment = async (
+    sourceRange?: { start: number; end: number },
+  ): Promise<void> => {
     const selected = state.context.selected;
     if (!selected || selected.effectiveDeletedRootId) {
       state.status = "Block is in Trash; restore before adding annotations";
@@ -1148,13 +1155,13 @@ export function createDetailController(
     }
     let target: AnnotationTarget;
     let returnMode: "preview" | "file";
-    if (state.mode === "select") {
-      const offsets = detailBufferRangeOffsets(state.buffer);
+    if (state.mode === "select" || sourceRange) {
+      const offsets = sourceRange ?? detailBufferRangeOffsets(state.buffer);
       if (!offsets) {
         state.status = "Select a non-empty source range before commenting";
         return;
       }
-      const sourceText = state.buffer.text;
+      const sourceText = selected.text;
       target = {
         kind: "block",
         sourceBlockId: selected.id,
@@ -1444,7 +1451,12 @@ export function createDetailController(
         await beginEdit(viewport);
         break;
       case "annotation.selection.begin":
-        await beginAnnotationSelection();
+        await beginAnnotationSelection(intent.sourceLine, intent.sourceColumn);
+        break;
+      case "annotation.selection.place":
+        if (state.mode === "select") {
+          state.buffer.placeCursor(intent.row, intent.column, intent.extend);
+        }
         break;
       case "trash.restore":
         if (state.context.selected?.deletedAt) {
@@ -1946,7 +1958,7 @@ export function createDetailController(
         state.status = "Attention cue acknowledged; active marks remain";
         break;
       case "comment.begin":
-        await beginComment();
+        await beginComment(intent.sourceRange);
         break;
       case "buffer.insert":
         if (isBufferMode() && state.mode !== "select") {

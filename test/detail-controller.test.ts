@@ -1373,6 +1373,41 @@ describe("detail controller saves and annotations", () => {
     expect(harness.controller.state.status).toBe("Annotation added for source range 0-8");
   });
 
+  test("opens a contextual composer directly from an exact rendered range", async () => {
+    const excerpt =
+      "1. Open the block in **Detail**.\n2. Press **`v`** to enter read-only source selec";
+    const text = `${"x".repeat(141)}${excerpt} trailing`;
+    const harness = createHarness(makeBlock({ text }));
+    await harness.controller.initialize();
+
+    await harness.controller.dispatch({
+      type: "comment.begin",
+      sourceRange: { start: 141, end: 222 },
+    }, viewport);
+
+    expect(harness.controller.state.mode).toBe("comment");
+    expect(harness.controller.state.context.selected?.id).toBe("block-1");
+    expect(harness.controller.state.annotationDraft?.target).toMatchObject({
+      kind: "block",
+      sourceBlockId: "block-1",
+      anchor: { start: 141, end: 222, excerpt },
+    });
+
+    await harness.controller.dispatch({
+      type: "buffer.insert",
+      text: "Keep the reader and selection visible.",
+    }, viewport);
+    await harness.controller.dispatch({ type: "buffer.save" }, viewport);
+
+    expect(harness.controller.state.mode).toBe("preview");
+    expect(harness.controller.state.context.selected?.id).toBe("block-1");
+    expect(harness.calls.creates[0].input.target).toMatchObject({
+      kind: "block",
+      sourceBlockId: "block-1",
+      anchor: { start: 141, end: 222, excerpt },
+    });
+  });
+
   test("rejects an empty annotation without leaving comment mode", async () => {
     const block = makeBlock({ properties: [{ key: "file", value: "src/example.ts" }] });
     const harness = createHarness(block, filePreview());
