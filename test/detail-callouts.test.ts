@@ -329,6 +329,13 @@ describe("Detail Obsidian callouts", () => {
     const action = state.regions[0]!.activation!;
 
     expect(parsePreviewRegionActionUri(previewRegionActionUri(action))).toEqual(action);
+    const annotationAction = {
+      type: "annotation.disclosure.toggle" as const,
+      regionId: "annotation:block-1:3",
+    };
+    expect(
+      parsePreviewRegionActionUri(previewRegionActionUri(annotationAction)),
+    ).toEqual(annotationAction);
     expect(togglePreviewRegionDisclosure(state, regions[0]!.id)).toBe(true);
     expect(source).toBe("> [!note]- Folded\n> canonical body");
   });

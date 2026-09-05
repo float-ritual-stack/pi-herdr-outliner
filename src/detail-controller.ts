@@ -1616,6 +1616,10 @@ export function createDetailController(
               regionId: intent.action.regionId,
             }, viewport);
             break;
+          case "annotation.disclosure.toggle":
+            state.previewRegions.focusedRegionId = intent.action.regionId;
+            togglePreviewRegionDisclosure(state.previewRegions, intent.action.regionId);
+            break;
           case "callout.disclosure.toggle":
             togglePreviewRegionDisclosure(state.previewRegions, intent.action.regionId);
             break;
