@@ -75,6 +75,25 @@ function normalizeMarkdownSource(text: string): {
   return { text: normalized, originalOffsets };
 }
 
+function markdownTokenRange(
+  source: string,
+  raw: string,
+  cursor: number,
+  type: string,
+): { start: number; end: number } {
+  const start = source.indexOf(raw, cursor);
+  if (start >= 0) return { start, end: start + raw.length };
+  const remainingLength = source.length - cursor;
+  if (
+    raw.length === remainingLength + 1 &&
+    raw.endsWith("\n") &&
+    source.startsWith(raw.slice(0, -1), cursor)
+  ) {
+    return { start: cursor, end: source.length };
+  }
+  throw new Error(`Markdown token source span could not be recovered: ${type}`);
+}
+
 function lineAt(starts: readonly number[], offset: number): number {
   let low = 0;
   let high = starts.length;
@@ -95,11 +114,14 @@ function markdownRenderBlocks(text: string): MarkdownRenderBlock[] {
   const blocks: MarkdownRenderBlock[] = [];
   let normalizedCursor = 0;
   for (const token of tokens) {
-    const normalizedStart = normalized.text.indexOf(token.raw, normalizedCursor);
-    if (normalizedStart < 0) {
-      throw new Error(`Markdown token source span could not be recovered: ${token.type}`);
-    }
-    const normalizedEnd = normalizedStart + token.raw.length;
+    const range = markdownTokenRange(
+      normalized.text,
+      token.raw,
+      normalizedCursor,
+      token.type,
+    );
+    const normalizedStart = range.start;
+    const normalizedEnd = range.end;
     const start = normalized.originalOffsets[normalizedStart]!;
     const end = normalized.originalOffsets[normalizedEnd]!;
     const span = sourceSpan(starts, start, end);
@@ -261,10 +283,13 @@ export function sourceSpannedMarkdownSegments(
   let normalizedCursor = 0;
 
   for (const token of tokens) {
-    const normalizedTokenStart = normalized.text.indexOf(token.raw, normalizedCursor);
-    if (normalizedTokenStart < 0) {
-      throw new Error(`Markdown token source span could not be recovered: ${token.type}`);
-    }
+    const range = markdownTokenRange(
+      normalized.text,
+      token.raw,
+      normalizedCursor,
+      token.type,
+    );
+    const normalizedTokenStart = range.start;
     const tokenStart = normalized.originalOffsets[normalizedTokenStart]!;
     if (tokenStart > normalized.originalOffsets[normalizedCursor]!) {
       const gapStart = normalized.originalOffsets[normalizedCursor]!;
@@ -276,7 +301,7 @@ export function sourceSpannedMarkdownSegments(
         intersectsRange(gapSpan, ranges),
       );
     }
-    const normalizedTokenEnd = normalizedTokenStart + token.raw.length;
+    const normalizedTokenEnd = range.end;
     const tokenEnd = normalized.originalOffsets[normalizedTokenEnd]!;
     appendSourceLines(
       segments,
