@@ -44,23 +44,42 @@ Use `outliner_selection` and `outliner_query` to inspect roadmap items, decision
 - Pass `clientId` when explicit focus is requested and several Tree clients are live.
 - Follow semantic order: governing task or decision first, supporting findings next, implementation proof last.
 - Narrate from bounded ancestors, properties, dependencies, and children.
-- Never invent a parallel comment or walkthrough data model.
+- Use the typed `outliner_workflow` route; never invent a second comment model, copy source bodies, or persist a block per walkthrough step.
 
 ## Conduct a walkthrough or review
 
-Use this workflow when the user wants to inspect, discuss, prioritize, or review a connected set of blocks:
+Use this workflow when the user wants to inspect, discuss, prioritize, or review
+a connected set of blocks:
 
-1. Read the current selection and query only enough bounded structure to identify the relevant arc.
-2. Choose a narrative order based on decisions and dependencies rather than storage or query order.
-3. State the scope briefly: which blocks are included, why they belong together, and what judgment the walkthrough should produce.
-4. Inspect the first block before discussing it. Focus it only when the user asked for live shared attention. Read the full body only for the block currently under discussion.
-5. Explain its role, current state, and connection to the preceding and following items. Avoid reciting every property or child.
-6. Continue through a small coherent group when no owner decision is required.
-7. Stop at an actual judgment boundary with one bounded question. Do not publish a decision or change priority before the owner answers.
-8. Resume from the next unresolved block. Re-read selection or query results after any mutation that may have changed the arc.
-9. End with the agreed ordering, unresolved questions, and next action. Publish only the durable conclusion, not each walkthrough stop.
+1. Start `outliner_workflow` with the explicit `walkthrough.plan` action
+   surface: a block, callout, bounded structured query, or literal
+   `walkthrough` command; an explicit capability allowlist; fan-out and call
+   ceilings; and `callscript` unless the user specifically requests the direct
+   baseline.
+2. Supply a live Detail `clientId` only when the user asks for shared visual
+   attention. The returned run stores its ordered source anchors and comparison
+   metrics without storing source bodies or narration.
+3. Use one `transition` at a time. `next`, `previous`, `resume`, and `skip`
+   reveal the exact current source anchor through ephemeral PIE-180 attention;
+   `pause` suspends in place; `branch` records one bounded question; `end`
+   clears current attention.
+4. Discuss the current passage in chat. Read the full body only when the
+   current judgment needs it. Do not recite every property or child.
+5. Put source-situated owner questions and replies in existing PIE-210
+   annotations. Preserve owner comments and lifecycle; never convert silence,
+   model narration, or a branch question into a decision.
+6. Promote an agreed outcome only with `promotion_preview`, show or otherwise
+   obtain approval for that exact text and provenance, then call
+   `promotion_commit` with its unchanged approval token. A changed approver,
+   target, kind, or text requires a new preview.
+7. End with the agreed ordering, unresolved questions, and next action.
+   Publish only durable conclusions; the run and result properties provide
+   query/embed links without copying canonical sources.
 
-Treat Tree focus as an explicit foreground action: it switches the user's active Herdr pane. Background agent work must query, publish, reveal, read, or send to explicit panes without focusing them. Use durable child blocks only for conclusions, corrections, decisions, follow-ups, or proof. Preserve the existing Now/Next work-in-progress limit and never promote an item silently.
+Treat Tree focus as an explicit foreground action: it switches the user's active
+Herdr pane. Background agent work must query, publish, reveal, read, or send to
+explicit panes without focusing them. Preserve the existing Now/Next
+work-in-progress limit and never promote an item silently.
 
 ## Choose artifact or chat
 
