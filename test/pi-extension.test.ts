@@ -116,6 +116,7 @@ test("registers the workspace commands and annotation-aware tools", () => {
     "outliner_annotation_reply",
     "outliner_annotation_lifecycle",
     "outliner_annotation_batch",
+    "outliner_attention",
     "outliner_update",
     "outliner_property_patch",
     "outliner_property_catalog",
@@ -135,8 +136,14 @@ test("registers the workspace commands and annotation-aware tools", () => {
   const updateSchema = JSON.stringify(
     registeredTools.find((definition) => definition.name === "outliner_update")?.parameters,
   );
+  const attentionSchema = JSON.stringify(
+    registeredTools.find((definition) => definition.name === "outliner_attention")?.parameters,
+  );
   expect(createSchema).not.toContain("author");
   expect(updateSchema).toContain("expectedUpdatedAt");
+  expect(attentionSchema).toContain("advance");
+  expect(attentionSchema).toContain("clientId");
+  expect(attentionSchema).toContain("expiresInMs");
 });
 
 test("loads command support without a custom entry renderer", () => {
@@ -1693,7 +1700,7 @@ test("requires the current protocol, attributes agent creates and page follows, 
     expect(largeEnvelope.presentation.omitted).toBeGreaterThan(0);
     protocolVersion = 5;
     await expect(tools.get("outliner_query")!.execute("incompatible-query", {})).rejects.toThrow(
-      "Outliner protocol 5 does not match this session's extension protocol 30. Run /reload, then retry.",
+      "Outliner protocol 5 does not match this session's extension protocol 31. Run /reload, then retry.",
     );
   } finally {
     OutlinerClient.prototype.request = originalRequest;

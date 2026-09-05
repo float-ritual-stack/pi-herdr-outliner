@@ -243,6 +243,9 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
       case "detail.annotation.reveal":
         await dispatch({ type: "annotation.reveal" });
         return true;
+      case "detail.attention.acknowledge":
+        await dispatch({ type: "attention.acknowledge" });
+        return true;
       case "detail.file.view":
         await dispatch({ type: "view.file" });
         return true;

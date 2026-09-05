@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { emptyAttentionState } from "../src/attention";
 import { OutlinerActionKeymap, type OutlinerActionMenuItem } from "../src/outliner-actions";
 import type {
   DetailController,
@@ -35,6 +36,8 @@ function state(): DetailState {
     selectionAnchor: null,
     annotationRange: null,
     annotationThreads: [],
+    attention: emptyAttentionState("detail-test"),
+    attentionRevealSourceLine: null,
     completion: null,
     status: "",
     busy: false,

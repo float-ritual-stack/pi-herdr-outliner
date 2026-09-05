@@ -1,5 +1,6 @@
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "bun:test";
+import { emptyAttentionState } from "../src/attention";
 import type { DetailState } from "../src/detail-controller";
 import {
   createPiDetailInputListener,
@@ -58,6 +59,8 @@ function state(overrides: Partial<DetailState> = {}): DetailState {
     selectionAnchor: null,
     annotationRange: null,
     annotationThreads: [],
+    attention: emptyAttentionState("detail-test"),
+    attentionRevealSourceLine: null,
     completion: null,
     status: "",
     busy: false,

@@ -250,7 +250,7 @@ Scope classification is structural. After leading blank lines, the first nonblan
 
 ## Protocol
 
-The current protocol version is `28`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
+The current protocol version is `31`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
 
 ### Important request families
 
@@ -270,6 +270,7 @@ The current protocol version is `28`, defined in [`src/types.ts`](../src/types.t
 - legacy workspace selection/history: `selection.get`, `selection.set`, `navigation.state`, `navigation.back`, `navigation.forward`
 - reactive clients: `events.subscribe`, `clients.list`, `clients.update`
 - exact-client behavior: `ui.command.send`; `open` respects the destination lock, while explicit `replace` retargets the invoking Detail and preserves that lock state
+- targeted ephemeral attention: `attention.get`, `attention.mark`, `attention.advance`, `attention.clear`, and `attention.acknowledge`
 
 ### Live client identity
 
@@ -294,7 +295,7 @@ subscriber for a browsing context disconnects, its target is pruned.
 `clients.list` returns the live registry, optionally filtered by role.
 
 `content`, legacy `selection`, and `view` events are workspace broadcasts. A
-`ui` command is written only to its `targetClientId`.
+`ui` command or `attention` event is written only to its `targetClientId`.
 
 For `preview` and `open`, `navigation.resolve` and `navigation.dispatch` select
 the first unlocked Detail in the source's current tab. Locked Details and every
@@ -558,6 +559,24 @@ Editor undo/redo stores at most 100 per-session snapshots. Consecutive typing, b
 Detail annotates canonical block text through a locked, read-only selection mode and referenced files through line-range selection. Both paths create ordinary canonical child blocks; replies are children of a root annotation. The target stores renderer-neutral UTF-16 start/end offsets, an encoded exact excerpt, bounded before/after context, source version/hash, provenance, lifecycle, anchor state, and file identity/lines when applicable. Annotation content never mutates the target block or file.
 
 Reanchoring trusts offsets only while source version or hash agrees. Changed sources search the excerpt and captured context; one defensible match updates the canonical annotation and every direct reply, while tied matches become `ambiguous` and missing excerpts become `orphaned`. Detail shows compact marker/count summaries, opens the canonical thread, and reveals an anchored block range or file lines exactly. Agent create/reply/batch operations use the same service path; request IDs make replays idempotent and the service validates an entire batch before its transaction.
+
+## Ephemeral attention
+
+Attention state is service-owned, client-targeted, and noncanonical. One current
+mark and at most eight supporting marks identify a block or referenced file,
+optionally with an exact UTF-16 anchor carrying excerpt, source version, and
+hash. Creation rejects mismatched source evidence. Later source changes retain
+the original offsets but mark the cue stale; attention never guesses or
+reanchors.
+
+Tree renders a non-color block marker. Detail decorates the exact rendered
+phrase and can scroll to its source row after reflow. Both surfaces show a
+coalesced return summary and acknowledge it with `Ctrl+X` without clearing active
+marks. Expiry and explicit clear remove marks. `reveal` and `focus` are separate
+instruction flags; absent those flags, receipt changes no pane target, browsing
+context, lock, selection, navigation history, durable annotation, or canonical
+content. The service validates a currently registered target client and never
+broadcasts attention to sibling panes.
 
 ## Herdr lifecycle
 

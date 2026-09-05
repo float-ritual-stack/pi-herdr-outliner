@@ -12,6 +12,11 @@ import {
   reanchorAnnotation,
 } from "./annotations";
 import {
+  attentionClientState,
+  attentionSourceLine,
+  emptyAttentionState,
+} from "./attention";
+import {
   completionTargetAtCursor,
   pageAddressCompletion,
   pageCompletionLookupQuery,
@@ -65,6 +70,7 @@ import type {
   AnnotationReanchorInput,
   AnnotationThread,
   AnnotationTarget,
+  AttentionClientState,
   BacklinkCollection,
   BacklinkSource,
   BacklinkQuery,
@@ -257,6 +263,8 @@ export interface DetailState {
   selectionAnchor: number | null;
   annotationThreads: AnnotationThread[];
   annotationRange: DetailLineRange | null;
+  attention: AttentionClientState;
+  attentionRevealSourceLine: number | null;
   annotationDraft?: DetailAnnotationDraft;
   completion: DetailCompletionState | null;
   status: string;
@@ -311,6 +319,8 @@ export interface DetailEffects {
   }): Promise<AnnotationBatchReceipt>;
   listAnnotations(sourceBlockId: string): Promise<AnnotationThread[]>;
   reanchorAnnotations(input: AnnotationReanchorInput): Promise<AnnotationThread[]>;
+  getAttention(): Promise<AttentionClientState>;
+  acknowledgeAttention(markId?: string): Promise<AttentionClientState>;
   restoreBlock(blockId: string): Promise<Block>;
   resolveReference(target: OutlinerLinkTarget): Promise<{ block: Block; created?: boolean }>;
   queryBlocks(query: BlockSearchQuery): Promise<VisibleBlockCollection>;
@@ -351,6 +361,7 @@ export type DetailIntent =
   | { type: "backlinks.filter.begin" }
   | { type: "backlinks.filter.input"; text: string }
   | { type: "annotation.reveal" }
+  | { type: "attention.acknowledge" }
   | { type: "backlinks.filter.backspace" }
   | { type: "backlinks.filter.commit" }
   | { type: "backlinks.filter.cancel" }
@@ -521,6 +532,8 @@ export function createDetailController(
     fileCursor: 0,
     selectionAnchor: null,
     annotationRange: null,
+    attention: emptyAttentionState(effects.clientId),
+    attentionRevealSourceLine: null,
     completion: null,
     status: "",
     busy: false,
@@ -576,6 +589,7 @@ export function createDetailController(
   };
 
   const loadFile = (block: Block): void => {
+    let fileSourceBlockId = block.id;
     try {
       if (getProperty(block.properties, "type")?.startsWith("annotation")) {
         try {
@@ -588,11 +602,32 @@ export function createDetailController(
             .find((candidate) => candidate?.id === annotation.target.sourceBlockId);
           if (!source) throw new Error(`Annotation source block is outside the loaded context: ${annotation.target.sourceBlockId}`);
           state.referencedFile = effects.readFile(source);
+          fileSourceBlockId = source.id;
         } catch {
           state.referencedFile = effects.readFile(block);
         }
       } else {
         state.referencedFile = effects.readFile(block);
+      }
+      const file = state.referencedFile;
+      if (file) {
+        const marks = state.attention.marks.map((mark) => {
+          if (
+            mark.target.kind !== "file" ||
+            mark.target.sourceBlockId !== fileSourceBlockId
+          ) return mark;
+          const matches =
+            file.sourceVersion === mark.target.anchor.sourceVersion &&
+            file.sourceHash === mark.target.anchor.sourceHash &&
+            file.sourceText?.slice(mark.target.anchor.start, mark.target.anchor.end) ===
+              mark.target.anchor.excerpt;
+          return { ...mark, sourceState: matches ? "active" as const : "stale" as const };
+        });
+        state.attention = attentionClientState(
+          effects.clientId,
+          marks,
+          state.attention.pendingCount,
+        );
       }
       state.fileCursor = 0;
       state.fileOffset = 0;
@@ -758,6 +793,7 @@ export function createDetailController(
       next.selected?.updatedAt !== state.context.selected?.updatedAt;
     if (targetChanged || fragmentChanged) destinationChooser?.dispose();
     if (targetChanged) state.previewRegions.disclosureOverrides.clear();
+    if (targetChanged) state.attentionRevealSourceLine = null;
     if (targetChanged || next.selected?.updatedAt !== state.context.selected?.updatedAt) {
       invalidateBacklinks();
     }
@@ -1905,6 +1941,10 @@ export function createDetailController(
         state.status = `Revealed source range ${reanchored.anchor.start}-${reanchored.anchor.end}`;
         break;
       }
+      case "attention.acknowledge":
+        state.attention = await effects.acknowledgeAttention();
+        state.status = "Attention cue acknowledged; active marks remain";
+        break;
       case "comment.begin":
         await beginComment();
         break;
@@ -2145,6 +2185,50 @@ export function createDetailController(
       return destinationChooser!.helpText();
     },
     async onServiceEvent(event, viewport) {
+      if (event.domain === "attention") {
+        if (!event.attention || event.attention.targetClientId !== effects.clientId) return;
+        state.attention = event.attention;
+        const instruction = event.attentionInstruction;
+        const mark = instruction
+          ? state.attention.marks.find((candidate) => candidate.markId === instruction.markId)
+          : undefined;
+        if (mark && instruction?.reveal) {
+          await loadBlock(
+            mark.target.sourceBlockId,
+            true,
+            true,
+            mark.target.kind === "block" ? mark.target.fragmentId ?? null : null,
+          );
+          if (mark.sourceState === "stale") {
+            state.status = "Attention source changed; exact mark is stale";
+          } else if (mark.target.kind === "file") {
+            if (state.referencedFile) {
+              state.mode = "file";
+              state.fileCursor = Math.min(
+                state.referencedFile.lines.length - 1,
+                Math.max(0, mark.target.startLine - state.referencedFile.firstLine),
+              );
+              ensureFileCursorVisible(viewport);
+              state.status = `Attention · ${mark.target.filePath}:${mark.target.startLine}-${mark.target.endLine}`;
+            } else {
+              state.status = `Attention file unavailable · ${mark.target.filePath}`;
+            }
+          } else {
+            const selected = state.context.selected;
+            state.mode = "preview";
+            state.attentionRevealSourceLine = selected
+              ? attentionSourceLine(selected.text, mark)
+              : 0;
+            state.previewOffset = state.attentionRevealSourceLine;
+            state.status = mark.target.anchor
+              ? `Attention · source range ${mark.target.anchor.start}-${mark.target.anchor.end}`
+              : `Attention · ${mark.target.sourceBlockId.slice(0, 8)}`;
+          }
+        }
+        if (instruction?.focus) effects.focusSelf();
+        emit();
+        return;
+      }
       if (event.domain === "ui") {
         const command = event.command;
         if (!command || command.targetClientId !== effects.clientId) return;
@@ -2209,6 +2293,7 @@ export function createDetailController(
       serviceConnected = true;
       await effects.setLocked(state.connectionMode === "locked");
       await effects.setCurrentBlock(state.targetBlockId);
+      state.attention = await effects.getAttention();
       state.status = "";
       if (isBufferMode()) state.refreshPending = true;
       else await loadCurrentTarget(true);

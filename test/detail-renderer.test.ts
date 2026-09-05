@@ -1,5 +1,11 @@
 import { getOsc8LinkAtColumn, stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "bun:test";
+import {
+  attentionClientState,
+  emptyAttentionState,
+  normalizeAttentionMark,
+} from "../src/attention";
+import { createAnnotationAnchor } from "../src/annotations";
 import { DEFAULT_OUTLINER_ACTION_KEYMAP } from "../src/outliner-actions";
 import type { DetailState } from "../src/detail-controller";
 import {
@@ -68,6 +74,8 @@ function state(overrides: Partial<DetailState> = {}): DetailState {
     selectionAnchor: null,
     annotationRange: null,
     annotationThreads: [],
+    attention: emptyAttentionState("detail-test"),
+    attentionRevealSourceLine: null,
     completion: null,
     status: "",
     busy: false,
@@ -528,4 +536,45 @@ test("renders compact anchored comment markers with thread replies", () => {
   expect(rendered).toContain("source 6-10 · anchored · open");
   expect(rendered).toContain("> βeta");
   expect(rendered).toContain("- **agent:** Verified.");
+});
+
+test("renders exact Detail attention with a non-color rail and return summary", () => {
+  const selected = block("alpha target phrase omega");
+  const start = selected.text.indexOf("target");
+  const mark = normalizeAttentionMark({
+    markId: "detail-mark",
+    targetClientId: "detail-test",
+    target: {
+      kind: "block",
+      sourceBlockId: selected.id,
+      anchor: createAnnotationAnchor(
+        selected.text,
+        start,
+        start + "target phrase".length,
+        selected.updatedAt,
+      ),
+    },
+    tone: "warning",
+    sender: "agent-test",
+  }, {
+    clientId: "detail-test",
+    role: "detail",
+    contextId: "detail-test",
+  }, selected);
+  const original = selected.text;
+  const lines = renderDetailLines(state({
+    context: { selected, ancestors: [], children: [] },
+    targetBlockId: selected.id,
+    resolvedSelectedText: selected.text,
+    projectedSelectedText: selected.text,
+    attention: attentionClientState("detail-test", [mark], 2),
+  }), { width: 48, height: 10 });
+  const visible = lines.map(stripTerminalSequences);
+
+  expect(visible[1]).toContain("ATTENTION WARNING");
+  expect(visible.some((line) => line.includes("▐ alpha target phrase omega"))).toBe(true);
+  expect(visible.at(-2)).toContain("2 attention cues");
+  expect(lines.some((line) => line.includes("\x1b[1;4;33m"))).toBe(true);
+  expect(selected.text).toBe(original);
+  expect(lines.every((line) => visibleWidth(line) <= 48)).toBe(true);
 });

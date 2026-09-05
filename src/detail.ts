@@ -37,6 +37,7 @@ import {
   type AnnotationBatchReceipt,
   type AnnotationReanchorInput,
   type AnnotationThread,
+  type AttentionClientState,
   type BacklinkCollection,
   type Block,
   type BrowsingContextState,
@@ -195,6 +196,18 @@ const effects: DetailEffects = {
       action: "annotations.reanchor",
       input,
       mutation: { author: "user", actorId: "detail" },
+    });
+  },
+  async getAttention() {
+    return client.request<AttentionClientState>({
+      action: "attention.get",
+      targetClientId: clientId,
+    });
+  },
+  async acknowledgeAttention(markId) {
+    return client.request<AttentionClientState>({
+      action: "attention.acknowledge",
+      input: { targetClientId: clientId, ...(markId ? { markId } : {}) },
     });
   },
   async queryBlocks(query) {

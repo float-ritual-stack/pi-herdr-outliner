@@ -3,6 +3,13 @@ import {
   truncateToWidth,
   visibleWidth,
 } from "@earendil-works/pi-tui";
+import {
+  attentionBanner,
+  attentionReturnSummary,
+  decorateAttentionBlockLine,
+  decorateAttentionLines,
+} from "./attention-render";
+import { currentAttentionMark } from "./attention";
 import { extractAnnotationBody, parseAnnotationBlock } from "./annotations";
 import { completionWindow } from "./completion";
 import { outlinerLinkUri } from "./outliner-links";
@@ -204,9 +211,10 @@ export function renderDetailHeader(
   const left = surface
     ? `${surfaceStyle}${fitDynamicText(surface, width)}\x1b[0m \x1b[2m·\x1b[0m ${title}`
     : title;
+  const attention = attentionBanner(state.attention, state.targetBlockId, width);
   return [
     alignHeaderControls(left, renderHeaderControls(state), width),
-    renderDetailMetadata(state, width, options),
+    attention ?? renderDetailMetadata(state, width, options),
     `\x1b[2m${"─".repeat(width)}\x1b[0m`,
   ];
 }
@@ -219,8 +227,9 @@ export function renderDetailFooter(
   chooserHelpText = openDestinationChooserHelp(),
 ): string[] {
   const destinationChooserOpen = state.destinationChooser.active;
+  const returnSummary = attentionReturnSummary(state.attention, width);
   return [
-    fitDynamicText(
+    returnSummary ?? fitDynamicText(
       destinationChooserOpen ? state.destinationChooser.status : state.status,
       width,
     ),
@@ -318,6 +327,7 @@ export function renderDetailLines(
   const height = viewport.height;
   const bodyHeight = Math.max(1, height - 5);
   const output = renderDetailHeader(state, width, options.header);
+  const bodyStart = output.length;
 
   if (!state.context.selected) {
     output.push("Select a block in the outliner pane.");
@@ -348,9 +358,10 @@ export function renderDetailLines(
   } else if (state.mode === "file" && state.referencedFile) {
     const file = state.referencedFile;
     const range = selectedDetailFileRange(state);
+    const attention = currentAttentionMark(state.attention, state.targetBlockId);
     const lineNumberWidth = String(file.firstLine + file.lines.length).length;
     const visibleLines = file.lines.slice(state.fileOffset, state.fileOffset + bodyHeight);
-    for (const [index, line] of visibleLines.entries()) {
+    const rows = visibleLines.map((line, index) => {
       const localIndex = state.fileOffset + index;
       const lineNumber = file.firstLine + localIndex;
       const inRange = range !== null && lineNumber >= range.startLine && lineNumber <= range.endLine;
@@ -359,8 +370,30 @@ export function renderDetailLines(
       const rendered = renderMarkdownLine(
         fitDynamicText(line, Math.max(1, width - prefix.length)),
       );
-      output.push(current ? `\x1b[48;5;238m${prefix}${rendered}\x1b[0m` : `${prefix}${rendered}`);
-    }
+      return current ? `\x1b[48;5;238m${prefix}${rendered}\x1b[0m` : `${prefix}${rendered}`;
+    });
+    const sourcePrefix = file.sourceText
+      ?.split(/\r?\n/)
+      .slice(0, file.firstLine - 1 + state.fileOffset)
+      .join("\n") ?? "";
+    const decorated = decorateAttentionLines(
+      rows,
+      attention?.target.kind === "file" ? attention : null,
+      width,
+      file.sourceText,
+      sourcePrefix,
+    );
+    decorated.forEach((row, index) => {
+      const lineNumber = file.firstLine + state.fileOffset + index;
+      output.push(
+        row === rows[index] &&
+          attention?.target.kind === "file" &&
+          lineNumber >= attention.target.startLine &&
+          lineNumber <= attention.target.endLine
+          ? decorateAttentionBlockLine(row, attention, width)
+          : row,
+      );
+    });
   } else {
     const lines = state.resolvedSelectedText.split(/\r?\n/);
     for (
@@ -396,6 +429,16 @@ export function renderDetailLines(
     (options.helpPrefix
       ? `${options.helpPrefix}  ${detailHelpText(state.mode)}`
       : detailHelpText(state.mode));
+  if (state.mode === "preview") {
+    const mark = currentAttentionMark(state.attention, state.targetBlockId);
+    const decorated = decorateAttentionLines(
+      output.slice(bodyStart),
+      mark,
+      width,
+      state.context.selected?.text,
+    );
+    output.splice(bodyStart, output.length - bodyStart, ...decorated);
+  }
   output.push(...renderDetailFooter(
     state,
     width,
