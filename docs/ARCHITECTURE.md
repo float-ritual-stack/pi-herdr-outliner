@@ -49,13 +49,13 @@ PageUp/PageDown move the selected expanded row's offset by one Tree body viewpor
 
 [`src/detail-main.ts`](../src/detail-main.ts) selects the Pi TUI Detail implementation, which separates:
 
-- [`DetailController`](../src/detail-controller.ts) — modes, effects, optimistic saves, PreviewRegion actions, property-inspector state, lazy backlink state, file/annotation behavior, and cursor visibility;
+- [`DetailController`](../src/detail-controller.ts) — modes, effects, optimistic saves, read-only source-range selection, durable annotation creation/reanchoring/reveal, PreviewRegion actions, property-inspector state, lazy backlink state, file behavior, and cursor visibility;
 - [`detail-pi.ts`](../src/detail-pi.ts) — terminal lifecycle, input, Pi layout switching, and dedicated-inspector startup;
 - [`detail-pi-preview.ts`](../src/detail-pi-preview.ts) — authored Markdown, callouts, property rows, and generated Backlinks in one `ScrollView`;
 - [`open-destination-chooser.ts`](../src/open-destination-chooser.ts) — shared destination state, fixed key handling, routing fallback, and idle dismissal for every open-capable Detail surface;
 - [`backlink-peek.ts`](../src/backlink-peek.ts) and [`backlink-peek-main.ts`](../src/backlink-peek-main.ts) — immutable source-set traversal, reversible outcomes, and the non-routable Herdr preview surface;
 - [`detail-editor-layout.ts`](../src/detail-editor-layout.ts) — grapheme-safe wrapped visual rows, cursor mapping, and selection spans;
-- [`detail-renderer.ts`](../src/detail-renderer.ts) — fixed custom frames for edit, comment, file, and annotation modes; and
+- [`detail-renderer.ts`](../src/detail-renderer.ts) — fixed custom frames for edit, source selection, comment, file, and annotation modes; and
 - [`text-buffer.ts`](../src/text-buffer.ts) — raw text, grapheme/word movement, and selections.
 
 The legacy ANSI Detail entrypoint remains available in [`src/detail.ts`](../src/detail.ts), but the Herdr manifest starts [`src/detail-main.ts`](../src/detail-main.ts).
@@ -123,6 +123,10 @@ parent/child identity. Nested callout bodies remain Pi Markdown, `+`/`-` fold
 markers produce ephemeral disclosure, and generated action links never enter
 canonical text. Generated embed backgrounds compose with callout bodies rather
 than replacing them.
+Sibling callout spacing follows source-level quote boundaries: adjacent headers
+and quoted blank lines remain visually stacked, while each unquoted blank line
+between root callouts contributes one rendered separator row. Source-line to
+rendered-row mapping counts those rows so exact fragment reveals remain aligned.
 Callout presentation is a Detail-process theme boundary. `OUTLINER_CALLOUT_THEME`
 is parsed once at startup into validated partial overrides for canonical type
 styles and the neutral fallback. Rendering reapplies each card's foreground and
@@ -549,11 +553,11 @@ canonical block is deleted.
 
 Editor undo/redo stores at most 100 per-session snapshots. Consecutive typing, backspace, and forward delete coalesce; cursor and selection state restore with text; divergent edits invalidate redo. New edit/comment sessions start with empty history. Modal editing, registers, macros, and programmable operator systems remain explicit non-goals for the custom buffer.
 
-## File annotations
+## Durable source annotations
 
-A block containing `[file::path]` can open a workspace-relative text or Markdown file. Detail supports line navigation and range selection. A comment creates a canonical child annotation containing source path, normalized line range, source block ID, and comment text.
+Detail annotates canonical block text through a locked, read-only selection mode and referenced files through line-range selection. Both paths create ordinary canonical child blocks; replies are children of a root annotation. The target stores renderer-neutral UTF-16 start/end offsets, an encoded exact excerpt, bounded before/after context, source version/hash, provenance, lifecycle, anchor state, and file identity/lines when applicable. Annotation content never mutates the target block or file.
 
-The service stores annotation blocks; it does not modify source files.
+Reanchoring trusts offsets only while source version or hash agrees. Changed sources search the excerpt and captured context; one defensible match updates the canonical annotation and every direct reply, while tied matches become `ambiguous` and missing excerpts become `orphaned`. Detail shows compact marker/count summaries, opens the canonical thread, and reveals an anchored block range or file lines exactly. Agent create/reply/batch operations use the same service path; request IDs make replays idempotent and the service validates an entire batch before its transaction.
 
 ## Herdr lifecycle
 

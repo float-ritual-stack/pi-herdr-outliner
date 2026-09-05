@@ -3,6 +3,7 @@ import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createAnnotationAnchor } from "../src/annotations";
 import { PROPERTY_PARSER_VERSION } from "../src/properties";
 import { PAGE_ADDRESS_REGISTRY_VERSION } from "../src/page-addresses";
 import { OutlinerStore } from "../src/store";
@@ -2123,4 +2124,135 @@ Second paragraph`;
     rmSync(directory, { recursive: true, force: true });
   });
 
+
+  test("creates idempotent source-range annotation threads with stable replies", () => {
+    const store = makeStore();
+    const source = store.create("alpha βeta gamma");
+    const target = {
+      kind: "block" as const,
+      sourceBlockId: source.id,
+      anchor: createAnnotationAnchor(source.text, 6, 10, source.updatedAt),
+    };
+    const created = store.createAnnotation(
+      "annotation-create-1",
+      { target, body: "Check Unicode.", source: "agent" },
+      "agent",
+      { actorId: "omp", sessionId: "session-1", taskId: "call-1" },
+    );
+    const replayed = store.createAnnotation(
+      "annotation-create-1",
+      { target, body: "Ignored replay payload.", source: "agent" },
+      "agent",
+      { actorId: "omp", sessionId: "session-1", taskId: "call-2" },
+    );
+    const annotation = created.annotations[0]!;
+    expect(created.deduplicated).toBe(false);
+    expect(replayed.deduplicated).toBe(true);
+    expect(replayed.annotations[0]!.block.id).toBe(annotation.block.id);
+    expect(annotation.block.parentId).toBe(source.id);
+    expect(annotation.block.actorId).toBe("omp");
+    expect(annotation.target.anchor.excerpt).toBe("βeta");
+
+    const reply = store.replyToAnnotation(
+      "annotation-reply-1",
+      { annotationId: annotation.block.id, body: "Verified.", source: "user" },
+      "user",
+    ).annotations[0]!;
+    expect(reply.parentAnnotationId).toBe(annotation.block.id);
+    expect(reply.block.parentId).toBe(annotation.block.id);
+
+    const threads = store.listAnnotationThreads({
+      sourceBlockId: source.id,
+      includeResolved: true,
+    });
+    expect(threads).toHaveLength(1);
+    expect(threads[0]!.block.id).toBe(annotation.block.id);
+    expect(threads[0]!.replies.map((entry) => entry.block.id)).toEqual([reply.block.id]);
+
+    const shiftedSource = store.update(
+      source.id,
+      `new ${source.text}`,
+      source.updatedAt,
+      { author: "user", actorId: "detail" },
+    );
+    const shifted = store.reanchorAnnotationThreads({
+      sourceBlockId: source.id,
+      sourceText: shiftedSource.text,
+      sourceVersion: shiftedSource.updatedAt,
+    }, { author: "user", actorId: "detail" });
+    expect(shifted[0]!.target.anchor.start).toBe(10);
+    expect(shifted[0]!.anchorState).toBe("anchored");
+    expect(shifted[0]!.replies[0]!.target.anchor.start).toBe(10);
+
+    const replacedSource = store.update(
+      source.id,
+      "new alpha delta gamma",
+      shiftedSource.updatedAt,
+      { author: "user", actorId: "detail" },
+    );
+    const orphaned = store.reanchorAnnotationThreads({
+      sourceBlockId: source.id,
+      sourceText: replacedSource.text,
+      sourceVersion: replacedSource.updatedAt,
+    }, { author: "user", actorId: "detail" });
+    expect(orphaned[0]!.anchorState).toBe("orphaned");
+    expect(orphaned[0]!.replies[0]!.anchorState).toBe("orphaned");
+    const promoted = store.create("Promoted decision");
+    const resolved = store.setAnnotationLifecycle({
+      annotationId: annotation.block.id,
+      lifecycle: "resolved",
+      promotedBlockId: promoted.id,
+    }, { author: "agent", actorId: "omp" });
+    expect(resolved.lifecycle).toBe("resolved");
+    expect(resolved.promotedBlockIds).toEqual([promoted.id]);
+  });
+
+  test("persists an annotation whose selected range starts at source offset zero", () => {
+    const store = makeStore();
+    const source = store.create("alpha 🧭 beta");
+    const receipt = store.createAnnotation("annotation-at-zero", {
+      target: {
+        kind: "block",
+        sourceBlockId: source.id,
+        anchor: createAnnotationAnchor(source.text, 0, 8, source.updatedAt),
+      },
+      body: "Boundary anchor.",
+      source: "user",
+    });
+    expect(receipt.annotations[0]!.target.anchor.excerpt).toBe("alpha 🧭");
+    expect(receipt.annotations[0]!.block.properties).toContainEqual({
+      key: "anchor-before",
+      value: "v1-",
+    });
+  });
+
+
+  test("rejects an invalid annotation batch without creating its valid prefix", () => {
+    const store = makeStore();
+    const source = store.create("one two");
+    const target = {
+      kind: "block" as const,
+      sourceBlockId: source.id,
+      anchor: createAnnotationAnchor(source.text, 0, 3, source.updatedAt),
+    };
+    expect(() =>
+      store.createAnnotationBatch("annotation-batch-invalid", [
+        {
+          operationId: "valid",
+          type: "create",
+          input: { target, body: "Would be valid.", source: "agent" },
+        },
+        {
+          operationId: "invalid",
+          type: "reply",
+          input: {
+            annotationId: "00000000-0000-4000-8000-000000000000",
+            body: "Missing parent.",
+            source: "agent",
+          },
+        },
+      ], "agent", { actorId: "omp" })
+    ).toThrow("Block not found");
+    expect(store.children(source.id)).toEqual([]);
+  });
 });

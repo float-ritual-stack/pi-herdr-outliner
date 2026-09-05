@@ -343,7 +343,24 @@ function traverseMarkdownLineRange(
   theme: MarkdownTheme,
   ranges: readonly MarkdownLineRange[],
   decorationEnabled: boolean,
+  preserveBlankLines = false,
 ): SourceRowTraversal {
+  if (
+    preserveBlankLines &&
+    endLine > startLine &&
+    Array.from(
+      { length: endLine - startLine },
+      (_, offset) => calloutBodyLine(source, starts, startLine + offset, quoteDepth),
+    ).every((line) => line.trim().length === 0)
+  ) {
+    return {
+      nextRow: renderedRow + endLine - startLine,
+      targetRow: targetLine >= startLine && targetLine < endLine
+        ? renderedRow + targetLine - startLine
+        : undefined,
+    };
+  }
+
   let row = renderedRow;
   let targetRow: number | undefined;
   let groupStart = startLine;
@@ -542,6 +559,7 @@ export class SourceSpannedMarkdown implements Component {
     let row = 0;
     if (this.calloutDocument && this.previewRegions) {
       let cursor = 0;
+      let hasPreviousRoot = false;
       const childrenByParent = indexCalloutsByParent(this.callouts);
       for (const root of childrenByParent.get(null) ?? []) {
         const beforeRoot = traverseMarkdownLineRange(
@@ -556,6 +574,7 @@ export class SourceSpannedMarkdown implements Component {
           this.theme,
           this.ranges,
           this.decorationEnabled,
+          hasPreviousRoot,
         );
         if (beforeRoot.targetRow !== undefined) {
           return {
@@ -585,6 +604,7 @@ export class SourceSpannedMarkdown implements Component {
         }
         row = rootRows.nextRow;
         cursor = root.sourceSpan!.endLine + 1;
+        hasPreviousRoot = true;
       }
       const tail = traverseMarkdownLineRange(
         this.sourceText,

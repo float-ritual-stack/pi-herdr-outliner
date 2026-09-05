@@ -57,6 +57,7 @@ function state(overrides: Partial<DetailState> = {}): DetailState {
     fileCursor: 0,
     selectionAnchor: null,
     annotationRange: null,
+    annotationThreads: [],
     completion: null,
     status: "",
     busy: false,

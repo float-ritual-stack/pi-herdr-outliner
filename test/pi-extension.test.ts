@@ -111,7 +111,11 @@ test("registers the workspace commands and annotation-aware tools", () => {
     "outliner_roadmap_create",
     "outliner_branch_rank",
     "outliner_capture",
-    "outliner_annotate_file",
+    "outliner_annotations",
+    "outliner_annotate",
+    "outliner_annotation_reply",
+    "outliner_annotation_lifecycle",
+    "outliner_annotation_batch",
     "outliner_update",
     "outliner_property_patch",
     "outliner_property_catalog",
@@ -1689,7 +1693,7 @@ test("requires the current protocol, attributes agent creates and page follows, 
     expect(largeEnvelope.presentation.omitted).toBeGreaterThan(0);
     protocolVersion = 5;
     await expect(tools.get("outliner_query")!.execute("incompatible-query", {})).rejects.toThrow(
-      "Outliner protocol 5 does not match this session's extension protocol 29. Run /reload, then retry.",
+      "Outliner protocol 5 does not match this session's extension protocol 30. Run /reload, then retry.",
     );
   } finally {
     OutlinerClient.prototype.request = originalRequest;

@@ -237,6 +237,12 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
       case "detail.edit.begin":
         await dispatch({ type: "edit.begin" });
         return true;
+      case "detail.annotation.select":
+        await dispatch({ type: "annotation.selection.begin" });
+        return true;
+      case "detail.annotation.reveal":
+        await dispatch({ type: "annotation.reveal" });
+        return true;
       case "detail.file.view":
         await dispatch({ type: "view.file" });
         return true;
@@ -381,6 +387,14 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
     }
     if (command.type === "cancel") {
       await executeAction("detail.cancel");
+      return;
+    }
+    if (
+      controller.state.mode === "select" &&
+      (command.type === "insert" || command.type === "newline" ||
+        command.type === "backspace" || command.type === "delete")
+    ) {
+      await setStatus("Source selection is read-only");
       return;
     }
     if (command.type === "select-all") {

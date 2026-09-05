@@ -89,6 +89,9 @@ import {
 import { osc52ClipboardWrite } from "./terminal";
 import {
   OUTLINER_PROTOCOL_VERSION,
+  type AnnotationBatchReceipt,
+  type AnnotationReanchorInput,
+  type AnnotationThread,
   type BacklinkCollection,
   type Block,
   type BrowsingContextState,
@@ -338,8 +341,25 @@ const effects: DetailEffects = {
   async resolveReference(target) {
     return resolveOutlinerLinkTarget(client, target);
   },
-  async createBlock(input) {
-    return client.request<Block>({ action: "create", ...input });
+  async createAnnotation(input) {
+    return client.request<AnnotationBatchReceipt>({
+      action: "annotations.create",
+      ...input,
+      author: "user",
+    });
+  },
+  async listAnnotations(sourceBlockId) {
+    return client.request<AnnotationThread[]>({
+      action: "annotations.list",
+      query: { sourceBlockId, includeResolved: true },
+    });
+  },
+  async reanchorAnnotations(input: AnnotationReanchorInput) {
+    return client.request<AnnotationThread[]>({
+      action: "annotations.reanchor",
+      input,
+      mutation: { author: "user", actorId: "detail" },
+    });
   },
   async queryBlocks(query) {
     return client.request<VisibleBlockCollection>({ action: "blocks.query", query });
@@ -626,7 +646,7 @@ function editorPointerLocation(
   );
 }
 async function handleDetailMouse(data: string): Promise<boolean> {
-  if (controller.state.mode !== "edit") return false;
+  if (controller.state.mode !== "edit" && controller.state.mode !== "select") return false;
   const split = draftSplitActive();
   const widths = detailDraftSplitWidths(terminal.columns);
   const mouseLayout = {
@@ -724,7 +744,7 @@ function shouldPassDetailInputToTui(data: string): boolean {
   if (tui.hasOverlay()) return true;
   if (!isTreeMouseSequence(data)) return false;
   if (parseTreeSecondaryClick(data) && rightClickOwnership === "outliner") return false;
-  if (controller.state.mode !== "edit") return true;
+  if (controller.state.mode !== "edit" && controller.state.mode !== "select") return true;
   const click = parseTreePlainClick(data);
   if (!click || !draftSplitActive()) return false;
   const widths = detailDraftSplitWidths(terminal.columns);
@@ -855,7 +875,7 @@ let previousMode = controller.state.mode;
 synchronizeLayout = () => {
   const mode = controller.state.mode;
   if (mode !== previousMode) editorDragActive = false;
-  if (mode === "edit" && previousMode !== "edit") {
+  if ((mode === "edit" || mode === "select") && mode !== previousMode) {
     draftSplitFocus = "editor";
     draftSplitHover = null;
   }

@@ -6,6 +6,7 @@ import {
   renderDetailAnsi,
   renderDetailLines,
 } from "../src/detail-renderer";
+import { renderAnnotationDocument } from "../src/detail-pi-renderer";
 import { createOpenDestinationChooserState } from "../src/open-destination-chooser";
 import { parsePropertySummaryKeys } from "../src/property-summary";
 import { TextBuffer } from "../src/text-buffer";
@@ -66,6 +67,7 @@ function state(overrides: Partial<DetailState> = {}): DetailState {
     fileCursor: 0,
     selectionAnchor: null,
     annotationRange: null,
+    annotationThreads: [],
     completion: null,
     status: "",
     busy: false,
@@ -482,4 +484,48 @@ test("renders the shared destination prompt over ordinary Detail help", () => {
   expect(rendered.at(-2)).toContain("Choose destination");
   expect(rendered.at(-1)).toContain("f first unlocked");
   expect(rendered.at(-1)).toContain("Enter default");
+});
+
+test("renders compact anchored comment markers with thread replies", () => {
+  const annotation = block("annotation");
+  annotation.id = "11111111-1111-4111-8111-111111111111";
+  const reply = block("reply");
+  reply.id = "22222222-2222-4222-8222-222222222222";
+  const target = {
+    kind: "block" as const,
+    sourceBlockId: "33333333-3333-4333-8333-333333333333",
+    anchor: {
+      start: 6,
+      end: 10,
+      excerpt: "βeta",
+      contextBefore: "alpha ",
+      contextAfter: " gamma",
+      sourceVersion: "version-1",
+      sourceHash: "hash-1",
+    },
+  };
+  const rendered = renderAnnotationDocument(state({
+    annotationThreads: [{
+      block: annotation,
+      target,
+      body: "Check this range.",
+      source: "user",
+      lifecycle: "open",
+      anchorState: "anchored",
+      replies: [{
+        block: reply,
+        target,
+        body: "Verified.",
+        source: "agent",
+        lifecycle: "open",
+        anchorState: "anchored",
+        parentAnnotationId: annotation.id,
+      }],
+    }],
+  }));
+  expect(rendered).toContain("## Comments · 1 thread");
+  expect(rendered).toContain("[[1]](pi-outliner://block/11111111-1111-4111-8111-111111111111)");
+  expect(rendered).toContain("source 6-10 · anchored · open");
+  expect(rendered).toContain("> βeta");
+  expect(rendered).toContain("- **agent:** Verified.");
 });

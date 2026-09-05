@@ -267,6 +267,59 @@ describe("Detail Obsidian callouts", () => {
     expect(document).toContain("const value = 1;");
   });
 
+  test("preserves unquoted blank rows between sibling callouts without spacing stacked syntax", () => {
+    const compactRender = (source: string): string[] =>
+      render(source).split("\n").map((line) => line.trimEnd());
+    const stacked = [
+      "> [!info] First",
+      "> [!note] Second",
+    ].join("\n");
+    const quotedBlank = [
+      "> [!info] First",
+      ">",
+      "> [!note] Second",
+    ].join("\n");
+    const separated = [
+      "> [!info] First",
+      "",
+      "> [!note] Second",
+    ].join("\n");
+    const doubleSeparated = [
+      "> [!info] First",
+      "",
+      "",
+      "> [!note] Second",
+    ].join("\n");
+
+    expect(compactRender(stacked)).toEqual([
+      "│ • i First",
+      "│ • ● Second",
+    ]);
+    expect(compactRender(quotedBlank)).toEqual([
+      "│ • i First",
+      "│ • ● Second",
+    ]);
+    expect(compactRender(separated)).toEqual([
+      "│ • i First",
+      "",
+      "│ • ● Second",
+    ]);
+    expect(compactRender(doubleSeparated)).toEqual([
+      "│ • i First",
+      "",
+      "",
+      "│ • ● Second",
+    ]);
+
+    const regions = parseDetailCallouts(separated);
+    const state = regionState();
+    reconcilePreviewRegions(state, regions);
+    const markdown = new SourceSpannedMarkdown(theme, (text) => text, state);
+    markdown.setContent(separated, [], false, regions);
+
+    expect(markdown.renderWithSourceLineRow(80, 2).sourceLineRow).toBe(2);
+  });
+
   test("uses one typed action for keyboard activation and OSC8 dispatch without source edits", () => {
     const source = "> [!note]- Folded\n> canonical body";
     const regions = parseDetailCallouts(source);
