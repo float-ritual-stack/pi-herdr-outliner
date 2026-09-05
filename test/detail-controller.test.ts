@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
+  attentionClientState,
+  normalizeAttentionMark,
+} from "../src/attention";
+import { createAnnotationAnchor } from "../src/annotations";
+import { emptyAttentionState } from "../src/attention";
+import {
   createDetailController,
   visibleBacklinkSources,
   type DetailControllerOptions,
@@ -294,6 +300,12 @@ function createHarness(
     },
     async reanchorAnnotations() {
       return [];
+    },
+    async getAttention() {
+      return emptyAttentionState("detail-test");
+    },
+    async acknowledgeAttention() {
+      return emptyAttentionState("detail-test");
     },
     async queryBlocks(query) {
       calls.queries.push(query);
@@ -2262,4 +2274,72 @@ describe("Detail property inspector integration", () => {
     expect(controller.state.projectedSelectedText).toBe("Target other-block");
     expect(harness.calls.projectedReadHosts).toEqual(["property-source", "other-block"]);
   });
+});
+
+test("reveals exact targeted attention without mutating source or durable annotations", async () => {
+  const selected = makeBlock({ text: "first line\npoint here\nlast line" });
+  const harness = createHarness(selected);
+  await harness.controller.initialize();
+  const start = selected.text.indexOf("point");
+  const mark = normalizeAttentionMark({
+    markId: "attention-one",
+    targetClientId: "detail-test",
+    target: {
+      kind: "block",
+      sourceBlockId: selected.id,
+      anchor: createAnnotationAnchor(
+        selected.text,
+        start,
+        start + "point here".length,
+        selected.updatedAt,
+      ),
+    },
+    tone: "current",
+    sender: "agent-test",
+    reveal: true,
+    focus: true,
+  }, {
+    clientId: "detail-test",
+    role: "detail",
+    contextId: "context-test",
+  }, selected);
+  const attention = attentionClientState("detail-test", [mark], 1);
+
+  await harness.controller.onServiceEvent({
+    id: "attention-event",
+    domain: "attention",
+    action: "attention.mark",
+    sequence: 1,
+    blockId: selected.id,
+    attention,
+    attentionInstruction: {
+      markId: mark.markId,
+      reveal: true,
+      focus: true,
+    },
+  }, viewport);
+
+  expect(harness.controller.state.targetBlockId).toBe(selected.id);
+  expect(harness.controller.state.attentionRevealSourceLine).toBe(1);
+  expect(harness.controller.state.previewOffset).toBe(1);
+  expect(harness.controller.state.mode).toBe("preview");
+  expect(harness.controller.state.annotationThreads).toEqual([]);
+  expect(harness.controller.state.context.selected?.text).toBe(selected.text);
+  expect(harness.controller.state.status).toBe(`Attention · source range ${start}-${start + 10}`);
+  expect(harness.calls.selfFocuses).toBe(1);
+
+  await harness.controller.onServiceEvent({
+    id: "other-client",
+    domain: "attention",
+    action: "attention.clear",
+    sequence: 1,
+    attention: { ...attention, targetClientId: "detail-other" },
+  }, viewport);
+  expect(harness.controller.state.attention.currentMarkId).toBe(mark.markId);
+
+  await harness.controller.dispatch({ type: "attention.acknowledge" }, viewport);
+  expect(harness.controller.state.attention.marks).toEqual([]);
+  expect(harness.controller.state.status).toBe(
+    "Attention cue acknowledged; active marks remain",
+  );
 });

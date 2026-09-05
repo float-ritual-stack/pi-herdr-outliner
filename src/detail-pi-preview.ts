@@ -7,6 +7,8 @@ import {
   type MarkdownTheme,
   VStack,
 } from "@earendil-works/pi-tui";
+import { currentAttentionMark } from "./attention";
+import { decorateAttentionLines } from "./attention-render";
 import { DEFAULT_OUTLINER_ACTION_KEYMAP } from "./outliner-actions";
 import {
   parseDetailCallouts,
@@ -482,6 +484,7 @@ function arrangeInlinePreview(
 
 class DetailPreviewBody implements Component {
   constructor(
+    private readonly state: Readonly<DetailState>,
     private readonly authored: Component,
     private readonly inspector: Markdown,
     private readonly backlinks: Markdown,
@@ -509,7 +512,12 @@ class DetailPreviewBody implements Component {
   render(width: number): string[] {
     const inspector = this.renderInspector(width);
     if (this.dedicatedInspector()) return inspector;
-    const authored = this.authored.render(width);
+    const authored = decorateAttentionLines(
+      this.authored.render(width),
+      currentAttentionMark(this.state.attention, this.state.targetBlockId),
+      width,
+      this.state.context.selected?.text,
+    );
     const lines = this.includeInspector()
       ? arrangeInlinePreview(authored, inspector).lines
       : [...authored];
@@ -588,6 +596,9 @@ export class DetailPiPreviewLayout extends VStack {
   private renderedCalloutRegions: DetailCalloutRegion[] = [];
   private renderedDocumentText = "";
   private renderedFragmentSourceLine = 0;
+  private renderedAttentionSourceLine = 0;
+  private previousAttentionRevealSourceLine: number | null | undefined;
+  private pendingAttentionScroll = false;
   private previousSelectionId: string | null | undefined;
   private previousTargetFragmentId: string | null | undefined;
   private previousPreviewOffset: number | undefined;
@@ -634,6 +645,7 @@ export class DetailPiPreviewLayout extends VStack {
       linkUrl: () => "",
     });
     const body = new DetailPreviewBody(
+      state,
       markdown,
       inspectorMarkdown,
       backlinkMarkdown,
@@ -873,6 +885,9 @@ export class DetailPiPreviewLayout extends VStack {
     this.renderedFragmentSourceLine = this.state.targetFragmentId
       ? renderedLineForAuthoredLine(this.state.previewOffset)
       : 0;
+    this.renderedAttentionSourceLine = this.state.attentionRevealSourceLine === null
+      ? 0
+      : renderedLineForAuthoredLine(this.state.attentionRevealSourceLine);
 
     const embedPresentation = `${this.state.embedBackgroundEnabled}:${
       embedRanges.map((range) => `${range.startLine}-${range.endLine}`).join(",")
@@ -981,6 +996,13 @@ export class DetailPiPreviewLayout extends VStack {
     this.previousTargetFragmentId = this.state.targetFragmentId;
     this.previousPreviewOffset = this.state.previewOffset;
     this.resetScroll = false;
+    if (
+      this.state.attentionRevealSourceLine !== this.previousAttentionRevealSourceLine &&
+      this.state.attentionRevealSourceLine !== null
+    ) {
+      this.pendingAttentionScroll = true;
+    }
+    this.previousAttentionRevealSourceLine = this.state.attentionRevealSourceLine;
     if (width !== undefined) {
       this.syncInspectorDocument(this.scrollView.getContentWidth(width));
     }
@@ -1035,6 +1057,32 @@ export class DetailPiPreviewLayout extends VStack {
     this.scrollView.scrollTo(
       this.state.targetFragmentId ? fragmentRow : 0,
     );
+    return this.scrollView.scrollTop !== previousScrollTop;
+  }
+
+  private applyPendingAttentionScroll(width: number): boolean {
+    if (
+      !this.pendingAttentionScroll ||
+      this.state.attentionRevealSourceLine === null ||
+      this.scrollView.viewportHeight <= 0 ||
+      this.state.propertyInspector.presentation === "dedicated"
+    ) return false;
+    const contentWidth = this.scrollView.getContentWidth(width);
+    const inspectorLines =
+      this.state.context.selected && !(this.options.splitActive?.() ?? false)
+        ? this.inspectorMarkdown.render(contentWidth)
+        : [];
+    const renderedDocument = this.markdown.renderWithSourceLineRow(
+      contentWidth,
+      this.renderedAttentionSourceLine,
+    );
+    const arrangement = arrangeInlinePreview(renderedDocument.lines, inspectorLines);
+    const contentHeight = arrangement.lines.length +
+      1 + this.backlinkMarkdown.render(contentWidth).length;
+    this.scrollView.updateLayout(contentHeight, this.scrollView.viewportHeight, () => {});
+    this.pendingAttentionScroll = false;
+    const previousScrollTop = this.scrollView.scrollTop;
+    this.scrollView.scrollTo(arrangement.mapAuthoredRow(renderedDocument.sourceLineRow));
     return this.scrollView.scrollTop !== previousScrollTop;
   }
 
@@ -1108,6 +1156,7 @@ export class DetailPiPreviewLayout extends VStack {
     this.syncState(width);
     let lines = super.render(width);
     if (this.applyPendingFragmentScroll(width)) lines = super.render(width);
+    if (this.applyPendingAttentionScroll(width)) lines = super.render(width);
     if (this.ensureBacklinkSelectionVisible(width)) lines = super.render(width);
     if (this.applyPropertyInspectorScroll()) lines = super.render(width);
     if (this.ensurePropertySelectionVisible(width)) lines = super.render(width);

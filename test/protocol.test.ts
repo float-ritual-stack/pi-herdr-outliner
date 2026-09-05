@@ -11,6 +11,7 @@ import { OutlinerStore } from "../src/store";
 import { OUTLINER_PROTOCOL_VERSION } from "../src/types";
 import type {
   AnnotationBatchReceipt,
+  AttentionClientState,
   AnnotationThread,
   BacklinkCollection,
   BlockEditActivityPage,
@@ -45,7 +46,7 @@ afterEach(async () => {
 });
 
 
-test("round-trips idempotent delivery identity over protocol v30", async () => {
+test("round-trips idempotent delivery identity over the current protocol", async () => {
   const directory = mkdtempSync(join(tmpdir(), "pi-outliner-delivery-protocol-"));
   const store = new OutlinerStore(join(directory, "outliner.sqlite"));
   const socket = join(directory, "outliner.sock");
@@ -88,7 +89,7 @@ test("round-trips idempotent delivery identity over protocol v30", async () => {
 
 
 
-test("serves atomic idempotent annotation threads over protocol v30", async () => {
+test("serves atomic idempotent annotation threads over the current protocol", async () => {
   const directory = mkdtempSync(join(tmpdir(), "pi-outliner-annotation-protocol-"));
   const store = new OutlinerStore(join(directory, "outliner.sqlite"));
   const socket = join(directory, "outliner.sock");
@@ -157,7 +158,7 @@ test("serves mutations and property queries over the local socket", async () => 
   const client = new OutlinerClient(socket);
   const service = await client.request<OutlinerServiceStatus>({ action: "ping" });
   expect(service).toEqual({ status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION });
-  expect(service.protocolVersion).toBe(30);
+  expect(service.protocolVersion).toBe(31);
   const provenance = {
     actorId: "omp",
     sessionId: "session-1",
@@ -1518,6 +1519,8 @@ test("reconciles long-lived clients against live Herdr pane topology", async () 
     tabId: "tab-old",
     paneX: 0,
     paneY: 0,
+    focused: false,
+    visible: true,
   });
   expect(initialClients.find(({ clientId }) => clientId === "detail-unresolved")?.runtime)
     .toEqual({ terminalId: "term-not-live" });
@@ -1562,6 +1565,8 @@ test("reconciles long-lived clients against live Herdr pane topology", async () 
     tabId: "tab-new",
     paneX: 0,
     paneY: 0,
+    focused: false,
+    visible: true,
   });
   expect(await client.request<OutlinerNavigationDispatch>({
     action: "navigation.resolve",
@@ -1582,6 +1587,8 @@ test("reconciles long-lived clients against live Herdr pane topology", async () 
     terminalId: "term-tree",
     workspaceId: "ws-new",
     tabId: "tab-new",
+    focused: false,
+    visible: true,
   });
   expect(await client.request<OutlinerNavigationDispatch>({
     action: "navigation.resolve",
@@ -1610,4 +1617,211 @@ test("reconciles long-lived clients against live Herdr pane topology", async () 
     intent: "reveal",
   })).rejects.toThrow("No Tree destination is available in this pane's context or tab");
   expect(connectionCount).toBe(registrations.length);
+});
+
+test("targets ephemeral attention, advances atomically, stales on edits, and expires", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-outliner-attention-"));
+  const store = new OutlinerStore(join(directory, "outliner.sqlite"));
+  const source = store.create("alpha 🧭 beta\nsecond passage");
+  const socket = join(directory, "outliner.sock");
+  const server = new OutlinerServer(store, socket);
+  await server.start();
+  const client = new OutlinerClient(socket);
+  const connected = Promise.withResolvers<void>();
+  const firstAttention = Promise.withResolvers<void>();
+  const staleAttention = Promise.withResolvers<void>();
+  const expiredAttention = Promise.withResolvers<void>();
+  const firstEvents: OutlinerEvent[] = [];
+  const secondEvents: OutlinerEvent[] = [];
+  let connectionCount = 0;
+  const watchers = [
+    { clientId: "attention-detail-one", events: firstEvents },
+    { clientId: "attention-detail-two", events: secondEvents },
+  ].map(({ clientId, events }) =>
+    new OutlinerClient(socket).watch({
+      client: { clientId, role: "detail", contextId: clientId },
+      onConnect: () => {
+        connectionCount += 1;
+        if (connectionCount === 2) connected.resolve();
+      },
+      onEvent: (event) => {
+        events.push(event);
+        if (event.domain !== "attention") return;
+        if (event.action === "attention.mark") firstAttention.resolve();
+        if (event.action === "attention.stale") staleAttention.resolve();
+        if (event.action === "attention.expired") expiredAttention.resolve();
+      },
+    })
+  );
+  cleanups.push(async () => {
+    await Promise.all(watchers.map((watcher) => watcher.stop()));
+    await server.close();
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  await connected.promise;
+
+  const firstAnchor = createAnnotationAnchor(source.text, 6, 13, source.updatedAt);
+  const marked = await client.request<AttentionClientState>({
+    action: "attention.mark",
+    input: {
+      markId: "current-one",
+      targetClientId: "attention-detail-one",
+      target: { kind: "block", sourceBlockId: source.id, anchor: firstAnchor },
+      tone: "warning",
+      sender: "agent-test",
+      expiresInMs: 2_000,
+      reveal: true,
+    },
+  });
+  await firstAttention.promise;
+  await Bun.sleep(20);
+  expect(marked.currentMarkId).toBe("current-one");
+  expect(marked.pendingCount).toBe(1);
+  expect(marked.marks[0]?.target.anchor?.excerpt).toBe("🧭 beta");
+  expect(store.require(source.id).text).toBe(source.text);
+  expect(firstEvents.at(-1)).toEqual(expect.objectContaining({
+    domain: "attention",
+    blockId: source.id,
+    attentionInstruction: { markId: "current-one", reveal: true, focus: false },
+  }));
+  expect(secondEvents).toEqual([]);
+
+  await expect(client.request({
+    action: "attention.mark",
+    input: {
+      markId: "wrong-client",
+      targetClientId: "missing-detail",
+      target: { kind: "block", sourceBlockId: source.id },
+      tone: "current",
+      sender: "agent-test",
+    },
+  })).rejects.toThrow("not registered");
+  await expect(client.request({
+    action: "attention.mark",
+    input: {
+      markId: "stale-source",
+      targetClientId: "attention-detail-one",
+      target: {
+        kind: "block",
+        sourceBlockId: source.id,
+        anchor: { ...firstAnchor, sourceHash: "stale" },
+      },
+      tone: "current",
+      sender: "agent-test",
+    },
+  })).rejects.toThrow("source evidence");
+
+  for (let index = 0; index < 10; index += 1) {
+    await client.request<AttentionClientState>({
+      action: "attention.mark",
+      input: {
+        markId: `support-${index}`,
+        targetClientId: "attention-detail-one",
+        target: { kind: "block", sourceBlockId: source.id },
+        tone: "info",
+        role: "supporting",
+        sender: "agent-test",
+        expiresInMs: 2_000,
+      },
+    });
+  }
+  const secondStart = source.text.indexOf("second");
+  const advanced = await client.request<AttentionClientState>({
+    action: "attention.advance",
+    input: {
+      markId: "current-two",
+      targetClientId: "attention-detail-one",
+      target: {
+        kind: "block",
+        sourceBlockId: source.id,
+        anchor: createAnnotationAnchor(
+          source.text,
+          secondStart,
+          secondStart + "second".length,
+          source.updatedAt,
+        ),
+      },
+      tone: "current",
+      sender: "agent-test",
+      expiresInMs: 2_000,
+      reveal: true,
+      focus: true,
+    },
+  });
+  expect(advanced.currentMarkId).toBe("current-two");
+  expect(advanced.marks.filter((mark) => mark.role === "current")).toHaveLength(1);
+  expect(advanced.marks.filter((mark) => mark.role === "supporting")).toHaveLength(8);
+
+  const partiallyAcknowledged = await client.request<AttentionClientState>({
+    action: "attention.acknowledge",
+    input: { targetClientId: "attention-detail-one", markId: "current-two" },
+  });
+  expect(partiallyAcknowledged.pendingCount).toBe(8);
+  expect(
+    partiallyAcknowledged.marks.find((mark) => mark.markId === "current-two")?.acknowledgedAt,
+  ).toBeDefined();
+  expect(partiallyAcknowledged.marks.filter((mark) => !mark.acknowledgedAt)).toHaveLength(8);
+
+  const acknowledged = await client.request<AttentionClientState>({
+    action: "attention.acknowledge",
+    input: { targetClientId: "attention-detail-one" },
+  });
+  expect(acknowledged.pendingCount).toBe(0);
+  expect(acknowledged.marks.every((mark) => mark.acknowledgedAt)).toBe(true);
+
+  const updated = await client.request<Block>({
+    action: "update",
+    blockId: source.id,
+    text: `prefix ${source.text}`,
+    expectedUpdatedAt: source.updatedAt,
+    mutation: { author: "user", actorId: "test" },
+  });
+  await staleAttention.promise;
+  const stale = await client.request<AttentionClientState>({
+    action: "attention.get",
+    targetClientId: "attention-detail-one",
+  });
+  expect(stale.marks.find((mark) => mark.markId === "current-two")?.sourceState).toBe("stale");
+  expect(stale.marks.find((mark) => mark.markId === "current-two")?.target.anchor?.start)
+    .toBe(secondStart);
+
+  const cleared = await client.request<AttentionClientState>({
+    action: "attention.clear",
+    input: { targetClientId: "attention-detail-one" },
+  });
+  expect(cleared.marks).toEqual([]);
+  expect(cleared.pendingCount).toBe(0);
+
+  const expiryStart = updated.text.indexOf("prefix");
+  await client.request<AttentionClientState>({
+    action: "attention.mark",
+    input: {
+      markId: "expires",
+      targetClientId: "attention-detail-one",
+      target: {
+        kind: "block",
+        sourceBlockId: source.id,
+        anchor: createAnnotationAnchor(
+          updated.text,
+          expiryStart,
+          expiryStart + "prefix".length,
+          updated.updatedAt,
+        ),
+      },
+      tone: "dim",
+      sender: "agent-test",
+      expiresInMs: 100,
+    },
+  });
+  await Promise.race([
+    expiredAttention.promise,
+    Bun.sleep(1_000).then(() => {
+      throw new Error("Attention expiry event timed out");
+    }),
+  ]);
+  expect(await client.request<AttentionClientState>({
+    action: "attention.get",
+    targetClientId: "attention-detail-one",
+  })).toEqual(expect.objectContaining({ marks: [], pendingCount: 0 }));
 });

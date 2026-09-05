@@ -1,4 +1,9 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { currentAttentionMark } from "./attention";
+import {
+  attentionReturnSummary,
+  decorateAttentionBlockLine,
+} from "./attention-render";
 import {
   actionMenuItemText,
   DEFAULT_OUTLINER_ACTION_KEYMAP,
@@ -342,7 +347,8 @@ export function renderTreeFrame(
       : "";
   const physicalCount = view.physicalRowCount;
   const occurrenceCount = view.occurrenceRowCount;
-  output.push(truncateToWidth(
+  const returnSummary = attentionReturnSummary(view.attention, width);
+  output.push(returnSummary ?? truncateToWidth(
     `\x1b[2m${countLabel(physicalCount, "physical block")} · ${countLabel(
       occurrenceCount,
       "projected occurrence",
@@ -502,6 +508,12 @@ export function renderTreeFrame(
       } else {
         result = expandedRows;
       }
+    }
+    const attention = currentAttentionMark(view.attention, row.canonicalId);
+    if (attention) {
+      result = result.map((line, lineIndex) =>
+        lineIndex === 0 ? decorateAttentionBlockLine(line, attention, width) : line
+      );
     }
     renderedRows[index] = result;
     return result;

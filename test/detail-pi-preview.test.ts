@@ -8,6 +8,12 @@ import {
   type MarkdownTheme,
 } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "bun:test";
+import {
+  attentionClientState,
+  emptyAttentionState,
+  normalizeAttentionMark,
+} from "../src/attention";
+import { createAnnotationAnchor } from "../src/annotations";
 import { parseDetailCallouts } from "../src/detail-callouts";
 import type { DetailState } from "../src/detail-controller";
 import {
@@ -76,6 +82,8 @@ function state(text: string, rawText = "raw edit source"): DetailState {
     selectionAnchor: null,
     annotationRange: null,
     annotationThreads: [],
+    attention: emptyAttentionState("detail-test"),
+    attentionRevealSourceLine: null,
     completion: null,
     status: "",
     busy: false,
@@ -1646,4 +1654,47 @@ describe("structured property inspector presentations", () => {
       layout.scrollView.scrollTop + layout.scrollView.viewportHeight,
     );
   });
+});
+
+test("decorates the exact active attention phrase in Pi preview", () => {
+  const detail = state(
+    "target phrase then target phrase omega",
+    "target phrase then target phrase omega",
+  );
+  const selected = detail.context.selected!;
+  const start = selected.text.lastIndexOf("target");
+  const mark = normalizeAttentionMark({
+    markId: "pi-preview-mark",
+    targetClientId: "detail-test",
+    target: {
+      kind: "block",
+      sourceBlockId: selected.id,
+      anchor: createAnnotationAnchor(
+        selected.text,
+        start,
+        start + "target phrase".length,
+        selected.updatedAt,
+      ),
+    },
+    tone: "match",
+    sender: "agent-test",
+  }, {
+    clientId: "detail-test",
+    role: "detail",
+    contextId: "detail-test",
+  }, selected);
+  detail.attention = attentionClientState("detail-test", [mark], 1);
+
+  const layout = previewLayout(detail);
+  const rendered = layout.render(48);
+  const visible = rendered.map(stripTerminalSequences);
+  expect(visible.some((line) => line.includes("ATTENTION MATCH"))).toBe(true);
+  expect(visible.some((line) => line.includes("▐ target phrase then target phrase omega"))).toBe(true);
+  expect(rendered.some((line) => line.includes("\x1b[1;4;32m"))).toBe(true);
+  expect(rendered.join("\n")).toContain(`target phrase then \x1b[1;4;32mtarget phrase`);
+  expect(rendered.every((line) => visibleWidth(line) <= 48)).toBe(true);
+  const wrapped = layout.render(24);
+  expect(wrapped.map(stripTerminalSequences).join("\n")).toContain("target phrase");
+  expect(wrapped.some((line) => line.includes("\x1b[1;4;32m"))).toBe(true);
+  expect(wrapped.every((line) => visibleWidth(line) <= 24)).toBe(true);
 });

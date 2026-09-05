@@ -180,6 +180,94 @@ export interface AnnotationLifecycleInput {
   promotedBlockId?: string;
 }
 
+export type AttentionTone = "current" | "info" | "warning" | "error" | "match" | "dim";
+export type AttentionRole = "current" | "supporting";
+export type AttentionSourceState = "active" | "stale";
+
+export type AttentionTargetInput =
+  | {
+      kind: "block";
+      sourceBlockId: string;
+      fragmentId?: string;
+      sourceVersion?: string;
+      sourceHash?: string;
+      anchor?: AnnotationAnchor;
+    }
+  | {
+      kind: "file";
+      sourceBlockId: string;
+      filePath: string;
+      startLine: number;
+      endLine: number;
+      anchor: AnnotationAnchor;
+    };
+
+export type AttentionTarget =
+  | {
+      kind: "block";
+      sourceBlockId: string;
+      fragmentId?: string;
+      sourceVersion: string;
+      sourceHash: string;
+      anchor?: AnnotationAnchor;
+    }
+  | {
+      kind: "file";
+      sourceBlockId: string;
+      filePath: string;
+      startLine: number;
+      endLine: number;
+      anchor: AnnotationAnchor;
+    };
+
+export interface AttentionMarkInput {
+  markId: string;
+  targetClientId: string;
+  target: AttentionTargetInput;
+  tone: AttentionTone;
+  role?: AttentionRole;
+  sender: string;
+  expiresInMs?: number;
+  reveal?: boolean;
+  focus?: boolean;
+}
+
+export interface AttentionMark {
+  markId: string;
+  targetClientId: string;
+  target: AttentionTarget;
+  tone: AttentionTone;
+  role: AttentionRole;
+  sender: string;
+  createdAt: string;
+  expiresAt: string;
+  acknowledgedAt?: string;
+  returnCuePending: boolean;
+  sourceState: AttentionSourceState;
+}
+
+export interface AttentionClientState {
+  targetClientId: string;
+  marks: AttentionMark[];
+  currentMarkId?: string;
+  pendingCount: number;
+  summary: string;
+  updatedAt: string;
+}
+
+export interface AttentionClearInput {
+  targetClientId: string;
+  markId?: string;
+}
+
+export interface AttentionAcknowledgeInput extends AttentionClearInput {}
+
+export interface AttentionInstruction {
+  markId: string;
+  reveal: boolean;
+  focus: boolean;
+}
+
 export type DeliveryStage = "work" | "review" | "validate" | "complete";
 
 export interface DeliveryEnsureInput {
@@ -207,6 +295,8 @@ export interface OutlinerClientRuntime {
   tabId?: string;
   paneX?: number;
   paneY?: number;
+  focused?: boolean;
+  visible?: boolean;
 }
 
 export interface OutlinerClientRegistration {
@@ -428,7 +518,7 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 30;
+export const OUTLINER_PROTOCOL_VERSION = 31;
 
 
 export interface OutlinerServiceStatus {
@@ -451,6 +541,11 @@ export type OutlinerRequest =
       locked?: boolean;
       currentBlockId?: string | null;
     }
+  | { id: string; action: "attention.get"; targetClientId: string }
+  | { id: string; action: "attention.mark"; input: AttentionMarkInput }
+  | { id: string; action: "attention.advance"; input: AttentionMarkInput }
+  | { id: string; action: "attention.clear"; input: AttentionClearInput }
+  | { id: string; action: "attention.acknowledge"; input: AttentionAcknowledgeInput }
   | { id: string; action: "ui.command.send"; command: OutlinerUiCommand }
   | { id: string; action: "blocks.context"; blockId: string }
   | { id: string; action: "browsing-context.get"; contextId: string }
@@ -697,6 +792,7 @@ export type OutlinerEventDomain =
   | "selection"
   | "view"
   | "ui"
+  | "attention"
   | "browsing-context";
 
 export interface OutlinerEvent {
@@ -707,6 +803,8 @@ export interface OutlinerEvent {
   blockId?: string;
   contextId?: string;
   command?: OutlinerUiCommand;
+  attention?: AttentionClientState;
+  attentionInstruction?: AttentionInstruction;
 }
 
 export interface OutlinerEventEnvelope {

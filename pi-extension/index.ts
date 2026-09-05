@@ -59,6 +59,9 @@ import {
   type AnnotationBatchReceipt,
   type AnnotationRecord,
   type AnnotationTarget,
+  type AttentionClientState,
+  type AttentionMarkInput,
+  type AttentionTargetInput,
   type AnnotationThread,
   type Block,
   type BlockEditActivityPage,
@@ -235,6 +238,25 @@ const annotationTargetSchema = Type.Union([
     kind: Type.Literal("block"),
     sourceBlockId: Type.String(),
     anchor: annotationAnchorSchema,
+  }),
+  Type.Object({
+    kind: Type.Literal("file"),
+    sourceBlockId: Type.String(),
+    filePath: Type.String(),
+    startLine: Type.Integer({ minimum: 1 }),
+    endLine: Type.Integer({ minimum: 1 }),
+    anchor: annotationAnchorSchema,
+  }),
+]);
+
+const attentionTargetSchema = Type.Union([
+  Type.Object({
+    kind: Type.Literal("block"),
+    sourceBlockId: Type.String(),
+    fragmentId: Type.Optional(Type.String()),
+    sourceVersion: Type.Optional(Type.String()),
+    sourceHash: Type.Optional(Type.String()),
+    anchor: Type.Optional(annotationAnchorSchema),
   }),
   Type.Object({
     kind: Type.Literal("file"),
@@ -2293,6 +2315,94 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
     },
   });
 
+
+  pi.registerTool({
+    ...outlinerToolPresentation("Outliner Attention"),
+    name: "outliner_attention",
+    label: "Outliner Attention",
+    description:
+      "Inspect, paint, advance, acknowledge, or clear ephemeral attention in one explicit Outliner client",
+    promptSnippet:
+      "Point at an exact source range without editing content or creating a durable annotation",
+    parameters: Type.Union([
+      Type.Object({
+        operation: Type.Literal("status"),
+        clientId: Type.String(),
+      }),
+      Type.Object({
+        operation: Type.Union([Type.Literal("mark"), Type.Literal("advance")]),
+        clientId: Type.String(),
+        markId: Type.Optional(Type.String()),
+        target: attentionTargetSchema,
+        tone: Type.Union([
+          Type.Literal("current"),
+          Type.Literal("info"),
+          Type.Literal("warning"),
+          Type.Literal("error"),
+          Type.Literal("match"),
+          Type.Literal("dim"),
+        ]),
+        role: Type.Optional(Type.Union([
+          Type.Literal("current"),
+          Type.Literal("supporting"),
+        ])),
+        expiresInMs: Type.Optional(Type.Integer({ minimum: 100, maximum: 3_600_000 })),
+        reveal: Type.Optional(Type.Boolean()),
+        focus: Type.Optional(Type.Boolean()),
+      }),
+      Type.Object({
+        operation: Type.Union([Type.Literal("acknowledge"), Type.Literal("clear")]),
+        clientId: Type.String(),
+        markId: Type.Optional(Type.String()),
+      }),
+    ]),
+    async execute(toolCallId, params, _signal, _onUpdate, context) {
+      await ensureService(false);
+      if (params.operation === "status") {
+        return toolResult(await client.request<AttentionClientState>({
+          action: "attention.get",
+          targetClientId: params.clientId,
+        }));
+      }
+      if (params.operation === "clear" || params.operation === "acknowledge") {
+        return toolResult(await client.request<AttentionClientState>({
+          action: params.operation === "clear"
+            ? "attention.clear"
+            : "attention.acknowledge",
+          input: {
+            targetClientId: params.clientId,
+            ...(params.markId ? { markId: params.markId } : {}),
+          },
+        }));
+      }
+      const markParams = params as {
+        operation: "mark" | "advance";
+        clientId: string;
+        markId?: string;
+        target: AttentionTargetInput;
+        tone: AttentionMarkInput["tone"];
+        role?: AttentionMarkInput["role"];
+        expiresInMs?: number;
+        reveal?: boolean;
+        focus?: boolean;
+      };
+      const input: AttentionMarkInput = {
+        markId: markParams.markId ?? `${context.sessionManager.getSessionId()}:${toolCallId}`,
+        targetClientId: markParams.clientId,
+        target: markParams.target,
+        tone: markParams.tone,
+        role: markParams.operation === "advance" ? "current" : markParams.role ?? "current",
+        sender: actorId,
+        ...(markParams.expiresInMs ? { expiresInMs: markParams.expiresInMs } : {}),
+        ...(markParams.reveal !== undefined ? { reveal: markParams.reveal } : {}),
+        ...(markParams.focus !== undefined ? { focus: markParams.focus } : {}),
+      };
+      return toolResult(await client.request<AttentionClientState>({
+        action: markParams.operation === "advance" ? "attention.advance" : "attention.mark",
+        input,
+      }));
+    },
+  });
   pi.registerTool({
     ...outlinerToolPresentation("Outliner Update"),
     name: "outliner_update",
