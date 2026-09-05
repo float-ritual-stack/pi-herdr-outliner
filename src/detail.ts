@@ -34,6 +34,9 @@ import {
 } from "./terminal";
 import {
   OUTLINER_PROTOCOL_VERSION,
+  type AnnotationBatchReceipt,
+  type AnnotationReanchorInput,
+  type AnnotationThread,
   type BacklinkCollection,
   type Block,
   type BrowsingContextState,
@@ -174,8 +177,25 @@ const effects: DetailEffects = {
   async resolveReference(target) {
     return resolveOutlinerLinkTarget(client, target);
   },
-  async createBlock(input) {
-    return client.request<Block>({ action: "create", ...input });
+  async createAnnotation(input) {
+    return client.request<AnnotationBatchReceipt>({
+      action: "annotations.create",
+      ...input,
+      author: "user",
+    });
+  },
+  async listAnnotations(sourceBlockId) {
+    return client.request<AnnotationThread[]>({
+      action: "annotations.list",
+      query: { sourceBlockId, includeResolved: true },
+    });
+  },
+  async reanchorAnnotations(input: AnnotationReanchorInput) {
+    return client.request<AnnotationThread[]>({
+      action: "annotations.reanchor",
+      input,
+      mutation: { author: "user", actorId: "detail" },
+    });
   },
   async queryBlocks(query) {
     return client.request<VisibleBlockCollection>({ action: "blocks.query", query });

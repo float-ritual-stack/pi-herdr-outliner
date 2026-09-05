@@ -3,7 +3,14 @@ import {
   DEFAULT_OUTLINER_ACTION_KEYMAP,
   type OutlinerActionKeymap,
 } from "./outliner-actions";
-import { extractFileAnnotationComment, formatFileAnnotation } from "./annotations";
+import {
+  annotationOffsetsForLineRange,
+  annotationSourceHash,
+  createAnnotationAnchor,
+  extractAnnotationBody,
+  parseAnnotationBlock,
+  reanchorAnnotation,
+} from "./annotations";
 import {
   completionTargetAtCursor,
   pageAddressCompletion,
@@ -53,6 +60,11 @@ import { blockDisplayTitle } from "./references";
 import { TextBuffer } from "./text-buffer";
 import type { TerminalKey } from "./terminal";
 import type {
+  AnnotationBatchReceipt,
+  AnnotationCreateInput,
+  AnnotationReanchorInput,
+  AnnotationThread,
+  AnnotationTarget,
   BacklinkCollection,
   BacklinkSource,
   BacklinkQuery,
@@ -76,7 +88,7 @@ interface DetailNavigationEntry {
   fragmentId: string | null;
 }
 
-export type DetailMode = "preview" | "file" | "annotation" | "edit" | "comment";
+export type DetailMode = "preview" | "file" | "annotation" | "edit" | "select" | "comment";
 export type DetailConnectionMode = "unlocked" | "locked";
 
 export interface DetailViewport {
@@ -213,6 +225,12 @@ export function visibleBacklinkSources(
     left.blockId.localeCompare(right.blockId)
   );
 }
+export interface DetailAnnotationDraft {
+  requestId: string;
+  target: AnnotationTarget;
+  returnMode: "preview" | "file";
+}
+
 export interface DetailState {
   context: SelectionContext;
   targetBlockId: string | null;
@@ -237,7 +255,9 @@ export interface DetailState {
   fileOffset: number;
   fileCursor: number;
   selectionAnchor: number | null;
+  annotationThreads: AnnotationThread[];
   annotationRange: DetailLineRange | null;
+  annotationDraft?: DetailAnnotationDraft;
   completion: DetailCompletionState | null;
   status: string;
   busy: boolean;
@@ -285,11 +305,12 @@ export interface DetailEffects {
     expectedUpdatedAt: string;
     operations: PropertyPatchOperation[];
   }): Promise<Block>;
-  createBlock(input: {
-    parentId: string;
-    text: string;
-    author: "user";
-  }): Promise<Block>;
+  createAnnotation(input: {
+    requestId: string;
+    input: AnnotationCreateInput;
+  }): Promise<AnnotationBatchReceipt>;
+  listAnnotations(sourceBlockId: string): Promise<AnnotationThread[]>;
+  reanchorAnnotations(input: AnnotationReanchorInput): Promise<AnnotationThread[]>;
   restoreBlock(blockId: string): Promise<Block>;
   resolveReference(target: OutlinerLinkTarget): Promise<{ block: Block; created?: boolean }>;
   queryBlocks(query: BlockSearchQuery): Promise<VisibleBlockCollection>;
@@ -314,6 +335,7 @@ export type DetailOpenRouting = "first-unlocked" | "chooser";
 
 export type DetailIntent =
   | { type: "edit.begin" }
+  | { type: "annotation.selection.begin" }
   | { type: "trash.restore" }
   | { type: "comment.begin" }
   | { type: "navigation.back" }
@@ -328,6 +350,7 @@ export type DetailIntent =
   | { type: "backlinks.toggle" }
   | { type: "backlinks.filter.begin" }
   | { type: "backlinks.filter.input"; text: string }
+  | { type: "annotation.reveal" }
   | { type: "backlinks.filter.backspace" }
   | { type: "backlinks.filter.commit" }
   | { type: "backlinks.filter.cancel" }
@@ -404,7 +427,7 @@ export interface DetailController {
 
 export function detailDisplayMode(block: Block | null): "preview" | "file" | "annotation" {
   if (!block) return "preview";
-  if (getProperty(block.properties, "type") === "annotation") return "annotation";
+  if (getProperty(block.properties, "type")?.startsWith("annotation")) return "annotation";
   return getProperty(block.properties, "file") ? "file" : "preview";
 }
 
@@ -421,8 +444,29 @@ export function selectedDetailFileRange(state: Readonly<DetailState>): DetailLin
   };
 }
 
+function detailBufferRangeOffsets(buffer: Readonly<TextBuffer>): { start: number; end: number } | null {
+  const range = buffer.selectionRange;
+  if (!range) return null;
+  const offset = (row: number, column: number): number => {
+    let total = column;
+    for (let index = 0; index < row; index += 1) total += buffer.lines[index]!.length + 1;
+    return total;
+  };
+  return {
+    start: offset(range.start.row, range.start.column),
+
+    end: offset(range.end.row, range.end.column),
+  };
+}
+function detailBufferPointAtOffset(text: string, offset: number): { row: number; column: number } {
+  const clamped = Math.max(0, Math.min(offset, text.length));
+  const before = text.slice(0, clamped);
+  const lines = before.split("\n");
+  return { row: lines.length - 1, column: lines[lines.length - 1]!.length };
+}
+
 export function detailAnnotationLineCount(state: Readonly<DetailState>): number {
-  const comment = extractFileAnnotationComment(state.resolvedSelectedText) || "(No comment text)";
+  const comment = extractAnnotationBody(state.resolvedSelectedText) || "(No comment text)";
   const sourceLines = state.referencedFile ? state.referencedFile.lines.length + 2 : 0;
   return sourceLines + 1 + comment.split(/\r?\n/).length;
 }
@@ -457,6 +501,7 @@ export function createDetailController(
     targetFragmentId: null,
     connectionMode: options.propertyInspectorPresentation === "dedicated" ? "locked" : "unlocked",
     canNavigateBack: false,
+    annotationThreads: [],
     canNavigateForward: false,
     resolvedSelectedText: "",
     projectedSelectedText: "",
@@ -519,7 +564,8 @@ export function createDetailController(
 
   const emit = (): void => onChange(state);
   const isBufferMode = (): boolean =>
-    state.mode === "edit" || state.mode === "comment" || state.propertyInspector.edit !== null;
+    state.mode === "edit" || state.mode === "select" || state.mode === "comment" ||
+    state.propertyInspector.edit !== null;
 
   const refreshBreadcrumb = (): void => {
     const titles = state.context.ancestors.map(blockDisplayTitle);
@@ -531,7 +577,23 @@ export function createDetailController(
 
   const loadFile = (block: Block): void => {
     try {
-      state.referencedFile = effects.readFile(block);
+      if (getProperty(block.properties, "type")?.startsWith("annotation")) {
+        try {
+          const annotation = parseAnnotationBlock(block);
+          if (annotation.target.kind === "block") {
+            state.referencedFile = null;
+            return;
+          }
+          const source = [...state.context.ancestors, state.context.selected, ...state.context.children]
+            .find((candidate) => candidate?.id === annotation.target.sourceBlockId);
+          if (!source) throw new Error(`Annotation source block is outside the loaded context: ${annotation.target.sourceBlockId}`);
+          state.referencedFile = effects.readFile(source);
+        } catch {
+          state.referencedFile = effects.readFile(block);
+        }
+      } else {
+        state.referencedFile = effects.readFile(block);
+      }
       state.fileCursor = 0;
       state.fileOffset = 0;
       state.selectionAnchor = null;
@@ -552,6 +614,50 @@ export function createDetailController(
     state.embedStates = projection.embeds;
     state.embedRanges = projection.embedRanges;
     applyResolvedReferences(await effects.resolveReferences(projection.text));
+  };
+
+  const loadAnnotations = async (): Promise<void> => {
+    const selected = state.context.selected;
+    if (!selected) {
+      state.annotationThreads = [];
+      return;
+    }
+    let sourceBlockId = selected.id;
+    let sourceText = selected.text;
+    let sourceVersion = selected.updatedAt;
+    let sourceHash: string | undefined;
+    if (getProperty(selected.properties, "type")?.startsWith("annotation")) {
+      try {
+        const annotation = parseAnnotationBlock(selected);
+        sourceBlockId = annotation.target.sourceBlockId;
+        const source = [...state.context.ancestors, ...state.context.children]
+          .find((candidate) => candidate.id === sourceBlockId);
+        if (annotation.target.kind === "file" && state.referencedFile?.sourceText !== undefined) {
+          sourceText = state.referencedFile.sourceText;
+          sourceVersion = state.referencedFile.sourceVersion ?? source?.updatedAt ?? sourceVersion;
+          sourceHash = state.referencedFile.sourceHash;
+        } else if (source) {
+          sourceText = source.text;
+          sourceVersion = source.updatedAt;
+        }
+      } catch {
+        sourceBlockId = getProperty(selected.properties, "source-block") ?? selected.id;
+      }
+    } else if (state.referencedFile?.sourceText !== undefined) {
+      sourceText = state.referencedFile.sourceText;
+      sourceVersion = state.referencedFile.sourceVersion ?? selected.updatedAt;
+      sourceHash = state.referencedFile.sourceHash;
+    }
+    try {
+      state.annotationThreads = await effects.reanchorAnnotations({
+        sourceBlockId,
+        sourceText,
+        sourceVersion,
+        ...(sourceHash ? { sourceHash } : {}),
+      });
+    } catch {
+      state.annotationThreads = await effects.listAnnotations(sourceBlockId).catch(() => []);
+    }
   };
 
   const invalidateBacklinks = (): void => {
@@ -697,6 +803,7 @@ export function createDetailController(
     if ((state.mode === "file" || state.mode === "annotation") && next.selected) loadFile(next.selected);
     else state.referencedFile = null;
     await loadBacklinks();
+    await loadAnnotations();
   };
 
   const loadBrowsingContext = async (force = false): Promise<void> => {
@@ -980,22 +1087,87 @@ export function createDetailController(
     }
   };
 
-  const beginComment = async (): Promise<void> => {
-    if (state.context.selected?.effectiveDeletedRootId) {
+  const beginAnnotationSelection = async (): Promise<void> => {
+    const selected = state.context.selected;
+    if (!selected || selected.effectiveDeletedRootId) {
       state.status = "Block is in Trash; restore before adding annotations";
       return;
     }
-    const range = selectedDetailFileRange(state);
-    if (!range || !state.referencedFile) return;
     await setLocked(true);
-    state.annotationRange = range;
-    state.buffer = new TextBuffer();
+    state.buffer = new TextBuffer(selected.text);
     state.editorVisualOffset = 0;
     state.editorViewportManual = false;
     state.draftPreviewLinked = false;
     state.completion = null;
+    state.annotationDraft = undefined;
+    state.mode = "select";
+    state.status = "Locked · select source text, then press c to comment";
+  };
+
+  const beginComment = async (): Promise<void> => {
+    const selected = state.context.selected;
+    if (!selected || selected.effectiveDeletedRootId) {
+      state.status = "Block is in Trash; restore before adding annotations";
+      return;
+    }
+    let target: AnnotationTarget;
+    let returnMode: "preview" | "file";
+    if (state.mode === "select") {
+      const offsets = detailBufferRangeOffsets(state.buffer);
+      if (!offsets) {
+        state.status = "Select a non-empty source range before commenting";
+        return;
+      }
+      const sourceText = state.buffer.text;
+      target = {
+        kind: "block",
+        sourceBlockId: selected.id,
+        anchor: createAnnotationAnchor(
+          sourceText,
+          offsets.start,
+          offsets.end,
+          selected.updatedAt,
+          annotationSourceHash(sourceText),
+        ),
+      };
+      returnMode = "preview";
+    } else {
+      const range = selectedDetailFileRange(state);
+      const file = state.referencedFile;
+      if (!range || !file) return;
+      const sourceText = file.sourceText ?? file.lines.join("\n");
+      const offsetRange = annotationOffsetsForLineRange(
+        sourceText,
+        file.sourceText ? range.startLine : range.startLine - file.firstLine + 1,
+        file.sourceText ? range.endLine : range.endLine - file.firstLine + 1,
+      );
+      target = {
+        kind: "file",
+        sourceBlockId: selected.id,
+        filePath: file.sourcePath,
+        startLine: range.startLine,
+        endLine: range.endLine,
+        anchor: createAnnotationAnchor(
+          sourceText,
+          offsetRange.start,
+          offsetRange.end,
+          file.sourceVersion ?? selected.updatedAt,
+          file.sourceHash ?? annotationSourceHash(sourceText),
+        ),
+      };
+      returnMode = "file";
+      state.annotationRange = range;
+    }
+    await setLocked(true);
+    state.annotationDraft = { requestId: crypto.randomUUID(), target, returnMode };
+    state.buffer = new TextBuffer();
+    state.editorVisualOffset = 0;
+    state.draftPreviewLinked = false;
+    state.completion = null;
     state.mode = "comment";
-    state.status = `Locked · commenting on ${state.referencedFile.sourcePath}:${range.startLine}-${range.endLine}`;
+    state.status = target.kind === "file"
+      ? `Locked · commenting on ${target.filePath}:${target.startLine}-${target.endLine}`
+      : `Locked · commenting on source range ${target.anchor.start}-${target.anchor.end}`;
   };
 
   const focusOutliner = async (announce: boolean): Promise<void> => {
@@ -1009,8 +1181,10 @@ export function createDetailController(
   };
 
   const cancelBuffer = async (): Promise<void> => {
+    const cancelledMode = state.mode;
     state.mode = detailDisplayMode(state.context.selected);
-    state.status = "Edit cancelled";
+    state.annotationDraft = undefined;
+    state.status = cancelledMode === "comment" ? "Comment cancelled" : "Edit cancelled";
     await focusOutliner(false);
   };
 
@@ -1030,22 +1204,24 @@ export function createDetailController(
         state.mode = detailDisplayMode(updated);
         if (state.mode === "file" || state.mode === "annotation") loadFile(updated);
         else state.referencedFile = null;
-      } else if (state.mode === "comment" && state.referencedFile && state.annotationRange) {
-        const text = formatFileAnnotation({
-          sourceBlockId: state.context.selected.id,
-          filePath: state.referencedFile.sourcePath,
-          startLine: state.annotationRange.startLine,
-          endLine: state.annotationRange.endLine,
-          comment: state.buffer.text,
+      } else if (state.mode === "comment" && state.annotationDraft) {
+        const draft = state.annotationDraft;
+        const body = state.buffer.text.trim();
+        if (!body) throw new Error("Annotation body cannot be empty");
+        await effects.createAnnotation({
+          requestId: draft.requestId,
+          input: {
+            target: draft.target,
+            body,
+            source: "user",
+          },
         });
-        await effects.createBlock({
-          parentId: state.context.selected.id,
-          text,
-          author: "user",
-        });
-        state.mode = "file";
+        state.mode = draft.returnMode;
+        state.annotationDraft = undefined;
         state.selectionAnchor = null;
-        state.status = `Annotation added for lines ${state.annotationRange.startLine}-${state.annotationRange.endLine}`;
+        state.status = draft.target.kind === "file"
+          ? `Annotation added for lines ${draft.target.startLine}-${draft.target.endLine}`
+          : `Annotation added for source range ${draft.target.anchor.start}-${draft.target.anchor.end}`;
       }
       if (!isBufferMode() && state.refreshPending) await refreshPendingTarget();
     } catch (error) {
@@ -1230,6 +1406,9 @@ export function createDetailController(
     switch (intent.type) {
       case "edit.begin":
         await beginEdit(viewport);
+        break;
+      case "annotation.selection.begin":
+        await beginAnnotationSelection();
         break;
       case "trash.restore":
         if (state.context.selected?.deletedAt) {
@@ -1679,11 +1858,58 @@ export function createDetailController(
         state.status = `Revealed ${source.title}`;
         break;
       }
+      case "annotation.reveal": {
+        const selected = state.context.selected;
+        if (!selected) break;
+        let annotation;
+        try {
+          annotation = parseAnnotationBlock(selected);
+        } catch (error) {
+          state.status = errorMessage(error);
+          break;
+        }
+        await loadBlock(annotation.target.sourceBlockId, true);
+        if (annotation.target.kind === "file") {
+          if (!state.referencedFile) {
+            state.status = `Referenced file unavailable: ${annotation.target.filePath}`;
+            break;
+          }
+          state.mode = "file";
+          state.selectionAnchor = Math.max(
+            0,
+            annotation.target.startLine - state.referencedFile.firstLine,
+          );
+          state.fileCursor = Math.min(
+            state.referencedFile.lines.length - 1,
+            Math.max(0, annotation.target.endLine - state.referencedFile.firstLine),
+          );
+          ensureFileCursorVisible(viewport);
+          state.status = `Revealed ${annotation.target.filePath}:${annotation.target.startLine}-${annotation.target.endLine}`;
+          break;
+        }
+        await beginAnnotationSelection();
+        const reanchored = reanchorAnnotation(
+          annotation.target.anchor,
+          state.buffer.text,
+          state.context.selected?.updatedAt ?? annotation.target.anchor.sourceVersion,
+        );
+        if (reanchored.state !== "anchored") {
+          state.status = `Annotation anchor is ${reanchored.state}; exact range not selected`;
+          break;
+        }
+        const start = detailBufferPointAtOffset(state.buffer.text, reanchored.anchor.start);
+        const end = detailBufferPointAtOffset(state.buffer.text, reanchored.anchor.end);
+        state.buffer.placeCursor(start.row, start.column);
+        state.buffer.placeCursor(end.row, end.column, true);
+        ensureEditorCursorVisible(viewport);
+        state.status = `Revealed source range ${reanchored.anchor.start}-${reanchored.anchor.end}`;
+        break;
+      }
       case "comment.begin":
         await beginComment();
         break;
       case "buffer.insert":
-        if (isBufferMode()) {
+        if (isBufferMode() && state.mode !== "select") {
           state.completion = null;
           state.buffer.insert(intent.text);
           state.status = "";
@@ -1691,16 +1917,28 @@ export function createDetailController(
         }
         break;
       case "buffer.newline":
+        if (state.mode === "select") {
+          state.status = "Source selection is read-only";
+          break;
+        }
         state.buffer.newline();
         state.status = "";
         ensureEditorCursorVisible(viewport);
         break;
       case "buffer.backspace":
+        if (state.mode === "select") {
+          state.status = "Source selection is read-only";
+          break;
+        }
         state.buffer.backspace();
         state.status = "";
         ensureEditorCursorVisible(viewport);
         break;
       case "buffer.delete":
+        if (state.mode === "select") {
+          state.status = "Source selection is read-only";
+          break;
+        }
         state.buffer.deleteForward();
         state.status = "";
         ensureEditorCursorVisible(viewport);

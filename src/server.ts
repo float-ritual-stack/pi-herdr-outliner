@@ -6,6 +6,7 @@ import { isFragmentId, resolveFragment } from "./fragments";
 import { OutlinerStore } from "./store";
 import {
   OUTLINER_PROTOCOL_VERSION,
+  type AnnotationBatchReceipt,
   type Block,
   type BrowsingContextPublication,
   type CaptureReceipt,
@@ -622,6 +623,45 @@ export class OutlinerServer {
             request.provenance,
           );
           break;
+        case "annotations.list":
+          result = this.store.listAnnotationThreads(request.query);
+          break;
+        case "annotations.create":
+          result = this.store.createAnnotation(
+            request.requestId,
+            request.input,
+            request.author,
+            request.provenance,
+          );
+          break;
+        case "annotations.reply":
+          result = this.store.replyToAnnotation(
+            request.requestId,
+            request.input,
+            request.author,
+            request.provenance,
+          );
+          break;
+        case "annotations.batch":
+          result = this.store.createAnnotationBatch(
+            request.requestId,
+            request.operations,
+            request.author,
+            request.provenance,
+          );
+          break;
+        case "annotations.reanchor":
+          result = this.store.reanchorAnnotationThreads(
+            request.input,
+            request.mutation,
+          );
+          break;
+        case "annotations.lifecycle":
+          result = this.store.setAnnotationLifecycle(
+            request.input,
+            request.mutation,
+          );
+          break;
         case "roadmap.items.create":
           result = this.store.createRoadmapItem(
             request.input,
@@ -804,6 +844,19 @@ export class OutlinerServer {
         blockId = receipt.block.id;
         break;
       }
+      case "annotations.create":
+      case "annotations.reply":
+      case "annotations.batch": {
+        const receipt = response.result as AnnotationBatchReceipt;
+        if (receipt.deduplicated) return null;
+        domain = "content";
+        blockId = receipt.annotations[0]?.block.id;
+        break;
+      }
+      case "annotations.lifecycle":
+        domain = "content";
+        blockId = request.input.annotationId;
+        break;
       case "update":
       case "move":
       case "delete":

@@ -71,7 +71,7 @@ interface Harness {
     projectedReadHosts: Array<string | undefined>;
     updates: Array<{ blockId: string; text: string; expectedUpdatedAt: string }>;
     propertyPatches: Array<Parameters<DetailEffects["patchProperties"]>[0]>;
-    creates: Array<{ parentId: string; text: string; author: "user" }>;
+    creates: Array<Parameters<DetailEffects["createAnnotation"]>[0]>;
     restores: string[];
     histories: Array<"back" | "forward">;
     followedReferences: OutlinerLinkTarget[];
@@ -275,9 +275,25 @@ function createHarness(
           : makeBlock({ id: blockId, text: `Target ${blockId}` }),
       };
     },
-    async createBlock(input) {
+    async createAnnotation(input) {
       calls.creates.push(input);
-      return makeBlock({ id: "annotation-1" });
+      return {
+        annotations: [{
+          block: makeBlock({ id: "annotation-1" }),
+          target: input.input.target,
+          body: input.input.body,
+          source: input.input.source,
+          lifecycle: "open",
+          anchorState: "anchored",
+        }],
+        deduplicated: false,
+      };
+    },
+    async listAnnotations() {
+      return [];
+    },
+    async reanchorAnnotations() {
+      return [];
     },
     async queryBlocks(query) {
       calls.queries.push(query);
@@ -1300,14 +1316,49 @@ describe("detail controller saves and annotations", () => {
     await harness.controller.dispatch({ type: "buffer.save" }, viewport);
 
     expect(harness.calls.creates).toHaveLength(1);
-    expect(harness.calls.creates[0].parentId).toBe("block-1");
-    expect(harness.calls.creates[0].author).toBe("user");
-    expect(harness.calls.creates[0].text).toContain("[line-start::10] [line-end::17]");
-    expect(harness.calls.creates[0].text).toContain("[source-block::block-1]");
-    expect(harness.calls.creates[0].text).toContain("Explain this range.");
+    expect(harness.calls.creates[0].input.target).toMatchObject({
+      kind: "file",
+      sourceBlockId: "block-1",
+      filePath: "src/example.ts",
+      startLine: 10,
+      endLine: 17,
+    });
+    expect(harness.calls.creates[0].input.body).toBe("Explain this range.");
+    expect(harness.calls.creates[0].input.source).toBe("user");
     expect(harness.controller.state.mode).toBe("file");
     expect(harness.controller.state.selectionAnchor).toBeNull();
     expect(harness.controller.state.status).toBe("Annotation added for lines 10-17");
+  });
+
+  test("selects an exact block source range and opens a local comment composer", async () => {
+    const harness = createHarness(makeBlock({ text: "alpha 🧭 beta\nsecond" }));
+    await harness.controller.initialize();
+    await harness.controller.dispatch({ type: "annotation.selection.begin" }, viewport);
+    expect(harness.controller.state.mode).toBe("select");
+    expect(harness.calls.locks.at(-1)).toBe(true);
+
+    for (let index = 0; index < 7; index += 1) {
+      await harness.controller.dispatch({
+        type: "buffer.move",
+        direction: "right",
+        extend: true,
+      }, viewport);
+    }
+    expect(harness.controller.state.buffer.selectedText).toBe("alpha 🧭");
+    await harness.controller.dispatch({ type: "comment.begin" }, viewport);
+    expect(harness.controller.state.mode).toBe("comment");
+    expect(harness.controller.state.annotationDraft?.target).toMatchObject({
+      kind: "block",
+      sourceBlockId: "block-1",
+      anchor: { start: 0, end: 8, excerpt: "alpha 🧭" },
+    });
+
+    await harness.controller.dispatch({ type: "buffer.insert", text: "Keep this bearing." }, viewport);
+    await harness.controller.dispatch({ type: "buffer.save" }, viewport);
+    expect(harness.calls.creates).toHaveLength(1);
+    expect(harness.calls.creates[0].input.body).toBe("Keep this bearing.");
+    expect(harness.controller.state.mode).toBe("preview");
+    expect(harness.controller.state.status).toBe("Annotation added for source range 0-8");
   });
 
   test("rejects an empty annotation without leaving comment mode", async () => {
@@ -1319,7 +1370,7 @@ describe("detail controller saves and annotations", () => {
 
     expect(harness.calls.creates).toEqual([]);
     expect(harness.controller.state.mode).toBe("comment");
-    expect(harness.controller.state.status).toBe("Annotation comment cannot be empty");
+    expect(harness.controller.state.status).toBe("Annotation body cannot be empty");
   });
 });
 

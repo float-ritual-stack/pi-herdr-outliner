@@ -3,12 +3,15 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { createConnection, createServer, Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createAnnotationAnchor } from "../src/annotations";
 import { OutlinerClient } from "../src/client";
 import { HerdrRuntimeRegistry, type HerdrSessionSnapshot } from "../src/herdr-registry";
 import { OutlinerServer } from "../src/server";
 import { OutlinerStore } from "../src/store";
 import { OUTLINER_PROTOCOL_VERSION } from "../src/types";
 import type {
+  AnnotationBatchReceipt,
+  AnnotationThread,
   BacklinkCollection,
   BlockEditActivityPage,
   Block,
@@ -42,7 +45,7 @@ afterEach(async () => {
 });
 
 
-test("round-trips idempotent delivery identity over protocol v29", async () => {
+test("round-trips idempotent delivery identity over protocol v30", async () => {
   const directory = mkdtempSync(join(tmpdir(), "pi-outliner-delivery-protocol-"));
   const store = new OutlinerStore(join(directory, "outliner.sqlite"));
   const socket = join(directory, "outliner.sock");
@@ -84,6 +87,61 @@ test("round-trips idempotent delivery identity over protocol v29", async () => {
 });
 
 
+
+test("serves atomic idempotent annotation threads over protocol v30", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-outliner-annotation-protocol-"));
+  const store = new OutlinerStore(join(directory, "outliner.sqlite"));
+  const socket = join(directory, "outliner.sock");
+  const server = new OutlinerServer(store, socket);
+  await server.start();
+  cleanups.push(async () => {
+    await server.close();
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const client = new OutlinerClient(socket);
+  const source = await client.request<Block>({
+    action: "create",
+    text: "alpha βeta gamma",
+  });
+  const operations = [{
+    operationId: "comment-1",
+    type: "create" as const,
+    input: {
+      target: {
+        kind: "block" as const,
+        sourceBlockId: source.id,
+        anchor: createAnnotationAnchor(source.text, 6, 10, source.updatedAt),
+      },
+      body: "Check this range.",
+      source: "agent" as const,
+    },
+  }];
+  const created = await client.request<AnnotationBatchReceipt>({
+    action: "annotations.batch",
+    requestId: "protocol-annotation-batch-1",
+    operations,
+    author: "agent",
+    provenance: { actorId: "omp", sessionId: "session-1", taskId: "call-1" },
+  });
+  const replayed = await client.request<AnnotationBatchReceipt>({
+    action: "annotations.batch",
+    requestId: "protocol-annotation-batch-1",
+    operations,
+    author: "agent",
+    provenance: { actorId: "omp", sessionId: "session-1", taskId: "call-2" },
+  });
+  const threads = await client.request<AnnotationThread[]>({
+    action: "annotations.list",
+    query: { sourceBlockId: source.id, includeResolved: true },
+  });
+  expect(created.deduplicated).toBe(false);
+  expect(replayed.deduplicated).toBe(true);
+  expect(replayed.annotations[0]!.block.id).toBe(created.annotations[0]!.block.id);
+  expect(threads).toHaveLength(1);
+  expect(threads[0]!.target.anchor.excerpt).toBe("βeta");
+});
+
 test("serves mutations and property queries over the local socket", async () => {
   const directory = mkdtempSync(join(tmpdir(), "pi-outliner-protocol-"));
   const store = new OutlinerStore(join(directory, "outliner.sqlite"));
@@ -99,7 +157,7 @@ test("serves mutations and property queries over the local socket", async () => 
   const client = new OutlinerClient(socket);
   const service = await client.request<OutlinerServiceStatus>({ action: "ping" });
   expect(service).toEqual({ status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION });
-  expect(service.protocolVersion).toBe(29);
+  expect(service.protocolVersion).toBe(30);
   const provenance = {
     actorId: "omp",
     sessionId: "session-1",

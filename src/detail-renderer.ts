@@ -3,7 +3,7 @@ import {
   truncateToWidth,
   visibleWidth,
 } from "@earendil-works/pi-tui";
-import { extractFileAnnotationComment } from "./annotations";
+import { extractAnnotationBody, parseAnnotationBlock } from "./annotations";
 import { completionWindow } from "./completion";
 import { outlinerLinkUri } from "./outliner-links";
 import { blockDisplayTitle } from "./references";
@@ -259,6 +259,24 @@ export function buildDetailAnnotationView(
 ): string[] {
   if (!state.context.selected) return [];
   const output: string[] = [];
+  let annotation;
+  try {
+    annotation = parseAnnotationBlock(state.context.selected);
+  } catch {
+    annotation = null;
+  }
+  if (annotation?.target.kind === "block") {
+    output.push(
+      `\x1b[2m${fitDynamicText(
+        `Source: block ${annotation.target.sourceBlockId} @${annotation.target.anchor.start}-${annotation.target.anchor.end} · ${annotation.anchorState}`,
+        width,
+      )}\x1b[0m`,
+    );
+    for (const line of annotation.target.anchor.excerpt.split(/\r?\n/)) {
+      output.push(`│ ${fitDynamicText(line, Math.max(1, width - 2))}`);
+    }
+    output.push("─".repeat(width));
+  }
   if (state.referencedFile) {
     const file = state.referencedFile;
     const lastLine = file.firstLine + Math.max(0, file.lines.length - 1);
@@ -277,7 +295,7 @@ export function buildDetailAnnotationView(
     output.push("─".repeat(width));
   }
   output.push("\x1b[1mComment\x1b[0m");
-  const comment = extractFileAnnotationComment(state.resolvedSelectedText);
+  const comment = extractAnnotationBody(state.resolvedSelectedText);
   for (const line of (comment || "(No comment text)").split(/\r?\n/)) {
     output.push(renderMarkdownLine(fitDynamicText(line, width)));
   }
@@ -303,7 +321,7 @@ export function renderDetailLines(
 
   if (!state.context.selected) {
     output.push("Select a block in the outliner pane.");
-  } else if (state.mode === "edit" || state.mode === "comment") {
+  } else if (state.mode === "edit" || state.mode === "select" || state.mode === "comment") {
     const editorHeight = detailVisibleEditorHeight(state, viewport);
     const layout = layoutDetailEditor(
       state.buffer.lines,
@@ -354,6 +372,22 @@ export function renderDetailLines(
       output.push(
         isEmbeddedLine(state, lineIndex) ? renderEmbedBackground(rendered, width) : rendered,
       );
+    }
+    if (state.annotationThreads.length > 0 && output.length < height - 2) {
+      const threads = state.annotationThreads;
+      output.push(`\x1b[1mComments · ${threads.length} ${threads.length === 1 ? "thread" : "threads"}\x1b[0m`);
+      for (const [index, thread] of threads.entries()) {
+        if (output.length >= height - 2) break;
+        const range = thread.target.kind === "file"
+          ? `${thread.target.filePath}:${thread.target.startLine}-${thread.target.endLine}`
+          : `source ${thread.target.anchor.start}-${thread.target.anchor.end}`;
+        output.push(
+          fitDynamicText(
+            `[${index + 1}] ${range} · ${thread.anchorState} · ${thread.lifecycle} — ${thread.body}`,
+            width,
+          ),
+        );
+      }
     }
   }
 

@@ -11,6 +11,7 @@ import {
   previewRegionActionUri,
   type PreviewRegion,
 } from "./detail-preview-regions";
+import { outlinerLinkUri } from "./outliner-links";
 import {
   groupPropertyInspectorEntries,
   type PropertyInspectorEntry,
@@ -267,6 +268,33 @@ export function renderPropertyInspectorDocument(
       lines.push(...propertyTableLines(state, group.entries, width));
     }
   }
+  return lines.join("\n");
+}
+
+export function renderAnnotationDocument(state: Readonly<DetailState>): string {
+  const threads = state.annotationThreads;
+  if (threads.length === 0) return "";
+  const lines = [
+    `## Comments · ${threads.length} ${threads.length === 1 ? "thread" : "threads"}`,
+  ];
+  threads.forEach((thread, index) => {
+    const target = thread.target;
+    const range = target.kind === "file"
+      ? `${target.filePath}:${target.startLine === target.endLine ? target.startLine : `${target.startLine}-${target.endLine}`}`
+      : `source ${target.anchor.start}-${target.anchor.end}`;
+    const marker = `[${index + 1}]`;
+    const href = outlinerLinkUri("block", thread.block.id);
+    const excerpt = escapeInspectorMarkdown(target.anchor.excerpt.replace(/\s+/g, " ").trim());
+    const body = escapeInspectorMarkdown(thread.body.replace(/\s+/g, " ").trim());
+    lines.push(
+      `### [${marker}](${href}) ${escapeInspectorMarkdown(range)} · ${thread.anchorState} · ${thread.lifecycle}`,
+      `> ${excerpt || "_empty excerpt_"}`,
+      body || "_No comment text._",
+    );
+    for (const reply of thread.replies) {
+      lines.push(`- **${reply.source}:** ${escapeInspectorMarkdown(reply.body.replace(/\s+/g, " ").trim())}`);
+    }
+  });
   return lines.join("\n");
 }
 

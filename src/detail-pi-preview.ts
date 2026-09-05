@@ -28,6 +28,7 @@ import {
 } from "./detail-preview-regions";
 import {
   detailPropertyInspectorRegions,
+  renderAnnotationDocument,
   renderPropertyInspectorDocument,
 } from "./detail-pi-renderer";
 import { stripFragmentAnchors } from "./fragments";
@@ -576,6 +577,7 @@ export class DetailPiPreviewLayout extends VStack {
   private renderedSourceText: string | undefined;
   private renderedRawText: string | undefined;
   private renderedWorkIdPrefix: string | null | undefined;
+  private renderedAnnotationDocument: string | undefined;
   private renderedBacklinksDocument: string | undefined;
   private renderedInspectorDocument: string | undefined;
   private renderedInspectorWidth: number | undefined;
@@ -884,16 +886,19 @@ export class DetailPiPreviewLayout extends VStack {
       (this.calloutRegions.length > 0 || nextCalloutRegions.length > 0);
     this.renderedCalloutSource = authoredCalloutSource;
     this.calloutRegions = nextCalloutRegions;
+    const annotationDocument = draftText === null ? renderAnnotationDocument(this.state) : "";
     const sourceChanged =
       sourceText !== this.renderedSourceText ||
       rawText !== this.renderedRawText ||
       workIdPrefix !== this.renderedWorkIdPrefix ||
+      annotationDocument !== this.renderedAnnotationDocument ||
       embedPresentation !== this.renderedEmbedPresentation ||
       this.draftProjectionError !== this.renderedDraftProjectionError;
     if (sourceChanged || calloutSourceChanged) {
       this.renderedSourceText = sourceText;
       this.renderedRawText = rawText;
       this.renderedWorkIdPrefix = workIdPrefix;
+      this.renderedAnnotationDocument = annotationDocument;
       this.renderedEmbedPresentation = embedPresentation;
       this.renderedDraftProjectionError = this.draftProjectionError;
       const document = selected
@@ -904,11 +909,14 @@ export class DetailPiPreviewLayout extends VStack {
             workIdPrefix,
           )
         : sourceText;
+      const decoratedDocument = annotationDocument
+        ? `${document}\n\n---\n\n${annotationDocument}`
+        : document;
       const renderedText = this.draftProjectionError
-        ? `${document}\n\n> Draft preview error: ${
+        ? `${decoratedDocument}\n\n> Draft preview error: ${
           sanitizeMarkdownDocument(this.draftProjectionError).replace(/\r?\n/g, " ")
         }`
-        : document;
+        : decoratedDocument;
       this.renderedDocumentText = renderedText;
       this.renderedCalloutRegions = renderedAuthoredCallouts(
         this.calloutRegions,

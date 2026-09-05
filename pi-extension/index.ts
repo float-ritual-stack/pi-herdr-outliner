@@ -12,7 +12,6 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { formatFileAnnotation } from "../src/annotations";
 import {
   focusBlockByQuery,
   formatBlockFocusMatch,
@@ -56,6 +55,11 @@ import {
 } from "../src/work-environment";
 import {
   OUTLINER_PROTOCOL_VERSION,
+  type AnnotationBatchOperation,
+  type AnnotationBatchReceipt,
+  type AnnotationRecord,
+  type AnnotationTarget,
+  type AnnotationThread,
   type Block,
   type BlockEditActivityPage,
   type BlockProvenance,
@@ -213,6 +217,32 @@ const propertyPatchOperationSchema = Type.Union([
     op: Type.Literal("append"),
     key: Type.String(),
     value: Type.String(),
+  }),
+]);
+
+const annotationAnchorSchema = Type.Object({
+  start: Type.Integer({ minimum: 0, description: "UTF-16 start offset, inclusive" }),
+  end: Type.Integer({ minimum: 1, description: "UTF-16 end offset, exclusive" }),
+  excerpt: Type.String(),
+  contextBefore: Type.String(),
+  contextAfter: Type.String(),
+  sourceVersion: Type.String(),
+  sourceHash: Type.String(),
+});
+
+const annotationTargetSchema = Type.Union([
+  Type.Object({
+    kind: Type.Literal("block"),
+    sourceBlockId: Type.String(),
+    anchor: annotationAnchorSchema,
+  }),
+  Type.Object({
+    kind: Type.Literal("file"),
+    sourceBlockId: Type.String(),
+    filePath: Type.String(),
+    startLine: Type.Integer({ minimum: 1 }),
+    endLine: Type.Integer({ minimum: 1 }),
+    anchor: annotationAnchorSchema,
   }),
 ]);
 
@@ -2109,31 +2139,157 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
   });
 
   pi.registerTool({
-    ...outlinerToolPresentation("Outliner Annotate File"),
-    name: "outliner_annotate_file",
-    label: "Outliner Annotate File",
-    description: "Attach a durable line-range comment beneath a file-reference block",
-    promptSnippet: "Annotate specific lines of a referenced text or Markdown file",
+    ...outlinerToolPresentation("Outliner Annotations"),
+    name: "outliner_annotations",
+    label: "Outliner Annotations",
+    description: "Inspect durable annotation threads anchored to a block or file reference",
+    promptSnippet: "List durable comments for an Outliner source block",
     parameters: Type.Object({
-      sourceBlockId: Type.String({ description: "Block containing the [file::path] property" }),
-      startLine: Type.Integer({ minimum: 1 }),
-      endLine: Type.Integer({ minimum: 1 }),
+      sourceBlockId: Type.Optional(Type.String()),
+      includeResolved: Type.Optional(Type.Boolean()),
+    }),
+    async execute(_toolCallId, params) {
+      await ensureService(false);
+      const sourceBlockId = params.sourceBlockId ?? await selectedBlockId();
+      if (!sourceBlockId) throw new Error("No annotation source block was provided or selected");
+      return toolResult(await client.request<AnnotationThread[]>({
+        action: "annotations.list",
+        query: {
+          sourceBlockId,
+          includeResolved: params.includeResolved ?? true,
+        },
+      }));
+    },
+  });
+
+  pi.registerTool({
+    ...outlinerToolPresentation("Outliner Annotate"),
+    name: "outliner_annotate",
+    label: "Outliner Annotate",
+    description: "Create one durable source-range comment without editing its target",
+    promptSnippet: "Annotate an exact UTF-16 range in an Outliner block or referenced file",
+    parameters: Type.Object({
+      target: annotationTargetSchema,
       comment: Type.String(),
+      requestId: Type.Optional(Type.String()),
     }),
     async execute(toolCallId, params, _signal, _onUpdate, context) {
       await ensureService(false);
-      const source = await client.request<Block>({ action: "get", blockId: params.sourceBlockId });
-      const filePath = getProperty(source.properties, "file");
-      if (!filePath) throw new Error(`Block has no [file::path] property: ${source.id}`);
-      const text = formatFileAnnotation({ ...params, filePath });
-      const annotation = await client.request<Block>({
-        action: "create",
-        parentId: source.id,
-        text,
+      return toolResult(await client.request<AnnotationBatchReceipt>({
+        action: "annotations.create",
+        requestId: params.requestId ?? `${context.sessionManager.getSessionId()}:${toolCallId}`,
+        input: {
+          target: params.target as AnnotationTarget,
+          body: params.comment,
+          source: "agent",
+        },
         author: "agent",
         provenance: toolProvenance(actorId, context, toolCallId),
-      });
-      return toolResult(annotation);
+      }));
+    },
+  });
+
+  pi.registerTool({
+    ...outlinerToolPresentation("Outliner Annotation Reply"),
+    name: "outliner_annotation_reply",
+    label: "Outliner Annotation Reply",
+    description: "Reply to a durable annotation thread without editing its target",
+    promptSnippet: "Reply to an existing Outliner source annotation",
+    parameters: Type.Object({
+      annotationId: Type.String(),
+      comment: Type.String(),
+      requestId: Type.Optional(Type.String()),
+    }),
+    async execute(toolCallId, params, _signal, _onUpdate, context) {
+      await ensureService(false);
+      return toolResult(await client.request<AnnotationBatchReceipt>({
+        action: "annotations.reply",
+        requestId: params.requestId ?? `${context.sessionManager.getSessionId()}:${toolCallId}`,
+        input: {
+          annotationId: params.annotationId,
+          body: params.comment,
+          source: "agent",
+        },
+        author: "agent",
+        provenance: toolProvenance(actorId, context, toolCallId),
+      }));
+    },
+  });
+
+  pi.registerTool({
+    ...outlinerToolPresentation("Outliner Annotation Lifecycle"),
+    name: "outliner_annotation_lifecycle",
+    label: "Outliner Annotation Lifecycle",
+    description: "Resolve or reopen a durable annotation thread and optionally link its promoted block",
+    promptSnippet: "Change an Outliner annotation thread lifecycle without editing its target",
+    parameters: Type.Object({
+      annotationId: Type.String(),
+      lifecycle: Type.Union([Type.Literal("open"), Type.Literal("resolved")]),
+      promotedBlockId: Type.Optional(Type.String()),
+    }),
+    async execute(toolCallId, params, _signal, _onUpdate, context) {
+      await ensureService(false);
+      return toolResult(await client.request<AnnotationRecord>({
+        action: "annotations.lifecycle",
+        input: params,
+        mutation: agentMutation(actorId, context, toolCallId),
+      }));
+    },
+  });
+
+  pi.registerTool({
+    ...outlinerToolPresentation("Outliner Annotation Batch"),
+    name: "outliner_annotation_batch",
+    label: "Outliner Annotation Batch",
+    description: "Atomically create or reply to multiple durable source annotations",
+    promptSnippet: "Apply an idempotent all-or-nothing batch of Outliner comments",
+    parameters: Type.Object({
+      requestId: Type.Optional(Type.String()),
+      operations: Type.Array(Type.Union([
+        Type.Object({
+          operationId: Type.String(),
+          type: Type.Literal("create"),
+          target: annotationTargetSchema,
+          comment: Type.String(),
+        }),
+        Type.Object({
+          operationId: Type.String(),
+          type: Type.Literal("reply"),
+          annotationId: Type.String(),
+          comment: Type.String(),
+        }),
+      ]), { minItems: 1, maxItems: 100 }),
+    }),
+    async execute(toolCallId, params, _signal, _onUpdate, context) {
+      await ensureService(false);
+      const operations = params.operations.map((operation): AnnotationBatchOperation =>
+        operation.type === "create"
+          ? {
+              operationId: operation.operationId,
+              type: "create",
+              input: {
+                target: operation.target as AnnotationTarget,
+                body: operation.comment,
+                source: "agent",
+              },
+            }
+          : {
+              operationId: operation.operationId,
+              type: "reply",
+              input: {
+                annotationId: operation.annotationId,
+                body: operation.comment,
+                source: "agent",
+              },
+            }
+      );
+      return toolResult(await client.request<AnnotationBatchReceipt>({
+        action: "annotations.batch",
+        requestId: params.requestId ?? `${context.sessionManager.getSessionId()}:${toolCallId}`,
+        operations,
+        author: "agent",
+        provenance: toolProvenance(actorId, context, toolCallId),
+      }));
     },
   });
 

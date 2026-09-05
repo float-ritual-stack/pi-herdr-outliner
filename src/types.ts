@@ -95,6 +95,91 @@ export interface CaptureReceipt {
   deduplicated: boolean;
 }
 
+export type AnnotationSource = "user" | "agent";
+export type AnnotationLifecycle = "open" | "resolved";
+export type AnnotationAnchorState = "anchored" | "ambiguous" | "orphaned";
+
+export interface AnnotationAnchor {
+  start: number;
+  end: number;
+  excerpt: string;
+  contextBefore: string;
+  contextAfter: string;
+  sourceVersion: string;
+  sourceHash: string;
+}
+
+export type AnnotationTarget =
+  | {
+      kind: "block";
+      sourceBlockId: string;
+      anchor: AnnotationAnchor;
+    }
+  | {
+      kind: "file";
+      sourceBlockId: string;
+      filePath: string;
+      startLine: number;
+      endLine: number;
+      anchor: AnnotationAnchor;
+    };
+
+export interface AnnotationCreateInput {
+  target: AnnotationTarget;
+  body: string;
+  source: AnnotationSource;
+}
+
+export interface AnnotationReplyInput {
+  annotationId: string;
+  body: string;
+  source: AnnotationSource;
+}
+
+export type AnnotationBatchOperation =
+  | { operationId: string; type: "create"; input: AnnotationCreateInput }
+  | { operationId: string; type: "reply"; input: AnnotationReplyInput };
+
+export interface AnnotationRecord {
+  block: Block;
+  target: AnnotationTarget;
+  body: string;
+  source: AnnotationSource;
+  lifecycle: AnnotationLifecycle;
+  promotedBlockIds?: string[];
+  anchorState: AnnotationAnchorState;
+  parentAnnotationId?: string;
+}
+
+export interface AnnotationThread extends AnnotationRecord {
+  replies: AnnotationRecord[];
+}
+
+export interface AnnotationBatchReceipt {
+  annotations: AnnotationRecord[];
+  deduplicated: boolean;
+}
+
+export interface AnnotationListQuery {
+  sourceBlockId?: string;
+  filePath?: string;
+  lifecycle?: AnnotationLifecycle;
+  includeResolved?: boolean;
+}
+
+export interface AnnotationReanchorInput {
+  sourceBlockId: string;
+  sourceText: string;
+  sourceVersion: string;
+  sourceHash?: string;
+}
+
+export interface AnnotationLifecycleInput {
+  annotationId: string;
+  lifecycle: AnnotationLifecycle;
+  promotedBlockId?: string;
+}
+
 export type DeliveryStage = "work" | "review" | "validate" | "complete";
 
 export interface DeliveryEnsureInput {
@@ -343,7 +428,7 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 29;
+export const OUTLINER_PROTOCOL_VERSION = 30;
 
 
 export interface OutlinerServiceStatus {
@@ -424,6 +509,47 @@ export type OutlinerRequest =
       capturedFromBlockId?: string;
       author?: BlockAuthor;
       provenance?: BlockProvenance;
+    }
+  | {
+      id: string;
+      action: "annotations.list";
+      query: AnnotationListQuery;
+    }
+  | {
+      id: string;
+      action: "annotations.create";
+      requestId: string;
+      input: AnnotationCreateInput;
+      author?: BlockAuthor;
+      provenance?: BlockProvenance;
+    }
+  | {
+      id: string;
+      action: "annotations.reply";
+      requestId: string;
+      input: AnnotationReplyInput;
+      author?: BlockAuthor;
+      provenance?: BlockProvenance;
+    }
+  | {
+      id: string;
+      action: "annotations.batch";
+      requestId: string;
+      operations: AnnotationBatchOperation[];
+      author?: BlockAuthor;
+      provenance?: BlockProvenance;
+    }
+  | {
+      id: string;
+      action: "annotations.reanchor";
+      input: AnnotationReanchorInput;
+      mutation: MutationProvenance;
+    }
+  | {
+      id: string;
+      action: "annotations.lifecycle";
+      input: AnnotationLifecycleInput;
+      mutation: MutationProvenance;
     }
   | {
       id: string;

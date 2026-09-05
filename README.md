@@ -25,7 +25,7 @@ The project started as a small Friday-night experiment and grew into a durable w
 
 - SQLite-backed hierarchical blocks with stable UUIDs, sibling order, authors, timestamps, and one canonical graph per workspace root.
 - Workspace-isolated service and runtime paths.
-- JSON-lines RPC protocol v29 over a Unix socket.
+- JSON-lines RPC protocol v30 over a Unix socket.
 - Reactive canonical content/view broadcasts, per-process Tree/Detail registration with Detail lock availability, exact-client UI commands, and source-aware `preview | open | reveal` navigation.
 - Each Tree owns its cursor, occurrence selection, filter, viewport, collapsed rows, multiline expansion, explicit-navigation history, and browsing context; moving a Tree previews only in the first unlocked same-tab Detail and never replaces a locked anchor.
 - Indexed `[property::value]` metadata with optimistic property patching and catalog queries.
@@ -44,7 +44,7 @@ The project started as a small Friday-night experiment and grew into a durable w
 - The property inspector preserves repeated keys and block/line/inline scope, offers inline disclosure plus a locked dedicated Detail pane, and routes typed block/page/Work-ID values through existing navigation.
 - Grapheme-safe wrapped Detail editing, word motion, selection, deletion, bounded per-session undo/redo, completion, optimistic save, and whole-session Esc cancellation.
 - Each Detail visibly reports `Unlocked` or `Locked`; unlocked Details form a spatial preview/open pool, while locked Details retain exact context anchors.
-- Referenced text/Markdown file viewing and durable line-range annotations.
+- Durable UTF-16 source-range annotations for blocks and referenced files, with resilient reanchoring, explicit ambiguous/orphan states, threaded replies, lifecycle/promotion links, compact Detail markers, and exact-range reveal.
 - Herdr-owned pane placement/focus and current-pane recovery, one remembered service pane, per-process live client discovery, and an ephemeral runtime registry.
 - Pi/OMP commands, tools, selection-context injection, canonical `/send-to-outline` capture, and deterministic configured `PREFIX-XXX` work-placeholder nudging.
 
@@ -390,6 +390,10 @@ invoking Detail regardless of lock state, `f` uses the first unlocked Detail,
 Detail or falls back to a right split. `R` outside the popup still reveals the
 selected source in Tree.
 
+### Detail source comments
+
+Press `v` in block preview to enter locked, read-only source selection. Shift-motion or primary-button drag selects an exact authored UTF-16 range without entering full edit mode; `c` opens the local comment composer, `Ctrl+S` stores it, and `Esc` cancels without creating a block. File view retains line-range selection with the same `c` composer. Annotation view `r` returns to the source with the resolved block range or file lines selected; ambiguous and orphaned anchors are reported instead of guessed.
+
 ### Detail edit and comment modes
 
 | Key | Action |
@@ -613,9 +617,15 @@ The project Pi extension is auto-discovered through [`.pi/extensions/outliner.ts
 - `outliner_move`
 - `outliner_clients`
 - `outliner_selection`
-- `outliner_annotate_file`
+- `outliner_annotations`
+- `outliner_annotate`
+- `outliner_annotation_reply`
+- `outliner_annotation_lifecycle`
+- `outliner_annotation_batch`
 
 `outliner_query` accepts structured filters such as `{ key: "status", value: "in progress" }`, plus optional text and subtree fields. The service normalizes keys/values and applies the same bounded semantics used by human surfaces. `outliner_focus` targets an explicit or unique live Tree client and returns compact structural context.
+
+Annotation tools use the same canonical child blocks as Detail. Targets carry a block ID or file identity plus UTF-16 offsets, excerpt, bounded before/after context, source version, and hash. Create and batch calls are idempotent; invalid batches create nothing. Replies retain the root target, lifecycle changes can link promoted canonical blocks, and inspection returns explicit anchor state.
 
 `outliner_roadmap_create` is the canonical new-work path: it fails without a partial block or consumed Work ID when queue discovery, metadata, or relationship validation fails. New work defaults to `unprioritized`. `outliner_branch_rank` updates only persisted virtual occurrence ranks; it neither moves canonical blocks nor changes `work-stage`, and ranks remain available across temporary query mismatches.
 

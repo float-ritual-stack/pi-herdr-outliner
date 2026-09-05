@@ -75,6 +75,7 @@ function state(text: string, rawText = "raw edit source"): DetailState {
     fileCursor: 0,
     selectionAnchor: null,
     annotationRange: null,
+    annotationThreads: [],
     completion: null,
     status: "",
     busy: false,
