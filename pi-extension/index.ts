@@ -83,6 +83,15 @@ import {
   type VisibleBlockCollection,
   type WorkIdAllocatorStatus,
   type WorkspaceSnapshot,
+  type WorkflowCapability,
+  type WorkflowInvocation,
+  type WorkflowPromotionCommitInput,
+  type WorkflowPromotionInput,
+  type WorkflowPromotionPreview,
+  type WorkflowPromotionReceipt,
+  type WorkflowRun,
+  type WorkflowStartReceipt,
+  type WorkflowTransitionAction,
 } from "../src/types";
 
 const execFileAsync = promisify(execFile);
@@ -267,6 +276,61 @@ const attentionTargetSchema = Type.Union([
     anchor: annotationAnchorSchema,
   }),
 ]);
+
+const workflowCapabilitySchema = Type.Union([
+  Type.Literal("outline.structure"),
+  Type.Literal("outline.route"),
+  Type.Literal("attention.mark"),
+  Type.Literal("annotations.create"),
+  Type.Literal("annotations.reply"),
+  Type.Literal("annotations.batch"),
+  Type.Literal("promotion.preview"),
+  Type.Literal("promotion.commit"),
+]);
+const workflowInvocationSchema = Type.Union([
+  Type.Object({
+    kind: Type.Literal("block"),
+    sourceBlockId: Type.String(),
+  }),
+  Type.Object({
+    kind: Type.Literal("callout"),
+    sourceBlockId: Type.String(),
+    calloutType: Type.String(),
+    calloutIndex: Type.Optional(Type.Integer({ minimum: 0, maximum: 1_000 })),
+  }),
+  Type.Object({
+    kind: Type.Literal("query"),
+    query: Type.Object({
+      text: Type.Optional(Type.String()),
+      subtreeRootId: Type.Optional(Type.String()),
+      filters: Type.Optional(Type.Array(Type.Object({
+        key: Type.String(),
+        value: Type.Optional(Type.String()),
+      }))),
+      limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+    }),
+  }),
+  Type.Object({
+    kind: Type.Literal("command"),
+    command: Type.Literal("walkthrough"),
+    sourceBlockId: Type.Optional(Type.String()),
+  }),
+]);
+const workflowPromotionInputSchema = Type.Object({
+  runId: Type.String(),
+  stepId: Type.String(),
+  annotationId: Type.String(),
+  kind: Type.Union([
+    Type.Literal("decision"),
+    Type.Literal("follow-up"),
+    Type.Literal("task"),
+    Type.Literal("artifact"),
+  ]),
+  title: Type.String(),
+  approvedBy: Type.String(),
+  body: Type.Optional(Type.String()),
+  parentId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+});
 
 const MAX_TOOL_RESULT_CHARS = 12_000;
 const WORK_PLACEHOLDER_SKILL = "work-placeholder-resolver";
@@ -518,6 +582,26 @@ async function waitForService(timeoutMs = 5000): Promise<void> {
     }
   }
   throw lastError instanceof Error ? lastError : new Error("Outliner service did not start");
+}
+
+async function runWorkflowOrchestrator(
+  runId: string,
+  signal?: AbortSignal,
+): Promise<unknown> {
+  const { stdout } = await execFileAsync(
+    "bun",
+    ["run", join(extensionRoot, "src/workflow-main.ts"), "--run-id", runId],
+    {
+      cwd: extensionRoot,
+      signal,
+      maxBuffer: 2 * 1024 * 1024,
+    },
+  );
+  try {
+    return JSON.parse(stdout);
+  } catch {
+    throw new Error("Workflow orchestrator returned invalid JSON");
+  }
 }
 
 async function ensureService(focus: boolean): Promise<void> {
@@ -2401,6 +2485,132 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
         action: markParams.operation === "advance" ? "attention.advance" : "attention.mark",
         input,
       }));
+    },
+  });
+  pi.registerTool({
+    ...outlinerToolPresentation("Outliner Workflow"),
+    name: "outliner_workflow",
+    label: "Outliner Workflow",
+    description:
+      "Run, inspect, navigate, cancel, and explicitly publish from a bounded allowlisted outline walkthrough",
+    promptSnippet:
+      "Use structure-first workflow state; keep narration ephemeral and promote annotation outcomes only after exact approval",
+    parameters: Type.Union([
+      Type.Object({
+        operation: Type.Literal("start"),
+        invocation: workflowInvocationSchema,
+        capabilities: Type.Array(workflowCapabilitySchema, { minItems: 2, maxItems: 8 }),
+        fanOut: Type.Integer({ minimum: 1, maximum: 20 }),
+        callLimit: Type.Integer({ minimum: 2, maximum: 50 }),
+        planner: Type.Union([Type.Literal("pi-direct"), Type.Literal("callscript")]),
+        clientId: Type.Optional(Type.String()),
+        requestId: Type.Optional(Type.String()),
+      }),
+      Type.Object({
+        operation: Type.Literal("status"),
+        runId: Type.Optional(Type.String()),
+        limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+      }),
+      Type.Object({
+        operation: Type.Literal("transition"),
+        runId: Type.String(),
+        action: Type.Union([
+          Type.Literal("next"),
+          Type.Literal("previous"),
+          Type.Literal("pause"),
+          Type.Literal("resume"),
+          Type.Literal("skip"),
+          Type.Literal("branch"),
+          Type.Literal("end"),
+        ]),
+        question: Type.Optional(Type.String()),
+        focus: Type.Optional(Type.Boolean()),
+        clientId: Type.Optional(Type.String()),
+      }),
+      Type.Object({
+        operation: Type.Literal("cancel"),
+        runId: Type.String(),
+      }),
+      Type.Object({
+        operation: Type.Literal("promotion_preview"),
+        input: workflowPromotionInputSchema,
+      }),
+      Type.Object({
+        operation: Type.Literal("promotion_commit"),
+        requestId: Type.Optional(Type.String()),
+        approvalToken: Type.String(),
+        input: workflowPromotionInputSchema,
+      }),
+    ]),
+    async execute(toolCallId, params, signal, _onUpdate, context) {
+      await ensureService(false);
+      if (params.operation === "status") {
+        const value = params.runId
+          ? await client.request<WorkflowRun>({ action: "workflows.get", runId: params.runId })
+          : await client.request<WorkflowRun[]>({ action: "workflows.list", limit: params.limit });
+        return toolResult(value);
+      }
+      if (params.operation === "cancel") {
+        return toolResult(await client.request<WorkflowRun>({
+          action: "workflows.cancel",
+          runId: params.runId,
+        }));
+      }
+      if (params.operation === "transition") {
+        return toolResult(await client.request<WorkflowRun>({
+          action: "workflows.transition",
+          input: {
+            runId: params.runId,
+            action: params.action as WorkflowTransitionAction,
+            ...(params.question ? { question: params.question } : {}),
+            ...(params.focus !== undefined ? { focus: params.focus } : {}),
+            ...(params.clientId ? { targetClientId: params.clientId } : {}),
+          },
+        }));
+      }
+      if (params.operation === "promotion_preview") {
+        return toolResult(await client.request<WorkflowPromotionPreview>({
+          action: "workflows.promotion.preview",
+          input: params.input as WorkflowPromotionInput,
+        }));
+      }
+      if (params.operation === "promotion_commit") {
+        const input: WorkflowPromotionCommitInput = {
+          requestId: params.requestId ?? `${context.sessionManager.getSessionId()}:${toolCallId}`,
+          approvalToken: params.approvalToken,
+          input: params.input as WorkflowPromotionInput,
+        };
+        return toolResult(await client.request<WorkflowPromotionReceipt>({
+          action: "workflows.promotion.commit",
+          input,
+          provenance: toolProvenance(actorId, context, toolCallId),
+        }));
+      }
+      const receipt = await client.request<WorkflowStartReceipt>({
+        action: "workflows.start",
+        input: {
+          requestId: params.requestId ?? `${context.sessionManager.getSessionId()}:${toolCallId}`,
+          actionId: "walkthrough.plan",
+          invocation: params.invocation as WorkflowInvocation,
+          capabilities: params.capabilities as WorkflowCapability[],
+          limits: { fanOut: params.fanOut, calls: params.callLimit },
+          planner: params.planner,
+          ...(params.clientId ? { targetClientId: params.clientId } : {}),
+          provenance: toolProvenance(actorId, context, toolCallId),
+        },
+      });
+      if (receipt.run.status !== "planning") return toolResult(receipt);
+      try {
+        return toolResult(await runWorkflowOrchestrator(receipt.run.runId, signal));
+      } catch (error) {
+        if (signal?.aborted) {
+          await client.request<WorkflowRun>({
+            action: "workflows.cancel",
+            runId: receipt.run.runId,
+          }).catch(() => undefined);
+        }
+        throw error;
+      }
     },
   });
   pi.registerTool({

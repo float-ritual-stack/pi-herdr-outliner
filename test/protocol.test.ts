@@ -8,6 +8,7 @@ import { OutlinerClient } from "../src/client";
 import { HerdrRuntimeRegistry, type HerdrSessionSnapshot } from "../src/herdr-registry";
 import { OutlinerServer } from "../src/server";
 import { OutlinerStore } from "../src/store";
+import { orchestrateWorkflowRun } from "../src/workflow-orchestrator";
 import { OUTLINER_PROTOCOL_VERSION } from "../src/types";
 import type {
   AnnotationBatchReceipt,
@@ -38,6 +39,8 @@ import type {
   WorkIdAllocation,
   WorkIdAllocatorStatus,
   WorkspaceSnapshot,
+  WorkflowRun,
+  WorkflowStartReceipt,
 } from "../src/types";
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -158,7 +161,7 @@ test("serves mutations and property queries over the local socket", async () => 
   const client = new OutlinerClient(socket);
   const service = await client.request<OutlinerServiceStatus>({ action: "ping" });
   expect(service).toEqual({ status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION });
-  expect(service.protocolVersion).toBe(31);
+  expect(service.protocolVersion).toBe(32);
   const provenance = {
     actorId: "omp",
     sessionId: "session-1",
@@ -1824,4 +1827,127 @@ test("targets ephemeral attention, advances atomically, stales on edits, and exp
     action: "attention.get",
     targetClientId: "attention-detail-one",
   })).toEqual(expect.objectContaining({ marks: [], pendingCount: 0 }));
+});
+
+test("runs and navigates a targeted structure-first walkthrough over protocol v32", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-outliner-workflow-protocol-"));
+  const store = new OutlinerStore(join(directory, "outliner.sqlite"));
+  const source = store.create([
+    "Architecture review",
+    "",
+    "## Problem",
+    "Understand the boundary.",
+    "",
+    "## Decision",
+    "Keep execution typed.",
+    "",
+    "## Next action",
+    "Record the result.",
+  ].join("\n"));
+  const socket = join(directory, "outliner.sock");
+  const server = new OutlinerServer(store, socket);
+  await server.start();
+  const client = new OutlinerClient(socket);
+  const connected = Promise.withResolvers<void>();
+  const firstEvents: OutlinerEvent[] = [];
+  const secondEvents: OutlinerEvent[] = [];
+  let connectionCount = 0;
+  const watchers = [
+    { clientId: "workflow-detail-one", events: firstEvents },
+    { clientId: "workflow-detail-two", events: secondEvents },
+  ].map(({ clientId, events }) =>
+    new OutlinerClient(socket).watch({
+      client: { clientId, role: "detail", contextId: clientId },
+      onConnect: () => {
+        connectionCount += 1;
+        if (connectionCount === 2) connected.resolve();
+      },
+      onEvent: (event) => {
+        events.push(event);
+      },
+    })
+  );
+  cleanups.push(async () => {
+    await Promise.all(watchers.map((watcher) => watcher.stop()));
+    await server.close();
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  await connected.promise;
+  const textBefore = store.require(source.id).text;
+  const selectionBefore = store.getSelection().selected?.id ?? null;
+
+  const started = await client.request<WorkflowStartReceipt>({
+    action: "workflows.start",
+    input: {
+      requestId: "workflow-protocol-start",
+      actionId: "walkthrough.plan",
+      invocation: { kind: "block", sourceBlockId: source.id },
+      capabilities: [
+        "outline.structure",
+        "outline.route",
+        "attention.mark",
+        "annotations.create",
+        "annotations.reply",
+        "annotations.batch",
+        "promotion.preview",
+        "promotion.commit",
+      ],
+      limits: { fanOut: 6, calls: 10 },
+      planner: "callscript",
+      targetClientId: "workflow-detail-one",
+    },
+  });
+  expect(started.run.status).toBe("planning");
+  expect(started.run.targetClientId).toBe("workflow-detail-one");
+  const planned = await orchestrateWorkflowRun(client, started.run.runId);
+  expect(planned.run.status).toBe("ready");
+  expect(planned.run.route.map((step) => step.title)).toEqual([
+    "Problem",
+    "Decision",
+    "Next action",
+  ]);
+  expect(planned.comparison.contextBytesSaved).toBeGreaterThan(0);
+
+  const active = await client.request<WorkflowRun>({
+    action: "workflows.transition",
+    input: { runId: started.run.runId, action: "next" },
+  });
+  await Bun.sleep(50);
+  const event = firstEvents.find((candidate) => candidate.domain === "attention");
+  expect(active.status).toBe("active");
+  expect(active.route[0]?.status).toBe("current");
+  expect(event?.attention?.targetClientId).toBe("workflow-detail-one");
+  expect(event?.attentionInstruction).toEqual(expect.objectContaining({
+    reveal: true,
+    focus: false,
+  }));
+  expect(secondEvents).toEqual([]);
+  expect(store.require(source.id).text).toBe(textBefore);
+  expect(store.getSelection().selected?.id ?? null).toBe(selectionBefore);
+
+  const branched = await client.request<WorkflowRun>({
+    action: "workflows.transition",
+    input: {
+      runId: started.run.runId,
+      action: "branch",
+      question: "Should this become a durable decision?",
+    },
+  });
+  expect(branched.status).toBe("paused");
+  expect(branched.branchQuestion?.stepId).toBe(active.route[0]?.stepId);
+  expect(await client.request<WorkflowRun[]>({
+    action: "workflows.list",
+    limit: 5,
+  })).toEqual([expect.objectContaining({ runId: started.run.runId })]);
+
+  const ended = await client.request<WorkflowRun>({
+    action: "workflows.transition",
+    input: { runId: started.run.runId, action: "end" },
+  });
+  expect(ended.status).toBe("completed");
+  expect(await client.request<AttentionClientState>({
+    action: "attention.get",
+    targetClientId: "workflow-detail-one",
+  })).toEqual(expect.objectContaining({ marks: [] }));
 });
