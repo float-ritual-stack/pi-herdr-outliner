@@ -235,6 +235,28 @@ describe("typed outline workflows", () => {
     expect(resultQuery.blocks.map((block) => block.id)).toEqual([committed.block.id]);
     run = workflows.get(run.runId);
     expect(run.resultBlockIds).toEqual([committed.block.id]);
+
+    const cancellable = savePlan(
+      workflows,
+      workflows.start(startInput(source.id, "cancelled-promotion-run")).run,
+    );
+    const cancellableStep = cancellable.route.find((step) => step.title === "Decision")!;
+    const cancelledPreview = workflows.previewPromotion({
+      ...preview.input,
+      runId: cancellable.runId,
+      stepId: cancellableStep.stepId,
+    });
+    workflows.cancel(cancellable.runId);
+    const blocksBeforeCancelledCommit = store.queryBlocks({ limit: 1_000 }).blocks.length;
+    expect(() => workflows.previewPromotion(cancelledPreview.input)).toThrow(
+      "promotion is unavailable from cancelled",
+    );
+    expect(() => workflows.commitPromotion({
+      requestId: "cancelled-promotion-commit",
+      approvalToken: cancelledPreview.approvalToken,
+      input: cancelledPreview.input,
+    })).toThrow("promotion is unavailable from cancelled");
+    expect(store.queryBlocks({ limit: 1_000 }).blocks).toHaveLength(blocksBeforeCancelledCommit);
   });
 
   test("executes a bounded Callscript plan and records a direct-tool comparison", async () => {

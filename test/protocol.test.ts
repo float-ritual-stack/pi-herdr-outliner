@@ -1907,7 +1907,9 @@ test("runs and navigates a targeted structure-first walkthrough over protocol v3
     "Decision",
     "Next action",
   ]);
-  expect(planned.comparison.contextBytesSaved).toBeGreaterThan(0);
+  expect(planned.comparison.contextBytesSaved).toBe(0);
+  expect(planned.comparison.direct.structureFirst).toBe(true);
+  expect(planned.comparison.callscript.structureFirst).toBe(true);
 
   const active = await client.request<WorkflowRun>({
     action: "workflows.transition",
