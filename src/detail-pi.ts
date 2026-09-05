@@ -176,6 +176,9 @@ let pendingLinkClick: PiDetailLinkClick = {
 };
 const terminal = new ProcessTerminal();
 const inputStream = new PiDetailInputStreamDecoder();
+const INPUT_IDLE_FLUSH_MS = 10;
+let inputFlushTimer: ReturnType<typeof setTimeout> | undefined;
+let inputGeneration = 0;
 const tui = new DetailTuiAltScreen(terminal, false, undefined, {
   mouse: true,
   openUrl(url) {
@@ -475,6 +478,7 @@ async function stop(exitCode = 0): Promise<void> {
     }
   }
   stopping = true;
+  if (inputFlushTimer) clearTimeout(inputFlushTimer);
   watcher?.stop();
   process.stdout.off("resize", handleResize);
   try {
@@ -832,6 +836,22 @@ async function handleInput(data: string): Promise<void> {
   for (const input of inputStream.push(data)) await handleDecodedInput(input);
 }
 
+async function flushInput(): Promise<void> {
+  for (const input of inputStream.flush()) await handleDecodedInput(input);
+}
+
+function scheduleInputFlush(): void {
+  inputGeneration += 1;
+  const generation = inputGeneration;
+  if (inputFlushTimer) clearTimeout(inputFlushTimer);
+  inputFlushTimer = setTimeout(() => {
+    inputFlushTimer = undefined;
+    enqueueWork(() => {
+      if (generation === inputGeneration && !stopping) return flushInput();
+    });
+  }, INPUT_IDLE_FLUSH_MS);
+}
+
 const customFrame = new DetailPiComponent({
   state: controller.state,
   height: () => terminal.rows,
@@ -925,7 +945,10 @@ synchronizeLayout();
 tui.addOutlinerInputListener(
   createPiDetailInputListener(
     (data) => {
-      if (!stopping) enqueueWork(() => handleInput(data));
+      if (!stopping) {
+        enqueueWork(() => handleInput(data));
+        scheduleInputFlush();
+      }
     },
     (data) => shouldPassDetailInputToTui(data),
   ),
