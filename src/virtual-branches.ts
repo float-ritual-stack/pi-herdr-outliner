@@ -812,8 +812,11 @@ export async function projectVirtualBranches(
   const rows: TreeRow[] = [];
   let occurrenceRowCount = 0;
   for (const physical of physicalRows) {
-    rows.push(physical);
-    if (physical.collapsed) continue;
+    const row = !physical.hasChildren && (occurrences.get(physical.canonicalId)?.length ?? 0) > 0
+      ? { ...physical, hasChildren: true }
+      : physical;
+    rows.push(row);
+    if (row.collapsed) continue;
     const composition = composeNestedOccurrences(
       physical.canonicalId,
       physical.depth,
