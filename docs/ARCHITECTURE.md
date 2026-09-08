@@ -174,7 +174,7 @@ state.
 - exposes Outliner tools and commands,
 - injects bounded selection context before agent turns,
 - inspects the live invocation-local Git checkout through `pi.exec`, and
-- enforces the recorded delivery branch, PR, and session lifecycle.
+- records delivery identity and reports advisory repository orientation.
 
 [`pi-extension/work-environment.ts`](../pi-extension/work-environment.ts) uses
 argument-array Git calls rooted at `ctx.cwd`, with cancellation, bounded
@@ -188,10 +188,13 @@ canonical delivery records and selects the one incomplete identity or the exact
 checkout match. [`pi-extension/delivery-lifecycle.ts`](../pi-extension/delivery-lifecycle.ts)
 discovers the base, inspects worktree occupancy, safely reuses or creates the
 recorded branch, and reads exact PR state through `gh`. The host adapter ensures
-the delivery before branch mutation and changes the roadmap to Doing only after
-both durable identity and Git orientation succeed. Tool/session gates fail
-closed; reads and lifecycle repair remain available. Git operations never
-stage, stash, or commit.
+the delivery before its explicit task-start branch transaction and changes the
+roadmap to Doing only after both durable identity and Git orientation succeed.
+Subsequent tool and session operations are not gated by delivery orientation;
+the extension reports mismatches as context instead. PIE-214 owns any future
+enforcement after repository/worktree and agent/subagent ownership plus recovery
+and publication boundaries are modeled. Git operations never stage, stash, or
+commit.
 
 Persistence, protocol, and rendering do not depend on the agent process surviving.
 

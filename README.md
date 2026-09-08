@@ -670,9 +670,10 @@ completion.
 The durable delivery block owns `delivery-key`, `repository`, `base-branch`,
 `work-branch`, `delivery-stage`, and observed pull-request facts. It never owns
 another `work-id`. `outliner_delivery` exposes status, deterministic ensure,
-live GitHub synchronization, and one owner-confirmed policy override with a
-printable reason. Git and GitHub remain authoritative for branch, PR, review,
-and merge facts; the Outliner stores identity and observed lifecycle state.
+and live GitHub synchronization. Git and GitHub remain authoritative for branch,
+PR, review, and merge facts; the Outliner stores identity and observed lifecycle
+state. Historical lifecycle-override properties remain readable but no operation
+creates them.
 
 The shared Pi/OMP extension inspects the invocation-local checkout through
 bounded, argument-array `pi.exec` calls. Every active-task turn receives a
@@ -683,12 +684,11 @@ detached HEAD, wrong repositories, missing bases, and Git conflicts leave both
 Git and roadmap stage unchanged. It never stages, stashes, commits, or opens a
 pull request.
 
-While a delivery is unoriented, `tool_call` blocks file/shell mutation and
-matching GitHub PR creation fails preflight. Task start and mutation cannot be
-sibling tool calls. Session switch, fork, and tree navigation use the same
-gate. Read-only inspection and the lifecycle repair tools remain available.
-An explicit owner-confirmed override changes those policy gates while retaining
-the observed facts and durable reason.
+Delivery orientation is advisory after task start. The extension does not
+intercept tools or block session switch, fork, or tree navigation based on the
+active delivery branch. This deliberately disables the premature lifecycle gate;
+PIE-214 owns any future enforcement after repository, worktree, delivery,
+agent/subagent ownership, recovery, and publication boundaries are modeled.
 
 An exact open PR advances Doing to Review; its exact merged commit advances
 Review to Validate. Repeated sync and session reentry select the same delivery

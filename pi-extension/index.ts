@@ -974,31 +974,7 @@ async function reportHerdrTask(
   }
 }
 
-export function containsTaskStartToolCall(value: unknown, depth = 0): boolean {
-  if (depth > 8 || !value || typeof value !== "object") return false;
-  if (Array.isArray(value)) {
-    return value.some((item) => containsTaskStartToolCall(item, depth + 1));
-  }
-  const record = value as Record<string, unknown>;
-  const name = record.name ?? record.toolName;
-  const input = record.arguments ?? record.input;
-  if (
-    name === "outliner_task" &&
-    input &&
-    typeof input === "object" &&
-    !Array.isArray(input) &&
-    (input as Record<string, unknown>).operation === "start"
-  ) return true;
-  return Object.values(record).some((item) => containsTaskStartToolCall(item, depth + 1));
-}
 
-export function isLifecycleMutationTool(toolName: string, input: unknown): boolean {
-  const leaf = toolName.split(/[.:/]/).at(-1);
-  if (leaf === "bash" || leaf === "edit" || leaf === "write") return true;
-  if (leaf !== "github" || !input || typeof input !== "object") return false;
-  const operation = (input as Record<string, unknown>).op;
-  return operation === "pr_create" || operation === "pr_push";
-}
 
 export function createOutlinerExtension(actorId: OutlinerHostActorId) {
   return function outlinerExtension(pi: ExtensionAPI): void {
@@ -1263,102 +1239,8 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
     return { task: updatedTask, delivery, pullRequest };
   }
 
-  async function overrideDeliveryPolicy(
-    task: Block,
-    reasonValue: string,
-    context: ExtensionContext,
-  ): Promise<DeliveryIdentity> {
-    const reason = reasonValue.trim();
-    if (!reason || reason.length > 500 || /[\u0000-\u001f\u007f]/.test(reason)) {
-      throw new Error("Lifecycle override reason must be 1-500 printable characters");
-    }
-    const current = await currentDelivery(task, context);
-    if (!current.delivery) throw new Error("No active delivery record to override");
-    const ui = context.ui as {
-      confirm?: (title: string, message: string) => Promise<boolean>;
-    };
-    if (typeof ui.confirm !== "function") {
-      throw new Error("Lifecycle override requires an interactive owner confirmation");
-    }
-    const approved = await ui.confirm(
-      "Override delivery lifecycle?",
-      `${current.delivery.key}: ${reason}`,
-    );
-    if (!approved) throw new Error("Lifecycle override was not approved");
-    const updated = await patchBlockProperties(
-      current.delivery.block,
-      {
-        "lifecycle-override": "active",
-        "lifecycle-override-reason": reason,
-        "lifecycle-override-at": new Date().toISOString(),
-      },
-      context,
-      "outliner-delivery:override",
-    );
-    return parseDeliveryIdentity(updated);
-  }
 
-  async function lifecyclePolicyState(context: ExtensionContext): Promise<{
-    task: Block | null;
-    delivery: DeliveryIdentity | null;
-    violation: string | null;
-  }> {
-    const task = await currentTask();
-    if (!task) return { task: null, delivery: null, violation: null };
-    const current = await currentDelivery(task, context);
-    const delivery = current.delivery;
-    if (!delivery) {
-      return {
-        task,
-        delivery: null,
-        violation: `Active task ${requireRoadmapTask(task)} has no durable delivery record`,
-      };
-    }
-    if (delivery.overrideReason) return { task, delivery, violation: null };
-    if (!current.orientation) {
-      return { task, delivery, violation: "Live Git orientation is unavailable" };
-    }
-    const snapshot = current.orientation.snapshot;
-    if (snapshot.repository !== delivery.repository) {
-      return {
-        task,
-        delivery,
-        violation:
-          `Delivery ${delivery.key} requires repository ${delivery.repository}; found ${snapshot.repository ?? "non-Git cwd"}`,
-      };
-    }
-    if (snapshot.branch !== delivery.workBranch) {
-      return {
-        task,
-        delivery,
-        violation:
-          `Delivery ${delivery.key} requires branch ${delivery.workBranch}; found ${snapshot.branch ?? "detached HEAD"}`,
-      };
-    }
-    return { task, delivery, violation: null };
-  }
 
-  function pullRequestToolViolation(
-    delivery: DeliveryIdentity,
-    input: unknown,
-  ): string | null {
-    if (!input || typeof input !== "object") return null;
-    const values = input as Record<string, unknown>;
-    if (values.op !== "pr_create") return null;
-    const checks: Array<[string, unknown, string]> = [
-      ["repo", values.repo, delivery.repository],
-      ["base", values.base, delivery.baseBranch],
-      ["head", values.head, delivery.workBranch],
-    ];
-    for (const [name, actual, expected] of checks) {
-      if (actual !== expected) {
-        return `Pull-request ${name} must be explicitly set to ${expected}; received ${
-          actual === undefined ? "no value" : String(actual)
-        }`;
-      }
-    }
-    return null;
-  }
 
   async function presentTask(
     context: ExtensionContext,
@@ -1666,23 +1548,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
     }
   });
 
-  async function gateSessionChange(context: ExtensionContext) {
-    if (!activeTaskId) return;
-    try {
-      const state = await lifecyclePolicyState(context);
-      if (!state.violation) return;
-      context.ui.notify(`Session change blocked: ${state.violation}`, "error");
-      return { cancel: true as const };
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      context.ui.notify(`Session change blocked: ${reason}`, "error");
-      return { cancel: true as const };
-    }
-  }
 
-  pi.on("session_before_switch", async (_event, context) => gateSessionChange(context));
-  pi.on("session_before_fork", async (_event, context) => gateSessionChange(context));
-  pi.on("session_before_tree", async (_event, context) => gateSessionChange(context));
   pi.registerCommand("outliner", {
     description: "Open or focus the persistent Herdr outliner pane",
     handler: async (_args, ctx) => {
@@ -1949,7 +1815,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
     name: "outliner_delivery",
     label: "Outliner Delivery",
     description:
-      "Inspect, ensure, synchronize, or explicitly override the active task's durable delivery lifecycle",
+      "Inspect, ensure, or synchronize the active task's durable delivery lifecycle",
     promptSnippet:
       "Keep one recorded repository, base branch, work branch, PR, and lifecycle stage per delivery",
     parameters: Type.Object({
@@ -1957,12 +1823,10 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
         Type.Literal("status"),
         Type.Literal("ensure"),
         Type.Literal("sync"),
-        Type.Literal("override"),
       ]),
       deliveryKey: Type.Optional(Type.String()),
       baseBranch: Type.Optional(Type.String()),
       workBranch: Type.Optional(Type.String()),
-      reason: Type.Optional(Type.String()),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, context) {
       await ensureService(false);
@@ -1985,16 +1849,6 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
       }
       if (params.operation === "sync") {
         return toolResult(await syncDelivery(task, context));
-      }
-      if (params.operation === "override") {
-        if (!params.reason) throw new Error("outliner_delivery override requires reason");
-        const delivery = await overrideDeliveryPolicy(task, params.reason, context);
-        return toolResult({
-          blockId: delivery.block.id,
-          deliveryKey: delivery.key,
-          stage: delivery.stage,
-          overrideReason: delivery.overrideReason,
-        });
       }
       const current = await currentDelivery(task, context);
       return toolResult(current.delivery
@@ -2946,41 +2800,6 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
     }
   });
 
-  pi.on("tool_call", async (event, context) => {
-    if (!isLifecycleMutationTool(event.toolName, event.input)) return;
-    const entries = context.sessionManager.getBranch();
-    if (containsTaskStartToolCall(entries.at(-1))) {
-      return {
-        block: true,
-        reason:
-          "Task start and repository mutation cannot be sibling tool calls; start the task, observe its delivery branch, then mutate in a later turn",
-      };
-    }
-    if (!activeTaskId) return;
-    try {
-      const state = await lifecyclePolicyState(context);
-      if (state.violation) {
-        return { block: true, reason: `Delivery lifecycle blocked mutation: ${state.violation}` };
-      }
-      if (state.delivery) {
-        const pullRequestViolation = pullRequestToolViolation(state.delivery, event.input);
-        if (pullRequestViolation) {
-          return {
-            block: true,
-            reason: `Delivery lifecycle blocked pull-request creation: ${pullRequestViolation}`,
-          };
-        }
-      }
-    } catch (error) {
-      return {
-        block: true,
-        reason:
-          `Delivery lifecycle preflight failed closed: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-      };
-    }
-  });
 
   pi.on("tool_result", async (event) => {
     if (workPlaceholderNudgedThisTurn || !event.toolName.startsWith("outliner_")) return;
