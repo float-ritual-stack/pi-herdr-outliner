@@ -581,39 +581,23 @@ function arrangeInlinePreview(
   const blank = authored.findIndex((line) => sanitizeDynamicText(line).trim() === "");
   const titleEnd = blank < 0 ? authored.length : blank;
   const bodyStart = blank < 0 ? authored.length : blank + 1;
-  const lines: string[] = [];
-  const authoredToOutput: number[] = [];
-  const outputToAuthored: Array<number | null> = [];
-  for (let row = 0; row < titleEnd; row += 1) {
-    authoredToOutput[row] = lines.length;
-    lines.push(authored[row]!);
-    outputToAuthored.push(row);
-  }
-  if (titleEnd > 0) {
-    lines.push("");
-    outputToAuthored.push(blank >= 0 ? blank : null);
-  }
+  const lines = authored.slice(0, titleEnd);
+  if (titleEnd > 0) lines.push("");
   const inspectorStart = lines.length;
-  for (const line of inspector) {
-    lines.push(line);
-    outputToAuthored.push(null);
-  }
-  if (bodyStart < authored.length) {
-    lines.push("");
-    outputToAuthored.push(blank >= 0 ? blank : null);
-    for (let row = bodyStart; row < authored.length; row += 1) {
-      authoredToOutput[row] = lines.length;
-      lines.push(authored[row]!);
-      outputToAuthored.push(row);
-    }
-  }
+  lines.push(...inspector);
+  const renderedBodyStart = lines.length + (bodyStart < authored.length ? 1 : 0);
+  if (bodyStart < authored.length) lines.push("", ...authored.slice(bodyStart));
   return {
     lines,
     inspectorStart,
     mapAuthoredRow: (row) =>
-      authoredToOutput[Math.max(0, Math.min(row, authored.length - 1))] ??
-        Math.min(row, lines.length),
-    authoredRowAt: (row) => outputToAuthored[row] ?? null,
+      row < bodyStart ? Math.min(row, titleEnd) : renderedBodyStart + row - bodyStart,
+    authoredRowAt: (row) => {
+      if (row < 0 || row >= lines.length) return null;
+      if (row < titleEnd) return row;
+      if (row >= renderedBodyStart) return bodyStart + row - renderedBodyStart;
+      return null;
+    },
   };
 }
 
@@ -1159,30 +1143,23 @@ export class DetailPiPreviewLayout extends VStack {
     if (!sourceText) return null;
     const contentWidth = this.scrollView.getContentWidth(width);
     const annotated = this.annotationPreview.renderArrangement(contentWidth);
-    const inspector = this.inspectorMarkdown.render(contentWidth);
     const split = this.options.splitActive?.() ?? false;
-    const arrangement = split
-      ? {
-        lines: annotated.lines,
-        mapAuthoredRow: (row: number) => row,
-        authoredRowAt: (row: number) =>
-          row >= 0 && row < annotated.lines.length ? row : null,
-      }
-      : arrangeInlinePreview(annotated.lines, inspector);
+    const arrangement = arrangeInlinePreview(
+      annotated.lines,
+      split ? [] : this.inspectorMarkdown.render(contentWidth),
+    );
     const sourceLines = sourceText.split(/\r?\n/);
     const markdownAnchors = draftSourceRowAnchors(
       sourceText,
       annotated.contentWidth,
       this.markdownTheme,
     );
-    const anchors = markdownAnchors
-      .map((row) => arrangement.mapAuthoredRow(annotated.mapMarkdownRow(row)));
     const bodyRow = this.scrollView.scrollTop + Math.max(0, viewportRow - 3);
     const annotatedRow = arrangement.authoredRowAt(bodyRow);
     if (annotatedRow === null) return null;
     const markdownRow = annotated.markdownRowAt(annotatedRow);
     if (markdownRow === null) return null;
-    const sourceLine = nearestDraftSourceLine(anchors, bodyRow);
+    const sourceLine = nearestDraftSourceLine(markdownAnchors, markdownRow);
     if (sourceLine === null) return null;
     const markdownAnchor = markdownAnchors[sourceLine];
     if (markdownAnchor === undefined || markdownRow < markdownAnchor) return null;
