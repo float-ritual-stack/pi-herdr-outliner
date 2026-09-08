@@ -106,10 +106,11 @@ herdr plugin action list --plugin float.pi-outliner
 herdr plugin log list --plugin float.pi-outliner --limit 20
 ```
 
-The plugin requires Herdr 0.9 or newer and Bun 1.3 or newer. Plugin logs report
-missing runtimes, dependency-build failures, manifest validation errors, and
-entrypoint failures. If Herdr itself was updated while its server remained
-running, restart that session before diagnosing server-side behavior.
+The plugin requires Herdr 0.9 or newer and Bun 1.3 or newer. The install
+command reports missing runtimes, dependency-build failures, and manifest
+validation errors; `plugin log` reports runtime entrypoint failures. If Herdr
+itself was updated while its server remained running, restart that session
+before diagnosing server-side behavior.
 
 ### Open the workspace
 
