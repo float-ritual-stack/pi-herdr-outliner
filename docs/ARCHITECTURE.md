@@ -287,7 +287,7 @@ as a private context.
 Client registrations retain terminal identity as their stable Herdr join key.
 When Herdr is available, the service reconciles pane, workspace, tab, and
 coordinate fields from the live runtime registry before returning client reads;
-launch-time runtime fields are only a fallback. The service orders same-tab
+launch-time placement is retained only without a configured Herdr registry. The service orders same-tab
 Detail candidates by horizontal then vertical pane position, with client ID only
 as a deterministic fallback. Herdr remains authoritative for current placement
 and focus.
@@ -302,10 +302,12 @@ subscriber for a browsing context disconnects, its target is pruned.
 
 For `preview` and `open`, `navigation.resolve` and `navigation.dispatch` select
 the first unlocked Detail in the source's current tab. Locked Details and every
-other tab/workspace are excluded. If the source lacks Herdr topology, its
-browsing context is the fallback pool boundary. When the pool exists but every
-Detail is locked, navigation fails with an instruction to unlock one or open
-another Detail; no anchor is overwritten. `reveal` targets the source Tree,
+other tab/workspace are excluded. Without a configured Herdr registry, the
+source's browsing context is the fallback pool boundary. A configured registry
+that is unavailable or cannot locate the source instead reports unavailable
+Herdr discovery; it never routes using stale launch-time placement. When the
+pool exists but every Detail is locked, navigation fails with an instruction
+to unlock one or open another Detail; no anchor is overwritten. `reveal` targets the source Tree,
 then one same-context Tree, then one unambiguous same-tab Tree. There are no
 persisted or manual per-source open routes.
 
@@ -458,6 +460,16 @@ Store startup creates one canonical `Inbox [type::inbox] [system-view::inbox]` w
 7. On service reconnect, Detail republishes its lock state and Tree republishes
    its retained cursor. A restarted process receives a new client identity;
    `open-here` creates a new pair context.
+
+The service and extension focus tracker share `HerdrRegistryRunner`, a client
+of Herdr's documented JSON socket API. Compatibility depends on the required
+response shapes, not equality with Herdr's numbered internal protocol.
+Herdr 0.9 or newer supplies live-only lifecycle subscriptions. The runner
+discovers pane IDs for scoped agent-status subscriptions, waits for subscription
+acknowledgement, installs an authoritative `session.snapshot`, and applies
+buffered events in order before reporting readiness. It refreshes subscription
+scope when panes change and obtains a fresh snapshot after reconnect or invalid
+topology. There is no retained-replay quiet window and no per-cursor CLI polling.
 
 While Detail is editing/commenting, it is locked before the mutable buffer
 opens. Content and exact-target refreshes are marked pending instead of

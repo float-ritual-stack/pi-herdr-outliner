@@ -1042,8 +1042,6 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
       diagnostic: () => {},
       eventTypes: ["pane.focused"],
       includePaneAgentStatus: false,
-      replayQuietMs: 25,
-      replayMaxMs: 500,
     });
     focusRunner.start();
   }
