@@ -121,8 +121,6 @@ function openPane(
     `OUTLINER_WORKSPACE_ROOT=${workspaceRoot}`,
     "--placement",
     options.placement,
-    "--cwd",
-    workspaceRoot,
     "--no-focus",
   ];
   if (process.env.OUTLINER_STATE_DIR) {

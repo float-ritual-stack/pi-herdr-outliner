@@ -291,8 +291,6 @@ if (args[0] === "pane" && args[1] === "current") {
       "w1:p9",
       "--direction",
       "right",
-      "--cwd",
-      "/workspace",
       "--no-focus",
       "--env",
       "OUTLINER_STATE_DIR=/tmp/outliner-state",
@@ -510,6 +508,7 @@ if (args[0] === "plugin" && args[1] === "pane" && args[2] === "open") {
       .toMatch(/^OUTLINER_CAPTURE_REQUEST_ID=[0-9a-f-]{36}$/);
     expect(openCall).toContain("--focus");
     expect(openCall).not.toContain("--placement");
+    expect(openCall).not.toContain("--cwd");
 
     openBacklinkPeekPopup({
       workspaceRoot: "/workspace",
@@ -537,6 +536,7 @@ if (args[0] === "plugin" && args[1] === "pane" && args[2] === "open") {
     expect(backlinkOpen).toContain("OUTLINER_OPEN_DESTINATION_TIMEOUT_MS=9000");
     expect(backlinkOpen).toContain("--focus");
     expect(backlinkOpen).not.toContain("--placement");
+    expect(backlinkOpen).not.toContain("--cwd");
   } finally {
     if (originalHerdrEnv === undefined) delete process.env.HERDR_ENV;
     else process.env.HERDR_ENV = originalHerdrEnv;
