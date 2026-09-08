@@ -357,12 +357,15 @@ describe("Pi Markdown detail preview", () => {
     setCapabilities({ ...capabilities, hyperlinks: true });
     try {
       const resultId = "550e8400-e29b-41d4-a716-446655440001";
+      const viewId = "550e8400-e29b-41d4-a716-446655440002";
+      const nestedTitleReferenceId = "550e8400-e29b-41d4-a716-446655440003";
       const detail = state(
-        "Embedded view: ((Next items)) · 1 result\n- ((Projected result))",
+        `Embedded view: ((Next items with ((${nestedTitleReferenceId})))) · 1 result\n- ((Projected result))`,
         "!((view-next))",
       );
       detail.projectedSelectedText =
-        `Embedded view: ((view-next)) · 1 result\n- ((${resultId}))`;
+        `Embedded view: ((${viewId})) · 1 result\n- ((${resultId}))`;
+      detail.embedRanges = [{ startLine: 0, endLine: 1 }];
       const layout = new DetailPiPreviewLayout(detail, plainMarkdownTheme, true);
       layout.syncState();
       const rendered = layout.markdown.render(80);
