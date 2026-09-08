@@ -11,19 +11,19 @@ Treat the Outliner as the primary artifact surface and chat as the conversationa
 
 1. Call `outliner_task` with `operation: "status"` before task-oriented work.
 2. Start an explicitly named roadmap item with `operation: "start"` and its Work ID, full block ID, or unambiguous title when no task is active. For code delivery, this records and orients the repository, base branch, and Work-ID branch before Doing.
-3. Never pair task start and mutation as sibling tool calls. Start, observe the returned delivery identity, then mutate in a later turn.
-4. Refuse to silently switch away from an active task. Complete, pause, or explicitly clear it first.
-5. Treat the injected active-task context as bounded orientation, not the entire record. Query or focus blocks when more context is required.
+3. Observe task start and its delivery identity before beginning repository mutation.
+4. Keep the session binding accurate when deliberately switching workflows: complete finished work, pause unfinished work, or use `clear` only for binding repair.
+5. Treat injected task and repository orientation as bounded advisory context, not an enforcement boundary or the entire task record. Query or focus blocks when more context is required.
 
-Use `pause` to return unfinished work to Next. Use `clear` only to repair session binding without changing roadmap metadata.
+Use `pause` to return unfinished work to Next. Use `clear` only to repair session binding without changing roadmap metadata. Neither operation may be treated as a prerequisite for recovery or read-only inspection.
 
 ## Keep delivery identity exact
 
 1. Use `outliner_delivery status` before PR or merge work.
-2. Treat its repository, base branch, and work branch as immutable for that delivery. Reentry must reuse them.
+2. Treat its repository, base branch, and work branch as the recorded identity for that delivery. Reentry should reuse them.
 3. Use `outliner_delivery sync` after opening or merging the exact PR. Live Git and GitHub facts are authoritative; never fabricate PR state in Outliner properties.
 4. Do not stage, stash, commit, or open a PR through lifecycle automation.
-5. If a policy gate must be bypassed, use the single `override` operation with an explicit reason and owner confirmation. An override changes policy only; it does not change observed Git or GitHub facts.
+5. Delivery identity and orientation are advisory after explicit task start. They do not authorize or deny tools, session changes, recovery, or work in another worktree; PIE-214 owns any future enforcement model.
 
 ## Create and update roadmap work
 
