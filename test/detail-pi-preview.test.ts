@@ -622,6 +622,52 @@ describe("Pi Markdown detail preview", () => {
     ).toContain("Check this range.");
   });
 
+  test("maps source clicks around inline panels and ignores generated rows", () => {
+    const raw = "Title\n\ntarget phrase\n\nafter";
+    const detail = state(raw, raw);
+    const start = raw.indexOf("target phrase");
+    detail.annotationThreads = [{
+      block: block("annotation-1", ""),
+      target: {
+        kind: "block",
+        sourceBlockId: "block-1",
+        anchor: createAnnotationAnchor(raw, start, start + "target phrase".length, "updated"),
+      },
+      body: "Comment content",
+      source: "user",
+      lifecycle: "open",
+      anchorState: "anchored",
+      replies: [],
+    }];
+    const layout = previewLayout(detail);
+    layout.scrollView.setScrollbar("hidden");
+    layout.syncState(60);
+    const region = detail.previewRegions.regions.find((candidate) =>
+      candidate.kind === "annotation"
+    )!;
+
+    for (const expanded of [false, true]) {
+      if (expanded) togglePreviewRegionDisclosure(detail.previewRegions, region.id);
+      layout.syncState(60);
+      const lines = layout.scrollView.render(60).map(stripTerminalSequences);
+      for (const [text, sourceRow] of [["target phrase", 2], ["after", 4]] as const) {
+        const row = lines.findIndex((line) => line.includes(text));
+        expect(row).toBeGreaterThanOrEqual(0);
+        expect(layout.sourcePointAtViewport(row + 3, lines[row]!.indexOf(text), 60))
+          .toEqual({ row: sourceRow, column: 0 });
+      }
+      const inspectorRow = lines.findIndex((line) => line.includes("Properties"));
+      expect(inspectorRow).toBeGreaterThanOrEqual(0);
+      expect(layout.sourcePointAtViewport(inspectorRow + 3, 0, 60)).toBeNull();
+      expect(layout.sourcePointAtViewport(inspectorRow + 2, 0, 60)).toBeNull();
+      if (expanded) {
+        const commentRow = lines.findIndex((line) => line.includes("Comment content"));
+        expect(commentRow).toBeGreaterThanOrEqual(0);
+        expect(layout.sourcePointAtViewport(commentRow + 3, 4, 60)).toBeNull();
+      }
+    }
+  });
+
   test("correlates authored callouts by projected origin instead of colliding positions", () => {
     const canonical = [
       "!((embed-block))",
