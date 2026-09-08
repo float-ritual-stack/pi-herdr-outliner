@@ -1,4 +1,5 @@
 import type { RequestInput } from "./client";
+import { emptyAttentionState } from "./attention";
 import {
   formatBlockFocusMatch,
   rankBlockFocusMatches,
@@ -36,6 +37,7 @@ import {
 } from "./terminal";
 import { TextBuffer } from "./text-buffer";
 import type {
+  AttentionClientState,
   Block,
   BlockCollectionCompleteness,
   OutlinerEvent,
@@ -111,6 +113,7 @@ export interface TreeView {
   readonly actionMenuItems?: readonly OutlinerActionMenuItem[];
   readonly actionMenuIndex?: number;
   readonly actionMenuOrigin?: { column: number; row: number } | null;
+  readonly attention: AttentionClientState;
   readonly actionMenuQuery?: string;
 }
 
@@ -250,6 +253,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   let lastVisibleCanonicalId: string | null = null;
   let status = "";
   let refreshPending = false;
+  let attention = emptyAttentionState(effects.clientId);
   const actionKeymap = effects.actionKeymap ?? DEFAULT_OUTLINER_ACTION_KEYMAP;
   let actionMenuOrigin: { column: number; row: number } | null = null;
   let actionMenuIndex = 0;
@@ -294,6 +298,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       expandedBlockOffset,
       status,
       refreshPending,
+      attention,
       actionHelpText: actionKeymap.helpText("tree", mode),
       actionMenuItems: mode === "action-menu" ? filteredActionMenuItems() : [],
       actionMenuOrigin,
@@ -1047,6 +1052,23 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   }
 
   async function handleServiceEvent(event: OutlinerEvent): Promise<void> {
+    if (event.domain === "attention") {
+      if (!event.attention || event.attention.targetClientId !== effects.clientId) return;
+      attention = event.attention;
+      const instruction = event.attentionInstruction;
+      const mark = instruction
+        ? attention.marks.find((candidate) => candidate.markId === instruction.markId)
+        : undefined;
+      if (mark && instruction?.reveal) {
+        await selectVisibleBlock(mark.target.sourceBlockId, { recordNavigation: true });
+        status = mark.sourceState === "stale"
+          ? "Attention source changed; mark is stale"
+          : `Attention · ${mark.tone} · ${mark.target.sourceBlockId.slice(0, 8)}`;
+      }
+      if (instruction?.focus) effects.focusSelf();
+      effects.invalidate();
+      return;
+    }
     if (event.domain === "ui") {
       const command = event.command;
       if (!command || command.targetClientId !== effects.clientId) return;
@@ -1119,6 +1141,10 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   async function handleConnect(): Promise<void> {
     resetExpandedBlockPaging();
     status = "";
+    attention = await effects.request<AttentionClientState>({
+      action: "attention.get",
+      targetClientId: effects.clientId,
+    });
     if (mode === "browse") {
       await reload();
       await publishBrowsingContext(lastVisibleCanonicalId);
@@ -1218,6 +1244,15 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     if (mode === "action-menu") mode = "browse";
     if (actionId === "tree.detail.right" || actionId === "tree.detail.below") {
       await createDetailPane(actionId === "tree.detail.right" ? "right" : "down");
+      return;
+    }
+    if (actionId === "tree.attention.acknowledge") {
+      attention = await effects.request<AttentionClientState>({
+        action: "attention.acknowledge",
+        input: { targetClientId: effects.clientId },
+      });
+      status = "Attention cue acknowledged; active marks remain";
+      effects.invalidate();
       return;
     }
     if (actionId === "tree.keymap.reload") {

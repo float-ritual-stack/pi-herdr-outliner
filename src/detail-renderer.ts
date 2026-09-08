@@ -3,7 +3,14 @@ import {
   truncateToWidth,
   visibleWidth,
 } from "@earendil-works/pi-tui";
-import { extractFileAnnotationComment } from "./annotations";
+import {
+  attentionBanner,
+  attentionReturnSummary,
+  decorateAttentionBlockLine,
+  decorateAttentionLines,
+} from "./attention-render";
+import { currentAttentionMark } from "./attention";
+import { extractAnnotationBody, parseAnnotationBlock } from "./annotations";
 import { completionWindow } from "./completion";
 import { outlinerLinkUri } from "./outliner-links";
 import { blockDisplayTitle } from "./references";
@@ -204,9 +211,10 @@ export function renderDetailHeader(
   const left = surface
     ? `${surfaceStyle}${fitDynamicText(surface, width)}\x1b[0m \x1b[2m·\x1b[0m ${title}`
     : title;
+  const attention = attentionBanner(state.attention, state.targetBlockId, width);
   return [
     alignHeaderControls(left, renderHeaderControls(state), width),
-    renderDetailMetadata(state, width, options),
+    attention ?? renderDetailMetadata(state, width, options),
     `\x1b[2m${"─".repeat(width)}\x1b[0m`,
   ];
 }
@@ -219,8 +227,9 @@ export function renderDetailFooter(
   chooserHelpText = openDestinationChooserHelp(),
 ): string[] {
   const destinationChooserOpen = state.destinationChooser.active;
+  const returnSummary = attentionReturnSummary(state.attention, width);
   return [
-    fitDynamicText(
+    returnSummary ?? fitDynamicText(
       destinationChooserOpen ? state.destinationChooser.status : state.status,
       width,
     ),
@@ -259,6 +268,24 @@ export function buildDetailAnnotationView(
 ): string[] {
   if (!state.context.selected) return [];
   const output: string[] = [];
+  let annotation;
+  try {
+    annotation = parseAnnotationBlock(state.context.selected);
+  } catch {
+    annotation = null;
+  }
+  if (annotation?.target.kind === "block") {
+    output.push(
+      `\x1b[2m${fitDynamicText(
+        `Source: block ${annotation.target.sourceBlockId} @${annotation.target.anchor.start}-${annotation.target.anchor.end} · ${annotation.anchorState}`,
+        width,
+      )}\x1b[0m`,
+    );
+    for (const line of annotation.target.anchor.excerpt.split(/\r?\n/)) {
+      output.push(`│ ${fitDynamicText(line, Math.max(1, width - 2))}`);
+    }
+    output.push("─".repeat(width));
+  }
   if (state.referencedFile) {
     const file = state.referencedFile;
     const lastLine = file.firstLine + Math.max(0, file.lines.length - 1);
@@ -277,7 +304,7 @@ export function buildDetailAnnotationView(
     output.push("─".repeat(width));
   }
   output.push("\x1b[1mComment\x1b[0m");
-  const comment = extractFileAnnotationComment(state.resolvedSelectedText);
+  const comment = extractAnnotationBody(state.resolvedSelectedText);
   for (const line of (comment || "(No comment text)").split(/\r?\n/)) {
     output.push(renderMarkdownLine(fitDynamicText(line, width)));
   }
@@ -300,10 +327,11 @@ export function renderDetailLines(
   const height = viewport.height;
   const bodyHeight = Math.max(1, height - 5);
   const output = renderDetailHeader(state, width, options.header);
+  const bodyStart = output.length;
 
   if (!state.context.selected) {
     output.push("Select a block in the outliner pane.");
-  } else if (state.mode === "edit" || state.mode === "comment") {
+  } else if (state.mode === "edit" || state.mode === "select" || state.mode === "comment") {
     const editorHeight = detailVisibleEditorHeight(state, viewport);
     const layout = layoutDetailEditor(
       state.buffer.lines,
@@ -330,9 +358,10 @@ export function renderDetailLines(
   } else if (state.mode === "file" && state.referencedFile) {
     const file = state.referencedFile;
     const range = selectedDetailFileRange(state);
+    const attention = currentAttentionMark(state.attention, state.targetBlockId);
     const lineNumberWidth = String(file.firstLine + file.lines.length).length;
     const visibleLines = file.lines.slice(state.fileOffset, state.fileOffset + bodyHeight);
-    for (const [index, line] of visibleLines.entries()) {
+    const rows = visibleLines.map((line, index) => {
       const localIndex = state.fileOffset + index;
       const lineNumber = file.firstLine + localIndex;
       const inRange = range !== null && lineNumber >= range.startLine && lineNumber <= range.endLine;
@@ -341,8 +370,30 @@ export function renderDetailLines(
       const rendered = renderMarkdownLine(
         fitDynamicText(line, Math.max(1, width - prefix.length)),
       );
-      output.push(current ? `\x1b[48;5;238m${prefix}${rendered}\x1b[0m` : `${prefix}${rendered}`);
-    }
+      return current ? `\x1b[48;5;238m${prefix}${rendered}\x1b[0m` : `${prefix}${rendered}`;
+    });
+    const sourcePrefix = file.sourceText
+      ?.split(/\r?\n/)
+      .slice(0, file.firstLine - 1 + state.fileOffset)
+      .join("\n") ?? "";
+    const decorated = decorateAttentionLines(
+      rows,
+      attention?.target.kind === "file" ? attention : null,
+      width,
+      file.sourceText,
+      sourcePrefix,
+    );
+    decorated.forEach((row, index) => {
+      const lineNumber = file.firstLine + state.fileOffset + index;
+      output.push(
+        row === rows[index] &&
+          attention?.target.kind === "file" &&
+          lineNumber >= attention.target.startLine &&
+          lineNumber <= attention.target.endLine
+          ? decorateAttentionBlockLine(row, attention, width)
+          : row,
+      );
+    });
   } else {
     const lines = state.resolvedSelectedText.split(/\r?\n/);
     for (
@@ -355,6 +406,22 @@ export function renderDetailLines(
         isEmbeddedLine(state, lineIndex) ? renderEmbedBackground(rendered, width) : rendered,
       );
     }
+    if (state.annotationThreads.length > 0 && output.length < height - 2) {
+      const threads = state.annotationThreads;
+      output.push(`\x1b[1mComments · ${threads.length} ${threads.length === 1 ? "thread" : "threads"}\x1b[0m`);
+      for (const [index, thread] of threads.entries()) {
+        if (output.length >= height - 2) break;
+        const range = thread.target.kind === "file"
+          ? `${thread.target.filePath}:${thread.target.startLine}-${thread.target.endLine}`
+          : `source ${thread.target.anchor.start}-${thread.target.anchor.end}`;
+        output.push(
+          fitDynamicText(
+            `[${index + 1}] ${range} · ${thread.anchorState} · ${thread.lifecycle} — ${thread.body}`,
+            width,
+          ),
+        );
+      }
+    }
   }
 
   while (output.length < height - 2) output.push("");
@@ -362,6 +429,16 @@ export function renderDetailLines(
     (options.helpPrefix
       ? `${options.helpPrefix}  ${detailHelpText(state.mode)}`
       : detailHelpText(state.mode));
+  if (state.mode === "preview") {
+    const mark = currentAttentionMark(state.attention, state.targetBlockId);
+    const decorated = decorateAttentionLines(
+      output.slice(bodyStart),
+      mark,
+      width,
+      state.context.selected?.text,
+    );
+    output.splice(bodyStart, output.length - bodyStart, ...decorated);
+  }
   output.push(...renderDetailFooter(
     state,
     width,

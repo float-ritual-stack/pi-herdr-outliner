@@ -1,6 +1,13 @@
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import {
+  annotationLineRangeForOffsets,
+  formatAnnotation,
+  normalizeAnnotationCreateInput,
+  parseAnnotationBlock,
+  reanchorAnnotation,
+} from "./annotations";
 import { resolveBacklinkRelation } from "./backlinks";
 import { isValidGitBranchName } from "./delivery-lifecycle";
 import {
@@ -35,6 +42,15 @@ import {
   type ParsedWorkId,
 } from "./work-ids";
 import type {
+  AnnotationBatchOperation,
+  AnnotationBatchReceipt,
+  AnnotationCreateInput,
+  AnnotationLifecycleInput,
+  AnnotationListQuery,
+  AnnotationRecord,
+  AnnotationReanchorInput,
+  AnnotationReplyInput,
+  AnnotationThread,
   BacklinkCollection,
   BacklinkQuery,
   Block,
@@ -104,6 +120,7 @@ interface CaptureRequestRow {
 
 interface PropertyRow {
   block_id: string;
+
   key: string;
   value: string;
   ordinal: number;
@@ -115,6 +132,9 @@ interface PropertyRow {
   placement: PropertyPlacement;
   scope: PropertyScope;
   syntax: PropertySyntax;
+}
+interface AnnotationRequestRow {
+  annotation_ids: string;
 }
 
 interface PageAddressRow {
@@ -277,6 +297,24 @@ function normalizeCaptureRequestId(requestId: string): string {
   return normalized;
 }
 
+function normalizeAnnotationRequestId(requestId: string): string {
+  if (typeof requestId !== "string") {
+    throw new Error("Annotation requestId must be 1-200 printable characters");
+  }
+  const normalized = requestId.trim();
+  if (!normalized || normalized.length > 200 || /[\u0000-\u001f\u007f]/.test(normalized)) {
+    throw new Error("Annotation requestId must be 1-200 printable characters");
+  }
+  return normalized;
+}
+
+function normalizeAnnotationBody(body: string): string {
+  if (typeof body !== "string" || !body.trim()) {
+    throw new Error("Annotation body cannot be empty");
+  }
+  return body.trim();
+}
+
 const ROADMAP_PRIORITIES: Record<RoadmapItemPriority, true> = {
   high: true,
   medium: true,
@@ -415,6 +453,255 @@ export class OutlinerStore {
     return this.require(id);
   }
 
+  createAnnotation(
+    requestId: string,
+    input: AnnotationCreateInput,
+    author: BlockAuthor = "user",
+    provenance?: BlockProvenance,
+  ): AnnotationBatchReceipt {
+    return this.createAnnotationBatch(
+      requestId,
+      [{ operationId: "create", type: "create", input }],
+      author,
+      provenance,
+    );
+  }
+
+  replyToAnnotation(
+    requestId: string,
+    input: AnnotationReplyInput,
+    author: BlockAuthor = "user",
+    provenance?: BlockProvenance,
+  ): AnnotationBatchReceipt {
+    return this.createAnnotationBatch(
+      requestId,
+      [{ operationId: "reply", type: "reply", input }],
+      author,
+      provenance,
+    );
+  }
+
+  createAnnotationBatch(
+    requestId: string,
+    operations: readonly AnnotationBatchOperation[],
+    author: BlockAuthor = "user",
+    provenance?: BlockProvenance,
+  ): AnnotationBatchReceipt {
+    const normalizedRequestId = normalizeAnnotationRequestId(requestId);
+    if (!Array.isArray(operations) || operations.length === 0 || operations.length > 100) {
+      throw new Error("Annotation batch must contain 1-100 operations");
+    }
+    normalizeCreatorProvenance(author, provenance);
+    const operationIds = new Set<string>();
+    const prepared = operations.map((operation) => {
+      if (!operation || typeof operation !== "object") {
+        throw new Error("Annotation batch operation must be an object");
+      }
+      const operationId = normalizeAnnotationRequestId(operation.operationId);
+      if (operationIds.has(operationId)) {
+        throw new Error(`Duplicate annotation operationId: ${operationId}`);
+      }
+      operationIds.add(operationId);
+      if (operation.type === "create") {
+        const input = normalizeAnnotationCreateInput(operation.input);
+        this.requireActive(input.target.sourceBlockId);
+        return { input, parentAnnotationId: undefined };
+      }
+      if (operation.type !== "reply") {
+        throw new Error(`Unsupported annotation batch operation: ${String((operation as { type?: unknown }).type)}`);
+      }
+      const annotationId = operation.input.annotationId?.trim();
+      if (!annotationId) throw new Error("Reply annotationId cannot be empty");
+      const parent = parseAnnotationBlock(this.requireActive(annotationId));
+      if (parent.parentAnnotationId) {
+        throw new Error("Replies must attach directly to a root annotation");
+      }
+      const input = normalizeAnnotationCreateInput({
+        target: parent.target,
+        body: normalizeAnnotationBody(operation.input.body),
+        source: operation.input.source,
+      });
+      return { input, parentAnnotationId: annotationId };
+    });
+
+    return this.database.transaction((): AnnotationBatchReceipt => {
+      const existing = this.database
+        .query("SELECT annotation_ids FROM annotation_requests WHERE request_id = ?")
+        .get(normalizedRequestId) as AnnotationRequestRow | null;
+      if (existing) {
+        const ids = JSON.parse(existing.annotation_ids) as unknown;
+        if (!Array.isArray(ids) || ids.some((id) => typeof id !== "string")) {
+          throw new Error(`Corrupt annotation request receipt: ${normalizedRequestId}`);
+        }
+        return {
+          annotations: ids.map((id) => parseAnnotationBlock(this.requireActive(id))),
+          deduplicated: true,
+        };
+      }
+
+      const annotations = prepared.map(({ input, parentAnnotationId }) => {
+        const parentId = parentAnnotationId ?? input.target.sourceBlockId;
+        const block = this.create(formatAnnotation(input, parentAnnotationId), parentId, author, provenance);
+        return parseAnnotationBlock(block);
+      });
+      this.database
+        .query(
+          "INSERT INTO annotation_requests (request_id, annotation_ids, created_at) VALUES (?, ?, ?)",
+        )
+        .run(
+          normalizedRequestId,
+          JSON.stringify(annotations.map((annotation) => annotation.block.id)),
+          new Date().toISOString(),
+        );
+      return { annotations, deduplicated: false };
+    })();
+  }
+
+  listAnnotationThreads(query: AnnotationListQuery): AnnotationThread[] {
+    if (!query || typeof query !== "object") {
+      throw new Error("Annotation list query must be an object");
+    }
+    const sourceBlockId = query.sourceBlockId?.trim();
+    const filePath = query.filePath?.trim();
+    if (!sourceBlockId && !filePath) {
+      throw new Error("Annotation list requires sourceBlockId or filePath");
+    }
+    const candidates = this.queryBlocks({
+      filters: sourceBlockId ? [{ key: "source-block", value: sourceBlockId }] : [],
+      limit: 1000,
+    }).blocks
+      .flatMap((block): AnnotationRecord[] => {
+        try {
+          return [parseAnnotationBlock(block)];
+        } catch {
+          return [];
+        }
+      })
+      .filter((annotation) =>
+        (!filePath || (annotation.target.kind === "file" && annotation.target.filePath === filePath)) &&
+        (!query.lifecycle || annotation.lifecycle === query.lifecycle) &&
+        (query.includeResolved !== false || annotation.lifecycle !== "resolved")
+      )
+      .sort((left, right) =>
+        left.target.anchor.start - right.target.anchor.start ||
+        left.block.createdAt.localeCompare(right.block.createdAt) ||
+        left.block.id.localeCompare(right.block.id)
+      );
+    const roots = candidates.filter((annotation) => !annotation.parentAnnotationId);
+    const repliesByParent = new Map<string, AnnotationRecord[]>();
+    for (const reply of candidates) {
+      if (!reply.parentAnnotationId) continue;
+      const replies = repliesByParent.get(reply.parentAnnotationId) ?? [];
+      replies.push(reply);
+      repliesByParent.set(reply.parentAnnotationId, replies);
+    }
+    return roots.map((annotation) => ({
+      ...annotation,
+      replies: repliesByParent.get(annotation.block.id) ?? [],
+    }));
+  }
+
+  reanchorAnnotationThreads(
+    input: AnnotationReanchorInput,
+    mutation: MutationProvenance,
+  ): AnnotationThread[] {
+    if (!input || typeof input !== "object") {
+      throw new Error("Annotation reanchor input must be an object");
+    }
+    const sourceBlockId = input.sourceBlockId?.trim();
+    if (!sourceBlockId) throw new Error("Annotation source block cannot be empty");
+    this.requireActive(sourceBlockId);
+    if (typeof input.sourceText !== "string") {
+      throw new Error("Annotation source text must be a string");
+    }
+    const sourceVersion = input.sourceVersion?.trim();
+    if (!sourceVersion) throw new Error("Annotation source version cannot be empty");
+    normalizeMutationProvenance(mutation);
+    const sourceHash = input.sourceHash?.trim();
+    const threads = this.listAnnotationThreads({ sourceBlockId, includeResolved: true });
+    const records = threads.flatMap((thread) => [thread, ...thread.replies]);
+    this.database.transaction(() => {
+      for (const record of records) {
+        const result = reanchorAnnotation(
+          record.target.anchor,
+          input.sourceText,
+          sourceVersion,
+          sourceHash,
+        );
+        let target = { ...record.target, anchor: result.anchor };
+        if (target.kind === "file" && result.state === "anchored") {
+          target = {
+            ...target,
+            ...annotationLineRangeForOffsets(
+              input.sourceText,
+              result.anchor.start,
+              result.anchor.end,
+            ),
+          };
+        }
+        const text = formatAnnotation(
+          {
+            target,
+            body: record.body,
+            source: record.source,
+          },
+          record.parentAnnotationId,
+          {
+            lifecycle: record.lifecycle,
+            anchorState: result.state,
+            promotedBlockIds: record.promotedBlockIds,
+          },
+        );
+        if (text === record.block.text) continue;
+        this.update(record.block.id, text, record.block.updatedAt, mutation);
+      }
+    })();
+    return this.listAnnotationThreads({ sourceBlockId, includeResolved: true });
+  }
+
+
+  setAnnotationLifecycle(
+    input: AnnotationLifecycleInput,
+    mutation: MutationProvenance,
+  ): AnnotationRecord {
+    if (!input || typeof input !== "object") {
+      throw new Error("Annotation lifecycle input must be an object");
+    }
+    const annotationId = input.annotationId?.trim();
+    if (!annotationId) throw new Error("Annotation ID cannot be empty");
+    if (input.lifecycle !== "open" && input.lifecycle !== "resolved") {
+      throw new Error(`Unsupported annotation lifecycle: ${String(input.lifecycle)}`);
+    }
+    const annotation = parseAnnotationBlock(this.requireActive(annotationId));
+    if (annotation.parentAnnotationId) {
+      throw new Error("Annotation lifecycle belongs to the root thread");
+    }
+    const promotedBlockIds = [...(annotation.promotedBlockIds ?? [])];
+    const promotedBlockId = input.promotedBlockId?.trim();
+    if (input.promotedBlockId !== undefined && !promotedBlockId) {
+      throw new Error("Promoted block ID cannot be empty");
+    }
+    if (promotedBlockId) {
+      this.requireActive(promotedBlockId);
+      if (!promotedBlockIds.includes(promotedBlockId)) promotedBlockIds.push(promotedBlockId);
+    }
+    const text = formatAnnotation(
+      {
+        target: annotation.target,
+        body: annotation.body,
+        source: annotation.source,
+      },
+      undefined,
+      {
+        lifecycle: input.lifecycle,
+        anchorState: annotation.anchorState,
+        promotedBlockIds,
+      },
+    );
+    return parseAnnotationBlock(
+      this.update(annotationId, text, annotation.block.updatedAt, mutation),
+    );
+  }
   createRoadmapItem(
     input: RoadmapItemCreateInput,
     author: BlockAuthor = "user",
@@ -1910,6 +2197,11 @@ export class OutlinerStore {
         request_id TEXT PRIMARY KEY,
         block_id TEXT NOT NULL,
         inbox_block_id TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS annotation_requests (
+        request_id TEXT PRIMARY KEY,
+        annotation_ids TEXT NOT NULL,
         created_at TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS block_edit_activity (

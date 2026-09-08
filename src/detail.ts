@@ -2,19 +2,19 @@ import { emitKeypressEvents } from "node:readline";
 import { setTimeout as sleep } from "node:timers/promises";
 import { OutlinerClient, type OutlinerWatcher } from "./client";
 import { OutlinerActionKeymap } from "./outliner-actions";
-import { sendContextClientCommand } from "./client-target";
 import {
   createDetailController,
   type DetailEffects,
   type DetailViewport,
 } from "./detail-controller";
 import { projectDetailRead } from "./detail-embeds";
-import { createDetailKeyHandler, detailActionMode } from "./detail-keymap";
+import { createDetailKeyHandler, detailActionScopes } from "./detail-keymap";
 import { renderDetailAnsi } from "./detail-renderer";
 import { completeReferencedPaths, readReferencedFile } from "./files";
 import { resolveOutlinerLinkTarget } from "./outliner-links";
 import {
   dispatchNavigation,
+  focusTreeForClient,
   resolveNavigationDestination,
 } from "./navigation-routes";
 import {
@@ -34,6 +34,10 @@ import {
 } from "./terminal";
 import {
   OUTLINER_PROTOCOL_VERSION,
+  type AnnotationBatchReceipt,
+  type AnnotationReanchorInput,
+  type AnnotationThread,
+  type AttentionClientState,
   type BacklinkCollection,
   type Block,
   type BrowsingContextState,
@@ -174,8 +178,37 @@ const effects: DetailEffects = {
   async resolveReference(target) {
     return resolveOutlinerLinkTarget(client, target);
   },
-  async createBlock(input) {
-    return client.request<Block>({ action: "create", ...input });
+  async createAnnotation(input) {
+    return client.request<AnnotationBatchReceipt>({
+      action: "annotations.create",
+      ...input,
+      author: "user",
+    });
+  },
+  async listAnnotations(sourceBlockId) {
+    return client.request<AnnotationThread[]>({
+      action: "annotations.list",
+      query: { sourceBlockId, includeResolved: true },
+    });
+  },
+  async reanchorAnnotations(input: AnnotationReanchorInput) {
+    return client.request<AnnotationThread[]>({
+      action: "annotations.reanchor",
+      input,
+      mutation: { author: "user", actorId: "detail" },
+    });
+  },
+  async getAttention() {
+    return client.request<AttentionClientState>({
+      action: "attention.get",
+      targetClientId: clientId,
+    });
+  },
+  async acknowledgeAttention(markId) {
+    return client.request<AttentionClientState>({
+      action: "attention.acknowledge",
+      input: { targetClientId: clientId, ...(markId ? { markId } : {}) },
+    });
   },
   async queryBlocks(query) {
     return client.request<VisibleBlockCollection>({ action: "blocks.query", query });
@@ -190,7 +223,7 @@ const effects: DetailEffects = {
     return completeReferencedPaths(query, paths.workspaceRoot);
   },
   async focusOutliner() {
-    await sendContextClientCommand(client, "tree", browsingContextId, { command: "focus" });
+    await focusTreeForClient(client, clientId);
   },
   async openPropertyInspectorPane(blockId) {
     const contextId = crypto.randomUUID();
@@ -211,7 +244,9 @@ const effects: DetailEffects = {
 
 function draw(): void {
   process.stdout.write(renderDetailAnsi(controller.state, viewport(), {
-    helpText: actionKeymap.helpText("detail", detailActionMode(controller.state)),
+    helpText: actionKeymap.helpText("detail", detailActionScopes(controller.state, {
+      bufferMode: controller.isBufferMode(),
+    })),
     chooserHelpText: controller.destinationChooserHelpText(),
   }));
 }

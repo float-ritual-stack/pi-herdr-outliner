@@ -1,5 +1,7 @@
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "bun:test";
+import { emptyAttentionState } from "../src/attention";
+import { BufferComposer } from "../src/buffer-composer";
 import type { DetailState } from "../src/detail-controller";
 import {
   createPiDetailInputListener,
@@ -7,6 +9,7 @@ import {
   PiDetailInputStreamDecoder,
   detailChooserOwnsPiInput,
   piDetailChooserInput,
+  piDetailLinkClick,
 } from "../src/detail-pi-input";
 import {
   DETAIL_DRAFT_SPLIT_MIN_WIDTH,
@@ -56,6 +59,9 @@ function state(overrides: Partial<DetailState> = {}): DetailState {
     fileCursor: 0,
     selectionAnchor: null,
     annotationRange: null,
+    annotationThreads: [],
+    attention: emptyAttentionState("detail-test"),
+    attentionRevealSourceLine: null,
     completion: null,
     status: "",
     busy: false,
@@ -93,6 +99,24 @@ function state(overrides: Partial<DetailState> = {}): DetailState {
 }
 
 describe("Pi TUI Detail input", () => {
+  test("preserves plain, Ctrl, and Meta click routing across the Pi input boundary", () => {
+    expect(piDetailLinkClick("\x1b[<0;4;3M")).toEqual({
+      activate: false,
+      routing: "first-unlocked",
+      suppress: false,
+    });
+    expect(piDetailLinkClick("\x1b[<16;4;3M")).toEqual({
+      activate: true,
+      routing: "chooser",
+      suppress: false,
+    });
+    expect(piDetailLinkClick("\x1b[<8;4;3M")).toEqual({
+      activate: true,
+      routing: "chooser",
+      suppress: false,
+    });
+  });
+
   test("decodes paste, control, navigation, modified Enter, and printable input", () => {
     expect(decodePiDetailInput("\x1b[200~first\nsecond\x1b[201~")).toEqual({
       kind: "paste",
@@ -210,6 +234,29 @@ describe("Pi TUI Detail component", () => {
     const rendered = component.render(64).join("\n");
     expect(rendered).toContain("raw ((block-id)) source");
     expect(rendered).not.toContain("resolved display source");
+  });
+
+  test("renders a compact contextual buffer with excerpt and semantic actions", () => {
+    const buffer = new TextBuffer("Keep this context.");
+    buffer.placeCursor(0, buffer.text.length);
+    const composer = new BufferComposer(() => ({
+      title: "Comment on selection",
+      context: "Open the block in Detail.\nPress v to select.",
+      buffer,
+      placeholder: "Write a comment…",
+      commitAction: "Ctrl+S",
+      cancelAction: "Esc",
+    }));
+
+    const lines = composer.render(72);
+    const rendered = stripTerminalSequences(lines.join("\n"));
+
+    expect(lines).toHaveLength(7);
+    expect(rendered).toContain("Comment on selection");
+    expect(rendered).toContain("“Open the block in Detail. Press v to select.”");
+    expect(rendered).toContain("Keep this context.");
+    expect(rendered).toContain("Esc cancel · Ctrl+S save");
+    expect(lines.every((line) => visibleWidth(line) === 72)).toBe(true);
   });
 
   test("allocates stable equal draft panes above the responsive breakpoint", () => {

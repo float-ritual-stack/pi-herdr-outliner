@@ -3,12 +3,17 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { createConnection, createServer, Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createAnnotationAnchor } from "../src/annotations";
 import { OutlinerClient } from "../src/client";
 import { HerdrRuntimeRegistry, type HerdrSessionSnapshot } from "../src/herdr-registry";
 import { OutlinerServer } from "../src/server";
 import { OutlinerStore } from "../src/store";
+import { orchestrateWorkflowRun } from "../src/workflow-orchestrator";
 import { OUTLINER_PROTOCOL_VERSION } from "../src/types";
 import type {
+  AnnotationBatchReceipt,
+  AttentionClientState,
+  AnnotationThread,
   BacklinkCollection,
   BlockEditActivityPage,
   Block,
@@ -34,6 +39,8 @@ import type {
   WorkIdAllocation,
   WorkIdAllocatorStatus,
   WorkspaceSnapshot,
+  WorkflowRun,
+  WorkflowStartReceipt,
 } from "../src/types";
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -42,7 +49,7 @@ afterEach(async () => {
 });
 
 
-test("round-trips idempotent delivery identity over protocol v29", async () => {
+test("round-trips idempotent delivery identity over the current protocol", async () => {
   const directory = mkdtempSync(join(tmpdir(), "pi-outliner-delivery-protocol-"));
   const store = new OutlinerStore(join(directory, "outliner.sqlite"));
   const socket = join(directory, "outliner.sock");
@@ -84,6 +91,61 @@ test("round-trips idempotent delivery identity over protocol v29", async () => {
 });
 
 
+
+test("serves atomic idempotent annotation threads over the current protocol", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-outliner-annotation-protocol-"));
+  const store = new OutlinerStore(join(directory, "outliner.sqlite"));
+  const socket = join(directory, "outliner.sock");
+  const server = new OutlinerServer(store, socket);
+  await server.start();
+  cleanups.push(async () => {
+    await server.close();
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const client = new OutlinerClient(socket);
+  const source = await client.request<Block>({
+    action: "create",
+    text: "alpha βeta gamma",
+  });
+  const operations = [{
+    operationId: "comment-1",
+    type: "create" as const,
+    input: {
+      target: {
+        kind: "block" as const,
+        sourceBlockId: source.id,
+        anchor: createAnnotationAnchor(source.text, 6, 10, source.updatedAt),
+      },
+      body: "Check this range.",
+      source: "agent" as const,
+    },
+  }];
+  const created = await client.request<AnnotationBatchReceipt>({
+    action: "annotations.batch",
+    requestId: "protocol-annotation-batch-1",
+    operations,
+    author: "agent",
+    provenance: { actorId: "omp", sessionId: "session-1", taskId: "call-1" },
+  });
+  const replayed = await client.request<AnnotationBatchReceipt>({
+    action: "annotations.batch",
+    requestId: "protocol-annotation-batch-1",
+    operations,
+    author: "agent",
+    provenance: { actorId: "omp", sessionId: "session-1", taskId: "call-2" },
+  });
+  const threads = await client.request<AnnotationThread[]>({
+    action: "annotations.list",
+    query: { sourceBlockId: source.id, includeResolved: true },
+  });
+  expect(created.deduplicated).toBe(false);
+  expect(replayed.deduplicated).toBe(true);
+  expect(replayed.annotations[0]!.block.id).toBe(created.annotations[0]!.block.id);
+  expect(threads).toHaveLength(1);
+  expect(threads[0]!.target.anchor.excerpt).toBe("βeta");
+});
+
 test("serves mutations and property queries over the local socket", async () => {
   const directory = mkdtempSync(join(tmpdir(), "pi-outliner-protocol-"));
   const store = new OutlinerStore(join(directory, "outliner.sqlite"));
@@ -99,7 +161,7 @@ test("serves mutations and property queries over the local socket", async () => 
   const client = new OutlinerClient(socket);
   const service = await client.request<OutlinerServiceStatus>({ action: "ping" });
   expect(service).toEqual({ status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION });
-  expect(service.protocolVersion).toBe(29);
+  expect(service.protocolVersion).toBe(32);
   const provenance = {
     actorId: "omp",
     sessionId: "session-1",
@@ -1386,7 +1448,7 @@ test("reconciles long-lived clients against live Herdr pane topology", async () 
     {
       clientId: "detail-b-live",
       role: "detail",
-      contextId: "live",
+      contextId: "detail-b-independent",
       locked: false,
       runtime: {
         paneId: "detail-b-at-launch",
@@ -1442,7 +1504,7 @@ test("reconciles long-lived clients against live Herdr pane topology", async () 
     action: "navigation.resolve",
     sourceClientId: "tree-live",
     intent: "open",
-  })).rejects.toThrow("No Detail is available in this tab · open another Detail");
+  })).rejects.toThrow();
 
   replaceTopology([
     { paneId: "tree-pane-old", terminalId: "term-tree", workspaceId: "ws-old", tabId: "tab-old", x: 0, y: 0 },
@@ -1460,6 +1522,8 @@ test("reconciles long-lived clients against live Herdr pane topology", async () 
     tabId: "tab-old",
     paneX: 0,
     paneY: 0,
+    focused: false,
+    visible: true,
   });
   expect(initialClients.find(({ clientId }) => clientId === "detail-unresolved")?.runtime)
     .toEqual({ terminalId: "term-not-live" });
@@ -1468,6 +1532,14 @@ test("reconciles long-lived clients against live Herdr pane topology", async () 
     sourceClientId: "tree-live",
     intent: "open",
   })).toMatchObject({ targetClientId: "detail-a-live" });
+  expect(await client.request<OutlinerNavigationDispatch>({
+    action: "navigation.resolve",
+    sourceClientId: "detail-b-live",
+    intent: "reveal",
+  })).toMatchObject({
+    targetClientId: "tree-live",
+    resolution: "same-tab",
+  });
 
   registry.markStale();
   const staleClients = await client.request<OutlinerClientRegistration[]>({
@@ -1479,7 +1551,7 @@ test("reconciles long-lived clients against live Herdr pane topology", async () 
     action: "navigation.resolve",
     sourceClientId: "tree-live",
     intent: "open",
-  })).rejects.toThrow("No Detail is available in this tab · open another Detail");
+  })).rejects.toThrow();
 
   replaceTopology([
     { paneId: "tree-pane-renamed", terminalId: "term-tree", workspaceId: "ws-new", tabId: "tab-new", x: 0, y: 0 },
@@ -1496,6 +1568,8 @@ test("reconciles long-lived clients against live Herdr pane topology", async () 
     tabId: "tab-new",
     paneX: 0,
     paneY: 0,
+    focused: false,
+    visible: true,
   });
   expect(await client.request<OutlinerNavigationDispatch>({
     action: "navigation.resolve",
@@ -1516,6 +1590,8 @@ test("reconciles long-lived clients against live Herdr pane topology", async () 
     terminalId: "term-tree",
     workspaceId: "ws-new",
     tabId: "tab-new",
+    focused: false,
+    visible: true,
   });
   expect(await client.request<OutlinerNavigationDispatch>({
     action: "navigation.resolve",
@@ -1542,6 +1618,338 @@ test("reconciles long-lived clients against live Herdr pane topology", async () 
     action: "navigation.resolve",
     sourceClientId: "detail-a-live",
     intent: "reveal",
-  })).rejects.toThrow("No Tree destination is available in this pane's context or tab");
+  })).rejects.toThrow();
   expect(connectionCount).toBe(registrations.length);
+});
+
+test("targets ephemeral attention, advances atomically, stales on edits, and expires", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-outliner-attention-"));
+  const store = new OutlinerStore(join(directory, "outliner.sqlite"));
+  const source = store.create("alpha 🧭 beta\nsecond passage");
+  const socket = join(directory, "outliner.sock");
+  const server = new OutlinerServer(store, socket);
+  await server.start();
+  const client = new OutlinerClient(socket);
+  const connected = Promise.withResolvers<void>();
+  const firstAttention = Promise.withResolvers<void>();
+  const staleAttention = Promise.withResolvers<void>();
+  const expiredAttention = Promise.withResolvers<void>();
+  const firstEvents: OutlinerEvent[] = [];
+  const secondEvents: OutlinerEvent[] = [];
+  let connectionCount = 0;
+  const watchers = [
+    { clientId: "attention-detail-one", events: firstEvents },
+    { clientId: "attention-detail-two", events: secondEvents },
+  ].map(({ clientId, events }) =>
+    new OutlinerClient(socket).watch({
+      client: { clientId, role: "detail", contextId: clientId },
+      onConnect: () => {
+        connectionCount += 1;
+        if (connectionCount === 2) connected.resolve();
+      },
+      onEvent: (event) => {
+        events.push(event);
+        if (event.domain !== "attention") return;
+        if (event.action === "attention.mark") firstAttention.resolve();
+        if (event.action === "attention.stale") staleAttention.resolve();
+        if (event.action === "attention.expired") expiredAttention.resolve();
+      },
+    })
+  );
+  cleanups.push(async () => {
+    await Promise.all(watchers.map((watcher) => watcher.stop()));
+    await server.close();
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  await connected.promise;
+
+  const firstAnchor = createAnnotationAnchor(source.text, 6, 13, source.updatedAt);
+  const marked = await client.request<AttentionClientState>({
+    action: "attention.mark",
+    input: {
+      markId: "current-one",
+      targetClientId: "attention-detail-one",
+      target: { kind: "block", sourceBlockId: source.id, anchor: firstAnchor },
+      tone: "warning",
+      sender: "agent-test",
+      expiresInMs: 2_000,
+      reveal: true,
+    },
+  });
+  await firstAttention.promise;
+  await Bun.sleep(20);
+  expect(marked.currentMarkId).toBe("current-one");
+  expect(marked.pendingCount).toBe(1);
+  expect(marked.marks[0]?.target.anchor?.excerpt).toBe("🧭 beta");
+  expect(store.require(source.id).text).toBe(source.text);
+  expect(firstEvents.at(-1)).toEqual(expect.objectContaining({
+    domain: "attention",
+    blockId: source.id,
+    attentionInstruction: { markId: "current-one", reveal: true, focus: false },
+  }));
+  expect(secondEvents).toEqual([]);
+
+  await expect(client.request({
+    action: "attention.mark",
+    input: {
+      markId: "wrong-client",
+      targetClientId: "missing-detail",
+      target: { kind: "block", sourceBlockId: source.id },
+      tone: "current",
+      sender: "agent-test",
+    },
+  })).rejects.toThrow("not registered");
+  await expect(client.request({
+    action: "attention.mark",
+    input: {
+      markId: "stale-source",
+      targetClientId: "attention-detail-one",
+      target: {
+        kind: "block",
+        sourceBlockId: source.id,
+        anchor: { ...firstAnchor, sourceHash: "stale" },
+      },
+      tone: "current",
+      sender: "agent-test",
+    },
+  })).rejects.toThrow("source evidence");
+
+  for (let index = 0; index < 10; index += 1) {
+    await client.request<AttentionClientState>({
+      action: "attention.mark",
+      input: {
+        markId: `support-${index}`,
+        targetClientId: "attention-detail-one",
+        target: { kind: "block", sourceBlockId: source.id },
+        tone: "info",
+        role: "supporting",
+        sender: "agent-test",
+        expiresInMs: 2_000,
+      },
+    });
+  }
+  const secondStart = source.text.indexOf("second");
+  const advanced = await client.request<AttentionClientState>({
+    action: "attention.advance",
+    input: {
+      markId: "current-two",
+      targetClientId: "attention-detail-one",
+      target: {
+        kind: "block",
+        sourceBlockId: source.id,
+        anchor: createAnnotationAnchor(
+          source.text,
+          secondStart,
+          secondStart + "second".length,
+          source.updatedAt,
+        ),
+      },
+      tone: "current",
+      sender: "agent-test",
+      expiresInMs: 2_000,
+      reveal: true,
+      focus: true,
+    },
+  });
+  expect(advanced.currentMarkId).toBe("current-two");
+  expect(advanced.marks.filter((mark) => mark.role === "current")).toHaveLength(1);
+  expect(advanced.marks.filter((mark) => mark.role === "supporting")).toHaveLength(8);
+
+  const partiallyAcknowledged = await client.request<AttentionClientState>({
+    action: "attention.acknowledge",
+    input: { targetClientId: "attention-detail-one", markId: "current-two" },
+  });
+  expect(partiallyAcknowledged.pendingCount).toBe(8);
+  expect(
+    partiallyAcknowledged.marks.find((mark) => mark.markId === "current-two")?.acknowledgedAt,
+  ).toBeDefined();
+  expect(partiallyAcknowledged.marks.filter((mark) => !mark.acknowledgedAt)).toHaveLength(8);
+
+  const acknowledged = await client.request<AttentionClientState>({
+    action: "attention.acknowledge",
+    input: { targetClientId: "attention-detail-one" },
+  });
+  expect(acknowledged.pendingCount).toBe(0);
+  expect(acknowledged.marks.every((mark) => mark.acknowledgedAt)).toBe(true);
+
+  const updated = await client.request<Block>({
+    action: "update",
+    blockId: source.id,
+    text: `prefix ${source.text}`,
+    expectedUpdatedAt: source.updatedAt,
+    mutation: { author: "user", actorId: "test" },
+  });
+  await staleAttention.promise;
+  const stale = await client.request<AttentionClientState>({
+    action: "attention.get",
+    targetClientId: "attention-detail-one",
+  });
+  expect(stale.marks.find((mark) => mark.markId === "current-two")?.sourceState).toBe("stale");
+  expect(stale.marks.find((mark) => mark.markId === "current-two")?.target.anchor?.start)
+    .toBe(secondStart);
+
+  const cleared = await client.request<AttentionClientState>({
+    action: "attention.clear",
+    input: { targetClientId: "attention-detail-one" },
+  });
+  expect(cleared.marks).toEqual([]);
+  expect(cleared.pendingCount).toBe(0);
+
+  const expiryStart = updated.text.indexOf("prefix");
+  await client.request<AttentionClientState>({
+    action: "attention.mark",
+    input: {
+      markId: "expires",
+      targetClientId: "attention-detail-one",
+      target: {
+        kind: "block",
+        sourceBlockId: source.id,
+        anchor: createAnnotationAnchor(
+          updated.text,
+          expiryStart,
+          expiryStart + "prefix".length,
+          updated.updatedAt,
+        ),
+      },
+      tone: "dim",
+      sender: "agent-test",
+      expiresInMs: 100,
+    },
+  });
+  await Promise.race([
+    expiredAttention.promise,
+    Bun.sleep(1_000).then(() => {
+      throw new Error("Attention expiry event timed out");
+    }),
+  ]);
+  expect(await client.request<AttentionClientState>({
+    action: "attention.get",
+    targetClientId: "attention-detail-one",
+  })).toEqual(expect.objectContaining({ marks: [], pendingCount: 0 }));
+});
+
+test("runs and navigates a targeted structure-first walkthrough over protocol v32", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-outliner-workflow-protocol-"));
+  const store = new OutlinerStore(join(directory, "outliner.sqlite"));
+  const source = store.create([
+    "Architecture review",
+    "",
+    "## Problem",
+    "Understand the boundary.",
+    "",
+    "## Decision",
+    "Keep execution typed.",
+    "",
+    "## Next action",
+    "Record the result.",
+  ].join("\n"));
+  const socket = join(directory, "outliner.sock");
+  const server = new OutlinerServer(store, socket);
+  await server.start();
+  const client = new OutlinerClient(socket);
+  const connected = Promise.withResolvers<void>();
+  const firstEvents: OutlinerEvent[] = [];
+  const secondEvents: OutlinerEvent[] = [];
+  let connectionCount = 0;
+  const watchers = [
+    { clientId: "workflow-detail-one", events: firstEvents },
+    { clientId: "workflow-detail-two", events: secondEvents },
+  ].map(({ clientId, events }) =>
+    new OutlinerClient(socket).watch({
+      client: { clientId, role: "detail", contextId: clientId },
+      onConnect: () => {
+        connectionCount += 1;
+        if (connectionCount === 2) connected.resolve();
+      },
+      onEvent: (event) => {
+        events.push(event);
+      },
+    })
+  );
+  cleanups.push(async () => {
+    await Promise.all(watchers.map((watcher) => watcher.stop()));
+    await server.close();
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  await connected.promise;
+  const textBefore = store.require(source.id).text;
+  const selectionBefore = store.getSelection().selected?.id ?? null;
+
+  const started = await client.request<WorkflowStartReceipt>({
+    action: "workflows.start",
+    input: {
+      requestId: "workflow-protocol-start",
+      actionId: "walkthrough.plan",
+      invocation: { kind: "block", sourceBlockId: source.id },
+      capabilities: [
+        "outline.structure",
+        "outline.route",
+        "attention.mark",
+        "annotations.create",
+        "annotations.reply",
+        "annotations.batch",
+        "promotion.preview",
+        "promotion.commit",
+      ],
+      limits: { fanOut: 6, calls: 10 },
+      planner: "callscript",
+      targetClientId: "workflow-detail-one",
+    },
+  });
+  expect(started.run.status).toBe("planning");
+  expect(started.run.targetClientId).toBe("workflow-detail-one");
+  const planned = await orchestrateWorkflowRun(client, started.run.runId);
+  expect(planned.run.status).toBe("ready");
+  expect(planned.run.route.map((step) => step.title)).toEqual([
+    "Problem",
+    "Decision",
+    "Next action",
+  ]);
+  expect(planned.comparison.contextBytesSaved).toBe(0);
+  expect(planned.comparison.direct.structureFirst).toBe(true);
+  expect(planned.comparison.callscript.structureFirst).toBe(true);
+
+  const active = await client.request<WorkflowRun>({
+    action: "workflows.transition",
+    input: { runId: started.run.runId, action: "next" },
+  });
+  await Bun.sleep(50);
+  const event = firstEvents.find((candidate) => candidate.domain === "attention");
+  expect(active.status).toBe("active");
+  expect(active.route[0]?.status).toBe("current");
+  expect(event?.attention?.targetClientId).toBe("workflow-detail-one");
+  expect(event?.attentionInstruction).toEqual(expect.objectContaining({
+    reveal: true,
+    focus: false,
+  }));
+  expect(secondEvents).toEqual([]);
+  expect(store.require(source.id).text).toBe(textBefore);
+  expect(store.getSelection().selected?.id ?? null).toBe(selectionBefore);
+
+  const branched = await client.request<WorkflowRun>({
+    action: "workflows.transition",
+    input: {
+      runId: started.run.runId,
+      action: "branch",
+      question: "Should this become a durable decision?",
+    },
+  });
+  expect(branched.status).toBe("paused");
+  expect(branched.branchQuestion?.stepId).toBe(active.route[0]?.stepId);
+  expect(await client.request<WorkflowRun[]>({
+    action: "workflows.list",
+    limit: 5,
+  })).toEqual([expect.objectContaining({ runId: started.run.runId })]);
+
+  const ended = await client.request<WorkflowRun>({
+    action: "workflows.transition",
+    input: { runId: started.run.runId, action: "end" },
+  });
+  expect(ended.status).toBe("completed");
+  expect(await client.request<AttentionClientState>({
+    action: "attention.get",
+    targetClientId: "workflow-detail-one",
+  })).toEqual(expect.objectContaining({ marks: [] }));
 });

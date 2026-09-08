@@ -1,4 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import {
+  attentionClientState,
+  emptyAttentionState,
+  normalizeAttentionMark,
+} from "../src/attention";
 import type { RequestInput } from "../src/client";
 import { OutlinerActionKeymap } from "../src/outliner-actions";
 import { createTreeController, type TreeControllerEffects } from "../src/tree-controller";
@@ -96,6 +101,12 @@ function harness(
             role: input.role ?? "tree",
             contextId: `${clientId}-context`,
           }] as T;
+        }
+        if (response === undefined && input.action === "attention.get") {
+          return emptyAttentionState(input.targetClientId) as T;
+        }
+        if (response === undefined && input.action === "attention.acknowledge") {
+          return emptyAttentionState(input.input.targetClientId) as T;
         }
         if (response === undefined && input.action === "browsing-context.publish") {
           return {
@@ -2088,4 +2099,54 @@ describe("createTreeController", () => {
     expect(purgeFake.calls.at(-1)).toEqual({ action: "browsing-context.publish", sourceClientId: "tree-test", contextId: "tree-test-context", blockId: definition.id });
     expect(purgeController.view().status).toBe("Permanently purged");
   });
+});
+
+test("isolates Tree attention and reveals only on explicit instruction", async () => {
+  const first = block("first");
+  const target = block("target", { position: 1 });
+  const fake = harness((input) =>
+    input.action === "workspace.snapshot" ? snapshot([first, target], first) : undefined
+  );
+  const controller = createTreeController(fake.effects);
+  await controller.initialize();
+  const mark = normalizeAttentionMark({
+    markId: "tree-attention",
+    targetClientId: "tree-test",
+    target: { kind: "block", sourceBlockId: target.id },
+    tone: "info",
+    sender: "agent-test",
+  }, {
+    clientId: "tree-test",
+    role: "tree",
+    contextId: "tree-test-context",
+  }, target);
+  const attention = attentionClientState("tree-test", [mark], 1);
+
+  await controller.handleServiceEvent({
+    id: "other-attention",
+    domain: "attention",
+    action: "attention.mark",
+    sequence: 2,
+    attention: { ...attention, targetClientId: "other-tree" },
+  });
+  expect(controller.view().attention.marks).toEqual([]);
+  expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe(first.id);
+
+  await controller.handleServiceEvent({
+    id: "targeted-attention",
+    domain: "attention",
+    action: "attention.mark",
+    sequence: 3,
+    blockId: target.id,
+    attention,
+    attentionInstruction: { markId: mark.markId, reveal: true, focus: true },
+  });
+  expect(controller.view().attention.currentMarkId).toBe(mark.markId);
+  expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe(target.id);
+  expect(fake.focused).toEqual(["outliner"]);
+  expect(fake.calls.some((call) => call.action === "selection.set")).toBe(false);
+
+  await controller.handleKeypress("", { name: "x", ctrl: true }, "pass");
+  expect(controller.view().attention.marks).toEqual([]);
+  expect(controller.view().status).toBe("Attention cue acknowledged; active marks remain");
 });

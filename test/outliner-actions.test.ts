@@ -78,6 +78,12 @@ describe("Outliner action keymap", () => {
     expect(action.intent).toBe("detail.edit.begin");
     expect(action.available({ surface: "detail", mode: "preview" })).toBe(true);
     expect(action.available({ surface: "detail", mode: "edit" })).toBe(false);
+    const reveal = keymap.action("detail.current.reveal");
+    expect(reveal.available({ surface: "detail", mode: "preview" })).toBe(true);
+    expect(reveal.available({ surface: "detail", mode: "annotation" })).toBe(true);
+    expect(reveal.available({ surface: "detail", mode: "file" })).toBe(true);
+    expect(reveal.available({ surface: "detail", mode: "property" })).toBe(true);
+    expect(reveal.available({ surface: "detail", mode: "edit" })).toBe(false);
   });
 
 
@@ -141,6 +147,42 @@ describe("Outliner action keymap", () => {
     expect(() => new OutlinerActionKeymap("<test>", {
       "detail.cancel": [],
     })).toThrow("Detail editor modes require a keyboard-accessible cancel action");
+  });
+  test("resolves the same chord by explicit active-scope order", () => {
+    const keymap = new OutlinerActionKeymap("<test>", {
+      "detail.edit.begin": ["x"],
+      "detail.property.filter": ["x"],
+      "detail.backlinks.filter": ["x"],
+    });
+
+    expect(keymap.resolve(
+      "detail",
+      ["backlinks", "property-inspector", "preview"],
+      "x",
+      { name: "x" },
+    )).toEqual({ actionId: "detail.backlinks.filter", suppressed: false });
+    expect(keymap.resolve(
+      "detail",
+      ["property-inspector", "backlinks", "preview"],
+      "x",
+      { name: "x" },
+    )).toEqual({ actionId: "detail.property.filter", suppressed: false });
+    expect(keymap.resolve("detail", ["preview"], "x", { name: "x" })).toEqual({
+      actionId: "detail.edit.begin",
+      suppressed: false,
+    });
+  });
+  test("suppresses a rebound higher-scope default before lower-scope fallback", () => {
+    const keymap = new OutlinerActionKeymap("<test>", {
+      "detail.property.group": ["x"],
+    });
+
+    expect(keymap.resolve(
+      "detail",
+      ["property-inspector", "preview"],
+      "G",
+      { name: "G" },
+    )).toEqual({ actionId: null, suppressed: true });
   });
   test("reports unbound actions accurately in helpers and menus", () => {
     const keymap = new OutlinerActionKeymap("<test>", { "tree.edit": [] });

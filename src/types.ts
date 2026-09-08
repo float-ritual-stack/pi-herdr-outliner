@@ -95,6 +95,361 @@ export interface CaptureReceipt {
   deduplicated: boolean;
 }
 
+export type AnnotationSource = "user" | "agent";
+export type AnnotationLifecycle = "open" | "resolved";
+export type AnnotationAnchorState = "anchored" | "ambiguous" | "orphaned";
+
+export interface AnnotationAnchor {
+  start: number;
+  end: number;
+  excerpt: string;
+  contextBefore: string;
+  contextAfter: string;
+  sourceVersion: string;
+  sourceHash: string;
+}
+
+export type AnnotationTarget =
+  | {
+      kind: "block";
+      sourceBlockId: string;
+      anchor: AnnotationAnchor;
+    }
+  | {
+      kind: "file";
+      sourceBlockId: string;
+      filePath: string;
+      startLine: number;
+      endLine: number;
+      anchor: AnnotationAnchor;
+    };
+
+export interface AnnotationCreateInput {
+  target: AnnotationTarget;
+  body: string;
+  source: AnnotationSource;
+}
+
+export interface AnnotationReplyInput {
+  annotationId: string;
+  body: string;
+  source: AnnotationSource;
+}
+
+export type AnnotationBatchOperation =
+  | { operationId: string; type: "create"; input: AnnotationCreateInput }
+  | { operationId: string; type: "reply"; input: AnnotationReplyInput };
+
+export interface AnnotationRecord {
+  block: Block;
+  target: AnnotationTarget;
+  body: string;
+  source: AnnotationSource;
+  lifecycle: AnnotationLifecycle;
+  promotedBlockIds?: string[];
+  anchorState: AnnotationAnchorState;
+  parentAnnotationId?: string;
+}
+
+export interface AnnotationThread extends AnnotationRecord {
+  replies: AnnotationRecord[];
+}
+
+export interface AnnotationBatchReceipt {
+  annotations: AnnotationRecord[];
+  deduplicated: boolean;
+}
+
+export interface AnnotationListQuery {
+  sourceBlockId?: string;
+  filePath?: string;
+  lifecycle?: AnnotationLifecycle;
+  includeResolved?: boolean;
+}
+
+export interface AnnotationReanchorInput {
+  sourceBlockId: string;
+  sourceText: string;
+  sourceVersion: string;
+  sourceHash?: string;
+}
+
+export interface AnnotationLifecycleInput {
+  annotationId: string;
+  lifecycle: AnnotationLifecycle;
+  promotedBlockId?: string;
+}
+
+export type AttentionTone = "current" | "info" | "warning" | "error" | "match" | "dim";
+export type AttentionRole = "current" | "supporting";
+export type AttentionSourceState = "active" | "stale";
+
+export type AttentionTargetInput =
+  | {
+      kind: "block";
+      sourceBlockId: string;
+      fragmentId?: string;
+      sourceVersion?: string;
+      sourceHash?: string;
+      anchor?: AnnotationAnchor;
+    }
+  | {
+      kind: "file";
+      sourceBlockId: string;
+      filePath: string;
+      startLine: number;
+      endLine: number;
+      anchor: AnnotationAnchor;
+    };
+
+export type AttentionTarget =
+  | {
+      kind: "block";
+      sourceBlockId: string;
+      fragmentId?: string;
+      sourceVersion: string;
+      sourceHash: string;
+      anchor?: AnnotationAnchor;
+    }
+  | {
+      kind: "file";
+      sourceBlockId: string;
+      filePath: string;
+      startLine: number;
+      endLine: number;
+      anchor: AnnotationAnchor;
+    };
+
+export interface AttentionMarkInput {
+  markId: string;
+  targetClientId: string;
+  target: AttentionTargetInput;
+  tone: AttentionTone;
+  role?: AttentionRole;
+  sender: string;
+  expiresInMs?: number;
+  reveal?: boolean;
+  focus?: boolean;
+}
+
+export interface AttentionMark {
+  markId: string;
+  targetClientId: string;
+  target: AttentionTarget;
+  tone: AttentionTone;
+  role: AttentionRole;
+  sender: string;
+  createdAt: string;
+  expiresAt: string;
+  acknowledgedAt?: string;
+  returnCuePending: boolean;
+  sourceState: AttentionSourceState;
+}
+
+export interface AttentionClientState {
+  targetClientId: string;
+  marks: AttentionMark[];
+  currentMarkId?: string;
+  pendingCount: number;
+  summary: string;
+  updatedAt: string;
+}
+
+export interface AttentionClearInput {
+  targetClientId: string;
+  markId?: string;
+}
+
+export interface AttentionAcknowledgeInput extends AttentionClearInput {}
+
+export interface AttentionInstruction {
+  markId: string;
+  reveal: boolean;
+  focus: boolean;
+}
+
+export type WorkflowActionId = "walkthrough.plan";
+export type WorkflowPlanner = "pi-direct" | "callscript";
+export type WorkflowStatus =
+  | "planning"
+  | "ready"
+  | "active"
+  | "paused"
+  | "completed"
+  | "cancelled"
+  | "failed";
+export type WorkflowCapability =
+  | "outline.structure"
+  | "outline.route"
+  | "attention.mark"
+  | "annotations.create"
+  | "annotations.reply"
+  | "annotations.batch"
+  | "promotion.preview"
+  | "promotion.commit";
+
+export type WorkflowInvocation =
+  | { kind: "block"; sourceBlockId: string }
+  | { kind: "callout"; sourceBlockId: string; calloutType: string; calloutIndex?: number }
+  | { kind: "query"; query: BlockSearchQuery }
+  | { kind: "command"; command: string; sourceBlockId?: string };
+
+export interface WorkflowLimits {
+  fanOut: number;
+  calls: number;
+}
+
+export interface WorkflowStartInput {
+  requestId: string;
+  actionId: WorkflowActionId;
+  invocation: WorkflowInvocation;
+  capabilities: WorkflowCapability[];
+  limits: WorkflowLimits;
+  planner: WorkflowPlanner;
+  targetClientId?: string;
+  provenance?: BlockProvenance;
+}
+
+export interface WorkflowStructureRegion {
+  regionId: string;
+  title: string;
+  target: AttentionTargetInput;
+  sourceBytes: number;
+}
+
+export interface WorkflowStructureItem {
+  blockId: string;
+  title: string;
+  updatedAt: string;
+  depth: number;
+  properties: BlockProperty[];
+  regions: WorkflowStructureRegion[];
+  sourceBytes: number;
+}
+
+export interface WorkflowStructure {
+  invocation: WorkflowInvocation;
+  items: WorkflowStructureItem[];
+  completeness: BlockCollectionCompleteness;
+  contextBytes: number;
+}
+
+export interface WorkflowStep {
+  stepId: string;
+  ordinal: number;
+  title: string;
+  target: AttentionTargetInput;
+  sourceRevision: string;
+  status: "pending" | "current" | "visited" | "skipped";
+}
+
+export interface WorkflowMetrics {
+  planner: WorkflowPlanner;
+  modelTurns: number;
+  operations: number;
+  contextBytes: number;
+  wallTimeMs: number;
+  completeness: BlockCollectionCompleteness;
+  artifactQuality: "unrated" | "usable" | "needs-revision";
+  structureFirst: boolean;
+}
+
+export interface WorkflowComparison {
+  direct: WorkflowMetrics;
+  callscript: WorkflowMetrics;
+  contextBytesSaved: number;
+  operationDelta: number;
+}
+
+export interface WorkflowBranchQuestion {
+  stepId: string;
+  question: string;
+  createdAt: string;
+}
+
+export interface WorkflowRun {
+  runId: string;
+  requestId: string;
+  actionId: WorkflowActionId;
+  invocation: WorkflowInvocation;
+  capabilities: WorkflowCapability[];
+  limits: WorkflowLimits;
+  planner: WorkflowPlanner;
+  targetClientId?: string;
+  provenance?: BlockProvenance;
+  status: WorkflowStatus;
+  route: WorkflowStep[];
+  currentStepIndex: number | null;
+  branchQuestion?: WorkflowBranchQuestion;
+  metrics?: WorkflowMetrics;
+  comparison?: WorkflowComparison;
+  resultBlockIds: string[];
+  cancellationRequested: boolean;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WorkflowStartReceipt {
+  run: WorkflowRun;
+  deduplicated: boolean;
+}
+
+export interface WorkflowPlanInput {
+  runId: string;
+  route: WorkflowStep[];
+  metrics: WorkflowMetrics;
+  comparison?: WorkflowComparison;
+}
+
+export type WorkflowTransitionAction =
+  | "next"
+  | "previous"
+  | "pause"
+  | "resume"
+  | "skip"
+  | "branch"
+  | "end";
+
+export interface WorkflowTransitionInput {
+  runId: string;
+  action: WorkflowTransitionAction;
+  question?: string;
+  targetClientId?: string;
+  focus?: boolean;
+}
+
+export type WorkflowPromotionKind = "decision" | "follow-up" | "task" | "artifact";
+
+export interface WorkflowPromotionInput {
+  runId: string;
+  stepId: string;
+  annotationId: string;
+  kind: WorkflowPromotionKind;
+  title: string;
+  approvedBy: string;
+  body?: string;
+  parentId?: string | null;
+}
+
+export interface WorkflowPromotionPreview {
+  input: WorkflowPromotionInput;
+  text: string;
+  approvalToken: string;
+}
+
+export interface WorkflowPromotionCommitInput {
+  requestId: string;
+  approvalToken: string;
+  input: WorkflowPromotionInput;
+}
+
+export interface WorkflowPromotionReceipt {
+  run: WorkflowRun;
+  block: Block;
+  deduplicated: boolean;
+}
+
 export type DeliveryStage = "work" | "review" | "validate" | "complete";
 
 export interface DeliveryEnsureInput {
@@ -122,6 +477,8 @@ export interface OutlinerClientRuntime {
   tabId?: string;
   paneX?: number;
   paneY?: number;
+  focused?: boolean;
+  visible?: boolean;
 }
 
 export interface OutlinerClientRegistration {
@@ -343,7 +700,7 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 29;
+export const OUTLINER_PROTOCOL_VERSION = 32;
 
 
 export interface OutlinerServiceStatus {
@@ -365,6 +722,26 @@ export type OutlinerRequest =
       clientId: string;
       locked?: boolean;
       currentBlockId?: string | null;
+    }
+  | { id: string; action: "attention.get"; targetClientId: string }
+  | { id: string; action: "attention.mark"; input: AttentionMarkInput }
+  | { id: string; action: "attention.advance"; input: AttentionMarkInput }
+  | { id: string; action: "attention.clear"; input: AttentionClearInput }
+  | { id: string; action: "attention.acknowledge"; input: AttentionAcknowledgeInput }
+  | { id: string; action: "workflows.start"; input: WorkflowStartInput }
+  | { id: string; action: "workflows.get"; runId: string }
+  | { id: string; action: "workflows.list"; limit?: number }
+  | { id: string; action: "workflows.structure"; runId: string }
+  | { id: string; action: "workflows.plan"; input: WorkflowPlanInput }
+  | { id: string; action: "workflows.transition"; input: WorkflowTransitionInput }
+  | { id: string; action: "workflows.cancel"; runId: string }
+  | { id: string; action: "workflows.promotion.preview"; input: WorkflowPromotionInput }
+  | {
+      id: string;
+      action: "workflows.promotion.commit";
+      input: WorkflowPromotionCommitInput;
+      author?: BlockAuthor;
+      provenance?: BlockProvenance;
     }
   | { id: string; action: "ui.command.send"; command: OutlinerUiCommand }
   | { id: string; action: "blocks.context"; blockId: string }
@@ -424,6 +801,47 @@ export type OutlinerRequest =
       capturedFromBlockId?: string;
       author?: BlockAuthor;
       provenance?: BlockProvenance;
+    }
+  | {
+      id: string;
+      action: "annotations.list";
+      query: AnnotationListQuery;
+    }
+  | {
+      id: string;
+      action: "annotations.create";
+      requestId: string;
+      input: AnnotationCreateInput;
+      author?: BlockAuthor;
+      provenance?: BlockProvenance;
+    }
+  | {
+      id: string;
+      action: "annotations.reply";
+      requestId: string;
+      input: AnnotationReplyInput;
+      author?: BlockAuthor;
+      provenance?: BlockProvenance;
+    }
+  | {
+      id: string;
+      action: "annotations.batch";
+      requestId: string;
+      operations: AnnotationBatchOperation[];
+      author?: BlockAuthor;
+      provenance?: BlockProvenance;
+    }
+  | {
+      id: string;
+      action: "annotations.reanchor";
+      input: AnnotationReanchorInput;
+      mutation: MutationProvenance;
+    }
+  | {
+      id: string;
+      action: "annotations.lifecycle";
+      input: AnnotationLifecycleInput;
+      mutation: MutationProvenance;
     }
   | {
       id: string;
@@ -571,6 +989,7 @@ export type OutlinerEventDomain =
   | "selection"
   | "view"
   | "ui"
+  | "attention"
   | "browsing-context";
 
 export interface OutlinerEvent {
@@ -581,6 +1000,8 @@ export interface OutlinerEvent {
   blockId?: string;
   contextId?: string;
   command?: OutlinerUiCommand;
+  attention?: AttentionClientState;
+  attentionInstruction?: AttentionInstruction;
 }
 
 export interface OutlinerEventEnvelope {

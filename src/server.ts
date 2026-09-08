@@ -1,11 +1,23 @@
 import { existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
 import { dirname } from "node:path";
+import {
+  ATTENTION_MAX_SUPPORTING_MARKS,
+  attentionClientState,
+  attentionSourceState,
+  emptyAttentionState,
+  normalizeAttentionMark,
+} from "./attention";
 import type { HerdrRuntimeRegistry } from "./herdr-registry";
 import { isFragmentId, resolveFragment } from "./fragments";
 import { OutlinerStore } from "./store";
+import { WorkflowManager } from "./workflows";
 import {
   OUTLINER_PROTOCOL_VERSION,
+  type AnnotationBatchReceipt,
+  type AttentionClientState,
+  type AttentionMark,
+  type AttentionMarkInput,
   type Block,
   type BrowsingContextPublication,
   type CaptureReceipt,
@@ -22,6 +34,9 @@ import {
   type OutlinerRequest,
   type RoadmapItemCreateReceipt,
   type OutlinerResponse,
+  type WorkflowRun,
+  type WorkflowStartInput,
+  type WorkflowTransitionInput,
   type SelectionContext,
 } from "./types";
 
@@ -29,12 +44,17 @@ export class OutlinerServer {
   private server: Server | null = null;
   private readonly subscribers = new Map<Socket, OutlinerClientRegistration>();
   private readonly browsingContextTargets = new Map<string, string | null>();
+  private readonly attentionStates = new Map<string, AttentionClientState>();
+  private readonly attentionTimers = new Map<string, Timer>();
+  private readonly workflows: WorkflowManager;
 
   constructor(
     readonly store: OutlinerStore,
     readonly socketPath: string,
     readonly herdrRegistry?: HerdrRuntimeRegistry,
-  ) {}
+  ) {
+    this.workflows = new WorkflowManager(store);
+  }
 
   async start(): Promise<void> {
     mkdirSync(dirname(this.socketPath), { recursive: true });
@@ -63,6 +83,9 @@ export class OutlinerServer {
     if (!server) return;
     for (const subscriber of this.subscribers.keys()) subscriber.destroy();
     this.subscribers.clear();
+    for (const timer of this.attentionTimers.values()) clearTimeout(timer);
+    this.attentionTimers.clear();
+    this.attentionStates.clear();
     this.browsingContextTargets.clear();
     const closed = Promise.withResolvers<void>();
     server.close((error) => (error ? closed.reject(error) : closed.resolve()));
@@ -273,6 +296,10 @@ export class OutlinerServer {
         workspaceId: pane.workspace_id,
         tabId: pane.tab_id,
         ...(hasCoordinates ? { paneX: rect.x, paneY: rect.y } : {}),
+        focused: registry.focusedPaneId === pane.pane_id,
+        visible:
+          (registry.focusedWorkspaceId === null || registry.focusedWorkspaceId === pane.workspace_id) &&
+          (registry.focusedTabId === null || registry.focusedTabId === pane.tab_id),
       },
     };
   }
@@ -329,6 +356,326 @@ export class OutlinerServer {
       return this.reconcileClientRuntime(updated);
     }
     throw new Error(`Client is not registered: ${clientId}`);
+  }
+
+  private attentionClient(clientId: string): OutlinerClientRegistration {
+    const client = this.listClients().find((candidate) => candidate.clientId === clientId);
+    if (!client) throw new Error(`Attention target client is not registered: ${clientId}`);
+    return client;
+  }
+
+  private attentionState(clientId: string): AttentionClientState {
+    const existing = this.attentionStates.get(clientId) ?? emptyAttentionState(clientId);
+    const now = Date.now();
+    const marks = existing.marks.filter((mark) => Date.parse(mark.expiresAt) > now);
+    if (marks.length === existing.marks.length) return existing;
+    const expiredPending = existing.marks.filter((mark) =>
+      Date.parse(mark.expiresAt) <= now && mark.returnCuePending
+    ).length;
+    const next = attentionClientState(
+      clientId,
+      marks,
+      marks.length > 0 ? existing.pendingCount - expiredPending : 0,
+    );
+    if (marks.length === 0) this.attentionStates.delete(clientId);
+    else this.attentionStates.set(clientId, next);
+    return next;
+  }
+
+  private attentionTimerKey(clientId: string, markId: string): string {
+    return `${clientId}\u0000${markId}`;
+  }
+
+  private cancelAttentionTimer(clientId: string, markId: string): void {
+    const key = this.attentionTimerKey(clientId, markId);
+    const timer = this.attentionTimers.get(key);
+    if (timer) clearTimeout(timer);
+    this.attentionTimers.delete(key);
+  }
+
+  private scheduleAttentionExpiry(mark: AttentionMark): void {
+    this.cancelAttentionTimer(mark.targetClientId, mark.markId);
+    const key = this.attentionTimerKey(mark.targetClientId, mark.markId);
+    const delay = Math.max(0, Date.parse(mark.expiresAt) - Date.now());
+    const timer = setTimeout(() => {
+      this.attentionTimers.delete(key);
+      const current = this.attentionStates.get(mark.targetClientId);
+      if (!current) return;
+      const expired = current.marks.find((candidate) => candidate.markId === mark.markId);
+      const marks = current.marks.filter((candidate) => candidate.markId !== mark.markId);
+      const next = attentionClientState(
+        mark.targetClientId,
+        marks,
+        marks.length > 0
+          ? current.pendingCount - (expired?.returnCuePending ? 1 : 0)
+          : 0,
+      );
+      if (marks.length === 0) this.attentionStates.delete(mark.targetClientId);
+      else this.attentionStates.set(mark.targetClientId, next);
+      this.emitAttention(mark.targetClientId, "attention.expired", next);
+    }, delay);
+    timer.unref?.();
+    this.attentionTimers.set(key, timer);
+  }
+
+  private setAttention(input: AttentionMarkInput, advance: boolean): AttentionClientState {
+    const client = this.attentionClient(input.targetClientId);
+    const source = this.store.require(input.target.sourceBlockId);
+    const mark = normalizeAttentionMark(input, client, source);
+    if (advance && mark.role !== "current") {
+      throw new Error("Attention advance requires a current mark");
+    }
+    if (mark.target.kind === "file" && client.role !== "detail") {
+      throw new Error("File attention requires a Detail target client");
+    }
+
+    const existing = this.attentionState(client.clientId);
+    const removedMarkIds = new Set(
+      existing.marks.filter((candidate) =>
+        candidate.markId === mark.markId ||
+        (mark.role === "current" && candidate.role === "current")
+      ).map((candidate) => candidate.markId),
+    );
+    let marks = existing.marks.filter((candidate) => !removedMarkIds.has(candidate.markId));
+    if (mark.role === "supporting") {
+      const supporting = marks.filter((candidate) => candidate.role === "supporting");
+      const overflow = supporting.length - ATTENTION_MAX_SUPPORTING_MARKS + 1;
+      if (overflow > 0) {
+        const removed = new Set(
+          supporting.slice(0, overflow).map((candidate) => candidate.markId),
+        );
+        for (const markId of removed) {
+          removedMarkIds.add(markId);
+          this.cancelAttentionTimer(client.clientId, markId);
+        }
+        marks = marks.filter((candidate) => !removed.has(candidate.markId));
+      }
+    } else {
+      for (const candidate of existing.marks) {
+        if (candidate.role === "current") this.cancelAttentionTimer(client.clientId, candidate.markId);
+      }
+    }
+    marks.push(mark);
+    const cuePending = mark.returnCuePending;
+    const removedPending = existing.marks.filter((candidate) =>
+      removedMarkIds.has(candidate.markId) && candidate.returnCuePending
+    ).length;
+    const next = attentionClientState(
+      client.clientId,
+      marks,
+      existing.pendingCount - removedPending + (cuePending ? 1 : 0),
+    );
+    this.attentionStates.set(client.clientId, next);
+    this.scheduleAttentionExpiry(mark);
+    return next;
+  }
+
+  private clearAttention(input: { targetClientId: string; markId?: string }): AttentionClientState {
+    this.attentionClient(input.targetClientId);
+    const existing = this.attentionState(input.targetClientId);
+    const marks = input.markId
+      ? existing.marks.filter((mark) => mark.markId !== input.markId)
+      : [];
+    for (const mark of existing.marks) {
+      if (!marks.some((candidate) => candidate.markId === mark.markId)) {
+        this.cancelAttentionTimer(input.targetClientId, mark.markId);
+      }
+    }
+    const removedPending = existing.marks.filter((mark) =>
+      !marks.some((candidate) => candidate.markId === mark.markId) &&
+      mark.returnCuePending
+    ).length;
+    const next = attentionClientState(
+      input.targetClientId,
+      marks,
+      input.markId ? existing.pendingCount - removedPending : 0,
+    );
+    if (marks.length === 0) this.attentionStates.delete(input.targetClientId);
+    else this.attentionStates.set(input.targetClientId, next);
+    return next;
+  }
+
+  private acknowledgeAttention(
+    input: { targetClientId: string; markId?: string },
+  ): AttentionClientState {
+    this.attentionClient(input.targetClientId);
+    const existing = this.attentionState(input.targetClientId);
+    const acknowledgedAt = new Date().toISOString();
+    const marks = existing.marks.map((mark) =>
+      !input.markId || mark.markId === input.markId
+        ? { ...mark, acknowledgedAt, returnCuePending: false }
+        : mark
+    );
+    const newlyAcknowledged = existing.marks.filter((mark) =>
+      (!input.markId || mark.markId === input.markId) && mark.returnCuePending
+    ).length;
+    const next = attentionClientState(
+      input.targetClientId,
+      marks,
+      input.markId ? existing.pendingCount - newlyAcknowledged : 0,
+    );
+    if (marks.length > 0) this.attentionStates.set(input.targetClientId, next);
+    return next;
+  }
+
+  private workflowAttentionMarkId(runId: string, ordinal: number): string {
+    return `workflow:${runId}:${ordinal}`;
+  }
+
+  private workflowAttentionInput(
+    run: WorkflowRun,
+    step: WorkflowRun["route"][number],
+    targetClientId: string,
+    focus = false,
+  ): AttentionMarkInput {
+    return {
+      markId: this.workflowAttentionMarkId(run.runId, step.ordinal),
+      targetClientId,
+      target: step.target,
+      tone: "current",
+      role: "current",
+      sender: `workflow:${run.runId.slice(0, 8)}`,
+      expiresInMs: 60 * 60 * 1_000,
+      reveal: true,
+      focus,
+    };
+  }
+
+  private startWorkflow(input: WorkflowStartInput) {
+    if (input.targetClientId) {
+      this.attentionClient(input.targetClientId);
+      if (!input.capabilities.includes("attention.mark")) {
+        throw new Error("Targeted workflows require the attention.mark capability");
+      }
+    }
+    return this.workflows.start(input);
+  }
+
+  private transitionWorkflow(input: WorkflowTransitionInput): WorkflowRun {
+    let before = this.workflows.get(input.runId);
+    if (input.targetClientId && input.targetClientId !== before.targetClientId) {
+      this.attentionClient(input.targetClientId);
+      if (before.targetClientId && this.hasClient(before.targetClientId)) {
+        throw new Error("A live workflow target cannot be replaced");
+      }
+      before = this.workflows.retarget(before.runId, input.targetClientId);
+    }
+    const targetClientId = input.targetClientId ?? before.targetClientId;
+    if (targetClientId) {
+      this.attentionClient(targetClientId);
+      if (!before.capabilities.includes("attention.mark")) {
+        throw new Error("Workflow run lacks attention.mark capability");
+      }
+    }
+    if (
+      targetClientId &&
+      input.action !== "pause" &&
+      input.action !== "branch" &&
+      input.action !== "end"
+    ) {
+      const candidateIndex = before.status === "ready" && input.action === "next"
+        ? 0
+        : input.action === "previous"
+        ? Math.max(0, (before.currentStepIndex ?? 0) - 1)
+        : input.action === "next" || input.action === "skip"
+        ? Math.min(before.route.length - 1, (before.currentStepIndex ?? 0) + 1)
+        : before.currentStepIndex ?? 0;
+      const step = before.route[candidateIndex];
+      if (step) {
+        const target = this.attentionClient(targetClientId);
+        const source = this.store.require(step.target.sourceBlockId);
+        normalizeAttentionMark(
+          this.workflowAttentionInput(before, step, targetClientId, input.focus ?? false),
+          target,
+          source,
+        );
+      }
+    }
+    const next = this.workflows.transition(input);
+    if (!targetClientId) return next;
+
+    if (input.action === "end") {
+      const previous = before.currentStepIndex === null ? null : before.route[before.currentStepIndex];
+      if (previous) {
+        const attention = this.clearAttention({
+          targetClientId,
+          markId: this.workflowAttentionMarkId(before.runId, previous.ordinal),
+        });
+        this.emitAttention(targetClientId, "workflows.transition", attention);
+      }
+      return next;
+    }
+    if (input.action === "pause" || input.action === "branch") return next;
+    const step = next.currentStepIndex === null ? null : next.route[next.currentStepIndex];
+    if (!step) return next;
+    const attentionInput = this.workflowAttentionInput(
+      next,
+      step,
+      targetClientId,
+      input.focus ?? false,
+    );
+    const attention = this.setAttention(attentionInput, true);
+    this.emitAttention(targetClientId, "workflows.transition", attention, {
+      markId: attentionInput.markId,
+      reveal: true,
+      focus: attentionInput.focus ?? false,
+    }, step.target.sourceBlockId);
+    return next;
+  }
+
+  private cancelWorkflow(runId: string): WorkflowRun {
+    const before = this.workflows.get(runId);
+    const next = this.workflows.cancel(runId);
+    const step = before.currentStepIndex === null ? null : before.route[before.currentStepIndex];
+    if (before.targetClientId && step) {
+      const attention = this.clearAttention({
+        targetClientId: before.targetClientId,
+        markId: this.workflowAttentionMarkId(before.runId, step.ordinal),
+      });
+      this.emitAttention(before.targetClientId, "workflows.cancel", attention);
+    }
+    return next;
+  }
+
+  private emitAttention(
+    targetClientId: string,
+    action: string,
+    attention: AttentionClientState,
+    attentionInstruction?: OutlinerEvent["attentionInstruction"],
+    blockId?: string,
+  ): void {
+    this.broadcast({
+      id: crypto.randomUUID(),
+      domain: "attention",
+      action,
+      sequence: this.store.sequence,
+      attention,
+      ...(attentionInstruction ? { attentionInstruction } : {}),
+      ...(blockId ? { blockId } : {}),
+    });
+  }
+
+  private refreshAttentionForBlock(blockId: string): void {
+    let source: Block | null = null;
+    try {
+      source = this.store.require(blockId);
+    } catch {
+      source = null;
+    }
+    for (const [clientId, state] of this.attentionStates) {
+      let changed = false;
+      const marks = state.marks.map((mark) => {
+        if (mark.target.sourceBlockId !== blockId) return mark;
+        const sourceState = attentionSourceState(mark, source);
+        if (sourceState === mark.sourceState) return mark;
+        changed = true;
+        return { ...mark, sourceState };
+      });
+      if (!changed) continue;
+      const next = attentionClientState(clientId, marks, state.pendingCount);
+      this.attentionStates.set(clientId, next);
+      this.emitAttention(clientId, "attention.stale", next);
+    }
   }
 
   private sameTab(
@@ -412,11 +759,11 @@ export class OutlinerServer {
     preserveSource = false,
   ): Omit<OutlinerNavigationDispatch, "command"> {
     const source = this.clientById(sourceClientId);
+    if (!this.hasAvailableTopology(source)) {
+      throw new Error("Herdr pane discovery is unavailable · wait for the service registry to reconnect");
+    }
     if (intent !== "reveal") {
       return this.resolveUnlockedDetail(source, intent, preserveSource);
-    }
-    if (!this.hasAvailableTopology(source)) {
-      throw new Error("No Tree destination is available in this pane's context or tab");
     }
     if (source.role === "tree") {
       return {
@@ -489,6 +836,49 @@ export class OutlinerServer {
           break;
         case "clients.update":
           result = this.updateClient(request.clientId, request);
+          break;
+        case "attention.get":
+          this.attentionClient(request.targetClientId);
+          result = this.attentionState(request.targetClientId);
+          break;
+        case "attention.mark":
+          result = this.setAttention(request.input, false);
+          break;
+        case "attention.advance":
+          result = this.setAttention(request.input, true);
+          break;
+        case "attention.clear":
+          result = this.clearAttention(request.input);
+          break;
+        case "attention.acknowledge":
+          result = this.acknowledgeAttention(request.input);
+          break;
+        case "workflows.start":
+          result = this.startWorkflow(request.input);
+          break;
+        case "workflows.get":
+          result = this.workflows.get(request.runId);
+          break;
+        case "workflows.list":
+          result = this.workflows.list(request.limit);
+          break;
+        case "workflows.structure":
+          result = this.workflows.structure(request.runId);
+          break;
+        case "workflows.plan":
+          result = this.workflows.savePlan(request.input);
+          break;
+        case "workflows.transition":
+          result = this.transitionWorkflow(request.input);
+          break;
+        case "workflows.cancel":
+          result = this.cancelWorkflow(request.runId);
+          break;
+        case "workflows.promotion.preview":
+          result = this.workflows.previewPromotion(request.input);
+          break;
+        case "workflows.promotion.commit":
+          result = this.workflows.commitPromotion(request.input, request.provenance);
           break;
         case "blocks.context":
           result = this.store.blockContext(request.blockId);
@@ -620,6 +1010,45 @@ export class OutlinerServer {
             request.parentId,
             request.author,
             request.provenance,
+          );
+          break;
+        case "annotations.list":
+          result = this.store.listAnnotationThreads(request.query);
+          break;
+        case "annotations.create":
+          result = this.store.createAnnotation(
+            request.requestId,
+            request.input,
+            request.author,
+            request.provenance,
+          );
+          break;
+        case "annotations.reply":
+          result = this.store.replyToAnnotation(
+            request.requestId,
+            request.input,
+            request.author,
+            request.provenance,
+          );
+          break;
+        case "annotations.batch":
+          result = this.store.createAnnotationBatch(
+            request.requestId,
+            request.operations,
+            request.author,
+            request.provenance,
+          );
+          break;
+        case "annotations.reanchor":
+          result = this.store.reanchorAnnotationThreads(
+            request.input,
+            request.mutation,
+          );
+          break;
+        case "annotations.lifecycle":
+          result = this.store.setAnnotationLifecycle(
+            request.input,
+            request.mutation,
           );
           break;
         case "roadmap.items.create":
@@ -781,6 +1210,8 @@ export class OutlinerServer {
     let blockId: string | undefined;
     let contextId: string | undefined;
     let command: OutlinerEvent["command"];
+    let attention: AttentionClientState | undefined;
+    let attentionInstruction: OutlinerEvent["attentionInstruction"];
     switch (request.action) {
       case "create":
         domain = "content";
@@ -804,6 +1235,40 @@ export class OutlinerServer {
         blockId = receipt.block.id;
         break;
       }
+      case "annotations.create":
+      case "annotations.reply":
+      case "annotations.batch": {
+        const receipt = response.result as AnnotationBatchReceipt;
+        if (receipt.deduplicated) return null;
+        domain = "content";
+        blockId = receipt.annotations[0]?.block.id;
+        break;
+      }
+      case "annotations.lifecycle":
+        domain = "content";
+        blockId = request.input.annotationId;
+        break;
+      case "attention.mark":
+      case "attention.advance":
+        domain = "attention";
+        blockId = request.input.target.sourceBlockId;
+        attention = response.result as AttentionClientState;
+        attentionInstruction = {
+          markId: request.input.markId,
+          reveal: request.input.reveal ?? false,
+          focus: request.input.focus ?? false,
+        };
+        break;
+      case "attention.clear":
+      case "attention.acknowledge":
+        domain = "attention";
+        attention = response.result as AttentionClientState;
+        blockId = attention.marks.find((mark) =>
+          !request.input.markId || mark.markId === request.input.markId
+        )?.target.sourceBlockId;
+        break;
+      case "attention.get":
+        return null;
       case "update":
       case "move":
       case "delete":
@@ -871,6 +1336,8 @@ export class OutlinerServer {
       sequence: response.sequence,
       blockId,
       command,
+      ...(attention ? { attention } : {}),
+      ...(attentionInstruction ? { attentionInstruction } : {}),
       contextId,
     };
   }
@@ -884,6 +1351,9 @@ export class OutlinerServer {
       : line;
     for (const [subscriber, client] of this.subscribers) {
       if (event.domain === "ui" && event.command?.targetClientId !== client.clientId) {
+        continue;
+      }
+      if (event.domain === "attention" && event.attention?.targetClientId !== client.clientId) {
         continue;
       }
       if (event.domain === "browsing-context") {
@@ -935,6 +1405,9 @@ export class OutlinerServer {
           if (request && response.ok) {
             const event = this.eventFor(request, response);
             if (event) this.broadcast(event);
+            if (event?.domain === "content" && event.blockId) {
+              this.refreshAttentionForBlock(event.blockId);
+            }
           }
         }
         newline = buffer.indexOf("\n");

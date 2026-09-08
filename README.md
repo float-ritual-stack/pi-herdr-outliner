@@ -25,7 +25,7 @@ The project started as a small Friday-night experiment and grew into a durable w
 
 - SQLite-backed hierarchical blocks with stable UUIDs, sibling order, authors, timestamps, and one canonical graph per workspace root.
 - Workspace-isolated service and runtime paths.
-- JSON-lines RPC protocol v29 over a Unix socket.
+- JSON-lines RPC protocol v32 over a Unix socket.
 - Reactive canonical content/view broadcasts, per-process Tree/Detail registration with Detail lock availability, exact-client UI commands, and source-aware `preview | open | reveal` navigation.
 - Each Tree owns its cursor, occurrence selection, filter, viewport, collapsed rows, multiline expansion, explicit-navigation history, and browsing context; moving a Tree previews only in the first unlocked same-tab Detail and never replaces a locked anchor.
 - Indexed `[property::value]` metadata with optimistic property patching and catalog queries.
@@ -43,8 +43,9 @@ The project started as a small Friday-night experiment and grew into a durable w
 - Detail renders source-spanned Markdown, nested Obsidian callouts, generated embeds, Backlinks, and a structured property inspector through one PreviewRegion focus/action model while canonical source remains authoritative.
 - The property inspector preserves repeated keys and block/line/inline scope, offers inline disclosure plus a locked dedicated Detail pane, and routes typed block/page/Work-ID values through existing navigation.
 - Grapheme-safe wrapped Detail editing, word motion, selection, deletion, bounded per-session undo/redo, completion, optimistic save, and whole-session Esc cancellation.
+- Targeted ephemeral attention marks exact block/file source ranges in one addressed Tree or Detail without mutating content, selection, navigation history, or durable annotations. Marks expire, become stale instead of drifting when source changes, retain one current plus bounded supporting cues, and coalesce missed activity into a return summary.
 - Each Detail visibly reports `Unlocked` or `Locked`; unlocked Details form a spatial preview/open pool, while locked Details retain exact context anchors.
-- Referenced text/Markdown file viewing and durable line-range annotations.
+- Durable UTF-16 source-range annotations for blocks and referenced files, with resilient reanchoring, explicit ambiguous/orphan states, threaded replies, lifecycle/promotion links, anchored two-column Detail gutter markers, session-only inline disclosure, and exact-range reveal.
 - Herdr-owned pane placement/focus and current-pane recovery, one remembered service pane, per-process live client discovery, and an ephemeral runtime registry.
 - Pi/OMP commands, tools, selection-context injection, canonical `/send-to-outline` capture, and deterministic configured `PREFIX-XXX` work-placeholder nudging.
 
@@ -57,7 +58,7 @@ behavior already shipped on the current branch.
 
 - Linux or macOS
 - [Bun](https://bun.sh/) 1.3 or newer
-- Herdr 0.8 or newer
+- Herdr 0.9 or newer
 - Pi/OMP only if you want the agent extension and slash commands
 
 ### Install and link
@@ -192,6 +193,14 @@ Type to fuzzy-filter action labels, descriptions, bindings, and IDs; Backspace
 edits the query. Use Up/Down and Enter, click an action, or press Esc to close.
 The menu also includes currently unbound actions.
 
+Detail resolves each terminal chord once against an ordered context stack:
+global close, active chooser/filter/completion/editor, focused projection, then
+the base preview, annotation, file, or Property mode. Resolution produces a
+semantic action ID that keyboard input, rebound chords, the action menu, and
+clickable action links execute through one direct dispatcher; resolved actions
+are never converted back into synthetic keystrokes. Only input not owned by an
+application action reaches the active text editor or transient text field.
+
 Herdr owns secondary-click by default. Set `OUTLINER_RIGHT_CLICK=outliner` when
 launching Tree and Detail to make content secondary-click open the same menu at
 the pointer. Outliner registers `right_click=pane` only while it is running and
@@ -320,7 +329,7 @@ Projected virtual occurrences deliberately constrain hierarchy and collapse. Bra
 | `e` | Lock this Detail and edit raw canonical text |
 | `f` | Open referenced file |
 | `o` | Open the first authored reference in the shared destination chooser |
-| `R` | Reveal the selected backlink source when expanded; otherwise reveal the first authored reference in the paired or unique same-tab Tree |
+| `R` | Reveal the block currently shown by this Detail in its paired or unique same-tab Tree |
 | `L`, `i`, `Ctrl+L`, or `Command/Meta+L` | Lock this block as an anchor, or unlock the Detail for previews and opens |
 | `Option+Shift+Right` / `Option+Shift+Down` | Open the current target in a new independent Detail to the right / below |
 | `Option+Left` / `Option+Right` | Move backward / forward through this Detail's local history without changing lock state |
@@ -343,6 +352,11 @@ Detail gives each canonical Obsidian callout type a terminal-safe one-column gly
 and a semantic foreground, card background, and accent rail. Aliases such as
 `faq`, `attention`, and `check` inherit the `question`, `warning`, and `success`
 styles. Unknown types keep their authored title and use the neutral fallback.
+
+Sibling callouts preserve authored whitespace. Adjacent headers—and headers
+separated only by a quoted blank line (`>`)—render as touching cards. One or
+more unquoted blank source lines render as the same number of empty rows between
+the cards.
 
 Set `OUTLINER_CALLOUT_THEME` on the Herdr process to override only the roles you
 need. Values are JSON, colors are `#RRGGBB`, glyphs must occupy exactly one
@@ -376,6 +390,10 @@ invoking Detail regardless of lock state, `f` uses the first unlocked Detail,
 `r` splits right, and `d` splits down. A second `Enter` uses the first unlocked
 Detail or falls back to a right split. `R` outside the popup still reveals the
 selected source in Tree.
+
+### Detail source comments
+
+Press `v` in block preview to begin a locked, read-only selection without replacing or reflowing the rendered reader. Shift-motion or primary-button drag selects an exact authored UTF-16 range; the range stays highlighted in place. `c` mounts a reusable contextual buffer over the bottom of the reader, quotes the selected excerpt, and leaves the resource, layout, and scroll position intact. `Ctrl+S` stores the comment and closes the buffer; `Esc` cancels without creating a block. File view retains line-range selection with the same contextual buffer. Annotation view `r` returns to the source with the resolved block range or file lines selected; ambiguous and orphaned anchors are reported instead of guessed.
 
 ### Detail edit and comment modes
 
@@ -600,9 +618,39 @@ The project Pi extension is auto-discovered through [`.pi/extensions/outliner.ts
 - `outliner_move`
 - `outliner_clients`
 - `outliner_selection`
-- `outliner_annotate_file`
+- `outliner_annotations`
+- `outliner_annotate`
+- `outliner_annotation_reply`
+- `outliner_annotation_lifecycle`
+- `outliner_annotation_batch`
+- `outliner_attention`
+- `outliner_workflow`
 
 `outliner_query` accepts structured filters such as `{ key: "status", value: "in progress" }`, plus optional text and subtree fields. The service normalizes keys/values and applies the same bounded semantics used by human surfaces. `outliner_focus` targets an explicit or unique live Tree client and returns compact structural context.
+
+Annotation tools use the same canonical child blocks as Detail. Targets carry a block ID or file identity plus UTF-16 offsets, excerpt, bounded before/after context, source version, and hash. Create and batch calls are idempotent; invalid batches create nothing. Replies retain the root target, lifecycle changes can link promoted canonical blocks, and inspection returns explicit anchor state.
+
+`outliner_attention` requires an explicit live client ID. It can mark, advance,
+acknowledge, clear, or inspect short-lived block/file attention. Exact UTF-16
+anchors carry source version/hash evidence; stale source is rejected on create
+and existing marks become visibly stale after a source change. `reveal` and
+`focus` are explicit, independent opt-ins. Without them, the target pane's
+selection, navigation history, lock, and canonical content do not change.
+
+`outliner_workflow` starts only the typed `walkthrough.plan` action with an
+explicit capability allowlist, fan-out bound, call bound, and invocation
+(`block`, `callout`, structured query, or the literal `walkthrough` command).
+A separate Pi SDK-side orchestrator compares ordinary sequential tool use with
+an inert Callscript plan that can call only `outline.structure` and
+`outline.route`. Both paths produce the same ordered route of source anchors;
+neither copies source bodies or persists narration. Run state records identity,
+inputs, provenance, route, current step, completeness, truncation, operations,
+model-turn estimate, context bytes, wall time, cancellation, and linked result
+blocks. `next`, `previous`, `pause`, `resume`, `skip`, `branch`, and `end`
+advance targeted `outliner_attention` without changing selection or canonical
+source text. Questions remain ordinary PIE-210 annotation threads. Promotion
+requires an exact preview token and an idempotent commit request before creating
+one linked canonical decision, follow-up, task, or artifact.
 
 `outliner_roadmap_create` is the canonical new-work path: it fails without a partial block or consumed Work ID when queue discovery, metadata, or relationship validation fails. New work defaults to `unprioritized`. `outliner_branch_rank` updates only persisted virtual occurrence ranks; it neither moves canonical blocks nor changes `work-stage`, and ranks remain available across temporary query mismatches.
 

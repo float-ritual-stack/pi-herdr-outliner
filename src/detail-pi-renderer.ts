@@ -270,6 +270,7 @@ export function renderPropertyInspectorDocument(
   return lines.join("\n");
 }
 
+
 export interface DetailPiComponentOptions {
   state: Readonly<DetailState>;
   height(): number;

@@ -12,7 +12,6 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { formatFileAnnotation } from "../src/annotations";
 import {
   focusBlockByQuery,
   formatBlockFocusMatch,
@@ -56,6 +55,14 @@ import {
 } from "../src/work-environment";
 import {
   OUTLINER_PROTOCOL_VERSION,
+  type AnnotationBatchOperation,
+  type AnnotationBatchReceipt,
+  type AnnotationRecord,
+  type AnnotationTarget,
+  type AttentionClientState,
+  type AttentionMarkInput,
+  type AttentionTargetInput,
+  type AnnotationThread,
   type Block,
   type BlockEditActivityPage,
   type BlockProvenance,
@@ -76,6 +83,15 @@ import {
   type VisibleBlockCollection,
   type WorkIdAllocatorStatus,
   type WorkspaceSnapshot,
+  type WorkflowCapability,
+  type WorkflowInvocation,
+  type WorkflowPromotionCommitInput,
+  type WorkflowPromotionInput,
+  type WorkflowPromotionPreview,
+  type WorkflowPromotionReceipt,
+  type WorkflowRun,
+  type WorkflowStartReceipt,
+  type WorkflowTransitionAction,
 } from "../src/types";
 
 const execFileAsync = promisify(execFile);
@@ -215,6 +231,106 @@ const propertyPatchOperationSchema = Type.Union([
     value: Type.String(),
   }),
 ]);
+
+const annotationAnchorSchema = Type.Object({
+  start: Type.Integer({ minimum: 0, description: "UTF-16 start offset, inclusive" }),
+  end: Type.Integer({ minimum: 1, description: "UTF-16 end offset, exclusive" }),
+  excerpt: Type.String(),
+  contextBefore: Type.String(),
+  contextAfter: Type.String(),
+  sourceVersion: Type.String(),
+  sourceHash: Type.String(),
+});
+
+const annotationTargetSchema = Type.Union([
+  Type.Object({
+    kind: Type.Literal("block"),
+    sourceBlockId: Type.String(),
+    anchor: annotationAnchorSchema,
+  }),
+  Type.Object({
+    kind: Type.Literal("file"),
+    sourceBlockId: Type.String(),
+    filePath: Type.String(),
+    startLine: Type.Integer({ minimum: 1 }),
+    endLine: Type.Integer({ minimum: 1 }),
+    anchor: annotationAnchorSchema,
+  }),
+]);
+
+const attentionTargetSchema = Type.Union([
+  Type.Object({
+    kind: Type.Literal("block"),
+    sourceBlockId: Type.String(),
+    fragmentId: Type.Optional(Type.String()),
+    sourceVersion: Type.Optional(Type.String()),
+    sourceHash: Type.Optional(Type.String()),
+    anchor: Type.Optional(annotationAnchorSchema),
+  }),
+  Type.Object({
+    kind: Type.Literal("file"),
+    sourceBlockId: Type.String(),
+    filePath: Type.String(),
+    startLine: Type.Integer({ minimum: 1 }),
+    endLine: Type.Integer({ minimum: 1 }),
+    anchor: annotationAnchorSchema,
+  }),
+]);
+
+const workflowCapabilitySchema = Type.Union([
+  Type.Literal("outline.structure"),
+  Type.Literal("outline.route"),
+  Type.Literal("attention.mark"),
+  Type.Literal("annotations.create"),
+  Type.Literal("annotations.reply"),
+  Type.Literal("annotations.batch"),
+  Type.Literal("promotion.preview"),
+  Type.Literal("promotion.commit"),
+]);
+const workflowInvocationSchema = Type.Union([
+  Type.Object({
+    kind: Type.Literal("block"),
+    sourceBlockId: Type.String(),
+  }),
+  Type.Object({
+    kind: Type.Literal("callout"),
+    sourceBlockId: Type.String(),
+    calloutType: Type.String(),
+    calloutIndex: Type.Optional(Type.Integer({ minimum: 0, maximum: 1_000 })),
+  }),
+  Type.Object({
+    kind: Type.Literal("query"),
+    query: Type.Object({
+      text: Type.Optional(Type.String()),
+      subtreeRootId: Type.Optional(Type.String()),
+      filters: Type.Optional(Type.Array(Type.Object({
+        key: Type.String(),
+        value: Type.Optional(Type.String()),
+      }))),
+      limit: Type.Integer({ minimum: 1, maximum: 100 }),
+    }),
+  }),
+  Type.Object({
+    kind: Type.Literal("command"),
+    command: Type.Literal("walkthrough"),
+    sourceBlockId: Type.Optional(Type.String()),
+  }),
+]);
+const workflowPromotionInputSchema = Type.Object({
+  runId: Type.String(),
+  stepId: Type.String(),
+  annotationId: Type.String(),
+  kind: Type.Union([
+    Type.Literal("decision"),
+    Type.Literal("follow-up"),
+    Type.Literal("task"),
+    Type.Literal("artifact"),
+  ]),
+  title: Type.String(),
+  approvedBy: Type.String(),
+  body: Type.Optional(Type.String()),
+  parentId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+});
 
 const MAX_TOOL_RESULT_CHARS = 12_000;
 const WORK_PLACEHOLDER_SKILL = "work-placeholder-resolver";
@@ -468,6 +584,27 @@ async function waitForService(timeoutMs = 5000): Promise<void> {
   throw lastError instanceof Error ? lastError : new Error("Outliner service did not start");
 }
 
+async function runWorkflowOrchestrator(
+  runId: string,
+  signal?: AbortSignal,
+): Promise<unknown> {
+  const { stdout } = await execFileAsync(
+    "bun",
+    ["run", join(extensionRoot, "src/workflow-main.ts"), "--run-id", runId],
+    {
+      cwd: extensionRoot,
+      signal,
+      maxBuffer: 2 * 1024 * 1024,
+      timeout: 10 * 60 * 1_000,
+    },
+  );
+  try {
+    return JSON.parse(stdout);
+  } catch {
+    throw new Error("Workflow orchestrator returned invalid JSON");
+  }
+}
+
 async function ensureService(focus: boolean): Promise<void> {
   const service = await client
     .request<OutlinerServiceStatus>({ action: "ping" }, 300)
@@ -689,7 +826,7 @@ function formatContext(
     children ? `Children:\n${children}` : "Children: none",
     "Use outliner_selection/outliner_query for additional block text.",
     options.workflowReminder
-      ? "Workflow: publish durable plans, roadmap reviews, findings, decisions, handoffs, and proof with outliner_publish; keep ordinary conversational explanation in chat. Use outliner_focus to present the relevant block before narrating it. Never infer task completion from agent lifecycle events."
+      ? "Workflow: publish durable plans, roadmap reviews, findings, decisions, handoffs, and proof with outliner_publish; keep ordinary conversational explanation in chat. Inspect with outliner_selection/outliner_query. Use outliner_focus only when the user explicitly asks to switch the visible Tree context. Never infer task completion from agent lifecycle events."
       : "",
   ].filter(Boolean).join("\n"));
 }
@@ -905,8 +1042,6 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
       diagnostic: () => {},
       eventTypes: ["pane.focused"],
       includePaneAgentStatus: false,
-      replayQuietMs: 25,
-      replayMaxMs: 500,
     });
     focusRunner.start();
   }
@@ -1884,8 +2019,8 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
     name: "outliner_focus",
     label: "Outliner Focus",
     description:
-      "Focus a block in an explicit or unique live Tree client and return bounded structural context",
-    promptSnippet: "Present an Outliner block before narrating or handing it to the user",
+      "Explicitly focus a block in a live Tree client, switching the user's active Herdr pane, and return bounded structural context",
+    promptSnippet: "Switch the visible Outliner Tree to a block only when the user explicitly asks",
     parameters: Type.Object({
       query: Type.String({ description: "Full ID, short ID prefix, symbolic title, or fuzzy text" }),
       clientId: Type.Optional(
@@ -1941,9 +2076,9 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
         Type.Literal("progress"),
       ]),
       parentId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
-      focus: Type.Optional(Type.Boolean({ description: "Defaults to true" })),
+      focus: Type.Optional(Type.Boolean({ description: "Defaults to false; true switches the user's active Herdr pane" })),
       clientId: Type.Optional(
-        Type.String({ description: "Tree client to focus when multiple clients are live" }),
+        Type.String({ description: "Tree client to focus when focus is true and multiple clients are live" }),
       ),
     }),
     async execute(toolCallId, params, _signal, _onUpdate, context) {
@@ -1958,7 +2093,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
         author: "agent",
         provenance: toolProvenance(actorId, context, toolCallId),
       });
-      if (params.focus === false) {
+      if (params.focus !== true) {
         return toolResult({
           blockId: block.id,
           parentId,
@@ -2109,34 +2244,374 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
   });
 
   pi.registerTool({
-    ...outlinerToolPresentation("Outliner Annotate File"),
-    name: "outliner_annotate_file",
-    label: "Outliner Annotate File",
-    description: "Attach a durable line-range comment beneath a file-reference block",
-    promptSnippet: "Annotate specific lines of a referenced text or Markdown file",
+    ...outlinerToolPresentation("Outliner Annotations"),
+    name: "outliner_annotations",
+    label: "Outliner Annotations",
+    description: "Inspect durable annotation threads anchored to a block or file reference",
+    promptSnippet: "List durable comments for an Outliner source block",
     parameters: Type.Object({
-      sourceBlockId: Type.String({ description: "Block containing the [file::path] property" }),
-      startLine: Type.Integer({ minimum: 1 }),
-      endLine: Type.Integer({ minimum: 1 }),
-      comment: Type.String(),
+      sourceBlockId: Type.Optional(Type.String()),
+      includeResolved: Type.Optional(Type.Boolean()),
     }),
-    async execute(toolCallId, params, _signal, _onUpdate, context) {
+    async execute(_toolCallId, params) {
       await ensureService(false);
-      const source = await client.request<Block>({ action: "get", blockId: params.sourceBlockId });
-      const filePath = getProperty(source.properties, "file");
-      if (!filePath) throw new Error(`Block has no [file::path] property: ${source.id}`);
-      const text = formatFileAnnotation({ ...params, filePath });
-      const annotation = await client.request<Block>({
-        action: "create",
-        parentId: source.id,
-        text,
-        author: "agent",
-        provenance: toolProvenance(actorId, context, toolCallId),
-      });
-      return toolResult(annotation);
+      const sourceBlockId = params.sourceBlockId ?? await selectedBlockId();
+      if (!sourceBlockId) throw new Error("No annotation source block was provided or selected");
+      return toolResult(await client.request<AnnotationThread[]>({
+        action: "annotations.list",
+        query: {
+          sourceBlockId,
+          includeResolved: params.includeResolved ?? true,
+        },
+      }));
     },
   });
 
+  pi.registerTool({
+    ...outlinerToolPresentation("Outliner Annotate"),
+    name: "outliner_annotate",
+    label: "Outliner Annotate",
+    description: "Create one durable source-range comment without editing its target",
+    promptSnippet: "Annotate an exact UTF-16 range in an Outliner block or referenced file",
+    parameters: Type.Object({
+      target: annotationTargetSchema,
+      comment: Type.String(),
+      requestId: Type.Optional(Type.String()),
+    }),
+    async execute(toolCallId, params, _signal, _onUpdate, context) {
+      await ensureService(false);
+      return toolResult(await client.request<AnnotationBatchReceipt>({
+        action: "annotations.create",
+        requestId: params.requestId ?? `${context.sessionManager.getSessionId()}:${toolCallId}`,
+        input: {
+          target: params.target as AnnotationTarget,
+          body: params.comment,
+          source: "agent",
+        },
+        author: "agent",
+        provenance: toolProvenance(actorId, context, toolCallId),
+      }));
+    },
+  });
+
+  pi.registerTool({
+    ...outlinerToolPresentation("Outliner Annotation Reply"),
+    name: "outliner_annotation_reply",
+    label: "Outliner Annotation Reply",
+    description: "Reply to a durable annotation thread without editing its target",
+    promptSnippet: "Reply to an existing Outliner source annotation",
+    parameters: Type.Object({
+      annotationId: Type.String(),
+      comment: Type.String(),
+      requestId: Type.Optional(Type.String()),
+    }),
+    async execute(toolCallId, params, _signal, _onUpdate, context) {
+      await ensureService(false);
+      return toolResult(await client.request<AnnotationBatchReceipt>({
+        action: "annotations.reply",
+        requestId: params.requestId ?? `${context.sessionManager.getSessionId()}:${toolCallId}`,
+        input: {
+          annotationId: params.annotationId,
+          body: params.comment,
+          source: "agent",
+        },
+        author: "agent",
+        provenance: toolProvenance(actorId, context, toolCallId),
+      }));
+    },
+  });
+
+  pi.registerTool({
+    ...outlinerToolPresentation("Outliner Annotation Lifecycle"),
+    name: "outliner_annotation_lifecycle",
+    label: "Outliner Annotation Lifecycle",
+    description: "Resolve or reopen a durable annotation thread and optionally link its promoted block",
+    promptSnippet: "Change an Outliner annotation thread lifecycle without editing its target",
+    parameters: Type.Object({
+      annotationId: Type.String(),
+      lifecycle: Type.Union([Type.Literal("open"), Type.Literal("resolved")]),
+      promotedBlockId: Type.Optional(Type.String()),
+    }),
+    async execute(toolCallId, params, _signal, _onUpdate, context) {
+      await ensureService(false);
+      return toolResult(await client.request<AnnotationRecord>({
+        action: "annotations.lifecycle",
+        input: params,
+        mutation: agentMutation(actorId, context, toolCallId),
+      }));
+    },
+  });
+
+  pi.registerTool({
+    ...outlinerToolPresentation("Outliner Annotation Batch"),
+    name: "outliner_annotation_batch",
+    label: "Outliner Annotation Batch",
+    description: "Atomically create or reply to multiple durable source annotations",
+    promptSnippet: "Apply an idempotent all-or-nothing batch of Outliner comments",
+    parameters: Type.Object({
+      requestId: Type.Optional(Type.String()),
+      operations: Type.Array(Type.Union([
+        Type.Object({
+          operationId: Type.String(),
+          type: Type.Literal("create"),
+          target: annotationTargetSchema,
+          comment: Type.String(),
+        }),
+        Type.Object({
+          operationId: Type.String(),
+          type: Type.Literal("reply"),
+          annotationId: Type.String(),
+          comment: Type.String(),
+        }),
+      ]), { minItems: 1, maxItems: 100 }),
+    }),
+    async execute(toolCallId, params, _signal, _onUpdate, context) {
+      await ensureService(false);
+      const operations = params.operations.map((operation): AnnotationBatchOperation =>
+        operation.type === "create"
+          ? {
+              operationId: operation.operationId,
+              type: "create",
+              input: {
+                target: operation.target as AnnotationTarget,
+                body: operation.comment,
+                source: "agent",
+              },
+            }
+          : {
+              operationId: operation.operationId,
+              type: "reply",
+              input: {
+                annotationId: operation.annotationId,
+                body: operation.comment,
+                source: "agent",
+              },
+            }
+      );
+      return toolResult(await client.request<AnnotationBatchReceipt>({
+        action: "annotations.batch",
+        requestId: params.requestId ?? `${context.sessionManager.getSessionId()}:${toolCallId}`,
+        operations,
+        author: "agent",
+        provenance: toolProvenance(actorId, context, toolCallId),
+      }));
+    },
+  });
+
+
+  pi.registerTool({
+    ...outlinerToolPresentation("Outliner Attention"),
+    name: "outliner_attention",
+    label: "Outliner Attention",
+    description:
+      "Inspect, paint, advance, acknowledge, or clear ephemeral attention in one explicit Outliner client",
+    promptSnippet:
+      "Point at an exact source range without editing content or creating a durable annotation",
+    parameters: Type.Union([
+      Type.Object({
+        operation: Type.Literal("status"),
+        clientId: Type.String(),
+      }),
+      Type.Object({
+        operation: Type.Union([Type.Literal("mark"), Type.Literal("advance")]),
+        clientId: Type.String(),
+        markId: Type.Optional(Type.String()),
+        target: attentionTargetSchema,
+        tone: Type.Union([
+          Type.Literal("current"),
+          Type.Literal("info"),
+          Type.Literal("warning"),
+          Type.Literal("error"),
+          Type.Literal("match"),
+          Type.Literal("dim"),
+        ]),
+        role: Type.Optional(Type.Union([
+          Type.Literal("current"),
+          Type.Literal("supporting"),
+        ])),
+        expiresInMs: Type.Optional(Type.Integer({ minimum: 100, maximum: 3_600_000 })),
+        reveal: Type.Optional(Type.Boolean()),
+        focus: Type.Optional(Type.Boolean()),
+      }),
+      Type.Object({
+        operation: Type.Union([Type.Literal("acknowledge"), Type.Literal("clear")]),
+        clientId: Type.String(),
+        markId: Type.Optional(Type.String()),
+      }),
+    ]),
+    async execute(toolCallId, params, _signal, _onUpdate, context) {
+      await ensureService(false);
+      if (params.operation === "status") {
+        return toolResult(await client.request<AttentionClientState>({
+          action: "attention.get",
+          targetClientId: params.clientId,
+        }));
+      }
+      if (params.operation === "clear" || params.operation === "acknowledge") {
+        return toolResult(await client.request<AttentionClientState>({
+          action: params.operation === "clear"
+            ? "attention.clear"
+            : "attention.acknowledge",
+          input: {
+            targetClientId: params.clientId,
+            ...(params.markId ? { markId: params.markId } : {}),
+          },
+        }));
+      }
+      const markParams = params as {
+        operation: "mark" | "advance";
+        clientId: string;
+        markId?: string;
+        target: AttentionTargetInput;
+        tone: AttentionMarkInput["tone"];
+        role?: AttentionMarkInput["role"];
+        expiresInMs?: number;
+        reveal?: boolean;
+        focus?: boolean;
+      };
+      const input: AttentionMarkInput = {
+        markId: markParams.markId ?? `${context.sessionManager.getSessionId()}:${toolCallId}`,
+        targetClientId: markParams.clientId,
+        target: markParams.target,
+        tone: markParams.tone,
+        role: markParams.operation === "advance" ? "current" : markParams.role ?? "current",
+        sender: actorId,
+        ...(markParams.expiresInMs ? { expiresInMs: markParams.expiresInMs } : {}),
+        ...(markParams.reveal !== undefined ? { reveal: markParams.reveal } : {}),
+        ...(markParams.focus !== undefined ? { focus: markParams.focus } : {}),
+      };
+      return toolResult(await client.request<AttentionClientState>({
+        action: markParams.operation === "advance" ? "attention.advance" : "attention.mark",
+        input,
+      }));
+    },
+  });
+  pi.registerTool({
+    ...outlinerToolPresentation("Outliner Workflow"),
+    name: "outliner_workflow",
+    label: "Outliner Workflow",
+    description:
+      "Run, inspect, navigate, cancel, and explicitly publish from a bounded allowlisted outline walkthrough",
+    promptSnippet:
+      "Use structure-first workflow state; keep narration ephemeral and promote annotation outcomes only after exact approval",
+    parameters: Type.Union([
+      Type.Object({
+        operation: Type.Literal("start"),
+        invocation: workflowInvocationSchema,
+        capabilities: Type.Array(workflowCapabilitySchema, { minItems: 2, maxItems: 8 }),
+        fanOut: Type.Integer({ minimum: 1, maximum: 20 }),
+        callLimit: Type.Integer({ minimum: 2, maximum: 50 }),
+        planner: Type.Union([Type.Literal("pi-direct"), Type.Literal("callscript")]),
+        clientId: Type.Optional(Type.String()),
+        requestId: Type.Optional(Type.String()),
+      }),
+      Type.Object({
+        operation: Type.Literal("status"),
+        runId: Type.Optional(Type.String()),
+        limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+      }),
+      Type.Object({
+        operation: Type.Literal("transition"),
+        runId: Type.String(),
+        action: Type.Union([
+          Type.Literal("next"),
+          Type.Literal("previous"),
+          Type.Literal("pause"),
+          Type.Literal("resume"),
+          Type.Literal("skip"),
+          Type.Literal("branch"),
+          Type.Literal("end"),
+        ]),
+        question: Type.Optional(Type.String()),
+        focus: Type.Optional(Type.Boolean()),
+        clientId: Type.Optional(Type.String()),
+      }),
+      Type.Object({
+        operation: Type.Literal("cancel"),
+        runId: Type.String(),
+      }),
+      Type.Object({
+        operation: Type.Literal("promotion_preview"),
+        input: workflowPromotionInputSchema,
+      }),
+      Type.Object({
+        operation: Type.Literal("promotion_commit"),
+        requestId: Type.Optional(Type.String()),
+        approvalToken: Type.String(),
+        input: workflowPromotionInputSchema,
+      }),
+    ]),
+    async execute(toolCallId, params, signal, _onUpdate, context) {
+      await ensureService(false);
+      if (params.operation === "status") {
+        const value = params.runId
+          ? await client.request<WorkflowRun>({ action: "workflows.get", runId: params.runId })
+          : await client.request<WorkflowRun[]>({ action: "workflows.list", limit: params.limit });
+        return toolResult(value);
+      }
+      if (params.operation === "cancel") {
+        return toolResult(await client.request<WorkflowRun>({
+          action: "workflows.cancel",
+          runId: params.runId,
+        }));
+      }
+      if (params.operation === "transition") {
+        return toolResult(await client.request<WorkflowRun>({
+          action: "workflows.transition",
+          input: {
+            runId: params.runId,
+            action: params.action as WorkflowTransitionAction,
+            ...(params.question ? { question: params.question } : {}),
+            ...(params.focus !== undefined ? { focus: params.focus } : {}),
+            ...(params.clientId ? { targetClientId: params.clientId } : {}),
+          },
+        }));
+      }
+      if (params.operation === "promotion_preview") {
+        return toolResult(await client.request<WorkflowPromotionPreview>({
+          action: "workflows.promotion.preview",
+          input: params.input as WorkflowPromotionInput,
+        }));
+      }
+      if (params.operation === "promotion_commit") {
+        const input: WorkflowPromotionCommitInput = {
+          requestId: params.requestId ?? `${context.sessionManager.getSessionId()}:${toolCallId}`,
+          approvalToken: params.approvalToken,
+          input: params.input as WorkflowPromotionInput,
+        };
+        return toolResult(await client.request<WorkflowPromotionReceipt>({
+          action: "workflows.promotion.commit",
+          input,
+          provenance: toolProvenance(actorId, context, toolCallId),
+        }));
+      }
+      const receipt = await client.request<WorkflowStartReceipt>({
+        action: "workflows.start",
+        input: {
+          requestId: params.requestId ?? `${context.sessionManager.getSessionId()}:${toolCallId}`,
+          actionId: "walkthrough.plan",
+          invocation: params.invocation as WorkflowInvocation,
+          capabilities: params.capabilities as WorkflowCapability[],
+          limits: { fanOut: params.fanOut, calls: params.callLimit },
+          planner: params.planner,
+          ...(params.clientId ? { targetClientId: params.clientId } : {}),
+          provenance: toolProvenance(actorId, context, toolCallId),
+        },
+      });
+      if (receipt.run.status !== "planning") return toolResult(receipt);
+      try {
+        return toolResult(await runWorkflowOrchestrator(receipt.run.runId, signal));
+      } catch (error) {
+        if (signal?.aborted) {
+          await client.request<WorkflowRun>({
+            action: "workflows.cancel",
+            runId: receipt.run.runId,
+          }).catch(() => undefined);
+        }
+        throw error;
+      }
+    },
+  });
   pi.registerTool({
     ...outlinerToolPresentation("Outliner Update"),
     name: "outliner_update",

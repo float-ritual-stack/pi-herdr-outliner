@@ -75,6 +75,25 @@ function normalizeMarkdownSource(text: string): {
   return { text: normalized, originalOffsets };
 }
 
+function markdownTokenRange(
+  source: string,
+  raw: string,
+  cursor: number,
+  type: string,
+): { start: number; end: number } {
+  const start = source.indexOf(raw, cursor);
+  if (start >= 0) return { start, end: start + raw.length };
+  const remainingLength = source.length - cursor;
+  if (
+    raw.length === remainingLength + 1 &&
+    raw.endsWith("\n") &&
+    source.startsWith(raw.slice(0, -1), cursor)
+  ) {
+    return { start: cursor, end: source.length };
+  }
+  throw new Error(`Markdown token source span could not be recovered: ${type}`);
+}
+
 function lineAt(starts: readonly number[], offset: number): number {
   let low = 0;
   let high = starts.length;
@@ -95,11 +114,14 @@ function markdownRenderBlocks(text: string): MarkdownRenderBlock[] {
   const blocks: MarkdownRenderBlock[] = [];
   let normalizedCursor = 0;
   for (const token of tokens) {
-    const normalizedStart = normalized.text.indexOf(token.raw, normalizedCursor);
-    if (normalizedStart < 0) {
-      throw new Error(`Markdown token source span could not be recovered: ${token.type}`);
-    }
-    const normalizedEnd = normalizedStart + token.raw.length;
+    const range = markdownTokenRange(
+      normalized.text,
+      token.raw,
+      normalizedCursor,
+      token.type,
+    );
+    const normalizedStart = range.start;
+    const normalizedEnd = range.end;
     const start = normalized.originalOffsets[normalizedStart]!;
     const end = normalized.originalOffsets[normalizedEnd]!;
     const span = sourceSpan(starts, start, end);
@@ -261,10 +283,13 @@ export function sourceSpannedMarkdownSegments(
   let normalizedCursor = 0;
 
   for (const token of tokens) {
-    const normalizedTokenStart = normalized.text.indexOf(token.raw, normalizedCursor);
-    if (normalizedTokenStart < 0) {
-      throw new Error(`Markdown token source span could not be recovered: ${token.type}`);
-    }
+    const range = markdownTokenRange(
+      normalized.text,
+      token.raw,
+      normalizedCursor,
+      token.type,
+    );
+    const normalizedTokenStart = range.start;
     const tokenStart = normalized.originalOffsets[normalizedTokenStart]!;
     if (tokenStart > normalized.originalOffsets[normalizedCursor]!) {
       const gapStart = normalized.originalOffsets[normalizedCursor]!;
@@ -276,7 +301,7 @@ export function sourceSpannedMarkdownSegments(
         intersectsRange(gapSpan, ranges),
       );
     }
-    const normalizedTokenEnd = normalizedTokenStart + token.raw.length;
+    const normalizedTokenEnd = range.end;
     const tokenEnd = normalized.originalOffsets[normalizedTokenEnd]!;
     appendSourceLines(
       segments,
@@ -343,7 +368,24 @@ function traverseMarkdownLineRange(
   theme: MarkdownTheme,
   ranges: readonly MarkdownLineRange[],
   decorationEnabled: boolean,
+  preserveBlankLines = false,
 ): SourceRowTraversal {
+  if (
+    preserveBlankLines &&
+    endLine > startLine &&
+    Array.from(
+      { length: endLine - startLine },
+      (_, offset) => calloutBodyLine(source, starts, startLine + offset, quoteDepth),
+    ).every((line) => line.trim().length === 0)
+  ) {
+    return {
+      nextRow: renderedRow + endLine - startLine,
+      targetRow: targetLine >= startLine && targetLine < endLine
+        ? renderedRow + targetLine - startLine
+        : undefined,
+    };
+  }
+
   let row = renderedRow;
   let targetRow: number | undefined;
   let groupStart = startLine;
@@ -532,16 +574,17 @@ export class SourceSpannedMarkdown implements Component {
     });
   }
 
-  renderWithSourceLineRow(
+  sourceLineRow(
     width: number,
     sourceLine: number,
-  ): SourceSpannedMarkdownRowRender {
-    const lines = this.render(width);
+    renderedLineCount = this.render(width).length,
+  ): number {
     const starts = lineStarts(this.sourceText);
     const targetLine = Math.max(0, Math.min(Math.trunc(sourceLine), starts.length - 1));
     let row = 0;
     if (this.calloutDocument && this.previewRegions) {
       let cursor = 0;
+      let hasPreviousRoot = false;
       const childrenByParent = indexCalloutsByParent(this.callouts);
       for (const root of childrenByParent.get(null) ?? []) {
         const beforeRoot = traverseMarkdownLineRange(
@@ -556,12 +599,10 @@ export class SourceSpannedMarkdown implements Component {
           this.theme,
           this.ranges,
           this.decorationEnabled,
+          hasPreviousRoot,
         );
         if (beforeRoot.targetRow !== undefined) {
-          return {
-            lines,
-            sourceLineRow: Math.min(beforeRoot.targetRow, lines.length),
-          };
+          return Math.min(beforeRoot.targetRow, renderedLineCount);
         }
         row = beforeRoot.nextRow;
         const rootRows = traverseCalloutRows(
@@ -578,13 +619,11 @@ export class SourceSpannedMarkdown implements Component {
           this.decorationEnabled,
         );
         if (rootRows.targetRow !== undefined) {
-          return {
-            lines,
-            sourceLineRow: Math.min(rootRows.targetRow, lines.length),
-          };
+          return Math.min(rootRows.targetRow, renderedLineCount);
         }
         row = rootRows.nextRow;
         cursor = root.sourceSpan!.endLine + 1;
+        hasPreviousRoot = true;
       }
       const tail = traverseMarkdownLineRange(
         this.sourceText,
@@ -599,31 +638,36 @@ export class SourceSpannedMarkdown implements Component {
         this.ranges,
         this.decorationEnabled,
       );
-      return {
-        lines,
-        sourceLineRow: Math.min(tail.targetRow ?? tail.nextRow, lines.length),
-      };
+      return Math.min(tail.targetRow ?? tail.nextRow, renderedLineCount);
     }
 
     for (const segment of this.segments) {
       if (targetLine < segment.span.startLine) break;
       if (targetLine <= segment.span.endLine) {
-        return {
-          lines,
-          sourceLineRow: Math.min(
-            row + markdownRowBeforeSourceLine(
-              segment.text,
-              targetLine - segment.span.startLine,
-              width,
-              this.theme,
-            ),
-            lines.length,
+        return Math.min(
+          row + markdownRowBeforeSourceLine(
+            segment.text,
+            targetLine - segment.span.startLine,
+            width,
+            this.theme,
           ),
-        };
+          renderedLineCount,
+        );
       }
       row += segment.component.render(width).length;
     }
-    return { lines, sourceLineRow: Math.min(row, lines.length) };
+    return Math.min(row, renderedLineCount);
+  }
+
+  renderWithSourceLineRow(
+    width: number,
+    sourceLine: number,
+  ): SourceSpannedMarkdownRowRender {
+    const lines = this.render(width);
+    return {
+      lines,
+      sourceLineRow: this.sourceLineRow(width, sourceLine, lines.length),
+    };
   }
 
   render(width: number): string[] {

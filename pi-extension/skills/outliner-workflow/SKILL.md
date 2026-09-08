@@ -36,31 +36,50 @@ Read [Roadmap items](references/roadmap-items.md) before creating, editing, prom
 5. Change lane membership through `work-stage`. Change ordering within a lane or track with `outliner_branch_rank`; never physically move canonical items to rank virtual occurrences.
 6. Query the item after mutation and verify its canonical parent, required properties, virtual-branch memberships, and explicit rank.
 
-## Navigate before narrating
+## Inspect before narrating
 
-Call `outliner_focus` before explaining a roadmap item, decision chain, investigation, or durable result that the user should inspect.
+Use `outliner_selection` and `outliner_query` to inspect roadmap items, decision chains, investigations, and durable results without changing the user's visible Herdr tab. Call `outliner_focus` only when the user explicitly asks to switch the visible Tree context.
 
-- Prefer a full Work ID or block ID.
-- Pass `clientId` when several Tree clients are live.
+- Prefer a full Work ID or block ID when querying.
+- Pass `clientId` when explicit focus is requested and several Tree clients are live.
 - Follow semantic order: governing task or decision first, supporting findings next, implementation proof last.
-- Use the returned bounded ancestors, properties, dependencies, and children to narrate structure.
-- Never invent a parallel comment or walkthrough data model.
+- Narrate from bounded ancestors, properties, dependencies, and children.
+- Use the typed `outliner_workflow` route; never invent a second comment model, copy source bodies, or persist a block per walkthrough step.
 
 ## Conduct a walkthrough or review
 
-Use this workflow when the user wants to inspect, discuss, prioritize, or review a connected set of blocks:
+Use this workflow when the user wants to inspect, discuss, prioritize, or review
+a connected set of blocks:
 
-1. Read the current selection and query only enough bounded structure to identify the relevant arc.
-2. Choose a narrative order based on decisions and dependencies rather than storage or query order.
-3. State the scope briefly: which blocks are included, why they belong together, and what judgment the walkthrough should produce.
-4. Focus the first block before discussing it. Read the full body only for the block currently under discussion.
-5. Explain its role, current state, and connection to the preceding and following items. Avoid reciting every property or child.
-6. Continue through a small coherent group when no owner decision is required.
-7. Stop at an actual judgment boundary with one bounded question. Do not publish a decision or change priority before the owner answers.
-8. Resume from the next unresolved block. Re-read selection or query results after any mutation that may have changed the arc.
-9. End with the agreed ordering, unresolved questions, and next action. Publish only the durable conclusion, not each walkthrough stop.
+1. Start `outliner_workflow` with the explicit `walkthrough.plan` action
+   surface: a block, callout, bounded structured query, or literal
+   `walkthrough` command; an explicit capability allowlist; fan-out and call
+   ceilings; and `callscript` unless the user specifically requests the direct
+   baseline.
+2. Supply a live Detail `clientId` only when the user asks for shared visual
+   attention. The returned run stores its ordered source anchors and comparison
+   metrics without storing source bodies or narration.
+3. Use one `transition` at a time. `next`, `previous`, `resume`, and `skip`
+   reveal the exact current source anchor through ephemeral PIE-180 attention;
+   `pause` suspends in place; `branch` records one bounded question; `end`
+   clears current attention.
+4. Discuss the current passage in chat. Read the full body only when the
+   current judgment needs it. Do not recite every property or child.
+5. Put source-situated owner questions and replies in existing PIE-210
+   annotations. Preserve owner comments and lifecycle; never convert silence,
+   model narration, or a branch question into a decision.
+6. Promote an agreed outcome only with `promotion_preview`, show or otherwise
+   obtain approval for that exact text and provenance, then call
+   `promotion_commit` with its unchanged approval token. A changed approver,
+   target, kind, or text requires a new preview.
+7. End with the agreed ordering, unresolved questions, and next action.
+   Publish only durable conclusions; the run and result properties provide
+   query/embed links without copying canonical sources.
 
-Treat Tree focus as the ephemeral shared attention marker. Use durable child blocks only for conclusions, corrections, decisions, follow-ups, or proof. Preserve the existing Now/Next work-in-progress limit and never promote an item silently.
+Treat Tree focus as an explicit foreground action: it switches the user's active
+Herdr pane. Background agent work must query, publish, reveal, read, or send to
+explicit panes without focusing them. Preserve the existing Now/Next
+work-in-progress limit and never promote an item silently.
 
 ## Choose artifact or chat
 
@@ -76,7 +95,7 @@ Compose the artifact for the Detail surface rather than as pasted chat prose. Us
 
 Keep each affordance semantic. Do not add callouts, embeds, or properties as decoration, and do not duplicate large canonical bodies merely to make a report self-contained.
 
-Return only a concise chat pointer after publication: what was created, the decisive conclusion, and the focused block ID or Work ID. Keep transient explanations, acknowledgements, bounded owner questions, live status, speculative fragments, and repeated summaries in chat. Use chat-only output when the user explicitly requests it or when no durable artifact would remain useful.
+Return only a concise chat pointer after publication: what was created, the decisive conclusion, and the block ID or Work ID. Keep transient explanations, acknowledgements, bounded owner questions, live status, speculative fragments, and repeated summaries in chat. Use chat-only output when the user explicitly requests it or when no durable artifact would remain useful.
 
 ## Publish durable work
 
@@ -90,7 +109,7 @@ Call `outliner_publish` with the narrowest existing type:
 - `roadmap-review` for prioritization and sequencing;
 - `implementation-proof` for exercised behavior and verification evidence.
 
-Omit `parentId` to publish beneath the active task. Supply an explicit parent when the artifact belongs elsewhere. Keep `focus` enabled when the published block is the useful user-facing result. The tool reports focus failure separately from successful creation; never claim focus when `focused` is false.
+Omit `parentId` to publish beneath the active task. Supply an explicit parent when the artifact belongs elsewhere. Publication does not focus by default; pass `focus: true` only when the user explicitly asks to switch the visible Tree context. The tool reports focus failure separately from successful creation; never claim focus when `focused` is false.
 
 Write one coherent artifact rather than many turn-log fragments. Include exact Work IDs and block references where they improve navigation. Leave raw query results and other generated projections out of authored text; link or embed the live native source instead.
 

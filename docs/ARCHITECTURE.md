@@ -49,16 +49,29 @@ PageUp/PageDown move the selected expanded row's offset by one Tree body viewpor
 
 [`src/detail-main.ts`](../src/detail-main.ts) selects the Pi TUI Detail implementation, which separates:
 
-- [`DetailController`](../src/detail-controller.ts) — modes, effects, optimistic saves, PreviewRegion actions, property-inspector state, lazy backlink state, file/annotation behavior, and cursor visibility;
+- [`DetailController`](../src/detail-controller.ts) — modes, effects, optimistic saves, read-only source-range selection, durable annotation creation/reanchoring/reveal, PreviewRegion actions, property-inspector state, lazy backlink state, file behavior, and cursor visibility;
 - [`detail-pi.ts`](../src/detail-pi.ts) — terminal lifecycle, input, Pi layout switching, and dedicated-inspector startup;
-- [`detail-pi-preview.ts`](../src/detail-pi-preview.ts) — authored Markdown, callouts, property rows, and generated Backlinks in one `ScrollView`;
+- [`detail-pi-preview.ts`](../src/detail-pi-preview.ts) — authored Markdown, anchored annotation gutter markers with inline threaded disclosure, callouts, property rows, and generated Backlinks in one `ScrollView`;
 - [`open-destination-chooser.ts`](../src/open-destination-chooser.ts) — shared destination state, fixed key handling, routing fallback, and idle dismissal for every open-capable Detail surface;
 - [`backlink-peek.ts`](../src/backlink-peek.ts) and [`backlink-peek-main.ts`](../src/backlink-peek-main.ts) — immutable source-set traversal, reversible outcomes, and the non-routable Herdr preview surface;
 - [`detail-editor-layout.ts`](../src/detail-editor-layout.ts) — grapheme-safe wrapped visual rows, cursor mapping, and selection spans;
-- [`detail-renderer.ts`](../src/detail-renderer.ts) — fixed custom frames for edit, comment, file, and annotation modes; and
+- [`detail-renderer.ts`](../src/detail-renderer.ts) — fixed custom frames for edit, source selection, comment, file, and annotation modes; and
 - [`text-buffer.ts`](../src/text-buffer.ts) — raw text, grapheme/word movement, and selections.
 
 The legacy ANSI Detail entrypoint remains available in [`src/detail.ts`](../src/detail.ts), but the Herdr manifest starts [`src/detail-main.ts`](../src/detail-main.ts).
+
+[`detail-keymap.ts`](../src/detail-keymap.ts) is the scoped Detail command
+router. It computes one ordered context list from controller and projection
+state, resolves a normalized terminal chord to a stable action ID, and executes
+that ID directly as a `DetailIntent` or pane effect. Global close precedes
+transient chooser/filter/completion/editor ownership; focused Property,
+Backlinks, dedicated Property, and draft-preview scopes precede the base
+Detail mode. Scope-disjoint actions may share a chord, with the earlier active
+scope winning and a rebound higher-scope default suppressing lower-scope
+fallback. Keyboard bindings, action-menu selections, and action links call the
+same executor. Raw text and cursor-editing input reaches
+[`text-buffer-editor.ts`](../src/text-buffer-editor.ts) only after command
+resolution declines the chord.
 
 Detail owns an exact target, a bounded in-process target history, and a visible
 `Unlocked | Locked` state. An unlocked Detail is eligible for same-tab Tree
@@ -110,6 +123,10 @@ parent/child identity. Nested callout bodies remain Pi Markdown, `+`/`-` fold
 markers produce ephemeral disclosure, and generated action links never enter
 canonical text. Generated embed backgrounds compose with callout bodies rather
 than replacing them.
+Sibling callout spacing follows source-level quote boundaries: adjacent headers
+and quoted blank lines remain visually stacked, while each unquoted blank line
+between root callouts contributes one rendered separator row. Source-line to
+rendered-row mapping counts those rows so exact fragment reveals remain aligned.
 Callout presentation is a Detail-process theme boundary. `OUTLINER_CALLOUT_THEME`
 is parsed once at startup into validated partial overrides for canonical type
 styles and the neutral fallback. Rendering reapplies each card's foreground and
@@ -230,10 +247,12 @@ Scope classification is structural. After leading blank lines, the first nonblan
 - `page_addresses` — unique normalized symbolic address to canonical block mapping for page declarations, Work IDs, and explicit aliases; foreign keys cascade only on physical purge.
 - `reserved_work_ids` — immutable Work-ID reservation ledger with the original canonical owner UUID retained after purge.
 - `work_id_allocator` — singleton workspace prefix and next monotonic sequence number.
+- `workflow_runs` — idempotent typed invocation, allowlist, limits, planner comparison, ordered source-anchor route, current step, provenance, cancellation, and linked results.
+- `workflow_promotions` — idempotent exact-preview publication receipt linking one workflow request to its canonical result block.
 
 ## Protocol
 
-The current protocol version is `28`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
+The current protocol version is `32`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
 
 ### Important request families
 
@@ -253,6 +272,8 @@ The current protocol version is `28`, defined in [`src/types.ts`](../src/types.t
 - legacy workspace selection/history: `selection.get`, `selection.set`, `navigation.state`, `navigation.back`, `navigation.forward`
 - reactive clients: `events.subscribe`, `clients.list`, `clients.update`
 - exact-client behavior: `ui.command.send`; `open` respects the destination lock, while explicit `replace` retargets the invoking Detail and preserves that lock state
+- targeted ephemeral attention: `attention.get`, `attention.mark`, `attention.advance`, `attention.clear`, and `attention.acknowledge`
+- typed workflows: `workflows.start`, `workflows.get`, `workflows.list`, `workflows.structure`, `workflows.plan`, `workflows.transition`, `workflows.cancel`, `workflows.promotion.preview`, and `workflows.promotion.commit`
 
 ### Live client identity
 
@@ -266,7 +287,7 @@ as a private context.
 Client registrations retain terminal identity as their stable Herdr join key.
 When Herdr is available, the service reconciles pane, workspace, tab, and
 coordinate fields from the live runtime registry before returning client reads;
-launch-time runtime fields are only a fallback. The service orders same-tab
+launch-time placement is retained only without a configured Herdr registry. The service orders same-tab
 Detail candidates by horizontal then vertical pane position, with client ID only
 as a deterministic fallback. Herdr remains authoritative for current placement
 and focus.
@@ -277,14 +298,16 @@ subscriber for a browsing context disconnects, its target is pruned.
 `clients.list` returns the live registry, optionally filtered by role.
 
 `content`, legacy `selection`, and `view` events are workspace broadcasts. A
-`ui` command is written only to its `targetClientId`.
+`ui` command or `attention` event is written only to its `targetClientId`.
 
 For `preview` and `open`, `navigation.resolve` and `navigation.dispatch` select
 the first unlocked Detail in the source's current tab. Locked Details and every
-other tab/workspace are excluded. If the source lacks Herdr topology, its
-browsing context is the fallback pool boundary. When the pool exists but every
-Detail is locked, navigation fails with an instruction to unlock one or open
-another Detail; no anchor is overwritten. `reveal` targets the source Tree,
+other tab/workspace are excluded. Without a configured Herdr registry, the
+source's browsing context is the fallback pool boundary. A configured registry
+that is unavailable or cannot locate the source instead reports unavailable
+Herdr discovery; it never routes using stale launch-time placement. When the
+pool exists but every Detail is locked, navigation fails with an instruction
+to unlock one or open another Detail; no anchor is overwritten. `reveal` targets the source Tree,
 then one same-context Tree, then one unambiguous same-tab Tree. There are no
 persisted or manual per-source open routes.
 
@@ -298,6 +321,40 @@ and idle expiry leave canonical content unchanged.
 `author` remains the coarse `user | agent | system` role used by renderers and existing clients. Agent creation requests may additionally carry `{ actorId, sessionId?, taskId? }`; the service accepts that provenance only with `author: "agent"`, stores it on the new block, and never rewrites it during later content updates.
 
 The Pi/OMP adapter forces `author: "agent"`. It identifies the host as `pi` or `omp`, reads the durable session ID from Pi's `ExtensionContext.sessionManager`, and records the tool-call ID as the originating task ID. Legacy and user-authored blocks omit these optional fields.
+
+### Typed walkthrough workflows
+
+The service accepts one declared action, `walkthrough.plan`; Markdown and
+callout bodies are data, never executable programs. Start requests carry an
+explicit invocation, capability allowlist, fan-out and call ceilings, planner,
+optional target client, and Pi provenance. The service performs bounded
+structure reads that return properties, source sizes, completeness, and exact
+heading/callout anchors without returning full bodies. It validates every
+planned step against current source revision/hash evidence before storing the
+semantic route.
+
+The Pi extension launches [`src/workflow-main.ts`](../src/workflow-main.ts) as a
+separate process from the canonical service. The orchestrator measures a
+sequential direct-tool baseline and executes an inert Callscript plan with only
+the read-only `outline.structure` and `outline.route` tools mounted. Stored
+metrics report model-turn estimate, operations, context bytes, wall time,
+truncation/completeness, structure-first behavior, and artifact quality. The
+selected planner changes only which validated route is stored.
+
+Workflow transitions are durable; narration is not. `next`, `previous`,
+`resume`, and `skip` atomically replace the target client's PIE-180 current
+attention mark and emit a targeted reveal instruction. `pause` and `branch`
+suspend without moving the mark; `end` removes it. Selection, navigation
+history, locks, source text, and user-owned annotation lifecycle remain
+unchanged.
+
+Questions and replies use the canonical PIE-210 annotation tables. A workflow
+outcome becomes canonical only through `promotion.preview` followed by
+`promotion.commit` with the exact SHA-256 approval token. The request ID and
+preview hash make commit replay atomic and idempotent; changing approver,
+content, target, or kind requires a new preview. Created results link the
+workflow run, workflow step, and source annotation through block-scoped
+properties and remain available to normal query, embed, and reference surfaces.
 
 ### Clickable outliner identities
 
@@ -403,6 +460,16 @@ Store startup creates one canonical `Inbox [type::inbox] [system-view::inbox]` w
 7. On service reconnect, Detail republishes its lock state and Tree republishes
    its retained cursor. A restarted process receives a new client identity;
    `open-here` creates a new pair context.
+
+The service and extension focus tracker share `HerdrRegistryRunner`, a client
+of Herdr's documented JSON socket API. Compatibility depends on the required
+response shapes, not equality with Herdr's numbered internal protocol.
+Herdr 0.9 or newer supplies live-only lifecycle subscriptions. The runner
+discovers pane IDs for scoped agent-status subscriptions, waits for subscription
+acknowledgement, installs an authoritative `session.snapshot`, and applies
+buffered events in order before reporting readiness. It refreshes subscription
+scope when panes change and obtains a fresh snapshot after reconnect or invalid
+topology. There is no retained-replay quiet window and no per-cursor CLI polling.
 
 While Detail is editing/commenting, it is locked before the mutable buffer
 opens. Content and exact-target refreshes are marked pending instead of
@@ -536,11 +603,29 @@ canonical block is deleted.
 
 Editor undo/redo stores at most 100 per-session snapshots. Consecutive typing, backspace, and forward delete coalesce; cursor and selection state restore with text; divergent edits invalidate redo. New edit/comment sessions start with empty history. Modal editing, registers, macros, and programmable operator systems remain explicit non-goals for the custom buffer.
 
-## File annotations
+## Durable source annotations
 
-A block containing `[file::path]` can open a workspace-relative text or Markdown file. Detail supports line navigation and range selection. A comment creates a canonical child annotation containing source path, normalized line range, source block ID, and comment text.
+Detail annotates canonical block text through a locked, read-only selection mode and referenced files through line-range selection. Both paths create ordinary canonical child blocks; replies are children of a root annotation. The target stores renderer-neutral UTF-16 start/end offsets, an encoded exact excerpt, bounded before/after context, source version/hash, provenance, lifecycle, anchor state, and file identity/lines when applicable. Annotation content never mutates the target block or file.
 
-The service stores annotation blocks; it does not modify source files.
+Reanchoring trusts offsets only while source version or hash agrees. Changed sources search the excerpt and captured context; one defensible match updates the canonical annotation and every direct reply, while tied matches become `ambiguous` and missing excerpts become `orphaned`. Detail shows compact marker/count summaries, opens the canonical thread, and reveals an anchored block range or file lines exactly. Agent create/reply/batch operations use the same service path; request IDs make replays idempotent and the service validates an entire batch before its transaction.
+
+## Ephemeral attention
+
+Attention state is service-owned, client-targeted, and noncanonical. One current
+mark and at most eight supporting marks identify a block or referenced file,
+optionally with an exact UTF-16 anchor carrying excerpt, source version, and
+hash. Creation rejects mismatched source evidence. Later source changes retain
+the original offsets but mark the cue stale; attention never guesses or
+reanchors.
+
+Tree renders a non-color block marker. Detail decorates the exact rendered
+phrase and can scroll to its source row after reflow. Both surfaces show a
+coalesced return summary and acknowledge it with `Ctrl+X` without clearing active
+marks. Expiry and explicit clear remove marks. `reveal` and `focus` are separate
+instruction flags; absent those flags, receipt changes no pane target, browsing
+context, lock, selection, navigation history, durable annotation, or canonical
+content. The service validates a currently registered target client and never
+broadcasts attention to sibling panes.
 
 ## Herdr lifecycle
 
@@ -582,6 +667,9 @@ src/work-ids.ts              Work-ID prefix validation, parsing, and formatting
 src/server.ts                 protocol and subscriptions
 src/client.ts                 request/watch client
 src/server-main.ts            canonical service process
+src/workflows.ts               typed workflow state, structure, navigation, and publication
+src/workflow-orchestrator.ts   direct-tool and bounded Callscript planner comparison
+src/workflow-main.ts           separate Pi-side workflow orchestration process
 src/outliner.ts               Tree terminal process
 src/tree-controller.ts        Tree behavior
 src/tree-renderer.ts          Tree ANSI rendering

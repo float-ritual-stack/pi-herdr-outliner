@@ -1,5 +1,10 @@
 import { getOsc8LinkAtColumn, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "bun:test";
+import {
+  attentionClientState,
+  emptyAttentionState,
+  normalizeAttentionMark,
+} from "../src/attention";
 import { DEFAULT_OUTLINER_ACTION_KEYMAP } from "../src/outliner-actions";
 import type { TreeView } from "../src/tree-controller";
 import { renderTreeFrame, treeSemanticState } from "../src/tree-renderer";
@@ -126,6 +131,7 @@ function view(
     viewerLines: [],
     viewerPath: "",
     viewerOffset: 0,
+    attention: emptyAttentionState("tree-test"),
     expandedBlockOffset: 0,
     status: "ready",
     refreshPending: false,
@@ -961,4 +967,29 @@ describe("renderTreeFrame", () => {
       disclosureColumn: -1,
     });
   });
+});
+
+test("renders a targeted Tree block mark and coalesced return cue", () => {
+  const target = block("attention-target", { text: "Target block", displayText: "Target block" });
+  const mark = normalizeAttentionMark({
+    markId: "tree-mark",
+    targetClientId: "tree-test",
+    target: { kind: "block", sourceBlockId: target.id },
+    tone: "info",
+    sender: "agent-test",
+  }, {
+    clientId: "tree-test",
+    role: "tree",
+    contextId: "tree-test",
+  }, target);
+  const rendered = renderTreeFrame(view([target], {
+    attention: attentionClientState("tree-test", [mark], 4),
+  }), 44, 10).frame;
+  const visible = stripTerminalSequences(rendered);
+
+  expect(visible).toContain("4 attention cues");
+  expect(visible).toContain("Target block");
+  expect(visible).toContain("◀");
+  expect(rendered).toContain("\x1b[1;4;96m");
+  expect(rendered.split("\n").every((line) => visibleWidth(line) <= 44)).toBe(true);
 });

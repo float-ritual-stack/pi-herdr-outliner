@@ -12,6 +12,9 @@ export interface ReferencedFile {
   sourcePath: string;
   lines: string[];
   firstLine: number;
+  sourceText?: string;
+  sourceVersion?: string;
+  sourceHash?: string;
 }
 
 export interface ReferencedPathCandidate {
@@ -82,7 +85,8 @@ export function readReferencedFile(block: Block, workspaceRoot: string): Referen
   if (!stat.isFile()) throw new Error(`Not a regular file: ${sourcePath}`);
   if (stat.size > MAX_PREVIEW_BYTES) throw new Error(`File exceeds the ${MAX_PREVIEW_BYTES / 1024 / 1024} MiB preview limit`);
 
-  const allLines = readFileSync(absolutePath, "utf8").split(/\r?\n/);
+  const sourceText = readFileSync(absolutePath, "utf8");
+  const allLines = sourceText.split(/\r?\n/);
   const firstLine = Math.max(1, Number(getProperty(block.properties, "line-start") ?? 1));
   const requestedEnd = Number(getProperty(block.properties, "line-end") ?? allLines.length);
   const lastLine = Math.max(firstLine, Math.min(allLines.length, requestedEnd));
@@ -93,5 +97,8 @@ export function readReferencedFile(block: Block, workspaceRoot: string): Referen
     sourcePath,
     lines: allLines.slice(firstLine - 1, lastLine),
     firstLine,
+    sourceText,
+    sourceVersion: `${stat.mtimeMs}:${stat.size}`,
+    sourceHash: new Bun.CryptoHasher("sha256").update(sourceText).digest("hex"),
   };
 }

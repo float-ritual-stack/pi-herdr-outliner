@@ -8,6 +8,12 @@ import {
   type MarkdownTheme,
 } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "bun:test";
+import {
+  attentionClientState,
+  emptyAttentionState,
+  normalizeAttentionMark,
+} from "../src/attention";
+import { createAnnotationAnchor } from "../src/annotations";
 import { parseDetailCallouts } from "../src/detail-callouts";
 import type { DetailState } from "../src/detail-controller";
 import {
@@ -27,6 +33,7 @@ import { createPropertyInspectorModel } from "../src/property-inspector";
 import {
   previewRegionActionUri,
   resolvePreviewPointerAction,
+  togglePreviewRegionDisclosure,
 } from "../src/detail-preview-regions";
 import { outlinerLinkUri } from "../src/outliner-links";
 import { createOpenDestinationChooserState } from "../src/open-destination-chooser";
@@ -75,6 +82,9 @@ function state(text: string, rawText = "raw edit source"): DetailState {
     fileCursor: 0,
     selectionAnchor: null,
     annotationRange: null,
+    annotationThreads: [],
+    attention: emptyAttentionState("detail-test"),
+    attentionRevealSourceLine: null,
     completion: null,
     status: "",
     busy: false,
@@ -505,6 +515,111 @@ describe("Pi Markdown detail preview", () => {
     expect(
       segments.filter((segment) => segment.decorated).map((segment) => segment.text).join(""),
     ).toBe("> Embedded\r\n> body");
+  });
+
+  test("recovers a final lazy blockquote token without a trailing newline", () => {
+    const document = "> 1. Open. 2. Press \\*\\*\\`v\\`\\*\\*.\ncomment body";
+    const segments = sourceSpannedMarkdownSegments(document, []);
+
+    expect(segments.map((segment) => segment.text).join("")).toBe(document);
+    expect(segments.every((segment) =>
+      segment.text === document.slice(segment.span.start, segment.span.end)
+    )).toBe(true);
+
+    const markdown = new SourceSpannedMarkdown(plainMarkdownTheme, (value) => value);
+    markdown.setContent(document, [], false);
+    expect(
+      markdown.renderWithSourceLineRow(40, 1).lines
+        .map(stripTerminalSequences)
+        .join("\n"),
+    ).toContain("comment body");
+  });
+
+  test("anchors interactive comment markers in a two-column gutter and expands inline", () => {
+    const raw = [
+      "Title",
+      "",
+      "before",
+      "target phrase",
+      "range line 2",
+      "range line 3",
+      "range line 4",
+      "range line 5",
+      "range line 6",
+      "after",
+    ].join("\n");
+    const detail = state(raw, raw);
+    const annotation = block("annotation-1", "");
+    const leadingAnnotation = block("annotation-2", "");
+    const reply = block("reply-1", "");
+    const start = raw.indexOf("target phrase");
+    const end = raw.indexOf("\nafter");
+    const target = {
+      kind: "block" as const,
+      sourceBlockId: "block-1",
+      anchor: createAnnotationAnchor(raw, start, end, "updated"),
+    };
+    const leadingTarget = {
+      kind: "block" as const,
+      sourceBlockId: "block-1",
+      anchor: createAnnotationAnchor(raw, start - 1, end, "updated"),
+    };
+    detail.annotationThreads = [{
+      block: annotation,
+      target,
+      body: "Check this range.",
+      source: "user",
+      lifecycle: "open",
+      anchorState: "anchored",
+      replies: [{
+        block: reply,
+        target,
+        body: "Verified.",
+        source: "agent",
+        lifecycle: "open",
+        anchorState: "anchored",
+        parentAnnotationId: annotation.id,
+      }],
+    }, {
+      block: leadingAnnotation,
+      target: leadingTarget,
+      body: "Second comment.",
+      source: "agent",
+      lifecycle: "open",
+      anchorState: "anchored",
+      replies: [],
+    }];
+    const layout = previewLayout(detail);
+
+    const collapsed = layout.render(72).map(stripTerminalSequences);
+    const region = detail.previewRegions.regions.find((candidate) =>
+      candidate.kind === "annotation"
+    )!;
+    expect(detail.previewRegions.regions.filter((candidate) =>
+      candidate.kind === "annotation"
+    )).toHaveLength(1);
+    const collapsedTarget = collapsed.find((line) => line.includes("target phrase"))!;
+    expect(collapsedTarget.startsWith("+ ")).toBe(true);
+    expect(collapsed.join("\n")).not.toContain("Comments ·");
+    expect(collapsed.join("\n")).not.toContain("Check this range.");
+
+    layout.scrollView.updateLayout(12, 6, () => {});
+    detail.previewRegions.focusedRegionId = region.id;
+    expect(togglePreviewRegionDisclosure(detail.previewRegions, region.id)).toBe(true);
+    const expanded = layout.render(72).map(stripTerminalSequences);
+    const targetRow = expanded.findIndex((line) => line.includes("target phrase"));
+    const commentRow = expanded.findIndex((line) => line.includes("Check this range."));
+    const afterRow = expanded.findIndex((line) => line.includes("after"));
+    expect(expanded[targetRow]!.startsWith("− ")).toBe(true);
+    expect(commentRow).toBeGreaterThan(targetRow);
+    expect(commentRow).toBeLessThan(afterRow);
+    expect(expanded.join("\n")).toContain("agent: Verified.");
+    expect(expanded.join("\n")).toContain("Second comment.");
+    expect(layout.render(72).every((line) => visibleWidth(line) <= 72)).toBe(true);
+    expect(layout.scrollView.scrollTop).toBeGreaterThan(0);
+    expect(
+      layout.scrollView.render(72).map(stripTerminalSequences).join("\n"),
+    ).toContain("Check this range.");
   });
 
   test("correlates authored callouts by projected origin instead of colliding positions", () => {
@@ -1414,8 +1529,23 @@ describe("structured property inspector presentations", () => {
       type: "property-inspector.target.open",
       occurrenceId: typed.occurrenceId,
     }, false)).toEqual({
-      type: "focus",
-      regionId: typed.occurrenceId,
+      type: "activate",
+      action: {
+        type: "property-inspector.target.open",
+        occurrenceId: typed.occurrenceId,
+      },
+      routing: "first-unlocked",
+    });
+    expect(resolvePreviewPointerAction({
+      type: "property-inspector.target.open",
+      occurrenceId: typed.occurrenceId,
+    }, true)).toEqual({
+      type: "activate",
+      action: {
+        type: "property-inspector.target.open",
+        occurrenceId: typed.occurrenceId,
+      },
+      routing: "chooser",
     });
     expect(detail.context.selected?.text).toBe(canonical);
   });
@@ -1630,4 +1760,106 @@ describe("structured property inspector presentations", () => {
       layout.scrollView.scrollTop + layout.scrollView.viewportHeight,
     );
   });
+});
+
+test("keeps reader selection highlighted without changing preview scroll", () => {
+  const raw = Array.from({ length: 40 }, (_, index) =>
+    index === 8 ? "alpha **selected phrase** omega" : `line ${index}`
+  ).join("\n");
+  const detail = state(raw, raw);
+  const layout = previewLayout(detail);
+  layout.scrollView.setScrollbar("hidden");
+  layout.syncState(48);
+  const contentHeight = renderedDocument(layout, 48).length;
+  layout.scrollView.updateLayout(contentHeight, 8, () => {});
+  layout.scrollView.scrollBy(5);
+  const initialScroll = layout.scrollView.scrollTop;
+
+  detail.mode = "select";
+  detail.buffer = new TextBuffer(raw);
+  detail.buffer.placeCursor(8, 8);
+  detail.buffer.placeCursor(8, 23, true);
+  const selecting = layout.scrollView.render(48);
+
+  expect(layout.scrollView.scrollTop).toBe(initialScroll);
+  expect(selecting.some((line) => {
+    const visible = stripTerminalSequences(line);
+    return visible.includes("▐ ") && visible.includes("selected phrase");
+  })).toBe(true);
+
+  const start = raw.indexOf("selected phrase");
+  detail.mode = "comment";
+  detail.annotationDraft = {
+    requestId: "request-1",
+    returnMode: "preview",
+    target: {
+      kind: "block",
+      sourceBlockId: "block-1",
+      anchor: createAnnotationAnchor(raw, start, start + "selected phrase".length, "updated"),
+    },
+  };
+  detail.buffer = new TextBuffer("A contextual comment");
+  layout.syncState(48);
+  const commenting = layout.scrollView.render(48);
+
+  expect(layout.scrollView.scrollTop).toBe(initialScroll);
+  expect(commenting.some((line) => {
+    const visible = stripTerminalSequences(line);
+    return visible.includes("▐ ") && visible.includes("selected phrase");
+  })).toBe(true);
+});
+
+test("maps rendered Markdown points back to UTF-16 source positions", () => {
+  const raw = "1. Open the block in **Detail**.";
+  const detail = state(raw, raw);
+  const layout = previewLayout(detail);
+  layout.syncState(60);
+  layout.render(60);
+
+  const point = layout.sourcePointAtViewport(3, 25, 60);
+
+  expect(point).toEqual({ row: 0, column: raw.indexOf("Detail") + 4 });
+});
+
+test("decorates the exact active attention phrase in Pi preview", () => {
+  const detail = state(
+    "target phrase then target phrase omega",
+    "target phrase then target phrase omega",
+  );
+  const selected = detail.context.selected!;
+  const start = selected.text.lastIndexOf("target");
+  const mark = normalizeAttentionMark({
+    markId: "pi-preview-mark",
+    targetClientId: "detail-test",
+    target: {
+      kind: "block",
+      sourceBlockId: selected.id,
+      anchor: createAnnotationAnchor(
+        selected.text,
+        start,
+        start + "target phrase".length,
+        selected.updatedAt,
+      ),
+    },
+    tone: "match",
+    sender: "agent-test",
+  }, {
+    clientId: "detail-test",
+    role: "detail",
+    contextId: "detail-test",
+  }, selected);
+  detail.attention = attentionClientState("detail-test", [mark], 1);
+
+  const layout = previewLayout(detail);
+  const rendered = layout.render(48);
+  const visible = rendered.map(stripTerminalSequences);
+  expect(visible.some((line) => line.includes("ATTENTION MATCH"))).toBe(true);
+  expect(visible.some((line) => line.includes("▐ target phrase then target phrase omega"))).toBe(true);
+  expect(rendered.some((line) => line.includes("\x1b[1;4;32m"))).toBe(true);
+  expect(rendered.join("\n")).toContain(`target phrase then \x1b[1;4;32mtarget phrase`);
+  expect(rendered.every((line) => visibleWidth(line) <= 48)).toBe(true);
+  const wrapped = layout.render(24);
+  expect(wrapped.map(stripTerminalSequences).join("\n")).toContain("target phrase");
+  expect(wrapped.some((line) => line.includes("\x1b[1;4;32m"))).toBe(true);
+  expect(wrapped.every((line) => visibleWidth(line) <= 24)).toBe(true);
 });
