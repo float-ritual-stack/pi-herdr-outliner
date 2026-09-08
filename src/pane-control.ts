@@ -276,8 +276,6 @@ export function openDetailPane(
     sourcePaneId,
     "--direction",
     options.direction ?? "down",
-    "--cwd",
-    options.workspaceRoot,
     "--no-focus",
   );
   for (const name of [
@@ -339,8 +337,6 @@ export function openBacklinkPeekPopup(
     `OUTLINER_BACKLINK_SORT_FIELD=${options.sortField}`,
     "--env",
     `OUTLINER_BACKLINK_SORT_DIRECTION=${options.sortDirection}`,
-    "--cwd",
-    options.workspaceRoot,
     "--focus",
   ];
   for (const name of [
@@ -380,8 +376,6 @@ export function openCapturePopup(
     `OUTLINER_CAPTURE_FROM_BLOCK_ID=${options.capturedFromBlockId}`,
     "--env",
     `OUTLINER_CAPTURE_REQUEST_ID=${crypto.randomUUID()}`,
-    "--cwd",
-    options.workspaceRoot,
     "--focus",
   ];
   if (process.env.OUTLINER_STATE_DIR) {

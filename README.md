@@ -9,7 +9,7 @@ Pi Herdr Outliner runs as a workspace-scoped SQLite service with two terminal cl
 
 The same service is exposed to Pi/OMP as agent tools, so notes, decisions, questions, work status, and file annotations live in one substrate instead of disappearing with a chat session.
 
-> **Status:** active dogfood. The service, Tree, Detail editor, agent tools, properties, references, and virtual branches are working. This is not yet a packaged release; schema and interaction details can still change.
+> **Status:** active dogfood. The plugin is installable from the GitHub source checkout, but there is not yet a stable tagged release; schema and interaction details can still change.
 
 ## Why this exists
 
@@ -59,16 +59,57 @@ behavior already shipped on the current branch.
 - Linux or macOS
 - [Bun](https://bun.sh/) 1.3 or newer
 - Herdr 0.9 or newer
+- Git, for a Herdr-managed GitHub install
 - Pi/OMP only if you want the agent extension and slash commands
 
-### Install and link
+### Install from GitHub
 
 ```sh
-bun install
-herdr plugin link --enabled .
+herdr plugin install float-ritual-stack/pi-herdr-outliner --ref main
+herdr plugin list --plugin float.pi-outliner
 ```
 
-Run these commands from the project root. The plugin manifest is [`herdr-plugin.toml`](herdr-plugin.toml).
+Herdr clones the repository, previews its executable commands, runs the
+manifest's `bun install --frozen-lockfile` build step, and registers the
+plugin. Re-run the same install command to refresh the managed checkout;
+Herdr plugin v1 has no separate update command. Pin `--ref` to a tag or commit
+instead of `main` when you need a reproducible revision.
+
+### Link a development checkout
+
+```sh
+git clone https://github.com/float-ritual-stack/pi-herdr-outliner.git
+cd pi-herdr-outliner
+bun install --frozen-lockfile
+herdr plugin link . --enabled
+```
+
+Run these commands from the repository root. `plugin link` registers the
+working directory but does not run manifest build commands. A GitHub install
+cannot replace a locally linked copy; run
+`herdr plugin unlink float.pi-outliner` before switching that installation to
+the managed GitHub source.
+
+The plugin manifest is [`herdr-plugin.toml`](herdr-plugin.toml). Runtime
+entrypoints execute from the installed or linked plugin root. The invoking
+project is passed separately through `OUTLINER_WORKSPACE_ROOT`, so opening the
+Outliner from another project does not change where Herdr resolves
+`src/*.ts`.
+
+### Verify or diagnose installation
+
+```sh
+herdr --version
+bun --version
+herdr plugin list --plugin float.pi-outliner --json
+herdr plugin action list --plugin float.pi-outliner
+herdr plugin log list --plugin float.pi-outliner --limit 20
+```
+
+The plugin requires Herdr 0.9 or newer and Bun 1.3 or newer. Plugin logs report
+missing runtimes, dependency-build failures, manifest validation errors, and
+entrypoint failures. If Herdr itself was updated while its server remained
+running, restart that session before diagnosing server-side behavior.
 
 ### Open the workspace
 

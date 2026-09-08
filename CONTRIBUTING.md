@@ -5,11 +5,16 @@ Pi Herdr Outliner is developed through live dogfooding. Changes must preserve ca
 ## Setup
 
 ```sh
-bun install
-herdr plugin link --enabled .
+bun install --frozen-lockfile
+herdr plugin link . --enabled
 bun run check
 bun test
 ```
+
+`herdr plugin link` does not execute manifest `[[build]]` commands. Install
+dependencies in the checkout first. Plugin pane entrypoints execute from the
+linked plugin root; pass the target project through `OUTLINER_WORKSPACE_ROOT`
+rather than overriding `herdr plugin pane open --cwd`.
 
 Open the live topology from a Herdr-managed pane:
 
