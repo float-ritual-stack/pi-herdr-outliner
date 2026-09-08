@@ -2,7 +2,6 @@ import { createConnection } from "node:net";
 import type { Duplex } from "node:stream";
 import { HerdrRuntimeRegistry, type HerdrSessionSnapshot } from "./herdr-registry";
 
-const HERDR_PROTOCOL = 20;
 const STRUCTURAL_SUBSCRIPTIONS = [
   "workspace.created",
   "workspace.updated",
@@ -39,8 +38,6 @@ export interface HerdrRegistryRunnerOptions {
   connectTimeoutMs?: number;
   requestTimeoutMs?: number;
   ackTimeoutMs?: number;
-  replayQuietMs?: number;
-  replayMaxMs?: number;
   minBackoffMs?: number;
   maxBackoffMs?: number;
   diagnostic?: (record: Record<string, unknown>) => void;
@@ -56,36 +53,6 @@ function isRecord(value: unknown): value is WireRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isReplayNonBarrier(value: unknown): boolean {
-  if (!isRecord(value) || !isRecord(value.data)) return false;
-  if (value.event === "pane.agent_status_changed") {
-    return (
-      typeof value.data.pane_id === "string" &&
-      value.data.pane_id.length > 0 &&
-      typeof value.data.agent_status === "string" &&
-      (
-        value.data.workspace_id === undefined ||
-        (
-          typeof value.data.workspace_id === "string" &&
-          value.data.workspace_id.length > 0
-        )
-      )
-    );
-  }
-  if (value.event !== "pane_updated" || value.data.type !== "pane_updated") return false;
-  const pane = value.data.pane;
-  return (
-    isRecord(pane) &&
-    typeof pane.pane_id === "string" &&
-    pane.pane_id.length > 0 &&
-    typeof pane.terminal_id === "string" &&
-    pane.terminal_id.length > 0 &&
-    typeof pane.workspace_id === "string" &&
-    pane.workspace_id.length > 0 &&
-    typeof pane.tab_id === "string" &&
-    pane.tab_id.length > 0
-  );
-}
 
 function defaultSocketFactory(
   path: string,
@@ -139,34 +106,11 @@ class MessageQueue {
     };
     return promise;
   }
-  async discardUntilQuiet(quietMs: number, maxMs: number): Promise<void> {
-    if (quietMs <= 0) {
-      this.values.length = 0;
-      return;
-    }
-    const deadline = Date.now() + maxMs;
-    let quietDeadline = Date.now() + quietMs;
-    for (;;) {
-      if (this.values.some((value) => !isReplayNonBarrier(value))) {
-        quietDeadline = Date.now() + quietMs;
-      }
-      this.values.length = 0;
-
-      const now = Date.now();
-      if (now >= deadline) throw new Error("Herdr retained event replay did not settle");
-      if (now >= quietDeadline) return;
-      try {
-        const value = await this.next(
-          Math.min(quietDeadline - now, deadline - now),
-          "Herdr retained event replay",
-        );
-        if (!isReplayNonBarrier(value)) quietDeadline = Date.now() + quietMs;
-      } catch (error) {
-        if (!(error instanceof Error) || error.message !== "Herdr retained event replay timeout") {
-          throw error;
-        }
-      }
-    }
+  takeBuffered(): unknown[] {
+    if (this.failure !== null) throw this.failure;
+    const values = this.values;
+    this.values = [];
+    return values;
   }
 }
 
@@ -232,8 +176,6 @@ export class HerdrRegistryRunner {
   private readonly requestTimeoutMs: number;
   private readonly connectTimeoutMs: number;
   private readonly ackTimeoutMs: number;
-  private readonly replayQuietMs: number;
-  private readonly replayMaxMs: number;
   private readonly minBackoffMs: number;
   private readonly maxBackoffMs: number;
   private readonly eventTypes: readonly string[];
@@ -253,8 +195,6 @@ export class HerdrRegistryRunner {
     this.requestTimeoutMs = options.requestTimeoutMs ?? 1_000;
     this.connectTimeoutMs = options.connectTimeoutMs ?? 1_000;
     this.ackTimeoutMs = options.ackTimeoutMs ?? 1_000;
-    this.replayQuietMs = options.replayQuietMs ?? 250;
-    this.replayMaxMs = options.replayMaxMs ?? 60_000;
     this.minBackoffMs = options.minBackoffMs ?? 250;
     this.maxBackoffMs = options.maxBackoffMs ?? 2_000;
     this.eventTypes = options.eventTypes ?? STRUCTURAL_SUBSCRIPTIONS;
@@ -297,24 +237,26 @@ export class HerdrRegistryRunner {
 
   private async connectCycle(): Promise<void> {
     const pong = await this.request("ping");
-    if (pong.type !== "pong" || pong.protocol !== HERDR_PROTOCOL) {
-      throw new Error("incompatible Herdr protocol");
+    if (pong.type !== "pong") {
+      throw new Error("invalid Herdr ping response");
     }
 
-    const initialSnapshot = await this.snapshot();
-    const subscription = await this.subscribe(initialSnapshot);
+    // Agent-status subscriptions require explicit pane IDs. This first snapshot
+    // discovers subscription scope only; the post-ACK snapshot is authoritative.
+    const paneIds = this.includePaneAgentStatus
+      ? (await this.snapshot()).panes.map((pane) => pane.pane_id)
+      : [];
+    const subscription = await this.subscribe(paneIds);
     try {
-      await subscription.messages.discardUntilQuiet(this.replayQuietMs, this.replayMaxMs);
+      const snapshot = await this.snapshot();
       if (this.abort.signal.aborted) return;
-      const settledSnapshot = await this.snapshot();
-      const subscribedPaneIds = new Set(initialSnapshot.panes.map((pane) => pane.pane_id));
-      if (
-        settledSnapshot.panes.length !== subscribedPaneIds.size ||
-        settledSnapshot.panes.some((pane) => !subscribedPaneIds.has(pane.pane_id))
-      ) {
-        throw new Error("Herdr pane topology changed while settling");
+      this.registry.replaceSnapshot(snapshot);
+      // Herdr's JSON lifecycle stream is live-only. Never discard events that
+      // arrived while the authoritative snapshot was in flight.
+      for (const message of subscription.messages.takeBuffered()) {
+        const result = this.registry.applyEvent(message);
+        if (result.kind === "resync") throw new Error(`Herdr registry resync: ${result.reason}`);
       }
-      this.registry.replaceSnapshot(settledSnapshot);
       this.diagnostic({
         status: "herdr_registry_ready",
         generation: this.registry.generation,
@@ -323,12 +265,17 @@ export class HerdrRegistryRunner {
         panes: this.registry.panes.size,
         agents: this.registry.agents.size,
       });
+      const subscribedPaneIds = new Set(paneIds);
+      if (this.includePaneAgentStatus && (
+        this.registry.panes.size !== subscribedPaneIds.size ||
+        [...this.registry.panes.keys()].some((paneId) => !subscribedPaneIds.has(paneId))
+      )) return;
 
       while (!this.abort.signal.aborted) {
         const message = await subscription.messages.next(2_147_483_647, "Herdr event");
         const result = this.registry.applyEvent(message);
         if (result.kind === "resync") throw new Error(`Herdr registry resync: ${result.reason}`);
-        if (result.topologyChanged) return;
+        if (result.topologyChanged && this.includePaneAgentStatus) return;
       }
     } finally {
       this.close(subscription);
@@ -358,13 +305,13 @@ export class HerdrRegistryRunner {
     }
   }
 
-  private async subscribe(snapshot: HerdrSessionSnapshot): Promise<NdjsonConnection> {
+  private async subscribe(paneIds: readonly string[]): Promise<NdjsonConnection> {
     const connection = await this.open();
     const id = this.nextId("events.subscribe");
     const subscriptions = [
       ...this.eventTypes.map((type) => ({ type })),
       ...(this.includePaneAgentStatus
-        ? snapshot.panes.map((pane) => ({ type: "pane.agent_status_changed", pane_id: pane.pane_id }))
+        ? paneIds.map((paneId) => ({ type: "pane.agent_status_changed", pane_id: paneId }))
         : []),
     ];
     connection.send({ id, method: "events.subscribe", params: { subscriptions } });

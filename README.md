@@ -58,7 +58,7 @@ behavior already shipped on the current branch.
 
 - Linux or macOS
 - [Bun](https://bun.sh/) 1.3 or newer
-- Herdr 0.8 or newer
+- Herdr 0.9 or newer
 - Pi/OMP only if you want the agent extension and slash commands
 
 ### Install and link

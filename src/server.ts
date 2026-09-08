@@ -759,11 +759,11 @@ export class OutlinerServer {
     preserveSource = false,
   ): Omit<OutlinerNavigationDispatch, "command"> {
     const source = this.clientById(sourceClientId);
+    if (!this.hasAvailableTopology(source)) {
+      throw new Error("Herdr pane discovery is unavailable · wait for the service registry to reconnect");
+    }
     if (intent !== "reveal") {
       return this.resolveUnlockedDetail(source, intent, preserveSource);
-    }
-    if (!this.hasAvailableTopology(source)) {
-      throw new Error("No Tree destination is available in this pane's context or tab");
     }
     if (source.role === "tree") {
       return {
