@@ -421,6 +421,26 @@ function markdownLink(visible: string, uri: string): string {
   return `[${label}](${uri})`;
 }
 
+function resolvedReferenceEnd(text: string, start: number): number {
+  let depth = 1;
+  let cursor = start + 2;
+  while (cursor < text.length - 1) {
+    if (text.startsWith("((", cursor)) {
+      depth += 1;
+      cursor += 2;
+      continue;
+    }
+    if (text.startsWith("))", cursor)) {
+      depth -= 1;
+      cursor += 2;
+      if (depth === 0) return cursor;
+      continue;
+    }
+    cursor += 1;
+  }
+  return -1;
+}
+
 function resolvedReferenceSpans(rawText: string, resolvedText: string): LinkSpan[] {
   const spans: LinkSpan[] = [];
   let rawCursor = 0;
@@ -442,18 +462,18 @@ function resolvedReferenceSpans(rawText: string, resolvedText: string): LinkSpan
       continue;
     }
     if (!resolvedText.startsWith("((", resolvedCursor)) return [];
-    const end = resolvedText.indexOf("))", resolvedCursor + 2);
+    const end = resolvedReferenceEnd(resolvedText, resolvedCursor);
     if (end < 0) return [];
     spans.push({
       start: resolvedCursor,
-      end: end + 2,
+      end,
       uri: outlinerLinkUri("block", reference.blockId, {
         fragmentId: reference.fragmentId,
       }),
-      presentation: resolvedText.slice(resolvedCursor + 2, end),
+      presentation: resolvedText.slice(resolvedCursor + 2, end - 2),
     });
     rawCursor = reference.end;
-    resolvedCursor = end + 2;
+    resolvedCursor = end;
   }
   return spans;
 }
