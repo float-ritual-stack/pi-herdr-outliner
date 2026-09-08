@@ -1173,6 +1173,68 @@ describe("createTreeController", () => {
     );
   });
 
+  test("collapses projected results through the shared definition disclosure", async () => {
+    const definition = block("view", {
+      properties: [
+        { key: "type", value: "virtual-branch" },
+        { key: "query", value: "status=Next" },
+      ],
+    });
+    const match = block("match", {
+      properties: [{ key: "status", value: "Next" }],
+    });
+    const fake = harness((input) => {
+      if (input.action === "workspace.snapshot") return snapshot([definition], definition);
+      if (input.action === "blocks.query") {
+        return { blocks: [match], completeness: { kind: "complete" } };
+      }
+      return undefined;
+    });
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+
+    expect(controller.view().rows[0]).toMatchObject({
+      rowId: definition.id,
+      hasChildren: true,
+      collapsed: false,
+    });
+    expect(controller.view().rows.map((row) => row.rowId)).toEqual([
+      definition.id,
+      `occurrence:${definition.id}:${match.id}`,
+    ]);
+
+    await controller.handleDisclosure(definition.id);
+    expect(controller.view().rows).toHaveLength(1);
+    expect(controller.view().rows[0]).toMatchObject({
+      rowId: definition.id,
+      hasChildren: true,
+      collapsed: true,
+    });
+
+    await controller.handleServiceEvent(event("content"));
+    expect(controller.view().rows).toHaveLength(1);
+    expect(controller.view().rows[0]?.collapsed).toBe(true);
+
+    await controller.handleDisclosure(definition.id);
+    expect(controller.view().rows.map((row) => row.rowId)).toEqual([
+      definition.id,
+      `occurrence:${definition.id}:${match.id}`,
+    ]);
+
+    await controller.handleKeypress("", { name: "left" }, "pass");
+    expect(controller.view().rows).toHaveLength(1);
+    expect(controller.view().rows[0]?.collapsed).toBe(true);
+
+    await controller.handleKeypress("", { name: "right" }, "pass");
+    expect(controller.view().rows).toHaveLength(2);
+    expect(controller.view().rows[0]?.collapsed).toBe(false);
+
+    await controller.handleKeypress("", { name: "space" }, "pass");
+    expect(controller.view().rows).toHaveLength(1);
+    await controller.handleKeypress("", { name: "space" }, "pass");
+    expect(controller.view().rows).toHaveLength(2);
+  });
+
   test("projects generic Next, Doing, and Done branches and requeries on content and connect", async () => {
     const nextView = block("next-view", {
       properties: [
