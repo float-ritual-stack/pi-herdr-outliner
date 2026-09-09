@@ -435,11 +435,12 @@ edit buffer or saved `Block.text`; clicking a source row selects and highlights
 it, while `Enter` or `Ctrl`/`Meta`-click opens a reversible preview over the
 invoking Detail. The popup captures the current filtered/sorted source set once:
 `Left`/`Right` traverse it and `Esc` restores the exact inline row without
-navigation. `Enter` opens the destination chooser. `Shift+R` replaces the
-invoking Detail regardless of lock state, `f` uses the first unlocked Detail,
-`r` splits right, and `d` splits down. A second `Enter` uses the first unlocked
-Detail or falls back to a right split. `R` outside the popup still reveals the
-selected source in Tree.
+navigation. `Enter` opens the destination chooser. Inside that chooser,
+`Shift+R` replaces the invoking Detail regardless of lock state, `f` uses the
+first unlocked Detail, `r` splits right, and `d` splits down. A second `Enter`
+uses the first unlocked Detail or falls back to a right split. Back in the
+invoking Detail, outside the popup, pane-level `Shift+R` reveals the current
+Detail block's canonical physical source in Tree.
 
 ### Detail source comments
 
