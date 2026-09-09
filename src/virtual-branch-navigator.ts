@@ -310,6 +310,7 @@ export class VirtualBranchNavigatorController {
     }
     const click = parseTreePrimaryClick(sequence);
     if (!click) return;
+    if (!rendered.narrow && click.column > rendered.listWidth) return;
     const target = rendered.mouseTargets[click.row];
     if (!target) return;
     const index = this.visibleRows.findIndex((row) => row.rowId === target.rowId);
@@ -488,9 +489,12 @@ export class VirtualBranchNavigatorController {
     return this.selectedPreview()?.target ?? null;
   }
 
-  private selectedUnavailableReason(): string | null {
+  private selectedUnavailableReason(): string {
+    if (this.loadingPreview) return "Loading preview… retry when it finishes";
     const preview = this.selectedPreview();
-    return preview?.target === null ? preview.unavailableReason : null;
+    return preview?.target === null
+      ? preview.unavailableReason ?? "Selected target is not available"
+      : "Selected target is not available";
   }
 
   private openDestinationChooser(): void {
@@ -502,7 +506,7 @@ export class VirtualBranchNavigatorController {
     }
     const target = this.selectedTarget();
     if (!target) {
-      this.status = this.selectedUnavailableReason() ?? "Selected target is not available";
+      this.status = this.selectedUnavailableReason();
       this.effects.invalidate();
       return;
     }
@@ -512,7 +516,7 @@ export class VirtualBranchNavigatorController {
   private async revealSelected(): Promise<void> {
     const target = this.selectedTarget();
     if (!target) {
-      this.status = this.selectedUnavailableReason() ?? "Selected target is not available";
+      this.status = this.selectedUnavailableReason();
       this.effects.invalidate();
       return;
     }
@@ -528,6 +532,11 @@ export class VirtualBranchNavigatorController {
   private async removeSelectedRecord(): Promise<void> {
     const row = this.selectedRow;
     if (!row || !this.effects.removeSelectedRecord) return;
+    if (row.relativeDepth !== 0) {
+      this.status = "Select the bookmark record row to remove it";
+      this.effects.invalidate();
+      return;
+    }
     try {
       await this.effects.removeSelectedRecord(row);
       await this.refresh();

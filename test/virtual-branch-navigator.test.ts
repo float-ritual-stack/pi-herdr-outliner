@@ -271,6 +271,23 @@ describe("virtual branch navigator", () => {
     expect(state.controller.preview?.resolvedText).toBe("Current preview");
   });
 
+  test("reports a pending preview instead of an unavailable target", async () => {
+    const pending = deferred<VirtualBranchNavigatorPreview>();
+    const state = harness([row("one")], () => pending.promise);
+    await state.controller.initialize();
+
+    await state.controller.handleKeypress("", key("return"), "pass", 20, false);
+    expect(state.controller.destinationChooserState.active).toBe(false);
+    expect(state.controller.status).toBe("Loading preview… retry when it finishes");
+
+    await state.controller.handleKeypress("R", key("r", { shift: true }), "pass", 20, false);
+    expect(state.calls.revealed).toEqual([]);
+    expect(state.controller.status).toBe("Loading preview… retry when it finishes");
+
+    pending.resolve(preview("Ready", "one"));
+    await settle();
+  });
+
   test("invalidates an old preview as soon as projection refresh begins", async () => {
     const oldPreview = deferred<VirtualBranchNavigatorPreview>();
     const refreshedProjection = deferred<VirtualBranchNavigatorProjection>();
@@ -385,6 +402,23 @@ describe("virtual branch navigator", () => {
     expect(state.controller.visibleRows.map((item) => item.canonicalId)).toEqual(["one", "three"]);
     expect(state.controller.selectedRow?.canonicalId).toBe("three");
     expect(state.controller.status).toBe("Bookmark removed");
+  });
+
+  test("does not remove a descendant occurrence's root bookmark", async () => {
+    const child = row("child", {
+      rowId: "view:one/child",
+      parentRowId: "view:one",
+      matchRootCanonicalId: "one",
+      relativeDepth: 1,
+      depth: 2,
+    });
+    const state = harness([row("one", { hasChildren: true }), child], undefined, undefined, true);
+    await state.controller.initialize();
+    await state.controller.handleKeypress("", key("down"), "pass", 20, false);
+    await state.controller.handleKeypress("", key("m", { meta: true }), "pass", 20, false);
+
+    expect(state.calls.removed).toEqual([]);
+    expect(state.controller.status).toBe("Select the bookmark record row to remove it");
   });
 
   test("keeps unavailable bookmark targets inert but removable", async () => {
@@ -539,6 +573,26 @@ describe("virtual branch navigator", () => {
     expect(rendered.frame).not.toContain("\u001b[31m");
     expect(rendered.frame).not.toContain("\u001b]52;c;payload\u0007");
     expect(rendered.frame).not.toContain("\u001b]52;c;header\u0007");
+  });
+
+  test("ignores clicks in the wide preview column", async () => {
+    const state = harness([row("one"), row("two")]);
+    await state.controller.initialize();
+    await settle();
+    const rendered = renderVirtualBranchNavigatorFrame(
+      state.controller,
+      100,
+      12,
+      plainMarkdownTheme,
+    );
+    const secondRow = rendered.mouseTargets.findIndex((target) => target?.rowId === "view:two");
+
+    await state.controller.handleMouse(
+      `\x1b[<0;${rendered.listWidth + 5};${secondRow + 1}M`,
+      rendered,
+    );
+
+    expect(state.controller.selectedRow?.canonicalId).toBe("one");
   });
 
   test("mouse selection, activation, disclosure, and scrolling use projected rows", async () => {

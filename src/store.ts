@@ -2662,9 +2662,9 @@ export class OutlinerStore {
   private bookmarkRecordsFromCurrentRead(root: Block): BookmarkRecord[] {
     const rows = this.database
       .query(
-        "SELECT DISTINCT property.block_id FROM block_properties property JOIN blocks block ON block.id = property.block_id WHERE property.scope = 'block' AND property.key = 'type' AND LOWER(property.value) = ? AND block.effective_deleted_root_id IS NULL ORDER BY block.created_at, block.id",
+        "SELECT DISTINCT property.block_id FROM block_properties property JOIN blocks block ON block.id = property.block_id WHERE property.scope = 'block' AND property.key = 'type' AND LOWER(property.value) = ? AND block.parent_id = ? AND block.effective_deleted_root_id IS NULL ORDER BY block.created_at, block.id",
       )
-      .all(BOOKMARK_TYPE) as Array<{ block_id: string }>;
+      .all(BOOKMARK_TYPE, root.id) as Array<{ block_id: string }>;
     const records = rows.map((row) => parseBookmarkRecord(this.require(row.block_id)));
     const targetOwners = new Map<string, string>();
     for (const record of records) {

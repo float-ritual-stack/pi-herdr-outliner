@@ -7,6 +7,7 @@ import type { DetailReadPreviewDocument } from "./detail-pi-preview";
 import { OutlinerActionKeymap } from "./outliner-actions";
 import { currentPaneRuntime, openDetailPane } from "./pane-control";
 import { resolvePaths } from "./paths";
+import { ALL_DETAILS_LOCKED_ERROR } from "./navigation-routes";
 import { openDestinationTimeoutFromEnvironment } from "./open-destination-chooser";
 import { blockDisplayTitle } from "./references";
 import {
@@ -190,10 +191,7 @@ const controller = new VirtualBranchNavigatorController(launch.sourceRole, {
       });
       return true;
     } catch (error) {
-      if (
-        error instanceof Error &&
-        error.message === "All Details in this tab are locked · unlock one or open another Detail"
-      ) return false;
+      if (error instanceof Error && error.message === ALL_DETAILS_LOCKED_ERROR) return false;
       throw error;
     }
   },
@@ -230,6 +228,9 @@ const controller = new VirtualBranchNavigatorController(launch.sourceRole, {
   ...(launch.adapter === "bookmark"
     ? {
       async removeSelectedRecord(row: VirtualBranchOccurrenceRow) {
+        if (row.relativeDepth !== 0) {
+          throw new Error("Select the bookmark record row to remove it");
+        }
         const resolution = await client.request<BookmarkResolution>({
           action: "bookmarks.resolve",
           recordId: row.matchRootCanonicalId,

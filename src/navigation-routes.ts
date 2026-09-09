@@ -5,6 +5,9 @@ import type {
   OutlinerNavigationResolution,
 } from "./types";
 
+export const ALL_DETAILS_LOCKED_ERROR =
+  "All Details in this tab are locked · unlock one or open another Detail";
+
 export interface NavigationRouteOptions {
   preserveSource?: boolean;
   fragmentId?: string;
