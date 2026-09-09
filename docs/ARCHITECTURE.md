@@ -651,8 +651,8 @@ Resolution distinguishes active, trashed, and missing targets.
 The Bookmarks root is an unsorted virtual branch: sequential child positions
 give creation order by default, and existing persisted occurrence ranks can
 optionally override that order. Tree and Detail use independently configurable
-`*.bookmark.toggle` and `*.bookmarks.open` action IDs. `Alt+M` and
-`Alt+Shift+M` are the defaults; `Ctrl+Shift+M` is intentionally unbound.
+`*.bookmark.toggle` and `*.bookmarks.open` action IDs. `m` and `Shift+M` are
+the defaults; modifier-prefixed alternatives remain available through keymap overrides.
 Successful toggle/remove requests emit ordinary content events for the bookmark
 record.
 
@@ -660,7 +660,7 @@ The PIE-221 popup accepts a bounded `bookmark` adapter. Bookmark root
 occurrences load their target through `bookmarks.resolve`, then reuse the shared
 Detail read projection, reference resolution, renderer, and destination
 chooser. Contextual note descendants retain ordinary canonical navigation.
-Unavailable root targets render an explicit inert preview. Popup `Alt+M`
+Unavailable root targets render an explicit inert preview. Popup `m`
 optimistically removes the owning root record, reprojects, and retains the next
 row at the prior index or the previous surviving row.
 

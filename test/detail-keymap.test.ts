@@ -496,13 +496,13 @@ test("maps Shift+V to the generic virtual branch navigator", async () => {
   expect(preview.intents).toEqual([{ type: "virtual-branch.open" }]);
 });
 
-test("maps Option+M bookmark actions without claiming Ctrl+Shift+M", async () => {
+test("maps m bookmark actions without claiming Ctrl+Shift+M", async () => {
   const previewState = state();
   previewState.mode = "preview";
   const preview = harness(previewState, false);
 
-  await preview.press({ name: "m", meta: true });
-  await preview.press({ name: "m", meta: true, shift: true }, "M");
+  await preview.press({ name: "m" }, "m");
+  await preview.press({ name: "m", shift: true }, "M");
   await preview.press({ name: "m", ctrl: true, shift: true }, "M");
 
   expect(preview.intents).toEqual([

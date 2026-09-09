@@ -36,6 +36,7 @@ import {
 } from "./fragments";
 import type { ReferencedFile, ReferencedPathCandidate } from "./files";
 import { firstOutlinerReference, type OutlinerLinkTarget } from "./outliner-links";
+import { ALL_DETAILS_LOCKED_ERROR } from "./navigation-routes";
 import {
   createOpenDestinationChooserState,
   OpenDestinationChooser,
@@ -1002,10 +1003,7 @@ export function createDetailController(
       state.status = `Opened ${target.title} in first unlocked Detail`;
       return true;
     } catch (error) {
-      if (
-        errorMessage(error) ===
-          "All Details in this tab are locked · unlock one or open another Detail"
-      ) {
+      if (errorMessage(error) === ALL_DETAILS_LOCKED_ERROR) {
         return false;
       }
       throw error;
@@ -1619,9 +1617,17 @@ export function createDetailController(
           state.status = "No block selected";
           break;
         }
-        const bookmark = await effects.bookmarkStatus(current.id);
-        const receipt = await effects.toggleBookmark(current.id, bookmark.record?.id ?? null);
-        state.status = receipt.bookmarked ? "Bookmarked" : "Bookmark removed";
+        if (current.deletedAt || current.effectiveDeletedRootId) {
+          state.status = "Block is in Trash; restore before bookmarking";
+          break;
+        }
+        try {
+          const bookmark = await effects.bookmarkStatus(current.id);
+          const receipt = await effects.toggleBookmark(current.id, bookmark.record?.id ?? null);
+          state.status = receipt.bookmarked ? "Bookmarked" : "Bookmark removed";
+        } catch (error) {
+          state.status = errorMessage(error);
+        }
         break;
       }
       case "bookmarks.open": {

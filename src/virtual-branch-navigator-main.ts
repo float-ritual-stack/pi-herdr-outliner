@@ -7,6 +7,7 @@ import type { DetailReadPreviewDocument } from "./detail-pi-preview";
 import { OutlinerActionKeymap } from "./outliner-actions";
 import { currentPaneRuntime, openDetailPane } from "./pane-control";
 import { resolvePaths } from "./paths";
+import { ALL_DETAILS_LOCKED_ERROR } from "./navigation-routes";
 import { openDestinationTimeoutFromEnvironment } from "./open-destination-chooser";
 import { blockDisplayTitle } from "./references";
 import {
@@ -26,6 +27,7 @@ import type {
   WorkspaceSnapshot,
 } from "./types";
 import {
+  bookmarkProjectionRows,
   VirtualBranchNavigatorController,
   renderVirtualBranchNavigatorFrame,
   type VirtualBranchNavigatorLaunch,
@@ -86,13 +88,19 @@ async function loadProjection(presentation: TreePresentationState) {
   if (!isVirtualBranchDefinition(definition)) {
     throw new Error(`Block is not a virtual branch: ${launch.viewId}`);
   }
-  const definitions = snapshot.physical.blocks
-    .filter(isVirtualBranchDefinition)
+  const definitions = (launch.adapter === "bookmark"
+    ? [definition]
+    : snapshot.physical.blocks.filter(isVirtualBranchDefinition))
     .map((block) => ({ ...block, depth: 0 }));
   const projection = await projectVirtualBranches(
     definitions,
     snapshot.physical.blocks,
-    (query) => client.request<VisibleBlockCollection>({ action: "blocks.query", query }),
+    (query) => client.request<VisibleBlockCollection>({
+      action: "blocks.query",
+      query: launch.adapter === "bookmark"
+        ? { ...query, subtreeRootId: launch.viewId }
+        : query,
+    }),
     snapshot.virtualOccurrenceRanks,
     presentation,
   );
@@ -107,7 +115,17 @@ async function loadProjection(presentation: TreePresentationState) {
   }
   const state = projection.branchStates.get(launch.viewId);
   if (!state) throw new Error(`Virtual branch state unavailable: ${launch.viewId}`);
-  return { title: blockDisplayTitle(definition), rows, state };
+  const projectedRows = launch.adapter === "bookmark"
+    ? bookmarkProjectionRows(rows, snapshot.physical.blocks, launch.viewId)
+    : rows;
+  const projectedState = launch.adapter === "bookmark"
+    ? {
+        ...state,
+        count: projectedRows.filter((row) => row.relativeDepth === 0).length,
+        descendantCount: projectedRows.filter((row) => row.relativeDepth > 0).length,
+      }
+    : state;
+  return { title: blockDisplayTitle(definition), rows: projectedRows, state: projectedState };
 }
 
 async function loadDetailPreviewDocument(block: Block): Promise<DetailReadPreviewDocument> {
@@ -190,10 +208,7 @@ const controller = new VirtualBranchNavigatorController(launch.sourceRole, {
       });
       return true;
     } catch (error) {
-      if (
-        error instanceof Error &&
-        error.message === "All Details in this tab are locked · unlock one or open another Detail"
-      ) return false;
+      if (error instanceof Error && error.message === ALL_DETAILS_LOCKED_ERROR) return false;
       throw error;
     }
   },
@@ -230,6 +245,9 @@ const controller = new VirtualBranchNavigatorController(launch.sourceRole, {
   ...(launch.adapter === "bookmark"
     ? {
       async removeSelectedRecord(row: VirtualBranchOccurrenceRow) {
+        if (row.relativeDepth !== 0) {
+          throw new Error("Select the bookmark record row to remove it");
+        }
         const resolution = await client.request<BookmarkResolution>({
           action: "bookmarks.resolve",
           recordId: row.matchRootCanonicalId,

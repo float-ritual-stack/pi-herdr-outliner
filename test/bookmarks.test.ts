@@ -140,6 +140,16 @@ describe("canonical bookmarks", () => {
     expect(second.record.id).not.toBe(first.record.id);
   });
 
+  test("ignores bookmark-shaped properties outside the reserved root", () => {
+    const store = makeStore();
+    store.create("Unrelated block\n[type::bookmark]");
+    const target = store.create("Target");
+
+    const added = store.toggleBookmark(target.id, null);
+
+    expect(store.bookmarkStatus(target.id).record?.id).toBe(added.record.id);
+  });
+
   test("validates optional labels before creating property metadata", () => {
     const store = makeStore();
 
