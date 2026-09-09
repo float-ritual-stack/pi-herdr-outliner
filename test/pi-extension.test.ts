@@ -1487,7 +1487,7 @@ test("requires the current protocol, attributes agent creates and page follows, 
     expect(largeEnvelope.presentation.omitted).toBeGreaterThan(0);
     protocolVersion = 5;
     await expect(tools.get("outliner_query")!.execute("incompatible-query", {})).rejects.toThrow(
-      "Outliner protocol 5 does not match this session's extension protocol 32. Run /reload, then retry.",
+      "Outliner protocol 5 does not match this session's extension protocol 33. Run /reload, then retry.",
     );
   } finally {
     OutlinerClient.prototype.request = originalRequest;

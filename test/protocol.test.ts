@@ -161,7 +161,7 @@ test("serves mutations and property queries over the local socket", async () => 
   const client = new OutlinerClient(socket);
   const service = await client.request<OutlinerServiceStatus>({ action: "ping" });
   expect(service).toEqual({ status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION });
-  expect(service.protocolVersion).toBe(32);
+  expect(service.protocolVersion).toBe(33);
   const provenance = {
     actorId: "omp",
     sessionId: "session-1",
@@ -1334,12 +1334,37 @@ test("routes previews and opens to the first spatially unlocked Detail", async (
     sourceClientId: "tree-a",
     blockId: target.id,
     intent: "reveal",
+    focusTarget: true,
   });
-  await revealReceived;
+  const revealEvent = await revealReceived;
   expect(reveal).toMatchObject({
     targetClientId: "tree-a",
     resolution: "self",
+    command: { targetClientId: "tree-a", command: "reveal", blockId: target.id, focus: true },
   });
+  expect(revealEvent.command?.focus).toBe(true);
+
+  const detailRevealReceived = nextCommand("tree-a", "reveal");
+  const detailReveal = await client.request<OutlinerNavigationDispatch>({
+    action: "navigation.dispatch",
+    sourceClientId: "detail-c",
+    blockId: target.id,
+    intent: "reveal",
+    focusTarget: true,
+  });
+  await detailRevealReceived;
+  expect(detailReveal).toMatchObject({
+    targetClientId: "tree-a",
+    resolution: "context",
+    command: { targetClientId: "tree-a", command: "reveal", blockId: target.id, focus: true },
+  });
+  await expect(client.request({
+    action: "navigation.dispatch",
+    sourceClientId: "tree-a",
+    blockId: target.id,
+    intent: "open",
+    focusTarget: true,
+  })).rejects.toThrow("Focused navigation dispatch requires reveal intent");
 
   await client.request({ action: "clients.update", clientId: "detail-d", locked: true });
   await expect(client.request({
@@ -1829,7 +1854,7 @@ test("targets ephemeral attention, advances atomically, stales on edits, and exp
   })).toEqual(expect.objectContaining({ marks: [], pendingCount: 0 }));
 });
 
-test("runs and navigates a targeted structure-first walkthrough over protocol v32", async () => {
+test("runs and navigates a targeted structure-first walkthrough over protocol v33", async () => {
   const directory = mkdtempSync(join(tmpdir(), "pi-outliner-workflow-protocol-"));
   const store = new OutlinerStore(join(directory, "outliner.sqlite"));
   const source = store.create([

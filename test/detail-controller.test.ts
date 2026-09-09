@@ -88,6 +88,7 @@ interface Harness {
       intent: "preview" | "open" | "reveal";
       preserveSource: boolean;
       fragmentId?: string;
+      focusTarget?: boolean;
     }>;
     pageQueries: Array<{ query: string | undefined; limit: number }>;
     focuses: number;
@@ -192,6 +193,7 @@ function createHarness(
         intent,
         preserveSource: options?.preserveSource === true,
         ...(options?.fragmentId ? { fragmentId: options.fragmentId } : {}),
+        ...(options?.focusTarget ? { focusTarget: true } : {}),
       });
       const targetClientId = options?.preserveSource ? "detail-other" : "detail-test";
       return {
@@ -205,6 +207,7 @@ function createHarness(
           command: intent,
           blockId,
           ...(options?.fragmentId ? { fragmentId: options.fragmentId } : {}),
+          ...(options?.focusTarget ? { focus: true } : {}),
         },
       };
     },
@@ -562,6 +565,7 @@ describe("detail controller projection and deferred refresh", () => {
       blockId: source.id,
       intent: "reveal",
       preserveSource: false,
+      focusTarget: true,
     }]);
     expect(harness.calls.followedReferences).toEqual([]);
     expect(harness.controller.state.context.selected?.id).toBe(source.id);
@@ -1861,6 +1865,7 @@ describe("detail backlink loading and navigation", () => {
       blockId: "ancestor-block",
       intent: "reveal",
       preserveSource: false,
+      focusTarget: true,
     });
   });
 
@@ -1916,7 +1921,7 @@ describe("detail backlink loading and navigation", () => {
       sortDirection: "desc",
     }]);
     expect(harness.calls.navigationDispatches).toEqual([
-      { blockId: "source-two", intent: "reveal", preserveSource: false },
+      { blockId: "source-two", intent: "reveal", preserveSource: false, focusTarget: true },
     ]);
     expect(harness.controller.state.context.selected?.id).toBe(hub.id);
     expect(harness.controller.state.status).toBe("Revealed Source two");

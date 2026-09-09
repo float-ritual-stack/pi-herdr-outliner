@@ -944,6 +944,9 @@ export class OutlinerServer {
           break;
         case "navigation.dispatch": {
           const intent = this.navigationIntent(request.intent);
+          if (request.focusTarget && intent !== "reveal") {
+            throw new Error("Focused navigation dispatch requires reveal intent");
+          }
           this.validateFragmentTarget(request.blockId, request.fragmentId);
           const route = this.resolveNavigationTarget(
             request.sourceClientId,
@@ -957,6 +960,7 @@ export class OutlinerServer {
               command: intent,
               blockId: request.blockId,
               ...(request.fragmentId ? { fragmentId: request.fragmentId } : {}),
+              ...(request.focusTarget ? { focus: true } : {}),
             },
           } satisfies OutlinerNavigationDispatch;
           break;

@@ -226,6 +226,9 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
       case "detail.reference.open":
         await dispatch({ type: "reference.follow" });
         return true;
+      case "detail.reference.reveal":
+        await dispatch({ type: "reference.reveal" });
+        return true;
       case "detail.current.reveal":
         await dispatch({ type: "current.reveal" });
         return true;

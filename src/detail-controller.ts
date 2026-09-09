@@ -287,7 +287,7 @@ export interface DetailEffects {
   dispatchNavigation(
     blockId: string,
     intent: OutlinerNavigationIntent,
-    options?: { preserveSource?: boolean; fragmentId?: string },
+    options?: { preserveSource?: boolean; fragmentId?: string; focusTarget?: boolean },
   ): Promise<OutlinerNavigationDispatch>;
   resolveNavigation(
     intent: OutlinerNavigationIntent,
@@ -1490,7 +1490,7 @@ export function createDetailController(
           state.status = "No block selected";
           break;
         }
-        await effects.dispatchNavigation(current.id, "reveal");
+        await effects.dispatchNavigation(current.id, "reveal", { focusTarget: true });
         state.status = `Revealed ${blockDisplayTitle(current)}`;
         break;
       }
@@ -1540,11 +1540,10 @@ export function createDetailController(
           await effects.resolveNavigation("reveal");
         }
         const resolved = await effects.resolveReference(reference);
-        await effects.dispatchNavigation(
-          resolved.block.id,
-          "reveal",
-          fragmentId ? { fragmentId } : {},
-        );
+        await effects.dispatchNavigation(resolved.block.id, "reveal", {
+          ...(fragmentId ? { fragmentId } : {}),
+          focusTarget: true,
+        });
         state.status = `Revealed ${blockDisplayTitle(resolved.block)}`;
         break;
       }
@@ -1906,7 +1905,7 @@ export function createDetailController(
           state.status = "No backlink source selected";
           break;
         }
-        await effects.dispatchNavigation(source.blockId, "reveal");
+        await effects.dispatchNavigation(source.blockId, "reveal", { focusTarget: true });
         state.status = `Revealed ${source.title}`;
         break;
       }

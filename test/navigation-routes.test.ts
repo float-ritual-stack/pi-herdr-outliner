@@ -130,3 +130,37 @@ test("forwards source preservation as an explicit routing constraint", async () 
     },
   ]);
 });
+
+test("forwards focused reveal as one navigation dispatch", async () => {
+  const calls: RequestInput[] = [];
+  const requester = {
+    async request<T>(input: RequestInput): Promise<T> {
+      calls.push(input);
+      return {
+        sourceClientId: "detail-a",
+        targetClientId: "tree-a",
+        blockId: "block-a",
+        intent: "reveal",
+        resolution: "context",
+        command: {
+          targetClientId: "tree-a",
+          command: "reveal",
+          blockId: "block-a",
+          focus: true,
+        },
+      } as T;
+    },
+  };
+
+  await dispatchNavigation(requester, "detail-a", "block-a", "reveal", {
+    focusTarget: true,
+  });
+
+  expect(calls).toEqual([{
+    action: "navigation.dispatch",
+    sourceClientId: "detail-a",
+    blockId: "block-a",
+    intent: "reveal",
+    focusTarget: true,
+  }]);
+});

@@ -298,7 +298,7 @@ describe("createTreeController", () => {
     expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe(target.id);
     expect(lastCall(fake.calls, "browsing-context.publish")).toEqual({ action: "browsing-context.publish", sourceClientId: "tree-test", contextId: "tree-test-context", blockId: target.id });
   });
-  test("opens the first block reference without moving Tree-local selection", async () => {
+  test("separates canonical source reveal from authored reference reveal", async () => {
     const source = block("source01", {
       text: "Source points to ((target01))",
       displayText: "Source points to ((target01))",
@@ -325,7 +325,14 @@ describe("createTreeController", () => {
     await controller.handleKeypress("R", { name: "r", shift: true }, "pass");
     expect(fake.calls.filter((call) => call.action === "navigation.dispatch")).toEqual([
       expect.objectContaining({ blockId: target.id, intent: "open" }),
-      expect.objectContaining({ blockId: target.id, intent: "reveal" }),
+    ]);
+    expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe(source.id);
+    expect(fake.focused).toEqual(["outliner"]);
+
+    await controller.handleKeypress("R", { name: "r", meta: true, shift: true }, "pass");
+    expect(fake.calls.filter((call) => call.action === "navigation.dispatch")).toEqual([
+      expect.objectContaining({ blockId: target.id, intent: "open" }),
+      expect.objectContaining({ blockId: target.id, intent: "reveal", focusTarget: true }),
     ]);
     expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe(source.id);
 
@@ -767,11 +774,14 @@ describe("createTreeController", () => {
         targetClientId: "tree-second",
         command: "reveal",
         blockId: child.id,
+        focus: true,
       },
     });
     await first.handleServiceEvent(event("browsing-context", child.id));
     expect(second.view().rows[second.view().selectedIndex]?.canonicalId).toBe(child.id);
     expect(first.view().rows[first.view().selectedIndex]?.canonicalId).toBe(peer.id);
+    expect(secondHarness.focused).toEqual(["outliner"]);
+    expect(firstHarness.focused).toEqual([]);
     expect(first.view().rows.map((row) => row.canonicalId)).toEqual(["root", "peer"]);
 
     await second.handleKeypress("", { name: "left", meta: true }, "pass");
@@ -1662,6 +1672,56 @@ describe("createTreeController", () => {
     expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe("view");
     expect(controller.view().status).toBe("Moved to Trash");
     expect(JSON.stringify(fake.calls)).not.toContain("occurrence:");
+  });
+
+  test("reveals a virtual occurrence's physical source and returns to its exact row", async () => {
+    const definition = block("view", {
+      properties: [
+        { key: "type", value: "virtual-branch" },
+        { key: "query", value: "status=Doing" },
+      ],
+    });
+    const parent = block("parent", { position: 1, hasChildren: true });
+    const card = block("card", {
+      parentId: parent.id,
+      position: 0,
+      depth: 1,
+      text: "Card",
+      displayText: "Card",
+      properties: [{ key: "status", value: "Doing" }],
+    });
+    const fake = harness((input) => {
+      if (input.action === "workspace.snapshot") {
+        return snapshot([definition, parent, card], definition);
+      }
+      if (input.action === "blocks.query") {
+        return { blocks: [card], completeness: { kind: "complete" } };
+      }
+      if (input.action === "get") return card;
+      return undefined;
+    });
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+    await controller.handleRowClick(parent.id);
+    await controller.handleKeypress("", { name: "space" }, "pass");
+    await controller.handleRowClick("occurrence:view:card");
+
+    await controller.handleKeypress("R", { name: "r", shift: true }, "pass");
+
+    expect(controller.view().rows[controller.view().selectedIndex]).toMatchObject({
+      rowId: card.id,
+      canonicalId: card.id,
+      kind: "physical",
+    });
+    expect(controller.view().rows.map((row) => row.rowId)).toContain(card.id);
+    expect(fake.focused).toEqual(["outliner"]);
+    expect(fake.calls.some((call) => call.action === "navigation.dispatch")).toBe(false);
+
+    await controller.handleKeypress("", { name: "left", meta: true }, "pass");
+
+    expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe(
+      "occurrence:view:card",
+    );
   });
 
   test("falls back at a vanished occurrence's visual position instead of its physical row", async () => {
