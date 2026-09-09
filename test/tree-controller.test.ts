@@ -698,14 +698,14 @@ describe("createTreeController", () => {
     const controller = createTreeController(fake.effects);
     await controller.initialize();
 
-    await controller.handleKeypress("", { name: "m", meta: true }, "pass");
+    await controller.handleKeypress("m", { name: "m" }, "pass");
     expect(lastCall(fake.calls, "bookmarks.toggle")).toMatchObject({
       targetBlockId: target.id,
       expectedRecordId: null,
     });
     expect(controller.view().status).toBe("Bookmarked");
 
-    await controller.handleKeypress("M", { name: "m", meta: true, shift: true }, "pass");
+    await controller.handleKeypress("M", { name: "m", shift: true }, "pass");
     expect(fake.openedVirtualNavigators).toEqual([root.id]);
     expect(fake.openedVirtualNavigatorAdapters).toEqual(["bookmark"]);
     expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe(target.id);

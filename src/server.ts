@@ -10,6 +10,7 @@ import {
 } from "./attention";
 import type { HerdrRuntimeRegistry } from "./herdr-registry";
 import { isFragmentId, resolveFragment } from "./fragments";
+import { ALL_DETAILS_LOCKED_ERROR } from "./navigation-routes";
 import { OutlinerStore } from "./store";
 import { WorkflowManager } from "./workflows";
 import {
@@ -745,7 +746,7 @@ export class OutlinerServer {
           "No other unlocked Detail is available · unlock one or open another Detail",
         );
       }
-      throw new Error("All Details in this tab are locked · unlock one or open another Detail");
+      throw new Error(ALL_DETAILS_LOCKED_ERROR);
     }
     return {
       sourceClientId: source.clientId,

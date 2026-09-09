@@ -316,7 +316,7 @@ cancel route rejects the entire candidate and preserves the prior bindings.
 | `R` | Reveal this row's canonical physical source, clearing filters, expanding its ancestors, and focusing this Tree |
 | `Option+Shift+R` | Reveal the first authored reference in this Tree |
 | `Shift+V` | Open the selected virtual branch in the generic split navigator |
-| `Option+M` / `Option+Shift+M` | Toggle a bookmark for the selected block / open Bookmarks |
+| `m` / `Shift+M` | Toggle a bookmark for the selected block / open Bookmarks |
 | `L` | Explain that locking is controlled from a Detail pane |
 | `Option+Left` / `Option+Right` | Move backward / forward through block navigation history |
 | `/` | Filter visible blocks |
@@ -385,7 +385,7 @@ Projected virtual occurrences deliberately constrain hierarchy and collapse. Bra
 | `R` | Reveal the block currently shown by this Detail in its paired or unique same-tab Tree |
 | `Option+Shift+R` | Reveal the first authored reference in the paired or unique same-tab Tree |
 | `Shift+V` | Open the current virtual branch in the generic split navigator |
-| `Option+M` / `Option+Shift+M` | Toggle a bookmark for the current block / open Bookmarks |
+| `m` / `Shift+M` | Toggle a bookmark for the current block / open Bookmarks |
 | `L`, `i`, `Ctrl+L`, or `Command/Meta+L` | Lock this block as an anchor, or unlock the Detail for previews and opens |
 | `Option+Shift+Right` / `Option+Shift+Down` | Open the current target in a new independent Detail to the right / below |
 | `Option+Left` / `Option+Right` | Move backward / forward through this Detail's local history without changing lock state |
@@ -689,17 +689,17 @@ order stays unchanged, and ranks survive temporary query mismatches.
 ### Bookmarks
 
 Bookmarks are ordinary canonical records under the single
-`[system-view::bookmarks]` virtual-branch root. `Option+M` toggles the current
-Tree or Detail target; removal moves only the bookmark record to Trash, while
+`[system-view::bookmarks]` virtual-branch root. `m` toggles the current Tree or
+Detail target; removal moves only the bookmark record to Trash, while
 the target remains unchanged. Each active record has one `[type::bookmark]`,
 one `[target::<canonical-block-id>]`, and one
 `[bookmark-created::<ISO-UTC>]`; its display label is captured separately from
 the stable target identity, and child blocks remain available for notes.
 
-`Option+Shift+M` opens the same navigator with the bookmark adapter. Root rows
+`Shift+M` opens the same navigator with the bookmark adapter. Root rows
 preview and route to the current target, so later target renames and moves
 remain valid. Missing or trashed targets are explicit and cannot be opened or
-revealed; `Option+M` in the popup removes the selected bookmark record and
+revealed; `m` in the popup removes the selected bookmark record and
 chooses the deterministic adjacent row. Default record order is creation order,
 while ordinary virtual-occurrence ranks provide optional manual order.
 

@@ -27,7 +27,7 @@ import {
   parseTreeWheelEvent,
   treeClickActivates,
 } from "./tree-mouse";
-import type { OutlinerClientRole } from "./types";
+import type { Block, OutlinerClientRole } from "./types";
 import {
   virtualBranchStateLabel,
   type VirtualBranchOccurrenceRow,
@@ -46,6 +46,19 @@ export interface VirtualBranchNavigatorProjection {
   title: string;
   rows: readonly VirtualBranchOccurrenceRow[];
   state: VirtualBranchState;
+}
+
+export function bookmarkProjectionRows(
+  rows: readonly VirtualBranchOccurrenceRow[],
+  physicalBlocks: readonly Block[],
+  bookmarksRootId: string,
+): VirtualBranchOccurrenceRow[] {
+  const recordIds = new Set(
+    physicalBlocks
+      .filter((block) => block.parentId === bookmarksRootId)
+      .map((block) => block.id),
+  );
+  return rows.filter((row) => recordIds.has(row.matchRootCanonicalId));
 }
 
 export type VirtualBranchNavigatorPreview =
@@ -92,6 +105,7 @@ export interface VirtualBranchNavigatorRenderResult {
 
 const WIDE_MINIMUM_WIDTH = 84;
 const SELECTED_ROW_STYLE = "\x1b[48;5;238m\x1b[1m";
+const PREVIEW_LOADING_STATUS = "Loading preview… retry when it finishes";
 
 function rowSearchText(row: VirtualBranchOccurrenceRow): string {
   return `${row.block.displayText} ${row.block.properties.map(({ key, value }) => `${key} ${value}`).join(" ")}`;
@@ -310,6 +324,7 @@ export class VirtualBranchNavigatorController {
     }
     const click = parseTreePrimaryClick(sequence);
     if (!click) return;
+    if (!rendered.narrow && click.column > rendered.listWidth) return;
     const target = rendered.mouseTargets[click.row];
     if (!target) return;
     const index = this.visibleRows.findIndex((row) => row.rowId === target.rowId);
@@ -460,12 +475,14 @@ export class VirtualBranchNavigatorController {
       if (generation !== this.previewGeneration || this.closed || this.selectedRow?.rowId !== row.rowId) return;
       this.loadedPreview = { rowId: row.rowId, value: preview };
       this.loadingPreview = false;
+      if (this.status === PREVIEW_LOADING_STATUS) this.status = "";
       this.effects.invalidate();
     }).catch((error) => {
       if (generation !== this.previewGeneration || this.closed || this.selectedRow?.rowId !== row.rowId) return;
       this.loadedPreview = null;
       this.loadingPreview = false;
       this.previewError = errorMessage(error);
+      if (this.status === PREVIEW_LOADING_STATUS) this.status = "";
       this.effects.invalidate();
     });
   }
@@ -488,9 +505,12 @@ export class VirtualBranchNavigatorController {
     return this.selectedPreview()?.target ?? null;
   }
 
-  private selectedUnavailableReason(): string | null {
+  private selectedUnavailableReason(): string {
+    if (this.loadingPreview) return PREVIEW_LOADING_STATUS;
     const preview = this.selectedPreview();
-    return preview?.target === null ? preview.unavailableReason : null;
+    return preview?.target === null
+      ? preview.unavailableReason ?? "Selected target is not available"
+      : "Selected target is not available";
   }
 
   private openDestinationChooser(): void {
@@ -502,7 +522,7 @@ export class VirtualBranchNavigatorController {
     }
     const target = this.selectedTarget();
     if (!target) {
-      this.status = this.selectedUnavailableReason() ?? "Selected target is not available";
+      this.status = this.selectedUnavailableReason();
       this.effects.invalidate();
       return;
     }
@@ -512,7 +532,7 @@ export class VirtualBranchNavigatorController {
   private async revealSelected(): Promise<void> {
     const target = this.selectedTarget();
     if (!target) {
-      this.status = this.selectedUnavailableReason() ?? "Selected target is not available";
+      this.status = this.selectedUnavailableReason();
       this.effects.invalidate();
       return;
     }
@@ -528,6 +548,11 @@ export class VirtualBranchNavigatorController {
   private async removeSelectedRecord(): Promise<void> {
     const row = this.selectedRow;
     if (!row || !this.effects.removeSelectedRecord) return;
+    if (row.relativeDepth !== 0) {
+      this.status = "Select the bookmark record row to remove it";
+      this.effects.invalidate();
+      return;
+    }
     try {
       await this.effects.removeSelectedRecord(row);
       await this.refresh();

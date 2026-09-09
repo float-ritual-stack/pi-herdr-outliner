@@ -646,6 +646,35 @@ describe("detail controller projection and deferred refresh", () => {
     expect(harness.controller.state.context.selected?.id).toBe(target.id);
   });
 
+  test("reports bookmark failures and does not bookmark Trash targets", async () => {
+    const target = makeBlock({ id: "bookmark-target", text: "Bookmark target" });
+    const statusFailure = createHarness(target);
+    await statusFailure.controller.initialize();
+    statusFailure.effects.bookmarkStatus = async () => {
+      throw new Error("Bookmark target is unavailable");
+    };
+    await statusFailure.controller.dispatch({ type: "bookmark.toggle" }, viewport);
+    expect(statusFailure.controller.state.status).toBe("Bookmark target is unavailable");
+
+    const toggleFailure = createHarness(target);
+    await toggleFailure.controller.initialize();
+    toggleFailure.effects.toggleBookmark = async () => {
+      throw new Error("Bookmark changed; refresh and retry");
+    };
+    await toggleFailure.controller.dispatch({ type: "bookmark.toggle" }, viewport);
+    expect(toggleFailure.controller.state.status).toBe("Bookmark changed; refresh and retry");
+
+    const deleted = createHarness(makeBlock({
+      id: "deleted-target",
+      deletedAt: "deleted-at",
+      effectiveDeletedRootId: "deleted-target",
+    }));
+    await deleted.controller.initialize();
+    await deleted.controller.dispatch({ type: "bookmark.toggle" }, viewport);
+    expect(deleted.calls.bookmarkToggles).toEqual([]);
+    expect(deleted.controller.state.status).toBe("Block is in Trash; restore before bookmarking");
+  });
+
   test("keeps navigation history local and loads deleted targets read-only", async () => {
     const source = makeBlock({ text: "See ((target01))" });
     const harness = createHarness(source);

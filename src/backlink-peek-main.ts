@@ -14,6 +14,7 @@ import { visibleBacklinkSources, type DetailBacklinkState } from "./detail-contr
 import { projectDetailRead } from "./detail-embeds";
 import { openDetailPane } from "./pane-control";
 import { resolvePaths } from "./paths";
+import { ALL_DETAILS_LOCKED_ERROR } from "./navigation-routes";
 import { openDestinationTimeoutFromEnvironment } from "./open-destination-chooser";
 import {
   BRACKETED_PASTE_DISABLE,
@@ -149,10 +150,7 @@ const controller = new BacklinkPeekController(
         });
         return true;
       } catch (error) {
-        if (
-          error instanceof Error &&
-          error.message === "All Details in this tab are locked · unlock one or open another Detail"
-        ) {
+        if (error instanceof Error && error.message === ALL_DETAILS_LOCKED_ERROR) {
           return false;
         }
         throw error;
