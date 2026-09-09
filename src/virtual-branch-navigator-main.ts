@@ -18,6 +18,8 @@ import {
 import { isTreeMouseSequence } from "./tree-mouse";
 import type {
   Block,
+  BookmarkResolution,
+  BookmarkRemoveReceipt,
   OutlinerClientRole,
   ResolvedBlockReferences,
   VisibleBlockCollection,
@@ -27,6 +29,7 @@ import {
   VirtualBranchNavigatorController,
   renderVirtualBranchNavigatorFrame,
   type VirtualBranchNavigatorLaunch,
+  type VirtualBranchNavigatorPreview,
   type VirtualBranchNavigatorRenderResult,
 } from "./virtual-branch-navigator";
 import {
@@ -51,11 +54,16 @@ function parseLaunch(): VirtualBranchNavigatorLaunch {
   if (sourceRole !== "tree" && sourceRole !== "detail") {
     throw new Error("OUTLINER_NAVIGATOR_SOURCE_ROLE must be tree or detail");
   }
+  const adapter = process.env.OUTLINER_NAVIGATOR_ADAPTER?.trim();
+  if (adapter && adapter !== "bookmark") {
+    throw new Error("OUTLINER_NAVIGATOR_ADAPTER must be bookmark when provided");
+  }
   return {
     sourceClientId: requiredEnvironment("OUTLINER_NAVIGATOR_SOURCE_CLIENT_ID"),
     sourceRole: sourceRole satisfies OutlinerClientRole,
     browsingContextId: requiredEnvironment("OUTLINER_BROWSING_CONTEXT_ID"),
     viewId: requiredEnvironment("OUTLINER_NAVIGATOR_VIEW_ID"),
+    ...(adapter === "bookmark" ? { adapter } : {}),
   };
 }
 
@@ -102,10 +110,7 @@ async function loadProjection(presentation: TreePresentationState) {
   return { title: blockDisplayTitle(definition), rows, state };
 }
 
-async function loadPreview(
-  row: VirtualBranchOccurrenceRow,
-): Promise<DetailReadPreviewDocument> {
-  const block = await client.request<Block>({ action: "get", blockId: row.canonicalId });
+async function loadDetailPreviewDocument(block: Block): Promise<DetailReadPreviewDocument> {
   const projection = await projectDetailRead(client, block.text, { hostBlockId: block.id });
   const resolved = await client.request<ResolvedBlockReferences>({
     action: "references.resolve",
@@ -117,6 +122,44 @@ async function loadPreview(
     projectedText: projection.text,
     embedRanges: projection.embedRanges,
     workIdPrefix: resolved.workIdPrefix ?? null,
+  };
+}
+
+async function loadPreview(
+  row: VirtualBranchOccurrenceRow,
+): Promise<VirtualBranchNavigatorPreview> {
+  if (launch.adapter === "bookmark" && row.relativeDepth === 0) {
+    const resolution = await client.request<BookmarkResolution>({
+      action: "bookmarks.resolve",
+      recordId: row.matchRootCanonicalId,
+    });
+    if (!resolution.target) {
+      const unavailableReason = resolution.unavailableReason;
+      const text = `${blockDisplayTitle(resolution.record)}\n\n> ${unavailableReason}`;
+      return {
+        document: {
+          canonicalText: text,
+          resolvedText: text,
+          projectedText: text,
+          embedRanges: [],
+          workIdPrefix: null,
+        },
+        target: null,
+        unavailableReason,
+      };
+    }
+    return {
+      document: await loadDetailPreviewDocument(resolution.target),
+      target: {
+        blockId: resolution.target.id,
+        title: blockDisplayTitle(resolution.target),
+      },
+    };
+  }
+  const block = await client.request<Block>({ action: "get", blockId: row.canonicalId });
+  return {
+    document: await loadDetailPreviewDocument(block),
+    target: { blockId: block.id, title: blockDisplayTitle(block) },
   };
 }
 
@@ -184,6 +227,21 @@ const controller = new VirtualBranchNavigatorController(launch.sourceRole, {
       focusTarget: true,
     });
   },
+  ...(launch.adapter === "bookmark"
+    ? {
+      async removeSelectedRecord(row: VirtualBranchOccurrenceRow) {
+        const resolution = await client.request<BookmarkResolution>({
+          action: "bookmarks.resolve",
+          recordId: row.matchRootCanonicalId,
+        });
+        await client.request<BookmarkRemoveReceipt>({
+          action: "bookmarks.remove",
+          recordId: resolution.record.id,
+          expectedUpdatedAt: resolution.record.updatedAt,
+        });
+      },
+    }
+    : {}),
   close() {
     stop();
   },

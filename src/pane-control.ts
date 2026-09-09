@@ -362,6 +362,7 @@ export interface OpenVirtualBranchNavigatorPopupOptions {
   sourceClientId: string;
   sourceRole: OutlinerClientRole;
   viewId: string;
+  adapter?: "bookmark";
 }
 
 export function openVirtualBranchNavigatorPopup(
@@ -389,8 +390,10 @@ export function openVirtualBranchNavigatorPopup(
     `OUTLINER_NAVIGATOR_SOURCE_ROLE=${options.sourceRole}`,
     "--env",
     `OUTLINER_NAVIGATOR_VIEW_ID=${options.viewId}`,
-    "--focus",
   ];
+  if (options.adapter) {
+    args.push("--env", `OUTLINER_NAVIGATOR_ADAPTER=${options.adapter}`);
+  }
   for (const name of [
     "OUTLINER_STATE_DIR",
     "OUTLINER_OPEN_DESTINATION_TIMEOUT_MS",
@@ -399,6 +402,7 @@ export function openVirtualBranchNavigatorPopup(
       args.push("--env", `${name}=${process.env[name]}`);
     }
   }
+  args.push("--focus");
   invokeHerdr(herdr, args);
 }
 

@@ -76,6 +76,8 @@ import type {
   BacklinkSource,
   BacklinkQuery,
   Block,
+  BookmarkStatus,
+  BookmarkToggleReceipt,
   BlockSearchQuery,
   BrowsingContextState,
   PageAddressCollection,
@@ -330,7 +332,10 @@ export interface DetailEffects {
   completeFiles(query: string): ReferencedPathCandidate[];
   focusOutliner(): Promise<void>;
   openPropertyInspectorPane(blockId: string): string | Promise<string>;
-  openVirtualBranchNavigator(viewId: string): void | Promise<void>;
+  openVirtualBranchNavigator(viewId: string, adapter?: "bookmark"): void | Promise<void>;
+  bookmarkStatus(targetBlockId: string): Promise<BookmarkStatus>;
+  toggleBookmark(targetBlockId: string, expectedRecordId: string | null): Promise<BookmarkToggleReceipt>;
+  bookmarksRoot(): Promise<Block>;
 }
 
 export type DetailBufferMoveDirection =
@@ -358,6 +363,8 @@ export type DetailIntent =
   | { type: "reference.reveal" }
   | { type: "current.reveal" }
   | { type: "virtual-branch.open" }
+  | { type: "bookmark.toggle" }
+  | { type: "bookmarks.open" }
   | { type: "backlinks.move"; delta: -1 | 1 }
   | { type: "backlinks.open" }
   | { type: "backlinks.reveal" }
@@ -1509,6 +1516,23 @@ export function createDetailController(
         }
         await effects.openVirtualBranchNavigator(current.id);
         state.status = `Opened virtual navigator for ${blockDisplayTitle(current)}`;
+        break;
+      }
+      case "bookmark.toggle": {
+        const current = state.context.selected;
+        if (!current) {
+          state.status = "No block selected";
+          break;
+        }
+        const bookmark = await effects.bookmarkStatus(current.id);
+        const receipt = await effects.toggleBookmark(current.id, bookmark.record?.id ?? null);
+        state.status = receipt.bookmarked ? "Bookmarked" : "Bookmark removed";
+        break;
+      }
+      case "bookmarks.open": {
+        const root = await effects.bookmarksRoot();
+        await effects.openVirtualBranchNavigator(root.id, "bookmark");
+        state.status = "Opened Bookmarks";
         break;
       }
       case "reference.open":

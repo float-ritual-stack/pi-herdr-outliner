@@ -235,6 +235,12 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
       case "detail.virtual-branch.open":
         await dispatch({ type: "virtual-branch.open" });
         return true;
+      case "detail.bookmark.toggle":
+        await dispatch({ type: "bookmark.toggle" });
+        return true;
+      case "detail.bookmarks.open":
+        await dispatch({ type: "bookmarks.open" });
+        return true;
       case "detail.navigation.back":
         await dispatch({ type: "navigation.back" });
         return true;

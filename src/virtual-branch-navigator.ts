@@ -14,6 +14,7 @@ import {
 import {
   createOpenDestinationChooserState,
   OpenDestinationChooser,
+  type OpenDestinationTarget,
 } from "./open-destination-chooser";
 import {
   DEFAULT_OUTLINER_ACTION_KEYMAP,
@@ -38,6 +39,7 @@ export interface VirtualBranchNavigatorLaunch {
   sourceRole: OutlinerClientRole;
   browsingContextId: string;
   viewId: string;
+  adapter?: "bookmark";
 }
 
 export interface VirtualBranchNavigatorProjection {
@@ -46,15 +48,27 @@ export interface VirtualBranchNavigatorProjection {
   state: VirtualBranchState;
 }
 
+export type VirtualBranchNavigatorPreview =
+  | {
+    document: DetailReadPreviewDocument;
+    target: OpenDestinationTarget;
+  }
+  | {
+    document: DetailReadPreviewDocument;
+    target: null;
+    unavailableReason: string;
+  };
+
 export interface VirtualBranchNavigatorEffects {
   loadProjection(
     collapsedOccurrenceRowIds: ReadonlySet<string>,
   ): Promise<VirtualBranchNavigatorProjection>;
-  loadPreview(row: VirtualBranchOccurrenceRow): Promise<DetailReadPreviewDocument>;
+  loadPreview(row: VirtualBranchOccurrenceRow): Promise<VirtualBranchNavigatorPreview>;
   replaceTarget(blockId: string): Promise<void>;
   openInFirstUnlocked(blockId: string): Promise<boolean>;
   openInNewDetail(blockId: string, direction: "right" | "down"): Promise<void>;
   revealSource(blockId: string): Promise<void>;
+  removeSelectedRecord?(row: VirtualBranchOccurrenceRow): Promise<void>;
   close(): void;
   invalidate(): void;
 }
@@ -99,7 +113,7 @@ export class VirtualBranchNavigatorController {
   selectedIndex = 0;
   filter = "";
   filterDraft: string | null = null;
-  preview: DetailReadPreviewDocument | null = null;
+  private loadedPreview: { rowId: string; value: VirtualBranchNavigatorPreview } | null = null;
   previewOffset = 0;
   listOffset = 0;
   status = "";
@@ -142,6 +156,14 @@ export class VirtualBranchNavigatorController {
     return this.visibleRows[this.selectedIndex];
   }
 
+  get canRemoveSelectedRecord(): boolean {
+    return this.effects.removeSelectedRecord !== undefined;
+  }
+
+  get preview(): DetailReadPreviewDocument | null {
+    return this.loadedPreview?.value.document ?? null;
+  }
+
   get destinationChooserHelpText(): string {
     return this.destinationChooser.helpText();
   }
@@ -175,7 +197,7 @@ export class VirtualBranchNavigatorController {
       this.visibleRows = [];
       this.branchState = null;
       this.selectedIndex = 0;
-      this.preview = null;
+      this.loadedPreview = null;
       this.loadingPreview = false;
       this.projectionError = errorMessage(error);
       this.previewError = "";
@@ -214,6 +236,13 @@ export class VirtualBranchNavigatorController {
       str,
       key,
     );
+    if (
+      mapped.actionId === "tree.bookmark.toggle" ||
+      mapped.actionId === "detail.bookmark.toggle"
+    ) {
+      await this.removeSelectedRecord();
+      return;
+    }
     if (
       mapped.actionId === "tree.current.reveal" ||
       mapped.actionId === "detail.current.reveal"
@@ -285,8 +314,9 @@ export class VirtualBranchNavigatorController {
     if (!target) return;
     const index = this.visibleRows.findIndex((row) => row.rowId === target.rowId);
     if (index < 0) return;
+    const selectionChanged = this.selectedRow?.rowId !== target.rowId;
     this.selectedIndex = index;
-    this.startPreview();
+    if (selectionChanged) this.startPreview();
     if (click.column === target.disclosureColumn) {
       await this.toggleDisclosure(target.rowId);
     } else if (treeClickActivates(click)) {
@@ -418,21 +448,22 @@ export class VirtualBranchNavigatorController {
     this.previewOffset = 0;
     this.previewError = "";
     if (!row) {
-      this.preview = null;
+      this.loadedPreview = null;
       this.loadingPreview = false;
       this.effects.invalidate();
       return;
     }
     this.loadingPreview = true;
+    this.loadedPreview = null;
     this.effects.invalidate();
     void this.effects.loadPreview(row).then((preview) => {
       if (generation !== this.previewGeneration || this.closed || this.selectedRow?.rowId !== row.rowId) return;
-      this.preview = preview;
+      this.loadedPreview = { rowId: row.rowId, value: preview };
       this.loadingPreview = false;
       this.effects.invalidate();
     }).catch((error) => {
       if (generation !== this.previewGeneration || this.closed || this.selectedRow?.rowId !== row.rowId) return;
-      this.preview = null;
+      this.loadedPreview = null;
       this.loadingPreview = false;
       this.previewError = errorMessage(error);
       this.effects.invalidate();
@@ -443,6 +474,25 @@ export class VirtualBranchNavigatorController {
     this.previewOffset = Math.max(0, this.previewOffset + delta);
   }
 
+  private selectedPreview(): VirtualBranchNavigatorPreview | null {
+    const row = this.selectedRow;
+    if (
+      !row ||
+      this.loadingPreview ||
+      this.loadedPreview?.rowId !== row.rowId
+    ) return null;
+    return this.loadedPreview.value;
+  }
+
+  private selectedTarget(): OpenDestinationTarget | null {
+    return this.selectedPreview()?.target ?? null;
+  }
+
+  private selectedUnavailableReason(): string | null {
+    const preview = this.selectedPreview();
+    return preview?.target === null ? preview.unavailableReason : null;
+  }
+
   private openDestinationChooser(): void {
     const row = this.selectedRow;
     if (!row) {
@@ -450,23 +500,42 @@ export class VirtualBranchNavigatorController {
       this.effects.invalidate();
       return;
     }
-    this.destinationChooser.open({ blockId: row.canonicalId, title: blockDisplayTitle(row.block) });
+    const target = this.selectedTarget();
+    if (!target) {
+      this.status = this.selectedUnavailableReason() ?? "Selected target is not available";
+      this.effects.invalidate();
+      return;
+    }
+    this.destinationChooser.open(target);
   }
 
   private async revealSelected(): Promise<void> {
-    const row = this.selectedRow;
-    if (!row) {
-      this.status = "No projected row selected";
+    const target = this.selectedTarget();
+    if (!target) {
+      this.status = this.selectedUnavailableReason() ?? "Selected target is not available";
       this.effects.invalidate();
       return;
     }
     try {
-      await this.effects.revealSource(row.canonicalId);
+      await this.effects.revealSource(target.blockId);
       this.finish();
     } catch (error) {
       this.status = errorMessage(error);
       this.effects.invalidate();
     }
+  }
+
+  private async removeSelectedRecord(): Promise<void> {
+    const row = this.selectedRow;
+    if (!row || !this.effects.removeSelectedRecord) return;
+    try {
+      await this.effects.removeSelectedRecord(row);
+      await this.refresh();
+      this.status = "Bookmark removed";
+    } catch (error) {
+      this.status = errorMessage(error);
+    }
+    this.effects.invalidate();
   }
 
   private cancel(): void {
@@ -570,7 +639,7 @@ export function renderVirtualBranchNavigatorFrame(
   output.push(truncateToWidth(
     controller.destinationChooserState.active
       ? controller.destinationChooserHelpText
-      : `Esc/q close  ↑/↓ select  ←/→ disclose  / filter  Enter choose  ⇧R reveal${narrow ? "  Tab list/preview" : ""}`,
+      : `Esc/q close  ↑/↓ select  ←/→ disclose  / filter  Enter choose  ⇧R reveal${controller.canRemoveSelectedRecord ? "  ⌥M remove" : ""}${narrow ? "  Tab list/preview" : ""}`,
     safeWidth,
   ));
   mouseTargets.push(null, null);

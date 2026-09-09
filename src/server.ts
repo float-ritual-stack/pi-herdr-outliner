@@ -20,6 +20,8 @@ import {
   type AttentionMarkInput,
   type Block,
   type BrowsingContextPublication,
+  type BookmarkRemoveReceipt,
+  type BookmarkToggleReceipt,
   type CaptureReceipt,
   type DeliveryReceipt,
   type NavigationState,
@@ -1016,6 +1018,27 @@ export class OutlinerServer {
             request.provenance,
           );
           break;
+        case "bookmarks.root":
+          result = this.store.bookmarksRoot();
+          break;
+        case "bookmarks.status":
+          result = this.store.bookmarkStatus(request.targetBlockId);
+          break;
+        case "bookmarks.resolve":
+          result = this.store.resolveBookmark(request.recordId);
+          break;
+        case "bookmarks.toggle":
+          result = this.store.toggleBookmark(
+            request.targetBlockId,
+            request.expectedRecordId,
+            request.label,
+            request.author,
+            request.provenance,
+          );
+          break;
+        case "bookmarks.remove":
+          result = this.store.removeBookmark(request.recordId, request.expectedUpdatedAt);
+          break;
         case "annotations.list":
           result = this.store.listAnnotationThreads(request.query);
           break;
@@ -1220,6 +1243,14 @@ export class OutlinerServer {
       case "create":
         domain = "content";
         blockId = (response.result as Block).id;
+        break;
+      case "bookmarks.toggle":
+        domain = "content";
+        blockId = (response.result as BookmarkToggleReceipt).record.id;
+        break;
+      case "bookmarks.remove":
+        domain = "content";
+        blockId = (response.result as BookmarkRemoveReceipt).record.id;
         break;
       case "roadmap.items.create":
         domain = "content";

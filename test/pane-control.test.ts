@@ -545,6 +545,7 @@ if (args[0] === "plugin" && args[1] === "pane" && args[2] === "open") {
       sourceClientId: "tree-one",
       sourceRole: "tree",
       viewId: "next-view",
+      adapter: "bookmark",
     }, herdr);
     const navigatorCalls = readFileSync(logPath, "utf8").trim().split("\n").map(
       (line) => JSON.parse(line) as string[],
@@ -556,6 +557,7 @@ if (args[0] === "plugin" && args[1] === "pane" && args[2] === "open") {
     expect(navigatorOpen).toContain("OUTLINER_NAVIGATOR_SOURCE_CLIENT_ID=tree-one");
     expect(navigatorOpen).toContain("OUTLINER_NAVIGATOR_SOURCE_ROLE=tree");
     expect(navigatorOpen).toContain("OUTLINER_NAVIGATOR_VIEW_ID=next-view");
+    expect(navigatorOpen).toContain("OUTLINER_NAVIGATOR_ADAPTER=bookmark");
     expect(navigatorOpen).toContain("OUTLINER_OPEN_DESTINATION_TIMEOUT_MS=9000");
     expect(navigatorOpen).toContain("--focus");
     expect(navigatorOpen).not.toContain("--placement");

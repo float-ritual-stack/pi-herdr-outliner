@@ -129,13 +129,14 @@ const controller = createTreeController({
       capturedFromBlockId,
     });
   },
-  openVirtualBranchNavigator(viewId) {
+  openVirtualBranchNavigator(viewId, adapter) {
     openVirtualBranchNavigatorPopup({
       workspaceRoot: paths.workspaceRoot,
       browsingContextId,
       sourceClientId: clientId,
       sourceRole: "tree",
       viewId,
+      ...(adapter ? { adapter } : {}),
     });
   },
   focusSelf() {
