@@ -30,6 +30,7 @@ import {
   parsePreviewRegionActionUri,
   type PreviewRegion,
   type PreviewRegionAction,
+  type PreviewRegionState,
 } from "./detail-preview-regions";
 import {
   detailPropertyInspectorRegions,
@@ -57,6 +58,14 @@ import type {
 export interface DetailDraftProjection {
   sourceText: string;
   rawText: string;
+  embedRanges: DetailState["embedRanges"];
+  workIdPrefix: string | null;
+}
+
+export interface DetailReadPreviewDocument {
+  canonicalText: string;
+  resolvedText: string;
+  projectedText: string;
   embedRanges: DetailState["embedRanges"];
   workIdPrefix: string | null;
 }
@@ -402,6 +411,52 @@ function renderedAuthoredCallouts(
     parentId: region.parentId && matchedIds.has(region.parentId) ? region.parentId : null,
     childIds: region.childIds.filter((id) => matchedIds.has(id)),
   }));
+}
+
+export function renderDetailReadPreviewLines(
+  input: DetailReadPreviewDocument,
+  width: number,
+  markdownTheme: MarkdownTheme,
+  calloutTheme?: DetailCalloutTheme,
+): string[] {
+  const sourceText = propertyInspectorAuthoredText(input.resolvedText);
+  const projectedText = propertyInspectorAuthoredText(input.projectedText);
+  const metadataRemoved = projectedText !== input.projectedText;
+  const embedRanges = metadataRemoved
+    ? remapEmbedRangesAfterMetadataRemoval(input.projectedText, input.embedRanges)
+    : input.embedRanges;
+  const renderedLineForAuthoredLine = (line: number): number => {
+    const projectedLine = projectedSourceLine(input.canonicalText, input.embedRanges, line);
+    return metadataRemoved
+      ? lineAfterMetadataRemoval(input.projectedText, projectedLine)
+      : projectedLine;
+  };
+  const document = renderPreviewDocument(
+    sourceText,
+    projectedText,
+    false,
+    input.workIdPrefix,
+  );
+  const callouts = renderedAuthoredCallouts(
+    parseDetailCallouts(input.canonicalText, calloutTheme),
+    document,
+    renderedLineForAuthoredLine,
+    calloutTheme,
+  );
+  const previewRegions: PreviewRegionState = {
+    regions: callouts,
+    focusedRegionId: null,
+    disclosureOverrides: new Map(),
+  };
+  const markdown = new SourceSpannedMarkdown(
+    markdownTheme,
+    applyEmbedBackground,
+    previewRegions,
+    false,
+    calloutTheme,
+  );
+  markdown.setContent(document, embedRanges, true, callouts);
+  return markdown.render(Math.max(1, width));
 }
 
 const PREVIEW_HELP = DEFAULT_OUTLINER_ACTION_KEYMAP.helpText("detail", "preview");

@@ -61,6 +61,7 @@ import {
   type PreviewRegionAction,
   type PreviewRegionState,
 } from "./detail-preview-regions";
+import { isVirtualBranchDefinition } from "./virtual-branches";
 import { blockDisplayTitle } from "./references";
 import { TextBuffer } from "./text-buffer";
 import type { TerminalKey } from "./terminal";
@@ -329,6 +330,7 @@ export interface DetailEffects {
   completeFiles(query: string): ReferencedPathCandidate[];
   focusOutliner(): Promise<void>;
   openPropertyInspectorPane(blockId: string): string | Promise<string>;
+  openVirtualBranchNavigator(viewId: string): void | Promise<void>;
 }
 
 export type DetailBufferMoveDirection =
@@ -355,6 +357,7 @@ export type DetailIntent =
   | { type: "reference.open"; target: OutlinerLinkTarget; routing?: DetailOpenRouting }
   | { type: "reference.reveal" }
   | { type: "current.reveal" }
+  | { type: "virtual-branch.open" }
   | { type: "backlinks.move"; delta: -1 | 1 }
   | { type: "backlinks.open" }
   | { type: "backlinks.reveal" }
@@ -1492,6 +1495,20 @@ export function createDetailController(
         }
         await effects.dispatchNavigation(current.id, "reveal", { focusTarget: true });
         state.status = `Revealed ${blockDisplayTitle(current)}`;
+        break;
+      }
+      case "virtual-branch.open": {
+        const current = state.context.selected;
+        if (!current) {
+          state.status = "No block selected";
+          break;
+        }
+        if (!isVirtualBranchDefinition(current)) {
+          state.status = "Current block is not a virtual branch";
+          break;
+        }
+        await effects.openVirtualBranchNavigator(current.id);
+        state.status = `Opened virtual navigator for ${blockDisplayTitle(current)}`;
         break;
       }
       case "reference.open":

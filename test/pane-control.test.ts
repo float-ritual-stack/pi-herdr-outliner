@@ -11,6 +11,7 @@ import {
   openBacklinkPeekPopup,
   openCapturePopup,
   openDetailPane,
+  openVirtualBranchNavigatorPopup,
   outlinerRightClickOwnership,
   pluginClickedUrl,
   pluginInvocationPaneId,
@@ -537,6 +538,28 @@ if (args[0] === "plugin" && args[1] === "pane" && args[2] === "open") {
     expect(backlinkOpen).toContain("--focus");
     expect(backlinkOpen).not.toContain("--placement");
     expect(backlinkOpen).not.toContain("--cwd");
+
+    openVirtualBranchNavigatorPopup({
+      workspaceRoot: "/workspace",
+      browsingContextId: "context-one",
+      sourceClientId: "tree-one",
+      sourceRole: "tree",
+      viewId: "next-view",
+    }, herdr);
+    const navigatorCalls = readFileSync(logPath, "utf8").trim().split("\n").map(
+      (line) => JSON.parse(line) as string[],
+    );
+    const navigatorOpen = navigatorCalls.at(-1)!;
+    expect(navigatorOpen).toContain("virtual-branch-navigator");
+    expect(navigatorOpen).toContain("OUTLINER_WORKSPACE_ROOT=/workspace");
+    expect(navigatorOpen).toContain("OUTLINER_BROWSING_CONTEXT_ID=context-one");
+    expect(navigatorOpen).toContain("OUTLINER_NAVIGATOR_SOURCE_CLIENT_ID=tree-one");
+    expect(navigatorOpen).toContain("OUTLINER_NAVIGATOR_SOURCE_ROLE=tree");
+    expect(navigatorOpen).toContain("OUTLINER_NAVIGATOR_VIEW_ID=next-view");
+    expect(navigatorOpen).toContain("OUTLINER_OPEN_DESTINATION_TIMEOUT_MS=9000");
+    expect(navigatorOpen).toContain("--focus");
+    expect(navigatorOpen).not.toContain("--placement");
+    expect(navigatorOpen).not.toContain("--cwd");
   } finally {
     if (originalHerdrEnv === undefined) delete process.env.HERDR_ENV;
     else process.env.HERDR_ENV = originalHerdrEnv;

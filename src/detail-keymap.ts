@@ -232,6 +232,9 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
       case "detail.current.reveal":
         await dispatch({ type: "current.reveal" });
         return true;
+      case "detail.virtual-branch.open":
+        await dispatch({ type: "virtual-branch.open" });
+        return true;
       case "detail.navigation.back":
         await dispatch({ type: "navigation.back" });
         return true;

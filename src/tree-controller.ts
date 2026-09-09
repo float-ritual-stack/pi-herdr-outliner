@@ -35,6 +35,7 @@ import {
   type TerminalInputAction,
   type TerminalKey,
 } from "./terminal";
+import { isVirtualBranchDefinition } from "./virtual-branches";
 import { TextBuffer } from "./text-buffer";
 import type {
   AttentionClientState,
@@ -130,6 +131,7 @@ export interface TreeControllerEffects {
   readonly filesystem: TreeFilesystem;
   createDetailPane(blockId: string, direction?: "right" | "down"): Promise<void>;
   openCapturePopup(capturedFromBlockId: string): Promise<void>;
+  openVirtualBranchNavigator(viewId: string): void | Promise<void>;
   focusSelf(): void;
   terminalWidth(): number;
   terminalHeight(): number;
@@ -1275,6 +1277,22 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       return;
     }
     const selected = rows[selectedIndex];
+    if (actionId === "tree.virtual-branch.open") {
+      if (!selected) {
+        status = "No block selected";
+      } else if (!isVirtualBranchDefinition(selected.block)) {
+        status = "Selected block is not a virtual branch";
+      } else {
+        try {
+          await effects.openVirtualBranchNavigator(selected.canonicalId);
+          status = `Opened virtual navigator for ${blockDisplayTitle(selected.block)}`;
+        } catch (error) {
+          status = errorMessage(error);
+        }
+      }
+      effects.invalidate();
+      return;
+    }
     if (actionId === "tree.current.reveal") {
       if (!selected) {
         status = "No block selected";

@@ -97,6 +97,7 @@ interface Harness {
     currentBlocks: Array<string | null>;
     propertyInspectorPanes: string[];
     backlinkPeeks: Array<Parameters<DetailEffects["openBacklinkPeek"]>[0]>;
+    virtualNavigators: string[];
     openedDetails: Array<{
       blockId: string;
       direction: "right" | "down";
@@ -160,6 +161,7 @@ function createHarness(
     propertyPatches: [],
     backlinkPeeks: [],
     openedDetails: [],
+    virtualNavigators: [],
     copiedTexts: [],
   };
   const effects: DetailEffects = {
@@ -337,6 +339,9 @@ function createHarness(
     openPropertyInspectorPane(blockId) {
       calls.propertyInspectorPanes.push(blockId);
       return "pane-inspector";
+    },
+    openVirtualBranchNavigator(viewId) {
+      calls.virtualNavigators.push(viewId);
     },
   };
   return {
@@ -571,6 +576,25 @@ describe("detail controller projection and deferred refresh", () => {
     expect(harness.controller.state.context.selected?.id).toBe(source.id);
     expect(harness.controller.state.connectionMode).toBe("locked");
     expect(harness.controller.state.status).toBe("Revealed See ((target01))");
+  });
+
+  test("opens the generic navigator only for the current virtual branch", async () => {
+    const view = makeBlock({
+      id: "next-view",
+      text: "Next\n[type::virtual-branch]",
+      properties: [{ key: "type", value: "virtual-branch" }],
+    });
+    const harness = createHarness(view);
+    await harness.controller.initialize();
+
+    await harness.controller.dispatch({ type: "virtual-branch.open" }, viewport);
+    expect(harness.calls.virtualNavigators).toEqual([view.id]);
+
+    const ordinary = createHarness(makeBlock({ id: "ordinary", text: "Ordinary" }));
+    await ordinary.controller.initialize();
+    await ordinary.controller.dispatch({ type: "virtual-branch.open" }, viewport);
+    expect(ordinary.calls.virtualNavigators).toEqual([]);
+    expect(ordinary.controller.state.status).toBe("Current block is not a virtual branch");
   });
 
   test("keeps navigation history local and loads deleted targets read-only", async () => {
