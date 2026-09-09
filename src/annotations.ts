@@ -9,6 +9,8 @@ import type {
   AnnotationSource,
   AnnotationTarget,
   Block,
+  RenderedPassageObservation,
+  RenderedPassageProjection,
 } from "./types";
 
 const DEFAULT_CONTEXT_UNITS = 32;
@@ -58,7 +60,7 @@ function normalizeLifecycle(lifecycle: string | undefined): AnnotationLifecycle 
 
 function normalizeAnchorState(state: string | undefined): AnnotationAnchorState {
   if (state === undefined || state === "anchored") return "anchored";
-  if (state === "ambiguous" || state === "orphaned") return state;
+  if (state === "ambiguous" || state === "orphaned" || state === "observed") return state;
   throw new Error(`Unsupported annotation anchor state: ${state}`);
 }
 
@@ -95,21 +97,67 @@ export function createAnnotationAnchor(
   };
 }
 
-export function normalizeAnnotationTarget(target: AnnotationTarget): AnnotationTarget {
-  const sourceBlockId = target.sourceBlockId.trim();
-  if (!sourceBlockId) throw new Error("Annotation source block cannot be empty");
-  const anchor = target.anchor;
+function normalizeIdentity(value: string, label: string): string {
+  const normalized = value.trim();
+  if (!normalized) throw new Error(`${label} cannot be empty`);
+  return normalized;
+}
+
+function normalizeRenderedObservation(
+  observation: RenderedPassageObservation,
+): RenderedPassageObservation {
+  if (!observation || typeof observation !== "object") {
+    throw new Error("Rendered passage observation is required");
+  }
+  if (typeof observation.quote !== "string" || !observation.quote.trim()) {
+    throw new Error("Rendered passage quote cannot be empty");
+  }
+  const capturedAt = normalizeIdentity(observation.capturedAt, "Rendered passage capture time");
+  if (new Date(capturedAt).toISOString() !== capturedAt) {
+    throw new Error("Rendered passage capture time must be an ISO timestamp");
+  }
+  const projection = observation.projection;
+  if (
+    projection !== "canonical" &&
+    projection !== "resolved" &&
+    projection !== "generated" &&
+    projection !== "mixed"
+  ) {
+    throw new Error(`Unsupported rendered passage projection: ${String(projection)}`);
+  }
+  if (observation.validation !== "herdr-keybinding") {
+    throw new Error("Rendered passage must come from a revision-validated Herdr keybinding");
+  }
+  return {
+    quote: observation.quote,
+    capturedAt,
+    hostBlockId: normalizeIdentity(observation.hostBlockId, "Rendered passage host block"),
+    paneId: normalizeIdentity(observation.paneId, "Rendered passage pane"),
+    contentRevision: finiteInteger(
+      observation.contentRevision,
+      "Rendered passage content revision",
+    ),
+    contextId: normalizeIdentity(observation.contextId, "Rendered passage context"),
+    detailClientId: normalizeIdentity(
+      observation.detailClientId,
+      "Rendered passage Detail client",
+    ),
+    validation: "herdr-keybinding",
+    projection,
+  };
+}
+
+function normalizeAnchor(anchor: AnnotationAnchor): AnnotationAnchor {
   const start = finiteInteger(anchor.start, "Annotation start");
   const end = finiteInteger(anchor.end, "Annotation end");
   if (end <= start) throw new Error("Annotation range must be non-empty");
   if (!anchor.excerpt || anchor.excerpt.length !== end - start) {
     throw new Error("Annotation excerpt must exactly match its UTF-16 range length");
   }
-
   if (!anchor.sourceVersion.trim() || !anchor.sourceHash.trim()) {
     throw new Error("Annotation source version and hash are required");
   }
-  const normalizedAnchor: AnnotationAnchor = {
+  return {
     start,
     end,
     excerpt: anchor.excerpt,
@@ -118,13 +166,38 @@ export function normalizeAnnotationTarget(target: AnnotationTarget): AnnotationT
     sourceVersion: anchor.sourceVersion.trim(),
     sourceHash: anchor.sourceHash.trim(),
   };
-  if (target.kind === "block") return { kind: "block", sourceBlockId, anchor: normalizedAnchor };
+}
+
+export function normalizeAnnotationTarget(target: AnnotationTarget): AnnotationTarget {
+  const sourceBlockId = normalizeIdentity(target.sourceBlockId, "Annotation source block");
+  if (target.kind === "passage") {
+    const observation = normalizeRenderedObservation(target.observation);
+    if (observation.hostBlockId !== sourceBlockId) {
+      throw new Error("Rendered passage host block must match its annotation source block");
+    }
+    return { kind: "passage", sourceBlockId, observation };
+  }
+  const anchor = normalizeAnchor(target.anchor);
+  if (target.kind === "block") {
+    const observation = target.observation
+      ? normalizeRenderedObservation(target.observation)
+      : undefined;
+    if (observation && observation.hostBlockId !== sourceBlockId) {
+      throw new Error("Rendered passage host block must match its annotation source block");
+    }
+    return {
+      kind: "block",
+      sourceBlockId,
+      anchor,
+      ...(observation ? { observation } : {}),
+    };
+  }
   const filePath = target.filePath.trim();
   if (!filePath) throw new Error("Annotation file path cannot be empty");
   const startLine = finiteInteger(target.startLine, "Annotation start line", 1);
   const endLine = finiteInteger(target.endLine, "Annotation end line", 1);
   if (endLine < startLine) throw new Error("Annotation end line cannot precede its start line");
-  return { kind: "file", sourceBlockId, filePath, startLine, endLine, anchor: normalizedAnchor };
+  return { kind: "file", sourceBlockId, filePath, startLine, endLine, anchor };
 }
 export function annotationOffsetsForLineRange(
   text: string,
@@ -180,14 +253,26 @@ export function normalizeAnnotationCreateInput(input: AnnotationCreateInput): An
   return { target: normalizeAnnotationTarget(input.target), body, source: normalizeSource(input.source) };
 }
 
+export function annotationTargetQuote(target: AnnotationTarget): string {
+  if (target.kind === "passage") return target.observation.quote;
+  if (target.kind === "block" && target.observation) return target.observation.quote;
+  return target.anchor.excerpt;
+}
+
+function escapeAnnotationHeadingText(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/\[/g, "\\[");
+}
+
 function annotationHeading(target: AnnotationTarget): string {
-  const excerpt = target.anchor.excerpt.replace(/\s+/g, " ").trim();
+  const excerpt = escapeAnnotationHeadingText(
+    annotationTargetQuote(target).replace(/\s+/g, " ").trim(),
+  );
   const quoted = `“${excerpt.length > 72 ? `${excerpt.slice(0, 71)}…` : excerpt}”`;
   if (target.kind === "file") {
     const range = target.startLine === target.endLine
       ? `${target.startLine}`
       : `${target.startLine}-${target.endLine}`;
-    return `Comment on ${target.filePath}:${range} · ${quoted}`;
+    return `Comment on ${escapeAnnotationHeadingText(target.filePath)}:${range} · ${quoted}`;
   }
   return `Comment on ${quoted}`;
 }
@@ -204,17 +289,34 @@ function annotationMetadata(
     `[type::${parentAnnotationId ? ANNOTATION_REPLY_TYPE : ANNOTATION_TYPE}]`,
     `[target-kind::${target.kind}]`,
     `[source-block::${target.sourceBlockId}]`,
-    `[anchor-start::${target.anchor.start}]`,
-    `[anchor-end::${target.anchor.end}]`,
-    `[anchor-excerpt::${encodePropertyValue(target.anchor.excerpt)}]`,
-    `[anchor-before::${encodePropertyValue(target.anchor.contextBefore)}]`,
-    `[anchor-after::${encodePropertyValue(target.anchor.contextAfter)}]`,
-    `[source-version::${encodePropertyValue(target.anchor.sourceVersion)}]`,
-    `[source-hash::${target.anchor.sourceHash}]`,
     `[annotation-source::${source}]`,
     `[annotation-status::${lifecycle}]`,
     `[anchor-state::${anchorState}]`,
   ];
+  if (target.kind !== "passage") {
+    values.push(
+      `[anchor-start::${target.anchor.start}]`,
+      `[anchor-end::${target.anchor.end}]`,
+      `[anchor-excerpt::${encodePropertyValue(target.anchor.excerpt)}]`,
+      `[anchor-before::${encodePropertyValue(target.anchor.contextBefore)}]`,
+      `[anchor-after::${encodePropertyValue(target.anchor.contextAfter)}]`,
+      `[source-version::${encodePropertyValue(target.anchor.sourceVersion)}]`,
+      `[source-hash::${target.anchor.sourceHash}]`,
+    );
+  }
+  const observation = target.kind === "file" ? undefined : target.observation;
+  if (observation) {
+    values.push(
+      `[rendered-quote::${encodePropertyValue(observation.quote)}]`,
+      `[observed-at::${encodePropertyValue(observation.capturedAt)}]`,
+      `[observed-pane::${encodePropertyValue(observation.paneId)}]`,
+      `[observed-revision::${observation.contentRevision}]`,
+      `[observed-context::${encodePropertyValue(observation.contextId)}]`,
+      `[observed-client::${encodePropertyValue(observation.detailClientId)}]`,
+      `[observed-validation::${observation.validation}]`,
+      `[observed-projection::${observation.projection}]`,
+    );
+  }
   if (target.kind === "file") {
     values.push(
       `[target-file::${encodePropertyValue(target.filePath)}]`,
@@ -253,7 +355,7 @@ export function formatAnnotation(
       input,
       parent,
       options.lifecycle ?? "open",
-      options.anchorState ?? "anchored",
+      options.anchorState ?? (input.target.kind === "passage" ? "observed" : "anchored"),
       options.promotedBlockIds ?? [],
     ),
     input.body,
@@ -277,30 +379,83 @@ export function parseAnnotationBlock(block: Block): AnnotationRecord {
     throw new Error(`Block is not an annotation: ${block.id}`);
   }
   const kind = getProperty(block.properties, "target-kind");
-  if (kind !== "block" && kind !== "file") {
+  if (kind !== "block" && kind !== "file" && kind !== "passage") {
     throw new Error(`Annotation has invalid target kind: ${block.id}`);
   }
   const sourceBlockId = getProperty(block.properties, "source-block")?.trim();
   if (!sourceBlockId) throw new Error(`Annotation is missing source block: ${block.id}`);
-  const anchor: AnnotationAnchor = {
-    start: propertyInteger(block, "anchor-start"),
-    end: propertyInteger(block, "anchor-end"),
-    excerpt: decodePropertyValue(getProperty(block.properties, "anchor-excerpt"), "anchor excerpt"),
-    contextBefore: decodePropertyValue(getProperty(block.properties, "anchor-before"), "anchor context before"),
-    contextAfter: decodePropertyValue(getProperty(block.properties, "anchor-after"), "anchor context after"),
-    sourceVersion: decodePropertyValue(getProperty(block.properties, "source-version"), "source version"),
-    sourceHash: getProperty(block.properties, "source-hash")?.trim() ?? "",
-  };
-  const target: AnnotationTarget = kind === "block"
-    ? { kind, sourceBlockId, anchor }
-    : {
-        kind,
-        sourceBlockId,
-        filePath: decodePropertyValue(getProperty(block.properties, "target-file"), "target file"),
-        startLine: propertyInteger(block, "line-start", 1),
-        endLine: propertyInteger(block, "line-end", 1),
-        anchor,
-      };
+  const projection = getProperty(block.properties, "observed-projection") as
+    | RenderedPassageProjection
+    | undefined;
+  const observation: RenderedPassageObservation | undefined = projection
+    ? {
+        quote: decodePropertyValue(
+          getProperty(block.properties, "rendered-quote"),
+          "rendered quote",
+        ),
+        capturedAt: decodePropertyValue(
+          getProperty(block.properties, "observed-at"),
+          "observation capture time",
+        ),
+        hostBlockId: sourceBlockId,
+        paneId: decodePropertyValue(
+          getProperty(block.properties, "observed-pane"),
+          "observation pane",
+        ),
+        contentRevision: propertyInteger(block, "observed-revision"),
+        contextId: decodePropertyValue(
+          getProperty(block.properties, "observed-context"),
+          "observation context",
+        ),
+        detailClientId: decodePropertyValue(
+          getProperty(block.properties, "observed-client"),
+          "observation client",
+        ),
+        validation: getProperty(block.properties, "observed-validation") as
+          RenderedPassageObservation["validation"],
+        projection,
+      }
+    : undefined;
+  let target: AnnotationTarget;
+  if (kind === "passage") {
+    if (!observation) throw new Error(`Passage annotation is missing observation: ${block.id}`);
+    target = { kind, sourceBlockId, observation };
+  } else {
+    const anchor: AnnotationAnchor = {
+      start: propertyInteger(block, "anchor-start"),
+      end: propertyInteger(block, "anchor-end"),
+      excerpt: decodePropertyValue(
+        getProperty(block.properties, "anchor-excerpt"),
+        "anchor excerpt",
+      ),
+      contextBefore: decodePropertyValue(
+        getProperty(block.properties, "anchor-before"),
+        "anchor context before",
+      ),
+      contextAfter: decodePropertyValue(
+        getProperty(block.properties, "anchor-after"),
+        "anchor context after",
+      ),
+      sourceVersion: decodePropertyValue(
+        getProperty(block.properties, "source-version"),
+        "source version",
+      ),
+      sourceHash: getProperty(block.properties, "source-hash")?.trim() ?? "",
+    };
+    target = kind === "block"
+      ? { kind, sourceBlockId, anchor, ...(observation ? { observation } : {}) }
+      : {
+          kind,
+          sourceBlockId,
+          filePath: decodePropertyValue(
+            getProperty(block.properties, "target-file"),
+            "target file",
+          ),
+          startLine: propertyInteger(block, "line-start", 1),
+          endLine: propertyInteger(block, "line-end", 1),
+          anchor,
+        };
+  }
   const source = normalizeSource(getProperty(block.properties, "annotation-source") as AnnotationSource);
   const record: AnnotationRecord = {
     block,

@@ -145,6 +145,7 @@ test("serves atomic idempotent annotation threads over the current protocol", as
   expect(replayed.deduplicated).toBe(true);
   expect(replayed.annotations[0]!.block.id).toBe(created.annotations[0]!.block.id);
   expect(threads).toHaveLength(1);
+  if (threads[0]!.target.kind !== "block") throw new Error("Expected a block annotation");
   expect(threads[0]!.target.anchor.excerpt).toBe("βeta");
 });
 
@@ -163,7 +164,7 @@ test("serves mutations and property queries over the local socket", async () => 
   const client = new OutlinerClient(socket);
   const service = await client.request<OutlinerServiceStatus>({ action: "ping" });
   expect(service).toEqual({ status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION });
-  expect(service.protocolVersion).toBe(34);
+  expect(service.protocolVersion).toBe(35);
   const provenance = {
     actorId: "omp",
     sessionId: "session-1",
@@ -933,6 +934,7 @@ test("validates direct popup commands and targets only the invoking Detail", asy
     action: "clients.update",
     clientId: "popup-detail",
     locked: true,
+    currentBlockId: source.id,
   });
   await expect(client.request({
     action: "ui.command.send",
@@ -947,6 +949,49 @@ test("validates direct popup commands and targets only the invoking Detail", asy
     targetClientId: "popup-detail",
     command: "replace",
     blockId: source.id,
+  });
+  const renderedSelection = {
+    quote: "Backlink source",
+    capturedAt: "2026-01-02T03:04:05.000Z",
+    hostBlockId: source.id,
+    paneId: "detail-pane",
+    contentRevision: 42,
+    contextId: "popup-context",
+    detailClientId: "popup-detail",
+    validation: "herdr-keybinding" as const,
+    snapshotText: "Block Detail\n\nBacklink source",
+  };
+  await expect(client.request({
+    action: "ui.command.send",
+    command: {
+      targetClientId: "popup-detail",
+      command: "comment.selection",
+      renderedSelection: { ...renderedSelection, contentRevision: -1 },
+    },
+  })).rejects.toThrow("Rendered selection evidence is invalid");
+  await expect(client.request({
+    action: "ui.command.send",
+    command: {
+      targetClientId: "popup-detail",
+      command: "comment.selection",
+      renderedSelection: { ...renderedSelection, capturedAt: "not-a-timestamp" },
+    },
+  })).rejects.toThrow("Rendered selection evidence is invalid");
+  await expect(client.request({
+    action: "ui.command.send",
+    command: {
+      targetClientId: "popup-detail",
+      command: "comment.selection",
+      renderedSelection: { ...renderedSelection, hostBlockId: target.id },
+    },
+  })).rejects.toThrow("no longer matches the target Detail");
+  await client.request({
+    action: "ui.command.send",
+    command: {
+      targetClientId: "popup-detail",
+      command: "comment.selection",
+      renderedSelection,
+    },
   });
 });
 
@@ -1902,7 +1947,7 @@ test("targets ephemeral attention, advances atomically, stales on edits, and exp
   })).toEqual(expect.objectContaining({ marks: [], pendingCount: 0 }));
 });
 
-test("runs and navigates a targeted structure-first walkthrough over protocol v34", async () => {
+test("runs and navigates a targeted structure-first walkthrough over protocol v35", async () => {
   const directory = mkdtempSync(join(tmpdir(), "pi-outliner-workflow-protocol-"));
   const store = new OutlinerStore(join(directory, "outliner.sqlite"));
   const source = store.create([

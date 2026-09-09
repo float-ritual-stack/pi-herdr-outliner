@@ -73,6 +73,13 @@ contexts = ["workspace", "tab", "pane"]
 command = ["bun", "run", "src/herdr-open.ts", "--mode", "open-here"]
 
 
+[[actions]]
+id = "comment-selection"
+title = "Outliner: comment on selection"
+description = "Open the invoking Detail composer with Herdr's revision-validated rendered selection."
+contexts = ["pane"]
+command = ["bun", "run", "src/herdr-comment-selection.ts"]
+
 [[link_handlers]]
 id = "outliner-navigation"
 title = "Navigate Outliner"

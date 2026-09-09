@@ -7,6 +7,7 @@ import { createAnnotationAnchor } from "../src/annotations";
 import { emptyAttentionState } from "../src/attention";
 import {
   createDetailController,
+  renderedSelectionAnnotationTarget,
   visibleBacklinkSources,
   type DetailControllerOptions,
   type DetailEffects,
@@ -1481,6 +1482,155 @@ describe("detail controller saves and annotations", () => {
       kind: "block",
       sourceBlockId: "block-1",
       anchor: { start: 141, end: 222, excerpt },
+    });
+  });
+
+  test("opens the composer from one revision-validated native canonical selection", async () => {
+    const block = makeBlock({ text: "alpha βeta gamma" });
+    const harness = createHarness(
+      block,
+      null,
+      async (text) => ({ text, references: [] }),
+    );
+    await harness.controller.initialize();
+    const capture = {
+      quote: "βeta",
+      capturedAt: "2026-01-02T03:04:05.000Z",
+      hostBlockId: block.id,
+      paneId: "w1:p2",
+      contentRevision: 42,
+      contextId: "context-test",
+      detailClientId: "detail-test",
+      validation: "herdr-keybinding" as const,
+      snapshotText: "Block Detail\n\nalpha βeta gamma",
+    };
+    const event = {
+      id: "native-comment",
+      domain: "ui" as const,
+      action: "ui.command.send",
+      sequence: 1,
+      command: {
+        targetClientId: "detail-test",
+        command: "comment.selection" as const,
+        renderedSelection: capture,
+      },
+    };
+
+    await harness.controller.onServiceEvent(event, viewport);
+    expect(harness.controller.state.mode).toBe("comment");
+    expect(harness.controller.state.annotationDraft?.target).toMatchObject({
+      kind: "block",
+      sourceBlockId: block.id,
+      anchor: { start: 6, end: 10, excerpt: "βeta" },
+      observation: { quote: "βeta", contentRevision: 42, projection: "canonical" },
+    });
+    await harness.controller.dispatch({ type: "buffer.cancel" }, viewport);
+    expect(harness.calls.creates).toEqual([]);
+
+    await harness.controller.onServiceEvent({ ...event, sequence: 2 }, viewport);
+    await harness.controller.dispatch({ type: "buffer.insert", text: "Keep this quote." }, viewport);
+    await harness.controller.dispatch({ type: "buffer.save" }, viewport);
+    expect(harness.calls.creates[0]!.input.target).toMatchObject({
+      kind: "block",
+      observation: { quote: "βeta", contentRevision: 42 },
+    });
+  });
+  test("does not invent a source anchor when chrome duplicates the rendered quote", async () => {
+    const block = makeBlock({ text: "alpha βeta gamma" });
+    const harness = createHarness(
+      block,
+      null,
+      async (text) => ({ text, references: [] }),
+    );
+    await harness.controller.initialize();
+
+    expect(renderedSelectionAnnotationTarget(harness.controller.state, {
+      quote: "βeta",
+      capturedAt: "2026-01-02T03:04:05.000Z",
+      hostBlockId: block.id,
+      paneId: "w1:p2",
+      contentRevision: 42,
+      contextId: "context-test",
+      detailClientId: "detail-test",
+      validation: "herdr-keybinding",
+      snapshotText: "βeta appears in chrome\nalpha βeta gamma",
+    })).toEqual({
+      kind: "passage",
+      sourceBlockId: block.id,
+      observation: {
+        quote: "βeta",
+        capturedAt: "2026-01-02T03:04:05.000Z",
+        hostBlockId: block.id,
+        paneId: "w1:p2",
+        contentRevision: 42,
+        contextId: "context-test",
+        detailClientId: "detail-test",
+        validation: "herdr-keybinding",
+        projection: "canonical",
+      },
+    });
+  });
+
+
+  test("stores a hub result as observed passage provenance without a source range", async () => {
+    const block = makeBlock({ text: "Roadmap Hub\n!((next-items))" });
+    const rendered = "Roadmap Hub\nPIE-300 — Rendered title\nQuery result body";
+    const harness = createHarness(
+      block,
+      null,
+      async (text) => ({ text, references: [] }),
+      async () => ({
+        text: rendered,
+        embeds: [{ blockId: "next-items", status: "ready", count: 2 }],
+        embedRanges: [{ startLine: 1, endLine: 2 }],
+      }),
+    );
+    await harness.controller.initialize();
+    const quote = "PIE-300 — Rendered title\nQuery result body";
+
+    await harness.controller.onServiceEvent({
+      id: "hub-native-comment",
+      domain: "ui",
+      action: "ui.command.send",
+      sequence: 1,
+      command: {
+        targetClientId: "detail-test",
+        command: "comment.selection",
+        renderedSelection: {
+          quote,
+          capturedAt: "2026-01-02T03:04:05.000Z",
+          hostBlockId: block.id,
+          paneId: "w1:p2",
+          contentRevision: 84,
+          contextId: "context-test",
+          detailClientId: "detail-test",
+          validation: "herdr-keybinding",
+          snapshotText: `Block Detail\n\n${rendered}`,
+        },
+      },
+    }, viewport);
+
+    expect(harness.controller.state.annotationDraft?.target).toEqual({
+      kind: "passage",
+      sourceBlockId: block.id,
+      observation: {
+        quote,
+        capturedAt: "2026-01-02T03:04:05.000Z",
+        hostBlockId: block.id,
+        paneId: "w1:p2",
+        contentRevision: 84,
+        contextId: "context-test",
+        detailClientId: "detail-test",
+        validation: "herdr-keybinding",
+        projection: "generated",
+      },
+    });
+    await harness.controller.dispatch({ type: "buffer.insert", text: "Discuss this result." }, viewport);
+    await harness.controller.dispatch({ type: "buffer.save" }, viewport);
+    expect(harness.calls.creates[0]!.input.target).toEqual({
+      kind: "passage",
+      sourceBlockId: block.id,
+      observation: expect.objectContaining({ quote, projection: "generated" }),
     });
   });
 

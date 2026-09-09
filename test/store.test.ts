@@ -2151,6 +2151,7 @@ Second paragraph`;
     expect(replayed.annotations[0]!.block.id).toBe(annotation.block.id);
     expect(annotation.block.parentId).toBe(source.id);
     expect(annotation.block.actorId).toBe("omp");
+    if (annotation.target.kind !== "block") throw new Error("Expected a block annotation");
     expect(annotation.target.anchor.excerpt).toBe("βeta");
 
     const reply = store.replyToAnnotation(
@@ -2180,6 +2181,10 @@ Second paragraph`;
       sourceText: shiftedSource.text,
       sourceVersion: shiftedSource.updatedAt,
     }, { author: "user", actorId: "detail" });
+    if (shifted[0]!.target.kind !== "block") throw new Error("Expected a block annotation");
+    if (shifted[0]!.replies[0]!.target.kind !== "block") {
+      throw new Error("Expected a block annotation reply");
+    }
     expect(shifted[0]!.target.anchor.start).toBe(10);
     expect(shifted[0]!.anchorState).toBe("anchored");
     expect(shifted[0]!.replies[0]!.target.anchor.start).toBe(10);
@@ -2219,6 +2224,9 @@ Second paragraph`;
       body: "Boundary anchor.",
       source: "user",
     });
+    if (receipt.annotations[0]!.target.kind !== "block") {
+      throw new Error("Expected a block annotation");
+    }
     expect(receipt.annotations[0]!.target.anchor.excerpt).toBe("alpha 🧭");
     expect(receipt.annotations[0]!.block.properties).toContainEqual({
       key: "anchor-before",
@@ -2226,6 +2234,51 @@ Second paragraph`;
     });
   });
 
+
+  test("keeps observed hub quotes immutable across source refresh and replies", () => {
+    const store = makeStore();
+    const source = store.create("Hub\n!((view-next))");
+    const observation = {
+      quote: "PIE-300 — Displayed title\nRendered query result",
+      capturedAt: "2026-01-02T03:04:05.000Z",
+      hostBlockId: source.id,
+      paneId: "w1:p2",
+      contentRevision: 42,
+      contextId: "context-1",
+      detailClientId: "detail-1",
+      validation: "herdr-keybinding" as const,
+      projection: "generated" as const,
+    };
+    const root = store.createAnnotation("observed-passage", {
+      target: { kind: "passage", sourceBlockId: source.id, observation },
+      body: "Discuss the displayed result.",
+      source: "user",
+    }).annotations[0]!;
+    const updated = store.update(
+      source.id,
+      "Hub\n!((view-next))\nchanged",
+      source.updatedAt,
+      { author: "user", actorId: "detail" },
+    );
+    const threads = store.reanchorAnnotationThreads({
+      sourceBlockId: source.id,
+      sourceText: updated.text,
+      sourceVersion: updated.updatedAt,
+    }, { author: "user", actorId: "detail" });
+    const reply = store.replyToAnnotation("observed-reply", {
+      annotationId: root.block.id,
+      body: "Acknowledged.",
+      source: "agent",
+    }).annotations[0]!;
+
+    expect(threads[0]!.target).toEqual({
+      kind: "passage",
+      sourceBlockId: source.id,
+      observation,
+    });
+    expect(threads[0]!.anchorState).toBe("observed");
+    expect(reply.target).toEqual(threads[0]!.target);
+  });
 
   test("rejects an invalid annotation batch without creating its valid prefix", () => {
     const store = makeStore();

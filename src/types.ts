@@ -126,7 +126,7 @@ export interface BookmarkRemoveReceipt {
 
 export type AnnotationSource = "user" | "agent";
 export type AnnotationLifecycle = "open" | "resolved";
-export type AnnotationAnchorState = "anchored" | "ambiguous" | "orphaned";
+export type AnnotationAnchorState = "anchored" | "ambiguous" | "orphaned" | "observed";
 
 export interface AnnotationAnchor {
   start: number;
@@ -138,11 +138,33 @@ export interface AnnotationAnchor {
   sourceHash: string;
 }
 
+export type RenderedPassageProjection = "canonical" | "resolved" | "generated" | "mixed";
+
+export interface RenderedSelectionEvidence {
+  quote: string;
+  capturedAt: string;
+  hostBlockId: string;
+  paneId: string;
+  contentRevision: number;
+  contextId: string;
+  detailClientId: string;
+  validation: "herdr-keybinding";
+}
+
+export interface RenderedSelectionCapture extends RenderedSelectionEvidence {
+  snapshotText: string;
+}
+
+export interface RenderedPassageObservation extends RenderedSelectionEvidence {
+  projection: RenderedPassageProjection;
+}
+
 export type AnnotationTarget =
   | {
       kind: "block";
       sourceBlockId: string;
       anchor: AnnotationAnchor;
+      observation?: RenderedPassageObservation;
     }
   | {
       kind: "file";
@@ -151,6 +173,11 @@ export type AnnotationTarget =
       startLine: number;
       endLine: number;
       anchor: AnnotationAnchor;
+    }
+  | {
+      kind: "passage";
+      sourceBlockId: string;
+      observation: RenderedPassageObservation;
     };
 
 export interface AnnotationCreateInput {
@@ -729,7 +756,7 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 34;
+export const OUTLINER_PROTOCOL_VERSION = 35;
 
 
 export interface OutlinerServiceStatus {
@@ -1014,12 +1041,21 @@ export interface WorkspaceSnapshot {
 
 export interface OutlinerUiCommand {
   targetClientId: string;
-  command: "edit" | "reveal" | "focus" | "preview" | "open" | "replace" | "backlinks.select";
+  command:
+    | "edit"
+    | "reveal"
+    | "focus"
+    | "preview"
+    | "open"
+    | "replace"
+    | "backlinks.select"
+    | "comment.selection";
   focus?: boolean;
   blockId?: string;
   fragmentId?: string;
   targetBlockId?: string;
   sourceBlockId?: string;
+  renderedSelection?: RenderedSelectionCapture;
 }
 
 export interface OutlinerNavigationResolution {

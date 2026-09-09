@@ -19,6 +19,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { OutlinerClient, type OutlinerWatcher } from "./client";
 import { BufferComposer } from "./buffer-composer";
+import { annotationTargetQuote } from "./annotations";
 import {
   actionMenuItemText,
   filterActionMenuItems,
@@ -698,12 +699,27 @@ async function handleRenderedSelectionMouse(data: string): Promise<boolean> {
   }
   const pointer = parseTreePrimaryPointer(data);
   if (!pointer || pointer.meta || pointer.ctrl) return false;
+  let row = pointer.row;
+  if (renderedSelectionDragActive && pointer.phase !== "down") {
+    const bodyTop = 3;
+    const bodyBottom = terminal.rows - 3;
+    if (row < bodyTop) {
+      preview.navigate("up");
+      row = bodyTop;
+    } else if (row > bodyBottom) {
+      preview.navigate("down");
+      row = bodyBottom;
+    }
+  }
   const point = preview.sourcePointAtViewport(
-    pointer.row,
+    row,
     pointer.column,
     terminal.columns,
   );
-  if (!point) return true;
+  if (!point) {
+    if (pointer.phase === "up") renderedSelectionDragActive = false;
+    return true;
+  }
   if (pointer.phase === "down") {
     renderedSelectionDragActive = true;
     await controller.dispatch({
@@ -966,7 +982,7 @@ const preview = new DetailPiPreviewLayout(
 const draftSplit = new DetailPiDraftSplitLayout(customFrame, preview);
 const composer = new BufferComposer(() => {
   const target = controller.state.annotationDraft?.target;
-  const context = target?.anchor.excerpt ?? "";
+  const context = target ? annotationTargetQuote(target) : "";
   return {
     title: target?.kind === "file"
       ? `Comment on ${target.filePath}:${target.startLine}-${target.endLine}`
