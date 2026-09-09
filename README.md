@@ -637,6 +637,20 @@ context share a 1,000-row budget. Physical virtual-branch definitions reached as
 context are inert leaves. Root-query, depth, and row-budget truncation are
 reported separately, and allocation does not depend on disclosure state.
 
+Press `Shift+V` on a virtual-branch definition in Tree or Detail to open its
+generic read-only navigator popup. The left pane uses the same projected roots,
+context descendants, occurrence identities, disclosure, ranking, and truncation
+states as Tree; the right pane uses the same Detail read projection and rendering
+path, including property-metadata exclusion, embeds, and callouts. `Up`/`Down`
+selects without retargeting the invoking pane, `Left`/`Right` navigates
+disclosure, and `/` filters the popup rows transiently. `Enter` opens the shared
+destination chooser. `Shift+R` dispatches Reveal for the selected row's physical
+source and closes after the service accepts that dispatch. Outside the chooser,
+`Esc` or `q` closes without changing canonical data, Tree selection, viewport,
+Detail lock state, or occurrence ranks; inside the chooser, `Esc` first dismisses
+that chooser. At narrow widths, `Tab` switches between the independently usable
+list and preview.
+
 `Shift+Up` / `Shift+Down` reorders matched roots within an unsorted branch using
 persisted occurrence ranks. Timestamp-sorted branches disable manual occurrence
 reorder. Contextual descendants never participate. Canonical parent/position

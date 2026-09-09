@@ -22,6 +22,7 @@ import {
   focusCurrentPane,
   openBacklinkPeekPopup,
   openDetailPane,
+  openVirtualBranchNavigatorPopup,
 } from "./pane-control";
 import { resolvePaths } from "./paths";
 import { openDestinationTimeoutFromEnvironment } from "./open-destination-chooser";
@@ -152,6 +153,15 @@ const effects: DetailEffects = {
     openBacklinkPeekPopup({
       workspaceRoot: paths.workspaceRoot,
       ...input,
+    });
+  },
+  openVirtualBranchNavigator(viewId) {
+    openVirtualBranchNavigatorPopup({
+      workspaceRoot: paths.workspaceRoot,
+      browsingContextId,
+      sourceClientId: clientId,
+      sourceRole: "detail",
+      viewId,
     });
   },
   openDetailPane: openTargetInNewDetail,

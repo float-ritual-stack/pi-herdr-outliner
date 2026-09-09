@@ -88,6 +88,8 @@ describe("Outliner action keymap", () => {
     expect(keymap.action("detail.current.reveal").defaultChords).toEqual(["Shift+R"]);
     expect(keymap.action("tree.reference.reveal").defaultChords).toEqual(["Alt+Shift+R"]);
     expect(keymap.action("detail.reference.reveal").defaultChords).toEqual(["Alt+Shift+R"]);
+    expect(keymap.action("tree.virtual-branch.open").defaultChords).toEqual(["Shift+V"]);
+    expect(keymap.action("detail.virtual-branch.open").defaultChords).toEqual(["Shift+V"]);
   });
 
 

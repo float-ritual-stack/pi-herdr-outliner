@@ -4,9 +4,15 @@ import { hostname } from "node:os";
 import { join } from "node:path";
 import { Type, type Static } from "typebox";
 import { Parse } from "typebox/value";
-import type { OutlinerClientRuntime } from "./types";
+import type { OutlinerClientRole, OutlinerClientRuntime } from "./types";
 
-export type PaneEntrypoint = "service" | "outliner" | "detail" | "capture" | "backlink-peek";
+export type PaneEntrypoint =
+  | "service"
+  | "outliner"
+  | "detail"
+  | "capture"
+  | "backlink-peek"
+  | "virtual-branch-navigator";
 export type OutlinerRightClickOwnership = "herdr" | "outliner";
 
 const PaneStateSchema = Type.Object({
@@ -337,6 +343,52 @@ export function openBacklinkPeekPopup(
     `OUTLINER_BACKLINK_SORT_FIELD=${options.sortField}`,
     "--env",
     `OUTLINER_BACKLINK_SORT_DIRECTION=${options.sortDirection}`,
+    "--focus",
+  ];
+  for (const name of [
+    "OUTLINER_STATE_DIR",
+    "OUTLINER_OPEN_DESTINATION_TIMEOUT_MS",
+  ] as const) {
+    if (process.env[name] !== undefined) {
+      args.push("--env", `${name}=${process.env[name]}`);
+    }
+  }
+  invokeHerdr(herdr, args);
+}
+
+export interface OpenVirtualBranchNavigatorPopupOptions {
+  workspaceRoot: string;
+  browsingContextId: string;
+  sourceClientId: string;
+  sourceRole: OutlinerClientRole;
+  viewId: string;
+}
+
+export function openVirtualBranchNavigatorPopup(
+  options: OpenVirtualBranchNavigatorPopupOptions,
+  herdr = process.env.HERDR_BIN_PATH ?? "herdr",
+): void {
+  if (process.env.HERDR_ENV !== "1") {
+    throw new Error("Virtual branch navigator popup requires Herdr");
+  }
+  const args = [
+    "plugin",
+    "pane",
+    "open",
+    "--plugin",
+    OUTLINER_PLUGIN_ID,
+    "--entrypoint",
+    "virtual-branch-navigator",
+    "--env",
+    `OUTLINER_WORKSPACE_ROOT=${options.workspaceRoot}`,
+    "--env",
+    `OUTLINER_BROWSING_CONTEXT_ID=${options.browsingContextId}`,
+    "--env",
+    `OUTLINER_NAVIGATOR_SOURCE_CLIENT_ID=${options.sourceClientId}`,
+    "--env",
+    `OUTLINER_NAVIGATOR_SOURCE_ROLE=${options.sourceRole}`,
+    "--env",
+    `OUTLINER_NAVIGATOR_VIEW_ID=${options.viewId}`,
     "--focus",
   ];
   for (const name of [

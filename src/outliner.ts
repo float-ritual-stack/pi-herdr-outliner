@@ -12,6 +12,7 @@ import {
   focusCurrentPane,
   openDetailPane,
   openCapturePopup as openHerdrCapturePopup,
+  openVirtualBranchNavigatorPopup,
   outlinerRightClickOwnership,
 } from "./pane-control";
 import { parsePropertySummaryKeys } from "./property-summary";
@@ -126,6 +127,15 @@ const controller = createTreeController({
     openHerdrCapturePopup({
       workspaceRoot: paths.workspaceRoot,
       capturedFromBlockId,
+    });
+  },
+  openVirtualBranchNavigator(viewId) {
+    openVirtualBranchNavigatorPopup({
+      workspaceRoot: paths.workspaceRoot,
+      browsingContextId,
+      sourceClientId: clientId,
+      sourceRole: "tree",
+      viewId,
     });
   },
   focusSelf() {

@@ -72,6 +72,7 @@ interface Harness {
   readonly createdDetails: string[];
   readonly createdDetailDirections: Array<"right" | "down">;
   readonly openedCaptures: string[];
+  readonly openedVirtualNavigators: string[];
   invalidations: number;
   stops: number;
 }
@@ -86,6 +87,7 @@ function harness(
     createdDetails: [],
     createdDetailDirections: [],
     openedCaptures: [],
+    openedVirtualNavigators: [],
     invalidations: 0,
     stops: 0,
     effects: {
@@ -150,6 +152,9 @@ function harness(
       },
       openCapturePopup: async (capturedFromBlockId) => {
         result.openedCaptures.push(capturedFromBlockId);
+      },
+      openVirtualBranchNavigator: async (viewId) => {
+        result.openedVirtualNavigators.push(viewId);
       },
       focusSelf: () => result.focused.push("outliner"),
       terminalWidth: () => 80,
@@ -645,6 +650,28 @@ describe("createTreeController", () => {
     expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe(origin.id);
     expect(controller.view().status).toBe("Opened quick capture popup");
     expect(fake.calls.filter((call) => call.action === "browsing-context.publish")).toHaveLength(1);
+  });
+
+  test("opens the generic navigator only for a selected virtual branch", async () => {
+    const view = block("next-view", {
+      text: "Next\n[type::virtual-branch]",
+      properties: [{ key: "type", value: "virtual-branch" }],
+    });
+    const ordinary = block("ordinary", { position: 1 });
+    const fake = harness((input) =>
+      input.action === "workspace.snapshot" ? snapshot([view, ordinary], view) : undefined
+    );
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+
+    await controller.handleKeypress("V", { name: "v", shift: true }, "pass");
+    expect(fake.openedVirtualNavigators).toEqual([view.id]);
+    expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe(view.id);
+
+    await controller.handleKeypress("", { name: "down" }, "pass");
+    await controller.handleKeypress("V", { name: "v", shift: true }, "pass");
+    expect(fake.openedVirtualNavigators).toEqual([view.id]);
+    expect(controller.view().status).toBe("Selected block is not a virtual branch");
   });
 
   test("keeps Tree selection stable when the capture popup cannot open", async () => {

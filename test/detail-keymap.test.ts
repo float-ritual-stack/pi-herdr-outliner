@@ -486,6 +486,16 @@ test("maps preview b to the lazy backlink section", async () => {
   expect(preview.intents).toEqual([{ type: "backlinks.toggle" }]);
 });
 
+test("maps Shift+V to the generic virtual branch navigator", async () => {
+  const previewState = state();
+  previewState.mode = "preview";
+  const preview = harness(previewState, false);
+
+  await preview.press({ name: "v", shift: true }, "V");
+
+  expect(preview.intents).toEqual([{ type: "virtual-branch.open" }]);
+});
+
 test("keeps Shift+R pane-level while Backlinks are expanded", async () => {
   const previewState = state();
   previewState.mode = "preview";

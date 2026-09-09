@@ -68,6 +68,7 @@ import {
   focusCurrentPane,
   openBacklinkPeekPopup,
   openDetailPane,
+  openVirtualBranchNavigatorPopup,
   outlinerRightClickOwnership,
 } from "./pane-control";
 import { parseOutlinerLinkUri, resolveOutlinerLinkTarget } from "./outliner-links";
@@ -321,6 +322,15 @@ const effects: DetailEffects = {
     openBacklinkPeekPopup({
       workspaceRoot: paths.workspaceRoot,
       ...input,
+    });
+  },
+  openVirtualBranchNavigator(viewId) {
+    openVirtualBranchNavigatorPopup({
+      workspaceRoot: paths.workspaceRoot,
+      browsingContextId,
+      sourceClientId: clientId,
+      sourceRole: "detail",
+      viewId,
     });
   },
   openDetailPane: openTargetInNewDetail,

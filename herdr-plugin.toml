@@ -42,6 +42,14 @@ width = "78%"
 height = "76%"
 command = ["bun", "run", "src/backlink-peek-main.ts"]
 
+[[panes]]
+id = "virtual-branch-navigator"
+title = "Virtual Branch Navigator"
+placement = "popup"
+width = "86%"
+height = "82%"
+command = ["bun", "run", "src/virtual-branch-navigator-main.ts"]
+
 
 [[actions]]
 id = "open"

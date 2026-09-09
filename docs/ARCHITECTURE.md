@@ -602,6 +602,32 @@ persisted ranks, and disable manual occurrence reorder. Rank rows survive
 temporary query mismatches and cascade when either the branch definition or
 canonical block is deleted.
 
+The generic virtual-branch navigator is a manifest-owned transient Herdr popup
+launched from either Tree or Detail with the definition ID, invoking client, and
+browsing context. It runs `projectVirtualBranches` over canonical definitions so
+its rows reuse query bounds, persisted ranks, nested occurrence identity,
+context descendants, disclosure, cycle protection, and root/depth/budget
+truncation. Its preview resolves the selected canonical block through
+`projectDetailRead` and `references.resolve`, then uses the shared Detail
+read-preview renderer for block-property exclusion, embeds, callouts, source
+presentation, and terminal sanitization. Projection and preview generation
+tokens discard stale completions after rapid movement or refresh.
+
+Popup selection, filter, disclosure, and viewport state are process-local.
+Content/view events reproject while retaining an exact occurrence row ID or the
+deterministic neighbor at the prior index. The popup registers as a transient
+locked Detail watcher, so it receives refresh events without entering the
+unlocked preview/open pool; every subscription connection triggers a fresh
+projection to close startup and reconnect gaps. `Enter` delegates to
+`OpenDestinationChooser`; `Shift+R` dispatches PIE-220 Reveal with `focusTarget`
+and closes after the service accepts the dispatch. The target Tree command then
+performs physical selection and focus. Outside the chooser, cancel closes
+without retargeting the invoking client or mutating selection, lock state,
+canonical data, or ranks; chooser `Esc` first dismisses the bound destination.
+Wide frames show list and Detail preview together; narrow frames retain both
+surfaces behind an explicit `Tab` toggle. Keyboard and SGR mouse selection,
+disclosure, scroll, and activation share row identity and routing semantics.
+
 ## Detail rendering and editing invariants
 
 ### Preview
