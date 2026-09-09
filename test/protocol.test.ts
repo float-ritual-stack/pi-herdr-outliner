@@ -17,6 +17,8 @@ import type {
   BacklinkCollection,
   BlockEditActivityPage,
   Block,
+  BookmarkRemoveReceipt,
+  BookmarkToggleReceipt,
   CaptureReceipt,
   DeliveryReceipt,
   BrowsingContextPublication,
@@ -161,7 +163,7 @@ test("serves mutations and property queries over the local socket", async () => 
   const client = new OutlinerClient(socket);
   const service = await client.request<OutlinerServiceStatus>({ action: "ping" });
   expect(service).toEqual({ status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION });
-  expect(service.protocolVersion).toBe(33);
+  expect(service.protocolVersion).toBe(34);
   const provenance = {
     actorId: "omp",
     sessionId: "session-1",
@@ -621,6 +623,52 @@ test("streams workspace mutations and transient UI commands to subscribers", asy
   expect(snapshot.virtualOccurrenceRanks).toEqual([
     { viewId: view.id, blockId: other.id, rank: 0 },
     { viewId: view.id, blockId: block.id, rank: 1 },
+  ]);
+});
+
+test("streams bookmark toggles and removals as content events", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-outliner-bookmark-events-"));
+  const store = new OutlinerStore(join(directory, "outliner.sqlite"));
+  const socket = join(directory, "outliner.sock");
+  const server = new OutlinerServer(store, socket);
+  await server.start();
+  const target = store.create("Bookmark event target");
+  const client = new OutlinerClient(socket);
+  const connected = Promise.withResolvers<void>();
+  const received = Promise.withResolvers<void>();
+  const events: OutlinerEvent[] = [];
+  const watcher = client.watch({
+    client: { clientId: "bookmark-event-detail", role: "detail", contextId: "bookmark-event-detail" },
+    onConnect: connected.resolve,
+    onEvent: (event) => {
+      events.push(event);
+      if (events.length === 2) received.resolve();
+    },
+  });
+  cleanups.push(async () => {
+    await watcher.stop();
+    await server.close();
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  await connected.promise;
+
+  const added = await client.request<BookmarkToggleReceipt>({
+    action: "bookmarks.toggle",
+    targetBlockId: target.id,
+    expectedRecordId: null,
+  });
+  const removed = await client.request<BookmarkRemoveReceipt>({
+    action: "bookmarks.remove",
+    recordId: added.record.id,
+    expectedUpdatedAt: added.record.updatedAt,
+  });
+  await received.promise;
+
+  expect(removed.record.deletedAt).toBeDefined();
+  expect(events.map((event) => [event.domain, event.action, event.blockId])).toEqual([
+    ["content", "bookmarks.toggle", added.record.id],
+    ["content", "bookmarks.remove", added.record.id],
   ]);
 });
 
@@ -1854,7 +1902,7 @@ test("targets ephemeral attention, advances atomically, stales on edits, and exp
   })).toEqual(expect.objectContaining({ marks: [], pendingCount: 0 }));
 });
 
-test("runs and navigates a targeted structure-first walkthrough over protocol v33", async () => {
+test("runs and navigates a targeted structure-first walkthrough over protocol v34", async () => {
   const directory = mkdtempSync(join(tmpdir(), "pi-outliner-workflow-protocol-"));
   const store = new OutlinerStore(join(directory, "outliner.sqlite"));
   const source = store.create([

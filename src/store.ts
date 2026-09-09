@@ -9,6 +9,14 @@ import {
   reanchorAnnotation,
 } from "./annotations";
 import { resolveBacklinkRelation } from "./backlinks";
+import {
+  BOOKMARKS_SYSTEM_VIEW,
+  BOOKMARK_TYPE,
+  bookmarkRecordText,
+  parseBookmarkRecord,
+  parseBookmarksRoot,
+  type BookmarkRecord,
+} from "./bookmarks";
 import { isValidGitBranchName } from "./delivery-lifecycle";
 import {
   normalizeBlockSearchQuery,
@@ -61,6 +69,10 @@ import type {
   BlockEditActivityPage,
   BlockSearchQuery,
   BlockTraversalOptions,
+  BookmarkRemoveReceipt,
+  BookmarkResolution,
+  BookmarkStatus,
+  BookmarkToggleReceipt,
   CaptureReceipt,
   CaptureSource,
   NavigationState,
@@ -401,6 +413,7 @@ export class OutlinerStore {
     this.seed();
     this.ensureTrashView();
     this.ensureInbox();
+    this.ensureBookmarks();
   }
 
   close(): void {
@@ -421,9 +434,24 @@ export class OutlinerStore {
     author: BlockAuthor = "user",
     provenance?: BlockProvenance,
   ): Block {
+    return this.createAt(
+      text,
+      parentId,
+      author,
+      provenance,
+      new Date().toISOString(),
+    );
+  }
+
+  private createAt(
+    text: string,
+    parentId: string | null,
+    author: BlockAuthor,
+    provenance: BlockProvenance | undefined,
+    createdAt: string,
+  ): Block {
     if (parentId !== null) this.requireActive(parentId);
     const { actorId, sessionId, taskId } = normalizeCreatorProvenance(author, provenance);
-    const now = new Date().toISOString();
     const id = crypto.randomUUID();
     const positionRow = this.database
       .query("SELECT COALESCE(MAX(position), -1) + 1 AS position FROM blocks WHERE parent_id IS ?")
@@ -443,14 +471,103 @@ export class OutlinerStore {
           actorId,
           sessionId,
           taskId,
-          now,
-          now,
+          createdAt,
+          createdAt,
         );
       this.replaceProperties(id, parsePropertyRecords(text));
       this.bumpSequence();
     })();
 
     return this.require(id);
+  }
+
+  bookmarksRoot(): Block {
+    return this.database.transaction(() => this.requireBookmarksRootFromCurrentRead())();
+  }
+
+  bookmarkStatus(targetBlockId: string): BookmarkStatus {
+    return this.database.transaction(() => {
+      this.requireActive(targetBlockId);
+      const root = this.requireBookmarksRootFromCurrentRead();
+      const records = this.bookmarkRecordsFromCurrentRead(root);
+      return {
+        root,
+        targetBlockId,
+        record: records.find((candidate) => candidate.targetBlockId === targetBlockId)?.record ?? null,
+      };
+    })();
+  }
+
+  resolveBookmark(recordId: string): BookmarkResolution {
+    return this.database.transaction(() => {
+      const root = this.requireBookmarksRootFromCurrentRead();
+      const record = this.requireBookmarkRecordFromCurrentRead(root, recordId);
+      const target = this.getFromCurrentRead(record.targetBlockId);
+      if (!target) {
+        return {
+          record: record.record,
+          target: null,
+          unavailableReason: "Bookmark target no longer exists",
+        };
+      }
+      if (target.effectiveDeletedRootId) {
+        return {
+          record: record.record,
+          target: null,
+          unavailableReason: "Bookmark target is in Trash",
+        };
+      }
+      return { record: record.record, target };
+    })();
+  }
+  toggleBookmark(
+    targetBlockId: string,
+    expectedRecordId: string | null,
+    label?: string,
+    author: BlockAuthor = "user",
+    provenance?: BlockProvenance,
+  ): BookmarkToggleReceipt {
+    return this.database.transaction(() => {
+      const target = this.requireActive(targetBlockId);
+      const root = this.requireBookmarksRootFromCurrentRead();
+      const current = this.bookmarkRecordsFromCurrentRead(root)
+        .find((candidate) => candidate.targetBlockId === targetBlockId);
+      if ((current?.record.id ?? null) !== expectedRecordId) {
+        throw new Error("Bookmark changed; refresh and retry");
+      }
+      if (current) {
+        return {
+          root,
+          target,
+          record: this.delete(current.record.id),
+          bookmarked: false,
+        };
+      }
+      const createdAt = new Date().toISOString();
+      const record = this.createAt(
+        bookmarkRecordText(target, createdAt, label),
+        root.id,
+        author,
+        provenance,
+        createdAt,
+      );
+      parseBookmarkRecord(record);
+      return { root, target, record, bookmarked: true };
+    })();
+  }
+
+  removeBookmark(recordId: string, expectedUpdatedAt: string): BookmarkRemoveReceipt {
+    return this.database.transaction(() => {
+      const root = this.requireBookmarksRootFromCurrentRead();
+      const record = this.requireBookmarkRecordFromCurrentRead(root, recordId);
+      if (record.record.updatedAt !== expectedUpdatedAt) {
+        throw new Error("Bookmark changed; refresh and retry");
+      }
+      return {
+        record: this.delete(recordId),
+        targetBlockId: record.targetBlockId,
+      };
+    })();
   }
 
   createAnnotation(
@@ -2517,6 +2634,57 @@ export class OutlinerStore {
     })();
   }
 
+  private bookmarksRootsFromCurrentRead(): Block[] {
+    const rows = this.database
+      .query(
+        "SELECT DISTINCT property.block_id FROM block_properties property JOIN blocks block ON block.id = property.block_id WHERE property.scope = 'block' AND property.key = 'system-view' AND LOWER(property.value) = ? AND block.effective_deleted_root_id IS NULL ORDER BY block.created_at, block.id",
+      )
+      .all(BOOKMARKS_SYSTEM_VIEW) as Array<{ block_id: string }>;
+    return rows
+      .map((row) => this.getFromCurrentRead(row.block_id))
+      .filter((block): block is Block => block !== null);
+  }
+
+  private requireBookmarksRootFromCurrentRead(): Block {
+    const roots = this.bookmarksRootsFromCurrentRead();
+    if (roots.length !== 1) {
+      throw new Error(
+        `Workspace must contain exactly one active [system-view::${BOOKMARKS_SYSTEM_VIEW}]; found ${roots.length}`,
+      );
+    }
+    return parseBookmarksRoot(roots[0]!).root;
+  }
+
+  private bookmarkRecordsFromCurrentRead(root: Block): BookmarkRecord[] {
+    const rows = this.database
+      .query(
+        "SELECT DISTINCT property.block_id FROM block_properties property JOIN blocks block ON block.id = property.block_id WHERE property.scope = 'block' AND property.key = 'type' AND LOWER(property.value) = ? AND block.effective_deleted_root_id IS NULL ORDER BY block.created_at, block.id",
+      )
+      .all(BOOKMARK_TYPE) as Array<{ block_id: string }>;
+    const records = rows.map((row) => parseBookmarkRecord(this.require(row.block_id)));
+    const targetOwners = new Map<string, string>();
+    for (const record of records) {
+      if (record.record.parentId !== root.id) {
+        throw new Error(`Bookmark record must be a direct child of ${root.id}: ${record.record.id}`);
+      }
+      const owner = targetOwners.get(record.targetBlockId);
+      if (owner) {
+        throw new Error(
+          `Duplicate active bookmark records for ${record.targetBlockId}: ${owner}, ${record.record.id}`,
+        );
+      }
+      targetOwners.set(record.targetBlockId, record.record.id);
+    }
+    return records;
+  }
+
+  private requireBookmarkRecordFromCurrentRead(root: Block, recordId: string): BookmarkRecord {
+    const record = this.bookmarkRecordsFromCurrentRead(root)
+      .find((candidate) => candidate.record.id === recordId);
+    if (!record) throw new Error(`Active bookmark record not found: ${recordId}`);
+    return record;
+  }
+
   private captureInboxesFromCurrentRead(): Block[] {
     const rows = this.database
       .query(
@@ -2547,6 +2715,24 @@ export class OutlinerStore {
     }
     if (inboxes.length === 1) return;
     this.create("Inbox [type::inbox] [system-view::inbox]", null, "system");
+  }
+
+  private ensureBookmarks(): void {
+    const roots = this.database.transaction(() => this.bookmarksRootsFromCurrentRead())();
+    if (roots.length > 1) {
+      throw new Error(
+        `Workspace must contain exactly one active [system-view::${BOOKMARKS_SYSTEM_VIEW}]; found ${roots.length}`,
+      );
+    }
+    if (roots.length === 1) {
+      parseBookmarksRoot(roots[0]!);
+      return;
+    }
+    this.create(
+      "Bookmarks [type::virtual-branch] [system-view::bookmarks] [query::type=bookmark] [limit::1000] [summary-properties::target,bookmark-created]",
+      null,
+      "system",
+    );
   }
 
   private ensureTrashView(): void {

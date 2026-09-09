@@ -73,6 +73,7 @@ interface Harness {
   readonly createdDetailDirections: Array<"right" | "down">;
   readonly openedCaptures: string[];
   readonly openedVirtualNavigators: string[];
+  readonly openedVirtualNavigatorAdapters: Array<"bookmark" | undefined>;
   invalidations: number;
   stops: number;
 }
@@ -88,6 +89,7 @@ function harness(
     createdDetailDirections: [],
     openedCaptures: [],
     openedVirtualNavigators: [],
+    openedVirtualNavigatorAdapters: [],
     invalidations: 0,
     stops: 0,
     effects: {
@@ -153,8 +155,9 @@ function harness(
       openCapturePopup: async (capturedFromBlockId) => {
         result.openedCaptures.push(capturedFromBlockId);
       },
-      openVirtualBranchNavigator: async (viewId) => {
+      openVirtualBranchNavigator: async (viewId, adapter) => {
         result.openedVirtualNavigators.push(viewId);
+        result.openedVirtualNavigatorAdapters.push(adapter);
       },
       focusSelf: () => result.focused.push("outliner"),
       terminalWidth: () => 80,
@@ -672,6 +675,40 @@ describe("createTreeController", () => {
     await controller.handleKeypress("V", { name: "v", shift: true }, "pass");
     expect(fake.openedVirtualNavigators).toEqual([view.id]);
     expect(controller.view().status).toBe("Selected block is not a virtual branch");
+  });
+
+  test("toggles and opens Bookmarks without mutating Tree selection", async () => {
+    const target = block("target");
+    const root = block("bookmarks-root", {
+      text: "Bookmarks",
+      properties: [{ key: "type", value: "virtual-branch" }],
+    });
+    const record = block("bookmark-record", { parentId: root.id });
+    const fake = harness((input) => {
+      if (input.action === "workspace.snapshot") return snapshot([target], target);
+      if (input.action === "bookmarks.status") {
+        return { root, targetBlockId: target.id, record: null };
+      }
+      if (input.action === "bookmarks.toggle") {
+        return { root, target, record, bookmarked: true };
+      }
+      if (input.action === "bookmarks.root") return root;
+      return undefined;
+    });
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+
+    await controller.handleKeypress("", { name: "m", meta: true }, "pass");
+    expect(lastCall(fake.calls, "bookmarks.toggle")).toMatchObject({
+      targetBlockId: target.id,
+      expectedRecordId: null,
+    });
+    expect(controller.view().status).toBe("Bookmarked");
+
+    await controller.handleKeypress("M", { name: "m", meta: true, shift: true }, "pass");
+    expect(fake.openedVirtualNavigators).toEqual([root.id]);
+    expect(fake.openedVirtualNavigatorAdapters).toEqual(["bookmark"]);
+    expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe(target.id);
   });
 
   test("keeps Tree selection stable when the capture popup cannot open", async () => {

@@ -95,6 +95,35 @@ export interface CaptureReceipt {
   deduplicated: boolean;
 }
 
+export interface BookmarkStatus {
+  root: Block;
+  targetBlockId: string;
+  record: Block | null;
+}
+
+export type BookmarkResolution =
+  | {
+    record: Block;
+    target: Block;
+  }
+  | {
+    record: Block;
+    target: null;
+    unavailableReason: string;
+  };
+
+export interface BookmarkToggleReceipt {
+  root: Block;
+  target: Block;
+  record: Block;
+  bookmarked: boolean;
+}
+
+export interface BookmarkRemoveReceipt {
+  record: Block;
+  targetBlockId: string;
+}
+
 export type AnnotationSource = "user" | "agent";
 export type AnnotationLifecycle = "open" | "resolved";
 export type AnnotationAnchorState = "anchored" | "ambiguous" | "orphaned";
@@ -700,7 +729,7 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 33;
+export const OUTLINER_PROTOCOL_VERSION = 34;
 
 
 export interface OutlinerServiceStatus {
@@ -778,6 +807,24 @@ export type OutlinerRequest =
       text: string;
       author?: BlockAuthor;
       provenance?: BlockProvenance;
+    }
+  | { id: string; action: "bookmarks.root" }
+  | { id: string; action: "bookmarks.status"; targetBlockId: string }
+  | { id: string; action: "bookmarks.resolve"; recordId: string }
+  | {
+      id: string;
+      action: "bookmarks.toggle";
+      targetBlockId: string;
+      expectedRecordId: string | null;
+      label?: string;
+      author?: BlockAuthor;
+      provenance?: BlockProvenance;
+    }
+  | {
+      id: string;
+      action: "bookmarks.remove";
+      recordId: string;
+      expectedUpdatedAt: string;
     }
   | {
       id: string;

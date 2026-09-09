@@ -1,12 +1,12 @@
 import type { MarkdownTheme } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "bun:test";
-import type { DetailReadPreviewDocument } from "../src/detail-pi-preview";
 import type { TerminalKey } from "../src/terminal";
 import type { Block, VisibleBlock } from "../src/types";
 import {
   VirtualBranchNavigatorController,
   renderVirtualBranchNavigatorFrame,
   type VirtualBranchNavigatorEffects,
+  type VirtualBranchNavigatorPreview,
 } from "../src/virtual-branch-navigator";
 import type {
   VirtualBranchNavigatorProjection,
@@ -56,13 +56,20 @@ function visibleBlock(id: string, text = id): VisibleBlock {
   };
 }
 
-function preview(text: string, canonicalText = text): DetailReadPreviewDocument {
+function preview(
+  text: string,
+  targetBlockId: string,
+  canonicalText = text,
+): VirtualBranchNavigatorPreview {
   return {
-    canonicalText,
-    resolvedText: text,
-    projectedText: text,
-    embedRanges: [],
-    workIdPrefix: null,
+    document: {
+      canonicalText,
+      resolvedText: text,
+      projectedText: text,
+      embedRanges: [],
+      workIdPrefix: null,
+    },
+    target: { blockId: targetBlockId, title: text },
   };
 }
 
@@ -118,6 +125,7 @@ interface Harness {
     collapsed: string[][];
     previews: string[];
     replaced: string[];
+    removed: string[];
     firstUnlocked: string[];
     openedNew: Array<{ blockId: string; direction: "right" | "down" }>;
     revealed: string[];
@@ -131,6 +139,7 @@ function harness(
   rows: readonly VirtualBranchOccurrenceRow[] = [row("one"), row("two"), row("three")],
   loadPreview?: VirtualBranchNavigatorEffects["loadPreview"],
   loadProjection?: VirtualBranchNavigatorEffects["loadProjection"],
+  removable = false,
 ): Harness {
   let projection: VirtualBranchNavigatorProjection = {
     title: "Next",
@@ -142,6 +151,7 @@ function harness(
     previews: [],
     replaced: [],
     firstUnlocked: [],
+    removed: [],
     openedNew: [],
     revealed: [],
     closes: 0,
@@ -156,7 +166,7 @@ function harness(
     async loadPreview(item) {
       calls.previews.push(item.canonicalId);
       if (loadPreview) return loadPreview(item);
-      return preview(`Preview ${item.canonicalId}`);
+      return preview(`Preview ${item.canonicalId}`, item.canonicalId);
     },
     async replaceTarget(blockId) {
       calls.replaced.push(blockId);
@@ -171,6 +181,17 @@ function harness(
     async revealSource(blockId) {
       calls.revealed.push(blockId);
     },
+    ...(removable
+      ? {
+        async removeSelectedRecord(item: VirtualBranchOccurrenceRow) {
+          calls.removed.push(item.canonicalId);
+          projection = {
+            ...projection,
+            rows: projection.rows.filter((candidate) => candidate.rowId !== item.rowId),
+          };
+        },
+      }
+      : {}),
     close() {
       calls.closes += 1;
     },
@@ -232,18 +253,18 @@ describe("virtual branch navigator", () => {
   });
 
   test("ignores stale preview completions after rapid movement", async () => {
-    const pending = new Map<string, Deferred<DetailReadPreviewDocument>>();
+    const pending = new Map<string, Deferred<VirtualBranchNavigatorPreview>>();
     const state = harness(undefined, (item) => {
-      const result = deferred<DetailReadPreviewDocument>();
+      const result = deferred<VirtualBranchNavigatorPreview>();
       pending.set(item.canonicalId, result);
       return result.promise;
     });
 
     await state.controller.initialize();
     await state.controller.handleKeypress("", key("down"), "pass", 20, false);
-    pending.get("two")!.resolve(preview("Current preview"));
+    pending.get("two")!.resolve(preview("Current preview", "two"));
     await settle();
-    pending.get("one")!.resolve(preview("Stale preview"));
+    pending.get("one")!.resolve(preview("Stale preview", "one"));
     await settle();
 
     expect(state.controller.selectedRow?.canonicalId).toBe("two");
@@ -251,7 +272,7 @@ describe("virtual branch navigator", () => {
   });
 
   test("invalidates an old preview as soon as projection refresh begins", async () => {
-    const oldPreview = deferred<DetailReadPreviewDocument>();
+    const oldPreview = deferred<VirtualBranchNavigatorPreview>();
     const refreshedProjection = deferred<VirtualBranchNavigatorProjection>();
     let projectionLoads = 0;
     let previewLoads = 0;
@@ -264,7 +285,7 @@ describe("virtual branch navigator", () => {
       initialProjection.rows,
       async () => {
         previewLoads += 1;
-        return previewLoads === 1 ? oldPreview.promise : preview("Fresh preview");
+        return previewLoads === 1 ? oldPreview.promise : preview("Fresh preview", "one");
       },
       async () => {
         projectionLoads += 1;
@@ -274,7 +295,7 @@ describe("virtual branch navigator", () => {
     await state.controller.initialize();
 
     const refresh = state.controller.refresh();
-    oldPreview.resolve(preview("Outdated preview"));
+    oldPreview.resolve(preview("Outdated preview", "one"));
     await settle();
     expect(state.controller.preview).toBeNull();
 
@@ -308,6 +329,7 @@ describe("virtual branch navigator", () => {
   });
 
   test("filters live, restores an escaped draft, and exposes empty results", async () => {
+
     const state = harness();
     await state.controller.initialize();
     await state.controller.handleKeypress("/", key("/"), "pass", 20, false);
@@ -324,6 +346,67 @@ describe("virtual branch navigator", () => {
     }
     await state.controller.handleKeypress("", key("return"), "pass", 20, false);
     expect(state.controller.notice()).toBe("No rows match “missing”");
+  });
+  test("routes adapted targets and removes records with deterministic adjacent selection", async () => {
+    const state = harness(
+      [row("record-one"), row("record-two"), row("record-three")],
+      async (item) => preview(
+        `Target ${item.canonicalId}`,
+        `target-${item.canonicalId}`,
+      ),
+      undefined,
+      true,
+    );
+    await state.controller.initialize();
+    await settle();
+    await state.controller.handleKeypress("", key("down"), "pass", 20, false);
+    await settle();
+
+    await state.controller.handleKeypress("R", key("r", { shift: true }), "pass", 20, false);
+    expect(state.calls.revealed).toEqual(["target-record-two"]);
+  });
+
+  test("removes the selected bookmark record and chooses the next surviving row", async () => {
+    const state = harness(
+      [row("one"), row("two"), row("three")],
+      undefined,
+      undefined,
+      true,
+    );
+    await state.controller.initialize();
+    await settle();
+    await state.controller.handleKeypress("", key("down"), "pass", 20, false);
+    await settle();
+
+    await state.controller.handleKeypress("", key("m", { meta: true }), "pass", 20, false);
+    await settle();
+
+    expect(state.calls.removed).toEqual(["two"]);
+    expect(state.controller.visibleRows.map((item) => item.canonicalId)).toEqual(["one", "three"]);
+    expect(state.controller.selectedRow?.canonicalId).toBe("three");
+    expect(state.controller.status).toBe("Bookmark removed");
+  });
+
+  test("keeps unavailable bookmark targets inert but removable", async () => {
+    const state = harness(
+      [row("missing-record")],
+      async () => ({
+        document: preview("Unavailable bookmark", "unavailable").document,
+        target: null,
+        unavailableReason: "Bookmark target is missing",
+      }),
+      undefined,
+      true,
+    );
+    await state.controller.initialize();
+    await settle();
+
+    await state.controller.handleKeypress("", key("return"), "pass", 20, false);
+    expect(state.controller.destinationChooserState.active).toBe(false);
+    expect(state.controller.status).toBe("Bookmark target is missing");
+
+    await state.controller.handleKeypress("", key("m", { meta: true }), "pass", 20, false);
+    expect(state.calls.removed).toEqual(["missing-record"]);
   });
 
   test("uses the shared destination chooser and closes only after a successful open", async () => {
@@ -415,7 +498,7 @@ describe("virtual branch navigator", () => {
       "> [!note]+ Shared preview",
       "> Rendered callout body",
     ].join("\n");
-    const state = harness([row("one")], async () => preview(content, content));
+    const state = harness([row("one")], async () => preview(content, "one", content));
     await state.controller.initialize();
     await settle();
 
@@ -478,6 +561,7 @@ describe("virtual branch navigator", () => {
     const childScreenRow = rendered.mouseTargets.findIndex((target) => target?.rowId === child.rowId);
     await state.controller.handleMouse(`\x1b[<0;4;${childScreenRow + 1}M`, rendered);
     expect(state.controller.selectedRow?.canonicalId).toBe("child");
+    await settle();
 
     await state.controller.handleMouse(`\x1b[<16;4;${childScreenRow + 1}M`, rendered);
     expect(state.controller.destinationChooserState.active).toBe(true);

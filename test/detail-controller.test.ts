@@ -98,6 +98,8 @@ interface Harness {
     propertyInspectorPanes: string[];
     backlinkPeeks: Array<Parameters<DetailEffects["openBacklinkPeek"]>[0]>;
     virtualNavigators: string[];
+    virtualNavigatorAdapters: Array<"bookmark" | undefined>;
+    bookmarkToggles: string[];
     openedDetails: Array<{
       blockId: string;
       direction: "right" | "down";
@@ -138,6 +140,7 @@ function createHarness(
   let queryResults: VisibleBlockCollection[] = [];
   let backlinkResults: BacklinkCollection[] = [];
   let focusError: Error | null = null;
+  let bookmarkRecord: Block | null = null;
   let pageQueryResults: PageAddressCollection[] = [];
   const calls: Harness["calls"] = {
     selections: 0,
@@ -162,6 +165,8 @@ function createHarness(
     backlinkPeeks: [],
     openedDetails: [],
     virtualNavigators: [],
+    virtualNavigatorAdapters: [],
+    bookmarkToggles: [],
     copiedTexts: [],
   };
   const effects: DetailEffects = {
@@ -340,8 +345,33 @@ function createHarness(
       calls.propertyInspectorPanes.push(blockId);
       return "pane-inspector";
     },
-    openVirtualBranchNavigator(viewId) {
+    openVirtualBranchNavigator(viewId, adapter) {
       calls.virtualNavigators.push(viewId);
+      calls.virtualNavigatorAdapters.push(adapter);
+    },
+    async bookmarkStatus(targetBlockId) {
+      return {
+        root: makeBlock({ id: "bookmarks-root", text: "Bookmarks" }),
+        targetBlockId,
+        record: bookmarkRecord,
+      };
+    },
+    async toggleBookmark(targetBlockId) {
+      calls.bookmarkToggles.push(targetBlockId);
+      bookmarkRecord = bookmarkRecord
+        ? null
+        : makeBlock({ id: "bookmark-record", text: "Bookmark record" });
+      return {
+        bookmarked: bookmarkRecord !== null,
+        record: bookmarkRecord ?? makeBlock({ id: "bookmark-record", deletedAt: "deleted" }),
+        root: makeBlock({ id: "bookmarks-root", text: "Bookmarks" }),
+        target: selection.selected?.id === targetBlockId
+          ? selection.selected
+          : makeBlock({ id: targetBlockId }),
+      };
+    },
+    async bookmarksRoot() {
+      return makeBlock({ id: "bookmarks-root", text: "Bookmarks" });
     },
   };
   return {
@@ -595,6 +625,24 @@ describe("detail controller projection and deferred refresh", () => {
     await ordinary.controller.dispatch({ type: "virtual-branch.open" }, viewport);
     expect(ordinary.calls.virtualNavigators).toEqual([]);
     expect(ordinary.controller.state.status).toBe("Current block is not a virtual branch");
+  });
+
+  test("toggles the current bookmark and opens its adapted navigator", async () => {
+    const target = makeBlock({ id: "bookmark-target", text: "Bookmark target" });
+    const harness = createHarness(target);
+    await harness.controller.initialize();
+
+    await harness.controller.dispatch({ type: "bookmark.toggle" }, viewport);
+    expect(harness.calls.bookmarkToggles).toEqual([target.id]);
+    expect(harness.controller.state.status).toBe("Bookmarked");
+
+    await harness.controller.dispatch({ type: "bookmark.toggle" }, viewport);
+    expect(harness.controller.state.status).toBe("Bookmark removed");
+
+    await harness.controller.dispatch({ type: "bookmarks.open" }, viewport);
+    expect(harness.calls.virtualNavigators).toEqual(["bookmarks-root"]);
+    expect(harness.calls.virtualNavigatorAdapters).toEqual(["bookmark"]);
+    expect(harness.controller.state.context.selected?.id).toBe(target.id);
   });
 
   test("keeps navigation history local and loads deleted targets read-only", async () => {

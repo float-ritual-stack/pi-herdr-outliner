@@ -25,7 +25,7 @@ The project started as a small Friday-night experiment and grew into a durable w
 
 - SQLite-backed hierarchical blocks with stable UUIDs, sibling order, authors, timestamps, and one canonical graph per workspace root.
 - Workspace-isolated service and runtime paths.
-- JSON-lines RPC protocol v33 over a Unix socket.
+- JSON-lines RPC protocol v34 over a Unix socket.
 - Reactive canonical content/view broadcasts, per-process Tree/Detail registration with Detail lock availability, exact-client UI commands, and source-aware `preview | open | reveal` navigation.
 - Each Tree owns its cursor, occurrence selection, filter, viewport, collapsed rows, multiline expansion, explicit-navigation history, and browsing context; moving a Tree previews only in the first unlocked same-tab Detail and never replaces a locked anchor.
 - Indexed `[property::value]` metadata with optimistic property patching and catalog queries.
@@ -38,6 +38,7 @@ The project started as a small Friday-night experiment and grew into a durable w
 - Agent-created blocks retain immutable creator provenance. Every later text or property mutation records its own `user`, `agent`, or `system` identity plus available actor, session, and task IDs, so edit attribution never depends on the creator.
 - Recoverable deletion preserves canonical structure and identity, excludes Trash content from normal queries/completions, and requires explicit identifier-confirmed purge.
 - Idempotent zero-context-loss Tree capture writes ordinary canonical children under one stable workspace Inbox without moving selection or navigation history.
+- Canonical bookmarks use one strict record per target beneath the durable Bookmarks system view; Tree and Detail toggle them optimistically, and the generic split navigator resolves each record back to its live target without rewriting target text.
 - Client-local multiline-expanded Tree rows support viewport-sized intra-block PageUp/PageDown without changing the Tree cursor.
 - Pi Markdown preview with line, page, endpoint, and mouse/trackpad scrolling.
 - Detail renders source-spanned Markdown, nested Obsidian callouts, generated embeds, Backlinks, and a structured property inspector through one PreviewRegion focus/action model while canonical source remains authoritative.
@@ -314,6 +315,8 @@ cancel route rejects the entire candidate and preserves the prior bindings.
 | `o` | Open the first exact `((block-id))` or symbolic `[[address]]` reference in the first unlocked Detail |
 | `R` | Reveal this row's canonical physical source, clearing filters, expanding its ancestors, and focusing this Tree |
 | `Option+Shift+R` | Reveal the first authored reference in this Tree |
+| `Shift+V` | Open the selected virtual branch in the generic split navigator |
+| `Option+M` / `Option+Shift+M` | Toggle a bookmark for the selected block / open Bookmarks |
 | `L` | Explain that locking is controlled from a Detail pane |
 | `Option+Left` / `Option+Right` | Move backward / forward through block navigation history |
 | `/` | Filter visible blocks |
@@ -380,6 +383,8 @@ Projected virtual occurrences deliberately constrain hierarchy and collapse. Bra
 | `o` | Open the first authored reference in the shared destination chooser |
 | `R` | Reveal the block currently shown by this Detail in its paired or unique same-tab Tree |
 | `Option+Shift+R` | Reveal the first authored reference in the paired or unique same-tab Tree |
+| `Shift+V` | Open the current virtual branch in the generic split navigator |
+| `Option+M` / `Option+Shift+M` | Toggle a bookmark for the current block / open Bookmarks |
 | `L`, `i`, `Ctrl+L`, or `Command/Meta+L` | Lock this block as an anchor, or unlock the Detail for previews and opens |
 | `Option+Shift+Right` / `Option+Shift+Down` | Open the current target in a new independent Detail to the right / below |
 | `Option+Left` / `Option+Right` | Move backward / forward through this Detail's local history without changing lock state |
@@ -655,6 +660,23 @@ list and preview.
 persisted occurrence ranks. Timestamp-sorted branches disable manual occurrence
 reorder. Contextual descendants never participate. Canonical parent/position
 order stays unchanged, and ranks survive temporary query mismatches.
+
+### Bookmarks
+
+Bookmarks are ordinary canonical records under the single
+`[system-view::bookmarks]` virtual-branch root. `Option+M` toggles the current
+Tree or Detail target; removal moves only the bookmark record to Trash, while
+the target remains unchanged. Each active record has one `[type::bookmark]`,
+one `[target::<canonical-block-id>]`, and one
+`[bookmark-created::<ISO-UTC>]`; its display label is captured separately from
+the stable target identity, and child blocks remain available for notes.
+
+`Option+Shift+M` opens the same navigator with the bookmark adapter. Root rows
+preview and route to the current target, so later target renames and moves
+remain valid. Missing or trashed targets are explicit and cannot be opened or
+revealed; `Option+M` in the popup removes the selected bookmark record and
+chooses the deterministic adjacent row. Default record order is creation order,
+while ordinary virtual-occurrence ranks provide optional manual order.
 
 ## Agent integration
 

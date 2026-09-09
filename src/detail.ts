@@ -41,6 +41,8 @@ import {
   type AttentionClientState,
   type BacklinkCollection,
   type Block,
+  type BookmarkStatus,
+  type BookmarkToggleReceipt,
   type BrowsingContextState,
   type PageAddressCollection,
   type OutlinerServiceStatus,
@@ -155,14 +157,28 @@ const effects: DetailEffects = {
       ...input,
     });
   },
-  openVirtualBranchNavigator(viewId) {
+  openVirtualBranchNavigator(viewId, adapter) {
     openVirtualBranchNavigatorPopup({
       workspaceRoot: paths.workspaceRoot,
       browsingContextId,
       sourceClientId: clientId,
       sourceRole: "detail",
       viewId,
+      ...(adapter ? { adapter } : {}),
     });
+  },
+  bookmarkStatus(targetBlockId) {
+    return client.request<BookmarkStatus>({ action: "bookmarks.status", targetBlockId });
+  },
+  toggleBookmark(targetBlockId, expectedRecordId) {
+    return client.request<BookmarkToggleReceipt>({
+      action: "bookmarks.toggle",
+      targetBlockId,
+      expectedRecordId,
+    });
+  },
+  bookmarksRoot() {
+    return client.request<Block>({ action: "bookmarks.root" });
   },
   openDetailPane: openTargetInNewDetail,
   copyText(text) {

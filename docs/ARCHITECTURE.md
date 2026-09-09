@@ -545,10 +545,11 @@ Canonical deletion does not choose a replacement selection or write navigation h
 
 Normal traversal, workspace snapshots, bounded/ranked queries, property catalogs, completions, goto candidates, and virtual branches centrally require `effective_deleted_root_id IS NULL`. Exact `get` remains identity-aware and can inspect a tombstone. Mutation APIs reject effectively deleted blocks except explicit Trash operations.
 
-The store ensures one ordinary canonical system view:
+The store ensures two canonical system views:
 
 ```text
 Trash [type::virtual-branch] [system-view::trash] [query::deleted=true]
+Bookmarks [type::virtual-branch] [system-view::bookmarks] [query::type=bookmark] [limit::1000] [summary-properties::target,bookmark-created]
 ```
 
 The special `deleted=true` query returns direct deletion roots only. It is read-only because it has no create configuration. Root rows include an effective descendant count; Detail previews deleted selection read-only. `r` clears only the selected root's direct marker, so independently deleted descendants stay deleted. `p` requires the exact work ID or eight-character block prefix before physical purge.
@@ -602,6 +603,7 @@ persisted ranks, and disable manual occurrence reorder. Rank rows survive
 temporary query mismatches and cascade when either the branch definition or
 canonical block is deleted.
 
+
 The generic virtual-branch navigator is a manifest-owned transient Herdr popup
 launched from either Tree or Detail with the definition ID, invoking client, and
 browsing context. It runs `projectVirtualBranches` over canonical definitions so
@@ -627,6 +629,40 @@ canonical data, or ranks; chooser `Esc` first dismisses the bound destination.
 Wide frames show list and Detail preview together; narrow frames retain both
 surfaces behind an explicit `Tab` toggle. Keyboard and SGR mouse selection,
 disclosure, scroll, and activation share row identity and routing semantics.
+
+## Bookmarks
+
+`bookmarks.toggle` creates or recoverably deletes one direct canonical child of
+the Bookmarks system view. A valid active record has exactly one
+`[type::bookmark]`, `[target::<canonical-block-id>]`, and
+`[bookmark-created::<ISO-UTC>]`; the authored timestamp must equal the record's
+database `created_at`. An optional single `[bookmark-label::…]` captures display
+text, defaulting to the target title at creation. Label metadata rejects line
+breaks and property delimiters. Prose and child blocks carry notes without
+overloading the identity properties.
+
+The store resolves records by stable target UUID, so target rename and move do
+not alter bookmark identity or text. Active duplicate targets, malformed
+records, misplaced records, duplicate system roots, and stale expected record
+or update identities fail explicitly. Removing a bookmark uses ordinary soft
+deletion and leaves both the target and bookmark subtree recoverable in Trash.
+Resolution distinguishes active, trashed, and missing targets.
+
+The Bookmarks root is an unsorted virtual branch: sequential child positions
+give creation order by default, and existing persisted occurrence ranks can
+optionally override that order. Tree and Detail use independently configurable
+`*.bookmark.toggle` and `*.bookmarks.open` action IDs. `Alt+M` and
+`Alt+Shift+M` are the defaults; `Ctrl+Shift+M` is intentionally unbound.
+Successful toggle/remove requests emit ordinary content events for the bookmark
+record.
+
+The PIE-221 popup accepts a bounded `bookmark` adapter. Bookmark root
+occurrences load their target through `bookmarks.resolve`, then reuse the shared
+Detail read projection, reference resolution, renderer, and destination
+chooser. Contextual note descendants retain ordinary canonical navigation.
+Unavailable root targets render an explicit inert preview. Popup `Alt+M`
+optimistically removes the owning root record, reprojects, and retains the next
+row at the prior index or the previous surviving row.
 
 ## Detail rendering and editing invariants
 

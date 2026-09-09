@@ -90,6 +90,16 @@ describe("Outliner action keymap", () => {
     expect(keymap.action("detail.reference.reveal").defaultChords).toEqual(["Alt+Shift+R"]);
     expect(keymap.action("tree.virtual-branch.open").defaultChords).toEqual(["Shift+V"]);
     expect(keymap.action("detail.virtual-branch.open").defaultChords).toEqual(["Shift+V"]);
+    expect(keymap.action("tree.bookmark.toggle").defaultChords).toEqual(["Alt+M"]);
+    expect(keymap.action("detail.bookmark.toggle").defaultChords).toEqual(["Alt+M"]);
+    expect(keymap.action("tree.bookmarks.open").defaultChords).toEqual(["Alt+Shift+M"]);
+    expect(keymap.action("detail.bookmarks.open").defaultChords).toEqual(["Alt+Shift+M"]);
+    expect(keymap.canonicalize(
+      "tree",
+      "browse",
+      "",
+      { name: "m", ctrl: true, shift: true },
+    ).actionId).toBeNull();
   });
 
 

@@ -40,6 +40,8 @@ import { TextBuffer } from "./text-buffer";
 import type {
   AttentionClientState,
   Block,
+  BookmarkStatus,
+  BookmarkToggleReceipt,
   BlockCollectionCompleteness,
   OutlinerEvent,
   OutlinerNavigationIntent,
@@ -131,7 +133,7 @@ export interface TreeControllerEffects {
   readonly filesystem: TreeFilesystem;
   createDetailPane(blockId: string, direction?: "right" | "down"): Promise<void>;
   openCapturePopup(capturedFromBlockId: string): Promise<void>;
-  openVirtualBranchNavigator(viewId: string): void | Promise<void>;
+  openVirtualBranchNavigator(viewId: string, adapter?: "bookmark"): void | Promise<void>;
   focusSelf(): void;
   terminalWidth(): number;
   terminalHeight(): number;
@@ -1286,6 +1288,39 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         try {
           await effects.openVirtualBranchNavigator(selected.canonicalId);
           status = `Opened virtual navigator for ${blockDisplayTitle(selected.block)}`;
+        } catch (error) {
+          status = errorMessage(error);
+        }
+      }
+      effects.invalidate();
+      return;
+    }
+    if (actionId === "tree.bookmarks.open") {
+      try {
+        const root = await effects.request<Block>({ action: "bookmarks.root" });
+        await effects.openVirtualBranchNavigator(root.id, "bookmark");
+        status = "Opened Bookmarks";
+      } catch (error) {
+        status = errorMessage(error);
+      }
+      effects.invalidate();
+      return;
+    }
+    if (actionId === "tree.bookmark.toggle") {
+      if (!selected) {
+        status = "No block selected";
+      } else {
+        try {
+          const bookmark = await effects.request<BookmarkStatus>({
+            action: "bookmarks.status",
+            targetBlockId: selected.canonicalId,
+          });
+          const receipt = await effects.request<BookmarkToggleReceipt>({
+            action: "bookmarks.toggle",
+            targetBlockId: selected.canonicalId,
+            expectedRecordId: bookmark.record?.id ?? null,
+          });
+          status = receipt.bookmarked ? "Bookmarked" : "Bookmark removed";
         } catch (error) {
           status = errorMessage(error);
         }
