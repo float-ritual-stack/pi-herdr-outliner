@@ -661,7 +661,7 @@ interface DetailAnnotationGroup {
   startLine: number;
   endLine: number;
   sourceLineCount: number;
-  sourceSpan: NonNullable<PreviewRegion["sourceSpan"]>;
+  sourceSpan: PreviewRegion["sourceSpan"];
   threads: AnnotationThread[];
 }
 
@@ -853,16 +853,40 @@ function detailAnnotationGroups(
   state: Readonly<DetailState>,
   renderedLineForAuthoredLine: (line: number) => number,
   renderedSourceLineCount: number,
+  renderedDocumentText: string,
 ): DetailAnnotationGroup[] {
   const selected = state.context.selected;
   if (!selected) return [];
   const starts = sourceLineStarts(selected.text);
-  const groups = new Map<number, DetailAnnotationGroup>();
+  const renderedStarts = sourceLineStarts(renderedDocumentText);
+  const groups = new Map<string, DetailAnnotationGroup>();
   for (const thread of state.annotationThreads) {
-    if (
-      thread.target.kind !== "block" ||
-      thread.target.sourceBlockId !== selected.id
-    ) continue;
+    if (thread.target.sourceBlockId !== selected.id) continue;
+    if (thread.target.kind === "passage") {
+      const quoteStart = renderedDocumentText.indexOf(thread.target.observation.quote);
+      const startLine = quoteStart < 0 ? 0 : sourceLineAt(renderedStarts, quoteStart);
+      const quoteEnd = quoteStart < 0
+        ? 0
+        : quoteStart + Math.max(0, thread.target.observation.quote.length - 1);
+      const endLine = quoteStart < 0 ? startLine : sourceLineAt(renderedStarts, quoteEnd);
+      const key = `observed:${startLine}`;
+      const existing = groups.get(key);
+      if (existing) {
+        existing.endLine = Math.max(existing.endLine, endLine);
+        existing.threads.push(thread);
+      } else {
+        groups.set(key, {
+          regionId: `annotation:${selected.id}:observed:${startLine}`,
+          startLine,
+          endLine,
+          sourceLineCount: renderedSourceLineCount,
+          threads: [thread],
+          sourceSpan: null,
+        });
+      }
+      continue;
+    }
+    if (thread.target.kind !== "block") continue;
     const anchor = thread.target.anchor;
     let markerOffset = anchor.start;
     while (
@@ -879,23 +903,24 @@ function detailAnnotationGroups(
     );
     const startLine = renderedLineForAuthoredLine(authoredStartLine);
     const endLine = renderedLineForAuthoredLine(authoredEndLine);
-    const existing = groups.get(startLine);
+    const key = `source:${startLine}`;
+    const existing = groups.get(key);
     if (existing) {
       existing.endLine = Math.max(existing.endLine, endLine);
-      existing.sourceSpan.start = Math.min(existing.sourceSpan.start, anchor.start);
-      existing.sourceSpan.end = Math.max(existing.sourceSpan.end, anchor.end);
-      existing.sourceSpan.startLine = Math.min(
-        existing.sourceSpan.startLine,
+      existing.sourceSpan!.start = Math.min(existing.sourceSpan!.start, anchor.start);
+      existing.sourceSpan!.end = Math.max(existing.sourceSpan!.end, anchor.end);
+      existing.sourceSpan!.startLine = Math.min(
+        existing.sourceSpan!.startLine,
         authoredStartLine,
       );
-      existing.sourceSpan.endLine = Math.max(
-        existing.sourceSpan.endLine,
+      existing.sourceSpan!.endLine = Math.max(
+        existing.sourceSpan!.endLine,
         authoredEndLine,
       );
       existing.threads.push(thread);
       continue;
     }
-    groups.set(startLine, {
+    groups.set(key, {
       regionId: `annotation:${selected.id}:${authoredStartLine}`,
       startLine,
       endLine,
@@ -1510,6 +1535,7 @@ export class DetailPiPreviewLayout extends VStack {
         this.state,
         renderedLineForAuthoredLine,
         this.renderedDocumentText.split(/\r?\n/).length,
+        this.renderedDocumentText,
       )
       : [];
     this.annotationPreview.setGroups(annotationGroups);

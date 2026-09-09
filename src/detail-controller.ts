@@ -83,6 +83,9 @@ import type {
   PageAddressCollection,
   OutlinerEvent,
   PropertyPatchOperation,
+  RenderedPassageObservation,
+  RenderedPassageProjection,
+  RenderedSelectionCapture,
   SelectionContext,
   OutlinerNavigationDispatch,
   OutlinerNavigationResolution,
@@ -466,6 +469,57 @@ export function selectedDetailFileRange(state: Readonly<DetailState>): DetailLin
   };
 }
 
+export function renderedSelectionAnnotationTarget(
+  state: Pick<
+    DetailState,
+    "context" | "resolvedSelectedText" | "projectedSelectedText"
+  >,
+  capture: RenderedSelectionCapture,
+): AnnotationTarget {
+  const selected = state.context.selected;
+  if (!selected) throw new Error("No block is open in this Detail");
+  if (selected.id !== capture.hostBlockId) {
+    throw new Error("The Detail target changed after the rendered selection was captured");
+  }
+  const projected = state.projectedSelectedText !== selected.text;
+  const resolved = state.resolvedSelectedText !== state.projectedSelectedText;
+  const projection: RenderedPassageProjection = projected && resolved
+    ? "mixed"
+    : projected
+      ? "generated"
+      : resolved
+        ? "resolved"
+        : "canonical";
+  const { snapshotText, ...evidence } = capture;
+  const observation: RenderedPassageObservation = { ...evidence, projection };
+  if (projection === "canonical") {
+    const snapshotStart = snapshotText.indexOf(capture.quote);
+    const snapshotMatchIsUnique =
+      snapshotStart >= 0 &&
+      snapshotText.indexOf(capture.quote, snapshotStart + 1) < 0;
+    const start = selected.text.indexOf(capture.quote);
+    if (
+      snapshotMatchIsUnique &&
+      start >= 0 &&
+      selected.text.indexOf(capture.quote, start + 1) < 0
+    ) {
+      return {
+        kind: "block",
+        sourceBlockId: selected.id,
+        anchor: createAnnotationAnchor(
+          selected.text,
+          start,
+          start + capture.quote.length,
+          selected.updatedAt,
+          annotationSourceHash(selected.text),
+        ),
+        observation,
+      };
+    }
+  }
+  return { kind: "passage", sourceBlockId: selected.id, observation };
+}
+
 function detailBufferRangeOffsets(buffer: Readonly<TextBuffer>): { start: number; end: number } | null {
   const range = buffer.selectionRange;
   if (!range) return null;
@@ -605,7 +659,7 @@ export function createDetailController(
       if (getProperty(block.properties, "type")?.startsWith("annotation")) {
         try {
           const annotation = parseAnnotationBlock(block);
-          if (annotation.target.kind === "block") {
+          if (annotation.target.kind !== "file") {
             state.referencedFile = null;
             return;
           }
@@ -1223,6 +1277,45 @@ export function createDetailController(
       : `Locked · commenting on source range ${target.anchor.start}-${target.anchor.end}`;
   };
 
+  const beginRenderedComment = async (
+    capture: RenderedSelectionCapture,
+  ): Promise<void> => {
+    const selected = state.context.selected;
+    if (!selected || selected.effectiveDeletedRootId) {
+      state.status = "Block is in Trash; restore before adding annotations";
+      return;
+    }
+    if (capture.detailClientId !== effects.clientId) {
+      state.status = "Rendered selection targeted a different Detail client";
+      return;
+    }
+    if (capture.contextId !== effects.browsingContextId) {
+      state.status = "Rendered selection targeted a different browsing context";
+      return;
+    }
+    let target: AnnotationTarget;
+    try {
+      target = renderedSelectionAnnotationTarget(state, capture);
+    } catch (error) {
+      state.status = errorMessage(error);
+      return;
+    }
+    await setLocked(true);
+    state.annotationDraft = {
+      requestId: crypto.randomUUID(),
+      target,
+      returnMode: "preview",
+    };
+    state.buffer = new TextBuffer();
+    state.editorVisualOffset = 0;
+    state.draftPreviewLinked = false;
+    state.completion = null;
+    state.mode = "comment";
+    state.status = target.kind === "block"
+      ? `Locked · rendered quote + source range ${target.anchor.start}-${target.anchor.end}`
+      : "Locked · commenting on the captured rendered passage";
+  };
+
   const focusOutliner = async (announce: boolean): Promise<void> => {
     try {
       await effects.focusOutliner();
@@ -1274,7 +1367,9 @@ export function createDetailController(
         state.selectionAnchor = null;
         state.status = draft.target.kind === "file"
           ? `Annotation added for lines ${draft.target.startLine}-${draft.target.endLine}`
-          : `Annotation added for source range ${draft.target.anchor.start}-${draft.target.anchor.end}`;
+          : draft.target.kind === "block"
+            ? `Annotation added for source range ${draft.target.anchor.start}-${draft.target.anchor.end}`
+            : "Annotation added for captured rendered passage";
       }
       if (!isBufferMode() && state.refreshPending) await refreshPendingTarget();
     } catch (error) {
@@ -1961,6 +2056,11 @@ export function createDetailController(
           break;
         }
         await loadBlock(annotation.target.sourceBlockId, true);
+        if (annotation.target.kind === "passage") {
+          state.mode = "preview";
+          state.status = "Revealed observed host block · no canonical source range";
+          break;
+        }
         if (annotation.target.kind === "file") {
           if (!state.referencedFile) {
             state.status = `Referenced file unavailable: ${annotation.target.filePath}`;
@@ -2288,6 +2388,18 @@ export function createDetailController(
       if (event.domain === "ui") {
         const command = event.command;
         if (!command || command.targetClientId !== effects.clientId) return;
+        if (command.command === "comment.selection") {
+          if (!command.renderedSelection) {
+            state.status = "Rendered selection payload is missing";
+          } else if (isBufferMode()) {
+            state.status = "Finish or cancel the current editor before commenting";
+          } else {
+            await beginRenderedComment(command.renderedSelection);
+          }
+          effects.focusSelf();
+          emit();
+          return;
+        }
         if (command.command === "backlinks.select") {
           if (
             command.targetBlockId === state.targetBlockId &&

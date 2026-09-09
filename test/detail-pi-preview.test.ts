@@ -624,6 +624,47 @@ describe("Pi Markdown detail preview", () => {
       layout.scrollView.render(72).map(stripTerminalSequences).join("\n"),
     ).toContain("Check this range.");
   });
+  test("shows observed-only passage threads in the default Detail preview", () => {
+    const rendered = "Hub\n\nGenerated result";
+    const detail = state(rendered, "Hub\n\n!((virtual-branch))");
+    const target = {
+      kind: "passage" as const,
+      sourceBlockId: "block-1",
+      observation: {
+        quote: "Generated result",
+        capturedAt: "2026-01-02T03:04:05.000Z",
+        hostBlockId: "block-1",
+        paneId: "w1:p2",
+        contentRevision: 42,
+        contextId: "context-1",
+        detailClientId: "detail-1",
+        validation: "herdr-keybinding" as const,
+        projection: "generated" as const,
+      },
+    };
+    detail.annotationThreads = [{
+      block: block("annotation-observed", ""),
+      target,
+      body: "Discuss the generated result.",
+      source: "user",
+      lifecycle: "open",
+      anchorState: "observed",
+      replies: [],
+    }];
+    const layout = previewLayout(detail);
+
+    const collapsed = layout.render(72).map(stripTerminalSequences);
+    const region = detail.previewRegions.regions.find((candidate) =>
+      candidate.kind === "annotation"
+    )!;
+    expect(region.sourceSpan).toBeNull();
+    expect(collapsed.find((line) => line.includes("Generated result"))).toStartWith("+ ");
+    expect(togglePreviewRegionDisclosure(detail.previewRegions, region.id)).toBe(true);
+    expect(layout.render(72).map(stripTerminalSequences).join("\n")).toContain(
+      "Discuss the generated result.",
+    );
+  });
+
 
   test("maps source clicks around inline panels and ignores generated rows", () => {
     const raw = "Title\n\ntarget phrase\n\nafter";

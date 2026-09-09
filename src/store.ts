@@ -700,7 +700,10 @@ export class OutlinerStore {
         (query.includeResolved !== false || annotation.lifecycle !== "resolved")
       )
       .sort((left, right) =>
-        left.target.anchor.start - right.target.anchor.start ||
+        (left.target.kind === "passage" ? Number.MAX_SAFE_INTEGER : left.target.anchor.start) -
+          (right.target.kind === "passage"
+            ? Number.MAX_SAFE_INTEGER
+            : right.target.anchor.start) ||
         left.block.createdAt.localeCompare(right.block.createdAt) ||
         left.block.id.localeCompare(right.block.id)
       );
@@ -739,6 +742,7 @@ export class OutlinerStore {
     const records = threads.flatMap((thread) => [thread, ...thread.replies]);
     this.database.transaction(() => {
       for (const record of records) {
+        if (record.target.kind === "passage") continue;
         const result = reanchorAnnotation(
           record.target.anchor,
           input.sourceText,

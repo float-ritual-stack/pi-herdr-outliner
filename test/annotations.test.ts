@@ -43,6 +43,7 @@ describe("durable annotation anchors", () => {
 
     const parsed = parseAnnotationBlock(annotationBlock(text));
     expect(parsed.target.kind).toBe("block");
+    if (parsed.target.kind !== "block") throw new Error("Expected a block annotation");
     expect(parsed.target.anchor).toEqual(anchor);
     expect(parsed.target.anchor.end - parsed.target.anchor.start).toBe(anchor.excerpt.length);
     expect(parsed.body).toBe("Keep the grapheme and combining mark exact.");
@@ -90,5 +91,38 @@ describe("durable annotation anchors", () => {
     const moved = reanchorAnnotation(anchor, "zz target q zz target q", "v2");
     expect(moved.state).toBe("ambiguous");
     expect(reanchorAnnotation(anchor, "gone", "v3").state).toBe("orphaned");
+  });
+
+  test("round-trips an immutable rendered passage without a fabricated source anchor", () => {
+    const observation = {
+      quote: "Resolved [type::roadmap-item]\n[target-kind::file] result",
+      capturedAt: "2026-01-02T03:04:05.000Z",
+      hostBlockId: "22222222-2222-4222-8222-222222222222",
+      paneId: "w1:p2",
+      contentRevision: 42,
+      contextId: "context-1",
+      detailClientId: "detail-1",
+      validation: "herdr-keybinding" as const,
+      projection: "mixed" as const,
+    };
+    const text = formatAnnotation({
+      target: {
+        kind: "passage",
+        sourceBlockId: observation.hostBlockId,
+        observation,
+      },
+      body: "Comment on what was shown.",
+      source: "user",
+    });
+
+    expect(text.split("\n")[0]).toContain("\\[type::roadmap-item]");
+    const parsed = parseAnnotationBlock(annotationBlock(text));
+    expect(parsed.target).toEqual({
+      kind: "passage",
+      sourceBlockId: observation.hostBlockId,
+      observation,
+    });
+    expect(parsed.anchorState).toBe("observed");
+    expect(parsed.block.properties.some(({ key }) => key === "anchor-start")).toBe(false);
   });
 });

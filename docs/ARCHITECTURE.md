@@ -689,11 +689,15 @@ row at the prior index or the previous surviving row.
 
 Editor undo/redo stores at most 100 per-session snapshots. Consecutive typing, backspace, and forward delete coalesce; cursor and selection state restore with text; divergent edits invalidate redo. New edit/comment sessions start with empty history. Modal editing, registers, macros, and programmable operator systems remain explicit non-goals for the custom buffer.
 
-## Durable source annotations
+## Durable source and rendered-passage annotations
 
-Detail annotates canonical block text through a locked, read-only selection mode and referenced files through line-range selection. Both paths create ordinary canonical child blocks; replies are children of a root annotation. The target stores renderer-neutral UTF-16 start/end offsets, an encoded exact excerpt, bounded before/after context, source version/hash, provenance, lifecycle, anchor state, and file identity/lines when applicable. Annotation content never mutates the target block or file.
+Detail has two explicit annotation targets. Source targets keep the existing locked authored-text selection for canonical blocks and line-range selection for referenced files. They store renderer-neutral UTF-16 start/end offsets, an encoded exact excerpt, bounded before/after context, source version/hash, provenance, lifecycle, anchor state, and file identity/lines when applicable.
 
-Reanchoring trusts offsets only while source version or hash agrees. Changed sources search the excerpt and captured context; one defensible match updates the canonical annotation and every direct reply, while tied matches become `ambiguous` and missing excerpts become `orphaned`. Detail shows compact marker/count summaries, opens the canonical thread, and reveals an anchored block range or file lines exactly. Agent create/reply/batch operations use the same service path; request IDs make replays idempotent and the service validates an entire batch before its transaction.
+Rendered-passage targets arrive from a retained Herdr copy-mode selection. A configured `plugin_action` command causes Herdr's client shell to validate anchor/cursor coordinates and `content_revision` through `command.invoke`; Herdr rejects stale coordinates before starting `float.pi-outliner.comment-selection`. Herdr exposes the validated exact text—but not those private coordinates—in the plugin context. The action accepts only that keybinding handoff, brackets live-Detail discovery with two bounded recent-output `pane.read` snapshots, and rejects changed revision/text/registration or a quote absent from the captured pane history. The service then revalidates pane, Detail client, browsing context, host block, validation method, capture time, and stable-snapshot evidence before broadcasting the command. Herdr copy mode owns multi-viewport selection and edge autoscroll; no clipboard or display server participates.
+
+The Detail classifies the frozen read projection at capture time. A canonical quote with one exact occurrence stores both its immutable rendered observation and the existing source anchor. Resolved, generated, transcluded, mixed, formatted-only, or ambiguous text stores a `passage` target with exact quote, capture time, host block, pane/revision, Detail client, browsing context, validation method, and projection class but no invented anchor. Replies inherit the root target. Projection refreshes never rewrite observations; reveal for an observed-only target returns to its host block.
+
+Both target types create ordinary canonical child blocks; replies are children of a root annotation. Reanchoring trusts source offsets only while source version or hash agrees. Changed sources search the excerpt and captured context; one defensible match updates canonical source targets and their replies, while tied matches become `ambiguous` and missing excerpts become `orphaned`. Observed-only targets remain `observed` and are skipped by source reanchoring. Detail shows exact source markers where an anchor exists, opens either canonical thread, and reveals block/file ranges only when defensible. Agent create/reply/batch operations use the same service path; request IDs make replays idempotent and the service validates an entire batch before its transaction. Annotation content never mutates the target block, file, or projection.
 
 ## Ephemeral attention
 
@@ -716,8 +720,7 @@ broadcasts attention to sibling panes.
 ## Herdr lifecycle
 
 [`src/herdr-open.ts`](../src/herdr-open.ts) enforces service-first startup for
-the three actions exported by the plugin manifest:
-
+the three pane-routing actions exported by the plugin manifest:
 - `open` reuses or opens the service, then focuses the Tree selected by invoking
   pane, unambiguous current tab, workspace, or project. If none exists, it runs
   the same pair creation as `open-here`; ambiguity is an error.
@@ -728,6 +731,12 @@ the three actions exported by the plugin manifest:
 - `open-here` always generates a browsing-context UUID, opens a Tree to the right
   of the invoking pane and a Detail below that Tree with the same UUID, and
   focuses the Tree.
+- `comment-selection` is a pane-context action reached through a Herdr
+  `plugin_action` keybinding from a retained copy-mode selection.
+  [`src/herdr-comment-selection.ts`](../src/herdr-comment-selection.ts) accepts
+  only the revision-validated keybinding handoff, proves a stable invoking pane
+  and Detail registration around two snapshots, and forwards the exact rendered
+  quote plus snapshot evidence to that Detail.
 
 Tree quick capture opens the manifest `capture` entrypoint with Herdr `placement = "popup"` anchored to the active Tree. The popup process reuses the same text-buffer command mapping, layout, and editor-row renderer as Detail; only Ctrl+S save and Esc/Ctrl+C cancellation are wired to `capture.create` and popup exit. It is not a Tree or Detail registry client and never changes browsing context or selection.
 
@@ -763,6 +772,7 @@ src/virtual-branches.ts       projection configuration and rows
 src/detail-main.ts            Detail implementation selector
 src/outliner-links.ts          private URI codec and safe Tree/Markdown link generation
 src/herdr-link-open.ts         Herdr link-handler action using shared goto/reveal
+src/herdr-comment-selection.ts native rendered-selection validation and exact-Detail dispatch
 src/detail-controller.ts      Detail behavior and effects
 src/detail-pi*.ts             Pi TUI preview/input/frame integration
 src/detail-editor-layout.ts   wrapped visual rows and selections

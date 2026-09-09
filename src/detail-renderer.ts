@@ -10,7 +10,11 @@ import {
   decorateAttentionLines,
 } from "./attention-render";
 import { currentAttentionMark } from "./attention";
-import { extractAnnotationBody, parseAnnotationBlock } from "./annotations";
+import {
+  annotationTargetQuote,
+  extractAnnotationBody,
+  parseAnnotationBlock,
+} from "./annotations";
 import { completionWindow } from "./completion";
 import { outlinerLinkUri } from "./outliner-links";
 import { blockDisplayTitle } from "./references";
@@ -274,14 +278,12 @@ export function buildDetailAnnotationView(
   } catch {
     annotation = null;
   }
-  if (annotation?.target.kind === "block") {
-    output.push(
-      `\x1b[2m${fitDynamicText(
-        `Source: block ${annotation.target.sourceBlockId} @${annotation.target.anchor.start}-${annotation.target.anchor.end} · ${annotation.anchorState}`,
-        width,
-      )}\x1b[0m`,
-    );
-    for (const line of annotation.target.anchor.excerpt.split(/\r?\n/)) {
+  if (annotation?.target.kind === "block" || annotation?.target.kind === "passage") {
+    const label = annotation.target.kind === "block"
+      ? `Source: block ${annotation.target.sourceBlockId} @${annotation.target.anchor.start}-${annotation.target.anchor.end} · ${annotation.anchorState}`
+      : `Observed: ${annotation.target.observation.projection} · ${annotation.target.observation.paneId} @ revision ${annotation.target.observation.contentRevision}`;
+    output.push(`\x1b[2m${fitDynamicText(label, width)}\x1b[0m`);
+    for (const line of annotationTargetQuote(annotation.target).split(/\r?\n/)) {
       output.push(`│ ${fitDynamicText(line, Math.max(1, width - 2))}`);
     }
     output.push("─".repeat(width));
@@ -413,7 +415,9 @@ export function renderDetailLines(
         if (output.length >= height - 2) break;
         const range = thread.target.kind === "file"
           ? `${thread.target.filePath}:${thread.target.startLine}-${thread.target.endLine}`
-          : `source ${thread.target.anchor.start}-${thread.target.anchor.end}`;
+          : thread.target.kind === "block"
+            ? `source ${thread.target.anchor.start}-${thread.target.anchor.end}`
+            : `observed ${thread.target.observation.projection}`;
         output.push(
           fitDynamicText(
             `[${index + 1}] ${range} · ${thread.anchorState} · ${thread.lifecycle} — ${thread.body}`,

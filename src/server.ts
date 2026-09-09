@@ -998,6 +998,35 @@ export class OutlinerServer {
             this.store.require(request.command.targetBlockId);
             this.store.require(request.command.sourceBlockId);
           }
+          if (request.command.command === "comment.selection") {
+            const capture = request.command.renderedSelection;
+            if (target.role !== "detail") {
+              throw new Error("Rendered selection comment target must be a Detail client");
+            }
+            if (!capture || !capture.quote.trim()) {
+              throw new Error("Rendered selection comment requires a non-empty quote");
+            }
+            const capturedAtMs = Date.parse(capture.capturedAt);
+            if (
+              capture.validation !== "herdr-keybinding" ||
+              !Number.isInteger(capture.contentRevision) ||
+              capture.contentRevision < 0 ||
+              typeof capture.snapshotText !== "string" ||
+              !Number.isFinite(capturedAtMs) ||
+              new Date(capturedAtMs).toISOString() !== capture.capturedAt
+            ) {
+              throw new Error("Rendered selection evidence is invalid");
+            }
+            if (
+              capture.detailClientId !== target.clientId ||
+              capture.contextId !== target.contextId ||
+              capture.hostBlockId !== target.currentBlockId ||
+              capture.paneId !== target.runtime?.paneId
+            ) {
+              throw new Error("Rendered selection no longer matches the target Detail");
+            }
+            this.store.requireActive(capture.hostBlockId);
+          }
           if (request.command.fragmentId) {
             if (!request.command.blockId) {
               throw new Error("Fragment navigation requires a block ID");

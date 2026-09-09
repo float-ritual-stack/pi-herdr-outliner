@@ -25,7 +25,7 @@ The project started as a small Friday-night experiment and grew into a durable w
 
 - SQLite-backed hierarchical blocks with stable UUIDs, sibling order, authors, timestamps, and one canonical graph per workspace root.
 - Workspace-isolated service and runtime paths.
-- JSON-lines RPC protocol v34 over a Unix socket.
+- JSON-lines RPC protocol v35 over a Unix socket.
 - Reactive canonical content/view broadcasts, per-process Tree/Detail registration with Detail lock availability, exact-client UI commands, and source-aware `preview | open | reveal` navigation.
 - Each Tree owns its cursor, occurrence selection, filter, viewport, collapsed rows, multiline expansion, explicit-navigation history, and browsing context; moving a Tree previews only in the first unlocked same-tab Detail and never replaces a locked anchor.
 - Indexed `[property::value]` metadata with optimistic property patching and catalog queries.
@@ -46,7 +46,7 @@ The project started as a small Friday-night experiment and grew into a durable w
 - Grapheme-safe wrapped Detail editing, word motion, selection, deletion, bounded per-session undo/redo, completion, optimistic save, and whole-session Esc cancellation.
 - Targeted ephemeral attention marks exact block/file source ranges in one addressed Tree or Detail without mutating content, selection, navigation history, or durable annotations. Marks expire, become stale instead of drifting when source changes, retain one current plus bounded supporting cues, and coalesce missed activity into a return summary.
 - Each Detail visibly reports `Unlocked` or `Locked`; unlocked Details form a spatial preview/open pool, while locked Details retain exact context anchors.
-- Durable UTF-16 source-range annotations for blocks and referenced files, with resilient reanchoring, explicit ambiguous/orphan states, threaded replies, lifecycle/promotion links, anchored two-column Detail gutter markers, session-only inline disclosure, and exact-range reveal.
+- Durable UTF-16 source-range annotations for blocks and referenced files plus immutable rendered-passage annotations for generated Detail projections, with resilient reanchoring, explicit anchored/ambiguous/orphaned/observed states, threaded replies, lifecycle/promotion links, exact-range reveal when honest, and host-pane provenance.
 - Herdr-owned pane placement/focus and current-pane recovery, one remembered service pane, per-process live client discovery, and an ephemeral runtime registry.
 - Pi/OMP commands, tools, selection-context injection, canonical `/send-to-outline` capture, and deterministic configured `PREFIX-XXX` work-placeholder nudging.
 
@@ -378,6 +378,7 @@ Projected virtual occurrences deliberately constrain hierarchy and collapse. Bra
 | Peek: configured Detail right/below binding | Open the current preview directly in a new right/down Detail |
 | Chooser: configured Detail right/below binding or `r` / `d`; `Shift+R` / `f` | Split right/down; replace this Detail / use first unlocked Detail |
 | Chooser: `Enter` / `Esc` | Use the default destination / dismiss without navigation |
+| configured Herdr `float.pi-outliner.comment-selection` key | Comment on the current native rendered selection without entering another selection mode |
 | `e` | Lock this Detail and edit raw canonical text |
 | `f` | Open referenced file |
 | `o` | Open the first authored reference in the shared destination chooser |
@@ -447,11 +448,35 @@ uses the first unlocked Detail or falls back to a right split. Back in the
 invoking Detail, outside the popup, pane-level `Shift+R` reveals the current
 Detail block's canonical physical source in Tree.
 
-### Detail source comments
+### Detail rendered-passage and source comments
 
-Press `v` in block preview to begin a locked, read-only selection without replacing or reflowing the rendered reader. Shift-motion or primary-button drag selects an exact authored UTF-16 range; the range stays highlighted in place. `c` mounts a reusable contextual buffer over the bottom of the reader, quotes the selected excerpt, and leaves the resource, layout, and scroll position intact. `Ctrl+S` stores the comment and closes the buffer; `Esc` cancels without creating a block. File view retains line-range selection with the same contextual buffer. Annotation view `r` returns to the source with the resolved block range or file lines selected; ambiguous and orphaned anchors are reported instead of guessed.
+Native Herdr copy-mode selection is the default rendered-passage flow. Bind the
+plugin action through a Herdr `plugin_action` command so the client validates
+its retained anchor/cursor coordinates and content revision through
+`command.invoke` before starting Outliner:
 
-Source selection follows authored text through expanded inline annotations and the Properties panel. Generated panel content and their inserted separators are not source text: clicking them does not move the authored selection.
+```toml
+[[keys.command]]
+key = "prefix+shift+c"
+type = "plugin_action"
+command = "float.pi-outliner.comment-selection"
+description = "Comment on the selected Outliner Detail passage"
+```
+
+Focus an Outliner Detail, enter Herdr copy mode (`prefix+[` by default), select
+the displayed passage once, then press that key. The action accepts only
+Herdr's keybinding handoff, preserves its exact validated text, and brackets
+live-Detail discovery with two identical recent-pane snapshots. It aborts if
+the pane revision, captured output, registered Detail/context/host block
+changes, or the exact quote is absent from that bounded pane history. No
+clipboard is read. A successful action locks that exact Detail and opens the
+compact composer over the existing reader; `Ctrl+S` creates the comment and
+`Esc` cancels without creating anything. Herdr copy mode owns multi-viewport
+selection and continuous edge autoscroll before this handoff.
+
+Canonical plain-text passages retain both the immutable rendered quote and an exact UTF-16 source anchor only when the quote has one unambiguous location in both the unchanged read projection and captured pane snapshot. Resolved references, embeds, query results, transclusions, ambiguous snapshot text, and mixed/generated selections instead retain the rendered quote, capture time, host block, stable pane snapshot revision, Detail client, browsing context, validation method, and projection class without inventing a canonical range. Such comments reveal their observed host block; later projection refreshes never rewrite the quote.
+
+`v` remains a separate, explicit source-comment operation. It freezes the current read projection, maps Shift-motion or primary-button drag to authored UTF-16 text, scrolls and extends continuously when dragging over a viewport edge, and labels copy as authored-source copy. `c` opens the same composer. File view retains line-range source comments. Annotation view `r` selects a defensible block/file source anchor exactly; observed passages reveal only the host block.
 
 ### Detail edit and comment modes
 
@@ -461,9 +486,9 @@ Source selection follows authored text through expanded inline annotations and t
 | `Option+Left/Right`, `Ctrl+Left/Right`, `Option+B/F` | Previous/next word start |
 | `Home` / `End`, `Ctrl+A` / `Ctrl+E` | Physical line start / end |
 | `Shift` + a supported motion | Extend selection |
-| Primary-button drag | Select exact authored text across wrapped rows and Unicode graphemes |
-| `Command+A` or `Ctrl+Shift+A` | Select all |
-| `Ctrl+C` or `Command+C` | Copy the selected authored text through the terminal clipboard |
+| Primary-button drag | Select exact authored text across wrapped rows and Unicode graphemes; dragging over a viewport edge scrolls and extends |
+| `Command+A` or `Ctrl+Shift+A` | Select all authored source |
+| `Ctrl+C` or `Command+C` | Explicitly copy the selected authored source through the terminal clipboard |
 | `Ctrl/Command+Z` | Undo the previous edit group |
 | `Ctrl+Shift+Z` or `Ctrl+Y` | Redo |
 | `Backspace` / `Delete` | Delete selection or one grapheme |
@@ -717,7 +742,7 @@ The project Pi extension is auto-discovered through [`.pi/extensions/outliner.ts
 
 `outliner_query` accepts structured filters such as `{ key: "status", value: "in progress" }`, plus optional text and subtree fields. The service normalizes keys/values and applies the same bounded semantics used by human surfaces. `outliner_focus` targets an explicit or unique live Tree client and returns compact structural context.
 
-Annotation tools use the same canonical child blocks as Detail. Targets carry a block ID or file identity plus UTF-16 offsets, excerpt, bounded before/after context, source version, and hash. Create and batch calls are idempotent; invalid batches create nothing. Replies retain the root target, lifecycle changes can link promoted canonical blocks, and inspection returns explicit anchor state.
+Annotation tools use the same canonical child blocks as Detail. Source targets carry a block ID or file identity plus UTF-16 offsets, excerpt, bounded before/after context, source version, and hash. Rendered-passage targets separately carry an immutable quote and host/pane/revision/projection provenance without a fabricated source range. Create and batch calls are idempotent; invalid batches create nothing. Replies retain the root target, lifecycle changes can link promoted canonical blocks, and inspection returns explicit anchor state.
 
 `outliner_attention` requires an explicit live client ID. It can mark, advance,
 acknowledge, clear, or inspect short-lived block/file attention. Exact UTF-16
