@@ -286,6 +286,10 @@ describe("virtual branch navigator", () => {
 
     pending.resolve(preview("Ready", "one"));
     await settle();
+    expect(state.controller.preview?.resolvedText).toBe("Ready");
+
+    await state.controller.handleKeypress("R", key("r", { shift: true }), "pass", 20, false);
+    expect(state.calls.revealed).toEqual(["one"]);
   });
 
   test("invalidates an old preview as soon as projection refresh begins", async () => {
