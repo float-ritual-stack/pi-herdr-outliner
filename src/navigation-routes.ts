@@ -8,6 +8,7 @@ import type {
 export interface NavigationRouteOptions {
   preserveSource?: boolean;
   fragmentId?: string;
+  focusTarget?: boolean;
 }
 
 export async function resolveNavigationDestination(
@@ -47,5 +48,6 @@ export async function dispatchNavigation(
     intent,
     ...(options.fragmentId ? { fragmentId: options.fragmentId } : {}),
     ...(options.preserveSource ? { preserveSource: true } : {}),
+    ...(options.focusTarget ? { focusTarget: true } : {}),
   });
 }

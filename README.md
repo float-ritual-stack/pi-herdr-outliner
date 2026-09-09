@@ -25,7 +25,7 @@ The project started as a small Friday-night experiment and grew into a durable w
 
 - SQLite-backed hierarchical blocks with stable UUIDs, sibling order, authors, timestamps, and one canonical graph per workspace root.
 - Workspace-isolated service and runtime paths.
-- JSON-lines RPC protocol v32 over a Unix socket.
+- JSON-lines RPC protocol v33 over a Unix socket.
 - Reactive canonical content/view broadcasts, per-process Tree/Detail registration with Detail lock availability, exact-client UI commands, and source-aware `preview | open | reveal` navigation.
 - Each Tree owns its cursor, occurrence selection, filter, viewport, collapsed rows, multiline expansion, explicit-navigation history, and browsing context; moving a Tree previews only in the first unlocked same-tab Detail and never replaces a locked anchor.
 - Indexed `[property::value]` metadata with optimistic property patching and catalog queries.
@@ -176,8 +176,9 @@ the current Detail while preserving its lock state, `f` uses the first unlocked
 same-tab Detail, `r` splits right, and `d` splits down. `Enter` uses the first
 unlocked Detail or creates a right split when none is available. `f` remains in
 the chooser when every Detail is locked, so fallback topology is always an
-explicit choice. `Esc` dismisses without resolving or opening the target. `R`
-outside the chooser reveals the reference in the paired or unique same-tab Tree.
+explicit choice. `Esc` dismisses without resolving or opening the target.
+Outside the chooser, `Shift+R` reveals the block currently shown by the Detail,
+while `Option+Shift+R` reveals its first authored reference.
 Block-fragment targets retain their exact anchor across every destination.
 
 Activating an inline Backlinks source opens a transient preview over the
@@ -311,7 +312,8 @@ cancel route rejects the entire candidate and preserves the prior bindings.
 | `Ctrl+E` or modified Enter | Explicitly edit and lock the selected block in the first unlocked Detail |
 | `g` | Fuzzy goto by UUID, short prefix, title, or content |
 | `o` | Open the first exact `((block-id))` or symbolic `[[address]]` reference in the first unlocked Detail |
-| `R` | Reveal the first reference in this Tree |
+| `R` | Reveal this row's canonical physical source, clearing filters, expanding its ancestors, and focusing this Tree |
+| `Option+Shift+R` | Reveal the first authored reference in this Tree |
 | `L` | Explain that locking is controlled from a Detail pane |
 | `Option+Left` / `Option+Right` | Move backward / forward through block navigation history |
 | `/` | Filter visible blocks |
@@ -320,6 +322,11 @@ cancel route rejects the entire candidate and preserves the prior bindings.
 | `r` | Restore a selected direct Trash root |
 | `p` | Type the work ID/short UUID to permanently purge a Trash root |
 | `Ctrl+Q` | Close the pane |
+
+Reveal source preserves exact occurrence history: after jumping from a virtual
+occurrence to its canonical physical row, `Option+Left` returns to that
+occurrence. User-triggered reveals focus the target Tree; programmatic reveal
+commands only focus it when they explicitly request focus.
 
 Plain-clicking a Tree row selects it and publishes that row to its linked Detail.
 `Ctrl`/`Meta`-clicking a Tree row selects and opens it; when the clicked cell is
@@ -372,6 +379,7 @@ Projected virtual occurrences deliberately constrain hierarchy and collapse. Bra
 | `f` | Open referenced file |
 | `o` | Open the first authored reference in the shared destination chooser |
 | `R` | Reveal the block currently shown by this Detail in its paired or unique same-tab Tree |
+| `Option+Shift+R` | Reveal the first authored reference in the paired or unique same-tab Tree |
 | `L`, `i`, `Ctrl+L`, or `Command/Meta+L` | Lock this block as an anchor, or unlock the Detail for previews and opens |
 | `Option+Shift+Right` / `Option+Shift+Down` | Open the current target in a new independent Detail to the right / below |
 | `Option+Left` / `Option+Right` | Move backward / forward through this Detail's local history without changing lock state |

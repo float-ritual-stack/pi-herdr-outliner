@@ -521,12 +521,14 @@ test("keeps Shift+R pane-level while Backlinks are expanded", async () => {
   await preview.press({ name: "tab", shift: true });
   await preview.press({ name: "return" });
   await preview.press({ name: "r", shift: true }, "R");
+  await preview.press({ name: "r", meta: true, shift: true }, "R");
 
   expect(preview.intents).toEqual([
     { type: "preview.focus.move", delta: 1 },
     { type: "preview.focus.move", delta: -1 },
     { type: "preview.activate" },
     { type: "current.reveal" },
+    { type: "reference.reveal" },
   ]);
 });
 

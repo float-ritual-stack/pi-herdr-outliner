@@ -84,6 +84,10 @@ describe("Outliner action keymap", () => {
     expect(reveal.available({ surface: "detail", mode: "file" })).toBe(true);
     expect(reveal.available({ surface: "detail", mode: "property" })).toBe(true);
     expect(reveal.available({ surface: "detail", mode: "edit" })).toBe(false);
+    expect(keymap.action("tree.current.reveal").defaultChords).toEqual(["Shift+R"]);
+    expect(keymap.action("detail.current.reveal").defaultChords).toEqual(["Shift+R"]);
+    expect(keymap.action("tree.reference.reveal").defaultChords).toEqual(["Alt+Shift+R"]);
+    expect(keymap.action("detail.reference.reveal").defaultChords).toEqual(["Alt+Shift+R"]);
   });
 
 

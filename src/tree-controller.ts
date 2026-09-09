@@ -649,12 +649,18 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     options?: {
       preferredRowId?: string;
       recordNavigation?: boolean;
+      physicalSource?: boolean;
     },
   ): Promise<void> {
     const source = navigationEntry(rows[selectedIndex]);
-    await reload(options?.preferredRowId ?? canonicalId);
     let visibilityChanged = false;
-    if (canonicalId && rows[selectedIndex]?.canonicalId !== canonicalId) {
+    if (!canonicalId || !options?.physicalSource) {
+      await reload(options?.preferredRowId ?? canonicalId);
+    }
+    if (
+      canonicalId &&
+      (options?.physicalSource || rows[selectedIndex]?.canonicalId !== canonicalId)
+    ) {
       const target = physicalBlocksById.get(canonicalId);
       if (!target) throw new Error(`Block not found: ${canonicalId}`);
       if (activeFilter) {
@@ -670,11 +676,15 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       }
       await reload(canonicalId);
     }
-    const visibleCanonicalId = rows[selectedIndex]?.canonicalId ?? null;
-    if (canonicalId && visibleCanonicalId !== canonicalId) {
+    const selected = rows[selectedIndex];
+    const visibleCanonicalId = selected?.canonicalId ?? null;
+    if (
+      canonicalId &&
+      (visibleCanonicalId !== canonicalId || (options?.physicalSource && selected?.kind !== "physical"))
+    ) {
       throw new Error(`Block ${canonicalId} could not be revealed`);
     }
-    const target = navigationEntry(rows[selectedIndex]);
+    const target = navigationEntry(selected);
     if (options?.recordNavigation) recordNavigation(source, target);
     lastVisibleCanonicalId = visibleCanonicalId;
     await publishBrowsingContext(visibleCanonicalId);
@@ -1077,10 +1087,12 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         return;
       }
       if (command.blockId) {
-        activeFilter = "";
-        await selectVisibleBlock(command.blockId, { recordNavigation: true });
+        await selectVisibleBlock(command.blockId, {
+          recordNavigation: true,
+          physicalSource: command.command === "reveal",
+        });
       }
-      if (command.command === "focus") effects.focusSelf();
+      if (command.command === "focus" || command.focus) effects.focusSelf();
       effects.invalidate();
       return;
     }
@@ -1184,6 +1196,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       sourceClientId: effects.clientId,
       blockId: resolved.block.id,
       intent,
+      ...(intent === "reveal" ? { focusTarget: true } : {}),
     });
     const verb = intent === "open"
       ? resolved.created ? "Created and opened" : "Opened"
@@ -1258,6 +1271,41 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     if (actionId === "tree.keymap.reload") {
       const result = actionKeymap.reload();
       status = result.ok ? "Outliner keymap reloaded" : `Keymap unchanged: ${result.error}`;
+      effects.invalidate();
+      return;
+    }
+    const selected = rows[selectedIndex];
+    if (actionId === "tree.current.reveal") {
+      if (!selected) {
+        status = "No block selected";
+      } else {
+        try {
+          await selectVisibleBlock(selected.canonicalId, {
+            recordNavigation: true,
+            physicalSource: true,
+          });
+          effects.focusSelf();
+          status = `Revealed source ${blockDisplayTitle(selected.block)}`;
+        } catch (error) {
+          status = errorMessage(error);
+        }
+      }
+      effects.invalidate();
+      return;
+    }
+    if (actionId === "tree.reference.open" || actionId === "tree.reference.reveal") {
+      if (!selected) {
+        status = "No block selected";
+      } else {
+        try {
+          await navigateSelectedReference(
+            selected,
+            actionId === "tree.reference.reveal" ? "reveal" : "open",
+          );
+        } catch (error) {
+          status = errorMessage(error);
+        }
+      }
       effects.invalidate();
       return;
     }
@@ -1568,14 +1616,6 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         }
         reloadRequired = true;
       }
-    } else if ((str === "o" || str === "R") && selected) {
-      try {
-        await navigateSelectedReference(selected, str === "R" ? "reveal" : "open");
-      } catch (error) {
-        status = errorMessage(error);
-      }
-      effects.invalidate();
-      return;
     } else if (str === "c" && selected) {
       try {
         await effects.openCapturePopup(selected.canonicalId);
