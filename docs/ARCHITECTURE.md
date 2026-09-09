@@ -108,9 +108,11 @@ type, and snippets; sorting cycles created/updated timestamps in both
 directions. The authored Markdown and generated backlink Markdown remain
 separate components; edit/save paths only read canonical block text. `Tab` or a
 plain source-row click selects generated sources, `.` toggles the selected
-source's occurrence rows, `Enter` or a Ctrl/Meta-click opens a non-routable
-Herdr popup, and `R` reveals one. The popup captures the visible filtered/sorted
-source set, renders one source at a time, and moves only within that snapshot.
+source's occurrence rows, and `Enter` or a Ctrl/Meta-click opens a non-routable
+Herdr popup. `Shift+R` remains pane-level Reveal source for the current Detail
+block; a selected generated backlink does not change its target. The
+popup captures the visible filtered/sorted source set, renders one source at a
+time, and moves only within that snapshot.
 `Esc` sends an exact-client `backlinks.select` command before closing. `Enter`
 opens the shared destination chooser instead of immediately mutating pane
 topology. Backlink Peek supplies reversible source-selection behavior to the
@@ -368,7 +370,26 @@ Herdr recognizes plain terminal text as a URL only for `http://` and `https://`.
 - `pi-outliner://work/<PIE-NNN>` — resolve-only Work-ID registry lookup;
 - `pi-outliner://page/<encoded-address>` — unique symbolic page resolution and explicit create-on-follow.
 
-Inside live panes, reference activation carries one exact canonical target identity. Tree keyboard `o` and Ctrl/Meta-click resolve and dispatch `open`; `R` dispatches `reveal`. Authored Detail links, typed Property targets, and Pi TUI's Detail `openUrl` bind the unresolved target to the shared destination chooser, which resolves and dispatches only after confirmation. A plain Tree-row click changes Tree selection and publishes that canonical row to its linked Detail. Ctrl/Meta-click selects and opens the canonical row unless the clicked cell carries a reference target, which opens instead. Detail breadcrumb links explicitly emit `reveal`, so selecting an ancestor moves the paired Tree rather than opening another Detail. Generated Backlink and Property links resolve first to local PreviewRegion focus on plain click; Ctrl/Meta-click activates the focused source or typed target.
+Inside live panes, Reveal source and authored-reference activation are distinct.
+For a selected Tree row, `Shift+R` resolves its canonical identity, clears
+transient filters, expands its physical ancestors, selects the physical row,
+records the exact occurrence in history, and focuses that Tree. Detail
+`Shift+R` routes the current block's reveal to its browsing-context Tree, or to
+the unique same-tab Tree fallback, with the same history and focus semantics.
+Tree `o` and Ctrl/Meta-click resolve and dispatch authored references as `open`;
+`Alt+Shift+R` reveals the first authored reference in either pane. User reveals
+propagate `focusTarget` through navigation dispatch to the targeted UI command;
+callers that omit it remain non-focusing. Authored Detail links, typed Property
+targets, and Pi TUI
+Detail `openUrl` bind the unresolved target to the shared destination chooser;
+it resolves and dispatches only after confirmation. A plain Tree-row click
+changes Tree selection and publishes that canonical row to its linked Detail.
+Ctrl/Meta-click selects and opens the canonical row unless the clicked cell
+carries a reference target; then it opens that target. Detail breadcrumbs
+dispatch `reveal`, so selecting an ancestor moves the paired Tree rather than
+opening another Detail. Generated Backlink and Property rows focus locally on
+plain click; Ctrl/Meta-click opens a Backlink Peek or activates a typed Property
+target.
 
 Authored text is sanitized before link generation. Tree adds OSC 8 only after plain-text wrapping/truncation; Detail generates safe Markdown links after sanitization. Under `HERDR_ENV=1`, Detail enables Pi TUI hyperlink emission because nested panes advertise generic `TERM=xterm-256color` even though Herdr captures OSC 8 metadata. Tree accepts unmodified and Ctrl/Meta primary-button presses, uses rendered row identity independently from link hit testing, and ignores release, motion, and wheel reports for activation. Shift remains available for terminal-native selection.
 
