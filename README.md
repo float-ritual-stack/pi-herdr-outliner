@@ -61,6 +61,8 @@ behavior already shipped on the current branch.
 - [Bun](https://bun.sh/) 1.3 or newer
 - Herdr 0.9 or newer
 - Git, for a Herdr-managed GitHub install
+- Optional: [Gum](https://github.com/charmbracelet/gum) for the helper's
+  polished interactive prompts; the plain POSIX interface remains available
 - Pi/OMP only if you want the agent extension and slash commands
 
 ### Install with the helper
@@ -76,6 +78,11 @@ plugin, and reconciles its `[[keys.command]]` entries in
 defaults; stale action entries are removed, unrelated config is preserved, and
 every changed config is backed up before Herdr reloads it.
 
+When Gum is available in an interactive terminal, the helper automatically
+uses its styled status, input, confirmation, and summary surfaces. No extra
+flag is required. Use `--plain` to force the minimal interface; `--yes` stays
+plain and non-interactive for automation.
+
 The default shortcuts are `prefix+u` for a new Tree + Detail and
 `prefix+shift+c` for commenting on retained Detail text. Press Enter to accept
 them, type alternatives at the prompts, or pass them explicitly:
@@ -86,8 +93,9 @@ curl -fsSL https://raw.githubusercontent.com/float-ritual-stack/pi-herdr-outline
 ```
 
 Use `--yes` for a non-interactive install with existing or default shortcuts,
-`--no-config` to leave `config.toml` untouched, and `--ref <tag-or-commit>` for
-a reproducible plugin revision. Run `sh install.sh --help` for all options.
+`--plain` to disable Gum, `--no-config` to leave `config.toml` untouched, and
+`--ref <tag-or-commit>` for a reproducible plugin revision. Run
+`sh install.sh --help` for all options.
 
 ### Install manually from GitHub
 
