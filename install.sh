@@ -18,15 +18,86 @@ OPEN_KEY=""
 COMMENT_KEY=""
 ASSUME_YES=0
 CONFIGURE_KEYS=1
+PLAIN_UI=0
+GUM_ENABLED=0
 TEMP_CONFIG=""
 
 say() {
-  printf '%s\n' "$*"
+  if [ "$GUM_ENABLED" -eq 1 ]; then
+    gum style --foreground 245 "$*"
+  else
+    printf '%s\n' "$*"
+  fi
+}
+
+succeed() {
+  if [ "$GUM_ENABLED" -eq 1 ]; then
+    gum style --foreground 42 "$*"
+  else
+    printf '%s\n' "$*"
+  fi
+}
+
+warn() {
+  if [ "$GUM_ENABLED" -eq 1 ]; then
+    gum style --foreground 214 "$*" >&2
+  else
+    printf 'pi-herdr-outliner installer: %s\n' "$*" >&2
+  fi
 }
 
 fail() {
-  printf 'pi-herdr-outliner installer: %s\n' "$*" >&2
+  if [ "$GUM_ENABLED" -eq 1 ]; then
+    gum style --foreground 196 --bold "$*" >&2
+  else
+    printf 'pi-herdr-outliner installer: %s\n' "$*" >&2
+  fi
   exit 1
+}
+
+show_banner() {
+  if [ "$GUM_ENABLED" -eq 1 ]; then
+    gum style \
+      --border rounded \
+      --border-foreground 212 \
+      --foreground 212 \
+      --bold \
+      --padding "0 2" \
+      "Pi Outliner" \
+      "Guided Herdr setup"
+    printf '\n'
+  else
+    printf '\nPi Outliner installer\n\n'
+  fi
+}
+
+show_summary() {
+  if [ "$GUM_ENABLED" -eq 1 ]; then
+    if [ "$CONFIGURE_KEYS" -eq 1 ]; then
+      gum style \
+        --border rounded \
+        --border-foreground 42 \
+        --foreground 42 \
+        --bold \
+        --padding "0 2" \
+        "Pi Outliner is ready" \
+        "Open Tree + Detail: $OPEN_KEY" \
+        "Comment on selection: $COMMENT_KEY"
+    else
+      gum style \
+        --border rounded \
+        --border-foreground 42 \
+        --foreground 42 \
+        --bold \
+        --padding "0 2" \
+        "Pi Outliner is ready" \
+        "Action: $OPEN_ACTION"
+    fi
+  elif [ "$CONFIGURE_KEYS" -eq 1 ]; then
+    say "Pi Outliner is installed. Inside Herdr, invoke $OPEN_ACTION or use the configured open key."
+  else
+    say "Pi Outliner is installed. Inside Herdr, invoke $OPEN_ACTION."
+  fi
 }
 
 usage() {
@@ -40,6 +111,7 @@ Options:
   --ref REF              Git ref to install (default: main)
   --config PATH          Herdr config.toml path
   --no-config            Install the plugin without changing Herdr keys
+  --plain               Disable Gum styling and interactive widgets
   -y, --yes              Install missing dependencies and accept defaults
   -h, --help             Show this help
 
@@ -82,6 +154,10 @@ while [ "$#" -gt 0 ]; do
       CONFIGURE_KEYS=0
       shift
       ;;
+    --plain)
+      PLAIN_UI=1
+      shift
+      ;;
     -y|--yes)
       ASSUME_YES=1
       shift
@@ -100,6 +176,18 @@ done
 PATH="${BUN_INSTALL:-$HOME/.bun}/bin:$HOME/.local/bin:$PATH"
 export PATH
 
+if [ "$PLAIN_UI" -eq 0 ] &&
+  [ "$ASSUME_YES" -eq 0 ] &&
+  [ -t 1 ] &&
+  [ -r /dev/tty ] &&
+  [ -w /dev/tty ] &&
+  command -v gum >/dev/null 2>&1
+then
+  GUM_ENABLED=1
+fi
+
+show_banner
+
 can_prompt() {
   [ "$ASSUME_YES" -eq 0 ] && [ -r /dev/tty ] && [ -w /dev/tty ]
 }
@@ -110,6 +198,13 @@ confirm() {
   fi
   if ! can_prompt; then
     return 1
+  fi
+  if [ "$GUM_ENABLED" -eq 1 ]; then
+    gum confirm \
+      --affirmative "Yes" \
+      --negative "No" \
+      "$1" </dev/tty >/dev/tty 2>&1
+    return $?
   fi
   printf '%s [y/N] ' "$1" >/dev/tty
   IFS= read -r answer </dev/tty || return 1
@@ -191,7 +286,7 @@ ensure_command() {
   if command -v "$command_name" >/dev/null 2>&1; then
     installed_version=$(command_version "$command_name")
     if [ -n "$installed_version" ] && version_at_least "$installed_version" "$minimum_version"; then
-      say "$dependency_name $installed_version found"
+      succeed "$dependency_name $installed_version found"
       return
     fi
     reason="$dependency_name $installed_version is older than $minimum_version"
@@ -208,12 +303,12 @@ ensure_command() {
   [ -n "$installed_version" ] || fail "could not read the installed $dependency_name version"
   version_at_least "$installed_version" "$minimum_version" ||
     fail "$dependency_name $installed_version is older than required $minimum_version"
-  say "$dependency_name $installed_version installed"
+  succeed "$dependency_name $installed_version installed"
 }
 
 ensure_git() {
   if command -v git >/dev/null 2>&1; then
-    say "Git found"
+    succeed "Git found"
     return
   fi
   if confirm "Git is not installed. Install it now?"; then
@@ -222,7 +317,7 @@ ensure_git() {
     fail "Git is required for a Herdr GitHub plugin install"
   fi
   command -v git >/dev/null 2>&1 || fail "Git installation did not expose git on PATH"
-  say "Git installed"
+  succeed "Git installed"
 }
 
 validate_key() {
@@ -321,6 +416,14 @@ prompt_key() {
     printf '%s\n' "$prompt_default"
     return
   fi
+  if [ "$GUM_ENABLED" -eq 1 ]; then
+    chosen_key=$(gum input \
+      --header "$prompt_label" \
+      --value "$prompt_default" \
+      --width 48 </dev/tty)
+    printf '%s\n' "${chosen_key:-$prompt_default}"
+    return
+  fi
   printf '%s [%s]: ' "$prompt_label" "$prompt_default" >/dev/tty
   IFS= read -r chosen_key </dev/tty || chosen_key=""
   printf '%s\n' "${chosen_key:-$prompt_default}"
@@ -339,7 +442,7 @@ choose_available_key() {
     if ! can_prompt; then
       fail "$choice_label $choice_value is already used by $owner; pass an alternative"
     fi
-    printf '%s\n' "$choice_value is already used by $owner" >/dev/tty
+    warn "$choice_value is already used by $owner"
     choice_value=$(prompt_key "$choice_label" "")
   done
 }
@@ -460,25 +563,27 @@ description = "Comment on retained Outliner Detail selection"
 EOF
 
   if cmp -s "$CONFIG_PATH" "$TEMP_CONFIG"; then
-    say "Herdr key configuration is already current"
+    succeed "Herdr key configuration is already current"
   else
     backup=$(mktemp "$CONFIG_PATH.bak.$(date +%Y%m%d%H%M%S).XXXXXX")
     cp -p "$CONFIG_PATH" "$backup"
     chmod 600 "$TEMP_CONFIG"
     mv "$TEMP_CONFIG" "$CONFIG_PATH"
     TEMP_CONFIG=""
-    say "Updated $CONFIG_PATH (backup: $backup)"
+    succeed "Updated $CONFIG_PATH (backup: $backup)"
     if herdr status server >/dev/null 2>&1; then
       if ! herdr server reload-config; then
         cp -p "$backup" "$CONFIG_PATH"
         herdr server reload-config >/dev/null 2>&1 || true
         fail "Herdr rejected the new config; restored $backup"
       fi
-      say "Reloaded the running Herdr server configuration"
+      succeed "Reloaded the running Herdr server configuration"
     fi
   fi
-  say "Open Tree + Detail: $OPEN_KEY"
-  say "Comment on retained selection: $COMMENT_KEY"
+  if [ "$GUM_ENABLED" -eq 0 ]; then
+    say "Open Tree + Detail: $OPEN_KEY"
+    say "Comment on retained selection: $COMMENT_KEY"
+  fi
 fi
 
-say "Pi Outliner is installed. Inside Herdr, invoke $OPEN_ACTION or use the configured open key."
+show_summary
