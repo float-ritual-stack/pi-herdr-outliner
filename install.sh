@@ -173,7 +173,11 @@ install_git() {
   elif command -v apk >/dev/null 2>&1; then
     run_privileged apk add git
   elif command -v pacman >/dev/null 2>&1; then
-    run_privileged pacman -Sy --needed git
+    if [ "$ASSUME_YES" -eq 1 ]; then
+      run_privileged pacman -S --needed --noconfirm git
+    else
+      run_privileged pacman -S --needed git
+    fi
   else
     fail "Git is missing and no supported package manager was found"
   fi
@@ -250,20 +254,21 @@ config_key_for_action() {
       }
       return value;
     }
-    BEGIN { RS = "\\[\\[keys\\.command\\]\\]" }
-    NR == 1 { next }
-    {
-      key = ""; command = "";
-      count = split($0, lines, "\n");
-      for (i = 1; i <= count; i++) {
-        if (lines[i] ~ /^[[:space:]]*key[[:space:]]*=/) {
-          key = value_of(lines[i]);
-        } else if (lines[i] ~ /^[[:space:]]*command[[:space:]]*=/) {
-          command = value_of(lines[i]);
-        }
+    function check_command() {
+      if (!found && in_command && command == wanted && key != "") {
+        print key; found = 1;
       }
-      if (command == wanted && key != "") { print key; exit }
     }
+    /^[[:space:]]*\[/ {
+      check_command();
+      if (found) exit;
+      in_command = $0 ~ /^[[:space:]]*\[\[[[:space:]]*keys[[:space:]]*\.[[:space:]]*command[[:space:]]*\]\][[:space:]]*(#.*)?$/;
+      key = ""; command = "";
+      next;
+    }
+    in_command && /^[[:space:]]*key[[:space:]]*=/ { key = value_of($0) }
+    in_command && /^[[:space:]]*command[[:space:]]*=/ { command = value_of($0) }
+    END { check_command() }
   ' "$config_file"
 }
 
@@ -289,24 +294,23 @@ config_owner_for_key() {
       }
       return value;
     }
-    BEGIN { RS = "\\[\\[keys\\.command\\]\\]" }
-    NR == 1 { next }
-    {
-      key = ""; command = "";
-      count = split($0, lines, "\n");
-      for (i = 1; i <= count; i++) {
-        if (lines[i] ~ /^[[:space:]]*key[[:space:]]*=/) {
-          key = value_of(lines[i]);
-        } else if (lines[i] ~ /^[[:space:]]*command[[:space:]]*=/) {
-          command = value_of(lines[i]);
-        }
-      }
+    function check_command() {
       preserved_outliner = command == supported_open || command == supported_detail;
-      if (key == wanted &&
+      if (!found && in_command && key == wanted &&
           (index(command, plugin) != 1 || preserved_outliner)) {
-        print command; exit;
+        print command; found = 1;
       }
     }
+    /^[[:space:]]*\[/ {
+      check_command();
+      if (found) exit;
+      in_command = $0 ~ /^[[:space:]]*\[\[[[:space:]]*keys[[:space:]]*\.[[:space:]]*command[[:space:]]*\]\][[:space:]]*(#.*)?$/;
+      key = ""; command = "";
+      next;
+    }
+    in_command && /^[[:space:]]*key[[:space:]]*=/ { key = value_of($0) }
+    in_command && /^[[:space:]]*command[[:space:]]*=/ { command = value_of($0) }
+    END { check_command() }
   ' "$config_file"
 }
 
@@ -375,10 +379,10 @@ rewrite_config() {
     index($0, begin) == 1 { flush_command(); managed = 1; next }
     managed && index($0, end) == 1 { managed = 0; next }
     managed { next }
-    $0 ~ /^\[\[keys\.command\]\][[:space:]]*$/ {
+    $0 ~ /^[[:space:]]*\[\[[[:space:]]*keys[[:space:]]*\.[[:space:]]*command[[:space:]]*\]\][[:space:]]*(#.*)?$/ {
       flush_command(); in_command = 1; block = $0 ORS; next;
     }
-    in_command && $0 ~ /^\[/ {
+    in_command && $0 ~ /^[[:space:]]*\[/ {
       flush_command(); print; next;
     }
     in_command {
