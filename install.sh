@@ -201,6 +201,7 @@ confirm() {
   fi
   if [ "$GUM_ENABLED" -eq 1 ]; then
     gum confirm \
+      --default=false \
       --affirmative "Yes" \
       --negative "No" \
       "$1" </dev/tty >/dev/tty 2>&1
