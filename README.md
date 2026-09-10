@@ -63,7 +63,33 @@ behavior already shipped on the current branch.
 - Git, for a Herdr-managed GitHub install
 - Pi/OMP only if you want the agent extension and slash commands
 
-### Install from GitHub
+### Install with the helper
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/float-ritual-stack/pi-herdr-outliner/main/install.sh | sh
+```
+
+The helper supports Linux and macOS. It checks Bun 1.3+, Herdr 0.9+, and Git,
+offers to install missing dependencies, installs or refreshes the managed
+plugin, and reconciles its `[[keys.command]]` entries in
+`~/.config/herdr/config.toml`. Existing Outliner bindings become the prompt
+defaults; stale action entries are removed, unrelated config is preserved, and
+every changed config is backed up before Herdr reloads it.
+
+The default shortcuts are `prefix+u` for a new Tree + Detail and
+`prefix+shift+c` for commenting on retained Detail text. Press Enter to accept
+them, type alternatives at the prompts, or pass them explicitly:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/float-ritual-stack/pi-herdr-outliner/main/install.sh |
+  sh -s -- --open-key prefix+y --comment-key prefix+shift+y
+```
+
+Use `--yes` for a non-interactive install with existing or default shortcuts,
+`--no-config` to leave `config.toml` untouched, and `--ref <tag-or-commit>` for
+a reproducible plugin revision. Run `sh install.sh --help` for all options.
+
+### Install manually from GitHub
 
 ```sh
 herdr plugin install float-ritual-stack/pi-herdr-outliner --ref main
@@ -71,10 +97,10 @@ herdr plugin list --plugin float.pi-outliner
 ```
 
 Herdr clones the repository, previews its executable commands, runs the
-manifest's `bun install --frozen-lockfile` build step, and registers the
-plugin. Re-run the same install command to refresh the managed checkout;
-Herdr plugin v1 has no separate update command. Pin `--ref` to a tag or commit
-instead of `main` when you need a reproducible revision.
+manifest's dependency build step, and registers the plugin. Re-run the same
+install command to refresh the managed checkout; Herdr plugin v1 has no
+separate update command. Pin `--ref` to a tag or commit instead of `main` when
+you need a reproducible revision.
 
 ### Link a development checkout
 
@@ -96,6 +122,11 @@ entrypoints execute from the installed or linked plugin root. The invoking
 project is passed separately through `OUTLINER_WORKSPACE_ROOT`, so opening the
 Outliner from another project does not change where Herdr resolves
 `src/*.ts`.
+
+Manifest commands launch Bun through `scripts/run-bun.sh`. The launcher checks
+`BUN_INSTALL`, the server's inherited `PATH`, and the standard
+`~/.bun/bin/bun` location. Installing Bun after Herdr started therefore does
+not require a server restart just to make plugin actions resolve the runtime.
 
 ### Verify or diagnose installation
 
