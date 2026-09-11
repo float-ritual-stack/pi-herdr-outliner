@@ -12,6 +12,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { completeSimple } from "@earendil-works/pi-ai/compat";
 import {
   focusBlockByQuery,
   formatBlockFocusMatch,
@@ -454,26 +455,46 @@ export function normalizeGeneratedCaptureTitle(value: unknown): string {
   return title;
 }
 
+type CompatibleModelRegistry = Omit<ExtensionContext["modelRegistry"], "complete"> & {
+  complete?: ExtensionContext["modelRegistry"]["complete"];
+};
+
 async function generateCaptureTitle(context: ExtensionContext, text: string): Promise<string> {
-  if (!context.model) throw new Error("No model is selected");
-  const response = await context.modelRegistry.complete(
-    context.model,
-    {
-      systemPrompt: CAPTURE_TITLE_SYSTEM_PROMPT,
-      messages: [{
-        role: "user",
-        content: [{
-          type: "text",
-          text: text.slice(0, MAX_CAPTURE_TITLE_SOURCE_CHARS),
-        }],
-        timestamp: Date.now(),
+  const selectedModel = context.model;
+  if (!selectedModel) throw new Error("No model is selected");
+  const request = {
+    systemPrompt: CAPTURE_TITLE_SYSTEM_PROMPT,
+    messages: [{
+      role: "user" as const,
+      content: [{
+        type: "text" as const,
+        text: text.slice(0, MAX_CAPTURE_TITLE_SOURCE_CHARS),
       }],
-    },
-    {
-      cacheRetention: "none",
-      maxTokens: 64,
-    },
-  );
+      timestamp: Date.now(),
+    }],
+  };
+  const options = {
+    cacheRetention: "none" as const,
+    maxTokens: 64,
+    signal: context.signal,
+  };
+  const registry = context.modelRegistry as CompatibleModelRegistry;
+  const response = await (async () => {
+    if (typeof registry.complete === "function") {
+      return registry.complete(selectedModel, request, options);
+    }
+    const auth = await registry.getApiKeyAndHeaders(selectedModel);
+    if (!auth.ok) throw new Error(auth.error);
+    const requestModel = auth.baseUrl
+      ? { ...selectedModel, baseUrl: auth.baseUrl }
+      : selectedModel;
+    return completeSimple(requestModel, request, {
+      ...options,
+      apiKey: auth.apiKey,
+      headers: auth.headers,
+      env: auth.env,
+    });
+  })();
   if (response.stopReason === "aborted") throw new Error("Title generation was aborted");
   const generated = response.content
     .filter((part): part is { type: "text"; text: string } => part.type === "text")

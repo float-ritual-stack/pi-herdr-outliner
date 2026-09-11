@@ -19,6 +19,7 @@
     "test": "bun test"
   },
   "dependencies": {
+    "@earendil-works/pi-ai": "^0.84.2",
     "@earendil-works/pi-coding-agent": "^0.84.2",
     "@earendil-works/pi-tui": "^0.84.2",
     "callscript": "^0.1.0",
