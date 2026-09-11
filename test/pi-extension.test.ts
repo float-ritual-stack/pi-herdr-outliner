@@ -6,6 +6,7 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { fauxAssistantMessage, registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import outlinerExtension, {
   containsConfiguredWorkPlaceholder,
   createOutlinerExtension,
@@ -1548,6 +1549,16 @@ test("captures through command, tool, and exact standalone dispatch without an a
   const notifications: Array<{ message: string; level: string }> = [];
   const sentMessages: unknown[] = [];
   const modelRequests: unknown[] = [];
+  const titleProvider = registerFauxProvider({
+    provider: "title-provider",
+    models: [{ id: "title-model" }],
+  });
+  titleProvider.setResponses([
+    (request, options, _state, model) => {
+      modelRequests.push([model, request, options]);
+      return fauxAssistantMessage("# Captured roadmap decision");
+    },
+  ]);
   const requests: RequestInput[] = [];
   let captureFailure: Error | null = null;
   let captureIndex = 0;
@@ -1670,13 +1681,13 @@ test("captures through command, tool, and exact standalone dispatch without an a
         },
       ],
     },
-    model: { id: "title-model" },
+    model: titleProvider.getModel(),
     modelRegistry: {
-      async complete(...args: unknown[]) {
-        modelRequests.push(args);
+      async getApiKeyAndHeaders() {
         return {
-          stopReason: "stop",
-          content: [{ type: "text", text: "# Captured roadmap decision" }],
+          ok: true,
+          apiKey: "title-api-key",
+          headers: { "x-title-test": "enabled" },
         };
       },
     },
@@ -1779,6 +1790,29 @@ test("captures through command, tool, and exact standalone dispatch without an a
       }),
     ]);
     expect(modelRequests).toHaveLength(1);
+    expect(modelRequests[0]).toEqual([
+      context.model,
+      expect.objectContaining({
+        systemPrompt: expect.any(String),
+        messages: [
+          expect.objectContaining({
+            role: "user",
+            content: [
+              expect.objectContaining({
+                type: "text",
+                text: "Roadmap analysis before the advisory.",
+              }),
+            ],
+          }),
+        ],
+      }),
+      expect.objectContaining({
+        apiKey: "title-api-key",
+        headers: { "x-title-test": "enabled" },
+        cacheRetention: "none",
+        maxTokens: 64,
+      }),
+    ]);
     expect(captures[3]).toMatchObject({
       text: "{remember this 🐢}",
       source: "omp",
@@ -1810,6 +1844,26 @@ test("captures through command, tool, and exact standalone dispatch without an a
     ]);
     expect(notifications.some(({ message }) => message.includes("Unterminated dispatch marker")))
       .toBe(true);
+    const registryCompleteRequests: unknown[] = [];
+    const newerContext = {
+      ...context,
+      modelRegistry: {
+        async complete(...args: unknown[]) {
+          registryCompleteRequests.push(args);
+          return {
+            stopReason: "stop",
+            content: [{ type: "text", text: "Current registry title" }],
+          };
+        },
+      },
+    } as unknown as ExtensionContext;
+    await commands.get("send-to-outline")!.handler("", newerContext);
+    expect(registryCompleteRequests).toHaveLength(1);
+    expect(requests).toContainEqual(expect.objectContaining({
+      action: "capture.retitle",
+      blockId: "capture-5",
+      title: "Current registry title",
+    }));
 
     captureFailure = new Error("service unavailable");
     expect(await input({
@@ -1820,6 +1874,7 @@ test("captures through command, tool, and exact standalone dispatch without an a
     expect(notifications.at(-1)?.message).toContain("Dispatch failed; input preserved");
   } finally {
     OutlinerClient.prototype.request = originalRequest;
+    titleProvider.unregister();
     if (originalHerdrEnv === undefined) delete process.env.HERDR_ENV;
     else process.env.HERDR_ENV = originalHerdrEnv;
   }
