@@ -277,6 +277,54 @@ describe("OutlinerStore", () => {
     expect(receipt.block.text).not.toContain("First line\r ");
   });
 
+  test("retitles captures without changing metadata, body, position, or stale revisions", () => {
+    const store = makeStore();
+    const receipt = store.capture(
+      "capture-retitle",
+      "Incidental opening\r\nBody with [literal] text",
+      "omp",
+      undefined,
+      "agent",
+      { actorId: "omp", sessionId: "session" },
+    );
+    const originalPosition = receipt.block.position;
+    const originalProperties = receipt.block.properties;
+
+    const retitled = store.retitleCapture(
+      receipt.block.id,
+      receipt.block.updatedAt,
+      "Concise generated title",
+      { author: "agent", actorId: "omp", sessionId: "session" },
+    );
+    expect(retitled.text).toBe(
+      `Concise generated title ${
+        receipt.block.text.slice(receipt.block.text.indexOf("[type::capture]"))
+      }`,
+    );
+    expect(retitled.text).toContain("\r\nBody with [literal] text");
+    expect(retitled.properties).toEqual(originalProperties);
+    expect(retitled.position).toBe(originalPosition);
+    expect(retitled.author).toBe("agent");
+
+    expect(() =>
+      store.retitleCapture(
+        receipt.block.id,
+        receipt.block.updatedAt,
+        "Stale replacement",
+        { author: "agent", actorId: "omp" },
+      )
+    ).toThrow("Block changed since editing began");
+    expect(() =>
+      store.retitleCapture(
+        receipt.block.id,
+        retitled.updatedAt,
+        "Invalid [status::title]",
+        { author: "agent", actorId: "omp" },
+      )
+    ).toThrow("Capture title must be 1-120 plain printable characters");
+    expect(store.require(receipt.block.id).text).toBe(retitled.text);
+  });
+
   test("rejects invalid capture input and ambiguous Inbox markers without partial writes", () => {
     const store = makeStore();
     const inbox = store.queryBlocks({

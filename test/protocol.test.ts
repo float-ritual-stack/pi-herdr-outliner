@@ -164,7 +164,7 @@ test("serves mutations and property queries over the local socket", async () => 
   const client = new OutlinerClient(socket);
   const service = await client.request<OutlinerServiceStatus>({ action: "ping" });
   expect(service).toEqual({ status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION });
-  expect(service.protocolVersion).toBe(35);
+  expect(service.protocolVersion).toBe(36);
   const provenance = {
     actorId: "omp",
     sessionId: "session-1",
@@ -530,7 +530,7 @@ test("streams workspace mutations and transient UI commands to subscribers", asy
     onConnect: connected.resolve,
     onEvent: (event) => {
       events.push(event);
-      if (events.length === 9) received.resolve();
+      if (events.length === 10) received.resolve();
     },
   });
   cleanups.push(async () => {
@@ -573,6 +573,17 @@ test("streams workspace mutations and transient UI commands to subscribers", asy
     inboxBlockId: capture.inboxBlockId,
     deduplicated: true,
   });
+  const retitledCapture = await client.request<Block>({
+    action: "capture.retitle",
+    blockId: capture.block.id,
+    expectedUpdatedAt: capture.block.updatedAt,
+    title: "Concise reactive title",
+    mutation: { author: "agent", actorId: "omp" },
+  });
+  expect(retitledCapture.text).toMatch(
+    /^Concise reactive title \[type::capture] .*\[captured-from::.*]\n?$/,
+  );
+  expect(retitledCapture.position).toBe(capture.block.position);
   await client.request({
     action: "work-ids.allocate",
     blockId: block.id,
@@ -596,6 +607,7 @@ test("streams workspace mutations and transient UI commands to subscribers", asy
     ["content", "work-ids.configure"],
     ["content", "create"],
     ["content", "capture.create"],
+    ["content", "capture.retitle"],
     ["content", "work-ids.allocate"],
     ["selection", "selection.set"],
     ["selection", "navigation.back"],
@@ -605,8 +617,9 @@ test("streams workspace mutations and transient UI commands to subscribers", asy
   ]);
   expect(events[1].blockId).toBe(block.id);
   expect(events[2].blockId).toBe(capture.block.id);
-  expect(events[3].blockId).toBe(block.id);
-  expect(events[8].command).toEqual({
+  expect(events[3].blockId).toBe(capture.block.id);
+  expect(events[4].blockId).toBe(block.id);
+  expect(events[9].command).toEqual({
     targetClientId: "event-detail",
     command: "edit",
     blockId: block.id,
@@ -1947,7 +1960,7 @@ test("targets ephemeral attention, advances atomically, stales on edits, and exp
   })).toEqual(expect.objectContaining({ marks: [], pendingCount: 0 }));
 });
 
-test("runs and navigates a targeted structure-first walkthrough over protocol v35", async () => {
+test("runs and navigates a targeted structure-first walkthrough over protocol v36", async () => {
   const directory = mkdtempSync(join(tmpdir(), "pi-outliner-workflow-protocol-"));
   const store = new OutlinerStore(join(directory, "outliner.sqlite"));
   const source = store.create([

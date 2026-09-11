@@ -335,6 +335,14 @@ const workflowPromotionInputSchema = Type.Object({
 const MAX_TOOL_RESULT_CHARS = 12_000;
 const WORK_PLACEHOLDER_SKILL = "work-placeholder-resolver";
 const OUTLINER_CAPTURE_RECEIPT_ENTRY = "outliner-capture-receipt";
+const OUTLINER_CAPTURE_TITLE_MESSAGE = "outliner-capture-title";
+const MAX_CAPTURE_TITLE_SOURCE_CHARS = 12_000;
+const MAX_CAPTURE_TITLE_CHARS = 120;
+const CAPTURE_TITLE_SYSTEM_PROMPT = [
+  "Write one concise title for the captured assistant response.",
+  "Return only the title: no quotes, Markdown, explanation, property tokens, or line breaks.",
+  `Use at most ${MAX_CAPTURE_TITLE_CHARS} characters.`,
+].join(" ");
 
 interface OutlinerCaptureReceiptEntry {
   blockId: string;
@@ -430,6 +438,55 @@ function firstDisplayLine(value: unknown, limit = 72): string {
   if (typeof value !== "string") return "";
   const line = value.split("\n", 1)[0]?.trim() ?? "";
   return line.length <= limit ? line : `${line.slice(0, limit - 1)}…`;
+}
+
+export function normalizeGeneratedCaptureTitle(value: unknown): string {
+  if (typeof value !== "string") throw new Error("Title generation returned no text");
+  let title = value.trim();
+  if (/[\r\n]/.test(title)) throw new Error("Title generation returned multiple lines");
+  title = title.replace(/^(?:#{1,6}|>)\s+/, "").trim();
+  for (const wrapper of ["**", "__", "`", "\"", "'"]) {
+    if (title.startsWith(wrapper) && title.endsWith(wrapper) && title.length > wrapper.length * 2) {
+      title = title.slice(wrapper.length, -wrapper.length).trim();
+      break;
+    }
+  }
+  if (
+    !title ||
+    [...title].length > MAX_CAPTURE_TITLE_CHARS ||
+    /[[\]\u0000-\u001f\u007f]/.test(title)
+  ) {
+    throw new Error("Generated title must be 1-120 plain printable characters");
+  }
+  return title;
+}
+
+async function generateCaptureTitle(context: ExtensionContext, text: string): Promise<string> {
+  if (!context.model) throw new Error("No model is selected");
+  const response = await context.modelRegistry.complete(
+    context.model,
+    {
+      systemPrompt: CAPTURE_TITLE_SYSTEM_PROMPT,
+      messages: [{
+        role: "user",
+        content: [{
+          type: "text",
+          text: text.slice(0, MAX_CAPTURE_TITLE_SOURCE_CHARS),
+        }],
+        timestamp: Date.now(),
+      }],
+    },
+    {
+      cacheRetention: "none",
+      maxTokens: 64,
+    },
+  );
+  if (response.stopReason === "aborted") throw new Error("Title generation was aborted");
+  const generated = response.content
+    .filter((part): part is { type: "text"; text: string } => part.type === "text")
+    .map((part) => part.text)
+    .join("");
+  return normalizeGeneratedCaptureTitle(generated);
 }
 
 function shortBlockId(value: unknown): string {
@@ -1666,6 +1723,30 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
             ...(activeTaskId ? { taskId: activeTaskId } : {}),
           },
         });
+        let captureBlock = receipt.block;
+        let titleWarning = "";
+        if (!receipt.deduplicated) {
+          try {
+            const title = await generateCaptureTitle(context, text);
+            captureBlock = await client.request<Block>({
+              action: "capture.retitle",
+              blockId: receipt.block.id,
+              expectedUpdatedAt: receipt.block.updatedAt,
+              title,
+              mutation: agentMutation(actorId, context, activeTaskId ?? undefined),
+            });
+          } catch (error) {
+            titleWarning = firstDisplayLine(
+              error instanceof Error ? error.message : String(error),
+              200,
+            );
+            context.ui.notify(
+              `Capture saved · title unchanged: ${titleWarning} · ${receipt.block.id}`,
+              "warning",
+            );
+          }
+        }
+        const finalTitle = blockDisplayTitle(captureBlock);
         let detail: OutlinerCaptureReceiptEntry["detail"] = "unavailable";
         try {
           await ensureService(true);
@@ -1687,12 +1768,27 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
         }
         pi.appendEntry<OutlinerCaptureReceiptEntry>(OUTLINER_CAPTURE_RECEIPT_ENTRY, {
           blockId: receipt.block.id,
-          title: firstDisplayLine(text, 120),
+          title: finalTitle,
           source,
           deduplicated: receipt.deduplicated,
           detail,
           capturedAt: Date.now(),
         });
+        pi.sendMessage({
+          customType: OUTLINER_CAPTURE_TITLE_MESSAGE,
+          content: [
+            titleWarning ? "Outliner capture saved without a generated title" : "Outliner capture saved",
+            `Title: ${finalTitle}`,
+            `Block: ${receipt.block.id}`,
+            ...(titleWarning ? [`Title generation: ${titleWarning}`] : []),
+          ].join("\n"),
+          display: true,
+          details: {
+            blockId: receipt.block.id,
+            title: finalTitle,
+            generated: !titleWarning && !receipt.deduplicated,
+          },
+        }, { triggerTurn: false });
       } catch (error) {
         context.ui.notify(error instanceof Error ? error.message : String(error), "error");
       }
