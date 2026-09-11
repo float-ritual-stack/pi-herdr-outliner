@@ -75,6 +75,8 @@ import type {
   BookmarkToggleReceipt,
   CaptureReceipt,
   CaptureSource,
+  QuickCaptureDraft,
+  QuickCaptureDraftSaveInput,
   NavigationState,
   DeliveryEnsureInput,
   DeliveryReceipt,
@@ -128,6 +130,16 @@ interface BlockRow {
 interface CaptureRequestRow {
   block_id: string;
   inbox_block_id: string;
+}
+
+interface QuickCaptureDraftRow {
+  request_id: string;
+  text: string;
+  cursor_row: number;
+  cursor_column: number;
+  captured_from_block_id: string | null;
+  revision: number;
+  updated_at: string;
 }
 
 interface PropertyRow {
@@ -1140,6 +1152,89 @@ export class OutlinerStore {
       expectedUpdatedAt,
       mutation,
     );
+  }
+
+  quickCaptureDraft(): QuickCaptureDraft | null {
+    return this.database.transaction(() => this.quickCaptureDraftFromCurrentRead())();
+  }
+
+  saveQuickCaptureDraft(input: QuickCaptureDraftSaveInput): QuickCaptureDraft {
+    const requestId = normalizeCaptureRequestId(input.requestId);
+    if (typeof input.text !== "string" || !input.text.trim()) {
+      throw new Error("Quick Capture draft text cannot be empty");
+    }
+    if (!Number.isInteger(input.cursorRow) || input.cursorRow < 0) {
+      throw new Error("Quick Capture draft cursor row must be a non-negative integer");
+    }
+    const lines = input.text.split("\n");
+    const cursorLine = lines[input.cursorRow];
+    if (cursorLine === undefined) {
+      throw new Error("Quick Capture draft cursor row is outside the text");
+    }
+    if (
+      !Number.isInteger(input.cursorColumn) ||
+      input.cursorColumn < 0 ||
+      input.cursorColumn > cursorLine.length
+    ) {
+      throw new Error("Quick Capture draft cursor column is outside the text");
+    }
+    if (
+      input.expectedRevision !== null &&
+      (!Number.isInteger(input.expectedRevision) || input.expectedRevision < 1)
+    ) {
+      throw new Error("Quick Capture draft expected revision must be null or a positive integer");
+    }
+    if (input.capturedFromBlockId !== undefined) this.requireActive(input.capturedFromBlockId);
+
+    return this.database.transaction(() => {
+      const current = this.quickCaptureDraftFromCurrentRead();
+      if ((current?.revision ?? null) !== input.expectedRevision) {
+        throw new Error("Quick Capture draft changed; close this popup and reopen the current draft");
+      }
+      const revision = (current?.revision ?? 0) + 1;
+      const updatedAt = new Date(
+        Math.max(Date.now(), current ? Date.parse(current.updatedAt) + 1 : 0),
+      ).toISOString();
+      this.database.query(`
+        INSERT INTO quick_capture_draft
+          (singleton, request_id, text, cursor_row, cursor_column, captured_from_block_id, revision, updated_at)
+        VALUES (1, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(singleton) DO UPDATE SET
+          request_id = excluded.request_id,
+          text = excluded.text,
+          cursor_row = excluded.cursor_row,
+          cursor_column = excluded.cursor_column,
+          captured_from_block_id = excluded.captured_from_block_id,
+          revision = excluded.revision,
+          updated_at = excluded.updated_at
+      `).run(
+        requestId,
+        input.text,
+        input.cursorRow,
+        input.cursorColumn,
+        input.capturedFromBlockId ?? null,
+        revision,
+        updatedAt,
+      );
+      return this.quickCaptureDraftFromCurrentRead()!;
+    })();
+  }
+
+  clearQuickCaptureDraft(expectedRevision: number | null): null {
+    if (
+      expectedRevision !== null &&
+      (!Number.isInteger(expectedRevision) || expectedRevision < 1)
+    ) {
+      throw new Error("Quick Capture draft expected revision must be null or a positive integer");
+    }
+    return this.database.transaction(() => {
+      const current = this.quickCaptureDraftFromCurrentRead();
+      if ((current?.revision ?? null) !== expectedRevision) {
+        throw new Error("Quick Capture draft changed; close this popup and reopen the current draft");
+      }
+      if (current) this.database.query("DELETE FROM quick_capture_draft WHERE singleton = 1").run();
+      return null;
+    })();
   }
 
   update(
@@ -2297,6 +2392,26 @@ export class OutlinerStore {
     };
   }
 
+  private quickCaptureDraftFromCurrentRead(): QuickCaptureDraft | null {
+    const row = this.database.query(`
+      SELECT request_id, text, cursor_row, cursor_column, captured_from_block_id, revision, updated_at
+      FROM quick_capture_draft
+      WHERE singleton = 1
+    `).get() as QuickCaptureDraftRow | null;
+    if (!row) return null;
+    return {
+      requestId: row.request_id,
+      text: row.text,
+      cursorRow: row.cursor_row,
+      cursorColumn: row.cursor_column,
+      ...(row.captured_from_block_id
+        ? { capturedFromBlockId: row.captured_from_block_id }
+        : {}),
+      revision: row.revision,
+      updatedAt: row.updated_at,
+    };
+  }
+
   private migrate(): void {
     this.database.exec(`
       CREATE TABLE IF NOT EXISTS blocks (
@@ -2377,6 +2492,16 @@ export class OutlinerStore {
         block_id TEXT NOT NULL,
         inbox_block_id TEXT NOT NULL,
         created_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS quick_capture_draft (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        request_id TEXT NOT NULL,
+        text TEXT NOT NULL,
+        cursor_row INTEGER NOT NULL CHECK (cursor_row >= 0),
+        cursor_column INTEGER NOT NULL CHECK (cursor_column >= 0),
+        captured_from_block_id TEXT REFERENCES blocks(id) ON DELETE SET NULL,
+        revision INTEGER NOT NULL CHECK (revision >= 1),
+        updated_at TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS annotation_requests (
         request_id TEXT PRIMARY KEY,

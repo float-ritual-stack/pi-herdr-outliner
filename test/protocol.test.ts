@@ -35,6 +35,7 @@ import type {
   PageAddressRemoval,
   OutlinerServiceStatus,
   PropertyCatalogItem,
+  QuickCaptureDraft,
   SelectionContext,
   VisibleBlockCollection,
   RoadmapItemCreateReceipt,
@@ -164,7 +165,7 @@ test("serves mutations and property queries over the local socket", async () => 
   const client = new OutlinerClient(socket);
   const service = await client.request<OutlinerServiceStatus>({ action: "ping" });
   expect(service).toEqual({ status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION });
-  expect(service.protocolVersion).toBe(36);
+  expect(service.protocolVersion).toBe(37);
   const provenance = {
     actorId: "omp",
     sessionId: "session-1",
@@ -573,6 +574,27 @@ test("streams workspace mutations and transient UI commands to subscribers", asy
     inboxBlockId: capture.inboxBlockId,
     deduplicated: true,
   });
+  const retainedDraft = await client.request<QuickCaptureDraft>({
+    action: "capture.draft.save",
+    input: {
+      requestId: "retained-event-capture",
+      text: "Retained before capture",
+      cursorRow: 0,
+      cursorColumn: 8,
+      capturedFromBlockId: block.id,
+      expectedRevision: null,
+    },
+  });
+  expect(await client.request<QuickCaptureDraft | null>({
+    action: "capture.draft.get",
+  })).toEqual(retainedDraft);
+  await client.request({
+    action: "capture.draft.clear",
+    expectedRevision: retainedDraft.revision,
+  });
+  expect(await client.request<QuickCaptureDraft | null>({
+    action: "capture.draft.get",
+  })).toBeNull();
   const retitledCapture = await client.request<Block>({
     action: "capture.retitle",
     blockId: capture.block.id,
@@ -1960,7 +1982,7 @@ test("targets ephemeral attention, advances atomically, stales on edits, and exp
   })).toEqual(expect.objectContaining({ marks: [], pendingCount: 0 }));
 });
 
-test("runs and navigates a targeted structure-first walkthrough over protocol v36", async () => {
+test("runs and navigates a targeted structure-first walkthrough over protocol v37", async () => {
   const directory = mkdtempSync(join(tmpdir(), "pi-outliner-workflow-protocol-"));
   const store = new OutlinerStore(join(directory, "outliner.sqlite"));
   const source = store.create([
