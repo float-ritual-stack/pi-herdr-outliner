@@ -579,13 +579,22 @@ Second paragraph`;
       "Independent [category::trash-test] [work-id::PIE-999]",
       child.id,
     );
+    const independentChild = store.create(
+      "Independent child [category::trash-test]",
+      independentlyDeleted.id,
+    );
+    const emptyDeleted = store.create("Empty [category::trash-test]");
 
     store.delete(independentlyDeleted.id);
     const deletedParent = store.delete(parent.id);
+    store.delete(emptyDeleted.id);
     expect(deletedParent.deletedAt).toBeDefined();
     expect(deletedParent.effectiveDeletedRootId).toBe(parent.id);
     expect(store.require(child.id).effectiveDeletedRootId).toBe(parent.id);
     expect(store.require(independentlyDeleted.id).effectiveDeletedRootId).toBe(
+      independentlyDeleted.id,
+    );
+    expect(store.require(independentChild.id).effectiveDeletedRootId).toBe(
       independentlyDeleted.id,
     );
     expect(store.readWorkspaceSnapshot().physical.blocks.some((block) =>
@@ -608,9 +617,21 @@ Second paragraph`;
     expect(trashRoots.map((block) => block.id)).toEqual([
       parent.id,
       independentlyDeleted.id,
+      emptyDeleted.id,
     ]);
     expect(trashRoots[0]?.deletedDescendantCount).toBe(1);
-    expect(trashRoots[1]?.deletedDescendantCount).toBe(0);
+    expect(trashRoots[1]?.deletedDescendantCount).toBe(1);
+    expect(trashRoots[2]?.deletedDescendantCount).toBe(0);
+    expect(store.queryBlocks({
+      filters: [{ key: "deleted", value: "true" }],
+      includeDeleted: "roots",
+      limit: 1,
+    }).blocks).toEqual([
+      expect.objectContaining({
+        id: parent.id,
+        deletedDescendantCount: 1,
+      }),
+    ]);
     const snapshot = store.readWorkspaceSnapshot();
     const projection = await projectVirtualBranches(
       snapshot.visible.blocks,

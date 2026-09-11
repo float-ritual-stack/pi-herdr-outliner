@@ -38,6 +38,7 @@ import {
   type RoadmapItemCreateReceipt,
   type OutlinerResponse,
   type WorkflowRun,
+  type WorkflowPromotionReceipt,
   type WorkflowStartInput,
   type WorkflowTransitionInput,
   type SelectionContext,
@@ -415,7 +416,7 @@ export class OutlinerServer {
       );
       if (marks.length === 0) this.attentionStates.delete(mark.targetClientId);
       else this.attentionStates.set(mark.targetClientId, next);
-      this.emitAttention(mark.targetClientId, "attention.expired", next);
+      this.emitAttention("attention.expired", next);
     }, delay);
     timer.unref?.();
     this.attentionTimers.set(key, timer);
@@ -604,7 +605,7 @@ export class OutlinerServer {
           targetClientId,
           markId: this.workflowAttentionMarkId(before.runId, previous.ordinal),
         });
-        this.emitAttention(targetClientId, "workflows.transition", attention);
+        this.emitAttention("workflows.transition", attention);
       }
       return next;
     }
@@ -618,7 +619,7 @@ export class OutlinerServer {
       input.focus ?? false,
     );
     const attention = this.setAttention(attentionInput, true);
-    this.emitAttention(targetClientId, "workflows.transition", attention, {
+    this.emitAttention("workflows.transition", attention, {
       markId: attentionInput.markId,
       reveal: true,
       focus: attentionInput.focus ?? false,
@@ -635,13 +636,12 @@ export class OutlinerServer {
         targetClientId: before.targetClientId,
         markId: this.workflowAttentionMarkId(before.runId, step.ordinal),
       });
-      this.emitAttention(before.targetClientId, "workflows.cancel", attention);
+      this.emitAttention("workflows.cancel", attention);
     }
     return next;
   }
 
   private emitAttention(
-    targetClientId: string,
     action: string,
     attention: AttentionClientState,
     attentionInstruction?: OutlinerEvent["attentionInstruction"],
@@ -677,7 +677,7 @@ export class OutlinerServer {
       if (!changed) continue;
       const next = attentionClientState(clientId, marks, state.pendingCount);
       this.attentionStates.set(clientId, next);
-      this.emitAttention(clientId, "attention.stale", next);
+      this.emitAttention("attention.stale", next);
     }
   }
 
@@ -1312,6 +1312,13 @@ export class OutlinerServer {
       }
       case "capture.create": {
         const receipt = response.result as CaptureReceipt;
+        if (receipt.deduplicated) return null;
+        domain = "content";
+        blockId = receipt.block.id;
+        break;
+      }
+      case "workflows.promotion.commit": {
+        const receipt = response.result as WorkflowPromotionReceipt;
         if (receipt.deduplicated) return null;
         domain = "content";
         blockId = receipt.block.id;

@@ -5,7 +5,7 @@ import {
   formatBlockFocusMatch,
 } from "./block-focus";
 import { OutlinerClient, type RequestInput } from "./client";
-import { listLiveClients, requireClientIdForRole } from "./client-target";
+import { requireClientIdForRole } from "./client-target";
 import { resolvePaths } from "./paths";
 import { navigateOutlinerLink } from "./outliner-links";
 import type { BlockSearchQuery, CaptureReceipt } from "./types";

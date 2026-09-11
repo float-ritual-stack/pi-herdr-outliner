@@ -27,7 +27,6 @@ import type {
   OutlinerEvent,
   PageAddressCollection,
   SelectionContext,
-  VisibleBlock,
   VisibleBlockCollection,
 } from "../src/types";
 
@@ -47,15 +46,6 @@ function makeBlock(overrides: Partial<Block> = {}): Block {
   };
 }
 
-function makeVisibleBlock(overrides: Partial<VisibleBlock> = {}): VisibleBlock {
-  return {
-    ...makeBlock(overrides),
-    depth: 0,
-    hasChildren: false,
-    displayText: overrides.text ?? "Raw block text",
-    ...overrides,
-  };
-}
 
 function filePreview(overrides: Partial<ReferencedFile> = {}): ReferencedFile {
   return {

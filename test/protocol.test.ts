@@ -44,6 +44,8 @@ import type {
   WorkspaceSnapshot,
   WorkflowRun,
   WorkflowStartReceipt,
+  WorkflowPromotionPreview,
+  WorkflowPromotionReceipt,
 } from "../src/types";
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -1980,6 +1982,140 @@ test("targets ephemeral attention, advances atomically, stales on edits, and exp
     action: "attention.get",
     targetClientId: "attention-detail-one",
   })).toEqual(expect.objectContaining({ marks: [], pendingCount: 0 }));
+});
+
+test("streams one content event for a fresh workflow promotion and none for its replay", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-outliner-promotion-events-"));
+  const store = new OutlinerStore(join(directory, "outliner.sqlite"));
+  const source = store.create("Review\n\n## Decision\nKeep the explicit boundary.");
+  const start = source.text.indexOf("Decision");
+  const annotation = store.createAnnotation(
+    "promotion-event-annotation",
+    {
+      target: {
+        kind: "block",
+        sourceBlockId: source.id,
+        anchor: createAnnotationAnchor(
+          source.text,
+          start,
+          start + "Decision".length,
+          source.updatedAt,
+        ),
+      },
+      body: "Promote the approved decision.",
+      source: "user",
+    },
+    "user",
+  ).annotations[0]!;
+  const socket = join(directory, "outliner.sock");
+  const server = new OutlinerServer(store, socket);
+  await server.start();
+  const client = new OutlinerClient(socket);
+  const connected = Promise.withResolvers<void>();
+  const barrierReceived = Promise.withResolvers<void>();
+  const subscriberEvents: OutlinerEvent[][] = [[], []];
+  let connectionCount = 0;
+  let barrierCount = 0;
+  const watchers = subscriberEvents.map((events, index) =>
+    new OutlinerClient(socket).watch({
+      client: {
+        clientId: `promotion-event-detail-${index + 1}`,
+        role: "detail",
+        contextId: `promotion-event-detail-${index + 1}`,
+      },
+      onConnect: () => {
+        connectionCount += 1;
+        if (connectionCount === subscriberEvents.length) connected.resolve();
+      },
+      onEvent: (event) => {
+        events.push(event);
+        if (event.action !== "create") return;
+        barrierCount += 1;
+        if (barrierCount === subscriberEvents.length) barrierReceived.resolve();
+      },
+    })
+  );
+  cleanups.push(async () => {
+    await Promise.all(watchers.map((watcher) => watcher.stop()));
+    await server.close();
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  await connected.promise;
+
+  const started = await client.request<WorkflowStartReceipt>({
+    action: "workflows.start",
+    input: {
+      requestId: "promotion-event-run",
+      actionId: "walkthrough.plan",
+      invocation: { kind: "block", sourceBlockId: source.id },
+      capabilities: [
+        "outline.structure",
+        "outline.route",
+        "promotion.preview",
+        "promotion.commit",
+      ],
+      limits: { fanOut: 6, calls: 10 },
+      planner: "callscript",
+    },
+  });
+  const planned = await orchestrateWorkflowRun(client, started.run.runId);
+  const step = planned.run.route[0]!;
+  const preview = await client.request<WorkflowPromotionPreview>({
+    action: "workflows.promotion.preview",
+    input: {
+      runId: planned.run.runId,
+      stepId: step.stepId,
+      annotationId: annotation.block.id,
+      kind: "decision",
+      title: "Decision: keep explicit publication",
+      approvedBy: "owner",
+      body: "Owner approved this outcome.",
+    },
+  });
+  const commitInput = {
+    requestId: "promotion-event-commit",
+    approvalToken: preview.approvalToken,
+    input: preview.input,
+  };
+  const committed = await client.request<WorkflowPromotionReceipt>({
+    action: "workflows.promotion.commit",
+    input: commitInput,
+  });
+  const promotionSequence = store.sequence;
+  const replayed = await client.request<WorkflowPromotionReceipt>({
+    action: "workflows.promotion.commit",
+    input: commitInput,
+  });
+  await expect(client.request({
+    action: "workflows.promotion.commit",
+    input: { ...commitInput, approvalToken: "invalid" },
+  })).rejects.toThrow("exact preview");
+  await client.request<Block>({ action: "create", text: "Promotion event barrier" });
+  await Promise.race([
+    barrierReceived.promise,
+    Bun.sleep(1_000).then(() => {
+      throw new Error("Promotion event barrier timed out");
+    }),
+  ]);
+
+  expect(committed.deduplicated).toBe(false);
+  expect(replayed).toEqual(expect.objectContaining({
+    block: expect.objectContaining({ id: committed.block.id }),
+    deduplicated: true,
+  }));
+  for (const events of subscriberEvents) {
+    const promotionEvents = events.filter((event) =>
+      event.domain === "content" &&
+      event.action === "workflows.promotion.commit"
+    );
+    expect(promotionEvents).toEqual([
+      expect.objectContaining({
+        blockId: committed.block.id,
+        sequence: promotionSequence,
+      }),
+    ]);
+  }
 });
 
 test("runs and navigates a targeted structure-first walkthrough over protocol v37", async () => {

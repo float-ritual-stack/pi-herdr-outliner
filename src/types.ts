@@ -623,13 +623,14 @@ export type RoadmapWorkStage =
   | "doing"
   | "review"
   | "validate"
-  | "later";
+  | "later"
+  | "done";
 
 export interface RoadmapItemCreateInput {
   title: string;
   body?: string;
   priority: RoadmapItemPriority;
-  workStage?: RoadmapWorkStage;
+  workStage?: Exclude<RoadmapWorkStage, "done">;
   project: string;
   arc: string;
   tracks: string[];

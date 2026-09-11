@@ -23,7 +23,6 @@ import {
 } from "../src/block-query";
 import { parseStandaloneDispatchMarker } from "../src/dispatch-marker";
 import {
-  deliveryIdentities,
   deterministicDeliveryIdentity,
   parseDeliveryIdentity,
   selectActiveDelivery,
@@ -366,12 +365,6 @@ export function formatWorkPlaceholderNudge(prefix: string): string {
   ].join(" ");
 }
 
-function textToolResult(text: string): AgentToolResult<Record<string, never>> {
-  return {
-    content: [{ type: "text", text }],
-    details: {},
-  };
-}
 
 function toolResult<T>(value: T): AgentToolResult<T> {
   const text = JSON.stringify(value, null, 2);
@@ -1202,13 +1195,9 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
     ) {
       throw new Error(`Requested delivery identity conflicts with ${delivery.key}`);
     }
-    const oriented = await orientDeliveryBranch(
-      exec,
-      context.cwd,
-      delivery,
-      snapshot,
-      context.signal,
-    );
+    const oriented = await orientDeliveryBranch(exec, delivery,
+    snapshot,
+    context.signal,);
     const orientation = classifyWorkEnvironment(oriented.snapshot, identifier);
     if (
       orientation.classification !== "oriented" ||
@@ -1249,12 +1238,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
     if (!current.delivery) return { task, delivery: null, pullRequest: null };
     const exec = hostExec();
     if (!exec) throw new Error("This host does not expose pi.exec for delivery synchronization");
-    const pullRequest = await inspectPullRequest(
-      exec,
-      current.delivery,
-      context.cwd,
-      context.signal,
-    );
+    const pullRequest = await inspectPullRequest(exec, current.delivery, context.signal,);
     if (!pullRequest) return { task, delivery: current.delivery, pullRequest: null };
     const nextStage = current.delivery.stage === "complete"
       ? "complete"

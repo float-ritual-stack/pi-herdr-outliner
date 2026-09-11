@@ -807,6 +807,16 @@ one linked canonical decision, follow-up, task, or artifact.
 
 `outliner_roadmap_create` is the canonical new-work path: it fails without a partial block or consumed Work ID when queue discovery, metadata, or relationship validation fails. New work defaults to `unprioritized`. `outliner_branch_rank` updates only persisted virtual occurrence ranks; it neither moves canonical blocks nor changes `work-stage`, and ranks remain available across temporary query mismatches.
 
+Roadmap-item `status` records outcome only: `planned` while open and `complete`
+after proof. `work-stage` records scheduling and delivery position:
+`unprioritized` or `later` → `next` → `doing` → `review` → `validate` →
+`done`. `accepted` belongs to source findings and reviews, not roadmap items.
+Capability maps classify canonical items by arc or track; they do not schedule
+work. Moving an item between lanes changes `work-stage`, while ranking inside a
+lane changes only virtual occurrence order. The full intake, duplicate-search,
+transition, and completion contract lives in
+[`roadmap-items.md`](pi-extension/skills/outliner-workflow/references/roadmap-items.md).
+
 `outliner_task` persists one active roadmap block per Pi session. Starting a
 code-delivery item first transactionally ensures one canonical child
 `[type::delivery]` record, then safely attaches or creates its recorded
