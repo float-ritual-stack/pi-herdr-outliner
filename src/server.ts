@@ -1132,6 +1132,14 @@ export class OutlinerServer {
             request.provenance,
           );
           break;
+        case "capture.retitle":
+          result = this.store.retitleCapture(
+            request.blockId,
+            request.expectedUpdatedAt,
+            request.title,
+            request.mutation,
+          );
+          break;
         case "update":
           result = this.store.update(
             request.blockId,
@@ -1300,6 +1308,10 @@ export class OutlinerServer {
         blockId = receipt.block.id;
         break;
       }
+      case "capture.retitle":
+        domain = "content";
+        blockId = (response.result as Block).id;
+        break;
       case "annotations.create":
       case "annotations.reply":
       case "annotations.batch": {

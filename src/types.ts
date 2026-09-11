@@ -756,7 +756,7 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 35;
+export const OUTLINER_PROTOCOL_VERSION = 36;
 
 
 export interface OutlinerServiceStatus {
@@ -876,6 +876,14 @@ export type OutlinerRequest =
       capturedFromBlockId?: string;
       author?: BlockAuthor;
       provenance?: BlockProvenance;
+    }
+  | {
+      id: string;
+      action: "capture.retitle";
+      blockId: string;
+      expectedUpdatedAt: string;
+      title: string;
+      mutation: MutationProvenance;
     }
   | {
       id: string;

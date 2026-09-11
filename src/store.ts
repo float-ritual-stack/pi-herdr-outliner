@@ -309,6 +309,19 @@ function normalizeCaptureRequestId(requestId: string): string {
   return normalized;
 }
 
+function normalizeCaptureTitle(title: string): string {
+  if (typeof title !== "string") throw new Error("Capture title must be a string");
+  const normalized = title.trim();
+  if (
+    !normalized ||
+    [...normalized].length > 120 ||
+    /[\r\n[\]\u0000-\u001f\u007f]/.test(normalized)
+  ) {
+    throw new Error("Capture title must be 1-120 plain printable characters");
+  }
+  return normalized;
+}
+
 function normalizeAnnotationRequestId(requestId: string): string {
   if (typeof requestId !== "string") {
     throw new Error("Annotation requestId must be 1-200 printable characters");
@@ -1093,6 +1106,40 @@ export class OutlinerStore {
         .run(normalizedRequestId, block.id, inbox.id, capturedAt);
       return { block, inboxBlockId: inbox.id, deduplicated: false };
     })();
+  }
+
+  retitleCapture(
+    blockId: string,
+    expectedUpdatedAt: string,
+    title: string,
+    mutation: MutationProvenance,
+  ): Block {
+    const capture = this.requireActive(blockId);
+    const captureTypes = capture.properties
+      .filter((property) => property.key === "type")
+      .map((property) => property.value.toLowerCase());
+    if (captureTypes.length !== 1 || captureTypes[0] !== "capture") {
+      throw new Error(`Block is not one canonical capture: ${blockId}`);
+    }
+    const normalizedTitle = normalizeCaptureTitle(title);
+    const firstNewlineIndex = capture.text.search(/\r?\n/);
+    const firstLine = firstNewlineIndex === -1
+      ? capture.text
+      : capture.text.slice(0, firstNewlineIndex);
+    const remainingText = firstNewlineIndex === -1
+      ? ""
+      : capture.text.slice(firstNewlineIndex);
+    const metadataIndex = firstLine.indexOf("[type::capture]");
+    if (metadataIndex < 0) {
+      throw new Error(`Capture metadata is not on the title line: ${blockId}`);
+    }
+    const metadata = firstLine.slice(metadataIndex);
+    return this.update(
+      blockId,
+      `${normalizedTitle} ${metadata}${remainingText}`,
+      expectedUpdatedAt,
+      mutation,
+    );
   }
 
   update(

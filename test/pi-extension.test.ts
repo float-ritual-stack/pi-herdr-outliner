@@ -11,6 +11,7 @@ import outlinerExtension, {
   createOutlinerExtension,
   formatSelection,
   latestAssistantResponse,
+  normalizeGeneratedCaptureTitle,
   formatWorkPlaceholderNudge,
   selectRecentFocusedOutlinerClient,
   selectCapturedResponseTree,
@@ -67,6 +68,17 @@ test("collects the user response without an advisor follow-up", () => {
   expect(latestAssistantResponse([
     { type: "message", message: { role: "user", content: "No assistant" } },
   ])).toBeNull();
+});
+
+test("normalizes plain generated capture titles and rejects unsafe output", () => {
+  expect(normalizeGeneratedCaptureTitle("# Concise capture title")).toBe("Concise capture title");
+  expect(normalizeGeneratedCaptureTitle("\"Quoted title\"")).toBe("Quoted title");
+  expect(() => normalizeGeneratedCaptureTitle("First line\nSecond line")).toThrow(
+    "Title generation returned multiple lines",
+  );
+  expect(() => normalizeGeneratedCaptureTitle("Unsafe [status::title]")).toThrow(
+    "Generated title must be 1-120 plain printable characters",
+  );
 });
 
 
@@ -1487,7 +1499,7 @@ test("requires the current protocol, attributes agent creates and page follows, 
     expect(largeEnvelope.presentation.omitted).toBeGreaterThan(0);
     protocolVersion = 5;
     await expect(tools.get("outliner_query")!.execute("incompatible-query", {})).rejects.toThrow(
-      "Outliner protocol 5 does not match this session's extension protocol 35. Run /reload, then retry.",
+      "Outliner protocol 5 does not match this session's extension protocol 36. Run /reload, then retry.",
     );
   } finally {
     OutlinerClient.prototype.request = originalRequest;
@@ -1534,6 +1546,8 @@ test("captures through command, tool, and exact standalone dispatch without an a
   const handlers = new Map<string, InputHandler>();
   const appendedEntries: Array<{ customType: string; data: unknown }> = [];
   const notifications: Array<{ message: string; level: string }> = [];
+  const sentMessages: unknown[] = [];
+  const modelRequests: unknown[] = [];
   const requests: RequestInput[] = [];
   let captureFailure: Error | null = null;
   let captureIndex = 0;
@@ -1593,6 +1607,20 @@ test("captures through command, tool, and exact standalone dispatch without an a
         deduplicated: false,
       } as T;
     }
+    if (input.action === "capture.retitle") {
+      return {
+        ...selectionBlock,
+        id: input.blockId,
+        parentId: "inbox",
+        text: `${input.title} [type::capture] [status::unprocessed]`,
+        author: "agent",
+        updatedAt: "retitled",
+        properties: [
+          { key: "type", value: "capture" },
+          { key: "status", value: "unprocessed" },
+        ],
+      } as T;
+    }
     throw new Error(`Unexpected request: ${input.action}`);
   };
   const pi = {
@@ -1605,6 +1633,9 @@ test("captures through command, tool, and exact standalone dispatch without an a
     registerEntryRenderer() {},
     appendEntry(customType: string, data: unknown) {
       appendedEntries.push({ customType, data });
+    },
+    sendMessage(message: unknown) {
+      sentMessages.push(message);
     },
     on(name: string, handler: InputHandler) {
       if (name === "input") handlers.set(name, handler);
@@ -1638,6 +1669,16 @@ test("captures through command, tool, and exact standalone dispatch without an a
           },
         },
       ],
+    },
+    model: { id: "title-model" },
+    modelRegistry: {
+      async complete(...args: unknown[]) {
+        modelRequests.push(args);
+        return {
+          stopReason: "stop",
+          content: [{ type: "text", text: "# Captured roadmap decision" }],
+        };
+      },
     },
     ui: {
       notify(message: string, level: string) {
@@ -1721,6 +1762,23 @@ test("captures through command, tool, and exact standalone dispatch without an a
         taskId: "tool-capture",
       },
     }));
+    const retitles = requests.filter(
+      (request): request is Extract<RequestInput, { action: "capture.retitle" }> =>
+        request.action === "capture.retitle",
+    );
+    expect(retitles).toEqual([
+      expect.objectContaining({
+        blockId: "capture-2",
+        expectedUpdatedAt: "updated",
+        title: "Captured roadmap decision",
+        mutation: expect.objectContaining({
+          author: "agent",
+          actorId: "omp",
+          sessionId: "session-capture",
+        }),
+      }),
+    ]);
+    expect(modelRequests).toHaveLength(1);
     expect(captures[3]).toMatchObject({
       text: "{remember this 🐢}",
       source: "omp",
@@ -1735,12 +1793,21 @@ test("captures through command, tool, and exact standalone dispatch without an a
       customType: "outliner-capture-receipt",
       data: expect.objectContaining({
         blockId: "capture-2",
-        title: "Roadmap analysis before the advisory.",
+        title: "Captured roadmap decision",
         source: "omp",
         deduplicated: false,
         detail: "opened",
       }),
     });
+    expect(sentMessages).toEqual([
+      expect.objectContaining({
+        customType: "outliner-capture-title",
+        display: true,
+        content: expect.stringContaining(
+          "Title: Captured roadmap decision\nBlock: capture-2",
+        ),
+      }),
+    ]);
     expect(notifications.some(({ message }) => message.includes("Unterminated dispatch marker")))
       .toBe(true);
 
