@@ -239,6 +239,33 @@ describe("OutlinerStore", () => {
     expect(store.getSelection().selected?.id).toBe(source.id);
   });
 
+  test("inserts first-time captures at the top without repositioning replays", () => {
+    const store = makeStore();
+    const inbox = store.queryBlocks({
+      filters: [{ key: "system-view", value: "inbox" }],
+      limit: 2,
+    }).blocks[0]!;
+    const existing = store.create("Existing Inbox child", inbox.id);
+
+    const first = store.capture("capture-newest-1", "First capture", "cli");
+    const second = store.capture("capture-newest-2", "Second capture", "pi");
+    expect(store.children(inbox.id).map((block) => block.id)).toEqual([
+      second.block.id,
+      first.block.id,
+      existing.id,
+    ]);
+    expect(store.children(inbox.id).map((block) => block.position)).toEqual([0, 1, 2]);
+
+    const replay = store.capture("capture-newest-1", "Replacement text", "cli");
+    expect(replay.deduplicated).toBe(true);
+    expect(replay.block.id).toBe(first.block.id);
+    expect(store.children(inbox.id).map((block) => block.id)).toEqual([
+      second.block.id,
+      first.block.id,
+      existing.id,
+    ]);
+  });
+
   test("preserves CRLF capture boundaries without adding a carriage return to the title", () => {
     const store = makeStore();
 

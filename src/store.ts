@@ -449,15 +449,24 @@ export class OutlinerStore {
     author: BlockAuthor,
     provenance: BlockProvenance | undefined,
     createdAt: string,
+    position?: number,
   ): Block {
     if (parentId !== null) this.requireActive(parentId);
     const { actorId, sessionId, taskId } = normalizeCreatorProvenance(author, provenance);
     const id = crypto.randomUUID();
-    const positionRow = this.database
-      .query("SELECT COALESCE(MAX(position), -1) + 1 AS position FROM blocks WHERE parent_id IS ?")
-      .get(parentId) as { position: number };
 
     this.database.transaction(() => {
+      const siblingCount = this.database
+        .query("SELECT COUNT(*) AS count FROM blocks WHERE parent_id IS ?")
+        .get(parentId) as { count: number };
+      const targetPosition = position === undefined
+        ? siblingCount.count
+        : Math.max(0, Math.min(position, siblingCount.count));
+      if (targetPosition < siblingCount.count) {
+        this.database
+          .query("UPDATE blocks SET position = position + 1 WHERE parent_id IS ? AND position >= ?")
+          .run(parentId, targetPosition);
+      }
       this.database
         .query(
           "INSERT INTO blocks (id, parent_id, position, text, author, actor_id, session_id, task_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -465,7 +474,7 @@ export class OutlinerStore {
         .run(
           id,
           parentId,
-          positionRow.position,
+          targetPosition,
           text,
           author,
           actorId,
@@ -1069,11 +1078,13 @@ export class OutlinerStore {
         firstNewlineIndex === -1 ? normalizedText : normalizedText.slice(0, firstNewlineIndex);
       const remainingText =
         firstNewlineIndex === -1 ? "" : normalizedText.slice(firstNewlineIndex);
-      const block = this.create(
+      const block = this.createAt(
         `${firstLine} ${metadata}${remainingText}`,
         inbox.id,
         author,
         provenance,
+        capturedAt,
+        0,
       );
       this.database
         .query(
