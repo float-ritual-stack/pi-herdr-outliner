@@ -95,6 +95,25 @@ export interface CaptureReceipt {
   deduplicated: boolean;
 }
 
+export interface QuickCaptureDraft {
+  requestId: string;
+  text: string;
+  cursorRow: number;
+  cursorColumn: number;
+  capturedFromBlockId?: string;
+  revision: number;
+  updatedAt: string;
+}
+
+export interface QuickCaptureDraftSaveInput {
+  requestId: string;
+  text: string;
+  cursorRow: number;
+  cursorColumn: number;
+  capturedFromBlockId?: string;
+  expectedRevision: number | null;
+}
+
 export interface BookmarkStatus {
   root: Block;
   targetBlockId: string;
@@ -756,7 +775,7 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 36;
+export const OUTLINER_PROTOCOL_VERSION = 37;
 
 
 export interface OutlinerServiceStatus {
@@ -884,6 +903,17 @@ export type OutlinerRequest =
       expectedUpdatedAt: string;
       title: string;
       mutation: MutationProvenance;
+    }
+  | { id: string; action: "capture.draft.get" }
+  | {
+      id: string;
+      action: "capture.draft.save";
+      input: QuickCaptureDraftSaveInput;
+    }
+  | {
+      id: string;
+      action: "capture.draft.clear";
+      expectedRevision: number | null;
     }
   | {
       id: string;

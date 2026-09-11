@@ -25,7 +25,7 @@ The project started as a small Friday-night experiment and grew into a durable w
 
 - SQLite-backed hierarchical blocks with stable UUIDs, sibling order, authors, timestamps, and one canonical graph per workspace root.
 - Workspace-isolated service and runtime paths.
-- JSON-lines RPC protocol v36 over a Unix socket.
+- JSON-lines RPC protocol v37 over a Unix socket.
 - Reactive canonical content/view broadcasts, per-process Tree/Detail registration with Detail lock availability, exact-client UI commands, and source-aware `preview | open | reveal` navigation.
 - Each Tree owns its cursor, occurrence selection, filter, viewport, collapsed rows, multiline expansion, explicit-navigation history, and browsing context; moving a Tree previews only in the first unlocked same-tab Detail and never replaces a locked anchor.
 - Indexed `[property::value]` metadata with optimistic property patching and catalog queries.
@@ -345,7 +345,7 @@ cancel route rejects the entire candidate and preserves the prior bindings.
 | `d` / `Shift+D` | Create and focus a new independent Detail to the right / below |
 | `e` | Edit a single-line block inline; open and lock a multiline block in the first unlocked Detail |
 | `a` / `s` | Add child / sibling |
-| `c` | Open the Herdr quick-capture popup; Enter adds a line, Ctrl+S saves to Inbox, Esc cancels |
+| `c` | Open the Herdr quick-capture popup; Enter adds a line, Ctrl+S saves to Inbox, Esc retains and closes, Ctrl+D twice discards |
 | `Tab` / `Shift+Tab` | Indent / outdent |
 | `Space` | Toggle collapse |
 | `.` or `Command+.` | Expand/collapse multiline block detail in Tree |
@@ -571,7 +571,7 @@ Property filters and catalogs default to `block` scope, so body examples and lin
 
 ### Quick capture Inbox
 
-Tree `c` opens the manifest-owned Herdr popup without navigating away from the selected row. The popup reuses the Detail multiline editor’s `TextBuffer`, command mapping, wrapping, cursor, selection, and row renderer: Enter adds a line, Ctrl+S explicitly saves, and Esc/Ctrl+C cancels. Multiline paste is preserved. A failed save leaves the full draft and request identity in the popup for a safe retry.
+Tree `c` opens the manifest-owned Herdr popup without navigating away from the selected row. The popup reuses the Detail multiline editor’s `TextBuffer`, command mapping, wrapping, cursor, selection, and row renderer. Enter adds a line and Ctrl+S explicitly saves. Text, cursor, stable request identity, and the original captured-from context are retained in one workspace-owned draft after a short debounce; Esc/Ctrl+C flush and close, while Ctrl+D requires a second press before discarding. Reopening from any pane in the same workspace resumes that draft. A failed save or stale concurrent writer leaves the full draft visible for a safe retry.
 
 `capture.create` writes one ordinary canonical child beneath the active `[system-view::inbox]` block. Tree, CLI, Pi/OMP tools/commands, and exact standalone dispatch markers are adapters over this same mutation. Captures include:
 
@@ -580,7 +580,7 @@ Useful title [type::capture] [status::unprocessed] [capture-source::tree] [captu
 Optional supporting detail on later lines.
 ```
 
-The optional captured-from block is context evidence, not the capture’s parent. Lifecycle metadata is a trailing block-scoped property run on the first authored line, so the useful title remains first; compact Tree rows hide that metadata and supporting lines until expanded. The Inbox can be renamed or moved while retaining its canonical identity. Persistent request receipts make retries idempotent across reconnects and service restarts. Capture never changes workspace selection/history; the Tree restores the exact prior row and shows a compact receipt. Routing, enrichment, Inbox processing, and concrete third-party launcher integrations remain later work.
+The optional captured-from block is context evidence, not the capture’s parent. Lifecycle metadata is a trailing block-scoped property run on the first authored line, so the useful title remains first; compact Tree rows hide that metadata and supporting lines until expanded. The Inbox can be renamed or moved while retaining its canonical identity, and new captures appear at its top. Persistent request receipts make retries idempotent across reconnects and service restarts; Quick Capture clears its retained draft only after a successful or deduplicated receipt. Capture never changes workspace selection/history; the Tree restores the exact prior row and shows a compact receipt. Routing, enrichment, Inbox processing, and concrete third-party launcher integrations remain later work.
 
 CLI accepts `--text`, explicit `--stdin`, or automatic non-TTY stdin/heredoc input. `--request-id` provides caller-controlled retry identity and `--captured-from` records optional context. Receipt JSON is written to stdout; service failure exits nonzero without a local fallback.
 
@@ -588,7 +588,7 @@ The Pi extension registers `/capture` and `outliner_capture`. An exact standalon
 
 `/send-to-outline` copies the latest completed assistant Markdown from the
 current Pi/OMP session into Inbox as an ordinary agent-authored canonical
-capture with session provenance. Capture succeeds independently of presentation.
+capture with session provenance. After durable capture, the active model generates a concise plain title while the complete Markdown remains unchanged as the body. Title generation or revision conflicts never remove the original capture: the command reports the full block UUID for recovery and leaves its initial title intact.
 When a recently focused or unique Tree is available, the command focuses the new
 block there and dispatches an ordinary open to the first eligible Detail; if
 Tree or Detail routing is unavailable, the durable Inbox block remains and the

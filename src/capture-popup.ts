@@ -7,6 +7,7 @@ import {
   textBufferEditorCommand,
 } from "./text-buffer-editor";
 import { type TerminalInputAction, type TerminalKey } from "./terminal";
+import type { QuickCaptureDraft, QuickCaptureDraftSaveInput } from "./types";
 
 export interface CapturePopupSaveInput {
   requestId: string;
@@ -16,29 +17,64 @@ export interface CapturePopupSaveInput {
 
 export interface CapturePopupEffects {
   save(input: CapturePopupSaveInput): Promise<void>;
+  persistDraft(input: QuickCaptureDraftSaveInput): Promise<QuickCaptureDraft>;
+  clearDraft(expectedRevision: number | null): Promise<void>;
   close(): void;
   invalidate(): void;
+}
+
+export interface CapturePopupScheduler {
+  set(callback: () => void, delayMs: number): unknown;
+  clear(handle: unknown): void;
 }
 
 export interface CapturePopupOptions {
   requestId: string;
   capturedFromBlockId?: string;
+  draft?: QuickCaptureDraft;
+  persistDelayMs?: number;
+  scheduler?: CapturePopupScheduler;
 }
 
+const defaultScheduler: CapturePopupScheduler = {
+  set: (callback, delayMs) => setTimeout(callback, delayMs),
+  clear: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+};
+
 export class CapturePopupController {
-  readonly buffer = new TextBuffer();
-  status = "";
+  readonly buffer: TextBuffer;
+  status: string;
   saving = false;
   private closed = false;
+  private readonly requestId: string;
+  private readonly capturedFromBlockId: string | undefined;
+  private draftRevision: number | null;
+  private readonly persistDelayMs: number;
+  private readonly scheduler: CapturePopupScheduler;
+  private persistTimer: unknown;
+  private persistenceTail: Promise<void> = Promise.resolve();
+  private discardArmed = false;
 
   constructor(
     private readonly effects: CapturePopupEffects,
-    private readonly options: CapturePopupOptions,
-  ) {}
+    options: CapturePopupOptions,
+  ) {
+    const draft = options.draft;
+    this.requestId = draft?.requestId ?? options.requestId;
+    this.capturedFromBlockId = draft?.capturedFromBlockId ?? options.capturedFromBlockId;
+    this.draftRevision = draft?.revision ?? null;
+    this.persistDelayMs = options.persistDelayMs ?? 250;
+    this.scheduler = options.scheduler ?? defaultScheduler;
+    this.buffer = new TextBuffer(draft?.text ?? "");
+    if (draft) this.buffer.placeCursor(draft.cursorRow, draft.cursorColumn);
+    this.status = draft ? "Resumed retained draft" : "";
+  }
 
   handlePaste(text: string): void {
     if (this.closed || this.saving) return;
+    this.discardArmed = false;
     this.buffer.insert(text);
+    this.scheduleDraftPersistence();
     this.effects.invalidate();
   }
 
@@ -49,10 +85,14 @@ export class CapturePopupController {
   ): Promise<void> {
     if (this.closed || this.saving || inputAction === "suppress") return;
     if (key.ctrl && key.name === "c") {
-      this.closed = true;
-      this.effects.close();
+      await this.closeRetainingDraft();
       return;
     }
+    if (key.ctrl && key.name === "d") {
+      await this.confirmDiscard();
+      return;
+    }
+    this.discardArmed = false;
     const command = textBufferEditorCommand(
       str,
       key,
@@ -64,11 +104,104 @@ export class CapturePopupController {
       return;
     }
     if (result === "cancel") {
+      await this.closeRetainingDraft();
+      return;
+    }
+    if (result === "changed") this.scheduleDraftPersistence();
+    this.effects.invalidate();
+  }
+
+  async retainDraft(): Promise<void> {
+    if (this.closed) return;
+    await this.flushDraft();
+  }
+
+  async closeRetainingDraft(): Promise<void> {
+    if (this.closed) return;
+    try {
+      await this.flushDraft();
+      this.closed = true;
+      this.effects.close();
+    } catch (error) {
+      this.status = `Draft retain failed: ${error instanceof Error ? error.message : String(error)}`;
+      this.effects.invalidate();
+    }
+  }
+
+  private scheduleDraftPersistence(): void {
+    this.clearPersistTimer();
+    this.persistTimer = this.scheduler.set(() => {
+      this.persistTimer = undefined;
+      void this.enqueueDraftPersistence().catch(() => {});
+    }, this.persistDelayMs);
+  }
+
+  private enqueueDraftPersistence(): Promise<void> {
+    const text = this.buffer.text;
+    const cursorRow = this.buffer.row;
+    const cursorColumn = this.buffer.column;
+    const operation = this.persistenceTail.then(async () => {
+      if (!text.trim()) {
+        if (this.draftRevision !== null) {
+          await this.effects.clearDraft(this.draftRevision);
+          this.draftRevision = null;
+        }
+        return;
+      }
+      const draft = await this.effects.persistDraft({
+        requestId: this.requestId,
+        text,
+        cursorRow,
+        cursorColumn,
+        ...(this.capturedFromBlockId
+          ? { capturedFromBlockId: this.capturedFromBlockId }
+          : {}),
+        expectedRevision: this.draftRevision,
+      });
+      this.draftRevision = draft.revision;
+    });
+    this.persistenceTail = operation.catch((error) => {
+      this.status = `Draft retain failed: ${error instanceof Error ? error.message : String(error)}`;
+      this.effects.invalidate();
+    });
+    return operation;
+  }
+
+  private async flushDraft(): Promise<void> {
+    this.clearPersistTimer();
+    await this.enqueueDraftPersistence();
+  }
+
+  private clearPersistTimer(): void {
+    if (this.persistTimer === undefined) return;
+    this.scheduler.clear(this.persistTimer);
+    this.persistTimer = undefined;
+  }
+
+  private async confirmDiscard(): Promise<void> {
+    if (!this.buffer.text.trim() && this.draftRevision === null) {
       this.closed = true;
       this.effects.close();
       return;
     }
-    this.effects.invalidate();
+    if (!this.discardArmed) {
+      this.discardArmed = true;
+      this.status = "Press Ctrl+D again to discard this draft";
+      this.effects.invalidate();
+      return;
+    }
+    this.clearPersistTimer();
+    await this.persistenceTail;
+    try {
+      await this.effects.clearDraft(this.draftRevision);
+      this.draftRevision = null;
+      this.closed = true;
+      this.effects.close();
+    } catch (error) {
+      this.discardArmed = false;
+      this.status = `Discard failed: ${error instanceof Error ? error.message : String(error)}`;
+      this.effects.invalidate();
+    }
   }
 
   private async save(): Promise<void> {
@@ -81,22 +214,28 @@ export class CapturePopupController {
     this.saving = true;
     this.status = "Saving…";
     this.effects.invalidate();
+    let captured = false;
     try {
+      await this.flushDraft();
       await this.effects.save({
-        requestId: this.options.requestId,
+        requestId: this.requestId,
         text,
-        capturedFromBlockId: this.options.capturedFromBlockId,
+        capturedFromBlockId: this.capturedFromBlockId,
       });
+      captured = true;
+      await this.effects.clearDraft(this.draftRevision);
+      this.draftRevision = null;
       this.closed = true;
       this.effects.close();
     } catch (error) {
       this.saving = false;
-      this.status = `Capture failed: ${error instanceof Error ? error.message : String(error)}`;
+      this.status = captured
+        ? `Capture saved; draft cleanup failed: ${error instanceof Error ? error.message : String(error)}`
+        : `Capture failed: ${error instanceof Error ? error.message : String(error)}`;
       this.effects.invalidate();
     }
   }
 }
-
 
 export function renderCapturePopupFrame(
   controller: CapturePopupController,
@@ -136,11 +275,11 @@ export function renderCapturePopupFrame(
         : "",
     );
   }
-  const status = controller.status || "Draft remains local until save succeeds";
+  const status = controller.status || "Draft retained automatically";
   output.push(truncateToWidth(status, frameWidth, "…"));
   output.push(
     `\x1b[2m${truncateToWidth(
-      "Enter newline · Ctrl+S save · Esc cancel",
+      "Enter newline · Ctrl+S save · Esc retain · Ctrl+D discard",
       frameWidth,
       "…",
     )}\x1b[0m`,

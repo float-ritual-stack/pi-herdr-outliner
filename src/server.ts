@@ -1140,6 +1140,15 @@ export class OutlinerServer {
             request.mutation,
           );
           break;
+        case "capture.draft.get":
+          result = this.store.quickCaptureDraft();
+          break;
+        case "capture.draft.save":
+          result = this.store.saveQuickCaptureDraft(request.input);
+          break;
+        case "capture.draft.clear":
+          result = this.store.clearQuickCaptureDraft(request.expectedRevision);
+          break;
         case "update":
           result = this.store.update(
             request.blockId,

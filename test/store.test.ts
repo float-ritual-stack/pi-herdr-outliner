@@ -325,6 +325,57 @@ describe("OutlinerStore", () => {
     expect(store.require(receipt.block.id).text).toBe(retitled.text);
   });
 
+  test("retains one revision-safe Quick Capture draft across popup restarts", () => {
+    let store = makeStore();
+    const entry = stores.at(-1)!;
+    const source = store.create("Original capture context");
+    const first = store.saveQuickCaptureDraft({
+      requestId: "quick-capture-request",
+      text: "First line\nSecond line",
+      cursorRow: 1,
+      cursorColumn: 6,
+      capturedFromBlockId: source.id,
+      expectedRevision: null,
+    });
+    expect(first).toMatchObject({
+      requestId: "quick-capture-request",
+      text: "First line\nSecond line",
+      cursorRow: 1,
+      cursorColumn: 6,
+      capturedFromBlockId: source.id,
+      revision: 1,
+    });
+
+    store.close();
+    store = new OutlinerStore(join(entry.directory, "outliner.sqlite"));
+    entry.store = store;
+    expect(store.quickCaptureDraft()).toEqual(first);
+
+    const second = store.saveQuickCaptureDraft({
+      requestId: first.requestId,
+      text: "First line\nSecond line revised",
+      cursorRow: 1,
+      cursorColumn: 19,
+      capturedFromBlockId: first.capturedFromBlockId,
+      expectedRevision: first.revision,
+    });
+    expect(second.revision).toBe(2);
+    expect(() =>
+      store.saveQuickCaptureDraft({
+        requestId: first.requestId,
+        text: "Stale writer",
+        cursorRow: 0,
+        cursorColumn: 12,
+        expectedRevision: first.revision,
+      })
+    ).toThrow("Quick Capture draft changed");
+    expect(() => store.clearQuickCaptureDraft(first.revision)).toThrow(
+      "Quick Capture draft changed",
+    );
+    expect(store.clearQuickCaptureDraft(second.revision)).toBeNull();
+    expect(store.quickCaptureDraft()).toBeNull();
+  });
+
   test("rejects invalid capture input and ambiguous Inbox markers without partial writes", () => {
     const store = makeStore();
     const inbox = store.queryBlocks({

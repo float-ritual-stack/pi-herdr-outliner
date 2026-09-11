@@ -11,6 +11,7 @@ import {
   TerminalInputDecoder,
   type TerminalKey,
 } from "./terminal";
+import type { QuickCaptureDraft } from "./types";
 
 if (process.env.HERDR_ENV !== "1") {
   throw new Error("Quick capture popup requires Herdr");
@@ -20,6 +21,7 @@ const paths = resolvePaths();
 const client = new OutlinerClient(paths.socket);
 const requestId = process.env.OUTLINER_CAPTURE_REQUEST_ID?.trim() || crypto.randomUUID();
 const capturedFromBlockId = process.env.OUTLINER_CAPTURE_FROM_BLOCK_ID?.trim() || undefined;
+const draft = await client.request<QuickCaptureDraft | null>({ action: "capture.draft.get" });
 let stopping = false;
 let workQueue = Promise.resolve();
 
@@ -30,6 +32,15 @@ function stop(exitCode = 0): void {
   process.stdout.off("resize", draw);
   process.stdout.write(`${BRACKETED_PASTE_DISABLE}\x1b[?25h\x1b[?1049l`);
   process.exit(exitCode);
+}
+
+let shutdownRequested = false;
+function stopAfterRetainingDraft(exitCode: number): void {
+  if (shutdownRequested || stopping) return;
+  shutdownRequested = true;
+  workQueue = workQueue
+    .then(() => controller.retainDraft())
+    .finally(() => stop(exitCode));
 }
 
 const controller = new CapturePopupController({
@@ -43,6 +54,18 @@ const controller = new CapturePopupController({
       author: "user",
     });
   },
+  async persistDraft(input) {
+    return await client.request<QuickCaptureDraft>({
+      action: "capture.draft.save",
+      input,
+    });
+  },
+  async clearDraft(expectedRevision) {
+    await client.request({
+      action: "capture.draft.clear",
+      expectedRevision,
+    });
+  },
   close() {
     stop();
   },
@@ -52,6 +75,7 @@ const controller = new CapturePopupController({
 }, {
   requestId,
   capturedFromBlockId,
+  draft: draft ?? undefined,
 });
 
 function draw(): void {
@@ -81,7 +105,7 @@ process.stdin.on("keypress", (str: string | undefined, key: TerminalKey) => {
   enqueueWork(() => controller.handleKeypress(text, key, inputAction));
 });
 process.stdout.on("resize", draw);
-process.on("SIGINT", () => stop(130));
-process.on("SIGTERM", () => stop(143));
-process.on("SIGHUP", () => stop(129));
+process.on("SIGINT", () => stopAfterRetainingDraft(130));
+process.on("SIGTERM", () => stopAfterRetainingDraft(143));
+process.on("SIGHUP", () => stopAfterRetainingDraft(129));
 draw();
