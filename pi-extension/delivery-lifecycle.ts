@@ -106,7 +106,6 @@ export interface BranchOrientationResult {
 
 export async function orientDeliveryBranch(
   exec: ExtensionExec,
-  cwd: string,
   delivery: DeliveryIdentity,
   current: WorkEnvironmentSnapshot,
   signal?: AbortSignal,
@@ -236,7 +235,6 @@ interface GhPullRequest {
 export async function inspectPullRequest(
   exec: ExtensionExec,
   delivery: DeliveryIdentity,
-  cwd: string,
   signal?: AbortSignal,
 ): Promise<PullRequestSnapshot | null> {
   const result = await run(exec, "gh", [

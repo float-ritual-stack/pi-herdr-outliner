@@ -203,6 +203,7 @@ interface LoadedGraph {
   byId: Map<string, Block>;
   byParent: Map<string | null, Block[]>;
   propertyRecordsByBlock: Map<string, PropertyRecord[]>;
+  deletedDescendantCountByRoot: Map<string, number>;
 }
 function propertyRecordFromRow(row: PropertyRow): PropertyRecord {
   return {
@@ -357,7 +358,7 @@ const ROADMAP_PRIORITIES: Record<RoadmapItemPriority, true> = {
   medium: true,
   low: true,
 };
-const ROADMAP_WORK_STAGES: Record<RoadmapWorkStage, true> = {
+const ROADMAP_WORK_STAGES: Record<Exclude<RoadmapWorkStage, "done">, true> = {
   unprioritized: true,
   next: true,
   doing: true,
@@ -1399,7 +1400,7 @@ export class OutlinerStore {
   }
 
   delete(id: string): Block {
-    const block = this.requireActive(id);
+    this.requireActive(id);
     const deletedAt = new Date().toISOString();
     this.database.transaction(() => {
       this.database.query("UPDATE blocks SET deleted_at = ?, updated_at = ? WHERE id = ?")
@@ -2277,6 +2278,7 @@ export class OutlinerStore {
     const blocks = rows.map((row) => this.hydrate(row, propertiesByBlock.get(row.id) ?? []));
     const byId = new Map<string, Block>();
     const byParent = new Map<string | null, Block[]>();
+    const deletedDescendantCountByRoot = new Map<string, number>();
     for (const block of blocks) {
       byId.set(block.id, block);
       const siblings = byParent.get(block.parentId);
@@ -2285,9 +2287,16 @@ export class OutlinerStore {
       } else {
         byParent.set(block.parentId, [block]);
       }
+      const deletedRootId = block.effectiveDeletedRootId;
+      if (deletedRootId && deletedRootId !== block.id) {
+        deletedDescendantCountByRoot.set(
+          deletedRootId,
+          (deletedDescendantCountByRoot.get(deletedRootId) ?? 0) + 1,
+        );
+      }
     }
 
-    return { byId, byParent, propertyRecordsByBlock };
+    return { byId, byParent, propertyRecordsByBlock, deletedDescendantCountByRoot };
   }
 
   private traverseLoadedGraph(
@@ -2329,11 +2338,8 @@ export class OutlinerStore {
           hasChildren: children.length > 0,
           ...(block.deletedAt
             ? {
-                deletedDescendantCount: [...graph.byId.values()].filter(
-                  (candidate) =>
-                    candidate.id !== block.id &&
-                    candidate.effectiveDeletedRootId === block.id,
-                ).length,
+                deletedDescendantCount:
+                  graph.deletedDescendantCountByRoot.get(block.id) ?? 0,
               }
             : {}),
           displayText: resolveBlockReferenceText(

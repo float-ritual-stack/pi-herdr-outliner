@@ -145,17 +145,13 @@ describe("delivery lifecycle", () => {
     const initial = await inspectWorkEnvironment(exec, root);
     const identity = delivery("feature/pie-200", initial.repository!);
 
-    const created = await orientDeliveryBranch(exec, root, identity, initial);
+    const created = await orientDeliveryBranch(exec, identity, initial);
     expect(created.changed).toBe(true);
     expect(created.snapshot.branch).toBe("feature/pie-200");
 
     await git(root, "switch", "main");
-    const reused = await orientDeliveryBranch(
-      exec,
-      root,
-      identity,
-      await inspectWorkEnvironment(exec, root),
-    );
+    const reused = await orientDeliveryBranch(exec, identity,
+    await inspectWorkEnvironment(exec, root),);
     expect(reused.changed).toBe(true);
     expect(reused.snapshot.branch).toBe("feature/pie-200");
   });
@@ -169,12 +165,8 @@ describe("delivery lifecycle", () => {
     await git(root, "switch", "main");
     await git(root, "branch", "-D", identity.workBranch);
 
-    const oriented = await orientDeliveryBranch(
-      exec,
-      root,
-      identity,
-      await inspectWorkEnvironment(exec, root),
-    );
+    const oriented = await orientDeliveryBranch(exec, identity,
+    await inspectWorkEnvironment(exec, root),);
 
     expect(oriented.snapshot.branch).toBe(identity.workBranch);
     const upstream = Bun.spawnSync([
@@ -195,29 +187,17 @@ describe("delivery lifecycle", () => {
     const identity = delivery("feature/pie-202", initial.repository!);
 
     writeFileSync(join(root, "tracked.txt"), "dirty\n");
-    await expect(orientDeliveryBranch(
-      exec,
-      root,
-      identity,
-      await inspectWorkEnvironment(exec, root),
-    )).rejects.toThrow("Refusing to switch from dirty branch main");
+    await expect(orientDeliveryBranch(exec, identity,
+    await inspectWorkEnvironment(exec, root),)).rejects.toThrow("Refusing to switch from dirty branch main");
     await git(root, "restore", "tracked.txt");
 
     await git(root, "checkout", "--detach");
-    await expect(orientDeliveryBranch(
-      exec,
-      root,
-      identity,
-      await inspectWorkEnvironment(exec, root),
-    )).rejects.toThrow("Detached HEAD");
+    await expect(orientDeliveryBranch(exec, identity,
+    await inspectWorkEnvironment(exec, root),)).rejects.toThrow("Detached HEAD");
     await git(root, "switch", "main");
 
-    await expect(orientDeliveryBranch(
-      exec,
-      root,
-      delivery(identity.workBranch, "other/repository"),
-      await inspectWorkEnvironment(exec, root),
-    )).rejects.toThrow("Wrong repository");
+    await expect(orientDeliveryBranch(exec, delivery(identity.workBranch, "other/repository"),
+    await inspectWorkEnvironment(exec, root),)).rejects.toThrow("Wrong repository");
 
     const missingBase = {
       ...identity,
@@ -225,12 +205,8 @@ describe("delivery lifecycle", () => {
       workBranch: "feature/pie-202-missing-base",
       baseBranch: "absent",
     };
-    await expect(orientDeliveryBranch(
-      exec,
-      root,
-      missingBase,
-      await inspectWorkEnvironment(exec, root),
-    )).rejects.toThrow("Resolve base branch absent failed");
+    await expect(orientDeliveryBranch(exec, missingBase,
+    await inspectWorkEnvironment(exec, root),)).rejects.toThrow("Resolve base branch absent failed");
     expect((await inspectWorkEnvironment(exec, root)).branch).toBe("main");
 
     await git(root, "branch", identity.workBranch);
@@ -238,12 +214,8 @@ describe("delivery lifecycle", () => {
     directories.push(occupied);
     rmSync(occupied, { recursive: true, force: true });
     await git(root, "worktree", "add", occupied, identity.workBranch);
-    await expect(orientDeliveryBranch(
-      exec,
-      root,
-      identity,
-      await inspectWorkEnvironment(exec, root),
-    )).rejects.toThrow(`already attached at ${occupied}`);
+    await expect(orientDeliveryBranch(exec, identity,
+    await inspectWorkEnvironment(exec, root),)).rejects.toThrow(`already attached at ${occupied}`);
   });
 
   test("reads only the exact repository, base, and head pull request", async () => {
@@ -269,7 +241,7 @@ describe("delivery lifecycle", () => {
       };
     };
 
-    expect(await inspectPullRequest(fakeExec, identity, "/repo")).toEqual({
+    expect(await inspectPullRequest(fakeExec, identity)).toEqual({
       number: 7,
       url: "https://github.com/org/repo/pull/7",
       state: "MERGED",

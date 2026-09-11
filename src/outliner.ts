@@ -18,7 +18,7 @@ import {
 import { parsePropertySummaryKeys } from "./property-summary";
 import { resolvePaths } from "./paths";
 import { TerminalInputDecoder, type TerminalKey } from "./terminal";
-import { createTreeController, type TreeController } from "./tree-controller";
+import { createTreeController } from "./tree-controller";
 import {
   isTreeMouseSequence,
   parseTreePrimaryClick,

@@ -1054,6 +1054,11 @@ class DetailPreviewFooter implements Component {
   invalidate(): void {}
 }
 
+interface AuthoredCalloutParse {
+  readonly source: string;
+  readonly regions: DetailCalloutRegion[];
+}
+
 export class DetailPiPreviewLayout extends VStack {
   readonly markdown: SourceSpannedMarkdown;
   private readonly annotationPreview: DetailAnnotationPreview;
@@ -1068,8 +1073,7 @@ export class DetailPiPreviewLayout extends VStack {
   private renderedInspectorWidth: number | undefined;
   private renderedEmbedPresentation: string | undefined;
   private renderedDraftProjectionError: string | undefined;
-  private renderedCalloutSource: string | undefined;
-  private calloutRegions: DetailCalloutRegion[] = [];
+  private authoredCallouts: AuthoredCalloutParse | undefined;
   private renderedCalloutRegions: DetailCalloutRegion[] = [];
   private renderedDocumentText = "";
   private renderedFragmentSourceLine = 0;
@@ -1482,15 +1486,21 @@ export class DetailPiPreviewLayout extends VStack {
     const embedPresentation = `${this.state.embedBackgroundEnabled}:${
       embedRanges.map((range) => `${range.startLine}-${range.endLine}`).join(",")
     }`;
-    const nextCalloutRegions = parseDetailCallouts(
-      authoredCalloutSource,
-      this.options.calloutTheme,
-    );
+    const previousAuthoredCallouts = this.authoredCallouts;
+    const authoredCallouts = previousAuthoredCallouts?.source === authoredCalloutSource
+      ? previousAuthoredCallouts
+      : {
+          source: authoredCalloutSource,
+          regions: parseDetailCallouts(
+            authoredCalloutSource,
+            this.options.calloutTheme,
+          ),
+        };
+    this.authoredCallouts = authoredCallouts;
     const calloutSourceChanged =
-      authoredCalloutSource !== this.renderedCalloutSource &&
-      (this.calloutRegions.length > 0 || nextCalloutRegions.length > 0);
-    this.renderedCalloutSource = authoredCalloutSource;
-    this.calloutRegions = nextCalloutRegions;
+      authoredCallouts !== previousAuthoredCallouts &&
+      ((previousAuthoredCallouts?.regions.length ?? 0) > 0 ||
+        authoredCallouts.regions.length > 0);
     const sourceChanged =
       sourceText !== this.renderedSourceText ||
       rawText !== this.renderedRawText ||
@@ -1518,7 +1528,7 @@ export class DetailPiPreviewLayout extends VStack {
         : document;
       this.renderedDocumentText = renderedText;
       this.renderedCalloutRegions = renderedAuthoredCallouts(
-        this.calloutRegions,
+        authoredCallouts.regions,
         renderedText,
         renderedLineForAuthoredLine,
         this.options.calloutTheme,
@@ -1547,7 +1557,7 @@ export class DetailPiPreviewLayout extends VStack {
     const regions = this.state.propertyInspector.presentation === "dedicated"
       ? detailPropertyInspectorRegions(this.state)
       : [
-        ...this.calloutRegions,
+        ...authoredCallouts.regions,
         ...detailAnnotationRegions(annotationGroups),
         ...detailPropertyInspectorRegions(this.state),
         ...detailBacklinkRegions(this.state),

@@ -11,7 +11,6 @@ import type {
   WorkflowPlanInput,
   WorkflowRun,
   WorkflowStartInput,
-  WorkflowStructure,
 } from "../src/types";
 import { planWorkflowRoute, WorkflowManager } from "../src/workflows";
 

@@ -14,6 +14,10 @@ import {
   normalizeAttentionMark,
 } from "../src/attention";
 import { createAnnotationAnchor } from "../src/annotations";
+import {
+  DEFAULT_DETAIL_CALLOUT_THEME,
+  type DetailCalloutTheme,
+} from "../src/detail-callout-theme";
 import { parseDetailCallouts } from "../src/detail-callouts";
 import type { DetailState } from "../src/detail-controller";
 import {
@@ -1087,6 +1091,66 @@ describe("Pi Markdown detail preview", () => {
     const lines = renderedDocument(layout, 80);
     expect(updates).toBe(2);
     expect(lines.map((line) => line.trim()).join(" ")).toContain("complete ending");
+  });
+
+  test("reuses authored callout parsing until the authored source changes", () => {
+    let styleLookups = 0;
+    const calloutTheme: DetailCalloutTheme = {
+      ...DEFAULT_DETAIL_CALLOUT_THEME,
+      types: new Proxy(DEFAULT_DETAIL_CALLOUT_THEME.types, {
+        get(target, property, receiver) {
+          styleLookups += 1;
+          return Reflect.get(target, property, receiver);
+        },
+      }),
+    };
+    const note = "> [!note]+ Cached callout\n> stable body";
+    const detail = state(note, note);
+    const layout = new DetailPiPreviewLayout(
+      detail,
+      plainMarkdownTheme,
+      false,
+      undefined,
+      { calloutTheme },
+    );
+
+    layout.syncState();
+    const initialLookups = styleLookups;
+    expect(initialLookups).toBeGreaterThan(0);
+    detail.status = "status-only change";
+    detail.previewOffset = 1;
+    detail.previewRegions.focusedRegionId = detail.previewRegions.regions.find(
+      (region) => region.kind === "callout",
+    )?.id ?? null;
+    layout.syncState();
+    expect(styleLookups).toBe(initialLookups);
+
+    const warning = "> [!warning]+ Changed callout\n> changed body";
+    detail.context.selected!.text = warning;
+    detail.resolvedSelectedText = warning;
+    detail.projectedSelectedText = warning;
+    layout.syncState();
+    expect(styleLookups).toBeGreaterThan(initialLookups);
+    expect(
+      detail.previewRegions.regions.find((region) => region.kind === "callout"),
+    ).toEqual(expect.objectContaining({
+      calloutType: "warning",
+      title: "Changed callout",
+    }));
+
+    const warningLookups = styleLookups;
+    const renamedWarning = "> [!warning]+ Renamed callout\n> changed body";
+    detail.context.selected!.text = renamedWarning;
+    detail.resolvedSelectedText = renamedWarning;
+    detail.projectedSelectedText = renamedWarning;
+    layout.syncState();
+    expect(styleLookups).toBeGreaterThan(warningLookups);
+    expect(
+      detail.previewRegions.regions.find((region) => region.kind === "callout"),
+    ).toEqual(expect.objectContaining({
+      calloutType: "warning",
+      title: "Renamed callout",
+    }));
   });
   test("renders a clickable unsaved draft and restores canonical preview on cancel", () => {
     const capabilities = getCapabilities();

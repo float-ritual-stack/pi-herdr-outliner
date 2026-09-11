@@ -36,7 +36,6 @@ import { layoutDetailEditor } from "./detail-editor-layout";
 import {
   detailEditorPointAtClick,
   detailMouseRegionAt,
-  type DetailMouseRegion,
 } from "./detail-mouse";
 import { detailCalloutThemeFromEnvironment } from "./detail-callout-theme";
 import { projectDetailRead } from "./detail-embeds";
@@ -83,7 +82,6 @@ import { openDestinationTimeoutFromEnvironment } from "./open-destination-choose
 import {
   isTreeMouseSequence,
   parseTreePlainClick,
-  parseTreePrimaryClick,
   parseTreePrimaryPointer,
   parseTreeSecondaryClick,
   parseTreeWheelEvent,
@@ -229,7 +227,6 @@ let workQueue = Promise.resolve();
 type DetailDraftSplitFocus = "editor" | "preview";
 
 let draftSplitFocus: DetailDraftSplitFocus = "editor";
-let draftSplitHover: DetailMouseRegion | null = null;
 let editorDragActive = false;
 let renderedSelectionDragActive = false;
 
@@ -753,7 +750,6 @@ async function handleDetailMouse(data: string): Promise<boolean> {
   if (wheel) {
     editorDragActive = false;
     const region = detailMouseRegionAt(wheel, mouseLayout);
-    draftSplitHover = region;
     if (region === "editor") {
       draftSplitFocus = "editor";
       await controller.dispatch({
@@ -777,7 +773,6 @@ async function handleDetailMouse(data: string): Promise<boolean> {
   if (pointer.phase === "down") {
     editorDragActive = false;
     const region = detailMouseRegionAt(pointer, mouseLayout);
-    draftSplitHover = region;
     if (region === "editor" && !pointer.meta && !pointer.ctrl) {
       draftSplitFocus = "editor";
       editorDragActive = true;
@@ -853,7 +848,6 @@ function shouldPassDetailInputToTui(data: string): boolean {
   });
   if (region !== "preview") return false;
   draftSplitFocus = "preview";
-  draftSplitHover = region;
   synchronizeLayout?.();
   return true;
 }
@@ -1007,7 +1001,6 @@ synchronizeLayout = () => {
   if (mode !== previousMode) editorDragActive = false;
   if ((mode === "edit" || mode === "select") && mode !== previousMode) {
     draftSplitFocus = "editor";
-    draftSplitHover = null;
   }
   previousMode = mode;
 

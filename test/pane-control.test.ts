@@ -13,7 +13,6 @@ import {
   openDetailPane,
   openVirtualBranchNavigatorPopup,
   outlinerRightClickOwnership,
-  pluginClickedUrl,
   pluginInvocationPaneId,
   pluginInvocationWorkspaceRoot,
   removeLegacyClientPaneStates,
