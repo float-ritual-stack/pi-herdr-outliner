@@ -1052,6 +1052,7 @@ Second paragraph`;
 
   test("reads complete visible and physical snapshots without a row cap", () => {
     const store = makeStore();
+    const baseline = store.readWorkspaceSnapshot();
     store.database.exec(`
       WITH RECURSIVE roots(n) AS (
         SELECT 1
@@ -1075,8 +1076,8 @@ Second paragraph`;
     const snapshot = store.readWorkspaceSnapshot();
     expect(snapshot.visible.completeness).toEqual({ kind: "complete" });
     expect(snapshot.physical.completeness).toEqual({ kind: "complete" });
-    expect(snapshot.visible.blocks).toHaveLength(509);
-    expect(snapshot.physical.blocks).toHaveLength(509);
+    expect(snapshot.visible.blocks).toHaveLength(baseline.visible.blocks.length + 501);
+    expect(snapshot.physical.blocks).toHaveLength(baseline.physical.blocks.length + 501);
     expect(snapshot.visible.blocks.some((block) => block.id === "bulk-root-501")).toBe(true);
     expect(snapshot.physical.blocks.some((block) => block.id === "bulk-root-501")).toBe(true);
   });

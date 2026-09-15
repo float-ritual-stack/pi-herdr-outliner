@@ -243,6 +243,23 @@ Canonical text is authoritative. Property updates patch text with optimistic con
 
 Scope classification is structural. After leading blank lines, the first nonblank line may be a subject or a property-only line. A trailing bracket run on the subject and the first contiguous property-only run after the optional subject are block metadata. Once a blank or non-property body line ends that preamble, later bare `key:: value` records are line-scoped and bracket records are inline-scoped, including later standalone bracket-only lines.
 
+### Default workspace seed
+
+After migrations, an empty `blocks` table is populated transactionally through
+`seedDefaultWorkspace`. The seed creates the ordinary Workspace roots, a
+Documentation hub, one `[system-doc::agent-documentation-guide]` reader
+composed from addressable canonical section blocks, and a writable bounded
+virtual branch over `[type::project-doc]`. Seed-local references use the UUIDs
+returned during that transaction; the database schema is never distributed as
+a binary content template.
+
+The seed runs only for a truly empty block graph. Its blocks are ordinary
+editable canonical content after creation, so reopening or upgrading the
+plugin never backfills, duplicates, or overwrites local edits. The
+model-invoked `outliner-documentation` skill is the discovery pointer: it
+queries the unique `system-doc` marker and reads the database guide before
+project-documentation mutations.
+
 ### Other tables
 
 - `metadata` — service sequence, parser version, and legacy navigation cursor.

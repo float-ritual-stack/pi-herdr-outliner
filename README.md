@@ -35,6 +35,7 @@ The project started as a small Friday-night experiment and grew into a durable w
 - Atomic canonical roadmap-item creation discovers the single project work queue, validates UUID relationships and complete routing metadata, allocates the immutable Work ID, and returns matching virtual-branch memberships in one transaction.
 - Plain-clickable Work IDs, canonical UUIDs, exact references, and `[[address]]` links inside Tree/Detail, with OSC 8 `pi-outliner://` links retained for external terminal interoperability.
 - Property-driven virtual branches with ranked or timestamp-sorted canonical roots, read-only contextual descendants through relative depth 2, independent occurrence disclosure, a 1,000-row branch budget, property-aware creation, and persisted manual root ordering.
+- Fresh databases seed a versioned, agent-readable Documentation hub with addressable sections, native transclusions, one exact cross-reference, and a working property-driven virtual branch.
 - Agent-created blocks retain immutable creator provenance. Every later text or property mutation records its own `user`, `agent`, or `system` identity plus available actor, session, and task IDs, so edit attribution never depends on the creator.
 - Recoverable deletion preserves canonical structure and identity, excludes Trash content from normal queries/completions, and requires explicit identifier-confirmed purge.
 - Idempotent zero-context-loss Tree capture writes ordinary canonical children under one stable workspace Inbox without moving selection or navigation history.
@@ -860,6 +861,7 @@ Before each agent turn, the extension uses Herdr pane-focus history to locate th
 The same bounded context budget can include up to five distinct blocks recently edited by the user. The first turn considers a seven-day horizon; later turns request only activity newer than a session-persisted cursor. Entries use current block text, deduplicate the focused block and active task, and report exact UUID and edit time. Failed or timed-out activity queries add nothing and do not advance the cursor. Agent and system mutations never enter this user-activity section.
 
 [`outliner-workflow`](pi-extension/skills/outliner-workflow/SKILL.md) defines when to publish durable findings, decisions, roadmap reviews, syntheses, progress, and implementation proof through `outliner_publish` rather than leaving useful workspace knowledge only in chat. Context and presence integration fail open when their optional surfaces are unavailable. Deterministic configured `PREFIX-XXX` nudging is shipped: the extension inspects prompts, focused block text, and textual `outliner_*` tool results and injects at most one resolver reminder per turn without performing the resolution itself.
+[`outliner-documentation`](pi-extension/skills/outliner-documentation/SKILL.md) is a compact context pointer for project-documentation work. It queries the workspace-local `[system-doc::agent-documentation-guide]` block and reads that canonical guide before writing; legacy or intentionally customized databases fall back to the same ownership invariant without silently installing seed content.
 
 ## Persistence and isolation
 
@@ -882,6 +884,12 @@ Herdr client identities are intentionally ephemeral and are not stored in
 `outliner.sqlite`. Canonical content remains shared and durable.
 
 Back up `outliner.sqlite` before experimenting with migrations. Do not copy a live database without also accounting for SQLite WAL files.
+
+A truly empty database receives the default Workspace roots plus one canonical
+Documentation hub. The seed is ordinary, editable workspace content and runs
+only once; restarts and package upgrades never overwrite local guide changes.
+The schema remains migration-owned rather than being distributed as a prebuilt
+SQLite database.
 
 ## Development
 
