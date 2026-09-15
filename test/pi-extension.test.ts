@@ -909,11 +909,15 @@ test("drives an explicit task through context, focus, durable proof, and complet
       skillPaths: string[];
       promptPaths: string[];
     };
+    expect(resources.skillPaths).toHaveLength(3);
     expect(resources.skillPaths[0]).toEndWith(
       "pi-extension/skills/outliner-workflow/SKILL.md",
     );
     expect(resources.skillPaths[1]).toEndWith(
       "pi-extension/skills/work-placeholder-resolver/SKILL.md",
+    );
+    expect(resources.skillPaths[2]).toEndWith(
+      "pi-extension/skills/outliner-documentation/SKILL.md",
     );
     expect(resources.promptPaths).toHaveLength(2);
     expect(resources.promptPaths[0]).toEndWith(

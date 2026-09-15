@@ -334,6 +334,7 @@ const workflowPromotionInputSchema = Type.Object({
 
 const MAX_TOOL_RESULT_CHARS = 12_000;
 const WORK_PLACEHOLDER_SKILL = "work-placeholder-resolver";
+const OUTLINER_DOCUMENTATION_SKILL = "outliner-documentation";
 const OUTLINER_CAPTURE_RECEIPT_ENTRY = "outliner-capture-receipt";
 const OUTLINER_CAPTURE_TITLE_MESSAGE = "outliner-capture-title";
 const MAX_CAPTURE_TITLE_SOURCE_CHARS = 12_000;
@@ -1570,6 +1571,13 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
         "pi-extension",
         "skills",
         WORK_PLACEHOLDER_SKILL,
+        "SKILL.md",
+      ),
+      join(
+        extensionRoot,
+        "pi-extension",
+        "skills",
+        OUTLINER_DOCUMENTATION_SKILL,
         "SKILL.md",
       ),
     ],

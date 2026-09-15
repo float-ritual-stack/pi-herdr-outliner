@@ -18,6 +18,7 @@ import {
   type BookmarkRecord,
 } from "./bookmarks";
 import { isValidGitBranchName } from "./delivery-lifecycle";
+import { seedDefaultWorkspace } from "./default-workspace";
 import {
   normalizeBlockSearchQuery,
   parsePropertyFilterExpression,
@@ -2942,14 +2943,20 @@ export class OutlinerStore {
   }
 
   private seed(): void {
-    const row = this.database.query("SELECT COUNT(*) AS count FROM blocks").get() as { count: number };
-    if (row.count > 0) return;
-    const workspace = this.create("Workspace [type::workspace]", null, "system");
-    this.create("Notes [type::notes]", workspace.id, "system");
-    this.create("Open Questions [type::questions] [status::open]", workspace.id, "system");
-    this.create("Decisions [type::decisions]", workspace.id, "system");
-    this.create("Progress Log [type::progress-log]", workspace.id, "system");
-    this.setSelection(workspace.id);
+    this.database.transaction(() => {
+      const row = this.database.query("SELECT COUNT(*) AS count FROM blocks").get() as {
+        count: number;
+      };
+      if (row.count > 0) return;
+      seedDefaultWorkspace({
+        create: (text, parentId) => this.create(text, parentId, "system"),
+        update: (block, text) =>
+          this.update(block.id, text, block.updatedAt, { author: "system" }),
+        select: (blockId) => {
+          this.setSelection(blockId);
+        },
+      });
+    })();
   }
 
   private hydrate(row: BlockRow, properties?: BlockProperty[]): Block {
