@@ -41,6 +41,8 @@ import {
   type TerminalKey,
 } from "./terminal";
 import {
+  authoredLinkActivation,
+  authoredLinkCanOpen,
   authoredLinkFallbackRowIds,
   authoredLinkHeaderRowId,
   authoredLinkTarget,
@@ -325,7 +327,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       items = items.filter((item) => {
         if (GENERATED_ROW_DISABLED_ACTIONS[item.id]) return false;
         if (item.id === "tree.read") {
-          return selected?.kind === "authored-link" && authoredLinkTarget(selected) !== null;
+          return selected?.kind === "authored-link" && authoredLinkCanOpen(selected);
         }
         if (item.id === "tree.disclosure.toggle") {
           return selected?.kind === "authored-link-header";
@@ -1044,13 +1046,25 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       return;
     }
     if (selected.kind === "authored-link") {
-      const target = authoredLinkTarget(selected);
-      if (!target) {
-        status = authoredLinkUnavailableReason(selected) ?? "Authored target is unavailable";
+      const activation = authoredLinkActivation(selected);
+      if (activation.kind === "unavailable") {
+        status = activation.reason;
         effects.invalidate();
         return;
       }
       try {
+        let target: OutlinerNavigationTarget;
+        let createdPage = false;
+        if (activation.kind === "follow-page") {
+          const resolved = await resolveOutlinerLinkTarget(effects, {
+            kind: "page",
+            value: activation.address,
+          });
+          target = { kind: "block", blockId: resolved.block.id };
+          createdPage = resolved.created === true;
+        } else {
+          target = activation.target;
+        }
         await dispatchNavigation(
           effects,
           effects.clientId,
@@ -1058,7 +1072,9 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
           "open",
           { preserveSource: true },
         );
-        status = "Authored target opened in first unlocked Detail";
+        status = createdPage
+          ? "Page created and opened in first unlocked Detail"
+          : "Authored target opened in first unlocked Detail";
       } catch (error) {
         status = errorMessage(error);
       }

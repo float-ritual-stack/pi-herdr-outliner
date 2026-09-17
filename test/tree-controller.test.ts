@@ -433,6 +433,96 @@ describe("createTreeController", () => {
     });
   });
 
+  test("creates an unregistered page only when its generated Outlink is activated", async () => {
+    const owner = block("owner001", {
+      text: "Owner [[Future Page]]",
+      displayText: "Owner",
+    });
+    const createdPage = block("created1", {
+      text: "Future Page [page::Future Page]",
+      displayText: "Future Page",
+    });
+    const fake = harness((input) => {
+      if (input.action === "workspace.snapshot") return snapshot([owner], owner);
+      if (input.action === "blocks.authored-links") {
+        return {
+          kind: "ready",
+          ownerId: owner.id,
+          ownerTextDigest: authoredTextDigest(owner.text),
+          outlinks: {
+            entries: [{
+              kind: "outlink",
+              key: JSON.stringify(["address", "future page"]),
+              label: "Future Page",
+              firstSpan: { start: 6, end: owner.text.length },
+              occurrenceCount: 1,
+              referenceKind: "page",
+              resolution: {
+                kind: "unregistered-page",
+                address: "Future Page",
+                reason: "Page is not registered: Future Page",
+              },
+            }],
+            completeness: { kind: "complete" },
+            invalidCount: 0,
+            diagnostics: [],
+          },
+          resources: {
+            entries: [],
+            completeness: { kind: "complete" },
+            invalidCount: 0,
+            diagnostics: [],
+          },
+        };
+      }
+      if (input.action === "pages.resolve") {
+        return {
+          address: input.address,
+          normalizedAddress: "future page",
+          status: "missing",
+        };
+      }
+      if (input.action === "pages.follow") {
+        return {
+          address: input.address,
+          normalizedAddress: "future page",
+          registeredAddress: "Future Page",
+          status: "resolved",
+          kind: "page",
+          block: createdPage,
+          created: true,
+        };
+      }
+      return undefined;
+    });
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+    await controller.handleAction("tree.authored-links.toggle");
+    const pageRow = controller.view().rows.find((row) => row.kind === "authored-link");
+    if (!pageRow || pageRow.kind !== "authored-link") {
+      throw new Error("Expected generated page Outlink");
+    }
+
+    await controller.handleRowClick(pageRow.rowId);
+    expect(lastCall(fake.calls, "browsing-context.publish")).toMatchObject({
+      target: null,
+      dispatchPreview: false,
+    });
+    expect(fake.calls.some((call) => call.action === "pages.follow")).toBe(false);
+
+    await controller.handleKeypress("", { name: "return" }, "pass");
+
+    expect(lastCall(fake.calls, "pages.follow")).toEqual({
+      action: "pages.follow",
+      address: "Future Page",
+    });
+    expect(lastCall(fake.calls, "navigation.dispatch")).toMatchObject({
+      target: { kind: "block", blockId: createdPage.id },
+      intent: "open",
+      preserveSource: true,
+    });
+  });
+
 
   test("fuzzy goto previews candidates and reveals the selected block", async () => {
     const first = block("first", { text: "Inbox", displayText: "Inbox" });

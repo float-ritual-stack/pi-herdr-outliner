@@ -90,6 +90,36 @@ test("enumerates existing Outlink forms and exact Resource links without passive
   });
 });
 
+test("preserves unresolved page addresses without registering them during enumeration", () => {
+  withStore((store) => {
+    store.configureWorkIdPrefix("PIE");
+    const owner = store.create("[[Future Page]]\nPIE-999");
+    const sequenceBefore = store.sequence;
+
+    const result = readAuthoredLinks(store, owner.id);
+
+    expect(store.sequence).toBe(sequenceBefore);
+    if (result.kind !== "ready") throw new Error(`Expected ready result, got ${result.kind}`);
+    expect(result.outlinks.entries).toEqual([
+      expect.objectContaining({
+        referenceKind: "page",
+        resolution: {
+          kind: "unregistered-page",
+          address: "Future Page",
+          reason: "Page is not registered: Future Page",
+        },
+      }),
+      expect.objectContaining({
+        referenceKind: "work-id",
+        resolution: {
+          kind: "missing",
+          reason: "Work ID is not registered: PIE-999",
+        },
+      }),
+    ]);
+  });
+});
+
 test("caps each authored-link group and reports incomplete results", () => {
   withStore((store) => {
     const targets = Array.from(

@@ -332,9 +332,13 @@ function renderAuthoredLinkDisplay(row: AuthoredLinkRow, width: number): string 
   let content: string;
   if (row.link.kind === "outlink") {
     const resolution = row.link.resolution;
-    content = resolution.kind === "ready"
-      ? `${row.link.label} → ${resolution.title} · ${row.link.referenceKind}${duplicateLabel}`
-      : `${row.link.label} · unavailable: ${resolution.reason}${duplicateLabel}`;
+    if (resolution.kind === "ready") {
+      content = `${row.link.label} → ${resolution.title} · ${row.link.referenceKind}${duplicateLabel}`;
+    } else if (resolution.kind === "unregistered-page") {
+      content = `${row.link.label} · page not registered · Enter creates${duplicateLabel}`;
+    } else {
+      content = `${row.link.label} · unavailable: ${resolution.reason}${duplicateLabel}`;
+    }
   } else {
     const resolution = row.link.resolution;
     content = resolution.kind === "ready"

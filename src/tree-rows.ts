@@ -195,12 +195,35 @@ export function composeAuthoredLinkRows(
   return composed;
 }
 
+export type AuthoredLinkActivation =
+  | { readonly kind: "target"; readonly target: OutlinerNavigationTarget }
+  | { readonly kind: "follow-page"; readonly address: string }
+  | { readonly kind: "unavailable"; readonly reason: string };
+
+export function authoredLinkActivation(row: AuthoredLinkRow): AuthoredLinkActivation {
+  const { resolution } = row.link;
+  if (resolution.kind === "ready") return { kind: "target", target: resolution.target };
+  if (resolution.kind === "unregistered-page") {
+    return { kind: "follow-page", address: resolution.address };
+  }
+  return { kind: "unavailable", reason: resolution.reason };
+}
+
+export function authoredLinkCanOpen(row: AuthoredLinkRow): boolean {
+  return authoredLinkActivation(row).kind !== "unavailable";
+}
+
 export function authoredLinkTarget(row: AuthoredLinkRow): OutlinerNavigationTarget | null {
   return row.link.resolution.kind === "ready" ? row.link.resolution.target : null;
 }
 
 export function authoredLinkUnavailableReason(row: AuthoredLinkRow): string | null {
-  return row.link.resolution.kind === "ready" ? null : row.link.resolution.reason;
+  const { resolution } = row.link;
+  if (resolution.kind === "ready") return null;
+  if (resolution.kind === "unregistered-page") {
+    return `${resolution.reason} · Enter creates the page`;
+  }
+  return resolution.reason;
 }
 
 export function authoredLinkFallbackRowIds(row: TreeDisplayRow): readonly string[] {

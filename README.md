@@ -25,7 +25,7 @@ The project started as a small Friday-night experiment and grew into a durable w
 
 - SQLite-backed hierarchical blocks with stable UUIDs, sibling order, authors, timestamps, and one canonical graph per workspace root.
 - Workspace-isolated service and runtime paths.
-- JSON-lines RPC protocol v48 over a Unix socket.
+- JSON-lines RPC protocol v51 over a Unix socket.
 - Reactive canonical content/view broadcasts, per-process Tree/Detail registration with Detail lock availability, exact-client UI commands, and source-aware `preview | open | reveal` navigation.
 - Durable resources have UUID identities independent of blocks and mutable locators. Provider-qualified Sources bind filesystem roots or remote namespaces; overlapping Sources remain distinct, relocations preserve Resource IDs, provider revisions remain explicit, and capability resolution reports blockers across provider, credentials, workspace policy, host, and connectivity. Registered Detail hosts declare Surface, Placement, renderer, capability, credential, and connectivity facts; open/describe/refresh deterministically negotiate cached Markdown, embedded-browser, native-document, metadata, or external-link representations without changing Resource identity. PDF is a media type reachable through filesystem and web Sources: one captured binary snapshot can produce both native PDF and page-aware Markdown representations through versioned replaceable extractors.
 - Each Tree owns its cursor, occurrence selection, filter, viewport, collapsed rows, multiline expansion, explicit-navigation history, and browsing context; moving a Tree previews only in the first unlocked same-tab Detail and never replaces a locked anchor.
@@ -35,6 +35,7 @@ The project started as a small Friday-night experiment and grew into a durable w
 - Workspace-scoped monotonic Work-ID allocation adopts a clean existing prefix or requires explicit configuration, optimistically assigns the next immutable ID, and never reuses reserved or purged identifiers.
 - Atomic canonical roadmap-item creation discovers the single project work queue, validates UUID relationships and complete routing metadata, allocates the immutable Work ID, and returns matching virtual-branch memberships in one transaction.
 - Plain-clickable Work IDs, canonical UUIDs, exact references, and `[[address]]` links inside Tree/Detail, with OSC 8 `pi-outliner://` links retained for external terminal interoperability.
+- Tree can project a selected block's authored Outlinks and Resources as read-only generated branches. Enumeration never creates pages or fetches providers; activating an unresolved ordinary `[[page]]` follows or creates it, unresolved Work IDs stay unavailable, and exact `pi-outliner://resource/<uuid>` links open their existing canonical Resource identities.
 - Property-driven virtual branches with ranked or timestamp-sorted canonical roots, read-only contextual descendants through relative depth 2, independent occurrence disclosure, a 1,000-row branch budget, property-aware creation, and persisted manual root ordering.
 - Fresh databases seed a versioned, agent-readable Documentation hub with addressable sections, native transclusions, one exact cross-reference, and a working property-driven virtual branch.
 - Agent-created blocks retain immutable creator provenance. Every later text or property mutation records its own `user`, `agent`, or `system` identity plus available actor, session, and task IDs, so edit attribution never depends on the creator.
@@ -330,6 +331,32 @@ explicit choice. `Esc` dismisses without resolving or opening the target.
 Outside the chooser, `Shift+R` reveals the block currently shown by the Detail,
 while `Option+Shift+R` reveals its first authored reference.
 Block-fragment targets retain their exact anchor across every destination.
+
+#### Inspect authored links
+
+Select a block in Tree, press `?`, and invoke **View · Show authored links**.
+Tree inserts two generated branches under that exact occurrence:
+
+- **Outlinks** contains authored block references, `[[page]]` addresses, and Work
+  IDs. Resolved rows open in the first unlocked Detail. Merely showing or
+  selecting an unresolved page is read-only; pressing `Enter` follows the
+  address and transactionally creates its registered page only when necessary.
+  An unresolved Work ID is never created implicitly.
+- **Resources** contains exact Markdown links of the form
+  `[label](pi-outliner://resource/<resource-uuid>)`. Showing the branch only
+  reads Resource and Source metadata from the local catalog. It does not fetch,
+  refresh, or invoke a provider. Press `Enter` to open the existing canonical
+  Resource in the first unlocked Detail.
+
+Fresh databases include **Authored links example** beneath **Documentation**.
+It has one resolved block link, one initially unregistered page link, and one
+ready web Resource, so both branches and create-on-navigation can be exercised
+without finding fixture IDs in the source. With a live Tree, focus it from the
+project root with:
+
+```sh
+bun run goto "Authored links example"
+```
 
 Activating an inline Backlinks source opens a transient preview over the
 invoking Detail instead of consuming another reader. `Left` and `Right` traverse

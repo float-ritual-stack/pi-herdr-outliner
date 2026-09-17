@@ -70,6 +70,11 @@ export type AuthoredOutlinkResolution =
       readonly reason: string;
     }
   | {
+      readonly kind: "unregistered-page";
+      readonly address: string;
+      readonly reason: string;
+    }
+  | {
       readonly kind: "missing";
       readonly reason: string;
     };
@@ -340,10 +345,16 @@ function resolveOutlink(
     label: presentation(authoredLabel ?? candidate.address),
     firstSpan: { start: candidate.start, end: candidate.end },
     occurrenceCount: 1,
-    resolution: {
-      kind: "missing",
-      reason: `${referenceKind === "work-id" ? "Work ID" : "Page"} is not registered: ${candidate.address}`,
-    },
+    resolution: referenceKind === "page"
+      ? {
+          kind: "unregistered-page",
+          address: candidate.address,
+          reason: `Page is not registered: ${candidate.address}`,
+        }
+      : {
+          kind: "missing",
+          reason: `Work ID is not registered: ${candidate.address}`,
+        },
   };
 }
 
@@ -579,6 +590,23 @@ function decodeOutlink(value: unknown, index: number): AuthoredOutlink {
       ...(fragmentId ? { fragmentId } : {}),
       title: string(resolutionInput.title, `${label} title`, AUTHORED_LINKS_MAX_PRESENTATION_UNITS),
       reason: string(resolutionInput.reason, `${label} reason`, AUTHORED_LINKS_MAX_PRESENTATION_UNITS),
+    };
+  } else if (resolutionInput.kind === "unregistered-page") {
+    if (input.referenceKind !== "page") {
+      throw new Error(`${label} unregistered page must use the page reference kind`);
+    }
+    resolution = {
+      kind: "unregistered-page",
+      address: string(
+        resolutionInput.address,
+        `${label} page address`,
+        AUTHORED_LINKS_MAX_PRESENTATION_UNITS,
+      ),
+      reason: string(
+        resolutionInput.reason,
+        `${label} reason`,
+        AUTHORED_LINKS_MAX_PRESENTATION_UNITS,
+      ),
     };
   } else if (resolutionInput.kind === "missing") {
     resolution = {

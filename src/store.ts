@@ -2869,6 +2869,17 @@ export class OutlinerStore {
         create: (text, parentId) => this.create(text, parentId, "system"),
         update: (block, text) =>
           this.update(block.id, text, block.updatedAt, { author: "system" }),
+        createWebResource: (input) => {
+          const source = this.resources.createSource({
+            name: input.sourceName,
+            provider: "web",
+            boundary: { baseUrl: input.baseUrl },
+          });
+          return this.resources.intern({
+            sourceId: source.id,
+            address: { kind: "web", url: input.url },
+          }).resource;
+        },
         select: (blockId) => {
           this.setSelection(blockId);
         },

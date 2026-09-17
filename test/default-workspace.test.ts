@@ -2,8 +2,10 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { readAuthoredLinks } from "../src/authored-links";
 import {
   AGENT_DOCUMENTATION_SYSTEM_DOC,
+  AUTHORED_LINKS_EXAMPLE_SYSTEM_DOC,
   DEFAULT_WORKSPACE_SEED_VERSION,
 } from "../src/default-workspace";
 import { getProperty } from "../src/properties";
@@ -48,6 +50,35 @@ test("seeds and preserves an agent-readable documentation workspace", async () =
       kind: "page",
       block: { id: guide.id },
     });
+    const authoredLinksExamples = store.queryBlocks({
+      filters: [{ key: "system-doc", value: AUTHORED_LINKS_EXAMPLE_SYSTEM_DOC }],
+      limit: 2,
+    }).blocks;
+    expect(authoredLinksExamples).toHaveLength(1);
+    const authoredLinksExample = authoredLinksExamples[0]!;
+    expect(store.resolvePageAddress("outliner-authored-links-example")).toMatchObject({
+      status: "resolved",
+      kind: "page",
+      block: { id: authoredLinksExample.id },
+    });
+    const authoredLinks = readAuthoredLinks(store, authoredLinksExample.id);
+    if (authoredLinks.kind !== "ready") {
+      throw new Error(`Expected ready authored links, got ${authoredLinks.kind}`);
+    }
+    expect(authoredLinks.outlinks.entries.map((entry) => entry.resolution.kind)).toEqual([
+      "ready",
+      "unregistered-page",
+    ]);
+    expect(authoredLinks.resources.entries).toEqual([
+      expect.objectContaining({
+        label: "README authored-links guide",
+        resolution: expect.objectContaining({
+          kind: "ready",
+          provider: "web",
+          sourceName: "Outliner documentation",
+        }),
+      }),
+    ]);
 
     const documentation = store.get(guide.parentId!);
     expect(documentation).not.toBeNull();

@@ -233,7 +233,7 @@ test("persists resources and dispatches resource targets without synthetic block
     resourceId: resource.id,
   })).toEqual(resource);
   expect(await client.request<ResourceSource[]>({ action: "resource-sources.list" }))
-    .toEqual([source]);
+    .toContainEqual(source);
   const description = await client.request<ResourceDescription>({
     action: "resources.describe",
     target: { kind: "resource", resourceId: resource.id },

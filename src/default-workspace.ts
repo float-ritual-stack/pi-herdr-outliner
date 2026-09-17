@@ -1,14 +1,24 @@
-export const DEFAULT_WORKSPACE_SEED_VERSION = 1;
+export const DEFAULT_WORKSPACE_SEED_VERSION = 2;
 export const AGENT_DOCUMENTATION_SYSTEM_DOC = "agent-documentation-guide";
+export const AUTHORED_LINKS_EXAMPLE_SYSTEM_DOC = "authored-links-example";
 
 interface SeedBlock {
   readonly id: string;
   readonly updatedAt: string;
 }
+interface SeedResource {
+  readonly id: string;
+}
+
 
 interface DefaultWorkspaceSeedWriter {
   create(text: string, parentId: string | null): SeedBlock;
   update(block: SeedBlock, text: string): SeedBlock;
+  createWebResource(input: {
+    readonly sourceName: string;
+    readonly baseUrl: string;
+    readonly url: string;
+  }): SeedResource;
   select(blockId: string): void;
 }
 
@@ -141,7 +151,11 @@ export function seedDefaultWorkspace(writer: DefaultWorkspaceSeedWriter): void {
   const virtualBranchesSection = sections.find(({ definition }) =>
     definition.key === "virtual-branches"
   );
+  const referencesSection = sections.find(({ definition }) =>
+    definition.key === "references"
+  );
   if (!virtualBranchesSection) throw new Error("Default documentation seed is missing virtual branches");
+  if (!referencesSection) throw new Error("Default documentation seed is missing references");
 
   writer.update(guide, [
     guideTitle,
@@ -152,6 +166,22 @@ export function seedDefaultWorkspace(writer: DefaultWorkspaceSeedWriter): void {
     "",
     ...sections.flatMap(({ block }) => [`!((${block.id}))`, ""]),
   ].join("\n").trimEnd());
+  const authoredLinksResource = writer.createWebResource({
+    sourceName: "Outliner documentation",
+    baseUrl: "https://github.com/float-ritual-stack/pi-herdr-outliner",
+    url: "https://github.com/float-ritual-stack/pi-herdr-outliner/blob/main/README.md",
+  });
+  writer.create([
+    `Authored links example [type::example] [system-doc::${AUTHORED_LINKS_EXAMPLE_SYSTEM_DOC}] [page::outliner-authored-links-example]`,
+    "",
+    "Select this block in Tree, open the action menu with `?`, and invoke `Show authored links`.",
+    "",
+    `- Existing block: ((${referencesSection.block.id}|References guide))`,
+    "- Unregistered page: [[Planning scratchpad]]",
+    `- Resource: [README authored-links guide](pi-outliner://resource/${authoredLinksResource.id})`,
+    "",
+    "Showing the generated Outlinks and Resources branches is read-only. Press Enter on the unregistered page to create or follow it; press Enter on the Resource to open its canonical Resource identity.",
+  ].join("\n"), documentation.id);
 
   writer.create([
     "Project documentation [type::virtual-branch]",
