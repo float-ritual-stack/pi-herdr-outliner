@@ -1639,8 +1639,7 @@ export class ResourceCatalog {
         );
         CREATE INDEX IF NOT EXISTS web_source_snapshots_resource
           ON web_source_snapshots(resource_id, address_version, fetched_at, id);
-        DROP INDEX IF EXISTS web_source_snapshots_available_content;
-        CREATE UNIQUE INDEX web_source_snapshots_available_content
+        CREATE UNIQUE INDEX IF NOT EXISTS web_source_snapshots_available_content
           ON web_source_snapshots(
             resource_id, address_version, canonical_url, content_hash, revision_json
           )
