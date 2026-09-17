@@ -8,6 +8,7 @@ import {
   emptyAttentionState,
   normalizeAttentionMark,
 } from "./attention";
+import { readAuthoredLinks } from "./authored-links";
 import type { HerdrRuntimeRegistry } from "./herdr-registry";
 import { isFragmentId, resolveFragment } from "./fragments";
 import { ALL_DETAILS_LOCKED_ERROR } from "./navigation-routes";
@@ -1072,6 +1073,9 @@ export class OutlinerServer {
           break;
         case "blocks.query":
           result = this.store.queryBlocks(request.query);
+          break;
+        case "blocks.authored-links":
+          result = readAuthoredLinks(this.store, request.ownerBlockId);
           break;
         case "children":
           result = this.store.children(request.parentId);

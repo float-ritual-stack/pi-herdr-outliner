@@ -8,6 +8,7 @@ import {
   createAnnotationAnchor,
   createTextQuoteAnchor,
 } from "../src/annotations";
+import { decodeAuthoredLinksSnapshot } from "../src/authored-links";
 import { OutlinerClient } from "../src/client";
 import { HerdrRuntimeRegistry, type HerdrSessionSnapshot } from "../src/herdr-registry";
 import { OutlinerServer } from "../src/server";
@@ -110,6 +111,59 @@ test("round-trips idempotent delivery identity over the current protocol", async
   expect(reused.delivery.id).toBe(created.delivery.id);
   expect(store.sequence).toBe(sequenceBefore + 1);
 });
+test("serves bounded authored links without loading Resources or mutating storage", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-outliner-authored-links-protocol-"));
+  let providerCalls = 0;
+  const store = new OutlinerStore(join(directory, "outliner.sqlite"), {
+    fetch: (async () => {
+      providerCalls += 1;
+      throw new Error("Authored-link enumeration must not contact a provider");
+    }) as unknown as typeof fetch,
+  });
+  const source = store.resources.createSource({
+    name: "Protocol docs",
+    provider: "web",
+    boundary: { baseUrl: "https://example.test/" },
+  });
+  const resource = store.resources.intern({
+    sourceId: source.id,
+    address: { kind: "web", url: "https://example.test/guide" },
+  }).resource;
+  const target = store.create("Protocol target");
+  const owner = store.create(
+    `Owner ((${target.id}|Target)) [Guide](pi-outliner://resource/${resource.id})`,
+  );
+  const blockIdsBefore = store.traversePreorder({}).map((block) => block.id);
+  const sequenceBefore = store.sequence;
+  const socket = join(directory, "outliner.sock");
+  const server = new OutlinerServer(store, socket);
+  await server.start();
+  cleanups.push(async () => {
+    await server.close();
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  const client = new OutlinerClient(socket);
+  const result = decodeAuthoredLinksSnapshot(await client.request<unknown>({
+    action: "blocks.authored-links",
+    ownerBlockId: owner.id,
+  }));
+
+  if (result.kind !== "ready") throw new Error(`Expected ready result, got ${result.kind}`);
+  expect(result.outlinks.entries[0]?.resolution).toMatchObject({
+    kind: "ready",
+    target: { kind: "block", blockId: target.id },
+  });
+  expect(result.resources.entries[0]?.resolution).toMatchObject({
+    kind: "ready",
+    target: { kind: "resource", resourceId: resource.id },
+  });
+  expect(providerCalls).toBe(0);
+  expect(store.sequence).toBe(sequenceBefore);
+  expect(store.traversePreorder({}).map((block) => block.id)).toEqual(blockIdsBefore);
+});
+
 
 test("persists resources and dispatches resource targets without synthetic blocks", async () => {
   const directory = mkdtempSync(join(tmpdir(), "pi-outliner-resource-protocol-"));
@@ -1395,7 +1449,7 @@ test("serves mutations and property queries over the local socket", async () => 
   const client = new OutlinerClient(socket);
   const service = await client.request<OutlinerServiceStatus>({ action: "ping" });
   expect(service).toEqual({ status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION });
-  expect(service.protocolVersion).toBe(50);
+  expect(service.protocolVersion).toBe(51);
   const provenance = {
     actorId: "omp",
     sessionId: "session-1",

@@ -1,4 +1,8 @@
 import type { RequestInput } from "./client";
+import {
+  authoredTextDigest,
+  decodeAuthoredLinksSnapshot,
+} from "./authored-links";
 import { emptyAttentionState } from "./attention";
 import {
   formatBlockFocusMatch,
@@ -27,6 +31,7 @@ import {
   type OutlinerActionKeymap,
   type OutlinerActionMenuItem,
 } from "./outliner-actions";
+import { dispatchNavigation } from "./navigation-routes";
 import { layoutExpandedBlock } from "./tree-layout";
 import {
   historyNavigationDirection,
@@ -35,6 +40,17 @@ import {
   type TerminalInputAction,
   type TerminalKey,
 } from "./terminal";
+import {
+  authoredLinkFallbackRowIds,
+  authoredLinkHeaderRowId,
+  authoredLinkTarget,
+  authoredLinkUnavailableReason,
+  composeAuthoredLinkRows,
+  isBlockTreeRow,
+  type AuthoredLinksPanel,
+  type AuthoredLinkHeaderRow,
+  type TreeDisplayRow,
+} from "./tree-rows";
 import { isVirtualBranchDefinition } from "./virtual-branches";
 import { TextBuffer } from "./text-buffer";
 import type {
@@ -48,6 +64,7 @@ import type {
   OutlinerNavigationDispatch,
   OutlinerNavigationResolution,
   BrowsingContextPublication,
+  OutlinerNavigationTarget,
   PageAddressCollection,
   PropertyCatalogItem,
   VisibleBlock,
@@ -92,7 +109,7 @@ export interface TreeQuickCompletion {
 
 export interface TreeView {
   readonly workspaceRoot: string;
-  readonly rows: readonly TreeRow[];
+  readonly rows: readonly TreeDisplayRow[];
   readonly physicalBlocksById: ReadonlyMap<string, VisibleBlock>;
   readonly physicalRowCount: number;
   readonly occurrenceRowCount: number;
@@ -169,6 +186,10 @@ interface TreeNavigationEntry {
   readonly canonicalId: string;
 }
 
+interface PendingBrowsingPublication {
+  readonly target: OutlinerNavigationTarget | null;
+  readonly dispatchPreview: boolean;
+}
 const MAX_TREE_HISTORY_ENTRIES = 200;
 
 const GOTO_PROMPT = "Type a block ID, short prefix, or fuzzy text";
@@ -177,8 +198,25 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+const GENERATED_ROW_DISABLED_ACTIONS: Record<string, true> = {
+  "tree.authored-links.toggle": true,
+  "tree.bookmark.toggle": true,
+  "tree.capture": true,
+  "tree.add.child": true,
+  "tree.add.sibling": true,
+  "tree.current.reveal": true,
+  "tree.delete": true,
+  "tree.detail.below": true,
+  "tree.detail.right": true,
+  "tree.edit": true,
+  "tree.file.open": true,
+  "tree.reference.open": true,
+  "tree.reference.reveal": true,
+  "tree.virtual-branch.open": true,
+};
+
 function rowIndexForIdentity(
-  rows: readonly TreeRow[],
+  rows: readonly TreeDisplayRow[],
   rowId: string,
   canonicalId = rowId,
 ): number {
@@ -188,16 +226,18 @@ function rowIndexForIdentity(
     (row) => row.kind === "physical" && row.canonicalId === canonicalId,
   );
   if (physicalIndex >= 0) return physicalIndex;
-  return rows.findIndex((row) => row.canonicalId === canonicalId);
+  return rows.findIndex((row) => isBlockTreeRow(row) && row.canonicalId === canonicalId);
 }
 
 function fallbackRowBeforeDelete(
-  rows: readonly TreeRow[],
+  rows: readonly TreeDisplayRow[],
   selectedIndex: number,
   physicalBlocksById: ReadonlyMap<string, VisibleBlock>,
 ): TreeRow | null {
   const selected = rows[selectedIndex];
-  if (!selected) return null;
+  if (!isBlockTreeRow(selected)) return null;
+  const blockRows = rows.filter(isBlockTreeRow);
+  const selectedBlockIndex = blockRows.findIndex((row) => row.rowId === selected.rowId);
   const removedCanonicalIds = new Set([selected.canonicalId]);
   let discoveredDescendant = true;
   while (discoveredDescendant) {
@@ -216,21 +256,22 @@ function fallbackRowBeforeDelete(
   const survives = (row: TreeRow): boolean =>
     !removedCanonicalIds.has(row.canonicalId) &&
     !(row.kind === "occurrence" && removedCanonicalIds.has(row.viewId));
-  const survivingRows = rows.filter(survives);
+  const survivingRows = blockRows.filter(survives);
   if (survivingRows.length === 0) return null;
-  const removedBefore = rows
-    .slice(0, selectedIndex)
+  const removedBefore = blockRows
+    .slice(0, selectedBlockIndex)
     .filter((row) => !survives(row))
     .length;
   const fallbackIndex = Math.min(
-    selectedIndex - removedBefore,
+    selectedBlockIndex - removedBefore,
     survivingRows.length - 1,
   );
   return survivingRows[Math.max(0, fallbackIndex)] ?? null;
 }
 
 export function createTreeController(effects: TreeControllerEffects): TreeController {
-  let rows: TreeRow[] = [];
+  let baseRows: TreeRow[] = [];
+  let rows: TreeDisplayRow[] = [];
   let physicalBlocksById = new Map<string, VisibleBlock>();
   let physicalRowCount = 0;
   let occurrenceRowCount = 0;
@@ -238,6 +279,10 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   let visibleCompleteness: BlockCollectionCompleteness = { kind: "complete" };
   let branchStates = new Map<string, VirtualBranchState>();
   const collapsedBlockIds = new Set<string>();
+  let authoredLinksPanel: AuthoredLinksPanel = { kind: "closed" };
+  let authoredLinksGeneration = 0;
+  let authoredLinksDirty = false;
+  let authoredLinksRefresh: Promise<void> | null = null;
   const collapsedOccurrenceRowIds = new Set<string>();
   const multilineExpandedRowIds = new Set<string>();
   const uncollapsedPresentationIds = new Set<string>();
@@ -262,12 +307,33 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   let actionMenuOrigin: { column: number; row: number } | null = null;
   let actionMenuIndex = 0;
   let actionMenuQuery = "";
+  let pendingBrowsingPublication: PendingBrowsingPublication | null = null;
+  let browsingPublicationPump: Promise<void> | null = null;
 
   function filteredActionMenuItems(): OutlinerActionMenuItem[] {
-    return filterActionMenuItems(
-      actionKeymap.menuItems("tree", "browse"),
-      actionMenuQuery,
-    );
+    const selected = rows[selectedIndex];
+    let items = actionKeymap.menuItems("tree", "browse");
+    if (isBlockTreeRow(selected)) {
+      const hiding = authoredLinksPanel.kind === "open" &&
+        authoredLinksPanel.owner.rowId === selected.rowId;
+      items = items.map((item) =>
+        item.id === "tree.authored-links.toggle"
+          ? { ...item, label: hiding ? "Hide authored links" : "Show authored links" }
+          : item
+      );
+    } else {
+      items = items.filter((item) => {
+        if (GENERATED_ROW_DISABLED_ACTIONS[item.id]) return false;
+        if (item.id === "tree.read") {
+          return selected?.kind === "authored-link" && authoredLinkTarget(selected) !== null;
+        }
+        if (item.id === "tree.disclosure.toggle") {
+          return selected?.kind === "authored-link-header";
+        }
+        return true;
+      });
+    }
+    return filterActionMenuItems(items, actionMenuQuery);
   }
 
   function updateActionMenuQuery(query: string): void {
@@ -311,6 +377,118 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     };
   }
 
+  function panelOwnerBlock(): VisibleBlock | null {
+    if (authoredLinksPanel.kind === "closed") return null;
+    return physicalBlocksById.get(authoredLinksPanel.owner.blockId) ?? null;
+  }
+  function authoredLinksOwnerCollapsed(): boolean {
+    const panel = authoredLinksPanel;
+    if (panel.kind === "closed") return false;
+    const owner = baseRows.find((row) => row.rowId === panel.owner.rowId);
+    if (!owner) return false;
+    return owner.kind === "occurrence"
+      ? collapsedOccurrenceRowIds.has(owner.rowId)
+      : collapsedBlockIds.has(owner.canonicalId);
+  }
+
+  function authoredLinksPanelVisible(): boolean {
+    const panel = authoredLinksPanel;
+    if (panel.kind === "closed") return false;
+    const ownerExists = baseRows.some((row) => row.rowId === panel.owner.rowId);
+    return ownerExists && !authoredLinksOwnerCollapsed();
+  }
+  function recomposeAuthoredRows(preferredRowId?: string): void {
+    const previous = rows[selectedIndex];
+    rows = composeAuthoredLinkRows(
+      baseRows,
+      authoredLinksPanel,
+      authoredLinksOwnerCollapsed(),
+    );
+    let nextIndex = preferredRowId === undefined
+      ? previous ? rows.findIndex((row) => row.rowId === previous.rowId) : -1
+      : rows.findIndex((row) => row.rowId === preferredRowId);
+    if (nextIndex < 0 && previous) {
+      for (const fallbackRowId of authoredLinkFallbackRowIds(previous)) {
+        nextIndex = rows.findIndex((row) => row.rowId === fallbackRowId);
+        if (nextIndex >= 0) break;
+      }
+    }
+    selectedIndex = Math.max(
+      0,
+      Math.min(nextIndex >= 0 ? nextIndex : selectedIndex, rows.length - 1),
+    );
+  }
+
+  async function runAuthoredLinksRefresh(): Promise<void> {
+    while (
+      authoredLinksDirty &&
+      authoredLinksPanel.kind === "open" &&
+      authoredLinksPanelVisible()
+    ) {
+      authoredLinksDirty = false;
+      const owner = authoredLinksPanel.owner;
+      const generation = authoredLinksPanel.generation;
+      try {
+        const decoded = decodeAuthoredLinksSnapshot(await effects.request<unknown>({
+          action: "blocks.authored-links",
+          ownerBlockId: owner.blockId,
+        }));
+        if (decoded.ownerId !== owner.blockId) {
+          throw new Error("Authored-links response owner does not match the requested block");
+        }
+        if (
+          authoredLinksPanel.kind !== "open" ||
+          authoredLinksPanel.generation !== generation ||
+          authoredLinksPanel.owner.rowId !== owner.rowId ||
+          authoredLinksDirty
+        ) continue;
+        const currentOwner = panelOwnerBlock();
+        if (
+          decoded.kind === "ready" &&
+          currentOwner &&
+          decoded.ownerTextDigest !== authoredTextDigest(currentOwner.text)
+        ) {
+          authoredLinksDirty = true;
+          authoredLinksPanel = {
+            ...authoredLinksPanel,
+            load: { kind: "loading" },
+          };
+          recomposeAuthoredRows();
+          continue;
+        }
+        authoredLinksPanel = {
+          ...authoredLinksPanel,
+          load: { kind: "ready", snapshot: decoded },
+        };
+      } catch (error) {
+        if (
+          authoredLinksPanel.kind === "open" &&
+          authoredLinksPanel.generation === generation &&
+          authoredLinksPanel.owner.rowId === owner.rowId
+        ) {
+          authoredLinksPanel = {
+            ...authoredLinksPanel,
+            load: { kind: "error", message: errorMessage(error) },
+          };
+        }
+      }
+      recomposeAuthoredRows();
+      effects.invalidate();
+    }
+  }
+
+  function refreshAuthoredLinks(markDirty = true): Promise<void> {
+    if (authoredLinksPanel.kind === "closed") return Promise.resolve();
+    if (markDirty) authoredLinksDirty = true;
+    if (!authoredLinksDirty || !authoredLinksPanelVisible()) return Promise.resolve();
+    if (!authoredLinksRefresh) {
+      authoredLinksRefresh = runAuthoredLinksRefresh().finally(() => {
+        authoredLinksRefresh = null;
+      });
+    }
+    return authoredLinksRefresh;
+  }
+
   async function reload(
     preferredRowId?: string | null,
     options?: { exactRowIdOnly?: boolean },
@@ -346,8 +524,28 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       snapshot.virtualOccurrenceRanks,
       presentation,
     );
-    const nextRows = projection.rows;
-    const nextPhysicalBlocksById = new Map(snapshot.physical.blocks.map((block) => [block.id, block]));
+    baseRows = projection.rows;
+    physicalBlocksById = new Map(snapshot.physical.blocks.map((block) => [block.id, block]));
+    if (authoredLinksPanel.kind === "open" && authoredLinksPanel.load.kind === "ready") {
+      const loaded = authoredLinksPanel.load.snapshot;
+      const owner = panelOwnerBlock();
+      if (
+        loaded.kind === "ready" &&
+        owner &&
+        loaded.ownerTextDigest !== authoredTextDigest(owner.text)
+      ) {
+        authoredLinksPanel = {
+          ...authoredLinksPanel,
+          load: { kind: "loading" },
+        };
+        authoredLinksDirty = true;
+      }
+    }
+    const nextRows = composeAuthoredLinkRows(
+      baseRows,
+      authoredLinksPanel,
+      authoredLinksOwnerCollapsed(),
+    );
     const serviceSelectedId = snapshot.selection.selected?.id ?? null;
     let nextIndex = -1;
     if (preferredRowId !== undefined) {
@@ -358,6 +556,12 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       }
     } else if (currentSelected) {
       nextIndex = nextRows.findIndex((row) => row.rowId === currentSelected.rowId);
+      if (nextIndex < 0) {
+        for (const fallbackRowId of authoredLinkFallbackRowIds(currentSelected)) {
+          nextIndex = nextRows.findIndex((row) => row.rowId === fallbackRowId);
+          if (nextIndex >= 0) break;
+        }
+      }
     }
     if (
       nextIndex < 0 &&
@@ -365,7 +569,9 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       !initialWorkspaceSelectionApplied &&
       serviceSelectedId
     ) {
-      nextIndex = nextRows.findIndex((row) => row.canonicalId === serviceSelectedId);
+      nextIndex = nextRows.findIndex(
+        (row) => isBlockTreeRow(row) && row.canonicalId === serviceSelectedId,
+      );
     }
     const nextSelectedIndex = Math.max(
       0,
@@ -373,22 +579,28 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     );
     const nextSelectedRow = nextRows[nextSelectedIndex];
     const selectedRowChanged = currentSelected?.rowId !== nextSelectedRow?.rowId;
-    const selectedExpansionChanged =
-      currentSelected?.multilineExpanded !== nextSelectedRow?.multilineExpanded;
-    if (selectedRowChanged || selectedExpansionChanged) resetExpandedBlockPaging();
-
+    const currentMultilineExpanded = isBlockTreeRow(currentSelected)
+      ? currentSelected.multilineExpanded
+      : false;
+    const nextMultilineExpanded = isBlockTreeRow(nextSelectedRow)
+      ? nextSelectedRow.multilineExpanded
+      : false;
+    if (selectedRowChanged || currentMultilineExpanded !== nextMultilineExpanded) {
+      resetExpandedBlockPaging();
+    }
     rows = nextRows;
-    physicalBlocksById = nextPhysicalBlocksById;
     physicalRowCount = projection.physicalRowCount;
     occurrenceRowCount = projection.occurrenceRowCount;
     visibleCompleteness = snapshot.visible.completeness;
     branchStates = projection.branchStates;
     selectedIndex = nextSelectedIndex;
-    lastVisibleCanonicalId = rows[selectedIndex]?.canonicalId ?? null;
+    const selectedBlock = rows[selectedIndex];
+    lastVisibleCanonicalId = isBlockTreeRow(selectedBlock) ? selectedBlock.canonicalId : null;
     initialWorkspaceSelectionApplied = true;
-    workspaceContextBlockId = lastVisibleCanonicalId;
+    if (lastVisibleCanonicalId) workspaceContextBlockId = lastVisibleCanonicalId;
     refreshPending = false;
-    return lastVisibleCanonicalId !== null;
+    if (authoredLinksDirty) await refreshAuthoredLinks(false);
+    return rows.length > 0;
   }
 
   function expandedBlockRowCount(row: TreeRow): number {
@@ -407,9 +619,11 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
 
   function scrollSelectedExpandedBlock(direction: "pageup" | "pagedown"): void {
     const selected = rows[selectedIndex];
-    if (!selected?.multilineExpanded) {
+    if (!isBlockTreeRow(selected) || !selected.multilineExpanded) {
       expandedBlockOffset = 0;
-      status = "Expand the selected block before paging within it";
+      status = isBlockTreeRow(selected)
+        ? "Expand the selected block before paging within it"
+        : "Authored-link rows are single-line";
       return;
     }
     const totalRows = expandedBlockRowCount(selected);
@@ -477,6 +691,14 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
 
   async function beginInput(nextMode: TreeInputMode, initial = ""): Promise<void> {
     const selected = rows[selectedIndex];
+    if (
+      !isBlockTreeRow(selected) &&
+      nextMode !== "filter" &&
+      nextMode !== "goto"
+    ) {
+      status = "Authored-link rows cannot enter block input modes";
+      return;
+    }
     if (nextMode === "add-child" && selected?.kind === "physical" && selected.collapsed) {
       collapsedBlockIds.delete(selected.canonicalId);
       await reload(selected.rowId);
@@ -540,7 +762,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
 
   async function commitQuickBlock(): Promise<string | null> {
     const selected = rows[selectedIndex];
-    if (!selected) return null;
+    if (!isBlockTreeRow(selected)) return null;
     const text = quickInputText();
     if (!text.trim()) return mode === "edit" ? selected.canonicalId : null;
 
@@ -605,8 +827,8 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     return null;
   }
 
-  function navigationEntry(row: TreeRow | undefined): TreeNavigationEntry | null {
-    return row ? { rowId: row.rowId, canonicalId: row.canonicalId } : null;
+  function navigationEntry(row: TreeDisplayRow | undefined): TreeNavigationEntry | null {
+    return isBlockTreeRow(row) ? { rowId: row.rowId, canonicalId: row.canonicalId } : null;
   }
 
   function sameNavigationEntry(
@@ -638,14 +860,76 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     }
   }
 
+  async function drainBrowsingPublications(): Promise<void> {
+    while (pendingBrowsingPublication) {
+      const desired = pendingBrowsingPublication;
+      pendingBrowsingPublication = null;
+      const publication = await effects.request<BrowsingContextPublication>({
+        action: "browsing-context.publish",
+        sourceClientId: effects.clientId,
+        contextId: effects.browsingContextId,
+        target: desired.target,
+        ...(desired.dispatchPreview ? {} : { dispatchPreview: false }),
+      });
+      if (!pendingBrowsingPublication) {
+        workspaceContextBlockId =
+          desired.target?.kind === "block" ? desired.target.blockId : null;
+        if (publication.unavailable) status = publication.unavailable;
+      }
+    }
+  }
+
+  async function publishBrowsingTarget(
+    target: OutlinerNavigationTarget | null,
+    dispatchPreview = true,
+  ): Promise<void> {
+    pendingBrowsingPublication = { target, dispatchPreview };
+    if (!browsingPublicationPump) {
+      browsingPublicationPump = drainBrowsingPublications().finally(() => {
+        browsingPublicationPump = null;
+      });
+    }
+    await browsingPublicationPump;
+  }
+
   async function publishBrowsingContext(blockId: string | null): Promise<void> {
-    const publication = await effects.request<BrowsingContextPublication>({
-      action: "browsing-context.publish",
-      sourceClientId: effects.clientId,
-      contextId: effects.browsingContextId,
-      target: blockId ? { kind: "block", blockId } : null,
-    });
-    if (publication.unavailable) status = publication.unavailable;
+    await publishBrowsingTarget(blockId ? { kind: "block", blockId } : null);
+  }
+
+  function headerSelectionStatus(row: AuthoredLinkHeaderRow): string {
+    if (row.state.kind !== "ready") return row.state.message;
+    const group = row.group === "outlinks" ? "Outlinks" : "Resources";
+    const details = [`${row.state.entryCount} authored ${group}`];
+    if (row.state.invalidCount > 0) details.push(`${row.state.invalidCount} invalid`);
+    if (row.state.limited) details.push("limited");
+    if (row.state.diagnostics[0]) details.push(row.state.diagnostics[0].message);
+    return details.join(" · ");
+  }
+
+  async function publishDisplayRowSelection(row: TreeDisplayRow | undefined): Promise<void> {
+    if (isBlockTreeRow(row)) {
+      lastVisibleCanonicalId = row.canonicalId;
+      await publishBrowsingContext(row.canonicalId);
+      return;
+    }
+    lastVisibleCanonicalId = null;
+    if (!row) {
+      await publishBrowsingTarget(null, false);
+      return;
+    }
+    if (row.kind === "authored-link-header") {
+      status = headerSelectionStatus(row);
+      await publishBrowsingTarget(null, false);
+      return;
+    }
+    const target = authoredLinkTarget(row);
+    if (target) {
+      status = `${row.link.label} selected · Enter opens in Detail`;
+      await publishBrowsingTarget(target, false);
+    } else {
+      status = authoredLinkUnavailableReason(row) ?? "Authored target is unavailable";
+      await publishBrowsingTarget(null, false);
+    }
   }
 
   async function selectVisibleBlock(
@@ -661,9 +945,12 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     if (!canonicalId || !options?.physicalSource) {
       await reload(options?.preferredRowId ?? canonicalId);
     }
+    const currentSelected = rows[selectedIndex];
     if (
       canonicalId &&
-      (options?.physicalSource || rows[selectedIndex]?.canonicalId !== canonicalId)
+      (options?.physicalSource ||
+        !isBlockTreeRow(currentSelected) ||
+        currentSelected.canonicalId !== canonicalId)
     ) {
       const target = physicalBlocksById.get(canonicalId);
       if (!target) throw new Error(`Block not found: ${canonicalId}`);
@@ -681,7 +968,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       await reload(canonicalId);
     }
     const selected = rows[selectedIndex];
-    const visibleCanonicalId = selected?.canonicalId ?? null;
+    const visibleCanonicalId = isBlockTreeRow(selected) ? selected.canonicalId : null;
     if (
       canonicalId &&
       (visibleCanonicalId !== canonicalId || (options?.physicalSource && selected?.kind !== "physical"))
@@ -718,7 +1005,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       const confirmation = quickInputText().trim();
       mode = "browse";
       resetQuickEditor();
-      if (!selected?.block.deletedAt) {
+      if (!isBlockTreeRow(selected) || !selected.block.deletedAt) {
         status = "Selected block is not a Trash root";
       } else {
         await effects.request({
@@ -728,7 +1015,8 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         });
         status = "Permanently purged";
         await reload();
-        const visibleCanonicalId = rows[selectedIndex]?.canonicalId ?? null;
+        const nextSelected = rows[selectedIndex];
+        const visibleCanonicalId = isBlockTreeRow(nextSelected) ? nextSelected.canonicalId : null;
         await publishBrowsingContext(visibleCanonicalId);
       }
       effects.invalidate();
@@ -738,7 +1026,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     const selected = rows[selectedIndex];
     const editingRowId = mode === "edit" ? selected?.rowId : undefined;
     const committedBlockId = await commitQuickBlock();
-    const fallbackId = selected?.canonicalId ?? null;
+    const fallbackId = isBlockTreeRow(selected) ? selected.canonicalId : null;
     mode = "browse";
     resetQuickEditor();
     await selectVisibleBlock(committedBlockId ?? fallbackId, {
@@ -750,17 +1038,52 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   async function focusDetailReader(): Promise<void> {
     const selected = rows[selectedIndex];
     if (!selected) return;
+    if (selected.kind === "authored-link-header") {
+      status = headerSelectionStatus(selected);
+      effects.invalidate();
+      return;
+    }
+    if (selected.kind === "authored-link") {
+      const target = authoredLinkTarget(selected);
+      if (!target) {
+        status = authoredLinkUnavailableReason(selected) ?? "Authored target is unavailable";
+        effects.invalidate();
+        return;
+      }
+      try {
+        await dispatchNavigation(
+          effects,
+          effects.clientId,
+          target,
+          "open",
+          { preserveSource: true },
+        );
+        status = "Authored target opened in first unlocked Detail";
+      } catch (error) {
+        status = errorMessage(error);
+      }
+      effects.invalidate();
+      return;
+    }
     try {
-      await effects.request<OutlinerNavigationDispatch>({ action: "navigation.dispatch", sourceClientId: effects.clientId, target: { kind: "block", blockId: selected.canonicalId }, intent: "open", });
+      await dispatchNavigation(effects, effects.clientId, {
+        kind: "block",
+        blockId: selected.canonicalId,
+      }, "open");
       status = "Reader opened in first unlocked Detail";
     } catch (error) {
       status = errorMessage(error);
     }
     effects.invalidate();
   }
+
   async function createDetailPane(direction: "right" | "down" = "down"): Promise<void> {
     const selected = rows[selectedIndex];
-    if (!selected) return;
+    if (!isBlockTreeRow(selected)) {
+      status = "Open authored targets in the existing Detail";
+      effects.invalidate();
+      return;
+    }
     try {
       await effects.createDetailPane(selected.canonicalId, direction);
       status = `Opened new independent Detail ${direction} for ${blockDisplayTitle(selected.block)}`;
@@ -769,9 +1092,14 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     }
     effects.invalidate();
   }
+
   async function handoffToDetail(): Promise<void> {
     const selected = rows[selectedIndex];
-    if (!selected) return;
+    if (!isBlockTreeRow(selected)) {
+      status = "Authored-link rows cannot enter the block editor";
+      effects.invalidate();
+      return;
+    }
     const committedBlockId = await commitQuickBlock();
     if ((mode === "add-child" || mode === "add-sibling") && !committedBlockId) {
       status = "Type a title before opening multiline detail";
@@ -791,7 +1119,11 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       });
       await effects.request({
         action: "ui.command.send",
-        command: { targetClientId: destination.targetClientId, command: "edit", target: { kind: "block", blockId: targetId },  },
+        command: {
+          targetClientId: destination.targetClientId,
+          command: "edit",
+          target: { kind: "block", blockId: targetId },
+        },
       });
       status = "Multiline editor opened and locked in first unlocked Detail";
     } catch (error) {
@@ -1008,7 +1340,9 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     }
     const branchRows = rows.filter(
       (row): row is VirtualBranchOccurrenceRow =>
-        isVirtualBranchRootOccurrence(row) && row.viewId === selected.viewId,
+        isBlockTreeRow(row) &&
+        isVirtualBranchRootOccurrence(row) &&
+        row.viewId === selected.viewId,
     );
     const currentIndex = branchRows.findIndex((row) => row.rowId === selected.rowId);
     const targetIndex = currentIndex + offset;
@@ -1097,8 +1431,13 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       effects.invalidate();
       return;
     }
-    if (event.domain === "resource-catalog") return;
+    if (event.domain === "resource-catalog") {
+      if (authoredLinksPanel.kind === "open") await refreshAuthoredLinks();
+      effects.invalidate();
+      return;
+    }
     if (event.domain === "selection") return;
+    if (authoredLinksPanel.kind === "open") authoredLinksDirty = true;
     if (mode !== "browse") {
       refreshPending = true;
       return;
@@ -1106,9 +1445,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     const previousRow = rows[selectedIndex];
     await reload();
     if (previousRow && !rows.some((row) => row.rowId === previousRow.rowId)) {
-      const fallbackCanonicalId = rows[selectedIndex]?.canonicalId ?? null;
-      lastVisibleCanonicalId = fallbackCanonicalId;
-      await publishBrowsingContext(fallbackCanonicalId);
+      await publishDisplayRowSelection(rows[selectedIndex]);
     }
     effects.invalidate();
   }
@@ -1150,9 +1487,13 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       targetClientId: effects.clientId,
     });
     if (mode === "browse") {
+      if (authoredLinksPanel.kind === "open") authoredLinksDirty = true;
       await reload();
-      await publishBrowsingContext(lastVisibleCanonicalId);
-    } else refreshPending = true;
+      await publishDisplayRowSelection(rows[selectedIndex]);
+    } else {
+      refreshPending = true;
+      if (authoredLinksPanel.kind === "open") authoredLinksDirty = true;
+    }
     effects.invalidate();
   }
 
@@ -1205,8 +1546,19 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   async function handleDisclosure(rowId: string): Promise<void> {
     const rowIndex = rows.findIndex((row) => row.rowId === rowId);
     const row = rows[rowIndex];
-    if (!row?.hasChildren) return;
+    if (!row) return;
     selectedIndex = rowIndex;
+    if (row.kind === "authored-link-header") {
+      if (authoredLinksPanel.kind !== "open") return;
+      authoredLinksPanel = row.group === "outlinks"
+        ? { ...authoredLinksPanel, outlinksCollapsed: !authoredLinksPanel.outlinksCollapsed }
+        : { ...authoredLinksPanel, resourcesCollapsed: !authoredLinksPanel.resourcesCollapsed };
+      recomposeAuthoredRows(row.rowId);
+      await publishDisplayRowSelection(rows[selectedIndex]);
+      effects.invalidate();
+      return;
+    }
+    if (!isBlockTreeRow(row) || !row.hasChildren) return;
     if (isVirtualBranchOccurrence(row)) {
       if (!collapsedOccurrenceRowIds.delete(row.rowId)) {
         collapsedOccurrenceRowIds.add(row.rowId);
@@ -1215,11 +1567,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       collapsedBlockIds.add(row.canonicalId);
     }
     await reload(row.rowId, { exactRowIdOnly: true });
-    const visibleCanonicalId = rows[selectedIndex]?.canonicalId ?? null;
-    if (visibleCanonicalId !== lastVisibleCanonicalId) {
-      lastVisibleCanonicalId = visibleCanonicalId;
-      await publishBrowsingContext(visibleCanonicalId);
-    }
+    await publishDisplayRowSelection(rows[selectedIndex]);
     effects.invalidate();
   }
 
@@ -1229,11 +1577,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     if (rowIndex < 0) return;
     if (rows[selectedIndex]?.rowId !== rowId) resetExpandedBlockPaging();
     selectedIndex = rowIndex;
-    const visibleCanonicalId = rows[selectedIndex]?.canonicalId ?? null;
-    if (visibleCanonicalId !== lastVisibleCanonicalId) {
-      lastVisibleCanonicalId = visibleCanonicalId;
-      await publishBrowsingContext(visibleCanonicalId);
-    }
+    await publishDisplayRowSelection(rows[selectedIndex]);
     effects.invalidate();
     if (activate) await focusDetailReader();
   }
@@ -1271,8 +1615,44 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       return;
     }
     const selected = rows[selectedIndex];
+    if (actionId === "tree.authored-links.toggle") {
+      if (!isBlockTreeRow(selected)) {
+        status = "Select an ordinary block occurrence to show authored links";
+        effects.invalidate();
+        return;
+      }
+      if (
+        authoredLinksPanel.kind === "open" &&
+        authoredLinksPanel.owner.rowId === selected.rowId
+      ) {
+        authoredLinksGeneration += 1;
+        authoredLinksDirty = false;
+        authoredLinksPanel = { kind: "closed" };
+        recomposeAuthoredRows(selected.rowId);
+        status = "Authored links hidden";
+        effects.invalidate();
+        return;
+      }
+      authoredLinksGeneration += 1;
+      if (selected.kind === "occurrence") collapsedOccurrenceRowIds.delete(selected.rowId);
+      else collapsedBlockIds.delete(selected.canonicalId);
+      authoredLinksPanel = {
+        kind: "open",
+        owner: { rowId: selected.rowId, blockId: selected.canonicalId },
+        generation: authoredLinksGeneration,
+        outlinksCollapsed: false,
+        resourcesCollapsed: false,
+        load: { kind: "loading" },
+      };
+      await reload(selected.rowId, { exactRowIdOnly: true });
+      effects.invalidate();
+      await refreshAuthoredLinks();
+      status = "Authored links shown";
+      effects.invalidate();
+      return;
+    }
     if (actionId === "tree.virtual-branch.open") {
-      if (!selected) {
+      if (!isBlockTreeRow(selected)) {
         status = "No block selected";
       } else if (!isVirtualBranchDefinition(selected.block)) {
         status = "Selected block is not a virtual branch";
@@ -1299,7 +1679,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       return;
     }
     if (actionId === "tree.bookmark.toggle") {
-      if (!selected) {
+      if (!isBlockTreeRow(selected)) {
         status = "No block selected";
       } else {
         try {
@@ -1321,7 +1701,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       return;
     }
     if (actionId === "tree.current.reveal") {
-      if (!selected) {
+      if (!isBlockTreeRow(selected)) {
         status = "No block selected";
       } else {
         try {
@@ -1339,7 +1719,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       return;
     }
     if (actionId === "tree.reference.open" || actionId === "tree.reference.reveal") {
-      if (!selected) {
+      if (!isBlockTreeRow(selected)) {
         status = "No block selected";
       } else {
         try {
@@ -1448,12 +1828,13 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
 
     if (mode === "delete") {
       const selected = rows[selectedIndex];
-      if (str.toLowerCase() === "y" && selected) {
+      if (str.toLowerCase() === "y" && isBlockTreeRow(selected)) {
         const fallback = fallbackRowBeforeDelete(rows, selectedIndex, physicalBlocksById);
         await publishBrowsingContext(fallback?.canonicalId ?? null);
         await effects.request({ action: "delete", blockId: selected.canonicalId });
         await reload(fallback?.rowId ?? null, { exactRowIdOnly: true });
-        lastVisibleCanonicalId = rows[selectedIndex]?.canonicalId ?? null;
+        const visible = rows[selectedIndex];
+        lastVisibleCanonicalId = isBlockTreeRow(visible) ? visible.canonicalId : null;
         status = "Moved to Trash";
       } else if (refreshPending) {
         await reload();
@@ -1525,6 +1906,57 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     const historyDirection = historyNavigationDirection(key);
     if (historyDirection) {
       await navigateTreeHistory(historyDirection);
+      effects.invalidate();
+      return;
+    }
+    if (selected && !isBlockTreeRow(selected)) {
+      if (key.name === "q") {
+        status = "Outliner remains open; ⌃Q closes this pane";
+      } else if (key.name === "up" || key.name === "down") {
+        const delta = key.name === "up" ? -1 : 1;
+        selectedIndex = Math.max(0, Math.min(rows.length - 1, selectedIndex + delta));
+        resetExpandedBlockPaging();
+        await publishDisplayRowSelection(rows[selectedIndex]);
+      } else if (key.name === "left") {
+        if (selected.kind === "authored-link-header" && !selected.collapsed) {
+          await handleDisclosure(selected.rowId);
+          return;
+        }
+        const targetRowId = selected.kind === "authored-link-header"
+          ? selected.owner.rowId
+          : authoredLinkHeaderRowId(selected.owner.rowId, selected.group);
+        const targetIndex = rows.findIndex((row) => row.rowId === targetRowId);
+        if (targetIndex >= 0) {
+          selectedIndex = targetIndex;
+          await publishDisplayRowSelection(rows[selectedIndex]);
+        }
+      } else if (
+        selected.kind === "authored-link-header" &&
+        (key.name === "right" || key.name === "space" || key.name === "return")
+      ) {
+        await handleDisclosure(selected.rowId);
+        return;
+      } else if (key.name === "return" || detailHandoffRequested) {
+        await focusDetailReader();
+        return;
+      } else if (key.name === "pageup" || key.name === "pagedown" || isDetailToggle(str, key)) {
+        status = "Authored-link rows are single-line";
+      } else if (str === "g") {
+        status = GOTO_PROMPT;
+        await beginInput("goto");
+        return;
+      } else if (str === "/") {
+        await beginInput("filter", activeFilter);
+        return;
+      } else if (key.name === "escape" && activeFilter) {
+        activeFilter = "";
+        await reload(selected.rowId, { exactRowIdOnly: true });
+        await publishDisplayRowSelection(rows[selectedIndex]);
+      } else if (str === "L") {
+        status = "Lock or unlock from a Detail pane";
+      } else {
+        status = "Authored-link rows are read-only; Enter opens the target";
+      }
       effects.invalidate();
       return;
     }
@@ -1603,7 +2035,9 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
           reloadRequired = true;
         } else if (selected.hasChildren) {
           const childIndex = rows.findIndex((row) =>
-            isVirtualBranchOccurrence(row) && row.parentRowId === selected.rowId
+            isBlockTreeRow(row) &&
+            isVirtualBranchOccurrence(row) &&
+            row.parentRowId === selected.rowId
           );
           if (childIndex >= 0) selectedIndex = childIndex;
         }
@@ -1714,19 +2148,17 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
 
     if (rows[selectedIndex]?.rowId !== selected?.rowId) resetExpandedBlockPaging();
     if (reloadRequired) await reload(preferredRowId);
-    const visibleCanonicalId = rows[selectedIndex]?.canonicalId ?? null;
-    if (visibleCanonicalId !== lastVisibleCanonicalId) {
-      lastVisibleCanonicalId = visibleCanonicalId;
-      await publishBrowsingContext(visibleCanonicalId);
+    const visible = rows[selectedIndex];
+    if (visible?.rowId !== selected?.rowId || reloadRequired) {
+      await publishDisplayRowSelection(visible);
     }
     effects.invalidate();
   }
 
   async function initialize(): Promise<void> {
     await reload();
-    await publishBrowsingContext(lastVisibleCanonicalId);
+    await publishDisplayRowSelection(rows[selectedIndex]);
   }
-
   return {
     view,
     initialize,

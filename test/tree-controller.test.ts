@@ -4,11 +4,23 @@ import {
   emptyAttentionState,
   normalizeAttentionMark,
 } from "../src/attention";
+import { authoredTextDigest } from "../src/authored-links";
 import type { RequestInput } from "../src/client";
 import { OutlinerActionKeymap } from "../src/outliner-actions";
-import { createTreeController, type TreeControllerEffects } from "../src/tree-controller";
+import {
+  createTreeController,
+  type TreeController,
+  type TreeControllerEffects,
+} from "../src/tree-controller";
+import {
+  isBlockTreeRow,
+  type TreeDisplayRow,
+} from "../src/tree-rows";
 import { layoutExpandedBlock } from "../src/tree-layout";
-import { decorateVirtualBranchDefinitionText } from "../src/virtual-branches";
+import {
+  decorateVirtualBranchDefinitionText,
+  type TreeRow,
+} from "../src/virtual-branches";
 import type {
   Block,
   BlockCollectionCompleteness,
@@ -63,6 +75,19 @@ function snapshot(
     sequence: 1,
     workIdPrefix: options.workIdPrefix,
   };
+}
+function blockRow(row: TreeDisplayRow | undefined): TreeRow {
+  if (!isBlockTreeRow(row)) throw new Error("Expected a block Tree row");
+  return row;
+}
+
+function selectedBlockRow(controller: TreeController): TreeRow {
+  const view = controller.view();
+  return blockRow(view.rows[view.selectedIndex]);
+}
+
+function canonicalRowIds(rows: readonly TreeDisplayRow[]): string[] {
+  return rows.filter(isBlockTreeRow).map((row) => row.canonicalId);
 }
 
 function publishedBlockId(
@@ -215,9 +240,9 @@ describe("createTreeController", () => {
     await controller.initialize();
 
     await controller.handleKeypress("j", { name: "j" }, "pass");
-    expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe("second");
+    expect(selectedBlockRow(controller).canonicalId).toBe("second");
     await controller.handleKeypress("", { name: "down" }, "pass");
-    expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe("second");
+    expect(selectedBlockRow(controller).canonicalId).toBe("second");
 
     await controller.handleAction("tree.menu.open");
     expect(controller.view().mode).toBe("action-menu");
@@ -251,11 +276,11 @@ describe("createTreeController", () => {
     const controller = createTreeController(fake.effects);
 
     await controller.initialize();
-    expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe("second");
+    expect(selectedBlockRow(controller).canonicalId).toBe("second");
     expect(fake.calls.filter((call) => call.action === "browsing-context.publish")).toHaveLength(1);
 
     await controller.handleServiceEvent(event("content"));
-    expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe("second");
+    expect(selectedBlockRow(controller).canonicalId).toBe("second");
     expect(fake.calls.filter((call) => call.action === "browsing-context.publish")).toHaveLength(1);
   });
 
@@ -270,20 +295,144 @@ describe("createTreeController", () => {
     fake.calls.length = 0;
 
     await controller.handleRowClick(second.id);
-    expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe(second.id);
+    expect(selectedBlockRow(controller).canonicalId).toBe(second.id);
     expect(lastCall(fake.calls, "browsing-context.publish")).toMatchObject({
       target: { kind: "block", blockId: second.id },
     });
 
     fake.calls.length = 0;
     await controller.handleRowClick(first.id, true);
-    expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe(first.id);
+    expect(selectedBlockRow(controller).canonicalId).toBe(first.id);
     expect(lastCall(fake.calls, "navigation.dispatch")).toMatchObject({
       target: { kind: "block", blockId: first.id },
       intent: "open",
     });
     expect(controller.view().status).toBe("Reader opened in first unlocked Detail");
   });
+  test("keeps generated links on their exact owner occurrence and opens typed targets explicitly", async () => {
+    const definition = block("view0001", {
+      properties: [
+        { key: "type", value: "virtual-branch" },
+        { key: "query", value: "status=Next" },
+      ],
+    });
+    const target = block("target01", { text: "Target", displayText: "Target" });
+    const resourceId = "22222222-2222-4222-8222-222222222222";
+    const owner = block("owner001", {
+      text: `Owner ((${target.id}|Target)) [Guide](pi-outliner://resource/${resourceId})`,
+      displayText: "Owner",
+      properties: [{ key: "status", value: "Next" }],
+    });
+    const ownerOccurrenceRowId = `occurrence:${definition.id}:${owner.id}`;
+    const fake = harness((input) => {
+      if (input.action === "workspace.snapshot") {
+        return snapshot([definition], definition, {
+          physicalBlocks: [definition, owner, target],
+        });
+      }
+      if (input.action === "blocks.query") {
+        return { blocks: [owner], completeness: { kind: "complete" } };
+      }
+      if (input.action === "blocks.authored-links") {
+        return {
+          kind: "ready",
+          ownerId: owner.id,
+          ownerTextDigest: authoredTextDigest(owner.text),
+          outlinks: {
+            entries: [{
+              kind: "outlink",
+              key: JSON.stringify(["block", target.id, null]),
+              label: "Target",
+              firstSpan: { start: 6, end: 27 },
+              occurrenceCount: 1,
+              referenceKind: "block",
+              resolution: {
+                kind: "ready",
+                target: { kind: "block", blockId: target.id },
+                title: "Target",
+              },
+            }],
+            completeness: { kind: "complete" },
+            invalidCount: 0,
+            diagnostics: [],
+          },
+          resources: {
+            entries: [{
+              kind: "resource",
+              key: JSON.stringify(["resource", resourceId]),
+              label: "Guide",
+              firstSpan: { start: 28, end: owner.text.length },
+              occurrenceCount: 1,
+              resourceId,
+              resolution: {
+                kind: "ready",
+                target: { kind: "resource", resourceId },
+                sourceName: "Protocol docs",
+                provider: "web",
+                addressLabel: "https://example.test/guide",
+              },
+            }],
+            completeness: { kind: "complete" },
+            invalidCount: 0,
+            diagnostics: [],
+          },
+        };
+      }
+      return undefined;
+    });
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+    await controller.handleKeypress("", { name: "down" }, "pass");
+
+    expect(controller.view().rows[controller.view().selectedIndex]?.rowId)
+      .toBe(ownerOccurrenceRowId);
+    await controller.handleAction("tree.authored-links.toggle");
+
+    const displayed = controller.view().rows;
+    expect(displayed.map((row) => row.kind)).toEqual([
+      "physical",
+      "occurrence",
+      "authored-link-header",
+      "authored-link",
+      "authored-link-header",
+      "authored-link",
+    ]);
+    const headers = displayed.filter((row) => row.kind === "authored-link-header");
+    expect(headers.map((row) => ({
+      ownerRowId: row.owner.rowId,
+      group: row.group,
+      collapsed: row.collapsed,
+    }))).toEqual([
+      { ownerRowId: ownerOccurrenceRowId, group: "outlinks", collapsed: false },
+      { ownerRowId: ownerOccurrenceRowId, group: "resources", collapsed: false },
+    ]);
+    const resourceRow = displayed.find(
+      (row) => row.kind === "authored-link" && row.group === "resources",
+    );
+    if (!resourceRow || resourceRow.kind !== "authored-link") {
+      throw new Error("Expected generated Resource row");
+    }
+
+    await controller.handleRowClick(resourceRow.rowId);
+    expect(lastCall(fake.calls, "browsing-context.publish")).toEqual({
+      action: "browsing-context.publish",
+      sourceClientId: "tree-test",
+      contextId: "tree-test-context",
+      target: { kind: "resource", resourceId },
+      dispatchPreview: false,
+    });
+    expect(fake.calls.some((call) => call.action === "navigation.dispatch")).toBe(false);
+
+    await controller.handleKeypress("", { name: "return" }, "pass");
+    expect(lastCall(fake.calls, "navigation.dispatch")).toEqual({
+      action: "navigation.dispatch",
+      sourceClientId: "tree-test",
+      target: { kind: "resource", resourceId },
+      intent: "open",
+      preserveSource: true,
+    });
+  });
+
 
   test("fuzzy goto previews candidates and reveals the selected block", async () => {
     const first = block("first", { text: "Inbox", displayText: "Inbox" });
@@ -320,7 +469,7 @@ describe("createTreeController", () => {
 
     await controller.handleKeypress("", { name: "return" }, "pass");
     expect(controller.view().mode).toBe("browse");
-    expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe(target.id);
+    expect(selectedBlockRow(controller).canonicalId).toBe(target.id);
     expect(lastCall(fake.calls, "browsing-context.publish")).toEqual({ action: "browsing-context.publish", sourceClientId: "tree-test", contextId: "tree-test-context", target: { kind: "block", blockId: target.id } });
   });
   test("separates canonical source reveal from authored reference reveal", async () => {
@@ -338,7 +487,7 @@ describe("createTreeController", () => {
     await controller.initialize();
 
     await controller.handleKeypress("o", { name: "o" }, "pass");
-    expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe(source.id);
+    expect(selectedBlockRow(controller).canonicalId).toBe(source.id);
     expect(lastCall(fake.calls, "navigation.dispatch")).toEqual({ action: "navigation.dispatch", sourceClientId: "tree-test", target: { kind: "block", blockId: target.id }, intent: "open", });
     expect(controller.view().status).toBe("Opened Target in first unlocked Detail");
 
@@ -349,7 +498,7 @@ describe("createTreeController", () => {
         intent: "open",
       }),
     ]);
-    expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe(source.id);
+    expect(selectedBlockRow(controller).canonicalId).toBe(source.id);
     expect(fake.focused).toEqual(["outliner"]);
 
     await controller.handleKeypress("R", { name: "r", meta: true, shift: true }, "pass");
@@ -364,10 +513,10 @@ describe("createTreeController", () => {
         focusTarget: true,
       }),
     ]);
-    expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe(source.id);
+    expect(selectedBlockRow(controller).canonicalId).toBe(source.id);
 
     await controller.handleKeypress("", { name: "b", meta: true }, "pass");
-    expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe(source.id);
+    expect(selectedBlockRow(controller).canonicalId).toBe(source.id);
     expect(fake.calls.some((call) => call.action === "navigation.back")).toBe(false);
   });
 
@@ -417,7 +566,7 @@ describe("createTreeController", () => {
       action: "pages.follow",
       address: "Future Page",
     });
-    expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe(source.id);
+    expect(selectedBlockRow(controller).canonicalId).toBe(source.id);
     expect(controller.view().status).toBe("Created and opened Future Page in first unlocked Detail");
   });
 
@@ -456,7 +605,7 @@ describe("createTreeController", () => {
       action: "pages.resolve",
       address: "ABC-001",
     });
-    expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe(source.id);
+    expect(selectedBlockRow(controller).canonicalId).toBe(source.id);
     expect(lastCall(fake.calls, "navigation.dispatch")).toMatchObject({
       sourceClientId: "tree-test",
       target: { kind: "block", blockId: target.id },
@@ -570,7 +719,7 @@ describe("createTreeController", () => {
     expect(controller.view().rows).toHaveLength(501);
     expect(controller.view().physicalBlocksById.size).toBe(501);
     expect(controller.view().visibleCompleteness).toEqual({ kind: "complete" });
-    expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe("block-500");
+    expect(selectedBlockRow(controller).canonicalId).toBe("block-500");
     expect(fake.calls.filter((call) => call.action === "browsing-context.publish")).toHaveLength(1);
   });
 
@@ -634,7 +783,7 @@ describe("createTreeController", () => {
     await controller.handleKeypress("", { name: "return" }, "pass");
 
     expect(controller.view().activeFilter).toBe('status="in progress"');
-    expect(controller.view().rows.map((row) => row.canonicalId)).toEqual(["alpha"]);
+    expect(canonicalRowIds(controller.view().rows)).toEqual(["alpha"]);
     expect(lastCall(fake.calls, "workspace.snapshot")).toEqual({
       action: "workspace.snapshot",
       view: {
@@ -650,7 +799,7 @@ describe("createTreeController", () => {
     await controller.handleKeypress("", { name: "return" }, "pass");
     expect(controller.view().mode).toBe("filter");
     expect(controller.view().activeFilter).toBe('status="in progress"');
-    expect(controller.view().rows.map((row) => row.canonicalId)).toEqual(["alpha"]);
+    expect(canonicalRowIds(controller.view().rows)).toEqual(["alpha"]);
     expect(controller.view().status).toContain("Invalid filter:");
   });
 
@@ -686,7 +835,7 @@ describe("createTreeController", () => {
 
     await controller.handleKeypress("V", { name: "v", shift: true }, "pass");
     expect(fake.openedVirtualNavigators).toEqual([view.id]);
-    expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe(view.id);
+    expect(selectedBlockRow(controller).canonicalId).toBe(view.id);
 
     await controller.handleKeypress("", { name: "down" }, "pass");
     await controller.handleKeypress("V", { name: "v", shift: true }, "pass");
@@ -725,7 +874,7 @@ describe("createTreeController", () => {
     await controller.handleKeypress("M", { name: "m", shift: true }, "pass");
     expect(fake.openedVirtualNavigators).toEqual([root.id]);
     expect(fake.openedVirtualNavigatorAdapters).toEqual(["bookmark"]);
-    expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe(target.id);
+    expect(selectedBlockRow(controller).canonicalId).toBe(target.id);
   });
 
   test("keeps Tree selection stable when the capture popup cannot open", async () => {
@@ -761,7 +910,7 @@ describe("createTreeController", () => {
 
     await controller.initialize();
 
-    expect(controller.view().rows.map((row) => row.canonicalId)).toEqual(["visible"]);
+    expect(canonicalRowIds(controller.view().rows)).toEqual(["visible"]);
     expect([...controller.view().physicalBlocksById.keys()]).toEqual(["visible", "hidden"]);
     expect(controller.view().visibleCompleteness).toEqual({ kind: "truncated", limit: 1 });
   });
@@ -790,7 +939,7 @@ describe("createTreeController", () => {
     await controller.handleKeypress("", { name: "down" }, "pass");
     await controller.handleServiceEvent(event("browsing-context", first.id));
 
-    expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe(second.id);
+    expect(selectedBlockRow(controller).canonicalId).toBe(second.id);
     expect(controller.view().workspaceContextBlockId).toBe(first.id);
   });
 
@@ -835,17 +984,17 @@ describe("createTreeController", () => {
     await first.handleKeypress("", { name: "pagedown" }, "pass");
     expect(first.view().expandedBlockOffset).toBeGreaterThan(0);
     expect(second.view().expandedBlockOffset).toBe(0);
-    expect(first.view().rows[0]?.multilineExpanded).toBe(true);
-    expect(second.view().rows[0]?.multilineExpanded).toBe(false);
+    expect(blockRow(first.view().rows[0]).multilineExpanded).toBe(true);
+    expect(blockRow(second.view().rows[0]).multilineExpanded).toBe(false);
 
     await first.handleKeypress("", { name: "space" }, "pass");
-    expect(first.view().rows.map((row) => row.canonicalId)).toEqual(["root", "peer"]);
-    expect(second.view().rows.map((row) => row.canonicalId)).toEqual(["root", "child", "peer"]);
+    expect(canonicalRowIds(first.view().rows)).toEqual(["root", "peer"]);
+    expect(canonicalRowIds(second.view().rows)).toEqual(["root", "child", "peer"]);
     await first.handleKeypress("", { name: "down" }, "pass");
     await second.handleServiceEvent(
       event("browsing-context", peer.id, "tree-second-context"),
     );
-    expect(second.view().rows[second.view().selectedIndex]?.canonicalId).toBe(root.id);
+    expect(selectedBlockRow(second).canonicalId).toBe(root.id);
     expect(second.view().workspaceContextBlockId).toBe(peer.id);
 
     await second.handleServiceEvent({
@@ -858,14 +1007,14 @@ describe("createTreeController", () => {
     await first.handleServiceEvent(
       event("browsing-context", child.id, "tree-first-context"),
     );
-    expect(second.view().rows[second.view().selectedIndex]?.canonicalId).toBe(child.id);
-    expect(first.view().rows[first.view().selectedIndex]?.canonicalId).toBe(peer.id);
+    expect(selectedBlockRow(second).canonicalId).toBe(child.id);
+    expect(selectedBlockRow(first).canonicalId).toBe(peer.id);
     expect(secondHarness.focused).toEqual(["outliner"]);
     expect(firstHarness.focused).toEqual([]);
-    expect(first.view().rows.map((row) => row.canonicalId)).toEqual(["root", "peer"]);
+    expect(canonicalRowIds(first.view().rows)).toEqual(["root", "peer"]);
 
     await second.handleKeypress("", { name: "left", meta: true }, "pass");
-    expect(second.view().rows[second.view().selectedIndex]?.canonicalId).toBe(root.id);
+    expect(selectedBlockRow(second).canonicalId).toBe(root.id);
     expect(firstHarness.calls.map((call) => String(call.action))).not.toContain("navigation.back");
     expect(secondHarness.calls.map((call) => String(call.action))).not.toContain("navigation.back");
 
@@ -887,7 +1036,7 @@ describe("createTreeController", () => {
     const controller = createTreeController(fake.effects);
     await controller.initialize();
     await controller.handleKeypress("", { name: "space" }, "pass");
-    expect(controller.view().rows.map((row) => row.canonicalId)).toEqual(["parent"]);
+    expect(canonicalRowIds(controller.view().rows)).toEqual(["parent"]);
 
     await controller.handleServiceEvent({
       id: "reveal",
@@ -899,7 +1048,7 @@ describe("createTreeController", () => {
 
     expect(fake.calls.map((call) => String(call.action))).not.toContain("toggle");
     expect(fake.calls.at(-1)).toEqual({ action: "browsing-context.publish", sourceClientId: "tree-test", contextId: "tree-test-context", target: { kind: "block", blockId: "hidden" } });
-    expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe("hidden");
+    expect(selectedBlockRow(controller).canonicalId).toBe("hidden");
   });
 
   test("indents only beneath a canonical sibling in a filtered projection", async () => {
@@ -965,7 +1114,7 @@ describe("createTreeController", () => {
 
     expect(controller.view().rows).toBe(completeView.rows);
     expect(controller.view().physicalBlocksById).toBe(completeView.physicalBlocksById);
-    expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe("stable");
+    expect(selectedBlockRow(controller).canonicalId).toBe("stable");
   });
 
   test("commits a quick child before targeted Detail handoff", async () => {
@@ -1164,7 +1313,7 @@ describe("createTreeController", () => {
 
     await controller.handleKeypress(".", { name: "." }, "modified-enter");
     expect(fake.calls.map((call) => String(call.action))).not.toContain("view.toggleMultiline");
-    expect(controller.view().rows[0]?.multilineExpanded).toBe(true);
+    expect(blockRow(controller.view().rows[0]).multilineExpanded).toBe(true);
     expect(fake.calls.some((call) => call.action === "ui.command.send")).toBe(false);
     expect(controller.view().status).toBe("Block detail expanded");
   });
@@ -1204,7 +1353,7 @@ describe("createTreeController", () => {
     expect(controller.view().expandedBlockOffset).toBe(6);
 
     await controller.handleKeypress("", { name: "down" }, "pass");
-    expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe("next");
+    expect(selectedBlockRow(controller).canonicalId).toBe("next");
     expect(controller.view().expandedBlockOffset).toBe(0);
     expect(controller.view().status).toBe("");
   });
@@ -1298,7 +1447,7 @@ describe("createTreeController", () => {
 
     await controller.handleServiceEvent(event("content"));
     expect(controller.view().rows).toHaveLength(1);
-    expect(controller.view().rows[0]?.collapsed).toBe(true);
+    expect(blockRow(controller.view().rows[0]).collapsed).toBe(true);
 
     await controller.handleDisclosure(definition.id);
     expect(controller.view().rows.map((row) => row.rowId)).toEqual([
@@ -1308,11 +1457,11 @@ describe("createTreeController", () => {
 
     await controller.handleKeypress("", { name: "left" }, "pass");
     expect(controller.view().rows).toHaveLength(1);
-    expect(controller.view().rows[0]?.collapsed).toBe(true);
+    expect(blockRow(controller.view().rows[0]).collapsed).toBe(true);
 
     await controller.handleKeypress("", { name: "right" }, "pass");
     expect(controller.view().rows).toHaveLength(2);
-    expect(controller.view().rows[0]?.collapsed).toBe(false);
+    expect(blockRow(controller.view().rows[0]).collapsed).toBe(false);
 
     await controller.handleKeypress("", { name: "space" }, "pass");
     expect(controller.view().rows).toHaveLength(1);
@@ -1706,7 +1855,7 @@ describe("createTreeController", () => {
     expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe(
       "occurrence:view:card",
     );
-    expect(controller.view().rows[controller.view().selectedIndex]?.multilineExpanded).toBe(true);
+    expect(selectedBlockRow(controller).multilineExpanded).toBe(true);
 
     await controller.handleKeypress("f", { name: "f" }, "pass");
     expect(openedFileId).toBe("card");
@@ -2323,7 +2472,7 @@ test("isolates Tree attention and reveals only on explicit instruction", async (
     attention: { ...attention, targetClientId: "other-tree" },
   });
   expect(controller.view().attention.marks).toEqual([]);
-  expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe(first.id);
+  expect(selectedBlockRow(controller).canonicalId).toBe(first.id);
 
   await controller.handleServiceEvent({
     id: "targeted-attention",
@@ -2335,7 +2484,7 @@ test("isolates Tree attention and reveals only on explicit instruction", async (
     attentionInstruction: { markId: mark.markId, reveal: true, focus: true },
   });
   expect(controller.view().attention.currentMarkId).toBe(mark.markId);
-  expect(controller.view().rows[controller.view().selectedIndex]?.canonicalId).toBe(target.id);
+  expect(selectedBlockRow(controller).canonicalId).toBe(target.id);
   expect(fake.focused).toEqual(["outliner"]);
   expect(fake.calls.some((call) => call.action === "selection.set")).toBe(false);
 

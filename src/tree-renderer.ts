@@ -22,6 +22,12 @@ import { layoutExpandedBlock } from "./tree-layout";
 import { renderMarkdownLine, truncate } from "./terminal";
 import type { Block, VisibleBlock } from "./types";
 import type { TreeQuickCompletion, TreeView } from "./tree-controller";
+import {
+  isBlockTreeRow,
+  type AuthoredLinkHeaderRow,
+  type AuthoredLinkRow,
+  type TreeDisplayRow,
+} from "./tree-rows";
 import type { TreeMouseTarget } from "./tree-mouse";
 import {
   decorateVirtualBranchDefinitionText,
@@ -304,6 +310,39 @@ function renderQuickCompletionRows(
   }
   return rows;
 }
+function authoredHeaderStateText(row: AuthoredLinkHeaderRow): string {
+  const { state } = row;
+  if (state.kind === "loading") return state.message;
+  if (state.kind === "error") return `Error: ${state.message}`;
+  if (state.kind === "unavailable") return state.message;
+  const details = [countLabel(state.entryCount, "link")];
+  if (state.invalidCount > 0) details.push(countLabel(state.invalidCount, "invalid reference"));
+  if (state.limited) details.push("results limited");
+  if (state.diagnostics.length > 0) {
+    details.push(state.diagnostics.map((diagnostic) => diagnostic.message).join("; "));
+  }
+  return details.join(" · ");
+}
+
+function renderAuthoredLinkDisplay(row: AuthoredLinkRow, width: number): string {
+  const prefix = `${"  ".repeat(row.depth)}${row.link.resolution.kind === "ready" ? "↗" : "!"} `;
+  const duplicateLabel = row.link.occurrenceCount > 1
+    ? ` · ${row.link.occurrenceCount} occurrences`
+    : "";
+  let content: string;
+  if (row.link.kind === "outlink") {
+    const resolution = row.link.resolution;
+    content = resolution.kind === "ready"
+      ? `${row.link.label} → ${resolution.title} · ${row.link.referenceKind}${duplicateLabel}`
+      : `${row.link.label} · unavailable: ${resolution.reason}${duplicateLabel}`;
+  } else {
+    const resolution = row.link.resolution;
+    content = resolution.kind === "ready"
+      ? `${row.link.label} → ${resolution.sourceName} · ${resolution.provider} · ${resolution.addressLabel}${duplicateLabel}`
+      : `${row.link.label} · unavailable: ${resolution.reason}${duplicateLabel}`;
+  }
+  return truncateToWidth(`${prefix}${content}`, width);
+}
 
 export function renderTreeFrame(
   view: TreeView,
@@ -399,7 +438,12 @@ export function renderTreeFrame(
     current: null as { offset: number; end: number; total: number } | null,
   };
 
-  function rowIsVisualDescendant(candidate: TreeRow, ancestor: TreeRow): boolean {
+  function rowIsVisualDescendant(
+    candidate: TreeDisplayRow,
+    ancestor: TreeDisplayRow,
+  ): boolean {
+    if (!isBlockTreeRow(ancestor)) return false;
+    if (!isBlockTreeRow(candidate)) return candidate.owner.rowId === ancestor.rowId;
     return isVisualDescendant(candidate, ancestor, view.physicalBlocksById);
   }
   const insertionPoint =
@@ -425,6 +469,20 @@ export function renderTreeFrame(
     if (cached) return cached;
 
     const row = view.rows[index];
+    if (!isBlockTreeRow(row)) {
+      const result = row.kind === "authored-link-header"
+        ? [
+            truncateToWidth(
+              `${"  ".repeat(row.depth)}${row.collapsed ? "▸" : "▾"} ${
+                row.group === "outlinks" ? "Outlinks" : "Resources"
+              }  \x1b[2m${authoredHeaderStateText(row)}\x1b[0m`,
+              width,
+            ),
+          ]
+        : [renderAuthoredLinkDisplay(row, width)];
+      renderedRows[index] = result;
+      return result;
+    }
     const block = row.block;
     let marker = row.kind === "occurrence" ? "◇" : "•";
     if (row.hasChildren) marker = row.collapsed ? "▸" : "▾";
@@ -531,8 +589,11 @@ export function renderTreeFrame(
     const entry = entryAt(entryIndex);
     if (entry.kind === "quick") return getEntryRows(entry).length;
     const row = view.rows[entry.blockIndex];
-    const editingInline = view.mode === "edit" && entry.blockIndex === view.selectedIndex;
-    return row.multilineExpanded || editingInline ? getEntryRows(entry).length : 1;
+    const editingInline =
+      isBlockTreeRow(row) && view.mode === "edit" && entry.blockIndex === view.selectedIndex;
+    return isBlockTreeRow(row) && (row.multilineExpanded || editingInline)
+      ? getEntryRows(entry).length
+      : 1;
   }
 
   const targetEntryIndex = insertionPoint
@@ -580,14 +641,17 @@ export function renderTreeFrame(
         const row = view.rows[entry.blockIndex];
         const disclosureMarkerVisible =
           lineIndex === 0 &&
-          (!row.multilineExpanded ||
+          (!isBlockTreeRow(row) ||
+            !row.multilineExpanded ||
             entry.blockIndex !== view.selectedIndex ||
             view.expandedBlockOffset === 0);
         mouseTargets[output.length] = {
           rowId: row.rowId,
-          disclosureColumn: row.hasChildren && disclosureMarkerVisible
-            ? row.depth * 2
-            : -1,
+          disclosureColumn:
+            row.kind === "authored-link-header" ||
+              (isBlockTreeRow(row) && row.hasChildren && disclosureMarkerVisible)
+              ? row.depth * 2
+              : -1,
         };
       }
       output.push(
@@ -625,9 +689,10 @@ export function renderTreeFrame(
     );
   } else if (view.mode === "purge") {
     const required =
-      selectedRow?.block.properties.find((property) => property.key === "work-id")?.value
-      ?? selectedRow?.canonicalId.slice(0, 8)
-      ?? "identifier";
+      isBlockTreeRow(selectedRow)
+        ? selectedRow.block.properties.find((property) => property.key === "work-id")?.value
+          ?? selectedRow.canonicalId.slice(0, 8)
+        : "identifier";
     output.push(`\x1b[31;1mPurge ${required}: \x1b[0m${view.quickInput}▏`);
   } else if (view.mode === "filter" || view.mode === "goto") {
     const label = view.mode === "goto" ? "Goto" : "Filter";
