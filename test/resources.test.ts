@@ -462,6 +462,13 @@ test("web refresh validates redirects before requests and stops oversized stream
   const root = mkdtempSync(join(tmpdir(), "outliner-web-boundary-"));
   const requested: string[] = [];
   let chunks = 0;
+  let rejectedCancellations = 0;
+  const rejectedBody = (): ReadableStream<Uint8Array> =>
+    new ReadableStream({
+      cancel() {
+        rejectedCancellations += 1;
+      },
+    });
   const store = new OutlinerStore(join(root, "workspace.sqlite"), {
     maximumWebBytes: 10,
     fetch: (async (input) => {
@@ -471,6 +478,19 @@ test("web refresh validates redirects before requests and stops oversized stream
         return new Response(null, {
           status: 302,
           headers: { location: "http://127.0.0.1/private" },
+        });
+      }
+      if (url.endsWith("/status")) {
+        return new Response(rejectedBody(), { status: 500 });
+      }
+      if (url.endsWith("/binary")) {
+        return new Response(rejectedBody(), {
+          headers: { "content-type": "application/octet-stream" },
+        });
+      }
+      if (url.endsWith("/declared-large")) {
+        return new Response(rejectedBody(), {
+          headers: { "content-type": "text/html", "content-length": "11" },
         });
       }
       return new Response(new ReadableStream({
@@ -497,6 +517,21 @@ test("web refresh validates redirects before requests and stops oversized stream
     expect(redirected.web).toBeNull();
     expect(redirected.webError).toContain("outside its source boundary");
     expect(requested).toEqual(["https://example.com/redirect"]);
+    for (
+      const [path, error] of [
+        ["/status", "Web provider returned HTTP 500"],
+        ["/binary", "Web provider returned unsupported media type"],
+        ["/declared-large", "Web response exceeds 10 bytes"],
+      ] as const
+    ) {
+      const rejected = store.resources.intern({
+        sourceId: source.id,
+        address: { kind: "web", url: `https://example.com${path}` },
+      }).resource;
+      expect((await store.resources.open(rejected.id, true)).webError).toContain(error);
+    }
+    expect(rejectedCancellations).toBe(3);
+
 
     const large = store.resources.intern({
       sourceId: source.id,

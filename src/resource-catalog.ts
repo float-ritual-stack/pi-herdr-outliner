@@ -356,6 +356,14 @@ function webRevision(
 function responseMediaType(response: Response): string {
   return response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
 }
+async function cancelResponseBody(response: Response): Promise<void> {
+  try {
+    await response.body?.cancel();
+  } catch {
+    // Preserve the provider validation error when a body cannot be cancelled.
+  }
+}
+
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -813,7 +821,7 @@ export class ResourceCatalog {
         snapshot.cache.adapter_id === this.webExtractor.adapter.id &&
         snapshot.cache.adapter_version === this.webExtractor.adapter.version;
       if (response.status === 304 && !cacheMatchesDerivation) {
-        await response.body?.cancel();
+        await cancelResponseBody(response);
         ({ response, url: canonicalUrl } = await this.fetchWeb(
           snapshot.source,
           snapshot.resource.address.url,
@@ -851,6 +859,7 @@ export class ResourceCatalog {
         return this.describe(snapshot.resource.id, destinationHostRegistered);
       }
       if (!response.ok) {
+        await cancelResponseBody(response);
         throw new ResourceCatalogError(
           "source-unavailable",
           `Web provider returned HTTP ${response.status}`,
@@ -858,6 +867,7 @@ export class ResourceCatalog {
       }
       const mediaType = responseMediaType(response);
       if (mediaType !== "text/html" && mediaType !== "application/xhtml+xml") {
+        await cancelResponseBody(response);
         throw new ResourceCatalogError(
           "invalid-input",
           `Web provider returned unsupported media type: ${mediaType || "unknown"}`,
@@ -865,6 +875,7 @@ export class ResourceCatalog {
       }
       const declaredLength = Number(response.headers.get("content-length"));
       if (Number.isFinite(declaredLength) && declaredLength > this.maximumWebBytes) {
+        await cancelResponseBody(response);
         throw new ResourceCatalogError(
           "invalid-input",
           `Web response exceeds ${this.maximumWebBytes} bytes`,
