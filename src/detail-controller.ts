@@ -110,6 +110,7 @@ import type {
   OutlinerNavigationTarget,
   OutlinerUiCommand,
   ResourceDescription,
+  ResourceRevisionRef,
   ResolvedBlockReferences,
   VisibleBlockCollection,
 } from "./types";
@@ -1161,9 +1162,7 @@ export function createDetailController(
     syncPropertyInspector(null, true);
   };
 
-  const providerRevisionLabel = (
-    revision: NonNullable<ResourceDescription["web"]>["sourceSnapshot"]["revision"],
-  ): string => {
+  const providerRevisionLabel = (revision: ResourceRevisionRef): string => {
     const providerRevision = revision.revision;
     if (providerRevision.kind === "filesystem") {
       return `filesystem mtime ${providerRevision.mtimeNs}, ${providerRevision.size} bytes`;
@@ -1177,6 +1176,9 @@ export function createDetailController(
         return `web Last-Modified ${validator.value}`;
       }
       return `web content hash ${validator.value}`;
+    }
+    if (providerRevision.kind === "computed") {
+      return `computed ${providerRevision.producerId}@${providerRevision.producerVersion}, input v${providerRevision.inputVersion}, dependencies ${providerRevision.dependencyFingerprint}`;
     }
     const provider = providerRevision.kind === "github"
       ? "GitHub"
@@ -1223,6 +1225,9 @@ export function createDetailController(
       web,
       webHistory,
       remoteEntity,
+      computed,
+      computedStatus,
+      computedFailure,
       presentation,
     } = description;
     const representation = presentation?.selected?.representation;
@@ -1260,7 +1265,17 @@ export function createDetailController(
       : resource.provider === "linear"
       ? "Linear"
       : null;
-    const lines = pdf && renderLocalContent
+    const lines = computed && renderLocalContent
+      ? [
+          computed.markdown,
+          "",
+          "---",
+          "",
+          "## Computed resource",
+          "",
+          `[Stable resource link](${outlinerLinkUri("resource", resource.id)})`,
+        ]
+      : pdf && renderLocalContent
       ? [
           pdf.markdown,
           "",
@@ -1321,6 +1336,29 @@ export function createDetailController(
         "```",
       );
     }
+    if (resource.provider === "computed") {
+      lines.push(
+        "",
+        "## Computed status",
+        "",
+        `- Invocation ID: \`${resource.address.invocationId}\``,
+        `- Handler reference: \`producer:${resource.address.invocationId}\``,
+        `- State: **${computedStatus?.state ?? "idle"}**`,
+        `- Generation: ${computedStatus?.generation ?? 0}`,
+        `- Last execution: ${computedStatus?.lastExecutionAt ?? "Never"}`,
+      );
+      if (computedFailure) {
+        lines.push(
+          "",
+          "## Latest execution failure",
+          "",
+          `- Execution ID: \`${computedFailure.executionId}\``,
+          `- Code: \`${computedFailure.code}\``,
+          `- Failed: ${computedFailure.failedAt}`,
+          `- Message: ${computedFailure.message}`,
+        );
+      }
+    }
     if (
       resource.provider === "web" ||
       resource.provider === "jira" ||
@@ -1345,7 +1383,30 @@ export function createDetailController(
         freshnessGuidance(freshness, pdf != null || web !== null || remoteEntity !== null),
       );
     }
-    if (pdf) {
+    if (computed) {
+      const computedRevision = computed.revision.revision;
+      if (computedRevision.kind !== "computed") {
+        throw new Error("Computed Resource has a non-computed revision");
+      }
+      lines.push(
+        "",
+        "## Selected immutable content",
+        "",
+        `- Representation ID: \`${computed.representationId}\``,
+        `- Content hash: \`${computed.contentHash}\``,
+        `- Producer: \`${computedRevision.producerId}@${computedRevision.producerVersion}\``,
+        `- Input version: ${computedRevision.inputVersion}`,
+        `- Dependency fingerprint: \`${computedRevision.dependencyFingerprint}\``,
+        `- Adapter: \`${computed.adapter.id}@${computed.adapter.version}\``,
+        `- Derived: ${computed.derivedAt}`,
+        `- Exact dependencies: ${computed.dependencies.length}`,
+      );
+      for (const dependency of computed.dependencies) {
+        lines.push(
+          `- Dependency \`${dependency.resourceId}\` · address v${dependency.addressVersion} · ${providerRevisionLabel(dependency)}`,
+        );
+      }
+    } else if (pdf) {
       lines.push(
         "",
         "## Selected immutable content",
@@ -2255,6 +2316,7 @@ export function createDetailController(
             description.resource.provider !== "web" &&
             description.resource.provider !== "jira" &&
             description.resource.provider !== "linear" &&
+            description.resource.provider !== "computed" &&
             !(description.resource.provider === "filesystem" &&
               description.resource.mediaType === "application/pdf")
           )
@@ -2270,6 +2332,14 @@ export function createDetailController(
             state.status = refreshed.pdfError
               ? `PDF refresh failed · showing selected immutable content · ${refreshed.pdfError}`
               : "PDF resource refreshed";
+            break;
+          }
+          if (refreshed.resource.provider === "computed") {
+            state.status = refreshed.computedFailure
+              ? `Computed execution failed · ${refreshed.computedFailure.message}`
+              : refreshed.computed
+              ? "Computed resource executed and cached"
+              : "Computed producer executed";
             break;
           }
           if (

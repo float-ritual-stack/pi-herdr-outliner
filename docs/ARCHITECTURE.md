@@ -75,17 +75,19 @@ resolution declines the chord.
 
 Detail owns an exact block-or-resource target, a bounded in-process target
 history, and a visible `Unlocked | Locked` state. Resource targets are addressed
-by durable Resource UUID without a synthetic block. Opening web, Jira, and
-Linear Resources reads local state only. It selects the latest suitable
-immutable Markdown representation when one exists and reports `unknown` with
-no-cache guidance when one does not. `r` explicitly refreshes against the
-provider, `v` selects exact cached Markdown for an Outliner-owned annotation,
-and `Alt+O` opens only the negotiated current-Resource URL. Detail renders
-mutable provider freshness separately from selected immutable content.
-Filesystem PDFs refresh from the confined local file; HTTP PDFs follow the same
-explicit provider-refresh boundary. Both expose retained binary snapshots,
-native PDF representations, and page-aware Markdown representations without
-changing Resource identity.
+by durable Resource UUID without a synthetic block. Opening web, Jira, Linear,
+and computed Resources reads local state only. It selects the latest suitable
+immutable Markdown representation when one exists and reports missing or failed
+state without contacting a provider or running a producer. `r` explicitly
+refreshes supported providers, `v` selects exact cached Markdown for an
+Outliner-owned annotation, and `Alt+O` opens only the negotiated
+current-Resource URL. Detail renders mutable provider freshness separately from
+selected immutable content. Computed Detail documents put cached Markdown first,
+then the current invocation and exact dependency provenance, then the latest
+inspectable failure. Filesystem PDFs refresh from the confined local file; HTTP
+PDFs follow the same explicit provider-refresh boundary. Both expose retained
+binary snapshots, native PDF representations, and page-aware Markdown
+representations without changing Resource identity.
 
 Resource presentation negotiation is a pure boundary above `ResourceCatalog`.
 Resource kind, provider access, representation kind, renderer, Surface,
@@ -123,6 +125,33 @@ remain deep-link-only: metadata is a valid TUI presentation, while external
 hosts can select `external-link` without an invented inline representation.
 Local deep-link launch requires `open-external` policy and host support but no
 provider credential or connectivity observation.
+
+Computed Sources bind an in-process producer registry to a workspace permission
+allowlist. Producer declarations name their input schema, required permissions,
+determinism, cache policy, output media types, and callback. The catalog stores
+each invocation UUID, producer and declaration snapshot, structured inputs,
+input version, and exact dependency Resource revisions. A computed Resource uses
+the invocation UUID as its canonical address.
+Immutable computed revisions include the exact execution ID, producer/input
+versions, and dependency fingerprint; pinned reads resolve that execution rather
+than a later run with the same inputs.
+
+The only handler syntax is `producer:<invocation-uuid>`. Resolution performs an
+exact persisted invocation lookup and never interprets arbitrary note text.
+Execution is explicit through `computed.execute` or a computed Resource's
+`resources.refresh` path. The server requires a registered Detail destination
+and an available negotiated `refresh` capability before the catalog can invoke
+a producer. The registry checks every declared permission against the Source
+allowlist before callback execution, bounds canonical input and text output,
+and enforces an abort-signaled deadline (256 KiB, 1 MiB, and 15 seconds by
+default).
+Outputs form a closed union. Transient representations exist only in the
+execution receipt. Immutable snapshots can become the selected local document,
+and durable outputs must name an existing Resource. Deterministic
+content-addressed execution reuses matching cached output. Input or dependency
+revision invalidates only the affected invocation. Typed precondition and
+producer failures remain in execution history and in the Resource description,
+while local open never executes the producer.
 
 Resource retention is a separate transactional module above immutable web,
 PDF, and remote-entity history tables. The workspace policy protects the
@@ -338,6 +367,10 @@ project-documentation mutations.
 - `workflow_promotions` — idempotent exact-preview publication receipt linking one workflow request to its canonical result block.
 - `resource_sources` — durable provider identity, provider-qualified boundary, workspace policy, immutable filesystem root binding when applicable, and timestamps.
 - `resources` — durable Resource UUID, Source-qualified normalized provider address, optional media type, resource version, address version, and timestamps; `(source_id, canonical_key)` is unique without merging identities across Sources.
+- `computed_invocations` — invocation UUID, Resource and Source identity, producer version and declaration snapshot, canonical structured inputs, exact dependency revisions, input version, optimistic version, and timestamps.
+- `computed_resource_state` — one mutable row per computed Resource containing its generation, execution state, selected immutable representation or durable Resource pointer, and latest failure pointer.
+- `computed_executions` — append-only execution receipts with producer/input versions, dependency fingerprint and exact revisions, cache decision, typed output metadata, typed failure fields, and start/completion times.
+- `computed_representations` — immutable content-addressed producer output with media type, content hash, exact dependency fingerprint, Markdown payload, and creation time.
 - `web_source_snapshots` — immutable provider observations keyed by snapshot ID, with Resource/address epoch, canonical URL, source hash, provider revision and validators, fetched time, full source HTML, explicit payload state/byte count, and eviction time. Eviction nulls HTML but preserves provenance metadata.
 - `web_representations` — immutable named derivations keyed by representation ID and source snapshot ID, with media type, adapter identity and version, representation hash, derived time, Markdown content, explicit payload state/byte count, and eviction time.
 - `web_resource_state` — one mutable row per web Resource containing current snapshot and representation pointers, five-state freshness, check/error diagnostics, address epoch, and the compare-and-swap version used to reject stale refresh completion.
@@ -366,7 +399,7 @@ bytes and provenance remain unknown rather than being synthesized.
 
 ## Protocol
 
-The current protocol version is `45`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
+The current protocol version is `48`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
 
 ### Important request families
 
@@ -375,6 +408,7 @@ The current protocol version is `45`, defined in [`src/types.ts`](../src/types.t
 - bounded search: `blocks.query`
 - resource identity and documents: `resource-sources.create | list | get` and `resources.intern | intern-filesystem | get | relocate | describe | open | refresh`
 - resource retention: `resources.retention.get | configure | inspect | pin | unpin | reference | unreference` and explicit `resources.collect` eviction/purge passes
+- computed producers: `computed.invocations.create`, `computed.invocations.revise`, `computed.handlers.resolve`, `computed.executions.list`, and async `computed.execute`
 - browsing contexts and Tree previews: `browsing-context.get`, `browsing-context.publish`
 - typed navigation: `navigation.resolve` preflight and `navigation.dispatch` with explicit block/resource targets and `preview | open | reveal`; resource targets cannot use block-Tree `reveal`
 - selection-neutral capture: `capture.create`

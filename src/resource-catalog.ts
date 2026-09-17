@@ -17,6 +17,14 @@ import {
   type RemoteEntityProviderClient,
 } from "./remote-entity";
 import {
+  ComputedProducerError,
+  canonicalJson,
+  canonicalJsonHash,
+  createDefaultComputedProducerRegistry,
+  type ComputedProducerOutput,
+  type ComputedProducerRegistry,
+} from "./computed-resources";
+import {
   ResourceCatalogError,
   deriveResourceCapabilityReport,
   normalizeInternResourceInput,
@@ -28,6 +36,17 @@ import {
   resourceRevisionRefEquals,
   normalizeResourceSourceInput,
   type CreateResourceSourceInput,
+  type ComputedExecutionHistory,
+  type ComputedExecutionReceipt,
+  type ComputedExecutionRecord,
+  type ComputedHandlerResolution,
+  type ComputedInvocation,
+  type ComputedProducerDeclarationSnapshot,
+  type ComputedResourceDocument,
+  type ComputedResourceFailure,
+  type ComputedResourceStatus,
+  type CreateComputedInvocationInput,
+  type ReviseComputedInvocationInput,
   type FilesystemResourceDocument,
   type PdfPageText,
   type PdfRepresentationProvenance,
@@ -84,6 +103,86 @@ interface ResourceRow {
   version: number;
   created_at: string;
   updated_at: string;
+}
+
+interface ComputedInvocationRow {
+  id: string;
+  resource_id: string;
+  source_id: string;
+  producer_id: string;
+  producer_version: number;
+  input_version: number;
+  inputs_json: string;
+  dependencies_json: string;
+  declaration_json: string;
+  version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+interface ComputedRepresentationRow {
+  id: string;
+  cache_key: string | null;
+  producer_id: string;
+  producer_version: number;
+  input_version: number;
+  dependency_fingerprint: string;
+  media_type: string;
+  content_hash: string;
+  content: string;
+  created_at: string;
+}
+
+interface ComputedExecutionRow {
+  id: string;
+  invocation_id: string;
+  resource_id: string;
+  generation: number;
+  producer_id: string;
+  producer_version: number;
+  input_version: number;
+  dependency_fingerprint: string;
+  dependencies_json: string;
+  cache_hit: number;
+  status: "executing" | "succeeded" | "failed";
+  output_kind:
+    | "transient-representation"
+    | "immutable-snapshot"
+    | "durable-resource"
+    | "failure"
+    | null;
+  media_type: string | null;
+  output_content_hash: string | null;
+  representation_id: string | null;
+  durable_resource_id: string | null;
+  failure_code: string | null;
+  failure_message: string | null;
+  started_at: string;
+  completed_at: string | null;
+}
+
+interface ComputedResourceStateRow {
+  resource_id: string;
+  invocation_id: string;
+  generation: number;
+  status: "idle" | "executing" | "succeeded" | "failed";
+  selected_execution_id: string | null;
+  representation_id: string | null;
+  durable_resource_id: string | null;
+  last_failure_execution_id: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+interface ComputedExecutionInitial {
+  readonly id: string;
+  readonly generation: number;
+  readonly invocationVersion: number;
+  readonly resource: Extract<Resource, { provider: "computed" }>;
+  readonly source: Extract<ResourceSource, { provider: "computed" }>;
+  readonly invocation: ComputedInvocation;
+  readonly dependencyFingerprint: string;
+  readonly startedAt: string;
 }
 interface WebSourceSnapshotRow {
   id: string;
@@ -269,12 +368,14 @@ export interface ResourceCatalogOptions {
   readonly workspaceRoot?: string;
   readonly maximumPdfBytes?: number;
   readonly remoteEntityClient?: RemoteEntityProviderClient;
+  readonly computedProducerRegistry?: ComputedProducerRegistry;
 }
 
 const DEFAULT_MAXIMUM_WEB_BYTES = 2 * 1024 * 1024;
 const DEFAULT_WEB_STALE_AFTER_MS = 24 * 60 * 60 * 1_000;
 const DEFAULT_MAXIMUM_PDF_BYTES = 16 * 1024 * 1024;
 const PDF_NATIVE_ADAPTER = { id: "builtin.pdf-native", version: 1 } as const;
+const COMPUTED_MARKDOWN_ADAPTER = { id: "builtin.computed-markdown", version: 1 } as const;
 
 interface LegacySourceRow {
   id: string;
@@ -311,6 +412,32 @@ const RelocationIdentitySchema = Type.Object({
   resourceId: Type.String(),
   destinationSourceId: Type.String(),
 });
+const ComputedInvocationInputSchema = Type.Object({
+  sourceId: Type.String(),
+  producerId: Type.String(),
+  inputs: Type.Record(Type.String(), Type.Unknown()),
+  dependencies: Type.Array(Type.Unknown()),
+}, { additionalProperties: false });
+const ComputedInvocationRevisionSchema = Type.Object({
+  invocationId: Type.String(),
+  expectedVersion: Type.Integer({ minimum: 1 }),
+  inputs: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+  dependencies: Type.Optional(Type.Array(Type.Unknown())),
+}, { additionalProperties: false });
+const ComputedProducerDeclarationSnapshotSchema = Type.Object({
+  id: Type.String(),
+  version: Type.Integer({ minimum: 1 }),
+  permissions: Type.Array(Type.String()),
+  determinism: Type.Union([
+    Type.Literal("deterministic"),
+    Type.Literal("nondeterministic"),
+  ]),
+  cachePolicy: Type.Union([
+    Type.Literal("none"),
+    Type.Literal("content-addressed"),
+  ]),
+  outputMediaTypes: Type.Array(Type.String()),
+}, { additionalProperties: false });
 const LegacyRepresentationEvidenceSchema = Type.Object({
   mediaType: Type.Literal("text/markdown"),
   adapter: Type.Object({
@@ -366,6 +493,8 @@ interface RemoteEntitySnapshotPayload {
 }
 type InternIdentity = Static<typeof InternIdentitySchema>;
 type RelocationIdentity = Static<typeof RelocationIdentitySchema>;
+type ParsedComputedInvocationInput = Static<typeof ComputedInvocationInputSchema>;
+type ParsedComputedInvocationRevision = Static<typeof ComputedInvocationRevisionSchema>;
 
 function parseInternIdentity(value: unknown): InternIdentity {
   try {
@@ -410,8 +539,150 @@ function parseRemoteEntitySnapshotPayload(value: unknown): RemoteEntitySnapshotP
   }
 }
 
+function parseComputedInvocationInput(value: unknown): ParsedComputedInvocationInput {
+  try {
+    return Parse(ComputedInvocationInputSchema, value);
+  } catch {
+    throw new ResourceCatalogError(
+      "invalid-input",
+      "Computed invocation input must contain sourceId, producerId, structured inputs, and dependencies",
+    );
+  }
+}
+
+function parseComputedInvocationRevision(value: unknown): ParsedComputedInvocationRevision {
+  let parsed: ParsedComputedInvocationRevision;
+  try {
+    parsed = Parse(ComputedInvocationRevisionSchema, value);
+  } catch {
+    throw new ResourceCatalogError(
+      "invalid-input",
+      "Computed invocation revision is invalid",
+    );
+  }
+  if (parsed.inputs === undefined && parsed.dependencies === undefined) {
+    throw new ResourceCatalogError(
+      "invalid-input",
+      "Computed invocation revision must change inputs or dependencies",
+    );
+  }
+  return parsed;
+}
+
+function parseComputedDeclaration(value: unknown): ComputedProducerDeclarationSnapshot {
+  try {
+    return Parse(ComputedProducerDeclarationSnapshotSchema, value);
+  } catch {
+    throw new ResourceCatalogError(
+      "invalid-input",
+      "Stored computed producer declaration is invalid",
+    );
+  }
+}
+
+function computedInvocationFromRow(row: ComputedInvocationRow): ComputedInvocation {
+  const inputs = parsedJson(row.inputs_json, "Computed invocation inputs");
+  let structuredInputs: Readonly<Record<string, unknown>>;
+  try {
+    structuredInputs = Parse(Type.Record(Type.String(), Type.Unknown()), inputs);
+  } catch {
+    throw new ResourceCatalogError("invalid-input", "Stored computed inputs are invalid");
+  }
+  const dependenciesValue = parsedJson(
+    row.dependencies_json,
+    "Computed invocation dependencies",
+  );
+  if (!Array.isArray(dependenciesValue)) {
+    throw new ResourceCatalogError("invalid-input", "Stored computed dependencies are invalid");
+  }
+  return {
+    id: normalizeResourceId(row.id, "Computed invocation ID"),
+    resourceId: normalizeResourceId(row.resource_id),
+    sourceId: normalizeResourceId(row.source_id, "Resource source ID"),
+    producerId: row.producer_id,
+    producerVersion: row.producer_version,
+    inputVersion: row.input_version,
+    inputs: structuredInputs,
+    dependencies: dependenciesValue.map(normalizeRetainedResourceRevisionRef),
+    declaration: parseComputedDeclaration(
+      parsedJson(row.declaration_json, "Computed producer declaration"),
+    ),
+    version: row.version,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
 
 
+
+
+function computedExecutionRecordFromRow(row: ComputedExecutionRow): ComputedExecutionRecord {
+  if (!row.completed_at || !row.output_kind) {
+    throw new ResourceCatalogError("invalid-input", "Stored computed execution is incomplete");
+  }
+  const dependenciesValue = parsedJson(
+    row.dependencies_json,
+    "Computed execution dependencies",
+  );
+  if (!Array.isArray(dependenciesValue)) {
+    throw new ResourceCatalogError(
+      "invalid-input",
+      "Stored computed execution dependencies are invalid",
+    );
+  }
+  const dependencies = dependenciesValue.map(normalizeRetainedResourceRevisionRef);
+  let output: ComputedExecutionRecord["output"];
+  switch (row.output_kind) {
+    case "transient-representation":
+      if (!row.media_type) {
+        throw new ResourceCatalogError("invalid-input", "Stored transient output is invalid");
+      }
+      output = { kind: "transient-representation", mediaType: row.media_type };
+      break;
+    case "immutable-snapshot": {
+      if (!row.media_type || !row.representation_id || !row.output_content_hash) {
+        throw new ResourceCatalogError("invalid-input", "Stored immutable output is invalid");
+      }
+      output = {
+        kind: "immutable-snapshot",
+        mediaType: row.media_type,
+        contentHash: row.output_content_hash,
+        representationId: row.representation_id,
+      };
+      break;
+    }
+    case "durable-resource":
+      if (!row.durable_resource_id) {
+        throw new ResourceCatalogError("invalid-input", "Stored durable output is invalid");
+      }
+      output = { kind: "durable-resource", resourceId: row.durable_resource_id };
+      break;
+    case "failure":
+      if (!row.failure_code || !row.failure_message) {
+        throw new ResourceCatalogError("invalid-input", "Stored computed failure is invalid");
+      }
+      output = {
+        kind: "failure",
+        code: row.failure_code,
+        message: row.failure_message,
+      };
+      break;
+  }
+  return {
+    id: row.id,
+    invocationId: row.invocation_id,
+    resourceId: row.resource_id,
+    producerId: row.producer_id,
+    producerVersion: row.producer_version,
+    inputVersion: row.input_version,
+    dependencyFingerprint: row.dependency_fingerprint,
+    dependencies,
+    cacheHit: row.cache_hit === 1,
+    output,
+    startedAt: row.started_at,
+    completedAt: row.completed_at,
+  };
+}
 
 function sourceFromRow(row: SourceRow): ResourceSource {
   const boundary = parsedJson(row.boundary_json, "Resource source boundary");
@@ -469,6 +740,12 @@ function sourceFromRow(row: SourceRow): ResourceSource {
         provider: "application",
         boundary: { kind: "application", ...normalized.boundary },
       };
+    case "computed":
+      return {
+        ...header,
+        provider: "computed",
+        boundary: { kind: "computed", ...normalized.boundary },
+      };
   }
 }
 
@@ -511,6 +788,8 @@ function resourceFromRow(row: ResourceRow, source: ResourceSource): Resource {
       return { ...header, provider: "linear", address: normalized.address };
     case "application":
       return { ...header, provider: "application", address: normalized.address };
+    case "computed":
+      return { ...header, provider: "computed", address: normalized.address };
   }
 }
 
@@ -655,6 +934,7 @@ export class ResourceCatalog {
   private readonly webExtractor: WebMarkdownExtractor;
   private readonly pdfExtractor: PdfTextExtractor;
   private readonly remoteEntityClient: RemoteEntityProviderClient;
+  private readonly computedProducerRegistry: ComputedProducerRegistry;
   private readonly now: () => string;
   private readonly maximumWebBytes: number;
   private readonly maximumPdfBytes: number;
@@ -680,6 +960,8 @@ export class ResourceCatalog {
         resolveCredential: (name) => process.env[name],
         now: this.now,
       });
+    this.computedProducerRegistry = options.computedProducerRegistry ??
+      createDefaultComputedProducerRegistry();
     this.maximumWebBytes = options.maximumWebBytes ?? DEFAULT_MAXIMUM_WEB_BYTES;
     this.maximumPdfBytes = options.maximumPdfBytes ?? DEFAULT_MAXIMUM_PDF_BYTES;
     this.webStaleAfterMs = options.webStaleAfterMs ?? DEFAULT_WEB_STALE_AFTER_MS;
@@ -698,11 +980,13 @@ export class ResourceCatalog {
         this.pdfExtractor.adapter,
         PDF_NATIVE_ADAPTER,
         REMOTE_ENTITY_MARKDOWN_ADAPTER,
+        COMPUTED_MARKDOWN_ADAPTER,
       ],
       markMutation: () => this.bumpSequence(),
     });
     this.recoverInterruptedWebRefreshes();
     this.recoverInterruptedRemoteEntityRefreshes();
+    this.recoverInterruptedComputedExecutions();
   }
 
   createSource(value: unknown): ResourceSource {
@@ -748,12 +1032,203 @@ export class ResourceCatalog {
     return this.database.transaction(() => this.requireSourceFromCurrentRead(normalized))();
   }
 
+  createComputedInvocation(value: CreateComputedInvocationInput): ComputedInvocation {
+    const input = parseComputedInvocationInput(value);
+    const sourceId = normalizeResourceId(input.sourceId, "Resource source ID");
+    const definition = this.computedProducerRegistry.require(input.producerId);
+    this.computedProducerRegistry.validateInputs(definition, input.inputs);
+    const declaration = this.computedProducerRegistry.snapshot(
+      definition.id,
+      definition.version,
+    );
+    return this.database.transaction(() => {
+      const source = this.requireSourceFromCurrentRead(sourceId);
+      if (source.provider !== "computed") {
+        throw new ResourceCatalogError(
+          "provider-mismatch",
+          "Computed invocation source must use the computed provider",
+        );
+      }
+      const dependencies = this.normalizeComputedDependenciesFromCurrentRead(
+        input.dependencies,
+      );
+      const invocationId = crypto.randomUUID();
+      const resourceId = crypto.randomUUID();
+      const now = this.now();
+      this.database.query(`
+        INSERT INTO resources (
+          id, source_id, provider, address_json, canonical_key, media_type,
+          address_version, version, created_at, updated_at
+        ) VALUES (?, ?, 'computed', ?, ?, NULL, 1, 1, ?, ?)
+      `).run(
+        resourceId,
+        source.id,
+        canonicalJson({ kind: "computed", invocationId }),
+        invocationId,
+        now,
+        now,
+      );
+      this.database.query(`
+        INSERT INTO computed_invocations (
+          id, resource_id, source_id, producer_id, producer_version, input_version,
+          inputs_json, dependencies_json, declaration_json, version, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, 1, ?, ?)
+      `).run(
+        invocationId,
+        resourceId,
+        source.id,
+        definition.id,
+        definition.version,
+        canonicalJson(input.inputs),
+        canonicalJson(dependencies),
+        canonicalJson(declaration),
+        now,
+        now,
+      );
+      this.database.query(`
+        INSERT INTO computed_resource_state (
+          resource_id, invocation_id, generation, status, selected_execution_id,
+          representation_id, durable_resource_id, last_failure_execution_id,
+          started_at, completed_at
+        ) VALUES (?, ?, 1, 'idle', NULL, NULL, NULL, NULL, NULL, NULL)
+      `).run(resourceId, invocationId);
+      this.bumpSequence();
+      return this.requireComputedInvocationFromCurrentRead(invocationId);
+    })();
+  }
+
+  reviseComputedInvocation(value: ReviseComputedInvocationInput): ComputedInvocation {
+    const input = parseComputedInvocationRevision(value);
+    const invocationId = normalizeResourceId(input.invocationId, "Computed invocation ID");
+    return this.database.transaction(() => {
+      const current = this.requireComputedInvocationFromCurrentRead(invocationId);
+      if (current.version !== input.expectedVersion) {
+        throw new ResourceCatalogError(
+          "version-conflict",
+          `Computed invocation version conflict: expected ${input.expectedVersion}, found ${current.version}`,
+        );
+      }
+      const definition = this.computedProducerRegistry.require(
+        current.producerId,
+        current.producerVersion,
+      );
+      const inputs = input.inputs ?? current.inputs;
+      this.computedProducerRegistry.validateInputs(definition, inputs);
+      const dependencies = input.dependencies === undefined
+        ? current.dependencies
+        : this.normalizeComputedDependenciesFromCurrentRead(input.dependencies);
+      const inputsChanged = canonicalJson(inputs) !== canonicalJson(current.inputs);
+      const now = this.now();
+      const update = this.database.query(`
+        UPDATE computed_invocations
+        SET inputs_json = ?,
+            dependencies_json = ?,
+            input_version = input_version + ?,
+            version = version + 1,
+            updated_at = ?
+        WHERE id = ? AND version = ?
+      `).run(
+        canonicalJson(inputs),
+        canonicalJson(dependencies),
+        inputsChanged ? 1 : 0,
+        now,
+        invocationId,
+        input.expectedVersion,
+      );
+      if (update.changes !== 1) {
+        throw new ResourceCatalogError(
+          "version-conflict",
+          "Computed invocation changed during revision",
+        );
+      }
+      this.database.query(
+        "UPDATE resources SET version = version + 1, updated_at = ? WHERE id = ?",
+      ).run(now, current.resourceId);
+      this.database.query(`
+        UPDATE computed_resource_state
+        SET generation = generation + 1,
+            status = 'idle',
+            selected_execution_id = NULL,
+            representation_id = NULL,
+            durable_resource_id = NULL,
+            last_failure_execution_id = NULL,
+            started_at = NULL,
+            completed_at = NULL
+        WHERE resource_id = ?
+      `).run(current.resourceId);
+      this.bumpSequence();
+      return this.requireComputedInvocationFromCurrentRead(invocationId);
+    })();
+  }
+
+  resolveComputedHandler(reference: string): ComputedHandlerResolution | null {
+    const match =
+      /^producer:([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i
+        .exec(reference);
+    if (!match?.[1]) return null;
+    const invocationId = normalizeResourceId(match[1], "Computed invocation ID");
+    return this.database.transaction(() => {
+      const row = this.computedInvocationRowFromCurrentRead(invocationId);
+      if (!row) return null;
+      return {
+        reference: `producer:${invocationId}`,
+        invocationId,
+        resourceId: row.resource_id,
+        producerId: row.producer_id,
+        producerVersion: row.producer_version,
+      };
+    })();
+  }
+
+  computedExecutionHistory(resourceId: string): ComputedExecutionHistory {
+    const normalized = normalizeResourceId(resourceId);
+    return this.database.transaction(() => {
+      const resource = this.requireFromCurrentRead(normalized);
+      if (resource.provider !== "computed") {
+        throw new ResourceCatalogError(
+          "provider-mismatch",
+          "Computed execution history requires a computed Resource",
+        );
+      }
+      const executions = this.database.query(`
+        SELECT id, invocation_id, resource_id, generation, producer_id,
+               producer_version, input_version, dependency_fingerprint,
+               dependencies_json, cache_hit, status, output_kind, media_type,
+               output_content_hash, representation_id, durable_resource_id,
+               failure_code, failure_message, started_at, completed_at
+        FROM computed_executions
+        WHERE resource_id = ? AND status != 'executing'
+        ORDER BY started_at, id
+      `).all(normalized) as ComputedExecutionRow[];
+      return {
+        resourceId: normalized,
+        executions: executions.map(computedExecutionRecordFromRow),
+      };
+    })();
+  }
+
+  executeComputedResource(
+    resourceId: string,
+    destinationHostRegistered: boolean,
+  ): Promise<ComputedExecutionReceipt> {
+    return this.performComputedExecution(
+      normalizeResourceId(resourceId),
+      destinationHostRegistered,
+    );
+  }
+
   intern(value: unknown): InternResourceReceipt {
     const identity = parseInternIdentity(value);
     const sourceId = normalizeResourceId(identity.sourceId, "Resource source ID");
     return this.database.transaction(() => {
       const sourceRow = this.requireSourceRowFromCurrentRead(sourceId);
       const source = sourceFromRow(sourceRow);
+      if (source.provider === "computed") {
+        throw new ResourceCatalogError(
+          "invalid-input",
+          "Computed Resources must be created through a registered producer invocation",
+        );
+      }
       const normalized = normalizeInternResourceInput(value, source);
       this.assertConfinement(source, sourceRow.root_binding, normalized.address);
       const existing = this.resourceRowByKeyFromCurrentRead(source.id, normalized.canonicalKey);
@@ -922,6 +1397,26 @@ export class ResourceCatalog {
             checked_at = NULL,
             last_error = NULL
         `).run(resource.id, relocated.addressVersion);
+      }
+      if (relocated.provider === "computed") {
+        const now = this.now();
+        this.database.query(`
+          UPDATE computed_invocations
+          SET source_id = ?, version = version + 1, updated_at = ?
+          WHERE resource_id = ?
+        `).run(destination.id, now, resource.id);
+        this.database.query(`
+          UPDATE computed_resource_state
+          SET generation = generation + 1,
+              status = 'idle',
+              selected_execution_id = NULL,
+              representation_id = NULL,
+              durable_resource_id = NULL,
+              last_failure_execution_id = NULL,
+              started_at = NULL,
+              completed_at = NULL
+          WHERE resource_id = ?
+        `).run(resource.id);
       }
       if (relocated.mediaType === "application/pdf") {
         this.database.query(`
@@ -1320,7 +1815,9 @@ export class ResourceCatalog {
             ? ["read"]
             : resource.provider === "jira" || resource.provider === "linear"
               ? ["read", "refresh", "open-external", "command"]
-              : [],
+              : resource.provider === "computed"
+                ? ["read", "refresh", "history"]
+                : [],
       );
       const remoteEntity =
         (resource.provider === "jira" || resource.provider === "linear") &&
@@ -1331,6 +1828,9 @@ export class ResourceCatalog {
         resource.provider === "jira" || resource.provider === "linear"
           ? this.remoteEntityStatusFromCurrentRead(resource)
           : null;
+      const computedRead = resource.provider === "computed"
+        ? this.computedDescriptionFromCurrentRead(resource, requestedRevision)
+        : null;
       return {
         resource,
         source,
@@ -1347,6 +1847,9 @@ export class ResourceCatalog {
         remoteEntity,
         remoteStatus,
         ...(remoteStatus?.lastError ? { remoteError: remoteStatus.lastError } : {}),
+        computed: readingDenied ? null : computedRead?.document ?? null,
+        computedStatus: computedRead?.status ?? null,
+        computedFailure: computedRead?.failure ?? null,
         availableCommands:
           capabilities.command.status === "available" &&
             requestedRevision === null
@@ -3156,6 +3659,668 @@ export class ResourceCatalog {
     };
   }
 
+  private async performComputedExecution(
+    resourceId: string,
+    destinationHostRegistered: boolean,
+  ): Promise<ComputedExecutionReceipt> {
+    const initial = this.database.transaction((): ComputedExecutionInitial => {
+      const resource = this.requireFromCurrentRead(resourceId);
+      if (resource.provider !== "computed") {
+        throw new ResourceCatalogError(
+          "provider-mismatch",
+          "Computed execution requires a computed Resource",
+        );
+      }
+      const source = this.requireSourceFromCurrentRead(resource.sourceId);
+      if (source.provider !== "computed") {
+        throw new ResourceCatalogError(
+          "provider-mismatch",
+          "Computed Resource source does not use the computed provider",
+        );
+      }
+      const invocation = this.requireComputedInvocationFromCurrentRead(
+        resource.address.invocationId,
+      );
+      if (
+        invocation.resourceId !== resource.id ||
+        invocation.sourceId !== source.id
+      ) {
+        throw new ResourceCatalogError(
+          "invalid-input",
+          "Computed invocation ownership does not match its Resource",
+        );
+      }
+      const state = this.computedStateRowFromCurrentRead(resource.id);
+      if (!state) {
+        throw new ResourceCatalogError(
+          "invalid-input",
+          "Computed Resource state is unavailable",
+        );
+      }
+      const generation = state.generation + 1;
+      const id = crypto.randomUUID();
+      const startedAt = this.now();
+      const dependencyFingerprint = canonicalJsonHash(invocation.dependencies);
+      this.database.query(`
+        UPDATE computed_resource_state
+        SET generation = ?,
+            status = 'executing',
+            last_failure_execution_id = NULL,
+            started_at = ?,
+            completed_at = NULL
+        WHERE resource_id = ?
+      `).run(generation, startedAt, resource.id);
+      this.database.query(`
+        INSERT INTO computed_executions (
+          id, invocation_id, resource_id, generation, producer_id,
+          producer_version, input_version, dependency_fingerprint,
+          dependencies_json, cache_hit, status, output_kind, media_type,
+          output_content_hash, representation_id, durable_resource_id,
+          failure_code, failure_message, started_at, completed_at
+        ) VALUES (
+          ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'executing', NULL, NULL,
+          NULL, NULL, NULL, NULL, NULL, ?, NULL
+        )
+      `).run(
+        id,
+        invocation.id,
+        resource.id,
+        generation,
+        invocation.producerId,
+        invocation.producerVersion,
+        invocation.inputVersion,
+        dependencyFingerprint,
+        canonicalJson(invocation.dependencies),
+        startedAt,
+      );
+      this.bumpSequence();
+      return {
+        id,
+        generation,
+        invocationVersion: invocation.version,
+        resource,
+        source,
+        invocation,
+        dependencyFingerprint,
+        startedAt,
+      };
+    })();
+
+    try {
+      if (!destinationHostRegistered) {
+        return this.completeComputedFailure(
+          initial,
+          "destination-unavailable",
+          "Computed execution requires a registered Detail destination",
+        );
+      }
+      if (
+        initial.source.policy.deniedCapabilities.includes("read") ||
+        initial.source.policy.deniedCapabilities.includes("refresh")
+      ) {
+        return this.completeComputedFailure(
+          initial,
+          "permission-denied",
+          "Workspace policy denies computed execution",
+        );
+      }
+      const definition = this.computedProducerRegistry.require(
+        initial.invocation.producerId,
+        initial.invocation.producerVersion,
+      );
+      this.computedProducerRegistry.validatePermissions(
+        definition,
+        initial.source.boundary.allowedPermissions,
+      );
+      this.computedProducerRegistry.validateInputs(
+        definition,
+        initial.invocation.inputs,
+      );
+      const cacheKey =
+        initial.invocation.declaration.determinism === "deterministic" &&
+          initial.invocation.declaration.cachePolicy === "content-addressed"
+          ? canonicalJsonHash({
+            producerId: initial.invocation.producerId,
+            producerVersion: initial.invocation.producerVersion,
+            inputs: initial.invocation.inputs,
+            dependencies: initial.invocation.dependencies,
+          })
+          : null;
+      if (cacheKey) {
+        const cached = this.database.transaction(() =>
+          this.database.query(`
+            SELECT id, cache_key, producer_id, producer_version, input_version,
+                   dependency_fingerprint, media_type, content_hash, content, created_at
+            FROM computed_representations
+            WHERE cache_key = ?
+          `).get(cacheKey) as ComputedRepresentationRow | null
+        )();
+        if (cached) {
+          return this.completeComputedSuccess(
+            initial,
+            {
+              kind: "immutable-snapshot",
+              mediaType: cached.media_type,
+              content: cached.content,
+            },
+            true,
+            cacheKey,
+            cached,
+          );
+        }
+      }
+      const output = await this.computedProducerRegistry.execute({
+        producerId: initial.invocation.producerId,
+        producerVersion: initial.invocation.producerVersion,
+        inputs: initial.invocation.inputs,
+        allowedPermissions: initial.source.boundary.allowedPermissions,
+        dependencies: initial.invocation.dependencies,
+      });
+      if (output.kind === "failure") {
+        return this.completeComputedFailure(initial, output.code, output.message);
+      }
+      return this.completeComputedSuccess(initial, output, false, cacheKey);
+    } catch (error) {
+      if (error instanceof ComputedProducerError) {
+        return this.completeComputedFailure(initial, error.code, error.message);
+      }
+      if (error instanceof ResourceCatalogError) {
+        return this.completeComputedFailure(initial, error.code, error.message);
+      }
+      return this.completeComputedFailure(initial, "execution-failed", errorText(error));
+    }
+  }
+
+  private computedExecutionIsCurrentFromCurrentRead(
+    initial: ComputedExecutionInitial,
+  ): boolean {
+    const state = this.computedStateRowFromCurrentRead(initial.resource.id);
+    const invocation = this.computedInvocationRowFromCurrentRead(initial.invocation.id);
+    return state?.generation === initial.generation &&
+      state.status === "executing" &&
+      invocation?.version === initial.invocationVersion;
+  }
+
+  private completeComputedFailure(
+    initial: ComputedExecutionInitial,
+    code: string,
+    message: string,
+  ): ComputedExecutionReceipt {
+    return this.database.transaction((): ComputedExecutionReceipt => {
+      const current = this.computedExecutionIsCurrentFromCurrentRead(initial);
+      const failureCode = current ? code : "execution-superseded";
+      const failureMessage = current
+        ? message
+        : "Computed execution was superseded by a newer invocation generation";
+      const completedAt = this.now();
+      this.database.query(`
+        UPDATE computed_executions
+        SET status = 'failed',
+            output_kind = 'failure',
+            failure_code = ?,
+            failure_message = ?,
+            completed_at = ?
+        WHERE id = ? AND status = 'executing'
+      `).run(failureCode, failureMessage, completedAt, initial.id);
+      if (current) {
+        this.database.query(`
+          UPDATE computed_resource_state
+          SET status = 'failed',
+              last_failure_execution_id = ?,
+              completed_at = ?
+          WHERE resource_id = ? AND generation = ?
+        `).run(initial.id, completedAt, initial.resource.id, initial.generation);
+      }
+      this.bumpSequence();
+      return {
+        id: initial.id,
+        invocationId: initial.invocation.id,
+        resourceId: initial.resource.id,
+        producerId: initial.invocation.producerId,
+        producerVersion: initial.invocation.producerVersion,
+        inputVersion: initial.invocation.inputVersion,
+        dependencyFingerprint: initial.dependencyFingerprint,
+        cacheHit: false,
+        output: {
+          kind: "failure",
+          code: failureCode,
+          message: failureMessage,
+        },
+        startedAt: initial.startedAt,
+        completedAt,
+      };
+    })();
+  }
+
+  private completeComputedSuccess(
+    initial: ComputedExecutionInitial,
+    output: Exclude<ComputedProducerOutput, { kind: "failure" }>,
+    cacheHit: boolean,
+    cacheKey: string | null,
+    cachedRepresentation: ComputedRepresentationRow | null = null,
+  ): ComputedExecutionReceipt {
+    return this.database.transaction((): ComputedExecutionReceipt => {
+      if (!this.computedExecutionIsCurrentFromCurrentRead(initial)) {
+        return this.completeComputedFailure(
+          initial,
+          "execution-superseded",
+          "Computed execution was superseded by a newer invocation generation",
+        );
+      }
+      const completedAt = this.now();
+      if (output.kind === "transient-representation") {
+        this.database.query(`
+          UPDATE computed_executions
+          SET status = 'succeeded',
+              output_kind = 'transient-representation',
+              media_type = ?,
+              completed_at = ?
+          WHERE id = ? AND status = 'executing'
+        `).run(output.mediaType, completedAt, initial.id);
+        this.database.query(`
+          UPDATE computed_resource_state
+          SET status = 'succeeded',
+              selected_execution_id = ?,
+              representation_id = NULL,
+              durable_resource_id = NULL,
+              last_failure_execution_id = NULL,
+              completed_at = ?
+          WHERE resource_id = ? AND generation = ?
+        `).run(initial.id, completedAt, initial.resource.id, initial.generation);
+        this.bumpSequence();
+        return {
+          id: initial.id,
+          invocationId: initial.invocation.id,
+          resourceId: initial.resource.id,
+          producerId: initial.invocation.producerId,
+          producerVersion: initial.invocation.producerVersion,
+          inputVersion: initial.invocation.inputVersion,
+          dependencyFingerprint: initial.dependencyFingerprint,
+          cacheHit,
+          output,
+          startedAt: initial.startedAt,
+          completedAt,
+        };
+      }
+      if (output.kind === "durable-resource") {
+        const durable = this.requireFromCurrentRead(output.resourceId);
+        if (durable.id === initial.resource.id) {
+          return this.completeComputedFailure(
+            initial,
+            "invalid-output",
+            "Computed durable output cannot reference its own Resource",
+          );
+        }
+        this.database.query(`
+          UPDATE computed_executions
+          SET status = 'succeeded',
+              output_kind = 'durable-resource',
+              durable_resource_id = ?,
+              completed_at = ?
+          WHERE id = ? AND status = 'executing'
+        `).run(durable.id, completedAt, initial.id);
+        this.database.query(`
+          UPDATE computed_resource_state
+          SET status = 'succeeded',
+              selected_execution_id = ?,
+              representation_id = NULL,
+              durable_resource_id = ?,
+              last_failure_execution_id = NULL,
+              completed_at = ?
+          WHERE resource_id = ? AND generation = ?
+        `).run(
+          initial.id,
+          durable.id,
+          completedAt,
+          initial.resource.id,
+          initial.generation,
+        );
+        this.bumpSequence();
+        return {
+          id: initial.id,
+          invocationId: initial.invocation.id,
+          resourceId: initial.resource.id,
+          producerId: initial.invocation.producerId,
+          producerVersion: initial.invocation.producerVersion,
+          inputVersion: initial.invocation.inputVersion,
+          dependencyFingerprint: initial.dependencyFingerprint,
+          cacheHit,
+          output: { kind: "durable-resource", resourceId: durable.id },
+          startedAt: initial.startedAt,
+          completedAt,
+        };
+      }
+      const contentHash = byteHash(new TextEncoder().encode(output.content));
+      let representation = cachedRepresentation;
+      if (!representation) {
+        const representationId = crypto.randomUUID();
+        if (cacheKey) {
+          this.database.query(`
+            INSERT OR IGNORE INTO computed_representations (
+              id, cache_key, producer_id, producer_version, input_version,
+              dependency_fingerprint, media_type, content_hash, content, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `).run(
+            representationId,
+            cacheKey,
+            initial.invocation.producerId,
+            initial.invocation.producerVersion,
+            initial.invocation.inputVersion,
+            initial.dependencyFingerprint,
+            output.mediaType,
+            contentHash,
+            output.content,
+            completedAt,
+          );
+          representation = this.database.query(`
+            SELECT id, cache_key, producer_id, producer_version, input_version,
+                   dependency_fingerprint, media_type, content_hash, content, created_at
+            FROM computed_representations
+            WHERE cache_key = ?
+          `).get(cacheKey) as ComputedRepresentationRow | null;
+        } else {
+          this.database.query(`
+            INSERT INTO computed_representations (
+              id, cache_key, producer_id, producer_version, input_version,
+              dependency_fingerprint, media_type, content_hash, content, created_at
+            ) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)
+          `).run(
+            representationId,
+            initial.invocation.producerId,
+            initial.invocation.producerVersion,
+            initial.invocation.inputVersion,
+            initial.dependencyFingerprint,
+            output.mediaType,
+            contentHash,
+            output.content,
+            completedAt,
+          );
+          representation = this.database.query(`
+            SELECT id, cache_key, producer_id, producer_version, input_version,
+                   dependency_fingerprint, media_type, content_hash, content, created_at
+            FROM computed_representations
+            WHERE id = ?
+          `).get(representationId) as ComputedRepresentationRow | null;
+        }
+      }
+      if (!representation) {
+        return this.completeComputedFailure(
+          initial,
+          "execution-failed",
+          "Computed representation could not be persisted",
+        );
+      }
+      this.database.query(`
+        UPDATE computed_executions
+        SET status = 'succeeded',
+            output_kind = 'immutable-snapshot',
+            media_type = ?,
+            output_content_hash = ?,
+            representation_id = ?,
+            cache_hit = ?,
+            completed_at = ?
+        WHERE id = ? AND status = 'executing'
+      `).run(
+        representation.media_type,
+        representation.content_hash,
+        representation.id,
+        cacheHit ? 1 : 0,
+        completedAt,
+        initial.id,
+      );
+      this.database.query(`
+        UPDATE computed_resource_state
+        SET status = 'succeeded',
+            selected_execution_id = ?,
+            representation_id = ?,
+            durable_resource_id = NULL,
+            last_failure_execution_id = NULL,
+            completed_at = ?
+        WHERE resource_id = ? AND generation = ?
+      `).run(
+        initial.id,
+        representation.id,
+        completedAt,
+        initial.resource.id,
+        initial.generation,
+      );
+      this.database.query(
+        "UPDATE resources SET media_type = ?, updated_at = ? WHERE id = ?",
+      ).run(representation.media_type, completedAt, initial.resource.id);
+      this.bumpSequence();
+      return {
+        id: initial.id,
+        invocationId: initial.invocation.id,
+        resourceId: initial.resource.id,
+        producerId: initial.invocation.producerId,
+        producerVersion: initial.invocation.producerVersion,
+        inputVersion: initial.invocation.inputVersion,
+        dependencyFingerprint: initial.dependencyFingerprint,
+        cacheHit,
+        output: {
+          kind: "immutable-snapshot",
+          mediaType: representation.media_type,
+          content: representation.content,
+          contentHash: representation.content_hash,
+          representationId: representation.id,
+        },
+        startedAt: initial.startedAt,
+        completedAt,
+      };
+    })();
+  }
+
+  private computedInvocationRowFromCurrentRead(
+    invocationId: string,
+  ): ComputedInvocationRow | null {
+    return this.database.query(`
+      SELECT id, resource_id, source_id, producer_id, producer_version, input_version,
+             inputs_json, dependencies_json, declaration_json, version, created_at, updated_at
+      FROM computed_invocations
+      WHERE id = ?
+    `).get(invocationId) as ComputedInvocationRow | null;
+  }
+
+  private requireComputedInvocationFromCurrentRead(
+    invocationId: string,
+  ): ComputedInvocation {
+    const row = this.computedInvocationRowFromCurrentRead(invocationId);
+    if (!row) {
+      throw new ResourceCatalogError(
+        "missing-resource",
+        `Computed invocation not found: ${invocationId}`,
+      );
+    }
+    return computedInvocationFromRow(row);
+  }
+
+  private normalizeComputedDependenciesFromCurrentRead(
+    values: readonly unknown[],
+  ): readonly ResourceRevisionRef[] {
+    const dependencies = values.map((value) => {
+      if (
+        typeof value !== "object" ||
+        value === null ||
+        !("resourceId" in value)
+      ) {
+        throw new ResourceCatalogError(
+          "invalid-input",
+          "Computed dependency must be a Resource revision reference",
+        );
+      }
+      const resource = this.requireFromCurrentRead(
+        normalizeResourceId(value.resourceId, "Dependency Resource ID"),
+      );
+      return normalizeResourceRevisionRef(value, resource);
+    }).sort((left, right) => {
+      const byResource = left.resourceId.localeCompare(right.resourceId);
+      return byResource || canonicalJson(left).localeCompare(canonicalJson(right));
+    });
+    for (let index = 1; index < dependencies.length; index += 1) {
+      if (dependencies[index]?.resourceId === dependencies[index - 1]?.resourceId) {
+        throw new ResourceCatalogError(
+          "invalid-input",
+          `Computed dependencies contain Resource more than once: ${dependencies[index]?.resourceId}`,
+        );
+      }
+    }
+    return dependencies;
+  }
+
+
+  private computedStateRowFromCurrentRead(
+    resourceId: string,
+  ): ComputedResourceStateRow | null {
+    return this.database.query(`
+      SELECT resource_id, invocation_id, generation, status, selected_execution_id,
+             representation_id, durable_resource_id, last_failure_execution_id,
+             started_at, completed_at
+      FROM computed_resource_state
+      WHERE resource_id = ?
+    `).get(resourceId) as ComputedResourceStateRow | null;
+  }
+
+  private computedDescriptionFromCurrentRead(
+    resource: Extract<Resource, { provider: "computed" }>,
+    requestedRevision: ResourceRevisionRef | null,
+  ): {
+    readonly document: ComputedResourceDocument | null;
+    readonly status: ComputedResourceStatus;
+    readonly failure: ComputedResourceFailure | null;
+  } {
+    const invocation = this.requireComputedInvocationFromCurrentRead(
+      resource.address.invocationId,
+    );
+    const state = this.computedStateRowFromCurrentRead(resource.id);
+    if (!state || state.invocation_id !== invocation.id) {
+      throw new ResourceCatalogError(
+        "invalid-input",
+        `Computed Resource state is unavailable: ${resource.id}`,
+      );
+    }
+    let execution: ComputedExecutionRow | null = null;
+    let representation: ComputedRepresentationRow | null = null;
+    if (requestedRevision) {
+      const revision = requestedRevision.revision;
+      if (revision.kind !== "computed") {
+        throw new ResourceCatalogError(
+          "provider-mismatch",
+          "Requested revision is not computed",
+        );
+      }
+      execution = this.database.query(`
+        SELECT id, invocation_id, resource_id, generation, producer_id,
+               producer_version, input_version, dependency_fingerprint,
+               dependencies_json, cache_hit, status, output_kind, media_type,
+               output_content_hash, representation_id, durable_resource_id,
+               failure_code, failure_message, started_at, completed_at
+        FROM computed_executions
+        WHERE resource_id = ?
+          AND id = ?
+          AND producer_id = ?
+          AND producer_version = ?
+          AND input_version = ?
+          AND dependency_fingerprint = ?
+          AND status = 'succeeded'
+          AND output_kind = 'immutable-snapshot'
+        ORDER BY completed_at DESC, id DESC
+        LIMIT 1
+      `).get(
+        resource.id,
+        revision.executionId,
+        revision.producerId,
+        revision.producerVersion,
+        revision.inputVersion,
+        revision.dependencyFingerprint,
+      ) as ComputedExecutionRow | null;
+    } else if (state.representation_id) {
+      execution = this.database.query(`
+        SELECT id, invocation_id, resource_id, generation, producer_id,
+               producer_version, input_version, dependency_fingerprint,
+               dependencies_json, cache_hit, status, output_kind, media_type,
+               output_content_hash, representation_id, durable_resource_id,
+               failure_code, failure_message, started_at, completed_at
+        FROM computed_executions
+        WHERE id = ?
+      `).get(state.selected_execution_id) as ComputedExecutionRow | null;
+    }
+    if (execution?.representation_id) {
+      representation = this.database.query(`
+        SELECT id, cache_key, producer_id, producer_version, input_version,
+               dependency_fingerprint, media_type, content_hash, content, created_at
+        FROM computed_representations
+        WHERE id = ?
+      `).get(execution.representation_id) as ComputedRepresentationRow | null;
+    }
+    let document: ComputedResourceDocument | null = null;
+    if (
+      execution &&
+      representation &&
+      representation.media_type === "text/markdown"
+    ) {
+      const dependenciesValue = parsedJson(
+        execution.dependencies_json,
+        "Computed execution dependencies",
+      );
+      if (!Array.isArray(dependenciesValue)) {
+        throw new ResourceCatalogError(
+          "invalid-input",
+          "Stored computed execution dependencies are invalid",
+        );
+      }
+      const dependencies = dependenciesValue.map(normalizeRetainedResourceRevisionRef);
+      document = {
+        markdown: representation.content,
+        mediaType: "text/markdown",
+        contentHash: representation.content_hash,
+        representationId: representation.id,
+        revision: {
+          resourceId: resource.id,
+          addressVersion: resource.addressVersion,
+          revision: {
+            kind: "computed",
+            executionId: execution.id,
+            producerId: execution.producer_id,
+            producerVersion: execution.producer_version,
+            inputVersion: execution.input_version,
+            dependencyFingerprint: execution.dependency_fingerprint,
+          },
+        },
+        dependencies,
+        adapter: COMPUTED_MARKDOWN_ADAPTER,
+        derivedAt: representation.created_at,
+      };
+    }
+    let failure: ComputedResourceFailure | null = null;
+    if (state.last_failure_execution_id) {
+      const row = this.database.query(`
+        SELECT id, failure_code, failure_message, completed_at
+        FROM computed_executions
+        WHERE id = ? AND status = 'failed'
+      `).get(state.last_failure_execution_id) as Pick<
+        ComputedExecutionRow,
+        "id" | "failure_code" | "failure_message" | "completed_at"
+      > | null;
+      if (row?.failure_code && row.failure_message && row.completed_at) {
+        failure = {
+          executionId: row.id,
+          code: row.failure_code,
+          message: row.failure_message,
+          failedAt: row.completed_at,
+        };
+      }
+    }
+    return {
+      document,
+      status: {
+        state: state.status,
+        generation: state.generation,
+        lastExecutionAt: state.completed_at,
+      },
+      failure,
+    };
+  }
+
   private assertConfinement(
     source: ResourceSource,
     rootBinding: string | null,
@@ -3229,7 +4394,7 @@ export class ResourceCatalog {
     ).run();
   }
 
-  private upgradeRemoteEntityProviderConstraints(): void {
+  private upgradeResourceProviderConstraints(): void {
     const schemas = this.database.query(
       "SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name IN ('resource_sources', 'resources')",
     ).all() as Array<{ name: string; sql: string | null }>;
@@ -3237,7 +4402,13 @@ export class ResourceCatalog {
     const sourceColumns = this.database.query("PRAGMA table_info(resource_sources)").all() as
       Array<{ name: string }>;
     if (!sourceColumns.some(({ name }) => name === "boundary_json")) return;
-    if (schemas.every(({ sql }) => sql?.includes("'jira'") && sql.includes("'linear'"))) return;
+    if (
+      schemas.every(({ sql }) =>
+        sql?.includes("'jira'") &&
+        sql.includes("'linear'") &&
+        sql.includes("'computed'")
+      )
+    ) return;
 
     const foreignKeyState = this.database.query("PRAGMA foreign_keys").get() as {
       foreign_keys: number;
@@ -3255,7 +4426,7 @@ export class ResourceCatalog {
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
             provider TEXT NOT NULL
-              CHECK (provider IN ('filesystem', 'web', 'github', 'application', 'jira', 'linear')),
+              CHECK (provider IN ('filesystem', 'web', 'github', 'application', 'jira', 'linear', 'computed')),
             boundary_json TEXT NOT NULL,
             policy_json TEXT NOT NULL,
             root_binding TEXT,
@@ -3272,7 +4443,7 @@ export class ResourceCatalog {
             id TEXT PRIMARY KEY,
             source_id TEXT NOT NULL REFERENCES resource_sources(id) ON DELETE RESTRICT,
             provider TEXT NOT NULL
-              CHECK (provider IN ('filesystem', 'web', 'github', 'application', 'jira', 'linear')),
+              CHECK (provider IN ('filesystem', 'web', 'github', 'application', 'jira', 'linear', 'computed')),
             address_json TEXT NOT NULL,
             canonical_key TEXT NOT NULL,
             media_type TEXT,
@@ -3313,7 +4484,7 @@ export class ResourceCatalog {
   }
 
   private migrate(): void {
-    this.upgradeRemoteEntityProviderConstraints();
+    this.upgradeResourceProviderConstraints();
     this.database.transaction(() => {
       const sourceColumns = this.database.query("PRAGMA table_info(resource_sources)").all() as
         Array<{ name: string }>;
@@ -3350,7 +4521,7 @@ export class ResourceCatalog {
         CREATE TABLE IF NOT EXISTS resource_sources (
           id TEXT PRIMARY KEY,
           name TEXT NOT NULL,
-          provider TEXT NOT NULL CHECK (provider IN ('filesystem', 'web', 'github', 'application', 'jira', 'linear')),
+          provider TEXT NOT NULL CHECK (provider IN ('filesystem', 'web', 'github', 'application', 'jira', 'linear', 'computed')),
           boundary_json TEXT NOT NULL,
           policy_json TEXT NOT NULL,
           root_binding TEXT,
@@ -3363,7 +4534,7 @@ export class ResourceCatalog {
         CREATE TABLE IF NOT EXISTS resources (
           id TEXT PRIMARY KEY,
           source_id TEXT NOT NULL REFERENCES resource_sources(id) ON DELETE RESTRICT,
-          provider TEXT NOT NULL CHECK (provider IN ('filesystem', 'web', 'github', 'application', 'jira', 'linear')),
+          provider TEXT NOT NULL CHECK (provider IN ('filesystem', 'web', 'github', 'application', 'jira', 'linear', 'computed')),
           address_json TEXT NOT NULL,
           canonical_key TEXT NOT NULL,
           media_type TEXT,
@@ -3543,6 +4714,86 @@ export class ResourceCatalog {
           checked_at TEXT,
           last_error TEXT
         );
+        CREATE TABLE IF NOT EXISTS computed_invocations (
+          id TEXT PRIMARY KEY,
+          resource_id TEXT NOT NULL UNIQUE REFERENCES resources(id) ON DELETE RESTRICT,
+          source_id TEXT NOT NULL REFERENCES resource_sources(id) ON DELETE RESTRICT,
+          producer_id TEXT NOT NULL,
+          producer_version INTEGER NOT NULL CHECK (producer_version >= 1),
+          input_version INTEGER NOT NULL CHECK (input_version >= 1),
+          inputs_json TEXT NOT NULL,
+          dependencies_json TEXT NOT NULL,
+          declaration_json TEXT NOT NULL,
+          version INTEGER NOT NULL CHECK (version >= 1),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS computed_invocations_source
+          ON computed_invocations(source_id, producer_id, id);
+        CREATE TABLE IF NOT EXISTS computed_representations (
+          id TEXT PRIMARY KEY,
+          cache_key TEXT,
+          producer_id TEXT NOT NULL,
+          producer_version INTEGER NOT NULL CHECK (producer_version >= 1),
+          input_version INTEGER NOT NULL CHECK (input_version >= 1),
+          dependency_fingerprint TEXT NOT NULL,
+          media_type TEXT NOT NULL,
+          content_hash TEXT NOT NULL,
+          content TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS computed_representations_cache_key
+          ON computed_representations(cache_key)
+          WHERE cache_key IS NOT NULL;
+        CREATE TABLE IF NOT EXISTS computed_executions (
+          id TEXT PRIMARY KEY,
+          invocation_id TEXT NOT NULL
+            REFERENCES computed_invocations(id) ON DELETE RESTRICT,
+          resource_id TEXT NOT NULL REFERENCES resources(id) ON DELETE RESTRICT,
+          generation INTEGER NOT NULL CHECK (generation >= 1),
+          producer_id TEXT NOT NULL,
+          producer_version INTEGER NOT NULL CHECK (producer_version >= 1),
+          input_version INTEGER NOT NULL CHECK (input_version >= 1),
+          dependency_fingerprint TEXT NOT NULL,
+          dependencies_json TEXT NOT NULL,
+          cache_hit INTEGER NOT NULL DEFAULT 0 CHECK (cache_hit IN (0, 1)),
+          status TEXT NOT NULL CHECK (status IN ('executing', 'succeeded', 'failed')),
+          output_kind TEXT CHECK (
+            output_kind IS NULL OR output_kind IN (
+              'transient-representation',
+              'immutable-snapshot',
+              'durable-resource',
+              'failure'
+            )
+          ),
+          media_type TEXT,
+          output_content_hash TEXT,
+          representation_id TEXT
+            REFERENCES computed_representations(id) ON DELETE RESTRICT,
+          durable_resource_id TEXT REFERENCES resources(id) ON DELETE RESTRICT,
+          failure_code TEXT,
+          failure_message TEXT,
+          started_at TEXT NOT NULL,
+          completed_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS computed_executions_resource
+          ON computed_executions(resource_id, started_at, id);
+        CREATE TABLE IF NOT EXISTS computed_resource_state (
+          resource_id TEXT PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE,
+          invocation_id TEXT NOT NULL UNIQUE
+            REFERENCES computed_invocations(id) ON DELETE RESTRICT,
+          generation INTEGER NOT NULL CHECK (generation >= 1),
+          status TEXT NOT NULL CHECK (status IN ('idle', 'executing', 'succeeded', 'failed')),
+          selected_execution_id TEXT
+            REFERENCES computed_executions(id) ON DELETE RESTRICT,
+          representation_id TEXT
+            REFERENCES computed_representations(id) ON DELETE RESTRICT,
+          durable_resource_id TEXT REFERENCES resources(id) ON DELETE RESTRICT,
+          last_failure_execution_id TEXT
+            REFERENCES computed_executions(id) ON DELETE RESTRICT,
+          started_at TEXT,
+          completed_at TEXT
+        );
       `);
       if (migratePie251Annotations) {
         this.database.exec(`
@@ -3595,6 +4846,45 @@ export class ResourceCatalog {
         WHERE freshness = 'refreshing'
       `).run();
       if (recovered.changes > 0) this.bumpSequence();
+    })();
+  }
+
+  private recoverInterruptedComputedExecutions(): void {
+    this.database.transaction(() => {
+      const interrupted = this.database.query(`
+        SELECT id, resource_id, generation
+        FROM computed_executions
+        WHERE status = 'executing'
+        ORDER BY started_at, id
+      `).all() as Array<{ id: string; resource_id: string; generation: number }>;
+      if (interrupted.length === 0) return;
+      const completedAt = this.now();
+      for (const execution of interrupted) {
+        this.database.query(`
+          UPDATE computed_executions
+          SET status = 'failed',
+              output_kind = 'failure',
+              failure_code = 'execution-interrupted',
+              failure_message = 'Computed execution interrupted before completion',
+              completed_at = ?
+          WHERE id = ? AND status = 'executing'
+        `).run(completedAt, execution.id);
+        this.database.query(`
+          UPDATE computed_resource_state
+          SET status = 'failed',
+              last_failure_execution_id = ?,
+              completed_at = ?
+          WHERE resource_id = ?
+            AND generation = ?
+            AND status = 'executing'
+        `).run(
+          execution.id,
+          completedAt,
+          execution.resource_id,
+          execution.generation,
+        );
+      }
+      this.bumpSequence();
     })();
   }
 

@@ -36,7 +36,8 @@ export type ResourceProvider =
   | "github"
   | "jira"
   | "linear"
-  | "application";
+  | "application"
+  | "computed";
 export type ResourceCapability = typeof RESOURCE_CAPABILITIES[number];
 export type ResourceCapabilityFactor = typeof RESOURCE_CAPABILITY_FACTORS[number];
 
@@ -97,6 +98,14 @@ export type ResourceSource =
         readonly authority: string;
         readonly namespace: string;
       };
+    }
+  | ResourceSourceHeader & {
+      readonly provider: "computed";
+      readonly boundary: {
+        readonly kind: "computed";
+        readonly registry: string;
+        readonly allowedPermissions: readonly string[];
+      };
     };
 
 export type CreateResourceSourceInput =
@@ -149,6 +158,15 @@ export type CreateResourceSourceInput =
         readonly scheme: string;
         readonly authority: string;
         readonly namespace: string;
+      };
+      readonly policy?: { readonly deniedCapabilities?: readonly ResourceCapability[] };
+    }
+  | {
+      readonly name: string;
+      readonly provider: "computed";
+      readonly boundary: {
+        readonly registry: string;
+        readonly allowedPermissions: readonly string[];
       };
       readonly policy?: { readonly deniedCapabilities?: readonly ResourceCapability[] };
     };
@@ -205,6 +223,15 @@ type NormalizedResourceSourceInput =
         readonly namespace: string;
       };
       readonly policy: ResourcePolicy;
+    }
+  | {
+      readonly name: string;
+      readonly provider: "computed";
+      readonly boundary: {
+        readonly registry: string;
+        readonly allowedPermissions: readonly string[];
+      };
+      readonly policy: ResourcePolicy;
     };
 
 export type ResourceAddress =
@@ -225,7 +252,8 @@ export type ResourceAddress =
       readonly entityId: string;
       readonly identifier: string;
     }
-  | { readonly kind: "application"; readonly uri: string };
+  | { readonly kind: "application"; readonly uri: string }
+  | { readonly kind: "computed"; readonly invocationId: string };
 
 interface ResourceHeader {
   readonly id: string;
@@ -243,7 +271,8 @@ export type Resource =
   | ResourceHeader & { readonly provider: "github"; readonly address: Extract<ResourceAddress, { kind: "github" }> }
   | ResourceHeader & { readonly provider: "jira"; readonly address: Extract<ResourceAddress, { kind: "jira" }> }
   | ResourceHeader & { readonly provider: "linear"; readonly address: Extract<ResourceAddress, { kind: "linear" }> }
-  | ResourceHeader & { readonly provider: "application"; readonly address: Extract<ResourceAddress, { kind: "application" }> };
+  | ResourceHeader & { readonly provider: "application"; readonly address: Extract<ResourceAddress, { kind: "application" }> }
+  | ResourceHeader & { readonly provider: "computed"; readonly address: Extract<ResourceAddress, { kind: "computed" }> };
 
 export type ResourceRevision =
   | {
@@ -271,12 +300,151 @@ export type ResourceRevision =
   | {
       readonly kind: "linear";
       readonly validator: { readonly kind: "updated-at"; readonly value: string };
+    }
+  | {
+      readonly kind: "computed";
+      readonly executionId: string;
+      readonly producerId: string;
+      readonly producerVersion: number;
+      readonly inputVersion: number;
+      readonly dependencyFingerprint: string;
     };
 
 export interface ResourceRevisionRef {
   readonly resourceId: string;
   readonly addressVersion: number;
   readonly revision: ResourceRevision;
+}
+
+export interface ComputedProducerDeclarationSnapshot {
+  readonly id: string;
+  readonly version: number;
+  readonly permissions: readonly string[];
+  readonly determinism: "deterministic" | "nondeterministic";
+  readonly cachePolicy: "none" | "content-addressed";
+  readonly outputMediaTypes: readonly string[];
+}
+
+export interface CreateComputedInvocationInput {
+  readonly sourceId: string;
+  readonly producerId: string;
+  readonly inputs: Readonly<Record<string, unknown>>;
+  readonly dependencies: readonly ResourceRevisionRef[];
+}
+
+export interface ReviseComputedInvocationInput {
+  readonly invocationId: string;
+  readonly expectedVersion: number;
+  readonly inputs?: Readonly<Record<string, unknown>>;
+  readonly dependencies?: readonly ResourceRevisionRef[];
+}
+
+export interface ComputedInvocation {
+  readonly id: string;
+  readonly resourceId: string;
+  readonly sourceId: string;
+  readonly producerId: string;
+  readonly producerVersion: number;
+  readonly inputVersion: number;
+  readonly inputs: Readonly<Record<string, unknown>>;
+  readonly dependencies: readonly ResourceRevisionRef[];
+  readonly declaration: ComputedProducerDeclarationSnapshot;
+  readonly version: number;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export interface ComputedHandlerResolution {
+  readonly reference: string;
+  readonly invocationId: string;
+  readonly resourceId: string;
+  readonly producerId: string;
+  readonly producerVersion: number;
+}
+
+export type ComputedExecutionReceiptOutput =
+  | {
+      readonly kind: "transient-representation";
+      readonly mediaType: string;
+      readonly content: string;
+    }
+  | {
+      readonly kind: "immutable-snapshot";
+      readonly mediaType: string;
+      readonly content: string;
+      readonly contentHash: string;
+      readonly representationId: string;
+    }
+  | { readonly kind: "durable-resource"; readonly resourceId: string }
+  | { readonly kind: "failure"; readonly code: string; readonly message: string };
+
+export type ComputedExecutionRecordOutput =
+  | { readonly kind: "transient-representation"; readonly mediaType: string }
+  | {
+      readonly kind: "immutable-snapshot";
+      readonly mediaType: string;
+      readonly contentHash: string;
+      readonly representationId: string;
+    }
+  | { readonly kind: "durable-resource"; readonly resourceId: string }
+  | { readonly kind: "failure"; readonly code: string; readonly message: string };
+
+export interface ComputedExecutionReceipt {
+  readonly id: string;
+  readonly invocationId: string;
+  readonly resourceId: string;
+  readonly producerId: string;
+  readonly producerVersion: number;
+  readonly inputVersion: number;
+  readonly dependencyFingerprint: string;
+  readonly cacheHit: boolean;
+  readonly output: ComputedExecutionReceiptOutput;
+  readonly startedAt: string;
+  readonly completedAt: string;
+}
+
+export interface ComputedExecutionRecord {
+  readonly id: string;
+  readonly invocationId: string;
+  readonly resourceId: string;
+  readonly producerId: string;
+  readonly producerVersion: number;
+  readonly inputVersion: number;
+  readonly dependencyFingerprint: string;
+  readonly dependencies: readonly ResourceRevisionRef[];
+  readonly cacheHit: boolean;
+  readonly output: ComputedExecutionRecordOutput;
+  readonly startedAt: string;
+  readonly completedAt: string;
+}
+
+export interface ComputedExecutionHistory {
+  readonly resourceId: string;
+  readonly executions: readonly ComputedExecutionRecord[];
+}
+
+export interface ComputedResourceDocument {
+  readonly markdown: string;
+  readonly mediaType: "text/markdown";
+  readonly contentHash: string;
+  readonly representationId: string;
+  readonly revision: ResourceRevisionRef;
+  readonly dependencies: readonly ResourceRevisionRef[];
+  readonly adapter: ResourceRepresentationAdapter;
+  readonly derivedAt: string;
+}
+
+export interface ComputedResourceStatus {
+  readonly state: "idle" | "executing" | "succeeded" | "failed";
+  readonly generation: number;
+  readonly lastExecutionAt: string | null;
+}
+
+export interface ComputedResourceFailure {
+  readonly executionId: string;
+  readonly code: string;
+  readonly message: string;
+  readonly failedAt: string;
 }
 
 export interface InternResourceInput {
@@ -690,6 +858,9 @@ export interface ResourceDescription {
   readonly remoteEntity: RemoteEntityDocument | null;
   readonly remoteStatus: WebResourceStatus | null;
   readonly remoteError?: string;
+  readonly computed?: ComputedResourceDocument | null;
+  readonly computedStatus?: ComputedResourceStatus | null;
+  readonly computedFailure?: ComputedResourceFailure | null;
   readonly availableCommands: readonly ResourceProviderCommandDescriptor[];
   readonly presentation?: ResourcePresentationDecision;
 }
@@ -824,6 +995,14 @@ function normalizePolicy(value: unknown): ResourcePolicy {
       values.includes(capability)
     ),
   };
+}
+
+function normalizeComputedPermissions(value: unknown): readonly string[] {
+  if (!Array.isArray(value)) invalid("Computed source allowedPermissions must be an array");
+  const normalized = value.map((permission) =>
+    printable(permission, "Computed source permission", 255)
+  );
+  return [...new Set(normalized)].sort();
 }
 
 function normalizeHttpUrl(value: unknown, label: string): URL {
@@ -1028,6 +1207,18 @@ function normalizeApplicationAddress(
   };
 }
 
+function normalizeComputedAddress(value: unknown): NormalizedResourceAddress {
+  const input = record(value, "Computed resource address");
+  if (input.kind !== "computed") {
+    invalid("Computed resource address kind must be computed");
+  }
+  const invocationId = normalizeResourceId(input.invocationId, "Computed invocation ID");
+  return {
+    address: { kind: "computed", invocationId },
+    canonicalKey: invocationId,
+  };
+}
+
 export function normalizeResourceSourceInput(value: unknown): NormalizedResourceSourceInput {
   const input = record(value, "Resource source input");
   const name = printable(input.name, "Resource source name", MAX_NAME_LENGTH);
@@ -1105,6 +1296,16 @@ export function normalizeResourceSourceInput(value: unknown): NormalizedResource
         policy,
       };
     }
+    case "computed":
+      return {
+        name,
+        provider: "computed",
+        boundary: {
+          registry: printable(boundary.registry, "Computed source registry", 255),
+          allowedPermissions: normalizeComputedPermissions(boundary.allowedPermissions),
+        },
+        policy,
+      };
     default:
       invalid(`Unsupported resource provider: ${String(input.provider)}`);
   }
@@ -1127,6 +1328,8 @@ export function normalizeResourceAddress(
       return normalizeLinearAddress(value);
     case "application":
       return normalizeApplicationAddress(source, value);
+    case "computed":
+      return normalizeComputedAddress(value);
   }
 }
 
@@ -1199,6 +1402,18 @@ export function normalizeRelocateResourceInput(
       "Linear relocation cannot change provider instance or immutable entity identity",
     );
   }
+  if (
+    resource.provider === "computed" &&
+    (
+      normalized.address.kind !== "computed" ||
+      normalized.address.invocationId !== resource.address.invocationId
+    )
+  ) {
+    throw new ResourceCatalogError(
+      "provider-mismatch",
+      "Computed relocation cannot change immutable invocation identity",
+    );
+  }
   return {
     resourceId,
     expectedVersion,
@@ -1240,6 +1455,31 @@ function normalizeProviderRevision(
         kind: "filesystem",
         mtimeNs: decimalInteger(revision.mtimeNs, "Filesystem revision mtimeNs"),
         size: decimalInteger(revision.size, "Filesystem revision size"),
+      },
+    };
+  }
+  if (revision.kind === "computed") {
+    const dependencyFingerprint = printable(
+      revision.dependencyFingerprint,
+      "Computed dependency fingerprint",
+      64,
+    ).toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(dependencyFingerprint)) {
+      invalid("Computed dependency fingerprint must be SHA-256");
+    }
+    return {
+      resourceId,
+      addressVersion,
+      revision: {
+        kind: "computed",
+        executionId: normalizeResourceId(revision.executionId, "Computed execution ID"),
+        producerId: printable(revision.producerId, "Computed producer ID", 255),
+        producerVersion: normalizeVersion(
+          revision.producerVersion,
+          "Computed producer version",
+        ),
+        inputVersion: normalizeVersion(revision.inputVersion, "Computed input version"),
+        dependencyFingerprint,
       },
     };
   }
@@ -1333,7 +1573,9 @@ function normalizeProviderRevision(
       },
     };
   }
-  invalid("Resource revision provider must be filesystem, web, github, jira, or linear");
+  invalid(
+    "Resource revision provider must be filesystem, web, github, jira, linear, or computed",
+  );
 }
 
 export function normalizeRetainedResourceRevisionRef(value: unknown): ResourceRevisionRef {
@@ -1401,6 +1643,13 @@ export function resourceRevisionRefEquals(
   ) {
     return left.revision.validator.value === right.revision.validator.value;
   }
+  if (left.revision.kind === "computed" && right.revision.kind === "computed") {
+    return left.revision.executionId === right.revision.executionId &&
+      left.revision.producerId === right.revision.producerId &&
+      left.revision.producerVersion === right.revision.producerVersion &&
+      left.revision.inputVersion === right.revision.inputVersion &&
+      left.revision.dependencyFingerprint === right.revision.dependencyFingerprint;
+  }
   return false;
 }
 
@@ -1418,6 +1667,8 @@ export function resourceAddressLabel(address: ResourceAddress): string {
       return address.identifier;
     case "application":
       return address.uri;
+    case "computed":
+      return `producer:${address.invocationId}`;
   }
 }
 
@@ -1464,6 +1715,11 @@ const PROVIDER_CAPABILITIES: Readonly<
   application: {
     "open-external": true,
     command: true,
+  },
+  computed: {
+    read: true,
+    refresh: true,
+    history: true,
   },
 };
 
