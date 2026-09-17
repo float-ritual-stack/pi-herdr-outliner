@@ -461,7 +461,7 @@ test("legacy PDF page-region evidence survives repository startup", async () => 
       anchor: {
         kind: "pdf-page-region",
         page: annotation.originalTarget.anchor.page,
-        regions: annotation.originalTarget.anchor.regions,
+        regions: [{ x: -4, y: -2, width: 0, height: 0 }],
         exact: annotation.originalTarget.anchor.exact,
       },
     };
@@ -481,6 +481,7 @@ test("legacy PDF page-region evidence survives repository startup", async () => 
       prefix: null,
       suffix: null,
       exact: "Durable claim revision 1",
+      regions: [{ x: -4, y: -2, width: 0, height: 0 }],
     });
   } finally {
     store.close();
@@ -525,3 +526,52 @@ test("PDF refresh enforces policy before provider access", async () => {
   }
 });
 
+
+test("protected PDF text keeps its native sibling and exact revision readable", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-outliner-pdf-protected-text-"));
+  const pdfPath = join(directory, "protected.pdf");
+  const store = new OutlinerStore(join(directory, "outliner.sqlite"), {
+    workspaceRoot: directory,
+  });
+  try {
+    writeFileSync(pdfPath, fixturePdf(1));
+    const resource = store.resources.internFilesystem({ path: pdfPath }).resource;
+    const protectedRevision = await store.resources.open(resource.id, true);
+    writeFileSync(pdfPath, fixturePdf(22));
+    await store.resources.open(resource.id, true);
+    if (!protectedRevision.pdf) throw new Error("Protected PDF fixture is unavailable");
+    store.resources.pinRetention({
+      artifact: {
+        kind: "representation",
+        id: protectedRevision.pdf.representation.id,
+      },
+      label: "Pinned extracted evidence",
+    });
+    store.resources.configureRetention({
+      retainNewestSourceSnapshots: 0,
+      retainNewestRepresentationsPerAdapter: 0,
+      minimumAgeMs: 0,
+      purgeGraceMs: 0,
+    });
+    const report = store.resources.inspectRetention(resource.id);
+    expect(
+      report.artifacts.find(({ artifact }) =>
+        artifact.id === protectedRevision.pdf!.nativeRepresentation.id
+      )?.states,
+    ).toContain("pinned");
+    store.resources.collectRetention("evict", resource.id);
+    store.resources.collectRetention("purge", resource.id);
+    const retained = store.resources.describe(
+      resource.id,
+      true,
+      protectedRevision.pdf.sourceSnapshot.revision,
+    );
+    expect(retained.pdf?.representation.id).toBe(protectedRevision.pdf.representation.id);
+    expect(retained.pdf?.nativeRepresentation.id).toBe(
+      protectedRevision.pdf.nativeRepresentation.id,
+    );
+  } finally {
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

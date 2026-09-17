@@ -48,6 +48,7 @@ interface SnapshotRetentionRow {
   source_snapshot_id: null;
   adapter_id: null;
   adapter_version: null;
+  media_type: null;
   captured_at: string | null;
   revision_json: string;
   payload_state: "available" | "evicted";
@@ -63,6 +64,7 @@ interface RepresentationRetentionRow {
   source_snapshot_id: string;
   adapter_id: string;
   adapter_version: number;
+  media_type: string;
   captured_at: string | null;
   revision_json: null;
   payload_state: "available" | "evicted";
@@ -505,20 +507,20 @@ export class ResourceRetentionRepository {
     const snapshots = this.database.query(`
       SELECT 'source-snapshot' AS kind, 'web' AS storage, id, resource_id,
              NULL AS source_snapshot_id, NULL AS adapter_id, NULL AS adapter_version,
-             fetched_at AS captured_at, revision_json,
+             NULL AS media_type, fetched_at AS captured_at, revision_json,
              payload_state, payload_bytes, evicted_at
       FROM web_source_snapshots
       WHERE ? IS NULL OR resource_id = ?
       UNION ALL
       SELECT 'source-snapshot' AS kind, 'pdf' AS storage, id, resource_id,
              NULL AS source_snapshot_id, NULL AS adapter_id, NULL AS adapter_version,
-             captured_at, revision_json, payload_state, payload_bytes, evicted_at
+             NULL AS media_type, captured_at, revision_json, payload_state, payload_bytes, evicted_at
       FROM pdf_source_snapshots
       WHERE ? IS NULL OR resource_id = ?
     `).all(resourceId, resourceId, resourceId, resourceId) as SnapshotRetentionRow[];
     const representations = this.database.query(`
       SELECT 'representation' AS kind, 'web' AS storage, wr.id, ws.resource_id,
-             wr.source_snapshot_id, wr.adapter_id, wr.adapter_version,
+             wr.source_snapshot_id, wr.adapter_id, wr.adapter_version, wr.media_type,
              wr.derived_at AS captured_at, NULL AS revision_json,
              wr.payload_state, wr.payload_bytes, wr.evicted_at
       FROM web_representations wr
@@ -526,7 +528,7 @@ export class ResourceRetentionRepository {
       WHERE ? IS NULL OR ws.resource_id = ?
       UNION ALL
       SELECT 'representation' AS kind, 'pdf' AS storage, pr.id, ps.resource_id,
-             pr.source_snapshot_id, pr.adapter_id, pr.adapter_version,
+             pr.source_snapshot_id, pr.adapter_id, pr.adapter_version, pr.media_type,
              pr.derived_at AS captured_at, NULL AS revision_json,
              pr.payload_state, pr.payload_bytes, pr.evicted_at
       FROM pdf_representations pr
@@ -664,6 +666,26 @@ export class ResourceRetentionRepository {
     for (const representation of representations) {
       const childStates = states.get(key("representation", representation.id));
       if (!childStates) continue;
+      const nativeSibling = representation.storage === "pdf" &&
+          representation.media_type === "text/markdown"
+        ? representations.find((candidate) =>
+          candidate.storage === "pdf" &&
+          candidate.source_snapshot_id === representation.source_snapshot_id &&
+          candidate.media_type === "application/pdf"
+        )
+        : undefined;
+      if (nativeSibling) {
+        for (const state of childStates) {
+          if (
+            state === "current" ||
+            state === "hot" ||
+            state === "referenced" ||
+            state === "pinned"
+          ) {
+            protect({ kind: "representation", id: nativeSibling.id }, state);
+          }
+        }
+      }
       for (const state of childStates) {
         if (
           state === "current" ||
@@ -729,18 +751,18 @@ export class ResourceRetentionRepository {
       ? this.database.query(`
           SELECT 'source-snapshot' AS kind, 'web' AS storage, id, resource_id,
                  NULL AS source_snapshot_id, NULL AS adapter_id, NULL AS adapter_version,
-                 fetched_at AS captured_at, revision_json, payload_state,
-                 payload_bytes, evicted_at
+                 NULL AS media_type, fetched_at AS captured_at, revision_json,
+                 payload_state, payload_bytes, evicted_at
           FROM web_source_snapshots WHERE id = ?
           UNION ALL
           SELECT 'source-snapshot' AS kind, 'pdf' AS storage, id, resource_id,
                  NULL AS source_snapshot_id, NULL AS adapter_id, NULL AS adapter_version,
-                 captured_at, revision_json, payload_state, payload_bytes, evicted_at
+                 NULL AS media_type, captured_at, revision_json, payload_state, payload_bytes, evicted_at
           FROM pdf_source_snapshots WHERE id = ?
         `).get(artifact.id, artifact.id) as SnapshotRetentionRow | null
       : this.database.query(`
           SELECT 'representation' AS kind, 'web' AS storage, wr.id, ws.resource_id,
-                 wr.source_snapshot_id, wr.adapter_id, wr.adapter_version,
+                 wr.source_snapshot_id, wr.adapter_id, wr.adapter_version, wr.media_type,
                  wr.derived_at AS captured_at, NULL AS revision_json,
                  wr.payload_state, wr.payload_bytes, wr.evicted_at
           FROM web_representations wr
@@ -748,7 +770,7 @@ export class ResourceRetentionRepository {
           WHERE wr.id = ?
           UNION ALL
           SELECT 'representation' AS kind, 'pdf' AS storage, pr.id, ps.resource_id,
-                 pr.source_snapshot_id, pr.adapter_id, pr.adapter_version,
+                 pr.source_snapshot_id, pr.adapter_id, pr.adapter_version, pr.media_type,
                  pr.derived_at AS captured_at, NULL AS revision_json,
                  pr.payload_state, pr.payload_bytes, pr.evicted_at
           FROM pdf_representations pr

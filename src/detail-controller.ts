@@ -2776,13 +2776,14 @@ export function createDetailController(
         if (
           annotation.currentResolution.status !== "resolved" ||
           !target ||
-          target.anchor.kind !== "text-quote"
+          (target.anchor.kind !== "text-quote" &&
+            target.anchor.kind !== "pdf-page-region")
         ) {
           state.status = `Annotation resolution is ${annotation.currentResolution.status}; no positioned text quote can be revealed`;
           break;
         }
         const anchor = target.anchor;
-        if (anchor.start === null || anchor.end === null) {
+        if (anchor.start === null || anchor.end === null || anchor.exact === null) {
           state.status = `Annotation resolution is ${annotation.currentResolution.status}; no positioned text quote can be revealed`;
           break;
         }

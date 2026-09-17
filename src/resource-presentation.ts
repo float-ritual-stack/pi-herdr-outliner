@@ -305,13 +305,16 @@ function attempt(
       `Host ${context.host.id} does not support ${definition.placement} placement`,
     );
   }
-  if (definition.representation === "cached-markdown") {
+  const localRepresentation =
+    definition.representation === "cached-markdown" ||
+    definition.representation === "native-document";
+  if (localRepresentation) {
     const decision = localReadDecision(description.capabilities.read);
     if (decision.status !== "available") {
       return presentationAttempt(definition, decision.status, capabilityReason(decision));
     }
   }
-  if (definition.capability) {
+  if (definition.capability && !localRepresentation) {
     const decision = description.capabilities[definition.capability];
     if (decision.status !== "available") {
       return presentationAttempt(definition, decision.status, capabilityReason(decision));

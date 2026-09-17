@@ -307,3 +307,88 @@ test("treats PDF as media type while selecting a native GUI renderer", () => {
     renderer: "metadata",
   });
 });
+
+test("selects retained HTTP PDF bytes for native hosts while the provider is offline", () => {
+  const web = webDescription.web!;
+  const sourceSnapshot = {
+    id: web.sourceSnapshot.id,
+    resourceId: webDescription.resource.id,
+    addressVersion: webDescription.resource.addressVersion,
+    locator: "https://example.com/document.pdf",
+    contentHash: web.sourceSnapshot.contentHash!,
+    revision: web.sourceSnapshot.revision,
+    capturedAt: web.sourceSnapshot.fetchedAt!,
+    bytesAvailable: true,
+    evictedAt: null,
+  };
+  const representation = {
+    ...web.representation,
+    mediaType: "text/markdown" as const,
+    derivedAt: web.representation.derivedAt!,
+  };
+  const nativeRepresentation = {
+    ...representation,
+    id: "representation-native-pdf",
+    mediaType: "application/pdf" as const,
+    adapter: { id: "builtin.pdf-native", version: 1 },
+    contentHash: sourceSnapshot.contentHash,
+  };
+  const description: ResourceDescription = {
+    ...webDescription,
+    resource: {
+      ...webDescription.resource,
+      provider: "web",
+      address: { kind: "web", url: "https://example.com/document.pdf" },
+      mediaType: "application/pdf",
+    },
+    pdf: {
+      markdown: "## Page 1\n\nRetained PDF",
+      pages: [{
+        page: 1,
+        width: 300,
+        height: 400,
+        start: 0,
+        end: 24,
+        spans: [{
+          start: 11,
+          end: 23,
+          region: { x: 36, y: 40, width: 100, height: 16 },
+        }],
+      }],
+      sourceSnapshot,
+      representation,
+      nativeRepresentation,
+    },
+    pdfHistory: {
+      sourceSnapshots: [sourceSnapshot],
+      representations: [representation, nativeRepresentation],
+    },
+    web: null,
+    webHistory: null,
+  };
+  const context: ResourcePresentationContext = {
+    surface: "native",
+    placement: "window",
+    host: {
+      id: "offline-native-pdf",
+      renderers: ["native-document", "metadata"],
+      placements: ["window"],
+      capabilities: ["read"],
+    },
+    providerAccess: { credentials: "unavailable", connectivity: "unavailable" },
+  };
+  expect(negotiateResourcePresentation(description, context).selected).toMatchObject({
+    representation: "native-document",
+    renderer: "native-document",
+  });
+  expect(negotiateResourcePresentation({
+    ...description,
+    source: {
+      ...description.source,
+      policy: { deniedCapabilities: ["read"] },
+    },
+  }, context).selected).toMatchObject({
+    representation: "metadata",
+    renderer: "metadata",
+  });
+});

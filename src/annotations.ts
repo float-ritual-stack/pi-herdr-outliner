@@ -315,6 +315,9 @@ export function normalizeAnnotationAnchor(value: unknown): AnnotationAnchor {
     if (!Array.isArray(anchor.regions) || anchor.regions.length === 0) {
       throw new Error("PDF anchor requires at least one region");
     }
+    const quoteFields = ["start", "end", "prefix", "suffix"] as const;
+    const presentQuoteFields = quoteFields.filter((key) => anchor[key] !== undefined);
+    const legacyEvidence = presentQuoteFields.length === 0;
     const regions = anchor.regions.map((raw) => {
       if (!raw || typeof raw !== "object") throw new Error("PDF region must be an object");
       const region = raw as Record<string, unknown>;
@@ -323,11 +326,13 @@ export function normalizeAnnotationAnchor(value: unknown): AnnotationAnchor {
           throw new Error(`PDF region ${key} must be finite`);
         }
       }
-      if ((region.x as number) < 0 || (region.y as number) < 0) {
-        throw new Error("PDF region coordinates cannot be negative");
-      }
-      if ((region.width as number) <= 0 || (region.height as number) <= 0) {
-        throw new Error("PDF region dimensions must be positive");
+      if (!legacyEvidence) {
+        if ((region.x as number) < 0 || (region.y as number) < 0) {
+          throw new Error("PDF region coordinates cannot be negative");
+        }
+        if ((region.width as number) <= 0 || (region.height as number) <= 0) {
+          throw new Error("PDF region dimensions must be positive");
+        }
       }
       return {
         x: region.x as number,
@@ -337,9 +342,7 @@ export function normalizeAnnotationAnchor(value: unknown): AnnotationAnchor {
       };
     });
     const page = integer(anchor.page, "PDF page", 1);
-    const quoteFields = ["start", "end", "prefix", "suffix"] as const;
-    const presentQuoteFields = quoteFields.filter((key) => anchor[key] !== undefined);
-    if (presentQuoteFields.length === 0) {
+    if (legacyEvidence) {
       if (anchor.exact !== null && typeof anchor.exact !== "string") {
         throw new Error("Legacy PDF exact text must be a string or null");
       }

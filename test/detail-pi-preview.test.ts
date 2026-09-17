@@ -2532,8 +2532,46 @@ test("maps keyboard selection through cached PDF Markdown", () => {
       },
     },
   };
-  detail.resolvedSelectedText = markdown;
-  detail.projectedSelectedText = markdown;
+  detail.resolvedSelectedText = [
+    markdown,
+    "",
+    "---",
+    "",
+    "## PDF resource",
+    "",
+    "PDF metadata",
+  ].join("\n");
+  detail.projectedSelectedText = detail.resolvedSelectedText;
+  const absoluteStart = markdown.indexOf("PDF phrase");
+  const pdfTarget: AnnotationTarget = {
+    representation: {
+      id: representation.id,
+      subject: { kind: "resource", resourceId: loaded.description.resource.id },
+      sourceSnapshot: {
+        kind: "resource",
+        resourceId: loaded.description.resource.id,
+        sourceSnapshotId: sourceSnapshot.id,
+        revision: sourceSnapshot.revision,
+      },
+      adapter: representation.adapter,
+      mediaType: representation.mediaType,
+      contentHash: representation.contentHash,
+      capturedAt: representation.derivedAt,
+    },
+    anchor: {
+      kind: "pdf-page-region",
+      page: 1,
+      regions: [{ x: 36, y: 40, width: 80, height: 16 }],
+      start: absoluteStart,
+      end: absoluteStart + "PDF phrase".length,
+      exact: "PDF phrase",
+      prefix: markdown.slice(Math.max(0, absoluteStart - 64), absoluteStart),
+      suffix: markdown.slice(absoluteStart + "PDF phrase".length),
+    },
+  };
+  detail.annotationThreads = [
+    annotationThread("annotation-pdf", pdfTarget, "PDF comment"),
+  ];
   const sourceLine = markdown.split("\n")[2]!;
   const selectionStart = sourceLine.indexOf("PDF phrase");
   detail.mode = "select";
@@ -2548,6 +2586,11 @@ test("maps keyboard selection through cached PDF Markdown", () => {
     stripTerminalSequences(line).includes("PDF phrase")
   )!;
   expect(selectedLine).toContain("\x1b[1;4;97;48;5;24m");
+  expect(detail.previewRegions.regions.some(({ kind }) => kind === "annotation")).toBe(true);
+  const rendered = layout.scrollView.render(60).map(stripTerminalSequences);
+  const metadataRow = rendered.findIndex((line) => line.includes("PDF metadata"));
+  expect(metadataRow).toBeGreaterThanOrEqual(0);
+  expect(layout.sourcePointAtViewport(metadataRow + 3, 0, 60)).toBeNull();
 });
 
 test("decorates the exact active attention phrase in Pi preview", () => {
