@@ -114,7 +114,7 @@ function computedDetailEffects(
     openDetailPane() {},
     copyText() {},
     async editExternalDraft(input) {
-      return { text: input.text, changed: false };
+      return { text: input.text, changed: false, recoveryPath: "/tmp/computed-draft", cleanup() {} };
     },
     async updateBlock() {
       return unavailable();

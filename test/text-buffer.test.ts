@@ -202,5 +202,25 @@ describe("TextBuffer undo and redo", () => {
     expect(buffer.replaceText("")).toBe(true);
     expect(buffer.text).toBe("");
   });
+
+  test("preserves external carriage returns exactly", () => {
+    const buffer = new TextBuffer("before");
+    const edited = "left\r\nright\rtail";
+
+    expect(buffer.replaceText(edited)).toBe(true);
+    expect(buffer.text).toBe(edited);
+    expect(buffer.undo()).toBe(true);
+    expect(buffer.text).toBe("before");
+  });
+
+  test("imports a large multiline draft without variadic argument limits", () => {
+    const buffer = new TextBuffer("before");
+    const edited = `${"line\n".repeat(150_000)}tail`;
+
+    expect(buffer.replaceText(edited)).toBe(true);
+    expect(buffer.text).toBe(edited);
+    expect(buffer.undo()).toBe(true);
+    expect(buffer.text).toBe("before");
+  });
 });
 

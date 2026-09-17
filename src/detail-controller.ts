@@ -391,7 +391,12 @@ export interface DetailEffects {
     blockId: string;
     text: string;
     expectedUpdatedAt: string;
-  }): Promise<{ text: string; changed: boolean }>;
+  }): Promise<{
+    text: string;
+    changed: boolean;
+    recoveryPath: string;
+    cleanup(): void;
+  }>;
   updateBlock(input: {
     blockId: string;
     text: string;
@@ -1867,13 +1872,25 @@ export function createDetailController(
         expectedUpdatedAt: selected.updatedAt,
       });
       if (!result.changed) {
+        result.cleanup();
         state.status = "$EDITOR returned an unchanged draft";
         return;
       }
-      if (!state.buffer.replaceText(result.text)) {
+      let replaced: boolean;
+      try {
+        replaced = state.buffer.replaceText(result.text);
+      } catch (error) {
+        throw new Error(
+          `Could not import the external editor draft. Recoverable editor file: ${result.recoveryPath}`,
+          { cause: error },
+        );
+      }
+      if (!replaced) {
+        result.cleanup();
         state.status = "$EDITOR returned an unchanged draft";
         return;
       }
+      result.cleanup();
       const layout = editorLayout(viewport);
       const maximumOffset = Math.max(
         0,

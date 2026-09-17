@@ -56,14 +56,47 @@ test("imports exact UTF-8 text only after terminal restoration and removes the t
       },
     );
 
-    expect(result).toEqual({ text: "héllo\n[[PIE-136]]\n", changed: true });
+    expect(result.text).toBe("héllo\n[[PIE-136]]\n");
+    expect(result.changed).toBe(true);
+    expect(result.recoveryPath).toBe(filePath);
     expect(phases).toEqual([
       "suspend",
       "run:fixture-editor --wait",
       "restore",
       "check",
     ]);
+    expect(existsSync(filePath)).toBe(true);
+    result.cleanup();
     expect(existsSync(filePath)).toBe(false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("preserves a leading U+FEFF and treats an untouched file as unchanged", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-external-editor-bom-"));
+  try {
+    const text = "\uFEFFauthored";
+    const result = await editTextInExternalEditor(
+      { text, expectedUpdatedAt: "version-1" },
+      {
+        editor: "fixture-editor",
+        cwd: root,
+        temporaryRoot: root,
+        suspendTerminal() {},
+        restoreTerminal() {},
+        async currentUpdatedAt() {
+          return "version-1";
+        },
+        async run() {
+          return 0;
+        },
+      },
+    );
+
+    expect(result.text).toBe(text);
+    expect(result.changed).toBe(false);
+    result.cleanup();
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

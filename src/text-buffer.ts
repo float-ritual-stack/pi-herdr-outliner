@@ -204,11 +204,11 @@ export class TextBuffer {
   }
 
   replaceText(value: string): boolean {
-    const normalized = value.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-    if (normalized === this.text) return false;
+    if (value === this.text) return false;
     this.recordEdit(null);
     this.clearSelectionAnchor();
-    this.lines.splice(0, this.lines.length, ...normalized.split("\n"));
+    this.lines.length = 0;
+    for (const line of value.split("\n")) this.lines.push(line);
     this.row = Math.min(this.row, this.lines.length - 1);
     this.column = clampToGraphemeStart(
       this.lines[this.row],

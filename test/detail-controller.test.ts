@@ -189,6 +189,8 @@ function createHarness(
   let externalEdit: DetailEffects["editExternalDraft"] = async (input) => ({
     text: input.text,
     changed: false,
+    recoveryPath: "/tmp/unchanged-draft",
+    cleanup() {},
   });
   let queryResults: VisibleBlockCollection[] = [];
   let backlinkResults: BacklinkCollection[] = [];
@@ -2301,7 +2303,7 @@ describe("detail controller saves and annotations", () => {
         text: "canonical",
         expectedUpdatedAt: "original-version",
       });
-      return { text: "", changed: true };
+      return { text: "", changed: true, recoveryPath: "/tmp/empty-draft", cleanup() {} };
     });
     await harness.controller.initialize();
 
@@ -2331,15 +2333,27 @@ describe("detail controller saves and annotations", () => {
     harness.controller.state.buffer.placeCursor(0, 2);
     harness.controller.state.buffer.placeCursor(1, 4, true);
     const priorSelection = harness.controller.state.buffer.selectionRange;
+    let cleanedExternalDraft = false;
     harness.setExternalEdit(async (input) => {
       expect(input.text).toBe("unsaved draft\nline two");
-      return { text: "editor draft\nwith several\nchanged lines", changed: true };
+      return {
+        text: "editor draft\nwith several\nchanged lines",
+        changed: true,
+        recoveryPath: "/tmp/changed-draft",
+        cleanup() {
+          expect(harness.controller.state.buffer.text).toBe(
+            "editor draft\nwith several\nchanged lines",
+          );
+          cleanedExternalDraft = true;
+        },
+      };
     });
 
     await harness.controller.dispatch({ type: "edit.external" }, viewport);
     expect(harness.controller.state.buffer.text).toBe(
       "editor draft\nwith several\nchanged lines",
     );
+    expect(cleanedExternalDraft).toBe(true);
     await harness.controller.dispatch({ type: "buffer.undo" }, viewport);
     expect(harness.controller.state.buffer.text).toBe("unsaved draft\nline two");
     expect(harness.controller.state.buffer.selectionRange).toEqual(priorSelection);
@@ -2363,7 +2377,7 @@ describe("detail controller saves and annotations", () => {
     expect(harness.controller.state.status).toBe("Nothing to undo");
   });
 
-  test("treats external line-ending changes as an unchanged draft", async () => {
+  test("treats an equivalent returned draft as unchanged and cleans its recovery file", async () => {
     const harness = createHarness(makeBlock({ text: "canonical" }));
     await harness.controller.initialize();
     await harness.controller.dispatch({ type: "edit.begin" }, viewport);
@@ -2371,9 +2385,14 @@ describe("detail controller saves and annotations", () => {
       type: "buffer.insert",
       text: "\nunsaved",
     }, viewport);
+    let cleaned = false;
     harness.setExternalEdit(async (input) => ({
-      text: input.text.replace(/\n/g, "\r\n"),
+      text: input.text,
       changed: true,
+      recoveryPath: "/tmp/equivalent-draft",
+      cleanup() {
+        cleaned = true;
+      },
     }));
 
     await harness.controller.dispatch({ type: "edit.external" }, viewport);
@@ -2381,6 +2400,7 @@ describe("detail controller saves and annotations", () => {
     expect(harness.controller.state.buffer.text).toBe("canonical\nunsaved");
     expect(harness.controller.state.status).toBe("$EDITOR returned an unchanged draft");
     expect(harness.controller.state.busy).toBe(false);
+    expect(cleaned).toBe(true);
     expect(harness.calls.updates).toEqual([]);
     await harness.controller.dispatch({ type: "buffer.undo" }, viewport);
     expect(harness.controller.state.buffer.text).toBe("canonical");

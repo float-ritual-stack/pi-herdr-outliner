@@ -40,6 +40,8 @@ export interface ExternalEditorInput {
 export interface ExternalEditorResult {
   readonly text: string;
   readonly changed: boolean;
+  readonly recoveryPath: string;
+  cleanup(): void;
 }
 
 export type ExternalEditorCommand = readonly [executable: string, ...arguments_: string[]];
@@ -153,7 +155,7 @@ async function runTerminalEditor(
 
 function readUtf8(filePath: string): string {
   const bytes = readFileSync(filePath);
-  return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
 }
 
 export async function editTextInExternalEditor(
@@ -290,15 +292,24 @@ export async function editTextInExternalEditor(
     );
   }
 
-  try {
-    rmSync(directory, { recursive: true });
-  } catch (error) {
-    throw failure(
-      "cleanup-failed",
-      `Could not remove the external editor temporary directory: ${reason(error)}`,
-      filePath,
-      error,
-    );
-  }
-  return { text: importedText, changed: importedText !== input.text };
+  let cleaned = false;
+  return {
+    text: importedText,
+    changed: importedText !== input.text,
+    recoveryPath: filePath,
+    cleanup() {
+      if (cleaned) return;
+      try {
+        rmSync(directory, { recursive: true });
+        cleaned = true;
+      } catch (error) {
+        throw failure(
+          "cleanup-failed",
+          `Could not remove the external editor temporary directory: ${reason(error)}`,
+          filePath,
+          error,
+        );
+      }
+    },
+  };
 }
