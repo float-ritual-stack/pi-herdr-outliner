@@ -286,13 +286,18 @@ test("persists resources and dispatches resource targets without synthetic block
   ).toEqual(unavailableBlockTarget);
 });
 
-test("serves cached web resources, refresh, and annotation evidence over the protocol", async () => {
+test("serves local web snapshots, explicit refresh, and retained annotation evidence", async () => {
   const directory = mkdtempSync(join(tmpdir(), "pi-outliner-web-protocol-"));
   let etag = "\"v1\"";
   let html = "<h1>Protocol</h1><p>Quoted evidence.</p>";
+  let providerAccessCount = 0;
+  const requestEtags: Array<string | null> = [];
   const store = new OutlinerStore(join(directory, "outliner.sqlite"), {
     fetch: (async (_input, init) => {
-      if (new Headers(init?.headers).get("if-none-match") === etag) {
+      providerAccessCount += 1;
+      const requestEtag = new Headers(init?.headers).get("if-none-match");
+      requestEtags.push(requestEtag);
+      if (requestEtag === etag) {
         return new Response(null, { status: 304 });
       }
       return new Response(html, {
@@ -306,12 +311,19 @@ test("serves cached web resources, refresh, and annotation evidence over the pro
   const connected = Promise.withResolvers<void>();
   const events: OutlinerEvent[] = [];
   const annotationEvent = Promise.withResolvers<void>();
+  const refreshEvents = Promise.withResolvers<void>();
   const watcher = new OutlinerClient(socket).watch({
     client: { clientId: "web-detail", role: "detail", contextId: "web-context" },
     onConnect: connected.resolve,
     onEvent(event) {
       events.push(event);
       if (event.action === "resources.web-annotations.create") annotationEvent.resolve();
+      if (
+        event.action === "resources.refresh" &&
+        events.filter(({ action }) => action === "resources.refresh").length === 3
+      ) {
+        refreshEvents.resolve();
+      }
     },
   });
   cleanups.push(async () => {
@@ -337,43 +349,180 @@ test("serves cached web resources, refresh, and annotation evidence over the pro
       address: { kind: "web", url: "https://example.com/article" },
     },
   })).resource;
-  const opened = await client.request<ResourceDescription>({
+
+  const initiallyOpened = await client.request<ResourceDescription>({
     action: "resources.open",
     target: { kind: "resource", resourceId: resource.id },
     destinationClientId: "web-detail",
   });
-  expect(opened.web?.markdown).toBe("# Protocol\n\nQuoted evidence.");
-  const start = opened.web!.markdown.indexOf("Quoted evidence");
-  const end = start + "Quoted evidence".length;
-  const annotation = await client.request<WebResourceAnnotation>({
-    action: "resources.web-annotations.create",
-    input: {
-      resourceId: resource.id,
-      revision: opened.web!.revision,
-      representation: opened.web!.representation,
-      anchor: {
-        start,
-        end,
-        exact: opened.web!.markdown.slice(start, end),
-        prefix: opened.web!.markdown.slice(Math.max(0, start - 64), start),
-        suffix: opened.web!.markdown.slice(end, end + 64),
-      },
-      body: "Protocol evidence",
-    },
+  expect(initiallyOpened.web).toBeNull();
+  expect(initiallyOpened.webStatus).toEqual({
+    freshness: "unknown",
+    checkedAt: null,
+    lastError: null,
   });
-  await annotationEvent.promise;
+  expect(providerAccessCount).toBe(0);
   expect(events.some((event) => event.action === "resources.open")).toBe(false);
-  expect(annotation.anchor.exact).toBe("Quoted evidence");
 
-  etag = "\"v2\"";
-  html = "<h1>Protocol changed</h1><p>New body.</p>";
-  const refreshed = await client.request<ResourceDescription>({
+  const acquired = await client.request<ResourceDescription>({
     action: "resources.refresh",
     resourceId: resource.id,
     destinationClientId: "web-detail",
   });
-  expect(refreshed.web?.markdown).toBe("# Protocol changed\n\nNew body.");
-  expect(refreshed.web?.annotations[0]).toEqual(annotation);
+  if (!acquired.web) throw new Error("Explicit refresh did not acquire the web document");
+  expect(providerAccessCount).toBe(1);
+  expect(requestEtags).toEqual([null]);
+  expect(acquired.webStatus).toEqual({
+    freshness: "fresh",
+    checkedAt: expect.any(String),
+    lastError: null,
+  });
+  const firstSnapshot = acquired.web.sourceSnapshot;
+  const firstRepresentation = acquired.web.representation;
+  expect(firstSnapshot).toEqual({
+    id: expect.any(String),
+    resourceId: resource.id,
+    addressVersion: resource.addressVersion,
+    canonicalUrl: "https://example.com/article",
+    contentHash: expect.any(String),
+    revision: {
+      resourceId: resource.id,
+      addressVersion: resource.addressVersion,
+      revision: {
+        kind: "web",
+        validator: { kind: "etag", value: "\"v1\"", weak: false },
+      },
+    },
+    fetchedAt: expect.any(String),
+    bodyAvailable: true,
+  });
+  expect(firstRepresentation).toEqual({
+    id: expect.any(String),
+    sourceSnapshotId: firstSnapshot.id,
+    mediaType: "text/markdown",
+    adapter: { id: "builtin.basic-html-to-markdown", version: 1 },
+    contentHash: expect.any(String),
+    derivedAt: expect.any(String),
+    contentAvailable: true,
+  });
+  expect(acquired.web).toEqual({
+    markdown: "# Protocol\n\nQuoted evidence.",
+    sourceSnapshot: firstSnapshot,
+    representation: firstRepresentation,
+  });
+  expect(acquired.webHistory).toEqual({
+    sourceSnapshots: [firstSnapshot],
+    representations: [firstRepresentation],
+    annotations: [],
+  });
+
+  const locallyOpened = await client.request<ResourceDescription>({
+    action: "resources.open",
+    target: { kind: "resource", resourceId: resource.id },
+    destinationClientId: "web-detail",
+  });
+  expect(locallyOpened.web).toEqual(acquired.web);
+  expect(providerAccessCount).toBe(1);
+  expect(events.some((event) => event.action === "resources.open")).toBe(false);
+
+  const start = acquired.web.markdown.indexOf("Quoted evidence");
+  const end = start + "Quoted evidence".length;
+  const anchor = {
+    start,
+    end,
+    exact: acquired.web.markdown.slice(start, end),
+    prefix: acquired.web.markdown.slice(Math.max(0, start - 64), start),
+    suffix: acquired.web.markdown.slice(end, end + 64),
+  };
+  const annotation = await client.request<WebResourceAnnotation>({
+    action: "resources.web-annotations.create",
+    input: {
+      resourceId: resource.id,
+      sourceSnapshotId: firstSnapshot.id,
+      representationId: firstRepresentation.id,
+      anchor,
+      body: "Protocol evidence",
+    },
+  });
+  await annotationEvent.promise;
+  expect(annotation).toEqual({
+    id: expect.any(String),
+    resourceId: resource.id,
+    sourceSnapshotId: firstSnapshot.id,
+    representationId: firstRepresentation.id,
+    revision: firstSnapshot.revision,
+    representation: firstRepresentation,
+    anchor,
+    body: "Protocol evidence",
+    createdAt: expect.any(String),
+  });
+
+  const unchanged = await client.request<ResourceDescription>({
+    action: "resources.refresh",
+    resourceId: resource.id,
+    destinationClientId: "web-detail",
+  });
+  if (!unchanged.web) throw new Error("Unchanged refresh lost the web document");
+  expect(unchanged.webStatus?.freshness).toBe("fresh");
+  expect(providerAccessCount).toBe(2);
+  expect(requestEtags).toEqual([null, "\"v1\""]);
+  expect(unchanged.web.sourceSnapshot.id).toBe(firstSnapshot.id);
+  expect(unchanged.web.representation.id).toBe(firstRepresentation.id);
+  expect(unchanged.webHistory).toEqual({
+    sourceSnapshots: [firstSnapshot],
+    representations: [firstRepresentation],
+    annotations: [annotation],
+  });
+
+  etag = "\"v2\"";
+  html = "<h1>Protocol changed</h1><p>New body.</p>";
+  const changed = await client.request<ResourceDescription>({
+    action: "resources.refresh",
+    resourceId: resource.id,
+    destinationClientId: "web-detail",
+  });
+  if (!changed.web) throw new Error("Changed refresh lost the web document");
+  expect(changed.webStatus?.freshness).toBe("fresh");
+  await refreshEvents.promise;
+  expect(providerAccessCount).toBe(3);
+  expect(requestEtags).toEqual([null, "\"v1\"", "\"v1\""]);
+  expect(changed.web.markdown).toBe("# Protocol changed\n\nNew body.");
+  expect(changed.web.sourceSnapshot.id).not.toBe(firstSnapshot.id);
+  expect(changed.web.representation.id).not.toBe(firstRepresentation.id);
+  expect(changed.web.representation.sourceSnapshotId).toBe(changed.web.sourceSnapshot.id);
+  expect(changed.webHistory?.sourceSnapshots).toHaveLength(2);
+  expect(changed.webHistory?.sourceSnapshots).toEqual(
+    expect.arrayContaining([firstSnapshot, changed.web.sourceSnapshot]),
+  );
+  expect(changed.webHistory?.representations).toHaveLength(2);
+  expect(changed.webHistory?.representations).toEqual(
+    expect.arrayContaining([firstRepresentation, changed.web.representation]),
+  );
+  expect(changed.webHistory?.annotations).toEqual([annotation]);
+  expect(changed.webHistory?.annotations[0]).toMatchObject({
+    sourceSnapshotId: firstSnapshot.id,
+    representationId: firstRepresentation.id,
+    revision: firstSnapshot.revision,
+    representation: firstRepresentation,
+  });
+  expect(events.filter(({ action }) => action === "resources.refresh")).toEqual([
+    expect.objectContaining({
+      domain: "resource-catalog",
+      action: "resources.refresh",
+      resourceId: resource.id,
+    }),
+    expect.objectContaining({
+      domain: "resource-catalog",
+      action: "resources.refresh",
+      resourceId: resource.id,
+    }),
+    expect.objectContaining({
+      domain: "resource-catalog",
+      action: "resources.refresh",
+      resourceId: resource.id,
+    }),
+  ]);
+  expect(events.some((event) => event.action === "resources.open")).toBe(false);
 });
 
 
@@ -448,7 +597,7 @@ test("serves mutations and property queries over the local socket", async () => 
   const client = new OutlinerClient(socket);
   const service = await client.request<OutlinerServiceStatus>({ action: "ping" });
   expect(service).toEqual({ status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION });
-  expect(service.protocolVersion).toBe(39);
+  expect(service.protocolVersion).toBe(40);
   const provenance = {
     actorId: "omp",
     sessionId: "session-1",

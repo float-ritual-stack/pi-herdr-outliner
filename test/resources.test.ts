@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";
 import {
   mkdirSync,
@@ -253,37 +254,41 @@ test("capability reports preserve every causal factor and unknown facts never gr
   });
 });
 
-test("web resources cache Markdown, refresh conditionally, and retain annotation evidence", async () => {
+test("web refresh owns immutable history, five-state freshness, and local-only open", async () => {
   const root = mkdtempSync(join(tmpdir(), "outliner-web-resource-"));
   const database = join(root, "workspace.sqlite");
   let online = true;
-  let etag = "\"v1\"";
+  let etag = '"v1"';
   let html = "<html><body><h1>First</h1><p>Stable quote in version one.</p></body></html>";
   let requests = 0;
-  const requestEtags: Array<string | null> = [];
   let clock = Date.parse("2026-09-17T12:00:00.000Z");
+  let releaseFirstRequest: (() => void) | null = null;
+  const firstRequestGate = new Promise<void>((resolve) => {
+    releaseFirstRequest = resolve;
+  });
+  const requestEtags: Array<string | null> = [];
   const fetcher = async (
     _input: string | URL | Request,
     init?: RequestInit,
   ): Promise<Response> => {
     requests += 1;
+    if (requests === 1) await firstRequestGate;
     if (!online) throw new Error("fixture offline");
     const requestEtag = new Headers(init?.headers).get("if-none-match");
     requestEtags.push(requestEtag);
     if (requestEtag === etag) return new Response(null, { status: 304 });
     return new Response(html, {
-      status: 200,
       headers: {
         "content-type": "text/html; charset=utf-8",
         etag,
       },
     });
   };
-  const options = {
+  let store = new OutlinerStore(database, {
     fetch: fetcher as typeof fetch,
-    now: () => new Date(clock += 1_000).toISOString(),
-  };
-  let store = new OutlinerStore(database, options);
+    now: () => new Date(clock).toISOString(),
+    webStaleAfterMs: 1_000,
+  });
   try {
     const source = store.resources.createSource({
       name: "Fixture",
@@ -295,30 +300,68 @@ test("web resources cache Markdown, refresh conditionally, and retain annotation
       address: { kind: "web", url: "https://example.com/articles/one" },
     }).resource;
 
-    const first = await store.resources.open(resource.id, true);
-    expect(first.web?.markdown).toBe("# First\n\nStable quote in version one.");
-    expect(first.web?.freshness).toBe("fresh");
-    expect(first.web?.canonicalUrl).toBe("https://example.com/articles/one");
-    expect(requests).toBe(1);
+    const empty = await store.resources.open(resource.id, true);
+    expect(empty.web).toBeNull();
+    expect(empty.webStatus).toEqual({
+      freshness: "unknown",
+      checkedAt: null,
+      lastError: null,
+    });
+    expect(requests).toBe(0);
 
-    online = false;
-    const offline = await store.resources.open(resource.id, true);
-    expect(offline.web?.markdown).toBe(first.web?.markdown);
+    const pending = store.resources.refreshWeb(resource.id, true);
+    expect(store.resources.describe(resource.id, true).webStatus?.freshness).toBe(
+      "refreshing",
+    );
+    releaseFirstRequest!();
+    const first = await pending;
+    expect(first.webStatus?.freshness).toBe("fresh");
+    expect(first.web?.markdown).toBe("# First\n\nStable quote in version one.");
+    expect(first.web?.sourceSnapshot).toMatchObject({
+      resourceId: resource.id,
+      addressVersion: 1,
+      canonicalUrl: "https://example.com/articles/one",
+      bodyAvailable: true,
+    });
+    expect(first.web?.representation).toMatchObject({
+      sourceSnapshotId: first.web!.sourceSnapshot.id,
+      mediaType: "text/markdown",
+      contentAvailable: true,
+    });
+    expect(first.webHistory?.sourceSnapshots).toHaveLength(1);
+    expect(first.webHistory?.representations).toHaveLength(1);
+
+    const local = await store.resources.open(resource.id, true);
+    expect(local.web?.representation.id).toBe(first.web?.representation.id);
     expect(requests).toBe(1);
-    online = true;
+    clock += 1_001;
+    expect(store.resources.describe(resource.id, true).webStatus?.freshness).toBe(
+      "stale",
+    );
 
     const unchanged = await store.resources.refreshWeb(resource.id, true);
-    expect(requestEtags.at(-1)).toBe("\"v1\"");
-    expect(unchanged.web?.fetchedAt).toBe(first.web?.fetchedAt);
-    expect(unchanged.web?.checkedAt).not.toBe(first.web?.checkedAt);
+    expect(requestEtags.at(-1)).toBe('"v1"');
+    expect(unchanged.webStatus?.freshness).toBe("fresh");
+    expect(unchanged.web?.sourceSnapshot.id).toBe(first.web?.sourceSnapshot.id);
+    expect(unchanged.web?.representation.id).toBe(first.web?.representation.id);
+    expect(unchanged.webHistory?.sourceSnapshots).toHaveLength(1);
+    expect(unchanged.webHistory?.representations).toHaveLength(1);
+
+    etag = '"v1-new-validator"';
+    clock += 1_000;
+    const sameBody = await store.resources.refreshWeb(resource.id, true);
+    expect(sameBody.web?.sourceSnapshot.id).not.toBe(first.web?.sourceSnapshot.id);
+    expect(sameBody.web?.representation.id).not.toBe(first.web?.representation.id);
+    expect(sameBody.webHistory?.sourceSnapshots).toHaveLength(2);
+    expect(sameBody.webHistory?.representations).toHaveLength(2);
 
     const markdown = unchanged.web!.markdown;
     const start = markdown.indexOf("Stable quote");
     const end = start + "Stable quote".length;
     const annotation = store.resources.createWebAnnotation({
       resourceId: resource.id,
-      revision: unchanged.web!.revision,
-      representation: unchanged.web!.representation,
+      sourceSnapshotId: unchanged.web!.sourceSnapshot.id,
+      representationId: unchanged.web!.representation.id,
       anchor: {
         start,
         end,
@@ -328,41 +371,72 @@ test("web resources cache Markdown, refresh conditionally, and retain annotation
       },
       body: "This evidence must survive refresh.",
     });
-
-    etag = "\"v2\"";
-    html = "<html><body><h1>Second</h1><p>Changed page without the old passage.</p></body></html>";
-    const changed = await store.resources.refreshWeb(resource.id, true);
-    expect(changed.resource.id).toBe(resource.id);
-    expect(changed.web?.markdown).toBe("# Second\n\nChanged page without the old passage.");
-    expect(changed.web?.annotations).toHaveLength(1);
-    expect(changed.web?.annotations[0]).toEqual(annotation);
-    expect(changed.web?.annotations[0]?.representation.contentHash).toBe(
-      unchanged.web?.representation.contentHash,
+    expectCatalogError(
+      () =>
+        store.resources.createWebAnnotation({
+          resourceId: resource.id,
+          sourceSnapshotId: crypto.randomUUID(),
+          representationId: unchanged.web!.representation.id,
+          anchor: annotation.anchor,
+          body: "Mismatched immutable IDs",
+        }),
+      "stale-revision",
     );
 
+    etag = '"v2"';
+    html = "<html><body><h1>Second</h1><p>Changed page without the old passage.</p></body></html>";
+    clock += 1_000;
+    const changed = await store.resources.refreshWeb(resource.id, true);
+    expect(changed.web?.markdown).toBe("# Second\n\nChanged page without the old passage.");
+    expect(changed.web?.sourceSnapshot.id).not.toBe(first.web?.sourceSnapshot.id);
+    expect(changed.web?.representation.id).not.toBe(first.web?.representation.id);
+    expect(changed.webHistory?.sourceSnapshots).toHaveLength(3);
+    expect(changed.webHistory?.representations).toHaveLength(3);
+    expect(changed.webHistory?.annotations).toEqual([annotation]);
+
     online = false;
+    clock += 1_000;
     const failed = await store.resources.refreshWeb(resource.id, true);
-    expect(failed.web).toMatchObject({
+    expect(failed.webStatus).toMatchObject({
       freshness: "failed",
-      markdown: "# Second\n\nChanged page without the old passage.",
       lastError: "fixture offline",
     });
+    expect(failed.web?.markdown).toBe(changed.web?.markdown);
+    expect(failed.web?.representation.id).toBe(changed.web?.representation.id);
 
     store.close();
+    online = true;
+    const basicExtractor = new BasicWebMarkdownExtractor();
+    const replacementExtractor: WebMarkdownExtractor = {
+      adapter: { id: "fixture.markdown", version: 2 },
+      extract: (snapshot) => `Replacement\n\n${basicExtractor.extract(snapshot)}`,
+    };
     store = new OutlinerStore(database, {
-      fetch: (() => {
-        throw new Error("cached reopen must not fetch");
-      }) as unknown as typeof fetch,
+      fetch: fetcher as typeof fetch,
+      webExtractor: replacementExtractor,
+      now: () => new Date(clock).toISOString(),
+      webStaleAfterMs: 1_000,
     });
+    const beforeReopen = requests;
     const reopened = await store.resources.open(resource.id, true);
-    expect(reopened.web?.markdown).toBe(changed.web?.markdown);
-    expect(reopened.web?.annotations[0]?.anchor.exact).toBe("Stable quote");
+    expect(requests).toBe(beforeReopen);
+    expect(reopened.web?.representation.id).toBe(changed.web?.representation.id);
+    const rederived = await store.resources.refreshWeb(resource.id, true);
+    expect(rederived.web?.sourceSnapshot.id).toBe(changed.web?.sourceSnapshot.id);
+    expect(rederived.web?.representation.id).not.toBe(changed.web?.representation.id);
+    expect(rederived.web?.representation.adapter).toEqual({
+      id: "fixture.markdown",
+      version: 2,
+    });
+    expect(rederived.webHistory?.sourceSnapshots).toHaveLength(3);
+    expect(rederived.webHistory?.representations).toHaveLength(4);
+    expect(rederived.webHistory?.annotations[0]).toEqual(annotation);
 
     store.database.query("UPDATE resource_sources SET policy_json = ? WHERE id = ?")
       .run(JSON.stringify({ deniedCapabilities: ["read"] }), source.id);
     expect(store.resources.describe(resource.id, true).web).toBeNull();
-    const denied = await store.resources.open(resource.id, true);
-    expect(denied).toMatchObject({
+    expect(store.resources.describe(resource.id, true).webHistory).toBeNull();
+    expect(await store.resources.open(resource.id, true)).toMatchObject({
       web: null,
       webError: "Workspace policy denies reading this resource",
     });
@@ -375,45 +449,321 @@ test("web resources cache Markdown, refresh conditionally, and retain annotation
   }
 });
 
-test("web refresh re-derives Markdown when its final URL or extractor changes", async () => {
-  const root = mkdtempSync(join(tmpdir(), "outliner-web-provenance-"));
-  const database = join(root, "workspace.sqlite");
-  const html = '<html><body><a href="./next">Next</a></body></html>';
-  let finalPath = "/first/page";
-  let clock = Date.parse("2026-09-17T14:00:00.000Z");
-  const fetcher = async (
-    input: string | URL | Request,
-    init?: RequestInit,
-  ): Promise<Response> => {
-    if (String(input).endsWith("/entry")) {
-      return new Response(null, {
-        status: 302,
-        headers: { location: finalPath },
+test("web relocation preserves history and invalidates an in-flight refresh", async () => {
+  const root = mkdtempSync(join(tmpdir(), "outliner-web-relocation-"));
+  let etag = '"before"';
+  let html = "<p>Before relocation</p>";
+  let gate: Promise<void> | null = null;
+  let release: (() => void) | null = null;
+  const store = new OutlinerStore(join(root, "workspace.sqlite"), {
+    fetch: (async (_input, init) => {
+      if (gate) await gate;
+      if (new Headers(init?.headers).get("if-none-match") === etag) {
+        return new Response(null, { status: 304 });
+      }
+      return new Response(html, {
+        headers: { "content-type": "text/html", etag },
       });
-    }
-    if (new Headers(init?.headers).get("if-none-match") === '"unchanged-html"') {
-      return new Response(null, { status: 304 });
-    }
-    return new Response(html, {
-      headers: {
-        "content-type": "text/html; charset=utf-8",
-        etag: '"unchanged-html"',
-      },
-    });
-  };
-  const basicExtractor = new BasicWebMarkdownExtractor();
-  const initialExtractor: WebMarkdownExtractor = {
-    adapter: { id: "fixture.markdown", version: 1 },
-    extract: (snapshot) => basicExtractor.extract(snapshot),
-  };
-  let store = new OutlinerStore(database, {
-    fetch: fetcher as typeof fetch,
-    webExtractor: initialExtractor,
-    now: () => new Date(clock += 1_000).toISOString(),
+    }) as typeof fetch,
   });
   try {
     const source = store.resources.createSource({
-      name: "Provenance",
+      name: "Relocation",
+      provider: "web",
+      boundary: { baseUrl: "https://example.com/" },
+    });
+    const resource = store.resources.intern({
+      sourceId: source.id,
+      address: { kind: "web", url: "https://example.com/before" },
+    }).resource;
+    const before = await store.resources.refreshWeb(resource.id, true);
+    const beforeMarkdown = before.web!.markdown;
+    const retainedAnnotation = store.resources.createWebAnnotation({
+      resourceId: resource.id,
+      sourceSnapshotId: before.web!.sourceSnapshot.id,
+      representationId: before.web!.representation.id,
+      anchor: {
+        start: 0,
+        end: beforeMarkdown.length,
+        exact: beforeMarkdown,
+        prefix: "",
+        suffix: "",
+      },
+      body: "Retain across relocation",
+    });
+    gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const pending = store.resources.refreshWeb(resource.id, true);
+    const relocated = store.resources.relocate({
+      resourceId: resource.id,
+      expectedVersion: resource.version,
+      destinationSourceId: source.id,
+      address: { kind: "web", url: "https://example.com/after" },
+    });
+    const afterRelocation = store.resources.describe(resource.id, true);
+    expect(afterRelocation).toMatchObject({
+      web: null,
+      webStatus: { freshness: "unknown" },
+    });
+    expect(afterRelocation.webHistory?.sourceSnapshots).toHaveLength(1);
+    expect(afterRelocation.webHistory?.representations).toHaveLength(1);
+    expect(afterRelocation.webHistory?.annotations).toEqual([retainedAnnotation]);
+    release!();
+    await expect(pending).rejects.toMatchObject({ code: "version-conflict" });
+
+    gate = null;
+    etag = '"after"';
+    html = "<p>After relocation</p>";
+    const after = await store.resources.refreshWeb(relocated.id, true);
+    expect(after.web?.sourceSnapshot.addressVersion).toBe(2);
+    expect(after.webHistory?.sourceSnapshots).toHaveLength(2);
+    expect(after.webHistory?.sourceSnapshots.some(
+      (snapshot) => snapshot.id === before.web?.sourceSnapshot.id,
+    )).toBe(true);
+    expect(after.webHistory?.annotations).toContainEqual(retainedAnnotation);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("PIE-251 web cache migration preserves current and unmatched annotation evidence", async () => {
+  const root = mkdtempSync(join(tmpdir(), "outliner-web-migration-"));
+  const path = join(root, "workspace.sqlite");
+  let store = new OutlinerStore(path, {
+    fetch: (async () =>
+      new Response("<p>Current evidence</p>", {
+        headers: { "content-type": "text/html", etag: '"current"' },
+      })) as unknown as typeof fetch,
+  });
+  const source = store.resources.createSource({
+    name: "Migration",
+    provider: "web",
+    boundary: { baseUrl: "https://example.com/" },
+  });
+  const resource = store.resources.intern({
+    sourceId: source.id,
+    address: { kind: "web", url: "https://example.com/page" },
+  }).resource;
+  const current = await store.resources.refreshWeb(resource.id, true);
+  store.close();
+
+  const database = new Database(path);
+  const stableAnnotationId = crypto.randomUUID();
+  const historicalAnnotationId = crypto.randomUUID();
+  const anchor = {
+    start: 0,
+    end: 7,
+    exact: "Current",
+    prefix: "",
+    suffix: " evidence",
+  };
+  const historicalEtag = '"legacy"';
+  const historicalRepresentationHash = "b".repeat(64);
+  try {
+    database.exec(`
+      DROP TABLE web_resource_annotations;
+      DROP TABLE web_resource_state;
+      DROP TABLE web_representations;
+      DROP TABLE web_source_snapshots;
+      CREATE TABLE web_resource_documents (
+        resource_id TEXT PRIMARY KEY,
+        address_version INTEGER NOT NULL,
+        generation INTEGER NOT NULL,
+        canonical_url TEXT NOT NULL,
+        source_hash TEXT NOT NULL,
+        markdown TEXT NOT NULL,
+        revision_json TEXT NOT NULL,
+        adapter_id TEXT NOT NULL,
+        adapter_version INTEGER NOT NULL,
+        representation_hash TEXT NOT NULL,
+        etag TEXT,
+        last_modified TEXT,
+        freshness TEXT NOT NULL,
+        fetched_at TEXT NOT NULL,
+        checked_at TEXT NOT NULL,
+        last_error TEXT
+      );
+      CREATE TABLE web_resource_annotations (
+        id TEXT PRIMARY KEY,
+        resource_id TEXT NOT NULL,
+        revision_json TEXT NOT NULL,
+        representation_json TEXT NOT NULL,
+        anchor_json TEXT NOT NULL,
+        body TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+    `);
+    const representationEvidence = {
+      mediaType: "text/markdown",
+      adapter: current.web!.representation.adapter,
+      contentHash: current.web!.representation.contentHash,
+    };
+    database.query(`
+      INSERT INTO web_resource_documents (
+        resource_id, address_version, generation, canonical_url, source_hash,
+        markdown, revision_json, adapter_id, adapter_version,
+        representation_hash, etag, last_modified, freshness, fetched_at,
+        checked_at, last_error
+      ) VALUES (?, 1, 7, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'fresh', ?, ?, NULL)
+    `).run(
+      resource.id,
+      current.web!.sourceSnapshot.canonicalUrl,
+      current.web!.sourceSnapshot.contentHash,
+      current.web!.markdown,
+      JSON.stringify(current.web!.sourceSnapshot.revision),
+      representationEvidence.adapter.id,
+      representationEvidence.adapter.version,
+      representationEvidence.contentHash,
+      '"current"',
+      current.web!.sourceSnapshot.fetchedAt,
+      current.webStatus!.checkedAt,
+    );
+    database.query(`
+      INSERT INTO web_resource_annotations (
+        id, resource_id, revision_json, representation_json,
+        anchor_json, body, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      stableAnnotationId,
+      resource.id,
+      JSON.stringify(current.web!.sourceSnapshot.revision),
+      JSON.stringify(representationEvidence),
+      JSON.stringify(anchor),
+      "Current evidence",
+      "2026-09-17T12:00:00.000Z",
+      historicalAnnotationId,
+      resource.id,
+      JSON.stringify({
+        resourceId: resource.id,
+        addressVersion: 1,
+        revision: {
+          kind: "web",
+          validator: { kind: "etag", value: historicalEtag, weak: false },
+        },
+      }),
+      JSON.stringify({
+        mediaType: "text/markdown",
+        adapter: { id: "legacy.extractor", version: 3 },
+        contentHash: historicalRepresentationHash,
+      }),
+      JSON.stringify(anchor),
+      "Historical evidence",
+      "2026-09-16T12:00:00.000Z",
+    );
+  } finally {
+    database.close();
+  }
+
+  store = new OutlinerStore(path, {
+    fetch: (() => {
+      throw new Error("migration open must remain local");
+    }) as unknown as typeof fetch,
+  });
+  try {
+    const migrated = await store.resources.open(resource.id, true);
+    expect(migrated.webHistory?.sourceSnapshots).toHaveLength(2);
+    expect(migrated.webHistory?.representations).toHaveLength(2);
+    expect(migrated.web?.sourceSnapshot.bodyAvailable).toBe(false);
+    expect(migrated.web?.representation.contentAvailable).toBe(true);
+    expect(migrated.webHistory?.annotations.map((annotation) => annotation.id).sort())
+      .toEqual([historicalAnnotationId, stableAnnotationId].sort());
+    const historical = migrated.webHistory?.annotations.find(
+      (annotation) => annotation.id === historicalAnnotationId,
+    );
+    expect(historical?.representation).toMatchObject({
+      id: historical?.representationId,
+      adapter: { id: "legacy.extractor", version: 3 },
+      contentHash: historicalRepresentationHash,
+      contentAvailable: false,
+      derivedAt: null,
+    });
+    expect(historical).toMatchObject({
+      revision: {
+        resourceId: resource.id,
+        addressVersion: 1,
+        revision: {
+          kind: "web",
+          validator: { kind: "etag", value: historicalEtag, weak: false },
+        },
+      },
+      anchor,
+      body: "Historical evidence",
+    });
+    const historicalSnapshot = migrated.webHistory?.sourceSnapshots.find(
+      (snapshot) => snapshot.id === historical?.sourceSnapshotId,
+    );
+    expect(historicalSnapshot).toMatchObject({
+      canonicalUrl: null,
+      contentHash: null,
+      fetchedAt: null,
+      bodyAvailable: false,
+    });
+    const migratedSnapshotIds = migrated.webHistory!.sourceSnapshots.map(
+      (snapshot) => snapshot.id,
+    );
+    const migratedRepresentationIds = migrated.webHistory!.representations.map(
+      (representation) => representation.id,
+    );
+    expect(store.database.query(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'web_resource_documents'",
+    ).get()).toBeNull();
+    store.database.query(
+      "UPDATE web_resource_state SET freshness = 'refreshing' WHERE resource_id = ?",
+    ).run(resource.id);
+    store.close();
+    store = new OutlinerStore(path, {
+      fetch: (() => {
+        throw new Error("recovery must remain local");
+      }) as unknown as typeof fetch,
+    });
+    expect(store.resources.describe(resource.id, true)).toMatchObject({
+      web: { markdown: "Current evidence" },
+      webStatus: {
+        freshness: "failed",
+        lastError: "Refresh interrupted before completion",
+      },
+    });
+    const reopenedMigration = store.resources.describe(resource.id, true);
+    expect(reopenedMigration.webHistory?.sourceSnapshots.map(
+      (snapshot) => snapshot.id,
+    )).toEqual(migratedSnapshotIds);
+    expect(reopenedMigration.webHistory?.representations.map(
+      (representation) => representation.id,
+    )).toEqual(migratedRepresentationIds);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("web refresh preserves redirect confinement and canonical extraction context", async () => {
+  const root = mkdtempSync(join(tmpdir(), "outliner-web-redirect-"));
+  const html = '<html><body><a href="./next">Next</a></body></html>';
+  let finalPath = "/first/page";
+  const store = new OutlinerStore(join(root, "workspace.sqlite"), {
+    fetch: (async (input, init) => {
+      if (String(input).endsWith("/entry")) {
+        return new Response(null, {
+          status: 302,
+          headers: { location: finalPath },
+        });
+      }
+      if (new Headers(init?.headers).get("if-none-match") === '"stable"') {
+        return new Response(null, { status: 304 });
+      }
+      return new Response(html, {
+        headers: {
+          "content-type": "text/html; charset=utf-8",
+          etag: '"stable"',
+        },
+      });
+    }) as typeof fetch,
+  });
+  try {
+    const source = store.resources.createSource({
+      name: "Redirect",
       provider: "web",
       boundary: { baseUrl: "https://example.com/" },
     });
@@ -421,37 +771,26 @@ test("web refresh re-derives Markdown when its final URL or extractor changes", 
       sourceId: source.id,
       address: { kind: "web", url: "https://example.com/entry" },
     }).resource;
-
-    const first = await store.resources.open(resource.id, true);
+    const first = await store.resources.refreshWeb(resource.id, true);
     expect(first.web?.markdown).toBe("[Next](https://example.com/first/next)");
+    expect(first.web?.sourceSnapshot.canonicalUrl).toBe(
+      "https://example.com/first/page",
+    );
 
     finalPath = "/second/page";
     const redirected = await store.resources.refreshWeb(resource.id, true);
     expect(redirected.web?.markdown).toBe("[Next](https://example.com/second/next)");
-    expect(redirected.web?.canonicalUrl).toBe("https://example.com/second/page");
-
-    const unchanged = await store.resources.refreshWeb(resource.id, true);
-    expect(unchanged.web?.markdown).toBe(redirected.web?.markdown);
-    expect(unchanged.web?.fetchedAt).toBe(redirected.web?.fetchedAt);
-
-    store.close();
-    const replacementExtractor: WebMarkdownExtractor = {
-      adapter: { id: "fixture.markdown", version: 2 },
-      extract: (snapshot) => `Replacement\n\n${basicExtractor.extract(snapshot)}`,
-    };
-    store = new OutlinerStore(database, {
-      fetch: fetcher as typeof fetch,
-      webExtractor: replacementExtractor,
-      now: () => new Date(clock += 1_000).toISOString(),
-    });
-    const replaced = await store.resources.refreshWeb(resource.id, true);
-    expect(replaced.web?.markdown).toBe(
-      "Replacement\n\n[Next](https://example.com/second/next)",
+    expect(redirected.web?.sourceSnapshot.canonicalUrl).toBe(
+      "https://example.com/second/page",
     );
-    expect(replaced.web?.representation.adapter).toEqual({
-      id: "fixture.markdown",
-      version: 2,
-    });
+    expect(redirected.webHistory?.sourceSnapshots).toHaveLength(2);
+    const pinned = await store.resources.open(
+      resource.id,
+      true,
+      redirected.web!.sourceSnapshot.revision,
+    );
+    expect(pinned.web?.sourceSnapshot.id).toBe(redirected.web?.sourceSnapshot.id);
+    expect(pinned.web?.markdown).toBe("[Next](https://example.com/second/next)");
   } finally {
     store.close();
     rmSync(root, { recursive: true, force: true });
@@ -513,9 +852,9 @@ test("web refresh validates redirects before requests and stops oversized stream
       sourceId: source.id,
       address: { kind: "web", url: "https://example.com/redirect" },
     }).resource;
-    const redirected = await store.resources.open(redirect.id, true);
+    const redirected = await store.resources.refreshWeb(redirect.id, true);
     expect(redirected.web).toBeNull();
-    expect(redirected.webError).toContain("outside its source boundary");
+    expect(redirected.webStatus?.lastError).toContain("outside its source boundary");
     expect(requested).toEqual(["https://example.com/redirect"]);
     for (
       const [path, error] of [
@@ -528,7 +867,9 @@ test("web refresh validates redirects before requests and stops oversized stream
         sourceId: source.id,
         address: { kind: "web", url: `https://example.com${path}` },
       }).resource;
-      expect((await store.resources.open(rejected.id, true)).webError).toContain(error);
+      expect(
+        (await store.resources.refreshWeb(rejected.id, true)).webStatus?.lastError,
+      ).toContain(error);
     }
     expect(rejectedCancellations).toBe(3);
 
@@ -537,8 +878,8 @@ test("web refresh validates redirects before requests and stops oversized stream
       sourceId: source.id,
       address: { kind: "web", url: "https://example.com/large" },
     }).resource;
-    const oversized = await store.resources.open(large.id, true);
-    expect(oversized.webError).toBe("Web response exceeds 10 bytes");
+    const oversized = await store.resources.refreshWeb(large.id, true);
+    expect(oversized.webStatus?.lastError).toBe("Web response exceeds 10 bytes");
     expect(chunks).toBeLessThanOrEqual(3);
   } finally {
     store.close();

@@ -16,15 +16,20 @@ export type {
   ResourceCapabilityDecision,
   ResourceCapabilityReport,
   ResourceDescription,
+  ResourceFreshness,
   ResourcePolicy,
   ResourceProvider,
   ResourceRevision,
   ResourceRevisionRef,
   ResourceSource,
   WebRepresentationAdapter,
+  WebRepresentationProvenance,
   WebResourceAnnotation,
   WebResourceAnnotationAnchor,
   WebResourceDocument,
+  WebResourceProvenance,
+  WebResourceStatus,
+  WebSourceSnapshotProvenance,
 } from "./resources";
 
 export type BlockAuthor = "user" | "agent" | "system";
@@ -818,7 +823,7 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 39;
+export const OUTLINER_PROTOCOL_VERSION = 40;
 
 
 export interface OutlinerServiceStatus {

@@ -229,7 +229,7 @@ function previewSelectionSource(
   return {
     text: web.markdown,
     sourceId: description.resource.id,
-    sourceVersion: web.representation.contentHash,
+    sourceVersion: web.representation.id,
     sourceHash: web.representation.contentHash,
   };
 }
@@ -1479,8 +1479,9 @@ export class DetailPiPreviewLayout extends VStack {
 
     const selected = this.state.context.selected;
     const target = this.state.target;
+    const selectedWeb = detailResourceDescription(this.state)?.web;
     const selectionId = target?.kind === "resource"
-      ? `resource:${target.resourceId}:${target.revision?.addressVersion ?? "latest"}`
+      ? `resource:${target.resourceId}:representation:${selectedWeb?.representation.id ?? "none"}`
       : selected?.id ?? null;
     const selectionChanged = selectionId !== this.previousSelectionId;
     this.previousSelectionId = selectionId;

@@ -83,5 +83,5 @@ command = ["/bin/sh", "scripts/run-bun.sh", "run", "src/herdr-comment-selection.
 [[link_handlers]]
 id = "outliner-navigation"
 title = "Navigate Outliner"
-pattern = "^pi-outliner://(block|goto|page|work)/[^[:space:]]+$"
+pattern = "^pi-outliner://(block|goto|page|resource|work)/[^[:space:]]+$"
 action = "open"

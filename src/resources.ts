@@ -234,6 +234,49 @@ export interface WebRepresentationAdapter {
   readonly version: number;
 }
 
+export type ResourceFreshness =
+  | "fresh"
+  | "stale"
+  | "unknown"
+  | "refreshing"
+  | "failed";
+
+export interface WebSourceSnapshotProvenance {
+  readonly id: string;
+  readonly resourceId: string;
+  readonly addressVersion: number;
+  readonly canonicalUrl: string | null;
+  readonly contentHash: string | null;
+  readonly revision: ResourceRevisionRef;
+  readonly fetchedAt: string | null;
+  readonly bodyAvailable: boolean;
+}
+
+export interface WebRepresentationProvenance {
+  readonly id: string;
+  readonly sourceSnapshotId: string;
+  readonly mediaType: "text/markdown";
+  readonly adapter: WebRepresentationAdapter;
+  readonly contentHash: string;
+  readonly derivedAt: string | null;
+  readonly contentAvailable: boolean;
+}
+
+export interface WebResourceProvenance {
+  readonly sourceSnapshots: readonly WebSourceSnapshotProvenance[];
+  readonly representations: readonly WebRepresentationProvenance[];
+}
+export interface WebResourceHistory extends WebResourceProvenance {
+  readonly annotations: readonly WebResourceAnnotation[];
+}
+
+
+export interface WebResourceStatus {
+  readonly freshness: ResourceFreshness;
+  readonly checkedAt: string | null;
+  readonly lastError: string | null;
+}
+
 export interface WebResourceAnnotationAnchor {
   readonly start: number;
   readonly end: number;
@@ -245,41 +288,28 @@ export interface WebResourceAnnotationAnchor {
 export interface WebResourceAnnotation {
   readonly id: string;
   readonly resourceId: string;
+  readonly sourceSnapshotId: string;
+  readonly representationId: string;
   readonly revision: ResourceRevisionRef;
-  readonly representation: {
-    readonly mediaType: "text/markdown";
-    readonly adapter: WebRepresentationAdapter;
-    readonly contentHash: string;
-  };
+  readonly representation: WebRepresentationProvenance;
   readonly anchor: WebResourceAnnotationAnchor;
   readonly body: string;
   readonly createdAt: string;
 }
 
 export interface WebResourceDocument {
-  readonly canonicalUrl: string;
   readonly markdown: string;
-  readonly revision: ResourceRevisionRef;
-  readonly representation: {
-    readonly mediaType: "text/markdown";
-    readonly adapter: WebRepresentationAdapter;
-    readonly contentHash: string;
-  };
-  readonly freshness: "fresh" | "failed";
-  readonly fetchedAt: string;
-  readonly checkedAt: string;
-  readonly lastError: string | null;
-  readonly annotations: readonly WebResourceAnnotation[];
+  readonly sourceSnapshot: WebSourceSnapshotProvenance;
+  readonly representation: WebRepresentationProvenance;
 }
 
 export interface CreateWebResourceAnnotationInput {
   readonly resourceId: string;
-  readonly revision: ResourceRevisionRef;
-  readonly representation: WebResourceDocument["representation"];
+  readonly sourceSnapshotId: string;
+  readonly representationId: string;
   readonly anchor: WebResourceAnnotationAnchor;
   readonly body: string;
 }
-
 
 export interface ResourceDescription {
   readonly resource: Resource;
@@ -287,6 +317,8 @@ export interface ResourceDescription {
   readonly requestedRevision: ResourceRevisionRef | null;
   readonly capabilities: ResourceCapabilityReport;
   readonly web: WebResourceDocument | null;
+  readonly webHistory: WebResourceHistory | null;
+  readonly webStatus: WebResourceStatus | null;
   readonly webError?: string;
 }
 

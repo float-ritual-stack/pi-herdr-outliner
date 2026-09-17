@@ -25,9 +25,9 @@ The project started as a small Friday-night experiment and grew into a durable w
 
 - SQLite-backed hierarchical blocks with stable UUIDs, sibling order, authors, timestamps, and one canonical graph per workspace root.
 - Workspace-isolated service and runtime paths.
-- JSON-lines RPC protocol v39 over a Unix socket.
+- JSON-lines RPC protocol v40 over a Unix socket.
 - Reactive canonical content/view broadcasts, per-process Tree/Detail registration with Detail lock availability, exact-client UI commands, and source-aware `preview | open | reveal` navigation.
-- Durable resources have UUID identities independent of blocks and mutable locators. Provider-qualified Sources bound filesystem roots or remote namespaces; overlapping Sources remain distinct, relocations preserve Resource IDs, provider revisions remain explicit, and capability resolution reports blockers across provider, credentials, workspace policy, host, and connectivity. Web Resources fetch once into cached Markdown, reopen without network access, conditionally refresh, retain exact annotation evidence across changes, expose freshness, and fall back to the canonical external URL.
+- Durable resources have UUID identities independent of blocks and mutable locators. Provider-qualified Sources bind filesystem roots or remote namespaces; overlapping Sources remain distinct, relocations preserve Resource IDs, provider revisions remain explicit, and capability resolution reports blockers across provider, credentials, workspace policy, host, and connectivity. Web Resources open from local storage only. Explicit refresh reconciles the provider into immutable source snapshots and named Markdown representations, retains annotation evidence across later observations, and reports `fresh`, `stale`, `unknown`, `refreshing`, or `failed` separately from the selected immutable content.
 - Each Tree owns its cursor, occurrence selection, filter, viewport, collapsed rows, multiline expansion, explicit-navigation history, and browsing context; moving a Tree previews only in the first unlocked same-tab Detail and never replaces a locked anchor.
 - Indexed `[property::value]` metadata with optimistic property patching and catalog queries.
 - Exact block and fragment references using `((block-id))` and `((block-id^fragment-id))`, resolved to display titles in read mode while raw text remains editable.
@@ -54,6 +54,29 @@ The project started as a small Friday-night experiment and grew into a durable w
 
 Planned work is tracked inside the outliner itself; this document describes only
 behavior already shipped on the current branch.
+
+### Web Resource snapshots
+
+Opening a Web Resource never contacts the provider. Detail shows the latest
+locally selected Markdown representation, or an `unknown` status with explicit
+no-cache guidance when the Resource has no local snapshot. Press `r` to refresh.
+Refresh is the only operation that performs provider reconciliation.
+
+Each successful observation stores an immutable source snapshot with the
+provider revision, source hash, fetched time, and full HTML. Markdown is a
+separate immutable representation named by its adapter and version. An
+unchanged source observation reuses its snapshot, while an extractor change can
+create a new representation for that snapshot. The mutable Resource state only
+points at the latest selected snapshot and representation and records freshness,
+check time, refresh errors, and a compare-and-swap version.
+
+Detail displays selected snapshot and representation provenance plus retained
+history independently of the nullable current document. Relocation clears the
+current pointers for the new address while prior snapshots, representations,
+and annotation evidence remain inspectable offline. Legacy annotations whose
+source bytes were never stored expose unknown URL, source hash, fetch time, and
+derivation time instead of fabricated metadata. Refresh failure does not alter
+the selected content.
 
 ## Quick start
 

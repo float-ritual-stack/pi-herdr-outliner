@@ -177,32 +177,51 @@ function webState(markdown: string): DetailState {
     updatedAt: "updated",
   };
   const target = { kind: "resource" as const, resourceId: resource.id };
+  const sourceSnapshot = {
+    id: "30000000-0000-4000-8000-000000000001",
+    resourceId: resource.id,
+    addressVersion: resource.addressVersion,
+    canonicalUrl: resource.address.url,
+    contentHash: "b".repeat(64),
+    revision: {
+      resourceId: resource.id,
+      addressVersion: resource.addressVersion,
+      revision: {
+        kind: "web" as const,
+        validator: { kind: "etag" as const, value: "fixture", weak: false },
+      },
+    },
+    fetchedAt: "2026-09-17T12:00:00.000Z",
+    bodyAvailable: true,
+  };
+  const representation = {
+    id: "40000000-0000-4000-8000-000000000001",
+    sourceSnapshotId: sourceSnapshot.id,
+    mediaType: "text/markdown" as const,
+    adapter: { id: "fixture", version: 1 },
+    contentHash: "a".repeat(64),
+    derivedAt: "2026-09-17T12:00:01.000Z",
+    contentAvailable: true,
+  };
   const description: ResourceDescription = {
     resource,
     source,
     requestedRevision: null,
     capabilities: deriveResourceCapabilityReport(source, true),
     web: {
-      canonicalUrl: resource.address.url,
       markdown,
-      revision: {
-        resourceId: resource.id,
-        addressVersion: resource.addressVersion,
-        revision: {
-          kind: "web",
-          validator: { kind: "etag", value: "fixture", weak: false },
-        },
-      },
-      representation: {
-        mediaType: "text/markdown",
-        adapter: { id: "fixture", version: 1 },
-        contentHash: "a".repeat(64),
-      },
+      sourceSnapshot,
+      representation,
+    },
+    webHistory: {
+      sourceSnapshots: [sourceSnapshot],
+      representations: [representation],
+      annotations: [],
+    },
+    webStatus: {
       freshness: "fresh",
-      fetchedAt: "2026-09-17T12:00:00.000Z",
       checkedAt: "2026-09-17T12:00:00.000Z",
       lastError: null,
-      annotations: [],
     },
   };
   const renderedDocument = [
@@ -213,6 +232,17 @@ function webState(markdown: string): DetailState {
     "## Web resource",
     "",
     `[Open externally](<${resource.address.url}>)`,
+    "",
+    "## Local status",
+    "",
+    "- Freshness: **fresh**",
+    "",
+    "## Selected immutable content",
+    "",
+    `- Source snapshot ID: \`${sourceSnapshot.id}\``,
+    `- Source hash: \`${sourceSnapshot.contentHash}\``,
+    `- Representation ID: \`${representation.id}\``,
+    `- Representation hash: \`${representation.contentHash}\``,
   ].join("\n");
   detail.document = {
     kind: "ready",
@@ -2119,6 +2149,137 @@ test("maps cached web Markdown points without requiring a selected block", () =>
     row: 2,
     column: markdown.split("\n")[2]!.indexOf("cached phrase") + 4,
   });
+});
+
+test("renders a no-cache web resource without exposing generated guidance as source", () => {
+  const detail = webState("# unavailable cache fixture");
+  if (detail.document.kind !== "ready" || detail.document.document.kind !== "resource") {
+    throw new Error("Expected a loaded web resource fixture");
+  }
+  const loaded = detail.document.document;
+  detail.document = {
+    kind: "ready",
+    document: {
+      ...loaded,
+      description: {
+        ...loaded.description,
+        web: null,
+        webStatus: {
+          freshness: "unknown",
+          checkedAt: null,
+          lastError: null,
+        },
+      },
+    },
+  };
+  const generated = [
+    "# https://example.com/article",
+    "",
+    "## Local status",
+    "",
+    "- Freshness: **unknown**",
+    "",
+    "No local snapshot is available. Press r to refresh explicitly.",
+  ].join("\n");
+  detail.resolvedSelectedText = generated;
+  detail.projectedSelectedText = generated;
+  const layout = previewLayout(detail);
+  layout.scrollView.setScrollbar("hidden");
+  layout.syncState(50);
+  const rendered = layout.scrollView.render(50).map(stripTerminalSequences);
+
+  expect(rendered.join("\n")).toContain("No local snapshot is available");
+  for (let row = 0; row < rendered.length; row += 1) {
+    if (!rendered[row]!.trim()) continue;
+    expect(layout.sourcePointAtViewport(row + 3, 0, 50)).toBeNull();
+  }
+});
+
+test("resets cached web preview scroll by representation identity while hashes remain evidence", () => {
+  const markdown = Array.from({ length: 24 }, (_, index) => `cached line ${index}`).join("\n");
+  const detail = webState(markdown);
+  if (detail.document.kind !== "ready" || detail.document.document.kind !== "resource") {
+    throw new Error("Expected a loaded web resource fixture");
+  }
+  const target = detail.document.document.target;
+  const initial = detail.document.document.description;
+  const initialWeb = initial.web!;
+  const layout = previewLayout(detail);
+  layout.scrollView.setScrollbar("hidden");
+  const contentHeight = renderedDocument(layout, 28).length;
+  layout.scrollView.updateLayout(contentHeight, 5, () => {});
+  layout.applyPendingFragmentScroll(28);
+  layout.scrollView.scrollBy(4);
+
+  expect(layout.scrollView.scrollTop).toBe(4);
+  expect(detail.resolvedSelectedText).toContain(
+    `- Source hash: \`${initialWeb.sourceSnapshot.contentHash}\``,
+  );
+  expect(detail.resolvedSelectedText).toContain(
+    `- Representation hash: \`${initialWeb.representation.contentHash}\``,
+  );
+
+  detail.document = {
+    kind: "ready",
+    document: {
+      kind: "resource",
+      target,
+      description: {
+        ...initial,
+        webStatus: {
+          freshness: "stale",
+          checkedAt: "2026-09-17T13:00:00.000Z",
+          lastError: null,
+        },
+      },
+    },
+  };
+  detail.resolvedSelectedText = detail.resolvedSelectedText.replace(
+    "- Freshness: **fresh**",
+    "- Freshness: **stale**",
+  );
+  detail.projectedSelectedText = detail.resolvedSelectedText;
+  layout.render(28);
+  expect(layout.scrollView.scrollTop).toBe(4);
+
+  const nextRepresentation = {
+    ...initialWeb.representation,
+    id: "40000000-0000-4000-8000-000000000002",
+  };
+  detail.document = {
+    kind: "ready",
+    document: {
+      kind: "resource",
+      target,
+      description: {
+        ...initial,
+        webStatus: {
+          freshness: "stale",
+          checkedAt: "2026-09-17T13:00:00.000Z",
+          lastError: null,
+        },
+        web: {
+          ...initialWeb,
+          representation: nextRepresentation,
+        },
+        webHistory: {
+          ...initial.webHistory!,
+          representations: [
+            ...initial.webHistory!.representations,
+            nextRepresentation,
+          ],
+        },
+      },
+    },
+  };
+  detail.resolvedSelectedText = detail.resolvedSelectedText.replace(
+    initialWeb.representation.id,
+    nextRepresentation.id,
+  );
+  detail.projectedSelectedText = detail.resolvedSelectedText;
+  layout.render(28);
+  expect(nextRepresentation.contentHash).toBe(initialWeb.representation.contentHash);
+  expect(layout.scrollView.scrollTop).toBe(0);
 });
 
 test("rejects generated web metadata rows for clicks and scroll source mapping", () => {
