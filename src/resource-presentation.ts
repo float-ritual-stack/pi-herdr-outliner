@@ -146,6 +146,18 @@ function capabilityReason(decision: ResourceCapabilityDecision): string {
   return "Capability is available";
 }
 
+
+function isTextualMediaType(mediaType: string | null): boolean {
+  if (mediaType === null) return true;
+  const normalized = mediaType.split(";", 1)[0]!.trim().toLowerCase();
+  return normalized.startsWith("text/") ||
+    normalized === "application/json" ||
+    normalized.endsWith("+json") ||
+    normalized === "application/xml" ||
+    normalized.endsWith("+xml") ||
+    normalized === "application/yaml" ||
+    normalized === "application/toml";
+}
 function localReadDecision(
   decision: ResourceCapabilityDecision,
 ): Pick<ResourceCapabilityDecision, "status" | "factors"> {
@@ -185,16 +197,21 @@ function orderedDefinitions(
   context: ResourcePresentationContext,
 ): readonly CandidateDefinition[] {
   const { resource, web, filesystem } = description;
-  const url = externalUrl(resource, description.source);
+  const unpinned = description.requestedRevision === null;
+  const url = unpinned ? externalUrl(resource, description.source) : null;
   const requestedPlacement = context.placement;
   const native: CandidateDefinition = {
     representation: "native-document",
     renderer: "native-document",
     placement: requestedPlacement,
     applicable:
+      unpinned &&
       (context.surface === "gui" || context.surface === "native") &&
-      resource.mediaType === "application/pdf",
-    missingReason: "Native document presentation requires a GUI/native surface and PDF media type",
+      resource.mediaType === "application/pdf" &&
+      filesystem != null,
+    missingReason: unpinned
+      ? "Native document presentation requires an available PDF on a GUI/native surface"
+      : "Pinned revisions require an exact retained representation",
     capability: "read",
     adapter: null,
     externalUrl: null,
@@ -203,8 +220,10 @@ function orderedDefinitions(
     representation: "embedded-browser",
     renderer: "embedded-browser",
     placement: requestedPlacement,
-    applicable: context.surface === "gui" && resource.provider === "web",
-    missingReason: "Embedded browser presentation requires a GUI surface and web Resource",
+    applicable: unpinned && context.surface === "gui" && resource.provider === "web",
+    missingReason: unpinned
+      ? "Embedded browser presentation requires a GUI surface and web Resource"
+      : "Pinned revisions cannot use a live embedded browser",
     capability: "embed",
     adapter: null,
     externalUrl: url,
@@ -213,7 +232,7 @@ function orderedDefinitions(
     representation: "cached-markdown",
     renderer: "markdown",
     placement: requestedPlacement,
-    applicable: web !== null || filesystem !== null,
+    applicable: web !== null || (filesystem != null && isTextualMediaType(resource.mediaType)),
     missingReason: "No local text or cached Markdown representation is available",
     adapter: web?.representation.adapter ?? null,
     externalUrl: null,
@@ -232,7 +251,9 @@ function orderedDefinitions(
     renderer: "external-open",
     placement: "external",
     applicable: url !== null,
-    missingReason: "Resource has no external deep link",
+    missingReason: unpinned
+      ? "Resource has no external deep link"
+      : "Pinned revisions cannot use a mutable external deep link",
     capability: "open-external",
     adapter: null,
     externalUrl: url,

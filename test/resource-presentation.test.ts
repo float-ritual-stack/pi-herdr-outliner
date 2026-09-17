@@ -140,6 +140,24 @@ test("negotiates one web Resource across TUI, GUI, and external-only hosts", () 
   });
 });
 
+test("keeps pinned revisions on their exact retained representation", () => {
+  const requestedRevision = webDescription.web!.sourceSnapshot.revision;
+  const pinned = negotiateResourcePresentation(
+    { ...webDescription, requestedRevision },
+    guiContext(),
+  );
+  expect(pinned.attempts[1]).toMatchObject({
+    representation: "embedded-browser",
+    status: "unavailable",
+    reason: "Pinned revisions cannot use a live embedded browser",
+  });
+  expect(pinned.selected).toMatchObject({
+    representation: "cached-markdown",
+    renderer: "markdown",
+    adapter: { id: "fixture.extractor", version: 3 },
+  });
+});
+
 test("falls back deterministically without coupling cached Markdown to live provider access", () => {
   const offline = negotiateResourcePresentation(webDescription, {
     ...guiContext(),
@@ -227,7 +245,16 @@ test("treats PDF as media type while selecting a native GUI renderer", () => {
     source: filesystemSource,
     requestedRevision: null,
     capabilities: deriveResourceCapabilityReport(filesystemSource, true, ["read"]),
-    filesystem: null,
+    filesystem: {
+      text: "%PDF-1.7",
+      contentHash: "c".repeat(64),
+      capturedAt: "2026-01-01T00:00:00.000Z",
+      revision: {
+        resourceId: "20000000-0000-4000-8000-000000000002",
+        addressVersion: 1,
+        revision: { kind: "filesystem", mtimeNs: "1", size: "8" },
+      },
+    },
     web: null,
     webHistory: null,
     webStatus: null,
@@ -253,4 +280,28 @@ test("treats PDF as media type while selecting a native GUI renderer", () => {
     },
   });
   expect(pdfDescription.resource.provider).toBe("filesystem");
+  const missing = negotiateResourcePresentation(
+    { ...pdfDescription, filesystem: null },
+    {
+      surface: "native",
+      placement: "window",
+      host: {
+        id: "native-document-host",
+        renderers: ["native-document", "metadata"],
+        placements: ["window"],
+        capabilities: ["read"],
+      },
+      providerAccess: { credentials: "available", connectivity: "available" },
+    },
+  );
+  expect(missing.selected).toMatchObject({
+    representation: "metadata",
+    renderer: "metadata",
+  });
+
+  const tui = negotiateResourcePresentation(pdfDescription, TUI_RESOURCE_PRESENTATION_CONTEXT);
+  expect(tui.selected).toMatchObject({
+    representation: "metadata",
+    renderer: "metadata",
+  });
 });
