@@ -136,6 +136,17 @@ test("filesystem PDF keeps identity across native/text representations and audit
       renderer: "native-document",
       adapter: { id: "builtin.pdf-native", version: 1 },
     });
+    const nativePayload = store.resources.nativePdfPayload(
+      first.resource.id,
+      first.pdf.nativeRepresentation.id,
+    );
+    expect(nativePayload).toMatchObject({
+      representationId: first.pdf.nativeRepresentation.id,
+      mediaType: "application/pdf",
+      encoding: "base64",
+      contentHash: first.pdf.nativeRepresentation.contentHash,
+    });
+    expect(Buffer.from(nativePayload.data, "base64")).toEqual(Buffer.from(fixturePdf(1)));
 
     const originalAnchor = anchorForQuote(first.pdf, "Durable claim revision 1");
     const annotation = store.annotations.create(
@@ -224,33 +235,16 @@ test("filesystem PDF keeps identity across native/text representations and audit
         artifact.id === refreshed.pdf!.sourceSnapshot.id
       )?.states,
     ).toEqual(expect.arrayContaining(["current", "referenced"]));
+    rmSync(pdfPath);
+    const unavailable = await store.resources.open(receipt.resource.id, true);
+    expect(unavailable.pdf?.sourceSnapshot.id).toBe(refreshed.pdf.sourceSnapshot.id);
+    expect(unavailable.pdfError).toContain("unavailable");
   } finally {
     store.close();
     rmSync(directory, { recursive: true, force: true });
   }
 });
 
-test("opening a missing filesystem PDF preserves retained snapshots and history", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "pi-outliner-missing-pdf-"));
-  const pdfPath = join(directory, "evidence.pdf");
-  const store = new OutlinerStore(join(directory, "outliner.sqlite"), { workspaceRoot: directory });
-  try {
-    writeFileSync(pdfPath, fixturePdf(1));
-    const resource = store.resources.internFilesystem({ path: pdfPath }).resource;
-    const first = await store.resources.open(resource.id, true);
-    expect(first.pdf).not.toBeNull();
-    rmSync(pdfPath);
-    const opened = await store.resources.open(resource.id, true);
-    expect(opened.pdf).toEqual(first.pdf);
-    expect(opened.pdfHistory).toEqual(first.pdfHistory);
-    await expect(store.resources.refreshPdf(resource.id, true)).rejects.toMatchObject({
-      code: "source-unavailable",
-    });
-  } finally {
-    store.close();
-    rmSync(directory, { recursive: true, force: true });
-  }
-});
 
 test.each([null, "4"])("HTTP PDF enforces the streaming limit with content-length %s", async (declaredLength) => {
   const directory = mkdtempSync(join(tmpdir(), "pi-outliner-pdf-limit-"));
@@ -270,7 +264,7 @@ test.each([null, "4"])("HTTP PDF enforces the streaming limit with content-lengt
   if (declaredLength !== null) headers.set("content-length", declaredLength);
   const store = new OutlinerStore(join(directory, "outliner.sqlite"), {
     maximumPdfBytes: 8,
-    fetch: (async () => new Response(body, { headers })) as typeof fetch,
+    fetch: (async () => new Response(body, { headers })) as unknown as typeof fetch,
   });
   try {
     const source = store.resources.createSource({
@@ -283,10 +277,9 @@ test.each([null, "4"])("HTTP PDF enforces the streaming limit with content-lengt
       address: { kind: "web", url: "https://example.com/evidence.pdf" },
       mediaType: "application/pdf",
     }).resource;
-    await expect(store.resources.refreshWeb(resource.id, true)).rejects.toMatchObject({
-      code: "invalid-input",
-      message: "PDF response exceeds 8 bytes",
-    });
+    const result = await store.resources.refreshWeb(resource.id, true);
+    expect(result.pdf).toBeNull();
+    expect(result.pdfError).toBe("PDF response exceeds 8 bytes");
     expect(receivedChunks).toBe(3);
     expect(cancelled).toBe(true);
     expect(body.locked).toBe(false);
@@ -313,6 +306,22 @@ test("PDF retention evicts and purges unreachable binary and text payloads", asy
     if (!first.pdf || !second.pdf || !current.pdf) {
       throw new Error("PDF retention fixture did not create three revisions");
     }
+    const nativePin = store.resources.pinRetention({
+      artifact: { kind: "representation", id: second.pdf.nativeRepresentation.id },
+      label: "Native PDF delivery",
+    }).pin;
+    const pinned = store.resources.inspectRetention(resource.id);
+    expect(
+      pinned.artifacts.find(({ artifact }) =>
+        artifact.id === second.pdf!.nativeRepresentation.id
+      )?.states,
+    ).toContain("pinned");
+    expect(
+      pinned.artifacts.find(({ artifact }) =>
+        artifact.id === second.pdf!.sourceSnapshot.id
+      )?.states,
+    ).toContain("pinned");
+    expect(store.resources.unpinRetention(nativePin.id).removed).toBe(true);
     store.resources.configureRetention({
       retainNewestSourceSnapshots: 1,
       retainNewestRepresentationsPerAdapter: 1,
@@ -335,6 +344,7 @@ test("PDF retention evicts and purges unreachable binary and text payloads", asy
     expect(eviction.evicted).toEqual(expect.arrayContaining([
       { kind: "source-snapshot", id: second.pdf.sourceSnapshot.id },
       { kind: "representation", id: second.pdf.representation.id },
+      { kind: "representation", id: second.pdf.nativeRepresentation.id },
     ]));
     const evicted = store.resources.describe(
       resource.id,
@@ -357,6 +367,7 @@ test("PDF retention evicts and purges unreachable binary and text payloads", asy
     expect(purge.purged.map(({ artifact }) => artifact)).toEqual(expect.arrayContaining([
       { kind: "source-snapshot", id: second.pdf.sourceSnapshot.id },
       { kind: "representation", id: second.pdf.representation.id },
+      { kind: "representation", id: second.pdf.nativeRepresentation.id },
     ]));
     const opened = await store.resources.open(resource.id, true);
     expect(opened.pdf?.sourceSnapshot.id).toBe(current.pdf.sourceSnapshot.id);
@@ -405,19 +416,112 @@ test("HTTP PDF refresh caches page-aware text and opens without refetching", asy
 
     store.close();
     store = new OutlinerStore(databasePath, {
-      fetch: fetcher,
+      fetch: (async () => {
+        throw new Error("Provider must not be contacted for retained rederivation");
+      }) as unknown as typeof fetch,
       pdfExtractor: new PrefixedPdfExtractor(),
     });
-    const rederived = await store.resources.refreshWeb(resource.id, true);
+    const rederived = await store.resources.open(resource.id, true);
     expect(rederived.pdf?.sourceSnapshot.id).toBe(refreshed.pdf?.sourceSnapshot.id);
     expect(rederived.pdf?.representation.id).not.toBe(refreshed.pdf?.representation.id);
     expect(rederived.pdf?.representation.adapter).toEqual({
       id: "fixture.prefixed-pdf-text",
       version: 2,
     });
-    expect(fetchCount).toBe(2);
+    expect(fetchCount).toBe(1);
   } finally {
     store.close();
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("legacy PDF page-region evidence survives repository startup", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-outliner-pdf-legacy-anchor-"));
+  const databasePath = join(directory, "outliner.sqlite");
+  const pdfPath = join(directory, "legacy.pdf");
+  writeFileSync(pdfPath, fixturePdf(1));
+  let store = new OutlinerStore(databasePath, { workspaceRoot: directory });
+  try {
+    const resource = store.resources.internFilesystem({ path: pdfPath }).resource;
+    const description = await store.resources.open(resource.id, true);
+    if (!description.pdf) throw new Error("Legacy PDF fixture is unavailable");
+    const annotation = store.annotations.create("legacy-pdf-anchor", {
+      target: {
+        representation: annotationRepresentation(description),
+        anchor: anchorForQuote(description.pdf, "Durable claim revision 1"),
+      },
+      body: "Preserve legacy PDF evidence.",
+      source: "user",
+    }, "user").annotations[0]!;
+    if (annotation.originalTarget.anchor.kind !== "pdf-page-region") {
+      throw new Error("Legacy PDF fixture has the wrong anchor kind");
+    }
+    const legacyTarget = {
+      ...annotation.originalTarget,
+      anchor: {
+        kind: "pdf-page-region",
+        page: annotation.originalTarget.anchor.page,
+        regions: annotation.originalTarget.anchor.regions,
+        exact: annotation.originalTarget.anchor.exact,
+      },
+    };
+    store.database.exec("DROP TRIGGER annotation_targets_immutable");
+    store.database.query(`
+      UPDATE annotation_targets SET original_target_json = ?
+      WHERE annotation_block_id = ?
+    `).run(JSON.stringify(legacyTarget), annotation.block.id);
+    store.close();
+
+    store = new OutlinerStore(databasePath, { workspaceRoot: directory });
+    expect(store.annotations.get(annotation.block.id).originalTarget.anchor).toMatchObject({
+      kind: "pdf-page-region",
+      page: 1,
+      start: null,
+      end: null,
+      prefix: null,
+      suffix: null,
+      exact: "Durable claim revision 1",
+    });
+  } finally {
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("PDF refresh enforces policy before provider access", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-outliner-pdf-policy-"));
+  let fetchCount = 0;
+  const store = new OutlinerStore(join(directory, "outliner.sqlite"), {
+    fetch: (async () => {
+      fetchCount += 1;
+      const bytes = fixturePdf(1);
+      return new Response(bytes.buffer.slice(
+        bytes.byteOffset,
+        bytes.byteOffset + bytes.byteLength,
+      ) as ArrayBuffer, {
+        headers: { "content-type": "application/pdf" },
+      });
+    }) as unknown as typeof fetch,
+  });
+  try {
+    const source = store.resources.createSource({
+      name: "Denied PDF refresh",
+      provider: "web",
+      boundary: { baseUrl: "https://example.com/" },
+      policy: { deniedCapabilities: ["refresh"] },
+    });
+    const resource = store.resources.intern({
+      sourceId: source.id,
+      address: { kind: "web", url: "https://example.com/denied.pdf" },
+      mediaType: "application/pdf",
+    }).resource;
+    await expect(async () => {
+      await store.resources.refreshWeb(resource.id, true);
+    }).toThrow("denies reading or refreshing");
+    expect(fetchCount).toBe(0);
+  } finally {
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+

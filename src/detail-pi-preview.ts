@@ -223,6 +223,15 @@ function previewSelectionSource(
     };
   }
   const description = detailResourceDescription(state);
+  const pdf = description?.pdf;
+  if (description && pdf) {
+    return {
+      text: pdf.markdown,
+      sourceId: description.resource.id,
+      sourceVersion: pdf.representation.id,
+      sourceHash: pdf.representation.contentHash,
+    };
+  }
   const web = description?.web;
   if (!description || !web) return null;
   return {

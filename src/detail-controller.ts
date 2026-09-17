@@ -1756,15 +1756,16 @@ export function createDetailController(
     sourceColumn = 0,
   ): Promise<void> => {
     const selected = state.context.selected;
-    const web = detailResourceDescription(state)?.web;
-    if (!web && (!selected || selected.effectiveDeletedRootId)) {
+    const description = detailResourceDescription(state);
+    const resourceMarkdown = description?.pdf?.markdown ?? description?.web?.markdown;
+    if (!resourceMarkdown && (!selected || selected.effectiveDeletedRootId)) {
       state.status = selected
         ? "Block is in Trash; restore before adding annotations"
         : "This resource has no cached Markdown to annotate";
       return;
     }
     await setLocked(true);
-    state.buffer = new TextBuffer(web?.markdown ?? selected!.text);
+    state.buffer = new TextBuffer(resourceMarkdown ?? selected!.text);
     state.buffer.placeCursor(sourceLine, sourceColumn);
     state.editorVisualOffset = 0;
     state.editorViewportManual = false;
@@ -2144,14 +2145,27 @@ export function createDetailController(
         break;
       case "resource.refresh": {
         const description = detailResourceDescription(state);
-        if (!description || description.resource.provider !== "web") {
-          state.status = "Current target is not a web resource";
+        if (
+          !description ||
+          (
+            description.resource.provider !== "web" &&
+            !(description.resource.provider === "filesystem" &&
+              description.resource.mediaType === "application/pdf")
+          )
+        ) {
+          state.status = "Current target does not support refresh";
           break;
         }
         state.busy = true;
         try {
           const refreshed = await effects.refreshResource(description.resource.id);
           await loadCurrentTarget(true);
+          if (refreshed.pdf) {
+            state.status = refreshed.pdfError
+              ? `PDF refresh failed · showing selected immutable content · ${refreshed.pdfError}`
+              : "PDF resource refreshed";
+            break;
+          }
           const freshness = refreshed.webStatus?.freshness ?? "unknown";
           switch (freshness) {
             case "fresh":
@@ -2804,8 +2818,11 @@ export function createDetailController(
           ensureFileCursorVisible(viewport);
         } else {
           const description = detailResourceDescription(state);
-          const resourceText = description?.web?.markdown ?? description?.filesystem?.text;
-          if (!resourceText || resourceText.slice(anchor.start, anchor.end) !== anchor.exact) {
+          const resourceText = description?.pdf?.markdown ??
+            description?.web?.markdown ??
+            description?.filesystem?.text;
+          if (!resourceText || anchor.start === null || anchor.end === null ||
+            resourceText.slice(anchor.start, anchor.end) !== anchor.exact) {
             state.status = "Resolved text quote is unavailable in the loaded Resource";
             break;
           }

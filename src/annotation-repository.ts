@@ -1035,7 +1035,22 @@ export class AnnotationRepository {
         target.anchor.kind !== "pdf-page-region") ||
       content === null
     ) return;
+    if (
+      target.anchor.kind === "pdf-page-region" &&
+      (
+        target.anchor.start === null ||
+        target.anchor.end === null ||
+        target.anchor.exact === null ||
+        target.anchor.prefix === null ||
+        target.anchor.suffix === null
+      )
+    ) {
+      throw new Error("New PDF annotations require quote range and context evidence");
+    }
     const { start, end, exact, prefix, suffix } = target.anchor;
+    if (exact === null || prefix === null || suffix === null) {
+      throw new Error("PDF annotation quote evidence is incomplete");
+    }
     if (start === null || end === null) {
       if (representation.observation?.quote !== exact) {
         throw new Error("Unpositioned annotation quote must match rendered evidence");

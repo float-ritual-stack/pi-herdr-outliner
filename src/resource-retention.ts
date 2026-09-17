@@ -531,8 +531,7 @@ export class ResourceRetentionRepository {
              pr.payload_state, pr.payload_bytes, pr.evicted_at
       FROM pdf_representations pr
       JOIN pdf_source_snapshots ps ON ps.id = pr.source_snapshot_id
-      WHERE pr.media_type = 'text/markdown'
-        AND (? IS NULL OR ps.resource_id = ?)
+      WHERE ? IS NULL OR ps.resource_id = ?
     `).all(resourceId, resourceId, resourceId, resourceId) as RepresentationRetentionRow[];
     snapshots.sort((left, right) =>
       left.resource_id.localeCompare(right.resource_id) ||
@@ -754,7 +753,7 @@ export class ResourceRetentionRepository {
                  pr.payload_state, pr.payload_bytes, pr.evicted_at
           FROM pdf_representations pr
           JOIN pdf_source_snapshots ps ON ps.id = pr.source_snapshot_id
-          WHERE pr.id = ? AND pr.media_type = 'text/markdown'
+          WHERE pr.id = ?
         `).get(artifact.id, artifact.id) as RepresentationRetentionRow | null;
     if (!row) {
       throw new ResourceCatalogError(

@@ -85,18 +85,23 @@ not alter selected content or prior annotation resolution history.
 Filesystem and HTTP PDF Resources retain the same Resource identity across
 native and extracted presentations. Each successful observation stores one
 immutable binary source snapshot. The built-in PDF.js adapter derives
-page-aware Markdown plus text spans with PDF-point rectangles; native-capable
-hosts may instead select the native PDF representation. Extractor upgrades can
-derive a new text representation from retained bytes without changing the
-source snapshot or fetching the provider again.
+page-aware Markdown plus text spans with PDF-point rectangles. TUI hosts receive
+the extracted Markdown; when negotiation selects `native-document`, the service
+delivers the exact retained PDF bytes to that native-capable Detail as a
+representation-bound base64 payload. Extractor upgrades can derive a new text
+representation from retained bytes during local open without changing the
+source snapshot or fetching the provider again. A failed filesystem or HTTP
+refresh leaves any retained PDF presentation visible with explicit diagnostics.
 
 PDF annotation targets retain the source snapshot, derived representation,
 page, exact quote and context, UTF-16 offsets, and page regions. Reconciliation
 maps the deterministic quote ladder back through the current page spans, so
 refreshes and extractor changes append an auditable PDF-specific result while
 leaving the immutable original target unchanged. Retention protects PDF
-evidence named by annotation history and applies the same explicit
-available/evicted/purged lifecycle to binary and extracted payloads.
+evidence named by annotation history, allows native or extracted
+representations to be pinned/referenced independently, propagates that
+protection to source bytes, and records the same explicit
+available/evicted/purged lifecycle for every PDF artifact.
 
 ## Quick start
 

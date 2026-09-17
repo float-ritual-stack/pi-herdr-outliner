@@ -208,7 +208,7 @@ function orderedDefinitions(
       unpinned &&
       (context.surface === "gui" || context.surface === "native") &&
       resource.mediaType === "application/pdf" &&
-      (pdf != null || filesystem != null),
+      (pdf?.nativeRepresentation.contentAvailable === true || filesystem != null),
     missingReason: unpinned
       ? "Native document presentation requires an available PDF on a GUI/native surface"
       : "Pinned revisions require an exact retained representation",

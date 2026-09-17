@@ -85,6 +85,21 @@ function reanchorPdfTarget(
   if (anchor.kind !== "pdf-page-region") {
     throw new Error("PDF reanchor requires a PDF page-region anchor");
   }
+  if (
+    anchor.start === null ||
+    anchor.end === null ||
+    anchor.exact === null ||
+    anchor.prefix === null ||
+    anchor.suffix === null
+  ) {
+    return {
+      resolvedTarget: null,
+      method: method(PDF_CODEC, "legacy-evidence-only"),
+      confidence: null,
+      status: "unsupported",
+      candidates: [],
+    };
+  }
   const textResult = reanchorAnnotationTarget(
     {
       representation: target.representation,

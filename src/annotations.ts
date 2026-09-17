@@ -336,11 +336,32 @@ export function normalizeAnnotationAnchor(value: unknown): AnnotationAnchor {
         height: region.height as number,
       };
     });
+    const page = integer(anchor.page, "PDF page", 1);
+    const quoteFields = ["start", "end", "prefix", "suffix"] as const;
+    const presentQuoteFields = quoteFields.filter((key) => anchor[key] !== undefined);
+    if (presentQuoteFields.length === 0) {
+      if (anchor.exact !== null && typeof anchor.exact !== "string") {
+        throw new Error("Legacy PDF exact text must be a string or null");
+      }
+      return {
+        kind: "pdf-page-region",
+        page,
+        regions,
+        start: null,
+        end: null,
+        exact: anchor.exact as string | null,
+        prefix: null,
+        suffix: null,
+      };
+    }
+    if (presentQuoteFields.length !== quoteFields.length) {
+      throw new Error("PDF quote evidence must include range and context together");
+    }
     const quote = normalizeAnnotationAnchor({ ...anchor, kind: "text-quote" });
     if (quote.kind !== "text-quote") throw new Error("PDF quote normalization failed");
     return {
       kind: "pdf-page-region",
-      page: integer(anchor.page, "PDF page", 1),
+      page,
       regions,
       start: quote.start,
       end: quote.end,

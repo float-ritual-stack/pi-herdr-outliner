@@ -448,6 +448,14 @@ export interface PdfResourceHistory {
   readonly sourceSnapshots: readonly PdfSourceSnapshotProvenance[];
   readonly representations: readonly PdfRepresentationProvenance[];
 }
+export interface ResourceNativePayload {
+  readonly representationId: string;
+  readonly mediaType: "application/pdf";
+  readonly contentHash: string;
+  readonly encoding: "base64";
+  readonly data: string;
+}
+
 
 
 export type ResourceKind = "document" | "entity" | "application";
@@ -519,6 +527,8 @@ export interface ResourceDescription {
   readonly filesystem?: FilesystemResourceDocument | null;
   readonly pdf?: PdfResourceDocument | null;
   readonly pdfHistory?: PdfResourceHistory | null;
+  readonly nativePayload?: ResourceNativePayload;
+  readonly pdfError?: string;
   readonly web: WebResourceDocument | null;
   readonly webHistory: WebResourceHistory | null;
   readonly webStatus: WebResourceStatus | null;

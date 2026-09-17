@@ -27,6 +27,7 @@ export type {
   ResourceCapabilityDecision,
   ResourceCapabilityReport,
   ResourceDescription,
+  ResourceNativePayload,
   ResourceKind,
   ResourcePlacement,
   ResourcePresentationAttempt,
@@ -316,9 +317,9 @@ export type AnnotationAnchor =
       }[];
       readonly start: number | null;
       readonly end: number | null;
-      readonly exact: string;
-      readonly prefix: string;
-      readonly suffix: string;
+      readonly exact: string | null;
+      readonly prefix: string | null;
+      readonly suffix: string | null;
     }
   | {
       readonly kind: "structured-entity-field";

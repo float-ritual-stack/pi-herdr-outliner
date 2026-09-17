@@ -98,9 +98,11 @@ a deep link. Missing or indeterminate live access never hides retained Markdown.
 PDF is selected by `application/pdf` media type, never modeled as a provider.
 The PDF.js text adapter emits page-scoped Markdown and a span map containing
 UTF-16 offsets and PDF-point rectangles. TUI hosts select that retained
-Markdown; native-capable hosts may select the native PDF representation.
-Extractor identity/version is representation provenance, so a new extractor can
-rederive retained source bytes without creating a Resource or source snapshot.
+Markdown. When a native-capable Detail negotiates `native-document`, the server
+attaches the exact retained bytes as a representation ID/hash-bound base64
+payload; other clients do not receive the binary. Extractor identity/version is
+representation provenance, so local open can rederive retained source bytes
+without creating a Resource/source snapshot or contacting the provider.
 Web and PDF annotations are listed by Resource subject through
 `AnnotationRepository`, so relocation, offline failure, and representation
 replacement do not hide target or resolution evidence. Detail exposes
@@ -117,9 +119,11 @@ review/publication references, and exact revisions held by live Details add
 independent protection roots. Eviction clears only web HTML, derived Markdown,
 or PDF source bytes and marks an `evictedAt` tombstone; it never acts like
 Trash, user deletion, or redaction. A later purge pass deletes only unprotected
-evicted metadata after its grace period. Representation protection propagates
-to its source snapshot. Unpinned open still uses the current newest suitable
-cached representation without provider access.
+evicted metadata after its grace period. Native and extracted PDF
+representations participate in pin/reference/audit accounting, and
+representation protection propagates to its source snapshot. Unpinned open
+still uses the current newest suitable cached representation without provider
+access.
 
 Block editing, backlinks, and Tree
 reveal stay unavailable for Resource targets. An unlocked Detail is eligible for
