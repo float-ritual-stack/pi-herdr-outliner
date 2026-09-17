@@ -1323,6 +1323,25 @@ describe("detail controller projection and deferred refresh", () => {
     expect(refreshes).toBe(1);
     expect(harness.controller.state.status).toBe("PDF resource refreshed");
 
+    const bufferBeforeSelection = harness.controller.state.buffer;
+    const locksBeforeSelection = [...harness.calls.locks];
+    const documentLines = harness.controller.state.resolvedSelectedText.split("\n");
+    for (const sourceLine of [markdown.split("\n").length, documentLines.indexOf("## PDF resource")]) {
+      expect(sourceLine).toBeGreaterThanOrEqual(markdown.split("\n").length);
+      await harness.controller.dispatch({
+        type: "annotation.selection.begin",
+        sourceLine,
+        sourceColumn: 0,
+      }, viewport);
+      expect(harness.controller.state.mode).toBe("preview");
+      expect(harness.controller.state.buffer).toBe(bufferBeforeSelection);
+      expect(harness.controller.state.annotationDraft).toBeUndefined();
+      expect(harness.calls.locks).toEqual(locksBeforeSelection);
+      expect(harness.controller.state.status).toBe(
+        "Select PDF text, not resource metadata, before adding annotations",
+      );
+    }
+
     await harness.controller.dispatch({
       type: "annotation.selection.begin",
       sourceLine: 2,

@@ -1758,6 +1758,10 @@ export function createDetailController(
     const selected = state.context.selected;
     const description = detailResourceDescription(state);
     const resourceMarkdown = description?.pdf?.markdown ?? description?.web?.markdown;
+    if (description?.pdf && sourceLine >= description.pdf.markdown.split("\n").length) {
+      state.status = "Select PDF text, not resource metadata, before adding annotations";
+      return;
+    }
     if (!resourceMarkdown && (!selected || selected.effectiveDeletedRootId)) {
       state.status = selected
         ? "Block is in Trash; restore before adding annotations"
