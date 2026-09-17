@@ -952,6 +952,123 @@ describe("detail controller projection and deferred refresh", () => {
     });
   });
 
+  test("annotates filesystem Resources and explains unsupported edit and refresh actions", async () => {
+    const harness = createHarness(makeBlock({ id: "block-anchor" }));
+    const resourceId = "10000000-0000-4000-8000-000000000001";
+    const source = {
+      id: "20000000-0000-4000-8000-000000000001",
+      name: "Filesystem fixture",
+      provider: "filesystem" as const,
+      boundary: { kind: "filesystem" as const, root: "/workspace" },
+      policy: { deniedCapabilities: [] },
+      version: 1,
+      createdAt: "created",
+      updatedAt: "updated",
+    };
+    const resource = {
+      id: resourceId,
+      sourceId: source.id,
+      provider: "filesystem" as const,
+      address: { kind: "filesystem" as const, path: "notes/example.md" },
+      version: 1,
+      addressVersion: 1,
+      mediaType: "text/markdown",
+      createdAt: "created",
+      updatedAt: "updated",
+    };
+    const text = "# Filesystem fixture\n\nAnnotate this exact line.";
+    const description: ResourceDescription = {
+      resource,
+      source,
+      requestedRevision: null,
+      capabilities: deriveResourceCapabilityReport(source, true, ["read"]),
+      filesystem: {
+        text,
+        contentHash: "filesystem-content-hash",
+        capturedAt: "2026-09-17T00:00:00.000Z",
+        revision: {
+          resourceId,
+          addressVersion: 1,
+          revision: { kind: "filesystem", mtimeNs: "1", size: String(text.length) },
+        },
+      },
+      pdf: null,
+      pdfHistory: null,
+      web: null,
+      webHistory: null,
+      webStatus: null,
+      remoteEntity: null,
+      remoteStatus: null,
+      computed: null,
+      computedStatus: null,
+      computedFailure: null,
+      availableCommands: [],
+    };
+    const loadTarget = harness.effects.loadTarget;
+    harness.effects.loadTarget = async (target) => target.kind === "resource"
+      ? {
+          kind: "resource",
+          target: { kind: "resource", resourceId },
+          description,
+        }
+      : loadTarget(target);
+
+    await harness.controller.initialize();
+    await harness.controller.onServiceEvent(event("ui", {
+      targetClientId: "detail-test",
+      command: "open",
+      target: { kind: "resource", resourceId },
+    }), viewport);
+
+    const outcomes: Array<string | null> = [];
+    await harness.controller.dispatch({ type: "edit.begin" }, viewport);
+    outcomes.push(harness.controller.state.status);
+    await harness.controller.dispatch({ type: "edit.external" }, viewport);
+    outcomes.push(harness.controller.state.status);
+    await harness.controller.dispatch({ type: "resource.refresh" }, viewport);
+    outcomes.push(harness.controller.state.status);
+    await harness.controller.dispatch({
+      type: "annotation.selection.begin",
+      sourceLine: 2,
+      sourceColumn: 0,
+    }, viewport);
+    outcomes.push(harness.controller.state.status);
+
+    expect(outcomes).toEqual([
+      "Filesystem Resource content is provider-owned; edit the source file instead",
+      "Filesystem Resource content is provider-owned; edit the source file instead",
+      "Filesystem Resource reopened from disk",
+      "Locked · extend the rendered selection, then press c",
+    ]);
+    expect(harness.controller.state.mode).toBe("select");
+    expect(harness.controller.state.buffer.text).toBe(text);
+
+    await harness.controller.dispatch({
+      type: "annotation.selection.place",
+      row: 2,
+      column: 8,
+      extend: true,
+    }, viewport);
+    await harness.controller.dispatch({ type: "comment.begin" }, viewport);
+    await harness.controller.dispatch({ type: "buffer.insert", text: "Filesystem note" }, viewport);
+    await harness.controller.dispatch({ type: "buffer.save" }, viewport);
+
+    const created = harness.calls.creates[0]!.input;
+    expect(created.target.representation).toMatchObject({
+      subject: { kind: "resource", resourceId },
+      sourceSnapshot: {
+        kind: "resource",
+        resourceId,
+        sourceSnapshotId: null,
+      },
+      adapter: { id: "filesystem.text", version: 1 },
+    });
+    expect(created.target.anchor).toMatchObject({
+      kind: "text-quote",
+      exact: "Annotate",
+    });
+  });
+
   test("opens, annotates, refreshes, and externally opens cached web Markdown", async () => {
     const harness = createHarness(makeBlock({ id: "block-anchor" }));
     const target = {
