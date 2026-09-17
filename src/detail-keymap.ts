@@ -5,6 +5,7 @@ import {
 } from "./outliner-actions";
 import {
   type DetailController,
+  type DetailDirectSelectionCapture,
   type DetailIntent,
   type DetailState,
   type DetailViewport,
@@ -15,7 +16,6 @@ import {
   type TerminalInputAction,
   type TerminalKey,
 } from "./terminal";
-import type { RenderedSelectionCapture } from "./types";
 
 export interface DetailKeymapOptions {
   controller: DetailController;
@@ -30,10 +30,10 @@ export interface DetailKeymapOptions {
   navigatePreview?(direction: "up" | "down" | "pageup" | "pagedown" | "top" | "bottom"): void;
   previewFocused?(): boolean;
   annotationSelectionSourceLine?(): number | null;
-  renderedSelectionCapture?():
-    | RenderedSelectionCapture
+  directSelectionCapture?():
+    | DetailDirectSelectionCapture
     | null
-    | Promise<RenderedSelectionCapture | null>;
+    | Promise<DetailDirectSelectionCapture | null>;
 }
 
 export interface DetailKeyHandler {
@@ -330,10 +330,8 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
         return true;
       case "detail.comment.begin": {
         if (controller.state.mode === "preview") {
-          const capture = (await options.renderedSelectionCapture?.()) ?? null;
-          await dispatch(capture
-            ? { type: "annotation.comment.rendered", capture }
-            : { type: "status.set", message: "Drag across rendered text before commenting" });
+          const capture = (await options.directSelectionCapture?.()) ?? null;
+          await dispatch({ type: "annotation.comment.direct", capture });
         } else {
           await dispatch({ type: "comment.begin" });
         }

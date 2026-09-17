@@ -74,7 +74,7 @@ import {
   resourceRevisionRefEquals,
   resourceAddressLabel,
 } from "./resources";
-import { TextBuffer } from "./text-buffer";
+import { TextBuffer, type TextBufferPoint, type TextBufferRange } from "./text-buffer";
 import type { TerminalKey } from "./terminal";
 import type {
   AnnotationBatchReceipt,
@@ -461,11 +461,24 @@ export type DetailBufferMoveDirection =
 
 export type DetailOpenRouting = "first-unlocked" | "chooser";
 
+export interface DetailResourceSelectionCapture {
+  readonly kind: "resource";
+  readonly resourceId: string;
+  readonly representationId: string;
+  readonly start: number;
+  readonly end: number;
+  readonly exact: string;
+}
+
+export type DetailDirectSelectionCapture =
+  | { readonly kind: "rendered"; readonly capture: RenderedSelectionCapture }
+  | DetailResourceSelectionCapture;
+
 export type DetailIntent =
   | { type: "edit.begin" }
   | { type: "edit.external" }
   | { type: "annotation.selection.begin"; sourceLine?: number; sourceColumn?: number }
-  | { type: "annotation.comment.rendered"; capture: RenderedSelectionCapture | null }
+  | { type: "annotation.comment.direct"; capture: DetailDirectSelectionCapture | null }
   | { type: "resource.refresh" }
   | { type: "resource.open-external" }
   | { type: "resource.open-url"; url: string }
@@ -553,6 +566,10 @@ export interface DetailController {
   initialize(): Promise<void>;
   isBufferMode(): boolean;
   dispatch(intent: DetailIntent, viewport: DetailViewport): Promise<void>;
+  captureResourcePointerSelection(
+    anchor: TextBufferPoint,
+    focus: TextBufferPoint,
+  ): DetailResourceSelectionCapture | null;
   setPreviewRegions(regions: readonly PreviewRegion[]): void;
   onServiceEvent(event: OutlinerEvent, viewport: DetailViewport): Promise<void>;
   handleDestinationChooserKeypress(str: string, key: TerminalKey): Promise<boolean>;
@@ -697,6 +714,13 @@ function resourceAnnotationRepresentation(
   };
 }
 
+function resourceAnnotationText(description: ResourceDescription | null): string | null {
+  return description?.pdf?.markdown ??
+    description?.web?.markdown ??
+    description?.filesystem?.text ??
+    null;
+}
+
 function pdfAnnotationAnchor(
   description: ResourceDescription,
   start: number,
@@ -805,19 +829,29 @@ export function renderedSelectionAnnotationTarget(
   };
 }
 
-function detailBufferRangeOffsets(buffer: Readonly<TextBuffer>): { start: number; end: number } | null {
-  const range = buffer.selectionRange;
-  if (!range) return null;
-  const offset = (row: number, column: number): number => {
+function textRangeOffsets(
+  text: string,
+  range: TextBufferRange,
+): { start: number; end: number } | null {
+  const lines = text.split("\n");
+  const offset = ({ row, column }: TextBufferRange["start"]): number | null => {
+    const line = lines[row];
+    if (line === undefined || column < 0 || column > line.length) return null;
     let total = column;
-    for (let index = 0; index < row; index += 1) total += buffer.lines[index]!.length + 1;
+    for (let index = 0; index < row; index += 1) total += lines[index]!.length + 1;
     return total;
   };
-  return {
-    start: offset(range.start.row, range.start.column),
+  const anchor = offset(range.start);
+  const focus = offset(range.end);
+  if (anchor === null || focus === null || anchor === focus) return null;
+  return anchor < focus
+    ? { start: anchor, end: focus }
+    : { start: focus, end: anchor };
+}
 
-    end: offset(range.end.row, range.end.column),
-  };
+function detailBufferRangeOffsets(buffer: Readonly<TextBuffer>): { start: number; end: number } | null {
+  const range = buffer.selectionRange;
+  return range ? textRangeOffsets(buffer.text, range) : null;
 }
 function detailBufferPointAtOffset(text: string, offset: number): { row: number; column: number } {
   const clamped = Math.max(0, Math.min(offset, text.length));
@@ -2072,10 +2106,7 @@ export function createDetailController(
   ): Promise<void> => {
     const selected = state.context.selected;
     const description = detailResourceDescription(state);
-    const resourceText = description?.pdf?.markdown ??
-      description?.web?.markdown ??
-      description?.filesystem?.text ??
-      null;
+    const resourceText = resourceAnnotationText(description);
     if (description?.pdf && sourceLine >= description.pdf.markdown.split("\n").length) {
       state.status = "Select PDF text, not resource metadata, before adding annotations";
       return;
@@ -2104,9 +2135,7 @@ export function createDetailController(
     const selected = state.context.selected;
     const description = detailResourceDescription(state);
     const pdf = description?.pdf;
-    const web = description?.web;
-    const filesystem = description?.filesystem;
-    const resourceText = pdf?.markdown ?? web?.markdown ?? filesystem?.text ?? null;
+    const resourceText = resourceAnnotationText(description);
     if (!resourceText && (!selected || selected.effectiveDeletedRootId)) {
       state.status = selected
         ? "Block is in Trash; restore before adding annotations"
@@ -2174,6 +2203,38 @@ export function createDetailController(
         : `Locked · commenting on source range ${range}`;
   };
 
+  const captureResourcePointerSelection = (
+    anchor: TextBufferPoint,
+    focus: TextBufferPoint,
+  ): DetailResourceSelectionCapture | null => {
+    if (anchor.row === focus.row && anchor.column === focus.column) return null;
+    const description = detailResourceDescription(state);
+    const text = resourceAnnotationText(description);
+    const representation = description ? resourceAnnotationRepresentation(description) : null;
+    if (!description || !text || !representation) return null;
+    const anchorBeforeFocus = anchor.row < focus.row ||
+      (anchor.row === focus.row && anchor.column <= focus.column);
+    const start = anchorBeforeFocus ? anchor : focus;
+    const inclusiveEnd = anchorBeforeFocus ? focus : anchor;
+    const buffer = new TextBuffer(text);
+    buffer.placeCursor(inclusiveEnd.row, inclusiveEnd.column);
+    if (buffer.column < buffer.lines[buffer.row]!.length) buffer.moveRight();
+    const range = {
+      start,
+      end: { row: buffer.row, column: buffer.column },
+    };
+    const offsets = textRangeOffsets(text, range);
+    if (!offsets) return null;
+    return {
+      kind: "resource",
+      resourceId: description.resource.id,
+      representationId: representation.id,
+      start: offsets.start,
+      end: offsets.end,
+      exact: text.slice(offsets.start, offsets.end),
+    };
+  };
+
   const beginRenderedComment = async (
     capture: RenderedSelectionCapture,
   ): Promise<void> => {
@@ -2212,6 +2273,35 @@ export function createDetailController(
     state.status = anchor.kind === "text-quote" && anchor.start !== null && anchor.end !== null
       ? `Locked · commenting on rendered quote ${anchor.start}-${anchor.end}`
       : "Locked · commenting on the captured rendered passage";
+  };
+
+  const beginDirectComment = async (
+    capture: DetailDirectSelectionCapture,
+  ): Promise<void> => {
+    if (capture.kind === "rendered") {
+      await beginRenderedComment(capture.capture);
+      return;
+    }
+    const description = detailResourceDescription(state);
+    const text = resourceAnnotationText(description);
+    const representation = description ? resourceAnnotationRepresentation(description) : null;
+    if (
+      !description ||
+      !text ||
+      !representation ||
+      description.resource.id !== capture.resourceId
+    ) {
+      state.status = "The Resource changed after the selection was captured";
+      return;
+    }
+    if (
+      representation.id !== capture.representationId ||
+      text.slice(capture.start, capture.end) !== capture.exact
+    ) {
+      state.status = "The Resource representation changed after the selection was captured";
+      return;
+    }
+    await beginComment({ start: capture.start, end: capture.end });
   };
 
   const focusOutliner = async (announce: boolean): Promise<void> => {
@@ -2489,11 +2579,11 @@ export function createDetailController(
       case "annotation.selection.begin":
         await beginAnnotationSelection(intent.sourceLine, intent.sourceColumn);
         break;
-      case "annotation.comment.rendered":
+      case "annotation.comment.direct":
         if (!intent.capture) {
-          state.status = "Drag across rendered text before commenting";
+          state.status = "Drag across text before commenting";
         } else {
-          await beginRenderedComment(intent.capture);
+          await beginDirectComment(intent.capture);
         }
         break;
       case "resource.refresh": {
@@ -3470,6 +3560,7 @@ export function createDetailController(
     },
     isBufferMode,
     dispatch,
+    captureResourcePointerSelection,
     setPreviewRegions(regions) {
       reconcilePreviewRegions(state.previewRegions, regions);
     },

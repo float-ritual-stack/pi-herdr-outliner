@@ -3,6 +3,7 @@ import { emptyAttentionState } from "../src/attention";
 import { OutlinerActionKeymap, type OutlinerActionMenuItem } from "../src/outliner-actions";
 import type {
   DetailController,
+  DetailDirectSelectionCapture,
   DetailIntent,
   DetailState,
 } from "../src/detail-controller";
@@ -10,7 +11,6 @@ import { createDetailKeyHandler } from "../src/detail-keymap";
 import { createOpenDestinationChooserState } from "../src/open-destination-chooser";
 import { TextBuffer } from "../src/text-buffer";
 import type { TerminalKey } from "../src/terminal";
-import type { RenderedSelectionCapture } from "../src/types";
 
 function state(): DetailState {
   return {
@@ -86,10 +86,10 @@ function harness(
     ) => void;
     navigatePreview?: (direction: "up" | "down" | "pageup" | "pagedown" | "top" | "bottom") => void;
     previewFocused?: () => boolean;
-    renderedSelectionCapture?: () =>
-      | RenderedSelectionCapture
+    directSelectionCapture?: () =>
+      | DetailDirectSelectionCapture
       | null
-      | Promise<RenderedSelectionCapture | null>;
+      | Promise<DetailDirectSelectionCapture | null>;
   } = {},
 ): {
   intents: DetailIntent[];
@@ -107,6 +107,9 @@ function harness(
     isBufferMode: () => bufferMode,
     async dispatch(intent) {
       intents.push(intent);
+    },
+    captureResourcePointerSelection() {
+      return null;
     },
     setPreviewRegions() {},
     async handleDestinationChooserKeypress(str, key) {
@@ -275,33 +278,36 @@ test("invokes the external editor action from an active unsaved draft", async ()
 test("comments on a directly dragged rendered selection from preview", async () => {
   const previewState = state();
   previewState.mode = "preview";
-  const capture: RenderedSelectionCapture = {
-    quote: "selected passage",
-    capturedAt: "2026-09-17T12:00:00.000Z",
-    hostBlockId: "block-1",
-    paneId: "pane-1",
-    contentRevision: 1,
-    contextId: "context-1",
-    detailClientId: "detail-1",
-    validation: "detail-pointer",
-    snapshotText: "Detail\n\nselected passage",
+  const capture: DetailDirectSelectionCapture = {
+    kind: "rendered",
+    capture: {
+      quote: "selected passage",
+      capturedAt: "2026-09-17T12:00:00.000Z",
+      hostBlockId: "block-1",
+      paneId: "pane-1",
+      contentRevision: 1,
+      contextId: "context-1",
+      detailClientId: "detail-1",
+      validation: "detail-pointer",
+      snapshotText: "Detail\n\nselected passage",
+    },
   };
   const selected = harness(previewState, false, {
-    renderedSelectionCapture: async () => capture,
+    directSelectionCapture: async () => capture,
   });
   await selected.press({ name: "c" }, "c");
   expect(selected.intents).toEqual([{
-    type: "annotation.comment.rendered",
+    type: "annotation.comment.direct",
     capture,
   }]);
 
   const empty = harness(previewState, false, {
-    renderedSelectionCapture: () => null,
+    directSelectionCapture: () => null,
   });
   await empty.press({ name: "c" }, "c");
   expect(empty.intents).toEqual([{
-    type: "status.set",
-    message: "Drag across rendered text before commenting",
+    type: "annotation.comment.direct",
+    capture: null,
   }]);
 });
 
