@@ -1838,7 +1838,15 @@ export function createDetailController(
   };
 
   const beginEdit = async (viewport: DetailViewport): Promise<void> => {
-    if (!state.context.selected) return;
+    if (!state.context.selected) {
+      const description = detailResourceDescription(state);
+      state.status = description?.resource.provider === "filesystem"
+        ? "Filesystem Resource content is provider-owned; edit the source file instead"
+        : description
+        ? "Resource content is provider-owned; edit it through the provider"
+        : "No selected block to edit";
+      return;
+    }
     if (state.context.selected.effectiveDeletedRootId) {
       state.status = "Block is in Trash; restore before editing";
       return;
@@ -1979,19 +1987,22 @@ export function createDetailController(
   ): Promise<void> => {
     const selected = state.context.selected;
     const description = detailResourceDescription(state);
-    const resourceMarkdown = description?.pdf?.markdown ?? description?.web?.markdown;
+    const resourceText = description?.pdf?.markdown ??
+      description?.web?.markdown ??
+      description?.filesystem?.text ??
+      null;
     if (description?.pdf && sourceLine >= description.pdf.markdown.split("\n").length) {
       state.status = "Select PDF text, not resource metadata, before adding annotations";
       return;
     }
-    if (!resourceMarkdown && (!selected || selected.effectiveDeletedRootId)) {
+    if (!resourceText && (!selected || selected.effectiveDeletedRootId)) {
       state.status = selected
         ? "Block is in Trash; restore before adding annotations"
-        : "This resource has no cached Markdown to annotate";
+        : "This resource has no local text to annotate";
       return;
     }
     await setLocked(true);
-    state.buffer = new TextBuffer(resourceMarkdown ?? selected!.text);
+    state.buffer = new TextBuffer(resourceText ?? selected!.text);
     state.buffer.placeCursor(sourceLine, sourceColumn);
     state.editorVisualOffset = 0;
     state.editorViewportManual = false;
@@ -2009,10 +2020,12 @@ export function createDetailController(
     const description = detailResourceDescription(state);
     const pdf = description?.pdf;
     const web = description?.web;
-    if (!pdf && !web && (!selected || selected.effectiveDeletedRootId)) {
+    const filesystem = description?.filesystem;
+    const resourceText = pdf?.markdown ?? web?.markdown ?? filesystem?.text ?? null;
+    if (!resourceText && (!selected || selected.effectiveDeletedRootId)) {
       state.status = selected
         ? "Block is in Trash; restore before adding annotations"
-        : "This resource has no cached Markdown to annotate";
+        : "This resource has no local text to annotate";
       return;
     }
     let target: DetailAnnotationTarget;
@@ -2023,14 +2036,14 @@ export function createDetailController(
         state.status = "Select a non-empty source range before commenting";
         return;
       }
-      if ((pdf || web) && description) {
+      if (resourceText && description) {
         const representation = resourceAnnotationRepresentation(description);
-        if (!representation) throw new Error("Cached resource representation is unavailable");
+        if (!representation) throw new Error("Local resource representation is unavailable");
         target = {
           representation,
           anchor: pdf
             ? pdfAnnotationAnchor(description, offsets.start, offsets.end)
-            : createTextQuoteAnchor(web!.markdown, offsets.start, offsets.end),
+            : createTextQuoteAnchor(resourceText, offsets.start, offsets.end),
         };
       } else {
         const source = selected!;
@@ -2374,6 +2387,14 @@ export function createDetailController(
         break;
       case "resource.refresh": {
         const description = detailResourceDescription(state);
+        if (
+          description?.resource.provider === "filesystem" &&
+          description.resource.mediaType !== "application/pdf"
+        ) {
+          await loadCurrentTarget(true);
+          state.status = "Filesystem Resource reopened from disk";
+          break;
+        }
         if (
           !description ||
           (
