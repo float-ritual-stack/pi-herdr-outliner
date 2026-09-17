@@ -293,6 +293,66 @@ export interface FilesystemResourceDocument {
   readonly revision: ResourceRevisionRef;
 }
 
+export type ResourceKind = "document" | "entity" | "application";
+export type ResourceSurface = "tui" | "gui" | "native" | "external";
+export type ResourcePlacement = "inline" | "pane" | "window" | "external";
+export type ResourceRenderer =
+  | "markdown"
+  | "embedded-browser"
+  | "native-document"
+  | "metadata"
+  | "external-open";
+export type ResourceRepresentationKind =
+  | "cached-markdown"
+  | "embedded-browser"
+  | "native-document"
+  | "metadata"
+  | "external-link";
+export type ResourceAccessState = "available" | "unavailable" | "unknown";
+
+export interface ResourceProviderAccess {
+  readonly credentials: ResourceAccessState;
+  readonly connectivity: ResourceAccessState;
+}
+
+export interface ResourcePresentationHost {
+  readonly id: string;
+  readonly renderers: readonly ResourceRenderer[];
+  readonly placements: readonly ResourcePlacement[];
+  readonly capabilities: readonly ResourceCapability[];
+}
+
+export interface ResourcePresentationContext {
+  readonly surface: ResourceSurface;
+  readonly placement: ResourcePlacement;
+  readonly host: ResourcePresentationHost;
+  readonly providerAccess: ResourceProviderAccess;
+}
+
+export interface ResourcePresentationAttempt {
+  readonly representation: ResourceRepresentationKind;
+  readonly renderer: ResourceRenderer;
+  readonly placement: ResourcePlacement;
+  readonly status: "available" | "indeterminate" | "unavailable";
+  readonly reason: string;
+}
+
+export interface ResourcePresentationSelection extends ResourcePresentationAttempt {
+  readonly mediaType: string | null;
+  readonly adapter: WebRepresentationAdapter | null;
+  readonly externalUrl: string | null;
+}
+
+export interface ResourcePresentationDecision {
+  readonly resourceId: string;
+  readonly resourceKind: ResourceKind;
+  readonly surface: ResourceSurface;
+  readonly requestedPlacement: ResourcePlacement;
+  readonly capabilities: ResourceCapabilityReport;
+  readonly selected: ResourcePresentationSelection | null;
+  readonly attempts: readonly ResourcePresentationAttempt[];
+}
+
 
 export interface ResourceDescription {
   readonly resource: Resource;
@@ -304,6 +364,7 @@ export interface ResourceDescription {
   readonly webHistory: WebResourceHistory | null;
   readonly webStatus: WebResourceStatus | null;
   readonly webError?: string;
+  readonly presentation?: ResourcePresentationDecision;
 }
 
 export type ResourceCatalogErrorCode =
@@ -906,11 +967,23 @@ function capabilityStatus(
   return "available";
 }
 
+function accessAssessment(
+  state: ResourceAccessState,
+  factor: "credentials" | "connectivity",
+): CapabilityAssessment {
+  if (state === "available") return { state: "satisfied" };
+  const label = factor === "credentials" ? "credentials" : "provider connectivity";
+  return state === "unavailable"
+    ? blocked(`${factor}-unavailable`, `${label} is unavailable`)
+    : unknown(`${factor}-not-observed`, `${label} has not been observed`);
+}
+
 function resourceCapabilityDecision(
   source: ResourceSource,
   destinationHostRegistered: boolean,
   destinationCapabilities: readonly ResourceCapability[],
   capability: ResourceCapability,
+  providerAccess: ResourceProviderAccess,
 ): ResourceCapabilityDecision {
   const providerSupports = PROVIDER_CAPABILITIES[source.provider][capability] === true;
   const policyDenied = source.policy.deniedCapabilities.includes(capability);
@@ -919,8 +992,8 @@ function resourceCapabilityDecision(
     provider: providerSupports
       ? { state: "satisfied" }
       : blocked("unsupported-operation", `${source.provider} does not support ${capability}`),
-    credentials: remote
-      ? unknown("credentials-not-observed", "Credential availability has not been observed")
+    credentials: remote && capability !== "open-external" && capability !== "embed"
+      ? accessAssessment(providerAccess.credentials, "credentials")
       : { state: "not-required" },
     "workspace-policy": policyDenied
       ? blocked("policy-denied", `Workspace policy denies ${capability}`)
@@ -934,7 +1007,7 @@ function resourceCapabilityDecision(
           )
       : unknown("destination-host-not-observed", "Destination host is not registered"),
     connectivity: remote
-      ? unknown("connectivity-not-observed", "Provider connectivity has not been observed")
+      ? accessAssessment(providerAccess.connectivity, "connectivity")
       : { state: "not-required" },
   };
   return { status: capabilityStatus(factors), factors };
@@ -944,6 +1017,10 @@ export function deriveResourceCapabilityReport(
   source: ResourceSource,
   destinationHostRegistered: boolean,
   destinationCapabilities: readonly ResourceCapability[] = [],
+  providerAccess: ResourceProviderAccess = {
+    credentials: "unknown",
+    connectivity: "unknown",
+  },
 ): ResourceCapabilityReport {
   const decision = (capability: ResourceCapability) =>
     resourceCapabilityDecision(
@@ -951,6 +1028,7 @@ export function deriveResourceCapabilityReport(
       destinationHostRegistered,
       destinationCapabilities,
       capability,
+      providerAccess,
     );
   return {
     read: decision("read"),

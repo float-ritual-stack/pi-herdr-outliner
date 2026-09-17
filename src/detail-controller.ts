@@ -1168,11 +1168,14 @@ export function createDetailController(
   };
 
   const resourceDocumentText = (description: ResourceDescription): string => {
-    const { resource, source, web, webHistory } = description;
-    if (description.filesystem) return description.filesystem.text;
-    const externalUrl = web?.sourceSnapshot.canonicalUrl ??
+    const { resource, source, web, webHistory, presentation } = description;
+    const representation = presentation?.selected?.representation;
+    const renderLocalContent = representation === undefined || representation === "cached-markdown";
+    if (description.filesystem && renderLocalContent) return description.filesystem.text;
+    const externalUrl = presentation?.selected?.externalUrl ??
+      web?.sourceSnapshot.canonicalUrl ??
       (resource.address.kind === "web" ? resource.address.url : null);
-    const lines = web
+    const lines = web && renderLocalContent
       ? [
           web.markdown,
           "",
@@ -1191,6 +1194,18 @@ export function createDetailController(
             ? ["", `[Open externally](<${resource.address.url}>)`]
             : []),
         ];
+    if (presentation) {
+      lines.push(
+        "",
+        "## Negotiated presentation",
+        "",
+        `- Resource kind: ${presentation.resourceKind}`,
+        `- Surface: ${presentation.surface}`,
+        `- Placement: ${presentation.selected?.placement ?? presentation.requestedPlacement}`,
+        `- Representation: ${presentation.selected?.representation ?? "unavailable"}`,
+        `- Renderer: ${presentation.selected?.renderer ?? "unavailable"}`,
+      );
+    }
     if (resource.provider === "web") {
       const freshness = description.webStatus?.freshness ?? "unknown";
       lines.push(

@@ -83,8 +83,20 @@ exact cached Markdown for an Outliner-owned annotation, and `Alt+O` opens the
 canonical HTTP URL externally. Detail renders the mutable
 `fresh | stale | unknown | refreshing | failed` status separately from the
 selected immutable content. `ResourceDescription.webHistory` carries only
-retained source snapshots and representations. Annotations are listed by
-Resource subject through `AnnotationRepository`, so relocation and offline
+retained source snapshots and representations.
+
+Resource presentation negotiation is a pure boundary above `ResourceCatalog`.
+Resource kind, provider access, representation kind, renderer, Surface,
+Placement, and Host remain separate typed values. A Detail registration declares
+its presentation host and provider-access observations. The service combines
+those facts with provider support and workspace policy, then returns the same
+Resource identity with one negotiated presentation and the ordered attempts that
+led to it. TUI hosts prefer cached Markdown and metadata; GUI/native hosts may
+prefer embedded-browser or native-document renderers; external-only hosts select
+a deep link. Missing or indeterminate live access never hides retained Markdown.
+PDF is selected by `application/pdf` media type, never modeled as a provider.
+Web representation provenance retains the replaceable adapter ID/version.
+Annotations are listed by Resource subject through `AnnotationRepository`, so relocation and offline
 failure do not hide target or resolution evidence. Detail exposes
 snapshot/representation identifiers and metadata, including explicit unknown
 fields on incomplete legacy evidence. Failed refreshes keep prior content and
@@ -310,7 +322,7 @@ bytes and provenance remain unknown rather than being synthesized.
 
 ## Protocol
 
-The current protocol version is `43`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
+The current protocol version is `44`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
 
 ### Important request families
 
