@@ -306,7 +306,7 @@ test("persists resources and dispatches resource targets without synthetic block
 test("serves local web snapshots, explicit refresh, and unified annotation resolution", async () => {
   const directory = mkdtempSync(join(tmpdir(), "pi-outliner-web-protocol-"));
   let etag = "\"v1\"";
-  let html = "<h1>Protocol</h1><p>Quoted evidence.</p>";
+  let html = "<h1>Protocol</h1><p>Quoted evidence.</p><p>Exact evidence remains.</p><p>Intro alpha target phrase omega Outro.</p><p>The system stores durable annotation evidence.</p>";
   let providerAccessCount = 0;
   const requestEtags: Array<string | null> = [];
   const store = new OutlinerStore(join(directory, "outliner.sqlite"), {
@@ -425,7 +425,7 @@ test("serves local web snapshots, explicit refresh, and unified annotation resol
     contentAvailable: true,
   });
   expect(acquired.web).toEqual({
-    markdown: "# Protocol\n\nQuoted evidence.",
+    markdown: "# Protocol\n\nQuoted evidence.\n\nExact evidence remains.\n\nIntro alpha target phrase omega Outro.\n\nThe system stores durable annotation evidence.",
     sourceSnapshot: firstSnapshot,
     representation: firstRepresentation,
   });
@@ -459,8 +459,8 @@ test("serves local web snapshots, explicit refresh, and unified annotation resol
     contentHash: firstRepresentation.contentHash,
     capturedAt: firstCapturedAt,
   };
-  const start = acquired.web.markdown.indexOf("Quoted evidence");
-  const end = start + "Quoted evidence".length;
+  const start = acquired.web.markdown.indexOf("Quoted");
+  const end = start + "Quoted".length;
   const originalTarget: AnnotationTarget = {
     representation: firstAnnotationRepresentation,
     anchor: createTextQuoteAnchor(acquired.web.markdown, start, end),
@@ -508,19 +508,52 @@ test("serves local web snapshots, explicit refresh, and unified annotation resol
     },
   });
   expect(annotation.resolutionHistory).toHaveLength(1);
-  expect(await client.request<AnnotationThread[]>({
+  const createFixtureAnnotation = async (requestId: string, quote: string) => {
+    const quoteStart = acquired.web!.markdown.indexOf(quote);
+    return (await client.request<AnnotationBatchReceipt>({
+      action: "annotations.create",
+      requestId,
+      input: {
+        target: {
+          representation: firstAnnotationRepresentation,
+          anchor: createTextQuoteAnchor(
+            acquired.web!.markdown,
+            quoteStart,
+            quoteStart + quote.length,
+          ),
+        },
+        body: requestId,
+        source: "user",
+      },
+    })).annotations[0]!;
+  };
+  const exactAnnotation = await createFixtureAnnotation(
+    "protocol-reanchor-exact",
+    "Exact evidence remains",
+  );
+  const contextualAnnotation = await createFixtureAnnotation(
+    "protocol-reanchor-context",
+    "target phrase",
+  );
+  const fuzzyAnnotation = await createFixtureAnnotation(
+    "protocol-reanchor-fuzzy",
+    "The system stores durable annotation evidence",
+  );
+  const listedAnnotations = await client.request<AnnotationThread[]>({
     action: "annotations.list",
     query: {
       subject: { kind: "resource", resourceId: resource.id },
       includeResolved: true,
     },
-  })).toEqual([
+  });
+  expect(listedAnnotations).toHaveLength(4);
+  expect(listedAnnotations).toEqual(expect.arrayContaining([
     expect.objectContaining({
       block: expect.objectContaining({ id: annotation.block.id }),
       originalTarget,
       resolvedTarget: originalTarget,
     }),
-  ]);
+  ]));
 
   const unchanged = await client.request<ResourceDescription>({
     action: "resources.refresh",
@@ -539,7 +572,7 @@ test("serves local web snapshots, explicit refresh, and unified annotation resol
   });
 
   etag = "\"v2\"";
-  html = "<h1>Protocol changed</h1><p>New body.</p>";
+  html = "<h1>Protocol changed</h1><p>New body.</p><p>Exact evidence remains.</p><p>Noise target phrase elsewhere.</p><p>Intro alpha target phrase omega Outro.</p><p>The system preserves durable annotation evidence.</p>";
   const changed = await client.request<ResourceDescription>({
     action: "resources.refresh",
     resourceId: resource.id,
@@ -550,7 +583,7 @@ test("serves local web snapshots, explicit refresh, and unified annotation resol
   await refreshEvents.promise;
   expect(providerAccessCount).toBe(3);
   expect(requestEtags).toEqual([null, "\"v1\"", "\"v1\""]);
-  expect(changed.web.markdown).toBe("# Protocol changed\n\nNew body.");
+  expect(changed.web.markdown).toBe("# Protocol changed\n\nNew body.\n\nExact evidence remains.\n\nNoise target phrase elsewhere.\n\nIntro alpha target phrase omega Outro.\n\nThe system preserves durable annotation evidence.");
   expect(changed.web.sourceSnapshot.id).not.toBe(firstSnapshot.id);
   expect(changed.web.representation.id).not.toBe(firstRepresentation.id);
   expect(changed.web.representation.sourceSnapshotId).toBe(changed.web.sourceSnapshot.id);
@@ -587,9 +620,10 @@ test("serves local web snapshots, explicit refresh, and unified annotation resol
     },
   });
   expect(reconciled.changed).toBe(true);
-  expect(reconciled.threads).toHaveLength(1);
-  expect(reconciled.threads[0]).toMatchObject({
-    block: { id: annotation.block.id },
+  expect(reconciled.threads).toHaveLength(4);
+  const reconciledById = new Map(reconciled.threads.map((thread) => [thread.block.id, thread]));
+  const orphanedAnnotation = reconciledById.get(annotation.block.id)!;
+  expect(orphanedAnnotation).toMatchObject({
     originalTarget,
     resolvedTarget: null,
     currentResolution: {
@@ -599,12 +633,33 @@ test("serves local web snapshots, explicit refresh, and unified annotation resol
       resolvedTarget: null,
       status: "orphaned",
       appliesCurrent: true,
+      candidates: [],
     },
   });
-  expect(reconciled.threads[0]!.resolutionHistory.map(({ status }) => status)).toEqual([
+  expect(orphanedAnnotation.resolutionHistory.map(({ status }) => status)).toEqual([
     "resolved",
     "orphaned",
   ]);
+  expect(reconciledById.get(exactAnnotation.block.id)).toMatchObject({
+    currentResolution: {
+      status: "resolved",
+      method: { method: "unique-exact-quote" },
+      confidence: 1,
+    },
+  });
+  const contextualResolution = reconciledById.get(contextualAnnotation.block.id)!.currentResolution;
+  expect(contextualResolution).toMatchObject({
+    status: "resolved",
+    method: { method: "quote-context" },
+  });
+  expect(contextualResolution.confidence).toBeGreaterThanOrEqual(0.8);
+  expect(contextualResolution.candidates).toHaveLength(2);
+  const fuzzyResolution = reconciledById.get(fuzzyAnnotation.block.id)!.currentResolution;
+  expect(fuzzyResolution).toMatchObject({
+    status: "resolved",
+    method: { method: "local-fuzzy" },
+  });
+  expect(fuzzyResolution.candidates[0]!.confidence).toBeGreaterThanOrEqual(0.8);
   await reconcileEvent.promise;
   const reconcileEventCount = events.filter(({ action }) =>
     action === "annotations.reconcile"
@@ -779,7 +834,7 @@ test("serves mutations and property queries over the local socket", async () => 
   const client = new OutlinerClient(socket);
   const service = await client.request<OutlinerServiceStatus>({ action: "ping" });
   expect(service).toEqual({ status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION });
-  expect(service.protocolVersion).toBe(41);
+  expect(service.protocolVersion).toBe(42);
   const provenance = {
     actorId: "omp",
     sessionId: "session-1",

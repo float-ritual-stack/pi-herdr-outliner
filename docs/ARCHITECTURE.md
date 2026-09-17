@@ -293,7 +293,7 @@ project-documentation mutations.
 - `web_representations` — immutable named derivations keyed by representation ID and source snapshot ID, with media type, adapter identity and version, representation hash, derived time, and Markdown content. Markdown is nullable for metadata-only legacy annotation evidence, and its unrecorded derivation time remains null.
 - `web_resource_state` — one mutable row per web Resource containing current snapshot and representation pointers, five-state freshness, check/error diagnostics, address epoch, and the compare-and-swap version used to reject stale refresh completion.
 - `annotation_targets` — one immutable original target JSON document per root annotation block, with indexed block, Resource, or honest legacy-file subject identity.
-- `annotation_resolution_events` — append-only, per-annotation resolution history. The latest event with `applies_current` supplies current status and optional resolved target; rejected proposals remain history without moving current resolution.
+- `annotation_resolution_events` — append-only, per-annotation resolution history. The latest event with `applies_current` supplies current status and optional resolved target. Every deterministic pass retains ranked candidate targets, methods, and confidence scores; rejected proposals remain history without moving current resolution.
 - `annotation_migration_quarantine` — raw legacy root blocks that cannot be parsed safely, preserving block ID, text, failure reason, and timestamp without fabricating a target.
 
 Replies have no target row and materialize the root target and history when
@@ -309,7 +309,7 @@ bytes and provenance remain unknown rather than being synthesized.
 
 ## Protocol
 
-The current protocol version is `41`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
+The current protocol version is `42`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
 
 ### Important request families
 
@@ -771,18 +771,24 @@ validated passage observation in a rendered representation and uses a text
 quote rather than a separate passage target. All surfaces then call the same
 `annotations.create` action and query by block or Resource subject.
 
-Creation appends sequence 0 as resolved. Reconciliation appends another event:
-an unchanged position or unique exact quote resolves automatically, duplicate
-exact quotes become ambiguous, a missing quote becomes orphaned, and an anchor
-without a PIE-250 codec becomes unsupported. Approval appends a human-reviewed
-resolution. Rejected proposals stay in history and do not replace the latest
-applied current event. Detail renders original and current evidence and reveals
-only a currently resolved positioned text quote; orphaned and unsupported
-threads remain valid and visible.
+Creation appends sequence 0 as resolved. Reconciliation then runs the cheapest
+reliable deterministic pass: unchanged representation hash, provider-native
+identity, structural replay with quote verification, unique exact quote,
+duplicate-quote context ranking, then bounded local fuzzy matching. The first
+pass with candidates wins. A unique candidate at confidence `0.8` or above
+applies automatically; a unique candidate at `0.65` or above remains
+`probable`; lower scored candidates remain `unresolved`; tied medium candidates
+remain `ambiguous`; and an exhaustive search with no plausible candidate becomes
+`orphaned`. A bounded, incomplete search with no candidate remains `unresolved`.
+Unsupported anchor/content combinations remain `unsupported`.
 
-PIE-250 deliberately stops at unchanged-position and unique exact-quote
-reconciliation. Context ranking, fuzzy text, structural, semantic, and
-provider-specific resolution ladders belong to PIE-252.
+Every event retains its ranked candidate targets, methods, and scores. Probable,
+unresolved, and ambiguous candidates do not become the resolved target.
+Approval appends a human-reviewed resolution. Rejected proposals stay in
+history and do not replace the latest applied current event. Detail renders
+original and current evidence and reveals only a currently resolved positioned
+text quote; every non-resolved outcome remains valid and inspectable. Original
+targets are never rewritten.
 
 ## Ephemeral attention
 

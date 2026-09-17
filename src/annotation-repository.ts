@@ -16,8 +16,10 @@ import {
   parseStoredTarget,
   type AnnotationBlockContent,
   type LegacyAnnotationEvidence,
+  normalizeResolutionCandidate,
 } from "./annotations";
 import { parsePropertyRecords } from "./properties";
+import { reanchorAnnotationTarget } from "./annotation-reanchoring";
 import type { ResourceCatalog } from "./resource-catalog";
 import { normalizeRetainedResourceRevisionRef } from "./resources";
 import type {
@@ -31,6 +33,7 @@ import type {
   AnnotationReconcileInput,
   AnnotationReconcileReceipt,
   AnnotationRepresentation,
+  AnnotationResolutionCandidate,
   AnnotationResolutionEvent,
   AnnotationResolutionMethod,
   AnnotationResolutionReviewer,
@@ -70,6 +73,7 @@ interface ResolutionRow {
   resolved_target_json: string | null;
   method_json: string;
   reviewer_json: string;
+  candidates_json: string;
   confidence: number | null;
   status: AnnotationResolutionStatus;
   applies_current: number;
@@ -163,17 +167,35 @@ function payloadHash(value: unknown): string {
 
 function eventFromRow(row: ResolutionRow): AnnotationResolutionEvent {
   const status = row.status;
-  if (status !== "resolved" && status !== "ambiguous" && status !== "orphaned" && status !== "unsupported" && status !== "rejected") {
-    throw new Error(`Invalid stored annotation resolution status: ${String(status)}`);
-  }
+  if (
+    status !== "resolved" &&
+    status !== "probable" &&
+    status !== "unresolved" &&
+    status !== "ambiguous" &&
+    status !== "orphaned" &&
+    status !== "unsupported" &&
+    status !== "rejected"
+  ) throw new Error(`Invalid stored annotation resolution status: ${String(status)}`);
   const resolvedTarget = row.resolved_target_json === null ? null : parseStoredTarget(row.resolved_target_json);
   const method = normalizeResolutionMethod(json(row.method_json, "Resolution method"));
   const reviewer = normalizeResolutionReviewer(json(row.reviewer_json, "Resolution reviewer"));
+  const rawCandidates = json(row.candidates_json, "Resolution candidates");
+  if (!Array.isArray(rawCandidates)) throw new Error("Resolution candidates must be an array");
+  const candidates = rawCandidates.map(normalizeResolutionCandidate);
   const appliesCurrent = row.applies_current === 1;
   if (row.applies_current !== 0 && !appliesCurrent) throw new Error("Invalid stored appliesCurrent value");
   if (status === "resolved" && (!resolvedTarget || !appliesCurrent || row.confidence === null)) {
     throw new Error("Resolved annotation event is incomplete");
   }
+  if (status === "probable" &&
+    (resolvedTarget !== null || !appliesCurrent || row.confidence === null || candidates.length === 0)) {
+    throw new Error("probable annotation event requires scored candidates without applying a target");
+  }
+  if (status === "unresolved" && (
+    resolvedTarget !== null ||
+    !appliesCurrent ||
+    ((row.confidence === null) !== (candidates.length === 0))
+  )) throw new Error("unresolved annotation event evidence is inconsistent");
   if ((status === "ambiguous" || status === "orphaned" || status === "unsupported") &&
     (resolvedTarget !== null || !appliesCurrent || row.confidence !== null)) {
     throw new Error(`${status} annotation event cannot carry a resolved target or confidence`);
@@ -194,6 +216,7 @@ function eventFromRow(row: ResolutionRow): AnnotationResolutionEvent {
     method,
     reviewer,
     confidence: row.confidence,
+    candidates,
     status,
     appliesCurrent,
     createdAt: iso(row.created_at, "Resolution event time"),
@@ -395,6 +418,7 @@ export class AnnotationRepository {
         method: { kind: "human", method: "approved-target" },
         reviewer: { kind: "user", id: "protocol" },
         confidence: 1,
+        candidates: [],
         status: "resolved",
         appliesCurrent: true,
       });
@@ -445,6 +469,7 @@ export class AnnotationRepository {
       method: { ...TEXT_CODEC, method: "capture" },
       reviewer: { kind: "system", id: "annotation-repository" },
       confidence: 1,
+      candidates: [],
       status: "resolved",
       appliesCurrent: true,
       createdAt: block.createdAt,
@@ -483,83 +508,24 @@ export class AnnotationRepository {
       sourceRepresentation.sourceSnapshot.kind === "rendered" &&
       representation.sourceSnapshot.kind !== "rendered"
     ) return false;
-    const anchor = record.resolvedTarget?.anchor ?? record.originalTarget.anchor;
-    if (anchor.kind !== "text-quote" || content === null) {
-      this.appendEvent({
-        annotationId: record.block.id,
-        sourceRepresentation,
-        targetRepresentation: representation,
-        resolvedTarget: null,
-        method: { ...TEXT_CODEC, method: anchor.kind === "text-quote" ? "content-unavailable" : "unsupported-anchor" },
-        reviewer: { kind: "system", id: "annotation-repository" },
-        confidence: null,
-        status: "unsupported",
-        appliesCurrent: true,
-      });
-      return true;
-    }
-    if (anchor.start !== null && anchor.end !== null && content.slice(anchor.start, anchor.end) === anchor.exact) {
-      this.appendResolvedText(record.block.id, sourceRepresentation, representation, content, anchor.start, anchor.end, "unchanged-position");
-      return true;
-    }
-    const occurrences: number[] = [];
-    let cursor = 0;
-    while (cursor <= content.length - anchor.exact.length) {
-      const index = content.indexOf(anchor.exact, cursor);
-      if (index < 0) break;
-      occurrences.push(index);
-      cursor = index + 1;
-    }
-    if (occurrences.length === 1) {
-      const start = occurrences[0]!;
-      this.appendResolvedText(record.block.id, sourceRepresentation, representation, content, start, start + anchor.exact.length, "unique-exact-quote");
-      return true;
-    }
+    const result = reanchorAnnotationTarget(
+      record.resolvedTarget ?? record.originalTarget,
+      representation,
+      content,
+    );
     this.appendEvent({
       annotationId: record.block.id,
       sourceRepresentation,
       targetRepresentation: representation,
-      resolvedTarget: null,
-      method: { ...TEXT_CODEC, method: "exact-quote" },
+      resolvedTarget: result.resolvedTarget,
+      method: result.method,
       reviewer: { kind: "system", id: "annotation-repository" },
-      confidence: null,
-      status: occurrences.length === 0 ? "orphaned" : "ambiguous",
+      confidence: result.confidence,
+      candidates: result.candidates,
+      status: result.status,
       appliesCurrent: true,
     });
     return true;
-  }
-
-  private appendResolvedText(
-    annotationId: string,
-    sourceRepresentation: AnnotationRepresentation,
-    targetRepresentation: AnnotationRepresentation,
-    content: string,
-    start: number,
-    end: number,
-    method: string,
-  ): void {
-    const contextUnits = 32;
-    this.appendEvent({
-      annotationId,
-      sourceRepresentation,
-      targetRepresentation,
-      resolvedTarget: {
-        representation: targetRepresentation,
-        anchor: {
-          kind: "text-quote",
-          start,
-          end,
-          exact: content.slice(start, end),
-          prefix: content.slice(Math.max(0, start - contextUnits), start),
-          suffix: content.slice(end, end + contextUnits),
-        },
-      },
-      method: { ...TEXT_CODEC, method },
-      reviewer: { kind: "system", id: "annotation-repository" },
-      confidence: 1,
-      status: "resolved",
-      appliesCurrent: true,
-    });
   }
 
   private validateCapture(target: AnnotationTarget): void {
@@ -678,6 +644,7 @@ export class AnnotationRepository {
     readonly method: AnnotationResolutionMethod;
     readonly reviewer: AnnotationResolutionReviewer;
     readonly confidence: number | null;
+    readonly candidates: readonly AnnotationResolutionCandidate[];
     readonly status: AnnotationResolutionStatus;
     readonly appliesCurrent: boolean;
     readonly createdAt?: string;
@@ -695,6 +662,7 @@ export class AnnotationRepository {
       method: normalizeResolutionMethod(input.method),
       reviewer: normalizeResolutionReviewer(input.reviewer),
       confidence: input.confidence,
+      candidates: input.candidates.map(normalizeResolutionCandidate),
       status: input.status,
       appliesCurrent: input.appliesCurrent,
       createdAt: input.createdAt ?? new Date().toISOString(),
@@ -704,8 +672,8 @@ export class AnnotationRepository {
       INSERT INTO annotation_resolution_events (
         id, annotation_block_id, sequence, source_representation_json,
         target_representation_json, resolved_target_json, method_json,
-        reviewer_json, confidence, status, applies_current, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        reviewer_json, confidence, candidates_json, status, applies_current, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       event.id,
       event.annotationId,
@@ -716,6 +684,7 @@ export class AnnotationRepository {
       JSON.stringify(event.method),
       JSON.stringify(event.reviewer),
       event.confidence,
+      JSON.stringify(event.candidates),
       event.status,
       event.appliesCurrent ? 1 : 0,
       event.createdAt,
@@ -725,14 +694,40 @@ export class AnnotationRepository {
 
   private assertEvent(event: AnnotationResolutionEvent): void {
     if (event.status === "resolved") {
-      if (!event.appliesCurrent || event.resolvedTarget === null || event.confidence === null) throw new Error("Resolved event must apply a target with confidence");
+      if (!event.appliesCurrent || event.resolvedTarget === null || event.confidence === null) {
+        throw new Error("Resolved event must apply a target with confidence");
+      }
+    } else if (event.status === "probable") {
+      if (
+        !event.appliesCurrent ||
+        event.resolvedTarget !== null ||
+        event.confidence === null ||
+        event.candidates.length === 0
+      ) throw new Error("probable event requires scored candidates without applying a target");
+    } else if (event.status === "unresolved") {
+      if (
+        !event.appliesCurrent ||
+        event.resolvedTarget !== null ||
+        ((event.confidence === null) !== (event.candidates.length === 0))
+      ) throw new Error("unresolved event evidence is inconsistent");
     } else if (event.status === "rejected") {
-      if (event.appliesCurrent || event.resolvedTarget !== null) throw new Error("Rejected event cannot apply current");
+      if (event.appliesCurrent || event.resolvedTarget !== null) {
+        throw new Error("Rejected event cannot apply current");
+      }
     } else if (!event.appliesCurrent || event.resolvedTarget !== null || event.confidence !== null) {
       throw new Error(`${event.status} event must apply a null current target without confidence`);
     }
     if (event.confidence !== null && (!Number.isFinite(event.confidence) || event.confidence < 0 || event.confidence > 1)) {
       throw new Error("Resolution confidence must be between 0 and 1");
+    }
+    for (let index = 0; index < event.candidates.length; index += 1) {
+      const entry = event.candidates[index]!;
+      if (!sameRepresentation(entry.target.representation, event.targetRepresentation)) {
+        throw new Error("Resolution candidate must belong to the target representation");
+      }
+      if (index > 0 && event.candidates[index - 1]!.confidence < entry.confidence) {
+        throw new Error("Resolution candidates must be ranked by descending confidence");
+      }
     }
   }
 
@@ -846,7 +841,15 @@ export class AnnotationRepository {
       CREATE TRIGGER IF NOT EXISTS annotation_targets_immutable
       BEFORE UPDATE ON annotation_targets
       BEGIN SELECT RAISE(ABORT, 'annotation original targets are immutable'); END;
-      CREATE TABLE IF NOT EXISTS annotation_resolution_events (
+      CREATE TABLE IF NOT EXISTS annotation_migration_quarantine (
+        annotation_block_id TEXT PRIMARY KEY REFERENCES blocks(id) ON DELETE CASCADE,
+        raw_text TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+    `);
+    const resolutionSchema = `
+      CREATE TABLE annotation_resolution_events (
         id TEXT PRIMARY KEY,
         annotation_block_id TEXT NOT NULL REFERENCES annotation_targets(annotation_block_id) ON DELETE CASCADE,
         sequence INTEGER NOT NULL CHECK(sequence >= 0),
@@ -856,29 +859,58 @@ export class AnnotationRepository {
         method_json TEXT NOT NULL CHECK(json_valid(method_json)),
         reviewer_json TEXT NOT NULL CHECK(json_valid(reviewer_json)),
         confidence REAL CHECK(confidence IS NULL OR (confidence >= 0 AND confidence <= 1)),
-        status TEXT NOT NULL CHECK(status IN ('resolved','ambiguous','orphaned','unsupported','rejected')),
+        candidates_json TEXT NOT NULL CHECK(json_valid(candidates_json) AND json_type(candidates_json) = 'array'),
+        status TEXT NOT NULL CHECK(status IN ('resolved','probable','unresolved','ambiguous','orphaned','unsupported','rejected')),
         applies_current INTEGER NOT NULL CHECK(applies_current IN (0,1)),
         created_at TEXT NOT NULL,
         UNIQUE(annotation_block_id, sequence),
         CHECK (
           (status = 'resolved' AND applies_current = 1 AND resolved_target_json IS NOT NULL AND confidence IS NOT NULL) OR
+          (status = 'probable' AND applies_current = 1 AND resolved_target_json IS NULL AND confidence IS NOT NULL AND json_array_length(candidates_json) > 0) OR
+          (status = 'unresolved' AND applies_current = 1 AND resolved_target_json IS NULL AND ((confidence IS NULL AND json_array_length(candidates_json) = 0) OR (confidence IS NOT NULL AND json_array_length(candidates_json) > 0))) OR
           (status IN ('ambiguous','orphaned','unsupported') AND applies_current = 1 AND resolved_target_json IS NULL AND confidence IS NULL) OR
           (status = 'rejected' AND applies_current = 0 AND resolved_target_json IS NULL)
         )
       );
+    `;
+    const existingResolution = this.database.query(
+      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'annotation_resolution_events'",
+    ).get() as { sql: string } | null;
+    const existingResolutionColumns = new Set(
+      (this.database.query("PRAGMA table_info(annotation_resolution_events)").all() as Array<{ name: string }>)
+        .map(({ name }) => name),
+    );
+    if (!existingResolution) {
+      this.database.exec(resolutionSchema);
+    } else if (
+      !existingResolution.sql.includes("candidates_json") ||
+      !existingResolution.sql.includes("'probable'") ||
+      !existingResolution.sql.includes("status = 'unresolved'")
+    ) {
+      this.database.exec(`
+        DROP TRIGGER IF EXISTS annotation_resolution_events_append_only;
+        DROP INDEX IF EXISTS annotation_resolution_history;
+        DROP INDEX IF EXISTS annotation_current_resolution;
+        ALTER TABLE annotation_resolution_events RENAME TO annotation_resolution_events_legacy;
+        ${resolutionSchema}
+        INSERT INTO annotation_resolution_events (
+          id, annotation_block_id, sequence, source_representation_json,
+          target_representation_json, resolved_target_json, method_json,
+          reviewer_json, confidence, candidates_json, status, applies_current, created_at
+        )
+        SELECT id, annotation_block_id, sequence, source_representation_json,
+          target_representation_json, resolved_target_json, method_json,
+          reviewer_json, confidence, ${existingResolutionColumns.has("candidates_json") ? "candidates_json" : "'[]'"}, status, applies_current, created_at
+        FROM annotation_resolution_events_legacy;
+        DROP TABLE annotation_resolution_events_legacy;
+      `);
+    }
+    this.database.exec(`
       CREATE INDEX IF NOT EXISTS annotation_resolution_history ON annotation_resolution_events(annotation_block_id, sequence);
       CREATE INDEX IF NOT EXISTS annotation_current_resolution ON annotation_resolution_events(annotation_block_id, applies_current, sequence DESC);
       CREATE TRIGGER IF NOT EXISTS annotation_resolution_events_append_only
       BEFORE UPDATE ON annotation_resolution_events
       BEGIN SELECT RAISE(ABORT, 'annotation resolution events are append-only'); END;
-    `);
-    this.database.exec(`
-      CREATE TABLE IF NOT EXISTS annotation_migration_quarantine (
-        annotation_block_id TEXT PRIMARY KEY REFERENCES blocks(id) ON DELETE CASCADE,
-        raw_text TEXT NOT NULL,
-        reason TEXT NOT NULL,
-        created_at TEXT NOT NULL
-      );
     `);
   }
 
@@ -956,6 +988,7 @@ export class AnnotationRepository {
       method: { ...TEXT_CODEC, method: "legacy-migration" },
       reviewer: { kind: "system", id: "pie-250-migration" },
       confidence: resolved ? 1 : null,
+      candidates: [],
       status,
       appliesCurrent: true,
       createdAt: legacy.block.createdAt,
@@ -1084,6 +1117,7 @@ export class AnnotationRepository {
       method: { ...TEXT_CODEC, method: "legacy-web-migration" },
       reviewer: { kind: "system", id: "pie-250-migration" },
       confidence: 1,
+      candidates: [],
       status: "resolved",
       appliesCurrent: true,
       createdAt: row.created_at,

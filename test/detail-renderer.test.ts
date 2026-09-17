@@ -462,6 +462,7 @@ describe("detail ANSI renderer", () => {
       },
       reviewer: { kind: "system" as const, id: "annotation-repository" },
       confidence: null,
+      candidates: [],
       status: "orphaned" as const,
       appliesCurrent: true,
       createdAt: "2026-01-02T00:00:00.000Z",

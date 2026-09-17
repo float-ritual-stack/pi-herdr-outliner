@@ -8,6 +8,7 @@ import type {
   AnnotationRepresentation,
   AnnotationResolutionEvent,
   AnnotationResolutionMethod,
+  AnnotationResolutionCandidate,
   AnnotationResolutionReviewer,
   AnnotationSource,
   AnnotationSourceSnapshot,
@@ -340,6 +341,22 @@ export function normalizeResolutionReviewer(value: unknown): AnnotationResolutio
   return { kind: reviewer.kind, id: identity(reviewer.id, "Resolution reviewer ID") };
 }
 
+export function normalizeResolutionCandidate(value: unknown): AnnotationResolutionCandidate {
+  if (!value || typeof value !== "object") throw new Error("Resolution candidate must be an object");
+  const candidate = value as Record<string, unknown>;
+  if (
+    typeof candidate.confidence !== "number" ||
+    !Number.isFinite(candidate.confidence) ||
+    candidate.confidence < 0 ||
+    candidate.confidence > 1
+  ) throw new Error("Resolution candidate confidence must be between 0 and 1");
+  return {
+    target: normalizeAnnotationTarget(candidate.target, true),
+    method: normalizeResolutionMethod(candidate.method),
+    confidence: candidate.confidence,
+  };
+}
+
 export function parseStoredTarget(json: string): AnnotationTarget {
   try {
     return normalizeAnnotationTarget(JSON.parse(json), true);
@@ -362,7 +379,15 @@ export function parseStoredResolutionEvent(json: string): AnnotationResolutionEv
   if (!value || typeof value !== "object") throw new Error("Stored annotation resolution event must be an object");
   const event = value as Record<string, unknown>;
   const status = event.status;
-  if (status !== "resolved" && status !== "ambiguous" && status !== "orphaned" && status !== "unsupported" && status !== "rejected") throw new Error("Stored annotation resolution status is invalid");
+  if (
+    status !== "resolved" &&
+    status !== "probable" &&
+    status !== "unresolved" &&
+    status !== "ambiguous" &&
+    status !== "orphaned" &&
+    status !== "unsupported" &&
+    status !== "rejected"
+  ) throw new Error("Stored annotation resolution status is invalid");
   const confidence = event.confidence === null ? null : event.confidence;
   if (confidence !== null && (typeof confidence !== "number" || !Number.isFinite(confidence) || confidence < 0 || confidence > 1)) throw new Error("Stored annotation confidence is invalid");
   return {
@@ -375,6 +400,11 @@ export function parseStoredResolutionEvent(json: string): AnnotationResolutionEv
     method: normalizeResolutionMethod(event.method),
     reviewer: normalizeResolutionReviewer(event.reviewer),
     confidence,
+    candidates: event.candidates === undefined
+      ? []
+      : Array.isArray(event.candidates)
+        ? event.candidates.map(normalizeResolutionCandidate)
+        : (() => { throw new Error("Stored annotation candidates must be an array"); })(),
     status,
     appliesCurrent: event.appliesCurrent === true,
     createdAt: timestamp(event.createdAt, "Resolution event time"),

@@ -359,6 +359,12 @@ export function buildDetailAnnotationView(
         }`,
         width,
       ));
+      for (const [index, candidate] of event.candidates.entries()) {
+        output.push(fitDynamicText(
+          `  candidate ${index + 1} · ${candidate.confidence.toFixed(3)} · ${annotationTargetLabel(candidate.target)}`,
+          width,
+        ));
+      }
     }
     output.push("─".repeat(width));
   }
