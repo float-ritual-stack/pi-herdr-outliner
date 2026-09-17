@@ -1320,6 +1320,56 @@ describe("detail controller projection and deferred refresh", () => {
       ...event("resource-catalog"),
       resourceId: resource.id,
     }, viewport);
+    const directCapture = harness.controller.captureResourcePointerSelection(
+      { row: 2, column: 0 },
+      { row: 2, column: 11 },
+    );
+    expect(directCapture).toMatchObject({
+      kind: "resource",
+      resourceId: resource.id,
+      representationId: "representation-a",
+      exact: "Stable quote",
+    });
+    expect(harness.controller.captureResourcePointerSelection(
+      { row: 2, column: 11 },
+      { row: 2, column: 0 },
+    )).toEqual(directCapture);
+    await harness.controller.dispatch({
+      type: "annotation.comment.direct",
+      capture: directCapture,
+    }, viewport);
+    expect(harness.controller.state.mode).toBe("comment");
+    expect(harness.controller.state.annotationDraft?.target).toMatchObject({
+      representation: {
+        id: "representation-a",
+        subject: { kind: "resource", resourceId: resource.id },
+        sourceSnapshot: {
+          kind: "resource",
+          sourceSnapshotId: "source-snapshot-a",
+        },
+      },
+      anchor: { kind: "text-quote", exact: "Stable quote" },
+    });
+    await harness.controller.dispatch({ type: "buffer.cancel" }, viewport);
+    current = description("# Changed\n\nNew representation", "b");
+    await harness.controller.onServiceEvent({
+      ...event("resource-catalog"),
+      resourceId: resource.id,
+    }, viewport);
+    await harness.controller.dispatch({
+      type: "annotation.comment.direct",
+      capture: directCapture,
+    }, viewport);
+    expect(harness.controller.state.mode).toBe("preview");
+    expect(harness.controller.state.status).toBe(
+      "The Resource representation changed after the selection was captured",
+    );
+    current = description("# First\n\nStable quote", "a");
+    await harness.controller.onServiceEvent({
+      ...event("resource-catalog"),
+      resourceId: resource.id,
+    }, viewport);
+
     await harness.controller.dispatch({
       type: "annotation.selection.begin",
       sourceLine: 2,
@@ -3023,17 +3073,20 @@ describe("detail controller saves and annotations", () => {
     await harness.controller.initialize();
 
     await harness.controller.dispatch({
-      type: "annotation.comment.rendered",
+      type: "annotation.comment.direct",
       capture: {
-        quote: "βeta",
-        capturedAt: "2026-09-17T12:00:00.000Z",
-        hostBlockId: block.id,
-        paneId: "w1:p2",
-        contentRevision: 43,
-        contextId: "context-test",
-        detailClientId: "detail-test",
-        validation: "detail-pointer",
-        snapshotText: "Block Detail\n\nalpha βeta gamma",
+        kind: "rendered",
+        capture: {
+          quote: "βeta",
+          capturedAt: "2026-09-17T12:00:00.000Z",
+          hostBlockId: block.id,
+          paneId: "w1:p2",
+          contentRevision: 43,
+          contextId: "context-test",
+          detailClientId: "detail-test",
+          validation: "detail-pointer",
+          snapshotText: "Block Detail\n\nalpha βeta gamma",
+        },
       },
     }, viewport);
 

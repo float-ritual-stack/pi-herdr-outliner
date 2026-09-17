@@ -28,6 +28,7 @@ import {
 } from "./outliner-actions";
 import {
   createDetailController,
+  type DetailDirectSelectionCapture,
   type DetailEffects,
   type DetailViewport,
 } from "./detail-controller";
@@ -104,7 +105,6 @@ import {
   type AnnotationThread,
   type AttentionClientState,
   type BacklinkCollection,
-  type RenderedSelectionCapture,
   type Block,
   type BookmarkStatus,
   type BookmarkToggleReceipt,
@@ -118,6 +118,7 @@ import {
   type SelectionContext,
   type VisibleBlockCollection,
 } from "./types";
+import type { TextBufferRange } from "./text-buffer";
 
 class DetailTuiAltScreen extends TuiAltScreen {
   declare private viewportInputListener: TuiInputListener | undefined;
@@ -190,9 +191,10 @@ let pendingLinkClick: PiDetailLinkClick = {
   routing: "first-unlocked",
   suppress: false,
 };
-let latestRenderedSelection: RenderedSelectionCapture | null = null;
-let pendingRenderedSelection: Promise<RenderedSelectionCapture | null> | null = null;
-let renderedSelectionGeneration = 0;
+let latestDirectSelection: DetailDirectSelectionCapture | null = null;
+let pendingDirectSelection: Promise<DetailDirectSelectionCapture | null> | null = null;
+let pendingResourceSelectionRange: TextBufferRange | null = null;
+let directSelectionGeneration = 0;
 const terminal = new ProcessTerminal();
 let detailPaneId: string | undefined;
 let inputStream = new PiDetailInputStreamDecoder();
@@ -203,36 +205,47 @@ const tui = new DetailTuiAltScreen(terminal, false, undefined, {
   mouse: true,
   async copySelection(quote) {
     process.stdout.write(osc52ClipboardWrite(quote));
-    const generation = ++renderedSelectionGeneration;
-    latestRenderedSelection = null;
+    const generation = ++directSelectionGeneration;
+    latestDirectSelection = null;
+    const resourceCapture = pendingResourceSelectionRange
+      ? controller.captureResourcePointerSelection(
+        pendingResourceSelectionRange.start,
+        pendingResourceSelectionRange.end,
+      )
+      : null;
     const selected = controller.state.context.selected;
     const socketPath = process.env.HERDR_SOCKET_PATH?.trim();
     const paneId = detailPaneId;
-    const capturePromise = (async (): Promise<RenderedSelectionCapture | null> => {
+    const capturePromise = (async (): Promise<DetailDirectSelectionCapture | null> => {
+      if (resourceCapture) return resourceCapture;
       if (!selected || !socketPath || !paneId) return null;
       try {
         const snapshot = await readHerdrPaneSnapshot(socketPath, paneId);
         if (!snapshot.text.includes(quote)) return null;
         return {
-          quote,
-          capturedAt: new Date().toISOString(),
-          hostBlockId: selected.id,
-          paneId,
-          contentRevision: snapshot.revision,
-          contextId: browsingContextId,
-          detailClientId: clientId,
-          validation: "detail-pointer",
-          snapshotText: snapshot.text,
+          kind: "rendered",
+          capture: {
+            quote,
+            capturedAt: new Date().toISOString(),
+            hostBlockId: selected.id,
+            paneId,
+            contentRevision: snapshot.revision,
+            contextId: browsingContextId,
+            detailClientId: clientId,
+            validation: "detail-pointer",
+            snapshotText: snapshot.text,
+          },
         };
       } catch {
         return null;
       }
     })();
-    pendingRenderedSelection = capturePromise;
+    pendingDirectSelection = capturePromise;
     const capture = await capturePromise;
-    if (generation === renderedSelectionGeneration) {
-      latestRenderedSelection = capture;
-      pendingRenderedSelection = null;
+    if (generation === directSelectionGeneration) {
+      latestDirectSelection = capture;
+      pendingDirectSelection = null;
+      pendingResourceSelectionRange = null;
     }
     return true;
   },
@@ -991,10 +1004,31 @@ function shouldPassDetailInputToTui(data: string): boolean {
   const linkClick = piDetailLinkClick(data);
   if (linkClick) pendingLinkClick = linkClick;
   const pointer = parseTreePrimaryPointer(data);
-  if (pointer?.phase === "down" && !pointer.meta && !pointer.ctrl) {
-    renderedSelectionGeneration += 1;
-    latestRenderedSelection = null;
-    pendingRenderedSelection = null;
+  if (pointer && !pointer.meta && !pointer.ctrl) {
+    if (pointer.phase === "down") {
+      directSelectionGeneration += 1;
+      latestDirectSelection = null;
+      pendingDirectSelection = null;
+      pendingResourceSelectionRange = null;
+    }
+    if (
+      controller.state.mode === "preview" &&
+      controller.state.target?.kind === "resource"
+    ) {
+      const point = preview.sourcePointAtViewport(
+        pointer.row,
+        pointer.column,
+        terminal.columns,
+      );
+      if (pointer.phase === "down") {
+        pendingResourceSelectionRange = point ? { start: point, end: point } : null;
+      } else if (point && pendingResourceSelectionRange) {
+        pendingResourceSelectionRange = {
+          start: pendingResourceSelectionRange.start,
+          end: point,
+        };
+      }
+    }
   }
   if (
     controller.state.destinationChooser.active &&
@@ -1032,14 +1066,19 @@ const handleKeypress = createDetailKeyHandler({
   navigatePreview,
   previewFocused: () => draftSplitActive() && draftSplitFocus === "preview",
   annotationSelectionSourceLine: () => preview.sourceLineAtScroll(terminal.columns),
-  renderedSelectionCapture: async () => {
-    const generation = renderedSelectionGeneration;
-    const capture = latestRenderedSelection ?? await pendingRenderedSelection;
+  directSelectionCapture: async () => {
+    const generation = directSelectionGeneration;
+    const capture = latestDirectSelection ?? await pendingDirectSelection;
     const target = controller.state.target;
-    return generation === renderedSelectionGeneration &&
-        capture &&
-        target?.kind === "block" &&
-        target.blockId === capture.hostBlockId
+    if (generation !== directSelectionGeneration || !capture || !target) return null;
+    if (capture.kind === "rendered") {
+      return target.kind === "block" &&
+          target.blockId === capture.capture.hostBlockId
+        ? capture
+        : null;
+    }
+    return target.kind === "resource" &&
+        target.resourceId === capture.resourceId
       ? capture
       : null;
   },

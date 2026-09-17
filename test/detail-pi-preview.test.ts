@@ -2550,6 +2550,33 @@ test("maps filesystem Resource text to mouse annotation selections", () => {
   });
 });
 
+test("maps cached Web Resource Markdown to mouse annotation selections", () => {
+  const markdown = "# Example Domain\n\nThis domain is for use in documentation examples.";
+  const detail = webState(markdown);
+  const layout = previewLayout(detail);
+  const width = 60;
+  layout.setActive(true);
+  layout.syncState(width);
+  const rendered = layout.scrollView.render(width).map(stripTerminalSequences);
+  const renderedRow = rendered.findIndex((line) => line.includes("documentation examples"));
+  const renderedColumn = rendered[renderedRow]!.indexOf("documentation examples");
+
+  const start = layout.sourcePointAtViewport(renderedRow + 3, renderedColumn, width);
+  const end = layout.sourcePointAtViewport(
+    renderedRow + 3,
+    renderedColumn + "documentation examples".length,
+    width,
+  );
+
+  const sourceLine = markdown.split("\n")[2]!;
+  const sourceColumn = sourceLine.indexOf("documentation examples");
+  expect(start).toEqual({ row: 2, column: sourceColumn });
+  expect(end).toEqual({
+    row: 2,
+    column: sourceColumn + "documentation examples".length,
+  });
+});
+
 test("highlights keyboard selection in cached web Markdown", () => {
   const markdown = "# Web article\n\nChoose the **cached phrase** from this paragraph.";
   const detail = webState(markdown);

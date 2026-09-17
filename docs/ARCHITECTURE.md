@@ -79,10 +79,12 @@ by durable Resource UUID without a synthetic block. Opening web, Jira, Linear,
 and computed Resources reads local state only. It selects the latest suitable
 immutable Markdown representation when one exists and reports missing or failed
 state without contacting a provider or running a producer. `r` explicitly
-refreshes supported providers, `v` selects exact cached Markdown for an
-Outliner-owned annotation, and `Alt+O` opens only the negotiated
-current-Resource URL. Detail renders mutable provider freshness separately from
-selected immutable content. Computed Detail documents put cached Markdown first,
+refreshes supported providers. Direct preview drag maps cached Resource text to
+the selected immutable representation; `v` provides the keyboard-first exact
+source-selection path for the same annotation target. `Alt+O` opens only the
+negotiated current-Resource URL. Detail renders mutable provider freshness
+separately from selected immutable content. Computed Detail documents put
+cached Markdown first,
 then the current invocation and exact dependency provenance, then the latest
 inspectable failure. Filesystem PDFs refresh from the confined local file; HTTP
 PDFs follow the same explicit provider-refresh boundary. Both expose retained
