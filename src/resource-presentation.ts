@@ -15,7 +15,7 @@ import {
   type ResourceRepresentationKind,
   type ResourceSource,
   type ResourceSurface,
-  type WebRepresentationAdapter,
+  type ResourceRepresentationAdapter,
 } from "./resources";
 
 const SURFACES = ["tui", "gui", "native", "external"] as const;
@@ -188,7 +188,7 @@ interface CandidateDefinition {
   readonly applicable: boolean;
   readonly missingReason: string;
   readonly capability?: ResourceCapability;
-  readonly adapter: WebRepresentationAdapter | null;
+  readonly adapter: ResourceRepresentationAdapter | null;
   readonly externalUrl: string | null;
 }
 
@@ -196,7 +196,7 @@ function orderedDefinitions(
   description: ResourceDescription,
   context: ResourcePresentationContext,
 ): readonly CandidateDefinition[] {
-  const { resource, web, filesystem } = description;
+  const { resource, web, filesystem, pdf } = description;
   const unpinned = description.requestedRevision === null;
   const url = unpinned ? externalUrl(resource, description.source) : null;
   const requestedPlacement = context.placement;
@@ -208,12 +208,12 @@ function orderedDefinitions(
       unpinned &&
       (context.surface === "gui" || context.surface === "native") &&
       resource.mediaType === "application/pdf" &&
-      filesystem != null,
+      (pdf != null || filesystem != null),
     missingReason: unpinned
       ? "Native document presentation requires an available PDF on a GUI/native surface"
       : "Pinned revisions require an exact retained representation",
     capability: "read",
-    adapter: null,
+    adapter: pdf?.nativeRepresentation.adapter ?? null,
     externalUrl: null,
   };
   const browser: CandidateDefinition = {
@@ -232,9 +232,12 @@ function orderedDefinitions(
     representation: "cached-markdown",
     renderer: "markdown",
     placement: requestedPlacement,
-    applicable: web !== null || (filesystem != null && isTextualMediaType(resource.mediaType)),
+    applicable:
+      web !== null ||
+      pdf != null ||
+      (filesystem != null && isTextualMediaType(resource.mediaType)),
     missingReason: "No local text or cached Markdown representation is available",
-    adapter: web?.representation.adapter ?? null,
+    adapter: web?.representation.adapter ?? pdf?.representation.adapter ?? null,
     externalUrl: null,
   };
   const metadata: CandidateDefinition = {

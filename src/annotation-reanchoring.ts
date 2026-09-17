@@ -1,4 +1,4 @@
-import { createTextQuoteAnchor } from "./annotations";
+import { createPdfPageRegionAnchor, createTextQuoteAnchor } from "./annotations";
 import type {
   AnnotationAnchor,
   AnnotationRepresentation,
@@ -6,9 +6,11 @@ import type {
   AnnotationResolutionMethod,
   AnnotationResolutionStatus,
   AnnotationTarget,
+  PdfPageText,
 } from "./types";
 
 const TEXT_CODEC = { kind: "codec", codecId: "text-quote", codecVersion: 1 } as const;
+const PDF_CODEC = { kind: "codec", codecId: "pdf-page-region", codecVersion: 1 } as const;
 const PROVIDER_CODEC = { kind: "codec", codecId: "provider-native", codecVersion: 1 } as const;
 const HIGH_CONFIDENCE = 0.8;
 const MEDIUM_CONFIDENCE = 0.65;
@@ -27,7 +29,10 @@ export interface AnnotationReanchorResult {
   readonly candidates: readonly AnnotationResolutionCandidate[];
 }
 
-function method(codec: typeof TEXT_CODEC | typeof PROVIDER_CODEC, name: string): AnnotationResolutionMethod {
+function method(
+  codec: typeof TEXT_CODEC | typeof PDF_CODEC | typeof PROVIDER_CODEC,
+  name: string,
+): AnnotationResolutionMethod {
   return { ...codec, method: name };
 }
 
@@ -40,6 +45,85 @@ function textTarget(
   return {
     representation,
     anchor: createTextQuoteAnchor(content, start, end),
+  };
+}
+
+function pdfTargetFromTextTarget(
+  target: AnnotationTarget,
+  content: string,
+  pages: readonly PdfPageText[],
+): AnnotationTarget | null {
+  const anchor = target.anchor;
+  if (anchor.kind !== "text-quote" || anchor.start === null || anchor.end === null) return null;
+  const page = pages.find((candidate) =>
+    anchor.start! >= candidate.start && anchor.end! <= candidate.end
+  );
+  if (!page) return null;
+  const regions = page.spans
+    .filter((span) => span.end > anchor.start! && span.start < anchor.end!)
+    .map(({ region }) => region);
+  if (regions.length === 0) return null;
+  return {
+    representation: target.representation,
+    anchor: createPdfPageRegionAnchor(
+      content,
+      anchor.start,
+      anchor.end,
+      page.page,
+      regions,
+    ),
+  };
+}
+
+function reanchorPdfTarget(
+  target: AnnotationTarget,
+  representation: AnnotationRepresentation,
+  content: string,
+  pages: readonly PdfPageText[],
+): AnnotationReanchorResult {
+  const anchor = target.anchor;
+  if (anchor.kind !== "pdf-page-region") {
+    throw new Error("PDF reanchor requires a PDF page-region anchor");
+  }
+  const textResult = reanchorAnnotationTarget(
+    {
+      representation: target.representation,
+      anchor: {
+        kind: "text-quote",
+        start: anchor.start,
+        end: anchor.end,
+        exact: anchor.exact,
+        prefix: anchor.prefix,
+        suffix: anchor.suffix,
+      },
+    },
+    representation,
+    content,
+  );
+  const pdfMethod = method(PDF_CODEC, textResult.method.method);
+  const mappedCandidates = textResult.candidates.flatMap((entry) => {
+    const mapped = pdfTargetFromTextTarget(entry.target, content, pages);
+    return mapped
+      ? [{ target: mapped, method: pdfMethod, confidence: entry.confidence }]
+      : [];
+  });
+  const resolvedTarget = textResult.resolvedTarget
+    ? pdfTargetFromTextTarget(textResult.resolvedTarget, content, pages)
+    : null;
+  if (textResult.resolvedTarget && !resolvedTarget) {
+    return {
+      resolvedTarget: null,
+      method: method(PDF_CODEC, "page-region-unavailable"),
+      confidence: null,
+      status: "unresolved",
+      candidates: mappedCandidates,
+    };
+  }
+  return {
+    ...textResult,
+    resolvedTarget,
+    method: pdfMethod,
+    candidates: mappedCandidates,
   };
 }
 
@@ -336,6 +420,7 @@ export function reanchorAnnotationTarget(
   target: AnnotationTarget,
   representation: AnnotationRepresentation,
   content: string | null,
+  pdfPages: readonly PdfPageText[] = [],
 ): AnnotationReanchorResult {
   const anchor = target.anchor;
   if (
@@ -354,6 +439,18 @@ export function reanchorAnnotationTarget(
       method(PROVIDER_CODEC, "stable-comment-id"),
       1,
     ));
+  }
+  if (anchor.kind === "pdf-page-region") {
+    if (content === null || pdfPages.length === 0) {
+      return {
+        resolvedTarget: null,
+        method: method(PDF_CODEC, content === null ? "content-unavailable" : "page-map-unavailable"),
+        confidence: null,
+        status: "unsupported",
+        candidates: [],
+      };
+    }
+    return reanchorPdfTarget(target, representation, content, pdfPages);
   }
   if (anchor.kind !== "text-quote" || content === null) {
     return {

@@ -80,10 +80,11 @@ local state only. It selects the latest suitable immutable Markdown
 representation when one exists and reports `unknown` with no-cache guidance
 when one does not. `r` explicitly refreshes against the provider, `v` selects
 exact cached Markdown for an Outliner-owned annotation, and `Alt+O` opens the
-canonical HTTP URL externally. Detail renders the mutable
-`fresh | stale | unknown | refreshing | failed` status separately from the
-selected immutable content. `ResourceDescription.webHistory` carries only
-retained source snapshots and representations.
+canonical HTTP URL externally. Detail renders mutable web freshness separately
+from selected immutable content. Filesystem PDFs refresh from the confined local
+file; HTTP PDFs follow the same explicit provider-refresh boundary. Both expose
+retained binary snapshots, native PDF representations, and page-aware Markdown
+representations without changing Resource identity.
 
 Resource presentation negotiation is a pure boundary above `ResourceCatalog`.
 Resource kind, provider access, representation kind, renderer, Surface,
@@ -95,24 +96,30 @@ led to it. TUI hosts prefer cached Markdown and metadata; GUI/native hosts may
 prefer embedded-browser or native-document renderers; external-only hosts select
 a deep link. Missing or indeterminate live access never hides retained Markdown.
 PDF is selected by `application/pdf` media type, never modeled as a provider.
-Web representation provenance retains the replaceable adapter ID/version.
-Annotations are listed by Resource subject through `AnnotationRepository`, so
-relocation and offline failure do not hide target or resolution evidence.
-Detail exposes snapshot/representation identifiers and metadata, including
-explicit unknown fields on incomplete legacy evidence. Failed refreshes keep
-prior content and annotation history visible. Other Resource providers still
-render read-only identity metadata.
+The PDF.js text adapter emits page-scoped Markdown and a span map containing
+UTF-16 offsets and PDF-point rectangles. TUI hosts select that retained
+Markdown; native-capable hosts may select the native PDF representation.
+Extractor identity/version is representation provenance, so a new extractor can
+rederive retained source bytes without creating a Resource or source snapshot.
+Web and PDF annotations are listed by Resource subject through
+`AnnotationRepository`, so relocation, offline failure, and representation
+replacement do not hide target or resolution evidence. Detail exposes
+snapshot/representation identifiers and metadata, including explicit unknown
+fields on incomplete legacy evidence. Failed refreshes keep prior content and
+annotation history visible. Other Resource providers still render read-only
+identity metadata.
 
-Resource retention is a separate transactional module above the immutable web
-history tables. The workspace policy protects the newest configured snapshots
-and active-adapter representations. Current pointers, every immutable annotation
-target and resolution candidate, explicit pins, durable review/publication
-references, and exact revisions held by live Details add independent protection
-roots. Eviction clears only HTML/Markdown bytes and marks an `evictedAt`
-tombstone; it never acts like Trash, user deletion, or redaction. A later purge
-pass deletes only unprotected evicted metadata after its grace period.
-Representation protection propagates to its source snapshot. Unpinned open still
-uses the current newest suitable cached representation without provider access.
+Resource retention is a separate transactional module above immutable web and
+PDF history tables. The workspace policy protects the newest configured
+snapshots and active-adapter representations. Current pointers, every immutable
+annotation target and resolution candidate, explicit pins, durable
+review/publication references, and exact revisions held by live Details add
+independent protection roots. Eviction clears only web HTML, derived Markdown,
+or PDF source bytes and marks an `evictedAt` tombstone; it never acts like
+Trash, user deletion, or redaction. A later purge pass deletes only unprotected
+evicted metadata after its grace period. Representation protection propagates
+to its source snapshot. Unpinned open still uses the current newest suitable
+cached representation without provider access.
 
 Block editing, backlinks, and Tree
 reveal stay unavailable for Resource targets. An unlocked Detail is eligible for
@@ -120,7 +127,7 @@ same-tab Tree previews and confirmed opens. Ordinary navigation can target only
 an unlocked Detail. A locked Detail also rejects directly addressed ordinary
 `preview` and `open` commands; explicit `replace` alone may retarget it without
 changing its lock state. `L`, `i`, `Ctrl+L`, or `Meta+L` toggles the current
-target's lock. Block and cached-web annotation commenting lock before opening a
+target's lock. Block and cached Resource annotation commenting lock before opening a
 mutable buffer.
 
 Authored block/page/Work-ID links and typed Property targets bind one target to
@@ -317,12 +324,15 @@ project-documentation mutations.
 - `web_source_snapshots` — immutable provider observations keyed by snapshot ID, with Resource/address epoch, canonical URL, source hash, provider revision and validators, fetched time, full source HTML, explicit payload state/byte count, and eviction time. Eviction nulls HTML but preserves provenance metadata.
 - `web_representations` — immutable named derivations keyed by representation ID and source snapshot ID, with media type, adapter identity and version, representation hash, derived time, Markdown content, explicit payload state/byte count, and eviction time.
 - `web_resource_state` — one mutable row per web Resource containing current snapshot and representation pointers, five-state freshness, check/error diagnostics, address epoch, and the compare-and-swap version used to reject stale refresh completion.
+- `pdf_source_snapshots` — immutable filesystem or HTTP PDF observations keyed by snapshot ID, with Resource/address epoch, provider locator and revision, source hash and validators, retained binary bytes, explicit payload state/byte count, and eviction time.
+- `pdf_representations` — immutable native PDF and page-aware Markdown derivations keyed by representation ID and PDF snapshot, with adapter identity/version, representation hash, extracted page-span geometry, payload accounting, and eviction time.
+- `pdf_resource_state` — one mutable row per PDF Resource containing its current source snapshot and selected extracted representation pointers plus generation.
 - `resource_retention_policy` — singleton workspace newest-count, minimum-age, and purge-grace policy.
 - `resource_retention_pins` and `resource_retention_references` — explicit artifact protection roots for user pins and durable review/publication ownership.
 - `resource_retention_events` — append-only eviction/purge audit entries that keep the intentionally purged state distinct from missing or user-deleted content.
 - `annotation_targets` — one immutable original target JSON document per root annotation block, with indexed block, Resource, or honest legacy-file subject identity.
 - `annotation_resolution_events` — append-only, per-annotation resolution history. The latest event with `applies_current` supplies current status and optional resolved target. Every deterministic pass retains ranked candidate targets, methods, and confidence scores; rejected proposals remain history without moving current resolution.
-- `annotation_resource_evidence_refs` — relational, FK-enforced reachability for every actual web snapshot/representation named by immutable original targets, resolution source/target records, resolved targets, and ranked candidates.
+- `annotation_resource_evidence_refs` — relational, FK-enforced reachability for every actual web or PDF snapshot/representation named by immutable original targets, resolution source/target records, resolved targets, and ranked candidates.
 - `annotation_agent_requests` — idempotency receipts linking one bounded agent request payload to its append-only proposal event.
 - `annotation_migration_quarantine` — raw legacy root blocks that cannot be parsed safely, preserving block ID, text, failure reason, and timestamp without fabricating a target.
 

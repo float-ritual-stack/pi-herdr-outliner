@@ -14,6 +14,13 @@ export type {
   CapabilityAssessment,
   InternFilesystemResourceInput,
   InternResourceReceipt,
+  PdfPageText,
+  PdfRegion,
+  PdfRepresentationProvenance,
+  PdfResourceDocument,
+  PdfResourceHistory,
+  PdfSourceSnapshotProvenance,
+  PdfTextSpan,
   Resource,
   ResourceAddress,
   ResourceCapability,
@@ -51,7 +58,7 @@ export type {
   ResourceRevision,
   ResourceRevisionRef,
   ResourceSource,
-  WebRepresentationAdapter,
+  ResourceRepresentationAdapter,
   WebRepresentationProvenance,
   WebResourceDocument,
   WebResourceProvenance,
@@ -307,7 +314,11 @@ export type AnnotationAnchor =
         readonly width: number;
         readonly height: number;
       }[];
-      readonly exact: string | null;
+      readonly start: number | null;
+      readonly end: number | null;
+      readonly exact: string;
+      readonly prefix: string;
+      readonly suffix: string;
     }
   | {
       readonly kind: "structured-entity-field";
@@ -1078,7 +1089,7 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 45;
+export const OUTLINER_PROTOCOL_VERSION = 46;
 
 
 export interface OutlinerServiceStatus {

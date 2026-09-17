@@ -16,7 +16,7 @@ import {
   type ResourceRetentionReport,
   type ResourceRetentionState,
   type ResourceRevisionRef,
-  type WebRepresentationAdapter,
+  type ResourceRepresentationAdapter,
 } from "./resources";
 
 const DEFAULT_RETAINED_SNAPSHOTS = 5;
@@ -42,6 +42,7 @@ interface RetentionPolicyRow {
 
 interface SnapshotRetentionRow {
   kind: "source-snapshot";
+  storage: "web" | "pdf";
   id: string;
   resource_id: string;
   source_snapshot_id: null;
@@ -56,6 +57,7 @@ interface SnapshotRetentionRow {
 
 interface RepresentationRetentionRow {
   kind: "representation";
+  storage: "web" | "pdf";
   id: string;
   resource_id: string;
   source_snapshot_id: string;
@@ -92,6 +94,8 @@ interface ReferenceRow {
 interface EvidenceReferenceRow {
   source_snapshot_id: string | null;
   representation_id: string | null;
+  pdf_source_snapshot_id: string | null;
+  pdf_representation_id: string | null;
 }
 
 interface CurrentPointerRow {
@@ -110,7 +114,7 @@ interface PurgedRow {
 
 export interface ResourceRetentionOptions {
   readonly now?: () => string;
-  readonly activeRepresentationAdapters?: readonly WebRepresentationAdapter[];
+  readonly activeRepresentationAdapters?: readonly ResourceRepresentationAdapter[];
   readonly markMutation?: () => void;
 }
 
@@ -381,16 +385,38 @@ export class ResourceRetentionRepository {
             left.artifact.id.localeCompare(right.artifact.id)
           );
         for (const candidate of candidates) {
-          const table = candidate.artifact.kind === "representation"
-            ? "web_representations"
-            : "web_source_snapshots";
-          const payload = candidate.artifact.kind === "representation" ? "markdown" : "html";
-          const changed = this.database.query(`
-            UPDATE ${table}
-            SET ${payload} = NULL, payload_state = 'evicted', payload_bytes = 0, evicted_at = ?
-            WHERE id = ? AND payload_state = 'available'
-          `).run(collectedAt, candidate.artifact.id).changes;
+          const row = this.requireArtifactFromCurrentRead(candidate.artifact);
+          const changed = row.storage === "web"
+            ? this.database.query(
+                candidate.artifact.kind === "representation"
+                  ? `UPDATE web_representations
+                     SET markdown = NULL, payload_state = 'evicted',
+                         payload_bytes = 0, evicted_at = ?
+                     WHERE id = ? AND payload_state = 'available'`
+                  : `UPDATE web_source_snapshots
+                     SET html = NULL, payload_state = 'evicted',
+                         payload_bytes = 0, evicted_at = ?
+                     WHERE id = ? AND payload_state = 'available'`,
+              ).run(collectedAt, candidate.artifact.id).changes
+            : this.database.query(
+                candidate.artifact.kind === "representation"
+                  ? `UPDATE pdf_representations
+                     SET markdown = NULL, pages_json = NULL,
+                         payload_state = 'evicted', payload_bytes = 0, evicted_at = ?
+                     WHERE id = ? AND payload_state = 'available'`
+                  : `UPDATE pdf_source_snapshots
+                     SET bytes = NULL, payload_state = 'evicted',
+                         payload_bytes = 0, evicted_at = ?
+                     WHERE id = ? AND payload_state = 'available'`,
+              ).run(collectedAt, candidate.artifact.id).changes;
           if (changed === 0) continue;
+          if (row.storage === "pdf" && candidate.artifact.kind === "source-snapshot") {
+            this.database.query(`
+              UPDATE pdf_representations
+              SET payload_state = 'evicted', evicted_at = ?
+              WHERE source_snapshot_id = ? AND media_type = 'application/pdf'
+            `).run(collectedAt, candidate.artifact.id);
+          }
           evicted.push(candidate.artifact);
           this.recordTransition(
             candidate.artifact,
@@ -413,9 +439,16 @@ export class ResourceRetentionRepository {
             left.artifact.id.localeCompare(right.artifact.id)
           );
         for (const candidate of candidates) {
+          const row = this.requireArtifactFromCurrentRead(candidate.artifact);
           if (candidate.artifact.kind === "source-snapshot") {
+            const childTable = row.storage === "web"
+              ? "web_representations"
+              : "pdf_representations";
             const child = this.database.query(
-              "SELECT 1 FROM web_representations WHERE source_snapshot_id = ? LIMIT 1",
+              `SELECT 1 FROM ${childTable}
+               WHERE source_snapshot_id = ?
+                 ${row.storage === "pdf" ? "AND media_type = 'text/markdown'" : ""}
+               LIMIT 1`,
             ).get(candidate.artifact.id);
             if (child) continue;
           }
@@ -425,6 +458,22 @@ export class ResourceRetentionRepository {
             capturedAt: candidate.capturedAt,
             evictedAt: candidate.evictedAt,
           };
+          const table = row.storage === "web"
+            ? candidate.artifact.kind === "representation"
+              ? "web_representations"
+              : "web_source_snapshots"
+            : candidate.artifact.kind === "representation"
+              ? "pdf_representations"
+              : "pdf_source_snapshots";
+          if (row.storage === "pdf" && candidate.artifact.kind === "source-snapshot") {
+            this.database.query(
+              "DELETE FROM pdf_representations WHERE source_snapshot_id = ? AND media_type = 'application/pdf'",
+            ).run(candidate.artifact.id);
+          }
+          const changed = this.database.query(`DELETE FROM ${table} WHERE id = ?`).run(
+            candidate.artifact.id,
+          ).changes;
+          if (changed === 0) continue;
           this.recordTransition(
             candidate.artifact,
             candidate.resourceId,
@@ -432,13 +481,6 @@ export class ResourceRetentionRepository {
             collectedAt,
             metadata,
           );
-          const table = candidate.artifact.kind === "representation"
-            ? "web_representations"
-            : "web_source_snapshots";
-          const changed = this.database.query(`DELETE FROM ${table} WHERE id = ?`).run(
-            candidate.artifact.id,
-          ).changes;
-          if (changed === 0) continue;
           purged.push({
             artifact: candidate.artifact,
             resourceId: candidate.resourceId,
@@ -457,27 +499,51 @@ export class ResourceRetentionRepository {
     resourceId: string | null,
     activeRevisions: readonly ResourceRevisionRef[],
   ): ResourceRetentionReport {
-    if (resourceId !== null) this.requireWebResourceFromCurrentRead(resourceId);
+    if (resourceId !== null) this.requireResourceFromCurrentRead(resourceId);
     const policy = this.policyFromCurrentRead();
     const now = this.now();
     const snapshots = this.database.query(`
-      SELECT 'source-snapshot' AS kind, id, resource_id, NULL AS source_snapshot_id,
-             NULL AS adapter_id, NULL AS adapter_version, fetched_at AS captured_at,
-             revision_json, payload_state, payload_bytes, evicted_at
+      SELECT 'source-snapshot' AS kind, 'web' AS storage, id, resource_id,
+             NULL AS source_snapshot_id, NULL AS adapter_id, NULL AS adapter_version,
+             fetched_at AS captured_at, revision_json,
+             payload_state, payload_bytes, evicted_at
       FROM web_source_snapshots
       WHERE ? IS NULL OR resource_id = ?
-      ORDER BY resource_id, fetched_at DESC, id DESC
-    `).all(resourceId, resourceId) as SnapshotRetentionRow[];
+      UNION ALL
+      SELECT 'source-snapshot' AS kind, 'pdf' AS storage, id, resource_id,
+             NULL AS source_snapshot_id, NULL AS adapter_id, NULL AS adapter_version,
+             captured_at, revision_json, payload_state, payload_bytes, evicted_at
+      FROM pdf_source_snapshots
+      WHERE ? IS NULL OR resource_id = ?
+    `).all(resourceId, resourceId, resourceId, resourceId) as SnapshotRetentionRow[];
     const representations = this.database.query(`
-      SELECT 'representation' AS kind, wr.id, ws.resource_id,
+      SELECT 'representation' AS kind, 'web' AS storage, wr.id, ws.resource_id,
              wr.source_snapshot_id, wr.adapter_id, wr.adapter_version,
              wr.derived_at AS captured_at, NULL AS revision_json,
              wr.payload_state, wr.payload_bytes, wr.evicted_at
       FROM web_representations wr
       JOIN web_source_snapshots ws ON ws.id = wr.source_snapshot_id
       WHERE ? IS NULL OR ws.resource_id = ?
-      ORDER BY ws.resource_id, wr.derived_at DESC, wr.id DESC
-    `).all(resourceId, resourceId) as RepresentationRetentionRow[];
+      UNION ALL
+      SELECT 'representation' AS kind, 'pdf' AS storage, pr.id, ps.resource_id,
+             pr.source_snapshot_id, pr.adapter_id, pr.adapter_version,
+             pr.derived_at AS captured_at, NULL AS revision_json,
+             pr.payload_state, pr.payload_bytes, pr.evicted_at
+      FROM pdf_representations pr
+      JOIN pdf_source_snapshots ps ON ps.id = pr.source_snapshot_id
+      WHERE pr.media_type = 'text/markdown'
+        AND (? IS NULL OR ps.resource_id = ?)
+    `).all(resourceId, resourceId, resourceId, resourceId) as RepresentationRetentionRow[];
+    snapshots.sort((left, right) =>
+      left.resource_id.localeCompare(right.resource_id) ||
+      (right.captured_at ?? "").localeCompare(left.captured_at ?? "") ||
+      right.id.localeCompare(left.id)
+    );
+    representations.sort((left, right) =>
+      left.resource_id.localeCompare(right.resource_id) ||
+      (right.captured_at ?? "").localeCompare(left.captured_at ?? "") ||
+      right.id.localeCompare(left.id)
+    );
     const rows: RetentionRow[] = [...snapshots, ...representations];
     const byKey = new Map(rows.map((row) => [key(row.kind, row.id), row]));
     const states = new Map<string, Set<Exclude<ResourceRetentionState, "purged">>>();
@@ -495,7 +561,11 @@ export class ResourceRetentionRepository {
       SELECT resource_id, source_snapshot_id, representation_id
       FROM web_resource_state
       WHERE ? IS NULL OR resource_id = ?
-    `).all(resourceId, resourceId) as CurrentPointerRow[];
+      UNION ALL
+      SELECT resource_id, source_snapshot_id, representation_id
+      FROM pdf_resource_state
+      WHERE ? IS NULL OR resource_id = ?
+    `).all(resourceId, resourceId, resourceId, resourceId) as CurrentPointerRow[];
     for (const pointer of pointers) {
       if (pointer.source_snapshot_id) {
         protect({ kind: "source-snapshot", id: pointer.source_snapshot_id }, "current");
@@ -544,6 +614,18 @@ export class ResourceRetentionRepository {
     for (const evidence of this.evidenceReferencesFromCurrentRead(resourceId)) {
       if (evidence.source_snapshot_id) {
         protect({ kind: "source-snapshot", id: evidence.source_snapshot_id }, "referenced");
+      }
+      if (evidence.pdf_source_snapshot_id) {
+        protect(
+          { kind: "source-snapshot", id: evidence.pdf_source_snapshot_id },
+          "referenced",
+        );
+      }
+      if (evidence.pdf_representation_id) {
+        protect(
+          { kind: "representation", id: evidence.pdf_representation_id },
+          "referenced",
+        );
       }
       if (evidence.representation_id) {
         protect({ kind: "representation", id: evidence.representation_id }, "referenced");
@@ -636,34 +718,44 @@ export class ResourceRetentionRepository {
     };
   }
 
-  private requireWebResourceFromCurrentRead(resourceId: string): void {
+  private requireResourceFromCurrentRead(resourceId: string): void {
     const row = this.database.query(
-      "SELECT provider FROM resources WHERE id = ?",
-    ).get(resourceId) as { provider: string } | null;
+      "SELECT 1 FROM resources WHERE id = ?",
+    ).get(resourceId);
     if (!row) throw new ResourceCatalogError("missing-resource", `Resource not found: ${resourceId}`);
-    if (row.provider !== "web") {
-      throw new ResourceCatalogError("provider-mismatch", "Retention history is currently available for web Resources");
-    }
   }
 
   private requireArtifactFromCurrentRead(artifact: ResourceRetentionArtifactRef): RetentionRow {
     const row = artifact.kind === "source-snapshot"
       ? this.database.query(`
-          SELECT 'source-snapshot' AS kind, id, resource_id,
+          SELECT 'source-snapshot' AS kind, 'web' AS storage, id, resource_id,
                  NULL AS source_snapshot_id, NULL AS adapter_id, NULL AS adapter_version,
                  fetched_at AS captured_at, revision_json, payload_state,
                  payload_bytes, evicted_at
           FROM web_source_snapshots WHERE id = ?
-        `).get(artifact.id) as SnapshotRetentionRow | null
+          UNION ALL
+          SELECT 'source-snapshot' AS kind, 'pdf' AS storage, id, resource_id,
+                 NULL AS source_snapshot_id, NULL AS adapter_id, NULL AS adapter_version,
+                 captured_at, revision_json, payload_state, payload_bytes, evicted_at
+          FROM pdf_source_snapshots WHERE id = ?
+        `).get(artifact.id, artifact.id) as SnapshotRetentionRow | null
       : this.database.query(`
-          SELECT 'representation' AS kind, wr.id, ws.resource_id,
+          SELECT 'representation' AS kind, 'web' AS storage, wr.id, ws.resource_id,
                  wr.source_snapshot_id, wr.adapter_id, wr.adapter_version,
                  wr.derived_at AS captured_at, NULL AS revision_json,
                  wr.payload_state, wr.payload_bytes, wr.evicted_at
           FROM web_representations wr
           JOIN web_source_snapshots ws ON ws.id = wr.source_snapshot_id
           WHERE wr.id = ?
-        `).get(artifact.id) as RepresentationRetentionRow | null;
+          UNION ALL
+          SELECT 'representation' AS kind, 'pdf' AS storage, pr.id, ps.resource_id,
+                 pr.source_snapshot_id, pr.adapter_id, pr.adapter_version,
+                 pr.derived_at AS captured_at, NULL AS revision_json,
+                 pr.payload_state, pr.payload_bytes, pr.evicted_at
+          FROM pdf_representations pr
+          JOIN pdf_source_snapshots ps ON ps.id = pr.source_snapshot_id
+          WHERE pr.id = ? AND pr.media_type = 'text/markdown'
+        `).get(artifact.id, artifact.id) as RepresentationRetentionRow | null;
     if (!row) {
       throw new ResourceCatalogError(
         "invalid-input",
@@ -714,7 +806,8 @@ export class ResourceRetentionRepository {
     ).get();
     if (!exists) return [];
     return this.database.query(`
-      SELECT evidence.source_snapshot_id, evidence.representation_id
+      SELECT evidence.source_snapshot_id, evidence.representation_id,
+             evidence.pdf_source_snapshot_id, evidence.pdf_representation_id
       FROM annotation_resource_evidence_refs evidence
       JOIN annotation_targets target
         ON target.annotation_block_id = evidence.annotation_block_id

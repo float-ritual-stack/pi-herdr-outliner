@@ -233,7 +233,7 @@ export interface ResourceCapabilityDecision {
 export type ResourceCapabilityReport = Readonly<
   Record<ResourceCapability, ResourceCapabilityDecision>
 >;
-export interface WebRepresentationAdapter {
+export interface ResourceRepresentationAdapter {
   readonly id: string;
   readonly version: number;
 }
@@ -289,7 +289,7 @@ export interface ResourceRetentionArtifact {
   readonly artifact: ResourceRetentionArtifactRef;
   readonly resourceId: string;
   readonly sourceSnapshotId: string | null;
-  readonly adapter: WebRepresentationAdapter | null;
+  readonly adapter: ResourceRepresentationAdapter | null;
   readonly states: readonly Exclude<ResourceRetentionState, "purged">[];
   readonly payloadAvailable: boolean;
   readonly payloadBytes: number;
@@ -358,7 +358,7 @@ export interface WebRepresentationProvenance {
   readonly id: string;
   readonly sourceSnapshotId: string;
   readonly mediaType: "text/markdown";
-  readonly adapter: WebRepresentationAdapter;
+  readonly adapter: ResourceRepresentationAdapter;
   readonly contentHash: string;
   readonly derivedAt: string | null;
   readonly contentAvailable: boolean;
@@ -391,6 +391,64 @@ export interface FilesystemResourceDocument {
   readonly capturedAt: string;
   readonly revision: ResourceRevisionRef;
 }
+
+export interface PdfRegion {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+export interface PdfTextSpan {
+  readonly start: number;
+  readonly end: number;
+  readonly region: PdfRegion;
+}
+
+export interface PdfPageText {
+  readonly page: number;
+  readonly width: number;
+  readonly height: number;
+  readonly start: number;
+  readonly end: number;
+  readonly spans: readonly PdfTextSpan[];
+}
+
+export interface PdfSourceSnapshotProvenance {
+  readonly id: string;
+  readonly resourceId: string;
+  readonly addressVersion: number;
+  readonly locator: string;
+  readonly contentHash: string;
+  readonly revision: ResourceRevisionRef;
+  readonly capturedAt: string;
+  readonly bytesAvailable: boolean;
+  readonly evictedAt: string | null;
+}
+
+export interface PdfRepresentationProvenance {
+  readonly id: string;
+  readonly sourceSnapshotId: string;
+  readonly mediaType: "application/pdf" | "text/markdown";
+  readonly adapter: ResourceRepresentationAdapter;
+  readonly contentHash: string;
+  readonly derivedAt: string;
+  readonly contentAvailable: boolean;
+  readonly evictedAt: string | null;
+}
+export interface PdfResourceDocument {
+  readonly markdown: string;
+  readonly pages: readonly PdfPageText[];
+  readonly sourceSnapshot: PdfSourceSnapshotProvenance;
+  readonly representation: PdfRepresentationProvenance;
+  readonly nativeRepresentation: PdfRepresentationProvenance;
+}
+
+export interface PdfResourceHistory {
+  readonly sourceSnapshots: readonly PdfSourceSnapshotProvenance[];
+  readonly representations: readonly PdfRepresentationProvenance[];
+}
+
 
 export type ResourceKind = "document" | "entity" | "application";
 export type ResourceSurface = "tui" | "gui" | "native" | "external";
@@ -438,7 +496,7 @@ export interface ResourcePresentationAttempt {
 
 export interface ResourcePresentationSelection extends ResourcePresentationAttempt {
   readonly mediaType: string | null;
-  readonly adapter: WebRepresentationAdapter | null;
+  readonly adapter: ResourceRepresentationAdapter | null;
   readonly externalUrl: string | null;
 }
 
@@ -459,6 +517,8 @@ export interface ResourceDescription {
   readonly requestedRevision: ResourceRevisionRef | null;
   readonly capabilities: ResourceCapabilityReport;
   readonly filesystem?: FilesystemResourceDocument | null;
+  readonly pdf?: PdfResourceDocument | null;
+  readonly pdfHistory?: PdfResourceHistory | null;
   readonly web: WebResourceDocument | null;
   readonly webHistory: WebResourceHistory | null;
   readonly webStatus: WebResourceStatus | null;
