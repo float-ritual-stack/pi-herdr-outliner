@@ -16,6 +16,11 @@ import {
   normalizeResourceId,
   normalizeRetainedResourceRevisionRef,
 } from "./resources";
+import {
+  negotiateResourcePresentation,
+  normalizeResourcePresentationContext,
+  TUI_RESOURCE_PRESENTATION_CONTEXT,
+} from "./resource-presentation";
 import { WorkflowManager } from "./workflows";
 import {
   OUTLINER_PROTOCOL_VERSION,
@@ -312,6 +317,12 @@ export class OutlinerServer {
     const currentTarget = registration.currentTarget === undefined
       ? undefined
       : this.normalizeNavigationTarget(registration.currentTarget, "retain");
+    const resourcePresentation = registration.resourcePresentation === undefined
+      ? undefined
+      : normalizeResourcePresentationContext(registration.resourcePresentation);
+    if (registration.role !== "detail" && resourcePresentation) {
+      throw new Error("Only Detail clients can declare Resource presentation capabilities");
+    }
     const normalized: OutlinerClientRegistration = {
       clientId,
       role: registration.role,
@@ -319,6 +330,7 @@ export class OutlinerServer {
       ...(registration.role === "detail" ? { locked: registration.locked ?? false } : {}),
       ...(currentTarget ? { currentTarget } : {}),
       ...(runtime ? { runtime } : {}),
+      ...(resourcePresentation ? { resourcePresentation } : {}),
     };
     const stored = this.herdrRegistry === undefined
       ? normalized
@@ -408,6 +420,21 @@ export class OutlinerServer {
     const client = this.listClients().find((candidate) => candidate.clientId === clientId);
     if (!client) throw new Error("Navigation source is not a live Outliner pane");
     return client;
+  }
+
+  private presentResource(
+    description: ResourceDescription,
+    destination: OutlinerClientRegistration,
+  ): ResourceDescription {
+    const presentation = negotiateResourcePresentation(
+      description,
+      destination.resourcePresentation ?? TUI_RESOURCE_PRESENTATION_CONTEXT,
+    );
+    return {
+      ...description,
+      capabilities: presentation.capabilities,
+      presentation,
+    };
   }
 
   private updateClient(
@@ -898,16 +925,18 @@ export class OutlinerServer {
         if (target.kind !== "resource") {
           throw new Error("Resource document target must be a resource");
         }
-        result = await this.store.resources.open(
+        const description = await this.store.resources.open(
           target.resourceId,
           true,
           target.revision,
         );
+        result = this.presentResource(description, destination);
       } else {
-        result = await this.store.resources.refreshWeb(
+        const description = await this.store.resources.refreshWeb(
           request.resourceId,
           true,
         );
+        result = this.presentResource(description, destination);
       }
       return { id: request.id, ok: true, result, sequence: this.store.sequence };
     } catch (error) {
@@ -986,10 +1015,13 @@ export class OutlinerServer {
           if (target.kind !== "resource") {
             throw new Error("Resource description target must be a resource");
           }
-          result = this.store.resources.describe(
-            target.resourceId,
-            true,
-            target.revision,
+          result = this.presentResource(
+            this.store.resources.describe(
+              target.resourceId,
+              true,
+              target.revision,
+            ),
+            destination,
           );
           break;
         }

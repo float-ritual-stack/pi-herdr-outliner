@@ -78,6 +78,7 @@ import {
   resolveNavigationDestination,
 } from "./navigation-routes";
 import { openExternalUrl } from "./open-external";
+import { TUI_RESOURCE_PRESENTATION_CONTEXT } from "./resource-presentation";
 import { resolvePaths } from "./paths";
 import { openDestinationTimeoutFromEnvironment } from "./open-destination-chooser";
 import {
@@ -537,6 +538,7 @@ function startWatcher(): void {
       contextId: browsingContextId,
       locked: detailPresentation === "property-inspector",
       runtime,
+      resourcePresentation: TUI_RESOURCE_PRESENTATION_CONTEXT,
     },
     onConnect: () => {
       firstWatcherConnection.resolve();

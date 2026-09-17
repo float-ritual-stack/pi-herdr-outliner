@@ -334,7 +334,22 @@ test("serves local web snapshots, explicit refresh, and unified annotation resol
   const reconcileEvent = Promise.withResolvers<void>();
   const refreshEvents = Promise.withResolvers<void>();
   const watcher = new OutlinerClient(socket).watch({
-    client: { clientId: "web-detail", role: "detail", contextId: "web-context" },
+    client: {
+      clientId: "web-detail",
+      role: "detail",
+      contextId: "web-context",
+      resourcePresentation: {
+        surface: "tui",
+        placement: "pane",
+        host: {
+          id: "protocol-tui",
+          renderers: ["markdown", "metadata", "external-open"],
+          placements: ["pane", "external"],
+          capabilities: ["read", "refresh", "open-external"],
+        },
+        providerAccess: { credentials: "unknown", connectivity: "unknown" },
+      },
+    },
     onConnect: connected.resolve,
     onEvent(event) {
       events.push(event);
@@ -382,6 +397,10 @@ test("serves local web snapshots, explicit refresh, and unified annotation resol
     freshness: "unknown",
     checkedAt: null,
     lastError: null,
+  });
+  expect(initiallyOpened.presentation).toMatchObject({
+    surface: "tui",
+    selected: { representation: "metadata", renderer: "metadata" },
   });
   expect(providerAccessCount).toBe(0);
   expect(events.some((event) => event.action === "resources.open")).toBe(false);
@@ -436,6 +455,15 @@ test("serves local web snapshots, explicit refresh, and unified annotation resol
     sourceSnapshots: [firstSnapshot],
     representations: [firstRepresentation],
   });
+  expect(acquired.presentation).toMatchObject({
+    resourceId: resource.id,
+    surface: "tui",
+    selected: {
+      representation: "cached-markdown",
+      renderer: "markdown",
+      adapter: { id: "builtin.basic-html-to-markdown", version: 1 },
+    },
+  });
 
   const locallyOpened = await client.request<ResourceDescription>({
     action: "resources.open",
@@ -445,6 +473,76 @@ test("serves local web snapshots, explicit refresh, and unified annotation resol
   expect(locallyOpened.web).toEqual(acquired.web);
   expect(providerAccessCount).toBe(1);
   expect(events.some((event) => event.action === "resources.open")).toBe(false);
+  const guiConnected = Promise.withResolvers<void>();
+  const guiWatcher = new OutlinerClient(socket).watch({
+    client: {
+      clientId: "web-gui-detail",
+      role: "detail",
+      contextId: "web-gui-context",
+      resourcePresentation: {
+        surface: "gui",
+        placement: "pane",
+        host: {
+          id: "protocol-gui",
+          renderers: ["embedded-browser", "markdown", "metadata", "external-open"],
+          placements: ["pane", "external"],
+          capabilities: ["read", "embed", "open-external"],
+        },
+        providerAccess: { credentials: "available", connectivity: "available" },
+      },
+    },
+    onConnect: guiConnected.resolve,
+    onEvent() {},
+  });
+  await guiConnected.promise;
+  const guiOpened = await client.request<ResourceDescription>({
+    action: "resources.open",
+    target: { kind: "resource", resourceId: resource.id },
+    destinationClientId: "web-gui-detail",
+  });
+  expect(guiOpened.resource.id).toBe(resource.id);
+  expect(guiOpened.presentation?.selected).toMatchObject({
+    representation: "embedded-browser",
+    renderer: "embedded-browser",
+    placement: "pane",
+  });
+  guiWatcher.stop();
+
+  const externalConnected = Promise.withResolvers<void>();
+  const externalWatcher = new OutlinerClient(socket).watch({
+    client: {
+      clientId: "web-external-detail",
+      role: "detail",
+      contextId: "web-external-context",
+      resourcePresentation: {
+        surface: "external",
+        placement: "external",
+        host: {
+          id: "protocol-external",
+          renderers: ["external-open"],
+          placements: ["external"],
+          capabilities: ["open-external"],
+        },
+        providerAccess: { credentials: "unknown", connectivity: "available" },
+      },
+    },
+    onConnect: externalConnected.resolve,
+    onEvent() {},
+  });
+  await externalConnected.promise;
+  const externalOpened = await client.request<ResourceDescription>({
+    action: "resources.open",
+    target: { kind: "resource", resourceId: resource.id },
+    destinationClientId: "web-external-detail",
+  });
+  expect(externalOpened.resource.id).toBe(resource.id);
+  expect(externalOpened.presentation?.selected).toMatchObject({
+    representation: "external-link",
+    renderer: "external-open",
+    placement: "external",
+    externalUrl: "https://example.com/article",
+  });
+  externalWatcher.stop();
 
   const firstCapturedAt = firstRepresentation.derivedAt ?? firstSnapshot.fetchedAt;
   if (!firstCapturedAt) throw new Error("Acquired web representation has no capture time");
@@ -1205,7 +1303,7 @@ test("serves mutations and property queries over the local socket", async () => 
   const client = new OutlinerClient(socket);
   const service = await client.request<OutlinerServiceStatus>({ action: "ping" });
   expect(service).toEqual({ status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION });
-  expect(service.protocolVersion).toBe(43);
+  expect(service.protocolVersion).toBe(44);
   const provenance = {
     actorId: "omp",
     sessionId: "session-1",

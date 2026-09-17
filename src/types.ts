@@ -4,6 +4,7 @@ import type {
   InternResourceInput,
   RelocateResourceInput,
   ResourceRevisionRef,
+  ResourcePresentationContext,
 } from "./resources";
 
 export type {
@@ -16,6 +17,17 @@ export type {
   ResourceCapabilityDecision,
   ResourceCapabilityReport,
   ResourceDescription,
+  ResourceKind,
+  ResourcePlacement,
+  ResourcePresentationAttempt,
+  ResourcePresentationContext,
+  ResourcePresentationDecision,
+  ResourcePresentationHost,
+  ResourcePresentationSelection,
+  ResourceProviderAccess,
+  ResourceRenderer,
+  ResourceRepresentationKind,
+  ResourceSurface,
   ResourceFreshness,
   ResourcePolicy,
   ResourceProvider,
@@ -835,6 +847,7 @@ export interface OutlinerClientRegistration {
   locked?: boolean;
   currentTarget?: OutlinerNavigationTarget;
   runtime?: OutlinerClientRuntime;
+  resourcePresentation?: ResourcePresentationContext;
 }
 
 export type PageAddressKind = "page" | "alias" | "work-id";
@@ -1048,7 +1061,7 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 43;
+export const OUTLINER_PROTOCOL_VERSION = 44;
 
 
 export interface OutlinerServiceStatus {
