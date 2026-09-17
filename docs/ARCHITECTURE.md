@@ -75,12 +75,19 @@ resolution declines the chord.
 
 Detail owns an exact block-or-resource target, a bounded in-process target
 history, and a visible `Unlocked | Locked` state. Resource targets are addressed
-by durable Resource UUID without a synthetic block. A web Resource opens its
-cached Markdown without provider access; the first open fetches when no cache
-exists, `r` conditionally refreshes it, `v` selects exact cached Markdown for an
-Outliner-owned annotation, and `Alt+O` opens the canonical HTTP URL externally.
-The preview keeps freshness, adapter provenance, and original annotation
-evidence visible after changed or failed refreshes. Other Resource providers
+by durable Resource UUID without a synthetic block. Opening a web Resource reads
+local state only. It selects the latest suitable immutable Markdown
+representation when one exists and reports `unknown` with no-cache guidance
+when one does not. `r` explicitly refreshes against the provider, `v` selects
+exact cached Markdown for an Outliner-owned annotation, and `Alt+O` opens the
+canonical HTTP URL externally. Detail renders the mutable
+`fresh | stale | unknown | refreshing | failed` status separately from the
+selected immutable content. `ResourceDescription.webHistory` carries retained
+source snapshots, representations, and annotations independently of the
+nullable selected document, so relocation and offline failure do not hide
+evidence. Detail exposes snapshot/representation identifiers and metadata,
+including explicit unknown fields on incomplete legacy evidence. Failed
+refreshes keep prior content and annotation evidence visible. Other Resource providers
 still render read-only identity metadata. Block editing, backlinks, and Tree
 reveal stay unavailable for Resource targets. An unlocked Detail is eligible for
 same-tab Tree previews and confirmed opens. Ordinary navigation can target only
@@ -281,12 +288,24 @@ project-documentation mutations.
 - `workflow_promotions` — idempotent exact-preview publication receipt linking one workflow request to its canonical result block.
 - `resource_sources` — durable provider identity, provider-qualified boundary, workspace policy, immutable filesystem root binding when applicable, and timestamps.
 - `resources` — durable Resource UUID, Source-qualified normalized provider address, optional media type, resource version, address version, and timestamps; `(source_id, canonical_key)` is unique without merging identities across Sources.
-- `web_resource_documents` — one current web cache per Resource address version: canonical URL, HTTP validator, source hash, exact Markdown, adapter identity, representation hash, freshness, and refresh diagnostics.
-- `web_resource_annotations` — append-only original web annotation evidence: Resource, provider revision, representation provenance, exact quote with bounded context, body, and timestamp.
+- `web_source_snapshots` — immutable provider observations keyed by snapshot ID, with Resource/address epoch, canonical URL, source hash, provider revision and validators, fetched time, and full source HTML. HTML is nullable for migrated legacy singleton caches; URL, source hash, and fetch time are also nullable for unmatched legacy annotation evidence that never recorded them.
+- `web_representations` — immutable named derivations keyed by representation ID and source snapshot ID, with media type, adapter identity and version, representation hash, derived time, and Markdown content. Markdown is nullable for metadata-only legacy annotation evidence, and its unrecorded derivation time remains null.
+- `web_resource_state` — one mutable row per web Resource containing current snapshot and representation pointers, five-state freshness, check/error diagnostics, address epoch, and the compare-and-swap version used to reject stale refresh completion.
+- `web_resource_annotations` — append-only annotation evidence with foreign keys to the Resource, source snapshot, and representation, plus retained provider revision and representation provenance, exact anchor, body, and timestamp.
+
+`web_resource_documents` no longer exists. Migration creates one immutable
+snapshot and representation for each legacy singleton cache, points
+`web_resource_state` at them, and attaches legacy annotations to those exact
+records in one transaction. The migration is idempotent. It marks unavailable
+legacy HTML, Markdown, URL, hash, fetch time, or derivation time as unknown
+instead of synthesizing bytes or metadata. Refresh stores source and
+representation records before it advances the state pointers; relocation
+clears those pointers for the new address epoch while `webHistory` keeps the
+retained evidence inspectable.
 
 ## Protocol
 
-The current protocol version is `39`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
+The current protocol version is `40`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
 
 ### Important request families
 

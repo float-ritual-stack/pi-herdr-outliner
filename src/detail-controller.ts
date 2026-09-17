@@ -980,8 +980,58 @@ export function createDetailController(
     syncPropertyInspector(null, true);
   };
 
+  const providerRevisionLabel = (
+    revision: NonNullable<ResourceDescription["web"]>["sourceSnapshot"]["revision"],
+  ): string => {
+    const providerRevision = revision.revision;
+    if (providerRevision.kind === "filesystem") {
+      return `filesystem mtime ${providerRevision.mtimeNs}, ${providerRevision.size} bytes`;
+    }
+    if (providerRevision.kind === "web") {
+      const validator = providerRevision.validator;
+      if (validator.kind === "etag") {
+        return `web ETag ${validator.weak ? "W/" : ""}${validator.value}`;
+      }
+      if (validator.kind === "last-modified") {
+        return `web Last-Modified ${validator.value}`;
+      }
+      return `web content hash ${validator.value}`;
+    }
+    return `GitHub ${providerRevision.validator.kind} ${providerRevision.validator.value}`;
+  };
+
+  const freshnessGuidance = (
+    freshness: NonNullable<ResourceDescription["webStatus"]>["freshness"],
+    hasLocalContent: boolean,
+  ): string => {
+    switch (freshness) {
+      case "fresh":
+        return "The latest observed snapshot is within the local freshness window.";
+      case "stale":
+        return "The selected content is local and older than the freshness window. Press r to refresh explicitly.";
+      case "unknown":
+        return hasLocalContent
+          ? "Provider freshness has not been checked. Press r to refresh explicitly."
+          : "No local snapshot is available. Press r to refresh explicitly. Opening this resource only reads local storage and never contacts the provider.";
+      case "refreshing":
+        return hasLocalContent
+          ? "Refresh is reconciling with the provider. The selected immutable content remains available until persistence succeeds."
+          : "Refresh is reconciling with the provider. No local snapshot is available yet.";
+      case "failed":
+        return hasLocalContent
+          ? "The last refresh failed. The selected immutable content remains available."
+          : "The last refresh failed and no local snapshot is available. Press r to retry explicitly.";
+      default: {
+        const exhaustive: never = freshness;
+        return exhaustive;
+      }
+    }
+  };
+
   const resourceDocumentText = (description: ResourceDescription): string => {
-    const { resource, source, web } = description;
+    const { resource, source, web, webHistory } = description;
+    const externalUrl = web?.sourceSnapshot.canonicalUrl ??
+      (resource.address.kind === "web" ? resource.address.url : null);
     const lines = web
       ? [
           web.markdown,
@@ -990,14 +1040,8 @@ export function createDetailController(
           "",
           "## Web resource",
           "",
-          `[Open externally](<${web.canonicalUrl}>)`,
-          "",
-          `- Freshness: **${web.freshness}**`,
-          `- Fetched: ${web.fetchedAt}`,
-          `- Checked: ${web.checkedAt}`,
-          `- Adapter: \`${web.representation.adapter.id}@${web.representation.adapter.version}\``,
-          `- Resource ID: \`${resource.id}\``,
-          ...(web.lastError ? [`- Refresh error: ${web.lastError}`] : []),
+          `[Stable resource link](${outlinerLinkUri("resource", resource.id)})`,
+          ...(externalUrl ? ["", `[Open externally](<${externalUrl}>)`] : []),
         ]
       : [
           `# ${resourceAddressLabel(resource.address)}`,
@@ -1006,28 +1050,84 @@ export function createDetailController(
           ...(resource.provider === "web"
             ? ["", `[Open externally](<${resource.address.url}>)`]
             : []),
-          "",
-          `- Resource ID: \`${resource.id}\``,
-          `- Source: ${source.name} (\`${source.id}\`)`,
-          `- Provider: \`${resource.provider}\``,
-          `- Address version: \`${resource.addressVersion}\``,
-          `- Requested revision: ${
-            description.requestedRevision
-              ? `address version ${description.requestedRevision.addressVersion}`
-              : "latest address"
-          }`,
-          ...(description.webError ? [`- Read error: ${description.webError}`] : []),
         ];
-    if (web?.annotations.length) {
+    if (resource.provider === "web") {
+      const freshness = description.webStatus?.freshness ?? "unknown";
+      lines.push(
+        "",
+        "## Local status",
+        "",
+        `- Freshness: **${freshness}**`,
+        `- Checked: ${description.webStatus?.checkedAt ?? "Never"}`,
+        ...(description.webStatus?.lastError
+          ? [`- Last refresh error: ${description.webStatus.lastError}`]
+          : []),
+        "",
+        freshnessGuidance(freshness, web !== null),
+      );
+    }
+    if (web) {
+      lines.push(
+        "",
+        "## Selected immutable content",
+        "",
+        `- Source snapshot ID: \`${web.sourceSnapshot.id}\``,
+        `- Source hash: ${web.sourceSnapshot.contentHash ? `\`${web.sourceSnapshot.contentHash}\`` : "Unknown"}`,
+        `- Provider revision: ${providerRevisionLabel(web.sourceSnapshot.revision)}`,
+        `- Fetched: ${web.sourceSnapshot.fetchedAt ?? "Unknown"}`,
+        `- Source body available: ${web.sourceSnapshot.bodyAvailable ? "yes" : "no"}`,
+        `- Representation ID: \`${web.representation.id}\``,
+        `- Adapter: \`${web.representation.adapter.id}@${web.representation.adapter.version}\``,
+        `- Representation hash: \`${web.representation.contentHash}\``,
+        `- Derived: ${web.representation.derivedAt ?? "Unknown"}`,
+        `- Representation content available: ${web.representation.contentAvailable ? "yes" : "no"}`,
+      );
+    } else {
+      lines.push(
+        "",
+        "## Resource identity",
+        "",
+        `- Resource ID: \`${resource.id}\``,
+        `- Source: ${source.name} (\`${source.id}\`)`,
+        `- Provider: \`${resource.provider}\``,
+        `- Address version: \`${resource.addressVersion}\``,
+        `- Requested revision: ${
+          description.requestedRevision
+            ? `address version ${description.requestedRevision.addressVersion}`
+            : "latest address"
+        }`,
+        ...(description.webError ? [`- Read error: ${description.webError}`] : []),
+      );
+    }
+    if (webHistory) {
+      lines.push(
+        "",
+        "## Retained history",
+        "",
+        `- Source snapshots: ${webHistory.sourceSnapshots.length}`,
+        `- Representations: ${webHistory.representations.length}`,
+      );
+      for (const snapshot of webHistory.sourceSnapshots) {
+        lines.push(
+          `- Snapshot \`${snapshot.id}\` · address v${snapshot.addressVersion} · ${snapshot.canonicalUrl ?? "URL unknown"} · ${snapshot.contentHash ?? "hash unknown"} · fetched ${snapshot.fetchedAt ?? "unknown"} · body ${snapshot.bodyAvailable ? "available" : "unavailable"}`,
+        );
+      }
+      for (const representation of webHistory.representations) {
+        lines.push(
+          `- Representation \`${representation.id}\` · snapshot \`${representation.sourceSnapshotId}\` · \`${representation.adapter.id}@${representation.adapter.version}\` · ${representation.contentHash} · derived ${representation.derivedAt ?? "unknown"} · content ${representation.contentAvailable ? "available" : "unavailable"}`,
+        );
+      }
+    }
+    if (webHistory?.annotations.length) {
       lines.push("", "## Annotations");
-      for (const annotation of web.annotations) {
+      for (const annotation of webHistory.annotations) {
         lines.push(
           "",
           `> ${annotation.anchor.exact.replaceAll("\n", "\n> ")}`,
           "",
           annotation.body,
           "",
-          `Original evidence: \`${annotation.representation.contentHash}\` · ${annotation.createdAt}`,
+          `Original evidence: snapshot \`${annotation.sourceSnapshotId}\` · representation \`${annotation.representationId}\` · hash \`${annotation.representation.contentHash}\` · ${annotation.createdAt}`,
         );
       }
     }
@@ -1467,8 +1567,8 @@ export function createDetailController(
         target = {
           kind: "web-resource",
           resourceId: detailResourceDescription(state)!.resource.id,
-          revision: web.revision,
-          representation: web.representation,
+          sourceSnapshotId: web.sourceSnapshot.id,
+          representationId: web.representation.id,
           anchor: {
             start: offsets.start,
             end: offsets.end,
@@ -1835,9 +1935,30 @@ export function createDetailController(
         try {
           const refreshed = await effects.refreshResource(description.resource.id);
           await loadCurrentTarget(true);
-          state.status = refreshed.web?.freshness === "failed"
-            ? `Refresh failed · showing cached Markdown · ${refreshed.web.lastError}`
-            : "Web resource refreshed";
+          const freshness = refreshed.webStatus?.freshness ?? "unknown";
+          switch (freshness) {
+            case "fresh":
+              state.status = "Web resource refreshed";
+              break;
+            case "stale":
+              state.status = "Refresh completed · selected local content remains stale";
+              break;
+            case "unknown":
+              state.status = "Refresh completed · provider freshness remains unknown";
+              break;
+            case "refreshing":
+              state.status = "Web resource refresh is still in progress";
+              break;
+            case "failed":
+              state.status = refreshed.web
+                ? `Refresh failed · showing selected immutable content · ${refreshed.webStatus?.lastError ?? "Unknown error"}`
+                : `Refresh failed · no local snapshot · ${refreshed.webStatus?.lastError ?? "Unknown error"}`;
+              break;
+            default: {
+              const exhaustive: never = freshness;
+              state.status = exhaustive;
+            }
+          }
         } catch (error) {
           state.status = errorMessage(error);
         } finally {
@@ -1858,7 +1979,7 @@ export function createDetailController(
         }
         const url = intent.type === "resource.open-url"
           ? intent.url
-          : description.web?.canonicalUrl ?? description.resource.address.url;
+          : description.web?.sourceSnapshot.canonicalUrl ?? description.resource.address.url;
         await effects.openExternal(url);
         state.status = "Opened URL externally";
         break;

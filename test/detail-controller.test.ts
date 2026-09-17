@@ -221,6 +221,8 @@ function createHarness(
           requestedRevision: target.revision ?? null,
           capabilities: deriveResourceCapabilityReport(source, true),
           web: null,
+          webHistory: null,
+          webStatus: null,
         },
       };
     },
@@ -355,13 +357,8 @@ function createHarness(
         deduplicated: false,
       };
     },
-    async createWebAnnotation(input) {
-      return {
-        id: "web-annotation-1",
-        ...input,
-        body: input.body,
-        createdAt: "created",
-      };
+    async createWebAnnotation() {
+      throw new Error("No web resource configured");
     },
     async refreshResource() {
       throw new Error("No web resource configured");
@@ -890,45 +887,77 @@ describe("detail controller projection and deferred refresh", () => {
       createdAt: "created",
       updatedAt: "updated",
     };
-    const description = (markdown: string, revision: string): ResourceDescription => ({
-      resource,
-      source,
-      requestedRevision: null,
-      capabilities: deriveResourceCapabilityReport(source, true),
-      web: {
+    const description = (markdown: string, revision: string): ResourceDescription => {
+      const sourceSnapshot = {
+        id: `source-snapshot-${revision}`,
+        resourceId: resource.id,
+        addressVersion: resource.addressVersion,
         canonicalUrl: resource.address.url,
-        markdown,
+        contentHash: revision.repeat(64).slice(0, 64),
         revision: {
           resourceId: resource.id,
           addressVersion: resource.addressVersion,
           revision: {
-            kind: "web",
-            validator: { kind: "etag", value: revision, weak: false },
+            kind: "web" as const,
+            validator: { kind: "etag" as const, value: revision, weak: false },
           },
         },
-        representation: {
-          mediaType: "text/markdown",
-          adapter: { id: "fixture", version: 1 },
-          contentHash: revision.repeat(64).slice(0, 64),
-        },
-        freshness: "fresh",
         fetchedAt: "2026-09-17T12:00:00.000Z",
-        checkedAt: "2026-09-17T12:00:00.000Z",
-        lastError: null,
-        annotations: [],
-      },
-    });
+        bodyAvailable: true,
+      };
+      const representation = {
+        id: `representation-${revision}`,
+        sourceSnapshotId: sourceSnapshot.id,
+        mediaType: "text/markdown" as const,
+        adapter: { id: "fixture", version: 1 },
+        contentHash: revision.repeat(64).slice(0, 64),
+        derivedAt: "2026-09-17T12:00:01.000Z",
+        contentAvailable: true,
+      };
+      return {
+        resource,
+        source,
+        requestedRevision: null,
+        capabilities: deriveResourceCapabilityReport(source, true),
+        web: {
+          markdown,
+          sourceSnapshot,
+          representation,
+        },
+        webHistory: {
+          sourceSnapshots: [sourceSnapshot],
+          representations: [representation],
+          annotations: [],
+        },
+        webStatus: {
+          freshness: "fresh",
+          checkedAt: "2026-09-17T12:00:02.000Z",
+          lastError: null,
+        },
+      };
+    };
     let current = description("# First\n\nStable quote", "a");
     const created: Array<Parameters<DetailEffects["createWebAnnotation"]>[0]> = [];
     const externalUrls: string[] = [];
     harness.effects.loadTarget = async () => ({ kind: "resource", target, description: current });
     harness.effects.createWebAnnotation = async (input) => {
       created.push(input);
-      return {
+      const web = current.web!;
+      const annotation = {
         id: "annotation-1",
         ...input,
+        revision: web.sourceSnapshot.revision,
+        representation: web.representation,
         createdAt: "2026-09-17T12:01:00.000Z",
       };
+      current = {
+        ...current,
+        webHistory: {
+          ...current.webHistory!,
+          annotations: [...current.webHistory!.annotations, annotation],
+        },
+      };
+      return annotation;
     };
     harness.effects.refreshResource = async () => {
       current = description("# Second\n\nChanged page", "b");
@@ -946,6 +975,67 @@ describe("detail controller projection and deferred refresh", () => {
 
     expect(harness.controller.state.resolvedSelectedText.startsWith("# First\n\nStable quote"))
       .toBe(true);
+    expect(harness.controller.state.resolvedSelectedText).toContain(
+      "- Freshness: **fresh**",
+    );
+    expect(harness.controller.state.resolvedSelectedText).toContain(
+      "- Source snapshot ID: `source-snapshot-a`",
+    );
+    expect(harness.controller.state.resolvedSelectedText).toContain(
+      `- Source hash: \`${"a".repeat(64)}\``,
+    );
+    expect(harness.controller.state.resolvedSelectedText).toContain(
+      "- Provider revision: web ETag a",
+    );
+    expect(harness.controller.state.resolvedSelectedText).toContain(
+      "- Fetched: 2026-09-17T12:00:00.000Z",
+    );
+    expect(harness.controller.state.resolvedSelectedText).toContain(
+      "- Representation ID: `representation-a`",
+    );
+    expect(harness.controller.state.resolvedSelectedText).toContain(
+      "- Adapter: `fixture@1`",
+    );
+    expect(harness.controller.state.resolvedSelectedText).toContain(
+      `- Representation hash: \`${"a".repeat(64)}\``,
+    );
+    expect(harness.controller.state.resolvedSelectedText).toContain(
+      "- Derived: 2026-09-17T12:00:01.000Z",
+    );
+    expect(harness.controller.state.resolvedSelectedText).toContain(
+      "## Retained history\n\n- Source snapshots: 1\n- Representations: 1",
+    );
+
+    for (
+      const [freshness, guidance] of [
+        ["stale", "older than the freshness window"],
+        ["unknown", "Provider freshness has not been checked"],
+        ["refreshing", "Refresh is reconciling with the provider"],
+        ["failed", "The last refresh failed"],
+      ] as const
+    ) {
+      current = {
+        ...current,
+        webStatus: {
+          freshness,
+          checkedAt: "2026-09-17T12:00:02.000Z",
+          lastError: freshness === "failed" ? "fixture offline" : null,
+        },
+      };
+      await harness.controller.onServiceEvent({
+        ...event("resource-catalog"),
+        resourceId: resource.id,
+      }, viewport);
+      expect(harness.controller.state.resolvedSelectedText).toContain(
+        `- Freshness: **${freshness}**`,
+      );
+      expect(harness.controller.state.resolvedSelectedText).toContain(guidance);
+    }
+    current = description("# First\n\nStable quote", "a");
+    await harness.controller.onServiceEvent({
+      ...event("resource-catalog"),
+      resourceId: resource.id,
+    }, viewport);
     await harness.controller.dispatch({
       type: "annotation.selection.begin",
       sourceLine: 2,
@@ -962,6 +1052,11 @@ describe("detail controller projection and deferred refresh", () => {
     await harness.controller.dispatch({ type: "buffer.save" }, viewport);
     expect(created[0]?.anchor.exact).toBe("Stable quote");
     expect(created[0]?.body).toBe("Keep this evidence");
+    expect(created[0]?.sourceSnapshotId).toBe("source-snapshot-a");
+    expect(created[0]?.representationId).toBe("representation-a");
+    expect(harness.controller.state.resolvedSelectedText).toContain(
+      "Original evidence: snapshot `source-snapshot-a` · representation `representation-a`",
+    );
 
     await harness.controller.dispatch({ type: "resource.open-external" }, viewport);
     expect(externalUrls).toEqual(["https://example.com/article"]);
@@ -973,12 +1068,27 @@ describe("detail controller projection and deferred refresh", () => {
     current = {
       ...description("# Unavailable", "c"),
       web: null,
+      webStatus: {
+        freshness: "unknown",
+        checkedAt: null,
+        lastError: null,
+      },
       webError: "fixture offline",
     };
     await harness.controller.onServiceEvent({
       ...event("resource-catalog"),
       resourceId: resource.id,
     }, viewport);
+    expect(harness.controller.state.resolvedSelectedText).toContain(
+      "- Freshness: **unknown**",
+    );
+    expect(harness.controller.state.resolvedSelectedText).toContain(
+      "No local snapshot is available. Press r to refresh explicitly.",
+    );
+    expect(harness.controller.state.resolvedSelectedText).toContain(
+      "Opening this resource only reads local storage and never contacts the provider.",
+    );
+    expect(harness.controller.state.resolvedSelectedText).not.toContain("# Unavailable");
     await harness.controller.dispatch({ type: "resource.open-external" }, viewport);
     expect(externalUrls).toEqual([
       "https://example.com/article",
