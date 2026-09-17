@@ -73,6 +73,9 @@ const webDescription: ResourceDescription = {
   },
   webHistory: null,
   webStatus: { freshness: "fresh", checkedAt: "2026-01-01T00:00:00.000Z", lastError: null },
+  remoteEntity: null,
+  remoteStatus: null,
+  availableCommands: [],
 };
 
 function guiContext(overrides: Partial<ResourcePresentationContext["host"]> = {}): ResourcePresentationContext {
@@ -221,6 +224,223 @@ test("honors workspace read policy for retained Markdown without requiring live 
   });
 });
 
+test("negotiates Jira and Linear entities plus application deep links without fabricating content", () => {
+  const jiraSource: ResourceSource = {
+    id: "10000000-0000-4000-8000-000000000003",
+    name: "Product Jira",
+    version: 1,
+    provider: "jira",
+    boundary: {
+      kind: "jira",
+      origin: "https://jira.example.test",
+      project: "PIE",
+      credentialEnv: "JIRA_TOKEN",
+    },
+    policy: { deniedCapabilities: [] },
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+  const jiraDescription: ResourceDescription = {
+    resource: {
+      id: "20000000-0000-4000-8000-000000000003",
+      sourceId: jiraSource.id,
+      version: 1,
+      addressVersion: 1,
+      provider: "jira",
+      address: { kind: "jira", entityId: "10042", key: "PIE-255" },
+      mediaType: "text/markdown",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    },
+    source: jiraSource,
+    requestedRevision: null,
+    capabilities: deriveResourceCapabilityReport(jiraSource, true),
+    web: null,
+    webHistory: null,
+    webStatus: null,
+    remoteEntity: {
+      title: "Remote entities",
+      metadata: { status: "In Progress", labels: ["resources", "providers"], parent: null },
+      markdown: "# Remote entities\n\nRetained Jira body.",
+      externalUrl: "https://jira.example.test/browse/OLD-1",
+      sourceSnapshot: {
+        provider: "jira",
+        resourceId: "20000000-0000-4000-8000-000000000003",
+        addressVersion: 1,
+        entityId: "10042",
+        locator: "PIE-255",
+        contentHash: "c".repeat(64),
+        revision: {
+          resourceId: "20000000-0000-4000-8000-000000000003",
+          addressVersion: 1,
+          revision: {
+            kind: "jira",
+            validator: { kind: "updated-at", value: "2026-01-01T00:00:00.000Z" },
+          },
+        },
+        fetchedAt: "2026-01-01T00:00:01.000Z",
+      },
+      representation: {
+        mediaType: "text/markdown",
+        adapter: { id: "jira.issue-markdown", version: 1 },
+        contentHash: "d".repeat(64),
+        derivedAt: "2026-01-01T00:00:02.000Z",
+      },
+      commandDescriptors: [],
+    },
+    remoteStatus: {
+      freshness: "fresh",
+      checkedAt: "2026-01-01T00:00:03.000Z",
+      lastError: null,
+    },
+    availableCommands: [],
+  };
+  const context: ResourcePresentationContext = {
+    ...TUI_RESOURCE_PRESENTATION_CONTEXT,
+    providerAccess: { credentials: "available", connectivity: "available" },
+  };
+  expect(negotiateResourcePresentation(jiraDescription, context)).toMatchObject({
+    resourceKind: "entity",
+    selected: {
+      representation: "cached-markdown",
+      renderer: "markdown",
+      adapter: { id: "jira.issue-markdown", version: 1 },
+      externalUrl: "https://jira.example.test/browse/PIE-255",
+    },
+  });
+  const linearSource: ResourceSource = {
+    id: "10000000-0000-4000-8000-000000000005",
+    name: "Product Linear",
+    version: 1,
+    provider: "linear",
+    boundary: {
+      kind: "linear",
+      origin: "https://api.linear.app",
+      workspace: "float",
+      credentialEnv: "LINEAR_TOKEN",
+    },
+    policy: { deniedCapabilities: [] },
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+  const linearDescription: ResourceDescription = {
+    resource: {
+      id: "20000000-0000-4000-8000-000000000005",
+      sourceId: linearSource.id,
+      version: 1,
+      addressVersion: 1,
+      provider: "linear",
+      address: {
+        kind: "linear",
+        entityId: "5a726eff-a292-4f23-b755-9bd9ff1b1241",
+        identifier: "PIE-256",
+      },
+      mediaType: "text/markdown",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    },
+    source: linearSource,
+    requestedRevision: null,
+    capabilities: deriveResourceCapabilityReport(linearSource, true),
+    web: null,
+    webHistory: null,
+    webStatus: null,
+    remoteEntity: {
+      title: "PIE-256",
+      metadata: { state: "In Progress" },
+      markdown: "# PIE-256",
+      externalUrl: "https://linear.app/float/issue/PIE-256",
+      sourceSnapshot: {
+        provider: "linear",
+        resourceId: "20000000-0000-4000-8000-000000000005",
+        addressVersion: 1,
+        entityId: "5a726eff-a292-4f23-b755-9bd9ff1b1241",
+        locator: "PIE-256",
+        contentHash: "c".repeat(64),
+        revision: {
+          resourceId: "20000000-0000-4000-8000-000000000005",
+          addressVersion: 1,
+          revision: {
+            kind: "linear",
+            validator: { kind: "updated-at", value: "2026-01-01T00:00:00.000Z" },
+          },
+        },
+        fetchedAt: "2026-01-01T00:00:00.000Z",
+      },
+      representation: {
+        mediaType: "text/markdown",
+        adapter: { id: "remote-entity-markdown", version: 1 },
+        contentHash: "d".repeat(64),
+        derivedAt: "2026-01-01T00:00:00.000Z",
+      },
+      commandDescriptors: [],
+    },
+    remoteStatus: {
+      freshness: "unknown",
+      checkedAt: null,
+      lastError: null,
+    },
+    availableCommands: [],
+  };
+  expect(negotiateResourcePresentation(linearDescription, context)).toMatchObject({
+    resourceKind: "entity",
+    selected: {
+      representation: "cached-markdown",
+      renderer: "markdown",
+      externalUrl: "https://linear.app/float/issue/PIE-256",
+    },
+  });
+
+  const applicationSource: ResourceSource = {
+    id: "10000000-0000-4000-8000-000000000004",
+    name: "Local application",
+    version: 1,
+    provider: "application",
+    boundary: {
+      kind: "application",
+      scheme: "slack",
+      authority: "channel",
+      namespace: "workspace",
+    },
+    policy: { deniedCapabilities: [] },
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+  const applicationDescription: ResourceDescription = {
+    resource: {
+      id: "20000000-0000-4000-8000-000000000004",
+      sourceId: applicationSource.id,
+      version: 1,
+      addressVersion: 1,
+      provider: "application",
+      address: { kind: "application", uri: "slack://channel/workspace/C0123" },
+      mediaType: null,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    },
+    source: applicationSource,
+    requestedRevision: null,
+    capabilities: deriveResourceCapabilityReport(applicationSource, true),
+    web: null,
+    webHistory: null,
+    webStatus: null,
+    remoteEntity: null,
+    remoteStatus: null,
+    availableCommands: [],
+  };
+  expect(negotiateResourcePresentation(
+    applicationDescription,
+    TUI_RESOURCE_PRESENTATION_CONTEXT,
+  )).toMatchObject({
+    resourceKind: "application",
+    selected: {
+      representation: "metadata",
+      renderer: "metadata",
+      externalUrl: "slack://channel/workspace/C0123",
+    },
+  });
+});
+
 test("treats PDF as media type while selecting a native GUI renderer", () => {
   const filesystemSource: ResourceSource = {
     id: "10000000-0000-4000-8000-000000000002",
@@ -260,6 +480,9 @@ test("treats PDF as media type while selecting a native GUI renderer", () => {
     web: null,
     webHistory: null,
     webStatus: null,
+    remoteEntity: null,
+    remoteStatus: null,
+    availableCommands: [],
   };
   const negotiated = negotiateResourcePresentation(pdfDescription, {
     surface: "native",

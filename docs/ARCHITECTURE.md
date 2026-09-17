@@ -75,16 +75,17 @@ resolution declines the chord.
 
 Detail owns an exact block-or-resource target, a bounded in-process target
 history, and a visible `Unlocked | Locked` state. Resource targets are addressed
-by durable Resource UUID without a synthetic block. Opening a web Resource reads
-local state only. It selects the latest suitable immutable Markdown
-representation when one exists and reports `unknown` with no-cache guidance
-when one does not. `r` explicitly refreshes against the provider, `v` selects
-exact cached Markdown for an Outliner-owned annotation, and `Alt+O` opens the
-canonical HTTP URL externally. Detail renders mutable web freshness separately
-from selected immutable content. Filesystem PDFs refresh from the confined local
-file; HTTP PDFs follow the same explicit provider-refresh boundary. Both expose
-retained binary snapshots, native PDF representations, and page-aware Markdown
-representations without changing Resource identity.
+by durable Resource UUID without a synthetic block. Opening web, Jira, and
+Linear Resources reads local state only. It selects the latest suitable
+immutable Markdown representation when one exists and reports `unknown` with
+no-cache guidance when one does not. `r` explicitly refreshes against the
+provider, `v` selects exact cached Markdown for an Outliner-owned annotation,
+and `Alt+O` opens only the negotiated current-Resource URL. Detail renders
+mutable provider freshness separately from selected immutable content.
+Filesystem PDFs refresh from the confined local file; HTTP PDFs follow the same
+explicit provider-refresh boundary. Both expose retained binary snapshots,
+native PDF representations, and page-aware Markdown representations without
+changing Resource identity.
 
 Resource presentation negotiation is a pure boundary above `ResourceCatalog`.
 Resource kind, provider access, representation kind, renderer, Surface,
@@ -108,22 +109,34 @@ Web and PDF annotations are listed by Resource subject through
 replacement do not hide target or resolution evidence. Detail exposes
 snapshot/representation identifiers and metadata, including explicit unknown
 fields on incomplete legacy evidence. Failed refreshes keep prior content and
-annotation history visible. Other Resource providers still render read-only
-identity metadata.
+annotation history visible.
 
-Resource retention is a separate transactional module above immutable web and
-PDF history tables. The workspace policy protects the newest configured
-snapshots and active-adapter representations. Current pointers, every immutable
-annotation target and resolution candidate, explicit pins, durable
-review/publication references, and exact revisions held by live Details add
-independent protection roots. Eviction clears only web HTML, derived Markdown,
-or PDF source bytes and marks an `evictedAt` tombstone; it never acts like
-Trash, user deletion, or redaction. A later purge pass deletes only unprotected
-evicted metadata after its grace period. Native and extracted PDF
-representations participate in pin/reference/audit accounting, and
-representation protection propagates to its source snapshot. Unpinned open
-still uses the current newest suitable cached representation without provider
-access.
+Jira and Linear Sources are provider instances. Their Resource canonical key
+is the immutable remote entity ID scoped by Source; the Jira key or Linear
+identifier is only a mutable locator. Explicit refresh persists an immutable
+structured snapshot and a versioned Markdown representation, then updates a
+changed locator without replacing the Resource UUID. Typed provider commands
+form a closed runtime-validated union. Dispatch resolves the stored Resource
+identity and requires provider support, credentials, workspace policy,
+connectivity, and a capable live Detail before I/O. Application Resources may
+remain deep-link-only: metadata is a valid TUI presentation, while external
+hosts can select `external-link` without an invented inline representation.
+Local deep-link launch requires `open-external` policy and host support but no
+provider credential or connectivity observation.
+
+Resource retention is a separate transactional module above immutable web,
+PDF, and remote-entity history tables. The workspace policy protects the
+newest configured snapshots and active-adapter representations. Current
+pointers, every immutable annotation target and resolution candidate, explicit
+pins, durable review/publication references, and exact revisions held by live
+Details add independent protection roots. Eviction clears only web HTML,
+derived Markdown, PDF source bytes, or remote structured payloads and marks an
+`evictedAt` tombstone; it never acts like Trash, user deletion, or redaction. A
+later purge pass deletes only unprotected evicted metadata after its grace
+period. Native and extracted PDF representations participate in
+pin/reference/audit accounting, and representation protection propagates to
+its source snapshot. Unpinned open still uses the current newest suitable
+cached representation without provider access.
 
 Block editing, backlinks, and Tree
 reveal stay unavailable for Resource targets. An unlocked Detail is eligible for

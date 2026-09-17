@@ -25,7 +25,7 @@ The project started as a small Friday-night experiment and grew into a durable w
 
 - SQLite-backed hierarchical blocks with stable UUIDs, sibling order, authors, timestamps, and one canonical graph per workspace root.
 - Workspace-isolated service and runtime paths.
-- JSON-lines RPC protocol v46 over a Unix socket.
+- JSON-lines RPC protocol v47 over a Unix socket.
 - Reactive canonical content/view broadcasts, per-process Tree/Detail registration with Detail lock availability, exact-client UI commands, and source-aware `preview | open | reveal` navigation.
 - Durable resources have UUID identities independent of blocks and mutable locators. Provider-qualified Sources bind filesystem roots or remote namespaces; overlapping Sources remain distinct, relocations preserve Resource IDs, provider revisions remain explicit, and capability resolution reports blockers across provider, credentials, workspace policy, host, and connectivity. Registered Detail hosts declare Surface, Placement, renderer, capability, credential, and connectivity facts; open/describe/refresh deterministically negotiate cached Markdown, embedded-browser, native-document, metadata, or external-link representations without changing Resource identity. PDF is a media type reachable through filesystem and web Sources: one captured binary snapshot can produce both native PDF and page-aware Markdown representations through versioned replaceable extractors.
 - Each Tree owns its cursor, occurrence selection, filter, viewport, collapsed rows, multiline expansion, explicit-navigation history, and browsing context; moving a Tree previews only in the first unlocked same-tab Detail and never replaces a locked anchor.
@@ -102,6 +102,29 @@ evidence named by annotation history, allows native or extracted
 representations to be pinned/referenced independently, propagates that
 protection to source bytes, and records the same explicit
 available/evicted/purged lifecycle for every PDF artifact.
+
+### Remote entities and application deep links
+
+Jira and Linear Sources represent one provider instance without storing
+credentials. A remote entity Resource is keyed by the Source plus the
+provider's immutable entity ID; Jira keys and Linear identifiers remain
+mutable display locators. Opening is local-only. Explicit refresh performs the
+provider request, stores an immutable structured snapshot and a versioned
+Markdown representation, updates a changed display locator without changing
+the Resource UUID, and keeps prior retained content visible after failure.
+
+Provider commands are a closed, schema-checked protocol union rather than
+generic mutation authority. The current Jira and Linear adapters expose
+`comment.create` only when the provider supports it and credentials,
+workspace policy, connectivity, and the destination host all allow
+`command`. The server resolves the Resource and immutable entity identity
+before execution; clients cannot select an entity through a mutable key.
+
+Application Resources may contain only a validated deep link. They still
+negotiate useful metadata in the TUI and an `external-link` on external hosts
+without fabricating an inline document. `Alt+O` launches only the negotiated
+current-Resource URL after `open-external` policy and host checks. Opening a
+deep link does not imply read or command authority.
 
 ## Quick start
 

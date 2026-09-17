@@ -12,6 +12,11 @@ import {
 import { PdfJsTextExtractor, type PdfTextExtractor } from "./pdf-text";
 import { ResourceRetentionRepository } from "./resource-retention";
 import {
+  DefaultRemoteEntityProviderClient,
+  REMOTE_ENTITY_MARKDOWN_ADAPTER,
+  type RemoteEntityProviderClient,
+} from "./remote-entity";
+import {
   ResourceCatalogError,
   deriveResourceCapabilityReport,
   normalizeInternResourceInput,
@@ -48,6 +53,10 @@ import {
   type WebResourceDocument,
   type WebResourceStatus,
   type WebSourceSnapshotProvenance,
+  type RemoteEntityDocument,
+  type RemoteEntityProvider,
+  type ResourceProviderCommandInput,
+  type ResourceProviderCommandReceipt,
 } from "./resources";
 
 const MAX_FILESYSTEM_RESOURCE_BYTES = 2 * 1024 * 1024;
@@ -152,6 +161,45 @@ interface PdfResourceStateRow {
   representation_id: string | null;
 }
 
+interface RemoteEntitySourceSnapshotRow {
+  id: string;
+  resource_id: string;
+  address_version: number;
+  provider: RemoteEntityProvider;
+  entity_id: string;
+  revision_json: string;
+  payload_json: string | null;
+  captured_at: string;
+  payload_state: "available" | "evicted";
+  payload_bytes: number;
+  evicted_at: string | null;
+}
+
+interface RemoteEntityRepresentationRow {
+  id: string;
+  source_snapshot_id: string;
+  media_type: "text/markdown";
+  adapter_id: string;
+  version: number;
+  content_hash: string;
+  markdown: string | null;
+  derived_at: string;
+  payload_state: "available" | "evicted";
+  payload_bytes: number;
+  evicted_at: string | null;
+}
+
+interface RemoteEntityResourceStateRow {
+  resource_id: string;
+  address_version: number;
+  generation: number;
+  source_snapshot_id: string | null;
+  representation_id: string | null;
+  freshness: ResourceFreshness;
+  checked_at: string | null;
+  last_error: string | null;
+}
+
 interface PdfObservation {
   readonly locator: string;
   readonly contentHash: string;
@@ -220,6 +268,7 @@ export interface ResourceCatalogOptions {
   readonly webStaleAfterMs?: number;
   readonly workspaceRoot?: string;
   readonly maximumPdfBytes?: number;
+  readonly remoteEntityClient?: RemoteEntityProviderClient;
 }
 
 const DEFAULT_MAXIMUM_WEB_BYTES = 2 * 1024 * 1024;
@@ -270,6 +319,51 @@ const LegacyRepresentationEvidenceSchema = Type.Object({
   }),
   contentHash: Type.String(),
 });
+const RemoteEntityCommandDescriptorSchema = Type.Union([
+  Type.Object({
+    provider: Type.Literal("jira"),
+    command: Type.Literal("comment.create"),
+    label: Type.String(),
+    input: Type.Object({
+      body: Type.Object({
+        type: Type.Literal("string"),
+        required: Type.Literal(true),
+        maxLength: Type.Literal(10_000),
+      }, { additionalProperties: false }),
+    }, { additionalProperties: false }),
+  }, { additionalProperties: false }),
+  Type.Object({
+    provider: Type.Literal("linear"),
+    command: Type.Literal("comment.create"),
+    label: Type.String(),
+    input: Type.Object({
+      body: Type.Object({
+        type: Type.Literal("string"),
+        required: Type.Literal(true),
+        maxLength: Type.Literal(10_000),
+      }, { additionalProperties: false }),
+    }, { additionalProperties: false }),
+  }, { additionalProperties: false }),
+]);
+const RemoteEntitySnapshotPayloadSchema = Type.Object({
+  title: Type.String(),
+  metadata: Type.Record(
+    Type.String(),
+    Type.Union([Type.String(), Type.Array(Type.String()), Type.Null()]),
+  ),
+  externalUrl: Type.String(),
+  locator: Type.String(),
+  contentHash: Type.String(),
+  commandDescriptors: Type.Array(RemoteEntityCommandDescriptorSchema),
+}, { additionalProperties: false });
+interface RemoteEntitySnapshotPayload {
+  readonly title: string;
+  readonly metadata: RemoteEntityDocument["metadata"];
+  readonly externalUrl: string;
+  readonly locator: string;
+  readonly contentHash: string;
+  readonly commandDescriptors: RemoteEntityDocument["commandDescriptors"];
+}
 type InternIdentity = Static<typeof InternIdentitySchema>;
 type RelocationIdentity = Static<typeof RelocationIdentitySchema>;
 
@@ -301,6 +395,17 @@ function parseLegacyRepresentationEvidence(
     throw new ResourceCatalogError(
       "invalid-input",
       "Legacy web annotation representation provenance is invalid",
+    );
+  }
+}
+
+function parseRemoteEntitySnapshotPayload(value: unknown): RemoteEntitySnapshotPayload {
+  try {
+    return Parse(RemoteEntitySnapshotPayloadSchema, value);
+  } catch {
+    throw new ResourceCatalogError(
+      "source-unavailable",
+      "Stored remote entity snapshot payload is invalid",
     );
   }
 }
@@ -346,6 +451,18 @@ function sourceFromRow(row: SourceRow): ResourceSource {
         provider: "github",
         boundary: { kind: "github", ...normalized.boundary },
       };
+    case "jira":
+      return {
+        ...header,
+        provider: "jira",
+        boundary: { kind: "jira", ...normalized.boundary },
+      };
+    case "linear":
+      return {
+        ...header,
+        provider: "linear",
+        boundary: { kind: "linear", ...normalized.boundary },
+      };
     case "application":
       return {
         ...header,
@@ -388,6 +505,10 @@ function resourceFromRow(row: ResourceRow, source: ResourceSource): Resource {
       return { ...header, provider: "web", address: normalized.address };
     case "github":
       return { ...header, provider: "github", address: normalized.address };
+    case "jira":
+      return { ...header, provider: "jira", address: normalized.address };
+    case "linear":
+      return { ...header, provider: "linear", address: normalized.address };
     case "application":
       return { ...header, provider: "application", address: normalized.address };
   }
@@ -533,6 +654,7 @@ export class ResourceCatalog {
   private readonly fetcher: typeof globalThis.fetch;
   private readonly webExtractor: WebMarkdownExtractor;
   private readonly pdfExtractor: PdfTextExtractor;
+  private readonly remoteEntityClient: RemoteEntityProviderClient;
   private readonly now: () => string;
   private readonly maximumWebBytes: number;
   private readonly maximumPdfBytes: number;
@@ -540,6 +662,8 @@ export class ResourceCatalog {
   private readonly workspaceRoot: string;
   private readonly pendingWebRefreshes = new Map<string, Promise<ResourceDescription>>();
   private readonly pendingPdfRefreshes = new Map<string, Promise<ResourceDescription>>();
+  private readonly pendingRemoteEntityRefreshes =
+    new Map<string, Promise<ResourceDescription>>();
   readonly retention: ResourceRetentionRepository;
 
   constructor(
@@ -550,6 +674,12 @@ export class ResourceCatalog {
     this.webExtractor = options.webExtractor ?? new BasicWebMarkdownExtractor();
     this.pdfExtractor = options.pdfExtractor ?? new PdfJsTextExtractor();
     this.now = options.now ?? (() => new Date().toISOString());
+    this.remoteEntityClient = options.remoteEntityClient ??
+      new DefaultRemoteEntityProviderClient({
+        fetch: this.fetcher,
+        resolveCredential: (name) => process.env[name],
+        now: this.now,
+      });
     this.maximumWebBytes = options.maximumWebBytes ?? DEFAULT_MAXIMUM_WEB_BYTES;
     this.maximumPdfBytes = options.maximumPdfBytes ?? DEFAULT_MAXIMUM_PDF_BYTES;
     this.webStaleAfterMs = options.webStaleAfterMs ?? DEFAULT_WEB_STALE_AFTER_MS;
@@ -567,10 +697,12 @@ export class ResourceCatalog {
         this.webExtractor.adapter,
         this.pdfExtractor.adapter,
         PDF_NATIVE_ADAPTER,
+        REMOTE_ENTITY_MARKDOWN_ADAPTER,
       ],
       markMutation: () => this.bumpSequence(),
     });
     this.recoverInterruptedWebRefreshes();
+    this.recoverInterruptedRemoteEntityRefreshes();
   }
 
   createSource(value: unknown): ResourceSource {
@@ -768,6 +900,22 @@ export class ResourceCatalog {
           ON CONFLICT(resource_id) DO UPDATE SET
             address_version = excluded.address_version,
             generation = web_resource_state.generation + 1,
+            source_snapshot_id = NULL,
+            representation_id = NULL,
+            freshness = 'unknown',
+            checked_at = NULL,
+            last_error = NULL
+        `).run(resource.id, relocated.addressVersion);
+      }
+      if (relocated.provider === "jira" || relocated.provider === "linear") {
+        this.database.query(`
+          INSERT INTO remote_entity_resource_state (
+            resource_id, address_version, generation, source_snapshot_id,
+            representation_id, freshness, checked_at, last_error
+          ) VALUES (?, ?, 1, NULL, NULL, 'unknown', NULL, NULL)
+          ON CONFLICT(resource_id) DO UPDATE SET
+            address_version = excluded.address_version,
+            generation = remote_entity_resource_state.generation + 1,
             source_snapshot_id = NULL,
             representation_id = NULL,
             freshness = 'unknown',
@@ -1005,6 +1153,127 @@ export class ResourceCatalog {
     ) !== null;
   }
 
+  private remoteEntityStateFromCurrentRead(
+    resourceId: string,
+  ): RemoteEntityResourceStateRow | null {
+    return this.database.query(`
+      SELECT resource_id, address_version, generation, source_snapshot_id,
+             representation_id, freshness, checked_at, last_error
+      FROM remote_entity_resource_state
+      WHERE resource_id = ?
+    `).get(resourceId) as RemoteEntityResourceStateRow | null;
+  }
+
+  private remoteEntityStatusFromCurrentRead(
+    resource: Extract<Resource, { provider: RemoteEntityProvider }>,
+  ): WebResourceStatus {
+    const state = this.remoteEntityStateFromCurrentRead(resource.id);
+    if (!state || state.address_version !== resource.addressVersion) {
+      return { freshness: "unknown", checkedAt: null, lastError: null };
+    }
+    return {
+      freshness: state.freshness,
+      checkedAt: state.checked_at,
+      lastError: state.last_error,
+    };
+  }
+
+  private remoteEntityReadFromCurrentRead(
+    resource: Extract<Resource, { provider: RemoteEntityProvider }>,
+    requestedRevision: ResourceRevisionRef | null,
+  ): RemoteEntityDocument | null {
+    let snapshot: RemoteEntitySourceSnapshotRow | null;
+    let representation: RemoteEntityRepresentationRow | null = null;
+    if (requestedRevision) {
+      snapshot = this.database.query(`
+        SELECT id, resource_id, address_version, provider, entity_id, revision_json,
+               payload_json, captured_at, payload_state, payload_bytes, evicted_at
+        FROM remote_entity_source_snapshots
+        WHERE resource_id = ? AND address_version = ? AND revision_json = ?
+        ORDER BY captured_at DESC, id DESC
+        LIMIT 1
+      `).get(
+        resource.id,
+        requestedRevision.addressVersion,
+        JSON.stringify(requestedRevision),
+      ) as RemoteEntitySourceSnapshotRow | null;
+      if (snapshot) {
+        representation = this.database.query(`
+          SELECT id, source_snapshot_id, media_type, adapter_id, version, content_hash,
+                 markdown, derived_at, payload_state, payload_bytes, evicted_at
+          FROM remote_entity_representations
+          WHERE source_snapshot_id = ?
+          ORDER BY derived_at DESC, id DESC
+          LIMIT 1
+        `).get(snapshot.id) as RemoteEntityRepresentationRow | null;
+      }
+    } else {
+      const state = this.remoteEntityStateFromCurrentRead(resource.id);
+      if (
+        !state ||
+        state.address_version !== resource.addressVersion ||
+        !state.source_snapshot_id ||
+        !state.representation_id
+      ) return null;
+      snapshot = this.database.query(`
+        SELECT id, resource_id, address_version, provider, entity_id, revision_json,
+               payload_json, captured_at, payload_state, payload_bytes, evicted_at
+        FROM remote_entity_source_snapshots
+        WHERE id = ?
+      `).get(state.source_snapshot_id) as RemoteEntitySourceSnapshotRow | null;
+      representation = this.database.query(`
+        SELECT id, source_snapshot_id, media_type, adapter_id, version, content_hash,
+               markdown, derived_at, payload_state, payload_bytes, evicted_at
+        FROM remote_entity_representations
+        WHERE id = ?
+      `).get(state.representation_id) as RemoteEntityRepresentationRow | null;
+    }
+    if (
+      !snapshot ||
+      snapshot.provider !== resource.provider ||
+      snapshot.entity_id !== resource.address.entityId ||
+      snapshot.payload_state !== "available" ||
+      snapshot.payload_json === null ||
+      !representation ||
+      representation.source_snapshot_id !== snapshot.id ||
+      representation.payload_state !== "available" ||
+      representation.markdown === null
+    ) return null;
+    const payload = parseRemoteEntitySnapshotPayload(
+      parsedJson(snapshot.payload_json, "Remote entity snapshot payload"),
+    );
+    const revision = normalizeResourceRevisionRef(
+      parsedJson(snapshot.revision_json, "Remote entity snapshot revision"),
+      resource,
+    );
+    return {
+      title: payload.title,
+      metadata: payload.metadata,
+      markdown: representation.markdown,
+      externalUrl: payload.externalUrl,
+      sourceSnapshot: {
+        provider: snapshot.provider,
+        resourceId: snapshot.resource_id,
+        addressVersion: snapshot.address_version,
+        entityId: snapshot.entity_id,
+        locator: payload.locator,
+        contentHash: payload.contentHash,
+        revision,
+        fetchedAt: snapshot.captured_at,
+      },
+      representation: {
+        mediaType: representation.media_type,
+        adapter: {
+          id: representation.adapter_id,
+          version: representation.version,
+        },
+        contentHash: representation.content_hash,
+        derivedAt: representation.derived_at,
+      },
+      commandDescriptors: payload.commandDescriptors,
+    };
+  }
+
   describe(
     resourceId: string,
     destinationHostRegistered: boolean,
@@ -1042,19 +1311,31 @@ export class ResourceCatalog {
           !readingDenied
           ? this.webReadFromCurrentRead(resource, requestedRevision)
           : null;
+      const capabilities = deriveResourceCapabilityReport(
+        source,
+        destinationHostRegistered,
+        resource.provider === "web"
+          ? ["read", "refresh", "open-external"]
+          : resource.provider === "filesystem"
+            ? ["read"]
+            : resource.provider === "jira" || resource.provider === "linear"
+              ? ["read", "refresh", "open-external", "command"]
+              : [],
+      );
+      const remoteEntity =
+        (resource.provider === "jira" || resource.provider === "linear") &&
+          !readingDenied
+          ? this.remoteEntityReadFromCurrentRead(resource, requestedRevision)
+          : null;
+      const remoteStatus =
+        resource.provider === "jira" || resource.provider === "linear"
+          ? this.remoteEntityStatusFromCurrentRead(resource)
+          : null;
       return {
         resource,
         source,
         requestedRevision,
-        capabilities: deriveResourceCapabilityReport(
-          source,
-          destinationHostRegistered,
-          resource.provider === "web"
-            ? ["read", "refresh", "open-external"]
-            : resource.provider === "filesystem"
-              ? ["read"]
-              : [],
-        ),
+        capabilities,
         filesystem,
         pdf: pdfRead?.document ?? null,
         pdfHistory: pdfRead?.history ?? null,
@@ -1063,6 +1344,14 @@ export class ResourceCatalog {
         webStatus: resource.provider === "web"
           ? this.webStatusFromCurrentRead(resource)
           : null,
+        remoteEntity,
+        remoteStatus,
+        ...(remoteStatus?.lastError ? { remoteError: remoteStatus.lastError } : {}),
+        availableCommands:
+          capabilities.command.status === "available" &&
+            requestedRevision === null
+            ? remoteEntity?.commandDescriptors ?? []
+            : [],
       };
     })();
   }
@@ -1150,6 +1439,112 @@ export class ResourceCatalog {
     this.pendingPdfRefreshes.set(normalized, refresh);
     return refresh;
   }
+
+  refreshRemoteEntity(
+    resourceId: string,
+    destinationHostRegistered: boolean,
+  ): Promise<ResourceDescription> {
+    const normalized = normalizeResourceId(resourceId);
+    const resource = this.require(normalized);
+    if (resource.provider !== "jira" && resource.provider !== "linear") {
+      throw new ResourceCatalogError(
+        "provider-mismatch",
+        "Remote entity refresh requires a Jira or Linear Resource",
+      );
+    }
+    const source = this.requireSource(resource.sourceId);
+    if (
+      source.policy.deniedCapabilities.includes("read") ||
+      source.policy.deniedCapabilities.includes("refresh")
+    ) {
+      throw new ResourceCatalogError(
+        "invalid-input",
+        "Workspace policy denies reading or refreshing this remote entity",
+      );
+    }
+    const pending = this.pendingRemoteEntityRefreshes.get(normalized);
+    if (pending) return pending;
+    const refresh = this.performRemoteEntityRefresh(
+      resource,
+      destinationHostRegistered,
+    ).catch((error) => {
+      const failed = this.remoteEntityRefreshFailure(
+        resource,
+        destinationHostRegistered,
+        error,
+      );
+      if (
+        error instanceof ResourceCatalogError &&
+        (error.code === "provider-mismatch" || error.code === "version-conflict")
+      ) throw error;
+      return failed;
+    }).finally(() => this.pendingRemoteEntityRefreshes.delete(normalized));
+    this.pendingRemoteEntityRefreshes.set(normalized, refresh);
+    return refresh;
+  }
+
+  async executeRemoteEntityCommand(
+    resourceId: string,
+    input: ResourceProviderCommandInput,
+  ): Promise<ResourceProviderCommandReceipt> {
+    const normalized = normalizeResourceId(resourceId);
+    const { resource, source, commands } = this.database.transaction(() => {
+      const resource = this.requireFromCurrentRead(normalized);
+      const source = this.requireSourceFromCurrentRead(resource.sourceId);
+      if (
+        (resource.provider !== "jira" && resource.provider !== "linear") ||
+        (source.provider !== "jira" && source.provider !== "linear")
+      ) {
+        throw new ResourceCatalogError(
+          "provider-mismatch",
+          "Resource provider commands require a Jira or Linear Resource",
+        );
+      }
+      if (resource.provider !== source.provider || input.provider !== resource.provider) {
+        throw new ResourceCatalogError(
+          "provider-mismatch",
+          "Resource provider command does not match the resolved Resource",
+        );
+      }
+      if (source.policy.deniedCapabilities.includes("command")) {
+        throw new ResourceCatalogError(
+          "invalid-input",
+          "Workspace policy denies this Resource provider command",
+        );
+      }
+      const document = this.remoteEntityReadFromCurrentRead(resource, null);
+      return {
+        resource,
+        source,
+        commands: document?.commandDescriptors ?? [],
+      };
+    })();
+    if (
+      !commands.some((descriptor) =>
+        descriptor.provider === input.provider &&
+        descriptor.command === input.command
+      )
+    ) {
+      throw new ResourceCatalogError(
+        "invalid-input",
+        "Resource provider command is not available for this entity",
+      );
+    }
+    const receipt = await this.remoteEntityClient.execute(resource, source, input);
+    if (
+      receipt.resourceId !== resource.id ||
+      receipt.provider !== resource.provider ||
+      receipt.command !== input.command ||
+      receipt.entityId !== resource.address.entityId
+    ) {
+      throw new ResourceCatalogError(
+        "provider-mismatch",
+        "Resource provider command receipt does not match the resolved Resource",
+      );
+    }
+    return receipt;
+  }
+
   nativePdfPayload(
     resourceId: string,
     representationId: string,
@@ -1593,6 +1988,294 @@ export class ResourceCatalog {
       destinationHostRegistered,
       false,
     );
+  }
+
+  private remoteEntityRefreshFailure(
+    resource: Extract<Resource, { provider: RemoteEntityProvider }>,
+    destinationHostRegistered: boolean,
+    error: unknown,
+  ): ResourceDescription {
+    const message = errorText(error);
+    this.database.transaction(() => {
+      this.database.query(`
+        INSERT INTO remote_entity_resource_state (
+          resource_id, address_version, generation, source_snapshot_id,
+          representation_id, freshness, checked_at, last_error
+        ) VALUES (?, ?, 1, NULL, NULL, 'failed', ?, ?)
+        ON CONFLICT(resource_id) DO UPDATE SET
+          freshness = 'failed',
+          checked_at = excluded.checked_at,
+          last_error = excluded.last_error
+        WHERE remote_entity_resource_state.address_version = excluded.address_version
+      `).run(resource.id, resource.addressVersion, this.now(), message);
+      this.bumpSequence();
+    })();
+    return {
+      ...this.describe(resource.id, destinationHostRegistered),
+      remoteError: message,
+    };
+  }
+
+  private async performRemoteEntityRefresh(
+    resource: Extract<Resource, { provider: RemoteEntityProvider }>,
+    destinationHostRegistered: boolean,
+  ): Promise<ResourceDescription> {
+    const initial = this.database.transaction(() => {
+      const current = this.requireFromCurrentRead(resource.id);
+      const source = this.requireSourceFromCurrentRead(current.sourceId);
+      if (
+        (current.provider !== "jira" && current.provider !== "linear") ||
+        (source.provider !== "jira" && source.provider !== "linear") ||
+        current.provider !== source.provider
+      ) {
+        throw new ResourceCatalogError(
+          "provider-mismatch",
+          "Remote entity Resource and source do not match",
+        );
+      }
+      if (
+        source.policy.deniedCapabilities.includes("read") ||
+        source.policy.deniedCapabilities.includes("refresh")
+      ) {
+        throw new ResourceCatalogError(
+          "invalid-input",
+          "Workspace policy denies reading or refreshing this remote entity",
+        );
+      }
+      this.database.query(`
+        INSERT INTO remote_entity_resource_state (
+          resource_id, address_version, generation, source_snapshot_id,
+          representation_id, freshness, checked_at, last_error
+        ) VALUES (?, ?, 1, NULL, NULL, 'refreshing', ?, NULL)
+        ON CONFLICT(resource_id) DO UPDATE SET
+          source_snapshot_id = CASE
+            WHEN remote_entity_resource_state.address_version = excluded.address_version
+              THEN remote_entity_resource_state.source_snapshot_id
+            ELSE NULL
+          END,
+          representation_id = CASE
+            WHEN remote_entity_resource_state.address_version = excluded.address_version
+              THEN remote_entity_resource_state.representation_id
+            ELSE NULL
+          END,
+          address_version = excluded.address_version,
+          generation = remote_entity_resource_state.generation + 1,
+          freshness = 'refreshing',
+          checked_at = excluded.checked_at,
+          last_error = NULL
+      `).run(current.id, current.addressVersion, this.now());
+      const state = this.remoteEntityStateFromCurrentRead(current.id);
+      if (!state) {
+        throw new ResourceCatalogError(
+          "source-unavailable",
+          "Remote entity refresh state was not created",
+        );
+      }
+      return { resource: current, source, generation: state.generation };
+    })();
+    const observed = await this.remoteEntityClient.observe(
+      initial.resource,
+      initial.source,
+    );
+    if (
+      observed.sourceSnapshot.provider !== initial.resource.provider ||
+      observed.sourceSnapshot.resourceId !== initial.resource.id ||
+      observed.sourceSnapshot.entityId !== initial.resource.address.entityId ||
+      observed.sourceSnapshot.addressVersion !== initial.resource.addressVersion ||
+      observed.sourceSnapshot.revision.resourceId !== initial.resource.id ||
+      observed.sourceSnapshot.revision.addressVersion !== initial.resource.addressVersion ||
+      observed.sourceSnapshot.revision.revision.kind !== initial.resource.provider
+    ) {
+      throw new ResourceCatalogError(
+        "provider-mismatch",
+        "Remote entity observation does not match the resolved Resource identity",
+      );
+    }
+    if (observed.representation.contentHash !== sha256(observed.markdown)) {
+      throw new ResourceCatalogError(
+        "source-unavailable",
+        "Remote entity Markdown representation hash is invalid",
+      );
+    }
+    const refreshedId = this.database.transaction(() => {
+      const current = this.requireFromCurrentRead(initial.resource.id);
+      if (current.provider !== "jira" && current.provider !== "linear") {
+        throw new ResourceCatalogError(
+          "provider-mismatch",
+          "Remote entity Resource provider changed while refresh was in flight",
+        );
+      }
+      if (
+        current.provider !== initial.resource.provider ||
+        current.version !== initial.resource.version ||
+        current.addressVersion !== initial.resource.addressVersion ||
+        current.address.entityId !== initial.resource.address.entityId
+      ) {
+        throw new ResourceCatalogError(
+          "version-conflict",
+          "Remote entity Resource changed while refresh was in flight",
+        );
+      }
+      const locatorAddress = current.provider === "jira"
+        ? {
+            kind: "jira" as const,
+            entityId: current.address.entityId,
+            key: observed.sourceSnapshot.locator,
+          }
+        : {
+            kind: "linear" as const,
+            entityId: current.address.entityId,
+            identifier: observed.sourceSnapshot.locator,
+          };
+      const normalized = normalizeResourceAddress(initial.source, locatorAddress);
+      const currentRow = this.database.query(
+        "SELECT canonical_key FROM resources WHERE id = ?",
+      ).get(current.id) as { canonical_key: string } | null;
+      if (!currentRow || normalized.canonicalKey !== currentRow.canonical_key) {
+        throw new ResourceCatalogError(
+          "provider-mismatch",
+          "Remote entity observation attempted to change canonical identity",
+        );
+      }
+      if (JSON.stringify(normalized.address) !== JSON.stringify(current.address)) {
+        const updated = this.database.query(`
+          UPDATE resources
+          SET address_json = ?,
+              address_version = address_version + 1,
+              version = version + 1,
+              updated_at = ?
+          WHERE id = ? AND version = ?
+        `).run(
+          JSON.stringify(normalized.address),
+          this.now(),
+          current.id,
+          current.version,
+        );
+        if (updated.changes !== 1) {
+          throw new ResourceCatalogError(
+            "version-conflict",
+            "Remote entity locator changed concurrently",
+          );
+        }
+      }
+      const refreshed = this.requireFromCurrentRead(current.id);
+      if (refreshed.provider !== "jira" && refreshed.provider !== "linear") {
+        throw new ResourceCatalogError(
+          "provider-mismatch",
+          "Remote entity Resource provider changed during refresh",
+        );
+      }
+      const revision = normalizeResourceRevisionRef({
+        resourceId: refreshed.id,
+        addressVersion: refreshed.addressVersion,
+        revision: observed.sourceSnapshot.revision.revision,
+      }, refreshed);
+      const payload: RemoteEntitySnapshotPayload = {
+        title: observed.title,
+        metadata: observed.metadata,
+        externalUrl: observed.externalUrl,
+        locator: observed.sourceSnapshot.locator,
+        contentHash: observed.sourceSnapshot.contentHash,
+        commandDescriptors: observed.commandDescriptors,
+      };
+      const payloadJson = JSON.stringify(payload);
+      const revisionJson = JSON.stringify(revision);
+      const snapshotId = crypto.randomUUID();
+      this.database.query(`
+        INSERT OR IGNORE INTO remote_entity_source_snapshots (
+          id, resource_id, address_version, provider, entity_id, revision_json,
+          payload_json, captured_at, payload_state, payload_bytes, evicted_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'available', ?, NULL)
+      `).run(
+        snapshotId,
+        refreshed.id,
+        refreshed.addressVersion,
+        refreshed.provider,
+        refreshed.address.entityId,
+        revisionJson,
+        payloadJson,
+        observed.sourceSnapshot.fetchedAt,
+        Buffer.byteLength(payloadJson),
+      );
+      const snapshot = this.database.query(`
+        SELECT id, resource_id, address_version, provider, entity_id, revision_json,
+               payload_json, captured_at, payload_state, payload_bytes, evicted_at
+        FROM remote_entity_source_snapshots
+        WHERE resource_id = ? AND address_version = ? AND provider = ?
+          AND entity_id = ? AND revision_json = ?
+      `).get(
+        refreshed.id,
+        refreshed.addressVersion,
+        refreshed.provider,
+        refreshed.address.entityId,
+        revisionJson,
+      ) as RemoteEntitySourceSnapshotRow | null;
+      if (!snapshot || snapshot.payload_json !== payloadJson) {
+        throw new ResourceCatalogError(
+          "source-unavailable",
+          "Remote entity provider reused a revision for different content",
+        );
+      }
+      const representationId = crypto.randomUUID();
+      this.database.query(`
+        INSERT OR IGNORE INTO remote_entity_representations (
+          id, source_snapshot_id, media_type, adapter_id, version, content_hash,
+          markdown, derived_at, payload_state, payload_bytes, evicted_at
+        ) VALUES (?, ?, 'text/markdown', ?, ?, ?, ?, ?, 'available', ?, NULL)
+      `).run(
+        representationId,
+        snapshot.id,
+        observed.representation.adapter.id,
+        observed.representation.adapter.version,
+        observed.representation.contentHash,
+        observed.markdown,
+        observed.representation.derivedAt,
+        Buffer.byteLength(observed.markdown),
+      );
+      const representation = this.database.query(`
+        SELECT id
+        FROM remote_entity_representations
+        WHERE source_snapshot_id = ? AND media_type = 'text/markdown'
+          AND adapter_id = ? AND version = ? AND content_hash = ?
+      `).get(
+        snapshot.id,
+        observed.representation.adapter.id,
+        observed.representation.adapter.version,
+        observed.representation.contentHash,
+      ) as { id: string } | null;
+      if (!representation) {
+        throw new ResourceCatalogError(
+          "source-unavailable",
+          "Remote entity Markdown representation was not retained",
+        );
+      }
+      const stateUpdate = this.database.query(`
+        UPDATE remote_entity_resource_state
+        SET address_version = ?,
+            source_snapshot_id = ?,
+            representation_id = ?,
+            freshness = 'fresh',
+            checked_at = ?,
+            last_error = NULL
+        WHERE resource_id = ? AND generation = ?
+      `).run(
+        refreshed.addressVersion,
+        snapshot.id,
+        representation.id,
+        observed.sourceSnapshot.fetchedAt,
+        refreshed.id,
+        initial.generation,
+      );
+      if (stateUpdate.changes !== 1) {
+        throw new ResourceCatalogError(
+          "version-conflict",
+          "Remote entity refresh was superseded",
+        );
+      }
+      this.bumpSequence();
+      return refreshed.id;
+    })();
+    return this.describe(refreshedId, destinationHostRegistered);
   }
 
   private pdfRefreshFailure(
@@ -2546,7 +3229,91 @@ export class ResourceCatalog {
     ).run();
   }
 
+  private upgradeRemoteEntityProviderConstraints(): void {
+    const schemas = this.database.query(
+      "SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name IN ('resource_sources', 'resources')",
+    ).all() as Array<{ name: string; sql: string | null }>;
+    if (schemas.length !== 2) return;
+    const sourceColumns = this.database.query("PRAGMA table_info(resource_sources)").all() as
+      Array<{ name: string }>;
+    if (!sourceColumns.some(({ name }) => name === "boundary_json")) return;
+    if (schemas.every(({ sql }) => sql?.includes("'jira'") && sql.includes("'linear'"))) return;
+
+    const foreignKeyState = this.database.query("PRAGMA foreign_keys").get() as {
+      foreign_keys: number;
+    };
+    const legacyAlterTableState = this.database.query("PRAGMA legacy_alter_table").get() as {
+      legacy_alter_table: number;
+    };
+    const foreignKeys = foreignKeyState.foreign_keys;
+    const legacyAlterTable = legacyAlterTableState.legacy_alter_table;
+    this.database.exec("PRAGMA foreign_keys = OFF; PRAGMA legacy_alter_table = ON;");
+    try {
+      this.database.transaction(() => {
+        this.database.exec(`
+          CREATE TABLE resource_sources_pie255 (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            provider TEXT NOT NULL
+              CHECK (provider IN ('filesystem', 'web', 'github', 'application', 'jira', 'linear')),
+            boundary_json TEXT NOT NULL,
+            policy_json TEXT NOT NULL,
+            root_binding TEXT,
+            version INTEGER NOT NULL CHECK (version >= 1),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          );
+          INSERT INTO resource_sources_pie255
+            (id, name, provider, boundary_json, policy_json, root_binding, version, created_at, updated_at)
+          SELECT id, name, provider, boundary_json, policy_json, root_binding, version, created_at, updated_at
+          FROM resource_sources;
+
+          CREATE TABLE resources_pie255 (
+            id TEXT PRIMARY KEY,
+            source_id TEXT NOT NULL REFERENCES resource_sources(id) ON DELETE RESTRICT,
+            provider TEXT NOT NULL
+              CHECK (provider IN ('filesystem', 'web', 'github', 'application', 'jira', 'linear')),
+            address_json TEXT NOT NULL,
+            canonical_key TEXT NOT NULL,
+            media_type TEXT,
+            address_version INTEGER NOT NULL CHECK (address_version >= 1),
+            version INTEGER NOT NULL CHECK (version >= 1),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE (source_id, canonical_key)
+          );
+          INSERT INTO resources_pie255
+            (id, source_id, provider, address_json, canonical_key, media_type,
+             address_version, version, created_at, updated_at)
+          SELECT id, source_id, provider, address_json, canonical_key, media_type,
+                 address_version, version, created_at, updated_at
+          FROM resources;
+
+          DROP TABLE resources;
+          DROP TABLE resource_sources;
+          ALTER TABLE resource_sources_pie255 RENAME TO resource_sources;
+          ALTER TABLE resources_pie255 RENAME TO resources;
+          CREATE INDEX resource_sources_provider
+            ON resource_sources(provider, name, id);
+        `);
+        const violations = this.database.query("PRAGMA foreign_key_check").all();
+        if (violations.length > 0) {
+          throw new ResourceCatalogError(
+            "invalid-input",
+            "Resource provider migration would leave broken foreign keys",
+          );
+        }
+      })();
+    } finally {
+      this.database.exec(
+        `PRAGMA legacy_alter_table = ${legacyAlterTable === 0 ? "OFF" : "ON"};`,
+      );
+      this.database.exec(`PRAGMA foreign_keys = ${foreignKeys === 0 ? "OFF" : "ON"};`);
+    }
+  }
+
   private migrate(): void {
+    this.upgradeRemoteEntityProviderConstraints();
     this.database.transaction(() => {
       const sourceColumns = this.database.query("PRAGMA table_info(resource_sources)").all() as
         Array<{ name: string }>;
@@ -2583,7 +3350,7 @@ export class ResourceCatalog {
         CREATE TABLE IF NOT EXISTS resource_sources (
           id TEXT PRIMARY KEY,
           name TEXT NOT NULL,
-          provider TEXT NOT NULL CHECK (provider IN ('filesystem', 'web', 'github', 'application')),
+          provider TEXT NOT NULL CHECK (provider IN ('filesystem', 'web', 'github', 'application', 'jira', 'linear')),
           boundary_json TEXT NOT NULL,
           policy_json TEXT NOT NULL,
           root_binding TEXT,
@@ -2596,7 +3363,7 @@ export class ResourceCatalog {
         CREATE TABLE IF NOT EXISTS resources (
           id TEXT PRIMARY KEY,
           source_id TEXT NOT NULL REFERENCES resource_sources(id) ON DELETE RESTRICT,
-          provider TEXT NOT NULL CHECK (provider IN ('filesystem', 'web', 'github', 'application')),
+          provider TEXT NOT NULL CHECK (provider IN ('filesystem', 'web', 'github', 'application', 'jira', 'linear')),
           address_json TEXT NOT NULL,
           canonical_key TEXT NOT NULL,
           media_type TEXT,
@@ -2722,6 +3489,60 @@ export class ResourceCatalog {
           source_snapshot_id TEXT REFERENCES pdf_source_snapshots(id) ON DELETE RESTRICT,
           representation_id TEXT REFERENCES pdf_representations(id) ON DELETE RESTRICT
         );
+        CREATE TABLE IF NOT EXISTS remote_entity_source_snapshots (
+          id TEXT PRIMARY KEY,
+          resource_id TEXT NOT NULL REFERENCES resources(id) ON DELETE RESTRICT,
+          address_version INTEGER NOT NULL CHECK (address_version >= 1),
+          provider TEXT NOT NULL CHECK (provider IN ('jira', 'linear')),
+          entity_id TEXT NOT NULL,
+          revision_json TEXT NOT NULL,
+          payload_json TEXT,
+          captured_at TEXT NOT NULL,
+          payload_state TEXT NOT NULL DEFAULT 'available'
+            CHECK (payload_state IN ('available','evicted')),
+          payload_bytes INTEGER NOT NULL DEFAULT 0 CHECK (payload_bytes >= 0),
+          evicted_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS remote_entity_source_snapshots_resource
+          ON remote_entity_source_snapshots(resource_id, address_version, captured_at, id);
+        CREATE UNIQUE INDEX IF NOT EXISTS remote_entity_source_snapshots_revision
+          ON remote_entity_source_snapshots(
+            resource_id, address_version, provider, entity_id, revision_json
+          );
+        CREATE TABLE IF NOT EXISTS remote_entity_representations (
+          id TEXT PRIMARY KEY,
+          source_snapshot_id TEXT NOT NULL
+            REFERENCES remote_entity_source_snapshots(id) ON DELETE RESTRICT,
+          media_type TEXT NOT NULL CHECK (media_type = 'text/markdown'),
+          adapter_id TEXT NOT NULL,
+          version INTEGER NOT NULL CHECK (version >= 1),
+          content_hash TEXT NOT NULL,
+          markdown TEXT,
+          derived_at TEXT NOT NULL,
+          payload_state TEXT NOT NULL DEFAULT 'available'
+            CHECK (payload_state IN ('available','evicted')),
+          payload_bytes INTEGER NOT NULL DEFAULT 0 CHECK (payload_bytes >= 0),
+          evicted_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS remote_entity_representations_snapshot
+          ON remote_entity_representations(source_snapshot_id, derived_at, id);
+        CREATE UNIQUE INDEX IF NOT EXISTS remote_entity_representations_content
+          ON remote_entity_representations(
+            source_snapshot_id, media_type, adapter_id, version, content_hash
+          );
+        CREATE TABLE IF NOT EXISTS remote_entity_resource_state (
+          resource_id TEXT PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE,
+          address_version INTEGER NOT NULL CHECK (address_version >= 1),
+          generation INTEGER NOT NULL CHECK (generation >= 1),
+          source_snapshot_id TEXT
+            REFERENCES remote_entity_source_snapshots(id) ON DELETE RESTRICT,
+          representation_id TEXT
+            REFERENCES remote_entity_representations(id) ON DELETE RESTRICT,
+          freshness TEXT NOT NULL
+            CHECK (freshness IN ('fresh', 'stale', 'unknown', 'refreshing', 'failed')),
+          checked_at TEXT,
+          last_error TEXT
+        );
       `);
       if (migratePie251Annotations) {
         this.database.exec(`
@@ -2757,6 +3578,18 @@ export class ResourceCatalog {
     this.database.transaction(() => {
       const recovered = this.database.query(`
         UPDATE web_resource_state
+        SET freshness = 'failed',
+            last_error = 'Refresh interrupted before completion'
+        WHERE freshness = 'refreshing'
+      `).run();
+      if (recovered.changes > 0) this.bumpSequence();
+    })();
+  }
+
+  private recoverInterruptedRemoteEntityRefreshes(): void {
+    this.database.transaction(() => {
+      const recovered = this.database.query(`
+        UPDATE remote_entity_resource_state
         SET freshness = 'failed',
             last_error = 'Refresh interrupted before completion'
         WHERE freshness = 'refreshing'

@@ -13,7 +13,6 @@ import {
   type ResourcePresentationSelection,
   type ResourceRenderer,
   type ResourceRepresentationKind,
-  type ResourceSource,
   type ResourceSurface,
   type ResourceRepresentationAdapter,
 } from "./resources";
@@ -123,20 +122,34 @@ export function normalizeResourcePresentationContext(
 }
 
 function resourceKind(resource: Resource): ResourceKind {
-  if (resource.provider === "github") return "entity";
+  if (
+    resource.provider === "github" ||
+    resource.provider === "jira" ||
+    resource.provider === "linear"
+  ) return "entity";
   if (resource.provider === "application") return "application";
   return "document";
 }
 
-function externalUrl(resource: Resource, source: ResourceSource): string | null {
+function externalUrl(description: ResourceDescription): string | null {
+  const { resource, source, remoteEntity } = description;
   if (resource.address.kind === "web") return resource.address.url;
   if (resource.address.kind === "application") return resource.address.uri;
-  if (resource.address.kind !== "github" || source.provider !== "github") return null;
-  const path = resource.address.entity === "issue" ? "issues" : "pull";
-  return new URL(
-    `${source.boundary.owner}/${source.boundary.repository}/${path}/${resource.address.number}`,
-    `${source.boundary.origin.replace(/\/$/, "")}/`,
-  ).href;
+  if (resource.address.kind === "github" && source.provider === "github") {
+    const path = resource.address.entity === "issue" ? "issues" : "pull";
+    return new URL(
+      `${source.boundary.owner}/${source.boundary.repository}/${path}/${resource.address.number}`,
+      `${source.boundary.origin.replace(/\/$/, "")}/`,
+    ).href;
+  }
+  if (resource.address.kind === "jira" && source.provider === "jira") {
+    return new URL(
+      `browse/${encodeURIComponent(resource.address.key)}`,
+      `${source.boundary.origin.replace(/\/$/, "")}/`,
+    ).href;
+  }
+  if (remoteEntity?.externalUrl) return remoteEntity.externalUrl;
+  return null;
 }
 
 function capabilityReason(decision: ResourceCapabilityDecision): string {
@@ -196,9 +209,9 @@ function orderedDefinitions(
   description: ResourceDescription,
   context: ResourcePresentationContext,
 ): readonly CandidateDefinition[] {
-  const { resource, web, filesystem, pdf } = description;
+  const { resource, web, filesystem, pdf, remoteEntity } = description;
   const unpinned = description.requestedRevision === null;
-  const url = unpinned ? externalUrl(resource, description.source) : null;
+  const url = unpinned ? externalUrl(description) : null;
   const requestedPlacement = context.placement;
   const native: CandidateDefinition = {
     representation: "native-document",
@@ -214,7 +227,7 @@ function orderedDefinitions(
       : "Pinned revisions require an exact retained representation",
     capability: "read",
     adapter: pdf?.nativeRepresentation.adapter ?? null,
-    externalUrl: null,
+    externalUrl: url,
   };
   const browser: CandidateDefinition = {
     representation: "embedded-browser",
@@ -235,10 +248,15 @@ function orderedDefinitions(
     applicable:
       web !== null ||
       pdf != null ||
+      remoteEntity != null ||
       (filesystem != null && isTextualMediaType(resource.mediaType)),
     missingReason: "No local text or cached Markdown representation is available",
-    adapter: web?.representation.adapter ?? pdf?.representation.adapter ?? null,
-    externalUrl: null,
+    adapter:
+      web?.representation.adapter ??
+      pdf?.representation.adapter ??
+      remoteEntity?.representation.adapter ??
+      null,
+    externalUrl: url,
   };
   const metadata: CandidateDefinition = {
     representation: "metadata",
@@ -247,7 +265,7 @@ function orderedDefinitions(
     applicable: true,
     missingReason: "Resource metadata is unavailable",
     adapter: null,
-    externalUrl: null,
+    externalUrl: url,
   };
   const external: CandidateDefinition = {
     representation: "external-link",

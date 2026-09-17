@@ -42,7 +42,7 @@ interface RetentionPolicyRow {
 
 interface SnapshotRetentionRow {
   kind: "source-snapshot";
-  storage: "web" | "pdf";
+  storage: "web" | "pdf" | "remote-entity";
   id: string;
   resource_id: string;
   source_snapshot_id: null;
@@ -58,7 +58,7 @@ interface SnapshotRetentionRow {
 
 interface RepresentationRetentionRow {
   kind: "representation";
-  storage: "web" | "pdf";
+  storage: "web" | "pdf" | "remote-entity";
   id: string;
   resource_id: string;
   source_snapshot_id: string;
@@ -400,17 +400,29 @@ export class ResourceRetentionRepository {
                          payload_bytes = 0, evicted_at = ?
                      WHERE id = ? AND payload_state = 'available'`,
               ).run(collectedAt, candidate.artifact.id).changes
-            : this.database.query(
-                candidate.artifact.kind === "representation"
-                  ? `UPDATE pdf_representations
-                     SET markdown = NULL, pages_json = NULL,
-                         payload_state = 'evicted', payload_bytes = 0, evicted_at = ?
-                     WHERE id = ? AND payload_state = 'available'`
-                  : `UPDATE pdf_source_snapshots
-                     SET bytes = NULL, payload_state = 'evicted',
-                         payload_bytes = 0, evicted_at = ?
-                     WHERE id = ? AND payload_state = 'available'`,
-              ).run(collectedAt, candidate.artifact.id).changes;
+            : row.storage === "pdf"
+              ? this.database.query(
+                  candidate.artifact.kind === "representation"
+                    ? `UPDATE pdf_representations
+                       SET markdown = NULL, pages_json = NULL,
+                           payload_state = 'evicted', payload_bytes = 0, evicted_at = ?
+                       WHERE id = ? AND payload_state = 'available'`
+                    : `UPDATE pdf_source_snapshots
+                       SET bytes = NULL, payload_state = 'evicted',
+                           payload_bytes = 0, evicted_at = ?
+                       WHERE id = ? AND payload_state = 'available'`,
+                ).run(collectedAt, candidate.artifact.id).changes
+              : this.database.query(
+                  candidate.artifact.kind === "representation"
+                    ? `UPDATE remote_entity_representations
+                       SET markdown = NULL, payload_state = 'evicted',
+                           payload_bytes = 0, evicted_at = ?
+                       WHERE id = ? AND payload_state = 'available'`
+                    : `UPDATE remote_entity_source_snapshots
+                       SET payload_json = NULL, payload_state = 'evicted',
+                           payload_bytes = 0, evicted_at = ?
+                       WHERE id = ? AND payload_state = 'available'`,
+                ).run(collectedAt, candidate.artifact.id).changes;
           if (changed === 0) continue;
           if (row.storage === "pdf" && candidate.artifact.kind === "source-snapshot") {
             this.database.query(`
@@ -445,7 +457,9 @@ export class ResourceRetentionRepository {
           if (candidate.artifact.kind === "source-snapshot") {
             const childTable = row.storage === "web"
               ? "web_representations"
-              : "pdf_representations";
+              : row.storage === "pdf"
+                ? "pdf_representations"
+                : "remote_entity_representations";
             const child = this.database.query(
               `SELECT 1 FROM ${childTable}
                WHERE source_snapshot_id = ?
@@ -464,9 +478,13 @@ export class ResourceRetentionRepository {
             ? candidate.artifact.kind === "representation"
               ? "web_representations"
               : "web_source_snapshots"
-            : candidate.artifact.kind === "representation"
-              ? "pdf_representations"
-              : "pdf_source_snapshots";
+            : row.storage === "pdf"
+              ? candidate.artifact.kind === "representation"
+                ? "pdf_representations"
+                : "pdf_source_snapshots"
+              : candidate.artifact.kind === "representation"
+                ? "remote_entity_representations"
+                : "remote_entity_source_snapshots";
           if (row.storage === "pdf" && candidate.artifact.kind === "source-snapshot") {
             this.database.query(
               "DELETE FROM pdf_representations WHERE source_snapshot_id = ? AND media_type = 'application/pdf'",
@@ -517,7 +535,17 @@ export class ResourceRetentionRepository {
              NULL AS media_type, captured_at, revision_json, payload_state, payload_bytes, evicted_at
       FROM pdf_source_snapshots
       WHERE ? IS NULL OR resource_id = ?
-    `).all(resourceId, resourceId, resourceId, resourceId) as SnapshotRetentionRow[];
+      UNION ALL
+      SELECT 'source-snapshot' AS kind, 'remote-entity' AS storage, id, resource_id,
+             NULL AS source_snapshot_id, NULL AS adapter_id, NULL AS adapter_version,
+             NULL AS media_type, captured_at, revision_json, payload_state, payload_bytes, evicted_at
+      FROM remote_entity_source_snapshots
+      WHERE ? IS NULL OR resource_id = ?
+    `).all(
+      resourceId, resourceId,
+      resourceId, resourceId,
+      resourceId, resourceId,
+    ) as SnapshotRetentionRow[];
     const representations = this.database.query(`
       SELECT 'representation' AS kind, 'web' AS storage, wr.id, ws.resource_id,
              wr.source_snapshot_id, wr.adapter_id, wr.adapter_version, wr.media_type,
@@ -534,7 +562,19 @@ export class ResourceRetentionRepository {
       FROM pdf_representations pr
       JOIN pdf_source_snapshots ps ON ps.id = pr.source_snapshot_id
       WHERE ? IS NULL OR ps.resource_id = ?
-    `).all(resourceId, resourceId, resourceId, resourceId) as RepresentationRetentionRow[];
+      UNION ALL
+      SELECT 'representation' AS kind, 'remote-entity' AS storage, rr.id, rs.resource_id,
+             rr.source_snapshot_id, rr.adapter_id, rr.version AS adapter_version, rr.media_type,
+             rr.derived_at AS captured_at, NULL AS revision_json,
+             rr.payload_state, rr.payload_bytes, rr.evicted_at
+      FROM remote_entity_representations rr
+      JOIN remote_entity_source_snapshots rs ON rs.id = rr.source_snapshot_id
+      WHERE ? IS NULL OR rs.resource_id = ?
+    `).all(
+      resourceId, resourceId,
+      resourceId, resourceId,
+      resourceId, resourceId,
+    ) as RepresentationRetentionRow[];
     snapshots.sort((left, right) =>
       left.resource_id.localeCompare(right.resource_id) ||
       (right.captured_at ?? "").localeCompare(left.captured_at ?? "") ||
@@ -566,7 +606,18 @@ export class ResourceRetentionRepository {
       SELECT resource_id, source_snapshot_id, representation_id
       FROM pdf_resource_state
       WHERE ? IS NULL OR resource_id = ?
-    `).all(resourceId, resourceId, resourceId, resourceId) as CurrentPointerRow[];
+      UNION ALL
+      SELECT state.resource_id, state.source_snapshot_id, state.representation_id
+      FROM remote_entity_resource_state state
+      JOIN resources resource
+        ON resource.id = state.resource_id
+       AND resource.address_version = state.address_version
+      WHERE ? IS NULL OR state.resource_id = ?
+    `).all(
+      resourceId, resourceId,
+      resourceId, resourceId,
+      resourceId, resourceId,
+    ) as CurrentPointerRow[];
     for (const pointer of pointers) {
       if (pointer.source_snapshot_id) {
         protect({ kind: "source-snapshot", id: pointer.source_snapshot_id }, "current");
@@ -759,7 +810,12 @@ export class ResourceRetentionRepository {
                  NULL AS source_snapshot_id, NULL AS adapter_id, NULL AS adapter_version,
                  NULL AS media_type, captured_at, revision_json, payload_state, payload_bytes, evicted_at
           FROM pdf_source_snapshots WHERE id = ?
-        `).get(artifact.id, artifact.id) as SnapshotRetentionRow | null
+          UNION ALL
+          SELECT 'source-snapshot' AS kind, 'remote-entity' AS storage, id, resource_id,
+                 NULL AS source_snapshot_id, NULL AS adapter_id, NULL AS adapter_version,
+                 NULL AS media_type, captured_at, revision_json, payload_state, payload_bytes, evicted_at
+          FROM remote_entity_source_snapshots WHERE id = ?
+        `).get(artifact.id, artifact.id, artifact.id) as SnapshotRetentionRow | null
       : this.database.query(`
           SELECT 'representation' AS kind, 'web' AS storage, wr.id, ws.resource_id,
                  wr.source_snapshot_id, wr.adapter_id, wr.adapter_version, wr.media_type,
@@ -776,7 +832,15 @@ export class ResourceRetentionRepository {
           FROM pdf_representations pr
           JOIN pdf_source_snapshots ps ON ps.id = pr.source_snapshot_id
           WHERE pr.id = ?
-        `).get(artifact.id, artifact.id) as RepresentationRetentionRow | null;
+          UNION ALL
+          SELECT 'representation' AS kind, 'remote-entity' AS storage, rr.id, rs.resource_id,
+                 rr.source_snapshot_id, rr.adapter_id, rr.version AS adapter_version, rr.media_type,
+                 rr.derived_at AS captured_at, NULL AS revision_json,
+                 rr.payload_state, rr.payload_bytes, rr.evicted_at
+          FROM remote_entity_representations rr
+          JOIN remote_entity_source_snapshots rs ON rs.id = rr.source_snapshot_id
+          WHERE rr.id = ?
+        `).get(artifact.id, artifact.id, artifact.id) as RepresentationRetentionRow | null;
     if (!row) {
       throw new ResourceCatalogError(
         "invalid-input",

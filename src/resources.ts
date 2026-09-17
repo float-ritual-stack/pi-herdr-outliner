@@ -30,7 +30,13 @@ export const RESOURCE_CAPABILITY_FACTORS = [
   "connectivity",
 ] as const;
 
-export type ResourceProvider = "filesystem" | "web" | "github" | "application";
+export type ResourceProvider =
+  | "filesystem"
+  | "web"
+  | "github"
+  | "jira"
+  | "linear"
+  | "application";
 export type ResourceCapability = typeof RESOURCE_CAPABILITIES[number];
 export type ResourceCapabilityFactor = typeof RESOURCE_CAPABILITY_FACTORS[number];
 
@@ -66,6 +72,24 @@ export type ResourceSource =
       };
     }
   | ResourceSourceHeader & {
+      readonly provider: "jira";
+      readonly boundary: {
+        readonly kind: "jira";
+        readonly origin: string;
+        readonly project: string;
+        readonly credentialEnv: string;
+      };
+    }
+  | ResourceSourceHeader & {
+      readonly provider: "linear";
+      readonly boundary: {
+        readonly kind: "linear";
+        readonly origin: string;
+        readonly workspace: string;
+        readonly credentialEnv: string;
+      };
+    }
+  | ResourceSourceHeader & {
       readonly provider: "application";
       readonly boundary: {
         readonly kind: "application";
@@ -95,6 +119,26 @@ export type CreateResourceSourceInput =
         readonly origin?: string;
         readonly owner: string;
         readonly repository: string;
+      };
+      readonly policy?: { readonly deniedCapabilities?: readonly ResourceCapability[] };
+    }
+  | {
+      readonly name: string;
+      readonly provider: "jira";
+      readonly boundary: {
+        readonly origin: string;
+        readonly project: string;
+        readonly credentialEnv: string;
+      };
+      readonly policy?: { readonly deniedCapabilities?: readonly ResourceCapability[] };
+    }
+  | {
+      readonly name: string;
+      readonly provider: "linear";
+      readonly boundary: {
+        readonly origin: string;
+        readonly workspace: string;
+        readonly credentialEnv: string;
       };
       readonly policy?: { readonly deniedCapabilities?: readonly ResourceCapability[] };
     }
@@ -134,6 +178,26 @@ type NormalizedResourceSourceInput =
     }
   | {
       readonly name: string;
+      readonly provider: "jira";
+      readonly boundary: {
+        readonly origin: string;
+        readonly project: string;
+        readonly credentialEnv: string;
+      };
+      readonly policy: ResourcePolicy;
+    }
+  | {
+      readonly name: string;
+      readonly provider: "linear";
+      readonly boundary: {
+        readonly origin: string;
+        readonly workspace: string;
+        readonly credentialEnv: string;
+      };
+      readonly policy: ResourcePolicy;
+    }
+  | {
+      readonly name: string;
       readonly provider: "application";
       readonly boundary: {
         readonly scheme: string;
@@ -151,6 +215,16 @@ export type ResourceAddress =
       readonly entity: "issue" | "pull-request";
       readonly number: number;
     }
+  | {
+      readonly kind: "jira";
+      readonly entityId: string;
+      readonly key: string;
+    }
+  | {
+      readonly kind: "linear";
+      readonly entityId: string;
+      readonly identifier: string;
+    }
   | { readonly kind: "application"; readonly uri: string };
 
 interface ResourceHeader {
@@ -167,6 +241,8 @@ export type Resource =
   | ResourceHeader & { readonly provider: "filesystem"; readonly address: Extract<ResourceAddress, { kind: "filesystem" }> }
   | ResourceHeader & { readonly provider: "web"; readonly address: Extract<ResourceAddress, { kind: "web" }> }
   | ResourceHeader & { readonly provider: "github"; readonly address: Extract<ResourceAddress, { kind: "github" }> }
+  | ResourceHeader & { readonly provider: "jira"; readonly address: Extract<ResourceAddress, { kind: "jira" }> }
+  | ResourceHeader & { readonly provider: "linear"; readonly address: Extract<ResourceAddress, { kind: "linear" }> }
   | ResourceHeader & { readonly provider: "application"; readonly address: Extract<ResourceAddress, { kind: "application" }> };
 
 export type ResourceRevision =
@@ -187,6 +263,14 @@ export type ResourceRevision =
       readonly validator:
         | { readonly kind: "etag"; readonly value: string }
         | { readonly kind: "updated-at"; readonly value: string };
+    }
+  | {
+      readonly kind: "jira";
+      readonly validator: { readonly kind: "updated-at"; readonly value: string };
+    }
+  | {
+      readonly kind: "linear";
+      readonly validator: { readonly kind: "updated-at"; readonly value: string };
     };
 
 export interface ResourceRevisionRef {
@@ -384,6 +468,76 @@ export interface WebResourceDocument {
   readonly sourceSnapshot: WebSourceSnapshotProvenance;
   readonly representation: WebRepresentationProvenance;
 }
+export const MAX_REMOTE_ENTITY_COMMENT_LENGTH = 10_000;
+
+export type RemoteEntityProvider = "jira" | "linear";
+export type RemoteEntityMetadataValue = string | readonly string[] | null;
+export type RemoteEntityMetadata = Readonly<Record<string, RemoteEntityMetadataValue>>;
+
+interface CommentCreateDescriptor {
+  readonly command: "comment.create";
+  readonly label: string;
+  readonly input: {
+    readonly body: {
+      readonly type: "string";
+      readonly required: true;
+      readonly maxLength: 10_000;
+    };
+  };
+}
+
+export type ResourceProviderCommandDescriptor =
+  | CommentCreateDescriptor & { readonly provider: "jira" }
+  | CommentCreateDescriptor & { readonly provider: "linear" };
+
+export type ResourceProviderCommandInput =
+  | {
+      readonly provider: "jira";
+      readonly command: "comment.create";
+      readonly payload: { readonly body: string };
+    }
+  | {
+      readonly provider: "linear";
+      readonly command: "comment.create";
+      readonly payload: { readonly body: string };
+    };
+
+export interface ResourceProviderCommandReceipt {
+  readonly resourceId: string;
+  readonly provider: RemoteEntityProvider;
+  readonly command: "comment.create";
+  readonly entityId: string;
+  readonly externalId: string | null;
+  readonly executedAt: string;
+}
+
+export interface RemoteEntitySourceSnapshotProvenance {
+  readonly provider: RemoteEntityProvider;
+  readonly resourceId: string;
+  readonly addressVersion: number;
+  readonly entityId: string;
+  readonly locator: string;
+  readonly contentHash: string;
+  readonly revision: ResourceRevisionRef;
+  readonly fetchedAt: string;
+}
+
+export interface RemoteEntityRepresentationProvenance {
+  readonly mediaType: "text/markdown";
+  readonly adapter: ResourceRepresentationAdapter;
+  readonly contentHash: string;
+  readonly derivedAt: string;
+}
+
+export interface RemoteEntityDocument {
+  readonly title: string;
+  readonly metadata: RemoteEntityMetadata;
+  readonly markdown: string;
+  readonly externalUrl: string;
+  readonly sourceSnapshot: RemoteEntitySourceSnapshotProvenance;
+  readonly representation: RemoteEntityRepresentationProvenance;
+  readonly commandDescriptors: readonly ResourceProviderCommandDescriptor[];
+}
 
 export interface FilesystemResourceDocument {
   readonly text: string;
@@ -533,6 +687,10 @@ export interface ResourceDescription {
   readonly webHistory: WebResourceHistory | null;
   readonly webStatus: WebResourceStatus | null;
   readonly webError?: string;
+  readonly remoteEntity: RemoteEntityDocument | null;
+  readonly remoteStatus: WebResourceStatus | null;
+  readonly remoteError?: string;
+  readonly availableCommands: readonly ResourceProviderCommandDescriptor[];
   readonly presentation?: ResourcePresentationDecision;
 }
 
@@ -565,6 +723,52 @@ export interface NormalizedResourceAddress {
 
 function invalid(message: string): never {
   throw new ResourceCatalogError("invalid-input", message);
+}
+const ResourceProviderCommandInputSchema = Type.Union([
+  Type.Object({
+    provider: Type.Literal("jira"),
+    command: Type.Literal("comment.create"),
+    payload: Type.Object({
+      body: Type.String(),
+    }, { additionalProperties: false }),
+  }, { additionalProperties: false }),
+  Type.Object({
+    provider: Type.Literal("linear"),
+    command: Type.Literal("comment.create"),
+    payload: Type.Object({
+      body: Type.String(),
+    }, { additionalProperties: false }),
+  }, { additionalProperties: false }),
+]);
+
+const COMMENT_CONTROL_CHARACTERS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
+
+export function normalizeResourceProviderCommandInput(
+  value: unknown,
+): ResourceProviderCommandInput {
+  let input: Static<typeof ResourceProviderCommandInputSchema>;
+  try {
+    input = Parse(ResourceProviderCommandInputSchema, value);
+  } catch {
+    invalid(
+      "Resource provider command must be a known command with exactly the expected fields",
+    );
+  }
+  const body = input.payload.body.trim();
+  if (
+    !body ||
+    body.length > MAX_REMOTE_ENTITY_COMMENT_LENGTH ||
+    COMMENT_CONTROL_CHARACTERS.test(body)
+  ) {
+    invalid(
+      `Comment body must be 1-${MAX_REMOTE_ENTITY_COMMENT_LENGTH} printable characters`,
+    );
+  }
+  return {
+    provider: input.provider,
+    command: input.command,
+    payload: { body },
+  };
 }
 
 const UnknownRecordSchema = Type.Record(Type.String(), Type.Unknown());
@@ -651,6 +855,56 @@ function githubSegment(value: unknown, label: string): string {
     invalid(`${label} must be a single GitHub path segment`);
   }
   return segment;
+}
+function normalizeRemoteOrigin(value: unknown, label: string): string {
+  const origin = normalizeHttpUrl(value, label);
+  if (origin.pathname !== "/" || origin.search) {
+    invalid(`${label} cannot contain a path or query`);
+  }
+  return origin.origin;
+}
+
+function credentialEnvironmentName(value: unknown): string {
+  const name = printable(value, "Credential environment variable", 255);
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+    invalid("Credential environment variable name is invalid");
+  }
+  return name;
+}
+
+function remoteEntityId(value: unknown, provider: "Jira" | "Linear"): string {
+  return printable(value, `${provider} entity ID`, 255);
+}
+
+function normalizeJiraAddress(
+  source: Extract<ResourceSource, { provider: "jira" }>,
+  value: unknown,
+): NormalizedResourceAddress {
+  const input = record(value, "Jira resource address");
+  if (input.kind !== "jira") invalid("Jira resource address kind must be jira");
+  const entityId = remoteEntityId(input.entityId, "Jira");
+  const key = printable(input.key, "Jira issue key", 255).toUpperCase();
+  if (!key.startsWith(`${source.boundary.project}-`)) {
+    throw new ResourceCatalogError(
+      "outside-source",
+      "Jira issue key is outside its source project",
+    );
+  }
+  return {
+    address: { kind: "jira", entityId, key },
+    canonicalKey: entityId,
+  };
+}
+
+function normalizeLinearAddress(value: unknown): NormalizedResourceAddress {
+  const input = record(value, "Linear resource address");
+  if (input.kind !== "linear") invalid("Linear resource address kind must be linear");
+  const entityId = remoteEntityId(input.entityId, "Linear");
+  const identifier = printable(input.identifier, "Linear issue identifier", 255).toUpperCase();
+  return {
+    address: { kind: "linear", entityId, identifier },
+    canonicalKey: entityId,
+  };
 }
 
 
@@ -811,6 +1065,28 @@ export function normalizeResourceSourceInput(value: unknown): NormalizedResource
         policy,
       };
     }
+    case "jira":
+      return {
+        name,
+        provider: "jira",
+        boundary: {
+          origin: normalizeRemoteOrigin(boundary.origin, "Jira source origin"),
+          project: printable(boundary.project, "Jira source project", 255).toUpperCase(),
+          credentialEnv: credentialEnvironmentName(boundary.credentialEnv),
+        },
+        policy,
+      };
+    case "linear":
+      return {
+        name,
+        provider: "linear",
+        boundary: {
+          origin: normalizeRemoteOrigin(boundary.origin, "Linear source origin"),
+          workspace: printable(boundary.workspace, "Linear source workspace", 255),
+          credentialEnv: credentialEnvironmentName(boundary.credentialEnv),
+        },
+        policy,
+      };
     case "application": {
       const scheme = printable(boundary.scheme, "Application source scheme", 64)
         .toLowerCase().replace(/:$/, "");
@@ -845,6 +1121,10 @@ export function normalizeResourceAddress(
       return normalizeWebAddress(source, value);
     case "github":
       return normalizeGithubAddress(value);
+    case "jira":
+      return normalizeJiraAddress(source, value);
+    case "linear":
+      return normalizeLinearAddress(value);
     case "application":
       return normalizeApplicationAddress(source, value);
   }
@@ -893,6 +1173,32 @@ export function normalizeRelocateResourceInput(
     );
   }
   const normalized = normalizeResourceAddress(destination, input.address);
+  if (
+    resource.provider === "jira" &&
+    (
+      destination.id !== resource.sourceId ||
+      normalized.address.kind !== "jira" ||
+      normalized.address.entityId !== resource.address.entityId
+    )
+  ) {
+    throw new ResourceCatalogError(
+      "provider-mismatch",
+      "Jira relocation cannot change provider instance or immutable entity identity",
+    );
+  }
+  if (
+    resource.provider === "linear" &&
+    (
+      destination.id !== resource.sourceId ||
+      normalized.address.kind !== "linear" ||
+      normalized.address.entityId !== resource.address.entityId
+    )
+  ) {
+    throw new ResourceCatalogError(
+      "provider-mismatch",
+      "Linear relocation cannot change provider instance or immutable entity identity",
+    );
+  }
   return {
     resourceId,
     expectedVersion,
@@ -909,7 +1215,11 @@ function decimalInteger(value: unknown, label: string): string {
 
 function isoTimestamp(value: unknown, label: string): string {
   const normalized = printable(value, label, 100);
-  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(normalized)) {
+  if (
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:?\d{2})$/.test(
+      normalized,
+    )
+  ) {
     invalid(`${label} must be an ISO timestamp`);
   }
   const timestamp = Date.parse(normalized);
@@ -1006,7 +1316,24 @@ function normalizeProviderRevision(
     }
     invalid("Unsupported GitHub revision validator");
   }
-  invalid("Resource revision provider must be filesystem, web, or github");
+  if (revision.kind === "jira" || revision.kind === "linear") {
+    if (validator.kind !== "updated-at") {
+      invalid(`Unsupported ${revision.kind} revision validator`);
+    }
+    const kind = revision.kind;
+    return {
+      resourceId,
+      addressVersion,
+      revision: {
+        kind,
+        validator: {
+          kind: "updated-at",
+          value: isoTimestamp(validator.value, `${kind} updated-at`),
+        },
+      },
+    };
+  }
+  invalid("Resource revision provider must be filesystem, web, github, jira, or linear");
 }
 
 export function normalizeRetainedResourceRevisionRef(value: unknown): ResourceRevisionRef {
@@ -1068,6 +1395,12 @@ export function resourceRevisionRefEquals(
     return left.revision.validator.kind === right.revision.validator.kind &&
       left.revision.validator.value === right.revision.validator.value;
   }
+  if (
+    (left.revision.kind === "jira" && right.revision.kind === "jira") ||
+    (left.revision.kind === "linear" && right.revision.kind === "linear")
+  ) {
+    return left.revision.validator.value === right.revision.validator.value;
+  }
   return false;
 }
 
@@ -1079,6 +1412,10 @@ export function resourceAddressLabel(address: ResourceAddress): string {
       return address.url;
     case "github":
       return `${address.entity} #${address.number}`;
+    case "jira":
+      return address.key;
+    case "linear":
+      return address.identifier;
     case "application":
       return address.uri;
   }
@@ -1109,6 +1446,20 @@ const PROVIDER_CAPABILITIES: Readonly<
     query: true,
     history: true,
     "open-external": true,
+  },
+  jira: {
+    read: true,
+    refresh: true,
+    history: true,
+    "open-external": true,
+    command: true,
+  },
+  linear: {
+    read: true,
+    refresh: true,
+    history: true,
+    "open-external": true,
+    command: true,
   },
   application: {
     "open-external": true,
@@ -1156,7 +1507,10 @@ function resourceCapabilityDecision(
 ): ResourceCapabilityDecision {
   const providerSupports = PROVIDER_CAPABILITIES[source.provider][capability] === true;
   const policyDenied = source.policy.deniedCapabilities.includes(capability);
-  const remote = source.provider === "web" || source.provider === "github";
+  const remote = source.provider === "web" ||
+    source.provider === "github" ||
+    source.provider === "jira" ||
+    source.provider === "linear";
   const factors: Record<ResourceCapabilityFactor, CapabilityAssessment> = {
     provider: providerSupports
       ? { state: "satisfied" }
@@ -1175,7 +1529,7 @@ function resourceCapabilityDecision(
             `This Detail host has no ${capability} executor`,
           )
       : unknown("destination-host-not-observed", "Destination host is not registered"),
-    connectivity: remote
+    connectivity: remote && capability !== "open-external"
       ? accessAssessment(providerAccess.connectivity, "connectivity")
       : { state: "not-required" },
   };

@@ -303,6 +303,9 @@ function webState(markdown: string): DetailState {
       checkedAt: "2026-09-17T12:00:00.000Z",
       lastError: null,
     },
+    remoteEntity: null,
+    remoteStatus: null,
+    availableCommands: [],
   };
   const renderedDocument = [
     markdown,

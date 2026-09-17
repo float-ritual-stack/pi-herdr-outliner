@@ -15,6 +15,7 @@ import { OutlinerStore } from "./store";
 import {
   normalizeResourceId,
   normalizeRetainedResourceRevisionRef,
+  normalizeResourceProviderCommandInput,
 } from "./resources";
 import {
   negotiateResourcePresentation,
@@ -56,6 +57,8 @@ import {
   type WorkflowTransitionInput,
   type Resource,
   type ResourceDescription,
+  type ResourceCapability,
+  type ResourceProviderCommandResult,
   type ResourceRetentionCollectionReceipt,
   type ResourceRetentionPin,
   type ResourceRetentionReference,
@@ -434,6 +437,11 @@ export class OutlinerServer {
       description,
       destination.resourcePresentation ?? TUI_RESOURCE_PRESENTATION_CONTEXT,
     );
+    const availableCommands =
+      presentation.capabilities.command.status === "available" &&
+        description.requestedRevision === null
+        ? description.remoteEntity?.commandDescriptors ?? []
+        : [];
     if (
       presentation.selected?.representation === "native-document" &&
       description.pdf
@@ -441,6 +449,7 @@ export class OutlinerServer {
       return {
         ...description,
         capabilities: presentation.capabilities,
+        availableCommands,
         presentation,
         nativePayload: this.store.resources.nativePdfPayload(
           description.resource.id,
@@ -451,8 +460,25 @@ export class OutlinerServer {
     return {
       ...description,
       capabilities: presentation.capabilities,
+      availableCommands,
       presentation,
     };
+  }
+
+  private requireAvailableResourceCapability(
+    description: ResourceDescription,
+    capability: ResourceCapability,
+    ignoreProviderAccess = false,
+  ): void {
+    const decision = description.capabilities[capability];
+    const obstacle = Object.entries(decision.factors).find(
+      ([factor, assessment]) =>
+        !(ignoreProviderAccess && (factor === "credentials" || factor === "connectivity")) &&
+        (assessment.state === "blocked" || assessment.state === "unknown"),
+    )?.[1];
+    if (!obstacle) return;
+    const detail = "detail" in obstacle ? obstacle.detail : `${capability} is unavailable`;
+    throw new Error(`Resource ${capability} unavailable: ${detail}`);
   }
 
   private activeResourceRevisions(resourceId?: string): ResourceRevisionRef[] {
@@ -939,7 +965,8 @@ export class OutlinerServer {
   ): Promise<OutlinerResponse> {
     if (
       request.action !== "resources.open" &&
-      request.action !== "resources.refresh"
+      request.action !== "resources.refresh" &&
+      request.action !== "resources.command.execute"
     ) {
       return this.handle(request, subscribedClient);
     }
@@ -960,12 +987,54 @@ export class OutlinerServer {
           target.revision,
         );
         result = this.presentResource(description, destination);
-      } else {
-        const description = await this.store.resources.refreshWeb(
-          request.resourceId,
-          true,
-        );
+      } else if (request.action === "resources.refresh") {
+        const resource = this.store.resources.require(request.resourceId);
+        let description: ResourceDescription;
+        if (resource.provider === "jira" || resource.provider === "linear") {
+          const local = this.presentResource(
+            this.store.resources.describe(resource.id, true),
+            destination,
+          );
+          this.requireAvailableResourceCapability(local, "refresh", true);
+          description = await this.store.resources.refreshRemoteEntity(
+            resource.id,
+            true,
+          );
+        } else {
+          description = await this.store.resources.refreshWeb(resource.id, true);
+        }
         result = this.presentResource(description, destination);
+      } else {
+        const input = normalizeResourceProviderCommandInput(request.input);
+        const resource = this.store.resources.require(request.resourceId);
+        if (resource.provider !== "jira" && resource.provider !== "linear") {
+          throw new Error("Resource provider commands require a Jira or Linear Resource");
+        }
+        if (input.provider !== resource.provider) {
+          throw new Error("Resource provider command does not match the resolved Resource");
+        }
+        const local = this.presentResource(
+          this.store.resources.describe(resource.id, true),
+          destination,
+        );
+        this.requireAvailableResourceCapability(local, "command");
+        if (
+          !local.availableCommands.some((descriptor) =>
+            descriptor.provider === input.provider &&
+            descriptor.command === input.command
+          )
+        ) {
+          throw new Error("Resource provider command is not available for this entity");
+        }
+        const receipt = await this.store.resources.executeRemoteEntityCommand(
+          resource.id,
+          input,
+        );
+        const description = this.presentResource(
+          this.store.resources.describe(resource.id, true),
+          destination,
+        );
+        result = { receipt, description } satisfies ResourceProviderCommandResult;
       }
       return { id: request.id, ok: true, result, sequence: this.store.sequence };
     } catch (error) {
@@ -1087,6 +1156,7 @@ export class OutlinerServer {
         }
         case "resources.open":
         case "resources.refresh":
+        case "resources.command.execute":
           throw new Error(`${request.action} requires asynchronous dispatch`);
         case "attention.get":
           this.attentionClient(request.targetClientId);
@@ -1581,6 +1651,12 @@ export class OutlinerServer {
         domain = "resource-catalog";
         resourceId = (response.result as ResourceDescription).resource.id;
         break;
+      case "resources.command.execute": {
+        const commandResult = response.result as ResourceProviderCommandResult;
+        domain = "resource-catalog";
+        resourceId = commandResult.receipt.resourceId;
+        break;
+      }
       case "resources.retention.configure":
         domain = "resource-catalog";
         break;

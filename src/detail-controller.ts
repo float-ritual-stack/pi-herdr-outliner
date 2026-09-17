@@ -1178,7 +1178,12 @@ export function createDetailController(
       }
       return `web content hash ${validator.value}`;
     }
-    return `GitHub ${providerRevision.validator.kind} ${providerRevision.validator.value}`;
+    const provider = providerRevision.kind === "github"
+      ? "GitHub"
+      : providerRevision.kind === "jira"
+      ? "Jira"
+      : "Linear";
+    return `${provider} ${providerRevision.validator.kind} ${providerRevision.validator.value}`;
   };
 
   const freshnessGuidance = (
@@ -1210,13 +1215,51 @@ export function createDetailController(
   };
 
   const resourceDocumentText = (description: ResourceDescription): string => {
-    const { resource, source, pdf, pdfHistory, web, webHistory, presentation } = description;
+    const {
+      resource,
+      source,
+      pdf,
+      pdfHistory,
+      web,
+      webHistory,
+      remoteEntity,
+      presentation,
+    } = description;
     const representation = presentation?.selected?.representation;
-    const renderLocalContent = representation === undefined || representation === "cached-markdown";
+    const renderLocalContent = representation === undefined ||
+      representation === "cached-markdown";
     if (description.filesystem && renderLocalContent) return description.filesystem.text;
-    const externalUrl = presentation?.selected?.externalUrl ??
-      web?.sourceSnapshot.canonicalUrl ??
-      (resource.address.kind === "web" ? resource.address.url : null);
+    const externalUrl = presentation?.selected?.externalUrl ?? null;
+    const openExternal = presentation?.capabilities["open-external"];
+    const unavailableExternalFactor = RESOURCE_CAPABILITY_FACTORS
+      .map((factor) => openExternal?.factors[factor])
+      .find((assessment) =>
+        assessment?.state === "blocked" || assessment?.state === "unknown"
+      );
+    const externalLines = externalUrl === null
+      ? []
+      : openExternal?.status === "available"
+      ? externalUrl.startsWith("http://") || externalUrl.startsWith("https://")
+        ? ["", `[Open externally](<${externalUrl}>)`]
+        : [
+            "",
+            `- External URL: \`${externalUrl}\``,
+            "- Open externally: Press Alt+O",
+          ]
+      : [
+          "",
+          `- External URL: \`${externalUrl}\``,
+          `- External open: unavailable — ${
+            unavailableExternalFactor && "detail" in unavailableExternalFactor
+              ? unavailableExternalFactor.detail
+              : "No negotiated open-external capability"
+          }`,
+        ];
+    const remoteProvider = resource.provider === "jira"
+      ? "Jira"
+      : resource.provider === "linear"
+      ? "Linear"
+      : null;
     const lines = pdf && renderLocalContent
       ? [
           pdf.markdown,
@@ -1226,7 +1269,7 @@ export function createDetailController(
           "## PDF resource",
           "",
           `[Stable resource link](${outlinerLinkUri("resource", resource.id)})`,
-          ...(externalUrl ? ["", `[Open externally](<${externalUrl}>)`] : []),
+          ...externalLines,
         ]
       : web && renderLocalContent
         ? [
@@ -1237,16 +1280,25 @@ export function createDetailController(
             "## Web resource",
             "",
             `[Stable resource link](${outlinerLinkUri("resource", resource.id)})`,
-            ...(externalUrl ? ["", `[Open externally](<${externalUrl}>)`] : []),
+            ...externalLines,
           ]
-        : [
-            `# ${resourceAddressLabel(resource.address)}`,
-            "",
-            `[Stable resource link](${outlinerLinkUri("resource", resource.id)})`,
-            ...(resource.provider === "web"
-              ? ["", `[Open externally](<${resource.address.url}>)`]
-              : []),
-          ];
+        : remoteEntity && renderLocalContent
+          ? [
+              remoteEntity.markdown,
+              "",
+              "---",
+              "",
+              `## ${remoteProvider ?? "Remote"} entity`,
+              "",
+              `[Stable resource link](${outlinerLinkUri("resource", resource.id)})`,
+              ...externalLines,
+            ]
+          : [
+              `# ${remoteEntity?.title ?? resourceAddressLabel(resource.address)}`,
+              "",
+              `[Stable resource link](${outlinerLinkUri("resource", resource.id)})`,
+              ...externalLines,
+            ];
     if (presentation) {
       lines.push(
         "",
@@ -1259,19 +1311,38 @@ export function createDetailController(
         `- Renderer: ${presentation.selected?.renderer ?? "unavailable"}`,
       );
     }
-    if (resource.provider === "web") {
-      const freshness = description.webStatus?.freshness ?? "unknown";
+    if (remoteEntity) {
+      lines.push(
+        "",
+        "## Entity metadata",
+        "",
+        "```json",
+        JSON.stringify(remoteEntity.metadata, null, 2),
+        "```",
+      );
+    }
+    if (
+      resource.provider === "web" ||
+      resource.provider === "jira" ||
+      resource.provider === "linear"
+    ) {
+      const status = resource.provider === "web"
+        ? description.webStatus
+        : description.remoteStatus;
+      const freshness = status?.freshness ?? "unknown";
       lines.push(
         "",
         "## Local status",
         "",
         `- Freshness: **${freshness}**`,
-        `- Checked: ${description.webStatus?.checkedAt ?? "Never"}`,
-        ...(description.webStatus?.lastError
-          ? [`- Last refresh error: ${description.webStatus.lastError}`]
+        `- Checked: ${status?.checkedAt ?? "Never"}`,
+        ...(status?.lastError
+          ? [`- Last refresh error: ${status.lastError}`]
+          : description.remoteError
+          ? [`- Last refresh error: ${description.remoteError}`]
           : []),
         "",
-        freshnessGuidance(freshness, pdf != null || web !== null),
+        freshnessGuidance(freshness, pdf != null || web !== null || remoteEntity !== null),
       );
     }
     if (pdf) {
@@ -1306,6 +1377,23 @@ export function createDetailController(
         `- Derived: ${web.representation.derivedAt ?? "Unknown"}`,
         `- Representation content available: ${web.representation.contentAvailable ? "yes" : "no"}`,
       );
+    } else if (remoteEntity) {
+      lines.push(
+        "",
+        "## Selected immutable content",
+        "",
+        `- Provider: \`${remoteEntity.sourceSnapshot.provider}\``,
+        `- Entity ID: \`${remoteEntity.sourceSnapshot.entityId}\``,
+        `- Locator: \`${remoteEntity.sourceSnapshot.locator}\``,
+        `- Source hash: \`${remoteEntity.sourceSnapshot.contentHash}\``,
+        `- Address version: \`${remoteEntity.sourceSnapshot.addressVersion}\``,
+        `- Provider revision: ${providerRevisionLabel(remoteEntity.sourceSnapshot.revision)}`,
+        `- Fetched: ${remoteEntity.sourceSnapshot.fetchedAt}`,
+        `- Media type: \`${remoteEntity.representation.mediaType}\``,
+        `- Adapter: \`${remoteEntity.representation.adapter.id}@${remoteEntity.representation.adapter.version}\``,
+        `- Representation hash: \`${remoteEntity.representation.contentHash}\``,
+        `- Derived: ${remoteEntity.representation.derivedAt}`,
+      );
     } else {
       lines.push(
         "",
@@ -1321,6 +1409,7 @@ export function createDetailController(
             : "latest address"
         }`,
         ...(description.webError ? [`- Read error: ${description.webError}`] : []),
+        ...(description.remoteError ? [`- Read error: ${description.remoteError}`] : []),
       );
     }
     if (webHistory) {
@@ -1361,9 +1450,20 @@ export function createDetailController(
         );
       }
     }
+    if (description.availableCommands.length > 0) {
+      lines.push(
+        "",
+        "## Available commands",
+        "",
+        "```json",
+        JSON.stringify(description.availableCommands, null, 2),
+        "```",
+      );
+    }
     lines.push("", "## Capabilities");
+    const capabilityReport = presentation?.capabilities ?? description.capabilities;
     for (const capability of RESOURCE_CAPABILITIES) {
-      const decision = description.capabilities[capability];
+      const decision = capabilityReport[capability];
       lines.push(`- ${capability}: ${decision.status}`);
       for (const factor of RESOURCE_CAPABILITY_FACTORS) {
         const assessment = decision.factors[factor];
@@ -2153,6 +2253,8 @@ export function createDetailController(
           !description ||
           (
             description.resource.provider !== "web" &&
+            description.resource.provider !== "jira" &&
+            description.resource.provider !== "linear" &&
             !(description.resource.provider === "filesystem" &&
               description.resource.mediaType === "application/pdf")
           )
@@ -2168,6 +2270,27 @@ export function createDetailController(
             state.status = refreshed.pdfError
               ? `PDF refresh failed · showing selected immutable content · ${refreshed.pdfError}`
               : "PDF resource refreshed";
+            break;
+          }
+          if (
+            refreshed.resource.provider === "jira" ||
+            refreshed.resource.provider === "linear"
+          ) {
+            const provider = refreshed.resource.provider === "jira" ? "Jira" : "Linear";
+            const freshness = refreshed.remoteStatus?.freshness ?? "unknown";
+            if (freshness === "fresh") {
+              state.status = `${provider} resource refreshed`;
+            } else if (freshness === "stale") {
+              state.status = "Refresh completed · selected local content remains stale";
+            } else if (freshness === "unknown") {
+              state.status = "Refresh completed · provider freshness remains unknown";
+            } else if (freshness === "refreshing") {
+              state.status = `${provider} resource refresh is still in progress`;
+            } else {
+              state.status = refreshed.remoteEntity
+                ? `Refresh failed · showing selected immutable content · ${refreshed.remoteStatus?.lastError ?? refreshed.remoteError ?? "Unknown error"}`
+                : `Refresh failed · no local snapshot · ${refreshed.remoteStatus?.lastError ?? refreshed.remoteError ?? "Unknown error"}`;
+            }
             break;
           }
           const freshness = refreshed.webStatus?.freshness ?? "unknown";
@@ -2201,24 +2324,33 @@ export function createDetailController(
         }
         break;
       }
-      case "resource.open-external":
-      case "resource.open-url": {
+      case "resource.open-external": {
         const description = detailResourceDescription(state);
-        if (!description || description.resource.provider !== "web") {
-          state.status = "Current target has no external web URL";
+        const selected = description?.presentation?.selected;
+        const capability = description?.presentation?.capabilities["open-external"];
+        if (!selected?.externalUrl) {
+          state.status = "Current target has no negotiated external URL";
           break;
         }
-        if (description.source.policy.deniedCapabilities.includes("open-external")) {
-          state.status = "Workspace policy denies opening this resource externally";
+        if (capability?.status !== "available") {
+          const unavailableFactor = RESOURCE_CAPABILITY_FACTORS
+            .map((factor) => capability?.factors[factor])
+            .find((assessment) =>
+              assessment?.state === "blocked" || assessment?.state === "unknown"
+            );
+          state.status = unavailableFactor && "detail" in unavailableFactor
+            ? unavailableFactor.detail
+            : "Opening this resource externally is unavailable";
           break;
         }
-        const url = intent.type === "resource.open-url"
-          ? intent.url
-          : description.web?.sourceSnapshot.canonicalUrl ?? description.resource.address.url;
-        await effects.openExternal(url);
-        state.status = "Opened URL externally";
+        await effects.openExternal(selected.externalUrl);
+        state.status = "Opened current resource externally";
         break;
       }
+      case "resource.open-url":
+        await effects.openExternal(intent.url);
+        state.status = "Opened URL externally";
+        break;
       case "annotation.selection.place":
         if (state.mode === "select") {
           state.buffer.placeCursor(intent.row, intent.column, intent.extend);
