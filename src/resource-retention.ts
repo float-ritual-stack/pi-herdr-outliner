@@ -628,20 +628,35 @@ export class ResourceRetentionRepository {
     }
 
     const snapshotsByResource = new Map<string, SnapshotRetentionRow[]>();
+    const availableSnapshotsByResource = new Map<string, SnapshotRetentionRow[]>();
+    const snapshotRevisions = new Map<string, ResourceRevisionRef>();
     for (const snapshot of snapshots) {
-      if (snapshot.payload_state !== "available") continue;
+      snapshotRevisions.set(
+        snapshot.id,
+        normalizeRetainedResourceRevisionRef(
+          parseJson(snapshot.revision_json, "Resource source snapshot revision"),
+        ),
+      );
       const group = snapshotsByResource.get(snapshot.resource_id) ?? [];
       group.push(snapshot);
       snapshotsByResource.set(snapshot.resource_id, group);
+      if (snapshot.payload_state !== "available") continue;
+      const availableGroup = availableSnapshotsByResource.get(snapshot.resource_id) ?? [];
+      availableGroup.push(snapshot);
+      availableSnapshotsByResource.set(snapshot.resource_id, availableGroup);
     }
-    for (const group of snapshotsByResource.values()) {
+    for (const group of availableSnapshotsByResource.values()) {
       for (const snapshot of group.slice(0, policy.retainNewestSourceSnapshots)) {
         protect({ kind: "source-snapshot", id: snapshot.id }, "hot");
       }
     }
 
     const representationsByAdapter = new Map<string, RepresentationRetentionRow[]>();
+    const representationsBySnapshot = new Map<string, RepresentationRetentionRow[]>();
     for (const representation of representations) {
+      const snapshotGroup = representationsBySnapshot.get(representation.source_snapshot_id) ?? [];
+      snapshotGroup.push(representation);
+      representationsBySnapshot.set(representation.source_snapshot_id, snapshotGroup);
       if (
         representation.payload_state !== "available" ||
         !this.activeAdapters.has(`${representation.adapter_id}@${representation.adapter_version}`)
@@ -683,24 +698,23 @@ export class ResourceRetentionRepository {
         protect({ kind: "representation", id: evidence.representation_id }, "referenced");
       }
     }
-    for (const revisionValue of activeRevisions) {
+    const requiredRevisions = new Map<string, ResourceRevisionRef>();
+    for (
+      const revisionValue of [
+        ...activeRevisions,
+        ...this.computedDependencyRevisionsFromCurrentRead(resourceId),
+      ]
+    ) {
       const revision = normalizeRetainedResourceRevisionRef(revisionValue);
-      for (const snapshot of snapshots) {
-        if (
-          snapshot.resource_id === revision.resourceId &&
-          resourceRevisionRefEquals(
-            normalizeRetainedResourceRevisionRef(
-              parseJson(snapshot.revision_json, "Web source snapshot revision"),
-            ),
-            revision,
-          )
-        ) {
-          protect({ kind: "source-snapshot", id: snapshot.id }, "referenced");
-          for (const representation of representations) {
-            if (representation.source_snapshot_id === snapshot.id) {
-              protect({ kind: "representation", id: representation.id }, "referenced");
-            }
-          }
+      requiredRevisions.set(JSON.stringify(revision), revision);
+    }
+    for (const revision of requiredRevisions.values()) {
+      for (const snapshot of snapshotsByResource.get(revision.resourceId) ?? []) {
+        const snapshotRevision = snapshotRevisions.get(snapshot.id);
+        if (!snapshotRevision || !resourceRevisionRefEquals(snapshotRevision, revision)) continue;
+        protect({ kind: "source-snapshot", id: snapshot.id }, "referenced");
+        for (const representation of representationsBySnapshot.get(snapshot.id) ?? []) {
+          protect({ kind: "representation", id: representation.id }, "referenced");
         }
       }
     }
@@ -899,6 +913,35 @@ export class ResourceRetentionRepository {
       WHERE ? IS NULL OR target.resource_id = ?
       ORDER BY evidence.id
     `).all(resourceId, resourceId) as EvidenceReferenceRow[];
+  }
+
+  private computedDependencyRevisionsFromCurrentRead(
+    resourceId: string | null,
+  ): ResourceRevisionRef[] {
+    const rows = this.database.query(`
+      SELECT dependencies_json
+      FROM computed_invocations
+      UNION ALL
+      SELECT dependencies_json
+      FROM computed_executions
+    `).all() as Array<{ dependencies_json: string }>;
+    return rows.flatMap(({ dependencies_json }) => {
+      const dependencies = parseJson(
+        dependencies_json,
+        "Computed Resource dependencies",
+      );
+      if (!Array.isArray(dependencies)) {
+        throw new ResourceCatalogError(
+          "invalid-input",
+          "Stored computed Resource dependencies are invalid",
+        );
+      }
+      return dependencies
+        .map(normalizeRetainedResourceRevisionRef)
+        .filter((revision) =>
+          resourceId === null || revision.resourceId === resourceId
+        );
+    });
   }
 
   private purgedRowsFromCurrentRead(resourceId: string | null): PurgedRow[] {

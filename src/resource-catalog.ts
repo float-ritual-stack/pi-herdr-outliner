@@ -1894,6 +1894,27 @@ export class ResourceCatalog {
     return description;
   }
 
+  async refresh(
+    resourceId: string,
+    destinationHostRegistered: boolean,
+  ): Promise<ResourceDescription> {
+    const resource = this.require(resourceId);
+    if (resource.provider === "computed") {
+      await this.executeComputedResource(resource.id, destinationHostRegistered);
+      return this.describe(resource.id, destinationHostRegistered);
+    }
+    if (resource.provider === "jira" || resource.provider === "linear") {
+      return this.refreshRemoteEntity(resource.id, destinationHostRegistered);
+    }
+    if (resource.provider === "web" || resource.mediaType === "application/pdf") {
+      return this.refreshWeb(resource.id, destinationHostRegistered);
+    }
+    throw new ResourceCatalogError(
+      "provider-mismatch",
+      `${resource.provider} Resources do not support explicit refresh`,
+    );
+  }
+
   refreshWeb(
     resourceId: string,
     destinationHostRegistered: boolean,
