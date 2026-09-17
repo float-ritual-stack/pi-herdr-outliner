@@ -801,17 +801,41 @@ export class ResourceCatalog {
     }
     const checkedAt = this.now();
     try {
-      const { response, url: canonicalUrl } = await this.fetchWeb(
+      const signal = AbortSignal.timeout(15_000);
+      let { response, url: canonicalUrl } = await this.fetchWeb(
         snapshot.source,
         snapshot.resource.address.url,
         headers,
-        AbortSignal.timeout(15_000),
+        signal,
       );
+      let cacheMatchesDerivation =
+        snapshot.cache?.canonical_url === canonicalUrl &&
+        snapshot.cache.adapter_id === this.webExtractor.adapter.id &&
+        snapshot.cache.adapter_version === this.webExtractor.adapter.version;
+      if (response.status === 304 && !cacheMatchesDerivation) {
+        await response.body?.cancel();
+        ({ response, url: canonicalUrl } = await this.fetchWeb(
+          snapshot.source,
+          snapshot.resource.address.url,
+          new Headers({ Accept: "text/html,application/xhtml+xml" }),
+          signal,
+        ));
+        cacheMatchesDerivation =
+          snapshot.cache?.canonical_url === canonicalUrl &&
+          snapshot.cache.adapter_id === this.webExtractor.adapter.id &&
+          snapshot.cache.adapter_version === this.webExtractor.adapter.version;
+      }
       if (response.status === 304) {
         if (!snapshot.cache) {
           throw new ResourceCatalogError(
             "source-unavailable",
             "Web provider returned not-modified without a cached representation",
+          );
+        }
+        if (!cacheMatchesDerivation) {
+          throw new ResourceCatalogError(
+            "source-unavailable",
+            "Web provider returned not-modified after cached derivation provenance changed",
           );
         }
         this.database.transaction(() => {
@@ -851,7 +875,9 @@ export class ResourceCatalog {
       const etag = webEtag(response);
       const lastModified = response.headers.get("last-modified")?.trim() || null;
       const revision = webRevision(snapshot.resource, etag, lastModified, sourceHash);
-      const unchanged = snapshot.cache?.source_hash === sourceHash;
+      const unchanged =
+        cacheMatchesDerivation &&
+        snapshot.cache?.source_hash === sourceHash;
       const markdown = unchanged
         ? snapshot.cache!.markdown
         : this.webExtractor.extract({ html, url: canonicalUrl });

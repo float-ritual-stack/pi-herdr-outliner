@@ -17,7 +17,10 @@ import {
   type ResourceSource,
 } from "../src/resources";
 import { OutlinerStore } from "../src/store";
-import { BasicWebMarkdownExtractor } from "../src/web-markdown";
+import {
+  BasicWebMarkdownExtractor,
+  type WebMarkdownExtractor,
+} from "../src/web-markdown";
 
 function withWorkspace(run: (root: string, store: OutlinerStore) => void): void {
   const root = mkdtempSync(join(tmpdir(), "outliner-resources-"));
@@ -366,6 +369,89 @@ test("web resources cache Markdown, refresh conditionally, and retain annotation
     await expect(store.resources.refreshWeb(resource.id, true)).rejects.toThrow(
       "Workspace policy denies reading or refreshing this resource",
     );
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("web refresh re-derives Markdown when its final URL or extractor changes", async () => {
+  const root = mkdtempSync(join(tmpdir(), "outliner-web-provenance-"));
+  const database = join(root, "workspace.sqlite");
+  const html = '<html><body><a href="./next">Next</a></body></html>';
+  let finalPath = "/first/page";
+  let clock = Date.parse("2026-09-17T14:00:00.000Z");
+  const fetcher = async (
+    input: string | URL | Request,
+    init?: RequestInit,
+  ): Promise<Response> => {
+    if (String(input).endsWith("/entry")) {
+      return new Response(null, {
+        status: 302,
+        headers: { location: finalPath },
+      });
+    }
+    if (new Headers(init?.headers).get("if-none-match") === '"unchanged-html"') {
+      return new Response(null, { status: 304 });
+    }
+    return new Response(html, {
+      headers: {
+        "content-type": "text/html; charset=utf-8",
+        etag: '"unchanged-html"',
+      },
+    });
+  };
+  const basicExtractor = new BasicWebMarkdownExtractor();
+  const initialExtractor: WebMarkdownExtractor = {
+    adapter: { id: "fixture.markdown", version: 1 },
+    extract: (snapshot) => basicExtractor.extract(snapshot),
+  };
+  let store = new OutlinerStore(database, {
+    fetch: fetcher as typeof fetch,
+    webExtractor: initialExtractor,
+    now: () => new Date(clock += 1_000).toISOString(),
+  });
+  try {
+    const source = store.resources.createSource({
+      name: "Provenance",
+      provider: "web",
+      boundary: { baseUrl: "https://example.com/" },
+    });
+    const resource = store.resources.intern({
+      sourceId: source.id,
+      address: { kind: "web", url: "https://example.com/entry" },
+    }).resource;
+
+    const first = await store.resources.open(resource.id, true);
+    expect(first.web?.markdown).toBe("[Next](https://example.com/first/next)");
+
+    finalPath = "/second/page";
+    const redirected = await store.resources.refreshWeb(resource.id, true);
+    expect(redirected.web?.markdown).toBe("[Next](https://example.com/second/next)");
+    expect(redirected.web?.canonicalUrl).toBe("https://example.com/second/page");
+
+    const unchanged = await store.resources.refreshWeb(resource.id, true);
+    expect(unchanged.web?.markdown).toBe(redirected.web?.markdown);
+    expect(unchanged.web?.fetchedAt).toBe(redirected.web?.fetchedAt);
+
+    store.close();
+    const replacementExtractor: WebMarkdownExtractor = {
+      adapter: { id: "fixture.markdown", version: 2 },
+      extract: (snapshot) => `Replacement\n\n${basicExtractor.extract(snapshot)}`,
+    };
+    store = new OutlinerStore(database, {
+      fetch: fetcher as typeof fetch,
+      webExtractor: replacementExtractor,
+      now: () => new Date(clock += 1_000).toISOString(),
+    });
+    const replaced = await store.resources.refreshWeb(resource.id, true);
+    expect(replaced.web?.markdown).toBe(
+      "Replacement\n\n[Next](https://example.com/second/next)",
+    );
+    expect(replaced.web?.representation.adapter).toEqual({
+      id: "fixture.markdown",
+      version: 2,
+    });
   } finally {
     store.close();
     rmSync(root, { recursive: true, force: true });

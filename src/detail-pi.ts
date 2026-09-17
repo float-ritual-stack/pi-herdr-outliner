@@ -158,6 +158,7 @@ const detailHeaderPropertyKeys = parsePropertySummaryKeys(
 const destinationTimeoutMs = openDestinationTimeoutFromEnvironment(
   process.env.OUTLINER_OPEN_DESTINATION_TIMEOUT_MS,
 );
+const WEB_RESOURCE_REQUEST_TIMEOUT_MS = 17_000;
 
 const paths = resolvePaths();
 const client = new OutlinerClient(paths.socket);
@@ -315,11 +316,14 @@ const effects: DetailEffects = {
     return {
       kind: "resource",
       target,
-      description: await client.request<ResourceDescription>({
-        action: "resources.open",
-        target,
-        destinationClientId: clientId,
-      }),
+      description: await client.request<ResourceDescription>(
+        {
+          action: "resources.open",
+          target,
+          destinationClientId: clientId,
+        },
+        WEB_RESOURCE_REQUEST_TIMEOUT_MS,
+      ),
     };
   },
   async setLocked(locked) {
@@ -410,11 +414,14 @@ const effects: DetailEffects = {
     });
   },
   async refreshResource(resourceId) {
-    return client.request<ResourceDescription>({
-      action: "resources.refresh",
-      resourceId,
-      destinationClientId: clientId,
-    });
+    return client.request<ResourceDescription>(
+      {
+        action: "resources.refresh",
+        resourceId,
+        destinationClientId: clientId,
+      },
+      WEB_RESOURCE_REQUEST_TIMEOUT_MS,
+    );
   },
   openExternal: openExternalUrl,
   async listAnnotations(sourceBlockId) {

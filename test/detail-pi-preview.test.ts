@@ -40,6 +40,12 @@ import {
   togglePreviewRegionDisclosure,
 } from "../src/detail-preview-regions";
 import { outlinerLinkUri } from "../src/outliner-links";
+import {
+  deriveResourceCapabilityReport,
+  type Resource,
+  type ResourceDescription,
+  type ResourceSource,
+} from "../src/resources";
 import { createOpenDestinationChooserState } from "../src/open-destination-chooser";
 import {
   SourceSpannedMarkdown,
@@ -147,6 +153,86 @@ function setBlockDocument(
     resource: null;
   }, { context, target, resource: null });
 }
+function webState(markdown: string): DetailState {
+  const detail = state(markdown, markdown);
+  const source: ResourceSource = {
+    id: "20000000-0000-4000-8000-000000000001",
+    name: "Web fixture",
+    provider: "web",
+    boundary: { kind: "web", baseUrl: "https://example.com/" },
+    policy: { deniedCapabilities: [] },
+    version: 1,
+    createdAt: "created",
+    updatedAt: "updated",
+  };
+  const resource: Resource = {
+    id: "10000000-0000-4000-8000-000000000001",
+    sourceId: source.id,
+    provider: "web",
+    address: { kind: "web", url: "https://example.com/article" },
+    version: 1,
+    addressVersion: 1,
+    mediaType: "text/html",
+    createdAt: "created",
+    updatedAt: "updated",
+  };
+  const target = { kind: "resource" as const, resourceId: resource.id };
+  const description: ResourceDescription = {
+    resource,
+    source,
+    requestedRevision: null,
+    capabilities: deriveResourceCapabilityReport(source, true),
+    web: {
+      canonicalUrl: resource.address.url,
+      markdown,
+      revision: {
+        resourceId: resource.id,
+        addressVersion: resource.addressVersion,
+        revision: {
+          kind: "web",
+          validator: { kind: "etag", value: "fixture", weak: false },
+        },
+      },
+      representation: {
+        mediaType: "text/markdown",
+        adapter: { id: "fixture", version: 1 },
+        contentHash: "a".repeat(64),
+      },
+      freshness: "fresh",
+      fetchedAt: "2026-09-17T12:00:00.000Z",
+      checkedAt: "2026-09-17T12:00:00.000Z",
+      lastError: null,
+      annotations: [],
+    },
+  };
+  const renderedDocument = [
+    markdown,
+    "",
+    "---",
+    "",
+    "## Web resource",
+    "",
+    `[Open externally](<${resource.address.url}>)`,
+  ].join("\n");
+  detail.document = {
+    kind: "ready",
+    document: { kind: "resource", target, description },
+  };
+  Object.assign(detail as unknown as {
+    context: SelectionContext;
+    target: OutlinerNavigationTarget;
+    resource: Resource;
+  }, {
+    context: { selected: null, ancestors: [], children: [] },
+    target,
+    resource,
+  });
+  detail.resolvedSelectedText = renderedDocument;
+  detail.projectedSelectedText = renderedDocument;
+  detail.resolvedBreadcrumb = resource.address.url;
+  return detail;
+}
+
 
 
 const plainMarkdownTheme: MarkdownTheme = {
@@ -2014,6 +2100,46 @@ test("maps rendered Markdown points back to UTF-16 source positions", () => {
   const point = layout.sourcePointAtViewport(3, 25, 60);
 
   expect(point).toEqual({ row: 0, column: raw.indexOf("Detail") + 4 });
+});
+
+test("maps cached web Markdown points without requiring a selected block", () => {
+  const markdown = "# Web article\n\nChoose the **cached phrase** from this paragraph.";
+  const detail = webState(markdown);
+  const layout = previewLayout(detail);
+  layout.scrollView.setScrollbar("hidden");
+  layout.syncState(60);
+  const rendered = layout.scrollView.render(60).map(stripTerminalSequences);
+  const renderedRow = rendered.findIndex((line) => line.includes("cached phrase"));
+  const renderedColumn = rendered[renderedRow]!.indexOf("cached phrase") + 4;
+
+  expect(detail.context.selected).toBeNull();
+  expect(
+    layout.sourcePointAtViewport(renderedRow + 3, renderedColumn, 60),
+  ).toEqual({
+    row: 2,
+    column: markdown.split("\n")[2]!.indexOf("cached phrase") + 4,
+  });
+});
+
+test("highlights keyboard selection in cached web Markdown", () => {
+  const markdown = "# Web article\n\nChoose the **cached phrase** from this paragraph.";
+  const detail = webState(markdown);
+  const sourceLine = markdown.split("\n")[2]!;
+  const selectionStart = sourceLine.indexOf("cached phrase");
+  detail.mode = "select";
+  detail.buffer = new TextBuffer(markdown);
+  detail.buffer.placeCursor(2, selectionStart);
+  detail.buffer.placeCursor(2, selectionStart + "cached phrase".length, true);
+
+  const layout = previewLayout(detail);
+  layout.setActive(true);
+  layout.syncState(60);
+  const selectedLine = layout.render(60).find((line) =>
+    stripTerminalSequences(line).includes("cached phrase")
+  )!;
+
+  expect(stripTerminalSequences(selectedLine)).toContain("▐ ");
+  expect(selectedLine).toContain("\x1b[1;4;97;48;5;24m");
 });
 
 test("decorates the exact active attention phrase in Pi preview", () => {
