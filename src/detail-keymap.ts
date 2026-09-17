@@ -250,6 +250,9 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
       case "detail.edit.begin":
         await dispatch({ type: "edit.begin" });
         return true;
+      case "detail.edit.external":
+        await dispatch({ type: "edit.external" });
+        return true;
       case "detail.annotation.select":
         await dispatch({
           type: "annotation.selection.begin",

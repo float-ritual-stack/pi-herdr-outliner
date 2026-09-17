@@ -387,6 +387,16 @@ export interface DetailEffects {
     direction: "right" | "down",
   ): void | Promise<void>;
   copyText(text: string): void;
+  editExternalDraft(input: {
+    blockId: string;
+    text: string;
+    expectedUpdatedAt: string;
+  }): Promise<{
+    text: string;
+    changed: boolean;
+    recoveryPath: string;
+    cleanup(): void;
+  }>;
   updateBlock(input: {
     blockId: string;
     text: string;
@@ -437,6 +447,7 @@ export type DetailOpenRouting = "first-unlocked" | "chooser";
 
 export type DetailIntent =
   | { type: "edit.begin" }
+  | { type: "edit.external" }
   | { type: "annotation.selection.begin"; sourceLine?: number; sourceColumn?: number }
   | { type: "resource.refresh" }
   | { type: "resource.open-external" }
@@ -1845,6 +1856,56 @@ export function createDetailController(
     ensureEditorCursorVisible(viewport);
   };
 
+  const editExternalDraft = async (viewport: DetailViewport): Promise<void> => {
+    if (state.mode !== "edit") await beginEdit(viewport);
+    if (state.mode !== "edit") return;
+    const selected = state.context.selected;
+    if (!selected || state.busy) return;
+    const previousViewportOffset = state.editorVisualOffset;
+    state.busy = true;
+    state.status = "Opening draft in $EDITOR";
+    emit();
+    try {
+      const result = await effects.editExternalDraft({
+        blockId: selected.id,
+        text: state.buffer.text,
+        expectedUpdatedAt: selected.updatedAt,
+      });
+      if (!result.changed) {
+        result.cleanup();
+        state.status = "$EDITOR returned an unchanged draft";
+        return;
+      }
+      let replaced: boolean;
+      try {
+        replaced = state.buffer.replaceText(result.text);
+      } catch (error) {
+        throw new Error(
+          `Could not import the external editor draft. Recoverable editor file: ${result.recoveryPath}`,
+          { cause: error },
+        );
+      }
+      if (!replaced) {
+        result.cleanup();
+        state.status = "$EDITOR returned an unchanged draft";
+        return;
+      }
+      result.cleanup();
+      const layout = editorLayout(viewport);
+      const maximumOffset = Math.max(
+        0,
+        layout.rows.length - detailVisibleEditorHeight(state, viewport),
+      );
+      state.editorVisualOffset = Math.min(previousViewportOffset, maximumOffset);
+      state.completion = null;
+      state.status = "Imported $EDITOR changes into the draft · Undo restores the prior draft";
+    } catch (error) {
+      state.status = errorMessage(error);
+    } finally {
+      state.busy = false;
+    }
+  };
+
   const beginPropertyEdit = async (): Promise<void> => {
     const selected = state.context.selected;
     if (!selected) {
@@ -2304,6 +2365,9 @@ export function createDetailController(
     switch (intent.type) {
       case "edit.begin":
         await beginEdit(viewport);
+        break;
+      case "edit.external":
+        await editExternalDraft(viewport);
         break;
       case "annotation.selection.begin":
         await beginAnnotationSelection(intent.sourceLine, intent.sourceColumn);

@@ -246,12 +246,25 @@ test("opens the contextual menu and invokes its selected action through effectiv
 
   await detail.press({ name: "?" }, "?");
   expect(menuItems.some((item) => item.id === "detail.edit.begin")).toBe(true);
+  expect(menuItems.some((item) => item.id === "detail.edit.external")).toBe(true);
   await invoke("detail.edit.begin");
+  await invoke("detail.edit.external");
   await invoke("detail.pane.right");
   expect(detail.intents).toEqual([
     { type: "edit.begin" },
+    { type: "edit.external" },
     { type: "pane.open", direction: "right" },
   ]);
+});
+
+test("invokes the external editor action from an active unsaved draft", async () => {
+  const editState = state();
+  editState.mode = "edit";
+  const detail = harness(editState, true);
+
+  await detail.press({ name: "e", meta: true });
+
+  expect(detail.intents).toEqual([{ type: "edit.external" }]);
 });
 
 test("invokes semantic actions directly regardless of bindings and reports invalid contexts", async () => {

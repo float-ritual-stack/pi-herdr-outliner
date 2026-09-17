@@ -203,6 +203,20 @@ export class TextBuffer {
     if (row === this.row) this.column = Math.min(this.column, value.length);
   }
 
+  replaceText(value: string): boolean {
+    if (value === this.text) return false;
+    this.recordEdit(null);
+    this.clearSelectionAnchor();
+    this.lines.length = 0;
+    for (const line of value.split("\n")) this.lines.push(line);
+    this.row = Math.min(this.row, this.lines.length - 1);
+    this.column = clampToGraphemeStart(
+      this.lines[this.row],
+      Math.min(this.column, this.lines[this.row].length),
+    );
+    return true;
+  }
+
   newline(): void {
     this.insert("\n");
   }
@@ -358,7 +372,8 @@ export class TextBuffer {
   }
 
   private restore(snapshot: TextBufferSnapshot): void {
-    this.lines.splice(0, this.lines.length, ...snapshot.lines);
+    this.lines.length = 0;
+    for (const line of snapshot.lines) this.lines.push(line);
     this.row = snapshot.row;
     this.column = snapshot.column;
     this.#selectionAnchor = snapshot.selectionAnchor ? { ...snapshot.selectionAnchor } : null;

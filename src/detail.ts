@@ -11,6 +11,7 @@ import { projectDetailRead } from "./detail-embeds";
 import { createDetailKeyHandler, detailActionScopes } from "./detail-keymap";
 import { renderDetailAnsi } from "./detail-renderer";
 import { completeReferencedPaths, readReferencedFile } from "./files";
+import { editTextInExternalEditor } from "./external-editor";
 import { resolveOutlinerLinkTarget } from "./outliner-links";
 import {
   dispatchNavigation,
@@ -80,6 +81,7 @@ if (detailPresentation === "property-inspector" && !dedicatedPropertyBlockId) {
 }
 const initialTarget = detailTargetFromEnvironment(process.env.OUTLINER_DETAIL_TARGET);
 let stopping = false;
+let externalEditorActive = false;
 let watcher: OutlinerWatcher | null = null;
 let workQueue = Promise.resolve();
 let pendingPaste: string | null = null;
@@ -211,6 +213,36 @@ const effects: DetailEffects = {
   openDetailPane: openTargetInNewDetail,
   copyText(text) {
     process.stdout.write(osc52ClipboardWrite(text));
+  },
+  editExternalDraft(input) {
+    return editTextInExternalEditor(input, {
+      editor: process.env.VISUAL?.trim() || process.env.EDITOR,
+      cwd: paths.workspaceRoot,
+      suspendTerminal() {
+        externalEditorActive = true;
+        pendingPaste = null;
+        inputDecoder = new TerminalInputDecoder((text) => {
+          pendingPaste = text;
+        });
+        process.stdin.pause();
+        if (process.stdin.isTTY) process.stdin.setRawMode(false);
+        process.stdout.write(`${BRACKETED_PASTE_DISABLE}\x1b[?25h\x1b[?1049l`);
+      },
+      restoreTerminal() {
+        try {
+          process.stdout.write(`\x1b[?1049h\x1b[?25l${BRACKETED_PASTE_ENABLE}`);
+          if (process.stdin.isTTY) process.stdin.setRawMode(true);
+          process.stdin.resume();
+          if (process.env.HERDR_ENV === "1") focusCurrentPane();
+          draw();
+        } finally {
+          externalEditorActive = false;
+        }
+      },
+      async currentUpdatedAt() {
+        return (await client.request<Block>({ action: "get", blockId: input.blockId })).updatedAt;
+      },
+    });
   },
   async updateBlock(input) {
     return client.request<Block>({
@@ -346,7 +378,7 @@ function enqueueWork(task: () => void | Promise<void>): void {
   });
 }
 
-const inputDecoder = new TerminalInputDecoder((text) => {
+let inputDecoder = new TerminalInputDecoder((text) => {
   pendingPaste = text;
 });
 
@@ -424,7 +456,9 @@ emitKeypressEvents(process.stdin);
 if (process.stdin.isTTY) process.stdin.setRawMode(true);
 process.stdout.write(`\x1b[?1049h\x1b[?25l${BRACKETED_PASTE_ENABLE}`);
 
-process.on("SIGINT", stop);
+process.on("SIGINT", () => {
+  if (!externalEditorActive) stop();
+});
 process.on("SIGTERM", stop);
 process.on("SIGHUP", stop);
 

@@ -61,6 +61,7 @@ import {
 } from "./detail-pi-renderer";
 import { parsePropertySummaryKeys } from "./property-summary";
 import { completeReferencedPaths, readReferencedFile } from "./files";
+import { editTextInExternalEditor } from "./external-editor";
 import {
   configureCurrentPaneRightClick,
   detailTargetFromEnvironment,
@@ -185,7 +186,7 @@ let pendingLinkClick: PiDetailLinkClick = {
   suppress: false,
 };
 const terminal = new ProcessTerminal();
-const inputStream = new PiDetailInputStreamDecoder();
+let inputStream = new PiDetailInputStreamDecoder();
 const INPUT_IDLE_FLUSH_MS = 10;
 let inputFlushTimer: ReturnType<typeof setTimeout> | undefined;
 let inputGeneration = 0;
@@ -232,6 +233,7 @@ const tui = new DetailTuiAltScreen(terminal, false, undefined, {
   },
 });
 let stopping = false;
+let externalEditorActive = false;
 let watcher: OutlinerWatcher | null = null;
 let workQueue = Promise.resolve();
 const firstWatcherConnection = Promise.withResolvers<void>();
@@ -380,6 +382,34 @@ const effects: DetailEffects = {
   openDetailPane: openTargetInNewDetail,
   copyText(text) {
     process.stdout.write(osc52ClipboardWrite(text));
+  },
+  editExternalDraft(input) {
+    return editTextInExternalEditor(input, {
+      editor: process.env.VISUAL?.trim() || process.env.EDITOR,
+      cwd: paths.workspaceRoot,
+      suspendTerminal() {
+        externalEditorActive = true;
+        if (inputFlushTimer) {
+          clearTimeout(inputFlushTimer);
+          inputFlushTimer = undefined;
+        }
+        inputGeneration += 1;
+        inputStream = new PiDetailInputStreamDecoder();
+        tui.stop({ preserveScreen: true });
+      },
+      restoreTerminal() {
+        try {
+          tui.start();
+          tui.requestRender(true);
+          if (process.env.HERDR_ENV === "1") focusCurrentPane();
+        } finally {
+          externalEditorActive = false;
+        }
+      },
+      async currentUpdatedAt() {
+        return (await client.request<Block>({ action: "get", blockId: input.blockId })).updatedAt;
+      },
+    });
   },
   async updateBlock(input) {
     return client.request<Block>({
@@ -1145,7 +1175,9 @@ try {
   process.exit(1);
 }
 
-process.on("SIGINT", () => void stop());
+process.on("SIGINT", () => {
+  if (!externalEditorActive) void stop();
+});
 process.on("SIGTERM", () => void stop());
 process.on("SIGHUP", () => void stop());
 process.stdout.on("resize", handleResize);

@@ -182,4 +182,47 @@ describe("TextBuffer undo and redo", () => {
     expect(undoCount).toBe(100);
     expect(buffer.text).toBe("x");
   });
+
+  test("imports a whole external draft as one undoable edit and ignores unchanged text", () => {
+    const buffer = new TextBuffer("alpha\nbeta");
+    buffer.placeCursor(0, 1);
+    buffer.placeCursor(1, 2, true);
+
+    expect(buffer.replaceText("changed\nthrough editor")).toBe(true);
+    expect(buffer.text).toBe("changed\nthrough editor");
+    expect(buffer.undo()).toBe(true);
+    expect(buffer.text).toBe("alpha\nbeta");
+    expect(buffer.selectionRange).toEqual({
+      start: { row: 0, column: 1 },
+      end: { row: 1, column: 2 },
+    });
+
+    expect(buffer.replaceText(buffer.text)).toBe(false);
+    expect(buffer.undo()).toBe(false);
+    expect(buffer.replaceText("")).toBe(true);
+    expect(buffer.text).toBe("");
+  });
+
+  test("preserves external carriage returns exactly", () => {
+    const buffer = new TextBuffer("before");
+    const edited = "left\r\nright\rtail";
+
+    expect(buffer.replaceText(edited)).toBe(true);
+    expect(buffer.text).toBe(edited);
+    expect(buffer.undo()).toBe(true);
+    expect(buffer.text).toBe("before");
+  });
+
+  test("imports a large multiline draft without variadic argument limits", () => {
+    const buffer = new TextBuffer("before");
+    const edited = `${"line\n".repeat(150_000)}tail`;
+
+    expect(buffer.replaceText(edited)).toBe(true);
+    expect(buffer.text).toBe(edited);
+    expect(buffer.undo()).toBe(true);
+    expect(buffer.text).toBe("before");
+    expect(buffer.redo()).toBe(true);
+    expect(buffer.text).toBe(edited);
+  });
 });
+
