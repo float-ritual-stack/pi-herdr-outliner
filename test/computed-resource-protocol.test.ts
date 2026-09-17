@@ -113,6 +113,9 @@ function computedDetailEffects(
     openBacklinkPeek() {},
     openDetailPane() {},
     copyText() {},
+    async editExternalDraft(input) {
+      return { text: input.text, changed: false };
+    },
     async updateBlock() {
       return unavailable();
     },

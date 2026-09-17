@@ -832,6 +832,7 @@ row at the prior index or the previous surviving row.
 - The controller keeps the active visual cursor row inside the editor viewport, including completion-height and terminal-size changes.
 - Completion replaces raw line ranges and does not resolve block references into saved text.
 - Ctrl+S uses optimistic concurrency. Esc discards the complete edit session.
+- `Edit in $EDITOR` is a draft adapter, not a storage path: renderer effects own private temporary files and terminal yield/restore, while the controller imports changed UTF-8 with one `TextBuffer` history entry only after the captured canonical version still matches. Canonical mutation remains exclusively behind the normal optimistic Save action.
 
 Editor undo/redo stores at most 100 per-session snapshots. Consecutive typing, backspace, and forward delete coalesce; cursor and selection state restore with text; divergent edits invalidate redo. New edit/comment sessions start with empty history. Modal editing, registers, macros, and programmable operator systems remain explicit non-goals for the custom buffer.
 

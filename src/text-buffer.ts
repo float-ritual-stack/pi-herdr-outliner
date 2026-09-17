@@ -203,6 +203,20 @@ export class TextBuffer {
     if (row === this.row) this.column = Math.min(this.column, value.length);
   }
 
+  replaceText(value: string): boolean {
+    const normalized = value.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    if (normalized === this.text) return false;
+    this.recordEdit(null);
+    this.clearSelectionAnchor();
+    this.lines.splice(0, this.lines.length, ...normalized.split("\n"));
+    this.row = Math.min(this.row, this.lines.length - 1);
+    this.column = clampToGraphemeStart(
+      this.lines[this.row],
+      Math.min(this.column, this.lines[this.row].length),
+    );
+    return true;
+  }
+
   newline(): void {
     this.insert("\n");
   }

@@ -121,6 +121,7 @@ interface Harness {
     projectedReads: string[];
     projectedReadHosts: Array<string | undefined>;
     updates: Array<{ blockId: string; text: string; expectedUpdatedAt: string }>;
+    externalDrafts: Array<Parameters<DetailEffects["editExternalDraft"]>[0]>;
     propertyPatches: Array<Parameters<DetailEffects["patchProperties"]>[0]>;
     creates: Array<Parameters<DetailEffects["createAnnotation"]>[0]>;
     restores: string[];
@@ -156,6 +157,7 @@ interface Harness {
   };
   setSelection(selection: SelectionContext): void;
   setUpdate(implementation: DetailEffects["updateBlock"]): void;
+  setExternalEdit(implementation: DetailEffects["editExternalDraft"]): void;
   setQueryResults(results: VisibleBlockCollection[]): void;
   setBacklinkResults(results: BacklinkCollection[]): void;
   setPageQueryResults(results: PageAddressCollection[]): void;
@@ -184,6 +186,10 @@ function createHarness(
     updatedAt: "version-2",
     properties: initial.properties,
   });
+  let externalEdit: DetailEffects["editExternalDraft"] = async (input) => ({
+    text: input.text,
+    changed: false,
+  });
   let queryResults: VisibleBlockCollection[] = [];
   let backlinkResults: BacklinkCollection[] = [];
   let focusError: Error | null = null;
@@ -196,6 +202,7 @@ function createHarness(
     projectedReads: [],
     projectedReadHosts: [],
     updates: [],
+    externalDrafts: [],
     creates: [],
     restores: [],
     histories: [],
@@ -353,6 +360,10 @@ function createHarness(
     },
     copyText(text) {
       calls.copiedTexts.push(text);
+    },
+    async editExternalDraft(input) {
+      calls.externalDrafts.push(input);
+      return externalEdit(input);
     },
     async resolveNavigation(intent) {
       return {
@@ -518,6 +529,9 @@ function createHarness(
     },
     setUpdate(implementation) {
       update = implementation;
+    },
+    setExternalEdit(implementation) {
+      externalEdit = implementation;
     },
     setQueryResults(next) {
       queryResults = [...next];
@@ -2274,6 +2288,98 @@ describe("detail controller saves and annotations", () => {
     expect(harness.controller.state.context.selected?.updatedAt).toBe("version-2");
     expect(harness.controller.state.resolvedSelectedText).toBe("resolved:raw changed");
     expect(harness.controller.state.mode).toBe("preview");
+  });
+
+  test("starts a canonical draft and imports an empty external edit without saving", async () => {
+    const harness = createHarness(makeBlock({
+      text: "canonical",
+      updatedAt: "original-version",
+    }));
+    harness.setExternalEdit(async (input) => {
+      expect(input).toEqual({
+        blockId: "block-1",
+        text: "canonical",
+        expectedUpdatedAt: "original-version",
+      });
+      return { text: "", changed: true };
+    });
+    await harness.controller.initialize();
+
+    await harness.controller.dispatch({ type: "edit.external" }, viewport);
+
+    expect(harness.controller.state.mode).toBe("edit");
+    expect(harness.controller.state.buffer.text).toBe("");
+    expect(harness.calls.locks).toContain(true);
+    expect(harness.calls.updates).toEqual([]);
+    await harness.controller.dispatch({ type: "buffer.cancel" }, viewport);
+    expect(harness.controller.state.context.selected?.text).toBe("canonical");
+    expect(harness.calls.updates).toEqual([]);
+  });
+
+  test("round-trips the exact unsaved draft as one undoable edit before optimistic save", async () => {
+    const harness = createHarness(makeBlock({
+      text: "canonical",
+      updatedAt: "original-version",
+    }));
+    await harness.controller.initialize();
+    await harness.controller.dispatch({ type: "edit.begin" }, viewport);
+    await harness.controller.dispatch({ type: "buffer.select-all" }, viewport);
+    await harness.controller.dispatch({
+      type: "buffer.insert",
+      text: "unsaved draft\nline two",
+    }, viewport);
+    harness.controller.state.buffer.placeCursor(0, 2);
+    harness.controller.state.buffer.placeCursor(1, 4, true);
+    const priorSelection = harness.controller.state.buffer.selectionRange;
+    harness.setExternalEdit(async (input) => {
+      expect(input.text).toBe("unsaved draft\nline two");
+      return { text: "editor draft\nwith several\nchanged lines", changed: true };
+    });
+
+    await harness.controller.dispatch({ type: "edit.external" }, viewport);
+    expect(harness.controller.state.buffer.text).toBe(
+      "editor draft\nwith several\nchanged lines",
+    );
+    await harness.controller.dispatch({ type: "buffer.undo" }, viewport);
+    expect(harness.controller.state.buffer.text).toBe("unsaved draft\nline two");
+    expect(harness.controller.state.buffer.selectionRange).toEqual(priorSelection);
+    await harness.controller.dispatch({ type: "buffer.redo" }, viewport);
+    await harness.controller.dispatch({ type: "buffer.save" }, viewport);
+    expect(harness.calls.updates).toEqual([{
+      blockId: "block-1",
+      text: "editor draft\nwith several\nchanged lines",
+      expectedUpdatedAt: "original-version",
+    }]);
+  });
+
+  test("treats an unchanged external file as a no-op", async () => {
+    const harness = createHarness(makeBlock({ text: "unchanged" }));
+    await harness.controller.initialize();
+
+    await harness.controller.dispatch({ type: "edit.external" }, viewport);
+    await harness.controller.dispatch({ type: "buffer.undo" }, viewport);
+
+    expect(harness.controller.state.buffer.text).toBe("unchanged");
+    expect(harness.controller.state.status).toBe("Nothing to undo");
+  });
+
+  test("keeps the exact draft after a recoverable external editor failure", async () => {
+    const harness = createHarness(makeBlock({ text: "canonical" }));
+    await harness.controller.initialize();
+    await harness.controller.dispatch({ type: "edit.begin" }, viewport);
+    await harness.controller.dispatch({ type: "buffer.insert", text: " unsaved" }, viewport);
+    harness.setExternalEdit(async () => {
+      throw new Error(
+        "editor exited with status 2. Recoverable editor file: /tmp/recovery/draft.md",
+      );
+    });
+
+    await harness.controller.dispatch({ type: "edit.external" }, viewport);
+
+    expect(harness.controller.state.mode).toBe("edit");
+    expect(harness.controller.state.buffer.text).toBe("canonical unsaved");
+    expect(harness.controller.state.status).toContain("/tmp/recovery/draft.md");
+    expect(harness.calls.updates).toEqual([]);
   });
 
   test("never serializes generated backlink projection content", async () => {

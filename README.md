@@ -644,10 +644,13 @@ Every capture constructs one typed `AnnotationTarget`: a representation with blo
 | `Tab` or `Ctrl+Space` | Open completion in block edit mode |
 | `Ctrl+W` | Move focus between the wide editor and draft preview |
 | `Ctrl+L` | Toggle source-line-linked editor/preview scrolling |
+| `Option+E` / `Alt+E` | Yield this Detail pane to `$VISUAL` or `$EDITOR`, then import the returned file into the current draft as one undoable edit |
 | `Ctrl+S` | Save block or add annotation |
 | `Esc` | Cancel the complete edit session and return to Tree |
 
 Long physical lines wrap without changing raw text. Continuation rows remain associated with one physical line number, and keyboard or pointer selection maps back to exact authored source. Bracketed paste replaces the selection and remains one edit even when terminal payload chunks arrive separately. Keyboard cursor movement keeps the active edge visible.
+
+External editing never writes the canonical block. From preview it first opens and locks an ordinary Detail draft; from edit mode it sends the exact unsaved buffer. Outliner leaves the alternate screen, waits for the configured terminal editor in the same local or SSH/Herdr PTY, restores the originating Detail and viewport, then imports valid UTF-8 only if the canonical version is unchanged. Save and Esc remain the commit/discard boundary. Failed launches, nonzero exits, restoration failures, and version conflicts preserve the draft and report the private recovery file when one exists.
 
 In edit mode, wheel/trackpad input scrolls the region under the pointer. Editor scrolling changes only its visual viewport; it never moves the text cursor. The next keyboard cursor movement restores cursor-follow. A primary press-drag-release gesture in the editor maps through headers, split geometry, line-number width, wrapping, tabs, grapheme boundaries, and Unicode display width to a valid source range, with edge dragging scrolling the editor viewport. Preview clicks retain their existing link and region actions.
 
