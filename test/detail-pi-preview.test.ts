@@ -345,6 +345,85 @@ function webState(markdown: string): DetailState {
   detail.resolvedBreadcrumb = resource.address.url;
   return detail;
 }
+function filesystemState(markdown: string): DetailState {
+  const detail = state(markdown, markdown);
+  const source: ResourceSource = {
+    id: "20000000-0000-4000-8000-000000000002",
+    name: "Filesystem fixture",
+    provider: "filesystem",
+    boundary: { kind: "filesystem", root: "/workspace" },
+    policy: { deniedCapabilities: [] },
+    version: 1,
+    createdAt: "created",
+    updatedAt: "updated",
+  };
+  const resource: Resource = {
+    id: "10000000-0000-4000-8000-000000000002",
+    sourceId: source.id,
+    provider: "filesystem",
+    address: { kind: "filesystem", path: "notes/fixture.md" },
+    version: 1,
+    addressVersion: 1,
+    mediaType: "text/markdown",
+    createdAt: "created",
+    updatedAt: "updated",
+  };
+  const target = { kind: "resource" as const, resourceId: resource.id };
+  const revision = {
+    resourceId: resource.id,
+    addressVersion: resource.addressVersion,
+    revision: {
+      kind: "filesystem" as const,
+      mtimeNs: "1",
+      size: String(markdown.length),
+    },
+  };
+  const description: ResourceDescription = {
+    resource,
+    source,
+    requestedRevision: null,
+    capabilities: deriveResourceCapabilityReport(source, true),
+    filesystem: {
+      text: markdown,
+      contentHash: "c".repeat(64),
+      capturedAt: "2026-09-17T12:00:00.000Z",
+      revision,
+    },
+    web: null,
+    webHistory: null,
+    remoteEntity: null,
+    webStatus: null,
+    remoteStatus: null,
+    availableCommands: [],
+  };
+  const renderedDocument = [
+    markdown,
+    "",
+    "---",
+    "",
+    "## Filesystem Resource",
+    "",
+    "- Local source",
+  ].join("\n");
+  detail.document = {
+    kind: "ready",
+    document: { kind: "resource", target, description },
+  };
+  Object.assign(detail as unknown as {
+    context: SelectionContext;
+    target: OutlinerNavigationTarget;
+    resource: Resource;
+  }, {
+    context: { selected: null, ancestors: [], children: [] },
+    target,
+    resource,
+  });
+  detail.resolvedSelectedText = renderedDocument;
+  detail.projectedSelectedText = renderedDocument;
+  detail.resolvedBreadcrumb = resource.address.path;
+  return detail;
+}
+
 
 
 
@@ -2444,6 +2523,31 @@ test("rejects generated web metadata rows for clicks and scroll source mapping",
       }
     }
   }
+});
+
+test("maps filesystem Resource text to mouse annotation selections", () => {
+  const markdown = "# Field notes\n\nChoose the selectable phrase from this paragraph.";
+  const detail = filesystemState(markdown);
+  const layout = previewLayout(detail);
+  const width = 60;
+  layout.setActive(true);
+  layout.syncState(width);
+  const rendered = layout.scrollView.render(width).map(stripTerminalSequences);
+  const renderedRow = rendered.findIndex((line) => line.includes("selectable phrase"));
+  const renderedColumn = rendered[renderedRow]!.indexOf("selectable phrase");
+
+  const start = layout.sourcePointAtViewport(renderedRow + 3, renderedColumn, width);
+  const end = layout.sourcePointAtViewport(
+    renderedRow + 3,
+    renderedColumn + "selectable phrase".length,
+    width,
+  );
+
+  expect(start).toEqual({ row: 2, column: markdown.split("\n")[2]!.indexOf("selectable phrase") });
+  expect(end).toEqual({
+    row: 2,
+    column: markdown.split("\n")[2]!.indexOf("selectable phrase") + "selectable phrase".length,
+  });
 });
 
 test("highlights keyboard selection in cached web Markdown", () => {

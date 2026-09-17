@@ -219,7 +219,13 @@ const effects: DetailEffects = {
   },
   editExternalDraft(input) {
     const configuration = resolveExternalEditorConfiguration();
-    return editTextInExternalEditor(input, {
+    const expectedUpdatedAt = input.kind === "block"
+      ? input.expectedUpdatedAt
+      : JSON.stringify(input.expectedRevision);
+    return editTextInExternalEditor({
+      text: input.text,
+      expectedUpdatedAt,
+    }, {
       editor: configuration.editor,
       environment: configuration.environment,
       cwd: paths.workspaceRoot,
@@ -245,8 +251,29 @@ const effects: DetailEffects = {
         }
       },
       async currentUpdatedAt() {
-        return (await client.request<Block>({ action: "get", blockId: input.blockId })).updatedAt;
+        if (input.kind === "block") {
+          return (await client.request<Block>({
+            action: "get",
+            blockId: input.blockId,
+          })).updatedAt;
+        }
+        const description = await client.request<ResourceDescription>({
+          action: "resources.describe",
+          target: { kind: "resource", resourceId: input.resourceId },
+          destinationClientId: clientId,
+        });
+        if (!description.filesystem) {
+          throw new Error("Filesystem Resource text is unavailable");
+        }
+        return JSON.stringify(description.filesystem.revision);
       },
+    });
+  },
+  writeFilesystemResource(input) {
+    return client.request<ResourceDescription>({
+      action: "resources.write-filesystem",
+      input,
+      destinationClientId: clientId,
     });
   },
   async updateBlock(input) {

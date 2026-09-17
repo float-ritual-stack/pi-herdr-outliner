@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createConnection, createServer, Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -204,6 +204,19 @@ test("persists resources and dispatches resource targets without synthetic block
       "workspace-policy": { state: "blocked" },
     },
   });
+  const written = await client.request<ResourceDescription>({
+    action: "resources.write-filesystem",
+    input: {
+      resourceId: resource.id,
+      expectedRevision: description.filesystem!.revision,
+      text: "# Daily\n\nEdited through Detail.\n",
+    },
+    destinationClientId: "resource-detail",
+  });
+  expect(written.filesystem?.text).toBe("# Daily\n\nEdited through Detail.\n");
+  expect(readFileSync(join(root, "daily/2026-09-17.md"), "utf8")).toBe(
+    "# Daily\n\nEdited through Detail.\n",
+  );
 
   const dispatch = await client.request<OutlinerNavigationDispatch>({
     action: "navigation.dispatch",
@@ -1382,7 +1395,7 @@ test("serves mutations and property queries over the local socket", async () => 
   const client = new OutlinerClient(socket);
   const service = await client.request<OutlinerServiceStatus>({ action: "ping" });
   expect(service).toEqual({ status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION });
-  expect(service.protocolVersion).toBe(48);
+  expect(service.protocolVersion).toBe(49);
   const provenance = {
     actorId: "omp",
     sessionId: "session-1",

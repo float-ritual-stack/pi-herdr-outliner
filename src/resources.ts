@@ -461,6 +461,12 @@ export interface InternFilesystemResourceInput {
   readonly path: string;
   readonly mediaType?: string;
 }
+export interface FilesystemResourceWriteInput {
+  readonly resourceId: string;
+  readonly expectedRevision: ResourceRevisionRef;
+  readonly text: string;
+}
+
 
 export interface RelocateResourceInput {
   readonly resourceId: string;

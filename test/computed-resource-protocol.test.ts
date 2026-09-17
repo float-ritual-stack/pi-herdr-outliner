@@ -116,6 +116,9 @@ function computedDetailEffects(
     async editExternalDraft(input) {
       return { text: input.text, changed: false, recoveryPath: "/tmp/computed-draft", cleanup() {} };
     },
+    async writeFilesystemResource() {
+      return unavailable();
+    },
     async updateBlock() {
       return unavailable();
     },

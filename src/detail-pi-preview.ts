@@ -232,6 +232,15 @@ function previewSelectionSource(
       sourceHash: pdf.representation.contentHash,
     };
   }
+  const filesystem = description?.filesystem;
+  if (description && filesystem) {
+    return {
+      text: filesystem.text,
+      sourceId: description.resource.id,
+      sourceVersion: filesystem.capturedAt,
+      sourceHash: filesystem.contentHash,
+    };
+  }
   const web = description?.web;
   if (!description || !web) return null;
   return {
@@ -1329,7 +1338,9 @@ export class DetailPiPreviewLayout extends VStack {
   private resourceMarkdownEndRow(annotated: AnnotationPreviewArrangement): number | null {
     if (this.state.context.selected) return null;
     const description = detailResourceDescription(this.state);
-    const markdown = description?.pdf?.markdown ?? description?.web?.markdown;
+    const markdown = description?.pdf?.markdown ??
+      description?.web?.markdown ??
+      description?.filesystem?.text;
     if (markdown === undefined) return null;
     return this.markdown.sourceLineRow(
       annotated.contentWidth,

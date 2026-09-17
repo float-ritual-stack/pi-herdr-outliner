@@ -1,6 +1,15 @@
 import { Database } from "bun:sqlite";
-import { createHash } from "node:crypto";
-import { lstatSync, readFileSync, realpathSync, statSync, type BigIntStats } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import {
+  lstatSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+  type BigIntStats,
+} from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { Type, type Static } from "typebox";
 import { Parse } from "typebox/value";
@@ -54,6 +63,7 @@ import {
   type PdfResourceHistory,
   type PdfSourceSnapshotProvenance,
   type InternFilesystemResourceInput,
+  type FilesystemResourceWriteInput,
   type InternResourceReceipt,
   type Resource,
   type ResourceAddress,
@@ -1434,6 +1444,66 @@ export class ResourceCatalog {
       return this.requireFromCurrentRead(resource.id);
     })();
   }
+  writeFilesystem(input: FilesystemResourceWriteInput): FilesystemResourceDocument {
+    const resource = this.require(normalizeResourceId(input.resourceId));
+    const source = this.requireSource(resource.sourceId);
+    if (
+      resource.provider !== "filesystem" ||
+      source.provider !== "filesystem" ||
+      resource.address.kind !== "filesystem"
+    ) {
+      throw new ResourceCatalogError(
+        "provider-mismatch",
+        "Filesystem writes require a filesystem Resource",
+      );
+    }
+    if (typeof input.text !== "string") {
+      throw new ResourceCatalogError("invalid-input", "Filesystem Resource text must be a string");
+    }
+    if (Buffer.byteLength(input.text, "utf8") > MAX_FILESYSTEM_RESOURCE_BYTES) {
+      throw new ResourceCatalogError(
+        "invalid-input",
+        `Filesystem Resource exceeds ${MAX_FILESYSTEM_RESOURCE_BYTES / 1024 / 1024} MiB`,
+      );
+    }
+    const expectedRevision = normalizeResourceRevisionRef(input.expectedRevision, resource);
+    const current = this.filesystemReadFromCurrentRead(resource, source, null);
+    if (!resourceRevisionRefEquals(expectedRevision, current.revision)) {
+      throw new ResourceCatalogError(
+        "stale-revision",
+        "Filesystem Resource changed after the edit began",
+      );
+    }
+    const sourceRow = this.requireSourceRowFromCurrentRead(source.id);
+    this.assertConfinement(source, sourceRow.root_binding, resource.address);
+    const absolutePath = realpathSync(resolve(source.boundary.root, resource.address.path));
+    const stat = statSync(absolutePath, { bigint: true });
+    const temporaryPath = join(
+      dirname(absolutePath),
+      `.${basename(absolutePath)}.${process.pid}.${randomUUID()}.tmp`,
+    );
+    try {
+      writeFileSync(temporaryPath, input.text, {
+        encoding: "utf8",
+        flag: "wx",
+        mode: Number(stat.mode & 0o777n),
+      });
+      renameSync(temporaryPath, absolutePath);
+    } catch (error) {
+      try {
+        unlinkSync(temporaryPath);
+      } catch {
+      }
+      throw new ResourceCatalogError(
+        "source-unavailable",
+        `Filesystem Resource could not be written: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+    return this.filesystemReadFromCurrentRead(resource, source, null);
+  }
+
 
   private filesystemReadFromCurrentRead(
     resource: Resource,

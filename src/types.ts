@@ -3,6 +3,7 @@ import type {
   CreateComputedInvocationInput,
   CreateResourceSourceInput,
   InternFilesystemResourceInput,
+  FilesystemResourceWriteInput,
   InternResourceInput,
   RelocateResourceInput,
   ResourceDescription,
@@ -30,6 +31,7 @@ export type {
   ComputedResourceStatus,
   CreateComputedInvocationInput,
   CapabilityAssessment,
+  FilesystemResourceWriteInput,
   InternFilesystemResourceInput,
   InternResourceReceipt,
   PdfPageText,
@@ -1118,7 +1120,7 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 48;
+export const OUTLINER_PROTOCOL_VERSION = 49;
 
 
 export interface OutlinerServiceStatus {
@@ -1176,6 +1178,13 @@ export type OutlinerRequest =
   | { id: string; action: "resources.intern-filesystem"; input: InternFilesystemResourceInput }
   | { id: string; action: "resources.get"; resourceId: string }
   | { id: string; action: "resources.relocate"; input: RelocateResourceInput }
+  | {
+      id: string;
+      action: "resources.write-filesystem";
+      input: FilesystemResourceWriteInput;
+      destinationClientId: string;
+    }
+
   | {
       id: string;
       action: "resources.describe";

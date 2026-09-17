@@ -1128,6 +1128,23 @@ export class OutlinerServer {
         case "resources.relocate":
           result = this.store.resources.relocate(request.input);
           break;
+        case "resources.write-filesystem": {
+          const destination = this.clientById(request.destinationClientId);
+          if (destination.role !== "detail") {
+            throw new Error("Filesystem Resource writes require a Detail destination");
+          }
+          const local = this.presentResource(
+            this.store.resources.describe(request.input.resourceId, true),
+            destination,
+          );
+          this.requireAvailableResourceCapability(local, "write", true);
+          this.store.resources.writeFilesystem(request.input);
+          result = this.presentResource(
+            this.store.resources.describe(request.input.resourceId, true),
+            destination,
+          );
+          break;
+        }
         case "resources.retention.get":
           result = this.store.resources.retentionPolicy();
           break;
@@ -1689,6 +1706,11 @@ export class OutlinerServer {
         domain = "resource-catalog";
         resourceId = (response.result as ResourceDescription).resource.id;
         break;
+      case "resources.write-filesystem":
+        domain = "resource-catalog";
+        resourceId = (response.result as ResourceDescription).resource.id;
+        break;
+
       case "resources.command.execute": {
         const commandResult = response.result as ResourceProviderCommandResult;
         domain = "resource-catalog";
