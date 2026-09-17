@@ -1327,6 +1327,23 @@ export class OutlinerStore {
         }
         this.reservePurgedWorkIdFromCurrentRead(row.block_id, parsed);
       }
+      // Retain request hashes so retries cannot recreate purged results or duplicate survivors.
+      this.database.query(`
+        WITH purged(id) AS (SELECT value FROM json_each(?))
+        UPDATE annotation_requests
+        SET annotation_ids = (
+          SELECT json_group_array(value) FROM (
+            SELECT entry.value
+            FROM json_each(annotation_requests.annotation_ids) entry
+            WHERE entry.value NOT IN (SELECT id FROM purged)
+            ORDER BY entry.key
+          )
+        )
+        WHERE EXISTS (
+          SELECT 1 FROM json_each(annotation_requests.annotation_ids) entry
+          WHERE entry.value IN (SELECT id FROM purged)
+        )
+      `).run(JSON.stringify(subtree));
       // Remove owned targets first so subject RESTRICT references cannot block the purge.
       this.database.query(
         `DELETE FROM annotation_targets WHERE annotation_block_id IN (${placeholders})`,

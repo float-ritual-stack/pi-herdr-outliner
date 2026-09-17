@@ -2611,6 +2611,7 @@ Second paragraph`;
     store.delete(source.id);
     const sequence = store.sequence;
     const doomed = [source, child, root, childRoot, reply, replyChild, replyAnnotation];
+    const receipts = store.database.query("SELECT * FROM annotation_requests ORDER BY request_id").all();
     store.database.exec(`
       CREATE TRIGGER prevent_subject_purge BEFORE DELETE ON blocks
       WHEN OLD.id = '${source.id}'
@@ -2621,6 +2622,7 @@ Second paragraph`;
     expect(store.database.query("SELECT COUNT(*) AS count FROM annotation_targets").get()).toEqual({ count: 4 });
     expect(store.database.query("SELECT COUNT(*) AS count FROM annotation_resolution_events").get()).toEqual({ count: 4 });
     expect(store.sequence).toBe(sequence);
+    expect(store.database.query("SELECT * FROM annotation_requests ORDER BY request_id").all()).toEqual(receipts);
     store.database.exec("DROP TRIGGER prevent_subject_purge");
 
     store.purge(source.id, source.id.slice(0, 8));
@@ -2638,6 +2640,50 @@ Second paragraph`;
     ]);
     expect(store.database.query("PRAGMA foreign_key_check").all()).toEqual([]);
     expect(store.sequence).toBe(sequence + 1);
+    expect(store.createAnnotation("purge-root", {
+      target: blockAnnotationTarget(source, 0, 5, "purge-root"),
+      body: "Comment.",
+      source: "user",
+    })).toEqual({ annotations: [], deduplicated: true });
+    expect(store.replyToAnnotation("purge-reply", {
+      annotationId: root.id, body: "Moved reply.", source: "user",
+    })).toEqual({ annotations: [], deduplicated: true });
+    expect(() => store.replyToAnnotation("purge-reply", {
+      annotationId: root.id, body: "Changed reply.", source: "user",
+    })).toThrow("already used with different input");
+    expect(store.database.query("SELECT * FROM annotation_requests WHERE request_id LIKE 'retained-%' ORDER BY request_id").all()).toEqual(
+      (receipts as Array<{ request_id: string }>).filter((receipt) => receipt.request_id.startsWith("retained-")),
+    );
+  });
+
+  test("replays only surviving batch results after purge without recreating annotations", () => {
+    const store = makeStore();
+    const source = store.create("alpha beta");
+    const operations = ["first", "purged", "last"].map((operationId) => ({
+      operationId,
+      type: "create" as const,
+      input: {
+        target: blockAnnotationTarget(source, 0, 5, "batch-purge-source"),
+        body: operationId,
+        source: "user" as const,
+      },
+    }));
+    const created = store.createAnnotationBatch("partial-purge", operations);
+    const purged = created.annotations[1]!.block;
+    store.delete(purged.id);
+    store.purge(purged.id, purged.id.slice(0, 8));
+    const sequence = store.sequence;
+
+    const replayed = store.createAnnotationBatch("partial-purge", operations);
+
+    expect(replayed.deduplicated).toBe(true);
+    expect(replayed.annotations.map((entry) => entry.block.id)).toEqual([
+      created.annotations[0]!.block.id,
+      created.annotations[2]!.block.id,
+    ]);
+    expect(store.get(purged.id)).toBeNull();
+    expect(store.database.query("SELECT COUNT(*) AS count FROM annotation_targets").get()).toEqual({ count: 2 });
+    expect(store.sequence).toBe(sequence);
   });
 
   test("keeps annotation originals immutable while resolutions advance", () => {
