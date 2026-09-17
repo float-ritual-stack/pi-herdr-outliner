@@ -78,6 +78,7 @@ import {
   focusTreeForClient,
   resolveNavigationDestination,
 } from "./navigation-routes";
+import { openExternalUrl } from "./open-external";
 import { resolvePaths } from "./paths";
 import { openDestinationTimeoutFromEnvironment } from "./open-destination-chooser";
 import {
@@ -92,6 +93,7 @@ import { osc52ClipboardWrite } from "./terminal";
 import {
   OUTLINER_PROTOCOL_VERSION,
   type AnnotationBatchReceipt,
+  type CreateWebResourceAnnotationInput,
   type AnnotationReanchorInput,
   type AnnotationThread,
   type AttentionClientState,
@@ -104,6 +106,7 @@ import {
   type OutlinerNavigationTarget,
   type OutlinerServiceStatus,
   type ResourceDescription,
+  type WebResourceAnnotation,
   type ResolvedBlockReferences,
   type SelectionContext,
   type VisibleBlockCollection,
@@ -197,6 +200,10 @@ const tui = new DetailTuiAltScreen(terminal, false, undefined, {
       }
       if (url.startsWith("pi-outliner-action:")) {
         await invokeDetailAction(url.slice("pi-outliner-action:".length));
+        return;
+      }
+      if (url.startsWith("http://") || url.startsWith("https://")) {
+        await controller.dispatch({ type: "resource.open-url", url }, viewport());
         return;
       }
       const action = parseDetailPreviewActionUri(url);
@@ -309,7 +316,7 @@ const effects: DetailEffects = {
       kind: "resource",
       target,
       description: await client.request<ResourceDescription>({
-        action: "resources.describe",
+        action: "resources.open",
         target,
         destinationClientId: clientId,
       }),
@@ -396,6 +403,20 @@ const effects: DetailEffects = {
       author: "user",
     });
   },
+  async createWebAnnotation(input: CreateWebResourceAnnotationInput) {
+    return client.request<WebResourceAnnotation>({
+      action: "resources.web-annotations.create",
+      input,
+    });
+  },
+  async refreshResource(resourceId) {
+    return client.request<ResourceDescription>({
+      action: "resources.refresh",
+      resourceId,
+      destinationClientId: clientId,
+    });
+  },
+  openExternal: openExternalUrl,
   async listAnnotations(sourceBlockId) {
     return client.request<AnnotationThread[]>({
       action: "annotations.list",
@@ -1000,7 +1021,11 @@ const preview = new DetailPiPreviewLayout(
 const draftSplit = new DetailPiDraftSplitLayout(customFrame, preview);
 const composer = new BufferComposer(() => {
   const target = controller.state.annotationDraft?.target;
-  const context = target ? annotationTargetQuote(target) : "";
+  const context = target
+    ? target.kind === "web-resource"
+      ? target.anchor.exact
+      : annotationTargetQuote(target)
+    : "";
   return {
     title: target?.kind === "file"
       ? `Comment on ${target.filePath}:${target.startLine}-${target.endLine}`

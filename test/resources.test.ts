@@ -239,3 +239,178 @@ test("capability reports preserve every causal factor and unknown facts never gr
     reason: "policy-denied",
   });
 });
+
+test("web resources cache Markdown, refresh conditionally, and retain annotation evidence", async () => {
+  const root = mkdtempSync(join(tmpdir(), "outliner-web-resource-"));
+  const database = join(root, "workspace.sqlite");
+  let online = true;
+  let etag = "\"v1\"";
+  let html = "<html><body><h1>First</h1><p>Stable quote in version one.</p></body></html>";
+  let requests = 0;
+  const requestEtags: Array<string | null> = [];
+  let clock = Date.parse("2026-09-17T12:00:00.000Z");
+  const fetcher = async (
+    _input: string | URL | Request,
+    init?: RequestInit,
+  ): Promise<Response> => {
+    requests += 1;
+    if (!online) throw new Error("fixture offline");
+    const requestEtag = new Headers(init?.headers).get("if-none-match");
+    requestEtags.push(requestEtag);
+    if (requestEtag === etag) return new Response(null, { status: 304 });
+    return new Response(html, {
+      status: 200,
+      headers: {
+        "content-type": "text/html; charset=utf-8",
+        etag,
+      },
+    });
+  };
+  const options = {
+    fetch: fetcher as typeof fetch,
+    now: () => new Date(clock += 1_000).toISOString(),
+  };
+  let store = new OutlinerStore(database, options);
+  try {
+    const source = store.resources.createSource({
+      name: "Fixture",
+      provider: "web",
+      boundary: { baseUrl: "https://example.com/articles/" },
+    });
+    const resource = store.resources.intern({
+      sourceId: source.id,
+      address: { kind: "web", url: "https://example.com/articles/one" },
+    }).resource;
+
+    const first = await store.resources.open(resource.id, true);
+    expect(first.web?.markdown).toBe("# First\n\nStable quote in version one.");
+    expect(first.web?.freshness).toBe("fresh");
+    expect(first.web?.canonicalUrl).toBe("https://example.com/articles/one");
+    expect(requests).toBe(1);
+
+    online = false;
+    const offline = await store.resources.open(resource.id, true);
+    expect(offline.web?.markdown).toBe(first.web?.markdown);
+    expect(requests).toBe(1);
+    online = true;
+
+    const unchanged = await store.resources.refreshWeb(resource.id, true);
+    expect(requestEtags.at(-1)).toBe("\"v1\"");
+    expect(unchanged.web?.fetchedAt).toBe(first.web?.fetchedAt);
+    expect(unchanged.web?.checkedAt).not.toBe(first.web?.checkedAt);
+
+    const markdown = unchanged.web!.markdown;
+    const start = markdown.indexOf("Stable quote");
+    const end = start + "Stable quote".length;
+    const annotation = store.resources.createWebAnnotation({
+      resourceId: resource.id,
+      revision: unchanged.web!.revision,
+      representation: unchanged.web!.representation,
+      anchor: {
+        start,
+        end,
+        exact: markdown.slice(start, end),
+        prefix: markdown.slice(Math.max(0, start - 64), start),
+        suffix: markdown.slice(end, end + 64),
+      },
+      body: "This evidence must survive refresh.",
+    });
+
+    etag = "\"v2\"";
+    html = "<html><body><h1>Second</h1><p>Changed page without the old passage.</p></body></html>";
+    const changed = await store.resources.refreshWeb(resource.id, true);
+    expect(changed.resource.id).toBe(resource.id);
+    expect(changed.web?.markdown).toBe("# Second\n\nChanged page without the old passage.");
+    expect(changed.web?.annotations).toHaveLength(1);
+    expect(changed.web?.annotations[0]).toEqual(annotation);
+    expect(changed.web?.annotations[0]?.representation.contentHash).toBe(
+      unchanged.web?.representation.contentHash,
+    );
+
+    online = false;
+    const failed = await store.resources.refreshWeb(resource.id, true);
+    expect(failed.web).toMatchObject({
+      freshness: "failed",
+      markdown: "# Second\n\nChanged page without the old passage.",
+      lastError: "fixture offline",
+    });
+
+    store.close();
+    store = new OutlinerStore(database, {
+      fetch: (() => {
+        throw new Error("cached reopen must not fetch");
+      }) as unknown as typeof fetch,
+    });
+    const reopened = await store.resources.open(resource.id, true);
+    expect(reopened.web?.markdown).toBe(changed.web?.markdown);
+    expect(reopened.web?.annotations[0]?.anchor.exact).toBe("Stable quote");
+
+    store.database.query("UPDATE resource_sources SET policy_json = ? WHERE id = ?")
+      .run(JSON.stringify({ deniedCapabilities: ["read"] }), source.id);
+    expect(store.resources.describe(resource.id, true).web).toBeNull();
+    const denied = await store.resources.open(resource.id, true);
+    expect(denied).toMatchObject({
+      web: null,
+      webError: "Workspace policy denies reading this resource",
+    });
+    await expect(store.resources.refreshWeb(resource.id, true)).rejects.toThrow(
+      "Workspace policy denies reading or refreshing this resource",
+    );
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("web refresh validates redirects before requests and stops oversized streams", async () => {
+  const root = mkdtempSync(join(tmpdir(), "outliner-web-boundary-"));
+  const requested: string[] = [];
+  let chunks = 0;
+  const store = new OutlinerStore(join(root, "workspace.sqlite"), {
+    maximumWebBytes: 10,
+    fetch: (async (input) => {
+      const url = String(input);
+      requested.push(url);
+      if (url.endsWith("/redirect")) {
+        return new Response(null, {
+          status: 302,
+          headers: { location: "http://127.0.0.1/private" },
+        });
+      }
+      return new Response(new ReadableStream({
+        pull(controller) {
+          chunks += 1;
+          controller.enqueue(new Uint8Array(8));
+        },
+      }), {
+        headers: { "content-type": "text/html" },
+      });
+    }) as typeof fetch,
+  });
+  try {
+    const source = store.resources.createSource({
+      name: "Boundary",
+      provider: "web",
+      boundary: { baseUrl: "https://example.com/" },
+    });
+    const redirect = store.resources.intern({
+      sourceId: source.id,
+      address: { kind: "web", url: "https://example.com/redirect" },
+    }).resource;
+    const redirected = await store.resources.open(redirect.id, true);
+    expect(redirected.web).toBeNull();
+    expect(redirected.webError).toContain("outside its source boundary");
+    expect(requested).toEqual(["https://example.com/redirect"]);
+
+    const large = store.resources.intern({
+      sourceId: source.id,
+      address: { kind: "web", url: "https://example.com/large" },
+    }).resource;
+    const oversized = await store.resources.open(large.id, true);
+    expect(oversized.webError).toBe("Web response exceeds 10 bytes");
+    expect(chunks).toBeLessThanOrEqual(3);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});

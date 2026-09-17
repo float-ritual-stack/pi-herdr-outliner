@@ -179,7 +179,8 @@ export type ResourceRevision =
       readonly kind: "web";
       readonly validator:
         | { readonly kind: "etag"; readonly value: string; readonly weak: boolean }
-        | { readonly kind: "last-modified"; readonly value: string };
+        | { readonly kind: "last-modified"; readonly value: string }
+        | { readonly kind: "content-hash"; readonly value: string };
     }
   | {
       readonly kind: "github";
@@ -228,12 +229,65 @@ export interface ResourceCapabilityDecision {
 export type ResourceCapabilityReport = Readonly<
   Record<ResourceCapability, ResourceCapabilityDecision>
 >;
+export interface WebRepresentationAdapter {
+  readonly id: string;
+  readonly version: number;
+}
+
+export interface WebResourceAnnotationAnchor {
+  readonly start: number;
+  readonly end: number;
+  readonly exact: string;
+  readonly prefix: string;
+  readonly suffix: string;
+}
+
+export interface WebResourceAnnotation {
+  readonly id: string;
+  readonly resourceId: string;
+  readonly revision: ResourceRevisionRef;
+  readonly representation: {
+    readonly mediaType: "text/markdown";
+    readonly adapter: WebRepresentationAdapter;
+    readonly contentHash: string;
+  };
+  readonly anchor: WebResourceAnnotationAnchor;
+  readonly body: string;
+  readonly createdAt: string;
+}
+
+export interface WebResourceDocument {
+  readonly canonicalUrl: string;
+  readonly markdown: string;
+  readonly revision: ResourceRevisionRef;
+  readonly representation: {
+    readonly mediaType: "text/markdown";
+    readonly adapter: WebRepresentationAdapter;
+    readonly contentHash: string;
+  };
+  readonly freshness: "fresh" | "failed";
+  readonly fetchedAt: string;
+  readonly checkedAt: string;
+  readonly lastError: string | null;
+  readonly annotations: readonly WebResourceAnnotation[];
+}
+
+export interface CreateWebResourceAnnotationInput {
+  readonly resourceId: string;
+  readonly revision: ResourceRevisionRef;
+  readonly representation: WebResourceDocument["representation"];
+  readonly anchor: WebResourceAnnotationAnchor;
+  readonly body: string;
+}
+
 
 export interface ResourceDescription {
   readonly resource: Resource;
   readonly source: ResourceSource;
   readonly requestedRevision: ResourceRevisionRef | null;
   readonly capabilities: ResourceCapabilityReport;
+  readonly web: WebResourceDocument | null;
+  readonly webError?: string;
 }
 
 export type ResourceCatalogErrorCode =
@@ -663,6 +717,18 @@ function normalizeProviderRevision(
         },
       };
     }
+    if (validator.kind === "content-hash") {
+      const value = printable(validator.value, "Web content hash", 64).toLowerCase();
+      if (!/^[0-9a-f]{64}$/.test(value)) invalid("Web content hash must be SHA-256");
+      return {
+        resourceId,
+        addressVersion,
+        revision: {
+          kind: "web",
+          validator: { kind: "content-hash", value },
+        },
+      };
+    }
     invalid("Unsupported web revision validator");
   }
   if (revision.kind === "github") {
@@ -827,6 +893,7 @@ function capabilityStatus(
 function resourceCapabilityDecision(
   source: ResourceSource,
   destinationHostRegistered: boolean,
+  destinationCapabilities: readonly ResourceCapability[],
   capability: ResourceCapability,
 ): ResourceCapabilityDecision {
   const providerSupports = PROVIDER_CAPABILITIES[source.provider][capability] === true;
@@ -843,10 +910,12 @@ function resourceCapabilityDecision(
       ? blocked("policy-denied", `Workspace policy denies ${capability}`)
       : { state: "satisfied" },
     "destination-host": destinationHostRegistered
-      ? blocked(
-          "implementation-not-installed",
-          `This Detail host has no ${capability} executor in PIE-247`,
-        )
+      ? destinationCapabilities.includes(capability)
+        ? { state: "satisfied" }
+        : blocked(
+            "implementation-not-installed",
+            `This Detail host has no ${capability} executor`,
+          )
       : unknown("destination-host-not-observed", "Destination host is not registered"),
     connectivity: remote
       ? unknown("connectivity-not-observed", "Provider connectivity has not been observed")
@@ -858,20 +927,24 @@ function resourceCapabilityDecision(
 export function deriveResourceCapabilityReport(
   source: ResourceSource,
   destinationHostRegistered: boolean,
+  destinationCapabilities: readonly ResourceCapability[] = [],
 ): ResourceCapabilityReport {
-  return {
-    read: resourceCapabilityDecision(source, destinationHostRegistered, "read"),
-    write: resourceCapabilityDecision(source, destinationHostRegistered, "write"),
-    refresh: resourceCapabilityDecision(source, destinationHostRegistered, "refresh"),
-    watch: resourceCapabilityDecision(source, destinationHostRegistered, "watch"),
-    query: resourceCapabilityDecision(source, destinationHostRegistered, "query"),
-    history: resourceCapabilityDecision(source, destinationHostRegistered, "history"),
-    "open-external": resourceCapabilityDecision(
+  const decision = (capability: ResourceCapability) =>
+    resourceCapabilityDecision(
       source,
       destinationHostRegistered,
-      "open-external",
-    ),
-    embed: resourceCapabilityDecision(source, destinationHostRegistered, "embed"),
-    command: resourceCapabilityDecision(source, destinationHostRegistered, "command"),
+      destinationCapabilities,
+      capability,
+    );
+  return {
+    read: decision("read"),
+    write: decision("write"),
+    refresh: decision("refresh"),
+    watch: decision("watch"),
+    query: decision("query"),
+    history: decision("history"),
+    "open-external": decision("open-external"),
+    embed: decision("embed"),
+    command: decision("command"),
   };
 }

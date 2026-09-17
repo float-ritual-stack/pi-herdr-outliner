@@ -79,6 +79,7 @@ import { TextBuffer } from "./text-buffer";
 import type { TerminalKey } from "./terminal";
 import type {
   AnnotationBatchReceipt,
+  CreateWebResourceAnnotationInput,
   AnnotationCreateInput,
   AnnotationReanchorInput,
   AnnotationThread,
@@ -105,6 +106,7 @@ import type {
   OutlinerNavigationTarget,
   OutlinerUiCommand,
   ResourceDescription,
+  WebResourceAnnotation,
   ResolvedBlockReferences,
   VisibleBlockCollection,
 } from "./types";
@@ -250,9 +252,13 @@ export function visibleBacklinkSources(
     left.blockId.localeCompare(right.blockId)
   );
 }
+type DetailAnnotationTarget =
+  | AnnotationTarget
+  | ({ readonly kind: "web-resource" } & CreateWebResourceAnnotationInput);
+
 export interface DetailAnnotationDraft {
   requestId: string;
-  target: AnnotationTarget;
+  target: DetailAnnotationTarget;
   returnMode: "preview" | "file";
 }
 
@@ -393,6 +399,9 @@ export interface DetailEffects {
     requestId: string;
     input: AnnotationCreateInput;
   }): Promise<AnnotationBatchReceipt>;
+  createWebAnnotation(input: CreateWebResourceAnnotationInput): Promise<WebResourceAnnotation>;
+  refreshResource(resourceId: string): Promise<ResourceDescription>;
+  openExternal(url: string): void | Promise<void>;
   listAnnotations(sourceBlockId: string): Promise<AnnotationThread[]>;
   reanchorAnnotations(input: AnnotationReanchorInput): Promise<AnnotationThread[]>;
   getAttention(): Promise<AttentionClientState>;
@@ -426,6 +435,9 @@ export type DetailOpenRouting = "first-unlocked" | "chooser";
 export type DetailIntent =
   | { type: "edit.begin" }
   | { type: "annotation.selection.begin"; sourceLine?: number; sourceColumn?: number }
+  | { type: "resource.refresh" }
+  | { type: "resource.open-external" }
+  | { type: "resource.open-url"; url: string }
   | { type: "annotation.selection.place"; row: number; column: number; extend?: boolean }
   | { type: "trash.restore" }
   | { type: "comment.begin"; sourceRange?: { start: number; end: number } }
@@ -969,24 +981,57 @@ export function createDetailController(
   };
 
   const resourceDocumentText = (description: ResourceDescription): string => {
-    const { resource, source } = description;
-    const lines = [
-      `# ${resourceAddressLabel(resource.address)}`,
-      "",
-      `[Stable resource link](${outlinerLinkUri("resource", resource.id)})`,
-      "",
-      `- Resource ID: \`${resource.id}\``,
-      `- Source: ${source.name} (\`${source.id}\`)`,
-      `- Provider: \`${resource.provider}\``,
-      `- Address version: \`${resource.addressVersion}\``,
-      `- Requested revision: ${
-        description.requestedRevision
-          ? `address version ${description.requestedRevision.addressVersion}`
-          : "latest address"
-      }`,
-      "",
-      "## Capabilities",
-    ];
+    const { resource, source, web } = description;
+    const lines = web
+      ? [
+          web.markdown,
+          "",
+          "---",
+          "",
+          "## Web resource",
+          "",
+          `[Open externally](<${web.canonicalUrl}>)`,
+          "",
+          `- Freshness: **${web.freshness}**`,
+          `- Fetched: ${web.fetchedAt}`,
+          `- Checked: ${web.checkedAt}`,
+          `- Adapter: \`${web.representation.adapter.id}@${web.representation.adapter.version}\``,
+          `- Resource ID: \`${resource.id}\``,
+          ...(web.lastError ? [`- Refresh error: ${web.lastError}`] : []),
+        ]
+      : [
+          `# ${resourceAddressLabel(resource.address)}`,
+          "",
+          `[Stable resource link](${outlinerLinkUri("resource", resource.id)})`,
+          ...(resource.provider === "web"
+            ? ["", `[Open externally](<${resource.address.url}>)`]
+            : []),
+          "",
+          `- Resource ID: \`${resource.id}\``,
+          `- Source: ${source.name} (\`${source.id}\`)`,
+          `- Provider: \`${resource.provider}\``,
+          `- Address version: \`${resource.addressVersion}\``,
+          `- Requested revision: ${
+            description.requestedRevision
+              ? `address version ${description.requestedRevision.addressVersion}`
+              : "latest address"
+          }`,
+          ...(description.webError ? [`- Read error: ${description.webError}`] : []),
+        ];
+    if (web?.annotations.length) {
+      lines.push("", "## Annotations");
+      for (const annotation of web.annotations) {
+        lines.push(
+          "",
+          `> ${annotation.anchor.exact.replaceAll("\n", "\n> ")}`,
+          "",
+          annotation.body,
+          "",
+          `Original evidence: \`${annotation.representation.contentHash}\` · ${annotation.createdAt}`,
+        );
+      }
+    }
+    lines.push("", "## Capabilities");
     for (const capability of RESOURCE_CAPABILITIES) {
       const decision = description.capabilities[capability];
       lines.push(`- ${capability}: ${decision.status}`);
@@ -1380,12 +1425,15 @@ export function createDetailController(
     sourceColumn = 0,
   ): Promise<void> => {
     const selected = state.context.selected;
-    if (!selected || selected.effectiveDeletedRootId) {
-      state.status = "Block is in Trash; restore before adding annotations";
+    const web = detailResourceDescription(state)?.web;
+    if (!web && (!selected || selected.effectiveDeletedRootId)) {
+      state.status = selected
+        ? "Block is in Trash; restore before adding annotations"
+        : "This resource has no cached Markdown to annotate";
       return;
     }
     await setLocked(true);
-    state.buffer = new TextBuffer(selected.text);
+    state.buffer = new TextBuffer(web?.markdown ?? selected!.text);
     state.buffer.placeCursor(sourceLine, sourceColumn);
     state.editorVisualOffset = 0;
     state.editorViewportManual = false;
@@ -1400,11 +1448,14 @@ export function createDetailController(
     sourceRange?: { start: number; end: number },
   ): Promise<void> => {
     const selected = state.context.selected;
-    if (!selected || selected.effectiveDeletedRootId) {
-      state.status = "Block is in Trash; restore before adding annotations";
+    const web = detailResourceDescription(state)?.web;
+    if (!web && (!selected || selected.effectiveDeletedRootId)) {
+      state.status = selected
+        ? "Block is in Trash; restore before adding annotations"
+        : "This resource has no cached Markdown to annotate";
       return;
     }
-    let target: AnnotationTarget;
+    let target: DetailAnnotationTarget;
     let returnMode: "preview" | "file";
     if (state.mode === "select" || sourceRange) {
       const offsets = sourceRange ?? detailBufferRangeOffsets(state.buffer);
@@ -1412,23 +1463,40 @@ export function createDetailController(
         state.status = "Select a non-empty source range before commenting";
         return;
       }
-      const sourceText = selected.text;
-      target = {
-        kind: "block",
-        sourceBlockId: selected.id,
-        anchor: createAnnotationAnchor(
-          sourceText,
-          offsets.start,
-          offsets.end,
-          selected.updatedAt,
-          annotationSourceHash(sourceText),
-        ),
-      };
+      if (web) {
+        target = {
+          kind: "web-resource",
+          resourceId: detailResourceDescription(state)!.resource.id,
+          revision: web.revision,
+          representation: web.representation,
+          anchor: {
+            start: offsets.start,
+            end: offsets.end,
+            exact: web.markdown.slice(offsets.start, offsets.end),
+            prefix: web.markdown.slice(Math.max(0, offsets.start - 64), offsets.start),
+            suffix: web.markdown.slice(offsets.end, offsets.end + 64),
+          },
+          body: "",
+        };
+      } else {
+        const sourceText = selected!.text;
+        target = {
+          kind: "block",
+          sourceBlockId: selected!.id,
+          anchor: createAnnotationAnchor(
+            sourceText,
+            offsets.start,
+            offsets.end,
+            selected!.updatedAt,
+            annotationSourceHash(sourceText),
+          ),
+        };
+      }
       returnMode = "preview";
     } else {
       const range = selectedDetailFileRange(state);
       const file = state.referencedFile;
-      if (!range || !file) return;
+      if (!range || !file || !selected) return;
       const sourceText = file.sourceText ?? file.lines.join("\n");
       const offsetRange = annotationOffsetsForLineRange(
         sourceText,
@@ -1461,7 +1529,9 @@ export function createDetailController(
     state.mode = "comment";
     state.status = target.kind === "file"
       ? `Locked · commenting on ${target.filePath}:${target.startLine}-${target.endLine}`
-      : `Locked · commenting on source range ${target.anchor.start}-${target.anchor.end}`;
+      : target.kind === "web-resource"
+        ? `Locked · commenting on cached Markdown ${target.anchor.start}-${target.anchor.end}`
+        : `Locked · commenting on source range ${target.anchor.start}-${target.anchor.end}`;
   };
 
   const beginRenderedComment = async (
@@ -1522,14 +1592,16 @@ export function createDetailController(
   };
 
   const saveBuffer = async (): Promise<void> => {
-    if (!state.context.selected || state.busy) return;
+    if (state.busy) return;
     state.busy = true;
     try {
       if (state.mode === "edit") {
+        const selected = state.context.selected;
+        if (!selected) throw new Error("Only blocks can be edited");
         const updated = await effects.updateBlock({
-          blockId: state.context.selected.id,
+          blockId: selected.id,
           text: state.buffer.text,
-          expectedUpdatedAt: state.context.selected.updatedAt,
+          expectedUpdatedAt: selected.updatedAt,
         });
         replaceSelectedBlock(updated);
         await applyReadProjection(updated.text, updated.id);
@@ -1541,22 +1613,30 @@ export function createDetailController(
         const draft = state.annotationDraft;
         const body = state.buffer.text.trim();
         if (!body) throw new Error("Annotation body cannot be empty");
-        await effects.createAnnotation({
-          requestId: draft.requestId,
-          input: {
-            target: draft.target,
-            body,
-            source: "user",
-          },
-        });
+        if (draft.target.kind === "web-resource") {
+          const { kind: _kind, ...input } = draft.target;
+          await effects.createWebAnnotation({ ...input, body });
+        } else {
+          await effects.createAnnotation({
+            requestId: draft.requestId,
+            input: {
+              target: draft.target,
+              body,
+              source: "user",
+            },
+          });
+        }
         state.mode = draft.returnMode;
         state.annotationDraft = undefined;
         state.selectionAnchor = null;
+        if (draft.target.kind === "web-resource") await loadCurrentTarget(true);
         state.status = draft.target.kind === "file"
           ? `Annotation added for lines ${draft.target.startLine}-${draft.target.endLine}`
-          : draft.target.kind === "block"
-            ? `Annotation added for source range ${draft.target.anchor.start}-${draft.target.anchor.end}`
-            : "Annotation added for captured rendered passage";
+          : draft.target.kind === "web-resource"
+            ? `Annotation added for cached Markdown ${draft.target.anchor.start}-${draft.target.anchor.end}`
+            : draft.target.kind === "block"
+              ? `Annotation added for source range ${draft.target.anchor.start}-${draft.target.anchor.end}`
+              : "Annotation added for captured rendered passage";
       }
       if (!isBufferMode() && state.refreshPending) await refreshPendingTarget();
     } catch (error) {
@@ -1745,6 +1825,44 @@ export function createDetailController(
       case "annotation.selection.begin":
         await beginAnnotationSelection(intent.sourceLine, intent.sourceColumn);
         break;
+      case "resource.refresh": {
+        const description = detailResourceDescription(state);
+        if (!description || description.resource.provider !== "web") {
+          state.status = "Current target is not a web resource";
+          break;
+        }
+        state.busy = true;
+        try {
+          const refreshed = await effects.refreshResource(description.resource.id);
+          await loadCurrentTarget(true);
+          state.status = refreshed.web?.freshness === "failed"
+            ? `Refresh failed · showing cached Markdown · ${refreshed.web.lastError}`
+            : "Web resource refreshed";
+        } catch (error) {
+          state.status = errorMessage(error);
+        } finally {
+          state.busy = false;
+        }
+        break;
+      }
+      case "resource.open-external":
+      case "resource.open-url": {
+        const description = detailResourceDescription(state);
+        if (!description || description.resource.provider !== "web") {
+          state.status = "Current target has no external web URL";
+          break;
+        }
+        if (description.source.policy.deniedCapabilities.includes("open-external")) {
+          state.status = "Workspace policy denies opening this resource externally";
+          break;
+        }
+        const url = intent.type === "resource.open-url"
+          ? intent.url
+          : description.web?.canonicalUrl ?? description.resource.address.url;
+        await effects.openExternal(url);
+        state.status = "Opened URL externally";
+        break;
+      }
       case "annotation.selection.place":
         if (state.mode === "select") {
           state.buffer.placeCursor(intent.row, intent.column, intent.extend);

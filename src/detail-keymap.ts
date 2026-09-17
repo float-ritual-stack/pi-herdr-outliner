@@ -256,6 +256,12 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
           sourceLine: options.annotationSelectionSourceLine?.() ?? undefined,
         });
         return true;
+      case "detail.resource.refresh":
+        await dispatch({ type: "resource.refresh" });
+        return true;
+      case "detail.resource.open-external":
+        await dispatch({ type: "resource.open-external" });
+        return true;
       case "detail.annotation.reveal":
         await dispatch({ type: "annotation.reveal" });
         return true;

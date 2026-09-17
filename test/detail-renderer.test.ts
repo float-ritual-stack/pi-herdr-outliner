@@ -78,6 +78,7 @@ function state(overrides: Partial<DetailState> = {}): DetailState {
               source,
               requestedRevision: target.revision ?? null,
               capabilities: deriveResourceCapabilityReport(source, true),
+              web: null,
             },
           },
         }

@@ -49,6 +49,8 @@ import {
   type WorkflowStartInput,
   type WorkflowTransitionInput,
   type Resource,
+  type ResourceDescription,
+  type WebResourceAnnotation,
 } from "./types";
 
 function eventResultId(value: unknown, label: string): string {
@@ -863,6 +865,54 @@ export class OutlinerServer {
     throw new Error("Multiple same-tab Tree destinations share no browsing context");
   }
 
+  async handleAsync(
+    request: OutlinerRequest,
+    subscribedClient?: OutlinerClientRegistration,
+  ): Promise<OutlinerResponse> {
+    if (
+      request.action !== "resources.open" &&
+      request.action !== "resources.refresh" &&
+      request.action !== "resources.web-annotations.create"
+    ) {
+      return this.handle(request, subscribedClient);
+    }
+    try {
+      let result: unknown;
+      if (request.action === "resources.web-annotations.create") {
+        result = this.store.resources.createWebAnnotation(request.input);
+      } else {
+        const destination = this.clientById(request.destinationClientId);
+        if (destination.role !== "detail") {
+          throw new Error("Resource documents require a Detail destination");
+        }
+        if (request.action === "resources.open") {
+          const target = this.normalizeNavigationTarget(request.target);
+          if (target.kind !== "resource") {
+            throw new Error("Resource document target must be a resource");
+          }
+          result = await this.store.resources.open(
+            target.resourceId,
+            true,
+            target.revision,
+          );
+        } else {
+          result = await this.store.resources.refreshWeb(
+            request.resourceId,
+            true,
+          );
+        }
+      }
+      return { id: request.id, ok: true, result, sequence: this.store.sequence };
+    } catch (error) {
+      return {
+        id: request.id,
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+        sequence: this.store.sequence,
+      };
+    }
+  }
+
   handle(
     request: OutlinerRequest,
     subscribedClient?: OutlinerClientRegistration,
@@ -933,6 +983,10 @@ export class OutlinerServer {
           );
           break;
         }
+        case "resources.open":
+        case "resources.refresh":
+        case "resources.web-annotations.create":
+          throw new Error(`${request.action} requires asynchronous dispatch`);
         case "attention.get":
           this.attentionClient(request.targetClientId);
           result = this.attentionState(request.targetClientId);
@@ -1395,6 +1449,16 @@ export class OutlinerServer {
         domain = "resource-catalog";
         resourceId = (response.result as Resource).id;
         break;
+      case "resources.open":
+        return null;
+      case "resources.refresh":
+        domain = "resource-catalog";
+        resourceId = (response.result as ResourceDescription).resource.id;
+        break;
+      case "resources.web-annotations.create":
+        domain = "resource-catalog";
+        resourceId = (response.result as WebResourceAnnotation).resourceId;
+        break;
       case "create":
         domain = "content";
         blockId = (response.result as Block).id;
@@ -1588,10 +1652,37 @@ export class OutlinerServer {
     }
   }
 
+  private async respond(socket: Socket, line: string): Promise<void> {
+    let request: OutlinerRequest | undefined;
+    let response: OutlinerResponse;
+    try {
+      request = JSON.parse(line) as OutlinerRequest;
+      const subscribedClient = request.action === "events.subscribe"
+        ? this.registerSubscriber(socket, request.client)
+        : undefined;
+      response = await this.handleAsync(request, subscribedClient);
+    } catch (error) {
+      response = {
+        id: request?.id ?? "invalid",
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+        sequence: this.store.sequence,
+      };
+    }
+    socket.write(`${JSON.stringify(response)}\n`);
+    if (!request || !response.ok) return;
+    const event = this.eventFor(request, response);
+    if (event) this.broadcast(event);
+    if (event?.domain === "content" && event.blockId) {
+      this.refreshAttentionForBlock(event.blockId);
+    }
+  }
+
   private accept(socket: Socket): void {
     socket.setEncoding("utf8");
     socket.once("close", () => this.removeSubscriber(socket));
     let buffer = "";
+    let requestQueue = Promise.resolve();
     socket.on("data", (chunk: string) => {
       buffer += chunk;
       let newline = buffer.indexOf("\n");
@@ -1599,30 +1690,7 @@ export class OutlinerServer {
         const line = buffer.slice(0, newline);
         buffer = buffer.slice(newline + 1);
         if (line.trim()) {
-          let request: OutlinerRequest | undefined;
-          let response: OutlinerResponse;
-          try {
-            request = JSON.parse(line) as OutlinerRequest;
-            const subscribedClient = request.action === "events.subscribe"
-              ? this.registerSubscriber(socket, request.client)
-              : undefined;
-            response = this.handle(request, subscribedClient);
-          } catch (error) {
-            response = {
-              id: request?.id ?? "invalid",
-              ok: false,
-              error: error instanceof Error ? error.message : String(error),
-              sequence: this.store.sequence,
-            };
-          }
-          socket.write(`${JSON.stringify(response)}\n`);
-          if (request && response.ok) {
-            const event = this.eventFor(request, response);
-            if (event) this.broadcast(event);
-            if (event?.domain === "content" && event.blockId) {
-              this.refreshAttentionForBlock(event.blockId);
-            }
-          }
+          requestQueue = requestQueue.then(() => this.respond(socket, line));
         }
         newline = buffer.indexOf("\n");
       }

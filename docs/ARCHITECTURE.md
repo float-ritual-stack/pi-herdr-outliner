@@ -75,14 +75,20 @@ resolution declines the chord.
 
 Detail owns an exact block-or-resource target, a bounded in-process target
 history, and a visible `Unlocked | Locked` state. Resource targets are addressed
-by durable Resource UUID without a synthetic block and render read-only identity
-metadata; block-only editing, annotations, backlinks, and Tree reveal stay
-unavailable. An unlocked Detail is eligible for same-tab Tree previews and
-confirmed opens. Ordinary navigation can target only an unlocked Detail. A
-locked Detail also rejects directly addressed ordinary `preview` and `open`
-commands; explicit `replace` alone may retarget it without changing its lock
-state. `L`, `i`, `Ctrl+L`, or `Meta+L` toggles the current target's lock. Block
-editing and annotation commenting lock before opening a mutable buffer.
+by durable Resource UUID without a synthetic block. A web Resource opens its
+cached Markdown without provider access; the first open fetches when no cache
+exists, `r` conditionally refreshes it, `v` selects exact cached Markdown for an
+Outliner-owned annotation, and `Alt+O` opens the canonical HTTP URL externally.
+The preview keeps freshness, adapter provenance, and original annotation
+evidence visible after changed or failed refreshes. Other Resource providers
+still render read-only identity metadata. Block editing, backlinks, and Tree
+reveal stay unavailable for Resource targets. An unlocked Detail is eligible for
+same-tab Tree previews and confirmed opens. Ordinary navigation can target only
+an unlocked Detail. A locked Detail also rejects directly addressed ordinary
+`preview` and `open` commands; explicit `replace` alone may retarget it without
+changing its lock state. `L`, `i`, `Ctrl+L`, or `Meta+L` toggles the current
+target's lock. Block and cached-web annotation commenting lock before opening a
+mutable buffer.
 
 Authored block/page/Work-ID links and typed Property targets bind one target to
 the shared destination chooser before resolution or navigation. `Shift+R`
@@ -275,17 +281,19 @@ project-documentation mutations.
 - `workflow_promotions` — idempotent exact-preview publication receipt linking one workflow request to its canonical result block.
 - `resource_sources` — durable provider identity, provider-qualified boundary, workspace policy, immutable filesystem root binding when applicable, and timestamps.
 - `resources` — durable Resource UUID, Source-qualified normalized provider address, optional media type, resource version, address version, and timestamps; `(source_id, canonical_key)` is unique without merging identities across Sources.
+- `web_resource_documents` — one current web cache per Resource address version: canonical URL, HTTP validator, source hash, exact Markdown, adapter identity, representation hash, freshness, and refresh diagnostics.
+- `web_resource_annotations` — append-only original web annotation evidence: Resource, provider revision, representation provenance, exact quote with bounded context, body, and timestamp.
 
 ## Protocol
 
-The current protocol version is `38`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
+The current protocol version is `39`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
 
 ### Important request families
 
 - health: `ping`
 - canonical reads: `get`, `children`, `blocks.context`, `workspace.snapshot`
 - bounded search: `blocks.query`
-- resource identity: `resource-sources.create | list | get`, `resources.intern | get | relocate | describe`
+- resource identity and documents: `resource-sources.create | list | get`, `resources.intern | get | relocate | describe | open | refresh`, and `resources.web-annotations.create`
 - browsing contexts and Tree previews: `browsing-context.get`, `browsing-context.publish`
 - typed navigation: `navigation.resolve` preflight and `navigation.dispatch` with explicit block/resource targets and `preview | open | reveal`; resource targets cannot use block-Tree `reveal`
 - selection-neutral capture: `capture.create`

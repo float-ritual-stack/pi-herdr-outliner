@@ -17,6 +17,7 @@ import {
   focusTreeForClient,
   resolveNavigationDestination,
 } from "./navigation-routes";
+import { openExternalUrl } from "./open-external";
 import {
   currentPaneRuntime,
   detailTargetFromEnvironment,
@@ -38,6 +39,7 @@ import {
   OUTLINER_PROTOCOL_VERSION,
   type AnnotationBatchReceipt,
   type AnnotationReanchorInput,
+  type CreateWebResourceAnnotationInput,
   type AnnotationThread,
   type AttentionClientState,
   type BacklinkCollection,
@@ -49,6 +51,7 @@ import {
   type OutlinerNavigationTarget,
   type OutlinerServiceStatus,
   type ResourceDescription,
+  type WebResourceAnnotation,
   type ResolvedBlockReferences,
   type SelectionContext,
   type VisibleBlockCollection,
@@ -142,7 +145,7 @@ const effects: DetailEffects = {
       kind: "resource",
       target,
       description: await client.request<ResourceDescription>({
-        action: "resources.describe",
+        action: "resources.open",
         target,
         destinationClientId: clientId,
       }),
@@ -229,6 +232,20 @@ const effects: DetailEffects = {
       author: "user",
     });
   },
+  async createWebAnnotation(input: CreateWebResourceAnnotationInput) {
+    return client.request<WebResourceAnnotation>({
+      action: "resources.web-annotations.create",
+      input,
+    });
+  },
+  async refreshResource(resourceId) {
+    return client.request<ResourceDescription>({
+      action: "resources.refresh",
+      resourceId,
+      destinationClientId: clientId,
+    });
+  },
+  openExternal: openExternalUrl,
   async listAnnotations(sourceBlockId) {
     return client.request<AnnotationThread[]>({
       action: "annotations.list",
