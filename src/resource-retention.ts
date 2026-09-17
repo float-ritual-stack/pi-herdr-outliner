@@ -776,15 +776,25 @@ export class ResourceRetentionRepository {
       if (!representationColumns.has("evicted_at")) {
         this.database.exec("ALTER TABLE web_representations ADD COLUMN evicted_at TEXT");
       }
+      const payloadMigration = this.database.query(
+        "SELECT value FROM metadata WHERE key = 'resource_retention_payload_migration'",
+      ).get();
+      if (!payloadMigration) {
+        this.database.exec(`
+          UPDATE web_source_snapshots
+          SET payload_state = CASE WHEN html IS NULL THEN 'evicted' ELSE 'available' END,
+              payload_bytes = CASE WHEN html IS NULL THEN 0 ELSE length(CAST(html AS BLOB)) END
+          WHERE evicted_at IS NULL;
+          UPDATE web_representations
+          SET payload_state = CASE WHEN markdown IS NULL THEN 'evicted' ELSE 'available' END,
+              payload_bytes = CASE WHEN markdown IS NULL THEN 0 ELSE length(CAST(markdown AS BLOB)) END
+          WHERE evicted_at IS NULL;
+        `);
+        this.database.query(
+          "INSERT INTO metadata (key, value) VALUES ('resource_retention_payload_migration', '1')",
+        ).run();
+      }
       this.database.exec(`
-        UPDATE web_source_snapshots
-        SET payload_state = CASE WHEN html IS NULL THEN 'evicted' ELSE 'available' END,
-            payload_bytes = CASE WHEN html IS NULL THEN 0 ELSE length(CAST(html AS BLOB)) END
-        WHERE evicted_at IS NULL;
-        UPDATE web_representations
-        SET payload_state = CASE WHEN markdown IS NULL THEN 'evicted' ELSE 'available' END,
-            payload_bytes = CASE WHEN markdown IS NULL THEN 0 ELSE length(CAST(markdown AS BLOB)) END
-        WHERE evicted_at IS NULL;
         CREATE TABLE IF NOT EXISTS resource_retention_policy (
           singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
           retain_newest_source_snapshots INTEGER NOT NULL CHECK(retain_newest_source_snapshots >= 0),
