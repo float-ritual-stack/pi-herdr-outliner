@@ -300,6 +300,8 @@ export interface AnnotationTarget {
 
 export type AnnotationResolutionStatus =
   | "resolved"
+  | "probable"
+  | "unresolved"
   | "ambiguous"
   | "orphaned"
   | "unsupported"
@@ -317,6 +319,12 @@ export type AnnotationResolutionMethod =
       readonly method: string;
     };
 
+export interface AnnotationResolutionCandidate {
+  readonly target: AnnotationTarget;
+  readonly method: AnnotationResolutionMethod;
+  readonly confidence: number;
+}
+
 export type AnnotationResolutionReviewer =
   | { readonly kind: "system"; readonly id: string }
   | { readonly kind: "user"; readonly id: string }
@@ -332,6 +340,7 @@ export interface AnnotationResolutionEvent {
   readonly method: AnnotationResolutionMethod;
   readonly reviewer: AnnotationResolutionReviewer;
   readonly confidence: number | null;
+  readonly candidates: readonly AnnotationResolutionCandidate[];
   readonly status: AnnotationResolutionStatus;
   readonly appliesCurrent: boolean;
   readonly createdAt: string;
@@ -947,7 +956,7 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 41;
+export const OUTLINER_PROTOCOL_VERSION = 42;
 
 
 export interface OutlinerServiceStatus {
