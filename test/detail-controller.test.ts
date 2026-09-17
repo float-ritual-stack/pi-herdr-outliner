@@ -3012,6 +3012,46 @@ describe("detail controller saves and annotations", () => {
       anchor: { kind: "text-quote", exact: "βeta" },
     });
   });
+
+  test("opens the composer from one directly dragged Detail selection", async () => {
+    const block = makeBlock({ text: "alpha βeta gamma" });
+    const harness = createHarness(
+      block,
+      null,
+      async (text) => ({ text, references: [] }),
+    );
+    await harness.controller.initialize();
+
+    await harness.controller.dispatch({
+      type: "annotation.comment.rendered",
+      capture: {
+        quote: "βeta",
+        capturedAt: "2026-09-17T12:00:00.000Z",
+        hostBlockId: block.id,
+        paneId: "w1:p2",
+        contentRevision: 43,
+        contextId: "context-test",
+        detailClientId: "detail-test",
+        validation: "detail-pointer",
+        snapshotText: "Block Detail\n\nalpha βeta gamma",
+      },
+    }, viewport);
+
+    expect(harness.controller.state.mode).toBe("comment");
+    expect(harness.controller.state.annotationDraft?.target).toMatchObject({
+      representation: {
+        sourceSnapshot: {
+          kind: "rendered",
+          observation: {
+            quote: "βeta",
+            contentRevision: 43,
+            validation: "detail-pointer",
+          },
+        },
+      },
+      anchor: { kind: "text-quote", exact: "βeta" },
+    });
+  });
   test("does not invent a source anchor when chrome duplicates the rendered quote", async () => {
     const block = makeBlock({ text: "alpha βeta gamma" });
     const harness = createHarness(

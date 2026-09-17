@@ -260,6 +260,7 @@ export type AnnotationSubject =
     };
 
 export type RenderedPassageProjection = "canonical" | "resolved" | "generated" | "mixed";
+export type RenderedSelectionValidation = "herdr-keybinding" | "detail-pointer";
 
 export interface RenderedSelectionEvidence {
   readonly quote: string;
@@ -269,7 +270,7 @@ export interface RenderedSelectionEvidence {
   readonly contentRevision: number;
   readonly contextId: string;
   readonly detailClientId: string;
-  readonly validation: "herdr-keybinding";
+  readonly validation: RenderedSelectionValidation;
 }
 
 export interface RenderedSelectionCapture extends RenderedSelectionEvidence {

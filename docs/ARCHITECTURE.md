@@ -537,7 +537,17 @@ opening another Detail. Generated Backlink and Property rows focus locally on
 plain click; Ctrl/Meta-click opens a Backlink Peek or activates a typed Property
 target.
 
-Authored text is sanitized before link generation. Tree adds OSC 8 only after plain-text wrapping/truncation; Detail generates safe Markdown links after sanitization. Under `HERDR_ENV=1`, Detail enables Pi TUI hyperlink emission because nested panes advertise generic `TERM=xterm-256color` even though Herdr captures OSC 8 metadata. Tree accepts unmodified and Ctrl/Meta primary-button presses, uses rendered row identity independently from link hit testing, and ignores release, motion, and wheel reports for activation. Shift remains available for terminal-native selection.
+Authored text is sanitized before link generation. Tree adds OSC 8 only after
+plain-text wrapping/truncation; Detail generates safe Markdown links after
+sanitization. Under `HERDR_ENV=1`, Detail enables Pi TUI hyperlink emission
+because nested panes advertise generic `TERM=xterm-256color` even though Herdr
+captures OSC 8 metadata. Tree accepts unmodified and Ctrl/Meta primary-button
+presses, uses rendered row identity independently from link hit testing, and
+ignores release, motion, and wheel reports for activation. In Detail preview,
+the Pi TUI owns unmodified primary-button drag selection: release copies the
+exact rendered text and captures the current Herdr pane revision; `c` converts
+that retained observation into the annotation composer without a second
+selection mode. Shift remains available for terminal-native selection.
 
 The `outliner-navigation` manifest handler and [`src/herdr-link-open.ts`](../src/herdr-link-open.ts) are the external Herdr path. They validate/decode the private URI, resolve the invoking pane to its live source registration, and dispatch through the same route. `[[address]]` remains visible when dangling; explicit activation creates exactly one root stub through the transactional registry path before navigation dispatch.
 
@@ -858,10 +868,11 @@ resolution-table details.
 Block selection captures a block representation. File selection first calls
 `resources.intern-filesystem` and targets that filesystem Resource; the path is
 a locator, never annotation identity. Cached web selection reuses the retained
-source snapshot and representation. Herdr rendered selection retains its
-validated passage observation in a rendered representation and uses a text
-quote rather than a separate passage target. All surfaces then call the same
-`annotations.create` action and query by block or Resource subject.
+source snapshot and representation. Detail pointer selection and Herdr copy-mode
+selection retain their validated passage observations in rendered
+representations and use text quotes rather than separate passage targets. All
+surfaces then call the same `annotations.create` action and query by block or
+Resource subject.
 
 Creation appends sequence 0 as resolved. Reconciliation then runs the cheapest
 reliable deterministic pass: unchanged representation hash, provider-native
@@ -926,12 +937,14 @@ the three pane-routing actions exported by the plugin manifest:
 - `open-here` always generates a browsing-context UUID, opens a Tree to the right
   of the invoking pane and a Detail below that Tree with the same UUID, and
   focuses the Tree.
-- `comment-selection` is a pane-context action reached through a Herdr
-  `plugin_action` keybinding from a retained copy-mode selection.
+- `comment-selection` is an alternate pane-context action reached through a
+  Herdr `plugin_action` keybinding from a retained copy-mode selection.
   [`src/herdr-comment-selection.ts`](../src/herdr-comment-selection.ts) accepts
   only the revision-validated keybinding handoff, proves a stable invoking pane
   and Detail registration around two snapshots, and forwards the exact rendered
-  quote plus snapshot evidence to that Detail.
+  quote plus snapshot evidence to that Detail. The default in-pane path uses Pi
+  TUI's application-owned drag selection, captures the current Herdr pane
+  revision when that selection is copied, and binds `c` directly in preview.
 
 Tree quick capture opens the manifest `capture` entrypoint with Herdr `placement = "popup"` anchored to the active Tree. The popup process reuses the same text-buffer command mapping, layout, and editor-row renderer as Detail; only Ctrl+S save and Esc/Ctrl+C cancellation are wired to `capture.create` and popup exit. It is not a Tree or Detail registry client and never changes browsing context or selection.
 

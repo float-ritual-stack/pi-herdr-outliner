@@ -1370,7 +1370,7 @@ export class OutlinerServer {
             }
             const capturedAtMs = Date.parse(capture.capturedAt);
             if (
-              capture.validation !== "herdr-keybinding" ||
+              (capture.validation !== "herdr-keybinding" && capture.validation !== "detail-pointer") ||
               !Number.isInteger(capture.contentRevision) ||
               capture.contentRevision < 0 ||
               typeof capture.snapshotText !== "string" ||

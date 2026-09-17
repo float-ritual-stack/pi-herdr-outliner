@@ -167,8 +167,9 @@ function normalizeObservation(value: unknown): RenderedPassageObservation {
   if (projection !== "canonical" && projection !== "resolved" && projection !== "generated" && projection !== "mixed") {
     throw new Error(`Unsupported rendered passage projection: ${String(projection)}`);
   }
-  if (observation.validation !== "herdr-keybinding") {
-    throw new Error("Rendered passage must come from a revision-validated Herdr keybinding");
+  const validation = observation.validation;
+  if (validation !== "herdr-keybinding" && validation !== "detail-pointer") {
+    throw new Error("Rendered passage must come from a validated Herdr or Detail selection");
   }
   return {
     quote: evidenceText(observation.quote, "Rendered passage quote"),
@@ -178,7 +179,7 @@ function normalizeObservation(value: unknown): RenderedPassageObservation {
     contentRevision: integer(observation.contentRevision, "Rendered passage content revision"),
     contextId: identity(observation.contextId, "Rendered passage context"),
     detailClientId: identity(observation.detailClientId, "Rendered passage Detail client"),
-    validation: "herdr-keybinding",
+    validation,
     projection,
   };
 }

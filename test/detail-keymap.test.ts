@@ -10,6 +10,7 @@ import { createDetailKeyHandler } from "../src/detail-keymap";
 import { createOpenDestinationChooserState } from "../src/open-destination-chooser";
 import { TextBuffer } from "../src/text-buffer";
 import type { TerminalKey } from "../src/terminal";
+import type { RenderedSelectionCapture } from "../src/types";
 
 function state(): DetailState {
   return {
@@ -85,6 +86,10 @@ function harness(
     ) => void;
     navigatePreview?: (direction: "up" | "down" | "pageup" | "pagedown" | "top" | "bottom") => void;
     previewFocused?: () => boolean;
+    renderedSelectionCapture?: () =>
+      | RenderedSelectionCapture
+      | null
+      | Promise<RenderedSelectionCapture | null>;
   } = {},
 ): {
   intents: DetailIntent[];
@@ -265,6 +270,39 @@ test("invokes the external editor action from an active unsaved draft", async ()
   await detail.press({ name: "e", meta: true });
 
   expect(detail.intents).toEqual([{ type: "edit.external" }]);
+});
+
+test("comments on a directly dragged rendered selection from preview", async () => {
+  const previewState = state();
+  previewState.mode = "preview";
+  const capture: RenderedSelectionCapture = {
+    quote: "selected passage",
+    capturedAt: "2026-09-17T12:00:00.000Z",
+    hostBlockId: "block-1",
+    paneId: "pane-1",
+    contentRevision: 1,
+    contextId: "context-1",
+    detailClientId: "detail-1",
+    validation: "detail-pointer",
+    snapshotText: "Detail\n\nselected passage",
+  };
+  const selected = harness(previewState, false, {
+    renderedSelectionCapture: async () => capture,
+  });
+  await selected.press({ name: "c" }, "c");
+  expect(selected.intents).toEqual([{
+    type: "annotation.comment.rendered",
+    capture,
+  }]);
+
+  const empty = harness(previewState, false, {
+    renderedSelectionCapture: () => null,
+  });
+  await empty.press({ name: "c" }, "c");
+  expect(empty.intents).toEqual([{
+    type: "status.set",
+    message: "Drag across rendered text before commenting",
+  }]);
 });
 
 test("invokes semantic actions directly regardless of bindings and reports invalid contexts", async () => {
