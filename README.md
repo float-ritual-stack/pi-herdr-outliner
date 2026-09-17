@@ -644,7 +644,7 @@ Every capture constructs one typed `AnnotationTarget`: a representation with blo
 | `Tab` or `Ctrl+Space` | Open completion in block edit mode |
 | `Ctrl+W` | Move focus between the wide editor and draft preview |
 | `Ctrl+L` | Toggle source-line-linked editor/preview scrolling |
-| `Option+E` / `Alt+E` | Yield this Detail pane to `$VISUAL` or `$EDITOR`; import a block draft as one undoable edit, or revision-check and write a changed filesystem Resource |
+| `Ctrl+E` or `Option+E` / `Alt+E` | Yield this Detail pane to `$VISUAL` or `$EDITOR`; `Ctrl+E` avoids AltGr/dead-key layouts. Imports a block draft as one undoable edit, or revision-checks and writes a changed filesystem Resource |
 | `Ctrl+S` | Save a block or writable filesystem Resource, or add an annotation |
 | `Esc` | Cancel the complete edit session and return to Tree |
 

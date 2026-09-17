@@ -94,6 +94,18 @@ describe("Outliner action keymap", () => {
     expect(keymap.action("detail.bookmark.toggle").defaultChords).toEqual(["m"]);
     expect(keymap.action("tree.bookmarks.open").defaultChords).toEqual(["Shift+M"]);
     expect(keymap.action("detail.bookmarks.open").defaultChords).toEqual(["Shift+M"]);
+    expect(keymap.action("detail.edit.external").defaultChords).toEqual(["Ctrl+E", "Alt+E"]);
+    expect(keymap.canonicalize(
+      "detail",
+      "preview",
+      "",
+      { name: "e", ctrl: true },
+    )).toEqual({
+      actionId: "detail.edit.external",
+      str: "",
+      key: { name: "e", ctrl: true },
+      suppressed: false,
+    });
     expect(keymap.canonicalize(
       "tree",
       "browse",
