@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import {
+  chmodSync,
   existsSync,
   mkdtempSync,
   readFileSync,
@@ -12,6 +13,7 @@ import {
   editTextInExternalEditor,
   ExternalEditorError,
   parseExternalEditorCommand,
+  resolveExternalEditorConfiguration,
 } from "../src/external-editor";
 
 test("parses configured editor arguments without invoking a shell", () => {
@@ -24,6 +26,36 @@ test("parses configured editor arguments without invoking a shell", () => {
   expect(() => parseExternalEditorCommand(`code "unterminated`)).toThrow(
     "unterminated quote",
   );
+});
+
+test("recovers the configured editor and PATH from the interactive shell", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-external-editor-environment-"));
+  const shell = join(root, "login-shell");
+  try {
+    writeFileSync(
+      shell,
+      [
+        "#!/bin/sh",
+        "export VISUAL=''",
+        "export EDITOR='nvim --clean'",
+        "export PATH='/fixture/bin:/usr/bin'",
+        'exec /bin/sh -c "$2"',
+        "",
+      ].join("\n"),
+      { mode: 0o700 },
+    );
+    chmodSync(shell, 0o700);
+
+    const configuration = resolveExternalEditorConfiguration({
+      SHELL: shell,
+      PATH: "/plugin/bin",
+    });
+
+    expect(configuration.editor).toBe("nvim --clean");
+    expect(configuration.environment.PATH).toBe("/fixture/bin:/usr/bin");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("imports exact UTF-8 text only after terminal restoration and removes the temporary file", async () => {

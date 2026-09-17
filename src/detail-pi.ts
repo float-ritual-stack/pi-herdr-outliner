@@ -61,7 +61,10 @@ import {
 } from "./detail-pi-renderer";
 import { parsePropertySummaryKeys } from "./property-summary";
 import { completeReferencedPaths, readReferencedFile } from "./files";
-import { editTextInExternalEditor } from "./external-editor";
+import {
+  editTextInExternalEditor,
+  resolveExternalEditorConfiguration,
+} from "./external-editor";
 import {
   configureCurrentPaneRightClick,
   detailTargetFromEnvironment,
@@ -384,8 +387,10 @@ const effects: DetailEffects = {
     process.stdout.write(osc52ClipboardWrite(text));
   },
   editExternalDraft(input) {
+    const configuration = resolveExternalEditorConfiguration();
     return editTextInExternalEditor(input, {
-      editor: process.env.VISUAL?.trim() || process.env.EDITOR,
+      editor: configuration.editor,
+      environment: configuration.environment,
       cwd: paths.workspaceRoot,
       suspendTerminal() {
         externalEditorActive = true;
