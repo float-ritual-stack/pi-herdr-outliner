@@ -2421,6 +2421,7 @@ Second paragraph`;
     const invalidState = store.create(invalidStateText, source.id);
     store.database.exec(`
       DELETE FROM metadata WHERE key = 'pie250_annotation_repository';
+      DROP TABLE annotation_resource_evidence_refs;
       DROP TABLE annotation_resolution_events;
       DROP TABLE annotation_targets;
     `);

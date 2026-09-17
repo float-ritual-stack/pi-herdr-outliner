@@ -96,12 +96,25 @@ prefer embedded-browser or native-document renderers; external-only hosts select
 a deep link. Missing or indeterminate live access never hides retained Markdown.
 PDF is selected by `application/pdf` media type, never modeled as a provider.
 Web representation provenance retains the replaceable adapter ID/version.
-Annotations are listed by Resource subject through `AnnotationRepository`, so relocation and offline
-failure do not hide target or resolution evidence. Detail exposes
-snapshot/representation identifiers and metadata, including explicit unknown
-fields on incomplete legacy evidence. Failed refreshes keep prior content and
-annotation history visible. Other Resource providers
-still render read-only identity metadata. Block editing, backlinks, and Tree
+Annotations are listed by Resource subject through `AnnotationRepository`, so
+relocation and offline failure do not hide target or resolution evidence.
+Detail exposes snapshot/representation identifiers and metadata, including
+explicit unknown fields on incomplete legacy evidence. Failed refreshes keep
+prior content and annotation history visible. Other Resource providers still
+render read-only identity metadata.
+
+Resource retention is a separate transactional module above the immutable web
+history tables. The workspace policy protects the newest configured snapshots
+and active-adapter representations. Current pointers, every immutable annotation
+target and resolution candidate, explicit pins, durable review/publication
+references, and exact revisions held by live Details add independent protection
+roots. Eviction clears only HTML/Markdown bytes and marks an `evictedAt`
+tombstone; it never acts like Trash, user deletion, or redaction. A later purge
+pass deletes only unprotected evicted metadata after its grace period.
+Representation protection propagates to its source snapshot. Unpinned open still
+uses the current newest suitable cached representation without provider access.
+
+Block editing, backlinks, and Tree
 reveal stay unavailable for Resource targets. An unlocked Detail is eligible for
 same-tab Tree previews and confirmed opens. Ordinary navigation can target only
 an unlocked Detail. A locked Detail also rejects directly addressed ordinary
@@ -301,11 +314,15 @@ project-documentation mutations.
 - `workflow_promotions` — idempotent exact-preview publication receipt linking one workflow request to its canonical result block.
 - `resource_sources` — durable provider identity, provider-qualified boundary, workspace policy, immutable filesystem root binding when applicable, and timestamps.
 - `resources` — durable Resource UUID, Source-qualified normalized provider address, optional media type, resource version, address version, and timestamps; `(source_id, canonical_key)` is unique without merging identities across Sources.
-- `web_source_snapshots` — immutable provider observations keyed by snapshot ID, with Resource/address epoch, canonical URL, source hash, provider revision and validators, fetched time, and full source HTML. HTML is nullable for migrated legacy singleton caches; URL, source hash, and fetch time are also nullable for unmatched legacy annotation evidence that never recorded them.
-- `web_representations` — immutable named derivations keyed by representation ID and source snapshot ID, with media type, adapter identity and version, representation hash, derived time, and Markdown content. Markdown is nullable for metadata-only legacy annotation evidence, and its unrecorded derivation time remains null.
+- `web_source_snapshots` — immutable provider observations keyed by snapshot ID, with Resource/address epoch, canonical URL, source hash, provider revision and validators, fetched time, full source HTML, explicit payload state/byte count, and eviction time. Eviction nulls HTML but preserves provenance metadata.
+- `web_representations` — immutable named derivations keyed by representation ID and source snapshot ID, with media type, adapter identity and version, representation hash, derived time, Markdown content, explicit payload state/byte count, and eviction time.
 - `web_resource_state` — one mutable row per web Resource containing current snapshot and representation pointers, five-state freshness, check/error diagnostics, address epoch, and the compare-and-swap version used to reject stale refresh completion.
+- `resource_retention_policy` — singleton workspace newest-count, minimum-age, and purge-grace policy.
+- `resource_retention_pins` and `resource_retention_references` — explicit artifact protection roots for user pins and durable review/publication ownership.
+- `resource_retention_events` — append-only eviction/purge audit entries that keep the intentionally purged state distinct from missing or user-deleted content.
 - `annotation_targets` — one immutable original target JSON document per root annotation block, with indexed block, Resource, or honest legacy-file subject identity.
 - `annotation_resolution_events` — append-only, per-annotation resolution history. The latest event with `applies_current` supplies current status and optional resolved target. Every deterministic pass retains ranked candidate targets, methods, and confidence scores; rejected proposals remain history without moving current resolution.
+- `annotation_resource_evidence_refs` — relational, FK-enforced reachability for every actual web snapshot/representation named by immutable original targets, resolution source/target records, resolved targets, and ranked candidates.
 - `annotation_agent_requests` — idempotency receipts linking one bounded agent request payload to its append-only proposal event.
 - `annotation_migration_quarantine` — raw legacy root blocks that cannot be parsed safely, preserving block ID, text, failure reason, and timestamp without fabricating a target.
 
@@ -322,7 +339,7 @@ bytes and provenance remain unknown rather than being synthesized.
 
 ## Protocol
 
-The current protocol version is `44`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
+The current protocol version is `45`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
 
 ### Important request families
 
@@ -330,7 +347,7 @@ The current protocol version is `44`, defined in [`src/types.ts`](../src/types.t
 - canonical reads: `get`, `children`, `blocks.context`, `workspace.snapshot`
 - bounded search: `blocks.query`
 - resource identity and documents: `resource-sources.create | list | get` and `resources.intern | intern-filesystem | get | relocate | describe | open | refresh`
-- unified annotations: `annotations.get | create | reply | batch | list | reconcile | approve-resolution | lifecycle`
+- resource retention: `resources.retention.get | configure | inspect | pin | unpin | reference | unreference` and explicit `resources.collect` eviction/purge passes
 - browsing contexts and Tree previews: `browsing-context.get`, `browsing-context.publish`
 - typed navigation: `navigation.resolve` preflight and `navigation.dispatch` with explicit block/resource targets and `preview | open | reveal`; resource targets cannot use block-Tree `reveal`
 - selection-neutral capture: `capture.create`

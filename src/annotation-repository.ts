@@ -91,6 +91,13 @@ interface ResolutionRow {
   created_at: string;
 }
 
+type AnnotationResourceEvidenceRole =
+  | "original-target"
+  | "event-source"
+  | "event-target"
+  | "event-resolved"
+  | "event-candidate";
+
 interface AnnotationRequestRow {
   payload_hash: string | null;
   annotation_ids: string;
@@ -1170,6 +1177,7 @@ export class AnnotationRepository {
       event.appliesCurrent ? 1 : 0,
       event.createdAt,
     );
+    this.insertEventResourceEvidenceRefs(event);
     return event;
   }
 
@@ -1237,6 +1245,13 @@ export class AnnotationRepository {
       JSON.stringify(target),
       createdAt,
     );
+    this.insertResourceEvidenceRef({
+      annotationId,
+      resolutionEventId: null,
+      role: "original-target",
+      value: target,
+      createdAt,
+    });
   }
 
   private targetRow(annotationId: string): AnnotationTargetRow {
@@ -1300,6 +1315,7 @@ export class AnnotationRepository {
       this.createSchema();
       const marker = this.database.query("SELECT value FROM metadata WHERE key = ?").get(MIGRATION_MARKER) as { value: string } | null;
       if (!marker) this.migrateLegacyData();
+      this.backfillResourceEvidenceRefs();
       this.database.exec("DROP INDEX IF EXISTS web_resource_annotations_resource; DROP INDEX IF EXISTS web_resource_annotations_evidence; DROP TABLE IF EXISTS web_resource_annotations;");
       this.database.query("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, '1')").run(MIGRATION_MARKER);
       const foreignKeys = this.database.query("PRAGMA foreign_key_check").all();
@@ -1412,6 +1428,168 @@ export class AnnotationRepository {
         created_at TEXT NOT NULL
       );
     `);
+    this.database.exec(`
+      CREATE TABLE IF NOT EXISTS annotation_resource_evidence_refs (
+        id TEXT PRIMARY KEY,
+        annotation_block_id TEXT NOT NULL
+          REFERENCES annotation_targets(annotation_block_id) ON DELETE CASCADE,
+        resolution_event_id TEXT
+          REFERENCES annotation_resolution_events(id) ON DELETE CASCADE,
+        role TEXT NOT NULL CHECK (
+          role IN (
+            'original-target',
+            'event-source',
+            'event-target',
+            'event-resolved',
+            'event-candidate'
+          )
+        ),
+        source_snapshot_id TEXT
+          REFERENCES web_source_snapshots(id) ON DELETE RESTRICT,
+        representation_id TEXT
+          REFERENCES web_representations(id) ON DELETE RESTRICT,
+        created_at TEXT NOT NULL,
+        CHECK (source_snapshot_id IS NOT NULL OR representation_id IS NOT NULL)
+      );
+      CREATE INDEX IF NOT EXISTS annotation_resource_evidence_refs_source_snapshot
+        ON annotation_resource_evidence_refs(source_snapshot_id, annotation_block_id)
+        WHERE source_snapshot_id IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS annotation_resource_evidence_refs_representation
+        ON annotation_resource_evidence_refs(representation_id, annotation_block_id)
+        WHERE representation_id IS NOT NULL;
+      CREATE UNIQUE INDEX IF NOT EXISTS annotation_resource_evidence_refs_unique
+        ON annotation_resource_evidence_refs(
+          annotation_block_id,
+          ifnull(resolution_event_id, ''),
+          role,
+          ifnull(source_snapshot_id, ''),
+          ifnull(representation_id, '')
+        );
+    `);
+  }
+
+  private insertResourceEvidenceRef(input: {
+    readonly annotationId: string;
+    readonly resolutionEventId: string | null;
+    readonly role: AnnotationResourceEvidenceRole;
+    readonly value: AnnotationRepresentation | AnnotationTarget;
+    readonly createdAt: string;
+  }): void {
+    const representation = "representation" in input.value
+      ? input.value.representation
+      : input.value;
+    const subject = representation.subject;
+    const snapshot = representation.sourceSnapshot;
+    if (
+      subject.kind !== "resource" ||
+      snapshot.kind !== "resource" ||
+      snapshot.resourceId !== subject.resourceId
+    ) return;
+    const artifacts = this.database.query(`
+      SELECT
+        (
+          SELECT id
+          FROM web_source_snapshots
+          WHERE id = ? AND resource_id = target.resource_id
+        ) AS source_snapshot_id,
+        (
+          SELECT representation.id
+          FROM web_representations representation
+          JOIN web_source_snapshots source_snapshot
+            ON source_snapshot.id = representation.source_snapshot_id
+          WHERE representation.id = ?
+            AND source_snapshot.resource_id = target.resource_id
+        ) AS representation_id
+      FROM annotation_targets target
+      WHERE target.annotation_block_id = ? AND target.resource_id = ?
+    `).get(
+      snapshot.sourceSnapshotId,
+      representation.id,
+      input.annotationId,
+      subject.resourceId,
+    ) as {
+      source_snapshot_id: string | null;
+      representation_id: string | null;
+    } | null;
+    if (
+      !artifacts ||
+      (artifacts.source_snapshot_id === null && artifacts.representation_id === null)
+    ) return;
+    this.database.query(`
+      INSERT OR IGNORE INTO annotation_resource_evidence_refs (
+        id, annotation_block_id, resolution_event_id, role,
+        source_snapshot_id, representation_id, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      crypto.randomUUID(),
+      input.annotationId,
+      input.resolutionEventId,
+      input.role,
+      artifacts.source_snapshot_id,
+      artifacts.representation_id,
+      input.createdAt,
+    );
+  }
+
+  private insertEventResourceEvidenceRefs(event: AnnotationResolutionEvent): void {
+    this.insertResourceEvidenceRef({
+      annotationId: event.annotationId,
+      resolutionEventId: event.id,
+      role: "event-source",
+      value: event.sourceRepresentation,
+      createdAt: event.createdAt,
+    });
+    this.insertResourceEvidenceRef({
+      annotationId: event.annotationId,
+      resolutionEventId: event.id,
+      role: "event-target",
+      value: event.targetRepresentation,
+      createdAt: event.createdAt,
+    });
+    if (event.resolvedTarget) {
+      this.insertResourceEvidenceRef({
+        annotationId: event.annotationId,
+        resolutionEventId: event.id,
+        role: "event-resolved",
+        value: event.resolvedTarget,
+        createdAt: event.createdAt,
+      });
+    }
+    for (const candidate of event.candidates) {
+      this.insertResourceEvidenceRef({
+        annotationId: event.annotationId,
+        resolutionEventId: event.id,
+        role: "event-candidate",
+        value: candidate.target,
+        createdAt: event.createdAt,
+      });
+    }
+  }
+
+  private backfillResourceEvidenceRefs(): void {
+    const targets = this.database.query(`
+      SELECT annotation_block_id, original_target_json, created_at
+      FROM annotation_targets
+    `).all() as Array<Pick<
+      AnnotationTargetRow,
+      "annotation_block_id" | "original_target_json" | "created_at"
+    >>;
+    for (const target of targets) {
+      this.insertResourceEvidenceRef({
+        annotationId: target.annotation_block_id,
+        resolutionEventId: null,
+        role: "original-target",
+        value: parseStoredTarget(target.original_target_json),
+        createdAt: target.created_at,
+      });
+    }
+    const events = this.database.query(
+      "SELECT * FROM annotation_resolution_events ORDER BY annotation_block_id, sequence",
+    ).all() as ResolutionRow[];
+    for (const row of events) {
+      const event = eventFromRow(row);
+      this.insertEventResourceEvidenceRefs(event);
+    }
   }
 
   private migrateLegacyData(): void {

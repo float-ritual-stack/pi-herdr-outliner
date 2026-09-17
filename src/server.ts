@@ -56,6 +56,10 @@ import {
   type WorkflowTransitionInput,
   type Resource,
   type ResourceDescription,
+  type ResourceRetentionCollectionReceipt,
+  type ResourceRetentionPin,
+  type ResourceRetentionReference,
+  type ResourceRevisionRef,
 } from "./types";
 
 function eventResultId(value: unknown, label: string): string {
@@ -435,6 +439,17 @@ export class OutlinerServer {
       capabilities: presentation.capabilities,
       presentation,
     };
+  }
+
+  private activeResourceRevisions(resourceId?: string): ResourceRevisionRef[] {
+    return this.listClients("detail").flatMap(({ currentTarget }) => {
+      if (
+        currentTarget?.kind !== "resource" ||
+        currentTarget.revision === undefined ||
+        (resourceId !== undefined && currentTarget.resourceId !== resourceId)
+      ) return [];
+      return [currentTarget.revision];
+    });
   }
 
   private updateClient(
@@ -1006,6 +1021,37 @@ export class OutlinerServer {
         case "resources.relocate":
           result = this.store.resources.relocate(request.input);
           break;
+        case "resources.retention.get":
+          result = this.store.resources.retentionPolicy();
+          break;
+        case "resources.retention.configure":
+          result = this.store.resources.configureRetention(request.input);
+          break;
+        case "resources.retention.inspect":
+          result = this.store.resources.inspectRetention(
+            request.resourceId,
+            this.activeResourceRevisions(request.resourceId),
+          );
+          break;
+        case "resources.retention.pin":
+          result = this.store.resources.pinRetention(request.input);
+          break;
+        case "resources.retention.unpin":
+          result = this.store.resources.unpinRetention(request.pinId);
+          break;
+        case "resources.retention.reference":
+          result = this.store.resources.referenceRetention(request.input);
+          break;
+        case "resources.retention.unreference":
+          result = this.store.resources.unreferenceRetention(request.referenceId);
+          break;
+        case "resources.collect":
+          result = this.store.resources.collectRetention(
+            request.mode,
+            request.resourceId,
+            this.activeResourceRevisions(request.resourceId),
+          );
+          break;
         case "resources.describe": {
           const destination = this.clientById(request.destinationClientId);
           if (destination.role !== "detail") {
@@ -1521,6 +1567,41 @@ export class OutlinerServer {
         domain = "resource-catalog";
         resourceId = (response.result as ResourceDescription).resource.id;
         break;
+      case "resources.retention.configure":
+        domain = "resource-catalog";
+        break;
+      case "resources.retention.pin": {
+        const receipt = response.result as { pin: ResourceRetentionPin; created: boolean };
+        if (!receipt.created) return null;
+        domain = "resource-catalog";
+        resourceId = receipt.pin.resourceId;
+        break;
+      }
+      case "resources.retention.unpin":
+        if (!(response.result as { removed: boolean }).removed) return null;
+        domain = "resource-catalog";
+        break;
+      case "resources.retention.reference": {
+        const receipt = response.result as {
+          reference: ResourceRetentionReference;
+          created: boolean;
+        };
+        if (!receipt.created) return null;
+        domain = "resource-catalog";
+        resourceId = receipt.reference.resourceId;
+        break;
+      }
+      case "resources.retention.unreference":
+        if (!(response.result as { removed: boolean }).removed) return null;
+        domain = "resource-catalog";
+        break;
+      case "resources.collect": {
+        const receipt = response.result as ResourceRetentionCollectionReceipt;
+        if (receipt.evicted.length === 0 && receipt.purged.length === 0) return null;
+        domain = "resource-catalog";
+        resourceId = receipt.resourceId ?? undefined;
+        break;
+      }
       case "create":
         domain = "content";
         blockId = (response.result as Block).id;

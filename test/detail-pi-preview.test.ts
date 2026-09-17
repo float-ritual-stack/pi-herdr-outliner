@@ -272,6 +272,7 @@ function webState(markdown: string): DetailState {
     },
     fetchedAt: "2026-09-17T12:00:00.000Z",
     bodyAvailable: true,
+    evictedAt: null,
   };
   const representation = {
     id: "40000000-0000-4000-8000-000000000001",
@@ -281,6 +282,7 @@ function webState(markdown: string): DetailState {
     contentHash: "a".repeat(64),
     derivedAt: "2026-09-17T12:00:01.000Z",
     contentAvailable: true,
+    evictedAt: null,
   };
   const description: ResourceDescription = {
     resource,

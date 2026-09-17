@@ -973,6 +973,7 @@ describe("detail controller projection and deferred refresh", () => {
         },
         fetchedAt: "2026-09-17T12:00:00.000Z",
         bodyAvailable: true,
+        evictedAt: null,
       };
       const representation = {
         id: `representation-${revision}`,
@@ -982,6 +983,7 @@ describe("detail controller projection and deferred refresh", () => {
         contentHash: revision.repeat(64).slice(0, 64),
         derivedAt: "2026-09-17T12:00:01.000Z",
         contentAvailable: true,
+        evictedAt: null,
       };
       return {
         resource,
@@ -1087,6 +1089,10 @@ describe("detail controller projection and deferred refresh", () => {
     expect(harness.controller.state.resolvedSelectedText).toContain(
       "## Retained history\n\n- Source snapshots: 1\n- Representations: 1",
     );
+
+    current = description("# Workspace collection\n\nFresh history state", "a");
+    await harness.controller.onServiceEvent(event("resource-catalog"), viewport);
+    expect(harness.controller.state.resolvedSelectedText).toContain("Fresh history state");
 
     for (
       const [freshness, guidance] of [

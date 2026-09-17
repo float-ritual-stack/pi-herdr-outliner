@@ -1264,12 +1264,12 @@ export function createDetailController(
       );
       for (const snapshot of webHistory.sourceSnapshots) {
         lines.push(
-          `- Snapshot \`${snapshot.id}\` · address v${snapshot.addressVersion} · ${snapshot.canonicalUrl ?? "URL unknown"} · ${snapshot.contentHash ?? "hash unknown"} · fetched ${snapshot.fetchedAt ?? "unknown"} · body ${snapshot.bodyAvailable ? "available" : "unavailable"}`,
+          `- Snapshot \`${snapshot.id}\` · address v${snapshot.addressVersion} · ${snapshot.canonicalUrl ?? "URL unknown"} · ${snapshot.contentHash ?? "hash unknown"} · fetched ${snapshot.fetchedAt ?? "unknown"} · body ${snapshot.bodyAvailable ? "available" : snapshot.evictedAt ? `evicted ${snapshot.evictedAt}` : "unavailable"}`,
         );
       }
       for (const representation of webHistory.representations) {
         lines.push(
-          `- Representation \`${representation.id}\` · snapshot \`${representation.sourceSnapshotId}\` · \`${representation.adapter.id}@${representation.adapter.version}\` · ${representation.contentHash} · derived ${representation.derivedAt ?? "unknown"} · content ${representation.contentAvailable ? "available" : "unavailable"}`,
+          `- Representation \`${representation.id}\` · snapshot \`${representation.sourceSnapshotId}\` · \`${representation.adapter.id}@${representation.adapter.version}\` · ${representation.contentHash} · derived ${representation.derivedAt ?? "unknown"} · content ${representation.contentAvailable ? "available" : representation.evictedAt ? `evicted ${representation.evictedAt}` : "unavailable"}`,
         );
       }
     }
@@ -3084,11 +3084,16 @@ export function createDetailController(
       }
       if (event.domain === "resource-catalog") {
         const description = detailResourceDescription(state);
+        const unscopedResourceChange =
+          event.resourceId === undefined && event.sourceId === undefined;
         const matchesTarget = state.target?.kind === "resource" &&
-          event.resourceId === state.target.resourceId;
+          (unscopedResourceChange || event.resourceId === state.target.resourceId);
         const matchesDescription = description !== null &&
-          (event.resourceId === description.resource.id ||
-            event.sourceId === description.source.id);
+          (
+            unscopedResourceChange ||
+            event.resourceId === description.resource.id ||
+            event.sourceId === description.source.id
+          );
         if (!matchesTarget && !matchesDescription) return;
       } else if (event.domain === "content") {
         invalidateBacklinks();
