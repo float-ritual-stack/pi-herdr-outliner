@@ -19,7 +19,6 @@ import {
 } from "@earendil-works/pi-tui";
 import { OutlinerClient, type OutlinerWatcher } from "./client";
 import { BufferComposer } from "./buffer-composer";
-import { annotationTargetQuote } from "./annotations";
 import {
   actionMenuItemText,
   filterActionMenuItems,
@@ -93,8 +92,9 @@ import { osc52ClipboardWrite } from "./terminal";
 import {
   OUTLINER_PROTOCOL_VERSION,
   type AnnotationBatchReceipt,
-  type CreateWebResourceAnnotationInput,
-  type AnnotationReanchorInput,
+  type AnnotationListQuery,
+  type AnnotationReconcileInput,
+  type AnnotationReconcileReceipt,
   type AnnotationThread,
   type AttentionClientState,
   type BacklinkCollection,
@@ -102,11 +102,11 @@ import {
   type BookmarkStatus,
   type BookmarkToggleReceipt,
   type BrowsingContextState,
+  type InternResourceReceipt,
   type PageAddressCollection,
   type OutlinerNavigationTarget,
   type OutlinerServiceStatus,
   type ResourceDescription,
-  type WebResourceAnnotation,
   type ResolvedBlockReferences,
   type SelectionContext,
   type VisibleBlockCollection,
@@ -407,10 +407,10 @@ const effects: DetailEffects = {
       author: "user",
     });
   },
-  async createWebAnnotation(input: CreateWebResourceAnnotationInput) {
-    return client.request<WebResourceAnnotation>({
-      action: "resources.web-annotations.create",
-      input,
+  async internFilesystem(path) {
+    return client.request<InternResourceReceipt>({
+      action: "resources.intern-filesystem",
+      input: { path },
     });
   },
   async refreshResource(resourceId) {
@@ -424,17 +424,22 @@ const effects: DetailEffects = {
     );
   },
   openExternal: openExternalUrl,
-  async listAnnotations(sourceBlockId) {
-    return client.request<AnnotationThread[]>({
-      action: "annotations.list",
-      query: { sourceBlockId, includeResolved: true },
+  async getAnnotation(annotationId) {
+    return client.request<AnnotationThread>({
+      action: "annotations.get",
+      annotationId,
     });
   },
-  async reanchorAnnotations(input: AnnotationReanchorInput) {
+  async listAnnotations(query: AnnotationListQuery) {
     return client.request<AnnotationThread[]>({
-      action: "annotations.reanchor",
+      action: "annotations.list",
+      query,
+    });
+  },
+  async reconcileAnnotations(input: AnnotationReconcileInput) {
+    return client.request<AnnotationReconcileReceipt>({
+      action: "annotations.reconcile",
       input,
-      mutation: { author: "user", actorId: "detail" },
     });
   },
   async getAttention() {
@@ -1028,14 +1033,16 @@ const preview = new DetailPiPreviewLayout(
 const draftSplit = new DetailPiDraftSplitLayout(customFrame, preview);
 const composer = new BufferComposer(() => {
   const target = controller.state.annotationDraft?.target;
-  const context = target
-    ? target.kind === "web-resource"
+  const context = target?.anchor.kind === "text-quote"
+    ? target.anchor.exact
+    : target?.anchor.kind === "dom-range"
       ? target.anchor.exact
-      : annotationTargetQuote(target)
-    : "";
+      : target?.anchor.kind === "pdf-page-region"
+        ? target.anchor.exact ?? ""
+        : "";
   return {
-    title: target?.kind === "file"
-      ? `Comment on ${target.filePath}:${target.startLine}-${target.endLine}`
+    title: target?.representation.subject.kind === "resource"
+      ? "Comment on Resource selection"
       : "Comment on selection",
     context,
     buffer: controller.state.buffer,

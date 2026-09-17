@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { createAnnotationAnchor, parseAnnotationBlock } from "./annotations";
+import { createAnnotationAnchor } from "./annotations";
 import { normalizeBlockSearchQuery } from "./block-query";
 import { parseDetailCallouts } from "./detail-callouts";
 import { firstLineWithoutPropertyTokens } from "./properties";
@@ -665,8 +665,15 @@ export class WorkflowManager {
     if (!PROMOTION_KINDS.includes(input.kind)) throw new Error(`Unsupported workflow promotion kind: ${String(input.kind)}`);
     const step = run.route.find((candidate) => candidate.stepId === input.stepId);
     if (!step) throw new Error(`Workflow step not found: ${input.stepId}`);
-    const annotation = parseAnnotationBlock(this.store.requireActive(input.annotationId));
-    if (annotation.target.sourceBlockId !== step.target.sourceBlockId) {
+    const annotation = this.store.getAnnotation(input.annotationId);
+    const target = annotation.resolvedTarget;
+    const subject = target?.representation.subject;
+    if (
+      annotation.currentResolution.status !== "resolved" ||
+      !target ||
+      subject?.kind !== "block" ||
+      subject.blockId !== step.target.sourceBlockId
+    ) {
       throw new Error("Workflow promotion annotation does not belong to the selected step source");
     }
     const normalized: WorkflowPromotionInput = {

@@ -205,6 +205,10 @@ export interface InternResourceReceipt {
   readonly resource: Resource;
   readonly created: boolean;
 }
+export interface InternFilesystemResourceInput {
+  readonly path: string;
+  readonly mediaType?: string;
+}
 
 export interface RelocateResourceInput {
   readonly resourceId: string;
@@ -266,9 +270,7 @@ export interface WebResourceProvenance {
   readonly sourceSnapshots: readonly WebSourceSnapshotProvenance[];
   readonly representations: readonly WebRepresentationProvenance[];
 }
-export interface WebResourceHistory extends WebResourceProvenance {
-  readonly annotations: readonly WebResourceAnnotation[];
-}
+export type WebResourceHistory = WebResourceProvenance;
 
 
 export interface WebResourceStatus {
@@ -277,25 +279,6 @@ export interface WebResourceStatus {
   readonly lastError: string | null;
 }
 
-export interface WebResourceAnnotationAnchor {
-  readonly start: number;
-  readonly end: number;
-  readonly exact: string;
-  readonly prefix: string;
-  readonly suffix: string;
-}
-
-export interface WebResourceAnnotation {
-  readonly id: string;
-  readonly resourceId: string;
-  readonly sourceSnapshotId: string;
-  readonly representationId: string;
-  readonly revision: ResourceRevisionRef;
-  readonly representation: WebRepresentationProvenance;
-  readonly anchor: WebResourceAnnotationAnchor;
-  readonly body: string;
-  readonly createdAt: string;
-}
 
 export interface WebResourceDocument {
   readonly markdown: string;
@@ -303,19 +286,20 @@ export interface WebResourceDocument {
   readonly representation: WebRepresentationProvenance;
 }
 
-export interface CreateWebResourceAnnotationInput {
-  readonly resourceId: string;
-  readonly sourceSnapshotId: string;
-  readonly representationId: string;
-  readonly anchor: WebResourceAnnotationAnchor;
-  readonly body: string;
+export interface FilesystemResourceDocument {
+  readonly text: string;
+  readonly contentHash: string;
+  readonly capturedAt: string;
+  readonly revision: ResourceRevisionRef;
 }
+
 
 export interface ResourceDescription {
   readonly resource: Resource;
   readonly source: ResourceSource;
   readonly requestedRevision: ResourceRevisionRef | null;
   readonly capabilities: ResourceCapabilityReport;
+  readonly filesystem?: FilesystemResourceDocument | null;
   readonly web: WebResourceDocument | null;
   readonly webHistory: WebResourceHistory | null;
   readonly webStatus: WebResourceStatus | null;

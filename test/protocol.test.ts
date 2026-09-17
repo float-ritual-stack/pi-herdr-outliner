@@ -1,9 +1,13 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createConnection, createServer, Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createAnnotationAnchor } from "../src/annotations";
+import {
+  annotationSourceHash,
+  createAnnotationAnchor,
+  createTextQuoteAnchor,
+} from "../src/annotations";
 import { OutlinerClient } from "../src/client";
 import { HerdrRuntimeRegistry, type HerdrSessionSnapshot } from "../src/herdr-registry";
 import { OutlinerServer } from "../src/server";
@@ -12,6 +16,10 @@ import { orchestrateWorkflowRun } from "../src/workflow-orchestrator";
 import { OUTLINER_PROTOCOL_VERSION } from "../src/types";
 import type {
   AnnotationBatchReceipt,
+  AnnotationRecord,
+  AnnotationReconcileReceipt,
+  AnnotationRepresentation,
+  AnnotationTarget,
   AttentionClientState,
   AnnotationThread,
   BacklinkCollection,
@@ -42,7 +50,6 @@ import type {
   InternResourceReceipt,
   ResourceDescription,
   ResourceSource,
-  WebResourceAnnotation,
   RoadmapItemCreateReceipt,
   WorkIdAllocation,
   WorkIdAllocatorStatus,
@@ -141,6 +148,8 @@ test("persists resources and dispatches resource targets without synthetic block
   const client = new OutlinerClient(socket);
   const root = join(directory, "external-notes");
   mkdirSync(root);
+  mkdirSync(join(root, "daily"));
+  writeFileSync(join(root, "daily/2026-09-17.md"), "# Daily\n\nDurable evidence.\n");
   const source = await client.request<ResourceSource>({
     action: "resource-sources.create",
     input: {
@@ -176,6 +185,14 @@ test("persists resources and dispatches resource targets without synthetic block
     resource: { id: resource.id },
     source: { id: source.id },
     requestedRevision: null,
+  });
+  expect(description.filesystem).toMatchObject({
+    text: "# Daily\n\nDurable evidence.\n",
+    revision: {
+      resourceId: resource.id,
+      addressVersion: resource.addressVersion,
+      revision: { kind: "filesystem", size: "27" },
+    },
   });
   expect(description.capabilities.watch).toMatchObject({
     status: "unavailable",
@@ -286,7 +303,7 @@ test("persists resources and dispatches resource targets without synthetic block
   ).toEqual(unavailableBlockTarget);
 });
 
-test("serves local web snapshots, explicit refresh, and retained annotation evidence", async () => {
+test("serves local web snapshots, explicit refresh, and unified annotation resolution", async () => {
   const directory = mkdtempSync(join(tmpdir(), "pi-outliner-web-protocol-"));
   let etag = "\"v1\"";
   let html = "<h1>Protocol</h1><p>Quoted evidence.</p>";
@@ -311,13 +328,15 @@ test("serves local web snapshots, explicit refresh, and retained annotation evid
   const connected = Promise.withResolvers<void>();
   const events: OutlinerEvent[] = [];
   const annotationEvent = Promise.withResolvers<void>();
+  const reconcileEvent = Promise.withResolvers<void>();
   const refreshEvents = Promise.withResolvers<void>();
   const watcher = new OutlinerClient(socket).watch({
     client: { clientId: "web-detail", role: "detail", contextId: "web-context" },
     onConnect: connected.resolve,
     onEvent(event) {
       events.push(event);
-      if (event.action === "resources.web-annotations.create") annotationEvent.resolve();
+      if (event.action === "annotations.create") annotationEvent.resolve();
+      if (event.action === "annotations.reconcile") reconcileEvent.resolve();
       if (
         event.action === "resources.refresh" &&
         events.filter(({ action }) => action === "resources.refresh").length === 3
@@ -413,7 +432,6 @@ test("serves local web snapshots, explicit refresh, and retained annotation evid
   expect(acquired.webHistory).toEqual({
     sourceSnapshots: [firstSnapshot],
     representations: [firstRepresentation],
-    annotations: [],
   });
 
   const locallyOpened = await client.request<ResourceDescription>({
@@ -425,37 +443,84 @@ test("serves local web snapshots, explicit refresh, and retained annotation evid
   expect(providerAccessCount).toBe(1);
   expect(events.some((event) => event.action === "resources.open")).toBe(false);
 
-  const start = acquired.web.markdown.indexOf("Quoted evidence");
-  const end = start + "Quoted evidence".length;
-  const anchor = {
-    start,
-    end,
-    exact: acquired.web.markdown.slice(start, end),
-    prefix: acquired.web.markdown.slice(Math.max(0, start - 64), start),
-    suffix: acquired.web.markdown.slice(end, end + 64),
-  };
-  const annotation = await client.request<WebResourceAnnotation>({
-    action: "resources.web-annotations.create",
-    input: {
+  const firstCapturedAt = firstRepresentation.derivedAt ?? firstSnapshot.fetchedAt;
+  if (!firstCapturedAt) throw new Error("Acquired web representation has no capture time");
+  const firstAnnotationRepresentation: AnnotationRepresentation = {
+    id: firstRepresentation.id,
+    subject: { kind: "resource", resourceId: resource.id },
+    sourceSnapshot: {
+      kind: "resource",
       resourceId: resource.id,
       sourceSnapshotId: firstSnapshot.id,
-      representationId: firstRepresentation.id,
-      anchor,
+      revision: firstSnapshot.revision,
+    },
+    adapter: firstRepresentation.adapter,
+    mediaType: firstRepresentation.mediaType,
+    contentHash: firstRepresentation.contentHash,
+    capturedAt: firstCapturedAt,
+  };
+  const start = acquired.web.markdown.indexOf("Quoted evidence");
+  const end = start + "Quoted evidence".length;
+  const originalTarget: AnnotationTarget = {
+    representation: firstAnnotationRepresentation,
+    anchor: createTextQuoteAnchor(acquired.web.markdown, start, end),
+  };
+  await expect(client.request<AnnotationBatchReceipt>({
+    action: "annotations.create",
+    requestId: "protocol-resource-annotation-invalid",
+    input: {
+      target: {
+        ...originalTarget,
+        representation: {
+          ...firstAnnotationRepresentation,
+          id: "missing-web-representation",
+        },
+      },
+      body: "Unverified evidence",
+      source: "agent",
+    },
+  })).rejects.toThrow("Annotation Resource representation evidence is unavailable");
+
+  const annotationReceipt = await client.request<AnnotationBatchReceipt>({
+    action: "annotations.create",
+    requestId: "protocol-resource-annotation-1",
+    input: {
+      target: originalTarget,
       body: "Protocol evidence",
+      source: "user",
     },
   });
   await annotationEvent.promise;
-  expect(annotation).toEqual({
-    id: expect.any(String),
-    resourceId: resource.id,
-    sourceSnapshotId: firstSnapshot.id,
-    representationId: firstRepresentation.id,
-    revision: firstSnapshot.revision,
-    representation: firstRepresentation,
-    anchor,
+  const annotation = annotationReceipt.annotations[0]!;
+  expect(annotationReceipt.deduplicated).toBe(false);
+  expect(annotation).toMatchObject({
+    originalTarget,
+    resolvedTarget: originalTarget,
     body: "Protocol evidence",
-    createdAt: expect.any(String),
+    source: "user",
+    currentResolution: {
+      sequence: 0,
+      sourceRepresentation: firstAnnotationRepresentation,
+      targetRepresentation: firstAnnotationRepresentation,
+      resolvedTarget: originalTarget,
+      status: "resolved",
+      appliesCurrent: true,
+    },
   });
+  expect(annotation.resolutionHistory).toHaveLength(1);
+  expect(await client.request<AnnotationThread[]>({
+    action: "annotations.list",
+    query: {
+      subject: { kind: "resource", resourceId: resource.id },
+      includeResolved: true,
+    },
+  })).toEqual([
+    expect.objectContaining({
+      block: expect.objectContaining({ id: annotation.block.id }),
+      originalTarget,
+      resolvedTarget: originalTarget,
+    }),
+  ]);
 
   const unchanged = await client.request<ResourceDescription>({
     action: "resources.refresh",
@@ -471,7 +536,6 @@ test("serves local web snapshots, explicit refresh, and retained annotation evid
   expect(unchanged.webHistory).toEqual({
     sourceSnapshots: [firstSnapshot],
     representations: [firstRepresentation],
-    annotations: [annotation],
   });
 
   etag = "\"v2\"";
@@ -498,13 +562,102 @@ test("serves local web snapshots, explicit refresh, and retained annotation evid
   expect(changed.webHistory?.representations).toEqual(
     expect.arrayContaining([firstRepresentation, changed.web.representation]),
   );
-  expect(changed.webHistory?.annotations).toEqual([annotation]);
-  expect(changed.webHistory?.annotations[0]).toMatchObject({
-    sourceSnapshotId: firstSnapshot.id,
-    representationId: firstRepresentation.id,
-    revision: firstSnapshot.revision,
-    representation: firstRepresentation,
+  const secondCapturedAt = changed.web.representation.derivedAt ??
+    changed.web.sourceSnapshot.fetchedAt;
+  if (!secondCapturedAt) throw new Error("Refreshed web representation has no capture time");
+  const secondAnnotationRepresentation: AnnotationRepresentation = {
+    id: changed.web.representation.id,
+    subject: { kind: "resource", resourceId: resource.id },
+    sourceSnapshot: {
+      kind: "resource",
+      resourceId: resource.id,
+      sourceSnapshotId: changed.web.sourceSnapshot.id,
+      revision: changed.web.sourceSnapshot.revision,
+    },
+    adapter: changed.web.representation.adapter,
+    mediaType: changed.web.representation.mediaType,
+    contentHash: changed.web.representation.contentHash,
+    capturedAt: secondCapturedAt,
+  };
+  const reconciled = await client.request<AnnotationReconcileReceipt>({
+    action: "annotations.reconcile",
+    input: {
+      subject: { kind: "resource", resourceId: resource.id },
+      newRepresentation: secondAnnotationRepresentation,
+    },
   });
+  expect(reconciled.changed).toBe(true);
+  expect(reconciled.threads).toHaveLength(1);
+  expect(reconciled.threads[0]).toMatchObject({
+    block: { id: annotation.block.id },
+    originalTarget,
+    resolvedTarget: null,
+    currentResolution: {
+      sequence: 1,
+      sourceRepresentation: firstAnnotationRepresentation,
+      targetRepresentation: secondAnnotationRepresentation,
+      resolvedTarget: null,
+      status: "orphaned",
+      appliesCurrent: true,
+    },
+  });
+  expect(reconciled.threads[0]!.resolutionHistory.map(({ status }) => status)).toEqual([
+    "resolved",
+    "orphaned",
+  ]);
+  await reconcileEvent.promise;
+  const reconcileEventCount = events.filter(({ action }) =>
+    action === "annotations.reconcile"
+  ).length;
+  const unchangedReconcile = await client.request<AnnotationReconcileReceipt>({
+    action: "annotations.reconcile",
+    input: {
+      subject: { kind: "resource", resourceId: resource.id },
+      newRepresentation: secondAnnotationRepresentation,
+    },
+  });
+  expect(unchangedReconcile.changed).toBe(false);
+  expect(unchangedReconcile.threads[0]!.resolutionHistory).toHaveLength(2);
+  await Bun.sleep(20);
+  expect(events.filter(({ action }) =>
+    action === "annotations.reconcile"
+  )).toHaveLength(reconcileEventCount);
+  const approvedStart = changed.web.markdown.indexOf("New body");
+  const approvedTarget: AnnotationTarget = {
+    representation: secondAnnotationRepresentation,
+    anchor: createTextQuoteAnchor(
+      changed.web.markdown,
+      approvedStart,
+      approvedStart + "New body".length,
+    ),
+  };
+  const approved = await client.request<AnnotationRecord>({
+    action: "annotations.approve-resolution",
+    input: {
+      annotationId: annotation.block.id,
+      target: approvedTarget,
+    },
+  });
+  expect(approved).toMatchObject({
+    originalTarget,
+    resolvedTarget: approvedTarget,
+    currentResolution: {
+      sequence: 2,
+      sourceRepresentation: secondAnnotationRepresentation,
+      targetRepresentation: secondAnnotationRepresentation,
+      resolvedTarget: approvedTarget,
+      method: { kind: "human", method: "approved-target" },
+      reviewer: { kind: "user", id: "protocol" },
+      confidence: 1,
+      status: "resolved",
+      appliesCurrent: true,
+    },
+  });
+  expect(approved.resolutionHistory.map(({ status }) => status)).toEqual([
+    "resolved",
+    "orphaned",
+    "resolved",
+  ]);
   expect(events.filter(({ action }) => action === "resources.refresh")).toEqual([
     expect.objectContaining({
       domain: "resource-catalog",
@@ -543,15 +696,30 @@ test("serves atomic idempotent annotation threads over the current protocol", as
     action: "create",
     text: "alpha βeta gamma",
   });
+  const contentHash = annotationSourceHash(source.text);
+  const representation: AnnotationRepresentation = {
+    id: `block:${source.id}:${source.updatedAt}`,
+    subject: { kind: "block", blockId: source.id },
+    sourceSnapshot: {
+      kind: "block",
+      blockId: source.id,
+      updatedAt: source.updatedAt,
+      contentHash,
+    },
+    adapter: null,
+    mediaType: "text/markdown",
+    contentHash,
+    capturedAt: source.updatedAt,
+  };
+  const target: AnnotationTarget = {
+    representation,
+    anchor: createTextQuoteAnchor(source.text, 6, 10),
+  };
   const operations = [{
     operationId: "comment-1",
     type: "create" as const,
     input: {
-      target: {
-        kind: "block" as const,
-        sourceBlockId: source.id,
-        anchor: createAnnotationAnchor(source.text, 6, 10, source.updatedAt),
-      },
+      target,
       body: "Check this range.",
       source: "agent" as const,
     },
@@ -572,14 +740,28 @@ test("serves atomic idempotent annotation threads over the current protocol", as
   });
   const threads = await client.request<AnnotationThread[]>({
     action: "annotations.list",
-    query: { sourceBlockId: source.id, includeResolved: true },
+    query: {
+      subject: { kind: "block", blockId: source.id },
+      includeResolved: true,
+    },
   });
   expect(created.deduplicated).toBe(false);
   expect(replayed.deduplicated).toBe(true);
   expect(replayed.annotations[0]!.block.id).toBe(created.annotations[0]!.block.id);
   expect(threads).toHaveLength(1);
-  if (threads[0]!.target.kind !== "block") throw new Error("Expected a block annotation");
-  expect(threads[0]!.target.anchor.excerpt).toBe("βeta");
+  expect(threads[0]).toMatchObject({
+    originalTarget: target,
+    resolvedTarget: target,
+    currentResolution: {
+      sequence: 0,
+      sourceRepresentation: representation,
+      targetRepresentation: representation,
+      resolvedTarget: target,
+      status: "resolved",
+      appliesCurrent: true,
+    },
+  });
+  expect(threads[0]!.resolutionHistory).toHaveLength(1);
 });
 
 test("serves mutations and property queries over the local socket", async () => {
@@ -597,7 +779,7 @@ test("serves mutations and property queries over the local socket", async () => 
   const client = new OutlinerClient(socket);
   const service = await client.request<OutlinerServiceStatus>({ action: "ping" });
   expect(service).toEqual({ status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION });
-  expect(service.protocolVersion).toBe(40);
+  expect(service.protocolVersion).toBe(41);
   const provenance = {
     actorId: "omp",
     sessionId: "session-1",
@@ -2353,17 +2535,30 @@ test("streams one content event for a fresh workflow promotion and none for its 
   const store = new OutlinerStore(join(directory, "outliner.sqlite"));
   const source = store.create("Review\n\n## Decision\nKeep the explicit boundary.");
   const start = source.text.indexOf("Decision");
+  const promotionContentHash = annotationSourceHash(source.text);
+  const promotionRepresentation: AnnotationRepresentation = {
+    id: `block:${source.id}:${source.updatedAt}`,
+    subject: { kind: "block", blockId: source.id },
+    sourceSnapshot: {
+      kind: "block",
+      blockId: source.id,
+      updatedAt: source.updatedAt,
+      contentHash: promotionContentHash,
+    },
+    adapter: null,
+    mediaType: "text/markdown",
+    contentHash: promotionContentHash,
+    capturedAt: source.updatedAt,
+  };
   const annotation = store.createAnnotation(
     "promotion-event-annotation",
     {
       target: {
-        kind: "block",
-        sourceBlockId: source.id,
-        anchor: createAnnotationAnchor(
+        representation: promotionRepresentation,
+        anchor: createTextQuoteAnchor(
           source.text,
           start,
           start + "Decision".length,
-          source.updatedAt,
         ),
       },
       body: "Promote the approved decision.",

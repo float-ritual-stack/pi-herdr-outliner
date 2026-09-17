@@ -52,7 +52,14 @@ import {
   sourceSpannedMarkdownSegments,
 } from "../src/source-spanned-markdown";
 import { TextBuffer } from "../src/text-buffer";
-import type { Block, OutlinerNavigationTarget, SelectionContext } from "../src/types";
+import type {
+  AnnotationRepresentation,
+  AnnotationTarget,
+  AnnotationThread,
+  Block,
+  OutlinerNavigationTarget,
+  SelectionContext,
+} from "../src/types";
 
 function block(id: string, text: string): Block {
   return {
@@ -66,6 +73,77 @@ function block(id: string, text: string): Block {
     properties: [],
   };
 }
+function textTarget(
+  text: string,
+  start: number,
+  end: number,
+  representation?: AnnotationRepresentation,
+): AnnotationTarget {
+  return {
+    representation: representation ?? {
+      id: `block:block-1:${text.length}`,
+      subject: { kind: "block", blockId: "block-1" },
+      sourceSnapshot: {
+        kind: "block",
+        blockId: "block-1",
+        updatedAt: "updated",
+        contentHash: "fixture",
+      },
+      adapter: { id: "outliner.block-text", version: 1 },
+      mediaType: "text/markdown",
+      contentHash: "fixture",
+      capturedAt: "2026-01-01T00:00:00.000Z",
+    },
+    anchor: {
+      kind: "text-quote",
+      start,
+      end,
+      exact: text.slice(start, end),
+      prefix: text.slice(Math.max(0, start - 64), start),
+      suffix: text.slice(end, end + 64),
+    },
+  };
+}
+
+function annotationThread(
+  id: string,
+  target: AnnotationTarget,
+  body: string,
+  source: "user" | "agent" = "user",
+): AnnotationThread {
+  const annotation = block(id, "");
+  const resolution = {
+    id: `${id}-resolution`,
+    annotationId: id,
+    sequence: 0,
+    sourceRepresentation: target.representation,
+    targetRepresentation: target.representation,
+    resolvedTarget: target,
+    method: {
+      kind: "codec" as const,
+      codecId: "text-quote",
+      codecVersion: 1,
+      method: "capture",
+    },
+    reviewer: { kind: "system" as const, id: "annotation-repository" },
+    confidence: 1,
+    status: "resolved" as const,
+    appliesCurrent: true,
+    createdAt: "2026-01-01T00:00:00.000Z",
+  };
+  return {
+    block: annotation,
+    originalTarget: target,
+    resolvedTarget: target,
+    currentResolution: resolution,
+    resolutionHistory: [resolution],
+    body,
+    source,
+    lifecycle: "open",
+    replies: [],
+  };
+}
+
 
 function state(text: string, rawText = "raw edit source"): DetailState {
   const selected = block("block-1", rawText);
@@ -216,7 +294,6 @@ function webState(markdown: string): DetailState {
     webHistory: {
       sourceSnapshots: [sourceSnapshot],
       representations: [representation],
-      annotations: [],
     },
     webStatus: {
       freshness: "fresh",
@@ -697,46 +774,24 @@ describe("Pi Markdown detail preview", () => {
       "after",
     ].join("\n");
     const detail = state(raw, raw);
-    const annotation = block("annotation-1", "");
-    const leadingAnnotation = block("annotation-2", "");
-    const reply = block("reply-1", "");
     const start = raw.indexOf("target phrase");
     const end = raw.indexOf("\nafter");
-    const target = {
-      kind: "block" as const,
-      sourceBlockId: "block-1",
-      anchor: createAnnotationAnchor(raw, start, end, "updated"),
-    };
-    const leadingTarget = {
-      kind: "block" as const,
-      sourceBlockId: "block-1",
-      anchor: createAnnotationAnchor(raw, start - 1, end, "updated"),
-    };
+    const target = textTarget(raw, start, end);
+    const leadingTarget = textTarget(raw, start - 1, end);
+    const root = annotationThread("annotation-1", target, "Check this range.");
+    const reply = annotationThread("reply-1", target, "Verified.", "agent");
     detail.annotationThreads = [{
-      block: annotation,
-      target,
-      body: "Check this range.",
-      source: "user",
-      lifecycle: "open",
-      anchorState: "anchored",
+      ...root,
       replies: [{
-        block: reply,
-        target,
-        body: "Verified.",
-        source: "agent",
-        lifecycle: "open",
-        anchorState: "anchored",
-        parentAnnotationId: annotation.id,
+        ...reply,
+        parentAnnotationId: root.block.id,
       }],
-    }, {
-      block: leadingAnnotation,
-      target: leadingTarget,
-      body: "Second comment.",
-      source: "agent",
-      lifecycle: "open",
-      anchorState: "anchored",
-      replies: [],
-    }];
+    }, annotationThread(
+      "annotation-2",
+      leadingTarget,
+      "Second comment.",
+      "agent",
+    )];
     const layout = previewLayout(detail);
 
     const collapsed = layout.render(72).map(stripTerminalSequences);
@@ -769,33 +824,44 @@ describe("Pi Markdown detail preview", () => {
       layout.scrollView.render(72).map(stripTerminalSequences).join("\n"),
     ).toContain("Check this range.");
   });
-  test("shows observed-only passage threads in the default Detail preview", () => {
+  test("shows resolved rendered-passage threads in the default Detail preview", () => {
     const rendered = "Hub\n\nGenerated result";
     const detail = state(rendered, "Hub\n\n!((virtual-branch))");
-    const target = {
-      kind: "passage" as const,
-      sourceBlockId: "block-1",
-      observation: {
-        quote: "Generated result",
-        capturedAt: "2026-01-02T03:04:05.000Z",
-        hostBlockId: "block-1",
-        paneId: "w1:p2",
-        contentRevision: 42,
-        contextId: "context-1",
-        detailClientId: "detail-1",
-        validation: "herdr-keybinding" as const,
-        projection: "generated" as const,
-      },
+    const observation = {
+      quote: "Generated result",
+      capturedAt: "2026-01-02T03:04:05.000Z",
+      hostBlockId: "block-1",
+      paneId: "w1:p2",
+      contentRevision: 42,
+      contextId: "context-1",
+      detailClientId: "detail-1",
+      validation: "herdr-keybinding" as const,
+      projection: "generated" as const,
     };
-    detail.annotationThreads = [{
-      block: block("annotation-observed", ""),
-      target,
-      body: "Discuss the generated result.",
-      source: "user",
-      lifecycle: "open",
-      anchorState: "observed",
-      replies: [],
-    }];
+    const representation: AnnotationRepresentation = {
+      id: "rendered-1",
+      subject: { kind: "block", blockId: "block-1" },
+      sourceSnapshot: { kind: "rendered", observation },
+      adapter: { id: "herdr.rendered-passage", version: 1 },
+      mediaType: "text/plain",
+      contentHash: "rendered-hash",
+      capturedAt: observation.capturedAt,
+      observation,
+    };
+    const start = rendered.indexOf(observation.quote);
+    const target = textTarget(
+      rendered,
+      start,
+      start + observation.quote.length,
+      representation,
+    );
+    detail.annotationThreads = [
+      annotationThread(
+        "annotation-rendered",
+        target,
+        "Discuss the generated result.",
+      ),
+    ];
     const layout = previewLayout(detail);
 
     const collapsed = layout.render(72).map(stripTerminalSequences);
@@ -810,24 +876,87 @@ describe("Pi Markdown detail preview", () => {
     );
   });
 
+  test("shows Resource threads at offsets matching the displayed historical representation", () => {
+    const rendered = "# Resource\n\nStable quote";
+    const detail = webState(rendered);
+    if (
+      detail.document.kind !== "ready" ||
+      detail.document.document.kind !== "resource" ||
+      !detail.document.document.description.web
+    ) throw new Error("Web Resource fixture is unavailable");
+    const web = detail.document.document.description.web;
+    const representation: AnnotationRepresentation = {
+      id: web.representation.id,
+      subject: {
+        kind: "resource",
+        resourceId: "10000000-0000-4000-8000-000000000001",
+      },
+      sourceSnapshot: {
+        kind: "resource",
+        resourceId: "10000000-0000-4000-8000-000000000001",
+        sourceSnapshotId: web.sourceSnapshot.id,
+        revision: web.sourceSnapshot.revision,
+      },
+      adapter: web.representation.adapter,
+      mediaType: web.representation.mediaType,
+      contentHash: web.representation.contentHash,
+      capturedAt: web.representation.derivedAt!,
+    };
+    const start = rendered.indexOf("Stable quote");
+    const historicalTarget = textTarget(
+      rendered,
+      start,
+      start + "Stable quote".length,
+      representation,
+    );
+    const historical = annotationThread(
+      "annotation-resource",
+      historicalTarget,
+      "Discuss the Resource evidence.",
+    );
+    const currentTarget = textTarget(rendered, 0, "# Resource".length, {
+      ...representation,
+      id: "newer-resource-representation",
+    });
+    const current = annotationThread(
+      "annotation-resource",
+      currentTarget,
+      "Discuss the Resource evidence.",
+    );
+    detail.annotationThreads = [{
+      ...current,
+      originalTarget: historicalTarget,
+      resolutionHistory: [
+        historical.currentResolution,
+        current.currentResolution,
+      ],
+    }];
+    const layout = previewLayout(detail);
+
+    const collapsed = layout.render(72).map(stripTerminalSequences);
+    const region = detail.previewRegions.regions.find((candidate) =>
+      candidate.kind === "annotation"
+    )!;
+    expect(region.sourceSpan).toBeNull();
+    expect(collapsed.find((line) => line.includes("Stable quote"))).toStartWith("+ ");
+    expect(togglePreviewRegionDisclosure(detail.previewRegions, region.id)).toBe(true);
+    expect(layout.render(72).map(stripTerminalSequences).join("\n")).toContain(
+      "Discuss the Resource evidence.",
+    );
+  });
+
 
   test("maps source clicks around inline panels and ignores generated rows", () => {
     const raw = "Title\n\ntarget phrase\n\nafter";
     const detail = state(raw, raw);
     const start = raw.indexOf("target phrase");
-    detail.annotationThreads = [{
-      block: block("annotation-1", ""),
-      target: {
-        kind: "block",
-        sourceBlockId: "block-1",
-        anchor: createAnnotationAnchor(raw, start, start + "target phrase".length, "updated"),
-      },
-      body: "Comment content",
-      source: "user",
-      lifecycle: "open",
-      anchorState: "anchored",
-      replies: [],
-    }];
+    detail.annotationThreads = [
+      annotationThread(
+        "annotation-1",
+        textTarget(raw, start, start + "target phrase".length),
+        "Comment content",
+      ),
+    ];
     const layout = previewLayout(detail);
     layout.scrollView.setScrollbar("hidden");
     layout.syncState(60);
@@ -2103,11 +2232,7 @@ test("keeps reader selection highlighted without changing preview scroll", () =>
   detail.annotationDraft = {
     requestId: "request-1",
     returnMode: "preview",
-    target: {
-      kind: "block",
-      sourceBlockId: "block-1",
-      anchor: createAnnotationAnchor(raw, start, start + "selected phrase".length, "updated"),
-    },
+    target: textTarget(raw, start, start + "selected phrase".length),
   };
   detail.buffer = new TextBuffer("A contextual comment");
   layout.syncState(48);

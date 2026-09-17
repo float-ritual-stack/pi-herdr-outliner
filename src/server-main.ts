@@ -10,7 +10,7 @@ import { OutlinerStore } from "./store";
 const paths = resolvePaths();
 mkdirSync(paths.stateDir, { recursive: true });
 const paneStatePath = join(paths.stateDir, "service-pane.json");
-const store = new OutlinerStore(paths.database);
+const store = new OutlinerStore(paths.database, { workspaceRoot: paths.workspaceRoot });
 const herdrRegistry = new HerdrRuntimeRegistry();
 const herdrSocketPath = process.env.HERDR_SOCKET_PATH;
 const herdrRunner = herdrSocketPath === undefined ? null : new HerdrRegistryRunner(herdrRegistry, herdrSocketPath);

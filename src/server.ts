@@ -50,7 +50,6 @@ import {
   type WorkflowTransitionInput,
   type Resource,
   type ResourceDescription,
-  type WebResourceAnnotation,
 } from "./types";
 
 function eventResultId(value: unknown, label: string): string {
@@ -63,6 +62,18 @@ function eventResultId(value: unknown, label: string): string {
     throw new Error(`${label} result is missing its ID`);
   }
   return value.id;
+}
+
+function annotationReconcileChanged(value: unknown): boolean {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("changed" in value) ||
+    typeof value.changed !== "boolean"
+  ) {
+    throw new Error("Annotation reconcile result is missing its changed flag");
+  }
+  return value.changed;
 }
 
 export class OutlinerServer {
@@ -871,36 +882,31 @@ export class OutlinerServer {
   ): Promise<OutlinerResponse> {
     if (
       request.action !== "resources.open" &&
-      request.action !== "resources.refresh" &&
-      request.action !== "resources.web-annotations.create"
+      request.action !== "resources.refresh"
     ) {
       return this.handle(request, subscribedClient);
     }
     try {
+      const destination = this.clientById(request.destinationClientId);
+      if (destination.role !== "detail") {
+        throw new Error("Resource documents require a Detail destination");
+      }
       let result: unknown;
-      if (request.action === "resources.web-annotations.create") {
-        result = this.store.resources.createWebAnnotation(request.input);
+      if (request.action === "resources.open") {
+        const target = this.normalizeNavigationTarget(request.target);
+        if (target.kind !== "resource") {
+          throw new Error("Resource document target must be a resource");
+        }
+        result = await this.store.resources.open(
+          target.resourceId,
+          true,
+          target.revision,
+        );
       } else {
-        const destination = this.clientById(request.destinationClientId);
-        if (destination.role !== "detail") {
-          throw new Error("Resource documents require a Detail destination");
-        }
-        if (request.action === "resources.open") {
-          const target = this.normalizeNavigationTarget(request.target);
-          if (target.kind !== "resource") {
-            throw new Error("Resource document target must be a resource");
-          }
-          result = await this.store.resources.open(
-            target.resourceId,
-            true,
-            target.revision,
-          );
-        } else {
-          result = await this.store.resources.refreshWeb(
-            request.resourceId,
-            true,
-          );
-        }
+        result = await this.store.resources.refreshWeb(
+          request.resourceId,
+          true,
+        );
       }
       return { id: request.id, ok: true, result, sequence: this.store.sequence };
     } catch (error) {
@@ -961,6 +967,9 @@ export class OutlinerServer {
         case "resources.intern":
           result = this.store.resources.intern(request.input);
           break;
+        case "resources.intern-filesystem":
+          result = this.store.resources.internFilesystem(request.input);
+          break;
         case "resources.get":
           result = this.store.resources.require(request.resourceId);
           break;
@@ -985,7 +994,6 @@ export class OutlinerServer {
         }
         case "resources.open":
         case "resources.refresh":
-        case "resources.web-annotations.create":
           throw new Error(`${request.action} requires asynchronous dispatch`);
         case "attention.get":
           this.attentionClient(request.targetClientId);
@@ -1217,6 +1225,9 @@ export class OutlinerServer {
         case "annotations.list":
           result = this.store.listAnnotationThreads(request.query);
           break;
+        case "annotations.get":
+          result = this.store.getAnnotation(request.annotationId);
+          break;
         case "annotations.create":
           result = this.store.createAnnotation(
             request.requestId,
@@ -1241,11 +1252,11 @@ export class OutlinerServer {
             request.provenance,
           );
           break;
-        case "annotations.reanchor":
-          result = this.store.reanchorAnnotationThreads(
-            request.input,
-            request.mutation,
-          );
+        case "annotations.reconcile":
+          result = this.store.reconcileAnnotationThreads(request.input);
+          break;
+        case "annotations.approve-resolution":
+          result = this.store.approveAnnotationResolution(request.input);
           break;
         case "annotations.lifecycle":
           result = this.store.setAnnotationLifecycle(
@@ -1445,6 +1456,13 @@ export class OutlinerServer {
         resourceId = receipt.resource.id;
         break;
       }
+      case "resources.intern-filesystem": {
+        const receipt = response.result as InternResourceReceipt;
+        if (!receipt.created) return null;
+        domain = "resource-catalog";
+        resourceId = receipt.resource.id;
+        break;
+      }
       case "resources.relocate":
         domain = "resource-catalog";
         resourceId = (response.result as Resource).id;
@@ -1454,10 +1472,6 @@ export class OutlinerServer {
       case "resources.refresh":
         domain = "resource-catalog";
         resourceId = (response.result as ResourceDescription).resource.id;
-        break;
-      case "resources.web-annotations.create":
-        domain = "resource-catalog";
-        resourceId = (response.result as WebResourceAnnotation).resourceId;
         break;
       case "create":
         domain = "content";
@@ -1509,6 +1523,14 @@ export class OutlinerServer {
         blockId = receipt.annotations[0]?.block.id;
         break;
       }
+      case "annotations.reconcile":
+        if (!annotationReconcileChanged(response.result)) return null;
+        domain = "content";
+        break;
+      case "annotations.approve-resolution":
+        domain = "content";
+        blockId = request.input.annotationId;
+        break;
       case "annotations.lifecycle":
         domain = "content";
         blockId = request.input.annotationId;

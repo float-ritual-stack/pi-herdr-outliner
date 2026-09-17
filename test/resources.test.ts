@@ -6,9 +6,11 @@ import {
   renameSync,
   rmSync,
   symlinkSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { annotationSourceHash, createTextQuoteAnchor } from "../src/annotations";
 import {
   RESOURCE_CAPABILITIES,
   RESOURCE_CAPABILITY_FACTORS,
@@ -88,6 +90,110 @@ test("resource identity is source-scoped and persists independently of blocks", 
     expect(second.resource.id).not.toBe(first.resource.id);
     expect(store.resources.require(first.resource.id).sourceId).toBe(firstSource.id);
     expect(store.get(first.resource.id)).toBeNull();
+  });
+});
+
+test("filesystem interning creates a reusable source for the file's directory", () => {
+  withWorkspace((root, store) => {
+    const directory = join(root, "notes");
+    const path = join(directory, "today.md");
+    mkdirSync(directory);
+    writeFileSync(path, "# Today\n");
+
+    const first = store.resources.internFilesystem({
+      path: "notes/today.md",
+      mediaType: "text/markdown",
+    });
+    const repeated = store.resources.internFilesystem({ path });
+
+    expect(first).toMatchObject({
+      created: true,
+      resource: {
+        provider: "filesystem",
+        address: { kind: "filesystem", path: "today.md" },
+        mediaType: "text/markdown",
+      },
+    });
+    expect(store.resources.requireSource(first.resource.sourceId)).toMatchObject({
+      provider: "filesystem",
+      boundary: { kind: "filesystem", root: directory },
+    });
+    expect(repeated).toEqual({ resource: first.resource, created: false });
+  });
+});
+
+test("filesystem descriptions expose immutable text evidence and reject stale revisions", () => {
+  withWorkspace((root, store) => {
+    const directory = join(root, "notes");
+    const path = join(directory, "today.md");
+    mkdirSync(directory);
+    writeFileSync(path, "# Today\n");
+    const resource = store.resources.internFilesystem({
+      path: "notes/today.md",
+      mediaType: "text/markdown",
+    }).resource;
+
+    const first = store.resources.describe(resource.id, true);
+    expect(first.filesystem).toMatchObject({
+      text: "# Today\n",
+      revision: {
+        resourceId: resource.id,
+        addressVersion: resource.addressVersion,
+        revision: { kind: "filesystem", size: "8" },
+      },
+    });
+    expect(first.capabilities.read.status).toBe("available");
+
+    writeFileSync(path, "# Today\n\nChanged\n");
+    expectCatalogError(
+      () => store.resources.describe(resource.id, true, first.filesystem!.revision),
+      "stale-revision",
+    );
+    const current = store.resources.describe(resource.id, true);
+    expect(current.filesystem?.text).toBe("# Today\n\nChanged\n");
+    expect(current.filesystem?.revision).not.toEqual(first.filesystem?.revision);
+  });
+});
+
+test("filesystem annotation capture enforces Resource read policy", () => {
+  withWorkspace((root, store) => {
+    const directory = join(root, "restricted");
+    mkdirSync(directory);
+    const text = "Restricted evidence";
+    writeFileSync(join(directory, "evidence.txt"), text);
+    const source = store.resources.createSource({
+      name: "Restricted",
+      provider: "filesystem",
+      boundary: { root: directory },
+      policy: { deniedCapabilities: ["read"] },
+    });
+    const resource = store.resources.intern({
+      sourceId: source.id,
+      address: { kind: "filesystem", path: "evidence.txt" },
+      mediaType: "text/plain",
+    }).resource;
+
+    expect(() => store.createAnnotation("restricted-annotation", {
+      target: {
+        representation: {
+          id: "restricted-representation",
+          subject: { kind: "resource", resourceId: resource.id },
+          sourceSnapshot: {
+            kind: "resource",
+            resourceId: resource.id,
+            sourceSnapshotId: null,
+            revision: null,
+          },
+          adapter: { id: "filesystem.text", version: 1 },
+          mediaType: "text/plain",
+          contentHash: annotationSourceHash(text),
+          capturedAt: "2026-01-01T00:00:00.000Z",
+        },
+        anchor: createTextQuoteAnchor(text, 0, text.length),
+      },
+      body: "Must not bypass policy.",
+      source: "agent",
+    }, "agent")).toThrow("Annotation Resource representation evidence is unavailable");
   });
 });
 
@@ -355,33 +461,6 @@ test("web refresh owns immutable history, five-state freshness, and local-only o
     expect(sameBody.webHistory?.sourceSnapshots).toHaveLength(2);
     expect(sameBody.webHistory?.representations).toHaveLength(2);
 
-    const markdown = unchanged.web!.markdown;
-    const start = markdown.indexOf("Stable quote");
-    const end = start + "Stable quote".length;
-    const annotation = store.resources.createWebAnnotation({
-      resourceId: resource.id,
-      sourceSnapshotId: unchanged.web!.sourceSnapshot.id,
-      representationId: unchanged.web!.representation.id,
-      anchor: {
-        start,
-        end,
-        exact: markdown.slice(start, end),
-        prefix: markdown.slice(Math.max(0, start - 64), start),
-        suffix: markdown.slice(end, end + 64),
-      },
-      body: "This evidence must survive refresh.",
-    });
-    expectCatalogError(
-      () =>
-        store.resources.createWebAnnotation({
-          resourceId: resource.id,
-          sourceSnapshotId: crypto.randomUUID(),
-          representationId: unchanged.web!.representation.id,
-          anchor: annotation.anchor,
-          body: "Mismatched immutable IDs",
-        }),
-      "stale-revision",
-    );
 
     etag = '"v2"';
     html = "<html><body><h1>Second</h1><p>Changed page without the old passage.</p></body></html>";
@@ -392,7 +471,6 @@ test("web refresh owns immutable history, five-state freshness, and local-only o
     expect(changed.web?.representation.id).not.toBe(first.web?.representation.id);
     expect(changed.webHistory?.sourceSnapshots).toHaveLength(3);
     expect(changed.webHistory?.representations).toHaveLength(3);
-    expect(changed.webHistory?.annotations).toEqual([annotation]);
 
     online = false;
     clock += 1_000;
@@ -430,7 +508,6 @@ test("web refresh owns immutable history, five-state freshness, and local-only o
     });
     expect(rederived.webHistory?.sourceSnapshots).toHaveLength(3);
     expect(rederived.webHistory?.representations).toHaveLength(4);
-    expect(rederived.webHistory?.annotations[0]).toEqual(annotation);
 
     store.database.query("UPDATE resource_sources SET policy_json = ? WHERE id = ?")
       .run(JSON.stringify({ deniedCapabilities: ["read"] }), source.id);
@@ -477,20 +554,6 @@ test("web relocation preserves history and invalidates an in-flight refresh", as
       address: { kind: "web", url: "https://example.com/before" },
     }).resource;
     const before = await store.resources.refreshWeb(resource.id, true);
-    const beforeMarkdown = before.web!.markdown;
-    const retainedAnnotation = store.resources.createWebAnnotation({
-      resourceId: resource.id,
-      sourceSnapshotId: before.web!.sourceSnapshot.id,
-      representationId: before.web!.representation.id,
-      anchor: {
-        start: 0,
-        end: beforeMarkdown.length,
-        exact: beforeMarkdown,
-        prefix: "",
-        suffix: "",
-      },
-      body: "Retain across relocation",
-    });
     gate = new Promise<void>((resolve) => {
       release = resolve;
     });
@@ -508,7 +571,6 @@ test("web relocation preserves history and invalidates an in-flight refresh", as
     });
     expect(afterRelocation.webHistory?.sourceSnapshots).toHaveLength(1);
     expect(afterRelocation.webHistory?.representations).toHaveLength(1);
-    expect(afterRelocation.webHistory?.annotations).toEqual([retainedAnnotation]);
     release!();
     await expect(pending).rejects.toMatchObject({ code: "version-conflict" });
 
@@ -521,14 +583,13 @@ test("web relocation preserves history and invalidates an in-flight refresh", as
     expect(after.webHistory?.sourceSnapshots.some(
       (snapshot) => snapshot.id === before.web?.sourceSnapshot.id,
     )).toBe(true);
-    expect(after.webHistory?.annotations).toContainEqual(retainedAnnotation);
   } finally {
     store.close();
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("PIE-251 web cache migration preserves current and unmatched annotation evidence", async () => {
+test("PIE-251 web cache migration preserves current snapshot and representation", async () => {
   const root = mkdtempSync(join(tmpdir(), "outliner-web-migration-"));
   const path = join(root, "workspace.sqlite");
   let store = new OutlinerStore(path, {
@@ -550,20 +611,8 @@ test("PIE-251 web cache migration preserves current and unmatched annotation evi
   store.close();
 
   const database = new Database(path);
-  const stableAnnotationId = crypto.randomUUID();
-  const historicalAnnotationId = crypto.randomUUID();
-  const anchor = {
-    start: 0,
-    end: 7,
-    exact: "Current",
-    prefix: "",
-    suffix: " evidence",
-  };
-  const historicalEtag = '"legacy"';
-  const historicalRepresentationHash = "b".repeat(64);
   try {
     database.exec(`
-      DROP TABLE web_resource_annotations;
       DROP TABLE web_resource_state;
       DROP TABLE web_representations;
       DROP TABLE web_source_snapshots;
@@ -584,15 +633,6 @@ test("PIE-251 web cache migration preserves current and unmatched annotation evi
         fetched_at TEXT NOT NULL,
         checked_at TEXT NOT NULL,
         last_error TEXT
-      );
-      CREATE TABLE web_resource_annotations (
-        id TEXT PRIMARY KEY,
-        resource_id TEXT NOT NULL,
-        revision_json TEXT NOT NULL,
-        representation_json TEXT NOT NULL,
-        anchor_json TEXT NOT NULL,
-        body TEXT NOT NULL,
-        created_at TEXT NOT NULL
       );
     `);
     const representationEvidence = {
@@ -620,38 +660,6 @@ test("PIE-251 web cache migration preserves current and unmatched annotation evi
       current.web!.sourceSnapshot.fetchedAt,
       current.webStatus!.checkedAt,
     );
-    database.query(`
-      INSERT INTO web_resource_annotations (
-        id, resource_id, revision_json, representation_json,
-        anchor_json, body, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      stableAnnotationId,
-      resource.id,
-      JSON.stringify(current.web!.sourceSnapshot.revision),
-      JSON.stringify(representationEvidence),
-      JSON.stringify(anchor),
-      "Current evidence",
-      "2026-09-17T12:00:00.000Z",
-      historicalAnnotationId,
-      resource.id,
-      JSON.stringify({
-        resourceId: resource.id,
-        addressVersion: 1,
-        revision: {
-          kind: "web",
-          validator: { kind: "etag", value: historicalEtag, weak: false },
-        },
-      }),
-      JSON.stringify({
-        mediaType: "text/markdown",
-        adapter: { id: "legacy.extractor", version: 3 },
-        contentHash: historicalRepresentationHash,
-      }),
-      JSON.stringify(anchor),
-      "Historical evidence",
-      "2026-09-16T12:00:00.000Z",
-    );
   } finally {
     database.close();
   }
@@ -663,43 +671,10 @@ test("PIE-251 web cache migration preserves current and unmatched annotation evi
   });
   try {
     const migrated = await store.resources.open(resource.id, true);
-    expect(migrated.webHistory?.sourceSnapshots).toHaveLength(2);
-    expect(migrated.webHistory?.representations).toHaveLength(2);
+    expect(migrated.webHistory?.sourceSnapshots).toHaveLength(1);
+    expect(migrated.webHistory?.representations).toHaveLength(1);
     expect(migrated.web?.sourceSnapshot.bodyAvailable).toBe(false);
     expect(migrated.web?.representation.contentAvailable).toBe(true);
-    expect(migrated.webHistory?.annotations.map((annotation) => annotation.id).sort())
-      .toEqual([historicalAnnotationId, stableAnnotationId].sort());
-    const historical = migrated.webHistory?.annotations.find(
-      (annotation) => annotation.id === historicalAnnotationId,
-    );
-    expect(historical?.representation).toMatchObject({
-      id: historical?.representationId,
-      adapter: { id: "legacy.extractor", version: 3 },
-      contentHash: historicalRepresentationHash,
-      contentAvailable: false,
-      derivedAt: null,
-    });
-    expect(historical).toMatchObject({
-      revision: {
-        resourceId: resource.id,
-        addressVersion: 1,
-        revision: {
-          kind: "web",
-          validator: { kind: "etag", value: historicalEtag, weak: false },
-        },
-      },
-      anchor,
-      body: "Historical evidence",
-    });
-    const historicalSnapshot = migrated.webHistory?.sourceSnapshots.find(
-      (snapshot) => snapshot.id === historical?.sourceSnapshotId,
-    );
-    expect(historicalSnapshot).toMatchObject({
-      canonicalUrl: null,
-      contentHash: null,
-      fetchedAt: null,
-      bodyAvailable: false,
-    });
     const migratedSnapshotIds = migrated.webHistory!.sourceSnapshots.map(
       (snapshot) => snapshot.id,
     );

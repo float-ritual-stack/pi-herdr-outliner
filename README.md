@@ -25,9 +25,9 @@ The project started as a small Friday-night experiment and grew into a durable w
 
 - SQLite-backed hierarchical blocks with stable UUIDs, sibling order, authors, timestamps, and one canonical graph per workspace root.
 - Workspace-isolated service and runtime paths.
-- JSON-lines RPC protocol v40 over a Unix socket.
+- JSON-lines RPC protocol v41 over a Unix socket.
 - Reactive canonical content/view broadcasts, per-process Tree/Detail registration with Detail lock availability, exact-client UI commands, and source-aware `preview | open | reveal` navigation.
-- Durable resources have UUID identities independent of blocks and mutable locators. Provider-qualified Sources bind filesystem roots or remote namespaces; overlapping Sources remain distinct, relocations preserve Resource IDs, provider revisions remain explicit, and capability resolution reports blockers across provider, credentials, workspace policy, host, and connectivity. Web Resources open from local storage only. Explicit refresh reconciles the provider into immutable source snapshots and named Markdown representations, retains annotation evidence across later observations, and reports `fresh`, `stale`, `unknown`, `refreshing`, or `failed` separately from the selected immutable content.
+- Durable resources have UUID identities independent of blocks and mutable locators. Provider-qualified Sources bind filesystem roots or remote namespaces; overlapping Sources remain distinct, relocations preserve Resource IDs, provider revisions remain explicit, and capability resolution reports blockers across provider, credentials, workspace policy, host, and connectivity. Web Resources open from local storage only. Explicit refresh reconciles the provider into immutable source snapshots and named Markdown representations and reports `fresh`, `stale`, `unknown`, `refreshing`, or `failed` separately from selected immutable content.
 - Each Tree owns its cursor, occurrence selection, filter, viewport, collapsed rows, multiline expansion, explicit-navigation history, and browsing context; moving a Tree previews only in the first unlocked same-tab Detail and never replaces a locked anchor.
 - Indexed `[property::value]` metadata with optimistic property patching and catalog queries.
 - Exact block and fragment references using `((block-id))` and `((block-id^fragment-id))`, resolved to display titles in read mode while raw text remains editable.
@@ -48,7 +48,7 @@ The project started as a small Friday-night experiment and grew into a durable w
 - Grapheme-safe wrapped Detail editing, word motion, selection, deletion, bounded per-session undo/redo, completion, optimistic save, and whole-session Esc cancellation.
 - Targeted ephemeral attention marks exact block/file source ranges in one addressed Tree or Detail without mutating content, selection, navigation history, or durable annotations. Marks expire, become stale instead of drifting when source changes, retain one current plus bounded supporting cues, and coalesce missed activity into a return summary.
 - Each Detail visibly reports `Unlocked` or `Locked`; unlocked Details form a spatial preview/open pool, while locked Details retain exact context anchors.
-- Durable UTF-16 source-range annotations for blocks and referenced files plus immutable rendered-passage annotations for generated Detail projections, with resilient reanchoring, explicit anchored/ambiguous/orphaned/observed states, threaded replies, lifecycle/promotion links, exact-range reveal when honest, and host-pane provenance.
+- Durable annotations use ordinary blocks for comment and reply content, lifecycle, and promotion presentation. One relational sidecar owns immutable original targets and append-only resolution history for block, filesystem Resource, rendered, web, and provider evidence. Typed anchors share one codec seam; Detail reveals only currently resolved text-quote positions and keeps ambiguous, orphaned, unsupported, and rejected outcomes inspectable.
 - Herdr-owned pane placement/focus and current-pane recovery, one remembered service pane, per-process live client discovery, and an ephemeral runtime registry.
 - Pi/OMP commands, tools, selection-context injection, canonical `/send-to-outline` capture, and deterministic configured `PREFIX-XXX` work-placeholder nudging.
 
@@ -72,11 +72,13 @@ check time, refresh errors, and a compare-and-swap version.
 
 Detail displays selected snapshot and representation provenance plus retained
 history independently of the nullable current document. Relocation clears the
-current pointers for the new address while prior snapshots, representations,
-and annotation evidence remain inspectable offline. Legacy annotations whose
-source bytes were never stored expose unknown URL, source hash, fetch time, and
-derivation time instead of fabricated metadata. Refresh failure does not alter
-the selected content.
+current pointers for the new address while prior snapshots and representations
+remain inspectable offline. Annotations are queried through the shared
+annotation repository rather than embedded in `ResourceDescription.webHistory`.
+Legacy evidence is preserved exactly: an unmatched legacy file remains a
+`legacy-file` subject with an orphaned migration event, and missing source bytes
+or provenance stay unknown rather than being fabricated. Refresh failure does
+not alter selected content or prior annotation resolution history.
 
 ## Quick start
 
@@ -538,9 +540,9 @@ compact composer over the existing reader; `Ctrl+S` creates the comment and
 `Esc` cancels without creating anything. Herdr copy mode owns multi-viewport
 selection and continuous edge autoscroll before this handoff.
 
-Canonical plain-text passages retain both the immutable rendered quote and an exact UTF-16 source anchor only when the quote has one unambiguous location in both the unchanged read projection and captured pane snapshot. Resolved references, embeds, query results, transclusions, ambiguous snapshot text, and mixed/generated selections instead retain the rendered quote, capture time, host block, stable pane snapshot revision, Detail client, browsing context, validation method, and projection class without inventing a canonical range. Such comments reveal their observed host block; later projection refreshes never rewrite the quote.
+Every capture constructs one typed `AnnotationTarget`: a representation with block, Resource, rendered, or unknown source-snapshot evidence plus one of the supported typed anchors. Canonical block selections and filesystem Resource selections use positioned text quotes. Cached web selections retain the exact source snapshot, derived representation, adapter, hash, and quote. Rendered selections retain the validated host/pane/revision observation as representation evidence instead of inventing canonical source coordinates.
 
-`v` remains a separate, explicit source-comment operation. It freezes the current read projection, maps Shift-motion or primary-button drag to authored UTF-16 text, scrolls and extends continuously when dragging over a viewport edge, and labels copy as authored-source copy. `c` opens the same composer. File view retains line-range source comments. Annotation view `r` selects a defensible block/file source anchor exactly; observed passages reveal only the host block.
+`v` remains a separate, explicit source-comment operation. It freezes the current read projection, maps Shift-motion or primary-button drag to UTF-16 text, and opens the same composer with `c`. File selection first interns the path as a filesystem Resource; file paths are locators, not annotation identity. Annotation view `r` reveals only a currently resolved positioned text quote. Ambiguous, orphaned, unsupported, and rejected records remain valid, visible history rather than being coerced into a location.
 
 ### Detail edit and comment modes
 
@@ -806,7 +808,7 @@ The project Pi extension is auto-discovered through [`.pi/extensions/outliner.ts
 
 `outliner_query` accepts structured filters such as `{ key: "status", value: "in progress" }`, plus optional text and subtree fields. The service normalizes keys/values and applies the same bounded semantics used by human surfaces. `outliner_focus` targets an explicit or unique live Tree client and returns compact structural context.
 
-Annotation tools use the same canonical child blocks as Detail. Source targets carry a block ID or file identity plus UTF-16 offsets, excerpt, bounded before/after context, source version, and hash. Rendered-passage targets separately carry an immutable quote and host/pane/revision/projection provenance without a fabricated source range. Create and batch calls are idempotent; invalid batches create nothing. Replies retain the root target, lifecycle changes can link promoted canonical blocks, and inspection returns explicit anchor state.
+Annotation tools use the same ordinary comment and reply blocks as Detail and the same relational target sidecar. `outliner_annotations` queries a block or Resource subject. `outliner_annotate` accepts a representation plus one of `text-quote`, `dom-range`, `pdf-page-region`, `structured-entity-field`, or `provider-comment-id`; it does not treat a file path as identity or use a web-specific creation path. Create and batch calls are idempotent, replies inherit the root target and history, and lifecycle changes can link promoted canonical blocks. The immutable original target is returned beside the current resolution and complete append-only history. PIE-250 automatically reconciles only unchanged positions and unique exact quotes; fuzzy, contextual, structural, semantic, and provider-specific resolution ladders belong to PIE-252.
 
 `outliner_attention` requires an explicit live client ID. It can mark, advance,
 acknowledge, clear, or inspect short-lived block/file attention. Exact UTF-16

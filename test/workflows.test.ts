@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createAnnotationAnchor } from "../src/annotations";
+import { annotationSourceHash, createTextQuoteAnchor } from "../src/annotations";
 import type { RequestInput } from "../src/client";
 import { orchestrateWorkflowRun } from "../src/workflow-orchestrator";
 import { OutlinerStore } from "../src/store";
@@ -166,13 +166,30 @@ describe("typed outline workflows", () => {
     const { store, workflows } = setup();
     const source = store.create("Review\n\n## Decision\nKeep the explicit boundary.");
     const start = source.text.indexOf("Decision");
+    const sourceHash = annotationSourceHash(source.text);
     const annotation = store.createAnnotation(
       "workflow-question",
       {
         target: {
-          kind: "block",
-          sourceBlockId: source.id,
-          anchor: createAnnotationAnchor(source.text, start, start + "Decision".length, source.updatedAt),
+          representation: {
+            id: `block:${source.id}:${source.updatedAt}`,
+            subject: { kind: "block", blockId: source.id },
+            sourceSnapshot: {
+              kind: "block",
+              blockId: source.id,
+              updatedAt: source.updatedAt,
+              contentHash: sourceHash,
+            },
+            adapter: null,
+            mediaType: "text/plain",
+            contentHash: sourceHash,
+            capturedAt: source.updatedAt,
+          },
+          anchor: createTextQuoteAnchor(
+            source.text,
+            start,
+            start + "Decision".length,
+          ),
         },
         body: "Owner asks whether this should become a decision.",
         source: "user",
@@ -209,7 +226,9 @@ describe("typed outline workflows", () => {
     expect(committed.block.author).toBe("agent");
     expect(committed.block.text).toContain("[approved-by::owner]");
     expect(committed.run.resultBlockIds).toEqual([committed.block.id]);
-    expect(store.listAnnotationThreads({ sourceBlockId: source.id })[0]?.lifecycle).toBe("open");
+    expect(store.listAnnotationThreads({
+      subject: { kind: "block", blockId: source.id },
+    })[0]?.lifecycle).toBe("open");
 
     const replayed = new WorkflowManager(store).commitPromotion({
       requestId: "promotion-commit",

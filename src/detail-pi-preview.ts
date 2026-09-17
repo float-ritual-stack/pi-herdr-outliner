@@ -51,7 +51,6 @@ import {
   type SourceSpannedMarkdownRowRender,
 } from "./source-spanned-markdown";
 import type {
-  AnnotationAnchor,
   AnnotationThread,
   AttentionMark,
   BacklinkReferenceGroup,
@@ -259,10 +258,20 @@ function annotationSelectionMark(state: Readonly<DetailState>): AttentionMark | 
   const target = state.mode === "comment"
     ? state.annotationDraft?.target
     : undefined;
-  let anchor: AnnotationAnchor;
-  if (target?.kind === "block") {
-    anchor = target.anchor;
-  } else if (target?.kind === "web-resource") {
+  let anchor: {
+    start: number;
+    end: number;
+    excerpt: string;
+    contextBefore: string;
+    contextAfter: string;
+    sourceVersion: string;
+    sourceHash: string;
+  };
+  if (
+    target?.anchor.kind === "text-quote" &&
+    target.anchor.start !== null &&
+    target.anchor.end !== null
+  ) {
     anchor = {
       start: target.anchor.start,
       end: target.anchor.end,
@@ -732,7 +741,7 @@ function annotationPanelLines(
 ): string[] {
   const panelWidth = Math.max(1, width);
   const title =
-    ` Comment ${index + 1} · ${thread.source} · ${thread.anchorState} · ${thread.lifecycle} `;
+    ` Comment ${index + 1} · ${thread.source} · ${thread.currentResolution.status} · ${thread.lifecycle} `;
   const top = truncateToWidth(
     `╭${title}${"─".repeat(Math.max(0, panelWidth - visibleWidth(title) - 1))}`,
     panelWidth,
@@ -891,34 +900,65 @@ class DetailAnnotationPreview implements Component {
   }
 }
 
+function displayedResourceRepresentationId(state: Readonly<DetailState>): string | null {
+  const description = detailResourceDescription(state);
+  if (!description) return null;
+  if (description.web) return description.web.representation.id;
+  const filesystem = description.filesystem;
+  if (!filesystem || filesystem.revision.revision.kind !== "filesystem") return null;
+  const revision = filesystem.revision.revision;
+  return `filesystem:${description.resource.id}:${revision.mtimeNs}:${revision.size}:${filesystem.contentHash}`;
+}
+
 function detailAnnotationGroups(
   state: Readonly<DetailState>,
   renderedLineForAuthoredLine: (line: number) => number,
   renderedSourceLineCount: number,
-  renderedDocumentText: string,
+  renderedAnchorText: string,
 ): DetailAnnotationGroup[] {
   const selected = state.context.selected;
-  if (!selected) return [];
-  const starts = sourceLineStarts(selected.text);
-  const renderedStarts = sourceLineStarts(renderedDocumentText);
+  const displayedResourceTargetId = state.target?.kind === "resource"
+    ? state.target.resourceId
+    : null;
+  const displayedResourceId = displayedResourceTargetId
+    ? displayedResourceRepresentationId(state)
+    : null;
+  const renderedStarts = sourceLineStarts(renderedAnchorText);
   const groups = new Map<string, DetailAnnotationGroup>();
   for (const thread of state.annotationThreads) {
-    if (thread.target.sourceBlockId !== selected.id) continue;
-    if (thread.target.kind === "passage") {
-      const quoteStart = renderedDocumentText.indexOf(thread.target.observation.quote);
-      const startLine = quoteStart < 0 ? 0 : sourceLineAt(renderedStarts, quoteStart);
-      const quoteEnd = quoteStart < 0
-        ? 0
-        : quoteStart + Math.max(0, thread.target.observation.quote.length - 1);
-      const endLine = quoteStart < 0 ? startLine : sourceLineAt(renderedStarts, quoteEnd);
-      const key = `observed:${startLine}`;
+    let target = thread.resolvedTarget;
+    if (displayedResourceTargetId) {
+      if (!displayedResourceId) continue;
+      target = [...thread.resolutionHistory]
+        .reverse()
+        .map((event) => event.resolvedTarget)
+        .find((candidate) =>
+          candidate?.representation.id === displayedResourceId &&
+          candidate.representation.subject.kind === "resource" &&
+          candidate.representation.subject.resourceId === displayedResourceTargetId
+        ) ?? null;
+    } else if (thread.currentResolution.status !== "resolved") {
+      target = null;
+    }
+    if (!target || target.anchor.kind !== "text-quote") continue;
+    const subject = target.representation.subject;
+    const anchor = target.anchor;
+    if (anchor.start === null || anchor.end === null) continue;
+    if (
+      state.target?.kind === "resource" &&
+      subject.kind === "resource" &&
+      subject.resourceId === state.target.resourceId
+    ) {
+      const startLine = sourceLineAt(renderedStarts, anchor.start);
+      const endLine = sourceLineAt(renderedStarts, Math.max(anchor.start, anchor.end - 1));
+      const key = `resource:${startLine}`;
       const existing = groups.get(key);
       if (existing) {
         existing.endLine = Math.max(existing.endLine, endLine);
         existing.threads.push(thread);
       } else {
         groups.set(key, {
-          regionId: `annotation:${selected.id}:observed:${startLine}`,
+          regionId: `annotation:${subject.resourceId}:resource:${startLine}`,
           startLine,
           endLine,
           sourceLineCount: renderedSourceLineCount,
@@ -928,8 +968,35 @@ function detailAnnotationGroups(
       }
       continue;
     }
-    if (thread.target.kind !== "block") continue;
-    const anchor = thread.target.anchor;
+    if (
+      !selected ||
+      subject.kind !== "block" ||
+      subject.blockId !== selected.id
+    ) continue;
+    const starts = sourceLineStarts(selected.text);
+    if (target.representation.sourceSnapshot.kind === "rendered") {
+      const startLine = sourceLineAt(renderedStarts, anchor.start);
+      const endLine = sourceLineAt(
+        renderedStarts,
+        Math.max(anchor.start, anchor.end - 1),
+      );
+      const key = `rendered:${startLine}`;
+      const existing = groups.get(key);
+      if (existing) {
+        existing.endLine = Math.max(existing.endLine, endLine);
+        existing.threads.push(thread);
+      } else {
+        groups.set(key, {
+          regionId: `annotation:${selected.id}:rendered:${startLine}`,
+          startLine,
+          endLine,
+          sourceLineCount: renderedSourceLineCount,
+          threads: [thread],
+          sourceSpan: null,
+        });
+      }
+      continue;
+    }
     let markerOffset = anchor.start;
     while (
       markerOffset < anchor.end &&
@@ -1118,7 +1185,6 @@ export class DetailPiPreviewLayout extends VStack {
   private renderedDraftProjectionError: string | undefined;
   private authoredCallouts: AuthoredCalloutParse | undefined;
   private renderedCalloutRegions: DetailCalloutRegion[] = [];
-  private renderedDocumentText = "";
   private renderedFragmentSourceLine = 0;
   private renderedAttentionSourceLine = 0;
   private previousAttentionRevealSourceLine: number | null | undefined;
@@ -1599,7 +1665,6 @@ export class DetailPiPreviewLayout extends VStack {
           sanitizeMarkdownDocument(this.draftProjectionError).replace(/\r?\n/g, " ")
         }`
         : document;
-      this.renderedDocumentText = renderedText;
       this.renderedCalloutRegions = renderedAuthoredCallouts(
         authoredCallouts.regions,
         renderedText,
@@ -1617,8 +1682,8 @@ export class DetailPiPreviewLayout extends VStack {
       ? detailAnnotationGroups(
         this.state,
         renderedLineForAuthoredLine,
-        this.renderedDocumentText.split(/\r?\n/).length,
-        this.renderedDocumentText,
+        sourceText.split(/\r?\n/).length,
+        sourceText,
       )
       : [];
     this.annotationPreview.setGroups(annotationGroups);

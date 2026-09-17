@@ -151,6 +151,12 @@ test("registers the workspace commands and annotation-aware tools", () => {
   const attentionSchema = JSON.stringify(
     registeredTools.find((definition) => definition.name === "outliner_attention")?.parameters,
   );
+  const annotationsSchema = JSON.stringify(
+    registeredTools.find((definition) => definition.name === "outliner_annotations")?.parameters,
+  );
+  const annotateSchema = JSON.stringify(
+    registeredTools.find((definition) => definition.name === "outliner_annotate")?.parameters,
+  );
   const workflowSchema = JSON.stringify(
     registeredTools.find((definition) => definition.name === "outliner_workflow")?.parameters,
   );
@@ -159,6 +165,22 @@ test("registers the workspace commands and annotation-aware tools", () => {
   expect(attentionSchema).toContain("advance");
   expect(attentionSchema).toContain("clientId");
   expect(attentionSchema).toContain("expiresInMs");
+  expect(annotationsSchema).toContain("resourceId");
+  expect(annotationsSchema).not.toContain("filePath");
+  for (
+    const anchorKind of [
+      "text-quote",
+      "dom-range",
+      "pdf-page-region",
+      "structured-entity-field",
+      "provider-comment-id",
+    ]
+  ) {
+    expect(annotateSchema).toContain(anchorKind);
+  }
+  expect(annotateSchema).toContain("sourceSnapshot");
+  expect(annotateSchema).toContain("adapter");
+  expect(annotateSchema).not.toContain("filePath");
   expect(workflowSchema).toContain("walkthrough");
   expect(workflowSchema).toContain("promotion_preview");
   expect(workflowSchema).not.toContain("javascript");
@@ -1504,7 +1526,7 @@ test("requires the current protocol, attributes agent creates and page follows, 
     expect(largeEnvelope.presentation.omitted).toBeGreaterThan(0);
     protocolVersion = 5;
     await expect(tools.get("outliner_query")!.execute("incompatible-query", {})).rejects.toThrow(
-      "Outliner protocol 5 does not match this session's extension protocol 40. Run /reload, then retry.",
+      "Outliner protocol 5 does not match this session's extension protocol 41. Run /reload, then retry.",
     );
   } finally {
     OutlinerClient.prototype.request = originalRequest;

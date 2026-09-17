@@ -1,13 +1,19 @@
 import { createHash } from "node:crypto";
+import { normalizeRetainedResourceRevisionRef } from "./resources";
 import { getProperty, stripProperties } from "./properties";
 import type {
   AnnotationAnchor,
-  AnnotationAnchorState,
   AnnotationCreateInput,
   AnnotationLifecycle,
-  AnnotationRecord,
+  AnnotationRepresentation,
+  AnnotationResolutionEvent,
+  AnnotationResolutionMethod,
+  AnnotationResolutionReviewer,
   AnnotationSource,
+  AnnotationSourceSnapshot,
+  AnnotationSubject,
   AnnotationTarget,
+  AttentionTextAnchor,
   Block,
   RenderedPassageObservation,
   RenderedPassageProjection,
@@ -16,58 +22,68 @@ import type {
 const DEFAULT_CONTEXT_UNITS = 32;
 const ANNOTATION_TYPE = "annotation";
 const ANNOTATION_REPLY_TYPE = "annotation-reply";
+export const OBSOLETE_ANNOTATION_PROPERTY_KEYS: Readonly<Record<string, true>> = {
+  "target-kind": true,
+  "source-block": true,
+  "anchor-state": true,
+  "anchor-start": true,
+  "anchor-end": true,
+  "anchor-excerpt": true,
+  "anchor-before": true,
+  "anchor-after": true,
+  "source-version": true,
+  "source-hash": true,
+  "rendered-quote": true,
+  "observed-at": true,
+  "observed-pane": true,
+  "observed-revision": true,
+  "observed-context": true,
+  "observed-client": true,
+  "observed-validation": true,
+  "observed-projection": true,
+  "target-file": true,
+  "line-start": true,
+  "line-end": true,
+};
 
-function encodePropertyValue(value: string): string {
-  return `v1-${Buffer.from(value, "utf8").toString("base64url")}`;
+function identity(value: unknown, label: string): string {
+  if (typeof value !== "string" || !value.trim()) throw new Error(`${label} cannot be empty`);
+  return value.trim();
 }
 
-function decodePropertyValue(value: string | undefined, label: string): string {
-  if (value === undefined || !value.startsWith("v1-")) {
-    throw new Error(`Annotation has invalid ${label}`);
+function evidenceText(value: unknown, label: string): string {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`${label} cannot be empty`);
   }
-  try {
-    return Buffer.from(value.slice(3), "base64url").toString("utf8");
-  } catch {
-    throw new Error(`Annotation has invalid ${label}`);
-  }
+  return value;
 }
 
-function finiteInteger(value: unknown, label: string, minimum = 0): number {
-  if (typeof value !== "number" || !Number.isInteger(value) || value < minimum) {
+function integer(value: unknown, label: string, minimum = 0): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < minimum) {
     throw new Error(`${label} must be an integer >= ${minimum}`);
   }
   return value;
 }
 
-function propertyInteger(block: Block, key: string, minimum = 0): number {
-  const value = getProperty(block.properties, key);
-  const parsed = value === undefined ? Number.NaN : Number(value);
-  return finiteInteger(parsed, key, minimum);
+function timestamp(value: unknown, label: string): string {
+  const normalized = identity(value, label);
+  if (new Date(normalized).toISOString() !== normalized) throw new Error(`${label} must be an ISO timestamp`);
+  return normalized;
 }
 
-function normalizeSource(source: AnnotationSource): AnnotationSource {
-  if (source !== "user" && source !== "agent") {
-    throw new Error("Annotation source must be user or agent");
-  }
-  return source;
+function optionalText(value: unknown, label: string): string | null {
+  if (value === null) return null;
+  return identity(value, label);
 }
 
-function normalizeLifecycle(lifecycle: string | undefined): AnnotationLifecycle {
-  if (lifecycle === undefined || lifecycle === "open") return "open";
-  if (lifecycle === "resolved") return lifecycle;
-  throw new Error(`Unsupported annotation lifecycle: ${lifecycle}`);
-}
-
-function normalizeAnchorState(state: string | undefined): AnnotationAnchorState {
-  if (state === undefined || state === "anchored") return "anchored";
-  if (state === "ambiguous" || state === "orphaned" || state === "observed") return state;
-  throw new Error(`Unsupported annotation anchor state: ${state}`);
+function source(value: unknown): AnnotationSource {
+  if (value !== "user" && value !== "agent") throw new Error("Annotation source must be user or agent");
+  return value;
 }
 
 export function annotationSourceHash(text: string): string {
   return createHash("sha256").update(text, "utf8").digest("hex");
 }
-
 export function createAnnotationAnchor(
   text: string,
   start: number,
@@ -75,291 +91,325 @@ export function createAnnotationAnchor(
   sourceVersion: string,
   sourceHash = annotationSourceHash(text),
   contextUnits = DEFAULT_CONTEXT_UNITS,
-): AnnotationAnchor {
-  const normalizedStart = finiteInteger(start, "Annotation start");
-  const normalizedEnd = finiteInteger(end, "Annotation end");
-  if (normalizedEnd <= normalizedStart || normalizedEnd > text.length) {
+): AttentionTextAnchor {
+  integer(start, "Annotation start");
+  integer(end, "Annotation end");
+  integer(contextUnits, "Annotation context size");
+  if (end <= start || end > text.length) {
     throw new Error("Annotation range must select non-empty UTF-16 source text");
   }
-  const version = sourceVersion.trim();
-  if (!version) throw new Error("Annotation source version cannot be empty");
-  const hash = sourceHash.trim();
-  if (!hash) throw new Error("Annotation source hash cannot be empty");
-  const context = finiteInteger(contextUnits, "Annotation context size");
   return {
-    start: normalizedStart,
-    end: normalizedEnd,
-    excerpt: text.slice(normalizedStart, normalizedEnd),
-    contextBefore: text.slice(Math.max(0, normalizedStart - context), normalizedStart),
-    contextAfter: text.slice(normalizedEnd, normalizedEnd + context),
-    sourceVersion: version,
-    sourceHash: hash,
+    start,
+    end,
+    excerpt: text.slice(start, end),
+    contextBefore: text.slice(Math.max(0, start - contextUnits), start),
+    contextAfter: text.slice(end, end + contextUnits),
+    sourceVersion: identity(sourceVersion, "Annotation source version"),
+    sourceHash: identity(sourceHash, "Annotation source hash"),
   };
 }
 
-function normalizeIdentity(value: string, label: string): string {
-  const normalized = value.trim();
-  if (!normalized) throw new Error(`${label} cannot be empty`);
-  return normalized;
+
+export function createTextQuoteAnchor(
+  text: string,
+  start: number,
+  end: number,
+  contextUnits = DEFAULT_CONTEXT_UNITS,
+): Extract<AnnotationAnchor, { kind: "text-quote" }> {
+  integer(start, "Annotation start");
+  integer(end, "Annotation end");
+  integer(contextUnits, "Annotation context size");
+  if (end <= start || end > text.length) {
+    throw new Error("Annotation range must select non-empty UTF-16 source text");
+  }
+  return {
+    kind: "text-quote",
+    start,
+    end,
+    exact: text.slice(start, end),
+    prefix: text.slice(Math.max(0, start - contextUnits), start),
+    suffix: text.slice(end, end + contextUnits),
+  };
 }
 
-function normalizeRenderedObservation(
-  observation: RenderedPassageObservation,
-): RenderedPassageObservation {
-  if (!observation || typeof observation !== "object") {
-    throw new Error("Rendered passage observation is required");
-  }
-  if (typeof observation.quote !== "string" || !observation.quote.trim()) {
-    throw new Error("Rendered passage quote cannot be empty");
-  }
-  const capturedAt = normalizeIdentity(observation.capturedAt, "Rendered passage capture time");
-  if (new Date(capturedAt).toISOString() !== capturedAt) {
-    throw new Error("Rendered passage capture time must be an ISO timestamp");
-  }
+function normalizeObservation(value: unknown): RenderedPassageObservation {
+  if (!value || typeof value !== "object") throw new Error("Rendered passage observation is required");
+  const observation = value as Record<string, unknown>;
   const projection = observation.projection;
-  if (
-    projection !== "canonical" &&
-    projection !== "resolved" &&
-    projection !== "generated" &&
-    projection !== "mixed"
-  ) {
+  if (projection !== "canonical" && projection !== "resolved" && projection !== "generated" && projection !== "mixed") {
     throw new Error(`Unsupported rendered passage projection: ${String(projection)}`);
   }
   if (observation.validation !== "herdr-keybinding") {
     throw new Error("Rendered passage must come from a revision-validated Herdr keybinding");
   }
   return {
-    quote: observation.quote,
-    capturedAt,
-    hostBlockId: normalizeIdentity(observation.hostBlockId, "Rendered passage host block"),
-    paneId: normalizeIdentity(observation.paneId, "Rendered passage pane"),
-    contentRevision: finiteInteger(
-      observation.contentRevision,
-      "Rendered passage content revision",
-    ),
-    contextId: normalizeIdentity(observation.contextId, "Rendered passage context"),
-    detailClientId: normalizeIdentity(
-      observation.detailClientId,
-      "Rendered passage Detail client",
-    ),
+    quote: evidenceText(observation.quote, "Rendered passage quote"),
+    capturedAt: timestamp(observation.capturedAt, "Rendered passage capture time"),
+    hostBlockId: identity(observation.hostBlockId, "Rendered passage host block"),
+    paneId: identity(observation.paneId, "Rendered passage pane"),
+    contentRevision: integer(observation.contentRevision, "Rendered passage content revision"),
+    contextId: identity(observation.contextId, "Rendered passage context"),
+    detailClientId: identity(observation.detailClientId, "Rendered passage Detail client"),
     validation: "herdr-keybinding",
     projection,
   };
 }
 
-function normalizeAnchor(anchor: AnnotationAnchor): AnnotationAnchor {
-  const start = finiteInteger(anchor.start, "Annotation start");
-  const end = finiteInteger(anchor.end, "Annotation end");
-  if (end <= start) throw new Error("Annotation range must be non-empty");
-  if (!anchor.excerpt || anchor.excerpt.length !== end - start) {
-    throw new Error("Annotation excerpt must exactly match its UTF-16 range length");
-  }
-  if (!anchor.sourceVersion.trim() || !anchor.sourceHash.trim()) {
-    throw new Error("Annotation source version and hash are required");
-  }
-  return {
-    start,
-    end,
-    excerpt: anchor.excerpt,
-    contextBefore: anchor.contextBefore,
-    contextAfter: anchor.contextAfter,
-    sourceVersion: anchor.sourceVersion.trim(),
-    sourceHash: anchor.sourceHash.trim(),
-  };
-}
-
-export function normalizeAnnotationTarget(target: AnnotationTarget): AnnotationTarget {
-  const sourceBlockId = normalizeIdentity(target.sourceBlockId, "Annotation source block");
-  if (target.kind === "passage") {
-    const observation = normalizeRenderedObservation(target.observation);
-    if (observation.hostBlockId !== sourceBlockId) {
-      throw new Error("Rendered passage host block must match its annotation source block");
-    }
-    return { kind: "passage", sourceBlockId, observation };
-  }
-  const anchor = normalizeAnchor(target.anchor);
-  if (target.kind === "block") {
-    const observation = target.observation
-      ? normalizeRenderedObservation(target.observation)
-      : undefined;
-    if (observation && observation.hostBlockId !== sourceBlockId) {
-      throw new Error("Rendered passage host block must match its annotation source block");
-    }
+export function normalizeAnnotationSubject(value: unknown, allowLegacy = false): AnnotationSubject {
+  if (!value || typeof value !== "object") throw new Error("Annotation subject must be an object");
+  const subject = value as Record<string, unknown>;
+  if (subject.kind === "block") return { kind: "block", blockId: identity(subject.blockId, "Annotation block") };
+  if (subject.kind === "resource") return { kind: "resource", resourceId: identity(subject.resourceId, "Annotation resource") };
+  if (subject.kind === "legacy-file" && allowLegacy) {
     return {
-      kind: "block",
-      sourceBlockId,
-      anchor,
-      ...(observation ? { observation } : {}),
+      kind: "legacy-file",
+      sourceBlockId: identity(subject.sourceBlockId, "Legacy annotation source block"),
+      filePath: identity(subject.filePath, "Legacy annotation file path"),
     };
   }
-  const filePath = target.filePath.trim();
-  if (!filePath) throw new Error("Annotation file path cannot be empty");
-  const startLine = finiteInteger(target.startLine, "Annotation start line", 1);
-  const endLine = finiteInteger(target.endLine, "Annotation end line", 1);
-  if (endLine < startLine) throw new Error("Annotation end line cannot precede its start line");
-  return { kind: "file", sourceBlockId, filePath, startLine, endLine, anchor };
-}
-export function annotationOffsetsForLineRange(
-  text: string,
-  startLine: number,
-  endLine: number,
-): { start: number; end: number } {
-  const normalizedStartLine = finiteInteger(startLine, "Annotation start line", 1);
-  const normalizedEndLine = finiteInteger(endLine, "Annotation end line", 1);
-  if (normalizedEndLine < normalizedStartLine) {
-    throw new Error("Annotation end line cannot precede its start line");
-  }
-  const starts = [0];
-  for (let index = 0; index < text.length; index += 1) {
-    if (text.charCodeAt(index) === 10) starts.push(index + 1);
-  }
-  if (normalizedEndLine > starts.length) {
-    throw new Error(`Annotation line ${normalizedEndLine} exceeds source line count ${starts.length}`);
-  }
-  const start = starts[normalizedStartLine - 1]!;
-  const nextLineStart = starts[normalizedEndLine];
-  let end = nextLineStart === undefined ? text.length : nextLineStart - 1;
-  if (end > start && text.charCodeAt(end - 1) === 13) end -= 1;
-  if (end <= start) throw new Error("Annotation line range must contain source text");
-  return { start, end };
+  throw new Error(`Unsupported annotation subject: ${String(subject.kind)}`);
 }
 
-export function annotationLineRangeForOffsets(
-  text: string,
-  start: number,
-  end: number,
-): { startLine: number; endLine: number } {
-  const normalizedStart = finiteInteger(start, "Annotation start");
-  const normalizedEnd = finiteInteger(end, "Annotation end");
-  if (normalizedEnd <= normalizedStart || normalizedEnd > text.length) {
-    throw new Error("Annotation range must select non-empty UTF-16 source text");
+export function normalizeAnnotationSourceSnapshot(
+  value: unknown,
+  allowLegacy = false,
+): AnnotationSourceSnapshot {
+  if (!value || typeof value !== "object") throw new Error("Annotation source snapshot must be an object");
+  const snapshot = value as Record<string, unknown>;
+  if (snapshot.kind === "block") {
+    return {
+      kind: "block",
+      blockId: identity(snapshot.blockId, "Snapshot block"),
+      updatedAt: timestamp(snapshot.updatedAt, "Snapshot update time"),
+      contentHash: identity(snapshot.contentHash, "Snapshot content hash"),
+    };
   }
-  const lineAt = (offset: number): number => {
-    let line = 1;
-    for (let index = 0; index < offset; index += 1) {
-      if (text.charCodeAt(index) === 10) line += 1;
+  if (snapshot.kind === "resource") {
+    const sourceSnapshotId = snapshot.sourceSnapshotId === null
+      ? null
+      : identity(snapshot.sourceSnapshotId, "Resource source snapshot");
+    return {
+      kind: "resource",
+      resourceId: identity(snapshot.resourceId, "Snapshot resource"),
+      sourceSnapshotId,
+      revision: snapshot.revision === null || snapshot.revision === undefined
+        ? null
+        : normalizeRetainedResourceRevisionRef(snapshot.revision),
+    };
+  }
+  if (snapshot.kind === "rendered") return { kind: "rendered", observation: normalizeObservation(snapshot.observation) };
+  if (snapshot.kind === "unknown" && allowLegacy) {
+    return { kind: "unknown", reason: identity(snapshot.reason, "Unknown snapshot reason") };
+  }
+  throw new Error(`Unsupported annotation source snapshot: ${String(snapshot.kind)}`);
+}
+
+export function normalizeAnnotationRepresentation(
+  value: unknown,
+  allowLegacy = false,
+): AnnotationRepresentation {
+  if (!value || typeof value !== "object") throw new Error("Annotation representation must be an object");
+  const representation = value as Record<string, unknown>;
+  const adapterValue = representation.adapter;
+  let adapter: AnnotationRepresentation["adapter"] = null;
+  if (adapterValue !== null) {
+    if (!adapterValue || typeof adapterValue !== "object") {
+      throw new Error("Annotation adapter must be an object or null");
     }
-    return line;
+    const adapterRecord = adapterValue as Record<string, unknown>;
+    adapter = {
+      id: identity(adapterRecord.id, "Annotation adapter ID"),
+      version: integer(adapterRecord.version, "Annotation adapter version", 1),
+    };
+  }
+  const normalized: AnnotationRepresentation = {
+    id: identity(representation.id, "Annotation representation ID"),
+    subject: normalizeAnnotationSubject(representation.subject, allowLegacy),
+    sourceSnapshot: normalizeAnnotationSourceSnapshot(representation.sourceSnapshot, allowLegacy),
+    adapter,
+    mediaType: optionalText(representation.mediaType, "Annotation media type"),
+    contentHash: optionalText(representation.contentHash, "Annotation content hash"),
+    capturedAt: timestamp(representation.capturedAt, "Annotation capture time"),
   };
+  if (normalized.subject.kind === "block") {
+    if (
+      normalized.sourceSnapshot.kind === "block" &&
+      normalized.sourceSnapshot.blockId !== normalized.subject.blockId
+    ) throw new Error("Block snapshot does not belong to the annotation subject");
+    if (
+      normalized.sourceSnapshot.kind === "rendered" &&
+      normalized.sourceSnapshot.observation.hostBlockId !== normalized.subject.blockId
+    ) throw new Error("Rendered snapshot does not belong to the annotation subject");
+  }
+  if (
+    normalized.subject.kind === "resource" &&
+    normalized.sourceSnapshot.kind === "resource" &&
+    normalized.sourceSnapshot.resourceId !== normalized.subject.resourceId
+  ) throw new Error("Resource snapshot does not belong to the annotation subject");
+  if (representation.observation !== undefined) {
+    const observation = normalizeObservation(representation.observation);
+    if (
+      normalized.subject.kind === "block" &&
+      observation.hostBlockId !== normalized.subject.blockId
+    ) throw new Error("Rendered observation does not belong to the annotation subject");
+    return { ...normalized, observation };
+  }
+  return normalized;
+}
+
+export function normalizeAnnotationAnchor(value: unknown): AnnotationAnchor {
+  if (!value || typeof value !== "object") throw new Error("Annotation anchor must be an object");
+  const anchor = value as Record<string, unknown>;
+  if (anchor.kind === "text-quote") {
+    const start = anchor.start === null ? null : integer(anchor.start, "Annotation start");
+    const end = anchor.end === null ? null : integer(anchor.end, "Annotation end");
+    if ((start === null) !== (end === null) || (start !== null && end !== null && end <= start)) {
+      throw new Error("Text quote positions must be null together or form a non-empty range");
+    }
+    const exact = evidenceText(anchor.exact, "Annotation quote");
+    if (start !== null && end !== null && end - start !== exact.length) {
+      throw new Error("Annotation quote length must match its UTF-16 range");
+    }
+    if (typeof anchor.prefix !== "string" || typeof anchor.suffix !== "string") {
+      throw new Error("Annotation quote context must be strings");
+    }
+    return { kind: "text-quote", start, end, exact, prefix: anchor.prefix, suffix: anchor.suffix };
+  }
+  if (anchor.kind === "dom-range") {
+    const point = (raw: unknown, label: string) => {
+      if (!raw || typeof raw !== "object") throw new Error(`${label} must be an object`);
+      const record = raw as Record<string, unknown>;
+      return { selector: identity(record.selector, `${label} selector`), textNode: integer(record.textNode, `${label} text node`), offset: integer(record.offset, `${label} offset`) };
+    };
+    return { kind: "dom-range", start: point(anchor.start, "DOM start"), end: point(anchor.end, "DOM end"), exact: evidenceText(anchor.exact, "DOM exact text") };
+  }
+  if (anchor.kind === "pdf-page-region") {
+    if (!Array.isArray(anchor.regions) || anchor.regions.length === 0) throw new Error("PDF anchor requires at least one region");
+    const regions = anchor.regions.map((raw) => {
+      if (!raw || typeof raw !== "object") throw new Error("PDF region must be an object");
+      const region = raw as Record<string, unknown>;
+      for (const key of ["x", "y", "width", "height"] as const) {
+        if (typeof region[key] !== "number" || !Number.isFinite(region[key])) throw new Error(`PDF region ${key} must be finite`);
+      }
+      return { x: region.x as number, y: region.y as number, width: region.width as number, height: region.height as number };
+    });
+    return { kind: "pdf-page-region", page: integer(anchor.page, "PDF page", 1), regions, exact: anchor.exact === null ? null : evidenceText(anchor.exact, "PDF exact text") };
+  }
+  if (anchor.kind === "structured-entity-field") {
+    if (!Array.isArray(anchor.fieldPath) || anchor.fieldPath.length === 0) throw new Error("Structured field path cannot be empty");
+    return { kind: "structured-entity-field", entityType: identity(anchor.entityType, "Entity type"), entityId: identity(anchor.entityId, "Entity ID"), fieldPath: anchor.fieldPath.map((part) => identity(part, "Field path component")), valueHash: identity(anchor.valueHash, "Field value hash") };
+  }
+  if (anchor.kind === "provider-comment-id") return { kind: "provider-comment-id", provider: identity(anchor.provider, "Comment provider"), commentId: identity(anchor.commentId, "Provider comment ID") };
+  throw new Error(`Unsupported annotation anchor: ${String(anchor.kind)}`);
+}
+
+export function normalizeAnnotationTarget(value: unknown, allowLegacy = false): AnnotationTarget {
+  if (!value || typeof value !== "object") throw new Error("Annotation target must be an object");
+  const target = value as Record<string, unknown>;
   return {
-    startLine: lineAt(normalizedStart),
-    endLine: lineAt(Math.max(normalizedStart, normalizedEnd - 1)),
+    representation: normalizeAnnotationRepresentation(target.representation, allowLegacy),
+    anchor: normalizeAnnotationAnchor(target.anchor),
   };
 }
 
-export function normalizeAnnotationCreateInput(input: AnnotationCreateInput): AnnotationCreateInput {
-  const body = input.body.trim();
-  if (!body) throw new Error("Annotation body cannot be empty");
-  return { target: normalizeAnnotationTarget(input.target), body, source: normalizeSource(input.source) };
+export function normalizeAnnotationCreateInput(
+  input: unknown,
+  allowLegacy = false,
+): AnnotationCreateInput {
+  if (!input || typeof input !== "object") throw new Error("Annotation create input must be an object");
+  const record = input as Record<string, unknown>;
+  return {
+    target: normalizeAnnotationTarget(record.target, allowLegacy),
+    body: identity(record.body, "Annotation body"),
+    source: source(record.source),
+  };
 }
 
-export function annotationTargetQuote(target: AnnotationTarget): string {
-  if (target.kind === "passage") return target.observation.quote;
-  if (target.kind === "block" && target.observation) return target.observation.quote;
-  return target.anchor.excerpt;
+export function normalizeResolutionMethod(value: unknown): AnnotationResolutionMethod {
+  if (!value || typeof value !== "object") throw new Error("Resolution method must be an object");
+  const method = value as Record<string, unknown>;
+  if (method.kind === "human") return { kind: "human", method: identity(method.method, "Human resolution method") };
+  if (method.kind === "codec") return { kind: "codec", codecId: identity(method.codecId, "Codec ID"), codecVersion: integer(method.codecVersion, "Codec version", 1), method: identity(method.method, "Codec method") };
+  throw new Error(`Unsupported resolution method: ${String(method.kind)}`);
 }
 
-function escapeAnnotationHeadingText(value: string): string {
-  return value.replace(/\\/g, "\\\\").replace(/\[/g, "\\[");
+export function normalizeResolutionReviewer(value: unknown): AnnotationResolutionReviewer {
+  if (!value || typeof value !== "object") throw new Error("Resolution reviewer must be an object");
+  const reviewer = value as Record<string, unknown>;
+  if (reviewer.kind !== "system" && reviewer.kind !== "user" && reviewer.kind !== "agent") throw new Error(`Unsupported resolution reviewer: ${String(reviewer.kind)}`);
+  return { kind: reviewer.kind, id: identity(reviewer.id, "Resolution reviewer ID") };
 }
 
-function annotationHeading(target: AnnotationTarget): string {
-  const excerpt = escapeAnnotationHeadingText(
-    annotationTargetQuote(target).replace(/\s+/g, " ").trim(),
-  );
-  const quoted = `“${excerpt.length > 72 ? `${excerpt.slice(0, 71)}…` : excerpt}”`;
-  if (target.kind === "file") {
-    const range = target.startLine === target.endLine
-      ? `${target.startLine}`
-      : `${target.startLine}-${target.endLine}`;
-    return `Comment on ${escapeAnnotationHeadingText(target.filePath)}:${range} · ${quoted}`;
+export function parseStoredTarget(json: string): AnnotationTarget {
+  try {
+    return normalizeAnnotationTarget(JSON.parse(json), true);
+  } catch (error) {
+    throw new Error(`Invalid stored annotation target: ${error instanceof Error ? error.message : String(error)}`);
   }
-  return `Comment on ${quoted}`;
 }
 
-function annotationMetadata(
+export function parseStoredRepresentation(json: string): AnnotationRepresentation {
+  try {
+    return normalizeAnnotationRepresentation(JSON.parse(json), true);
+  } catch (error) {
+    throw new Error(`Invalid stored annotation representation: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+export function parseStoredResolutionEvent(json: string): AnnotationResolutionEvent {
+  let value: unknown;
+  try { value = JSON.parse(json); } catch { throw new Error("Invalid stored annotation resolution event JSON"); }
+  if (!value || typeof value !== "object") throw new Error("Stored annotation resolution event must be an object");
+  const event = value as Record<string, unknown>;
+  const status = event.status;
+  if (status !== "resolved" && status !== "ambiguous" && status !== "orphaned" && status !== "unsupported" && status !== "rejected") throw new Error("Stored annotation resolution status is invalid");
+  const confidence = event.confidence === null ? null : event.confidence;
+  if (confidence !== null && (typeof confidence !== "number" || !Number.isFinite(confidence) || confidence < 0 || confidence > 1)) throw new Error("Stored annotation confidence is invalid");
+  return {
+    id: identity(event.id, "Resolution event ID"),
+    annotationId: identity(event.annotationId, "Resolution annotation ID"),
+    sequence: integer(event.sequence, "Resolution sequence"),
+    sourceRepresentation: normalizeAnnotationRepresentation(event.sourceRepresentation, true),
+    targetRepresentation: normalizeAnnotationRepresentation(event.targetRepresentation, true),
+    resolvedTarget: event.resolvedTarget === null ? null : normalizeAnnotationTarget(event.resolvedTarget, true),
+    method: normalizeResolutionMethod(event.method),
+    reviewer: normalizeResolutionReviewer(event.reviewer),
+    confidence,
+    status,
+    appliesCurrent: event.appliesCurrent === true,
+    createdAt: timestamp(event.createdAt, "Resolution event time"),
+  };
+}
+
+function quoteForHeading(target: AnnotationTarget): string {
+  if (target.anchor.kind === "text-quote") return target.anchor.exact;
+  if (target.anchor.kind === "dom-range") return target.anchor.exact;
+  if (target.anchor.kind === "pdf-page-region") return target.anchor.exact ?? `page ${target.anchor.page}`;
+  if (target.anchor.kind === "structured-entity-field") return `${target.anchor.entityType}.${target.anchor.fieldPath.join(".")}`;
+  return `${target.anchor.provider} comment ${target.anchor.commentId}`;
+}
+
+export function formatAnnotationBlock(
   input: AnnotationCreateInput,
-  parentAnnotationId: string | undefined,
-  lifecycle: AnnotationLifecycle,
-  anchorState: AnnotationAnchorState,
-  promotedBlockIds: readonly string[],
-): string {
-  const { target, source } = input;
-  const values = [
-    `[type::${parentAnnotationId ? ANNOTATION_REPLY_TYPE : ANNOTATION_TYPE}]`,
-    `[target-kind::${target.kind}]`,
-    `[source-block::${target.sourceBlockId}]`,
-    `[annotation-source::${source}]`,
-    `[annotation-status::${lifecycle}]`,
-    `[anchor-state::${anchorState}]`,
-  ];
-  if (target.kind !== "passage") {
-    values.push(
-      `[anchor-start::${target.anchor.start}]`,
-      `[anchor-end::${target.anchor.end}]`,
-      `[anchor-excerpt::${encodePropertyValue(target.anchor.excerpt)}]`,
-      `[anchor-before::${encodePropertyValue(target.anchor.contextBefore)}]`,
-      `[anchor-after::${encodePropertyValue(target.anchor.contextAfter)}]`,
-      `[source-version::${encodePropertyValue(target.anchor.sourceVersion)}]`,
-      `[source-hash::${target.anchor.sourceHash}]`,
-    );
-  }
-  const observation = target.kind === "file" ? undefined : target.observation;
-  if (observation) {
-    values.push(
-      `[rendered-quote::${encodePropertyValue(observation.quote)}]`,
-      `[observed-at::${encodePropertyValue(observation.capturedAt)}]`,
-      `[observed-pane::${encodePropertyValue(observation.paneId)}]`,
-      `[observed-revision::${observation.contentRevision}]`,
-      `[observed-context::${encodePropertyValue(observation.contextId)}]`,
-      `[observed-client::${encodePropertyValue(observation.detailClientId)}]`,
-      `[observed-validation::${observation.validation}]`,
-      `[observed-projection::${observation.projection}]`,
-    );
-  }
-  if (target.kind === "file") {
-    values.push(
-      `[target-file::${encodePropertyValue(target.filePath)}]`,
-      `[line-start::${target.startLine}]`,
-      `[line-end::${target.endLine}]`,
-    );
-  }
-  if (parentAnnotationId) values.push(`[parent-annotation::${parentAnnotationId}]`);
-  for (const promotedBlockId of promotedBlockIds) {
-    const normalized = promotedBlockId.trim();
-    if (!normalized || normalized.includes("]")) {
-      throw new Error("Promoted block ID cannot be empty or contain ]");
-    }
-    values.push(`[promoted-block::${normalized}]`);
-  }
-  return values.join(" ");
-}
-
-export function formatAnnotation(
-  rawInput: AnnotationCreateInput,
   parentAnnotationId?: string,
   options: {
-    lifecycle?: AnnotationLifecycle;
-    anchorState?: AnnotationAnchorState;
-    promotedBlockIds?: readonly string[];
+    readonly lifecycle?: AnnotationLifecycle;
+    readonly promotedBlockIds?: readonly string[];
+    readonly allowLegacy?: boolean;
   } = {},
 ): string {
-  const input = normalizeAnnotationCreateInput(rawInput);
-  const parent = parentAnnotationId?.trim();
-  if (parentAnnotationId !== undefined && !parent) {
-    throw new Error("Parent annotation ID cannot be empty");
-  }
-  return [
-    annotationHeading(input.target),
-    annotationMetadata(
-      input,
-      parent,
-      options.lifecycle ?? "open",
-      options.anchorState ?? (input.target.kind === "passage" ? "observed" : "anchored"),
-      options.promotedBlockIds ?? [],
-    ),
-    input.body,
-  ].join("\n");
+  const normalized = normalizeAnnotationCreateInput(input, options.allowLegacy ?? false);
+  const parent = parentAnnotationId === undefined ? undefined : identity(parentAnnotationId, "Parent annotation ID");
+  const quote = quoteForHeading(normalized.target).replace(/\\/g, "\\\\").replace(/\[/g, "\\[").replace(/\s+/g, " ").trim();
+  const heading = `Comment on “${quote.length > 72 ? `${quote.slice(0, 71)}…` : quote}”`;
+  const metadata = [
+    `[type::${parent ? ANNOTATION_REPLY_TYPE : ANNOTATION_TYPE}]`,
+    `[annotation-source::${normalized.source}]`,
+    `[annotation-status::${options.lifecycle ?? "open"}]`,
+  ];
+  if (parent) metadata.push(`[parent-annotation::${parent}]`);
+  for (const promotedBlockId of options.promotedBlockIds ?? []) metadata.push(`[promoted-block::${identity(promotedBlockId, "Promoted block ID")}]`);
+  return [heading, metadata.join(" "), normalized.body].join("\n");
 }
 
 export function extractAnnotationBody(text: string): string {
@@ -373,165 +423,90 @@ export function extractAnnotationBody(text: string): string {
   return lines.slice(bodyStart).join("\n").trim();
 }
 
-export function parseAnnotationBlock(block: Block): AnnotationRecord {
+export interface AnnotationBlockContent {
+  readonly block: Block;
+  readonly body: string;
+  readonly source: AnnotationSource;
+  readonly lifecycle: AnnotationLifecycle;
+  readonly promotedBlockIds: readonly string[];
+  readonly parentAnnotationId?: string;
+}
+
+export function parseAnnotationBlockContent(block: Block): AnnotationBlockContent {
   const type = getProperty(block.properties, "type");
-  if (type !== ANNOTATION_TYPE && type !== ANNOTATION_REPLY_TYPE) {
-    throw new Error(`Block is not an annotation: ${block.id}`);
-  }
-  const kind = getProperty(block.properties, "target-kind");
-  if (kind !== "block" && kind !== "file" && kind !== "passage") {
-    throw new Error(`Annotation has invalid target kind: ${block.id}`);
-  }
-  const sourceBlockId = getProperty(block.properties, "source-block")?.trim();
-  if (!sourceBlockId) throw new Error(`Annotation is missing source block: ${block.id}`);
-  const projection = getProperty(block.properties, "observed-projection") as
-    | RenderedPassageProjection
-    | undefined;
-  const observation: RenderedPassageObservation | undefined = projection
-    ? {
-        quote: decodePropertyValue(
-          getProperty(block.properties, "rendered-quote"),
-          "rendered quote",
-        ),
-        capturedAt: decodePropertyValue(
-          getProperty(block.properties, "observed-at"),
-          "observation capture time",
-        ),
-        hostBlockId: sourceBlockId,
-        paneId: decodePropertyValue(
-          getProperty(block.properties, "observed-pane"),
-          "observation pane",
-        ),
-        contentRevision: propertyInteger(block, "observed-revision"),
-        contextId: decodePropertyValue(
-          getProperty(block.properties, "observed-context"),
-          "observation context",
-        ),
-        detailClientId: decodePropertyValue(
-          getProperty(block.properties, "observed-client"),
-          "observation client",
-        ),
-        validation: getProperty(block.properties, "observed-validation") as
-          RenderedPassageObservation["validation"],
-        projection,
-      }
-    : undefined;
-  let target: AnnotationTarget;
-  if (kind === "passage") {
-    if (!observation) throw new Error(`Passage annotation is missing observation: ${block.id}`);
-    target = { kind, sourceBlockId, observation };
-  } else {
-    const anchor: AnnotationAnchor = {
-      start: propertyInteger(block, "anchor-start"),
-      end: propertyInteger(block, "anchor-end"),
-      excerpt: decodePropertyValue(
-        getProperty(block.properties, "anchor-excerpt"),
-        "anchor excerpt",
-      ),
-      contextBefore: decodePropertyValue(
-        getProperty(block.properties, "anchor-before"),
-        "anchor context before",
-      ),
-      contextAfter: decodePropertyValue(
-        getProperty(block.properties, "anchor-after"),
-        "anchor context after",
-      ),
-      sourceVersion: decodePropertyValue(
-        getProperty(block.properties, "source-version"),
-        "source version",
-      ),
-      sourceHash: getProperty(block.properties, "source-hash")?.trim() ?? "",
-    };
-    target = kind === "block"
-      ? { kind, sourceBlockId, anchor, ...(observation ? { observation } : {}) }
-      : {
-          kind,
-          sourceBlockId,
-          filePath: decodePropertyValue(
-            getProperty(block.properties, "target-file"),
-            "target file",
-          ),
-          startLine: propertyInteger(block, "line-start", 1),
-          endLine: propertyInteger(block, "line-end", 1),
-          anchor,
-        };
-  }
-  const source = normalizeSource(getProperty(block.properties, "annotation-source") as AnnotationSource);
-  const record: AnnotationRecord = {
+  if (type !== ANNOTATION_TYPE && type !== ANNOTATION_REPLY_TYPE) throw new Error(`Block is not an annotation: ${block.id}`);
+  const lifecycle = getProperty(block.properties, "annotation-status") ?? "open";
+  if (lifecycle !== "open" && lifecycle !== "resolved") throw new Error(`Unsupported annotation lifecycle: ${lifecycle}`);
+  const content: AnnotationBlockContent = {
     block,
-    target: normalizeAnnotationTarget(target),
     body: extractAnnotationBody(block.text),
-    source,
-    lifecycle: normalizeLifecycle(getProperty(block.properties, "annotation-status")),
-    promotedBlockIds: block.properties
-      .filter((property) => property.key === "promoted-block")
-      .map((property) => property.value),
-    anchorState: normalizeAnchorState(getProperty(block.properties, "anchor-state")),
+    source: source(getProperty(block.properties, "annotation-source")),
+    lifecycle,
+    promotedBlockIds: block.properties.filter((property) => property.key === "promoted-block").map((property) => property.value),
   };
   const parentAnnotationId = getProperty(block.properties, "parent-annotation")?.trim();
-  if (parentAnnotationId) record.parentAnnotationId = parentAnnotationId;
-  return record;
+  return parentAnnotationId ? { ...content, parentAnnotationId } : content;
 }
 
-export interface AnnotationReanchorResult {
-  state: AnnotationAnchorState;
-  anchor: AnnotationAnchor;
+function decodeLegacy(value: string | undefined, label: string): string {
+  if (!value?.startsWith("v1-")) throw new Error(`Annotation has invalid ${label}`);
+  return Buffer.from(value.slice(3), "base64url").toString("utf8");
 }
 
-function contextMatchScore(text: string, start: number, end: number, anchor: AnnotationAnchor): number {
-  let before = 0;
-  while (
-    before < anchor.contextBefore.length &&
-    start - before - 1 >= 0 &&
-    text[start - before - 1] === anchor.contextBefore[anchor.contextBefore.length - before - 1]
-  ) before += 1;
-  let after = 0;
-  while (
-    after < anchor.contextAfter.length &&
-    end + after < text.length &&
-    text[end + after] === anchor.contextAfter[after]
-  ) after += 1;
-  return before + after;
+export interface LegacyAnnotationEvidence extends AnnotationBlockContent {
+  readonly kind: "block" | "file" | "passage";
+  readonly sourceBlockId: string;
+  readonly state: "anchored" | "ambiguous" | "orphaned" | "observed";
+  readonly anchor: Extract<AnnotationAnchor, { kind: "text-quote" }>;
+  readonly sourceVersion: string | null;
+  readonly sourceHash: string | null;
+  readonly filePath?: string;
+  readonly observation?: RenderedPassageObservation;
 }
 
-export function reanchorAnnotation(
-  anchor: AnnotationAnchor,
-  currentText: string,
-  sourceVersion: string,
-  sourceHash = annotationSourceHash(currentText),
-): AnnotationReanchorResult {
-  if (
-    (anchor.sourceHash === sourceHash || anchor.sourceVersion === sourceVersion) &&
-    currentText.slice(anchor.start, anchor.end) === anchor.excerpt
-  ) {
-    return {
-      state: "anchored",
-      anchor: createAnnotationAnchor(currentText, anchor.start, anchor.end, sourceVersion, sourceHash),
-    };
+export function parseLegacyAnnotationBlock(block: Block): LegacyAnnotationEvidence {
+  const content = parseAnnotationBlockContent(block);
+  const kind = getProperty(block.properties, "target-kind");
+  if (kind !== "block" && kind !== "file" && kind !== "passage") throw new Error(`Annotation has invalid target kind: ${block.id}`);
+  const sourceBlockId = identity(getProperty(block.properties, "source-block"), "Annotation source block");
+  const rawState = getProperty(block.properties, "anchor-state") ?? (kind === "passage" ? "observed" : "anchored");
+  if (rawState !== "anchored" && rawState !== "ambiguous" && rawState !== "orphaned" && rawState !== "observed") throw new Error(`Annotation has invalid anchor state: ${block.id}`);
+  let observation: RenderedPassageObservation | undefined;
+  const projection = getProperty(block.properties, "observed-projection") as RenderedPassageProjection | undefined;
+  if (projection) {
+    observation = normalizeObservation({
+      quote: decodeLegacy(getProperty(block.properties, "rendered-quote"), "rendered quote"),
+      capturedAt: decodeLegacy(getProperty(block.properties, "observed-at"), "observation time"),
+      hostBlockId: sourceBlockId,
+      paneId: decodeLegacy(getProperty(block.properties, "observed-pane"), "observation pane"),
+      contentRevision: Number(getProperty(block.properties, "observed-revision")),
+      contextId: decodeLegacy(getProperty(block.properties, "observed-context"), "observation context"),
+      detailClientId: decodeLegacy(getProperty(block.properties, "observed-client"), "observation client"),
+      validation: getProperty(block.properties, "observed-validation"),
+      projection,
+    });
   }
-  const occurrences: number[] = [];
-  let cursor = 0;
-  while (cursor <= currentText.length - anchor.excerpt.length) {
-    const index = currentText.indexOf(anchor.excerpt, cursor);
-    if (index < 0) break;
-    occurrences.push(index);
-    cursor = index + 1;
-  }
-  if (occurrences.length === 0) return { state: "orphaned", anchor: { ...anchor } };
-  if (occurrences.length === 1) {
-    const start = occurrences[0]!;
-    return {
-      state: "anchored",
-      anchor: createAnnotationAnchor(currentText, start, start + anchor.excerpt.length, sourceVersion, sourceHash),
-    };
-  }
-  const ranked = occurrences
-    .map((start) => ({ start, score: contextMatchScore(currentText, start, start + anchor.excerpt.length, anchor) }))
-    .sort((left, right) => right.score - left.score || left.start - right.start);
-  if (ranked[0]!.score === ranked[1]!.score) return { state: "ambiguous", anchor: { ...anchor } };
-  const start = ranked[0]!.start;
-  return {
-    state: "anchored",
-    anchor: createAnnotationAnchor(currentText, start, start + anchor.excerpt.length, sourceVersion, sourceHash),
+  const exact = kind === "passage"
+    ? observation?.quote ?? ""
+    : decodeLegacy(getProperty(block.properties, "anchor-excerpt"), "anchor excerpt");
+  const start = kind === "passage" ? null : Number(getProperty(block.properties, "anchor-start"));
+  const end = kind === "passage" ? null : Number(getProperty(block.properties, "anchor-end"));
+  const evidence: LegacyAnnotationEvidence = {
+    ...content,
+    kind,
+    sourceBlockId,
+    state: rawState,
+    anchor: {
+      kind: "text-quote",
+      start,
+      end,
+      exact,
+      prefix: kind === "passage" ? "" : decodeLegacy(getProperty(block.properties, "anchor-before"), "anchor prefix"),
+      suffix: kind === "passage" ? "" : decodeLegacy(getProperty(block.properties, "anchor-after"), "anchor suffix"),
+    },
+    sourceVersion: kind === "passage" ? null : decodeLegacy(getProperty(block.properties, "source-version"), "source version"),
+    sourceHash: kind === "passage" ? null : identity(getProperty(block.properties, "source-hash"), "Annotation source hash"),
   };
+  if (kind === "file") return { ...evidence, filePath: decodeLegacy(getProperty(block.properties, "target-file"), "target file") };
+  return observation ? { ...evidence, observation } : evidence;
 }

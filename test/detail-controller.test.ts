@@ -22,6 +22,11 @@ import type { OutlinerLinkTarget } from "../src/outliner-links";
 import { patchPropertyText } from "../src/properties";
 import { deriveResourceCapabilityReport } from "../src/resources";
 import type {
+  AnnotationRecord,
+  AnnotationReconcileInput,
+  AnnotationResolutionEvent,
+  AnnotationTarget,
+  AnnotationThread,
   BacklinkCollection,
   BacklinkQuery,
   Block,
@@ -58,9 +63,49 @@ function filePreview(overrides: Partial<ReferencedFile> = {}): ReferencedFile {
     sourcePath: "src/example.ts",
     lines: ["one", "two", "three", "four", "five", "six", "seven", "eight"],
     firstLine: 10,
+    sourceVersion: "1770000000000000000:39",
+    sourceHash: "filesystem-content-hash",
+    capturedAt: "2026-02-02T00:00:00.000Z",
     ...overrides,
   };
 }
+function annotationRecord(
+  target: AnnotationTarget,
+  overrides: Partial<AnnotationRecord> = {},
+): AnnotationRecord {
+  const block = makeBlock({ id: "annotation-1", text: "Comment\n[type::annotation]\nBody" });
+  const event: AnnotationResolutionEvent = {
+    id: "resolution-1",
+    annotationId: block.id,
+    sequence: 0,
+    sourceRepresentation: target.representation,
+    targetRepresentation: target.representation,
+    resolvedTarget: target,
+    method: {
+      kind: "codec",
+      codecId: "text-quote",
+      codecVersion: 1,
+      method: "capture",
+    },
+    reviewer: { kind: "system", id: "annotation-repository" },
+    confidence: 1,
+    status: "resolved",
+    appliesCurrent: true,
+    createdAt: "2026-01-01T00:00:00.000Z",
+  };
+  return {
+    block,
+    originalTarget: target,
+    resolvedTarget: target,
+    currentResolution: event,
+    resolutionHistory: [event],
+    body: "Body",
+    source: "user",
+    lifecycle: "open",
+    ...overrides,
+  };
+}
+
 
 interface Harness {
   controller: ReturnType<typeof createDetailController>;
@@ -101,6 +146,8 @@ interface Harness {
       fragmentId?: string;
     }>;
     copiedTexts: string[];
+    filesystemInterns: string[];
+    reconciles: AnnotationReconcileInput[];
   };
   setSelection(selection: SelectionContext): void;
   setUpdate(implementation: DetailEffects["updateBlock"]): void;
@@ -137,6 +184,7 @@ function createHarness(
   let focusError: Error | null = null;
   let bookmarkRecord: Block | null = null;
   let pageQueryResults: PageAddressCollection[] = [];
+  let annotationThreads: AnnotationThread[] = [];
   const calls: Harness["calls"] = {
     selections: 0,
     setSelections: [],
@@ -163,6 +211,8 @@ function createHarness(
     virtualNavigatorAdapters: [],
     bookmarkToggles: [],
     copiedTexts: [],
+    filesystemInterns: [],
+    reconciles: [],
   };
   const effects: DetailEffects = {
     clientId: "detail-test",
@@ -345,30 +395,48 @@ function createHarness(
     },
     async createAnnotation(input) {
       calls.creates.push(input);
+      const record = annotationRecord(input.input.target, {
+        body: input.input.body,
+        source: input.input.source,
+      });
+      annotationThreads = [{ ...record, replies: [] }];
       return {
-        annotations: [{
-          block: makeBlock({ id: "annotation-1" }),
-          target: input.input.target,
-          body: input.input.body,
-          source: input.input.source,
-          lifecycle: "open",
-          anchorState: "anchored",
-        }],
+        annotations: [record],
         deduplicated: false,
       };
     },
-    async createWebAnnotation() {
-      throw new Error("No web resource configured");
+    async internFilesystem(path) {
+      calls.filesystemInterns.push(path);
+      return {
+        resource: {
+          id: "30000000-0000-4000-8000-000000000001",
+          sourceId: "20000000-0000-4000-8000-000000000001",
+          provider: "filesystem",
+          address: { kind: "filesystem", path },
+          version: 1,
+          addressVersion: 1,
+          mediaType: "text/plain",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        },
+        created: false,
+      };
     },
     async refreshResource() {
       throw new Error("No web resource configured");
     },
     openExternal() {},
-    async listAnnotations() {
-      return [];
+    async getAnnotation(annotationId) {
+      const thread = annotationThreads.find(({ block }) => block.id === annotationId);
+      if (!thread) throw new Error(`Missing annotation ${annotationId}`);
+      return thread;
     },
-    async reanchorAnnotations() {
-      return [];
+    async listAnnotations() {
+      return annotationThreads;
+    },
+    async reconcileAnnotations(input) {
+      calls.reconciles.push(input);
+      return { threads: annotationThreads, changed: true };
     },
     async getAttention() {
       return emptyAttentionState("detail-test");
@@ -927,7 +995,6 @@ describe("detail controller projection and deferred refresh", () => {
         webHistory: {
           sourceSnapshots: [sourceSnapshot],
           representations: [representation],
-          annotations: [],
         },
         webStatus: {
           freshness: "fresh",
@@ -937,28 +1004,8 @@ describe("detail controller projection and deferred refresh", () => {
       };
     };
     let current = description("# First\n\nStable quote", "a");
-    const created: Array<Parameters<DetailEffects["createWebAnnotation"]>[0]> = [];
     const externalUrls: string[] = [];
     harness.effects.loadTarget = async () => ({ kind: "resource", target, description: current });
-    harness.effects.createWebAnnotation = async (input) => {
-      created.push(input);
-      const web = current.web!;
-      const annotation = {
-        id: "annotation-1",
-        ...input,
-        revision: web.sourceSnapshot.revision,
-        representation: web.representation,
-        createdAt: "2026-09-17T12:01:00.000Z",
-      };
-      current = {
-        ...current,
-        webHistory: {
-          ...current.webHistory!,
-          annotations: [...current.webHistory!.annotations, annotation],
-        },
-      };
-      return annotation;
-    };
     harness.effects.refreshResource = async () => {
       current = description("# Second\n\nChanged page", "b");
       return current;
@@ -967,6 +1014,40 @@ describe("detail controller projection and deferred refresh", () => {
       externalUrls.push(url);
     };
     await harness.controller.initialize();
+    await harness.controller.onServiceEvent(event("ui", {
+      targetClientId: "detail-test",
+      command: "open",
+      target,
+    }), viewport);
+    expect(harness.calls.reconciles.at(-1)).toMatchObject({
+      subject: { kind: "resource", resourceId: resource.id },
+      newRepresentation: { id: "representation-a" },
+      content: "# First\n\nStable quote",
+    });
+    const reconcilesBeforeContentEvent = harness.calls.reconciles.length;
+    await harness.controller.onServiceEvent(event("content"), viewport);
+    expect(harness.calls.reconciles).toHaveLength(reconcilesBeforeContentEvent + 1);
+    const loadLatestTarget = harness.effects.loadTarget;
+    const pinnedTarget = {
+      ...target,
+      revision: current.web!.sourceSnapshot.revision,
+    };
+    harness.effects.loadTarget = async (candidate) => candidate.kind === "resource" &&
+        candidate.revision
+      ? {
+          kind: "resource",
+          target: candidate,
+          description: { ...current, requestedRevision: candidate.revision },
+        }
+      : loadLatestTarget(candidate);
+    const reconcilesBeforePinnedOpen = harness.calls.reconciles.length;
+    await harness.controller.onServiceEvent(event("ui", {
+      targetClientId: "detail-test",
+      command: "open",
+      target: pinnedTarget,
+    }), viewport);
+    expect(harness.calls.reconciles).toHaveLength(reconcilesBeforePinnedOpen);
+    harness.effects.loadTarget = loadLatestTarget;
     await harness.controller.onServiceEvent(event("ui", {
       targetClientId: "detail-test",
       command: "open",
@@ -1050,13 +1131,18 @@ describe("detail controller projection and deferred refresh", () => {
     await harness.controller.dispatch({ type: "comment.begin" }, viewport);
     await harness.controller.dispatch({ type: "buffer.insert", text: "Keep this evidence" }, viewport);
     await harness.controller.dispatch({ type: "buffer.save" }, viewport);
-    expect(created[0]?.anchor.exact).toBe("Stable quote");
-    expect(created[0]?.body).toBe("Keep this evidence");
-    expect(created[0]?.sourceSnapshotId).toBe("source-snapshot-a");
-    expect(created[0]?.representationId).toBe("representation-a");
-    expect(harness.controller.state.resolvedSelectedText).toContain(
-      "Original evidence: snapshot `source-snapshot-a` · representation `representation-a`",
-    );
+    const created = harness.calls.creates[0]!.input;
+    expect(created.target.anchor).toMatchObject({
+      kind: "text-quote",
+      exact: "Stable quote",
+    });
+    expect(created.body).toBe("Keep this evidence");
+    expect(created.target.representation.sourceSnapshot).toMatchObject({
+      kind: "resource",
+      sourceSnapshotId: "source-snapshot-a",
+    });
+    expect(created.target.representation.id).toBe("representation-a");
+    expect(harness.controller.state.annotationThreads[0]?.body).toBe("Keep this evidence");
 
     await harness.controller.dispatch({ type: "resource.open-external" }, viewport);
     expect(externalUrls).toEqual(["https://example.com/article"]);
@@ -1064,6 +1150,11 @@ describe("detail controller projection and deferred refresh", () => {
     expect(harness.controller.state.resolvedSelectedText.startsWith("# Second\n\nChanged page"))
       .toBe(true);
     expect(harness.controller.state.status).toBe("Web resource refreshed");
+    expect(harness.calls.reconciles.at(-1)).toMatchObject({
+      subject: { kind: "resource", resourceId: resource.id },
+      newRepresentation: { id: "representation-b" },
+      content: "# Second\n\nChanged page",
+    });
 
     current = {
       ...description("# Unavailable", "c"),
@@ -1843,11 +1934,14 @@ describe("detail controller saves and annotations", () => {
 
     expect(harness.calls.creates).toHaveLength(1);
     expect(harness.calls.creates[0].input.target).toMatchObject({
-      kind: "file",
-      sourceBlockId: "block-1",
-      filePath: "src/example.ts",
-      startLine: 10,
-      endLine: 17,
+      representation: {
+        subject: {
+          kind: "resource",
+          resourceId: "30000000-0000-4000-8000-000000000001",
+        },
+        sourceSnapshot: { kind: "resource" },
+      },
+      anchor: { kind: "text-quote", start: 0, exact: "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight" },
     });
     expect(harness.calls.creates[0].input.body).toBe("Explain this range.");
     expect(harness.calls.creates[0].input.source).toBe("user");
@@ -1856,6 +1950,163 @@ describe("detail controller saves and annotations", () => {
     expect(harness.controller.state.status).toBe("Annotation added for lines 10-17");
   });
 
+  test("uses file evidence rather than host block versions for filesystem representations", async () => {
+    const first = createHarness(
+      makeBlock({
+        id: "file-host-1",
+        updatedAt: "host-version-1",
+        properties: [{ key: "file", value: "src/example.ts" }],
+      }),
+      filePreview(),
+    );
+    const second = createHarness(
+      makeBlock({
+        id: "file-host-2",
+        updatedAt: "host-version-2",
+        properties: [{ key: "file", value: "src/example.ts" }],
+      }),
+      filePreview(),
+    );
+    for (const harness of [first, second]) {
+      await harness.controller.initialize();
+      await harness.controller.dispatch({ type: "comment.begin" }, viewport);
+    }
+    expect(first.calls.filesystemInterns).toContain("/workspace/src/example.ts");
+    expect(second.calls.filesystemInterns).toContain("/workspace/src/example.ts");
+
+    expect(first.controller.state.annotationDraft?.target.representation).toEqual(
+      second.controller.state.annotationDraft?.target.representation,
+    );
+    expect(first.controller.state.annotationDraft?.target.representation.sourceSnapshot)
+      .toMatchObject({
+        kind: "resource",
+        revision: {
+          revision: {
+            kind: "filesystem",
+            mtimeNs: "1770000000000000000",
+            size: "39",
+          },
+        },
+      });
+  });
+
+
+  test("opens and reveals filesystem annotations through Resource content", async () => {
+    const file = filePreview();
+    const harness = createHarness(
+      makeBlock({ properties: [{ key: "file", value: file.sourcePath }] }),
+      file,
+    );
+    await harness.controller.initialize();
+    await harness.controller.dispatch({ type: "comment.begin" }, viewport);
+    await harness.controller.dispatch({ type: "buffer.insert", text: "Inspect this line" }, viewport);
+    await harness.controller.dispatch({ type: "buffer.save" }, viewport);
+    Object.assign(harness.controller.state as unknown as { connectionMode: "unlocked" }, {
+      connectionMode: "unlocked",
+    });
+    const annotation = harness.controller.state.annotationThreads[0]!;
+    const annotationId = annotation.block.id;
+    const resourceId = "30000000-0000-4000-8000-000000000001";
+    const source = {
+      id: "20000000-0000-4000-8000-000000000001",
+      name: "Test files",
+      provider: "filesystem" as const,
+      boundary: { kind: "filesystem" as const, root: "/workspace" },
+      policy: { deniedCapabilities: [] },
+      version: 1,
+      createdAt: "created",
+      updatedAt: "updated",
+    };
+    const resource = {
+      id: resourceId,
+      sourceId: source.id,
+      provider: "filesystem" as const,
+      address: { kind: "filesystem" as const, path: file.sourcePath },
+      version: 1,
+      addressVersion: 1,
+      mediaType: "text/plain",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+    const revision = {
+      resourceId,
+      addressVersion: 1,
+      revision: {
+        kind: "filesystem" as const,
+        mtimeNs: "1770000000000000000",
+        size: "39",
+      },
+    };
+    const content = file.lines.join("\n");
+    const description: ResourceDescription = {
+      resource,
+      source,
+      requestedRevision: null,
+      capabilities: deriveResourceCapabilityReport(source, true, ["read"]),
+      filesystem: {
+        text: content,
+        contentHash: file.sourceHash!,
+        capturedAt: file.capturedAt!,
+        revision,
+      },
+      web: null,
+      webHistory: null,
+      webStatus: null,
+    };
+    const target = { kind: "resource" as const, resourceId };
+    const unrelatedFile = filePreview({
+      absolutePath: "/workspace/other.ts",
+      displayPath: "other.ts",
+      sourcePath: "other.ts",
+    });
+    harness.effects.readFile = () => unrelatedFile;
+    const internFilesystem = harness.effects.internFilesystem;
+    harness.effects.internFilesystem = async (path) => {
+      const receipt = await internFilesystem(path);
+      if (path === unrelatedFile.absolutePath && receipt.resource.provider === "filesystem") {
+        return {
+          ...receipt,
+          resource: {
+            ...receipt.resource,
+            id: "30000000-0000-4000-8000-000000000099",
+            address: { kind: "filesystem", path: unrelatedFile.sourcePath },
+          },
+        };
+      }
+      return receipt;
+    };
+    harness.effects.loadTarget = async (candidate) => candidate.kind === "resource"
+      ? { kind: "resource", target, description }
+      : {
+          kind: "block",
+          target: candidate,
+          context: {
+            selected: {
+              ...annotation.block,
+              properties: [{ key: "type", value: "annotation" }],
+            },
+            ancestors: [
+              makeBlock({
+                id: "unrelated-file-host",
+                properties: [{ key: "file", value: unrelatedFile.sourcePath }],
+              }),
+            ],
+            children: [],
+          },
+        };
+
+    await harness.controller.onServiceEvent(event("ui", {
+      targetClientId: "detail-test",
+      command: "open",
+      target: { kind: "block", blockId: annotationId },
+    }), viewport);
+    expect(harness.controller.state.referencedFile?.absolutePath).toBe(unrelatedFile.absolutePath);
+    await harness.controller.dispatch({ type: "annotation.reveal" }, viewport);
+    expect(harness.controller.state.resolvedSelectedText).toBe(content);
+    expect(harness.controller.state.context.selected).toBeNull();
+    expect(harness.controller.state.status).toBe("Revealed resolved text quote 0-3");
+    expect(harness.controller.state.previewOffset).toBe(0);
+  });
   test("selects an exact block source range and opens a local comment composer", async () => {
     const harness = createHarness(makeBlock({ text: "alpha 🧭 beta\nsecond" }));
     await harness.controller.initialize();
@@ -1874,9 +2125,11 @@ describe("detail controller saves and annotations", () => {
     await harness.controller.dispatch({ type: "comment.begin" }, viewport);
     expect(harness.controller.state.mode).toBe("comment");
     expect(harness.controller.state.annotationDraft?.target).toMatchObject({
-      kind: "block",
-      sourceBlockId: "block-1",
-      anchor: { start: 0, end: 8, excerpt: "alpha 🧭" },
+      representation: {
+        subject: { kind: "block", blockId: "block-1" },
+        sourceSnapshot: { kind: "block" },
+      },
+      anchor: { kind: "text-quote", start: 0, end: 8, exact: "alpha 🧭" },
     });
 
     await harness.controller.dispatch({ type: "buffer.insert", text: "Keep this bearing." }, viewport);
@@ -1902,9 +2155,11 @@ describe("detail controller saves and annotations", () => {
     expect(harness.controller.state.mode).toBe("comment");
     expect(harness.controller.state.context.selected?.id).toBe("block-1");
     expect(harness.controller.state.annotationDraft?.target).toMatchObject({
-      kind: "block",
-      sourceBlockId: "block-1",
-      anchor: { start: 141, end: 222, excerpt },
+      representation: {
+        subject: { kind: "block", blockId: "block-1" },
+        sourceSnapshot: { kind: "block" },
+      },
+      anchor: { kind: "text-quote", start: 141, end: 222, exact: excerpt },
     });
 
     await harness.controller.dispatch({
@@ -1916,9 +2171,10 @@ describe("detail controller saves and annotations", () => {
     expect(harness.controller.state.mode).toBe("preview");
     expect(harness.controller.state.context.selected?.id).toBe("block-1");
     expect(harness.calls.creates[0].input.target).toMatchObject({
-      kind: "block",
-      sourceBlockId: "block-1",
-      anchor: { start: 141, end: 222, excerpt },
+      representation: {
+        subject: { kind: "block", blockId: "block-1" },
+      },
+      anchor: { kind: "text-quote", start: 141, end: 222, exact: excerpt },
     });
   });
 
@@ -1956,10 +2212,14 @@ describe("detail controller saves and annotations", () => {
     await harness.controller.onServiceEvent(event, viewport);
     expect(harness.controller.state.mode).toBe("comment");
     expect(harness.controller.state.annotationDraft?.target).toMatchObject({
-      kind: "block",
-      sourceBlockId: block.id,
-      anchor: { start: 6, end: 10, excerpt: "βeta" },
-      observation: { quote: "βeta", contentRevision: 42, projection: "canonical" },
+      representation: {
+        subject: { kind: "block", blockId: block.id },
+        sourceSnapshot: {
+          kind: "rendered",
+          observation: { quote: "βeta", contentRevision: 42, projection: "canonical" },
+        },
+      },
+      anchor: { kind: "text-quote", exact: "βeta" },
     });
     await harness.controller.dispatch({ type: "buffer.cancel" }, viewport);
     expect(harness.calls.creates).toEqual([]);
@@ -1968,8 +2228,13 @@ describe("detail controller saves and annotations", () => {
     await harness.controller.dispatch({ type: "buffer.insert", text: "Keep this quote." }, viewport);
     await harness.controller.dispatch({ type: "buffer.save" }, viewport);
     expect(harness.calls.creates[0]!.input.target).toMatchObject({
-      kind: "block",
-      observation: { quote: "βeta", contentRevision: 42 },
+      representation: {
+        sourceSnapshot: {
+          kind: "rendered",
+          observation: { quote: "βeta", contentRevision: 42 },
+        },
+      },
+      anchor: { kind: "text-quote", exact: "βeta" },
     });
   });
   test("does not invent a source anchor when chrome duplicates the rendered quote", async () => {
@@ -1991,19 +2256,19 @@ describe("detail controller saves and annotations", () => {
       detailClientId: "detail-test",
       validation: "herdr-keybinding",
       snapshotText: "βeta appears in chrome\nalpha βeta gamma",
-    })).toEqual({
-      kind: "passage",
-      sourceBlockId: block.id,
-      observation: {
-        quote: "βeta",
-        capturedAt: "2026-01-02T03:04:05.000Z",
-        hostBlockId: block.id,
-        paneId: "w1:p2",
-        contentRevision: 42,
-        contextId: "context-test",
-        detailClientId: "detail-test",
-        validation: "herdr-keybinding",
-        projection: "canonical",
+    })).toMatchObject({
+      representation: {
+        subject: { kind: "block", blockId: block.id },
+        sourceSnapshot: {
+          kind: "rendered",
+          observation: { quote: "βeta", projection: "canonical" },
+        },
+      },
+      anchor: {
+        kind: "text-quote",
+        start: null,
+        end: null,
+        exact: "βeta",
       },
     });
   });
@@ -2047,27 +2312,30 @@ describe("detail controller saves and annotations", () => {
       },
     }, viewport);
 
-    expect(harness.controller.state.annotationDraft?.target).toEqual({
-      kind: "passage",
-      sourceBlockId: block.id,
-      observation: {
-        quote,
-        capturedAt: "2026-01-02T03:04:05.000Z",
-        hostBlockId: block.id,
-        paneId: "w1:p2",
-        contentRevision: 84,
-        contextId: "context-test",
-        detailClientId: "detail-test",
-        validation: "herdr-keybinding",
-        projection: "generated",
+    expect(harness.controller.state.annotationDraft?.target).toMatchObject({
+      representation: {
+        subject: { kind: "block", blockId: block.id },
+        sourceSnapshot: {
+          kind: "rendered",
+          observation: {
+            quote,
+            contentRevision: 84,
+            projection: "generated",
+          },
+        },
       },
+      anchor: { kind: "text-quote", exact: quote },
     });
     await harness.controller.dispatch({ type: "buffer.insert", text: "Discuss this result." }, viewport);
     await harness.controller.dispatch({ type: "buffer.save" }, viewport);
-    expect(harness.calls.creates[0]!.input.target).toEqual({
-      kind: "passage",
-      sourceBlockId: block.id,
-      observation: expect.objectContaining({ quote, projection: "generated" }),
+    expect(harness.calls.creates[0]!.input.target).toMatchObject({
+      representation: {
+        sourceSnapshot: {
+          kind: "rendered",
+          observation: { quote, projection: "generated" },
+        },
+      },
+      anchor: { kind: "text-quote", exact: quote },
     });
   });
 

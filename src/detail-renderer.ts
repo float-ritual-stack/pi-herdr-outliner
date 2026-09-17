@@ -10,11 +10,7 @@ import {
   decorateAttentionLines,
 } from "./attention-render";
 import { currentAttentionMark } from "./attention";
-import {
-  annotationTargetQuote,
-  extractAnnotationBody,
-  parseAnnotationBlock,
-} from "./annotations";
+import { extractAnnotationBody } from "./annotations";
 import { completionWindow } from "./completion";
 import { outlinerLinkUri } from "./outliner-links";
 import { blockDisplayTitle } from "./references";
@@ -37,6 +33,7 @@ import {
 } from "./property-summary";
 import { renderTextBufferEditorRow } from "./text-buffer-editor";
 import { renderMarkdownLine, sanitizeDynamicText } from "./terminal";
+import type { AnnotationRecord, AnnotationTarget } from "./types";
 
 const ESC = "\x1b[";
 
@@ -282,25 +279,86 @@ function appendCompletion(
   }
 }
 
+function annotationTargetLabel(target: AnnotationTarget): string {
+  const subject = target.representation.subject;
+  const subjectLabel = subject.kind === "block"
+    ? `block ${subject.blockId}`
+    : subject.kind === "resource"
+      ? `resource ${subject.resourceId}`
+      : `legacy file ${subject.filePath}`;
+  const anchor = target.anchor;
+  if (anchor.kind === "text-quote") {
+    const position = anchor.start !== null && anchor.end !== null
+      ? ` @${anchor.start}-${anchor.end}`
+      : " · unpositioned";
+    return `${subjectLabel}${position}`;
+  }
+  return `${subjectLabel} · ${anchor.kind}`;
+}
+
+function annotationTargetText(target: AnnotationTarget): string {
+  const anchor = target.anchor;
+  switch (anchor.kind) {
+    case "text-quote":
+    case "dom-range":
+      return anchor.exact;
+    case "pdf-page-region":
+      return anchor.exact ?? `PDF page ${anchor.page}`;
+    case "structured-entity-field":
+      return `${anchor.entityType} ${anchor.entityId} · ${anchor.fieldPath.join(".")}`;
+    case "provider-comment-id":
+      return `${anchor.provider} comment ${anchor.commentId}`;
+  }
+}
+
+function selectedAnnotationRecord(state: Readonly<DetailState>): AnnotationRecord | null {
+  const selectedId = state.context.selected?.id;
+  if (!selectedId) return null;
+  for (const thread of state.annotationThreads) {
+    if (thread.block.id === selectedId) return thread;
+    const reply = thread.replies.find((candidate) => candidate.block.id === selectedId);
+    if (reply) return reply;
+  }
+  return null;
+}
+
 export function buildDetailAnnotationView(
   state: Readonly<DetailState>,
   width: number,
 ): string[] {
   if (!state.context.selected) return [];
   const output: string[] = [];
-  let annotation;
-  try {
-    annotation = parseAnnotationBlock(state.context.selected);
-  } catch {
-    annotation = null;
-  }
-  if (annotation?.target.kind === "block" || annotation?.target.kind === "passage") {
-    const label = annotation.target.kind === "block"
-      ? `Source: block ${annotation.target.sourceBlockId} @${annotation.target.anchor.start}-${annotation.target.anchor.end} · ${annotation.anchorState}`
-      : `Observed: ${annotation.target.observation.projection} · ${annotation.target.observation.paneId} @ revision ${annotation.target.observation.contentRevision}`;
-    output.push(`\x1b[2m${fitDynamicText(label, width)}\x1b[0m`);
-    for (const line of annotationTargetQuote(annotation.target).split(/\r?\n/)) {
+  const annotation = selectedAnnotationRecord(state);
+  if (annotation) {
+    output.push(`\x1b[2m${fitDynamicText(
+      `Original target: ${annotationTargetLabel(annotation.originalTarget)}`,
+      width,
+    )}\x1b[0m`);
+    for (const line of annotationTargetText(annotation.originalTarget).split(/\r?\n/)) {
       output.push(`│ ${fitDynamicText(line, Math.max(1, width - 2))}`);
+    }
+    output.push(`\x1b[2m${fitDynamicText(
+      `Current resolution: ${annotation.currentResolution.status}${
+        annotation.resolvedTarget ? ` · ${annotationTargetLabel(annotation.resolvedTarget)}` : ""
+      }`,
+      width,
+    )}\x1b[0m`);
+    if (annotation.resolvedTarget) {
+      for (const line of annotationTargetText(annotation.resolvedTarget).split(/\r?\n/)) {
+        output.push(`│ ${fitDynamicText(line, Math.max(1, width - 2))}`);
+      }
+    }
+    output.push("\x1b[1mResolution history\x1b[0m");
+    for (const event of annotation.resolutionHistory) {
+      const method = event.method.kind === "codec"
+        ? `${event.method.codecId}@${event.method.codecVersion}:${event.method.method}`
+        : event.method.method;
+      output.push(fitDynamicText(
+        `#${event.sequence} ${event.status}${event.appliesCurrent ? " · current" : ""} · ${method} · ${event.reviewer.kind}:${event.reviewer.id}${
+          event.confidence === null ? "" : ` · ${event.confidence}`
+        }`,
+        width,
+      ));
     }
     output.push("─".repeat(width));
   }
@@ -437,14 +495,10 @@ export function renderDetailLines(
       output.push(`\x1b[1mComments · ${threads.length} ${threads.length === 1 ? "thread" : "threads"}\x1b[0m`);
       for (const [index, thread] of threads.entries()) {
         if (output.length >= height - 2) break;
-        const range = thread.target.kind === "file"
-          ? `${thread.target.filePath}:${thread.target.startLine}-${thread.target.endLine}`
-          : thread.target.kind === "block"
-            ? `source ${thread.target.anchor.start}-${thread.target.anchor.end}`
-            : `observed ${thread.target.observation.projection}`;
+        const target = thread.resolvedTarget ?? thread.originalTarget;
         output.push(
           fitDynamicText(
-            `[${index + 1}] ${range} · ${thread.anchorState} · ${thread.lifecycle} — ${thread.body}`,
+            `[${index + 1}] ${annotationTargetLabel(target)} · ${thread.currentResolution.status} · ${thread.lifecycle} — ${thread.body}`,
             width,
           ),
         );
