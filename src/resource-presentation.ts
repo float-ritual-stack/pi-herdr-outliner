@@ -36,7 +36,7 @@ export const TUI_RESOURCE_PRESENTATION_CONTEXT: ResourcePresentationContext = {
     id: "outliner-tui",
     renderers: ["markdown", "metadata", "external-open"],
     placements: ["pane", "external"],
-    capabilities: ["read", "refresh", "open-external"],
+    capabilities: ["read", "write", "refresh", "open-external"],
   },
   providerAccess: {
     credentials: "unknown",
@@ -155,7 +155,7 @@ function capabilityReason(decision: ResourceCapabilityDecision): string {
 }
 
 
-function isTextualMediaType(mediaType: string | null): boolean {
+export function isTextualMediaType(mediaType: string | null): boolean {
   if (mediaType === null) return true;
   const normalized = mediaType.split(";", 1)[0]!.trim().toLowerCase();
   return normalized.startsWith("text/") ||

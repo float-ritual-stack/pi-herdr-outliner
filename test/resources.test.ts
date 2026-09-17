@@ -3,6 +3,7 @@ import { expect, test } from "bun:test";
 import {
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   renameSync,
   rmSync,
   symlinkSync,
@@ -152,6 +153,39 @@ test("filesystem descriptions expose immutable text evidence and reject stale re
     const current = store.resources.describe(resource.id, true);
     expect(current.filesystem?.text).toBe("# Today\n\nChanged\n");
     expect(current.filesystem?.revision).not.toEqual(first.filesystem?.revision);
+  });
+});
+
+test("filesystem writes enforce the opened revision", () => {
+  withWorkspace((root, store) => {
+    const directory = join(root, "notes");
+    const path = join(directory, "today.md");
+    mkdirSync(directory);
+    writeFileSync(path, "# Today\n");
+    const resource = store.resources.internFilesystem({
+      path: "notes/today.md",
+      mediaType: "text/markdown",
+    }).resource;
+    const opened = store.resources.describe(resource.id, true).filesystem!;
+
+    const written = store.resources.writeFilesystem({
+      resourceId: resource.id,
+      expectedRevision: opened.revision,
+      text: "# Today\n\nEdited\n",
+    });
+
+    expect(written.text).toBe("# Today\n\nEdited\n");
+    expect(readFileSync(path, "utf8")).toBe("# Today\n\nEdited\n");
+    expect(written.revision).not.toEqual(opened.revision);
+    expectCatalogError(
+      () =>
+        store.resources.writeFilesystem({
+          resourceId: resource.id,
+          expectedRevision: opened.revision,
+          text: "stale",
+        }),
+      "stale-revision",
+    );
   });
 });
 

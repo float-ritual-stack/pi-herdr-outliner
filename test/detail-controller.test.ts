@@ -122,6 +122,7 @@ interface Harness {
     projectedReadHosts: Array<string | undefined>;
     updates: Array<{ blockId: string; text: string; expectedUpdatedAt: string }>;
     externalDrafts: Array<Parameters<DetailEffects["editExternalDraft"]>[0]>;
+    filesystemWrites: Array<Parameters<DetailEffects["writeFilesystemResource"]>[0]>;
     propertyPatches: Array<Parameters<DetailEffects["patchProperties"]>[0]>;
     creates: Array<Parameters<DetailEffects["createAnnotation"]>[0]>;
     restores: string[];
@@ -205,6 +206,7 @@ function createHarness(
     projectedReadHosts: [],
     updates: [],
     externalDrafts: [],
+    filesystemWrites: [],
     creates: [],
     restores: [],
     histories: [],
@@ -366,6 +368,17 @@ function createHarness(
     async editExternalDraft(input) {
       calls.externalDrafts.push(input);
       return externalEdit(input);
+    },
+    async writeFilesystemResource(input) {
+      calls.filesystemWrites.push(input);
+      const loaded = await effects.loadTarget({
+        kind: "resource",
+        resourceId: input.resourceId,
+      });
+      if (loaded.kind !== "resource") {
+        throw new Error("Expected a filesystem Resource test target");
+      }
+      return loaded.description;
     },
     async resolveNavigation(intent) {
       return {
@@ -952,7 +965,7 @@ describe("detail controller projection and deferred refresh", () => {
     });
   });
 
-  test("annotates filesystem Resources and explains unsupported edit and refresh actions", async () => {
+  test("edits and annotates filesystem Resources through their source representation", async () => {
     const harness = createHarness(makeBlock({ id: "block-anchor" }));
     const resourceId = "10000000-0000-4000-8000-000000000001";
     const source = {
@@ -981,7 +994,7 @@ describe("detail controller projection and deferred refresh", () => {
       resource,
       source,
       requestedRevision: null,
-      capabilities: deriveResourceCapabilityReport(source, true, ["read"]),
+      capabilities: deriveResourceCapabilityReport(source, true, ["read", "write"]),
       filesystem: {
         text,
         contentHash: "filesystem-content-hash",
@@ -1020,26 +1033,59 @@ describe("detail controller projection and deferred refresh", () => {
       target: { kind: "resource", resourceId },
     }), viewport);
 
-    const outcomes: Array<string | null> = [];
     await harness.controller.dispatch({ type: "edit.begin" }, viewport);
-    outcomes.push(harness.controller.state.status);
+    expect(harness.controller.state.mode).toBe("edit");
+    expect(harness.controller.state.status).toBe("Locked for editing filesystem Resource");
+    expect(harness.controller.state.buffer.text).toBe(text);
+    await harness.controller.dispatch({ type: "buffer.select-all" }, viewport);
+    await harness.controller.dispatch({
+      type: "buffer.insert",
+      text: "# Filesystem fixture\n\nInline edit.",
+    }, viewport);
+    await harness.controller.dispatch({ type: "buffer.save" }, viewport);
+    expect(harness.calls.filesystemWrites[0]).toEqual({
+      resourceId,
+      text: "# Filesystem fixture\n\nInline edit.",
+      expectedRevision: description.filesystem!.revision,
+    });
+    expect(harness.controller.state.status).toBe("Filesystem Resource saved");
+
+    let externalDraftCleaned = false;
+    harness.setExternalEdit(async (input) => {
+      expect(input).toEqual({
+        kind: "filesystem-resource",
+        resourceId,
+        text,
+        expectedRevision: description.filesystem!.revision,
+      });
+      return {
+        text: "# Filesystem fixture\n\nExternal edit.",
+        changed: true,
+        recoveryPath: "/tmp/filesystem-resource-draft",
+        cleanup() {
+          externalDraftCleaned = true;
+        },
+      };
+    });
     await harness.controller.dispatch({ type: "edit.external" }, viewport);
-    outcomes.push(harness.controller.state.status);
+    expect(harness.calls.filesystemWrites[1]).toEqual({
+      resourceId,
+      text: "# Filesystem fixture\n\nExternal edit.",
+      expectedRevision: description.filesystem!.revision,
+    });
+    expect(externalDraftCleaned).toBe(true);
+    expect(harness.controller.state.status).toBe("Filesystem Resource updated from $EDITOR");
+
     await harness.controller.dispatch({ type: "resource.refresh" }, viewport);
-    outcomes.push(harness.controller.state.status);
+    expect(harness.controller.state.status).toBe("Filesystem Resource reopened from disk");
     await harness.controller.dispatch({
       type: "annotation.selection.begin",
       sourceLine: 2,
       sourceColumn: 0,
     }, viewport);
-    outcomes.push(harness.controller.state.status);
-
-    expect(outcomes).toEqual([
-      "Filesystem Resource content is provider-owned; edit the source file instead",
-      "Filesystem Resource content is provider-owned; edit the source file instead",
-      "Filesystem Resource reopened from disk",
+    expect(harness.controller.state.status).toBe(
       "Locked · extend the rendered selection, then press c",
-    ]);
+    );
     expect(harness.controller.state.mode).toBe("select");
     expect(harness.controller.state.buffer.text).toBe(text);
 
@@ -2416,11 +2462,17 @@ describe("detail controller saves and annotations", () => {
     }));
     harness.setExternalEdit(async (input) => {
       expect(input).toEqual({
+        kind: "block",
         blockId: "block-1",
         text: "canonical",
         expectedUpdatedAt: "original-version",
       });
-      return { text: "", changed: true, recoveryPath: "/tmp/empty-draft", cleanup() {} };
+      return {
+        text: "",
+        changed: true,
+        recoveryPath: "/tmp/empty-draft",
+        cleanup() {},
+      };
     });
     await harness.controller.initialize();
 

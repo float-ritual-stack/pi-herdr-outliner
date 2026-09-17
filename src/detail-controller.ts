@@ -65,6 +65,7 @@ import {
   type PreviewRegionAction,
   type PreviewRegionState,
 } from "./detail-preview-regions";
+import { isTextualMediaType } from "./resource-presentation";
 import { isVirtualBranchDefinition } from "./virtual-branches";
 import { blockDisplayTitle } from "./references";
 import {
@@ -387,16 +388,31 @@ export interface DetailEffects {
     direction: "right" | "down",
   ): void | Promise<void>;
   copyText(text: string): void;
-  editExternalDraft(input: {
-    blockId: string;
-    text: string;
-    expectedUpdatedAt: string;
-  }): Promise<{
+  editExternalDraft(
+    input:
+      | {
+          kind: "block";
+          blockId: string;
+          text: string;
+          expectedUpdatedAt: string;
+        }
+      | {
+          kind: "filesystem-resource";
+          resourceId: string;
+          text: string;
+          expectedRevision: ResourceRevisionRef;
+        },
+  ): Promise<{
     text: string;
     changed: boolean;
     recoveryPath: string;
     cleanup(): void;
   }>;
+  writeFilesystemResource(input: {
+    resourceId: string;
+    text: string;
+    expectedRevision: ResourceRevisionRef;
+  }): Promise<ResourceDescription>;
   updateBlock(input: {
     blockId: string;
     text: string;
@@ -1838,21 +1854,56 @@ export function createDetailController(
   };
 
   const beginEdit = async (viewport: DetailViewport): Promise<void> => {
-    if (!state.context.selected) {
+    const selected = state.context.selected;
+    let text: string;
+    let status: string;
+    if (selected) {
+      if (selected.effectiveDeletedRootId) {
+        state.status = "Block is in Trash; restore before editing";
+        return;
+      }
+      text = selected.text;
+      status = "Locked for editing";
+    } else {
       const description = detailResourceDescription(state);
-      state.status = description?.resource.provider === "filesystem"
-        ? "Filesystem Resource content is provider-owned; edit the source file instead"
-        : description
-        ? "Resource content is provider-owned; edit it through the provider"
-        : "No selected block to edit";
-      return;
-    }
-    if (state.context.selected.effectiveDeletedRootId) {
-      state.status = "Block is in Trash; restore before editing";
-      return;
+      if (
+        !description ||
+        description.resource.provider !== "filesystem" ||
+        description.source.provider !== "filesystem"
+      ) {
+        state.status = description
+          ? "Resource content is provider-owned; edit it through the provider"
+          : "No selected block or Resource to edit";
+        return;
+      }
+      if (description.requestedRevision !== null) {
+        state.status = "Pinned filesystem Resource revisions are read-only";
+        return;
+      }
+      if (
+        !description.filesystem ||
+        !isTextualMediaType(description.resource.mediaType)
+      ) {
+        state.status = "This filesystem Resource has no editable text representation";
+        return;
+      }
+      const write = description.capabilities.write;
+      if (write.status !== "available") {
+        const factor = RESOURCE_CAPABILITY_FACTORS
+          .map((name) => write.factors[name])
+          .find((assessment) =>
+            assessment.state === "blocked" || assessment.state === "unknown"
+          );
+        state.status = factor && "detail" in factor
+          ? factor.detail
+          : "Filesystem Resource writing is unavailable";
+        return;
+      }
+      text = description.filesystem.text;
+      status = "Locked for editing filesystem Resource";
     }
     await setLocked(true);
-    state.buffer = new TextBuffer(state.context.selected.text);
+    state.buffer = new TextBuffer(text);
     state.buffer.row = state.buffer.lines.length - 1;
     state.buffer.moveEnd();
     state.editorVisualOffset = 0;
@@ -1860,7 +1911,7 @@ export function createDetailController(
     state.draftPreviewLinked = false;
     state.completion = null;
     state.mode = "edit";
-    state.status = "Locked for editing";
+    state.status = status;
     ensureEditorCursorVisible(viewport);
   };
 
@@ -1868,13 +1919,46 @@ export function createDetailController(
     if (state.mode !== "edit") await beginEdit(viewport);
     if (state.mode !== "edit") return;
     const selected = state.context.selected;
-    if (!selected || state.busy) return;
+    if (state.busy) return;
     const previousViewportOffset = state.editorVisualOffset;
     state.busy = true;
     state.status = "Opening draft in $EDITOR";
     emit();
     try {
+      if (!selected) {
+        const description = detailResourceDescription(state);
+        const filesystem = description?.filesystem;
+        if (
+          !description ||
+          description.resource.provider !== "filesystem" ||
+          !filesystem
+        ) {
+          throw new Error("Editable filesystem Resource is unavailable");
+        }
+        const result = await effects.editExternalDraft({
+          kind: "filesystem-resource",
+          resourceId: description.resource.id,
+          text: state.buffer.text,
+          expectedRevision: filesystem.revision,
+        });
+        if (!result.changed) {
+          result.cleanup();
+          state.status = "$EDITOR returned an unchanged filesystem Resource";
+          return;
+        }
+        await effects.writeFilesystemResource({
+          resourceId: description.resource.id,
+          text: result.text,
+          expectedRevision: filesystem.revision,
+        });
+        result.cleanup();
+        state.mode = "preview";
+        await loadCurrentTarget(true);
+        state.status = "Filesystem Resource updated from $EDITOR";
+        return;
+      }
       const result = await effects.editExternalDraft({
+        kind: "block",
         blockId: selected.id,
         text: state.buffer.text,
         expectedUpdatedAt: selected.updatedAt,
@@ -2153,18 +2237,37 @@ export function createDetailController(
     try {
       if (state.mode === "edit") {
         const selected = state.context.selected;
-        if (!selected) throw new Error("Only blocks can be edited");
-        const updated = await effects.updateBlock({
-          blockId: selected.id,
-          text: state.buffer.text,
-          expectedUpdatedAt: selected.updatedAt,
-        });
-        replaceSelectedBlock(updated);
-        await applyReadProjection(updated.text, updated.id);
-        refreshBreadcrumb();
-        state.mode = detailDisplayMode(updated);
-        if (state.mode === "file" || state.mode === "annotation") loadFile(updated);
-        else state.referencedFile = null;
+        if (selected) {
+          const updated = await effects.updateBlock({
+            blockId: selected.id,
+            text: state.buffer.text,
+            expectedUpdatedAt: selected.updatedAt,
+          });
+          replaceSelectedBlock(updated);
+          await applyReadProjection(updated.text, updated.id);
+          refreshBreadcrumb();
+          state.mode = detailDisplayMode(updated);
+          if (state.mode === "file" || state.mode === "annotation") loadFile(updated);
+          else state.referencedFile = null;
+        } else {
+          const description = detailResourceDescription(state);
+          const filesystem = description?.filesystem;
+          if (
+            !description ||
+            description.resource.provider !== "filesystem" ||
+            !filesystem
+          ) {
+            throw new Error("Editable filesystem Resource is unavailable");
+          }
+          await effects.writeFilesystemResource({
+            resourceId: description.resource.id,
+            text: state.buffer.text,
+            expectedRevision: filesystem.revision,
+          });
+          state.mode = "preview";
+          await loadCurrentTarget(true);
+          state.status = "Filesystem Resource saved";
+        }
       } else if (state.mode === "comment" && state.annotationDraft) {
         const draft = state.annotationDraft;
         const body = state.buffer.text.trim();
