@@ -59,6 +59,12 @@ function evidenceText(value: unknown, label: string): string {
   return value;
 }
 
+function boundedText(value: unknown, label: string, maximum: number): string {
+  const normalized = evidenceText(value, label).trim();
+  if (normalized.length > maximum) throw new Error(`${label} must be at most ${maximum} characters`);
+  return normalized;
+}
+
 function integer(value: unknown, label: string, minimum = 0): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < minimum) {
     throw new Error(`${label} must be an integer >= ${minimum}`);
@@ -329,8 +335,31 @@ export function normalizeAnnotationCreateInput(
 export function normalizeResolutionMethod(value: unknown): AnnotationResolutionMethod {
   if (!value || typeof value !== "object") throw new Error("Resolution method must be an object");
   const method = value as Record<string, unknown>;
-  if (method.kind === "human") return { kind: "human", method: identity(method.method, "Human resolution method") };
+  if (method.kind === "human") {
+    return {
+      kind: "human",
+      method: identity(method.method, "Human resolution method"),
+      ...(method.proposalEventId === undefined
+        ? {}
+        : { proposalEventId: identity(method.proposalEventId, "Proposal event ID") }),
+    };
+  }
   if (method.kind === "codec") return { kind: "codec", codecId: identity(method.codecId, "Codec ID"), codecVersion: integer(method.codecVersion, "Codec version", 1), method: identity(method.method, "Codec method") };
+  if (method.kind === "agent") {
+    if (method.method !== "semantic-reconciliation") {
+      throw new Error("Unsupported agent resolution method");
+    }
+    if (!Array.isArray(method.evidence) || method.evidence.length === 0 || method.evidence.length > 8) {
+      throw new Error("Agent resolution evidence must contain 1-8 entries");
+    }
+    return {
+      kind: "agent",
+      modelId: boundedText(method.modelId, "Agent model ID", 200),
+      method: "semantic-reconciliation",
+      rationale: boundedText(method.rationale, "Agent rationale", 4_000),
+      evidence: method.evidence.map((item) => boundedText(item, "Agent evidence", 1_000)),
+    };
+  }
   throw new Error(`Unsupported resolution method: ${String(method.kind)}`);
 }
 

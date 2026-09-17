@@ -23,6 +23,12 @@ import { reanchorAnnotationTarget } from "./annotation-reanchoring";
 import type { ResourceCatalog } from "./resource-catalog";
 import { normalizeRetainedResourceRevisionRef } from "./resources";
 import type {
+  AnnotationAgentEvidenceSample,
+  AnnotationAgentEvidenceSummary,
+  AnnotationAgentPromptPackage,
+  AnnotationAgentProposalInput,
+  AnnotationAgentProposalReceipt,
+  AnnotationAgentReviewInput,
   AnnotationApproveResolutionInput,
   AnnotationBatchOperation,
   AnnotationBatchReceipt,
@@ -53,6 +59,11 @@ const SYSTEM_ANNOTATIONS_ROOT_ID = "7674db6f-6639-4d49-bb63-9ed50cdbba08";
 const MIGRATION_MARKER = "pie250_annotation_repository";
 const TEXT_CODEC = { kind: "codec", codecId: "text-quote", codecVersion: 1 } as const;
 const TARGET_PROPERTY_KEYS = OBSOLETE_ANNOTATION_PROPERTY_KEYS;
+const AGENT_AUTOMATIC_THRESHOLD = 0.95;
+const AGENT_BODY_LIMIT = 4_000;
+const AGENT_PASSAGE_LIMIT = 2_000;
+const AGENT_CONTEXT_LIMIT = 1_000;
+const AGENT_PACKAGE_LIMIT = 24_000;
 
 interface AnnotationTargetRow {
   annotation_block_id: string;
@@ -85,16 +96,28 @@ interface AnnotationRequestRow {
   annotation_ids: string;
 }
 
+interface AgentRequestRow {
+  payload_hash: string;
+  event_id: string;
+}
+
 interface WebAnnotationRow {
   id: string;
   resource_id: string;
   source_snapshot_id: string;
   representation_id: string;
+
   revision_json: string;
   representation_json: string;
   anchor_json: string;
   body: string;
   created_at: string;
+}
+interface AgentEvidenceRow extends ResolutionRow {
+  accepted_by: "automatic" | "human";
+  accepted_target_json: string | null;
+  accepted_count: number;
+  automatic_count: number;
 }
 
 interface RepositoryBlocks {
@@ -165,6 +188,19 @@ function payloadHash(value: unknown): string {
   return new Bun.CryptoHasher("sha256").update(serialized).digest("hex");
 }
 
+function boundedSlice(value: string, maximum: number): { readonly text: string; readonly truncated: boolean } {
+  if (value.length <= maximum) return { text: value, truncated: false };
+  return { text: value.slice(0, maximum), truncated: true };
+}
+
+function targetPassage(target: AnnotationTarget): string {
+  const anchor = target.anchor;
+  if (anchor.kind === "text-quote" || anchor.kind === "dom-range") return anchor.exact;
+  if (anchor.kind === "pdf-page-region") return anchor.exact ?? `PDF page ${anchor.page}`;
+  if (anchor.kind === "structured-entity-field") return `${anchor.entityType}/${anchor.entityId}/${anchor.fieldPath.join(".")}`;
+  return `${anchor.provider}:${anchor.commentId}`;
+}
+
 function eventFromRow(row: ResolutionRow): AnnotationResolutionEvent {
   const status = row.status;
   if (
@@ -187,8 +223,10 @@ function eventFromRow(row: ResolutionRow): AnnotationResolutionEvent {
   if (status === "resolved" && (!resolvedTarget || !appliesCurrent || row.confidence === null)) {
     throw new Error("Resolved annotation event is incomplete");
   }
+  const isAgentProposal = method.kind === "agent" && !appliesCurrent;
   if (status === "probable" &&
-    (resolvedTarget !== null || !appliesCurrent || row.confidence === null || candidates.length === 0)) {
+    (resolvedTarget !== null || row.confidence === null || candidates.length === 0 ||
+      (!appliesCurrent && !isAgentProposal))) {
     throw new Error("probable annotation event requires scored candidates without applying a target");
   }
   if (status === "unresolved" && (
@@ -196,9 +234,14 @@ function eventFromRow(row: ResolutionRow): AnnotationResolutionEvent {
     !appliesCurrent ||
     ((row.confidence === null) !== (candidates.length === 0))
   )) throw new Error("unresolved annotation event evidence is inconsistent");
-  if ((status === "ambiguous" || status === "orphaned" || status === "unsupported") &&
-    (resolvedTarget !== null || !appliesCurrent || row.confidence !== null)) {
-    throw new Error(`${status} annotation event cannot carry a resolved target or confidence`);
+  if ((status === "ambiguous" || status === "orphaned") && (
+    resolvedTarget !== null ||
+    (appliesCurrent ? row.confidence !== null : !isAgentProposal || row.confidence === null) ||
+    (status === "ambiguous" && isAgentProposal && candidates.length < 2) ||
+    (status === "orphaned" && candidates.length > 0)
+  )) throw new Error(`${status} annotation event evidence is inconsistent`);
+  if (status === "unsupported" && (resolvedTarget !== null || !appliesCurrent || row.confidence !== null)) {
+    throw new Error("unsupported annotation event cannot carry a resolved target or confidence");
   }
   if (status === "rejected" && (resolvedTarget !== null || appliesCurrent)) {
     throw new Error("Rejected annotation event cannot apply current or carry a resolved target");
@@ -427,6 +470,436 @@ export class AnnotationRepository {
     })();
   }
 
+  agentPackage(annotationIdValue: string): AnnotationAgentPromptPackage {
+    const annotationId = text(annotationIdValue, "Annotation ID");
+    const record = this.get(annotationId);
+    if (record.parentAnnotationId) throw new Error("Agent reconciliation belongs to the root annotation");
+    const current = record.currentResolution;
+    const deterministicFailure =
+      current.method.kind === "codec" &&
+      current.reviewer.kind === "system" &&
+      current.reviewer.id === "annotation-repository" &&
+      (current.method.method === "quote-context" || current.method.method === "local-fuzzy") &&
+      ["probable", "unresolved", "ambiguous", "orphaned"].includes(current.status);
+    if (!deterministicFailure) {
+      throw new Error("Only failed deterministic reconciliations can be sent to an agent");
+    }
+    const original = record.originalTarget.anchor;
+    const originalPassage = boundedSlice(targetPassage(record.originalTarget), AGENT_PASSAGE_LIMIT);
+    const originalPrefix = boundedSlice(
+      original.kind === "text-quote" ? original.prefix : "",
+      AGENT_CONTEXT_LIMIT,
+    );
+    const originalSuffix = boundedSlice(
+      original.kind === "text-quote" ? original.suffix : "",
+      AGENT_CONTEXT_LIMIT,
+    );
+    const body = boundedSlice(record.body, AGENT_BODY_LIMIT);
+    let annotationBody = body.text;
+    let packageOriginalPassage = originalPassage.text;
+    let packageOriginalPrefix = originalPrefix.text;
+    let packageOriginalSuffix = originalSuffix.text;
+    let truncated = body.truncated ||
+      originalPassage.truncated ||
+      originalPrefix.truncated ||
+      originalSuffix.truncated;
+    const packageLength = (
+      candidates: readonly AnnotationAgentPromptPackage["candidates"][number][],
+      packageTruncated: boolean,
+    ) => JSON.stringify({
+      annotationId,
+      baseEventId: current.id,
+      annotationBody,
+      originalPassage: packageOriginalPassage,
+      originalPrefix: packageOriginalPrefix,
+      originalSuffix: packageOriginalSuffix,
+      candidates,
+      truncated: packageTruncated,
+      characterCount: AGENT_PACKAGE_LIMIT,
+    }).length;
+    while (packageLength([], truncated) > AGENT_PACKAGE_LIMIT) {
+      const maximum = Math.max(
+        annotationBody.length,
+        packageOriginalPassage.length,
+        packageOriginalPrefix.length,
+        packageOriginalSuffix.length,
+      );
+      if (maximum === 0) throw new Error("Annotation reconciliation package metadata exceeds its limit");
+      if (annotationBody.length === maximum) {
+        annotationBody = annotationBody.slice(0, Math.floor(annotationBody.length / 2));
+      } else if (packageOriginalPassage.length === maximum) {
+        packageOriginalPassage = packageOriginalPassage.slice(
+          0,
+          Math.floor(packageOriginalPassage.length / 2),
+        );
+      } else if (packageOriginalPrefix.length === maximum) {
+        packageOriginalPrefix = packageOriginalPrefix.slice(
+          0,
+          Math.floor(packageOriginalPrefix.length / 2),
+        );
+      } else {
+        packageOriginalSuffix = packageOriginalSuffix.slice(
+          0,
+          Math.floor(packageOriginalSuffix.length / 2),
+        );
+      }
+      truncated = true;
+    }
+    const candidates: AnnotationAgentPromptPackage["candidates"][number][] = [];
+    for (let index = 0; index < Math.min(current.candidates.length, 8); index += 1) {
+      const candidate = current.candidates[index]!;
+      const anchor = candidate.target.anchor;
+      const passage = boundedSlice(targetPassage(candidate.target), AGENT_PASSAGE_LIMIT);
+      const prefix = boundedSlice(
+        anchor.kind === "text-quote" ? anchor.prefix : "",
+        AGENT_CONTEXT_LIMIT,
+      );
+      const suffix = boundedSlice(
+        anchor.kind === "text-quote" ? anchor.suffix : "",
+        AGENT_CONTEXT_LIMIT,
+      );
+      const section = {
+        index,
+        deterministicMethod: candidate.method,
+        deterministicConfidence: candidate.confidence,
+        passage: passage.text,
+        prefix: prefix.text,
+        suffix: suffix.text,
+      };
+      const nextTruncated =
+        truncated || passage.truncated || prefix.truncated || suffix.truncated;
+      if (packageLength([...candidates, section], nextTruncated) > AGENT_PACKAGE_LIMIT) {
+        truncated = true;
+        break;
+      }
+      candidates.push(section);
+      truncated = nextTruncated;
+    }
+    if (candidates.length < current.candidates.length) truncated = true;
+    const packageWithoutCount = {
+      annotationId,
+      baseEventId: current.id,
+      annotationBody,
+      originalPassage: packageOriginalPassage,
+      originalPrefix: packageOriginalPrefix,
+      originalSuffix: packageOriginalSuffix,
+      candidates,
+      truncated,
+    };
+    let characterCount = 0;
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const nextCount = JSON.stringify({ ...packageWithoutCount, characterCount }).length;
+      if (nextCount === characterCount) break;
+      characterCount = nextCount;
+    }
+    const promptPackage = { ...packageWithoutCount, characterCount };
+    if (JSON.stringify(promptPackage).length > AGENT_PACKAGE_LIMIT) {
+      throw new Error("Annotation reconciliation package exceeds its limit");
+    }
+    return promptPackage;
+  }
+
+  agentReceipt(requestIdValue: string): AnnotationAgentProposalReceipt | null {
+    const requestId = text(requestIdValue, "Agent reconciliation request ID");
+    if (requestId.length > 200) throw new Error("Agent reconciliation request ID must be at most 200 characters");
+    const existing = this.database.query(
+      "SELECT payload_hash, event_id FROM annotation_agent_requests WHERE request_id = ?",
+    ).get(requestId) as AgentRequestRow | null;
+    if (!existing) return null;
+    const proposal = this.eventById(existing.event_id);
+    return {
+      annotation: this.get(proposal.annotationId),
+      proposal,
+      deduplicated: true,
+    };
+  }
+
+  proposeAgent(requestIdValue: string, input: AnnotationAgentProposalInput): AnnotationAgentProposalReceipt {
+    const requestId = text(requestIdValue, "Agent reconciliation request ID");
+    if (!input || typeof input !== "object") throw new Error("Agent proposal input must be an object");
+    const annotationId = text(input.annotationId, "Annotation ID");
+    if (requestId.length > 200) throw new Error("Agent reconciliation request ID must be at most 200 characters");
+    const baseEventId = text(input.baseEventId, "Base resolution event ID");
+    const modelId = text(input.modelId, "Agent model ID");
+    if (modelId.length > 200) throw new Error("Agent model ID must be at most 200 characters");
+    if (!input.result || typeof input.result !== "object") throw new Error("Agent result must be an object");
+    const result = input.result;
+    if (!Number.isFinite(result.confidence) || result.confidence < 0 || result.confidence > 1) {
+      throw new Error("Agent confidence must be between 0 and 1");
+    }
+    const method = normalizeResolutionMethod({
+      kind: "agent",
+      modelId,
+      method: "semantic-reconciliation",
+      rationale: result.rationale,
+      evidence: result.evidence,
+    });
+    const normalizedResult = result.status === "reanchored"
+      ? {
+          status: result.status,
+          candidateIndex: Number.isSafeInteger(result.candidateIndex) ? result.candidateIndex : -1,
+          confidence: result.confidence,
+          rationale: method.kind === "agent" ? method.rationale : "",
+          evidence: method.kind === "agent" ? method.evidence : [],
+        }
+      : result.status === "ambiguous"
+        ? {
+            status: result.status,
+            candidateIndexes: Array.isArray(result.candidateIndexes) &&
+                result.candidateIndexes.length >= 2 &&
+                result.candidateIndexes.length <= 8
+              ? result.candidateIndexes.map((index) => Number.isSafeInteger(index) ? index : -1)
+              : [],
+            confidence: result.confidence,
+            rationale: method.kind === "agent" ? method.rationale : "",
+            evidence: method.kind === "agent" ? method.evidence : [],
+          }
+        : result.status === "orphaned"
+          ? {
+              status: result.status,
+              confidence: result.confidence,
+              rationale: method.kind === "agent" ? method.rationale : "",
+              evidence: method.kind === "agent" ? method.evidence : [],
+            }
+          : (() => { throw new Error("Agent result status must be reanchored, ambiguous, or orphaned"); })();
+    const hash = payloadHash({ annotationId, baseEventId });
+    return this.database.transaction((): AnnotationAgentProposalReceipt => {
+      const existing = this.database.query(
+        "SELECT payload_hash, event_id FROM annotation_agent_requests WHERE request_id = ?",
+      ).get(requestId) as AgentRequestRow | null;
+      if (existing) {
+        if (existing.payload_hash !== hash) throw new Error("Agent reconciliation request ID was reused with different input");
+        const proposal = this.eventById(existing.event_id);
+        return { annotation: this.get(annotationId), proposal, deduplicated: true };
+      }
+      const promptPackage = this.agentPackage(annotationId);
+      if (promptPackage.baseEventId !== baseEventId) {
+        throw new Error("Agent proposal is stale because the annotation resolution changed");
+      }
+      const current = this.currentEvent(annotationId);
+      let proposal: AnnotationResolutionEvent;
+      if (normalizedResult.status === "reanchored") {
+        if (normalizedResult.candidateIndex >= promptPackage.candidates.length) {
+          throw new Error("Agent selected a candidate that was not supplied in its prompt package");
+        }
+        const candidate = current.candidates[normalizedResult.candidateIndex];
+        if (!candidate) throw new Error("Agent selected an unavailable candidate");
+        const automatic = normalizedResult.confidence >= AGENT_AUTOMATIC_THRESHOLD;
+        proposal = this.appendEvent({
+          annotationId,
+          sourceRepresentation: current.targetRepresentation,
+          targetRepresentation: current.targetRepresentation,
+          resolvedTarget: automatic ? candidate.target : null,
+          method,
+          reviewer: { kind: "agent", id: modelId },
+          confidence: normalizedResult.confidence,
+          candidates: [candidate],
+          status: automatic ? "resolved" : "probable",
+          appliesCurrent: automatic,
+        });
+      } else if (normalizedResult.status === "ambiguous") {
+        const indexes = [...new Set(normalizedResult.candidateIndexes)];
+        if (indexes.length < 2) throw new Error("Ambiguous agent result requires at least two candidates");
+        if (indexes.some((index) => index >= promptPackage.candidates.length)) {
+          throw new Error("Agent selected a candidate that was not supplied in its prompt package");
+        }
+        const candidates = indexes.map((index) => {
+          const candidate = current.candidates[index];
+          if (!candidate) throw new Error("Agent selected an unavailable candidate");
+          return candidate;
+        }).sort((left, right) => right.confidence - left.confidence);
+        proposal = this.appendEvent({
+          annotationId,
+          sourceRepresentation: current.targetRepresentation,
+          targetRepresentation: current.targetRepresentation,
+          resolvedTarget: null,
+          method,
+          reviewer: { kind: "agent", id: modelId },
+          confidence: normalizedResult.confidence,
+          candidates,
+          status: "ambiguous",
+          appliesCurrent: false,
+        });
+      } else {
+        proposal = this.appendEvent({
+          annotationId,
+          sourceRepresentation: current.targetRepresentation,
+          targetRepresentation: current.targetRepresentation,
+          resolvedTarget: null,
+          method,
+          reviewer: { kind: "agent", id: modelId },
+          confidence: normalizedResult.confidence,
+          candidates: [],
+          status: "orphaned",
+          appliesCurrent: false,
+        });
+      }
+      this.database.query(
+        "INSERT INTO annotation_agent_requests (request_id, payload_hash, event_id, created_at) VALUES (?, ?, ?, ?)",
+      ).run(requestId, hash, proposal.id, new Date().toISOString());
+      this.blocks.markMutation();
+      return { annotation: this.get(annotationId), proposal, deduplicated: false };
+    })();
+  }
+
+  reviewAgent(input: AnnotationAgentReviewInput): AnnotationRecord {
+    if (!input || typeof input !== "object") throw new Error("Agent review input must be an object");
+    const annotationId = text(input.annotationId, "Annotation ID");
+    const proposalEventId = text(input.proposalEventId, "Proposal event ID");
+    if (input.decision !== "accept" && input.decision !== "reject") {
+      throw new Error("Agent review decision must be accept or reject");
+    }
+    return this.database.transaction(() => {
+      this.requireRoot(annotationId);
+      const proposal = this.eventById(proposalEventId);
+      if (proposal.annotationId !== annotationId || proposal.method.kind !== "agent" || proposal.appliesCurrent) {
+        throw new Error("Resolution event is not a reviewable agent proposal");
+      }
+      const reviewed = this.history(annotationId).some((event) =>
+        event.method.kind === "human" && event.method.proposalEventId === proposalEventId
+      );
+      if (reviewed) throw new Error("Agent proposal was already reviewed");
+      const current = this.currentEvent(annotationId);
+      if (!sameRepresentation(current.targetRepresentation, proposal.targetRepresentation)) {
+        throw new Error("Agent proposal is stale because the annotation representation changed");
+      }
+      if (input.decision === "reject") {
+        this.appendEvent({
+          annotationId,
+          sourceRepresentation: current.targetRepresentation,
+          targetRepresentation: proposal.targetRepresentation,
+          resolvedTarget: null,
+          method: { kind: "human", method: "rejected-agent-proposal", proposalEventId },
+          reviewer: { kind: "user", id: "protocol" },
+          confidence: proposal.confidence,
+          candidates: proposal.candidates,
+          status: "rejected",
+          appliesCurrent: false,
+        });
+      } else if (proposal.status === "orphaned") {
+        this.appendEvent({
+          annotationId,
+          sourceRepresentation: current.targetRepresentation,
+          targetRepresentation: proposal.targetRepresentation,
+          resolvedTarget: null,
+          method: { kind: "human", method: "accepted-agent-proposal", proposalEventId },
+          reviewer: { kind: "user", id: "protocol" },
+          confidence: null,
+          candidates: [],
+          status: "orphaned",
+          appliesCurrent: true,
+        });
+      } else {
+        const candidateIndex = input.candidateIndex ?? (proposal.candidates.length === 1 ? 0 : -1);
+        const candidate = Number.isSafeInteger(candidateIndex) ? proposal.candidates[candidateIndex] : undefined;
+        if (!candidate) throw new Error("Agent proposal acceptance requires a valid candidate index");
+        this.appendEvent({
+          annotationId,
+          sourceRepresentation: current.targetRepresentation,
+          targetRepresentation: proposal.targetRepresentation,
+          resolvedTarget: candidate.target,
+          method: { kind: "human", method: "accepted-agent-proposal", proposalEventId },
+          reviewer: { kind: "user", id: "protocol" },
+          confidence: 1,
+          candidates: [],
+          status: "resolved",
+          appliesCurrent: true,
+        });
+      }
+      this.blocks.markMutation();
+      return this.get(annotationId);
+    })();
+  }
+
+  agentEvidence(limitValue = 50): AnnotationAgentEvidenceSummary {
+    if (!Number.isSafeInteger(limitValue) || limitValue < 1 || limitValue > 100) {
+      throw new Error("Agent evidence limit must be an integer between 1 and 100");
+    }
+    const rows = this.database.query(`
+      WITH reviews AS (
+        SELECT
+          json_extract(method_json, '$.proposalEventId') AS proposal_event_id,
+          resolved_target_json,
+          ROW_NUMBER() OVER (
+            PARTITION BY json_extract(method_json, '$.proposalEventId')
+            ORDER BY sequence
+          ) AS review_order
+        FROM annotation_resolution_events
+        WHERE json_extract(method_json, '$.kind') = 'human'
+          AND json_extract(method_json, '$.method') = 'accepted-agent-proposal'
+      )
+      SELECT
+        agent.*,
+        CASE
+          WHEN agent.status = 'resolved' AND agent.applies_current = 1 THEN 'automatic'
+          ELSE 'human'
+        END AS accepted_by,
+        CASE
+          WHEN agent.status = 'resolved' AND agent.applies_current = 1
+            THEN agent.resolved_target_json
+          ELSE review.resolved_target_json
+        END AS accepted_target_json,
+        COUNT(*) OVER () AS accepted_count,
+        SUM(CASE
+          WHEN agent.status = 'resolved' AND agent.applies_current = 1 THEN 1
+          ELSE 0
+        END) OVER () AS automatic_count
+      FROM annotation_resolution_events agent
+      LEFT JOIN reviews review
+        ON review.proposal_event_id = agent.id AND review.review_order = 1
+      WHERE json_extract(agent.method_json, '$.kind') = 'agent'
+        AND agent.confidence IS NOT NULL
+        AND (
+          (agent.status = 'resolved' AND agent.applies_current = 1) OR
+          review.proposal_event_id IS NOT NULL
+        )
+      ORDER BY agent.created_at, agent.id
+      LIMIT ?
+    `).all(limitValue) as AgentEvidenceRow[];
+    const acceptedCount = rows[0]?.accepted_count ?? 0;
+    const automaticCount = rows[0]?.automatic_count ?? 0;
+    const humanReviewedCount = acceptedCount - automaticCount;
+    let passageTruncated = false;
+    const samples = rows.map((row): AnnotationAgentEvidenceSample => {
+      const proposal = eventFromRow(row);
+      if (proposal.method.kind !== "agent" || proposal.confidence === null) {
+        throw new Error("Stored agent evidence row is invalid");
+      }
+      const original = parseStoredTarget(this.targetRow(proposal.annotationId).original_target_json);
+      const resolved = row.accepted_target_json === null
+        ? null
+        : parseStoredTarget(row.accepted_target_json);
+      const originalPassage = boundedSlice(targetPassage(original), AGENT_PASSAGE_LIMIT);
+      const resolvedPassage = resolved === null
+        ? null
+        : boundedSlice(targetPassage(resolved), AGENT_PASSAGE_LIMIT);
+      passageTruncated ||= originalPassage.truncated || resolvedPassage?.truncated === true;
+      return {
+        annotationId: proposal.annotationId,
+        proposalEventId: proposal.id,
+        modelId: proposal.method.modelId,
+        outcome: proposal.status === "ambiguous"
+          ? "ambiguous"
+          : proposal.status === "orphaned"
+            ? "orphaned"
+            : "reanchored",
+        acceptedBy: row.accepted_by,
+        confidence: proposal.confidence,
+        originalPassage: originalPassage.text,
+        resolvedPassage: resolvedPassage?.text ?? null,
+        rationale: proposal.method.rationale,
+        evidence: proposal.method.evidence,
+      };
+    });
+    return {
+      acceptedCount,
+      automaticCount,
+      humanReviewedCount,
+      samples,
+      truncated: acceptedCount > samples.length || passageTruncated,
+    };
+  }
+
   setLifecycle(input: AnnotationLifecycleInput, mutation: MutationProvenance): AnnotationRecord {
     if (!input || typeof input !== "object") throw new Error("Annotation lifecycle input must be an object");
     const annotationId = text(input.annotationId, "Annotation ID");
@@ -636,6 +1109,14 @@ export class AnnotationRepository {
     return eventFromRow(row);
   }
 
+  private eventById(eventId: string): AnnotationResolutionEvent {
+    const row = this.database.query(
+      "SELECT * FROM annotation_resolution_events WHERE id = ?",
+    ).get(eventId) as ResolutionRow | null;
+    if (!row) throw new Error(`Annotation resolution event not found: ${eventId}`);
+    return eventFromRow(row);
+  }
+
   private appendEvent(input: {
     readonly annotationId: string;
     readonly sourceRepresentation: AnnotationRepresentation;
@@ -698,8 +1179,9 @@ export class AnnotationRepository {
         throw new Error("Resolved event must apply a target with confidence");
       }
     } else if (event.status === "probable") {
+      const proposal = event.method.kind === "agent" && !event.appliesCurrent;
       if (
-        !event.appliesCurrent ||
+        (!event.appliesCurrent && !proposal) ||
         event.resolvedTarget !== null ||
         event.confidence === null ||
         event.candidates.length === 0
@@ -710,6 +1192,14 @@ export class AnnotationRepository {
         event.resolvedTarget !== null ||
         ((event.confidence === null) !== (event.candidates.length === 0))
       ) throw new Error("unresolved event evidence is inconsistent");
+    } else if (event.status === "ambiguous" || event.status === "orphaned") {
+      const proposal = event.method.kind === "agent" && !event.appliesCurrent;
+      if (
+        event.resolvedTarget !== null ||
+        (event.appliesCurrent ? event.confidence !== null : !proposal || event.confidence === null) ||
+        (event.status === "ambiguous" && proposal && event.candidates.length < 2) ||
+        (event.status === "orphaned" && event.candidates.length > 0)
+      ) throw new Error(`${event.status} event evidence is inconsistent`);
     } else if (event.status === "rejected") {
       if (event.appliesCurrent || event.resolvedTarget !== null) {
         throw new Error("Rejected event cannot apply current");
@@ -866,9 +1356,10 @@ export class AnnotationRepository {
         UNIQUE(annotation_block_id, sequence),
         CHECK (
           (status = 'resolved' AND applies_current = 1 AND resolved_target_json IS NOT NULL AND confidence IS NOT NULL) OR
-          (status = 'probable' AND applies_current = 1 AND resolved_target_json IS NULL AND confidence IS NOT NULL AND json_array_length(candidates_json) > 0) OR
+          (status = 'probable' AND resolved_target_json IS NULL AND confidence IS NOT NULL AND json_array_length(candidates_json) > 0 AND (applies_current = 1 OR (applies_current = 0 AND json_extract(method_json, '$.kind') = 'agent'))) OR
           (status = 'unresolved' AND applies_current = 1 AND resolved_target_json IS NULL AND ((confidence IS NULL AND json_array_length(candidates_json) = 0) OR (confidence IS NOT NULL AND json_array_length(candidates_json) > 0))) OR
-          (status IN ('ambiguous','orphaned','unsupported') AND applies_current = 1 AND resolved_target_json IS NULL AND confidence IS NULL) OR
+          (status IN ('ambiguous','orphaned') AND resolved_target_json IS NULL AND ((applies_current = 1 AND confidence IS NULL) OR (applies_current = 0 AND confidence IS NOT NULL AND json_extract(method_json, '$.kind') = 'agent'))) OR
+          (status = 'unsupported' AND applies_current = 1 AND resolved_target_json IS NULL AND confidence IS NULL) OR
           (status = 'rejected' AND applies_current = 0 AND resolved_target_json IS NULL)
         )
       );
@@ -885,7 +1376,8 @@ export class AnnotationRepository {
     } else if (
       !existingResolution.sql.includes("candidates_json") ||
       !existingResolution.sql.includes("'probable'") ||
-      !existingResolution.sql.includes("status = 'unresolved'")
+      !existingResolution.sql.includes("status = 'unresolved'") ||
+      !existingResolution.sql.includes("json_extract(method_json")
     ) {
       this.database.exec(`
         DROP TRIGGER IF EXISTS annotation_resolution_events_append_only;
@@ -911,6 +1403,14 @@ export class AnnotationRepository {
       CREATE TRIGGER IF NOT EXISTS annotation_resolution_events_append_only
       BEFORE UPDATE ON annotation_resolution_events
       BEGIN SELECT RAISE(ABORT, 'annotation resolution events are append-only'); END;
+    `);
+    this.database.exec(`
+      CREATE TABLE IF NOT EXISTS annotation_agent_requests (
+        request_id TEXT PRIMARY KEY,
+        payload_hash TEXT NOT NULL,
+        event_id TEXT NOT NULL REFERENCES annotation_resolution_events(id) ON DELETE CASCADE,
+        created_at TEXT NOT NULL
+      );
     `);
   }
 

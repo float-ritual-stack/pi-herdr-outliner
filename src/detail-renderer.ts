@@ -365,6 +365,14 @@ export function buildDetailAnnotationView(
           width,
         ));
       }
+      if (event.method.kind === "agent") {
+        output.push(fitDynamicText(`  rationale · ${event.method.rationale}`, width));
+        for (const evidence of event.method.evidence) {
+          output.push(fitDynamicText(`  evidence · ${evidence}`, width));
+        }
+      } else if (event.method.kind === "human" && event.method.proposalEventId) {
+        output.push(fitDynamicText(`  proposal · ${event.method.proposalEventId}`, width));
+      }
     }
     output.push("─".repeat(width));
   }

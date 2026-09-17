@@ -13,6 +13,7 @@ import outlinerExtension, {
   formatSelection,
   latestAssistantResponse,
   normalizeGeneratedCaptureTitle,
+  normalizeAgentReconciliationOutput,
   formatWorkPlaceholderNudge,
   selectRecentFocusedOutlinerClient,
   selectCapturedResponseTree,
@@ -21,6 +22,7 @@ import { OutlinerClient, type RequestInput } from "../src/client";
 import { parseProperties, patchPropertyText } from "../src/properties";
 import { OUTLINER_PROTOCOL_VERSION } from "../src/types";
 import type {
+  AnnotationAgentPromptPackage,
   BlockEditActivityPage,
   Block,
   OutlinerClientRegistration,
@@ -82,6 +84,32 @@ test("normalizes plain generated capture titles and rejects unsafe output", () =
   );
 });
 
+test("normalizes structured agent reconciliation output and rejects invented shapes", () => {
+  expect(normalizeAgentReconciliationOutput(JSON.stringify({
+    status: "reanchored",
+    candidateIndex: 1,
+    confidence: 0.96,
+    rationale: "The candidate preserves the cited claim.",
+    evidence: ["Candidate 1 retains the original passage."],
+  }))).toEqual({
+    status: "reanchored",
+    candidateIndex: 1,
+    confidence: 0.96,
+    rationale: "The candidate preserves the cited claim.",
+    evidence: ["Candidate 1 retains the original passage."],
+  });
+  expect(() => normalizeAgentReconciliationOutput("```json\n{}\n```")).toThrow(
+    "must return one JSON object",
+  );
+  expect(() => normalizeAgentReconciliationOutput(JSON.stringify({
+    status: "ambiguous",
+    candidateIndexes: [0, 0],
+    confidence: 0.5,
+    rationale: "Duplicate indexes are not evidence.",
+    evidence: ["same"],
+  }))).toThrow("at least two distinct");
+});
+
 
 test("registers the workspace commands and annotation-aware tools", () => {
   const registeredTools: Array<{
@@ -123,6 +151,7 @@ test("registers the workspace commands and annotation-aware tools", () => {
     "outliner_branch_rank",
     "outliner_capture",
     "outliner_annotations",
+    "outliner_annotation_reconcile",
     "outliner_annotate",
     "outliner_annotation_reply",
     "outliner_annotation_lifecycle",
@@ -1526,7 +1555,7 @@ test("requires the current protocol, attributes agent creates and page follows, 
     expect(largeEnvelope.presentation.omitted).toBeGreaterThan(0);
     protocolVersion = 5;
     await expect(tools.get("outliner_query")!.execute("incompatible-query", {})).rejects.toThrow(
-      "Outliner protocol 5 does not match this session's extension protocol 42. Run /reload, then retry.",
+      "Outliner protocol 5 does not match this session's extension protocol 43. Run /reload, then retry.",
     );
   } finally {
     OutlinerClient.prototype.request = originalRequest;
@@ -1551,7 +1580,9 @@ test("captures through command, tool, and exact standalone dispatch without an a
     name: string;
     execute(
       id: string,
-      params: { text: string; requestId?: string; capturedFromBlockId?: string },
+      params:
+        | { text: string; requestId?: string; capturedFromBlockId?: string }
+        | { annotationId: string; requestId?: string },
       signal: AbortSignal | undefined,
       onUpdate: unknown,
       context: ExtensionContext,
@@ -1567,6 +1598,29 @@ test("captures through command, tool, and exact standalone dispatch without an a
     createdAt: "created",
     updatedAt: "updated",
     properties: [],
+  };
+  const agentPackage: AnnotationAgentPromptPackage = {
+    annotationId: "annotation-1",
+    baseEventId: "deterministic-event-1",
+    annotationBody: "Check the moved claim.",
+    originalPassage: "Original claim",
+    originalPrefix: "Before ",
+    originalSuffix: " after",
+    candidates: [{
+      index: 0,
+      deterministicMethod: {
+        kind: "codec",
+        codecId: "text-quote",
+        codecVersion: 1,
+        method: "local-fuzzy",
+      },
+      deterministicConfidence: 0.68,
+      passage: "Moved claim",
+      prefix: "Before ",
+      suffix: " after",
+    }],
+    truncated: false,
+    characterCount: 512,
   };
   const commands = new Map<string, CommandDefinition>();
   const tools = new Map<string, ToolDefinition>();
@@ -1584,11 +1638,22 @@ test("captures through command, tool, and exact standalone dispatch without an a
       modelRequests.push([model, request, options]);
       return fauxAssistantMessage("# Captured roadmap decision");
     },
+    (request, options, _state, model) => {
+      modelRequests.push([model, request, options]);
+      return fauxAssistantMessage(JSON.stringify({
+        status: "reanchored",
+        candidateIndex: 0,
+        confidence: 0.96,
+        rationale: "The candidate preserves the surrounding context.",
+        evidence: ["Candidate 0 retains both context fragments."],
+      }));
+    },
   ]);
   const requests: RequestInput[] = [];
   let captureFailure: Error | null = null;
   let captureIndex = 0;
   const originalHerdrEnv = process.env.HERDR_ENV;
+  let storedAgentReceipt: unknown = null;
   process.env.HERDR_ENV = "0";
   const originalRequest = OutlinerClient.prototype.request;
   OutlinerClient.prototype.request = async function <T>(input: RequestInput): Promise<T> {
@@ -1657,6 +1722,30 @@ test("captures through command, tool, and exact standalone dispatch without an a
           { key: "status", value: "unprocessed" },
         ],
       } as T;
+    }
+    if (input.action === "annotations.agent-receipt") return storedAgentReceipt as T;
+    if (input.action === "annotations.agent-package") return agentPackage as T;
+    if (input.action === "annotations.propose-agent") {
+      const receipt = {
+        annotation: { block: { id: input.input.annotationId } },
+        proposal: {
+          id: "agent-proposal-1",
+          annotationId: input.input.annotationId,
+          status: "resolved",
+          appliesCurrent: true,
+          confidence: input.input.result.confidence,
+          method: {
+            kind: "agent",
+            modelId: input.input.modelId,
+            method: "semantic-reconciliation",
+            rationale: input.input.result.rationale,
+            evidence: input.input.result.evidence,
+          },
+        },
+        deduplicated: false,
+      };
+      storedAgentReceipt = { ...receipt, deduplicated: true };
+      return receipt as T;
     }
     throw new Error(`Unexpected request: ${input.action}`);
   };
@@ -1749,6 +1838,37 @@ test("captures through command, tool, and exact standalone dispatch without an a
       capturedFromBlockId: selectionBlock.id,
       deduplicated: false,
     });
+    const reconciliationResult = await tools.get("outliner_annotation_reconcile")!.execute(
+      "tool-reconcile",
+      { annotationId: "annotation-1", requestId: "stable-reconcile-request" },
+      undefined,
+      undefined,
+      context,
+    );
+    expect(JSON.parse(reconciliationResult.content[0]!.text)).toMatchObject({
+      proposal: {
+        id: "agent-proposal-1",
+        status: "resolved",
+        confidence: 0.96,
+        method: {
+          kind: "agent",
+          modelId: "title-provider/title-model",
+          rationale: "The candidate preserves the surrounding context.",
+        },
+      },
+      deduplicated: false,
+    });
+    const reconciliationReplay = await tools.get("outliner_annotation_reconcile")!.execute(
+      "tool-reconcile-retry",
+      { annotationId: "annotation-1", requestId: "stable-reconcile-request" },
+      undefined,
+      undefined,
+      context,
+    );
+    expect(JSON.parse(reconciliationReplay.content[0]!.text)).toMatchObject({
+      proposal: { id: "agent-proposal-1" },
+      deduplicated: true,
+    });
 
     const input = handlers.get("input")!;
     expect(await input({
@@ -1815,7 +1935,7 @@ test("captures through command, tool, and exact standalone dispatch without an a
         }),
       }),
     ]);
-    expect(modelRequests).toHaveLength(1);
+    expect(modelRequests).toHaveLength(2);
     expect(modelRequests[0]).toEqual([
       context.model,
       expect.objectContaining({
@@ -1839,6 +1959,47 @@ test("captures through command, tool, and exact standalone dispatch without an a
         maxTokens: 64,
       }),
     ]);
+    expect(modelRequests[1]).toEqual([
+      context.model,
+      expect.objectContaining({
+        systemPrompt: expect.stringContaining("Choose only listed candidate indexes"),
+        messages: [
+          expect.objectContaining({
+            role: "user",
+            content: [
+              expect.objectContaining({
+                type: "text",
+                text: JSON.stringify(agentPackage),
+              }),
+            ],
+          }),
+        ],
+      }),
+      expect.objectContaining({
+        apiKey: "title-api-key",
+        headers: { "x-title-test": "enabled" },
+        cacheRetention: "none",
+        maxTokens: 1_024,
+      }),
+    ]);
+    expect(requests).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        action: "annotations.propose-agent",
+        requestId: "stable-reconcile-request",
+        input: {
+          annotationId: "annotation-1",
+          baseEventId: "deterministic-event-1",
+          modelId: "title-provider/title-model",
+          result: {
+            status: "reanchored",
+            candidateIndex: 0,
+            confidence: 0.96,
+            rationale: "The candidate preserves the surrounding context.",
+            evidence: ["Candidate 0 retains both context fragments."],
+          },
+        },
+      }),
+    ]));
     expect(captures[3]).toMatchObject({
       text: "{remember this 🐢}",
       source: "omp",

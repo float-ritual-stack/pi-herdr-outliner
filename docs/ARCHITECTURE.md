@@ -294,6 +294,7 @@ project-documentation mutations.
 - `web_resource_state` — one mutable row per web Resource containing current snapshot and representation pointers, five-state freshness, check/error diagnostics, address epoch, and the compare-and-swap version used to reject stale refresh completion.
 - `annotation_targets` — one immutable original target JSON document per root annotation block, with indexed block, Resource, or honest legacy-file subject identity.
 - `annotation_resolution_events` — append-only, per-annotation resolution history. The latest event with `applies_current` supplies current status and optional resolved target. Every deterministic pass retains ranked candidate targets, methods, and confidence scores; rejected proposals remain history without moving current resolution.
+- `annotation_agent_requests` — idempotency receipts linking one bounded agent request payload to its append-only proposal event.
 - `annotation_migration_quarantine` — raw legacy root blocks that cannot be parsed safely, preserving block ID, text, failure reason, and timestamp without fabricating a target.
 
 Replies have no target row and materialize the root target and history when
@@ -309,7 +310,7 @@ bytes and provenance remain unknown rather than being synthesized.
 
 ## Protocol
 
-The current protocol version is `42`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
+The current protocol version is `43`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
 
 ### Important request families
 
@@ -784,11 +785,23 @@ Unsupported anchor/content combinations remain `unsupported`.
 
 Every event retains its ranked candidate targets, methods, and scores. Probable,
 unresolved, and ambiguous candidates do not become the resolved target.
+`outliner_annotation_reconcile` is the only model-backed reconciliation seam. It
+accepts only failed deterministic outcomes, sends the selected model a package
+bounded to the annotation body, immutable original passage/context, and ranked
+candidate passages, then validates one structured `reanchored`, `ambiguous`, or
+`orphaned` result. The model may select only supplied candidate indexes.
+Reanchored results at confidence `0.95` or above apply automatically; every
+lower-confidence semantic move and every ambiguous/orphaned result remains a
+non-current, reviewable proposal. Human accept/reject events link to the proposal
+ID, so original targets, proposed evidence/rationale, and rejected proposals stay
+auditable. Accepted automatic and human-reviewed outcomes are available through
+`annotations.agent-evidence` as bounded heuristic-promotion evidence.
+
 Approval appends a human-reviewed resolution. Rejected proposals stay in
 history and do not replace the latest applied current event. Detail renders
-original and current evidence and reveals only a currently resolved positioned
-text quote; every non-resolved outcome remains valid and inspectable. Original
-targets are never rewritten.
+original and current evidence plus agent rationale and evidence, and reveals
+only a currently resolved positioned text quote; every non-resolved outcome
+remains valid and inspectable. Original targets are never rewritten.
 
 ## Ephemeral attention
 
