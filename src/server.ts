@@ -991,29 +991,15 @@ export class OutlinerServer {
         );
         result = this.presentResource(description, destination);
       } else if (request.action === "resources.refresh") {
-        const resource = this.store.resources.require(request.resourceId);
-        let description: ResourceDescription;
-        if (resource.provider === "computed") {
-          const local = this.presentResource(
-            this.store.resources.describe(resource.id, true),
-            destination,
-          );
-          this.requireAvailableResourceCapability(local, "refresh", true);
-          await this.store.resources.executeComputedResource(resource.id, true);
-          description = this.store.resources.describe(resource.id, true);
-        } else if (resource.provider === "jira" || resource.provider === "linear") {
-          const local = this.presentResource(
-            this.store.resources.describe(resource.id, true),
-            destination,
-          );
-          this.requireAvailableResourceCapability(local, "refresh", true);
-          description = await this.store.resources.refreshRemoteEntity(
-            resource.id,
-            true,
-          );
-        } else {
-          description = await this.store.resources.refreshWeb(resource.id, true);
-        }
+        const local = this.presentResource(
+          this.store.resources.describe(request.resourceId, true),
+          destination,
+        );
+        this.requireAvailableResourceCapability(local, "refresh", true);
+        const description = await this.store.resources.refresh(
+          request.resourceId,
+          true,
+        );
         result = this.presentResource(description, destination);
       } else if (request.action === "computed.execute") {
         const local = this.presentResource(

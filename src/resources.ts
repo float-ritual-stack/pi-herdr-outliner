@@ -1672,56 +1672,92 @@ export function resourceAddressLabel(address: ResourceAddress): string {
   }
 }
 
-const PROVIDER_CAPABILITIES: Readonly<
-  Record<ResourceProvider, Partial<Record<ResourceCapability, true>>>
-> = {
+export interface ResourceProviderProfile {
+  readonly kind: ResourceKind;
+  readonly access: "local" | "remote";
+  readonly capabilities: Partial<Record<ResourceCapability, true>>;
+}
+
+const RESOURCE_PROVIDER_PROFILES: Readonly<Record<ResourceProvider, ResourceProviderProfile>> = {
   filesystem: {
-    read: true,
-    write: true,
-    refresh: true,
-    watch: true,
-    history: true,
-    "open-external": true,
+    kind: "document",
+    access: "local",
+    capabilities: {
+      read: true,
+      write: true,
+      refresh: true,
+      watch: true,
+      history: true,
+      "open-external": true,
+    },
   },
   web: {
-    read: true,
-    refresh: true,
-    history: true,
-    "open-external": true,
-    embed: true,
+    kind: "document",
+    access: "remote",
+    capabilities: {
+      read: true,
+      refresh: true,
+      history: true,
+      "open-external": true,
+      embed: true,
+    },
   },
   github: {
-    read: true,
-    write: true,
-    refresh: true,
-    query: true,
-    history: true,
-    "open-external": true,
+    kind: "entity",
+    access: "remote",
+    capabilities: {
+      read: true,
+      write: true,
+      refresh: true,
+      query: true,
+      history: true,
+      "open-external": true,
+    },
   },
   jira: {
-    read: true,
-    refresh: true,
-    history: true,
-    "open-external": true,
-    command: true,
+    kind: "entity",
+    access: "remote",
+    capabilities: {
+      read: true,
+      refresh: true,
+      history: true,
+      "open-external": true,
+      command: true,
+    },
   },
   linear: {
-    read: true,
-    refresh: true,
-    history: true,
-    "open-external": true,
-    command: true,
+    kind: "entity",
+    access: "remote",
+    capabilities: {
+      read: true,
+      refresh: true,
+      history: true,
+      "open-external": true,
+      command: true,
+    },
   },
   application: {
-    "open-external": true,
-    command: true,
+    kind: "application",
+    access: "local",
+    capabilities: {
+      "open-external": true,
+      command: true,
+    },
   },
   computed: {
-    read: true,
-    refresh: true,
-    history: true,
+    kind: "document",
+    access: "local",
+    capabilities: {
+      read: true,
+      refresh: true,
+      history: true,
+    },
   },
 };
+
+export function resourceProviderProfile(provider: ResourceProvider): ResourceProviderProfile {
+  return RESOURCE_PROVIDER_PROFILES[provider];
+}
 
 function blocked(reason: string, detail: string): CapabilityAssessment {
   return { state: "blocked", reason, detail };
@@ -1761,12 +1797,10 @@ function resourceCapabilityDecision(
   capability: ResourceCapability,
   providerAccess: ResourceProviderAccess,
 ): ResourceCapabilityDecision {
-  const providerSupports = PROVIDER_CAPABILITIES[source.provider][capability] === true;
+  const profile = resourceProviderProfile(source.provider);
+  const providerSupports = profile.capabilities[capability] === true;
   const policyDenied = source.policy.deniedCapabilities.includes(capability);
-  const remote = source.provider === "web" ||
-    source.provider === "github" ||
-    source.provider === "jira" ||
-    source.provider === "linear";
+  const remote = profile.access === "remote";
   const factors: Record<ResourceCapabilityFactor, CapabilityAssessment> = {
     provider: providerSupports
       ? { state: "satisfied" }

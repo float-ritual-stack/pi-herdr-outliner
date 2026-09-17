@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createTextQuoteAnchor } from "../src/annotations";
+import { BUILTIN_MARKDOWN_PRODUCER_ID } from "../src/computed-resources";
 import { OutlinerStore } from "../src/store";
 import {
   BasicWebMarkdownExtractor,
@@ -313,6 +314,102 @@ test("young representations keep their older source snapshots available", async 
         ({ artifact: candidate }) => candidate.id === firstSourceSnapshotId,
       ),
     ).toMatchObject({ payloadAvailable: true, evictedAt: null });
+  } finally {
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("computed dependencies retain their exact noncurrent source revision", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-outliner-retention-computed-"));
+  let version = 1;
+  const store = new OutlinerStore(join(directory, "outliner.sqlite"), {
+    fetch: (async (_input: string | URL | Request, _init?: RequestInit) =>
+      new Response(`<h1>Revision ${version}</h1>`, {
+        headers: { "content-type": "text/html", etag: `"v${version}"` },
+      })) as typeof fetch,
+  });
+  try {
+    const webSource = store.resources.createSource({
+      name: "Computed dependency fixture",
+      provider: "web",
+      boundary: { baseUrl: "https://example.com/" },
+    });
+    const webResource = store.resources.intern({
+      sourceId: webSource.id,
+      address: { kind: "web", url: "https://example.com/dependency" },
+    }).resource;
+    const first = await store.resources.refreshWeb(webResource.id, true);
+    if (!first.web) throw new Error("Fixture did not create its first web revision");
+
+    const computedSource = store.resources.createSource({
+      name: "Computed producers",
+      provider: "computed",
+      boundary: { registry: "retention", allowedPermissions: [] },
+    });
+    store.resources.createComputedInvocation({
+      sourceId: computedSource.id,
+      producerId: BUILTIN_MARKDOWN_PRODUCER_ID,
+      inputs: { title: "Dependent output", body: "Uses the first web revision." },
+      dependencies: [first.web.sourceSnapshot.revision],
+    });
+
+    version = 2;
+    const second = await store.resources.refreshWeb(webResource.id, true);
+    version = 3;
+    const third = await store.resources.refreshWeb(webResource.id, true);
+    version = 4;
+    const current = await store.resources.refreshWeb(webResource.id, true);
+    if (!second.web || !third.web || !current.web) {
+      throw new Error("Fixture did not create later web revisions");
+    }
+    store.resources.configureRetention({
+      retainNewestSourceSnapshots: 1,
+      retainNewestRepresentationsPerAdapter: 1,
+      minimumAgeMs: 0,
+      purgeGraceMs: 0,
+    });
+
+    const before = store.resources.inspectRetention(webResource.id);
+    expect(
+      artifact(before.artifacts, "source-snapshot", first.web.sourceSnapshot.id).states,
+    ).toContain("referenced");
+    expect(
+      artifact(before.artifacts, "source-snapshot", second.web.sourceSnapshot.id).states,
+    ).toEqual(["evictable"]);
+    const collection = store.resources.collectRetention("evict", webResource.id);
+    expect(collection.evicted).toEqual(expect.arrayContaining([
+      { kind: "source-snapshot", id: second.web.sourceSnapshot.id },
+      { kind: "source-snapshot", id: third.web.sourceSnapshot.id },
+    ]));
+    expect(collection.evicted).not.toContainEqual({
+      kind: "source-snapshot",
+      id: first.web.sourceSnapshot.id,
+    });
+
+    store.resources.createComputedInvocation({
+      sourceId: computedSource.id,
+      producerId: BUILTIN_MARKDOWN_PRODUCER_ID,
+      inputs: { title: "Historical dependency", body: "Uses evicted revision metadata." },
+      dependencies: [second.web.sourceSnapshot.revision],
+    });
+    expect(
+      artifact(
+        store.resources.inspectRetention(webResource.id).artifacts,
+        "source-snapshot",
+        second.web.sourceSnapshot.id,
+      ).states,
+    ).toEqual(expect.arrayContaining(["referenced", "evicted"]));
+    const purge = store.resources.collectRetention("purge", webResource.id);
+    expect(purge.purged.map(({ artifact: purged }) => purged)).toEqual(
+      expect.arrayContaining([
+        { kind: "source-snapshot", id: third.web.sourceSnapshot.id },
+      ]),
+    );
+    expect(purge.purged.map(({ artifact: purged }) => purged)).not.toContainEqual({
+      kind: "source-snapshot",
+      id: second.web.sourceSnapshot.id,
+    });
   } finally {
     store.close();
     rmSync(directory, { recursive: true, force: true });

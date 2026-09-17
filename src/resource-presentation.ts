@@ -1,6 +1,7 @@
 import {
   RESOURCE_CAPABILITIES,
   deriveResourceCapabilityReport,
+  resourceProviderProfile,
   type Resource,
   type ResourceCapability,
   type ResourceCapabilityDecision,
@@ -122,13 +123,7 @@ export function normalizeResourcePresentationContext(
 }
 
 function resourceKind(resource: Resource): ResourceKind {
-  if (
-    resource.provider === "github" ||
-    resource.provider === "jira" ||
-    resource.provider === "linear"
-  ) return "entity";
-  if (resource.provider === "application") return "application";
-  return "document";
+  return resourceProviderProfile(resource.provider).kind;
 }
 
 function externalUrl(description: ResourceDescription): string | null {
