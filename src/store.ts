@@ -1307,6 +1307,11 @@ export class OutlinerStore {
           SELECT parent.block_id
           FROM block_properties parent JOIN doomed ON parent.value = doomed.id
           WHERE parent.scope = 'block' AND parent.key = 'parent-annotation'
+            AND NOT EXISTS (
+              SELECT 1 FROM block_properties earlier
+              WHERE earlier.block_id = parent.block_id AND earlier.scope = 'block'
+                AND earlier.key = 'parent-annotation' AND earlier.ordinal < parent.ordinal
+            )
             AND EXISTS (
               SELECT 1 FROM block_properties type
               WHERE type.block_id = parent.block_id AND type.scope = 'block'
@@ -1327,7 +1332,6 @@ export class OutlinerStore {
         }
         this.reservePurgedWorkIdFromCurrentRead(row.block_id, parsed);
       }
-      // Retain request hashes so retries cannot recreate purged results or duplicate survivors.
       this.database.query(`
         WITH purged(id) AS (SELECT value FROM json_each(?))
         UPDATE annotation_requests
@@ -1344,7 +1348,6 @@ export class OutlinerStore {
           WHERE entry.value IN (SELECT id FROM purged)
         )
       `).run(JSON.stringify(subtree));
-      // Remove owned targets first so subject RESTRICT references cannot block the purge.
       this.database.query(
         `DELETE FROM annotation_targets WHERE annotation_block_id IN (${placeholders})`,
       ).run(...subtree);

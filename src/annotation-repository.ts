@@ -250,7 +250,6 @@ export class AnnotationRepository {
         if (!Array.isArray(ids) || ids.some((id) => typeof id !== "string")) {
           throw new Error(`Corrupt annotation request receipt: ${normalizedRequestId}`);
         }
-        // Purge prunes receipt IDs, so retries return only surviving results (possibly none).
         return { annotations: ids.map((id) => this.get(id)), deduplicated: true };
       }
       const operationIds = new Set<string>();

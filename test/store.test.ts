@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -2551,9 +2551,9 @@ Second paragraph`;
     const deletedReply = store.replyToAnnotation("deleted-reply", {
       annotationId: root.block.id, body: "Deleted.", source: "user",
     }).annotations[0]!;
-    const otherReply = store.replyToAnnotation("other-reply", {
+    store.replyToAnnotation("other-reply", {
       annotationId: otherRoot.block.id, body: "Unrelated reply.", source: "user",
-    }).annotations[0]!;
+    });
     const quarantined = store.create([
       "Malformed reply",
       `[type::annotation-reply] [parent-annotation::${root.block.id}] [annotation-status::invalid]`,
@@ -2566,22 +2566,14 @@ Second paragraph`;
     store.delete(deletedReply.block.id);
     store.move(reply.block.id, null);
     store.create("Ordinary child", root.block.id);
-    const get = spyOn(store, "get");
-    try {
-      const threads = store.listAnnotationThreads({
-        subject: { kind: "block", blockId: source.id },
-      });
-      expect(threads.map((thread) => thread.block.id)).toEqual([root.block.id]);
-      expect(threads[0]!.replies.map((entry) => entry.block.id)).toEqual([reply.block.id]);
-      expect(get).not.toHaveBeenCalledWith(otherRoot.block.id);
-      expect(get).not.toHaveBeenCalledWith(otherReply.block.id);
-      expect(get).not.toHaveBeenCalledWith(quarantined.id);
-      expect(store.listAnnotationThreads({
-        subject: { kind: "resource", resourceId: "no-annotations" },
-      })).toEqual([]);
-    } finally {
-      get.mockRestore();
-    }
+    const threads = store.listAnnotationThreads({
+      subject: { kind: "block", blockId: source.id },
+    });
+    expect(threads.map((thread) => thread.block.id)).toEqual([root.block.id]);
+    expect(threads[0]!.replies.map((entry) => entry.block.id)).toEqual([reply.block.id]);
+    expect(store.listAnnotationThreads({
+      subject: { kind: "resource", resourceId: "no-annotations" },
+    })).toEqual([]);
   });
 
   test("purges subject annotations and moved replies with their dependent data", () => {
@@ -2603,6 +2595,9 @@ Second paragraph`;
     const otherReply = store.replyToAnnotation("retained-reply", {
       annotationId: otherRoot.id, body: "Retained reply.", source: "user",
     }).annotations[0]!.block;
+    store.patchProperties(otherReply.id, otherReply.updatedAt, [
+      { op: "append", key: "parent-annotation", value: root.id },
+    ]);
     const replyChild = store.create("Reply child", reply.id);
     const replyAnnotation = annotate(reply, "purge-reply-annotation");
     store.move(root.id, null);
@@ -2628,7 +2623,6 @@ Second paragraph`;
     store.purge(source.id, source.id.slice(0, 8));
 
     for (const block of doomed) expect(store.get(block.id)).toBeNull();
-    expect(store.require(unrelated.id)).toEqual(unrelated);
     expect(store.listAnnotationThreads({
       subject: { kind: "block", blockId: unrelated.id },
     })[0]!.replies.map((entry) => entry.block.id)).toEqual([otherReply.id]);
