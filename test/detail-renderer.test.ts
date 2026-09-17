@@ -163,6 +163,26 @@ describe("detail ANSI renderer", () => {
     ].join("\n"));
   });
 
+  test("fits failed document messages within the fixed frame", () => {
+    const width = 32;
+    const lines = renderDetailLines(state({
+      document: {
+        kind: "failed",
+        target: {
+          kind: "resource",
+          resourceId: "10000000-0000-4000-8000-000000000001",
+        },
+        message: "\x1b[31mResource revision reference does not match the current resource address\x1b[0m",
+      },
+    }), { width, height: 8 });
+
+    expect(lines).toHaveLength(8);
+    expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
+    expect(stripTerminalSequences(lines[3]!)).toBe(
+      "Resource revision reference doe…",
+    );
+  });
+
   test("renders a resource target without block context", () => {
     const resource = {
       id: "10000000-0000-4000-8000-000000000001",

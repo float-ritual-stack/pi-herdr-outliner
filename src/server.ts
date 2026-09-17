@@ -12,6 +12,10 @@ import type { HerdrRuntimeRegistry } from "./herdr-registry";
 import { isFragmentId, resolveFragment } from "./fragments";
 import { ALL_DETAILS_LOCKED_ERROR } from "./navigation-routes";
 import { OutlinerStore } from "./store";
+import {
+  normalizeResourceId,
+  normalizeRetainedResourceRevisionRef,
+} from "./resources";
 import { WorkflowManager } from "./workflows";
 import {
   OUTLINER_PROTOCOL_VERSION,
@@ -153,7 +157,10 @@ export class OutlinerServer {
 
 
 
-  private normalizeNavigationTarget(value: unknown): OutlinerNavigationTarget {
+  private normalizeNavigationTarget(
+    value: unknown,
+    availability: "require-current" | "retain" = "require-current",
+  ): OutlinerNavigationTarget {
     if (!value || typeof value !== "object" || !("kind" in value)) {
       throw new Error("Navigation target is required");
     }
@@ -167,13 +174,29 @@ export class OutlinerServer {
       if (!blockId || blockId.length > 200 || /[\u0000-\u001f\u007f]/.test(blockId)) {
         throw new Error("Navigation block ID must be 1-200 printable characters");
       }
-      this.validateFragmentTarget(blockId, fragmentId);
+      if (fragmentId && !isFragmentId(fragmentId)) {
+        throw new Error(`Invalid fragment ID: ${fragmentId}`);
+      }
+      if (availability === "require-current") this.validateFragmentTarget(blockId, fragmentId);
       return { kind: "block", blockId, ...(fragmentId ? { fragmentId } : {}) };
     }
     if (value.kind === "resource") {
-      const resourceId = "resourceId" in value && typeof value.resourceId === "string"
-        ? value.resourceId.trim()
-        : "";
+      const resourceId = normalizeResourceId(
+        "resourceId" in value ? value.resourceId : undefined,
+      );
+      if (availability === "retain") {
+        const revision = "revision" in value && value.revision !== undefined
+          ? normalizeRetainedResourceRevisionRef(value.revision)
+          : null;
+        if (revision && revision.resourceId !== resourceId) {
+          throw new Error("Resource revision reference does not match the target resource");
+        }
+        return {
+          kind: "resource",
+          resourceId,
+          ...(revision ? { revision } : {}),
+        };
+      }
       const resource = this.store.resources.require(resourceId);
       const revision = "revision" in value && value.revision !== undefined
         ? this.store.resources.describe(resource.id, true, value.revision).requestedRevision
@@ -274,7 +297,7 @@ export class OutlinerServer {
     }
     const currentTarget = registration.currentTarget === undefined
       ? undefined
-      : this.normalizeNavigationTarget(registration.currentTarget);
+      : this.normalizeNavigationTarget(registration.currentTarget, "retain");
     const normalized: OutlinerClientRegistration = {
       clientId,
       role: registration.role,
@@ -390,7 +413,7 @@ export class OutlinerServer {
       if (update.currentTarget === null) {
         delete updated.currentTarget;
       } else if (update.currentTarget !== undefined) {
-        updated.currentTarget = this.normalizeNavigationTarget(update.currentTarget);
+        updated.currentTarget = this.normalizeNavigationTarget(update.currentTarget, "retain");
       }
       this.subscribers.set(socket, updated);
       return this.reconcileClientRuntime(updated);

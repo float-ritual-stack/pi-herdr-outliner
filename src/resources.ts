@@ -617,27 +617,12 @@ function isoTimestamp(value: unknown, label: string): string {
   return new Date(timestamp).toISOString();
 }
 
-export function normalizeResourceRevisionRef(
-  value: unknown,
-  resource: Resource,
+function normalizeProviderRevision(
+  resourceId: string,
+  addressVersion: number,
+  revision: Record<string, unknown>,
 ): ResourceRevisionRef {
-  const input = record(value, "Resource revision reference");
-  const resourceId = normalizeResourceId(input.resourceId);
-  const addressVersion = normalizeVersion(input.addressVersion, "Revision address version");
-  if (resourceId !== resource.id || addressVersion !== resource.addressVersion) {
-    throw new ResourceCatalogError(
-      "stale-revision",
-      "Resource revision reference does not match the current resource address",
-    );
-  }
-  const revision = record(input.revision, "Resource revision");
-  if (revision.kind !== resource.provider || resource.provider === "application") {
-    throw new ResourceCatalogError(
-      "provider-mismatch",
-      "Resource revision provider does not match the resource",
-    );
-  }
-  if (resource.provider === "filesystem") {
+  if (revision.kind === "filesystem") {
     return {
       resourceId,
       addressVersion,
@@ -649,7 +634,7 @@ export function normalizeResourceRevisionRef(
     };
   }
   const validator = record(revision.validator, "Resource revision validator");
-  if (resource.provider === "web") {
+  if (revision.kind === "web") {
     if (validator.kind === "etag") {
       if (typeof validator.weak !== "boolean") invalid("Web ETag weak must be boolean");
       return {
@@ -680,31 +665,68 @@ export function normalizeResourceRevisionRef(
     }
     invalid("Unsupported web revision validator");
   }
-  if (validator.kind === "etag") {
-    return {
-      resourceId,
-      addressVersion,
-      revision: {
-        kind: "github",
-        validator: { kind: "etag", value: printable(validator.value, "GitHub ETag", 1_000) },
-      },
-    };
-  }
-  if (validator.kind === "updated-at") {
-    return {
-      resourceId,
-      addressVersion,
-      revision: {
-        kind: "github",
-        validator: {
-          kind: "updated-at",
-          value: isoTimestamp(validator.value, "GitHub updated-at"),
+  if (revision.kind === "github") {
+    if (validator.kind === "etag") {
+      return {
+        resourceId,
+        addressVersion,
+        revision: {
+          kind: "github",
+          validator: {
+            kind: "etag",
+            value: printable(validator.value, "GitHub ETag", 1_000),
+          },
         },
-      },
-    };
+      };
+    }
+    if (validator.kind === "updated-at") {
+      return {
+        resourceId,
+        addressVersion,
+        revision: {
+          kind: "github",
+          validator: {
+            kind: "updated-at",
+            value: isoTimestamp(validator.value, "GitHub updated-at"),
+          },
+        },
+      };
+    }
+    invalid("Unsupported GitHub revision validator");
   }
+  invalid("Resource revision provider must be filesystem, web, or github");
+}
 
-  invalid("Unsupported GitHub revision validator");
+export function normalizeRetainedResourceRevisionRef(value: unknown): ResourceRevisionRef {
+  const input = record(value, "Resource revision reference");
+  return normalizeProviderRevision(
+    normalizeResourceId(input.resourceId),
+    normalizeVersion(input.addressVersion, "Revision address version"),
+    record(input.revision, "Resource revision"),
+  );
+}
+
+export function normalizeResourceRevisionRef(
+  value: unknown,
+  resource: Resource,
+): ResourceRevisionRef {
+  const input = record(value, "Resource revision reference");
+  const resourceId = normalizeResourceId(input.resourceId);
+  const addressVersion = normalizeVersion(input.addressVersion, "Revision address version");
+  if (resourceId !== resource.id || addressVersion !== resource.addressVersion) {
+    throw new ResourceCatalogError(
+      "stale-revision",
+      "Resource revision reference does not match the current resource address",
+    );
+  }
+  const revision = record(input.revision, "Resource revision");
+  if (revision.kind !== resource.provider || resource.provider === "application") {
+    throw new ResourceCatalogError(
+      "provider-mismatch",
+      "Resource revision provider does not match the resource",
+    );
+  }
+  return normalizeProviderRevision(resourceId, addressVersion, revision);
 }
 export function resourceRevisionRefEquals(
   left: ResourceRevisionRef,
