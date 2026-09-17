@@ -221,6 +221,8 @@ describe("TextBuffer undo and redo", () => {
     expect(buffer.text).toBe(edited);
     expect(buffer.undo()).toBe(true);
     expect(buffer.text).toBe("before");
+    expect(buffer.redo()).toBe(true);
+    expect(buffer.text).toBe(edited);
   });
 });
 

@@ -372,7 +372,8 @@ export class TextBuffer {
   }
 
   private restore(snapshot: TextBufferSnapshot): void {
-    this.lines.splice(0, this.lines.length, ...snapshot.lines);
+    this.lines.length = 0;
+    for (const line of snapshot.lines) this.lines.push(line);
     this.row = snapshot.row;
     this.column = snapshot.column;
     this.#selectionAnchor = snapshot.selectionAnchor ? { ...snapshot.selectionAnchor } : null;
