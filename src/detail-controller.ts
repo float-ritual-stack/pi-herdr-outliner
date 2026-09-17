@@ -3084,11 +3084,16 @@ export function createDetailController(
       }
       if (event.domain === "resource-catalog") {
         const description = detailResourceDescription(state);
+        const unscopedResourceChange =
+          event.resourceId === undefined && event.sourceId === undefined;
         const matchesTarget = state.target?.kind === "resource" &&
-          event.resourceId === state.target.resourceId;
+          (unscopedResourceChange || event.resourceId === state.target.resourceId);
         const matchesDescription = description !== null &&
-          (event.resourceId === description.resource.id ||
-            event.sourceId === description.source.id);
+          (
+            unscopedResourceChange ||
+            event.resourceId === description.resource.id ||
+            event.sourceId === description.source.id
+          );
         if (!matchesTarget && !matchesDescription) return;
       } else if (event.domain === "content") {
         invalidateBacklinks();

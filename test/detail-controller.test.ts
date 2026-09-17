@@ -1090,6 +1090,10 @@ describe("detail controller projection and deferred refresh", () => {
       "## Retained history\n\n- Source snapshots: 1\n- Representations: 1",
     );
 
+    current = description("# Workspace collection\n\nFresh history state", "a");
+    await harness.controller.onServiceEvent(event("resource-catalog"), viewport);
+    expect(harness.controller.state.resolvedSelectedText).toContain("Fresh history state");
+
     for (
       const [freshness, guidance] of [
         ["stale", "older than the freshness window"],

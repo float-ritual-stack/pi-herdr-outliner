@@ -4,6 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createTextQuoteAnchor } from "../src/annotations";
 import { OutlinerStore } from "../src/store";
+import {
+  BasicWebMarkdownExtractor,
+  type WebMarkdownExtractor,
+} from "../src/web-markdown";
 import type {
   AnnotationRepresentation,
   ResourceDescription,
@@ -177,11 +181,13 @@ test("collects unreachable web history while preserving current, pinned, publish
       current.web.representation.id,
     ).states).toEqual(expect.arrayContaining(["current", "hot"]));
 
+    const sequenceBeforeEviction = store.sequence;
     const eviction = store.resources.collectRetention("evict", resource.id);
     expect(eviction.evicted).toEqual(expect.arrayContaining([
       { kind: "source-snapshot", id: fourth.web.sourceSnapshot.id },
       { kind: "representation", id: fourth.web.representation.id },
     ]));
+    expect(store.sequence).toBe(sequenceBeforeEviction + 1);
     const evictedDescription = store.resources.describe(
       resource.id,
       true,
@@ -229,6 +235,84 @@ test("collects unreachable web history while preserving current, pinned, publish
       first.web.representation.id,
     );
     expect(store.resources.inspectRetention(resource.id).purged).toHaveLength(2);
+  } finally {
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("young representations keep their older source snapshots available", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-outliner-retention-hot-source-"));
+  const databasePath = join(directory, "outliner.sqlite");
+  let now = "2026-09-01T12:00:00.000Z";
+  let version = 1;
+  const fetcher = (async (_input: string | URL | Request, init?: RequestInit) => {
+    const etag = `"v${version}"`;
+    const requestHeaders = new Headers(init?.headers);
+    if (requestHeaders.get("if-none-match") === etag) {
+      return new Response(null, { status: 304, headers: { etag } });
+    }
+    return new Response(`<h1>Revision ${version}</h1>`, {
+      headers: { "content-type": "text/html", etag },
+    });
+  }) as typeof fetch;
+  const options = { now: () => now, fetch: fetcher };
+  let store = new OutlinerStore(databasePath, options);
+  try {
+    const source = store.resources.createSource({
+      name: "Hot representation fixture",
+      provider: "web",
+      boundary: { baseUrl: "https://example.com/" },
+    });
+    const resource = store.resources.intern({
+      sourceId: source.id,
+      address: { kind: "web", url: "https://example.com/hot-representation" },
+    }).resource;
+    const first = await store.resources.refreshWeb(resource.id, true);
+    const firstSourceSnapshotId = first.web!.sourceSnapshot.id;
+    store.close();
+
+    now = "2026-09-10T12:00:00.000Z";
+    const basicExtractor = new BasicWebMarkdownExtractor();
+    const replacementExtractor: WebMarkdownExtractor = {
+      adapter: { id: "fixture.retention-markdown", version: 2 },
+      extract: (snapshot) => `Replacement\n\n${basicExtractor.extract(snapshot)}`,
+    };
+    store = new OutlinerStore(databasePath, {
+      ...options,
+      webExtractor: replacementExtractor,
+    });
+    const rederived = await store.resources.refreshWeb(resource.id, true);
+    expect(rederived.web!.sourceSnapshot.id).toBe(firstSourceSnapshotId);
+    const youngRepresentationId = rederived.web!.representation.id;
+
+    version = 2;
+    now = "2026-09-10T12:01:00.000Z";
+    await store.resources.refreshWeb(resource.id, true);
+    store.resources.configureRetention({
+      retainNewestSourceSnapshots: 1,
+      retainNewestRepresentationsPerAdapter: 1,
+      minimumAgeMs: 7 * 24 * 60 * 60 * 1_000,
+      purgeGraceMs: 0,
+    });
+
+    const before = store.resources.inspectRetention(resource.id);
+    expect(artifact(before.artifacts, "representation", youngRepresentationId).states).toContain(
+      "hot",
+    );
+    expect(artifact(before.artifacts, "source-snapshot", firstSourceSnapshotId).states).toContain(
+      "hot",
+    );
+    const collection = store.resources.collectRetention("evict", resource.id);
+    expect(collection.evicted).not.toContainEqual({
+      kind: "source-snapshot",
+      id: firstSourceSnapshotId,
+    });
+    expect(
+      store.resources.inspectRetention(resource.id).artifacts.find(
+        ({ artifact: candidate }) => candidate.id === firstSourceSnapshotId,
+      ),
+    ).toMatchObject({ payloadAvailable: true, evictedAt: null });
   } finally {
     store.close();
     rmSync(directory, { recursive: true, force: true });

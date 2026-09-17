@@ -448,6 +448,7 @@ export class ResourceRetentionRepository {
           });
         }
       }
+      if (evicted.length > 0 || purged.length > 0) this.markMutation();
       return { mode: collectionMode, resourceId: normalized, evicted, purged, collectedAt };
     })();
   }
@@ -569,6 +570,15 @@ export class ResourceRetentionRepository {
         }
       }
     }
+    for (const row of rows) {
+      if (
+        row.payload_state === "available" &&
+        timestampAge(now, row.captured_at) < policy.minimumAgeMs
+      ) {
+        protect({ kind: row.kind, id: row.id }, "hot");
+      }
+    }
+
 
     for (const representation of representations) {
       const childStates = states.get(key("representation", representation.id));
@@ -596,11 +606,7 @@ export class ResourceRetentionRepository {
     const artifacts = rows.map((row): ResourceRetentionArtifact => {
       const artifactStates = states.get(key(row.kind, row.id)) ?? new Set();
       if (artifactStates.size === 0 && row.payload_state === "available") {
-        artifactStates.add(
-          timestampAge(now, row.captured_at) >= policy.minimumAgeMs
-            ? "evictable"
-            : "hot",
-        );
+        artifactStates.add("evictable");
       }
       if (row.payload_state === "evicted") artifactStates.add("evicted");
       return {
