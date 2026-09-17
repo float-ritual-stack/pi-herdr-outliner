@@ -2867,7 +2867,7 @@ Second paragraph`;
       contentRevision: 42,
       contextId: "context-1",
       detailClientId: "detail-1",
-      validation: "herdr-keybinding",
+      validation: "detail-pointer",
       projection: "generated",
     } satisfies RenderedPassageObservation;
     const originalTarget = {

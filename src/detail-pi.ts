@@ -82,6 +82,7 @@ import {
   resolveNavigationDestination,
 } from "./navigation-routes";
 import { openExternalUrl } from "./open-external";
+import { readHerdrPaneSnapshot } from "./herdr-comment-selection";
 import { TUI_RESOURCE_PRESENTATION_CONTEXT } from "./resource-presentation";
 import { resolvePaths } from "./paths";
 import { openDestinationTimeoutFromEnvironment } from "./open-destination-chooser";
@@ -103,6 +104,7 @@ import {
   type AnnotationThread,
   type AttentionClientState,
   type BacklinkCollection,
+  type RenderedSelectionCapture,
   type Block,
   type BookmarkStatus,
   type BookmarkToggleReceipt,
@@ -188,13 +190,52 @@ let pendingLinkClick: PiDetailLinkClick = {
   routing: "first-unlocked",
   suppress: false,
 };
+let latestRenderedSelection: RenderedSelectionCapture | null = null;
+let pendingRenderedSelection: Promise<RenderedSelectionCapture | null> | null = null;
+let renderedSelectionGeneration = 0;
 const terminal = new ProcessTerminal();
+let detailPaneId: string | undefined;
 let inputStream = new PiDetailInputStreamDecoder();
 const INPUT_IDLE_FLUSH_MS = 10;
 let inputFlushTimer: ReturnType<typeof setTimeout> | undefined;
 let inputGeneration = 0;
 const tui = new DetailTuiAltScreen(terminal, false, undefined, {
   mouse: true,
+  async copySelection(quote) {
+    process.stdout.write(osc52ClipboardWrite(quote));
+    const generation = ++renderedSelectionGeneration;
+    latestRenderedSelection = null;
+    const selected = controller.state.context.selected;
+    const socketPath = process.env.HERDR_SOCKET_PATH?.trim();
+    const paneId = detailPaneId;
+    const capturePromise = (async (): Promise<RenderedSelectionCapture | null> => {
+      if (!selected || !socketPath || !paneId) return null;
+      try {
+        const snapshot = await readHerdrPaneSnapshot(socketPath, paneId);
+        if (!snapshot.text.includes(quote)) return null;
+        return {
+          quote,
+          capturedAt: new Date().toISOString(),
+          hostBlockId: selected.id,
+          paneId,
+          contentRevision: snapshot.revision,
+          contextId: browsingContextId,
+          detailClientId: clientId,
+          validation: "detail-pointer",
+          snapshotText: snapshot.text,
+        };
+      } catch {
+        return null;
+      }
+    })();
+    pendingRenderedSelection = capturePromise;
+    const capture = await capturePromise;
+    if (generation === renderedSelectionGeneration) {
+      latestRenderedSelection = capture;
+      pendingRenderedSelection = null;
+    }
+    return true;
+  },
   openUrl(url) {
     const pointer = pendingLinkClick;
     pendingLinkClick = { activate: false, routing: "first-unlocked", suppress: false };
@@ -594,6 +635,7 @@ function startWatcher(): void {
   } catch (error) {
     console.error(errorMessage(error));
   }
+  detailPaneId = runtime?.paneId;
   watcher = client.watch({
     client: {
       clientId,
@@ -948,6 +990,12 @@ async function handleDetailMouse(data: string): Promise<boolean> {
 function shouldPassDetailInputToTui(data: string): boolean {
   const linkClick = piDetailLinkClick(data);
   if (linkClick) pendingLinkClick = linkClick;
+  const pointer = parseTreePrimaryPointer(data);
+  if (pointer?.phase === "down" && !pointer.meta && !pointer.ctrl) {
+    renderedSelectionGeneration += 1;
+    latestRenderedSelection = null;
+    pendingRenderedSelection = null;
+  }
   if (
     controller.state.destinationChooser.active &&
     detailChooserOwnsPiInput(data)
@@ -984,6 +1032,17 @@ const handleKeypress = createDetailKeyHandler({
   navigatePreview,
   previewFocused: () => draftSplitActive() && draftSplitFocus === "preview",
   annotationSelectionSourceLine: () => preview.sourceLineAtScroll(terminal.columns),
+  renderedSelectionCapture: async () => {
+    const generation = renderedSelectionGeneration;
+    const capture = latestRenderedSelection ?? await pendingRenderedSelection;
+    const target = controller.state.target;
+    return generation === renderedSelectionGeneration &&
+        capture &&
+        target?.kind === "block" &&
+        target.blockId === capture.hostBlockId
+      ? capture
+      : null;
+  },
 });
 invokeDetailAction = async (actionId) => {
   closeActionMenu();

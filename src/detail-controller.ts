@@ -465,6 +465,7 @@ export type DetailIntent =
   | { type: "edit.begin" }
   | { type: "edit.external" }
   | { type: "annotation.selection.begin"; sourceLine?: number; sourceColumn?: number }
+  | { type: "annotation.comment.rendered"; capture: RenderedSelectionCapture | null }
   | { type: "resource.refresh" }
   | { type: "resource.open-external" }
   | { type: "resource.open-url"; url: string }
@@ -2487,6 +2488,13 @@ export function createDetailController(
         break;
       case "annotation.selection.begin":
         await beginAnnotationSelection(intent.sourceLine, intent.sourceColumn);
+        break;
+      case "annotation.comment.rendered":
+        if (!intent.capture) {
+          state.status = "Drag across rendered text before commenting";
+        } else {
+          await beginRenderedComment(intent.capture);
+        }
         break;
       case "resource.refresh": {
         const description = detailResourceDescription(state);

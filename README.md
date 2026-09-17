@@ -527,7 +527,9 @@ Projected virtual occurrences deliberately constrain hierarchy and collapse. Bra
 | Peek: configured Detail right/below binding | Open the current preview directly in a new right/down Detail |
 | Chooser: configured Detail right/below binding or `r` / `d`; `Shift+R` / `f` | Split right/down; replace this Detail / use first unlocked Detail |
 | Chooser: `Enter` / `Esc` | Use the default destination / dismiss without navigation |
-| configured Herdr `float.pi-outliner.comment-selection` key | Comment on the current native rendered selection without entering another selection mode |
+| Primary-button drag | Select and copy an exact rendered passage |
+| `c` | Comment on the most recently dragged rendered passage without entering another selection mode |
+| configured Herdr `float.pi-outliner.comment-selection` key | Alternate copy-mode path for commenting on a retained native rendered selection |
 | `e` | Lock this Detail and edit raw canonical text |
 | `f` | Open referenced file |
 | `o` | Open the first authored reference in the shared destination chooser |
@@ -599,10 +601,16 @@ Detail block's canonical physical source in Tree.
 
 ### Detail rendered-passage and source comments
 
-Native Herdr copy-mode selection is the default rendered-passage flow. Bind the
-plugin action through a Herdr `plugin_action` command so the client validates
-its retained anchor/cursor coordinates and content revision through
-`command.invoke` before starting Outliner:
+Primary-button drag in an ordinary Detail preview is the default
+rendered-passage flow. Drag the passage once, then press `c`; the same
+application-owned selection is copied and opened in the compact annotation
+composer. Detail captures the selected text with the current Herdr pane revision
+and rejects it if the block or browsing context changes before the composer
+opens.
+
+Herdr copy mode remains an alternate path for selections retained outside the
+active Detail viewport. Bind the plugin action through a Herdr `plugin_action`
+command:
 
 ```toml
 [[keys.command]]
@@ -613,19 +621,24 @@ description = "Comment on the selected Outliner Detail passage"
 ```
 
 Focus an Outliner Detail, enter Herdr copy mode (`prefix+[` by default), select
-the displayed passage once, then press that key. The action accepts only
-Herdr's keybinding handoff, preserves its exact validated text, and brackets
-live-Detail discovery with two identical recent-pane snapshots. It aborts if
-the pane revision, captured output, registered Detail/context/host block
-changes, or the exact quote is absent from that bounded pane history. No
-clipboard is read. A successful action locks that exact Detail and opens the
-compact composer over the existing reader; `Ctrl+S` creates the comment and
-`Esc` cancels without creating anything. Herdr copy mode owns multi-viewport
-selection and continuous edge autoscroll before this handoff.
+the displayed passage once, then press that key. The action accepts only Herdr's
+keybinding handoff, preserves its exact validated text, and brackets live-Detail
+discovery with two identical recent-pane snapshots. It aborts if the pane
+revision, captured output, registered Detail/context/host block changes, or the
+exact quote is absent from that bounded pane history. No clipboard is read. Both
+paths lock that exact Detail and open the composer over the existing reader;
+`Ctrl+S` creates the comment and `Esc` cancels without creating anything.
 
 Every capture constructs one typed `AnnotationTarget`: a representation with block, Resource, rendered, or unknown source-snapshot evidence plus one of the supported typed anchors. Canonical block selections and filesystem text Resource selections use positioned text quotes. Cached web selections retain the exact source snapshot, derived representation, adapter, hash, and quote. PDF selections additionally retain the page, UTF-16 range, quote context, and PDF-point regions from the extracted page map. Rendered selections retain the validated host/pane/revision observation as representation evidence instead of inventing canonical source coordinates.
 
-`v` remains a separate, explicit source-comment operation. It freezes the current read projection, maps Shift-motion or primary-button drag to UTF-16 text, and opens the same composer with `c`. File selection first interns the path as a filesystem Resource; file paths are locators, not annotation identity. Annotation view `r` reveals only a currently resolved positioned text quote. Probable, unresolved, ambiguous, orphaned, unsupported, and rejected records remain valid, visible history rather than being coerced into a location.
+`v` remains the keyboard-first source-comment operation. It freezes the current
+read projection, maps Shift-motion or primary-button drag to UTF-16 source text,
+and opens the same composer with `c`. Mouse users can drag directly in preview
+without pressing `v`. File selection first interns the path as a filesystem
+Resource; file paths are locators, not annotation identity. Annotation view `r`
+reveals only a currently resolved positioned text quote. Probable, unresolved,
+ambiguous, orphaned, unsupported, and rejected records remain valid, visible
+history rather than being coerced into a location.
 
 ### Detail edit and comment modes
 

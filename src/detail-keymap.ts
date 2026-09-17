@@ -15,6 +15,7 @@ import {
   type TerminalInputAction,
   type TerminalKey,
 } from "./terminal";
+import type { RenderedSelectionCapture } from "./types";
 
 export interface DetailKeymapOptions {
   controller: DetailController;
@@ -29,6 +30,10 @@ export interface DetailKeymapOptions {
   navigatePreview?(direction: "up" | "down" | "pageup" | "pagedown" | "top" | "bottom"): void;
   previewFocused?(): boolean;
   annotationSelectionSourceLine?(): number | null;
+  renderedSelectionCapture?():
+    | RenderedSelectionCapture
+    | null
+    | Promise<RenderedSelectionCapture | null>;
 }
 
 export interface DetailKeyHandler {
@@ -323,9 +328,17 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
       case "detail.file.selection":
         await dispatch({ type: "file.selection.toggle" });
         return true;
-      case "detail.comment.begin":
-        await dispatch({ type: "comment.begin" });
+      case "detail.comment.begin": {
+        if (controller.state.mode === "preview") {
+          const capture = (await options.renderedSelectionCapture?.()) ?? null;
+          await dispatch(capture
+            ? { type: "annotation.comment.rendered", capture }
+            : { type: "status.set", message: "Drag across rendered text before commenting" });
+        } else {
+          await dispatch({ type: "comment.begin" });
+        }
         return true;
+      }
       case "detail.trash.restore":
         await dispatch({ type: "trash.restore" });
         return true;
