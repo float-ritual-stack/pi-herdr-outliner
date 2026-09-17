@@ -146,6 +146,29 @@ function capabilityReason(decision: ResourceCapabilityDecision): string {
   return "Capability is available";
 }
 
+function localReadDecision(
+  decision: ResourceCapabilityDecision,
+): Pick<ResourceCapabilityDecision, "status" | "factors"> {
+  const factors = {
+    provider: decision.factors.provider,
+    "workspace-policy": decision.factors["workspace-policy"],
+    "destination-host": decision.factors["destination-host"],
+  };
+  const assessments = Object.values(factors);
+  return {
+    status: assessments.some(({ state }) => state === "blocked")
+      ? "unavailable"
+      : assessments.some(({ state }) => state === "unknown")
+      ? "indeterminate"
+      : "available",
+    factors: {
+      ...decision.factors,
+      credentials: { state: "not-required" },
+      connectivity: { state: "not-required" },
+    },
+  };
+}
+
 interface CandidateDefinition {
   readonly representation: ResourceRepresentationKind;
   readonly renderer: ResourceRenderer;
@@ -257,6 +280,12 @@ function attempt(
       "unavailable",
       `Host ${context.host.id} does not support ${definition.placement} placement`,
     );
+  }
+  if (definition.representation === "cached-markdown") {
+    const decision = localReadDecision(description.capabilities.read);
+    if (decision.status !== "available") {
+      return presentationAttempt(definition, decision.status, capabilityReason(decision));
+    }
   }
   if (definition.capability) {
     const decision = description.capabilities[definition.capability];

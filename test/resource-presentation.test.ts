@@ -181,6 +181,26 @@ test("falls back deterministically without coupling cached Markdown to live prov
   });
 });
 
+test("honors workspace read policy for retained Markdown without requiring live access", () => {
+  const deniedSource: ResourceSource = {
+    ...webSource,
+    policy: { deniedCapabilities: ["read"] },
+  };
+  const denied = negotiateResourcePresentation(
+    { ...webDescription, source: deniedSource },
+    TUI_RESOURCE_PRESENTATION_CONTEXT,
+  );
+  expect(denied.attempts[0]).toMatchObject({
+    representation: "cached-markdown",
+    status: "unavailable",
+    reason: "Workspace policy denies read",
+  });
+  expect(denied.selected).toMatchObject({
+    representation: "metadata",
+    renderer: "metadata",
+  });
+});
+
 test("treats PDF as media type while selecting a native GUI renderer", () => {
   const filesystemSource: ResourceSource = {
     id: "10000000-0000-4000-8000-000000000002",
