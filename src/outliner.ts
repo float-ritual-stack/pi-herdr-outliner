@@ -115,7 +115,7 @@ const controller = createTreeController({
       action: "browsing-context.publish",
       sourceClientId: clientId,
       contextId: detailContextId,
-      blockId,
+      target: { kind: "block", blockId },
     });
     openDetailPane({
       workspaceRoot: paths.workspaceRoot,

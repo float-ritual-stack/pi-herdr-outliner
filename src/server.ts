@@ -32,7 +32,10 @@ import {
   type OutlinerEvent,
   type OutlinerEventEnvelope,
   type OutlinerNavigationDispatch,
+  type InternResourceReceipt,
   type OutlinerNavigationIntent,
+  type OutlinerNavigationTarget,
+  type OutlinerUiCommand,
   type PageAddressFollowResult,
   type OutlinerRequest,
   type RoadmapItemCreateReceipt,
@@ -41,13 +44,25 @@ import {
   type WorkflowPromotionReceipt,
   type WorkflowStartInput,
   type WorkflowTransitionInput,
-  type SelectionContext,
+  type Resource,
 } from "./types";
+
+function eventResultId(value: unknown, label: string): string {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("id" in value) ||
+    typeof value.id !== "string"
+  ) {
+    throw new Error(`${label} result is missing its ID`);
+  }
+  return value.id;
+}
 
 export class OutlinerServer {
   private server: Server | null = null;
   private readonly subscribers = new Map<Socket, OutlinerClientRegistration>();
-  private readonly browsingContextTargets = new Map<string, string | null>();
+  private readonly browsingContextTargets = new Map<string, OutlinerNavigationTarget | null>();
   private readonly attentionStates = new Map<string, AttentionClientState>();
   private readonly attentionTimers = new Map<string, Timer>();
   private readonly workflows: WorkflowManager;
@@ -138,17 +153,38 @@ export class OutlinerServer {
 
 
 
-  private normalizeClientBlockId(value: unknown): string {
-    const blockId = typeof value === "string" ? value.trim() : "";
-    if (
-      !blockId ||
-      blockId.length > 200 ||
-      /[\u0000-\u001f\u007f]/.test(blockId)
-    ) {
-      throw new Error("Client currentBlockId must be 1-200 printable characters");
+  private normalizeNavigationTarget(value: unknown): OutlinerNavigationTarget {
+    if (!value || typeof value !== "object" || !("kind" in value)) {
+      throw new Error("Navigation target is required");
     }
-    this.store.require(blockId);
-    return blockId;
+    if (value.kind === "block") {
+      const blockId = "blockId" in value && typeof value.blockId === "string"
+        ? value.blockId.trim()
+        : "";
+      const fragmentId = "fragmentId" in value && typeof value.fragmentId === "string"
+        ? value.fragmentId.trim()
+        : undefined;
+      if (!blockId || blockId.length > 200 || /[\u0000-\u001f\u007f]/.test(blockId)) {
+        throw new Error("Navigation block ID must be 1-200 printable characters");
+      }
+      this.validateFragmentTarget(blockId, fragmentId);
+      return { kind: "block", blockId, ...(fragmentId ? { fragmentId } : {}) };
+    }
+    if (value.kind === "resource") {
+      const resourceId = "resourceId" in value && typeof value.resourceId === "string"
+        ? value.resourceId.trim()
+        : "";
+      const resource = this.store.resources.require(resourceId);
+      const revision = "revision" in value && value.revision !== undefined
+        ? this.store.resources.describe(resource.id, true, value.revision).requestedRevision
+        : null;
+      return {
+        kind: "resource",
+        resourceId: resource.id,
+        ...(revision ? { revision } : {}),
+      };
+    }
+    throw new Error("Navigation target kind must be block or resource");
   }
 
   private removeSubscriber(socket: Socket): void {
@@ -236,15 +272,15 @@ export class OutlinerServer {
     if (registration.role === "tree" && registration.locked) {
       throw new Error("Only Detail clients can be locked");
     }
-    const currentBlockId = registration.currentBlockId === undefined
+    const currentTarget = registration.currentTarget === undefined
       ? undefined
-      : this.normalizeClientBlockId(registration.currentBlockId);
+      : this.normalizeNavigationTarget(registration.currentTarget);
     const normalized: OutlinerClientRegistration = {
       clientId,
       role: registration.role,
       contextId,
       ...(registration.role === "detail" ? { locked: registration.locked ?? false } : {}),
-      ...(currentBlockId ? { currentBlockId } : {}),
+      ...(currentTarget ? { currentTarget } : {}),
       ...(runtime ? { runtime } : {}),
     };
     const stored = this.herdrRegistry === undefined
@@ -339,10 +375,10 @@ export class OutlinerServer {
 
   private updateClient(
     clientId: string,
-    update: { locked?: boolean; currentBlockId?: string | null },
+    update: { locked?: boolean; currentTarget?: OutlinerNavigationTarget | null },
   ): OutlinerClientRegistration {
-    if (update.locked === undefined && update.currentBlockId === undefined) {
-      throw new Error("Client update must change locked or currentBlockId");
+    if (update.locked === undefined && update.currentTarget === undefined) {
+      throw new Error("Client update must change locked or currentTarget");
     }
     for (const [socket, client] of this.subscribers) {
       if (client.clientId !== clientId) continue;
@@ -351,10 +387,10 @@ export class OutlinerServer {
         if (client.role !== "detail") throw new Error("Only Detail clients can be locked");
         updated.locked = update.locked;
       }
-      if (update.currentBlockId === null) {
-        delete updated.currentBlockId;
-      } else if (update.currentBlockId !== undefined) {
-        updated.currentBlockId = this.normalizeClientBlockId(update.currentBlockId);
+      if (update.currentTarget === null) {
+        delete updated.currentTarget;
+      } else if (update.currentTarget !== undefined) {
+        updated.currentTarget = this.normalizeNavigationTarget(update.currentTarget);
       }
       this.subscribers.set(socket, updated);
       return this.reconcileClientRuntime(updated);
@@ -840,6 +876,40 @@ export class OutlinerServer {
         case "clients.update":
           result = this.updateClient(request.clientId, request);
           break;
+        case "resource-sources.create":
+          result = this.store.resources.createSource(request.input);
+          break;
+        case "resource-sources.list":
+          result = this.store.resources.listSources();
+          break;
+        case "resource-sources.get":
+          result = this.store.resources.requireSource(request.sourceId);
+          break;
+        case "resources.intern":
+          result = this.store.resources.intern(request.input);
+          break;
+        case "resources.get":
+          result = this.store.resources.require(request.resourceId);
+          break;
+        case "resources.relocate":
+          result = this.store.resources.relocate(request.input);
+          break;
+        case "resources.describe": {
+          const destination = this.clientById(request.destinationClientId);
+          if (destination.role !== "detail") {
+            throw new Error("Resource descriptions require a Detail destination");
+          }
+          const target = this.normalizeNavigationTarget(request.target);
+          if (target.kind !== "resource") {
+            throw new Error("Resource description target must be a resource");
+          }
+          result = this.store.resources.describe(
+            target.resourceId,
+            true,
+            target.revision,
+          );
+          break;
+        }
         case "attention.get":
           this.attentionClient(request.targetClientId);
           result = this.attentionState(request.targetClientId);
@@ -888,17 +958,10 @@ export class OutlinerServer {
           break;
         case "browsing-context.get": {
           const contextId = this.normalizeContextId(request.contextId);
-          const blockId = this.browsingContextTargets.get(contextId) ?? null;
-          let target: SelectionContext = { selected: null, ancestors: [], children: [] };
-          if (blockId) {
-            try {
-              target = this.store.blockContext(blockId);
-            } catch (error) {
-              if (!(error instanceof Error) || error.message !== `Block not found: ${blockId}`) throw error;
-              this.browsingContextTargets.delete(contextId);
-            }
-          }
-          result = { contextId, target };
+          result = {
+            contextId,
+            target: this.browsingContextTargets.get(contextId) ?? null,
+          };
           break;
         }
         case "browsing-context.publish": {
@@ -909,13 +972,13 @@ export class OutlinerServer {
             throw new Error("Browsing context dispatchPreview must be boolean");
           }
           const contextId = this.normalizeContextId(request.contextId);
-          const target = request.blockId
-            ? this.store.blockContext(request.blockId)
-            : { selected: null, ancestors: [], children: [] };
-          this.browsingContextTargets.set(contextId, request.blockId);
+          const target = request.target === null
+            ? null
+            : this.normalizeNavigationTarget(request.target);
+          this.browsingContextTargets.set(contextId, target);
           let preview: OutlinerNavigationDispatch | undefined;
           let unavailable: string | undefined;
-          if (request.blockId && request.dispatchPreview !== false) {
+          if (target && request.dispatchPreview !== false) {
             try {
               const route = this.resolveNavigationTarget(request.sourceClientId, "preview");
               preview = {
@@ -923,7 +986,7 @@ export class OutlinerServer {
                 command: {
                   targetClientId: route.targetClientId,
                   command: "preview",
-                  blockId: request.blockId,
+                  target,
                 },
               };
             } catch (error) {
@@ -950,22 +1013,31 @@ export class OutlinerServer {
           if (request.focusTarget && intent !== "reveal") {
             throw new Error("Focused navigation dispatch requires reveal intent");
           }
-          this.validateFragmentTarget(request.blockId, request.fragmentId);
+          const navigationTarget = this.normalizeNavigationTarget(request.target);
           const route = this.resolveNavigationTarget(
             request.sourceClientId,
             intent,
             request.preserveSource,
           );
-          result = {
-            ...route,
-            command: {
+          let command: OutlinerUiCommand;
+          if (intent === "reveal") {
+            if (navigationTarget.kind !== "block") {
+              throw new Error("Resource targets cannot be revealed in the block Tree");
+            }
+            command = {
+              targetClientId: route.targetClientId,
+              command: "reveal",
+              target: navigationTarget,
+              ...(request.focusTarget ? { focus: true } : {}),
+            };
+          } else {
+            command = {
               targetClientId: route.targetClientId,
               command: intent,
-              blockId: request.blockId,
-              ...(request.fragmentId ? { fragmentId: request.fragmentId } : {}),
-              ...(request.focusTarget ? { focus: true } : {}),
-            },
-          } satisfies OutlinerNavigationDispatch;
+              target: navigationTarget,
+            };
+          }
+          result = { ...route, command } satisfies OutlinerNavigationDispatch;
           break;
         }
         case "ui.command.send": {
@@ -973,6 +1045,9 @@ export class OutlinerServer {
             throw new Error(`Target client is not registered: ${request.command.targetClientId}`);
           }
           const target = this.clientById(request.command.targetClientId);
+          if ("target" in request.command && request.command.target !== undefined) {
+            request.command.target = this.normalizeNavigationTarget(request.command.target);
+          }
           if (
             request.command.command === "open" ||
             request.command.command === "replace"
@@ -984,10 +1059,6 @@ export class OutlinerServer {
             if (operation === "open" && target.locked) {
               throw new Error("Invoking Detail is locked");
             }
-            if (!request.command.blockId) {
-              throw new Error(`Direct ${operation} requires a block ID`);
-            }
-            this.store.require(request.command.blockId);
           }
           if (request.command.command === "backlinks.select") {
             if (target.role !== "detail") {
@@ -1004,7 +1075,7 @@ export class OutlinerServer {
             if (target.role !== "detail") {
               throw new Error("Rendered selection comment target must be a Detail client");
             }
-            if (!capture || !capture.quote.trim()) {
+            if (!capture.quote.trim()) {
               throw new Error("Rendered selection comment requires a non-empty quote");
             }
             const capturedAtMs = Date.parse(capture.capturedAt);
@@ -1018,21 +1089,18 @@ export class OutlinerServer {
             ) {
               throw new Error("Rendered selection evidence is invalid");
             }
+            const currentBlockId = target.currentTarget?.kind === "block"
+              ? target.currentTarget.blockId
+              : undefined;
             if (
               capture.detailClientId !== target.clientId ||
               capture.contextId !== target.contextId ||
-              capture.hostBlockId !== target.currentBlockId ||
+              capture.hostBlockId !== currentBlockId ||
               capture.paneId !== target.runtime?.paneId
             ) {
               throw new Error("Rendered selection no longer matches the target Detail");
             }
             this.store.requireActive(capture.hostBlockId);
-          }
-          if (request.command.fragmentId) {
-            if (!request.command.blockId) {
-              throw new Error("Fragment navigation requires a block ID");
-            }
-            this.validateFragmentTarget(request.command.blockId, request.command.fragmentId);
           }
           result = { accepted: true, command: request.command };
           break;
@@ -1282,11 +1350,28 @@ export class OutlinerServer {
   private eventFor(request: OutlinerRequest, response: Extract<OutlinerResponse, { ok: true }>): OutlinerEvent | null {
     let domain: OutlinerEvent["domain"];
     let blockId: string | undefined;
+    let resourceId: string | undefined;
+    let sourceId: string | undefined;
     let contextId: string | undefined;
     let command: OutlinerEvent["command"];
     let attention: AttentionClientState | undefined;
     let attentionInstruction: OutlinerEvent["attentionInstruction"];
     switch (request.action) {
+      case "resource-sources.create":
+        domain = "resource-catalog";
+        sourceId = eventResultId(response.result, "Resource source");
+        break;
+      case "resources.intern": {
+        const receipt = response.result as InternResourceReceipt;
+        if (!receipt.created) return null;
+        domain = "resource-catalog";
+        resourceId = receipt.resource.id;
+        break;
+      }
+      case "resources.relocate":
+        domain = "resource-catalog";
+        resourceId = (response.result as Resource).id;
+        break;
       case "create":
         domain = "content";
         blockId = (response.result as Block).id;
@@ -1400,13 +1485,21 @@ export class OutlinerServer {
         break;
       case "ui.command.send":
         domain = "ui";
-        blockId = request.command.blockId ?? request.command.targetBlockId;
+        blockId = "target" in request.command && request.command.target?.kind === "block"
+          ? request.command.target.blockId
+          : request.command.command === "backlinks.select"
+            ? request.command.targetBlockId
+            : undefined;
+        resourceId = "target" in request.command && request.command.target?.kind === "resource"
+          ? request.command.target.resourceId
+          : undefined;
         command = request.command;
         break;
       case "navigation.dispatch": {
         const dispatched = response.result as OutlinerNavigationDispatch;
         domain = "ui";
-        blockId = request.blockId;
+        blockId = request.target.kind === "block" ? request.target.blockId : undefined;
+        resourceId = request.target.kind === "resource" ? request.target.resourceId : undefined;
         command = dispatched.command;
         break;
       }
@@ -1414,7 +1507,10 @@ export class OutlinerServer {
         const published = response.result as BrowsingContextPublication;
         domain = "browsing-context";
         contextId = published.contextId;
-        blockId = request.blockId ?? undefined;
+        blockId = published.target?.kind === "block" ? published.target.blockId : undefined;
+        resourceId = published.target?.kind === "resource"
+          ? published.target.resourceId
+          : undefined;
         command = published.preview?.command;
         break;
       }
@@ -1428,8 +1524,10 @@ export class OutlinerServer {
       action: request.action,
       sequence: response.sequence,
       blockId,
+      resourceId,
       command,
       ...(attention ? { attention } : {}),
+      sourceId,
       ...(attentionInstruction ? { attentionInstruction } : {}),
       contextId,
     };

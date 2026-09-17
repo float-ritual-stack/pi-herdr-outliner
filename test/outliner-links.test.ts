@@ -158,7 +158,7 @@ describe("outliner link URIs", () => {
       { action: "selection.set", blockId: target.id },
       {
         action: "ui.command.send",
-        command: { targetClientId: "tree-client", command: "focus", blockId: target.id },
+        command: { targetClientId: "tree-client", command: "focus", target: { kind: "block", blockId: target.id } },
       },
     ]);
     calls.length = 0;
@@ -177,7 +177,7 @@ describe("outliner link URIs", () => {
       { action: "selection.set", blockId: target.id },
       {
         action: "ui.command.send",
-        command: { targetClientId: "tree-client", command: "focus", blockId: target.id },
+        command: { targetClientId: "tree-client", command: "focus", target: { kind: "block", blockId: target.id } },
       },
     ]);
 
@@ -195,7 +195,7 @@ describe("outliner link URIs", () => {
       { action: "selection.set", blockId: target.id },
       {
         action: "ui.command.send",
-        command: { targetClientId: "tree-client", command: "focus", blockId: target.id },
+        command: { targetClientId: "tree-client", command: "focus", target: { kind: "block", blockId: target.id } },
       },
     ]);
   });
@@ -216,11 +216,7 @@ describe("outliner link URIs", () => {
             targetClientId: "detail-c",
             intent: input.intent,
             resolution: "unlocked",
-            command: {
-              targetClientId: "detail-c",
-              command: input.intent,
-              blockId: input.blockId,
-            },
+            command: { targetClientId: "detail-c", command: input.intent, target: input.target },
           } as T;
         }
         throw new Error(`Unexpected request: ${input.action}`);
@@ -241,12 +237,7 @@ describe("outliner link URIs", () => {
     });
     expect(calls).toEqual([
       { action: "get", blockId: target.id },
-      {
-        action: "navigation.dispatch",
-        sourceClientId: "tree-a",
-        blockId: target.id,
-        intent: "preview",
-      },
+      { action: "navigation.dispatch", sourceClientId: "tree-a", target: { kind: "block", blockId: target.id }, intent: "preview", },
     ]);
   });
 
@@ -266,12 +257,7 @@ describe("outliner link URIs", () => {
             targetClientId: "detail-c",
             intent: input.intent,
             resolution: "unlocked",
-            command: {
-              targetClientId: "detail-c",
-              command: input.intent,
-              blockId: input.blockId,
-              fragmentId: input.fragmentId,
-            },
+            command: { targetClientId: "detail-c", command: input.intent, target: input.target },
           } as T;
         }
         throw new Error(`Unexpected request: ${input.action}`);
@@ -289,8 +275,7 @@ describe("outliner link URIs", () => {
       {
         action: "navigation.dispatch",
         sourceClientId: "detail-a",
-        blockId: target.id,
-        fragmentId: "durable-decision",
+        target: { kind: "block", blockId: target.id, fragmentId: "durable-decision" },
         intent: "open",
       },
     ]);
@@ -383,11 +368,7 @@ describe("outliner link URIs", () => {
       { action: "selection.set", blockId: target.id },
       {
         action: "ui.command.send",
-        command: {
-          targetClientId: "detail-client",
-          command: "focus",
-          blockId: target.id,
-        },
+        command: { targetClientId: "detail-client", command: "focus", target: { kind: "block", blockId: target.id },  },
       },
     ]);
   });

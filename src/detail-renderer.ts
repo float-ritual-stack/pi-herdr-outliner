@@ -18,8 +18,11 @@ import {
 import { completionWindow } from "./completion";
 import { outlinerLinkUri } from "./outliner-links";
 import { blockDisplayTitle } from "./references";
+import { resourceAddressLabel } from "./resources";
 import { outlinerActionLink } from "./outliner-actions";
 import {
+  detailBlockTarget,
+  detailResourceDescription,
   detailHelpText,
   detailVisibleEditorHeight,
   selectedDetailFileRange,
@@ -83,8 +86,10 @@ function detailTitle(state: Readonly<DetailState>): string {
     ?.trim();
   const title = selected
     ? breadcrumbTitle || blockDisplayTitle(selected)
-    : state.resolvedBreadcrumb || "No block selected";
-  return state.targetFragmentId ? `${title} · ^${state.targetFragmentId}` : title;
+    : (state.resource ? resourceAddressLabel(state.resource.address) : state.resolvedBreadcrumb) ||
+      "No block selected";
+  const fragmentId = detailBlockTarget(state)?.fragmentId;
+  return fragmentId ? `${title} · ^${fragmentId}` : title;
 }
 
 function renderDetailTitle(
@@ -95,15 +100,19 @@ function renderDetailTitle(
 ): string {
   const safe = sanitizeDynamicText(detailTitle(state));
   const fitted = fitToWidth(safe, width);
-  const linked = linksEnabled && state.context.selected
+  const blockTarget = detailBlockTarget(state);
+  const resource = state.resource;
+  const linked = linksEnabled && state.context.selected && blockTarget
     ? hyperlink(
       fitted,
       outlinerLinkUri("block", state.context.selected.id, {
         intent: "reveal",
-        ...(state.targetFragmentId ? { fragmentId: state.targetFragmentId } : {}),
+        ...(blockTarget.fragmentId ? { fragmentId: blockTarget.fragmentId } : {}),
       }),
     )
-    : fitted;
+    : linksEnabled && resource
+      ? hyperlink(fitted, outlinerLinkUri("resource", resource.id))
+      : fitted;
   const style = focused === false ? "\x1b[2;37m" : "\x1b[1;97m";
   return `${style}${linked}\x1b[0m`;
 }
@@ -148,6 +157,13 @@ function renderDetailMetadata(
   width: number,
   options: DetailHeaderOptions,
 ): string {
+  const resource = detailResourceDescription(state);
+  if (resource) {
+    return fitDynamicText(
+      `resource · ${resource.source.name} · ${resource.resource.provider}`,
+      width,
+    );
+  }
   const keys = options.propertyKeys ?? DEFAULT_PROPERTY_SUMMARY_KEYS;
   const segments = propertySummarySegments(state.context.selected?.properties ?? [], keys);
   while (
@@ -215,7 +231,7 @@ export function renderDetailHeader(
   const left = surface
     ? `${surfaceStyle}${fitDynamicText(surface, width)}\x1b[0m \x1b[2m·\x1b[0m ${title}`
     : title;
-  const attention = attentionBanner(state.attention, state.targetBlockId, width);
+  const attention = attentionBanner(state.attention, detailBlockTarget(state)?.blockId ?? null, width);
   return [
     alignHeaderControls(left, renderHeaderControls(state), width),
     attention ?? renderDetailMetadata(state, width, options),
@@ -331,8 +347,16 @@ export function renderDetailLines(
   const output = renderDetailHeader(state, width, options.header);
   const bodyStart = output.length;
 
-  if (!state.context.selected) {
-    output.push("Select a block in the outliner pane.");
+  if (state.document.kind === "loading") {
+    output.push(
+      state.document.target.kind === "resource"
+        ? "Loading resource metadata…"
+        : "Loading block…",
+    );
+  } else if (state.document.kind === "failed") {
+    output.push(state.document.message);
+  } else if (state.document.kind === "empty") {
+    output.push("Select a block or resource in the outliner pane.");
   } else if (state.mode === "edit" || state.mode === "select" || state.mode === "comment") {
     const editorHeight = detailVisibleEditorHeight(state, viewport);
     const layout = layoutDetailEditor(
@@ -360,7 +384,7 @@ export function renderDetailLines(
   } else if (state.mode === "file" && state.referencedFile) {
     const file = state.referencedFile;
     const range = selectedDetailFileRange(state);
-    const attention = currentAttentionMark(state.attention, state.targetBlockId);
+    const attention = currentAttentionMark(state.attention, detailBlockTarget(state)?.blockId ?? null);
     const lineNumberWidth = String(file.firstLine + file.lines.length).length;
     const visibleLines = file.lines.slice(state.fileOffset, state.fileOffset + bodyHeight);
     const rows = visibleLines.map((line, index) => {
@@ -434,7 +458,7 @@ export function renderDetailLines(
       ? `${options.helpPrefix}  ${detailHelpText(state.mode)}`
       : detailHelpText(state.mode));
   if (state.mode === "preview") {
-    const mark = currentAttentionMark(state.attention, state.targetBlockId);
+    const mark = currentAttentionMark(state.attention, detailBlockTarget(state)?.blockId ?? null);
     const decorated = decorateAttentionLines(
       output.slice(bodyStart),
       mark,

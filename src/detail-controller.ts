@@ -35,7 +35,12 @@ import {
   resolveFragment,
 } from "./fragments";
 import type { ReferencedFile, ReferencedPathCandidate } from "./files";
-import { firstOutlinerReference, type OutlinerLinkTarget } from "./outliner-links";
+import {
+  firstOutlinerReference,
+  outlinerLinkUri,
+  type OutlinerLinkTarget,
+  type ResolvedOutlinerLinkTarget,
+} from "./outliner-links";
 import { ALL_DETAILS_LOCKED_ERROR } from "./navigation-routes";
 import {
   createOpenDestinationChooserState,
@@ -64,6 +69,12 @@ import {
 } from "./detail-preview-regions";
 import { isVirtualBranchDefinition } from "./virtual-branches";
 import { blockDisplayTitle } from "./references";
+import {
+  RESOURCE_CAPABILITIES,
+  RESOURCE_CAPABILITY_FACTORS,
+  resourceRevisionRefEquals,
+  resourceAddressLabel,
+} from "./resources";
 import { TextBuffer } from "./text-buffer";
 import type { TerminalKey } from "./terminal";
 import type {
@@ -91,14 +102,15 @@ import type {
   OutlinerNavigationDispatch,
   OutlinerNavigationResolution,
   OutlinerNavigationIntent,
+  OutlinerNavigationTarget,
   OutlinerUiCommand,
+  ResourceDescription,
   ResolvedBlockReferences,
   VisibleBlockCollection,
 } from "./types";
 
 interface DetailNavigationEntry {
-  blockId: string;
-  fragmentId: string | null;
+  target: OutlinerNavigationTarget;
 }
 
 export type DetailMode = "preview" | "file" | "annotation" | "edit" | "select" | "comment";
@@ -174,7 +186,7 @@ export interface DetailPropertyInspectorState {
 export interface DetailControllerOptions {
   propertyInspectorPresentation?: DetailPropertyInspectorPresentation;
   destinationTimeoutMs?: number;
-  initialTargetFragmentId?: string;
+  initialTarget?: OutlinerNavigationTarget;
   destinationScheduler?: OpenDestinationScheduler;
   actionKeymap?: OutlinerActionKeymap;
 }
@@ -244,10 +256,56 @@ export interface DetailAnnotationDraft {
   returnMode: "preview" | "file";
 }
 
+const EMPTY_SELECTION_CONTEXT: SelectionContext = {
+  selected: null,
+  ancestors: [],
+  children: [],
+};
+
+export type DetailReadyDocument =
+  | {
+      kind: "block";
+      target: Extract<OutlinerNavigationTarget, { kind: "block" }>;
+      context: SelectionContext;
+    }
+  | {
+      kind: "resource";
+      target: Extract<OutlinerNavigationTarget, { kind: "resource" }>;
+      description: ResourceDescription;
+    };
+
+export type DetailDocumentState =
+  | { kind: "empty" }
+  | { kind: "loading"; target: OutlinerNavigationTarget }
+  | { kind: "ready"; document: DetailReadyDocument }
+  | { kind: "failed"; target: OutlinerNavigationTarget; message: string };
+
+function detailDocumentTarget(
+  document: DetailDocumentState,
+): OutlinerNavigationTarget | null {
+  if (document.kind === "empty") return null;
+  return document.kind === "ready" ? document.document.target : document.target;
+}
+
+function detailDocumentContext(document: DetailDocumentState): SelectionContext {
+  return document.kind === "ready" && document.document.kind === "block"
+    ? document.document.context
+    : EMPTY_SELECTION_CONTEXT;
+}
+
+export function detailResourceDescription(
+  state: Pick<DetailState, "document">,
+): ResourceDescription | null {
+  return state.document.kind === "ready" && state.document.document.kind === "resource"
+    ? state.document.document.description
+    : null;
+}
+
 export interface DetailState {
-  context: SelectionContext;
-  targetBlockId: string | null;
-  targetFragmentId: string | null;
+  document: DetailDocumentState;
+  readonly context: SelectionContext;
+  readonly target: OutlinerNavigationTarget | null;
+  readonly resource: ResourceDescription["resource"] | null;
   connectionMode: DetailConnectionMode;
   canNavigateBack: boolean;
   canNavigateForward: boolean;
@@ -283,18 +341,30 @@ export interface DetailState {
   destinationChooser: OpenDestinationChooserState;
 }
 
+export function detailBlockTarget(
+  state: Pick<DetailState, "target">,
+): Extract<OutlinerNavigationTarget, { kind: "block" }> | null {
+  return state.target?.kind === "block" ? state.target : null;
+}
+
+export function detailResourceTarget(
+  state: Pick<DetailState, "document">,
+): ResourceDescription["resource"] | null {
+  return detailResourceDescription(state)?.resource ?? null;
+}
+
 export interface DetailEffects {
   readonly clientId: string;
   readonly browsingContextId: string;
   focusSelf(): void;
   getBrowsingContext(): Promise<BrowsingContextState>;
-  getBlockContext(blockId: string): Promise<SelectionContext>;
+  loadTarget(target: OutlinerNavigationTarget): Promise<DetailReadyDocument>;
   setLocked(locked: boolean): Promise<void>;
-  setCurrentBlock(blockId: string | null): Promise<void>;
+  setCurrentTarget(target: OutlinerNavigationTarget | null): Promise<void>;
   dispatchNavigation(
-    blockId: string,
+    target: OutlinerNavigationTarget,
     intent: OutlinerNavigationIntent,
-    options?: { preserveSource?: boolean; fragmentId?: string; focusTarget?: boolean },
+    options?: { preserveSource?: boolean; focusTarget?: boolean },
   ): Promise<OutlinerNavigationDispatch>;
   resolveNavigation(
     intent: OutlinerNavigationIntent,
@@ -305,9 +375,8 @@ export interface DetailEffects {
   queryBacklinks(query: BacklinkQuery): Promise<BacklinkCollection>;
   openBacklinkPeek(input: BacklinkPeekLaunch): void;
   openDetailPane(
-    blockId: string,
+    target: OutlinerNavigationTarget,
     direction: "right" | "down",
-    fragmentId?: string,
   ): void | Promise<void>;
   copyText(text: string): void;
   updateBlock(input: {
@@ -329,7 +398,7 @@ export interface DetailEffects {
   getAttention(): Promise<AttentionClientState>;
   acknowledgeAttention(markId?: string): Promise<AttentionClientState>;
   restoreBlock(blockId: string): Promise<Block>;
-  resolveReference(target: OutlinerLinkTarget): Promise<{ block: Block; created?: boolean }>;
+  resolveReference(target: OutlinerLinkTarget): Promise<ResolvedOutlinerLinkTarget>;
   queryBlocks(query: BlockSearchQuery): Promise<VisibleBlockCollection>;
   queryPageAddresses(query: string | undefined, limit: number): Promise<PageAddressCollection>;
   readFile(block: Block): ReferencedFile;
@@ -573,9 +642,18 @@ export function createDetailController(
 ): DetailController {
   const destinationChooserState = createOpenDestinationChooserState();
   const state: DetailState = {
-    context: { selected: null, ancestors: [], children: [] },
-    targetBlockId: null,
-    targetFragmentId: null,
+    document: options.initialTarget
+      ? { kind: "loading", target: options.initialTarget }
+      : { kind: "empty" },
+    get context() {
+      return detailDocumentContext(this.document);
+    },
+    get target() {
+      return detailDocumentTarget(this.document);
+    },
+    get resource() {
+      return detailResourceDescription(this)?.resource ?? null;
+    },
     connectionMode: options.propertyInspectorPresentation === "dedicated" ? "locked" : "unlocked",
     canNavigateBack: false,
     annotationThreads: [],
@@ -639,7 +717,7 @@ export function createDetailController(
   let serviceConnected = false;
   let destinationChooser: OpenDestinationChooser | undefined;
   const destinationReferences = new WeakMap<OpenDestinationTarget, OutlinerLinkTarget>();
-  let startupTargetFragmentId = options.initialTargetFragmentId ?? null;
+  let loadGeneration = 0;
 
   const emit = (): void => onChange(state);
   const isBufferMode = (): boolean =>
@@ -717,10 +795,12 @@ export function createDetailController(
     applyResolvedReferences(await effects.resolveReferences(projection.text));
   };
 
-  const loadAnnotations = async (): Promise<void> => {
+  const loadAnnotations = async (expectedGeneration?: number): Promise<void> => {
     const selected = state.context.selected;
     if (!selected) {
-      state.annotationThreads = [];
+      if (expectedGeneration === undefined || expectedGeneration === loadGeneration) {
+        state.annotationThreads = [];
+      }
       return;
     }
     let sourceBlockId = selected.id;
@@ -749,16 +829,24 @@ export function createDetailController(
       sourceVersion = state.referencedFile.sourceVersion ?? selected.updatedAt;
       sourceHash = state.referencedFile.sourceHash;
     }
+    let threads: AnnotationThread[];
     try {
-      state.annotationThreads = await effects.reanchorAnnotations({
+      threads = await effects.reanchorAnnotations({
         sourceBlockId,
         sourceText,
         sourceVersion,
         ...(sourceHash ? { sourceHash } : {}),
       });
     } catch {
-      state.annotationThreads = await effects.listAnnotations(sourceBlockId).catch(() => []);
+      threads = await effects.listAnnotations(sourceBlockId).catch(() => []);
     }
+    if (
+      (expectedGeneration !== undefined && expectedGeneration !== loadGeneration) ||
+      detailBlockTarget(state)?.blockId !== selected.id
+    ) {
+      return;
+    }
+    state.annotationThreads = threads;
   };
 
   const invalidateBacklinks = (): void => {
@@ -792,7 +880,7 @@ export function createDetailController(
   };
 
   const loadBacklinks = async (): Promise<void> => {
-    const targetBlockId = state.targetBlockId;
+    const targetBlockId = detailBlockTarget(state)?.blockId;
     if (
       !state.backlinks.expanded ||
       !targetBlockId ||
@@ -807,16 +895,16 @@ export function createDetailController(
         targetBlockId,
         limit: 50,
       });
-      if (state.backlinks.expanded && state.targetBlockId === targetBlockId) {
+      if (state.backlinks.expanded && detailBlockTarget(state)?.blockId === targetBlockId) {
         state.backlinks.collection = collection;
         clampBacklinkSelection();
       }
     } catch (error) {
-      if (state.backlinks.expanded && state.targetBlockId === targetBlockId) {
+      if (state.backlinks.expanded && detailBlockTarget(state)?.blockId === targetBlockId) {
         state.backlinks.error = errorMessage(error);
       }
     } finally {
-      if (state.targetBlockId === targetBlockId) state.backlinks.loading = false;
+      if (detailBlockTarget(state)?.blockId === targetBlockId) state.backlinks.loading = false;
     }
   };
 
@@ -825,65 +913,153 @@ export function createDetailController(
     state.canNavigateForward = navigationIndex >= 0 && navigationIndex < navigationHistory.length - 1;
   };
 
-  const recordNavigation = (
-    blockId: string | null,
-    fragmentId: string | null,
-  ): void => {
-    const current = navigationHistory[navigationIndex];
-    if (
-      !blockId ||
-      (current?.blockId === blockId && current.fragmentId === fragmentId)
-    ) {
+  const sameNavigationTarget = (
+    left: OutlinerNavigationTarget | null,
+    right: OutlinerNavigationTarget | null,
+  ): boolean => {
+    if (!left || !right || left.kind !== right.kind) return left === right;
+    if (left.kind === "block" && right.kind === "block") {
+      return left.blockId === right.blockId && left.fragmentId === right.fragmentId;
+    }
+    if (left.kind !== "resource" || right.kind !== "resource") return false;
+    if (left.resourceId !== right.resourceId) return false;
+    if (!left.revision || !right.revision) return left.revision === right.revision;
+    return resourceRevisionRefEquals(left.revision, right.revision);
+  };
+
+  const recordNavigation = (target: OutlinerNavigationTarget | null): void => {
+    const current = navigationHistory[navigationIndex]?.target ?? null;
+    if (!target || sameNavigationTarget(current, target)) {
       syncNavigationState();
       return;
     }
     navigationHistory.splice(navigationIndex + 1);
-    navigationHistory.push({ blockId, fragmentId });
+    navigationHistory.push({ target });
     if (navigationHistory.length > 200) navigationHistory.shift();
     navigationIndex = navigationHistory.length - 1;
     syncNavigationState();
   };
 
-  const applyTarget = async (
-    next: SelectionContext,
-    force = false,
-    record = true,
-    fragmentId: string | null = null,
-  ): Promise<void> => {
-    state.refreshPending = false;
-    const targetChanged = (next.selected?.id ?? null) !== state.targetBlockId;
-    const fragmentChanged = fragmentId !== state.targetFragmentId;
-    const changed =
-      targetChanged ||
-      fragmentChanged ||
-      next.selected?.updatedAt !== state.context.selected?.updatedAt;
-    if (targetChanged || fragmentChanged) destinationChooser?.dispose();
-    if (targetChanged) state.previewRegions.disclosureOverrides.clear();
-    if (targetChanged) state.attentionRevealSourceLine = null;
-    if (targetChanged || next.selected?.updatedAt !== state.context.selected?.updatedAt) {
-      invalidateBacklinks();
+  const replaceSelectedBlock = (selected: Block): void => {
+    if (state.document.kind !== "ready" || state.document.document.kind !== "block") {
+      throw new Error("Block update completed without a loaded block document");
     }
-    if (record) recordNavigation(state.targetBlockId, state.targetFragmentId);
-    state.context = next;
-    state.targetBlockId = next.selected?.id ?? null;
-    state.targetFragmentId = fragmentId;
-    if (targetChanged && serviceConnected) await effects.setCurrentBlock(state.targetBlockId);
-    if (record) recordNavigation(state.targetBlockId, state.targetFragmentId);
+    const document = state.document.document;
+    state.document = {
+      kind: "ready",
+      document: {
+        ...document,
+        context: { ...document.context, selected },
+      },
+    };
+  };
+
+  const clearDocumentPresentation = (): void => {
+    state.resolvedSelectedText = "";
+    state.projectedSelectedText = "";
+    state.embedStates = [];
+    state.embedRanges = [];
+    state.workIdPrefix = null;
+    state.resolvedBreadcrumb = "";
+    state.referencedFile = null;
+    state.previewOffset = 0;
+    state.annotationThreads = [];
+    invalidateBacklinks();
+    syncPropertyInspector(null, true);
+  };
+
+  const resourceDocumentText = (description: ResourceDescription): string => {
+    const { resource, source } = description;
+    const lines = [
+      `# ${resourceAddressLabel(resource.address)}`,
+      "",
+      `[Stable resource link](${outlinerLinkUri("resource", resource.id)})`,
+      "",
+      `- Resource ID: \`${resource.id}\``,
+      `- Source: ${source.name} (\`${source.id}\`)`,
+      `- Provider: \`${resource.provider}\``,
+      `- Address version: \`${resource.addressVersion}\``,
+      `- Requested revision: ${
+        description.requestedRevision
+          ? `address version ${description.requestedRevision.addressVersion}`
+          : "latest address"
+      }`,
+      "",
+      "## Capabilities",
+    ];
+    for (const capability of RESOURCE_CAPABILITIES) {
+      const decision = description.capabilities[capability];
+      lines.push(`- ${capability}: ${decision.status}`);
+      for (const factor of RESOURCE_CAPABILITY_FACTORS) {
+        const assessment = decision.factors[factor];
+        if (assessment.state === "blocked" || assessment.state === "unknown") {
+          lines.push(`  - ${factor}: ${assessment.state} — ${assessment.detail}`);
+        }
+      }
+    }
+    return lines.join("\n");
+  };
+
+  const applyReadyDocument = async (
+    document: DetailReadyDocument,
+    generation: number,
+    force: boolean,
+    record: boolean,
+    previousTarget: OutlinerNavigationTarget | null,
+  ): Promise<void> => {
+    const previousContext = state.context;
+    const targetChanged = !sameNavigationTarget(previousTarget, document.target);
+    const nextSelected = document.kind === "block" ? document.context.selected : null;
+    const blockChanged = detailBlockTarget({ target: previousTarget })?.blockId !== nextSelected?.id;
+    const changed = document.kind === "resource" || targetChanged ||
+      nextSelected?.updatedAt !== previousContext.selected?.updatedAt;
+
+    let projection: DetailReadProjection | null = null;
+    let resolved: ResolvedBlockReferences | null = null;
+    if (document.kind === "block" && nextSelected && (force || changed)) {
+      projection = await effects.projectRead(nextSelected.text, nextSelected.id);
+      resolved = await effects.resolveReferences(projection.text);
+      if (generation !== loadGeneration) return;
+    }
+
+    if (record) recordNavigation(previousTarget);
+    state.document = { kind: "ready", document };
+    state.refreshPending = false;
+    if (targetChanged) destinationChooser?.dispose();
+    if (blockChanged) {
+      state.previewRegions.disclosureOverrides.clear();
+      state.attentionRevealSourceLine = null;
+    }
+    if (blockChanged || changed) invalidateBacklinks();
+    if (serviceConnected) await effects.setCurrentTarget(document.target);
+    if (generation !== loadGeneration) return;
+    if (record) recordNavigation(document.target);
     else syncNavigationState();
     if (!force && !changed) return;
     if (changed) state.status = "";
-    syncPropertyInspector(next.selected, targetChanged);
 
-    if (next.selected) {
-      await applyReadProjection(next.selected.text, next.selected.id);
-    } else {
-      state.projectedSelectedText = "";
-      state.embedStates = [];
-      state.resolvedSelectedText = "";
-      state.workIdPrefix = null;
+    if (document.kind === "resource") {
+      clearDocumentPresentation();
+      state.resolvedSelectedText = resourceDocumentText(document.description);
+      state.projectedSelectedText = state.resolvedSelectedText;
+      state.resolvedBreadcrumb = resourceAddressLabel(document.description.resource.address);
+      state.mode = "preview";
+      return;
+    }
+
+    const next = document.context;
+    syncPropertyInspector(next.selected, blockChanged);
+    if (next.selected && projection && resolved) {
+      state.projectedSelectedText = projection.text;
+      state.embedStates = projection.embeds;
+      state.embedRanges = projection.embedRanges;
+      applyResolvedReferences(resolved);
+    } else if (!next.selected) {
+      clearDocumentPresentation();
     }
     refreshBreadcrumb();
     state.previewOffset = 0;
+    const fragmentId = document.target.fragmentId;
     if (fragmentId && next.selected) {
       const fragment = resolveFragment(next.selected.text, fragmentId);
       if (fragment.status === "resolved") {
@@ -905,14 +1081,53 @@ export function createDetailController(
     if ((state.mode === "file" || state.mode === "annotation") && next.selected) loadFile(next.selected);
     else state.referencedFile = null;
     await loadBacklinks();
-    await loadAnnotations();
+    if (generation !== loadGeneration) return;
+    await loadAnnotations(generation);
+  };
+
+  const loadNavigationTarget = async (
+    target: OutlinerNavigationTarget,
+    force = false,
+    record = true,
+  ): Promise<void> => {
+    const generation = ++loadGeneration;
+    const previousTarget = state.target;
+    state.document = { kind: "loading", target };
+    state.refreshPending = false;
+    emit();
+    try {
+      const document = await effects.loadTarget(target);
+      if (generation !== loadGeneration) return;
+      if (!sameNavigationTarget(document.target, target)) {
+        throw new Error("Detail loader returned a different navigation target");
+      }
+      await applyReadyDocument(document, generation, force, record, previousTarget);
+    } catch (error) {
+      if (generation !== loadGeneration) return;
+      const message = errorMessage(error);
+      clearDocumentPresentation();
+      state.document = { kind: "failed", target, message };
+      if (record) {
+        recordNavigation(previousTarget);
+        recordNavigation(target);
+      } else syncNavigationState();
+      await effects.setCurrentTarget(target);
+      state.status = `Target is no longer available · ${message}`;
+    }
   };
 
   const loadBrowsingContext = async (force = false): Promise<void> => {
+    const generation = ++loadGeneration;
     const browsingContext = await effects.getBrowsingContext();
-    const fragmentId = startupTargetFragmentId;
-    startupTargetFragmentId = null;
-    await applyTarget(browsingContext.target, force, true, fragmentId);
+    if (generation !== loadGeneration) return;
+    if (!browsingContext.target) {
+      clearDocumentPresentation();
+      state.document = { kind: "empty" };
+      await effects.setCurrentTarget(null);
+      return;
+    }
+    loadGeneration -= 1;
+    await loadNavigationTarget(browsingContext.target, force, true);
   };
 
   const loadBlock = async (
@@ -921,61 +1136,27 @@ export function createDetailController(
     record = true,
     fragmentId: string | null = null,
   ): Promise<void> => {
-    try {
-      await applyTarget(
-        await effects.getBlockContext(blockId),
-        force,
-        record,
-        fragmentId,
-      );
-    } catch {
-      if (blockId !== state.targetBlockId) {
-        state.previewRegions.disclosureOverrides.clear();
-      }
-      if (record) recordNavigation(state.targetBlockId, state.targetFragmentId);
-      state.context = { selected: null, ancestors: [], children: [] };
-      syncPropertyInspector(null, true);
-      await effects.setCurrentBlock(null);
-      state.targetBlockId = blockId;
-      state.targetFragmentId = fragmentId;
-      state.resolvedSelectedText = "";
-      state.projectedSelectedText = "";
-      state.embedStates = [];
-      state.resolvedBreadcrumb = "";
-      state.referencedFile = null;
-      if (record) recordNavigation(blockId, fragmentId);
-      else syncNavigationState();
-      state.status = `Target is no longer available · ${blockId}${
-        fragmentId ? `^${fragmentId}` : ""
-      }`;
-    }
+    await loadNavigationTarget({
+      kind: "block",
+      blockId,
+      ...(fragmentId ? { fragmentId } : {}),
+    }, force, record);
   };
 
   const loadCurrentTarget = async (force = false): Promise<void> => {
-    if (state.targetBlockId) {
-      await loadBlock(
-        state.targetBlockId,
-        force,
-        false,
-        state.targetFragmentId,
-      );
-    } else await loadBrowsingContext(force);
+    if (state.target) await loadNavigationTarget(state.target, force, false);
+    else await loadBrowsingContext(force);
   };
 
   const applyNavigationCommand = async (command: OutlinerUiCommand): Promise<boolean> => {
-    if (!command.blockId) return false;
+    if (!("target" in command) || !command.target) return false;
     if (
       state.connectionMode === "locked" &&
       (command.command === "preview" || command.command === "open")
     ) {
       return false;
     }
-    await loadBlock(
-      command.blockId,
-      true,
-      command.command !== "preview",
-      command.fragmentId ?? null,
-    );
+    await loadNavigationTarget(command.target, true, command.command !== "preview");
     return true;
   };
 
@@ -983,8 +1164,17 @@ export function createDetailController(
     target: OpenDestinationTarget,
     reference: OutlinerLinkTarget,
   ): Promise<void> => {
+    if (reference.kind === "resource") {
+      target.target = { kind: "resource", resourceId: reference.value };
+      target.title = reference.value;
+      return;
+    }
     const resolved = await effects.resolveReference(reference);
-    target.blockId = resolved.block.id;
+    target.target = {
+      kind: "block",
+      blockId: resolved.block.id,
+      ...(resolved.fragmentId ? { fragmentId: resolved.fragmentId } : {}),
+    };
     target.title = blockDisplayTitle(resolved.block);
   };
 
@@ -993,9 +1183,8 @@ export function createDetailController(
     preserveSource = false,
   ): Promise<boolean> => {
     try {
-      const dispatched = await effects.dispatchNavigation(target.blockId, "open", {
+      const dispatched = await effects.dispatchNavigation(target.target, "open", {
         ...(preserveSource ? { preserveSource: true } : {}),
-        ...(target.fragmentId ? { fragmentId: target.fragmentId } : {}),
       });
       if (dispatched.targetClientId === effects.clientId) {
         await applyNavigationCommand(dispatched.command);
@@ -1022,12 +1211,12 @@ export function createDetailController(
       await applyNavigationCommand({
         targetClientId: effects.clientId,
         command: "replace",
-        blockId: target.blockId,
-        ...(target.fragmentId ? { fragmentId: target.fragmentId } : {}),
+        target: target.target,
       });
+      const noun = target.target.kind === "resource" ? "resource" : "block";
       state.status = state.connectionMode === "locked"
-        ? "Replaced here · remains locked · L unlocks this block"
-        : "Replaced here · still unlocked · L locks this block";
+        ? `Replaced here · remains locked · L unlocks this ${noun}`
+        : `Replaced here · still unlocked · L locks this ${noun}`;
     },
     openFirstUnlocked: (target) =>
       openFirstUnlocked(
@@ -1035,7 +1224,7 @@ export function createDetailController(
         destinationReferences.get(target)?.preserveSource === true,
       ),
     openNewDetail: async (target, direction) => {
-      await effects.openDetailPane(target.blockId, direction, target.fragmentId);
+      await effects.openDetailPane(target.target, direction);
       state.status = direction === "right"
         ? `Opened ${target.title} to the right`
         : `Opened ${target.title} below`;
@@ -1170,7 +1359,7 @@ export function createDetailController(
         await refreshPendingTarget();
         return;
       }
-      state.context = { ...state.context, selected: updated };
+      replaceSelectedBlock(updated);
       syncPropertyInspector(updated, false);
       await applyReadProjection(updated.text, updated.id);
       refreshBreadcrumb();
@@ -1342,7 +1531,7 @@ export function createDetailController(
           text: state.buffer.text,
           expectedUpdatedAt: state.context.selected.updatedAt,
         });
-        state.context = { ...state.context, selected: updated };
+        replaceSelectedBlock(updated);
         await applyReadProjection(updated.text, updated.id);
         refreshBreadcrumb();
         state.mode = detailDisplayMode(updated);
@@ -1578,12 +1767,7 @@ export function createDetailController(
           break;
         }
         navigationIndex = targetIndex;
-        await loadBlock(
-          target.blockId,
-          true,
-          false,
-          target.fragmentId,
-        );
+        await loadNavigationTarget(target.target, true, false);
         state.status = direction < 0 ? "Navigation back" : "Navigation forward";
         break;
       }
@@ -1593,7 +1777,11 @@ export function createDetailController(
           state.status = "No block selected";
           break;
         }
-        await effects.dispatchNavigation(current.id, "reveal", { focusTarget: true });
+        await effects.dispatchNavigation(
+          { kind: "block", blockId: current.id },
+          "reveal",
+          { focusTarget: true },
+        );
         state.status = `Revealed ${blockDisplayTitle(current)}`;
         break;
       }
@@ -1660,9 +1848,14 @@ export function createDetailController(
         const fragmentId = reference.kind === "block" ? reference.fragmentId : undefined;
         if (navigationIntent === "open") {
           const target: OpenDestinationTarget = {
-            blockId: reference.value,
+            target: reference.kind === "resource"
+              ? { kind: "resource", resourceId: reference.value }
+              : {
+                  kind: "block",
+                  blockId: reference.value,
+                  ...(fragmentId ? { fragmentId } : {}),
+                },
             title: reference.value,
-            ...(fragmentId ? { fragmentId } : {}),
           };
           const routing = intent.type === "reference.open"
             ? intent.routing ?? "chooser"
@@ -1678,31 +1871,39 @@ export function createDetailController(
           }
           break;
         }
+        if (reference.kind === "resource") {
+          await effects.dispatchNavigation(
+            { kind: "resource", resourceId: reference.value },
+            "reveal",
+            { focusTarget: true },
+          );
+          break;
+        }
         if (reference.kind === "page") {
           await effects.resolveNavigation("reveal");
         }
         const resolved = await effects.resolveReference(reference);
-        await effects.dispatchNavigation(resolved.block.id, "reveal", {
-          ...(fragmentId ? { fragmentId } : {}),
-          focusTarget: true,
-        });
+        await effects.dispatchNavigation({
+          kind: "block",
+          blockId: resolved.block.id,
+          ...(resolved.fragmentId ? { fragmentId: resolved.fragmentId } : {}),
+        }, "reveal", { focusTarget: true });
         state.status = `Revealed ${blockDisplayTitle(resolved.block)}`;
         break;
       }
       case "pane.open": {
-        const target = state.context.selected;
+        const target = state.target;
         if (!target) {
-          state.status = "No block selected";
+          state.status = "No target selected";
           break;
         }
-        await effects.openDetailPane(
-          target.id,
-          intent.direction,
-          state.targetFragmentId ?? undefined,
-        );
+        await effects.openDetailPane(target, intent.direction);
+        const title = state.resource
+          ? resourceAddressLabel(state.resource.address)
+          : (state.context.selected ? blockDisplayTitle(state.context.selected) : "target");
         state.status = intent.direction === "right"
-          ? `Opened ${blockDisplayTitle(target)} to the right`
-          : `Opened ${blockDisplayTitle(target)} below`;
+          ? `Opened ${title} to the right`
+          : `Opened ${title} below`;
         break;
       }
       case "lock.toggle": {
@@ -2024,7 +2225,7 @@ export function createDetailController(
       }
       case "backlinks.open": {
         const source = selectedBacklinkSource();
-        const targetBlockId = state.targetBlockId;
+        const targetBlockId = detailBlockTarget(state)?.blockId;
         if (!source || !targetBlockId) {
           state.status = "No backlink source selected";
           break;
@@ -2047,7 +2248,11 @@ export function createDetailController(
           state.status = "No backlink source selected";
           break;
         }
-        await effects.dispatchNavigation(source.blockId, "reveal", { focusTarget: true });
+        await effects.dispatchNavigation(
+          { kind: "block", blockId: source.blockId },
+          "reveal",
+          { focusTarget: true },
+        );
         state.status = `Revealed ${source.title}`;
         break;
       }
@@ -2333,7 +2538,9 @@ export function createDetailController(
       return state;
     },
     initialize() {
-      return loadBrowsingContext(true);
+      return options.initialTarget
+        ? loadNavigationTarget(options.initialTarget, true, true)
+        : loadBrowsingContext(true);
     },
     isBufferMode,
     dispatch,
@@ -2408,7 +2615,7 @@ export function createDetailController(
         }
         if (command.command === "backlinks.select") {
           if (
-            command.targetBlockId === state.targetBlockId &&
+            command.targetBlockId === detailBlockTarget(state)?.blockId &&
             command.sourceBlockId
           ) {
             await loadBacklinks();
@@ -2430,22 +2637,29 @@ export function createDetailController(
           return;
         }
         if (isBufferMode()) {
-          if (command.blockId) pendingUiCommand = command;
+          if ("target" in command && command.target) pendingUiCommand = command;
           state.refreshPending = true;
           return;
         }
-        if (command.blockId) {
+        if ("target" in command && command.target) {
           await applyNavigationCommand(command);
-          if (command.command === "preview") {
-            state.status = "Previewing Tree selection · L locks this block";
-          } else if (command.command === "open") {
-            state.status = command.fragmentId
-              ? `Opened fragment · ^${command.fragmentId} · line ${state.previewOffset + 1} · still unlocked`
-              : "Opened here · still unlocked · L locks this block";
-          } else if (command.command === "replace") {
-            state.status = state.connectionMode === "locked"
-              ? "Replaced here · remains locked · L unlocks this block"
-              : "Replaced here · still unlocked · L locks this block";
+          if (state.document.kind !== "failed") {
+            if (command.command === "preview") {
+              state.status = command.target.kind === "resource"
+                ? "Previewing resource · L locks this resource"
+                : "Previewing Tree selection · L locks this block";
+            } else if (command.command === "open") {
+              state.status = command.target.kind === "block" && command.target.fragmentId
+                ? `Opened fragment · ^${command.target.fragmentId} · line ${state.previewOffset + 1} · still unlocked`
+                : command.target.kind === "resource"
+                  ? "Opened resource here · still unlocked · L locks this resource"
+                  : "Opened here · still unlocked · L locks this block";
+            } else if (command.command === "replace") {
+              const noun = command.target.kind === "resource" ? "resource" : "block";
+              state.status = state.connectionMode === "locked"
+                ? `Replaced here · remains locked · L unlocks this ${noun}`
+                : `Replaced here · still unlocked · L locks this ${noun}`;
+            }
           }
         }
         if (command.command === "edit") await beginEdit(viewport);
@@ -2453,20 +2667,31 @@ export function createDetailController(
         emit();
         return;
       }
-      if (event.domain === "content") invalidateBacklinks();
+      if (event.domain === "resource-catalog") {
+        const description = detailResourceDescription(state);
+        const matchesTarget = state.target?.kind === "resource" &&
+          event.resourceId === state.target.resourceId;
+        const matchesDescription = description !== null &&
+          (event.resourceId === description.resource.id ||
+            event.sourceId === description.source.id);
+        if (!matchesTarget && !matchesDescription) return;
+      } else if (event.domain === "content") {
+        if (state.target?.kind === "resource") return;
+        invalidateBacklinks();
+      }
       if (event.domain === "selection" || event.domain === "browsing-context") return;
       if (isBufferMode()) {
         state.refreshPending = true;
         return;
       }
-      await loadCurrentTarget(event.domain === "content");
+      await loadCurrentTarget(true);
       await loadBacklinks();
       emit();
     },
     async onServiceConnect() {
       serviceConnected = true;
       await effects.setLocked(state.connectionMode === "locked");
-      await effects.setCurrentBlock(state.targetBlockId);
+      await effects.setCurrentTarget(state.target);
       state.attention = await effects.getAttention();
       state.status = "";
       if (isBufferMode()) state.refreshPending = true;

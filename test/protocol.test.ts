@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { createConnection, createServer, Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -22,6 +22,7 @@ import type {
   CaptureReceipt,
   DeliveryReceipt,
   BrowsingContextPublication,
+  BrowsingContextState,
   OutlinerEvent,
   OutlinerClientRegistration,
   OutlinerRequest,
@@ -36,8 +37,11 @@ import type {
   OutlinerServiceStatus,
   PropertyCatalogItem,
   QuickCaptureDraft,
-  SelectionContext,
   VisibleBlockCollection,
+  Resource,
+  InternResourceReceipt,
+  ResourceDescription,
+  ResourceSource,
   RoadmapItemCreateReceipt,
   WorkIdAllocation,
   WorkIdAllocatorStatus,
@@ -93,6 +97,118 @@ test("round-trips idempotent delivery identity over the current protocol", async
   expect(reused.created).toBe(false);
   expect(reused.delivery.id).toBe(created.delivery.id);
   expect(store.sequence).toBe(sequenceBefore + 1);
+});
+
+test("persists resources and dispatches resource targets without synthetic blocks", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-outliner-resource-protocol-"));
+  const store = new OutlinerStore(join(directory, "outliner.sqlite"));
+  const socket = join(directory, "outliner.sock");
+  const server = new OutlinerServer(store, socket);
+  await server.start();
+  const treeConnected = Promise.withResolvers<void>();
+  const detailConnected = Promise.withResolvers<void>();
+  const resourceOpened = Promise.withResolvers<OutlinerEvent>();
+  const treeWatcher = new OutlinerClient(socket).watch({
+    client: { clientId: "resource-tree", role: "tree", contextId: "resource-context" },
+    onConnect: treeConnected.resolve,
+    onEvent() {},
+  });
+  const detailWatcher = new OutlinerClient(socket).watch({
+    client: { clientId: "resource-detail", role: "detail", contextId: "resource-context" },
+    onConnect: detailConnected.resolve,
+    onEvent(event) {
+      if (
+        event.domain === "ui" &&
+        event.command?.command === "open" &&
+        event.command.target.kind === "resource"
+      ) {
+        resourceOpened.resolve(event);
+      }
+    },
+  });
+  cleanups.push(async () => {
+    treeWatcher.stop();
+    detailWatcher.stop();
+    await server.close();
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  await Promise.all([treeConnected.promise, detailConnected.promise]);
+
+  const client = new OutlinerClient(socket);
+  const root = join(directory, "external-notes");
+  mkdirSync(root);
+  const source = await client.request<ResourceSource>({
+    action: "resource-sources.create",
+    input: {
+      name: "External notes",
+      provider: "filesystem",
+      boundary: { root },
+      policy: { deniedCapabilities: ["watch"] },
+    },
+  });
+  const receipt = await client.request<InternResourceReceipt>({
+    action: "resources.intern",
+    input: {
+      sourceId: source.id,
+      address: { kind: "filesystem", path: "daily/2026-09-17.md" },
+      mediaType: "text/markdown",
+    },
+  });
+  const resource = receipt.resource;
+
+  expect(receipt.created).toBe(true);
+  expect(await client.request<Resource>({
+    action: "resources.get",
+    resourceId: resource.id,
+  })).toEqual(resource);
+  expect(await client.request<ResourceSource[]>({ action: "resource-sources.list" }))
+    .toEqual([source]);
+  const description = await client.request<ResourceDescription>({
+    action: "resources.describe",
+    target: { kind: "resource", resourceId: resource.id },
+    destinationClientId: "resource-detail",
+  });
+  expect(description).toMatchObject({
+    resource: { id: resource.id },
+    source: { id: source.id },
+    requestedRevision: null,
+  });
+  expect(description.capabilities.watch).toMatchObject({
+    status: "unavailable",
+    factors: {
+      "workspace-policy": { state: "blocked" },
+    },
+  });
+
+  const dispatch = await client.request<OutlinerNavigationDispatch>({
+    action: "navigation.dispatch",
+    sourceClientId: "resource-tree",
+    target: { kind: "resource", resourceId: resource.id },
+    intent: "open",
+  });
+  expect(dispatch).toMatchObject({
+    targetClientId: "resource-detail",
+    command: {
+      targetClientId: "resource-detail",
+      command: "open",
+      target: { kind: "resource", resourceId: resource.id },
+    },
+  });
+  const openedEvent = await resourceOpened.promise;
+  expect(openedEvent).toMatchObject({
+    resourceId: resource.id,
+  });
+  expect(openedEvent.blockId).toBeUndefined();
+  await client.request({
+    action: "clients.update",
+    clientId: "resource-detail",
+    currentTarget: { kind: "resource", resourceId: resource.id },
+  });
+  expect(
+    (await client.request<OutlinerClientRegistration[]>({ action: "clients.list" }))
+      .find(({ clientId }) => clientId === "resource-detail")?.currentTarget,
+  ).toEqual({ kind: "resource", resourceId: resource.id });
 });
 
 
@@ -167,7 +283,7 @@ test("serves mutations and property queries over the local socket", async () => 
   const client = new OutlinerClient(socket);
   const service = await client.request<OutlinerServiceStatus>({ action: "ping" });
   expect(service).toEqual({ status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION });
-  expect(service.protocolVersion).toBe(37);
+  expect(service.protocolVersion).toBe(38);
   const provenance = {
     actorId: "omp",
     sessionId: "session-1",
@@ -623,7 +739,7 @@ test("streams workspace mutations and transient UI commands to subscribers", asy
   });
   await client.request({
     action: "ui.command.send",
-    command: { targetClientId: "event-detail", command: "edit", blockId: block.id },
+    command: { targetClientId: "event-detail", command: "edit", target: { kind: "block", blockId: block.id } },
   });
   await received.promise;
 
@@ -643,11 +759,7 @@ test("streams workspace mutations and transient UI commands to subscribers", asy
   expect(events[2].blockId).toBe(capture.block.id);
   expect(events[3].blockId).toBe(capture.block.id);
   expect(events[4].blockId).toBe(block.id);
-  expect(events[9].command).toEqual({
-    targetClientId: "event-detail",
-    command: "edit",
-    blockId: block.id,
-  });
+  expect(events[9].command).toEqual({ targetClientId: "event-detail", command: "edit", target: { kind: "block", blockId: block.id },  });
 
   const children = await client.request<Block[]>({ action: "children", parentId: null });
   expect(children.some((candidate) => candidate.id === block.id)).toBe(true);
@@ -750,12 +862,8 @@ test("isolates browsing-context targets and events across same-workspace client 
   });
 
   await Promise.all([firstConnected.promise, secondConnected.promise]);
-  await client.request({
-    action: "browsing-context.publish",
-    sourceClientId: "detail-first",
-    contextId: "context-first",
-    blockId: first.id,
-  });
+  await client.request({ action: "browsing-context.publish", sourceClientId: "detail-first",
+  contextId: "context-first", target: { kind: "block", blockId: first.id },  });
   await firstReceived.promise;
   await Bun.sleep(20);
   expect(firstEvents).toEqual([
@@ -775,31 +883,27 @@ test("isolates browsing-context targets and events across same-workspace client 
   ]);
   expect(secondEvents).toEqual([]);
 
-  await client.request({
-    action: "browsing-context.publish",
-    sourceClientId: "detail-second",
-    contextId: "context-second",
-    blockId: second.id,
-  });
+  await client.request({ action: "browsing-context.publish", sourceClientId: "detail-second",
+  contextId: "context-second", target: { kind: "block", blockId: second.id },  });
   await secondReceived.promise;
-  const firstContext = await client.request<{
-    contextId: string;
-    target: SelectionContext;
-  }>({ action: "browsing-context.get", contextId: "context-first" });
-  const secondContext = await client.request<{
-    contextId: string;
-    target: SelectionContext;
-  }>({ action: "browsing-context.get", contextId: "context-second" });
-  expect(firstContext.target.selected?.id).toBe(first.id);
-  expect(secondContext.target.selected?.id).toBe(second.id);
+  const firstContext = await client.request<BrowsingContextState>({
+    action: "browsing-context.get",
+    contextId: "context-first",
+  });
+  const secondContext = await client.request<BrowsingContextState>({
+    action: "browsing-context.get",
+    contextId: "context-second",
+  });
+  expect(firstContext.target).toEqual({ kind: "block", blockId: first.id });
+  expect(secondContext.target).toEqual({ kind: "block", blockId: second.id });
 
   store.delete(first.id);
   store.purge(first.id, first.id.slice(0, 8));
-  const purgedContext = await client.request<{
-    contextId: string;
-    target: SelectionContext;
-  }>({ action: "browsing-context.get", contextId: "context-first" });
-  expect(purgedContext.target).toEqual({ selected: null, ancestors: [], children: [] });
+  const purgedContext = await client.request<BrowsingContextState>({
+    action: "browsing-context.get",
+    contextId: "context-first",
+  });
+  expect(purgedContext.target).toEqual({ kind: "block", blockId: first.id });
 });
 
 test("prunes destroyed client registrations before listing or targeting", () => {
@@ -888,37 +992,27 @@ test("validates direct popup commands and targets only the invoking Detail", asy
   await connected.promise;
 
   for (const invalid of ["false", null]) {
-    await expect(client.request({
-      action: "browsing-context.publish",
-      sourceClientId: "popup-detail",
-      contextId: `invalid-dispatch-${String(invalid)}`,
-      blockId: source.id,
-      dispatchPreview: invalid,
-    } as never)).rejects.toThrow("Browsing context dispatchPreview must be boolean");
+    await expect(client.request({ action: "browsing-context.publish", sourceClientId: "popup-detail",
+    contextId: `invalid-dispatch-${String(invalid)}`, target: { kind: "block", blockId: source.id }, dispatchPreview: invalid, } as never)).rejects.toThrow("Browsing context dispatchPreview must be boolean");
   }
 
-  const seeded = await client.request<BrowsingContextPublication>({
-    action: "browsing-context.publish",
-    sourceClientId: "popup-detail",
-    contextId: "seeded-detail-context",
-    blockId: source.id,
-    dispatchPreview: false,
-  });
+  const seeded = await client.request<BrowsingContextPublication>({ action: "browsing-context.publish", sourceClientId: "popup-detail",
+  contextId: "seeded-detail-context", target: { kind: "block", blockId: source.id }, dispatchPreview: false, });
   expect(seeded).toEqual({
     contextId: "seeded-detail-context",
-    target: store.blockContext(source.id),
+    target: { kind: "block", blockId: source.id },
   });
-  expect(await client.request<{ contextId: string; target: SelectionContext }>({
+  expect(await client.request<BrowsingContextState>({
     action: "browsing-context.get",
     contextId: "seeded-detail-context",
   })).toEqual({
     contextId: "seeded-detail-context",
-    target: store.blockContext(source.id),
+    target: { kind: "block", blockId: source.id },
   });
 
   await client.request({
     action: "ui.command.send",
-    command: { targetClientId: "popup-detail", command: "open", blockId: source.id },
+    command: { targetClientId: "popup-detail", command: "open", target: { kind: "block", blockId: source.id } },
   });
   await client.request({
     action: "ui.command.send",
@@ -931,7 +1025,7 @@ test("validates direct popup commands and targets only the invoking Detail", asy
   });
   await received.promise;
   expect(events.map((event) => event.command)).toEqual([
-    { targetClientId: "popup-detail", command: "open", blockId: source.id },
+    { targetClientId: "popup-detail", command: "open", target: { kind: "block", blockId: source.id } },
     {
       targetClientId: "popup-detail",
       command: "backlinks.select",
@@ -943,7 +1037,7 @@ test("validates direct popup commands and targets only the invoking Detail", asy
 
   await expect(client.request({
     action: "ui.command.send",
-    command: { targetClientId: "popup-tree", command: "open", blockId: source.id },
+    command: { targetClientId: "popup-tree", command: "open", target: { kind: "block", blockId: source.id } },
   })).rejects.toThrow("Direct open target must be a Detail client");
   await expect(client.request({
     action: "ui.command.send",
@@ -956,7 +1050,7 @@ test("validates direct popup commands and targets only the invoking Detail", asy
   })).rejects.toThrow("Backlink selection target must be a Detail client");
   await expect(client.request({
     action: "ui.command.send",
-    command: { targetClientId: "popup-detail", command: "open", blockId: "missing-block" },
+    command: { targetClientId: "popup-detail", command: "open", target: { kind: "block", blockId: "missing-block" } },
   })).rejects.toThrow("Block not found: missing-block");
   await expect(client.request({
     action: "ui.command.send",
@@ -971,22 +1065,18 @@ test("validates direct popup commands and targets only the invoking Detail", asy
     action: "clients.update",
     clientId: "popup-detail",
     locked: true,
-    currentBlockId: source.id,
+    currentTarget: { kind: "block", blockId: source.id },
   });
   await expect(client.request({
     action: "ui.command.send",
-    command: { targetClientId: "popup-detail", command: "open", blockId: source.id },
+    command: { targetClientId: "popup-detail", command: "open", target: { kind: "block", blockId: source.id } },
   })).rejects.toThrow("Invoking Detail is locked");
   await client.request({
     action: "ui.command.send",
-    command: { targetClientId: "popup-detail", command: "replace", blockId: source.id },
+    command: { targetClientId: "popup-detail", command: "replace", target: { kind: "block", blockId: source.id } },
   });
   await replaced.promise;
-  expect(events[2]?.command).toEqual({
-    targetClientId: "popup-detail",
-    command: "replace",
-    blockId: source.id,
-  });
+  expect(events[2]?.command).toEqual({ targetClientId: "popup-detail", command: "replace", target: { kind: "block", blockId: source.id },  });
   const renderedSelection = {
     quote: "Backlink source",
     capturedAt: "2026-01-02T03:04:05.000Z",
@@ -1132,11 +1222,18 @@ test("registers multiple live clients, targets one recipient, broadcasts content
     command: { targetClientId: "missing-client", command: "focus" },
   })).rejects.toThrow("Target client is not registered: missing-client");
 
-  await client.request({ action: "create", text: "Broadcast to every live client" });
+  const broadcastBlock = await client.request<Block>({
+    action: "create",
+    text: "Broadcast to every live client",
+  });
   await broadcastReceived.promise;
   await client.request({
     action: "ui.command.send",
-    command: { targetClientId: "detail-b", command: "edit", blockId: "target-block" },
+    command: {
+      targetClientId: "detail-b",
+      command: "edit",
+      target: { kind: "block", blockId: broadcastBlock.id },
+    },
   });
   await targeted.promise;
   expect(registrations.map(({ clientId }) =>
@@ -1362,49 +1459,36 @@ test("routes previews and opens to the first spatially unlocked Detail", async (
     .toEqual(registrations[0]!.runtime);
 
   const firstOpenReceived = nextCommand("detail-c", "open");
-  const firstOpen = await client.request<OutlinerNavigationDispatch>({
-    action: "navigation.dispatch",
-    sourceClientId: "tree-a",
-    blockId: target.id,
-    intent: "open",
-  });
+  const firstOpen = await client.request<OutlinerNavigationDispatch>({ action: "navigation.dispatch", sourceClientId: "tree-a", target: { kind: "block", blockId: target.id }, intent: "open", });
   await firstOpenReceived;
   expect(firstOpen).toMatchObject({
     targetClientId: "detail-c",
     resolution: "unlocked",
-    command: { targetClientId: "detail-c", command: "open", blockId: target.id },
+    command: { targetClientId: "detail-c", command: "open", target: { kind: "block", blockId: target.id } },
   });
   const fragmentOpenReceived = nextCommand("detail-c", "open");
   const fragmentOpen = await client.request<OutlinerNavigationDispatch>({
     action: "navigation.dispatch",
     sourceClientId: "tree-a",
-    blockId: target.id,
-    fragmentId: "durable-decision",
+    target: { kind: "block", blockId: target.id, fragmentId: "durable-decision" },
     intent: "open",
   });
   await fragmentOpenReceived;
   expect(fragmentOpen.command).toEqual({
     targetClientId: "detail-c",
     command: "open",
-    blockId: target.id,
-    fragmentId: "durable-decision",
+    target: { kind: "block", blockId: target.id, fragmentId: "durable-decision" },
   });
   await expect(client.request({
     action: "navigation.dispatch",
     sourceClientId: "tree-a",
-    blockId: target.id,
-    fragmentId: "stale-decision",
+    target: { kind: "block", blockId: target.id, fragmentId: "stale-decision" },
     intent: "open",
   })).rejects.toThrow(`Fragment not found: ${target.id}^stale-decision`);
 
   const sourcePreservingOpenReceived = nextCommand("detail-d", "open");
-  const sourcePreservingOpen = await client.request<OutlinerNavigationDispatch>({
-    action: "navigation.dispatch",
-    sourceClientId: "detail-c",
-    blockId: target.id,
-    intent: "open",
-    preserveSource: true,
-  });
+  const sourcePreservingOpen = await client.request<OutlinerNavigationDispatch>({ action: "navigation.dispatch", sourceClientId: "detail-c", target: { kind: "block", blockId: target.id }, intent: "open",
+  preserveSource: true, });
   await sourcePreservingOpenReceived;
   expect(sourcePreservingOpen).toMatchObject({
     sourceClientId: "detail-c",
@@ -1416,19 +1500,17 @@ test("routes previews and opens to the first spatially unlocked Detail", async (
     action: "clients.update",
     clientId: "detail-c",
     locked: true,
-    currentBlockId: target.id,
+    currentTarget: { kind: "block", blockId: target.id },
   });
   expect(
     (await client.request<OutlinerClientRegistration[]>({ action: "clients.list" }))
       .find(({ clientId }) => clientId === "detail-c"),
-  ).toMatchObject({ locked: true, currentBlockId: target.id });
-  const nextOpenReceived = nextCommand("detail-d", "open");
-  const nextOpen = await client.request<OutlinerNavigationDispatch>({
-    action: "navigation.dispatch",
-    sourceClientId: "detail-c",
-    blockId: target.id,
-    intent: "open",
+  ).toMatchObject({
+    locked: true,
+    currentTarget: { kind: "block", blockId: target.id },
   });
+  const nextOpenReceived = nextCommand("detail-d", "open");
+  const nextOpen = await client.request<OutlinerNavigationDispatch>({ action: "navigation.dispatch", sourceClientId: "detail-c", target: { kind: "block", blockId: target.id }, intent: "open", });
   await nextOpenReceived;
   expect(nextOpen).toMatchObject({
     targetClientId: "detail-d",
@@ -1436,80 +1518,48 @@ test("routes previews and opens to the first spatially unlocked Detail", async (
   });
 
   const previewReceived = nextCommand("detail-d", "preview");
-  const published = await client.request<BrowsingContextPublication>({
-    action: "browsing-context.publish",
-    sourceClientId: "tree-a",
-    contextId: "context-a",
-    blockId: target.id,
-  });
+  const published = await client.request<BrowsingContextPublication>({ action: "browsing-context.publish", sourceClientId: "tree-a",
+  contextId: "context-a", target: { kind: "block", blockId: target.id },  });
   await previewReceived;
   expect(published.preview).toMatchObject({
     targetClientId: "detail-d",
-    command: { targetClientId: "detail-d", command: "preview", blockId: target.id },
+    command: { targetClientId: "detail-d", command: "preview", target: { kind: "block", blockId: target.id } },
   });
 
   const otherTabOpenReceived = nextCommand("detail-oi", "open");
-  const otherTab = await client.request<OutlinerNavigationDispatch>({
-    action: "navigation.dispatch",
-    sourceClientId: "tree-oi",
-    blockId: target.id,
-    intent: "open",
-  });
+  const otherTab = await client.request<OutlinerNavigationDispatch>({ action: "navigation.dispatch", sourceClientId: "tree-oi", target: { kind: "block", blockId: target.id }, intent: "open", });
   await otherTabOpenReceived;
   expect(otherTab.targetClientId).toBe("detail-oi");
 
   const revealReceived = nextCommand("tree-a", "reveal");
-  const reveal = await client.request<OutlinerNavigationDispatch>({
-    action: "navigation.dispatch",
-    sourceClientId: "tree-a",
-    blockId: target.id,
-    intent: "reveal",
-    focusTarget: true,
-  });
+  const reveal = await client.request<OutlinerNavigationDispatch>({ action: "navigation.dispatch", sourceClientId: "tree-a", target: { kind: "block", blockId: target.id }, intent: "reveal",
+  focusTarget: true, });
   const revealEvent = await revealReceived;
   expect(reveal).toMatchObject({
     targetClientId: "tree-a",
     resolution: "self",
-    command: { targetClientId: "tree-a", command: "reveal", blockId: target.id, focus: true },
+    command: { targetClientId: "tree-a", command: "reveal", target: { kind: "block", blockId: target.id }, focus: true },
   });
-  expect(revealEvent.command?.focus).toBe(true);
+  expect(revealEvent.command && "focus" in revealEvent.command
+    ? revealEvent.command.focus
+    : undefined).toBe(true);
 
   const detailRevealReceived = nextCommand("tree-a", "reveal");
-  const detailReveal = await client.request<OutlinerNavigationDispatch>({
-    action: "navigation.dispatch",
-    sourceClientId: "detail-c",
-    blockId: target.id,
-    intent: "reveal",
-    focusTarget: true,
-  });
+  const detailReveal = await client.request<OutlinerNavigationDispatch>({ action: "navigation.dispatch", sourceClientId: "detail-c", target: { kind: "block", blockId: target.id }, intent: "reveal",
+  focusTarget: true, });
   await detailRevealReceived;
   expect(detailReveal).toMatchObject({
     targetClientId: "tree-a",
     resolution: "context",
-    command: { targetClientId: "tree-a", command: "reveal", blockId: target.id, focus: true },
+    command: { targetClientId: "tree-a", command: "reveal", target: { kind: "block", blockId: target.id }, focus: true },
   });
-  await expect(client.request({
-    action: "navigation.dispatch",
-    sourceClientId: "tree-a",
-    blockId: target.id,
-    intent: "open",
-    focusTarget: true,
-  })).rejects.toThrow("Focused navigation dispatch requires reveal intent");
+  await expect(client.request({ action: "navigation.dispatch", sourceClientId: "tree-a", target: { kind: "block", blockId: target.id }, intent: "open",
+  focusTarget: true, })).rejects.toThrow("Focused navigation dispatch requires reveal intent");
 
   await client.request({ action: "clients.update", clientId: "detail-d", locked: true });
-  await expect(client.request({
-    action: "navigation.dispatch",
-    sourceClientId: "tree-b",
-    blockId: target.id,
-    intent: "open",
-  })).rejects.toThrow("All Details in this tab are locked · unlock one or open another Detail");
-  await expect(client.request({
-    action: "navigation.dispatch",
-    sourceClientId: "detail-c",
-    blockId: target.id,
-    intent: "open",
-    preserveSource: true,
-  })).rejects.toThrow(
+  await expect(client.request({ action: "navigation.dispatch", sourceClientId: "tree-b", target: { kind: "block", blockId: target.id }, intent: "open", })).rejects.toThrow("All Details in this tab are locked · unlock one or open another Detail");
+  await expect(client.request({ action: "navigation.dispatch", sourceClientId: "detail-c", target: { kind: "block", blockId: target.id }, intent: "open",
+  preserveSource: true, })).rejects.toThrow(
     "No other unlocked Detail is available · unlock one or open another Detail",
   );
 

@@ -10,6 +10,7 @@ import {
 } from "./detail-pi-preview";
 import {
   createOpenDestinationChooserState,
+  openDestinationBlockId,
   OpenDestinationChooser,
 } from "./open-destination-chooser";
 import {
@@ -78,11 +79,15 @@ export class BacklinkPeekController {
     this.actionKeymap = options.actionKeymap ?? DEFAULT_OUTLINER_ACTION_KEYMAP;
     this.destinationChooser = new OpenDestinationChooser({
       beforeOpen: async (target, destination) => {
-        if (destination !== "replace") await effects.restoreSelection(target.blockId);
+        if (destination !== "replace") {
+          await effects.restoreSelection(openDestinationBlockId(target));
+        }
       },
-      replace: (target) => effects.replaceSource(target.blockId),
-      openFirstUnlocked: (target) => effects.openInFirstUnlocked(target.blockId),
-      openNewDetail: (target, direction) => effects.openInNewDetail(target.blockId, direction),
+      replace: (target) => effects.replaceSource(openDestinationBlockId(target)),
+      openFirstUnlocked: (target) =>
+        effects.openInFirstUnlocked(openDestinationBlockId(target)),
+      openNewDetail: (target, direction) =>
+        effects.openInNewDetail(openDestinationBlockId(target), direction),
       opened: () => {
         this.closed = true;
         effects.close();
@@ -144,7 +149,10 @@ export class BacklinkPeekController {
     ) {
       const source = this.selectedSource;
       if (source) {
-        this.destinationChooser.open({ blockId: source.blockId, title: source.title });
+        this.destinationChooser.open({
+          target: { kind: "block", blockId: source.blockId },
+          title: source.title,
+        });
         await this.destinationChooser.handleKeypress(str, key);
       }
       return;
@@ -169,7 +177,10 @@ export class BacklinkPeekController {
     if (key.name === "return") {
       const source = this.selectedSource;
       if (source) {
-        this.destinationChooser.open({ blockId: source.blockId, title: source.title });
+        this.destinationChooser.open({
+          target: { kind: "block", blockId: source.blockId },
+          title: source.title,
+        });
       }
       return;
     }

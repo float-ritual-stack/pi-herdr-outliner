@@ -3,6 +3,7 @@ import type {
   OutlinerNavigationDispatch,
   OutlinerNavigationIntent,
   OutlinerNavigationResolution,
+  OutlinerNavigationTarget,
 } from "./types";
 
 export const ALL_DETAILS_LOCKED_ERROR =
@@ -10,7 +11,6 @@ export const ALL_DETAILS_LOCKED_ERROR =
 
 export interface NavigationRouteOptions {
   preserveSource?: boolean;
-  fragmentId?: string;
   focusTarget?: boolean;
 }
 
@@ -40,16 +40,15 @@ export async function focusTreeForClient(
 export async function dispatchNavigation(
   requester: OutlinerRequester,
   sourceClientId: string,
-  blockId: string,
+  target: OutlinerNavigationTarget,
   intent: OutlinerNavigationIntent,
   options: NavigationRouteOptions = {},
 ): Promise<OutlinerNavigationDispatch> {
   return requester.request<OutlinerNavigationDispatch>({
     action: "navigation.dispatch",
     sourceClientId,
-    blockId,
+    target,
     intent,
-    ...(options.fragmentId ? { fragmentId: options.fragmentId } : {}),
     ...(options.preserveSource ? { preserveSource: true } : {}),
     ...(options.focusTarget ? { focusTarget: true } : {}),
   });

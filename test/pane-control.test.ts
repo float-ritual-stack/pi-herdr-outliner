@@ -307,14 +307,22 @@ if (args[0] === "pane" && args[1] === "current") {
       browsingContextId: "new-context",
       targetPaneId: "w1:explicit-source",
       direction: "right",
-      targetFragmentId: "decision",
+      initialTarget: { kind: "block", blockId: "target", fragmentId: "decision" },
     }, herdr);
     const explicitTargetCalls = readFileSync(logPath, "utf8").trim().split("\n").map(
       (line) => JSON.parse(line) as string[],
     );
     const explicitTargetOpen = explicitTargetCalls.at(-2)!;
     expect(explicitTargetOpen).toContain("OUTLINER_BROWSING_CONTEXT_ID=new-context");
-    expect(explicitTargetOpen).toContain("OUTLINER_DETAIL_TARGET_FRAGMENT_ID=decision");
+    expect(explicitTargetOpen).toContain(
+      `OUTLINER_DETAIL_TARGET=${
+        encodeURIComponent(JSON.stringify({
+          kind: "block",
+          blockId: "target",
+          fragmentId: "decision",
+        }))
+      }`,
+    );
     expect(explicitTargetOpen.slice(
       explicitTargetOpen.indexOf("--target-pane"),
       explicitTargetOpen.indexOf("--target-pane") + 2,

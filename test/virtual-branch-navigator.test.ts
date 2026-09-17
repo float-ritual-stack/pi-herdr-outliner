@@ -70,7 +70,7 @@ function preview(
       embedRanges: [],
       workIdPrefix: null,
     },
-    target: { blockId: targetBlockId, title: text },
+    target: { target: { kind: "block", blockId: targetBlockId }, title: text },
   };
 }
 

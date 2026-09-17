@@ -643,7 +643,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       action: "browsing-context.publish",
       sourceClientId: effects.clientId,
       contextId: effects.browsingContextId,
-      blockId,
+      target: blockId ? { kind: "block", blockId } : null,
     });
     if (publication.unavailable) status = publication.unavailable;
   }
@@ -751,12 +751,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     const selected = rows[selectedIndex];
     if (!selected) return;
     try {
-      await effects.request<OutlinerNavigationDispatch>({
-        action: "navigation.dispatch",
-        sourceClientId: effects.clientId,
-        blockId: selected.canonicalId,
-        intent: "open",
-      });
+      await effects.request<OutlinerNavigationDispatch>({ action: "navigation.dispatch", sourceClientId: effects.clientId, target: { kind: "block", blockId: selected.canonicalId }, intent: "open", });
       status = "Reader opened in first unlocked Detail";
     } catch (error) {
       status = errorMessage(error);
@@ -796,11 +791,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       });
       await effects.request({
         action: "ui.command.send",
-        command: {
-          targetClientId: destination.targetClientId,
-          command: "edit",
-          blockId: targetId,
-        },
+        command: { targetClientId: destination.targetClientId, command: "edit", target: { kind: "block", blockId: targetId },  },
       });
       status = "Multiline editor opened and locked in first unlocked Detail";
     } catch (error) {
@@ -1090,21 +1081,23 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         refreshPending = true;
         return;
       }
-      if (command.blockId) {
-        await selectVisibleBlock(command.blockId, {
+      if ("target" in command && command.target?.kind === "block") {
+        await selectVisibleBlock(command.target.blockId, {
           recordNavigation: true,
           physicalSource: command.command === "reveal",
         });
       }
-      if (command.command === "focus" || command.focus) effects.focusSelf();
+      if (command.command === "focus" || ("focus" in command && command.focus)) effects.focusSelf();
       effects.invalidate();
       return;
     }
     if (event.domain === "browsing-context") {
+      if (event.contextId !== effects.browsingContextId) return;
       workspaceContextBlockId = event.blockId ?? null;
       effects.invalidate();
       return;
     }
+    if (event.domain === "resource-catalog") return;
     if (event.domain === "selection") return;
     if (mode !== "browse") {
       refreshPending = true;
@@ -1140,12 +1133,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     }
     navigationIndex = targetIndex;
     if (canonical.effectiveDeletedRootId) {
-      await effects.request({
-        action: "navigation.dispatch",
-        sourceClientId: effects.clientId,
-        blockId: canonical.id,
-        intent: "open",
-      });
+      await effects.request({ action: "navigation.dispatch", sourceClientId: effects.clientId, target: { kind: "block", blockId: canonical.id }, intent: "open", });
       status = "Navigation history opened deleted block read-only in first unlocked Detail";
       return;
     }
@@ -1198,7 +1186,11 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     const dispatched = await effects.request<OutlinerNavigationDispatch>({
       action: "navigation.dispatch",
       sourceClientId: effects.clientId,
-      blockId: resolved.block.id,
+      target: {
+        kind: "block",
+        blockId: resolved.block.id,
+        ...(resolved.fragmentId ? { fragmentId: resolved.fragmentId } : {}),
+      },
       intent,
       ...(intent === "reveal" ? { focusTarget: true } : {}),
     });

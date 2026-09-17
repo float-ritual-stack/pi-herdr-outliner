@@ -46,7 +46,7 @@ import {
   sourceSpannedMarkdownSegments,
 } from "../src/source-spanned-markdown";
 import { TextBuffer } from "../src/text-buffer";
-import type { Block } from "../src/types";
+import type { Block, OutlinerNavigationTarget, SelectionContext } from "../src/types";
 
 function block(id: string, text: string): Block {
   return {
@@ -64,9 +64,17 @@ function block(id: string, text: string): Block {
 function state(text: string, rawText = "raw edit source"): DetailState {
   const selected = block("block-1", rawText);
   return {
+    document: {
+      kind: "ready",
+      document: {
+        kind: "block",
+        target: { kind: "block", blockId: selected.id },
+        context: { selected, ancestors: [], children: [] },
+      },
+    },
     context: { selected, ancestors: [], children: [] },
-    targetBlockId: selected.id,
-    targetFragmentId: null,
+    target: { kind: "block", blockId: selected.id },
+    resource: null,
     connectionMode: "unlocked",
     canNavigateBack: false,
     canNavigateForward: false,
@@ -123,6 +131,23 @@ function state(text: string, rawText = "raw edit source"): DetailState {
     destinationChooser: createOpenDestinationChooserState(),
   };
 }
+
+function setBlockDocument(
+  detail: DetailState,
+  context: SelectionContext,
+  target: Extract<OutlinerNavigationTarget, { kind: "block" }> = {
+    kind: "block",
+    blockId: context.selected?.id ?? "",
+  },
+): void {
+  detail.document = { kind: "ready", document: { kind: "block", target, context } };
+  Object.assign(detail as unknown as {
+    context: SelectionContext;
+    target: OutlinerNavigationTarget;
+    resource: null;
+  }, { context, target, resource: null });
+}
+
 
 const plainMarkdownTheme: MarkdownTheme = {
   heading: (text) => text,
@@ -250,14 +275,14 @@ describe("Pi Markdown detail preview", () => {
 
   test("prioritizes the selected title over a deep breadcrumb", () => {
     const detail = state("Selected leaf");
-    detail.context = {
+    setBlockDocument(detail, {
       selected: block("selected", "Selected leaf"),
       ancestors: [
         block("workspace", "A very long workspace title"),
         block("parent", "A very long parent title"),
       ],
       children: [],
-    };
+    });
     detail.resolvedBreadcrumb =
       "A very long workspace title › A very long parent title › Selected leaf";
     const lines = previewLayout(detail).render(42).map(stripTerminalSequences);
@@ -752,11 +777,11 @@ describe("Pi Markdown detail preview", () => {
     setCapabilities({ ...capabilities, hyperlinks: true });
     try {
       const detail = state("Selected leaf");
-      detail.context = {
+      setBlockDocument(detail, {
         selected: block("selected-01", "Selected leaf"),
         ancestors: [block("parent-001", "Parent page")],
         children: [],
-      };
+      });
       detail.resolvedBreadcrumb = "Parent page › Selected leaf";
       const lines = new DetailPiPreviewLayout(
         detail,
@@ -851,11 +876,11 @@ describe("Pi Markdown detail preview", () => {
 
     layout.scrollView.updateLayout(contentHeight, 4, () => {});
     layout.scrollView.scrollBy(3);
-    detail.context = {
+    setBlockDocument(detail, {
       selected: block("block-2", "other raw source"),
       ancestors: [],
       children: [],
-    };
+    });
     layout.render(20);
     expect(layout.scrollView.scrollTop).toBe(0);
   });
@@ -867,7 +892,11 @@ describe("Pi Markdown detail preview", () => {
     const contentHeight = renderedDocument(layout, 20).length;
     layout.scrollView.updateLayout(contentHeight, 6, () => {});
 
-    detail.targetFragmentId = "decision";
+    setBlockDocument(detail, detail.context, {
+      kind: "block",
+      blockId: detail.context.selected!.id,
+      fragmentId: "decision",
+    });
     detail.previewOffset = 15;
     layout.render(20);
     const targetRow = layout.markdown.render(20).findIndex((line) =>
@@ -914,7 +943,11 @@ describe("Pi Markdown detail preview", () => {
     const contentHeight = renderedDocument(layout, 18).length;
     layout.scrollView.updateLayout(contentHeight, 5, () => {});
 
-    detail.targetFragmentId = "target";
+    setBlockDocument(detail, detail.context, {
+      kind: "block",
+      blockId: detail.context.selected!.id,
+      fragmentId: "target",
+    });
     detail.previewOffset = 2;
     layout.render(18);
 
@@ -946,7 +979,11 @@ describe("Pi Markdown detail preview", () => {
     const projected = canonical.replace(" ^target", "");
     const detail = state(projected, canonical);
     detail.projectedSelectedText = projected;
-    detail.targetFragmentId = "target";
+    setBlockDocument(detail, detail.context, {
+      kind: "block",
+      blockId: detail.context.selected!.id,
+      fragmentId: "target",
+    });
     detail.previewOffset = 6;
     const layout = previewLayout(detail);
     layout.scrollView.setScrollbar("hidden");
@@ -981,7 +1018,11 @@ describe("Pi Markdown detail preview", () => {
     const projected = canonical.replace(" ^target", "");
     const detail = state(projected, canonical);
     detail.projectedSelectedText = projected;
-    detail.targetFragmentId = "target";
+    setBlockDocument(detail, detail.context, {
+      kind: "block",
+      blockId: detail.context.selected!.id,
+      fragmentId: "target",
+    });
     detail.previewOffset = 5;
     const layout = previewLayout(detail);
     layout.scrollView.setScrollbar("hidden");
@@ -1790,7 +1831,7 @@ describe("structured property inspector presentations", () => {
     ].join("\n");
     const detail = state(resolved, canonical);
     detail.context.selected!.id = targetId;
-    detail.targetBlockId = targetId;
+    setBlockDocument(detail, detail.context, { kind: "block", blockId: targetId });
     const layout = new DetailPiPreviewLayout(
       detail,
       plainMarkdownTheme,

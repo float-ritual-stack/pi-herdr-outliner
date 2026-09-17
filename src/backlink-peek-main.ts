@@ -133,21 +133,12 @@ const controller = new BacklinkPeekController(
     async replaceSource(sourceBlockId) {
       await client.request({
         action: "ui.command.send",
-        command: {
-          targetClientId: launch.sourceClientId,
-          command: "replace",
-          blockId: sourceBlockId,
-        },
+        command: { targetClientId: launch.sourceClientId, command: "replace", target: { kind: "block", blockId: sourceBlockId },  },
       });
     },
     async openInFirstUnlocked(sourceBlockId) {
       try {
-        await client.request({
-          action: "navigation.dispatch",
-          sourceClientId: launch.sourceClientId,
-          blockId: sourceBlockId,
-          intent: "open",
-        });
+        await client.request({ action: "navigation.dispatch", sourceClientId: launch.sourceClientId, target: { kind: "block", blockId: sourceBlockId }, intent: "open", });
         return true;
       } catch (error) {
         if (error instanceof Error && error.message === ALL_DETAILS_LOCKED_ERROR) {
@@ -167,7 +158,7 @@ const controller = new BacklinkPeekController(
         action: "browsing-context.publish",
         sourceClientId: launch.sourceClientId,
         contextId,
-        blockId: sourceBlockId,
+        target: { kind: "block", blockId: sourceBlockId },
         dispatchPreview: false,
       });
       openDetailPane({

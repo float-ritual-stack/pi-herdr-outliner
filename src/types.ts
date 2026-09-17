@@ -1,3 +1,26 @@
+import type {
+  CreateResourceSourceInput,
+  InternResourceInput,
+  RelocateResourceInput,
+  ResourceRevisionRef,
+} from "./resources";
+
+export type {
+  CapabilityAssessment,
+  InternResourceReceipt,
+  Resource,
+  ResourceAddress,
+  ResourceCapability,
+  ResourceCapabilityDecision,
+  ResourceCapabilityReport,
+  ResourceDescription,
+  ResourcePolicy,
+  ResourceProvider,
+  ResourceRevision,
+  ResourceRevisionRef,
+  ResourceSource,
+} from "./resources";
+
 export type BlockAuthor = "user" | "agent" | "system";
 
 export interface BlockProvenance {
@@ -543,8 +566,21 @@ export interface DeliveryReceipt {
 
 export type OutlinerClientRole = "tree" | "detail";
 
+export interface BlockTarget {
+  kind: "block";
+  blockId: string;
+  fragmentId?: string;
+}
+
+export interface ResourceTarget {
+  kind: "resource";
+  resourceId: string;
+  revision?: ResourceRevisionRef;
+}
+
 export type OutlinerNavigationIntent = "preview" | "open" | "reveal";
 
+export type OutlinerNavigationTarget = BlockTarget | ResourceTarget;
 export interface OutlinerClientRuntime {
   paneId?: string;
   terminalId?: string;
@@ -561,7 +597,7 @@ export interface OutlinerClientRegistration {
   role: OutlinerClientRole;
   contextId: string;
   locked?: boolean;
-  currentBlockId?: string;
+  currentTarget?: OutlinerNavigationTarget;
   runtime?: OutlinerClientRuntime;
 }
 
@@ -776,7 +812,7 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 37;
+export const OUTLINER_PROTOCOL_VERSION = 38;
 
 
 export interface OutlinerServiceStatus {
@@ -797,7 +833,19 @@ export type OutlinerRequest =
       action: "clients.update";
       clientId: string;
       locked?: boolean;
-      currentBlockId?: string | null;
+      currentTarget?: OutlinerNavigationTarget | null;
+    }
+  | { id: string; action: "resource-sources.create"; input: CreateResourceSourceInput }
+  | { id: string; action: "resource-sources.list" }
+  | { id: string; action: "resource-sources.get"; sourceId: string }
+  | { id: string; action: "resources.intern"; input: InternResourceInput }
+  | { id: string; action: "resources.get"; resourceId: string }
+  | { id: string; action: "resources.relocate"; input: RelocateResourceInput }
+  | {
+      id: string;
+      action: "resources.describe";
+      target: ResourceTarget;
+      destinationClientId: string;
     }
   | { id: string; action: "attention.get"; targetClientId: string }
   | { id: string; action: "attention.mark"; input: AttentionMarkInput }
@@ -827,7 +875,7 @@ export type OutlinerRequest =
       action: "browsing-context.publish";
       sourceClientId: string;
       contextId: string;
-      blockId: string | null;
+      target: OutlinerNavigationTarget | null;
       dispatchPreview?: boolean;
     }
   | {
@@ -841,8 +889,7 @@ export type OutlinerRequest =
       id: string;
       action: "navigation.dispatch";
       sourceClientId: string;
-      blockId: string;
-      fragmentId?: string;
+      target: OutlinerNavigationTarget;
       intent: OutlinerNavigationIntent;
       preserveSource?: boolean;
       focusTarget?: boolean;
@@ -1057,7 +1104,7 @@ export interface NavigationState {
 
 export interface BrowsingContextState {
   contextId: string;
-  target: SelectionContext;
+  target: OutlinerNavigationTarget | null;
 }
 
 export interface BrowsingContextPublication extends BrowsingContextState {
@@ -1078,24 +1125,36 @@ export interface WorkspaceSnapshot {
   workIdPrefix?: string;
 }
 
-export interface OutlinerUiCommand {
-  targetClientId: string;
-  command:
-    | "edit"
-    | "reveal"
-    | "focus"
-    | "preview"
-    | "open"
-    | "replace"
-    | "backlinks.select"
-    | "comment.selection";
-  focus?: boolean;
-  blockId?: string;
-  fragmentId?: string;
-  targetBlockId?: string;
-  sourceBlockId?: string;
-  renderedSelection?: RenderedSelectionCapture;
-}
+export type OutlinerUiCommand =
+  | {
+      targetClientId: string;
+      command: "focus";
+      target?: OutlinerNavigationTarget;
+      focus?: boolean;
+    }
+  | {
+      targetClientId: string;
+      command: "edit" | "reveal";
+      target: Extract<OutlinerNavigationTarget, { kind: "block" }>;
+      focus?: boolean;
+    }
+  | {
+      targetClientId: string;
+      command: "preview" | "open" | "replace";
+      target: OutlinerNavigationTarget;
+      focus?: boolean;
+    }
+  | {
+      targetClientId: string;
+      command: "backlinks.select";
+      targetBlockId: string;
+      sourceBlockId: string;
+    }
+  | {
+      targetClientId: string;
+      command: "comment.selection";
+      renderedSelection: RenderedSelectionCapture;
+    };
 
 export interface OutlinerNavigationResolution {
   sourceClientId: string;
@@ -1110,6 +1169,7 @@ export interface OutlinerNavigationDispatch extends OutlinerNavigationResolution
 
 export type OutlinerEventDomain =
   | "content"
+  | "resource-catalog"
   | "selection"
   | "view"
   | "ui"
@@ -1122,6 +1182,8 @@ export interface OutlinerEvent {
   action: string;
   sequence: number;
   blockId?: string;
+  resourceId?: string;
+  sourceId?: string;
   contextId?: string;
   command?: OutlinerUiCommand;
   attention?: AttentionClientState;

@@ -1,0 +1,855 @@
+import { Type, type Static } from "typebox";
+import { Parse } from "typebox/value";
+
+const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/;
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const WINDOWS_ABSOLUTE_PATH = /^(?:[a-z]:[\\/]|[\\/]{2})/i;
+const ENCODED_PATH_ESCAPE = /%(?:2e|2f|5c)/i;
+const MAX_NAME_LENGTH = 200;
+const MAX_LOCATOR_LENGTH = 4_096;
+const MAX_MEDIA_TYPE_LENGTH = 255;
+
+export const RESOURCE_CAPABILITIES = [
+  "read",
+  "write",
+  "refresh",
+  "watch",
+  "query",
+  "history",
+  "open-external",
+  "embed",
+  "command",
+] as const;
+
+export const RESOURCE_CAPABILITY_FACTORS = [
+  "provider",
+  "credentials",
+  "workspace-policy",
+  "destination-host",
+  "connectivity",
+] as const;
+
+export type ResourceProvider = "filesystem" | "web" | "github" | "application";
+export type ResourceCapability = typeof RESOURCE_CAPABILITIES[number];
+export type ResourceCapabilityFactor = typeof RESOURCE_CAPABILITY_FACTORS[number];
+
+export interface ResourcePolicy {
+  readonly deniedCapabilities: readonly ResourceCapability[];
+}
+
+interface ResourceSourceHeader {
+  readonly id: string;
+  readonly name: string;
+  readonly version: number;
+  readonly policy: ResourcePolicy;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export type ResourceSource =
+  | ResourceSourceHeader & {
+      readonly provider: "filesystem";
+      readonly boundary: { readonly kind: "filesystem"; readonly root: string };
+    }
+  | ResourceSourceHeader & {
+      readonly provider: "web";
+      readonly boundary: { readonly kind: "web"; readonly baseUrl: string };
+    }
+  | ResourceSourceHeader & {
+      readonly provider: "github";
+      readonly boundary: {
+        readonly kind: "github";
+        readonly origin: string;
+        readonly owner: string;
+        readonly repository: string;
+      };
+    }
+  | ResourceSourceHeader & {
+      readonly provider: "application";
+      readonly boundary: {
+        readonly kind: "application";
+        readonly scheme: string;
+        readonly authority: string;
+        readonly namespace: string;
+      };
+    };
+
+export type CreateResourceSourceInput =
+  | {
+      readonly name: string;
+      readonly provider: "filesystem";
+      readonly boundary: { readonly root: string };
+      readonly policy?: { readonly deniedCapabilities?: readonly ResourceCapability[] };
+    }
+  | {
+      readonly name: string;
+      readonly provider: "web";
+      readonly boundary: { readonly baseUrl: string };
+      readonly policy?: { readonly deniedCapabilities?: readonly ResourceCapability[] };
+    }
+  | {
+      readonly name: string;
+      readonly provider: "github";
+      readonly boundary: {
+        readonly origin?: string;
+        readonly owner: string;
+        readonly repository: string;
+      };
+      readonly policy?: { readonly deniedCapabilities?: readonly ResourceCapability[] };
+    }
+  | {
+      readonly name: string;
+      readonly provider: "application";
+      readonly boundary: {
+        readonly scheme: string;
+        readonly authority: string;
+        readonly namespace: string;
+      };
+      readonly policy?: { readonly deniedCapabilities?: readonly ResourceCapability[] };
+    };
+
+type NormalizedResourceSourceInput =
+  | {
+      readonly name: string;
+      readonly provider: "filesystem";
+      readonly boundary: { readonly root: string };
+      readonly policy: ResourcePolicy;
+    }
+  | {
+      readonly name: string;
+      readonly provider: "web";
+      readonly boundary: { readonly baseUrl: string };
+      readonly policy: ResourcePolicy;
+    }
+  | {
+      readonly name: string;
+      readonly provider: "github";
+      readonly boundary: {
+        readonly origin: string;
+        readonly owner: string;
+        readonly repository: string;
+      };
+      readonly policy: ResourcePolicy;
+    }
+  | {
+      readonly name: string;
+      readonly provider: "application";
+      readonly boundary: {
+        readonly scheme: string;
+        readonly authority: string;
+        readonly namespace: string;
+      };
+      readonly policy: ResourcePolicy;
+    };
+
+export type ResourceAddress =
+  | { readonly kind: "filesystem"; readonly path: string }
+  | { readonly kind: "web"; readonly url: string }
+  | {
+      readonly kind: "github";
+      readonly entity: "issue" | "pull-request";
+      readonly number: number;
+    }
+  | { readonly kind: "application"; readonly uri: string };
+
+interface ResourceHeader {
+  readonly id: string;
+  readonly sourceId: string;
+  readonly version: number;
+  readonly addressVersion: number;
+  readonly mediaType: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export type Resource =
+  | ResourceHeader & { readonly provider: "filesystem"; readonly address: Extract<ResourceAddress, { kind: "filesystem" }> }
+  | ResourceHeader & { readonly provider: "web"; readonly address: Extract<ResourceAddress, { kind: "web" }> }
+  | ResourceHeader & { readonly provider: "github"; readonly address: Extract<ResourceAddress, { kind: "github" }> }
+  | ResourceHeader & { readonly provider: "application"; readonly address: Extract<ResourceAddress, { kind: "application" }> };
+
+export type ResourceRevision =
+  | {
+      readonly kind: "filesystem";
+      readonly mtimeNs: string;
+      readonly size: string;
+    }
+  | {
+      readonly kind: "web";
+      readonly validator:
+        | { readonly kind: "etag"; readonly value: string; readonly weak: boolean }
+        | { readonly kind: "last-modified"; readonly value: string };
+    }
+  | {
+      readonly kind: "github";
+      readonly validator:
+        | { readonly kind: "etag"; readonly value: string }
+        | { readonly kind: "updated-at"; readonly value: string };
+    };
+
+export interface ResourceRevisionRef {
+  readonly resourceId: string;
+  readonly addressVersion: number;
+  readonly revision: ResourceRevision;
+}
+
+export interface InternResourceInput {
+  readonly sourceId: string;
+  readonly address: ResourceAddress;
+  readonly mediaType?: string;
+}
+
+export interface InternResourceReceipt {
+  readonly resource: Resource;
+  readonly created: boolean;
+}
+
+export interface RelocateResourceInput {
+  readonly resourceId: string;
+  readonly expectedVersion: number;
+  readonly destinationSourceId: string;
+  readonly address: ResourceAddress;
+}
+
+export type CapabilityAssessment =
+  | { readonly state: "satisfied" | "not-required" }
+  | {
+      readonly state: "blocked" | "unknown";
+      readonly reason: string;
+      readonly detail: string;
+    };
+
+export interface ResourceCapabilityDecision {
+  readonly status: "available" | "unavailable" | "indeterminate";
+  readonly factors: Readonly<Record<ResourceCapabilityFactor, CapabilityAssessment>>;
+}
+
+export type ResourceCapabilityReport = Readonly<
+  Record<ResourceCapability, ResourceCapabilityDecision>
+>;
+
+export interface ResourceDescription {
+  readonly resource: Resource;
+  readonly source: ResourceSource;
+  readonly requestedRevision: ResourceRevisionRef | null;
+  readonly capabilities: ResourceCapabilityReport;
+}
+
+export type ResourceCatalogErrorCode =
+  | "missing-source"
+  | "missing-resource"
+  | "provider-mismatch"
+  | "outside-source"
+  | "symlink-disallowed"
+  | "source-unavailable"
+  | "version-conflict"
+  | "address-conflict"
+  | "invalid-input"
+  | "stale-revision";
+
+export class ResourceCatalogError extends Error {
+  constructor(
+    readonly code: ResourceCatalogErrorCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ResourceCatalogError";
+  }
+}
+
+export interface NormalizedResourceAddress {
+  readonly address: ResourceAddress;
+  readonly canonicalKey: string;
+}
+
+function invalid(message: string): never {
+  throw new ResourceCatalogError("invalid-input", message);
+}
+
+const UnknownRecordSchema = Type.Record(Type.String(), Type.Unknown());
+type UnknownRecord = Static<typeof UnknownRecordSchema>;
+
+function record(value: unknown, label: string): UnknownRecord {
+  try {
+    return Parse(UnknownRecordSchema, value);
+  } catch {
+    invalid(`${label} must be an object`);
+  }
+}
+
+function printable(value: unknown, label: string, maximum: number): string {
+  if (typeof value !== "string") invalid(`${label} must be a string`);
+  const normalized = value.trim();
+  if (!normalized || normalized.length > maximum || CONTROL_CHARACTERS.test(normalized)) {
+    invalid(`${label} must be 1-${maximum} printable characters`);
+  }
+  return normalized;
+}
+
+export function normalizeResourceId(value: unknown, label = "Resource ID"): string {
+  const id = printable(value, label, 36).toLowerCase();
+  if (!UUID_PATTERN.test(id)) invalid(`${label} must be a canonical UUID`);
+  return id;
+}
+
+function normalizeVersion(value: unknown, label: string): number {
+  if (!Number.isSafeInteger(value) || Number(value) < 1) {
+    invalid(`${label} must be a positive safe integer`);
+  }
+  return Number(value);
+}
+
+function isResourceCapability(value: string): value is ResourceCapability {
+  return RESOURCE_CAPABILITIES.some((capability) => capability === value);
+}
+
+function normalizeCapability(value: unknown): ResourceCapability {
+  if (typeof value === "string" && isResourceCapability(value)) return value;
+  invalid(`Unsupported resource capability: ${String(value)}`);
+}
+
+function normalizePolicy(value: unknown): ResourcePolicy {
+  if (value === undefined) return { deniedCapabilities: [] };
+  const input = record(value, "Resource policy");
+  const denied = input.deniedCapabilities ?? [];
+  if (!Array.isArray(denied)) invalid("Resource policy deniedCapabilities must be an array");
+  const values = denied.map(normalizeCapability);
+  return {
+    deniedCapabilities: RESOURCE_CAPABILITIES.filter((capability) =>
+      values.includes(capability)
+    ),
+  };
+}
+
+function normalizeHttpUrl(value: unknown, label: string): URL {
+  const raw = printable(value, label, MAX_LOCATOR_LENGTH);
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    invalid(`${label} must be an absolute URL`);
+  }
+  if ((url.protocol !== "http:" && url.protocol !== "https:") || url.username || url.password) {
+    invalid(`${label} must use HTTP or HTTPS without embedded credentials`);
+  }
+  if (url.hash) invalid(`${label} cannot contain a fragment`);
+  if (ENCODED_PATH_ESCAPE.test(url.pathname)) {
+    invalid(`${label} cannot contain encoded traversal or path separators`);
+  }
+  return url;
+}
+
+function normalizedPathPrefix(pathname: string): string {
+  const normalized = pathname.replace(/\/{2,}/g, "/");
+  if (normalized === "/") return "/";
+  return normalized.endsWith("/") ? normalized : `${normalized}/`;
+}
+function githubSegment(value: unknown, label: string): string {
+  const segment = printable(value, label, 200);
+  if (!/^[A-Za-z0-9_.-]+$/.test(segment)) {
+    invalid(`${label} must be a single GitHub path segment`);
+  }
+  return segment;
+}
+
+
+function normalizeFilesystemAddress(value: unknown): NormalizedResourceAddress {
+  const input = record(value, "Filesystem resource address");
+  if (input.kind !== "filesystem") invalid("Filesystem resource address kind must be filesystem");
+  const path = printable(input.path, "Filesystem resource path", MAX_LOCATOR_LENGTH);
+  if (path.startsWith("/") || WINDOWS_ABSOLUTE_PATH.test(path) || path.startsWith("~")) {
+    throw new ResourceCatalogError("outside-source", "Filesystem resource path must be relative");
+  }
+  const parts: string[] = [];
+  for (const segment of path.replaceAll("\\", "/").split("/")) {
+    if (!segment || segment === ".") continue;
+    if (segment === "..") {
+      if (parts.length === 0) {
+        throw new ResourceCatalogError(
+          "outside-source",
+          "Filesystem resource path cannot escape its source root",
+        );
+      }
+      parts.pop();
+      continue;
+    }
+    parts.push(segment);
+  }
+  const normalized = parts.join("/") || ".";
+  return {
+    address: { kind: "filesystem", path: normalized },
+    canonicalKey: normalized,
+  };
+}
+
+function normalizeWebAddress(
+  source: Extract<ResourceSource, { provider: "web" }>,
+  value: unknown,
+): NormalizedResourceAddress {
+  const input = record(value, "Web resource address");
+  if (input.kind !== "web") invalid("Web resource address kind must be web");
+  const base = normalizeHttpUrl(source.boundary.baseUrl, "Web source base URL");
+  const url = normalizeHttpUrl(input.url, "Web resource URL");
+  const basePrefix = normalizedPathPrefix(base.pathname);
+  if (
+    url.origin !== base.origin ||
+    !(url.pathname === base.pathname || url.pathname.startsWith(basePrefix))
+  ) {
+    throw new ResourceCatalogError("outside-source", "Web resource URL is outside its source boundary");
+  }
+  return {
+    address: { kind: "web", url: url.href },
+    canonicalKey: url.href,
+  };
+}
+
+function normalizeGithubAddress(value: unknown): NormalizedResourceAddress {
+  const input = record(value, "GitHub resource address");
+  if (input.kind !== "github") invalid("GitHub resource address kind must be github");
+  if (input.entity !== "issue" && input.entity !== "pull-request") {
+    invalid("GitHub resource entity must be issue or pull-request");
+  }
+  if (!Number.isSafeInteger(input.number) || Number(input.number) < 1) {
+    invalid("GitHub resource number must be a positive safe integer");
+  }
+  const address: Extract<ResourceAddress, { kind: "github" }> = {
+    kind: "github",
+    entity: input.entity,
+    number: Number(input.number),
+  };
+  return { address, canonicalKey: `${address.entity}:${address.number}` };
+}
+
+function normalizeApplicationNamespace(value: unknown): string {
+  const namespace = printable(value, "Application source namespace", 255)
+    .replaceAll("\\", "/")
+    .replace(/^\/+|\/+$/g, "");
+  const segments = namespace.split("/");
+  if (!namespace || segments.some((segment) => !segment || segment === "." || segment === "..")) {
+    invalid("Application source namespace must be a non-empty relative path");
+  }
+  return segments.join("/");
+}
+
+function normalizeApplicationAddress(
+  source: Extract<ResourceSource, { provider: "application" }>,
+  value: unknown,
+): NormalizedResourceAddress {
+  const input = record(value, "Application resource address");
+  if (input.kind !== "application") {
+    invalid("Application resource address kind must be application");
+  }
+  const uri = printable(input.uri, "Application resource URI", MAX_LOCATOR_LENGTH);
+  let parsed: URL;
+  try {
+    parsed = new URL(uri);
+  } catch {
+    invalid("Application resource URI must be absolute");
+  }
+  if (
+    parsed.username ||
+    parsed.password ||
+    parsed.hash ||
+    ENCODED_PATH_ESCAPE.test(parsed.pathname)
+  ) {
+    invalid("Application resource URI cannot contain credentials, a fragment, or encoded traversal");
+  }
+  const namespacePath = `/${
+    source.boundary.namespace.split("/").map((segment) => encodeURIComponent(segment)).join("/")
+  }`;
+  if (
+    parsed.protocol.slice(0, -1).toLowerCase() !== source.boundary.scheme ||
+    parsed.host.toLowerCase() !== source.boundary.authority ||
+    (parsed.pathname !== namespacePath && !parsed.pathname.startsWith(`${namespacePath}/`))
+  ) {
+    throw new ResourceCatalogError(
+      "outside-source",
+      "Application resource URI is outside its source boundary",
+    );
+  }
+  return {
+    address: { kind: "application", uri: parsed.href },
+    canonicalKey: parsed.href,
+  };
+}
+
+export function normalizeResourceSourceInput(value: unknown): NormalizedResourceSourceInput {
+  const input = record(value, "Resource source input");
+  const name = printable(input.name, "Resource source name", MAX_NAME_LENGTH);
+  const boundary = record(input.boundary, "Resource source boundary");
+  const policy = normalizePolicy(input.policy);
+  switch (input.provider) {
+    case "filesystem": {
+      const root = printable(boundary.root, "Filesystem source root", MAX_LOCATOR_LENGTH);
+      if (!root.startsWith("/") || WINDOWS_ABSOLUTE_PATH.test(root)) {
+        invalid("Filesystem source root must be an absolute POSIX path");
+      }
+      return { name, provider: "filesystem", boundary: { root }, policy };
+    }
+    case "web": {
+      const base = normalizeHttpUrl(boundary.baseUrl, "Web source base URL");
+      base.pathname = normalizedPathPrefix(base.pathname);
+      return { name, provider: "web", boundary: { baseUrl: base.href }, policy };
+    }
+    case "github": {
+      const origin = normalizeHttpUrl(
+        boundary.origin ?? "https://github.com",
+        "GitHub source origin",
+      );
+      if (origin.pathname !== "/" || origin.search) {
+        invalid("GitHub source origin cannot contain a path or query");
+      }
+      return {
+        name,
+        provider: "github",
+        boundary: {
+          origin: origin.origin,
+          owner: githubSegment(boundary.owner, "GitHub source owner"),
+          repository: githubSegment(boundary.repository, "GitHub source repository"),
+        },
+        policy,
+      };
+    }
+    case "application": {
+      const scheme = printable(boundary.scheme, "Application source scheme", 64)
+        .toLowerCase().replace(/:$/, "");
+      if (!/^[a-z][a-z0-9+.-]*$/.test(scheme)) {
+        invalid("Application source scheme is invalid");
+      }
+      return {
+        name,
+        provider: "application",
+        boundary: {
+          scheme,
+          authority: printable(boundary.authority, "Application source authority", 255)
+            .toLowerCase(),
+          namespace: normalizeApplicationNamespace(boundary.namespace),
+        },
+        policy,
+      };
+    }
+    default:
+      invalid(`Unsupported resource provider: ${String(input.provider)}`);
+  }
+}
+
+export function normalizeResourceAddress(
+  source: ResourceSource,
+  value: unknown,
+): NormalizedResourceAddress {
+  switch (source.provider) {
+    case "filesystem":
+      return normalizeFilesystemAddress(value);
+    case "web":
+      return normalizeWebAddress(source, value);
+    case "github":
+      return normalizeGithubAddress(value);
+    case "application":
+      return normalizeApplicationAddress(source, value);
+  }
+}
+
+export function normalizeInternResourceInput(
+  value: unknown,
+  source: ResourceSource,
+): InternResourceInput & NormalizedResourceAddress {
+  const input = record(value, "Resource intern input");
+  const sourceId = normalizeResourceId(input.sourceId, "Resource source ID");
+  if (sourceId !== source.id) invalid("Resource source ID does not match the resolved source");
+  const normalized = normalizeResourceAddress(source, input.address);
+  const mediaType = input.mediaType === undefined
+    ? undefined
+    : printable(input.mediaType, "Resource media type", MAX_MEDIA_TYPE_LENGTH);
+  return { sourceId, ...normalized, ...(mediaType ? { mediaType } : {}) };
+}
+
+export function normalizeRelocateResourceInput(
+  value: unknown,
+  resource: Resource,
+  destination: ResourceSource,
+): RelocateResourceInput & NormalizedResourceAddress {
+  const input = record(value, "Resource relocation input");
+  const resourceId = normalizeResourceId(input.resourceId);
+  if (resourceId !== resource.id) invalid("Resource ID does not match the resolved resource");
+  const destinationSourceId = normalizeResourceId(
+    input.destinationSourceId,
+    "Destination source ID",
+  );
+  if (destinationSourceId !== destination.id) {
+    invalid("Destination source ID does not match the resolved source");
+  }
+  if (resource.provider !== destination.provider) {
+    throw new ResourceCatalogError(
+      "provider-mismatch",
+      `Cannot relocate ${resource.provider} resource into ${destination.provider} source`,
+    );
+  }
+  const expectedVersion = normalizeVersion(input.expectedVersion, "Expected resource version");
+  if (expectedVersion !== resource.version) {
+    throw new ResourceCatalogError(
+      "version-conflict",
+      `Resource version changed: expected ${expectedVersion}, found ${resource.version}`,
+    );
+  }
+  const normalized = normalizeResourceAddress(destination, input.address);
+  return {
+    resourceId,
+    expectedVersion,
+    destinationSourceId,
+    ...normalized,
+  };
+}
+
+function decimalInteger(value: unknown, label: string): string {
+  const normalized = printable(value, label, 100);
+  if (!/^(?:0|[1-9][0-9]*)$/.test(normalized)) invalid(`${label} must be a decimal integer`);
+  return normalized;
+}
+
+function isoTimestamp(value: unknown, label: string): string {
+  const normalized = printable(value, label, 100);
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(normalized)) {
+    invalid(`${label} must be an ISO timestamp`);
+  }
+  const timestamp = Date.parse(normalized);
+  if (!Number.isFinite(timestamp)) invalid(`${label} must be an ISO timestamp`);
+  return new Date(timestamp).toISOString();
+}
+
+export function normalizeResourceRevisionRef(
+  value: unknown,
+  resource: Resource,
+): ResourceRevisionRef {
+  const input = record(value, "Resource revision reference");
+  const resourceId = normalizeResourceId(input.resourceId);
+  const addressVersion = normalizeVersion(input.addressVersion, "Revision address version");
+  if (resourceId !== resource.id || addressVersion !== resource.addressVersion) {
+    throw new ResourceCatalogError(
+      "stale-revision",
+      "Resource revision reference does not match the current resource address",
+    );
+  }
+  const revision = record(input.revision, "Resource revision");
+  if (revision.kind !== resource.provider || resource.provider === "application") {
+    throw new ResourceCatalogError(
+      "provider-mismatch",
+      "Resource revision provider does not match the resource",
+    );
+  }
+  if (resource.provider === "filesystem") {
+    return {
+      resourceId,
+      addressVersion,
+      revision: {
+        kind: "filesystem",
+        mtimeNs: decimalInteger(revision.mtimeNs, "Filesystem revision mtimeNs"),
+        size: decimalInteger(revision.size, "Filesystem revision size"),
+      },
+    };
+  }
+  const validator = record(revision.validator, "Resource revision validator");
+  if (resource.provider === "web") {
+    if (validator.kind === "etag") {
+      if (typeof validator.weak !== "boolean") invalid("Web ETag weak must be boolean");
+      return {
+        resourceId,
+        addressVersion,
+        revision: {
+          kind: "web",
+          validator: {
+            kind: "etag",
+            value: printable(validator.value, "Web ETag", 1_000),
+            weak: validator.weak,
+          },
+        },
+      };
+    }
+    if (validator.kind === "last-modified") {
+      return {
+        resourceId,
+        addressVersion,
+        revision: {
+          kind: "web",
+          validator: {
+            kind: "last-modified",
+            value: printable(validator.value, "Web Last-Modified", 1_000),
+          },
+        },
+      };
+    }
+    invalid("Unsupported web revision validator");
+  }
+  if (validator.kind === "etag") {
+    return {
+      resourceId,
+      addressVersion,
+      revision: {
+        kind: "github",
+        validator: { kind: "etag", value: printable(validator.value, "GitHub ETag", 1_000) },
+      },
+    };
+  }
+  if (validator.kind === "updated-at") {
+    return {
+      resourceId,
+      addressVersion,
+      revision: {
+        kind: "github",
+        validator: {
+          kind: "updated-at",
+          value: isoTimestamp(validator.value, "GitHub updated-at"),
+        },
+      },
+    };
+  }
+
+  invalid("Unsupported GitHub revision validator");
+}
+export function resourceRevisionRefEquals(
+  left: ResourceRevisionRef,
+  right: ResourceRevisionRef,
+): boolean {
+  if (
+    left.resourceId !== right.resourceId ||
+    left.addressVersion !== right.addressVersion ||
+    left.revision.kind !== right.revision.kind
+  ) {
+    return false;
+  }
+  if (left.revision.kind === "filesystem" && right.revision.kind === "filesystem") {
+    return left.revision.mtimeNs === right.revision.mtimeNs &&
+      left.revision.size === right.revision.size;
+  }
+  if (left.revision.kind === "web" && right.revision.kind === "web") {
+    const leftValidator = left.revision.validator;
+    const rightValidator = right.revision.validator;
+    if (leftValidator.kind !== rightValidator.kind) return false;
+    return leftValidator.kind === "etag" && rightValidator.kind === "etag"
+      ? leftValidator.value === rightValidator.value &&
+        leftValidator.weak === rightValidator.weak
+      : leftValidator.value === rightValidator.value;
+  }
+  if (left.revision.kind === "github" && right.revision.kind === "github") {
+    return left.revision.validator.kind === right.revision.validator.kind &&
+      left.revision.validator.value === right.revision.validator.value;
+  }
+  return false;
+}
+
+export function resourceAddressLabel(address: ResourceAddress): string {
+  switch (address.kind) {
+    case "filesystem":
+      return address.path;
+    case "web":
+      return address.url;
+    case "github":
+      return `${address.entity} #${address.number}`;
+    case "application":
+      return address.uri;
+  }
+}
+
+const PROVIDER_CAPABILITIES: Readonly<
+  Record<ResourceProvider, Partial<Record<ResourceCapability, true>>>
+> = {
+  filesystem: {
+    read: true,
+    write: true,
+    refresh: true,
+    watch: true,
+    history: true,
+    "open-external": true,
+  },
+  web: {
+    read: true,
+    refresh: true,
+    history: true,
+    "open-external": true,
+    embed: true,
+  },
+  github: {
+    read: true,
+    write: true,
+    refresh: true,
+    query: true,
+    history: true,
+    "open-external": true,
+  },
+  application: {
+    "open-external": true,
+    command: true,
+  },
+};
+
+function blocked(reason: string, detail: string): CapabilityAssessment {
+  return { state: "blocked", reason, detail };
+}
+
+function unknown(reason: string, detail: string): CapabilityAssessment {
+  return { state: "unknown", reason, detail };
+}
+
+function capabilityStatus(
+  factors: Readonly<Record<ResourceCapabilityFactor, CapabilityAssessment>>,
+): ResourceCapabilityDecision["status"] {
+  if (RESOURCE_CAPABILITY_FACTORS.some((factor) => factors[factor].state === "blocked")) {
+    return "unavailable";
+  }
+  if (RESOURCE_CAPABILITY_FACTORS.some((factor) => factors[factor].state === "unknown")) {
+    return "indeterminate";
+  }
+  return "available";
+}
+
+function resourceCapabilityDecision(
+  source: ResourceSource,
+  destinationHostRegistered: boolean,
+  capability: ResourceCapability,
+): ResourceCapabilityDecision {
+  const providerSupports = PROVIDER_CAPABILITIES[source.provider][capability] === true;
+  const policyDenied = source.policy.deniedCapabilities.includes(capability);
+  const remote = source.provider === "web" || source.provider === "github";
+  const factors: Record<ResourceCapabilityFactor, CapabilityAssessment> = {
+    provider: providerSupports
+      ? { state: "satisfied" }
+      : blocked("unsupported-operation", `${source.provider} does not support ${capability}`),
+    credentials: remote
+      ? unknown("credentials-not-observed", "Credential availability has not been observed")
+      : { state: "not-required" },
+    "workspace-policy": policyDenied
+      ? blocked("policy-denied", `Workspace policy denies ${capability}`)
+      : { state: "satisfied" },
+    "destination-host": destinationHostRegistered
+      ? blocked(
+          "implementation-not-installed",
+          `This Detail host has no ${capability} executor in PIE-247`,
+        )
+      : unknown("destination-host-not-observed", "Destination host is not registered"),
+    connectivity: remote
+      ? unknown("connectivity-not-observed", "Provider connectivity has not been observed")
+      : { state: "not-required" },
+  };
+  return { status: capabilityStatus(factors), factors };
+}
+
+export function deriveResourceCapabilityReport(
+  source: ResourceSource,
+  destinationHostRegistered: boolean,
+): ResourceCapabilityReport {
+  return {
+    read: resourceCapabilityDecision(source, destinationHostRegistered, "read"),
+    write: resourceCapabilityDecision(source, destinationHostRegistered, "write"),
+    refresh: resourceCapabilityDecision(source, destinationHostRegistered, "refresh"),
+    watch: resourceCapabilityDecision(source, destinationHostRegistered, "watch"),
+    query: resourceCapabilityDecision(source, destinationHostRegistered, "query"),
+    history: resourceCapabilityDecision(source, destinationHostRegistered, "history"),
+    "open-external": resourceCapabilityDecision(
+      source,
+      destinationHostRegistered,
+      "open-external",
+    ),
+    embed: resourceCapabilityDecision(source, destinationHostRegistered, "embed"),
+    command: resourceCapabilityDecision(source, destinationHostRegistered, "command"),
+  };
+}

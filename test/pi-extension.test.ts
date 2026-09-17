@@ -1504,7 +1504,7 @@ test("requires the current protocol, attributes agent creates and page follows, 
     expect(largeEnvelope.presentation.omitted).toBeGreaterThan(0);
     protocolVersion = 5;
     await expect(tools.get("outliner_query")!.execute("incompatible-query", {})).rejects.toThrow(
-      "Outliner protocol 5 does not match this session's extension protocol 37. Run /reload, then retry.",
+      "Outliner protocol 5 does not match this session's extension protocol 38. Run /reload, then retry.",
     );
   } finally {
     OutlinerClient.prototype.request = originalRequest;
@@ -1598,7 +1598,7 @@ test("captures through command, tool, and exact standalone dispatch without an a
         targetClientId: "detail-client",
         command: "open",
         intent: "open",
-        blockId: input.blockId,
+        target: input.target,
       } as T;
     }
     if (input.action === "capture.create") {

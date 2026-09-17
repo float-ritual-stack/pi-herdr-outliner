@@ -36,10 +36,17 @@ function block(text: string): Block {
 }
 
 function state(overrides: Partial<DetailState> = {}): DetailState {
+  const context = overrides.context ?? { selected: null, ancestors: [], children: [] };
+  const target = overrides.target ??
+    (context.selected ? { kind: "block" as const, blockId: context.selected.id } : null);
+  const document = overrides.document ??
+    (target?.kind === "block"
+      ? { kind: "ready" as const, document: { kind: "block" as const, target, context } }
+      : { kind: "empty" as const });
   return {
-    context: { selected: null, ancestors: [], children: [] },
-    targetBlockId: null,
-    targetFragmentId: null,
+    context,
+    target,
+    resource: null,
     connectionMode: "unlocked",
     canNavigateBack: false,
     canNavigateForward: false,
@@ -95,6 +102,7 @@ function state(overrides: Partial<DetailState> = {}): DetailState {
     },
     destinationChooser: createOpenDestinationChooserState(),
     ...overrides,
+    document,
   };
 }
 
