@@ -74,23 +74,19 @@ test("forwards a preview dispatch without inventing a destination", async () => 
         targetClientId: "detail-a",
         intent: "preview",
         resolution: "unlocked",
-        command: {
-          targetClientId: "detail-a",
-          command: "preview",
-          blockId: "block-a",
-        },
+        command: { targetClientId: "detail-a", command: "preview", target: { kind: "block", blockId: "block-a" },  },
       } as T;
     },
   };
 
-  await dispatchNavigation(requester, "tree-a", "block-a", "preview");
+  await dispatchNavigation(
+    requester,
+    "tree-a",
+    { kind: "block", blockId: "block-a" },
+    "preview",
+  );
 
-  expect(calls).toEqual([{
-    action: "navigation.dispatch",
-    sourceClientId: "tree-a",
-    blockId: "block-a",
-    intent: "preview",
-  }]);
+  expect(calls).toEqual([{ action: "navigation.dispatch", sourceClientId: "tree-a", target: { kind: "block", blockId: "block-a" }, intent: "preview", }]);
 });
 
 test("forwards source preservation as an explicit routing constraint", async () => {
@@ -110,9 +106,13 @@ test("forwards source preservation as an explicit routing constraint", async () 
   await resolveNavigationDestination(requester, "detail-a", "open", {
     preserveSource: true,
   });
-  await dispatchNavigation(requester, "detail-a", "block-a", "open", {
-    preserveSource: true,
-  });
+  await dispatchNavigation(
+    requester,
+    "detail-a",
+    { kind: "block", blockId: "block-a" },
+    "open",
+    { preserveSource: true },
+  );
 
   expect(calls).toEqual([
     {
@@ -121,13 +121,8 @@ test("forwards source preservation as an explicit routing constraint", async () 
       intent: "open",
       preserveSource: true,
     },
-    {
-      action: "navigation.dispatch",
-      sourceClientId: "detail-a",
-      blockId: "block-a",
-      intent: "open",
-      preserveSource: true,
-    },
+    { action: "navigation.dispatch", sourceClientId: "detail-a", target: { kind: "block", blockId: "block-a" }, intent: "open",
+    preserveSource: true, },
   ]);
 });
 
@@ -142,25 +137,19 @@ test("forwards focused reveal as one navigation dispatch", async () => {
         blockId: "block-a",
         intent: "reveal",
         resolution: "context",
-        command: {
-          targetClientId: "tree-a",
-          command: "reveal",
-          blockId: "block-a",
-          focus: true,
-        },
+        command: { targetClientId: "tree-a", command: "reveal", target: { kind: "block", blockId: "block-a" }, focus: true, },
       } as T;
     },
   };
 
-  await dispatchNavigation(requester, "detail-a", "block-a", "reveal", {
-    focusTarget: true,
-  });
+  await dispatchNavigation(
+    requester,
+    "detail-a",
+    { kind: "block", blockId: "block-a" },
+    "reveal",
+    { focusTarget: true },
+  );
 
-  expect(calls).toEqual([{
-    action: "navigation.dispatch",
-    sourceClientId: "detail-a",
-    blockId: "block-a",
-    intent: "reveal",
-    focusTarget: true,
-  }]);
+  expect(calls).toEqual([{ action: "navigation.dispatch", sourceClientId: "detail-a", target: { kind: "block", blockId: "block-a" }, intent: "reveal",
+  focusTarget: true, }]);
 });

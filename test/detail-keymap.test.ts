@@ -13,9 +13,10 @@ import type { TerminalKey } from "../src/terminal";
 
 function state(): DetailState {
   return {
+    document: { kind: "empty" },
     context: { selected: null, ancestors: [], children: [] },
-    targetBlockId: null,
-    targetFragmentId: null,
+    target: null,
+    resource: null,
     connectionMode: "unlocked",
     canNavigateBack: false,
     canNavigateForward: false,

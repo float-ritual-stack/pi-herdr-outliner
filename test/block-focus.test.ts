@@ -135,7 +135,7 @@ test("focuses only an unambiguous match through selection and Tree reveal", asyn
     { action: "selection.set", blockId: roadmap.id },
     {
       action: "ui.command.send",
-      command: { targetClientId: "tree-client", command: "focus", blockId: roadmap.id },
+      command: { targetClientId: "tree-client", command: "focus", target: { kind: "block", blockId: roadmap.id } },
     },
   ]);
 });

@@ -73,14 +73,16 @@ same executor. Raw text and cursor-editing input reaches
 [`text-buffer-editor.ts`](../src/text-buffer-editor.ts) only after command
 resolution declines the chord.
 
-Detail owns an exact target, a bounded in-process target history, and a visible
-`Unlocked | Locked` state. An unlocked Detail is eligible for same-tab Tree
-previews and confirmed reference opens. Ordinary navigation can target only an
-unlocked Detail. A locked Detail also rejects directly addressed ordinary
-`preview` and `open` commands; explicit `replace` alone may retarget it without
-changing its lock state. `L`, `i`, `Ctrl+L`, or `Meta+L` toggles the current
-target's lock. Block editing and annotation commenting lock before opening a
-mutable buffer.
+Detail owns an exact block-or-resource target, a bounded in-process target
+history, and a visible `Unlocked | Locked` state. Resource targets are addressed
+by durable Resource UUID without a synthetic block and render read-only identity
+metadata; block-only editing, annotations, backlinks, and Tree reveal stay
+unavailable. An unlocked Detail is eligible for same-tab Tree previews and
+confirmed opens. Ordinary navigation can target only an unlocked Detail. A
+locked Detail also rejects directly addressed ordinary `preview` and `open`
+commands; explicit `replace` alone may retarget it without changing its lock
+state. `L`, `i`, `Ctrl+L`, or `Meta+L` toggles the current target's lock. Block
+editing and annotation commenting lock before opening a mutable buffer.
 
 Authored block/page/Work-ID links and typed Property targets bind one target to
 the shared destination chooser before resolution or navigation. `Shift+R`
@@ -271,18 +273,21 @@ project-documentation mutations.
 - `work_id_allocator` — singleton workspace prefix and next monotonic sequence number.
 - `workflow_runs` — idempotent typed invocation, allowlist, limits, planner comparison, ordered source-anchor route, current step, provenance, cancellation, and linked results.
 - `workflow_promotions` — idempotent exact-preview publication receipt linking one workflow request to its canonical result block.
+- `resource_sources` — durable provider identity, provider-qualified boundary, workspace policy, immutable filesystem root binding when applicable, and timestamps.
+- `resources` — durable Resource UUID, Source-qualified normalized provider address, optional media type, resource version, address version, and timestamps; `(source_id, canonical_key)` is unique without merging identities across Sources.
 
 ## Protocol
 
-The current protocol version is `32`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
+The current protocol version is `38`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
 
 ### Important request families
 
 - health: `ping`
 - canonical reads: `get`, `children`, `blocks.context`, `workspace.snapshot`
 - bounded search: `blocks.query`
+- resource identity: `resource-sources.create | list | get`, `resources.intern | get | relocate | describe`
 - browsing contexts and Tree previews: `browsing-context.get`, `browsing-context.publish`
-- typed navigation: `navigation.resolve` preflight and `navigation.dispatch` with `preview | open | reveal`, plus optional transient source preservation
+- typed navigation: `navigation.resolve` preflight and `navigation.dispatch` with explicit block/resource targets and `preview | open | reveal`; resource targets cannot use block-Tree `reveal`
 - selection-neutral capture: `capture.create`
 - delivery identity: `deliveries.ensure`
 - mutations: `create`, `update`, `move`, `delete` (move to Trash), `trash.restore`, `trash.purge`
@@ -300,11 +305,12 @@ The current protocol version is `32`, defined in [`src/types.ts`](../src/types.t
 ### Live client identity
 
 Each Tree and Detail process generates a fresh client UUID and registers
-`{ clientId, role, contextId, locked?, runtime? }` on `events.subscribe`.
-Details register unlocked and publish every explicit lock-state transition
-through `clients.update`. `open-here` generates one context UUID and passes it
-to the Tree and Detail it creates. Standalone processes use their client UUID
-as a private context.
+`{ clientId, role, contextId, locked?, currentTarget?, runtime? }` on
+`events.subscribe`. A Detail's current target is an explicit block or Resource
+address. Details register unlocked and publish every explicit lock or target
+transition through `clients.update`. `open-here` generates one context UUID and
+passes it to the Tree and Detail it creates. Standalone processes use their
+client UUID as a private context.
 
 Client registrations retain terminal identity as their stable Herdr join key.
 When Herdr is available, the service reconciles pane, workspace, tab, and

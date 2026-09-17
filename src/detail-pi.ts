@@ -64,6 +64,7 @@ import { parsePropertySummaryKeys } from "./property-summary";
 import { completeReferencedPaths, readReferencedFile } from "./files";
 import {
   configureCurrentPaneRightClick,
+  detailTargetFromEnvironment,
   currentPaneRuntime,
   focusCurrentPane,
   openBacklinkPeekPopup,
@@ -100,7 +101,9 @@ import {
   type BookmarkToggleReceipt,
   type BrowsingContextState,
   type PageAddressCollection,
+  type OutlinerNavigationTarget,
   type OutlinerServiceStatus,
+  type ResourceDescription,
   type ResolvedBlockReferences,
   type SelectionContext,
   type VisibleBlockCollection,
@@ -169,8 +172,7 @@ const dedicatedPropertyBlockId =
 if (detailPresentation === "property-inspector" && !dedicatedPropertyBlockId) {
   throw new Error("Dedicated property inspector requires a target block ID");
 }
-const initialTargetFragmentId =
-  process.env.OUTLINER_DETAIL_TARGET_FRAGMENT_ID?.trim() || undefined;
+const initialTarget = detailTargetFromEnvironment(process.env.OUTLINER_DETAIL_TARGET);
 configureCurrentPaneRightClick(rightClickOwnership);
 let pendingLinkClick: PiDetailLinkClick = {
   activate: false,
@@ -223,6 +225,8 @@ const tui = new DetailTuiAltScreen(terminal, false, undefined, {
 let stopping = false;
 let watcher: OutlinerWatcher | null = null;
 let workQueue = Promise.resolve();
+const firstWatcherConnection = Promise.withResolvers<void>();
+let runtimeInitialized = false;
 
 type DetailDraftSplitFocus = "editor" | "preview";
 
@@ -254,23 +258,22 @@ function errorMessage(error: unknown): string {
 }
 
 async function openTargetInNewDetail(
-  blockId: string,
+  target: OutlinerNavigationTarget,
   direction: "right" | "down",
-  fragmentId?: string,
 ): Promise<void> {
   const contextId = crypto.randomUUID();
   await client.request({
     action: "browsing-context.publish",
     sourceClientId: clientId,
     contextId,
-    blockId,
+    target,
     dispatchPreview: false,
   });
   openDetailPane({
     workspaceRoot: paths.workspaceRoot,
     browsingContextId: contextId,
     direction,
-    ...(fragmentId ? { targetFragmentId: fragmentId } : {}),
+    initialTarget: target,
   });
 }
 
@@ -285,26 +288,41 @@ const effects: DetailEffects = {
       action: "browsing-context.get",
       contextId: browsingContextId,
     });
-    if (!dedicatedPropertyBlockId || browsingContext.target.selected) return browsingContext;
+    if (!dedicatedPropertyBlockId || browsingContext.target) return browsingContext;
     return {
       ...browsingContext,
-      target: await client.request<SelectionContext>({
-        action: "blocks.context",
-        blockId: dedicatedPropertyBlockId,
-      }),
+      target: { kind: "block", blockId: dedicatedPropertyBlockId },
     };
   },
-  async getBlockContext(blockId) {
-    return client.request<SelectionContext>({ action: "blocks.context", blockId });
+  async loadTarget(target) {
+    if (target.kind === "block") {
+      return {
+        kind: "block",
+        target,
+        context: await client.request<SelectionContext>({
+          action: "blocks.context",
+          blockId: target.blockId,
+        }),
+      };
+    }
+    return {
+      kind: "resource",
+      target,
+      description: await client.request<ResourceDescription>({
+        action: "resources.describe",
+        target,
+        destinationClientId: clientId,
+      }),
+    };
   },
   async setLocked(locked) {
     await client.request({ action: "clients.update", clientId, locked });
   },
-  async setCurrentBlock(currentBlockId) {
-    await client.request({ action: "clients.update", clientId, currentBlockId });
+  async setCurrentTarget(currentTarget) {
+    await client.request({ action: "clients.update", clientId, currentTarget });
   },
-  dispatchNavigation(blockId, intent, options) {
-    return dispatchNavigation(client, clientId, blockId, intent, options);
+  dispatchNavigation(target, intent, options) {
+    return dispatchNavigation(client, clientId, target, intent, options);
   },
   resolveNavigation(intent, options) {
     return resolveNavigationDestination(client, clientId, intent, options);
@@ -424,7 +442,7 @@ const effects: DetailEffects = {
       action: "browsing-context.publish",
       sourceClientId: clientId,
       contextId,
-      blockId,
+      target: { kind: "block", blockId },
       dispatchPreview: false,
     });
     return openDetailPane({
@@ -447,7 +465,7 @@ const controller = createDetailController(
       ? "dedicated"
       : "inline",
     destinationTimeoutMs,
-    initialTargetFragmentId,
+    initialTarget,
     actionKeymap,
   },
 );
@@ -487,9 +505,15 @@ function startWatcher(): void {
       locked: detailPresentation === "property-inspector",
       runtime,
     },
-    onConnect: () => enqueueWork(() => controller.onServiceConnect(viewport())),
+    onConnect: () => {
+      firstWatcherConnection.resolve();
+      if (runtimeInitialized) enqueueWork(() => controller.onServiceConnect(viewport()));
+    },
     onDisconnect: () => enqueueWork(() => controller.onServiceDisconnect()),
-    onError: (error) => enqueueWork(() => controller.onServiceError(error)),
+    onError: (error) => {
+      if (!runtimeInitialized) firstWatcherConnection.reject(error);
+      else enqueueWork(() => controller.onServiceError(error));
+    },
     onEvent: (event) => enqueueWork(() => controller.onServiceEvent(event, viewport())),
   });
 }
@@ -1066,7 +1090,11 @@ function handleResize(): void {
 
 async function initialize(): Promise<void> {
   await waitForService();
+  startWatcher();
+  await firstWatcherConnection.promise;
   await controller.initialize();
+  runtimeInitialized = true;
+  await controller.onServiceConnect(viewport());
 }
 
 try {
@@ -1082,4 +1110,3 @@ process.on("SIGHUP", () => void stop());
 process.stdout.on("resize", handleResize);
 
 tui.start();
-startWatcher();

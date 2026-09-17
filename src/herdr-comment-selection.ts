@@ -75,7 +75,9 @@ export function requireInvokingDetail(
     throw new Error("Multiple Outliner Details claim the invoking Herdr pane");
   }
   const detail = matches[0]!;
-  if (!detail.currentBlockId) throw new Error("The invoking Detail has no open block");
+  if (detail.currentTarget?.kind !== "block") {
+    throw new Error("The invoking Detail has no open block");
+  }
   return detail;
 }
 
@@ -85,7 +87,10 @@ function sameDetailTarget(
 ): boolean {
   return left.clientId === right.clientId &&
     left.contextId === right.contextId &&
-    left.currentBlockId === right.currentBlockId &&
+    left.currentTarget?.kind === "block" &&
+    right.currentTarget?.kind === "block" &&
+    left.currentTarget.blockId === right.currentTarget.blockId &&
+    left.currentTarget.fragmentId === right.currentTarget.fragmentId &&
     left.runtime?.paneId === right.runtime?.paneId;
 }
 
@@ -193,10 +198,14 @@ export async function dispatchNativeSelectionComment(options: {
   ) {
     throw new Error("The invoking Detail changed after Herdr validated the selection");
   }
+  const currentTarget = confirmedDetail.currentTarget;
+  if (currentTarget?.kind !== "block") {
+    throw new Error("The invoking Detail no longer has an open block");
+  }
   const capture: RenderedSelectionCapture = {
     quote: invocation.quote,
     capturedAt: (options.now ?? (() => new Date()))().toISOString(),
-    hostBlockId: confirmedDetail.currentBlockId!,
+    hostBlockId: currentTarget.blockId,
     paneId: invocation.paneId,
     contentRevision: after.revision,
     contextId: confirmedDetail.contextId,

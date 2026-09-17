@@ -4,7 +4,7 @@ import { hostname } from "node:os";
 import { join } from "node:path";
 import { Type, type Static } from "typebox";
 import { Parse } from "typebox/value";
-import type { OutlinerClientRole, OutlinerClientRuntime } from "./types";
+import type { OutlinerClientRole, OutlinerClientRuntime, OutlinerNavigationTarget } from "./types";
 
 export type PaneEntrypoint =
   | "service"
@@ -46,6 +46,67 @@ const PluginPaneOpenResponseSchema = Type.Object({
     plugin_pane: Type.Object({ pane: HerdrPaneSchema }),
   }),
 });
+const ResourceRevisionSchema = Type.Union([
+  Type.Object({
+    kind: Type.Literal("filesystem"),
+    mtimeNs: Type.String(),
+    size: Type.String(),
+  }),
+  Type.Object({
+    kind: Type.Literal("web"),
+    validator: Type.Union([
+      Type.Object({
+        kind: Type.Literal("etag"),
+        value: Type.String(),
+        weak: Type.Boolean(),
+      }),
+      Type.Object({
+        kind: Type.Literal("last-modified"),
+        value: Type.String(),
+      }),
+    ]),
+  }),
+  Type.Object({
+    kind: Type.Literal("github"),
+    validator: Type.Union([
+      Type.Object({
+        kind: Type.Literal("etag"),
+        value: Type.String(),
+      }),
+      Type.Object({
+        kind: Type.Literal("updated-at"),
+        value: Type.String(),
+      }),
+    ]),
+  }),
+]);
+
+const ResourceRevisionRefSchema = Type.Object({
+  resourceId: Type.String(),
+  addressVersion: Type.Integer({ minimum: 1 }),
+  revision: ResourceRevisionSchema,
+});
+
+const NavigationTargetSchema = Type.Union([
+  Type.Object({
+    kind: Type.Literal("block"),
+    blockId: Type.String(),
+    fragmentId: Type.Optional(Type.String()),
+  }),
+  Type.Object({
+    kind: Type.Literal("resource"),
+    resourceId: Type.String(),
+    revision: Type.Optional(ResourceRevisionRefSchema),
+  }),
+]);
+
+export function detailTargetFromEnvironment(
+  value: string | undefined,
+): OutlinerNavigationTarget | undefined {
+  const encoded = value?.trim();
+  if (!encoded) return undefined;
+  return Parse(NavigationTargetSchema, JSON.parse(decodeURIComponent(encoded)));
+}
 const WorkspaceListResponseSchema = Type.Object({
   result: Type.Object({
     workspaces: Type.Array(Type.Object({ workspace_id: Type.String() })),
@@ -231,7 +292,7 @@ export interface OpenDetailPaneOptions {
   workspaceRoot: string;
   browsingContextId: string;
   propertyInspectorBlockId?: string;
-  targetFragmentId?: string;
+  initialTarget?: OutlinerNavigationTarget;
   targetPaneId?: string;
   direction?: "right" | "down";
 }
@@ -270,10 +331,11 @@ export function openDetailPane(
       "OUTLINER_DETAIL_RENDERER=pi-tui",
     );
   }
-  if (options.targetFragmentId !== undefined) {
-    const fragmentId = options.targetFragmentId.trim();
-    if (!fragmentId) throw new Error("Detail target fragment ID cannot be empty");
-    args.push("--env", `OUTLINER_DETAIL_TARGET_FRAGMENT_ID=${fragmentId}`);
+  if (options.initialTarget !== undefined) {
+    args.push(
+      "--env",
+      `OUTLINER_DETAIL_TARGET=${encodeURIComponent(JSON.stringify(options.initialTarget))}`,
+    );
   }
   args.push(
     "--placement",

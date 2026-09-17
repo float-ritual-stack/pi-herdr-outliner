@@ -4,6 +4,7 @@ import {
   type OutlinerActionKeymap,
 } from "./outliner-actions";
 import type { TerminalKey } from "./terminal";
+import type { OutlinerNavigationTarget } from "./types";
 
 export const DEFAULT_OPEN_DESTINATION_TIMEOUT_MS = 7_500;
 const MIN_OPEN_DESTINATION_TIMEOUT_MS = 1_000;
@@ -17,9 +18,14 @@ export type OpenDestination =
   | "split-down";
 
 export interface OpenDestinationTarget {
-  blockId: string;
+  target: OutlinerNavigationTarget;
   title: string;
-  fragmentId?: string;
+}
+export function openDestinationBlockId(target: OpenDestinationTarget): string {
+  if (target.target.kind !== "block") {
+    throw new Error("This destination requires a block target");
+  }
+  return target.target.blockId;
 }
 
 export interface OpenDestinationChooserState {

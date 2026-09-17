@@ -42,6 +42,7 @@ import {
   resolveBlockReferences as resolveBlockReferenceText,
   resolveBlockReferencesWithStatus,
 } from "./references";
+import { ResourceCatalog } from "./resource-catalog";
 import {
   formatWorkId,
   isConfiguredWorkIdPlaceholder,
@@ -398,6 +399,7 @@ function normalizeRoadmapValues(values: unknown, label: string): string[] {
   if (!Array.isArray(values) || values.length === 0) {
     throw new Error(`${label} must contain at least one value`);
   }
+
   return [...new Set(values.map((value) => normalizeRoadmapText(value, label)))];
 }
 
@@ -431,17 +433,20 @@ function assertNoReservedRoadmapProperties(title: string, body: string): void {
 
 export class OutlinerStore {
   readonly database: Database;
+  readonly resources: ResourceCatalog;
 
   constructor(path: string) {
     mkdirSync(dirname(path), { recursive: true });
     this.database = new Database(path, { create: true });
     this.database.exec("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;");
     this.migrate();
+    this.resources = new ResourceCatalog(this.database);
     this.seed();
     this.ensureTrashView();
     this.ensureInbox();
     this.ensureBookmarks();
   }
+
 
   close(): void {
     this.database.close();
@@ -2418,6 +2423,8 @@ export class OutlinerStore {
       updatedAt: row.updated_at,
     };
   }
+
+
 
   private migrate(): void {
     this.database.exec(`

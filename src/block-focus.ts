@@ -195,6 +195,9 @@ export async function focusBlockByQuery(
     clientId = await requireUniqueClientId(requester, "tree");
   }
   await requester.request({ action: "selection.set", blockId });
-  await sendClientCommand(requester, clientId, { command: "focus", blockId });
+  await sendClientCommand(requester, clientId, {
+    command: "focus",
+    target: { kind: "block", blockId },
+  });
   return { resolution, focused: true };
 }

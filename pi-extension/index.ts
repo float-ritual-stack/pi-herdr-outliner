@@ -53,6 +53,7 @@ import {
   workEnvironmentStatus,
   workIdFromBranch,
 } from "../src/work-environment";
+import { resourceAddressLabel } from "../src/resources";
 import {
   OUTLINER_PROTOCOL_VERSION,
   type AnnotationBatchOperation,
@@ -78,6 +79,7 @@ import {
   type PageAddressResolution,
   type PropertyPatchOperation,
   type SelectionContext,
+  type ResourceDescription,
   type RoadmapItemCreateReceipt,
   type VirtualOccurrenceRank,
   type VisibleBlockCollection,
@@ -1109,12 +1111,16 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
     await client.request({ action: "selection.set", blockId });
     await client.request({
       action: "ui.command.send",
-      command: { targetClientId: target.clientId, command: "focus", blockId },
+      command: {
+        targetClientId: target.clientId,
+        command: "focus",
+        target: { kind: "block", blockId },
+      },
     });
     await client.request({
       action: "navigation.dispatch",
       sourceClientId: target.clientId,
-      blockId,
+      target: { kind: "block", blockId },
       intent: "open",
     });
     return true;
@@ -1460,7 +1466,11 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
     return formatActiveTask(context, dependencies);
   }
 
-  async function lastFocusedPaneContext(): Promise<SelectionContext | null> {
+  type FocusedPaneContext =
+    | { kind: "block"; context: SelectionContext }
+    | { kind: "resource"; description: ResourceDescription };
+
+  async function lastFocusedPaneContext(): Promise<FocusedPaneContext | null> {
     if (!focusRegistry || focusRegistry.phase !== "ready") return null;
     const clients = await client.request<OutlinerClientRegistration[]>({
       action: "clients.list",
@@ -1470,24 +1480,50 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
       focusRegistry.recentFocusedPaneIds(),
     );
     if (!focusedClient) return null;
-    if (focusedClient.currentBlockId) {
-      return client.request<SelectionContext>({
-        action: "blocks.context",
-        blockId: focusedClient.currentBlockId,
-      }, 250);
+    const directTarget = focusedClient.currentTarget;
+    const browsing = directTarget
+      ? null
+      : await client.request<BrowsingContextState>({
+          action: "browsing-context.get",
+          contextId: focusedClient.contextId,
+        }, 250);
+    const target = directTarget ?? browsing?.target ?? null;
+    if (!target) return null;
+    if (target.kind === "block") {
+      return {
+        kind: "block",
+        context: await client.request<SelectionContext>({
+          action: "blocks.context",
+          blockId: target.blockId,
+        }, 250),
+      };
     }
-    const browsing = await client.request<BrowsingContextState>({
-      action: "browsing-context.get",
-      contextId: focusedClient.contextId,
-    }, 250);
-    return browsing.target.selected ? browsing.target : null;
+    if (focusedClient.role !== "detail") return null;
+    return {
+      kind: "resource",
+      description: await client.request<ResourceDescription>({
+        action: "resources.describe",
+        target,
+        destinationClientId: focusedClient.clientId,
+      }, 250),
+    };
   }
 
   async function agentWorkspaceContext(): Promise<string> {
     const focused = await lastFocusedPaneContext();
-    if (focused?.selected) {
-      const sections = [formatFocusedPane(focused)];
-      if (activeTaskId && activeTaskId !== focused.selected.id) {
+    if (focused?.kind === "resource") {
+      const { resource, source } = focused.description;
+      return boundAgentContext(
+        `Focused resource: [${resource.id}] ${resourceAddressLabel(resource.address)}\n` +
+          `Source: ${source.name} [${source.id}] · provider=${resource.provider}`,
+      );
+    }
+    if (focused?.kind === "block") {
+      const selection = focused.context;
+      const selected = selection.selected;
+      if (!selected) return "";
+      const sections = [formatFocusedPane(selection)];
+      if (activeTaskId && activeTaskId !== selected.id) {
         const task = await currentTask();
         if (task) {
           const taskProperties = [
@@ -1510,11 +1546,11 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
 
   async function recentUserActivityContext(): Promise<string> {
     const focused = await lastFocusedPaneContext();
-    const selected = focused?.selected ?? (
-      activeTaskId
+    const selected = focused?.kind === "block"
+      ? focused.context.selected
+      : focused?.kind === "resource" || activeTaskId
         ? null
-        : (await client.request<SelectionContext>({ action: "selection.get" }, 250)).selected
-    );
+        : (await client.request<SelectionContext>({ action: "selection.get" }, 250)).selected;
     const excluded = new Set(
       [selected?.id, activeTaskId].filter((id): id is string => Boolean(id)),
     );
@@ -1557,7 +1593,9 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
 
   async function selectedAgentBlockText(): Promise<string> {
     const focused = await lastFocusedPaneContext();
-    if (focused?.selected) return focused.selected.text;
+    if (focused?.kind === "block" && focused.context.selected) {
+      return focused.context.selected.text;
+    }
     if (activeTaskId) return (await currentTask())?.text ?? "";
     const selection = await client.request<SelectionContext>({ action: "selection.get" }, 250);
     return selection.selected?.text ?? "";

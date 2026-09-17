@@ -169,7 +169,7 @@ async function loadPreview(
     return {
       document: await loadDetailPreviewDocument(resolution.target),
       target: {
-        blockId: resolution.target.id,
+        target: { kind: "block", blockId: resolution.target.id },
         title: blockDisplayTitle(resolution.target),
       },
     };
@@ -177,7 +177,10 @@ async function loadPreview(
   const block = await client.request<Block>({ action: "get", blockId: row.canonicalId });
   return {
     document: await loadDetailPreviewDocument(block),
-    target: { blockId: block.id, title: blockDisplayTitle(block) },
+    target: {
+      target: { kind: "block", blockId: block.id },
+      title: blockDisplayTitle(block),
+    },
   };
 }
 
@@ -195,7 +198,11 @@ const controller = new VirtualBranchNavigatorController(launch.sourceRole, {
     }
     await client.request({
       action: "ui.command.send",
-      command: { targetClientId: launch.sourceClientId, command: "replace", blockId },
+      command: {
+        targetClientId: launch.sourceClientId,
+        command: "replace",
+        target: { kind: "block", blockId },
+      },
     });
   },
   async openInFirstUnlocked(blockId) {
@@ -203,7 +210,7 @@ const controller = new VirtualBranchNavigatorController(launch.sourceRole, {
       await client.request({
         action: "navigation.dispatch",
         sourceClientId: launch.sourceClientId,
-        blockId,
+        target: { kind: "block", blockId },
         intent: "open",
       });
       return true;
@@ -223,7 +230,7 @@ const controller = new VirtualBranchNavigatorController(launch.sourceRole, {
       action: "browsing-context.publish",
       sourceClientId: launch.sourceClientId,
       contextId,
-      blockId,
+      target: { kind: "block", blockId },
       dispatchPreview: false,
     });
     openDetailPane({
@@ -237,7 +244,7 @@ const controller = new VirtualBranchNavigatorController(launch.sourceRole, {
     await client.request({
       action: "navigation.dispatch",
       sourceClientId: launch.sourceClientId,
-      blockId,
+      target: { kind: "block", blockId },
       intent: "reveal",
       focusTarget: true,
     });

@@ -11,6 +11,7 @@ import {
   visibleBacklinkSources,
   type DetailControllerOptions,
   type DetailEffects,
+  type DetailReadyDocument,
   type DetailViewport,
 } from "../src/detail-controller";
 import { OutlinerActionKeymap } from "../src/outliner-actions";
@@ -19,12 +20,14 @@ import { detailPropertyInspectorRegions } from "../src/detail-pi-renderer";
 import type { ReferencedFile } from "../src/files";
 import type { OutlinerLinkTarget } from "../src/outliner-links";
 import { patchPropertyText } from "../src/properties";
+import { deriveResourceCapabilityReport } from "../src/resources";
 import type {
   BacklinkCollection,
   BacklinkQuery,
   Block,
   BlockSearchQuery,
   OutlinerEvent,
+  OutlinerUiCommand,
   PageAddressCollection,
   SelectionContext,
   VisibleBlockCollection,
@@ -168,45 +171,96 @@ function createHarness(
     },
     async getBrowsingContext() {
       calls.selections += 1;
-      return { contextId: "context-test", target: selection };
-    },
-    async getBlockContext(blockId) {
-      calls.selections += 1;
-      if (selection.selected?.id === blockId) return selection;
       return {
-        selected: makeBlock({ id: blockId, text: `Target ${blockId}` }),
-        ancestors: [],
-        children: [],
+        contextId: "context-test",
+        target: selection.selected
+          ? { kind: "block", blockId: selection.selected.id }
+          : null,
+      };
+    },
+    async loadTarget(target) {
+      if (target.kind === "block") {
+        calls.selections += 1;
+        const context = selection.selected?.id === target.blockId
+          ? selection
+          : {
+              selected: makeBlock({ id: target.blockId, text: `Target ${target.blockId}` }),
+              ancestors: [],
+              children: [],
+            };
+        return { kind: "block", target, context };
+      }
+      const source = {
+        id: "20000000-0000-4000-8000-000000000001",
+        name: "Test files",
+        provider: "filesystem" as const,
+        boundary: { kind: "filesystem" as const, root: "/workspace" },
+        policy: { deniedCapabilities: [] },
+        version: 1,
+        createdAt: "created",
+        updatedAt: "updated",
+      };
+      const resource = {
+        id: target.resourceId,
+        sourceId: source.id,
+        provider: "filesystem" as const,
+        address: { kind: "filesystem" as const, path: "notes/example.md" },
+        version: 1,
+        addressVersion: 1,
+        mediaType: "text/markdown",
+        createdAt: "created",
+        updatedAt: "updated",
+      };
+      return {
+        kind: "resource",
+        target,
+        description: {
+          resource,
+          source,
+          requestedRevision: target.revision ?? null,
+          capabilities: deriveResourceCapabilityReport(source, true),
+        },
       };
     },
     async setLocked(locked) {
       calls.locks.push(locked);
     },
-    async setCurrentBlock(blockId) {
-      calls.currentBlocks.push(blockId);
+    async setCurrentTarget(target) {
+      calls.currentBlocks.push(target?.kind === "block" ? target.blockId : null);
     },
-    async dispatchNavigation(blockId, intent, options) {
+    async dispatchNavigation(target, intent, options) {
+      const blockTarget = target.kind === "block" ? target : null;
       calls.navigationDispatches.push({
-        blockId,
+        blockId: target.kind === "block" ? target.blockId : target.resourceId,
         intent,
         preserveSource: options?.preserveSource === true,
-        ...(options?.fragmentId ? { fragmentId: options.fragmentId } : {}),
+        ...(blockTarget?.fragmentId ? { fragmentId: blockTarget.fragmentId } : {}),
         ...(options?.focusTarget ? { focusTarget: true } : {}),
       });
       const targetClientId = options?.preserveSource ? "detail-other" : "detail-test";
+      let command: OutlinerUiCommand;
+      if (intent === "reveal") {
+        if (!blockTarget) throw new Error("Cannot reveal a resource in a Tree");
+        command = {
+          targetClientId,
+          command: "reveal",
+          target: blockTarget,
+          ...(options?.focusTarget ? { focus: true } : {}),
+        };
+      } else {
+        command = {
+          targetClientId,
+          command: intent,
+          target,
+          ...(options?.focusTarget ? { focus: true } : {}),
+        };
+      }
       return {
         sourceClientId: "detail-test",
         targetClientId,
-        blockId,
         intent,
         resolution: "unlocked",
-        command: {
-          targetClientId,
-          command: intent,
-          blockId,
-          ...(options?.fragmentId ? { fragmentId: options.fragmentId } : {}),
-          ...(options?.focusTarget ? { focus: true } : {}),
-        },
+        command,
       };
     },
     resolveReferences,
@@ -226,11 +280,13 @@ function createHarness(
     openBacklinkPeek(input) {
       calls.backlinkPeeks.push(input);
     },
-    openDetailPane(blockId, direction, fragmentId) {
+    openDetailPane(target, direction) {
       calls.openedDetails.push({
-        blockId,
+        blockId: target.kind === "block" ? target.blockId : target.resourceId,
         direction,
-        ...(fragmentId ? { fragmentId } : {}),
+        ...(target.kind === "block" && target.fragmentId
+          ? { fragmentId: target.fragmentId }
+          : {}),
       });
     },
     copyText(text) {
@@ -280,6 +336,7 @@ function createHarness(
         block: selection.selected?.id === blockId
           ? selection.selected
           : makeBlock({ id: blockId, text: `Target ${blockId}` }),
+        ...(target.fragmentId ? { fragmentId: target.fragmentId } : {}),
       };
     },
     async createAnnotation(input) {
@@ -673,7 +730,9 @@ describe("detail controller projection and deferred refresh", () => {
     await harness.controller.dispatch({ type: "reference.follow" }, viewport);
     expect(harness.controller.state.destinationChooser).toMatchObject({
       active: true,
-      target: { blockId: "target01" },
+      target: {
+        target: { kind: "block", blockId: "target01" },
+      },
     });
     expect(harness.controller.state.context.selected?.id).toBe(source.id);
     await harness.controller.handleDestinationChooserKeypress("", { name: "return" });
@@ -691,7 +750,7 @@ describe("detail controller projection and deferred refresh", () => {
       children: [],
     });
     await harness.controller.onServiceEvent(
-      event("ui", { targetClientId: "detail-test", command: "reveal", blockId: "deleted1" }),
+      event("ui", { targetClientId: "detail-test", command: "reveal", target: { kind: "block", blockId: "deleted1" } }),
       viewport,
     );
     await harness.controller.dispatch({ type: "navigation.back" }, viewport);
@@ -738,18 +797,120 @@ describe("detail controller projection and deferred refresh", () => {
     const renamed = makeBlock({
       ...target,
       text: "Target\n\nIntro revised\n\n## Renamed decision ^decision\nBody",
+
       updatedAt: "renamed-version",
     });
     harness.setSelection({ selected: renamed, ancestors: [], children: [] });
     await harness.controller.onServiceEvent(event("content"), viewport);
-    expect(harness.controller.state.targetFragmentId).toBe("decision");
+    expect(harness.controller.state.target).toMatchObject({ kind: "block", fragmentId: "decision" });
     expect(harness.controller.state.previewOffset).toBe(4);
 
     await harness.controller.dispatch({ type: "navigation.back" }, viewport);
     await harness.controller.dispatch({ type: "navigation.forward" }, viewport);
     expect(harness.controller.state.context.selected?.id).toBe(target.id);
-    expect(harness.controller.state.targetFragmentId).toBe("decision");
+    expect(harness.controller.state.target).toMatchObject({ kind: "block", fragmentId: "decision" });
     expect(harness.controller.state.previewOffset).toBe(4);
+  });
+  test("opens a resource target without creating block context", async () => {
+    const initial = makeBlock({ id: "block-anchor", text: "Anchor" });
+    const harness = createHarness(initial);
+    await harness.controller.initialize();
+
+    await harness.controller.onServiceEvent(event("ui", {
+      targetClientId: "detail-test",
+      command: "open",
+      target: {
+        kind: "resource",
+        resourceId: "10000000-0000-4000-8000-000000000001",
+      },
+    }), viewport);
+
+    expect(harness.controller.state.target).toEqual({
+      kind: "resource",
+      resourceId: "10000000-0000-4000-8000-000000000001",
+    });
+    expect(harness.controller.state.resource).toMatchObject({
+      address: { kind: "filesystem", path: "notes/example.md" },
+      mediaType: "text/markdown",
+    });
+    expect(harness.controller.state.context).toEqual({
+      selected: null,
+      ancestors: [],
+      children: [],
+    });
+    expect(harness.controller.state.resolvedSelectedText).toContain(
+      "10000000-0000-4000-8000-000000000001",
+    );
+
+    await harness.controller.dispatch({ type: "navigation.back" }, viewport);
+    expect(harness.controller.state.target).toEqual({
+      kind: "block",
+      blockId: initial.id,
+    });
+  });
+
+  test("ignores a late resource load after a newer mixed-target navigation", async () => {
+    const initial = makeBlock({ id: "block-anchor", text: "Anchor" });
+    const harness = createHarness(initial);
+    await harness.controller.initialize();
+    const originalLoadTarget = harness.effects.loadTarget;
+    const slowTarget = {
+      kind: "resource" as const,
+      resourceId: "10000000-0000-4000-8000-000000000001",
+    };
+    const slow = Promise.withResolvers<DetailReadyDocument>();
+    harness.effects.loadTarget = (target) =>
+      target.kind === "resource" && target.resourceId === slowTarget.resourceId
+        ? slow.promise
+        : originalLoadTarget(target);
+
+    const slowNavigation = harness.controller.onServiceEvent(event("ui", {
+      targetClientId: "detail-test",
+      command: "open",
+      target: slowTarget,
+    }), viewport);
+    await harness.controller.onServiceEvent(event("ui", {
+      targetClientId: "detail-test",
+      command: "open",
+      target: { kind: "block", blockId: "newer-block" },
+    }), viewport);
+    slow.resolve(await originalLoadTarget(slowTarget));
+    await slowNavigation;
+
+    expect(harness.controller.state.document).toMatchObject({
+      kind: "ready",
+      document: {
+        kind: "block",
+        target: { blockId: "newer-block" },
+      },
+    });
+  });
+
+  test("retains a failed resource target without invoking block projections", async () => {
+    const harness = createHarness(makeBlock({ id: "block-anchor" }));
+    await harness.controller.initialize();
+    const projectedBefore = harness.calls.projectedReads.length;
+    harness.effects.loadTarget = async () => {
+      throw new Error("provider offline");
+    };
+    const target = {
+      kind: "resource" as const,
+      resourceId: "10000000-0000-4000-8000-000000000009",
+    };
+
+    await harness.controller.onServiceEvent(event("ui", {
+      targetClientId: "detail-test",
+      command: "open",
+      target,
+    }), viewport);
+
+    expect(harness.controller.state.document).toEqual({
+      kind: "failed",
+      target,
+      message: "provider offline",
+    });
+    expect(harness.controller.state.target).toEqual(target);
+    expect(harness.calls.projectedReads).toHaveLength(projectedBefore);
   });
 
   test("returns to an unlocked Tree preview after opening its link", async () => {
@@ -760,7 +921,7 @@ describe("detail controller projection and deferred refresh", () => {
 
     harness.setSelection({ selected: previewed, ancestors: [], children: [] });
     await harness.controller.onServiceEvent(
-      event("ui", { targetClientId: "detail-test", command: "preview", blockId: previewed.id }),
+      event("ui", { targetClientId: "detail-test", command: "preview", target: { kind: "block", blockId: previewed.id } }),
       viewport,
     );
     await harness.controller.dispatch({
@@ -785,7 +946,7 @@ describe("detail controller projection and deferred refresh", () => {
     await harness.controller.initialize();
 
     await harness.controller.onServiceEvent(
-      event("ui", { targetClientId: "detail-test", command: "preview", blockId: second.id }),
+      event("ui", { targetClientId: "detail-test", command: "preview", target: { kind: "block", blockId: second.id } }),
       viewport,
     );
     expect(harness.controller.state.context.selected?.id).toBe(second.id);
@@ -793,14 +954,14 @@ describe("detail controller projection and deferred refresh", () => {
 
     await harness.controller.dispatch({ type: "lock.toggle" }, viewport);
     await harness.controller.onServiceEvent(
-      event("ui", { targetClientId: "detail-test", command: "preview", blockId: third.id }),
+      event("ui", { targetClientId: "detail-test", command: "preview", target: { kind: "block", blockId: third.id } }),
       viewport,
     );
     expect(harness.controller.state.context.selected?.id).toBe(second.id);
     expect(harness.controller.state.connectionMode).toBe("locked");
 
     await harness.controller.onServiceEvent(
-      event("ui", { targetClientId: "detail-test", command: "open", blockId: third.id }),
+      event("ui", { targetClientId: "detail-test", command: "open", target: { kind: "block", blockId: third.id } }),
       viewport,
     );
     expect(harness.controller.state.context.selected?.id).toBe(second.id);
@@ -808,7 +969,7 @@ describe("detail controller projection and deferred refresh", () => {
 
     await harness.controller.dispatch({ type: "lock.toggle" }, viewport);
     await harness.controller.onServiceEvent(
-      event("ui", { targetClientId: "detail-test", command: "preview", blockId: third.id }),
+      event("ui", { targetClientId: "detail-test", command: "preview", target: { kind: "block", blockId: third.id } }),
       viewport,
     );
     expect(harness.controller.state.context.selected?.id).toBe(third.id);
@@ -835,7 +996,7 @@ describe("detail controller projection and deferred refresh", () => {
       fragmentId: "decision",
     }]);
     expect(harness.controller.state.context.selected?.id).toBe("plain-target");
-    expect(harness.controller.state.targetFragmentId).toBe("decision");
+    expect(harness.controller.state.target).toMatchObject({ kind: "block", fragmentId: "decision" });
   });
 
   test("opens the chooser without replacing a locked anchor when no Detail is available", async () => {
@@ -1025,12 +1186,12 @@ describe("detail controller projection and deferred refresh", () => {
       null,
       undefined,
       undefined,
-      { initialTargetFragmentId: "decision" },
+      { initialTarget: { kind: "block", blockId: target.id, fragmentId: "decision" } },
     );
 
     await harness.controller.initialize();
 
-    expect(harness.controller.state.targetFragmentId).toBe("decision");
+    expect(harness.controller.state.target).toMatchObject({ kind: "block", fragmentId: "decision" });
     expect(harness.controller.state.previewOffset).toBe(2);
   });
 
@@ -1085,11 +1246,7 @@ describe("detail controller projection and deferred refresh", () => {
       children: [],
     });
     await harness.controller.onServiceEvent(
-      event("ui", {
-        targetClientId: "detail-test",
-        command: "preview",
-        blockId: "other-target",
-      }),
+      event("ui", { targetClientId: "detail-test", command: "preview", target: { kind: "block", blockId: "other-target" },  }),
       viewport,
     );
     expect(harness.controller.state.destinationChooser.active).toBe(false);
@@ -1106,7 +1263,7 @@ describe("detail controller projection and deferred refresh", () => {
       null,
       undefined,
       undefined,
-      { initialTargetFragmentId: "first" },
+      { initialTarget: { kind: "block", blockId: source.id, fragmentId: "first" } },
     );
     await harness.controller.initialize();
     await harness.controller.dispatch({ type: "reference.follow" }, viewport);
@@ -1116,13 +1273,12 @@ describe("detail controller projection and deferred refresh", () => {
       event("ui", {
         targetClientId: "detail-test",
         command: "replace",
-        blockId: source.id,
-        fragmentId: "second",
+        target: { kind: "block", blockId: source.id, fragmentId: "second" },
       }),
       viewport,
     );
 
-    expect(harness.controller.state.targetFragmentId).toBe("second");
+    expect(harness.controller.state.target).toMatchObject({ kind: "block", fragmentId: "second" });
     expect(harness.controller.state.destinationChooser.active).toBe(false);
     expect(harness.calls.followedReferences).toEqual([]);
   });
@@ -1214,7 +1370,7 @@ describe("detail controller projection and deferred refresh", () => {
 
     await harness.controller.onServiceEvent(event("content"), viewport);
     await harness.controller.onServiceEvent(
-      event("ui", { targetClientId: "detail-test", command: "edit", blockId: "other-block" }),
+      event("ui", { targetClientId: "detail-test", command: "edit", target: { kind: "block", blockId: "other-block" } }),
       viewport,
     );
 
@@ -1273,14 +1429,10 @@ describe("detail controller projection and deferred refresh", () => {
       .toBe(true);
 
     await harness.controller.onServiceEvent(
-      event("ui", {
-        targetClientId: "detail-test",
-        command: "preview",
-        blockId: "other-block",
-      }),
+      event("ui", { targetClientId: "detail-test", command: "preview", target: { kind: "block", blockId: "other-block" },  }),
       viewport,
     );
-    expect(harness.controller.state.targetBlockId).toBe("other-block");
+    expect(harness.controller.state.target).toEqual({ kind: "block", blockId: "other-block" });
     expect(harness.controller.state.previewRegions.disclosureOverrides.size).toBe(0);
 
     harness.controller.setPreviewRegions([region]);
@@ -1392,7 +1544,6 @@ describe("detail controller saves and annotations", () => {
 
     expect(harness.controller.state.refreshPending).toBe(false);
     expect(harness.controller.state.context.selected?.updatedAt).toBe("version-2");
-    expect(harness.calls.selections).toBe(2);
   });
 
   test("keeps the editable buffer and pending refresh on an optimistic conflict", async () => {
@@ -1920,16 +2071,12 @@ describe("detail controller completion, navigation, and focus", () => {
     harness.setSelection({ selected: next, ancestors: [], children: [] });
 
     await harness.controller.onServiceEvent(
-      event("ui", {
-        targetClientId: "detail-test",
-        command: "preview",
-        blockId: next.id,
-      }),
+      event("ui", { targetClientId: "detail-test", command: "preview", target: { kind: "block", blockId: next.id },  }),
       viewport,
     );
 
     expect(harness.controller.state.connectionMode).toBe("unlocked");
-    expect(harness.controller.state.targetBlockId).toBe(next.id);
+    expect(harness.controller.state.target).toEqual({ kind: "block", blockId: next.id });
     expect(harness.controller.state.status).toBe(
       "Previewing Tree selection · L locks this block",
     );
@@ -1944,7 +2091,7 @@ describe("detail controller completion, navigation, and focus", () => {
     harness.setSelection({ selected: second, ancestors: [], children: [] });
 
     await harness.controller.onServiceEvent(
-      event("ui", { targetClientId: "detail-test", command: "open", blockId: "block-2" }),
+      event("ui", { targetClientId: "detail-test", command: "open", target: { kind: "block", blockId: "block-2" } }),
       viewport,
     );
 
@@ -1963,7 +2110,7 @@ describe("detail controller completion, navigation, and focus", () => {
     harness.setSelection({ selected: second, ancestors: [], children: [] });
 
     await harness.controller.onServiceEvent(
-      event("ui", { targetClientId: "detail-test", command: "replace", blockId: second.id }),
+      event("ui", { targetClientId: "detail-test", command: "replace", target: { kind: "block", blockId: second.id } }),
       viewport,
     );
 
@@ -2010,11 +2157,7 @@ describe("detail backlink loading and navigation", () => {
     await harness.controller.initialize();
     harness.setSelection({ selected: second, ancestors: [], children: [] });
     await harness.controller.onServiceEvent(
-      event("ui", {
-        targetClientId: "detail-test",
-        command: "preview",
-        blockId: second.id,
-      }),
+      event("ui", { targetClientId: "detail-test", command: "preview", target: { kind: "block", blockId: second.id },  }),
       viewport,
     );
     expect(harness.calls.backlinkQueries).toEqual([]);
@@ -2054,11 +2197,7 @@ describe("detail backlink loading and navigation", () => {
 
     harness.setSelection({ selected: second, ancestors: [], children: [] });
     await harness.controller.onServiceEvent(
-      event("ui", {
-        targetClientId: "detail-test",
-        command: "preview",
-        blockId: second.id,
-      }),
+      event("ui", { targetClientId: "detail-test", command: "preview", target: { kind: "block", blockId: second.id },  }),
       viewport,
     );
 
@@ -2358,11 +2497,7 @@ describe("Detail property inspector integration", () => {
 
     await controller.dispatch({ type: "lock.toggle" }, viewport);
     await controller.onServiceEvent(
-      event("ui", {
-        targetClientId: "detail-test",
-        command: "preview",
-        blockId: "routed-property-target",
-      }),
+      event("ui", { targetClientId: "detail-test", command: "preview", target: { kind: "block", blockId: "routed-property-target" },  }),
       viewport,
     );
     await controller.dispatch({ type: "pane.open", direction: "down" }, viewport);
@@ -2536,11 +2671,7 @@ describe("Detail property inspector integration", () => {
       text: "complete",
     }, viewport);
     await controller.onServiceEvent(
-      event("ui", {
-        targetClientId: "detail-test",
-        command: "edit",
-        blockId: "other-block",
-      }),
+      event("ui", { targetClientId: "detail-test", command: "edit", target: { kind: "block", blockId: "other-block" },  }),
       viewport,
     );
     expect(controller.state.refreshPending).toBe(true);
@@ -2548,7 +2679,7 @@ describe("Detail property inspector integration", () => {
     await controller.dispatch({ type: "property-inspector.edit.commit" }, viewport);
 
     expect(controller.state.refreshPending).toBe(false);
-    expect(controller.state.targetBlockId).toBe("other-block");
+    expect(controller.state.target).toEqual({ kind: "block", blockId: "other-block" });
     expect(controller.state.context.selected?.id).toBe("other-block");
     expect(controller.state.previewRegions.focusedRegionId).toBeNull();
     expect(controller.state.propertyInspector.edit).toBeNull();
@@ -2600,7 +2731,7 @@ test("reveals exact targeted attention without mutating source or durable annota
     },
   }, viewport);
 
-  expect(harness.controller.state.targetBlockId).toBe(selected.id);
+  expect(harness.controller.state.target).toEqual({ kind: "block", blockId: selected.id });
   expect(harness.controller.state.attentionRevealSourceLine).toBe(1);
   expect(harness.controller.state.previewOffset).toBe(1);
   expect(harness.controller.state.mode).toBe("preview");

@@ -15,6 +15,7 @@ import {
 import { createOpenDestinationChooserState } from "../src/open-destination-chooser";
 import { parsePropertySummaryKeys } from "../src/property-summary";
 import { TextBuffer } from "../src/text-buffer";
+import { deriveResourceCapabilityReport } from "../src/resources";
 import type { Block } from "../src/types";
 const ACTION_MENU = "\x1b]8;;pi-outliner-action:detail.menu.open\x1b\\\x1b[2;36m[⋯]\x1b[0m\x1b]8;;\x1b\\";
 const UNLOCKED = "\x1b]8;;pi-outliner-action:detail.lock.toggle\x1b\\\x1b[32m🔓\x1b[0m\x1b]8;;\x1b\\";
@@ -49,10 +50,42 @@ function block(text: string, properties: Block["properties"] = []): Block {
 }
 
 function state(overrides: Partial<DetailState> = {}): DetailState {
+  const context = overrides.context ?? { selected: null, ancestors: [], children: [] };
+  const target = overrides.target ??
+    (context.selected ? { kind: "block" as const, blockId: context.selected.id } : null);
+  const resource = overrides.resource ?? null;
+  const source = {
+    id: resource?.sourceId ?? "20000000-0000-4000-8000-000000000001",
+    name: "Test source",
+    provider: "filesystem" as const,
+    boundary: { kind: "filesystem" as const, root: "/workspace" },
+    policy: { deniedCapabilities: [] },
+    version: 1,
+    createdAt: "created",
+    updatedAt: "updated",
+  };
+  const document = overrides.document ??
+    (target?.kind === "block"
+      ? { kind: "ready" as const, document: { kind: "block" as const, target, context } }
+      : target?.kind === "resource" && resource
+      ? {
+          kind: "ready" as const,
+          document: {
+            kind: "resource" as const,
+            target,
+            description: {
+              resource,
+              source,
+              requestedRevision: target.revision ?? null,
+              capabilities: deriveResourceCapabilityReport(source, true),
+            },
+          },
+        }
+      : { kind: "empty" as const });
   return {
-    context: { selected: null, ancestors: [], children: [] },
-    targetBlockId: null,
-    targetFragmentId: null,
+    context,
+    target,
+    resource,
     connectionMode: "unlocked",
     canNavigateBack: false,
     canNavigateForward: false,
@@ -108,6 +141,7 @@ function state(overrides: Partial<DetailState> = {}): DetailState {
     },
     destinationChooser: createOpenDestinationChooserState(),
     ...overrides,
+    document,
   };
 }
 
@@ -121,12 +155,41 @@ describe("detail ANSI renderer", () => {
       `\x1b[H\x1b[2J${header}`,
       metadata,
       rule,
-      "Select a block in the outliner pane.",
+      "Select a block or resource in the outliner pane.",
       "",
       "",
       "",
       detailHelp("preview", 64),
     ].join("\n"));
+  });
+
+  test("renders a resource target without block context", () => {
+    const resource = {
+      id: "10000000-0000-4000-8000-000000000001",
+      sourceId: "20000000-0000-4000-8000-000000000001",
+      provider: "filesystem" as const,
+      address: { kind: "filesystem" as const, path: "notes/example.md" },
+      version: 1,
+      addressVersion: 1,
+      mediaType: "text/markdown",
+      createdAt: "created",
+      updatedAt: "updated",
+    };
+    const rendered = renderDetailAnsi(state({
+      target: { kind: "resource", resourceId: resource.id },
+      resource,
+      resolvedBreadcrumb: resource.address.path,
+      resolvedSelectedText: [
+        `# ${resource.address.path}`,
+        "",
+        `- Resource ID: \`${resource.id}\``,
+        `- Source ID: \`${resource.sourceId}\``,
+      ].join("\n"),
+    }), { width: 80, height: 10 });
+
+    expect(stripTerminalSequences(rendered)).toContain("notes/example.md");
+    expect(stripTerminalSequences(rendered)).toContain(resource.id);
+    expect(rendered).not.toContain("Select a block in the outliner pane.");
   });
   test("right-aligns clickable lock and action-menu controls", () => {
     const header = renderDetailLines(state(), { width: 64, height: 8 })[0]!;
@@ -179,7 +242,11 @@ describe("detail ANSI renderer", () => {
       context: { selected, ancestors: [], children: [] },
       resolvedSelectedText: "resolved one\nresolved two\nresolved three\nresolved four",
       resolvedBreadcrumb: "Resolved title",
-      targetFragmentId: "resolved-section",
+      target: {
+        kind: "block",
+        blockId: selected.id,
+        fragmentId: "resolved-section",
+      },
       previewOffset: 1,
       status: "Ready",
     }), { width: 64, height: 8 });
@@ -480,7 +547,7 @@ test("renders the shared destination prompt over ordinary Detail help", () => {
     destinationChooser: {
       active: true,
       loading: false,
-      target: { blockId: "target-1", title: "Target" },
+      target: { target: { kind: "block", blockId: "target-1" }, title: "Target" },
       status: "Choose destination",
     },
   });
@@ -520,7 +587,7 @@ test("renders exact Detail attention with a non-color rail and return summary", 
   const original = selected.text;
   const lines = renderDetailLines(state({
     context: { selected, ancestors: [], children: [] },
-    targetBlockId: selected.id,
+    target: { kind: "block", blockId: selected.id },
     resolvedSelectedText: selected.text,
     projectedSelectedText: selected.text,
     attention: attentionClientState("detail-test", [mark], 2),

@@ -21,6 +21,7 @@ import type { DetailCalloutTheme } from "./detail-callout-theme";
 import { detailEmbedIds } from "./detail-embeds";
 import { linkOutlinerMarkdown } from "./outliner-links";
 import {
+  detailBlockTarget,
   visibleBacklinkSources,
   type DetailState,
 } from "./detail-controller";
@@ -991,7 +992,7 @@ class DetailPreviewBody implements Component {
     const authored = decorateAttentionLines(
       this.authored.render(width),
       annotationSelectionMark(this.state) ??
-        currentAttentionMark(this.state.attention, this.state.targetBlockId),
+        currentAttentionMark(this.state.attention, detailBlockTarget(this.state)?.blockId ?? null),
       width,
       this.state.context.selected?.text,
     );
@@ -1416,7 +1417,10 @@ export class DetailPiPreviewLayout extends VStack {
     if (!this.active) return;
 
     const selected = this.state.context.selected;
-    const selectionId = selected?.id ?? null;
+    const target = this.state.target;
+    const selectionId = target?.kind === "resource"
+      ? `resource:${target.resourceId}:${target.revision?.addressVersion ?? "latest"}`
+      : selected?.id ?? null;
     const selectionChanged = selectionId !== this.previousSelectionId;
     this.previousSelectionId = selectionId;
 
@@ -1439,11 +1443,18 @@ export class DetailPiPreviewLayout extends VStack {
       workIdPrefix = projection?.workIdPrefix ?? this.state.workIdPrefix;
     } else {
       this.resetDraftProjectionState();
-      sourceText = selected
+      const hasDocument = selected !== null ||
+        (this.state.document.kind === "ready" &&
+          this.state.document.document.kind === "resource");
+      sourceText = hasDocument
         ? this.state.resolvedSelectedText
-        : "Select a block in the outliner pane.";
-      projectionRawText = selected ? this.state.projectedSelectedText : sourceText;
-      rawText = selected ? projectionRawText : sourceText;
+        : this.state.document.kind === "loading"
+          ? "Loading target…"
+          : this.state.document.kind === "failed"
+            ? this.state.document.message
+            : "Select a block or resource in the outliner pane.";
+      projectionRawText = hasDocument ? this.state.projectedSelectedText : sourceText;
+      rawText = hasDocument ? projectionRawText : sourceText;
       embedRanges = this.state.embedRanges;
       workIdPrefix = this.state.workIdPrefix;
     }
@@ -1476,7 +1487,7 @@ export class DetailPiPreviewLayout extends VStack {
       if (!metadataRemoved) return projected;
       return lineAfterMetadataRemoval(projectedTextBeforeMetadataRemoval, projected);
     };
-    this.renderedFragmentSourceLine = this.state.targetFragmentId
+    this.renderedFragmentSourceLine = detailBlockTarget(this.state)?.fragmentId
       ? renderedLineForAuthoredLine(this.state.previewOffset)
       : 0;
     this.renderedAttentionSourceLine = this.state.attentionRevealSourceLine === null
@@ -1603,18 +1614,19 @@ export class DetailPiPreviewLayout extends VStack {
     }
     this.previousBacklinksExpanded = this.state.backlinks.expanded;
     this.previousBacklinkSelectedIndex = this.state.backlinks.selectedIndex;
+    const fragmentId = detailBlockTarget(this.state)?.fragmentId;
     const fragmentChanged =
-      this.state.targetFragmentId !== this.previousTargetFragmentId ||
+      fragmentId !== this.previousTargetFragmentId ||
       this.state.previewOffset !== this.previousPreviewOffset;
     if (
       this.resetScroll ||
       selectionChanged ||
       fragmentChanged ||
-      (sourceChanged && this.state.targetFragmentId)
+      (sourceChanged && fragmentId)
     ) {
       this.pendingFragmentScroll = true;
     }
-    this.previousTargetFragmentId = this.state.targetFragmentId;
+    this.previousTargetFragmentId = fragmentId;
     this.previousPreviewOffset = this.state.previewOffset;
     this.resetScroll = false;
     if (
@@ -1676,7 +1688,7 @@ export class DetailPiPreviewLayout extends VStack {
     const previousScrollTop = this.scrollView.scrollTop;
     const fragmentRow = arrangement.mapAuthoredRow(renderedDocument.sourceLineRow);
     this.scrollView.scrollTo(
-      this.state.targetFragmentId ? fragmentRow : 0,
+      detailBlockTarget(this.state)?.fragmentId ? fragmentRow : 0,
     );
     return this.scrollView.scrollTop !== previousScrollTop;
   }

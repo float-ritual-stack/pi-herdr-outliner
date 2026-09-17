@@ -13,6 +13,7 @@ import {
 } from "./detail-pi-preview";
 import {
   createOpenDestinationChooserState,
+  openDestinationBlockId,
   OpenDestinationChooser,
   type OpenDestinationTarget,
 } from "./open-destination-chooser";
@@ -151,9 +152,11 @@ export class VirtualBranchNavigatorController {
   ) {
     this.actionKeymap = options.actionKeymap ?? DEFAULT_OUTLINER_ACTION_KEYMAP;
     this.destinationChooser = new OpenDestinationChooser({
-      replace: (target) => effects.replaceTarget(target.blockId),
-      openFirstUnlocked: (target) => effects.openInFirstUnlocked(target.blockId),
-      openNewDetail: (target, direction) => effects.openInNewDetail(target.blockId, direction),
+      replace: (target) => effects.replaceTarget(openDestinationBlockId(target)),
+      openFirstUnlocked: (target) =>
+        effects.openInFirstUnlocked(openDestinationBlockId(target)),
+      openNewDetail: (target, direction) =>
+        effects.openInNewDetail(openDestinationBlockId(target), direction),
       opened: () => this.finish(),
       invalidate: () => {
         this.status = this.destinationChooserState.status;
@@ -537,7 +540,7 @@ export class VirtualBranchNavigatorController {
       return;
     }
     try {
-      await this.effects.revealSource(target.blockId);
+      await this.effects.revealSource(openDestinationBlockId(target));
       this.finish();
     } catch (error) {
       this.status = errorMessage(error);

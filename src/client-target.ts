@@ -4,6 +4,11 @@ import type {
   OutlinerClientRole,
   OutlinerUiCommand,
 } from "./types";
+type OutlinerUiCommandInput = OutlinerUiCommand extends infer Command
+  ? Command extends { targetClientId: string }
+    ? Omit<Command, "targetClientId">
+    : never
+  : never;
 
 export interface OutlinerRequester {
   request<T>(input: RequestInput): Promise<T>;
@@ -61,21 +66,42 @@ export async function requireClientIdForRole(
   return clientId;
 }
 
+function targetUiCommand(
+  targetClientId: string,
+  command: OutlinerUiCommandInput,
+): OutlinerUiCommand {
+  switch (command.command) {
+    case "focus":
+      return { ...command, targetClientId };
+    case "edit":
+    case "reveal":
+      return { ...command, targetClientId };
+    case "preview":
+    case "open":
+    case "replace":
+      return { ...command, targetClientId };
+    case "backlinks.select":
+      return { ...command, targetClientId };
+    case "comment.selection":
+      return { ...command, targetClientId };
+  }
+}
+
 export async function sendClientCommand(
   requester: OutlinerRequester,
   targetClientId: string,
-  command: Omit<OutlinerUiCommand, "targetClientId">,
+  command: OutlinerUiCommandInput,
 ): Promise<void> {
   await requester.request({
     action: "ui.command.send",
-    command: { ...command, targetClientId },
+    command: targetUiCommand(targetClientId, command),
   });
 }
 
 export async function sendUniqueClientCommand(
   requester: OutlinerRequester,
   role: OutlinerClientRole,
-  command: Omit<OutlinerUiCommand, "targetClientId">,
+  command: OutlinerUiCommandInput,
 ): Promise<string> {
   const clientId = await requireUniqueClientId(requester, role);
   await sendClientCommand(requester, clientId, command);
@@ -86,7 +112,7 @@ export async function sendContextClientCommand(
   requester: OutlinerRequester,
   role: OutlinerClientRole,
   contextId: string,
-  command: Omit<OutlinerUiCommand, "targetClientId">,
+  command: OutlinerUiCommandInput,
 ): Promise<string> {
   const clientId = await requireContextClientId(requester, role, contextId);
   await sendClientCommand(requester, clientId, command);

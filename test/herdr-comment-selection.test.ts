@@ -12,7 +12,10 @@ const detail: OutlinerClientRegistration = {
   clientId: "detail-1",
   role: "detail",
   contextId: "context-1",
-  currentBlockId: "11111111-1111-4111-8111-111111111111",
+  currentTarget: {
+    kind: "block",
+    blockId: "11111111-1111-4111-8111-111111111111",
+  },
   runtime: { paneId: "w1:p2", workspaceId: "w1", tabId: "w1:t1" },
 };
 
@@ -81,7 +84,9 @@ test("dispatches the immutable quote with pane revision and projection identity 
   expect(capture).toEqual({
     quote: "Resolved title\nQuery result",
     capturedAt: "2026-01-02T03:04:05.000Z",
-    hostBlockId: detail.currentBlockId!,
+    hostBlockId: detail.currentTarget?.kind === "block"
+      ? detail.currentTarget.blockId
+      : "",
     paneId: "w1:p2",
     contentRevision: 42,
     contextId: "context-1",

@@ -27,6 +27,7 @@ import type {
   OutlinerNavigationIntent,
   PageAddressFollowResult,
   PageAddressResolution,
+  Resource,
 } from "./types";
 
 const OUTLINER_SCHEME = "pi-outliner:";
@@ -35,7 +36,7 @@ const BLOCK_ID_TOKEN_PATTERN = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4
 
 const TERMINAL_CONTROL_PATTERN = /[\u0000-\u001f\u007f]/;
 
-export type OutlinerLinkKind = "block" | "goto" | "page" | "work";
+export type OutlinerLinkKind = "block" | "goto" | "page" | "resource" | "work";
 
 export interface OutlinerLinkTarget {
   kind: OutlinerLinkKind;
@@ -110,7 +111,13 @@ export function parseOutlinerLinkUri(uri: string): OutlinerLinkTarget {
     throw new Error("Invalid outliner link URI");
   }
   const kind = parsed.hostname;
-  if (kind !== "block" && kind !== "goto" && kind !== "page" && kind !== "work") {
+  if (
+    kind !== "block" &&
+    kind !== "goto" &&
+    kind !== "page" &&
+    kind !== "resource" &&
+    kind !== "work"
+  ) {
     throw new Error(`Unsupported outliner link kind: ${parsed.hostname}`);
   }
   const encoded = parsed.pathname.startsWith("/") ? parsed.pathname.slice(1) : parsed.pathname;
@@ -166,6 +173,9 @@ export async function resolveOutlinerLinkTarget(
 ): Promise<ResolvedOutlinerLinkTarget> {
   if (target.kind === "goto") {
     throw new Error("Fuzzy goto links require a Tree destination");
+  }
+  if (target.kind === "resource") {
+    throw new Error("Resource links resolve through Resource navigation");
   }
   if (target.kind === "block") {
     const block = await requester.request<Block>({ action: "get", blockId: target.value });
@@ -223,6 +233,43 @@ export async function navigateOutlinerLink(
       title: focused.resolution.match.title,
     };
   }
+  if (target.kind === "resource") {
+    const resource = await requester.request<Resource>({
+      action: "resources.get",
+      resourceId: target.value,
+    });
+    const navigationTarget = { kind: "resource" as const, resourceId: resource.id };
+    if (targets.sourceClientId) {
+      const intent = target.intent ?? targets.intent ?? "open";
+      const dispatched = await dispatchNavigation(
+        requester,
+        targets.sourceClientId,
+        navigationTarget,
+        intent,
+        { preserveSource: target.preserveSource },
+      );
+      return {
+        kind: "resource",
+        id: resource.id,
+        title: resource.id,
+        targetClientId: dispatched.targetClientId,
+        intent: dispatched.intent,
+        resolution: dispatched.resolution,
+      };
+    }
+    const detailClientId =
+      targets.detailClientId ?? await requireUniqueClientId(requester, "detail");
+    await sendClientCommand(requester, detailClientId, {
+      command: "open",
+      target: navigationTarget,
+    });
+    return {
+      kind: "resource",
+      id: resource.id,
+      title: resource.id,
+      targetClientId: detailClientId,
+    };
+  }
 
   if (targets.sourceClientId) {
     const intent = target.intent ?? targets.intent ?? "open";
@@ -238,12 +285,13 @@ export async function navigateOutlinerLink(
     const dispatched = await dispatchNavigation(
       requester,
       targets.sourceClientId,
-      resolved.block.id,
-      intent,
       {
-        preserveSource: target.preserveSource,
-        fragmentId: resolved.fragmentId,
+        kind: "block",
+        blockId: resolved.block.id,
+        ...(resolved.fragmentId ? { fragmentId: resolved.fragmentId } : {}),
       },
+      intent,
+      { preserveSource: target.preserveSource },
     );
     return {
       kind: target.kind,
@@ -292,8 +340,11 @@ export async function navigateOutlinerLink(
     await requester.request({ action: "selection.set", blockId: block.id });
     await sendClientCommand(requester, detailClientId, {
       command: "focus",
-      blockId: block.id,
-      ...(target.fragmentId ? { fragmentId: target.fragmentId } : {}),
+      target: {
+        kind: "block",
+        blockId: block.id,
+        ...(target.fragmentId ? { fragmentId: target.fragmentId } : {}),
+      },
     });
     return {
       kind: target.kind,
@@ -308,8 +359,11 @@ export async function navigateOutlinerLink(
   await requester.request({ action: "selection.set", blockId: block.id });
   await sendClientCommand(requester, treeClientId, {
     command: "focus",
-    blockId: block.id,
-    ...(target.fragmentId ? { fragmentId: target.fragmentId } : {}),
+    target: {
+      kind: "block",
+      blockId: block.id,
+      ...(target.fragmentId ? { fragmentId: target.fragmentId } : {}),
+    },
   });
   return {
     kind: target.kind,

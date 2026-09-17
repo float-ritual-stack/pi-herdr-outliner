@@ -49,7 +49,8 @@ test("Herdr link action delegates an exact block URI to shared focus and reveal"
       if (
         event.domain === "ui" &&
         event.command?.command === "open" &&
-        event.command.blockId === target.id
+        event.command.target.kind === "block" &&
+        event.command.target.blockId === target.id
       ) opened.resolve();
     },
   });

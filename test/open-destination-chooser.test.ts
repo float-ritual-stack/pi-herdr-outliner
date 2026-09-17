@@ -29,7 +29,10 @@ class FakeScheduler implements OpenDestinationScheduler {
   }
 }
 
-const target: OpenDestinationTarget = { blockId: "target-1", title: "Target one" };
+const target: OpenDestinationTarget = {
+  target: { kind: "block", blockId: "target-1" },
+  title: "Target one",
+};
 
 function harness(options: {
   firstUnlocked?: boolean;
@@ -42,14 +45,16 @@ function harness(options: {
       calls.push(`before:${destination}`);
     },
     replace: (opened) => {
-      calls.push(`replace:${opened.blockId}`);
+      calls.push(`replace:${opened.target.kind === "block" ? opened.target.blockId : opened.target.resourceId}`);
     },
     openFirstUnlocked: (opened) => {
-      calls.push(`first:${opened.blockId}`);
+      calls.push(`first:${opened.target.kind === "block" ? opened.target.blockId : opened.target.resourceId}`);
       return options.firstUnlocked ?? true;
     },
     openNewDetail: (opened, direction) => {
-      calls.push(`split:${direction}:${opened.blockId}`);
+      calls.push(`split:${direction}:${
+        opened.target.kind === "block" ? opened.target.blockId : opened.target.resourceId
+      }`);
     },
     opened: (_opened, destination) => {
       calls.push(`opened:${destination}`);
@@ -165,10 +170,16 @@ describe("open destination chooser", () => {
     const scheduler = new FakeScheduler();
     const state = harness({ scheduler });
     state.chooser.open(target);
-    state.chooser.open({ blockId: "target-2", title: "Target two" });
+    state.chooser.open({
+      target: { kind: "block", blockId: "target-2" },
+      title: "Target two",
+    });
 
     scheduler.fire(0);
-    expect(state.chooser.state.target?.blockId).toBe("target-2");
+    expect(state.chooser.state.target?.target).toEqual({
+      kind: "block",
+      blockId: "target-2",
+    });
     scheduler.fire(1);
     expect(state.chooser.state.active).toBe(false);
   });
