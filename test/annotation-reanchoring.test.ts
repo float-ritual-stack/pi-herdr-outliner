@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { reanchorAnnotationTarget } from "../src/annotation-reanchoring";
-import { annotationSourceHash, createTextQuoteAnchor } from "../src/annotations";
+import {
+  annotationSourceHash,
+  createPdfPageRegionAnchor,
+  createTextQuoteAnchor,
+} from "../src/annotations";
 import type { AnnotationRepresentation, AnnotationTarget } from "../src/types";
 
 function representation(id: string, content: string): AnnotationRepresentation {
@@ -147,6 +151,55 @@ describe("deterministic annotation reanchoring", () => {
       confidence: null,
       candidates: [],
     });
+  });
+
+  test("normalizes PDF candidates without page regions to unscored unresolved results", () => {
+    const oldContent = "Intro\nThe system stores durable annotation evidence\nOutro";
+    const selected = "The system stores durable annotation evidence";
+    const start = oldContent.indexOf(selected);
+    const region = { x: 10, y: 10, width: 200, height: 20 };
+    const original: AnnotationTarget = {
+      representation: representation("old", oldContent),
+      anchor: createPdfPageRegionAnchor(
+        oldContent, start, start + selected.length, 1, [region],
+      ),
+    };
+    for (const [newContent, status] of [
+      ["Intro changed\nThe system retains durable annotation records\nOutro changed", "probable"],
+      ["Intro changed\nAnnotation evidence remains available\nOutro changed", "unresolved"],
+    ] as const) {
+      const textResult = reconcile(oldContent, selected, newContent);
+      expect(textResult.status).toBe(status);
+      expect(textResult.confidence).not.toBeNull();
+      expect(textResult.candidates.length).toBeGreaterThan(0);
+      const page = { page: 1, width: 300, height: 400, start: 0, end: newContent.length };
+      const result = reanchorAnnotationTarget(
+        original,
+        representation("new", newContent),
+        newContent,
+        [{ ...page, spans: [] }],
+      );
+      expect(result).toMatchObject({
+        resolvedTarget: null,
+        status: "unresolved",
+        confidence: null,
+        candidates: [],
+        method: { codecId: "pdf-page-region", method: "page-region-unavailable" },
+      });
+
+      const mapped = reanchorAnnotationTarget(
+        original,
+        representation("new", newContent),
+        newContent,
+        [{ ...page, spans: [{ start: 0, end: newContent.length, region }] }],
+      );
+      expect(mapped.status).toBe(textResult.status);
+      expect(mapped.confidence).toBe(textResult.confidence);
+      expect(mapped.candidates).toHaveLength(textResult.candidates.length);
+      expect(mapped.candidates.every(({ target }) =>
+        target.anchor.kind === "pdf-page-region"
+      )).toBe(true);
+    }
   });
 
   test("centers bounded fuzzy search and reports incomplete misses as unresolved", () => {

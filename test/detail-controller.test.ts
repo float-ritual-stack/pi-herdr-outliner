@@ -1163,6 +1163,7 @@ describe("detail controller projection and deferred refresh", () => {
       content: "# Second\n\nChanged page",
     });
 
+
     current = {
       ...description("# Unavailable", "c"),
       web: null,
@@ -1212,6 +1213,159 @@ describe("detail controller projection and deferred refresh", () => {
     expect(harness.controller.state.status).toBe(
       "Workspace policy denies opening this resource externally",
     );
+  });
+  test("selects PDF page evidence and refreshes filesystem PDFs", async () => {
+    const harness = createHarness(makeBlock());
+    const target = {
+      kind: "resource" as const,
+      resourceId: "30000000-0000-4000-8000-000000000254",
+    };
+    const markdown = "## Page 1\n\nStable PDF quote";
+    const quoteStart = markdown.indexOf("Stable PDF quote");
+    const source = {
+      id: "20000000-0000-4000-8000-000000000254",
+      name: "PDF files",
+      provider: "filesystem" as const,
+      boundary: { kind: "filesystem" as const, root: "/workspace" },
+      policy: { deniedCapabilities: [] },
+      version: 1,
+      createdAt: "created",
+      updatedAt: "updated",
+    };
+    const resource = {
+      id: target.resourceId,
+      sourceId: source.id,
+      provider: "filesystem" as const,
+      address: { kind: "filesystem" as const, path: "evidence.pdf" },
+      version: 1,
+      addressVersion: 1,
+      mediaType: "application/pdf",
+      createdAt: "created",
+      updatedAt: "updated",
+    };
+    const revision = {
+      resourceId: resource.id,
+      addressVersion: 1,
+      revision: { kind: "filesystem" as const, mtimeNs: "1", size: "10" },
+    };
+    const snapshot = {
+      id: "pdf-snapshot",
+      resourceId: resource.id,
+      addressVersion: 1,
+      locator: "evidence.pdf",
+      contentHash: "a".repeat(64),
+      revision,
+      capturedAt: "2026-09-17T12:00:00.000Z",
+      bytesAvailable: true,
+      evictedAt: null,
+    };
+    const representation = {
+      id: "pdf-text-representation",
+      sourceSnapshotId: snapshot.id,
+      mediaType: "text/markdown" as const,
+      adapter: { id: "fixture.pdf-text", version: 1 },
+      contentHash: "b".repeat(64),
+      derivedAt: "2026-09-17T12:00:01.000Z",
+      contentAvailable: true,
+      evictedAt: null,
+    };
+    const nativeRepresentation = {
+      ...representation,
+      id: "pdf-native-representation",
+      mediaType: "application/pdf" as const,
+      adapter: { id: "builtin.pdf-native", version: 1 },
+      contentHash: snapshot.contentHash,
+    };
+    const description: ResourceDescription = {
+      resource,
+      source,
+      requestedRevision: null,
+      capabilities: deriveResourceCapabilityReport(source, true),
+      pdf: {
+        markdown,
+        pages: [{
+          page: 1,
+          width: 300,
+          height: 400,
+          start: 0,
+          end: markdown.length,
+          spans: [{
+            start: quoteStart,
+            end: markdown.length,
+            region: { x: 36, y: 40, width: 120, height: 16 },
+          }],
+        }],
+        sourceSnapshot: snapshot,
+        representation,
+        nativeRepresentation,
+      },
+      pdfHistory: {
+        sourceSnapshots: [snapshot],
+        representations: [representation, nativeRepresentation],
+      },
+      web: null,
+      webHistory: null,
+      webStatus: null,
+    };
+    harness.effects.loadTarget = async () => ({ kind: "resource", target, description });
+    let refreshes = 0;
+    harness.effects.refreshResource = async () => {
+      refreshes += 1;
+      return description;
+    };
+    await harness.controller.initialize();
+    await harness.controller.onServiceEvent(event("ui", {
+      targetClientId: "detail-test",
+      command: "open",
+      target,
+    }), viewport);
+    await harness.controller.dispatch({ type: "resource.refresh" }, viewport);
+    expect(refreshes).toBe(1);
+    expect(harness.controller.state.status).toBe("PDF resource refreshed");
+
+    const bufferBeforeSelection = harness.controller.state.buffer;
+    const locksBeforeSelection = [...harness.calls.locks];
+    const documentLines = harness.controller.state.resolvedSelectedText.split("\n");
+    for (const sourceLine of [markdown.split("\n").length, documentLines.indexOf("## PDF resource")]) {
+      expect(sourceLine).toBeGreaterThanOrEqual(markdown.split("\n").length);
+      await harness.controller.dispatch({
+        type: "annotation.selection.begin",
+        sourceLine,
+        sourceColumn: 0,
+      }, viewport);
+      expect(harness.controller.state.mode).toBe("preview");
+      expect(harness.controller.state.buffer).toBe(bufferBeforeSelection);
+      expect(harness.controller.state.annotationDraft).toBeUndefined();
+      expect(harness.calls.locks).toEqual(locksBeforeSelection);
+      expect(harness.controller.state.status).toBe(
+        "Select PDF text, not resource metadata, before adding annotations",
+      );
+    }
+
+    await harness.controller.dispatch({
+      type: "annotation.selection.begin",
+      sourceLine: 2,
+      sourceColumn: 0,
+    }, viewport);
+    await harness.controller.dispatch({
+      type: "annotation.selection.place",
+      row: 2,
+      column: "Stable PDF quote".length,
+      extend: true,
+    }, viewport);
+    await harness.controller.dispatch({ type: "comment.begin" }, viewport);
+    expect(harness.controller.state.annotationDraft?.target).toMatchObject({
+      representation: {
+        id: representation.id,
+        sourceSnapshot: { kind: "resource", sourceSnapshotId: snapshot.id },
+      },
+      anchor: {
+        kind: "pdf-page-region",
+        page: 1,
+        exact: "Stable PDF quote",
+        regions: [{ x: 36, y: 40, width: 120, height: 16 }],
+      },
+    });
   });
   test("ignores a late resource load after a newer mixed-target navigation", async () => {
     const initial = makeBlock({ id: "block-anchor", text: "Anchor" });

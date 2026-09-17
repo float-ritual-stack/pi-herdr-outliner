@@ -1,4 +1,5 @@
 import { Database } from "bun:sqlite";
+import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, realpathSync, statSync, type BigIntStats } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { Type, type Static } from "typebox";
@@ -8,6 +9,7 @@ import {
   sha256,
   type WebMarkdownExtractor,
 } from "./web-markdown";
+import { PdfJsTextExtractor, type PdfTextExtractor } from "./pdf-text";
 import { ResourceRetentionRepository } from "./resource-retention";
 import {
   ResourceCatalogError,
@@ -22,11 +24,17 @@ import {
   normalizeResourceSourceInput,
   type CreateResourceSourceInput,
   type FilesystemResourceDocument,
+  type PdfPageText,
+  type PdfRepresentationProvenance,
+  type PdfResourceDocument,
+  type PdfResourceHistory,
+  type PdfSourceSnapshotProvenance,
   type InternFilesystemResourceInput,
   type InternResourceReceipt,
   type Resource,
   type ResourceAddress,
   type ResourceDescription,
+  type ResourceNativePayload,
   type ResourceFreshness,
   type ResourceRetentionCollectionReceipt,
   type ResourceRetentionPin,
@@ -105,6 +113,55 @@ interface WebResourceStateRow {
   last_error: string | null;
 }
 
+interface PdfSourceSnapshotRow {
+  id: string;
+  resource_id: string;
+  address_version: number;
+  locator: string;
+  content_hash: string;
+  revision_json: string;
+  etag: string | null;
+  last_modified: string | null;
+  bytes: Uint8Array | null;
+  payload_state: "available" | "evicted";
+  payload_bytes: number;
+  evicted_at: string | null;
+  captured_at: string;
+}
+
+interface PdfRepresentationRow {
+  id: string;
+  source_snapshot_id: string;
+  media_type: "application/pdf" | "text/markdown";
+  adapter_id: string;
+  adapter_version: number;
+  content_hash: string;
+  markdown: string | null;
+  pages_json: string | null;
+  derived_at: string;
+  payload_state: "available" | "evicted";
+  payload_bytes: number;
+  evicted_at: string | null;
+}
+
+interface PdfResourceStateRow {
+  resource_id: string;
+  address_version: number;
+  generation: number;
+  source_snapshot_id: string | null;
+  representation_id: string | null;
+}
+
+interface PdfObservation {
+  readonly locator: string;
+  readonly contentHash: string;
+  readonly revision: ResourceRevisionRef;
+  readonly etag: string | null;
+  readonly lastModified: string | null;
+  readonly bytes: Uint8Array;
+  readonly capturedAt: string;
+}
+
 
 interface WebObservation {
   readonly canonicalUrl: string;
@@ -157,14 +214,18 @@ interface LegacyWebResourceAnnotationRow {
 export interface ResourceCatalogOptions {
   readonly fetch?: typeof globalThis.fetch;
   readonly webExtractor?: WebMarkdownExtractor;
+  readonly pdfExtractor?: PdfTextExtractor;
   readonly now?: () => string;
   readonly maximumWebBytes?: number;
   readonly webStaleAfterMs?: number;
   readonly workspaceRoot?: string;
+  readonly maximumPdfBytes?: number;
 }
 
 const DEFAULT_MAXIMUM_WEB_BYTES = 2 * 1024 * 1024;
 const DEFAULT_WEB_STALE_AFTER_MS = 24 * 60 * 60 * 1_000;
+const DEFAULT_MAXIMUM_PDF_BYTES = 16 * 1024 * 1024;
+const PDF_NATIVE_ADAPTER = { id: "builtin.pdf-native", version: 1 } as const;
 
 interface LegacySourceRow {
   id: string;
@@ -463,16 +524,22 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function byteHash(bytes: Uint8Array): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
 
 
 export class ResourceCatalog {
   private readonly fetcher: typeof globalThis.fetch;
   private readonly webExtractor: WebMarkdownExtractor;
+  private readonly pdfExtractor: PdfTextExtractor;
   private readonly now: () => string;
   private readonly maximumWebBytes: number;
+  private readonly maximumPdfBytes: number;
   private readonly webStaleAfterMs: number;
   private readonly workspaceRoot: string;
   private readonly pendingWebRefreshes = new Map<string, Promise<ResourceDescription>>();
+  private readonly pendingPdfRefreshes = new Map<string, Promise<ResourceDescription>>();
   readonly retention: ResourceRetentionRepository;
 
   constructor(
@@ -481,8 +548,10 @@ export class ResourceCatalog {
   ) {
     this.fetcher = options.fetch ?? globalThis.fetch;
     this.webExtractor = options.webExtractor ?? new BasicWebMarkdownExtractor();
+    this.pdfExtractor = options.pdfExtractor ?? new PdfJsTextExtractor();
     this.now = options.now ?? (() => new Date().toISOString());
     this.maximumWebBytes = options.maximumWebBytes ?? DEFAULT_MAXIMUM_WEB_BYTES;
+    this.maximumPdfBytes = options.maximumPdfBytes ?? DEFAULT_MAXIMUM_PDF_BYTES;
     this.webStaleAfterMs = options.webStaleAfterMs ?? DEFAULT_WEB_STALE_AFTER_MS;
     this.workspaceRoot = resolve(options.workspaceRoot ?? ".");
     if (!Number.isFinite(this.webStaleAfterMs) || this.webStaleAfterMs < 0) {
@@ -494,7 +563,11 @@ export class ResourceCatalog {
     this.migrate();
     this.retention = new ResourceRetentionRepository(this.database, {
       now: this.now,
-      activeRepresentationAdapters: [this.webExtractor.adapter],
+      activeRepresentationAdapters: [
+        this.webExtractor.adapter,
+        this.pdfExtractor.adapter,
+        PDF_NATIVE_ADAPTER,
+      ],
       markMutation: () => this.bumpSequence(),
     });
     this.recoverInterruptedWebRefreshes();
@@ -619,7 +692,7 @@ export class ResourceCatalog {
         kind: "filesystem",
         path: relative(source.boundary.root, absolutePath).replaceAll(sep, "/"),
       },
-      ...(value.mediaType === undefined ? {} : { mediaType: value.mediaType }),
+      mediaType: value.mediaType ?? (/\.pdf$/i.test(absolutePath) ? "application/pdf" : undefined),
     });
   }
 
@@ -685,8 +758,8 @@ export class ResourceCatalog {
         resource.id,
         normalized.expectedVersion,
       );
-      if (resource.provider === "web") {
-        const relocated = this.requireFromCurrentRead(resource.id);
+      const relocated = this.requireFromCurrentRead(resource.id);
+      if (relocated.provider === "web") {
         this.database.query(`
           INSERT INTO web_resource_state (
             resource_id, address_version, generation, source_snapshot_id,
@@ -700,6 +773,18 @@ export class ResourceCatalog {
             freshness = 'unknown',
             checked_at = NULL,
             last_error = NULL
+        `).run(resource.id, relocated.addressVersion);
+      }
+      if (relocated.mediaType === "application/pdf") {
+        this.database.query(`
+          INSERT INTO pdf_resource_state (
+            resource_id, address_version, generation, source_snapshot_id, representation_id
+          ) VALUES (?, ?, 1, NULL, NULL)
+          ON CONFLICT(resource_id) DO UPDATE SET
+            address_version = excluded.address_version,
+            generation = pdf_resource_state.generation + 1,
+            source_snapshot_id = NULL,
+            representation_id = NULL
         `).run(resource.id, relocated.addressVersion);
       }
       this.bumpSequence();
@@ -766,6 +851,160 @@ export class ResourceCatalog {
     };
   }
 
+  private pdfStateFromCurrentRead(resourceId: string): PdfResourceStateRow | null {
+    return this.database.query(
+      "SELECT * FROM pdf_resource_state WHERE resource_id = ?",
+    ).get(resourceId) as PdfResourceStateRow | null;
+  }
+
+  private pdfSnapshotProvenance(row: PdfSourceSnapshotRow): PdfSourceSnapshotProvenance {
+    return {
+      id: row.id,
+      resourceId: row.resource_id,
+      addressVersion: row.address_version,
+      locator: row.locator,
+      contentHash: row.content_hash,
+      revision: normalizeRetainedResourceRevisionRef(
+        parsedJson(row.revision_json, "PDF source snapshot revision"),
+      ),
+      capturedAt: row.captured_at,
+      bytesAvailable: row.payload_state === "available" && row.bytes !== null,
+      evictedAt: row.evicted_at,
+    };
+  }
+
+  private pdfRepresentationProvenance(
+    row: PdfRepresentationRow,
+  ): PdfRepresentationProvenance {
+    return {
+      id: row.id,
+      sourceSnapshotId: row.source_snapshot_id,
+      mediaType: row.media_type,
+      adapter: { id: row.adapter_id, version: row.adapter_version },
+      contentHash: row.content_hash,
+      derivedAt: row.derived_at,
+      contentAvailable: row.payload_state === "available" &&
+        (
+          row.media_type === "application/pdf" ||
+          row.markdown !== null && row.pages_json !== null
+        ),
+      evictedAt: row.evicted_at,
+    };
+  }
+  private pdfReadFromCurrentRead(
+    resource: Resource,
+    requestedRevision: ResourceRevisionRef | null,
+  ): { document: PdfResourceDocument | null; history: PdfResourceHistory } {
+    const snapshots = this.database.query(`
+      SELECT *
+      FROM pdf_source_snapshots
+      WHERE resource_id = ? AND address_version = ?
+      ORDER BY captured_at DESC, id DESC
+    `).all(resource.id, resource.addressVersion) as PdfSourceSnapshotRow[];
+    const representations = this.database.query(`
+      SELECT representation.*
+      FROM pdf_representations representation
+      JOIN pdf_source_snapshots snapshot
+        ON snapshot.id = representation.source_snapshot_id
+      WHERE snapshot.resource_id = ? AND snapshot.address_version = ?
+      ORDER BY representation.derived_at DESC, representation.id DESC
+    `).all(resource.id, resource.addressVersion) as PdfRepresentationRow[];
+    const history = {
+      sourceSnapshots: snapshots.map((row) => this.pdfSnapshotProvenance(row)),
+      representations: representations.map((row) => this.pdfRepresentationProvenance(row)),
+    };
+    let snapshot: PdfSourceSnapshotRow | null = null;
+    if (requestedRevision) {
+      snapshot = snapshots.find((candidate) =>
+        resourceRevisionRefEquals(
+          normalizeRetainedResourceRevisionRef(
+            parsedJson(candidate.revision_json, "PDF source snapshot revision"),
+          ),
+          requestedRevision,
+        )
+      ) ?? null;
+      if (!snapshot) {
+        throw new ResourceCatalogError("stale-revision", "PDF Resource revision is unavailable");
+      }
+    } else {
+      const state = this.pdfStateFromCurrentRead(resource.id);
+      if (state?.address_version === resource.addressVersion && state.source_snapshot_id) {
+        snapshot = snapshots.find(({ id }) => id === state.source_snapshot_id) ?? null;
+      }
+    }
+    if (
+      !snapshot ||
+      snapshot.payload_state !== "available" ||
+      snapshot.bytes === null
+    ) return { document: null, history };
+    const textRepresentation = representations.find((candidate) =>
+      candidate.source_snapshot_id === snapshot!.id &&
+      candidate.media_type === "text/markdown" &&
+      candidate.payload_state === "available" &&
+      candidate.adapter_id === this.pdfExtractor.adapter.id &&
+      candidate.adapter_version === this.pdfExtractor.adapter.version &&
+      candidate.markdown !== null &&
+      candidate.pages_json !== null
+    ) ?? representations.find((candidate) =>
+      candidate.source_snapshot_id === snapshot!.id &&
+      candidate.payload_state === "available" &&
+      candidate.media_type === "text/markdown" &&
+      candidate.markdown !== null &&
+      candidate.pages_json !== null
+    ) ?? null;
+    const nativeRepresentation = representations.find((candidate) =>
+      candidate.source_snapshot_id === snapshot!.id &&
+      candidate.media_type === "application/pdf"
+    ) ?? null;
+    if (
+      !textRepresentation ||
+      !nativeRepresentation ||
+      textRepresentation.markdown === null ||
+      textRepresentation.pages_json === null
+    ) {
+      return { document: null, history };
+    }
+    const pages = parsedJson(
+      textRepresentation.pages_json,
+      "PDF text representation pages",
+    );
+    if (!Array.isArray(pages)) {
+      throw new ResourceCatalogError("source-unavailable", "PDF page map is invalid");
+    }
+    return {
+      document: {
+        markdown: textRepresentation.markdown,
+        pages: pages as PdfPageText[],
+        sourceSnapshot: this.pdfSnapshotProvenance(snapshot),
+        representation: this.pdfRepresentationProvenance(textRepresentation),
+        nativeRepresentation: this.pdfRepresentationProvenance(nativeRepresentation),
+      },
+      history,
+    };
+  }
+
+  private pdfActiveRepresentationAvailable(sourceSnapshotId: string): boolean {
+    return this.database.query(`
+      SELECT 1
+      FROM pdf_representations text
+      WHERE text.source_snapshot_id = ? AND text.media_type = 'text/markdown'
+        AND text.adapter_id = ? AND text.adapter_version = ?
+        AND text.markdown IS NOT NULL AND text.pages_json IS NOT NULL
+        AND text.payload_state = 'available'
+        AND EXISTS (
+          SELECT 1 FROM pdf_representations native
+          WHERE native.source_snapshot_id = text.source_snapshot_id
+            AND native.media_type = 'application/pdf'
+            AND native.payload_state = 'available'
+        )
+      LIMIT 1
+    `).get(
+      sourceSnapshotId,
+      this.pdfExtractor.adapter.id,
+      this.pdfExtractor.adapter.version,
+    ) !== null;
+  }
+
   describe(
     resourceId: string,
     destinationHostRegistered: boolean,
@@ -779,7 +1018,11 @@ export class ResourceCatalog {
         : normalizeResourceRevisionRef(revision, resource);
       const readingDenied = source.policy.deniedCapabilities.includes("read");
       let filesystem: FilesystemResourceDocument | null = null;
-      if (resource.provider === "filesystem" && !readingDenied) {
+      if (
+        resource.provider === "filesystem" &&
+        resource.mediaType !== "application/pdf" &&
+        !readingDenied
+      ) {
         try {
           filesystem = this.filesystemReadFromCurrentRead(resource, source, requestedRevision);
         } catch (error) {
@@ -790,9 +1033,15 @@ export class ResourceCatalog {
           ) throw error;
         }
       }
-      const webRead = resource.provider === "web" && !readingDenied
-        ? this.webReadFromCurrentRead(resource, requestedRevision)
+      const pdfRead = resource.mediaType === "application/pdf" && !readingDenied
+        ? this.pdfReadFromCurrentRead(resource, requestedRevision)
         : null;
+      const webRead =
+        resource.provider === "web" &&
+          resource.mediaType !== "application/pdf" &&
+          !readingDenied
+          ? this.webReadFromCurrentRead(resource, requestedRevision)
+          : null;
       return {
         resource,
         source,
@@ -807,6 +1056,8 @@ export class ResourceCatalog {
               : [],
         ),
         filesystem,
+        pdf: pdfRead?.document ?? null,
+        pdfHistory: pdfRead?.history ?? null,
         web: webRead?.document ?? null,
         webHistory: webRead?.history ?? null,
         webStatus: resource.provider === "web"
@@ -821,7 +1072,27 @@ export class ResourceCatalog {
     destinationHostRegistered: boolean,
     revision?: unknown,
   ): Promise<ResourceDescription> {
-    const description = this.describe(resourceId, destinationHostRegistered, revision);
+    const resource = this.require(resourceId);
+    if (resource.mediaType === "application/pdf" && revision === undefined) {
+      const source = this.requireSource(resource.sourceId);
+      if (source.policy.deniedCapabilities.includes("read")) {
+        return {
+          ...this.describe(resource.id, destinationHostRegistered),
+          pdfError: "Workspace policy denies reading this PDF Resource",
+        };
+      }
+      try {
+        await this.derivePdfFromRetained(resource.id, destinationHostRegistered);
+      } catch (error) {
+        const cached = this.describe(resource.id, destinationHostRegistered);
+        if (!cached.pdf) throw error;
+        return { ...cached, pdfError: errorText(error) };
+      }
+      if (resource.provider === "filesystem") {
+        return this.refreshPdf(resource.id, destinationHostRegistered);
+      }
+    }
+    const description = this.describe(resource.id, destinationHostRegistered, revision);
     if (
       description.resource.provider === "web" &&
       description.source.policy.deniedCapabilities.includes("read")
@@ -835,6 +1106,10 @@ export class ResourceCatalog {
     resourceId: string,
     destinationHostRegistered: boolean,
   ): Promise<ResourceDescription> {
+    const resource = this.require(resourceId);
+    if (resource.mediaType === "application/pdf") {
+      return this.refreshPdf(resource.id, destinationHostRegistered);
+    }
     const normalized = normalizeResourceId(resourceId);
     const pending = this.pendingWebRefreshes.get(normalized);
     if (pending) return pending;
@@ -843,6 +1118,83 @@ export class ResourceCatalog {
     this.pendingWebRefreshes.set(normalized, refresh);
     return refresh;
   }
+
+  refreshPdf(
+    resourceId: string,
+    destinationHostRegistered: boolean,
+  ): Promise<ResourceDescription> {
+    const normalized = normalizeResourceId(resourceId);
+    const { resource, source } = this.database.transaction(() => {
+      const resource = this.requireFromCurrentRead(normalized);
+      return {
+        resource,
+        source: this.requireSourceFromCurrentRead(resource.sourceId),
+      };
+    })();
+    if (
+      source.policy.deniedCapabilities.includes("read") ||
+      source.policy.deniedCapabilities.includes("refresh")
+    ) {
+      throw new ResourceCatalogError(
+        "invalid-input",
+        "Workspace policy denies reading or refreshing this PDF Resource",
+      );
+    }
+    const pending = this.pendingPdfRefreshes.get(normalized);
+    if (pending) return pending;
+    const refresh = this.performPdfRefresh(normalized, destinationHostRegistered)
+      .catch((error) =>
+        this.pdfRefreshFailure(resource, destinationHostRegistered, error)
+      )
+      .finally(() => this.pendingPdfRefreshes.delete(normalized));
+    this.pendingPdfRefreshes.set(normalized, refresh);
+    return refresh;
+  }
+  nativePdfPayload(
+    resourceId: string,
+    representationId: string,
+  ): ResourceNativePayload {
+    const normalizedResourceId = normalizeResourceId(resourceId);
+    const normalizedRepresentationId = representationId.trim();
+    if (!normalizedRepresentationId) {
+      throw new ResourceCatalogError("invalid-input", "PDF representation ID is required");
+    }
+    return this.database.transaction((): ResourceNativePayload => {
+      const row = this.database.query(`
+        SELECT pr.id, pr.content_hash, pr.payload_state AS representation_state,
+               ps.bytes, ps.payload_state AS snapshot_state
+        FROM pdf_representations pr
+        JOIN pdf_source_snapshots ps ON ps.id = pr.source_snapshot_id
+        WHERE ps.resource_id = ? AND pr.id = ?
+          AND pr.media_type = 'application/pdf'
+      `).get(normalizedResourceId, normalizedRepresentationId) as {
+        id: string;
+        content_hash: string;
+        representation_state: "available" | "evicted";
+        bytes: Uint8Array | null;
+        snapshot_state: "available" | "evicted";
+      } | null;
+      if (
+        !row ||
+        row.representation_state !== "available" ||
+        row.snapshot_state !== "available" ||
+        row.bytes === null
+      ) {
+        throw new ResourceCatalogError(
+          "source-unavailable",
+          "Native PDF representation payload is unavailable",
+        );
+      }
+      return {
+        representationId: row.id,
+        mediaType: "application/pdf",
+        contentHash: row.content_hash,
+        encoding: "base64",
+        data: Buffer.from(row.bytes).toString("base64"),
+      };
+    })();
+  }
+
 
   retentionPolicy(): ResourceRetentionPolicy {
     return this.retention.policy();
@@ -953,6 +1305,585 @@ export class ResourceCatalog {
     } finally {
       reader.releaseLock();
     }
+  }
+
+  private async readPdfBody(response: Response): Promise<Uint8Array> {
+    const declaredLength = Number(response.headers.get("content-length"));
+    if (Number.isFinite(declaredLength) && declaredLength > this.maximumPdfBytes) {
+      await cancelResponseBody(response);
+      throw new ResourceCatalogError(
+        "invalid-input",
+        `PDF response exceeds ${this.maximumPdfBytes} bytes`,
+      );
+    }
+    if (!response.body) return new Uint8Array();
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let received = 0;
+    try {
+      while (true) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        received += chunk.value.byteLength;
+        if (received > this.maximumPdfBytes) {
+          await reader.cancel();
+          throw new ResourceCatalogError(
+            "invalid-input",
+            `PDF response exceeds ${this.maximumPdfBytes} bytes`,
+          );
+        }
+        chunks.push(chunk.value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    const bytes = new Uint8Array(received);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return bytes;
+  }
+
+  private assertPdfRefreshCurrent(
+    resource: Resource,
+    expectedGeneration: number,
+  ): void {
+    const current = this.requireFromCurrentRead(resource.id);
+    const state = this.pdfStateFromCurrentRead(resource.id);
+    if (
+      current.version !== resource.version ||
+      current.addressVersion !== resource.addressVersion ||
+      state?.generation !== expectedGeneration ||
+      state.address_version !== resource.addressVersion
+    ) {
+      throw new ResourceCatalogError(
+        "version-conflict",
+        "PDF Resource changed while refresh was in flight",
+      );
+    }
+  }
+
+  private async persistPdfObservation(
+    resource: Resource,
+    expectedGeneration: number,
+    observation: PdfObservation,
+    destinationHostRegistered: boolean,
+    providerChecked = true,
+  ): Promise<ResourceDescription> {
+    const extraction = await this.pdfExtractor.extract(new Uint8Array(observation.bytes));
+    if (!extraction.markdown.trim() || extraction.pages.length === 0) {
+      throw new ResourceCatalogError(
+        "source-unavailable",
+        "PDF extractor returned no page-aware text",
+      );
+    }
+    const representationHash = sha256(extraction.markdown);
+    this.database.transaction(() => {
+      this.assertPdfRefreshCurrent(resource, expectedGeneration);
+      let sourceSnapshot = this.database.query(`
+        SELECT *
+        FROM pdf_source_snapshots
+        WHERE resource_id = ? AND address_version = ?
+          AND content_hash = ? AND revision_json = ?
+      `).get(
+        resource.id,
+        resource.addressVersion,
+        observation.contentHash,
+        JSON.stringify(observation.revision),
+      ) as PdfSourceSnapshotRow | null;
+      if (!sourceSnapshot) {
+        const sourceSnapshotId = crypto.randomUUID();
+        this.database.query(`
+          INSERT INTO pdf_source_snapshots (
+            id, resource_id, address_version, locator, content_hash, revision_json,
+            etag, last_modified, bytes, captured_at,
+            payload_state, payload_bytes, evicted_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'available', ?, NULL)
+        `).run(
+          sourceSnapshotId,
+          resource.id,
+          resource.addressVersion,
+          observation.locator,
+          observation.contentHash,
+          JSON.stringify(observation.revision),
+          observation.etag,
+          observation.lastModified,
+          observation.bytes,
+          observation.capturedAt,
+          observation.bytes.byteLength,
+        );
+        sourceSnapshot = this.database.query(
+          "SELECT * FROM pdf_source_snapshots WHERE id = ?",
+        ).get(sourceSnapshotId) as PdfSourceSnapshotRow;
+      } else if (sourceSnapshot.bytes === null) {
+        this.database.query(`
+          UPDATE pdf_source_snapshots
+          SET locator = ?, etag = ?, last_modified = ?, bytes = ?, captured_at = ?,
+              payload_state = 'available', payload_bytes = ?, evicted_at = NULL
+          WHERE id = ?
+        `).run(
+          observation.locator,
+          observation.etag,
+          observation.lastModified,
+          observation.bytes,
+          observation.capturedAt,
+          observation.bytes.byteLength,
+          sourceSnapshot.id,
+        );
+      }
+      let nativeRepresentation = this.database.query(`
+        SELECT *
+        FROM pdf_representations
+        WHERE source_snapshot_id = ? AND media_type = 'application/pdf'
+          AND adapter_id = ? AND adapter_version = ? AND content_hash = ?
+      `).get(
+        sourceSnapshot.id,
+        PDF_NATIVE_ADAPTER.id,
+        PDF_NATIVE_ADAPTER.version,
+        observation.contentHash,
+      ) as PdfRepresentationRow | null;
+      if (!nativeRepresentation) {
+        const nativeId = crypto.randomUUID();
+        this.database.query(`
+          INSERT INTO pdf_representations (
+            id, source_snapshot_id, media_type, adapter_id, adapter_version,
+            content_hash, markdown, pages_json, derived_at,
+            payload_state, payload_bytes, evicted_at
+          ) VALUES (?, ?, 'application/pdf', ?, ?, ?, NULL, NULL, ?, 'available', 0, NULL)
+        `).run(
+          nativeId,
+          sourceSnapshot.id,
+          PDF_NATIVE_ADAPTER.id,
+          PDF_NATIVE_ADAPTER.version,
+          observation.contentHash,
+          observation.capturedAt,
+        );
+        nativeRepresentation = this.database.query(
+          "SELECT * FROM pdf_representations WHERE id = ?",
+        ).get(nativeId) as PdfRepresentationRow;
+      }
+      else if (nativeRepresentation.payload_state === "evicted") {
+        this.database.query(`
+          UPDATE pdf_representations
+          SET payload_state = 'available', evicted_at = NULL
+          WHERE id = ?
+        `).run(nativeRepresentation.id);
+      }
+      let textRepresentation = this.database.query(`
+        SELECT *
+        FROM pdf_representations
+        WHERE source_snapshot_id = ? AND media_type = 'text/markdown'
+          AND adapter_id = ? AND adapter_version = ? AND content_hash = ?
+      `).get(
+        sourceSnapshot.id,
+        this.pdfExtractor.adapter.id,
+        this.pdfExtractor.adapter.version,
+        representationHash,
+      ) as PdfRepresentationRow | null;
+      if (!textRepresentation) {
+        const representationId = crypto.randomUUID();
+        this.database.query(`
+          INSERT INTO pdf_representations (
+            id, source_snapshot_id, media_type, adapter_id, adapter_version,
+            content_hash, markdown, pages_json, derived_at,
+            payload_state, payload_bytes, evicted_at
+          ) VALUES (?, ?, 'text/markdown', ?, ?, ?, ?, ?, ?, 'available', ?, NULL)
+        `).run(
+          representationId,
+          sourceSnapshot.id,
+          this.pdfExtractor.adapter.id,
+          this.pdfExtractor.adapter.version,
+          representationHash,
+          extraction.markdown,
+          JSON.stringify(extraction.pages),
+          observation.capturedAt,
+          Buffer.byteLength(extraction.markdown, "utf8"),
+        );
+        textRepresentation = this.database.query(
+          "SELECT * FROM pdf_representations WHERE id = ?",
+        ).get(representationId) as PdfRepresentationRow;
+      }
+      else if (
+        textRepresentation.payload_state === "evicted" ||
+        textRepresentation.markdown === null ||
+        textRepresentation.pages_json === null
+      ) {
+        this.database.query(`
+          UPDATE pdf_representations
+          SET markdown = ?, pages_json = ?, derived_at = ?,
+              payload_state = 'available', payload_bytes = ?, evicted_at = NULL
+          WHERE id = ?
+        `).run(
+          extraction.markdown,
+          JSON.stringify(extraction.pages),
+          observation.capturedAt,
+          Buffer.byteLength(extraction.markdown, "utf8"),
+          textRepresentation.id,
+        );
+      }
+      this.database.query(`
+        UPDATE pdf_resource_state
+        SET source_snapshot_id = ?, representation_id = ?
+        WHERE resource_id = ? AND generation = ?
+      `).run(
+        sourceSnapshot.id,
+        textRepresentation.id,
+        resource.id,
+        expectedGeneration,
+      );
+      if (resource.provider === "web" && providerChecked) {
+        this.database.query(`
+          UPDATE web_resource_state
+          SET freshness = 'fresh', checked_at = ?, last_error = NULL
+          WHERE resource_id = ?
+        `).run(observation.capturedAt, resource.id);
+      }
+      this.bumpSequence();
+    })();
+    return this.describe(resource.id, destinationHostRegistered);
+  }
+  private async derivePdfFromRetained(
+    resourceId: string,
+    destinationHostRegistered: boolean,
+  ): Promise<ResourceDescription | null> {
+    const retained = this.database.transaction(() => {
+      const resource = this.requireFromCurrentRead(resourceId);
+      const source = this.requireSourceFromCurrentRead(resource.sourceId);
+      if (
+        resource.mediaType !== "application/pdf" ||
+        source.policy.deniedCapabilities.includes("read")
+      ) return null;
+      const state = this.pdfStateFromCurrentRead(resource.id);
+      if (
+        !state ||
+        state.address_version !== resource.addressVersion ||
+        !state.source_snapshot_id
+      ) return null;
+      const snapshot = this.database.query(
+        "SELECT * FROM pdf_source_snapshots WHERE id = ?",
+      ).get(state.source_snapshot_id) as PdfSourceSnapshotRow | null;
+      if (
+        !snapshot ||
+        snapshot.payload_state !== "available" ||
+        snapshot.bytes === null ||
+        this.pdfActiveRepresentationAvailable(snapshot.id)
+      ) return null;
+      return { resource, snapshot };
+    })();
+    if (!retained) return null;
+    const generation = this.database.transaction(() =>
+      this.beginPdfRefresh(retained.resource, retained.snapshot, false)
+    )();
+    return this.persistPdfObservation(
+      retained.resource,
+      generation,
+      {
+        locator: retained.snapshot.locator,
+        contentHash: retained.snapshot.content_hash,
+        revision: normalizeRetainedResourceRevisionRef(
+          parsedJson(retained.snapshot.revision_json, "PDF source snapshot revision"),
+        ),
+        etag: retained.snapshot.etag,
+        lastModified: retained.snapshot.last_modified,
+        bytes: new Uint8Array(retained.snapshot.bytes as Uint8Array),
+        capturedAt: retained.snapshot.captured_at,
+      },
+      destinationHostRegistered,
+      false,
+    );
+  }
+
+  private pdfRefreshFailure(
+    resource: Resource,
+    destinationHostRegistered: boolean,
+    error: unknown,
+  ): ResourceDescription {
+    const message = errorText(error);
+    if (resource.provider === "web") {
+      this.database.transaction(() => {
+        this.database.query(`
+          UPDATE web_resource_state
+          SET freshness = 'failed', checked_at = ?, last_error = ?
+          WHERE resource_id = ?
+        `).run(this.now(), message, resource.id);
+        this.bumpSequence();
+      })();
+    }
+    const description = this.describe(resource.id, destinationHostRegistered);
+    if (resource.provider === "web" || description.pdf) {
+      return { ...description, pdfError: message };
+    }
+    throw error;
+  }
+
+
+  private async performPdfRefresh(
+    resourceId: string,
+    destinationHostRegistered: boolean,
+  ): Promise<ResourceDescription> {
+    const initial = this.database.transaction(() => {
+      const resource = this.requireFromCurrentRead(resourceId);
+      const source = this.requireSourceFromCurrentRead(resource.sourceId);
+      if (
+        resource.mediaType !== "application/pdf" ||
+        (resource.provider !== "filesystem" && resource.provider !== "web")
+      ) {
+        throw new ResourceCatalogError(
+          "provider-mismatch",
+          "PDF refresh requires a filesystem or web PDF Resource",
+        );
+      }
+      if (
+        source.policy.deniedCapabilities.includes("read") ||
+        source.policy.deniedCapabilities.includes("refresh")
+      ) {
+        throw new ResourceCatalogError(
+          "invalid-input",
+          "Workspace policy denies reading or refreshing this PDF Resource",
+        );
+      }
+      const state = this.pdfStateFromCurrentRead(resource.id);
+      const sourceSnapshot = state?.address_version === resource.addressVersion &&
+          state.source_snapshot_id
+        ? this.database.query(
+            "SELECT * FROM pdf_source_snapshots WHERE id = ?",
+          ).get(state.source_snapshot_id) as PdfSourceSnapshotRow | null
+        : null;
+      return { resource, source, state, sourceSnapshot };
+    })();
+
+    let observation: PdfObservation;
+    if (
+      initial.resource.provider === "filesystem" &&
+      initial.source.provider === "filesystem" &&
+      initial.resource.address.kind === "filesystem"
+    ) {
+      const sourceRow = this.database.transaction(() =>
+        this.requireSourceRowFromCurrentRead(initial.source.id)
+      )();
+      this.assertConfinement(initial.source, sourceRow.root_binding, initial.resource.address);
+      const absolutePath = resolve(
+        initial.source.boundary.root,
+        initial.resource.address.path,
+      );
+      let stat: BigIntStats;
+      try {
+        stat = statSync(absolutePath, { bigint: true });
+      } catch {
+        throw new ResourceCatalogError("source-unavailable", "PDF Resource is unavailable");
+      }
+      if (!stat.isFile()) {
+        throw new ResourceCatalogError("source-unavailable", "PDF Resource is not a regular file");
+      }
+      if (stat.size > BigInt(this.maximumPdfBytes)) {
+        throw new ResourceCatalogError(
+          "source-unavailable",
+          `PDF Resource exceeds ${this.maximumPdfBytes} bytes`,
+        );
+      }
+      const revision: ResourceRevisionRef = {
+        resourceId: initial.resource.id,
+        addressVersion: initial.resource.addressVersion,
+        revision: {
+          kind: "filesystem",
+          mtimeNs: stat.mtimeNs.toString(),
+          size: stat.size.toString(),
+        },
+      };
+      if (
+        initial.sourceSnapshot &&
+        resourceRevisionRefEquals(
+          normalizeRetainedResourceRevisionRef(
+            parsedJson(initial.sourceSnapshot.revision_json, "PDF source snapshot revision"),
+          ),
+          revision,
+        ) &&
+        this.pdfActiveRepresentationAvailable(initial.sourceSnapshot.id)
+      ) {
+        return this.describe(initial.resource.id, destinationHostRegistered);
+      }
+      let bytes: Uint8Array;
+      try {
+        bytes = new Uint8Array(readFileSync(absolutePath));
+      } catch {
+        throw new ResourceCatalogError("source-unavailable", "PDF Resource is unreadable");
+      }
+      observation = {
+        locator: initial.resource.address.path,
+        contentHash: byteHash(bytes),
+        revision,
+        etag: null,
+        lastModified: null,
+        bytes,
+        capturedAt: new Date(Number(stat.mtimeMs)).toISOString(),
+      };
+    } else if (
+      initial.resource.provider === "web" &&
+      initial.source.provider === "web" &&
+      initial.resource.address.kind === "web"
+    ) {
+      const headers = new Headers({ Accept: "application/pdf" });
+      if (initial.sourceSnapshot?.etag) headers.set("If-None-Match", initial.sourceSnapshot.etag);
+      if (initial.sourceSnapshot?.last_modified) {
+        headers.set("If-Modified-Since", initial.sourceSnapshot.last_modified);
+      }
+      const signal = AbortSignal.timeout(15_000);
+      let { response, url: canonicalUrl } = await this.fetchWeb(
+        initial.source,
+        initial.resource.address.url,
+        headers,
+        signal,
+      );
+      const currentAvailable = initial.sourceSnapshot !== null &&
+        initial.sourceSnapshot.bytes !== null &&
+        this.pdfActiveRepresentationAvailable(initial.sourceSnapshot.id);
+      if (
+        response.status === 304 &&
+        initial.sourceSnapshot &&
+        initial.sourceSnapshot.bytes !== null
+      ) {
+        if (currentAvailable) {
+          const generation = this.database.transaction(() =>
+            this.beginPdfRefresh(initial.resource, initial.sourceSnapshot)
+          )();
+          this.database.transaction(() => {
+            this.assertPdfRefreshCurrent(initial.resource, generation);
+            this.database.query(`
+              UPDATE web_resource_state
+              SET freshness = 'fresh', checked_at = ?, last_error = NULL
+              WHERE resource_id = ?
+            `).run(this.now(), initial.resource.id);
+            this.bumpSequence();
+          })();
+          return this.describe(initial.resource.id, destinationHostRegistered);
+        }
+        observation = {
+          locator: initial.sourceSnapshot.locator,
+          contentHash: initial.sourceSnapshot.content_hash,
+          revision: normalizeRetainedResourceRevisionRef(
+            parsedJson(initial.sourceSnapshot.revision_json, "PDF source snapshot revision"),
+          ),
+          etag: initial.sourceSnapshot.etag,
+          lastModified: initial.sourceSnapshot.last_modified,
+          bytes: new Uint8Array(initial.sourceSnapshot.bytes),
+          capturedAt: this.now(),
+        };
+      } else {
+        if (response.status === 304) {
+          await cancelResponseBody(response);
+          ({ response, url: canonicalUrl } = await this.fetchWeb(
+            initial.source,
+            initial.resource.address.url,
+            new Headers({ Accept: "application/pdf" }),
+            signal,
+          ));
+        }
+        if (!response.ok) {
+          await cancelResponseBody(response);
+          throw new ResourceCatalogError(
+            "source-unavailable",
+            `Web provider returned HTTP ${response.status}`,
+          );
+        }
+        const mediaType = responseMediaType(response);
+        if (mediaType !== "application/pdf") {
+          await cancelResponseBody(response);
+          throw new ResourceCatalogError(
+            "invalid-input",
+            `Web provider returned unsupported PDF media type: ${mediaType || "unknown"}`,
+          );
+        }
+        const bytes = await this.readPdfBody(response);
+        const contentHash = byteHash(bytes);
+        const etag = webEtag(response);
+        const lastModified = response.headers.get("last-modified")?.trim() || null;
+        observation = {
+          locator: canonicalUrl,
+          contentHash,
+          revision: webRevision(initial.resource, etag, lastModified, contentHash),
+          etag,
+          lastModified,
+          bytes,
+          capturedAt: this.now(),
+        };
+      }
+    } else {
+      throw new ResourceCatalogError("provider-mismatch", "PDF provider identity is inconsistent");
+    }
+
+    const generation = this.database.transaction(() =>
+      this.beginPdfRefresh(initial.resource, initial.sourceSnapshot)
+    )();
+    try {
+      return await this.persistPdfObservation(
+        initial.resource,
+        generation,
+        observation,
+        destinationHostRegistered,
+      );
+    } catch (error) {
+      if (initial.resource.provider === "web") {
+        this.database.transaction(() => {
+          this.assertPdfRefreshCurrent(initial.resource, generation);
+          this.database.query(`
+            UPDATE web_resource_state
+            SET freshness = 'failed', checked_at = ?, last_error = ?
+            WHERE resource_id = ?
+          `).run(this.now(), errorText(error), initial.resource.id);
+          this.bumpSequence();
+        })();
+        return {
+          ...this.describe(initial.resource.id, destinationHostRegistered),
+          pdfError: errorText(error),
+        };
+      }
+      throw error;
+    }
+  }
+
+  private beginPdfRefresh(
+    resource: Resource,
+    sourceSnapshot: PdfSourceSnapshotRow | null,
+    updateWebStatus = true,
+  ): number {
+    const state = this.pdfStateFromCurrentRead(resource.id);
+    const generation = (state?.generation ?? 0) + 1;
+    this.database.query(`
+      INSERT INTO pdf_resource_state (
+        resource_id, address_version, generation, source_snapshot_id, representation_id
+      ) VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(resource_id) DO UPDATE SET
+        address_version = excluded.address_version,
+        generation = excluded.generation,
+        source_snapshot_id = excluded.source_snapshot_id,
+        representation_id = excluded.representation_id
+    `).run(
+      resource.id,
+      resource.addressVersion,
+      generation,
+      sourceSnapshot?.id ?? null,
+      state?.address_version === resource.addressVersion ? state.representation_id : null,
+    );
+    if (resource.provider === "web" && updateWebStatus) {
+      this.database.query(`
+        INSERT INTO web_resource_state (
+          resource_id, address_version, generation, source_snapshot_id,
+          representation_id, freshness, checked_at, last_error
+        ) VALUES (?, ?, 1, NULL, NULL, 'refreshing', ?, NULL)
+        ON CONFLICT(resource_id) DO UPDATE SET
+          address_version = excluded.address_version,
+          generation = web_resource_state.generation + 1,
+          source_snapshot_id = NULL,
+          representation_id = NULL,
+          freshness = 'refreshing',
+          checked_at = excluded.checked_at,
+          last_error = NULL
+      `).run(resource.id, resource.addressVersion, this.now());
+    }
+    this.bumpSequence();
+    return generation;
   }
 
   private async performWebRefresh(
@@ -1730,6 +2661,66 @@ export class ResourceCatalog {
             CHECK (freshness IN ('fresh', 'stale', 'unknown', 'refreshing', 'failed')),
           checked_at TEXT,
           last_error TEXT
+        );
+        CREATE TABLE IF NOT EXISTS pdf_source_snapshots (
+          id TEXT PRIMARY KEY,
+          resource_id TEXT NOT NULL REFERENCES resources(id) ON DELETE RESTRICT,
+          address_version INTEGER NOT NULL CHECK (address_version >= 1),
+          locator TEXT NOT NULL,
+          content_hash TEXT NOT NULL,
+          revision_json TEXT NOT NULL,
+          etag TEXT,
+          last_modified TEXT,
+          bytes BLOB,
+          captured_at TEXT NOT NULL,
+          payload_state TEXT NOT NULL DEFAULT 'available'
+            CHECK (payload_state IN ('available','evicted')),
+          payload_bytes INTEGER NOT NULL DEFAULT 0 CHECK (payload_bytes >= 0),
+          evicted_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS pdf_source_snapshots_resource
+          ON pdf_source_snapshots(resource_id, address_version, captured_at, id);
+        CREATE UNIQUE INDEX IF NOT EXISTS pdf_source_snapshots_content
+          ON pdf_source_snapshots(resource_id, address_version, content_hash, revision_json);
+        CREATE TABLE IF NOT EXISTS pdf_representations (
+          id TEXT PRIMARY KEY,
+          source_snapshot_id TEXT NOT NULL
+            REFERENCES pdf_source_snapshots(id) ON DELETE RESTRICT,
+          media_type TEXT NOT NULL
+            CHECK (media_type IN ('application/pdf', 'text/markdown')),
+          adapter_id TEXT NOT NULL,
+          adapter_version INTEGER NOT NULL CHECK (adapter_version >= 1),
+          content_hash TEXT NOT NULL,
+          markdown TEXT,
+          pages_json TEXT,
+          derived_at TEXT NOT NULL,
+          payload_state TEXT NOT NULL DEFAULT 'available'
+            CHECK (payload_state IN ('available','evicted')),
+          payload_bytes INTEGER NOT NULL DEFAULT 0 CHECK (payload_bytes >= 0),
+          evicted_at TEXT,
+          CHECK (
+            (media_type = 'application/pdf' AND markdown IS NULL AND pages_json IS NULL) OR
+            (
+              media_type = 'text/markdown' AND
+              (
+                (payload_state = 'available' AND markdown IS NOT NULL AND pages_json IS NOT NULL) OR
+                (payload_state = 'evicted' AND markdown IS NULL AND pages_json IS NULL)
+              )
+            )
+          )
+        );
+        CREATE INDEX IF NOT EXISTS pdf_representations_snapshot
+          ON pdf_representations(source_snapshot_id, derived_at, id);
+        CREATE UNIQUE INDEX IF NOT EXISTS pdf_representations_content
+          ON pdf_representations(
+            source_snapshot_id, media_type, adapter_id, adapter_version, content_hash
+          );
+        CREATE TABLE IF NOT EXISTS pdf_resource_state (
+          resource_id TEXT PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE,
+          address_version INTEGER NOT NULL CHECK (address_version >= 1),
+          generation INTEGER NOT NULL CHECK (generation >= 1),
+          source_snapshot_id TEXT REFERENCES pdf_source_snapshots(id) ON DELETE RESTRICT,
+          representation_id TEXT REFERENCES pdf_representations(id) ON DELETE RESTRICT
         );
       `);
       if (migratePie251Annotations) {

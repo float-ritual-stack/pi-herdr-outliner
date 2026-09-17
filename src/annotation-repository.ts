@@ -52,6 +52,7 @@ import type {
   BlockAuthor,
   BlockProvenance,
   MutationProvenance,
+  PdfPageText,
   Resource,
 } from "./types";
 
@@ -437,11 +438,12 @@ export class AnnotationRepository {
       representation.contentHash !== null &&
       annotationSourceHash(content) !== representation.contentHash
     ) throw new Error("Annotation reconciliation content hash does not match the representation");
+    const pdfPages = this.representationPdfPages(representation);
     const threads = this.list({ subject, includeResolved: true });
     let changed = false;
     this.database.transaction(() => {
       for (const thread of threads) {
-        changed = this.reconcileOne(thread, representation, content) || changed;
+        changed = this.reconcileOne(thread, representation, content, pdfPages) || changed;
       }
       if (changed) this.blocks.markMutation();
     })();
@@ -981,6 +983,7 @@ export class AnnotationRepository {
     record: AnnotationRecord,
     representation: AnnotationRepresentation,
     content: string | null,
+    pdfPages: readonly PdfPageText[],
   ): boolean {
     const sourceRepresentation = record.currentResolution.targetRepresentation;
     if (sameRepresentation(sourceRepresentation, representation)) return false;
@@ -992,6 +995,7 @@ export class AnnotationRepository {
       record.resolvedTarget ?? record.originalTarget,
       representation,
       content,
+      pdfPages,
     );
     this.appendEvent({
       annotationId: record.block.id,
@@ -1026,13 +1030,40 @@ export class AnnotationRepository {
       content !== null &&
       annotationSourceHash(content) !== representation.contentHash
     ) throw new Error("Annotation representation content hash does not match captured content");
-    if (target.anchor.kind !== "text-quote" || content === null) return;
+    if (
+      (target.anchor.kind !== "text-quote" &&
+        target.anchor.kind !== "pdf-page-region") ||
+      content === null
+    ) return;
+    if (
+      target.anchor.kind === "pdf-page-region" &&
+      (
+        target.anchor.start === null ||
+        target.anchor.end === null ||
+        target.anchor.exact === null ||
+        target.anchor.prefix === null ||
+        target.anchor.suffix === null
+      )
+    ) {
+      throw new Error("New PDF annotations require quote range and context evidence");
+    }
     const { start, end, exact, prefix, suffix } = target.anchor;
+    if (exact === null || prefix === null || suffix === null) {
+      throw new Error("PDF annotation quote evidence is incomplete");
+    }
     if (start === null || end === null) {
       if (representation.observation?.quote !== exact) {
         throw new Error("Unpositioned annotation quote must match rendered evidence");
       }
       return;
+    }
+    if (target.anchor.kind === "pdf-page-region") {
+      const pdfAnchor = target.anchor;
+      const page = this.representationPdfPages(representation)
+        .find(({ page: pageNumber }) => pageNumber === pdfAnchor.page);
+      if (!page || start < page.start || end > page.end) {
+        throw new Error("PDF annotation quote does not belong to its captured page");
+      }
     }
     if (content.slice(start, end) !== exact) {
       throw new Error("Annotation quote does not match captured representation");
@@ -1041,6 +1072,31 @@ export class AnnotationRepository {
       content.slice(Math.max(0, start - prefix.length), start) !== prefix ||
       content.slice(end, end + suffix.length) !== suffix
     ) throw new Error("Annotation quote context does not match captured representation");
+  }
+
+  private representationPdfPages(
+    representation: AnnotationRepresentation,
+  ): readonly PdfPageText[] {
+    const subject = representation.subject;
+    const snapshot = representation.sourceSnapshot;
+    if (
+      subject.kind !== "resource" ||
+      snapshot.kind !== "resource" ||
+      snapshot.resourceId !== subject.resourceId
+    ) return [];
+    const description = this.resources.describe(
+      subject.resourceId,
+      true,
+      snapshot.revision ?? undefined,
+    );
+    const pdf = description.pdf;
+    if (
+      !pdf ||
+      pdf.representation.id !== representation.id ||
+      snapshot.sourceSnapshotId === null ||
+      pdf.sourceSnapshot.id !== snapshot.sourceSnapshotId
+    ) return [];
+    return pdf.pages;
   }
 
   private representationContent(representation: AnnotationRepresentation): string | null {
@@ -1059,6 +1115,13 @@ export class AnnotationRepository {
       true,
       snapshot.revision ?? undefined,
     );
+    const pdf = description.pdf;
+    if (
+      pdf &&
+      pdf.representation.id === representation.id &&
+      snapshot.sourceSnapshotId !== null &&
+      pdf.sourceSnapshot.id === snapshot.sourceSnapshotId
+    ) return pdf.markdown;
     if (description.resource.provider === "filesystem") {
       return description.filesystem?.text ?? null;
     }
@@ -1428,6 +1491,20 @@ export class AnnotationRepository {
         created_at TEXT NOT NULL
       );
     `);
+    const evidenceColumns = this.database.query(
+      "PRAGMA table_info(annotation_resource_evidence_refs)",
+    ).all() as Array<{ name: string }>;
+    const migratePdfEvidence = evidenceColumns.length > 0 &&
+      !evidenceColumns.some(({ name }) => name === "pdf_source_snapshot_id");
+    if (migratePdfEvidence) {
+      this.database.exec(`
+        DROP INDEX IF EXISTS annotation_resource_evidence_refs_source_snapshot;
+        DROP INDEX IF EXISTS annotation_resource_evidence_refs_representation;
+        DROP INDEX IF EXISTS annotation_resource_evidence_refs_unique;
+        ALTER TABLE annotation_resource_evidence_refs
+          RENAME TO annotation_resource_evidence_refs_legacy_pie253;
+      `);
+    }
     this.database.exec(`
       CREATE TABLE IF NOT EXISTS annotation_resource_evidence_refs (
         id TEXT PRIMARY KEY,
@@ -1448,8 +1525,15 @@ export class AnnotationRepository {
           REFERENCES web_source_snapshots(id) ON DELETE RESTRICT,
         representation_id TEXT
           REFERENCES web_representations(id) ON DELETE RESTRICT,
+        pdf_source_snapshot_id TEXT
+          REFERENCES pdf_source_snapshots(id) ON DELETE RESTRICT,
+        pdf_representation_id TEXT
+          REFERENCES pdf_representations(id) ON DELETE RESTRICT,
         created_at TEXT NOT NULL,
-        CHECK (source_snapshot_id IS NOT NULL OR representation_id IS NOT NULL)
+        CHECK (
+          source_snapshot_id IS NOT NULL OR representation_id IS NOT NULL OR
+          pdf_source_snapshot_id IS NOT NULL OR pdf_representation_id IS NOT NULL
+        )
       );
       CREATE INDEX IF NOT EXISTS annotation_resource_evidence_refs_source_snapshot
         ON annotation_resource_evidence_refs(source_snapshot_id, annotation_block_id)
@@ -1457,15 +1541,37 @@ export class AnnotationRepository {
       CREATE INDEX IF NOT EXISTS annotation_resource_evidence_refs_representation
         ON annotation_resource_evidence_refs(representation_id, annotation_block_id)
         WHERE representation_id IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS annotation_resource_evidence_refs_pdf_source_snapshot
+        ON annotation_resource_evidence_refs(pdf_source_snapshot_id, annotation_block_id)
+        WHERE pdf_source_snapshot_id IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS annotation_resource_evidence_refs_pdf_representation
+        ON annotation_resource_evidence_refs(pdf_representation_id, annotation_block_id)
+        WHERE pdf_representation_id IS NOT NULL;
       CREATE UNIQUE INDEX IF NOT EXISTS annotation_resource_evidence_refs_unique
         ON annotation_resource_evidence_refs(
           annotation_block_id,
           ifnull(resolution_event_id, ''),
           role,
           ifnull(source_snapshot_id, ''),
-          ifnull(representation_id, '')
+          ifnull(representation_id, ''),
+          ifnull(pdf_source_snapshot_id, ''),
+          ifnull(pdf_representation_id, '')
         );
     `);
+    if (migratePdfEvidence) {
+      this.database.exec(`
+        INSERT INTO annotation_resource_evidence_refs (
+          id, annotation_block_id, resolution_event_id, role,
+          source_snapshot_id, representation_id,
+          pdf_source_snapshot_id, pdf_representation_id, created_at
+        )
+        SELECT
+          id, annotation_block_id, resolution_event_id, role,
+          source_snapshot_id, representation_id, NULL, NULL, created_at
+        FROM annotation_resource_evidence_refs_legacy_pie253;
+        DROP TABLE annotation_resource_evidence_refs_legacy_pie253;
+      `);
+    }
   }
 
   private insertResourceEvidenceRef(input: {
@@ -1493,16 +1599,31 @@ export class AnnotationRepository {
           WHERE id = ? AND resource_id = target.resource_id
         ) AS source_snapshot_id,
         (
-          SELECT representation.id
-          FROM web_representations representation
-          JOIN web_source_snapshots source_snapshot
-            ON source_snapshot.id = representation.source_snapshot_id
-          WHERE representation.id = ?
-            AND source_snapshot.resource_id = target.resource_id
-        ) AS representation_id
+          SELECT web_representation.id
+          FROM web_representations web_representation
+          JOIN web_source_snapshots web_snapshot
+            ON web_snapshot.id = web_representation.source_snapshot_id
+          WHERE web_representation.id = ?
+            AND web_snapshot.resource_id = target.resource_id
+        ) AS representation_id,
+        (
+          SELECT id
+          FROM pdf_source_snapshots
+          WHERE id = ? AND resource_id = target.resource_id
+        ) AS pdf_source_snapshot_id,
+        (
+          SELECT pdf_representation.id
+          FROM pdf_representations pdf_representation
+          JOIN pdf_source_snapshots pdf_snapshot
+            ON pdf_snapshot.id = pdf_representation.source_snapshot_id
+          WHERE pdf_representation.id = ?
+            AND pdf_snapshot.resource_id = target.resource_id
+        ) AS pdf_representation_id
       FROM annotation_targets target
       WHERE target.annotation_block_id = ? AND target.resource_id = ?
     `).get(
+      snapshot.sourceSnapshotId,
+      representation.id,
       snapshot.sourceSnapshotId,
       representation.id,
       input.annotationId,
@@ -1510,16 +1631,24 @@ export class AnnotationRepository {
     ) as {
       source_snapshot_id: string | null;
       representation_id: string | null;
+      pdf_source_snapshot_id: string | null;
+      pdf_representation_id: string | null;
     } | null;
     if (
       !artifacts ||
-      (artifacts.source_snapshot_id === null && artifacts.representation_id === null)
+      (
+        artifacts.source_snapshot_id === null &&
+        artifacts.representation_id === null &&
+        artifacts.pdf_source_snapshot_id === null &&
+        artifacts.pdf_representation_id === null
+      )
     ) return;
     this.database.query(`
       INSERT OR IGNORE INTO annotation_resource_evidence_refs (
         id, annotation_block_id, resolution_event_id, role,
-        source_snapshot_id, representation_id, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        source_snapshot_id, representation_id,
+        pdf_source_snapshot_id, pdf_representation_id, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       crypto.randomUUID(),
       input.annotationId,
@@ -1527,6 +1656,8 @@ export class AnnotationRepository {
       input.role,
       artifacts.source_snapshot_id,
       artifacts.representation_id,
+      artifacts.pdf_source_snapshot_id,
+      artifacts.pdf_representation_id,
       input.createdAt,
     );
   }

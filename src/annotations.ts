@@ -17,6 +17,7 @@ import type {
   AttentionTextAnchor,
   Block,
   RenderedPassageObservation,
+  PdfRegion,
   RenderedPassageProjection,
 } from "./types";
 
@@ -136,6 +137,26 @@ export function createTextQuoteAnchor(
     exact: text.slice(start, end),
     prefix: text.slice(Math.max(0, start - contextUnits), start),
     suffix: text.slice(end, end + contextUnits),
+  };
+}
+
+export function createPdfPageRegionAnchor(
+  text: string,
+  start: number,
+  end: number,
+  page: number,
+  regions: readonly PdfRegion[],
+): Extract<AnnotationAnchor, { kind: "pdf-page-region" }> {
+  const quote = createTextQuoteAnchor(text, start, end);
+  return {
+    kind: "pdf-page-region",
+    page,
+    regions,
+    start: quote.start,
+    end: quote.end,
+    exact: quote.exact,
+    prefix: quote.prefix,
+    suffix: quote.suffix,
   };
 }
 
@@ -291,16 +312,66 @@ export function normalizeAnnotationAnchor(value: unknown): AnnotationAnchor {
     return { kind: "dom-range", start: point(anchor.start, "DOM start"), end: point(anchor.end, "DOM end"), exact: evidenceText(anchor.exact, "DOM exact text") };
   }
   if (anchor.kind === "pdf-page-region") {
-    if (!Array.isArray(anchor.regions) || anchor.regions.length === 0) throw new Error("PDF anchor requires at least one region");
+    if (!Array.isArray(anchor.regions) || anchor.regions.length === 0) {
+      throw new Error("PDF anchor requires at least one region");
+    }
+    const quoteFields = ["start", "end", "prefix", "suffix"] as const;
+    const presentQuoteFields = quoteFields.filter((key) => anchor[key] !== undefined);
+    const legacyEvidence = presentQuoteFields.length === 0;
     const regions = anchor.regions.map((raw) => {
       if (!raw || typeof raw !== "object") throw new Error("PDF region must be an object");
       const region = raw as Record<string, unknown>;
       for (const key of ["x", "y", "width", "height"] as const) {
-        if (typeof region[key] !== "number" || !Number.isFinite(region[key])) throw new Error(`PDF region ${key} must be finite`);
+        if (typeof region[key] !== "number" || !Number.isFinite(region[key])) {
+          throw new Error(`PDF region ${key} must be finite`);
+        }
       }
-      return { x: region.x as number, y: region.y as number, width: region.width as number, height: region.height as number };
+      if (!legacyEvidence) {
+        if ((region.x as number) < 0 || (region.y as number) < 0) {
+          throw new Error("PDF region coordinates cannot be negative");
+        }
+        if ((region.width as number) <= 0 || (region.height as number) <= 0) {
+          throw new Error("PDF region dimensions must be positive");
+        }
+      }
+      return {
+        x: region.x as number,
+        y: region.y as number,
+        width: region.width as number,
+        height: region.height as number,
+      };
     });
-    return { kind: "pdf-page-region", page: integer(anchor.page, "PDF page", 1), regions, exact: anchor.exact === null ? null : evidenceText(anchor.exact, "PDF exact text") };
+    const page = integer(anchor.page, "PDF page", 1);
+    if (legacyEvidence) {
+      if (anchor.exact !== null && typeof anchor.exact !== "string") {
+        throw new Error("Legacy PDF exact text must be a string or null");
+      }
+      return {
+        kind: "pdf-page-region",
+        page,
+        regions,
+        start: null,
+        end: null,
+        exact: anchor.exact as string | null,
+        prefix: null,
+        suffix: null,
+      };
+    }
+    if (presentQuoteFields.length !== quoteFields.length) {
+      throw new Error("PDF quote evidence must include range and context together");
+    }
+    const quote = normalizeAnnotationAnchor({ ...anchor, kind: "text-quote" });
+    if (quote.kind !== "text-quote") throw new Error("PDF quote normalization failed");
+    return {
+      kind: "pdf-page-region",
+      page,
+      regions,
+      start: quote.start,
+      end: quote.end,
+      exact: quote.exact,
+      prefix: quote.prefix,
+      suffix: quote.suffix,
+    };
   }
   if (anchor.kind === "structured-entity-field") {
     if (!Array.isArray(anchor.fieldPath) || anchor.fieldPath.length === 0) throw new Error("Structured field path cannot be empty");

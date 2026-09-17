@@ -5,6 +5,7 @@ import {
 } from "./outliner-actions";
 import {
   annotationSourceHash,
+  createPdfPageRegionAnchor,
   createTextQuoteAnchor,
   extractAnnotationBody,
 } from "./annotations";
@@ -76,6 +77,7 @@ import { TextBuffer } from "./text-buffer";
 import type { TerminalKey } from "./terminal";
 import type {
   AnnotationBatchReceipt,
+  AnnotationAnchor,
   AnnotationCreateInput,
   AnnotationListQuery,
   AnnotationReconcileInput,
@@ -608,6 +610,23 @@ function blockAnnotationRepresentation(block: Block): AnnotationRepresentation {
 function resourceAnnotationRepresentation(
   description: ResourceDescription,
 ): AnnotationRepresentation | null {
+  const pdf = description.pdf;
+  if (pdf) {
+    return {
+      id: pdf.representation.id,
+      subject: { kind: "resource", resourceId: description.resource.id },
+      sourceSnapshot: {
+        kind: "resource",
+        resourceId: description.resource.id,
+        sourceSnapshotId: pdf.sourceSnapshot.id,
+        revision: pdf.sourceSnapshot.revision,
+      },
+      adapter: pdf.representation.adapter,
+      mediaType: pdf.representation.mediaType,
+      contentHash: pdf.representation.contentHash,
+      capturedAt: pdf.representation.derivedAt,
+    };
+  }
   const filesystem = description.filesystem;
   if (filesystem) {
     const revision = filesystem.revision.revision;
@@ -647,6 +666,26 @@ function resourceAnnotationRepresentation(
       web.sourceSnapshot.fetchedAt ??
       description.resource.updatedAt,
   };
+}
+
+function pdfAnnotationAnchor(
+  description: ResourceDescription,
+  start: number,
+  end: number,
+): Extract<AnnotationAnchor, { kind: "pdf-page-region" }> {
+  const pdf = description.pdf;
+  if (!pdf) throw new Error("PDF representation is unavailable");
+  const page = pdf.pages.find((candidate) =>
+    start >= candidate.start && end <= candidate.end
+  );
+  if (!page) throw new Error("PDF annotations must stay within one extracted page");
+  const regions = page.spans
+    .filter((span) => span.end > start && span.start < end)
+    .map(({ region }) => region);
+  if (regions.length === 0) {
+    throw new Error("PDF selection has no durable page region");
+  }
+  return createPdfPageRegionAnchor(pdf.markdown, start, end, page.page, regions);
 }
 
 function filesystemAnnotationRepresentation(
@@ -947,7 +986,10 @@ export function createDetailController(
           resourceId: description.resource.id,
         };
         const representation = resourceAnnotationRepresentation(description);
-        const content = description.web?.markdown ?? description.filesystem?.text ?? null;
+        const content = description.pdf?.markdown ??
+          description.web?.markdown ??
+          description.filesystem?.text ??
+          null;
         threads = representation && content !== null && targetAtStart.revision === undefined
           ? (await effects.reconcileAnnotations({
               subject,
@@ -1168,32 +1210,43 @@ export function createDetailController(
   };
 
   const resourceDocumentText = (description: ResourceDescription): string => {
-    const { resource, source, web, webHistory, presentation } = description;
+    const { resource, source, pdf, pdfHistory, web, webHistory, presentation } = description;
     const representation = presentation?.selected?.representation;
     const renderLocalContent = representation === undefined || representation === "cached-markdown";
     if (description.filesystem && renderLocalContent) return description.filesystem.text;
     const externalUrl = presentation?.selected?.externalUrl ??
       web?.sourceSnapshot.canonicalUrl ??
       (resource.address.kind === "web" ? resource.address.url : null);
-    const lines = web && renderLocalContent
+    const lines = pdf && renderLocalContent
       ? [
-          web.markdown,
+          pdf.markdown,
           "",
           "---",
           "",
-          "## Web resource",
+          "## PDF resource",
           "",
           `[Stable resource link](${outlinerLinkUri("resource", resource.id)})`,
           ...(externalUrl ? ["", `[Open externally](<${externalUrl}>)`] : []),
         ]
-      : [
-          `# ${resourceAddressLabel(resource.address)}`,
-          "",
-          `[Stable resource link](${outlinerLinkUri("resource", resource.id)})`,
-          ...(resource.provider === "web"
-            ? ["", `[Open externally](<${resource.address.url}>)`]
-            : []),
-        ];
+      : web && renderLocalContent
+        ? [
+            web.markdown,
+            "",
+            "---",
+            "",
+            "## Web resource",
+            "",
+            `[Stable resource link](${outlinerLinkUri("resource", resource.id)})`,
+            ...(externalUrl ? ["", `[Open externally](<${externalUrl}>)`] : []),
+          ]
+        : [
+            `# ${resourceAddressLabel(resource.address)}`,
+            "",
+            `[Stable resource link](${outlinerLinkUri("resource", resource.id)})`,
+            ...(resource.provider === "web"
+              ? ["", `[Open externally](<${resource.address.url}>)`]
+              : []),
+          ];
     if (presentation) {
       lines.push(
         "",
@@ -1218,10 +1271,26 @@ export function createDetailController(
           ? [`- Last refresh error: ${description.webStatus.lastError}`]
           : []),
         "",
-        freshnessGuidance(freshness, web !== null),
+        freshnessGuidance(freshness, pdf != null || web !== null),
       );
     }
-    if (web) {
+    if (pdf) {
+      lines.push(
+        "",
+        "## Selected immutable content",
+        "",
+        `- Source snapshot ID: \`${pdf.sourceSnapshot.id}\``,
+        `- Source hash: \`${pdf.sourceSnapshot.contentHash}\``,
+        `- Provider revision: ${providerRevisionLabel(pdf.sourceSnapshot.revision)}`,
+        `- Captured: ${pdf.sourceSnapshot.capturedAt}`,
+        `- Source bytes available: ${pdf.sourceSnapshot.bytesAvailable ? "yes" : "no"}`,
+        `- Text representation ID: \`${pdf.representation.id}\``,
+        `- Text adapter: \`${pdf.representation.adapter.id}@${pdf.representation.adapter.version}\``,
+        `- Text representation hash: \`${pdf.representation.contentHash}\``,
+        `- Native representation ID: \`${pdf.nativeRepresentation.id}\``,
+        `- Pages: ${pdf.pages.length}`,
+      );
+    } else if (web) {
       lines.push(
         "",
         "## Selected immutable content",
@@ -1270,6 +1339,25 @@ export function createDetailController(
       for (const representation of webHistory.representations) {
         lines.push(
           `- Representation \`${representation.id}\` · snapshot \`${representation.sourceSnapshotId}\` · \`${representation.adapter.id}@${representation.adapter.version}\` · ${representation.contentHash} · derived ${representation.derivedAt ?? "unknown"} · content ${representation.contentAvailable ? "available" : representation.evictedAt ? `evicted ${representation.evictedAt}` : "unavailable"}`,
+        );
+      }
+    }
+    if (pdfHistory) {
+      lines.push(
+        "",
+        "## Retained PDF history",
+        "",
+        `- Source snapshots: ${pdfHistory.sourceSnapshots.length}`,
+        `- Representations: ${pdfHistory.representations.length}`,
+      );
+      for (const snapshot of pdfHistory.sourceSnapshots) {
+        lines.push(
+          `- Snapshot \`${snapshot.id}\` · address v${snapshot.addressVersion} · ${snapshot.locator} · ${snapshot.contentHash} · captured ${snapshot.capturedAt} · bytes ${snapshot.bytesAvailable ? "available" : "unavailable"}`,
+        );
+      }
+      for (const candidate of pdfHistory.representations) {
+        lines.push(
+          `- Representation \`${candidate.id}\` · snapshot \`${candidate.sourceSnapshotId}\` · ${candidate.mediaType} · \`${candidate.adapter.id}@${candidate.adapter.version}\` · ${candidate.contentHash} · derived ${candidate.derivedAt}`,
         );
       }
     }
@@ -1668,15 +1756,20 @@ export function createDetailController(
     sourceColumn = 0,
   ): Promise<void> => {
     const selected = state.context.selected;
-    const web = detailResourceDescription(state)?.web;
-    if (!web && (!selected || selected.effectiveDeletedRootId)) {
+    const description = detailResourceDescription(state);
+    const resourceMarkdown = description?.pdf?.markdown ?? description?.web?.markdown;
+    if (description?.pdf && sourceLine >= description.pdf.markdown.split("\n").length) {
+      state.status = "Select PDF text, not resource metadata, before adding annotations";
+      return;
+    }
+    if (!resourceMarkdown && (!selected || selected.effectiveDeletedRootId)) {
       state.status = selected
         ? "Block is in Trash; restore before adding annotations"
         : "This resource has no cached Markdown to annotate";
       return;
     }
     await setLocked(true);
-    state.buffer = new TextBuffer(web?.markdown ?? selected!.text);
+    state.buffer = new TextBuffer(resourceMarkdown ?? selected!.text);
     state.buffer.placeCursor(sourceLine, sourceColumn);
     state.editorVisualOffset = 0;
     state.editorViewportManual = false;
@@ -1692,8 +1785,9 @@ export function createDetailController(
   ): Promise<void> => {
     const selected = state.context.selected;
     const description = detailResourceDescription(state);
+    const pdf = description?.pdf;
     const web = description?.web;
-    if (!web && (!selected || selected.effectiveDeletedRootId)) {
+    if (!pdf && !web && (!selected || selected.effectiveDeletedRootId)) {
       state.status = selected
         ? "Block is in Trash; restore before adding annotations"
         : "This resource has no cached Markdown to annotate";
@@ -1707,12 +1801,14 @@ export function createDetailController(
         state.status = "Select a non-empty source range before commenting";
         return;
       }
-      if (web && description) {
+      if ((pdf || web) && description) {
         const representation = resourceAnnotationRepresentation(description);
-        if (!representation) throw new Error("Cached web representation is unavailable");
+        if (!representation) throw new Error("Cached resource representation is unavailable");
         target = {
           representation,
-          anchor: createTextQuoteAnchor(web.markdown, offsets.start, offsets.end),
+          anchor: pdf
+            ? pdfAnnotationAnchor(description, offsets.start, offsets.end)
+            : createTextQuoteAnchor(web!.markdown, offsets.start, offsets.end),
         };
       } else {
         const source = selected!;
@@ -2053,14 +2149,27 @@ export function createDetailController(
         break;
       case "resource.refresh": {
         const description = detailResourceDescription(state);
-        if (!description || description.resource.provider !== "web") {
-          state.status = "Current target is not a web resource";
+        if (
+          !description ||
+          (
+            description.resource.provider !== "web" &&
+            !(description.resource.provider === "filesystem" &&
+              description.resource.mediaType === "application/pdf")
+          )
+        ) {
+          state.status = "Current target does not support refresh";
           break;
         }
         state.busy = true;
         try {
           const refreshed = await effects.refreshResource(description.resource.id);
           await loadCurrentTarget(true);
+          if (refreshed.pdf) {
+            state.status = refreshed.pdfError
+              ? `PDF refresh failed · showing selected immutable content · ${refreshed.pdfError}`
+              : "PDF resource refreshed";
+            break;
+          }
           const freshness = refreshed.webStatus?.freshness ?? "unknown";
           switch (freshness) {
             case "fresh":
@@ -2667,13 +2776,14 @@ export function createDetailController(
         if (
           annotation.currentResolution.status !== "resolved" ||
           !target ||
-          target.anchor.kind !== "text-quote"
+          (target.anchor.kind !== "text-quote" &&
+            target.anchor.kind !== "pdf-page-region")
         ) {
           state.status = `Annotation resolution is ${annotation.currentResolution.status}; no positioned text quote can be revealed`;
           break;
         }
         const anchor = target.anchor;
-        if (anchor.start === null || anchor.end === null) {
+        if (anchor.start === null || anchor.end === null || anchor.exact === null) {
           state.status = `Annotation resolution is ${annotation.currentResolution.status}; no positioned text quote can be revealed`;
           break;
         }
@@ -2713,8 +2823,11 @@ export function createDetailController(
           ensureFileCursorVisible(viewport);
         } else {
           const description = detailResourceDescription(state);
-          const resourceText = description?.web?.markdown ?? description?.filesystem?.text;
-          if (!resourceText || resourceText.slice(anchor.start, anchor.end) !== anchor.exact) {
+          const resourceText = description?.pdf?.markdown ??
+            description?.web?.markdown ??
+            description?.filesystem?.text;
+          if (!resourceText || anchor.start === null || anchor.end === null ||
+            resourceText.slice(anchor.start, anchor.end) !== anchor.exact) {
             state.status = "Resolved text quote is unavailable in the loaded Resource";
             break;
           }

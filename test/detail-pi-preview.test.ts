@@ -2464,6 +2464,135 @@ test("highlights keyboard selection in cached web Markdown", () => {
   expect(selectedLine).toContain("\x1b[1;4;97;48;5;24m");
 });
 
+test("maps keyboard selection through cached PDF Markdown", () => {
+  const markdown = "## Page 1\n\nChoose the **PDF phrase** from this page.";
+  const detail = webState(markdown);
+  if (detail.document.kind !== "ready" || detail.document.document.kind !== "resource") {
+    throw new Error("Expected a loaded Resource fixture");
+  }
+  const loaded = detail.document.document;
+  const web = loaded.description.web;
+  if (!web) throw new Error("Expected a retained fixture representation");
+  const sourceSnapshot = {
+    id: web.sourceSnapshot.id,
+    resourceId: loaded.description.resource.id,
+    addressVersion: loaded.description.resource.addressVersion,
+    locator: loaded.description.resource.address.kind === "web"
+      ? loaded.description.resource.address.url
+      : "fixture.pdf",
+    contentHash: web.sourceSnapshot.contentHash ?? "a".repeat(64),
+    revision: web.sourceSnapshot.revision,
+    capturedAt: web.sourceSnapshot.fetchedAt ?? "2026-09-17T12:00:00.000Z",
+    bytesAvailable: true,
+    evictedAt: null,
+  };
+  const representation = {
+    ...web.representation,
+    mediaType: "text/markdown" as const,
+    derivedAt: web.representation.derivedAt ?? "2026-09-17T12:00:01.000Z",
+  };
+  const nativeRepresentation = {
+    ...representation,
+    id: "40000000-0000-4000-8000-000000000002",
+    mediaType: "application/pdf" as const,
+    adapter: { id: "builtin.pdf-native", version: 1 },
+    contentHash: sourceSnapshot.contentHash,
+  };
+  detail.document = {
+    kind: "ready",
+    document: {
+      ...loaded,
+      description: {
+        ...loaded.description,
+        resource: { ...loaded.description.resource, mediaType: "application/pdf" },
+        pdf: {
+          markdown,
+          pages: [{
+            page: 1,
+            width: 300,
+            height: 400,
+            start: 0,
+            end: markdown.length,
+            spans: [{
+              start: markdown.indexOf("PDF phrase"),
+              end: markdown.indexOf("PDF phrase") + "PDF phrase".length,
+              region: { x: 36, y: 40, width: 80, height: 16 },
+            }],
+          }],
+          sourceSnapshot,
+          representation,
+          nativeRepresentation,
+        },
+        pdfHistory: {
+          sourceSnapshots: [sourceSnapshot],
+          representations: [representation, nativeRepresentation],
+        },
+        web: null,
+        webHistory: null,
+      },
+    },
+  };
+  detail.resolvedSelectedText = [
+    markdown,
+    "",
+    "---",
+    "",
+    "## PDF resource",
+    "",
+    "PDF metadata",
+  ].join("\n");
+  detail.projectedSelectedText = detail.resolvedSelectedText;
+  const absoluteStart = markdown.indexOf("PDF phrase");
+  const pdfTarget: AnnotationTarget = {
+    representation: {
+      id: representation.id,
+      subject: { kind: "resource", resourceId: loaded.description.resource.id },
+      sourceSnapshot: {
+        kind: "resource",
+        resourceId: loaded.description.resource.id,
+        sourceSnapshotId: sourceSnapshot.id,
+        revision: sourceSnapshot.revision,
+      },
+      adapter: representation.adapter,
+      mediaType: representation.mediaType,
+      contentHash: representation.contentHash,
+      capturedAt: representation.derivedAt,
+    },
+    anchor: {
+      kind: "pdf-page-region",
+      page: 1,
+      regions: [{ x: 36, y: 40, width: 80, height: 16 }],
+      start: absoluteStart,
+      end: absoluteStart + "PDF phrase".length,
+      exact: "PDF phrase",
+      prefix: markdown.slice(Math.max(0, absoluteStart - 64), absoluteStart),
+      suffix: markdown.slice(absoluteStart + "PDF phrase".length),
+    },
+  };
+  detail.annotationThreads = [
+    annotationThread("annotation-pdf", pdfTarget, "PDF comment"),
+  ];
+  const sourceLine = markdown.split("\n")[2]!;
+  const selectionStart = sourceLine.indexOf("PDF phrase");
+  detail.mode = "select";
+  detail.buffer = new TextBuffer(markdown);
+  detail.buffer.placeCursor(2, selectionStart);
+  detail.buffer.placeCursor(2, selectionStart + "PDF phrase".length, true);
+
+  const layout = previewLayout(detail);
+  layout.setActive(true);
+  layout.syncState(60);
+  const selectedLine = layout.render(60).find((line) =>
+    stripTerminalSequences(line).includes("PDF phrase")
+  )!;
+  expect(selectedLine).toContain("\x1b[1;4;97;48;5;24m");
+  expect(detail.previewRegions.regions.some(({ kind }) => kind === "annotation")).toBe(true);
+  const rendered = layout.scrollView.render(60).map(stripTerminalSequences);
+  const metadataRow = rendered.findIndex((line) => line.includes("PDF metadata"));
+  expect(metadataRow).toBeGreaterThanOrEqual(0);
+  expect(layout.sourcePointAtViewport(metadataRow + 3, 0, 60)).toBeNull();
+});
+
 test("decorates the exact active attention phrase in Pi preview", () => {
   const detail = state(
     "target phrase then target phrase omega",

@@ -13,6 +13,7 @@ import { HerdrRuntimeRegistry, type HerdrSessionSnapshot } from "../src/herdr-re
 import { OutlinerServer } from "../src/server";
 import { OutlinerStore } from "../src/store";
 import { orchestrateWorkflowRun } from "../src/workflow-orchestrator";
+import { createPdfFixture } from "./pdf-fixture";
 import { OUTLINER_PROTOCOL_VERSION } from "../src/types";
 import type {
   AnnotationBatchReceipt,
@@ -304,6 +305,82 @@ test("persists resources and dispatches resource targets without synthetic block
     (await client.request<OutlinerClientRegistration[]>({ action: "clients.list" }))
       .find(({ clientId }) => clientId === "resource-detail")?.currentTarget,
   ).toEqual(unavailableBlockTarget);
+});
+
+test("delivers native PDF bytes only to a native-capable Detail", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-outliner-pdf-protocol-"));
+  const databasePath = join(directory, "outliner.sqlite");
+  const pdfPath = join(directory, "native.pdf");
+  const bytes = createPdfFixture([{
+    width: 300,
+    height: 400,
+    lines: [{ text: "Native protocol payload", x: 36, y: 350 }],
+  }]);
+  writeFileSync(pdfPath, bytes);
+  const store = new OutlinerStore(databasePath, { workspaceRoot: directory });
+  const socket = join(directory, "outliner.sock");
+  const server = new OutlinerServer(store, socket);
+  await server.start();
+  const connected = Promise.withResolvers<void>();
+  const watcher = new OutlinerClient(socket).watch({
+    client: {
+      clientId: "pdf-native-detail",
+      role: "detail",
+      contextId: "pdf-native",
+      resourcePresentation: {
+        surface: "native",
+        placement: "window",
+        host: {
+          id: "protocol-native-pdf",
+          renderers: ["native-document", "metadata"],
+          placements: ["window"],
+          capabilities: ["read", "refresh"],
+        },
+        providerAccess: { credentials: "available", connectivity: "available" },
+      },
+    },
+    onConnect: connected.resolve,
+    onEvent() {},
+  });
+  cleanups.push(async () => {
+    watcher.stop();
+    await server.close();
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  await connected.promise;
+  const client = new OutlinerClient(socket);
+  const source = await client.request<ResourceSource>({
+    action: "resource-sources.create",
+    input: {
+      name: "Native PDF protocol",
+      provider: "filesystem",
+      boundary: { root: directory },
+    },
+  });
+  const resource = (await client.request<InternResourceReceipt>({
+    action: "resources.intern",
+    input: {
+      sourceId: source.id,
+      address: { kind: "filesystem", path: "native.pdf" },
+      mediaType: "application/pdf",
+    },
+  })).resource;
+  const description = await client.request<ResourceDescription>({
+    action: "resources.refresh",
+    resourceId: resource.id,
+    destinationClientId: "pdf-native-detail",
+  });
+  expect(description.presentation?.selected).toMatchObject({
+    representation: "native-document",
+    renderer: "native-document",
+  });
+  expect(description.nativePayload).toMatchObject({
+    representationId: description.pdf?.nativeRepresentation.id,
+    mediaType: "application/pdf",
+    encoding: "base64",
+  });
+  expect(Buffer.from(description.nativePayload!.data, "base64")).toEqual(Buffer.from(bytes));
 });
 
 test("serves local web snapshots, explicit refresh, and unified annotation resolution", async () => {
@@ -1305,7 +1382,7 @@ test("serves mutations and property queries over the local socket", async () => 
   const client = new OutlinerClient(socket);
   const service = await client.request<OutlinerServiceStatus>({ action: "ping" });
   expect(service).toEqual({ status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION });
-  expect(service.protocolVersion).toBe(45);
+  expect(service.protocolVersion).toBe(46);
   const provenance = {
     actorId: "omp",
     sessionId: "session-1",

@@ -223,6 +223,15 @@ function previewSelectionSource(
     };
   }
   const description = detailResourceDescription(state);
+  const pdf = description?.pdf;
+  if (description && pdf) {
+    return {
+      text: pdf.markdown,
+      sourceId: description.resource.id,
+      sourceVersion: pdf.representation.id,
+      sourceHash: pdf.representation.contentHash,
+    };
+  }
   const web = description?.web;
   if (!description || !web) return null;
   return {
@@ -268,9 +277,14 @@ function annotationSelectionMark(state: Readonly<DetailState>): AttentionMark | 
     sourceHash: string;
   };
   if (
-    target?.anchor.kind === "text-quote" &&
+    target &&
+    (target.anchor.kind === "text-quote" ||
+      target.anchor.kind === "pdf-page-region") &&
     target.anchor.start !== null &&
-    target.anchor.end !== null
+    target.anchor.end !== null &&
+    target.anchor.exact !== null &&
+    target.anchor.prefix !== null &&
+    target.anchor.suffix !== null
   ) {
     anchor = {
       start: target.anchor.start,
@@ -903,6 +917,7 @@ class DetailAnnotationPreview implements Component {
 function displayedResourceRepresentationId(state: Readonly<DetailState>): string | null {
   const description = detailResourceDescription(state);
   if (!description) return null;
+  if (description.pdf) return description.pdf.representation.id;
   if (description.web) return description.web.representation.id;
   const filesystem = description.filesystem;
   if (!filesystem || filesystem.revision.revision.kind !== "filesystem") return null;
@@ -940,10 +955,14 @@ function detailAnnotationGroups(
     } else if (thread.currentResolution.status !== "resolved") {
       target = null;
     }
-    if (!target || target.anchor.kind !== "text-quote") continue;
+    if (
+      !target ||
+      (target.anchor.kind !== "text-quote" &&
+        target.anchor.kind !== "pdf-page-region")
+    ) continue;
     const subject = target.representation.subject;
     const anchor = target.anchor;
-    if (anchor.start === null || anchor.end === null) continue;
+    if (anchor.start === null || anchor.end === null || anchor.exact === null) continue;
     if (
       state.target?.kind === "resource" &&
       subject.kind === "resource" &&
@@ -1307,13 +1326,14 @@ export class DetailPiPreviewLayout extends VStack {
     return anchors ? nearestDraftSourceLine(anchors, this.scrollView.scrollTop) : null;
   }
 
-  private webMarkdownEndRow(annotated: AnnotationPreviewArrangement): number | null {
+  private resourceMarkdownEndRow(annotated: AnnotationPreviewArrangement): number | null {
     if (this.state.context.selected) return null;
-    const web = detailResourceDescription(this.state)?.web;
-    if (!web) return null;
+    const description = detailResourceDescription(this.state);
+    const markdown = description?.pdf?.markdown ?? description?.web?.markdown;
+    if (markdown === undefined) return null;
     return this.markdown.sourceLineRow(
       annotated.contentWidth,
-      web.markdown.split(/\r?\n/).length,
+      markdown.split(/\r?\n/).length,
       annotated.markdownLines.length,
     );
   }
@@ -1323,10 +1343,10 @@ export class DetailPiPreviewLayout extends VStack {
     if (!sourceText) return null;
     const contentWidth = this.scrollView.getContentWidth(width);
     const annotated = this.annotationPreview.renderArrangement(contentWidth);
-    const webEndRow = this.webMarkdownEndRow(annotated);
+    const resourceEndRow = this.resourceMarkdownEndRow(annotated);
     if (
-      webEndRow !== null &&
-      this.scrollView.scrollTop >= annotated.mapMarkdownRow(webEndRow)
+      resourceEndRow !== null &&
+      this.scrollView.scrollTop >= annotated.mapMarkdownRow(resourceEndRow)
     ) return null;
     const anchors = draftSourceRowAnchors(
       sourceText,
@@ -1369,8 +1389,8 @@ export class DetailPiPreviewLayout extends VStack {
     if (annotatedRow === null) return null;
     const markdownRow = annotated.markdownRowAt(annotatedRow);
     if (markdownRow === null) return null;
-    const webEndRow = this.webMarkdownEndRow(annotated);
-    if (webEndRow !== null && markdownRow >= webEndRow) return null;
+    const resourceEndRow = this.resourceMarkdownEndRow(annotated);
+    if (resourceEndRow !== null && markdownRow >= resourceEndRow) return null;
     const sourceLine = nearestDraftSourceLine(markdownAnchors, markdownRow);
     if (sourceLine === null) return null;
     const markdownAnchor = markdownAnchors[sourceLine];

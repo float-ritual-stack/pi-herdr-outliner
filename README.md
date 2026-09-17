@@ -25,9 +25,9 @@ The project started as a small Friday-night experiment and grew into a durable w
 
 - SQLite-backed hierarchical blocks with stable UUIDs, sibling order, authors, timestamps, and one canonical graph per workspace root.
 - Workspace-isolated service and runtime paths.
-- JSON-lines RPC protocol v45 over a Unix socket.
+- JSON-lines RPC protocol v46 over a Unix socket.
 - Reactive canonical content/view broadcasts, per-process Tree/Detail registration with Detail lock availability, exact-client UI commands, and source-aware `preview | open | reveal` navigation.
-- Durable resources have UUID identities independent of blocks and mutable locators. Provider-qualified Sources bind filesystem roots or remote namespaces; overlapping Sources remain distinct, relocations preserve Resource IDs, provider revisions remain explicit, and capability resolution reports blockers across provider, credentials, workspace policy, host, and connectivity. Registered Detail hosts declare Surface, Placement, renderer, capability, credential, and connectivity facts; open/describe/refresh deterministically negotiate cached Markdown, embedded-browser, native-document, metadata, or external-link representations without changing Resource identity. PDF remains a media type and web extractors remain versioned replaceable adapters. Web Resources open from local storage only. Explicit refresh reconciles the provider into immutable source snapshots and named Markdown representations and reports `fresh`, `stale`, `unknown`, `refreshing`, or `failed` separately from selected immutable content. Dependency-aware retention keeps current, newest, referenced, pinned, published, reviewed, and live-Detail evidence; byte eviction preserves explicit metadata tombstones, while a separate purge pass removes only unreachable tombstones.
+- Durable resources have UUID identities independent of blocks and mutable locators. Provider-qualified Sources bind filesystem roots or remote namespaces; overlapping Sources remain distinct, relocations preserve Resource IDs, provider revisions remain explicit, and capability resolution reports blockers across provider, credentials, workspace policy, host, and connectivity. Registered Detail hosts declare Surface, Placement, renderer, capability, credential, and connectivity facts; open/describe/refresh deterministically negotiate cached Markdown, embedded-browser, native-document, metadata, or external-link representations without changing Resource identity. PDF is a media type reachable through filesystem and web Sources: one captured binary snapshot can produce both native PDF and page-aware Markdown representations through versioned replaceable extractors.
 - Each Tree owns its cursor, occurrence selection, filter, viewport, collapsed rows, multiline expansion, explicit-navigation history, and browsing context; moving a Tree previews only in the first unlocked same-tab Detail and never replaces a locked anchor.
 - Indexed `[property::value]` metadata with optimistic property patching and catalog queries.
 - Exact block and fragment references using `((block-id))` and `((block-id^fragment-id))`, resolved to display titles in read mode while raw text remains editable.
@@ -79,6 +79,29 @@ Legacy evidence is preserved exactly: an unmatched legacy file remains a
 `legacy-file` subject with an orphaned migration event, and missing source bytes
 or provenance stay unknown rather than being fabricated. Refresh failure does
 not alter selected content or prior annotation resolution history.
+
+### PDF Resource representations
+
+Filesystem and HTTP PDF Resources retain the same Resource identity across
+native and extracted presentations. Each successful observation stores one
+immutable binary source snapshot. The built-in PDF.js adapter derives
+page-aware Markdown plus text spans with PDF-point rectangles. TUI hosts receive
+the extracted Markdown; when negotiation selects `native-document`, the service
+delivers the exact retained PDF bytes to that native-capable Detail as a
+representation-bound base64 payload. Extractor upgrades can derive a new text
+representation from retained bytes during local open without changing the
+source snapshot or fetching the provider again. A failed filesystem or HTTP
+refresh leaves any retained PDF presentation visible with explicit diagnostics.
+
+PDF annotation targets retain the source snapshot, derived representation,
+page, exact quote and context, UTF-16 offsets, and page regions. Reconciliation
+maps the deterministic quote ladder back through the current page spans, so
+refreshes and extractor changes append an auditable PDF-specific result while
+leaving the immutable original target unchanged. Retention protects PDF
+evidence named by annotation history, allows native or extracted
+representations to be pinned/referenced independently, propagates that
+protection to source bytes, and records the same explicit
+available/evicted/purged lifecycle for every PDF artifact.
 
 ## Quick start
 
@@ -540,7 +563,7 @@ compact composer over the existing reader; `Ctrl+S` creates the comment and
 `Esc` cancels without creating anything. Herdr copy mode owns multi-viewport
 selection and continuous edge autoscroll before this handoff.
 
-Every capture constructs one typed `AnnotationTarget`: a representation with block, Resource, rendered, or unknown source-snapshot evidence plus one of the supported typed anchors. Canonical block selections and filesystem Resource selections use positioned text quotes. Cached web selections retain the exact source snapshot, derived representation, adapter, hash, and quote. Rendered selections retain the validated host/pane/revision observation as representation evidence instead of inventing canonical source coordinates.
+Every capture constructs one typed `AnnotationTarget`: a representation with block, Resource, rendered, or unknown source-snapshot evidence plus one of the supported typed anchors. Canonical block selections and filesystem text Resource selections use positioned text quotes. Cached web selections retain the exact source snapshot, derived representation, adapter, hash, and quote. PDF selections additionally retain the page, UTF-16 range, quote context, and PDF-point regions from the extracted page map. Rendered selections retain the validated host/pane/revision observation as representation evidence instead of inventing canonical source coordinates.
 
 `v` remains a separate, explicit source-comment operation. It freezes the current read projection, maps Shift-motion or primary-button drag to UTF-16 text, and opens the same composer with `c`. File selection first interns the path as a filesystem Resource; file paths are locators, not annotation identity. Annotation view `r` reveals only a currently resolved positioned text quote. Probable, unresolved, ambiguous, orphaned, unsupported, and rejected records remain valid, visible history rather than being coerced into a location.
 
@@ -809,7 +832,7 @@ The project Pi extension is auto-discovered through [`.pi/extensions/outliner.ts
 
 `outliner_query` accepts structured filters such as `{ key: "status", value: "in progress" }`, plus optional text and subtree fields. The service normalizes keys/values and applies the same bounded semantics used by human surfaces. `outliner_focus` targets an explicit or unique live Tree client and returns compact structural context.
 
-Annotation tools use the same ordinary comment and reply blocks as Detail and the same relational target sidecar. `outliner_annotations` queries a block or Resource subject. `outliner_annotate` accepts a representation plus one of `text-quote`, `dom-range`, `pdf-page-region`, `structured-entity-field`, or `provider-comment-id`; it does not treat a file path as identity or use a web-specific creation path. Create and batch calls are idempotent, replies inherit the root target and history, and lifecycle changes can link promoted canonical blocks. The immutable original target is returned beside the current resolution and complete append-only history. PIE-250 automatically reconciles only unchanged positions and unique exact quotes; fuzzy, contextual, structural, semantic, and provider-specific resolution ladders belong to PIE-252.
+Annotation tools use the same ordinary comment and reply blocks as Detail and the same relational target sidecar. `outliner_annotations` queries a block or Resource subject. `outliner_annotate` accepts a representation plus one of `text-quote`, `dom-range`, `pdf-page-region`, `structured-entity-field`, or `provider-comment-id`; it does not treat a file path as identity or use a web-specific creation path. Create and batch calls are idempotent, replies inherit the root target and history, and lifecycle changes can link promoted canonical blocks. The immutable original target is returned beside the current resolution and complete append-only history. Text and PDF quote anchors use deterministic unchanged, exact, contextual, and bounded local-fuzzy reconciliation; PDF results are mapped back to current page regions. Probable, unresolved, ambiguous, orphaned, unsupported, and rejected records remain preserved history rather than being coerced into a location.
 
 `outliner_attention` requires an explicit live client ID. It can mark, advance,
 acknowledge, clear, or inspect short-lived block/file attention. Exact UTF-16

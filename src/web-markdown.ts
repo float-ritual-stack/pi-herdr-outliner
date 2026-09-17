@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { WebRepresentationAdapter } from "./resources";
+import type { ResourceRepresentationAdapter } from "./resources";
 
 export interface WebSnapshotInput {
   readonly html: string;
@@ -7,11 +7,11 @@ export interface WebSnapshotInput {
 }
 
 export interface WebMarkdownExtractor {
-  readonly adapter: WebRepresentationAdapter;
+  readonly adapter: ResourceRepresentationAdapter;
   extract(snapshot: WebSnapshotInput): string;
 }
 
-export const BASIC_WEB_MARKDOWN_ADAPTER: WebRepresentationAdapter = {
+export const BASIC_WEB_MARKDOWN_ADAPTER: ResourceRepresentationAdapter = {
   id: "builtin.basic-html-to-markdown",
   version: 1,
 };

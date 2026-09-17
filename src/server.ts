@@ -434,6 +434,20 @@ export class OutlinerServer {
       description,
       destination.resourcePresentation ?? TUI_RESOURCE_PRESENTATION_CONTEXT,
     );
+    if (
+      presentation.selected?.representation === "native-document" &&
+      description.pdf
+    ) {
+      return {
+        ...description,
+        capabilities: presentation.capabilities,
+        presentation,
+        nativePayload: this.store.resources.nativePdfPayload(
+          description.resource.id,
+          description.pdf.nativeRepresentation.id,
+        ),
+      };
+    }
     return {
       ...description,
       capabilities: presentation.capabilities,

@@ -24,6 +24,7 @@
     "@earendil-works/pi-tui": "^0.84.2",
     "callscript": "^0.1.0",
     "marked": "18.0.5",
+    "pdfjs-dist": "^6.3.289",
     "typebox": "^1.0.44"
   },
   "devDependencies": {
