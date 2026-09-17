@@ -303,18 +303,27 @@ export class AnnotationRepository {
     const rows = subject.kind === "block"
       ? this.database.query("SELECT * FROM annotation_targets WHERE block_id = ? ORDER BY created_at, annotation_block_id").all(subject.blockId)
       : this.database.query("SELECT * FROM annotation_targets WHERE resource_id = ? ORDER BY created_at, annotation_block_id").all(subject.resourceId);
-    const quarantined = new Set(
-      (this.database.query(
-        "SELECT annotation_block_id FROM annotation_migration_quarantine",
-      ).all() as Array<{ annotation_block_id: string }>)
-        .map((row) => row.annotation_block_id),
-    );
+    const rootIds = new Set((rows as AnnotationTargetRow[]).map((row) => row.annotation_block_id));
+    if (rootIds.size === 0) return [];
+    const replyIds = this.database.query(`
+      SELECT DISTINCT parent.block_id AS id
+      FROM block_properties parent
+      JOIN block_properties type ON type.block_id = parent.block_id
+      WHERE parent.scope = 'block' AND parent.key = 'parent-annotation'
+        AND parent.value IN (SELECT value FROM json_each(?))
+        AND type.scope = 'block' AND type.key = 'type'
+        AND type.value IN ('annotation', 'annotation-reply')
+        AND NOT EXISTS (
+          SELECT 1 FROM annotation_migration_quarantine quarantine
+          WHERE quarantine.annotation_block_id = parent.block_id
+        )
+    `).all(JSON.stringify([...rootIds])) as Array<{ id: string }>;
     const repliesByParent = new Map<string, AnnotationBlockContent[]>();
-    for (const candidate of this.blocks.listAnnotations()) {
-      if (quarantined.has(candidate.id)) continue;
-      if (candidate.effectiveDeletedRootId) continue;
+    for (const { id } of replyIds) {
+      const candidate = this.blocks.get(id);
+      if (!candidate || candidate.effectiveDeletedRootId) continue;
       const reply = parseAnnotationBlockContent(candidate);
-      if (!reply.parentAnnotationId) continue;
+      if (!reply.parentAnnotationId || !rootIds.has(reply.parentAnnotationId)) continue;
       const siblings = repliesByParent.get(reply.parentAnnotationId) ?? [];
       siblings.push(reply);
       repliesByParent.set(reply.parentAnnotationId, siblings);

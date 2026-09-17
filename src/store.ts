@@ -1295,7 +1295,26 @@ export class OutlinerStore {
     const expected = workId ?? block.id.slice(0, 8);
     if (confirmation !== expected) throw new Error(`Permanent purge requires confirmation: ${expected}`);
     this.database.transaction(() => {
-      const subtree = this.subtreeIdsFromCurrentRead(id);
+      const subtree = (this.database.query(`
+        WITH RECURSIVE doomed(id) AS (
+          SELECT id FROM blocks WHERE id = ?
+          UNION
+          SELECT child.id FROM blocks child JOIN doomed ON child.parent_id = doomed.id
+          UNION
+          SELECT target.annotation_block_id
+          FROM annotation_targets target JOIN doomed ON target.block_id = doomed.id
+          UNION
+          SELECT parent.block_id
+          FROM block_properties parent JOIN doomed ON parent.value = doomed.id
+          WHERE parent.scope = 'block' AND parent.key = 'parent-annotation'
+            AND EXISTS (
+              SELECT 1 FROM block_properties type
+              WHERE type.block_id = parent.block_id AND type.scope = 'block'
+                AND type.key = 'type' AND type.value IN ('annotation', 'annotation-reply')
+            )
+        )
+        SELECT id FROM doomed
+      `).all(id) as Array<{ id: string }>).map((row) => row.id);
       const placeholders = subtree.map(() => "?").join(", ");
       const reserved = this.database.query(
         `SELECT block_id, value FROM block_properties WHERE scope = 'block' AND key = 'work-id' AND block_id IN (${placeholders})`,
@@ -1308,7 +1327,11 @@ export class OutlinerStore {
         }
         this.reservePurgedWorkIdFromCurrentRead(row.block_id, parsed);
       }
-      this.database.query("DELETE FROM blocks WHERE id = ?").run(id);
+      // Remove owned targets first so subject RESTRICT references cannot block the purge.
+      this.database.query(
+        `DELETE FROM annotation_targets WHERE annotation_block_id IN (${placeholders})`,
+      ).run(...subtree);
+      this.database.query(`DELETE FROM blocks WHERE id IN (${placeholders})`).run(...subtree);
       this.recomputeEffectiveDeletion();
       this.bumpSequence();
     })();

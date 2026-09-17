@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -2530,6 +2530,115 @@ Second paragraph`;
   });
 
 
+
+  test("loads only replies belonging to the requested annotation roots", () => {
+    const store = makeStore();
+    const source = store.create("alpha beta");
+    const unrelated = store.create("other source");
+    const root = store.createAnnotation("scoped-root", {
+      target: blockAnnotationTarget(source, 0, 5, "scoped-source"),
+      body: "Root.",
+      source: "user",
+    }).annotations[0]!;
+    const otherRoot = store.createAnnotation("other-root", {
+      target: blockAnnotationTarget(unrelated, 0, 5, "other-source"),
+      body: "Unrelated root.",
+      source: "user",
+    }).annotations[0]!;
+    const reply = store.replyToAnnotation("scoped-reply", {
+      annotationId: root.block.id, body: "Reply.", source: "user",
+    }).annotations[0]!;
+    const deletedReply = store.replyToAnnotation("deleted-reply", {
+      annotationId: root.block.id, body: "Deleted.", source: "user",
+    }).annotations[0]!;
+    const otherReply = store.replyToAnnotation("other-reply", {
+      annotationId: otherRoot.block.id, body: "Unrelated reply.", source: "user",
+    }).annotations[0]!;
+    const quarantined = store.create([
+      "Malformed reply",
+      `[type::annotation-reply] [parent-annotation::${root.block.id}] [annotation-status::invalid]`,
+      "Retained evidence.",
+    ].join("\n"), root.block.id);
+    store.database.query(`
+      INSERT INTO annotation_migration_quarantine (annotation_block_id, raw_text, reason, created_at)
+      VALUES (?, ?, 'invalid lifecycle', ?)
+    `).run(quarantined.id, quarantined.text, quarantined.createdAt);
+    store.delete(deletedReply.block.id);
+    store.move(reply.block.id, null);
+    store.create("Ordinary child", root.block.id);
+    const get = spyOn(store, "get");
+    try {
+      const threads = store.listAnnotationThreads({
+        subject: { kind: "block", blockId: source.id },
+      });
+      expect(threads.map((thread) => thread.block.id)).toEqual([root.block.id]);
+      expect(threads[0]!.replies.map((entry) => entry.block.id)).toEqual([reply.block.id]);
+      expect(get).not.toHaveBeenCalledWith(otherRoot.block.id);
+      expect(get).not.toHaveBeenCalledWith(otherReply.block.id);
+      expect(get).not.toHaveBeenCalledWith(quarantined.id);
+      expect(store.listAnnotationThreads({
+        subject: { kind: "resource", resourceId: "no-annotations" },
+      })).toEqual([]);
+    } finally {
+      get.mockRestore();
+    }
+  });
+
+  test("purges subject annotations and moved replies with their dependent data", () => {
+    const store = makeStore();
+    const source = store.create("alpha beta");
+    const child = store.create("child text", source.id);
+    const unrelated = store.create("other source");
+    const annotate = (block: Block, requestId: string) => store.createAnnotation(requestId, {
+      target: blockAnnotationTarget(block, 0, 5, requestId),
+      body: "Comment.",
+      source: "user",
+    }).annotations[0]!.block;
+    const root = annotate(source, "purge-root");
+    const childRoot = annotate(child, "purge-child-root");
+    const otherRoot = annotate(unrelated, "retained-root");
+    const reply = store.replyToAnnotation("purge-reply", {
+      annotationId: root.id, body: "Moved reply.", source: "user",
+    }).annotations[0]!.block;
+    const otherReply = store.replyToAnnotation("retained-reply", {
+      annotationId: otherRoot.id, body: "Retained reply.", source: "user",
+    }).annotations[0]!.block;
+    const replyChild = store.create("Reply child", reply.id);
+    const replyAnnotation = annotate(reply, "purge-reply-annotation");
+    store.move(root.id, null);
+    store.move(reply.id, null);
+    store.move(replyAnnotation.id, null);
+    store.delete(source.id);
+    const sequence = store.sequence;
+    const doomed = [source, child, root, childRoot, reply, replyChild, replyAnnotation];
+    store.database.exec(`
+      CREATE TRIGGER prevent_subject_purge BEFORE DELETE ON blocks
+      WHEN OLD.id = '${source.id}'
+      BEGIN SELECT RAISE(ABORT, 'purge blocked'); END;
+    `);
+    expect(() => store.purge(source.id, source.id.slice(0, 8))).toThrow("purge blocked");
+    for (const block of doomed) expect(store.get(block.id)).not.toBeNull();
+    expect(store.database.query("SELECT COUNT(*) AS count FROM annotation_targets").get()).toEqual({ count: 4 });
+    expect(store.database.query("SELECT COUNT(*) AS count FROM annotation_resolution_events").get()).toEqual({ count: 4 });
+    expect(store.sequence).toBe(sequence);
+    store.database.exec("DROP TRIGGER prevent_subject_purge");
+
+    store.purge(source.id, source.id.slice(0, 8));
+
+    for (const block of doomed) expect(store.get(block.id)).toBeNull();
+    expect(store.require(unrelated.id)).toEqual(unrelated);
+    expect(store.listAnnotationThreads({
+      subject: { kind: "block", blockId: unrelated.id },
+    })[0]!.replies.map((entry) => entry.block.id)).toEqual([otherReply.id]);
+    expect(store.database.query("SELECT annotation_block_id FROM annotation_targets").all()).toEqual([
+      { annotation_block_id: otherRoot.id },
+    ]);
+    expect(store.database.query("SELECT annotation_block_id FROM annotation_resolution_events").all()).toEqual([
+      { annotation_block_id: otherRoot.id },
+    ]);
+    expect(store.database.query("PRAGMA foreign_key_check").all()).toEqual([]);
+    expect(store.sequence).toBe(sequence + 1);
+  });
 
   test("keeps annotation originals immutable while resolutions advance", () => {
     const store = makeStore();
