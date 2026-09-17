@@ -354,7 +354,7 @@ export function renderDetailLines(
         : "Loading block…",
     );
   } else if (state.document.kind === "failed") {
-    output.push(state.document.message);
+    output.push(fitDynamicText(state.document.message, width));
   } else if (state.document.kind === "empty") {
     output.push("Select a block or resource in the outliner pane.");
   } else if (state.mode === "edit" || state.mode === "select" || state.mode === "comment") {

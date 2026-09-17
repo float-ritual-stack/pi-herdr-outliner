@@ -108,6 +108,7 @@ test("persists resources and dispatches resource targets without synthetic block
   const treeConnected = Promise.withResolvers<void>();
   const detailConnected = Promise.withResolvers<void>();
   const resourceOpened = Promise.withResolvers<OutlinerEvent>();
+  let reconnectWatcher: ReturnType<OutlinerClient["watch"]> | null = null;
   const treeWatcher = new OutlinerClient(socket).watch({
     client: { clientId: "resource-tree", role: "tree", contextId: "resource-context" },
     onConnect: treeConnected.resolve,
@@ -129,6 +130,7 @@ test("persists resources and dispatches resource targets without synthetic block
   cleanups.push(async () => {
     treeWatcher.stop();
     detailWatcher.stop();
+    await reconnectWatcher?.stop();
     await server.close();
     store.close();
     rmSync(directory, { recursive: true, force: true });
@@ -209,6 +211,78 @@ test("persists resources and dispatches resource targets without synthetic block
     (await client.request<OutlinerClientRegistration[]>({ action: "clients.list" }))
       .find(({ clientId }) => clientId === "resource-detail")?.currentTarget,
   ).toEqual({ kind: "resource", resourceId: resource.id });
+
+  const pinnedTarget = {
+    kind: "resource" as const,
+    resourceId: resource.id,
+    revision: {
+      resourceId: resource.id,
+      addressVersion: resource.addressVersion,
+      revision: { kind: "filesystem" as const, mtimeNs: "1", size: "0" },
+    },
+  };
+  await client.request({
+    action: "clients.update",
+    clientId: "resource-detail",
+    currentTarget: pinnedTarget,
+  });
+  await client.request<Resource>({
+    action: "resources.relocate",
+    input: {
+      resourceId: resource.id,
+      expectedVersion: resource.version,
+      destinationSourceId: source.id,
+      address: { kind: "filesystem", path: "daily/relocated.md" },
+    },
+  });
+  await expect(client.request({
+    action: "navigation.dispatch",
+    sourceClientId: "resource-tree",
+    target: pinnedTarget,
+    intent: "open",
+  })).rejects.toThrow("Resource revision reference does not match the current resource address");
+  await client.request({
+    action: "clients.update",
+    clientId: "resource-detail",
+    currentTarget: pinnedTarget,
+  });
+  expect(
+    (await client.request<OutlinerClientRegistration[]>({ action: "clients.list" }))
+      .find(({ clientId }) => clientId === "resource-detail")?.currentTarget,
+  ).toEqual(pinnedTarget);
+
+  const reconnected = Promise.withResolvers<void>();
+  reconnectWatcher = client.watch({
+    client: {
+      clientId: "resource-detail-reconnected",
+      role: "detail",
+      contextId: "resource-context",
+      currentTarget: pinnedTarget,
+    },
+    onConnect: reconnected.resolve,
+    onEvent() {},
+    onError: reconnected.reject,
+  });
+  await reconnected.promise;
+  expect(
+    (await client.request<OutlinerClientRegistration[]>({ action: "clients.list" }))
+      .find(({ clientId }) => clientId === "resource-detail-reconnected")?.currentTarget,
+  ).toEqual(pinnedTarget);
+
+  const unavailableBlockTarget = {
+    kind: "block" as const,
+    blockId: "purged-block",
+    fragmentId: "former-anchor",
+  };
+  await client.request({
+    action: "clients.update",
+    clientId: "resource-detail",
+    currentTarget: unavailableBlockTarget,
+  });
+  expect(
+    (await client.request<OutlinerClientRegistration[]>({ action: "clients.list" }))
+      .find(({ clientId }) => clientId === "resource-detail")?.currentTarget,
+  ).toEqual(unavailableBlockTarget);
 });
 
 
