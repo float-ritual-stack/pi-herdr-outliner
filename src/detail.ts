@@ -11,7 +11,10 @@ import { projectDetailRead } from "./detail-embeds";
 import { createDetailKeyHandler, detailActionScopes } from "./detail-keymap";
 import { renderDetailAnsi } from "./detail-renderer";
 import { completeReferencedPaths, readReferencedFile } from "./files";
-import { editTextInExternalEditor } from "./external-editor";
+import {
+  editTextInExternalEditor,
+  resolveExternalEditorConfiguration,
+} from "./external-editor";
 import { resolveOutlinerLinkTarget } from "./outliner-links";
 import {
   dispatchNavigation,
@@ -215,8 +218,10 @@ const effects: DetailEffects = {
     process.stdout.write(osc52ClipboardWrite(text));
   },
   editExternalDraft(input) {
+    const configuration = resolveExternalEditorConfiguration();
     return editTextInExternalEditor(input, {
-      editor: process.env.VISUAL?.trim() || process.env.EDITOR,
+      editor: configuration.editor,
+      environment: configuration.environment,
       cwd: paths.workspaceRoot,
       suspendTerminal() {
         externalEditorActive = true;

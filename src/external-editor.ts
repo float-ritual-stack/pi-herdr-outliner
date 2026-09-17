@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -42,6 +43,78 @@ export interface ExternalEditorResult {
   readonly changed: boolean;
   readonly recoveryPath: string;
   cleanup(): void;
+}
+
+export interface ExternalEditorConfiguration {
+  readonly editor?: string;
+  readonly environment: NodeJS.ProcessEnv;
+}
+
+interface InteractiveShellEditorConfiguration {
+  readonly visual?: string;
+  readonly editor?: string;
+  readonly path?: string;
+}
+
+const SHELL_EDITOR_MARKER = "__PI_OUTLINER_EDITOR_ENV__";
+
+function interactiveShellEditorConfiguration(
+  shell: string,
+  environment: NodeJS.ProcessEnv,
+): InteractiveShellEditorConfiguration | null {
+  const output = execFileSync(
+    shell,
+    [
+      "-ic",
+      `printf '\\n${SHELL_EDITOR_MARKER}\\000%s\\000%s\\000%s\\000' "$VISUAL" "$EDITOR" "$PATH"`,
+    ],
+    {
+      encoding: "utf8",
+      env: environment,
+      maxBuffer: 64 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 3_000,
+    },
+  );
+  const marker = `\n${SHELL_EDITOR_MARKER}\0`;
+  const markerIndex = output.lastIndexOf(marker);
+  if (markerIndex < 0) return null;
+  const [visual = "", editor = "", path = ""] = output
+    .slice(markerIndex + marker.length)
+    .split("\0");
+  return {
+    ...(visual.trim() ? { visual: visual.trim() } : {}),
+    ...(editor.trim() ? { editor: editor.trim() } : {}),
+    ...(path.trim() ? { path: path.trim() } : {}),
+  };
+}
+
+export function resolveExternalEditorConfiguration(
+  environment: NodeJS.ProcessEnv = process.env,
+): ExternalEditorConfiguration {
+  const configured = environment.VISUAL?.trim() || environment.EDITOR?.trim();
+  if (configured) return { editor: configured, environment };
+
+  const shell = environment.SHELL?.trim();
+  if (!shell) return { environment };
+  let shellConfiguration: InteractiveShellEditorConfiguration | null = null;
+  try {
+    shellConfiguration = interactiveShellEditorConfiguration(shell, environment);
+  } catch {
+    return { environment };
+  }
+  if (!shellConfiguration) return { environment };
+  const editor = shellConfiguration.visual || shellConfiguration.editor;
+  if (!editor) return { environment };
+  return {
+    editor,
+    environment: {
+      ...environment,
+      ...(shellConfiguration.visual ? { VISUAL: shellConfiguration.visual } : {}),
+      ...(shellConfiguration.editor ? { EDITOR: shellConfiguration.editor } : {}),
+      ...(shellConfiguration.path ? { PATH: shellConfiguration.path } : {}),
+    },
+  };
 }
 
 export type ExternalEditorCommand = readonly [executable: string, ...arguments_: string[]];
