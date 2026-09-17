@@ -436,6 +436,7 @@ test("serves local web snapshots, explicit refresh, and unified annotation resol
     },
     fetchedAt: expect.any(String),
     bodyAvailable: true,
+    evictedAt: null,
   });
   expect(firstRepresentation).toEqual({
     id: expect.any(String),
@@ -445,6 +446,7 @@ test("serves local web snapshots, explicit refresh, and unified annotation resol
     contentHash: expect.any(String),
     derivedAt: expect.any(String),
     contentAvailable: true,
+    evictedAt: null,
   });
   expect(acquired.web).toEqual({
     markdown: "# Protocol\n\nQuoted evidence.\n\nExact evidence remains.\n\nIntro alpha target phrase omega Outro.\n\nTwin before Semantic candidate Twin after.\n\nThe system stores durable annotation evidence.",
@@ -1303,7 +1305,7 @@ test("serves mutations and property queries over the local socket", async () => 
   const client = new OutlinerClient(socket);
   const service = await client.request<OutlinerServiceStatus>({ action: "ping" });
   expect(service).toEqual({ status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION });
-  expect(service.protocolVersion).toBe(44);
+  expect(service.protocolVersion).toBe(45);
   const provenance = {
     actorId: "omp",
     sessionId: "session-1",

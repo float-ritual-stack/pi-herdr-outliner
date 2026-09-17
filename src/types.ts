@@ -5,6 +5,9 @@ import type {
   RelocateResourceInput,
   ResourceRevisionRef,
   ResourcePresentationContext,
+  ResourceRetentionPinInput,
+  ResourceRetentionPolicyInput,
+  ResourceRetentionReferenceInput,
 } from "./resources";
 
 export type {
@@ -28,6 +31,20 @@ export type {
   ResourceRenderer,
   ResourceRepresentationKind,
   ResourceSurface,
+  PurgedResourceArtifact,
+  ResourceRetentionArtifact,
+  ResourceRetentionArtifactKind,
+  ResourceRetentionArtifactRef,
+  ResourceRetentionCollectionReceipt,
+  ResourceRetentionPin,
+  ResourceRetentionPinInput,
+  ResourceRetentionPolicy,
+  ResourceRetentionPolicyInput,
+  ResourceRetentionReference,
+  ResourceRetentionReferenceInput,
+  ResourceRetentionReferenceOwner,
+  ResourceRetentionReport,
+  ResourceRetentionState,
   ResourceFreshness,
   ResourcePolicy,
   ResourceProvider,
@@ -1061,7 +1078,7 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 44;
+export const OUTLINER_PROTOCOL_VERSION = 45;
 
 
 export interface OutlinerServiceStatus {
@@ -1108,6 +1125,23 @@ export type OutlinerRequest =
       action: "resources.refresh";
       resourceId: string;
       destinationClientId: string;
+    }
+  | { id: string; action: "resources.retention.get" }
+  | { id: string; action: "resources.retention.configure"; input: ResourceRetentionPolicyInput }
+  | { id: string; action: "resources.retention.inspect"; resourceId?: string }
+  | { id: string; action: "resources.retention.pin"; input: ResourceRetentionPinInput }
+  | { id: string; action: "resources.retention.unpin"; pinId: string }
+  | {
+      id: string;
+      action: "resources.retention.reference";
+      input: ResourceRetentionReferenceInput;
+    }
+  | { id: string; action: "resources.retention.unreference"; referenceId: string }
+  | {
+      id: string;
+      action: "resources.collect";
+      mode: "evict" | "purge";
+      resourceId?: string;
     }
   | { id: string; action: "attention.get"; targetClientId: string }
   | { id: string; action: "attention.mark"; input: AttentionMarkInput }

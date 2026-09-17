@@ -245,6 +245,103 @@ export type ResourceFreshness =
   | "refreshing"
   | "failed";
 
+export type ResourceRetentionArtifactKind = "source-snapshot" | "representation";
+export type ResourceRetentionState =
+  | "current"
+  | "hot"
+  | "referenced"
+  | "pinned"
+  | "evictable"
+  | "evicted"
+  | "purged";
+
+export interface ResourceRetentionPolicy {
+  readonly retainNewestSourceSnapshots: number;
+  readonly retainNewestRepresentationsPerAdapter: number;
+  readonly minimumAgeMs: number;
+  readonly purgeGraceMs: number;
+  readonly updatedAt: string;
+}
+
+export interface ResourceRetentionPolicyInput {
+  readonly retainNewestSourceSnapshots: number;
+  readonly retainNewestRepresentationsPerAdapter: number;
+  readonly minimumAgeMs: number;
+  readonly purgeGraceMs: number;
+}
+
+export interface ResourceRetentionPinInput {
+  readonly artifact: ResourceRetentionArtifactRef;
+  readonly label?: string | null;
+}
+
+export interface ResourceRetentionReferenceInput {
+  readonly artifact: ResourceRetentionArtifactRef;
+  readonly owner: ResourceRetentionReferenceOwner;
+}
+
+export interface ResourceRetentionArtifactRef {
+  readonly kind: ResourceRetentionArtifactKind;
+  readonly id: string;
+}
+
+export interface ResourceRetentionArtifact {
+  readonly artifact: ResourceRetentionArtifactRef;
+  readonly resourceId: string;
+  readonly sourceSnapshotId: string | null;
+  readonly adapter: WebRepresentationAdapter | null;
+  readonly states: readonly Exclude<ResourceRetentionState, "purged">[];
+  readonly payloadAvailable: boolean;
+  readonly payloadBytes: number;
+  readonly capturedAt: string | null;
+  readonly evictedAt: string | null;
+}
+
+export interface ResourceRetentionPin {
+  readonly id: string;
+  readonly resourceId: string;
+  readonly artifact: ResourceRetentionArtifactRef;
+  readonly label: string | null;
+  readonly createdAt: string;
+}
+
+export interface ResourceRetentionReferenceOwner {
+  readonly kind: "review" | "publication";
+  readonly id: string;
+}
+
+export interface ResourceRetentionReference {
+  readonly id: string;
+  readonly resourceId: string;
+  readonly artifact: ResourceRetentionArtifactRef;
+  readonly owner: ResourceRetentionReferenceOwner;
+  readonly createdAt: string;
+}
+
+export interface PurgedResourceArtifact {
+  readonly artifact: ResourceRetentionArtifactRef;
+  readonly resourceId: string;
+  readonly state: "purged";
+  readonly purgedAt: string;
+  readonly metadata: Readonly<Record<string, unknown>>;
+}
+
+export interface ResourceRetentionReport {
+  readonly policy: ResourceRetentionPolicy;
+  readonly artifacts: readonly ResourceRetentionArtifact[];
+  readonly pins: readonly ResourceRetentionPin[];
+  readonly references: readonly ResourceRetentionReference[];
+  readonly purged: readonly PurgedResourceArtifact[];
+}
+
+export interface ResourceRetentionCollectionReceipt {
+  readonly mode: "evict" | "purge";
+  readonly resourceId: string | null;
+  readonly evicted: readonly ResourceRetentionArtifactRef[];
+  readonly purged: readonly PurgedResourceArtifact[];
+  readonly collectedAt: string;
+}
+
 export interface WebSourceSnapshotProvenance {
   readonly id: string;
   readonly resourceId: string;
@@ -254,6 +351,7 @@ export interface WebSourceSnapshotProvenance {
   readonly revision: ResourceRevisionRef;
   readonly fetchedAt: string | null;
   readonly bodyAvailable: boolean;
+  readonly evictedAt: string | null;
 }
 
 export interface WebRepresentationProvenance {
@@ -264,6 +362,7 @@ export interface WebRepresentationProvenance {
   readonly contentHash: string;
   readonly derivedAt: string | null;
   readonly contentAvailable: boolean;
+  readonly evictedAt: string | null;
 }
 
 export interface WebResourceProvenance {

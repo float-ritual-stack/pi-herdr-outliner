@@ -8,6 +8,7 @@ import {
   sha256,
   type WebMarkdownExtractor,
 } from "./web-markdown";
+import { ResourceRetentionRepository } from "./resource-retention";
 import {
   ResourceCatalogError,
   deriveResourceCapabilityReport,
@@ -27,6 +28,11 @@ import {
   type ResourceAddress,
   type ResourceDescription,
   type ResourceFreshness,
+  type ResourceRetentionCollectionReceipt,
+  type ResourceRetentionPin,
+  type ResourceRetentionPolicy,
+  type ResourceRetentionReference,
+  type ResourceRetentionReport,
   type ResourceRevisionRef,
   type ResourceSource,
   type WebRepresentationProvenance,
@@ -72,6 +78,7 @@ interface WebSourceSnapshotRow {
   etag: string | null;
   last_modified: string | null;
   html: string | null;
+  evicted_at: string | null;
   fetched_at: string | null;
 }
 
@@ -83,6 +90,7 @@ interface WebRepresentationRow {
   adapter_version: number;
   content_hash: string;
   markdown: string | null;
+  evicted_at: string | null;
   derived_at: string | null;
 }
 
@@ -465,6 +473,7 @@ export class ResourceCatalog {
   private readonly webStaleAfterMs: number;
   private readonly workspaceRoot: string;
   private readonly pendingWebRefreshes = new Map<string, Promise<ResourceDescription>>();
+  readonly retention: ResourceRetentionRepository;
 
   constructor(
     private readonly database: Database,
@@ -483,6 +492,11 @@ export class ResourceCatalog {
       );
     }
     this.migrate();
+    this.retention = new ResourceRetentionRepository(this.database, {
+      now: this.now,
+      activeRepresentationAdapters: [this.webExtractor.adapter],
+      markMutation: () => this.bumpSequence(),
+    });
     this.recoverInterruptedWebRefreshes();
   }
 
@@ -830,6 +844,49 @@ export class ResourceCatalog {
     return refresh;
   }
 
+  retentionPolicy(): ResourceRetentionPolicy {
+    return this.retention.policy();
+  }
+
+  configureRetention(value: unknown): ResourceRetentionPolicy {
+    return this.retention.configure(value);
+  }
+
+  inspectRetention(
+    resourceId?: unknown,
+    activeRevisions: readonly ResourceRevisionRef[] = [],
+  ): ResourceRetentionReport {
+    return this.retention.inspect(resourceId, activeRevisions);
+  }
+
+  pinRetention(value: unknown): { pin: ResourceRetentionPin; created: boolean } {
+    return this.retention.pin(value);
+  }
+
+  unpinRetention(pinId: unknown): { pinId: string; removed: boolean } {
+    return this.retention.unpin(pinId);
+  }
+
+  referenceRetention(
+    value: unknown,
+  ): { reference: ResourceRetentionReference; created: boolean } {
+    return this.retention.reference(value);
+  }
+
+  unreferenceRetention(
+    referenceId: unknown,
+  ): { referenceId: string; removed: boolean } {
+    return this.retention.unreference(referenceId);
+  }
+
+  collectRetention(
+    mode: unknown,
+    resourceId?: unknown,
+    activeRevisions: readonly ResourceRevisionRef[] = [],
+  ): ResourceRetentionCollectionReceipt {
+    return this.retention.collect(mode, resourceId, activeRevisions);
+  }
+
 
 
   private async fetchWeb(
@@ -1137,10 +1194,11 @@ export class ResourceCatalog {
       this.assertWebRefreshCurrent(resource, expectedGeneration);
       let sourceSnapshot = this.database.query(`
         SELECT id, resource_id, address_version, canonical_url, content_hash,
-               revision_json, etag, last_modified, html, fetched_at
+               revision_json, etag, last_modified, html, evicted_at, fetched_at
         FROM web_source_snapshots
         WHERE resource_id = ? AND address_version = ? AND canonical_url = ?
-          AND content_hash = ? AND revision_json = ? AND html IS NOT NULL
+          AND content_hash = ? AND revision_json = ?
+        ORDER BY CASE WHEN html IS NULL THEN 1 ELSE 0 END, fetched_at, id
         LIMIT 1
       `).get(
         resource.id,
@@ -1154,8 +1212,9 @@ export class ResourceCatalog {
         this.database.query(`
           INSERT INTO web_source_snapshots (
             id, resource_id, address_version, canonical_url, content_hash,
-            revision_json, etag, last_modified, html, fetched_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            revision_json, etag, last_modified, html, fetched_at,
+            payload_state, payload_bytes, evicted_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'available', ?, NULL)
         `).run(
           sourceSnapshotId,
           resource.id,
@@ -1167,8 +1226,20 @@ export class ResourceCatalog {
           observation.lastModified,
           observation.html,
           observation.fetchedAt,
+          Buffer.byteLength(observation.html, "utf8"),
         );
         sourceSnapshot = this.webSourceSnapshotRowFromCurrentRead(sourceSnapshotId);
+      } else if (sourceSnapshot.html === null) {
+        this.database.query(`
+          UPDATE web_source_snapshots
+          SET html = ?, payload_state = 'available', payload_bytes = ?, evicted_at = NULL
+          WHERE id = ?
+        `).run(
+          observation.html,
+          Buffer.byteLength(observation.html, "utf8"),
+          sourceSnapshot.id,
+        );
+        sourceSnapshot = this.webSourceSnapshotRowFromCurrentRead(sourceSnapshot.id);
       }
       if (!sourceSnapshot) {
         throw new ResourceCatalogError(
@@ -1178,12 +1249,11 @@ export class ResourceCatalog {
       }
       let representation = this.database.query(`
         SELECT id, source_snapshot_id, media_type, adapter_id, adapter_version,
-               content_hash, markdown, derived_at
+               content_hash, markdown, evicted_at, derived_at
         FROM web_representations
         WHERE source_snapshot_id = ? AND media_type = 'text/markdown'
           AND adapter_id = ? AND adapter_version = ? AND content_hash = ?
-          AND markdown IS NOT NULL
-        ORDER BY derived_at, id
+        ORDER BY CASE WHEN markdown IS NULL THEN 1 ELSE 0 END, derived_at, id
         LIMIT 1
       `).get(
         sourceSnapshot.id,
@@ -1196,8 +1266,8 @@ export class ResourceCatalog {
         this.database.query(`
           INSERT INTO web_representations (
             id, source_snapshot_id, media_type, adapter_id, adapter_version,
-            content_hash, markdown, derived_at
-          ) VALUES (?, ?, 'text/markdown', ?, ?, ?, ?, ?)
+            content_hash, markdown, derived_at, payload_state, payload_bytes, evicted_at
+          ) VALUES (?, ?, 'text/markdown', ?, ?, ?, ?, ?, 'available', ?, NULL)
         `).run(
           representationId,
           sourceSnapshot.id,
@@ -1206,8 +1276,16 @@ export class ResourceCatalog {
           representationHash,
           markdown,
           checkedAt,
+          Buffer.byteLength(markdown, "utf8"),
         );
         representation = this.webRepresentationRowFromCurrentRead(representationId);
+      } else if (representation.markdown === null) {
+        this.database.query(`
+          UPDATE web_representations
+          SET markdown = ?, payload_state = 'available', payload_bytes = ?, evicted_at = NULL
+          WHERE id = ?
+        `).run(markdown, Buffer.byteLength(markdown, "utf8"), representation.id);
+        representation = this.webRepresentationRowFromCurrentRead(representation.id);
       }
       if (!representation) {
         throw new ResourceCatalogError(
@@ -1258,7 +1336,7 @@ export class ResourceCatalog {
   ): WebSourceSnapshotRow | null {
     return this.database.query(`
       SELECT id, resource_id, address_version, canonical_url, content_hash,
-             revision_json, etag, last_modified, html, fetched_at
+             revision_json, etag, last_modified, html, evicted_at, fetched_at
       FROM web_source_snapshots
       WHERE id = ?
     `).get(sourceSnapshotId) as WebSourceSnapshotRow | null;
@@ -1269,7 +1347,7 @@ export class ResourceCatalog {
   ): WebRepresentationRow | null {
     return this.database.query(`
       SELECT id, source_snapshot_id, media_type, adapter_id, adapter_version,
-             content_hash, markdown, derived_at
+             content_hash, markdown, evicted_at, derived_at
       FROM web_representations
       WHERE id = ?
     `).get(representationId) as WebRepresentationRow | null;
@@ -1289,6 +1367,7 @@ export class ResourceCatalog {
       ),
       fetchedAt: row.fetched_at,
       bodyAvailable: row.html !== null,
+      evictedAt: row.evicted_at ?? null,
     };
   }
 
@@ -1303,6 +1382,7 @@ export class ResourceCatalog {
       contentHash: row.content_hash,
       derivedAt: row.derived_at,
       contentAvailable: row.markdown !== null,
+      evictedAt: row.evicted_at ?? null,
     };
   }
 
@@ -1341,14 +1421,14 @@ export class ResourceCatalog {
     const state = this.webStateRowFromCurrentRead(resource.id);
     const sourceRows = this.database.query(`
       SELECT id, resource_id, address_version, canonical_url, content_hash,
-             revision_json, etag, last_modified, html, fetched_at
+             revision_json, etag, last_modified, html, evicted_at, fetched_at
       FROM web_source_snapshots
       WHERE resource_id = ?
       ORDER BY fetched_at, id
     `).all(resource.id) as WebSourceSnapshotRow[];
     const representationRows = this.database.query(`
       SELECT wr.id, wr.source_snapshot_id, wr.media_type, wr.adapter_id,
-             wr.adapter_version, wr.content_hash, wr.markdown, wr.derived_at
+             wr.adapter_version, wr.content_hash, wr.markdown, wr.evicted_at, wr.derived_at
       FROM web_representations wr
       JOIN web_source_snapshots ws ON ws.id = wr.source_snapshot_id
       WHERE ws.resource_id = ?
@@ -1404,20 +1484,50 @@ export class ResourceCatalog {
           }
         }
       }
-    } else if (
-      state?.address_version === resource.addressVersion &&
-      state.source_snapshot_id &&
-      state.representation_id
-    ) {
-      sourceRow = sourceRows.find((candidate) =>
-        candidate.id === state.source_snapshot_id &&
-        candidate.address_version === resource.addressVersion
-      ) ?? null;
-      representationRow = representationRows.find((candidate) =>
-        candidate.id === state.representation_id &&
-        candidate.source_snapshot_id === sourceRow?.id &&
-        candidate.markdown !== null
-      ) ?? null;
+    } else {
+      if (
+        state?.address_version === resource.addressVersion &&
+        state.source_snapshot_id &&
+        state.representation_id
+      ) {
+        sourceRow = sourceRows.find((candidate) =>
+          candidate.id === state.source_snapshot_id &&
+          candidate.address_version === resource.addressVersion
+        ) ?? null;
+        representationRow = representationRows.find((candidate) =>
+          candidate.id === state.representation_id &&
+          candidate.source_snapshot_id === sourceRow?.id &&
+          candidate.markdown !== null
+        ) ?? null;
+      }
+      if (!sourceRow || !representationRow) {
+        const selectNewest = (activeAdapterOnly: boolean): boolean => {
+          for (let index = representationRows.length - 1; index >= 0; index -= 1) {
+            const candidate = representationRows[index];
+            if (
+              !candidate ||
+              candidate.markdown === null ||
+              (
+                activeAdapterOnly &&
+                (
+                  candidate.adapter_id !== this.webExtractor.adapter.id ||
+                  candidate.adapter_version !== this.webExtractor.adapter.version
+                )
+              )
+            ) continue;
+            const candidateSource = sourceRows.find((sourceCandidate) =>
+              sourceCandidate.id === candidate.source_snapshot_id &&
+              sourceCandidate.address_version === resource.addressVersion
+            ) ?? null;
+            if (!candidateSource) continue;
+            sourceRow = candidateSource;
+            representationRow = candidate;
+            return true;
+          }
+          return false;
+        };
+        selectNewest(true) || selectNewest(false);
+      }
     }
     if (!sourceRow || !representationRow || representationRow.markdown === null) {
       return { document: null, history };
@@ -1575,7 +1685,11 @@ export class ResourceCatalog {
           etag TEXT,
           last_modified TEXT,
           html TEXT,
-          fetched_at TEXT
+          fetched_at TEXT,
+          payload_state TEXT NOT NULL DEFAULT 'available'
+            CHECK (payload_state IN ('available','evicted')),
+          payload_bytes INTEGER NOT NULL DEFAULT 0 CHECK (payload_bytes >= 0),
+          evicted_at TEXT
         );
         CREATE INDEX IF NOT EXISTS web_source_snapshots_resource
           ON web_source_snapshots(resource_id, address_version, fetched_at, id);
@@ -1593,7 +1707,11 @@ export class ResourceCatalog {
           adapter_version INTEGER NOT NULL CHECK (adapter_version >= 1),
           content_hash TEXT NOT NULL,
           markdown TEXT,
-          derived_at TEXT
+          derived_at TEXT,
+          payload_state TEXT NOT NULL DEFAULT 'available'
+            CHECK (payload_state IN ('available','evicted')),
+          payload_bytes INTEGER NOT NULL DEFAULT 0 CHECK (payload_bytes >= 0),
+          evicted_at TEXT
         );
         CREATE INDEX IF NOT EXISTS web_representations_snapshot
           ON web_representations(source_snapshot_id, derived_at, id);

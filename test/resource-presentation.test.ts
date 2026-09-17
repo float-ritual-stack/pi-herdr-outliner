@@ -58,6 +58,7 @@ const webDescription: ResourceDescription = {
       },
       fetchedAt: "2026-01-01T00:00:00.000Z",
       bodyAvailable: true,
+      evictedAt: null,
     },
     representation: {
       id: "representation-1",
@@ -67,6 +68,7 @@ const webDescription: ResourceDescription = {
       contentHash: "b".repeat(64),
       derivedAt: "2026-01-01T00:00:00.000Z",
       contentAvailable: true,
+      evictedAt: null,
     },
   },
   webHistory: null,
