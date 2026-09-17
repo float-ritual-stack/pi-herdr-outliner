@@ -3,6 +3,9 @@ import type {
   InternFilesystemResourceInput,
   InternResourceInput,
   RelocateResourceInput,
+  ResourceDescription,
+  ResourceProviderCommandInput,
+  ResourceProviderCommandReceipt,
   ResourceRevisionRef,
   ResourcePresentationContext,
   ResourceRetentionPinInput,
@@ -20,6 +23,12 @@ export type {
   PdfResourceDocument,
   PdfResourceHistory,
   PdfSourceSnapshotProvenance,
+  RemoteEntityDocument,
+  RemoteEntityMetadata,
+  RemoteEntityMetadataValue,
+  RemoteEntityProvider,
+  RemoteEntityRepresentationProvenance,
+  RemoteEntitySourceSnapshotProvenance,
   PdfTextSpan,
   Resource,
   ResourceAddress,
@@ -39,6 +48,9 @@ export type {
   ResourceRenderer,
   ResourceRepresentationKind,
   ResourceSurface,
+  ResourceProviderCommandDescriptor,
+  ResourceProviderCommandInput,
+  ResourceProviderCommandReceipt,
   PurgedResourceArtifact,
   ResourceRetentionArtifact,
   ResourceRetentionArtifactKind,
@@ -1090,12 +1102,17 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 46;
+export const OUTLINER_PROTOCOL_VERSION = 47;
 
 
 export interface OutlinerServiceStatus {
   status: "ready";
   protocolVersion: typeof OUTLINER_PROTOCOL_VERSION;
+}
+
+export interface ResourceProviderCommandResult {
+  readonly receipt: ResourceProviderCommandReceipt;
+  readonly description: ResourceDescription;
 }
 
 export type OutlinerRequest =
@@ -1137,6 +1154,13 @@ export type OutlinerRequest =
       action: "resources.refresh";
       resourceId: string;
       destinationClientId: string;
+    }
+  | {
+      id: string;
+      action: "resources.command.execute";
+      resourceId: string;
+      destinationClientId: string;
+      input: ResourceProviderCommandInput;
     }
   | { id: string; action: "resources.retention.get" }
   | { id: string; action: "resources.retention.configure"; input: ResourceRetentionPolicyInput }

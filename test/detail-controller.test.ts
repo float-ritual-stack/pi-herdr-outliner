@@ -21,6 +21,10 @@ import type { ReferencedFile } from "../src/files";
 import type { OutlinerLinkTarget } from "../src/outliner-links";
 import { patchPropertyText } from "../src/properties";
 import { deriveResourceCapabilityReport } from "../src/resources";
+import {
+  negotiateResourcePresentation,
+  TUI_RESOURCE_PRESENTATION_CONTEXT,
+} from "../src/resource-presentation";
 import type {
   AnnotationRecord,
   AnnotationReconcileInput,
@@ -274,6 +278,9 @@ function createHarness(
           web: null,
           webHistory: null,
           webStatus: null,
+          remoteEntity: null,
+          remoteStatus: null,
+          availableCommands: [],
         },
       };
     },
@@ -985,7 +992,7 @@ describe("detail controller projection and deferred refresh", () => {
         contentAvailable: true,
         evictedAt: null,
       };
-      return {
+      const result: ResourceDescription = {
         resource,
         source,
         requestedRevision: null,
@@ -1004,6 +1011,16 @@ describe("detail controller projection and deferred refresh", () => {
           checkedAt: "2026-09-17T12:00:02.000Z",
           lastError: null,
         },
+        remoteEntity: null,
+        remoteStatus: null,
+        availableCommands: [],
+      };
+      return {
+        ...result,
+        presentation: negotiateResourcePresentation(result, {
+          ...TUI_RESOURCE_PRESENTATION_CONTEXT,
+          providerAccess: { credentials: "available", connectivity: "available" },
+        }),
       };
     };
     let current = description("# First\n\nStable quote", "a");
@@ -1164,8 +1181,9 @@ describe("detail controller projection and deferred refresh", () => {
     });
 
 
+    const unavailable = description("# Unavailable", "c");
     current = {
-      ...description("# Unavailable", "c"),
+      ...unavailable,
       web: null,
       webStatus: {
         freshness: "unknown",
@@ -1173,6 +1191,13 @@ describe("detail controller projection and deferred refresh", () => {
         lastError: null,
       },
       webError: "fixture offline",
+    };
+    current = {
+      ...current,
+      presentation: negotiateResourcePresentation(current, {
+        ...TUI_RESOURCE_PRESENTATION_CONTEXT,
+        providerAccess: { credentials: "available", connectivity: "available" },
+      }),
     };
     await harness.controller.onServiceEvent({
       ...event("resource-catalog"),
@@ -1201,19 +1226,282 @@ describe("detail controller projection and deferred refresh", () => {
         policy: { deniedCapabilities: ["open-external"] },
       },
     };
+    current = {
+      ...current,
+      presentation: negotiateResourcePresentation(current, {
+        ...TUI_RESOURCE_PRESENTATION_CONTEXT,
+        providerAccess: { credentials: "available", connectivity: "available" },
+      }),
+    };
     await harness.controller.onServiceEvent({
       ...event("resource-catalog"),
       resourceId: resource.id,
     }, viewport);
+    await harness.controller.dispatch({ type: "resource.open-external" }, viewport);
+    expect(externalUrls).toHaveLength(2);
+    expect(harness.controller.state.status).toBe(
+      "Workspace policy denies open-external",
+    );
     await harness.controller.dispatch({
       type: "resource.open-url",
       url: "https://example.com/linked",
     }, viewport);
-    expect(externalUrls).toHaveLength(2);
-    expect(harness.controller.state.status).toBe(
-      "Workspace policy denies opening this resource externally",
+    expect(externalUrls).toEqual([
+      "https://example.com/article",
+      "https://example.com/article",
+      "https://example.com/linked",
+    ]);
+    expect(harness.controller.state.status).toBe("Opened URL externally");
+  });
+  test("renders retained remote entities, refreshes them, and opens only negotiated deep links", async () => {
+    const harness = createHarness(makeBlock({ id: "remote-anchor" }));
+    const target = {
+      kind: "resource" as const,
+      resourceId: "10000000-0000-4000-8000-000000000255",
+    };
+    const source = {
+      id: "20000000-0000-4000-8000-000000000255",
+      name: "Product Jira",
+      provider: "jira" as const,
+      boundary: {
+        kind: "jira" as const,
+        origin: "https://jira.example.test",
+        project: "PIE",
+        credentialEnv: "JIRA_TOKEN",
+      },
+      policy: { deniedCapabilities: [] },
+      version: 1,
+      createdAt: "created",
+      updatedAt: "updated",
+    };
+    const resource = {
+      id: target.resourceId,
+      sourceId: source.id,
+      provider: "jira" as const,
+      address: { kind: "jira" as const, entityId: "10042", key: "PIE-255" },
+      version: 1,
+      addressVersion: 1,
+      mediaType: "text/markdown",
+      createdAt: "created",
+      updatedAt: "updated",
+    };
+    const describe = (
+      markdown: string,
+      availableCommands: ResourceDescription["availableCommands"],
+    ): ResourceDescription => {
+      const result: ResourceDescription = {
+        resource,
+        source,
+        requestedRevision: null,
+        capabilities: deriveResourceCapabilityReport(source, true),
+        web: null,
+        webHistory: null,
+        webStatus: null,
+        remoteEntity: {
+          title: "Remote entities",
+          metadata: {
+            status: "In Progress",
+            labels: ["resources", "providers"],
+            parent: null,
+          },
+          markdown,
+          externalUrl: "https://jira.example.test/browse/PIE-255",
+          sourceSnapshot: {
+            contentHash: "c".repeat(64),
+            provider: "jira",
+            resourceId: resource.id,
+            addressVersion: 1,
+            entityId: "10042",
+            locator: "PIE-255",
+            revision: {
+              resourceId: resource.id,
+              addressVersion: 1,
+              revision: {
+                kind: "jira",
+                validator: {
+                  kind: "updated-at",
+                  value: "2026-09-17T12:00:00.000Z",
+                },
+              },
+            },
+            fetchedAt: "2026-09-17T12:00:01.000Z",
+          },
+          representation: {
+            mediaType: "text/markdown",
+            adapter: { id: "jira.issue-markdown", version: 1 },
+            contentHash: "d".repeat(64),
+            derivedAt: "2026-09-17T12:00:02.000Z",
+          },
+          commandDescriptors: [{
+            provider: "jira",
+            command: "comment.create",
+            label: "Provider-advertised command",
+            input: {
+              body: { type: "string", required: true, maxLength: 10_000 },
+            },
+          }],
+        },
+        remoteStatus: {
+          freshness: "fresh",
+          checkedAt: "2026-09-17T12:00:03.000Z",
+          lastError: null,
+        },
+        availableCommands,
+      };
+      return {
+        ...result,
+        presentation: negotiateResourcePresentation(result, {
+          ...TUI_RESOURCE_PRESENTATION_CONTEXT,
+          providerAccess: { credentials: "available", connectivity: "available" },
+        }),
+      };
+    };
+    let current = describe("# Remote entities\n\nRetained Jira body.", []);
+    const externalUrls: string[] = [];
+    harness.effects.loadTarget = async () => ({ kind: "resource", target, description: current });
+    harness.effects.refreshResource = async () => {
+      current = describe("# Remote entities\n\nRefreshed Jira body.", [{
+        provider: "jira",
+        command: "comment.create",
+        label: "Create comment",
+        input: {
+          body: { type: "string", required: true, maxLength: 10_000 },
+        },
+      }]);
+      return current;
+    };
+    harness.effects.openExternal = (url) => {
+      externalUrls.push(url);
+    };
+
+    await harness.controller.initialize();
+    await harness.controller.onServiceEvent(event("ui", {
+      targetClientId: "detail-test",
+      command: "open",
+      target,
+    }), viewport);
+
+    const rendered = harness.controller.state.resolvedSelectedText;
+    expect(rendered.startsWith("# Remote entities\n\nRetained Jira body.")).toBe(true);
+    expect(rendered).toContain('"status": "In Progress"');
+    expect(rendered).toContain('"labels": [');
+    expect(rendered).toContain("- Provider revision: Jira updated-at 2026-09-17T12:00:00.000Z");
+    expect(rendered).toContain("- Entity ID: `10042`");
+    expect(rendered).toContain("- Adapter: `jira.issue-markdown@1`");
+    expect(rendered).toContain("- Freshness: **fresh**");
+    expect(rendered).not.toContain("Provider-advertised command");
+    expect(rendered).not.toContain("## Available commands");
+
+    await harness.controller.dispatch({ type: "resource.open-external" }, viewport);
+    expect(externalUrls).toEqual(["https://jira.example.test/browse/PIE-255"]);
+    await harness.controller.dispatch({ type: "resource.refresh" }, viewport);
+    expect(harness.controller.state.status).toBe("Jira resource refreshed");
+    expect(harness.controller.state.resolvedSelectedText).toContain("Refreshed Jira body.");
+    expect(harness.controller.state.resolvedSelectedText).toContain("## Available commands");
+    expect(harness.controller.state.resolvedSelectedText).toContain("Create comment");
+    expect(harness.controller.state.resolvedSelectedText).not.toContain(
+      "Provider-advertised command",
     );
   });
+
+  test("keeps application deep-link-only resources useful without inline content", async () => {
+    const harness = createHarness(makeBlock({ id: "application-anchor" }));
+    const target = {
+      kind: "resource" as const,
+      resourceId: "10000000-0000-4000-8000-000000000256",
+    };
+    const source = {
+      id: "20000000-0000-4000-8000-000000000256",
+      name: "Team chat",
+      provider: "application" as const,
+      boundary: {
+        kind: "application" as const,
+        scheme: "slack",
+        authority: "channel",
+        namespace: "workspace",
+      },
+      policy: { deniedCapabilities: [] },
+      version: 1,
+      createdAt: "created",
+      updatedAt: "updated",
+    };
+    const result: ResourceDescription = {
+      resource: {
+        id: target.resourceId,
+        sourceId: source.id,
+        provider: "application",
+        address: { kind: "application", uri: "slack://channel/workspace/C0123" },
+        version: 1,
+        addressVersion: 1,
+        mediaType: null,
+        createdAt: "created",
+        updatedAt: "updated",
+      },
+      source,
+      requestedRevision: null,
+      capabilities: deriveResourceCapabilityReport(source, true),
+      web: null,
+      webHistory: null,
+      webStatus: null,
+      remoteEntity: null,
+      remoteStatus: null,
+      availableCommands: [],
+    };
+    let description: ResourceDescription = {
+      ...result,
+      presentation: negotiateResourcePresentation(result, TUI_RESOURCE_PRESENTATION_CONTEXT),
+    };
+    const externalUrls: string[] = [];
+    harness.effects.loadTarget = async () => ({ kind: "resource", target, description });
+    harness.effects.openExternal = (url) => {
+      externalUrls.push(url);
+    };
+
+    await harness.controller.initialize();
+    await harness.controller.onServiceEvent(event("ui", {
+      targetClientId: "detail-test",
+      command: "open",
+      target,
+    }), viewport);
+
+    expect(harness.controller.state.resolvedSelectedText).toContain(
+      "# slack://channel/workspace/C0123",
+    );
+    expect(harness.controller.state.resolvedSelectedText).toContain(
+      "- Provider: `application`",
+    );
+    expect(harness.controller.state.resolvedSelectedText).toContain(
+      "- External URL: `slack://channel/workspace/C0123`",
+    );
+    expect(harness.controller.state.resolvedSelectedText).toContain(
+      "- Open externally: Press Alt+O",
+    );
+    expect(harness.controller.state.resolvedSelectedText).not.toContain(
+      "Retained Jira body",
+    );
+    await harness.controller.dispatch({ type: "resource.open-external" }, viewport);
+    expect(externalUrls).toEqual(["slack://channel/workspace/C0123"]);
+    description = {
+      ...result,
+      presentation: negotiateResourcePresentation(result, {
+        ...TUI_RESOURCE_PRESENTATION_CONTEXT,
+        host: {
+          ...TUI_RESOURCE_PRESENTATION_CONTEXT.host,
+          capabilities: ["read", "refresh"],
+        },
+      }),
+    };
+    await harness.controller.onServiceEvent({
+      ...event("resource-catalog"),
+      resourceId: result.resource.id,
+    }, viewport);
+    expect(harness.controller.state.resolvedSelectedText).toContain(
+      "This Detail host has no open-external executor",
+    );
+    await harness.controller.dispatch({ type: "resource.open-external" }, viewport);
+    expect(externalUrls).toEqual(["slack://channel/workspace/C0123"]);
+  });
+
   test("selects PDF page evidence and refreshes filesystem PDFs", async () => {
     const harness = createHarness(makeBlock());
     const target = {
@@ -1306,6 +1594,9 @@ describe("detail controller projection and deferred refresh", () => {
       web: null,
       webHistory: null,
       webStatus: null,
+      remoteEntity: null,
+      remoteStatus: null,
+      availableCommands: [],
     };
     harness.effects.loadTarget = async () => ({ kind: "resource", target, description });
     let refreshes = 0;
@@ -2213,6 +2504,9 @@ describe("detail controller saves and annotations", () => {
       web: null,
       webHistory: null,
       webStatus: null,
+      remoteEntity: null,
+      remoteStatus: null,
+      availableCommands: [],
     };
     const target = { kind: "resource" as const, resourceId };
     const unrelatedFile = filePreview({

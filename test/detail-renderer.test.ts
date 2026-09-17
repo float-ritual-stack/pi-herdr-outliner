@@ -81,6 +81,9 @@ function state(overrides: Partial<DetailState> = {}): DetailState {
               web: null,
               webHistory: null,
               webStatus: null,
+              remoteEntity: null,
+              remoteStatus: null,
+              availableCommands: [],
             },
           },
         }
