@@ -317,6 +317,14 @@ export type AnnotationResolutionMethod =
   | {
       readonly kind: "human";
       readonly method: string;
+      readonly proposalEventId?: string;
+    }
+  | {
+      readonly kind: "agent";
+      readonly modelId: string;
+      readonly method: "semantic-reconciliation";
+      readonly rationale: string;
+      readonly evidence: readonly string[];
     };
 
 export interface AnnotationResolutionCandidate {
@@ -404,6 +412,90 @@ export interface AnnotationReconcileReceipt {
 export interface AnnotationApproveResolutionInput {
   readonly annotationId: string;
   readonly target: AnnotationTarget;
+}
+
+export interface AnnotationAgentCandidateSection {
+  readonly index: number;
+  readonly deterministicMethod: AnnotationResolutionMethod;
+  readonly deterministicConfidence: number;
+  readonly passage: string;
+  readonly prefix: string;
+  readonly suffix: string;
+}
+
+export interface AnnotationAgentPromptPackage {
+  readonly annotationId: string;
+  readonly baseEventId: string;
+  readonly annotationBody: string;
+  readonly originalPassage: string;
+  readonly originalPrefix: string;
+  readonly originalSuffix: string;
+  readonly candidates: readonly AnnotationAgentCandidateSection[];
+  readonly truncated: boolean;
+  readonly characterCount: number;
+}
+
+export type AnnotationAgentResult =
+  | {
+      readonly status: "reanchored";
+      readonly candidateIndex: number;
+      readonly confidence: number;
+      readonly rationale: string;
+      readonly evidence: readonly string[];
+    }
+  | {
+      readonly status: "ambiguous";
+      readonly candidateIndexes: readonly number[];
+      readonly confidence: number;
+      readonly rationale: string;
+      readonly evidence: readonly string[];
+    }
+  | {
+      readonly status: "orphaned";
+      readonly confidence: number;
+      readonly rationale: string;
+      readonly evidence: readonly string[];
+    };
+
+export interface AnnotationAgentProposalInput {
+  readonly annotationId: string;
+  readonly baseEventId: string;
+  readonly modelId: string;
+  readonly result: AnnotationAgentResult;
+}
+
+export interface AnnotationAgentProposalReceipt {
+  readonly annotation: AnnotationRecord;
+  readonly proposal: AnnotationResolutionEvent;
+  readonly deduplicated: boolean;
+}
+
+export interface AnnotationAgentReviewInput {
+  readonly annotationId: string;
+  readonly proposalEventId: string;
+  readonly decision: "accept" | "reject";
+  readonly candidateIndex?: number;
+}
+
+export interface AnnotationAgentEvidenceSample {
+  readonly annotationId: string;
+  readonly proposalEventId: string;
+  readonly modelId: string;
+  readonly outcome: "reanchored" | "ambiguous" | "orphaned";
+  readonly acceptedBy: "automatic" | "human";
+  readonly confidence: number;
+  readonly originalPassage: string;
+  readonly resolvedPassage: string | null;
+  readonly rationale: string;
+  readonly evidence: readonly string[];
+}
+
+export interface AnnotationAgentEvidenceSummary {
+  readonly acceptedCount: number;
+  readonly automaticCount: number;
+  readonly humanReviewedCount: number;
+  readonly samples: readonly AnnotationAgentEvidenceSample[];
+  readonly truncated: boolean;
 }
 
 export interface AnnotationLifecycleInput {
@@ -956,7 +1048,7 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 42;
+export const OUTLINER_PROTOCOL_VERSION = 43;
 
 
 export interface OutlinerServiceStatus {
@@ -1163,6 +1255,32 @@ export type OutlinerRequest =
       id: string;
       action: "annotations.approve-resolution";
       input: AnnotationApproveResolutionInput;
+    }
+  | {
+      id: string;
+      action: "annotations.agent-package";
+      annotationId: string;
+    }
+  | {
+      id: string;
+      action: "annotations.agent-receipt";
+      requestId: string;
+    }
+  | {
+      id: string;
+      action: "annotations.propose-agent";
+      requestId: string;
+      input: AnnotationAgentProposalInput;
+    }
+  | {
+      id: string;
+      action: "annotations.review-agent";
+      input: AnnotationAgentReviewInput;
+    }
+  | {
+      id: string;
+      action: "annotations.agent-evidence";
+      limit?: number;
     }
   | {
       id: string;

@@ -467,6 +467,27 @@ describe("detail ANSI renderer", () => {
       appliesCurrent: true,
       createdAt: "2026-01-02T00:00:00.000Z",
     };
+    const agentProposal = {
+      id: "resolution-proposal-2",
+      annotationId: annotationBlock.id,
+      sequence: 2,
+      sourceRepresentation: representation,
+      targetRepresentation: representation,
+      resolvedTarget: null,
+      method: {
+        kind: "agent" as const,
+        modelId: "provider/model",
+        method: "semantic-reconciliation" as const,
+        rationale: "The revised source no longer contains the claim.",
+        evidence: ["No supplied candidate preserves “const one = 1;”."],
+      },
+      reviewer: { kind: "agent" as const, id: "provider/model" },
+      confidence: 0.82,
+      candidates: [],
+      status: "orphaned" as const,
+      appliesCurrent: false,
+      createdAt: "2026-01-02T00:01:00.000Z",
+    };
     const annotationState = state({
       context: { selected: annotationBlock, ancestors: [], children: [] },
       resolvedBreadcrumb: "Annotation",
@@ -478,7 +499,7 @@ describe("detail ANSI renderer", () => {
         originalTarget,
         resolvedTarget: null,
         currentResolution: resolution,
-        resolutionHistory: [resolution],
+        resolutionHistory: [resolution, agentProposal],
         body: "Needs a guard.",
         source: "user",
         lifecycle: "open",
@@ -491,6 +512,9 @@ describe("detail ANSI renderer", () => {
     expect(annotationFrame).toContain("Original target: resource 30000000-0000-4000-8000-000000000001 @0-14");
     expect(annotationFrame).toContain("Current resolution: orphaned");
     expect(annotationFrame).toContain("#1 orphaned · current · text-quote@1:unique-exact");
+    expect(annotationFrame).toContain("#2 orphaned · semantic-reconciliation · agent:provider/model · 0.82");
+    expect(annotationFrame).toContain("rationale · The revised source no longer contains the claim.");
+    expect(annotationFrame).toContain("evidence · No supplied candidate preserves “const one = 1;”.");
     expect(annotationFrame).toContain("\x1b[1mComment\x1b[0m\nNeeds a guard.");
     expect(annotationState.previewOffset).toBe(beforeOffset);
   });

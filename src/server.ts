@@ -20,6 +20,7 @@ import { WorkflowManager } from "./workflows";
 import {
   OUTLINER_PROTOCOL_VERSION,
   type AnnotationBatchReceipt,
+  type AnnotationAgentProposalReceipt,
   type AttentionClientState,
   type AttentionMark,
   type AttentionMarkInput,
@@ -1258,6 +1259,21 @@ export class OutlinerServer {
         case "annotations.approve-resolution":
           result = this.store.approveAnnotationResolution(request.input);
           break;
+        case "annotations.agent-package":
+          result = this.store.getAnnotationAgentPackage(request.annotationId);
+          break;
+        case "annotations.agent-receipt":
+          result = this.store.getAnnotationAgentReceipt(request.requestId);
+          break;
+        case "annotations.propose-agent":
+          result = this.store.proposeAnnotationAgentResolution(request.requestId, request.input);
+          break;
+        case "annotations.review-agent":
+          result = this.store.reviewAnnotationAgentResolution(request.input);
+          break;
+        case "annotations.agent-evidence":
+          result = this.store.summarizeAnnotationAgentEvidence(request.limit);
+          break;
         case "annotations.lifecycle":
           result = this.store.setAnnotationLifecycle(
             request.input,
@@ -1528,6 +1544,17 @@ export class OutlinerServer {
         domain = "content";
         break;
       case "annotations.approve-resolution":
+        domain = "content";
+        blockId = request.input.annotationId;
+        break;
+      case "annotations.propose-agent": {
+        const receipt = response.result as AnnotationAgentProposalReceipt;
+        if (receipt.deduplicated) return null;
+        domain = "content";
+        blockId = request.input.annotationId;
+        break;
+      }
+      case "annotations.review-agent":
         domain = "content";
         blockId = request.input.annotationId;
         break;

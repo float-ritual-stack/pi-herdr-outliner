@@ -25,7 +25,7 @@ The project started as a small Friday-night experiment and grew into a durable w
 
 - SQLite-backed hierarchical blocks with stable UUIDs, sibling order, authors, timestamps, and one canonical graph per workspace root.
 - Workspace-isolated service and runtime paths.
-- JSON-lines RPC protocol v42 over a Unix socket.
+- JSON-lines RPC protocol v43 over a Unix socket.
 - Reactive canonical content/view broadcasts, per-process Tree/Detail registration with Detail lock availability, exact-client UI commands, and source-aware `preview | open | reveal` navigation.
 - Durable resources have UUID identities independent of blocks and mutable locators. Provider-qualified Sources bind filesystem roots or remote namespaces; overlapping Sources remain distinct, relocations preserve Resource IDs, provider revisions remain explicit, and capability resolution reports blockers across provider, credentials, workspace policy, host, and connectivity. Web Resources open from local storage only. Explicit refresh reconciles the provider into immutable source snapshots and named Markdown representations and reports `fresh`, `stale`, `unknown`, `refreshing`, or `failed` separately from selected immutable content.
 - Each Tree owns its cursor, occurrence selection, filter, viewport, collapsed rows, multiline expansion, explicit-navigation history, and browsing context; moving a Tree previews only in the first unlocked same-tab Detail and never replaces a locked anchor.
@@ -799,6 +799,7 @@ The project Pi extension is auto-discovered through [`.pi/extensions/outliner.ts
 - `outliner_clients`
 - `outliner_selection`
 - `outliner_annotations`
+- `outliner_annotation_reconcile`
 - `outliner_annotate`
 - `outliner_annotation_reply`
 - `outliner_annotation_lifecycle`

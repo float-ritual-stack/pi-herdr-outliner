@@ -49,6 +49,11 @@ import {
   type ParsedWorkId,
 } from "./work-ids";
 import type {
+  AnnotationAgentEvidenceSummary,
+  AnnotationAgentPromptPackage,
+  AnnotationAgentProposalInput,
+  AnnotationAgentProposalReceipt,
+  AnnotationAgentReviewInput,
   AnnotationApproveResolutionInput,
   AnnotationBatchOperation,
   AnnotationBatchReceipt,
@@ -694,6 +699,29 @@ export class OutlinerStore {
 
   approveAnnotationResolution(input: AnnotationApproveResolutionInput): AnnotationRecord {
     return this.annotations.approve(input);
+  }
+
+  getAnnotationAgentPackage(annotationId: string): AnnotationAgentPromptPackage {
+    return this.annotations.agentPackage(annotationId);
+  }
+
+
+  getAnnotationAgentReceipt(requestId: string): AnnotationAgentProposalReceipt | null {
+    return this.annotations.agentReceipt(requestId);
+  }
+  proposeAnnotationAgentResolution(
+    requestId: string,
+    input: AnnotationAgentProposalInput,
+  ): AnnotationAgentProposalReceipt {
+    return this.annotations.proposeAgent(requestId, input);
+  }
+
+  reviewAnnotationAgentResolution(input: AnnotationAgentReviewInput): AnnotationRecord {
+    return this.annotations.reviewAgent(input);
+  }
+
+  summarizeAnnotationAgentEvidence(limit?: number): AnnotationAgentEvidenceSummary {
+    return this.annotations.agentEvidence(limit);
   }
 
   setAnnotationLifecycle(

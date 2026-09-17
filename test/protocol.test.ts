@@ -16,6 +16,9 @@ import { orchestrateWorkflowRun } from "../src/workflow-orchestrator";
 import { OUTLINER_PROTOCOL_VERSION } from "../src/types";
 import type {
   AnnotationBatchReceipt,
+  AnnotationAgentEvidenceSummary,
+  AnnotationAgentPromptPackage,
+  AnnotationAgentProposalReceipt,
   AnnotationRecord,
   AnnotationReconcileReceipt,
   AnnotationRepresentation,
@@ -306,7 +309,7 @@ test("persists resources and dispatches resource targets without synthetic block
 test("serves local web snapshots, explicit refresh, and unified annotation resolution", async () => {
   const directory = mkdtempSync(join(tmpdir(), "pi-outliner-web-protocol-"));
   let etag = "\"v1\"";
-  let html = "<h1>Protocol</h1><p>Quoted evidence.</p><p>Exact evidence remains.</p><p>Intro alpha target phrase omega Outro.</p><p>The system stores durable annotation evidence.</p>";
+  let html = "<h1>Protocol</h1><p>Quoted evidence.</p><p>Exact evidence remains.</p><p>Intro alpha target phrase omega Outro.</p><p>Twin before Semantic candidate Twin after.</p><p>The system stores durable annotation evidence.</p>";
   let providerAccessCount = 0;
   const requestEtags: Array<string | null> = [];
   const store = new OutlinerStore(join(directory, "outliner.sqlite"), {
@@ -425,7 +428,7 @@ test("serves local web snapshots, explicit refresh, and unified annotation resol
     contentAvailable: true,
   });
   expect(acquired.web).toEqual({
-    markdown: "# Protocol\n\nQuoted evidence.\n\nExact evidence remains.\n\nIntro alpha target phrase omega Outro.\n\nThe system stores durable annotation evidence.",
+    markdown: "# Protocol\n\nQuoted evidence.\n\nExact evidence remains.\n\nIntro alpha target phrase omega Outro.\n\nTwin before Semantic candidate Twin after.\n\nThe system stores durable annotation evidence.",
     sourceSnapshot: firstSnapshot,
     representation: firstRepresentation,
   });
@@ -539,6 +542,18 @@ test("serves local web snapshots, explicit refresh, and unified annotation resol
     "protocol-reanchor-fuzzy",
     "The system stores durable annotation evidence",
   );
+  const semanticAnnotation = await createFixtureAnnotation(
+    "protocol-reanchor-semantic",
+    "Semantic candidate",
+  );
+  const automaticSemanticAnnotation = await createFixtureAnnotation(
+    "protocol-reanchor-semantic-automatic",
+    "Semantic candidate",
+  );
+  const orphanSemanticAnnotation = await createFixtureAnnotation(
+    "protocol-reanchor-semantic-orphan",
+    "Semantic candidate",
+  );
   const listedAnnotations = await client.request<AnnotationThread[]>({
     action: "annotations.list",
     query: {
@@ -546,7 +561,7 @@ test("serves local web snapshots, explicit refresh, and unified annotation resol
       includeResolved: true,
     },
   });
-  expect(listedAnnotations).toHaveLength(4);
+  expect(listedAnnotations).toHaveLength(7);
   expect(listedAnnotations).toEqual(expect.arrayContaining([
     expect.objectContaining({
       block: expect.objectContaining({ id: annotation.block.id }),
@@ -572,7 +587,7 @@ test("serves local web snapshots, explicit refresh, and unified annotation resol
   });
 
   etag = "\"v2\"";
-  html = "<h1>Protocol changed</h1><p>New body.</p><p>Exact evidence remains.</p><p>Noise target phrase elsewhere.</p><p>Intro alpha target phrase omega Outro.</p><p>The system preserves durable annotation evidence.</p>";
+  html = "<h1>Protocol changed</h1><p>New body.</p><p>Exact evidence remains.</p><p>Noise target phrase elsewhere.</p><p>Intro alpha target phrase omega Outro.</p><p>Twin before Semantic candidate Twin after.</p><p>Twin before Semantic candidate Twin after.</p><p>The system preserves durable annotation evidence.</p>";
   const changed = await client.request<ResourceDescription>({
     action: "resources.refresh",
     resourceId: resource.id,
@@ -583,7 +598,7 @@ test("serves local web snapshots, explicit refresh, and unified annotation resol
   await refreshEvents.promise;
   expect(providerAccessCount).toBe(3);
   expect(requestEtags).toEqual([null, "\"v1\"", "\"v1\""]);
-  expect(changed.web.markdown).toBe("# Protocol changed\n\nNew body.\n\nExact evidence remains.\n\nNoise target phrase elsewhere.\n\nIntro alpha target phrase omega Outro.\n\nThe system preserves durable annotation evidence.");
+  expect(changed.web.markdown).toBe("# Protocol changed\n\nNew body.\n\nExact evidence remains.\n\nNoise target phrase elsewhere.\n\nIntro alpha target phrase omega Outro.\n\nTwin before Semantic candidate Twin after.\n\nTwin before Semantic candidate Twin after.\n\nThe system preserves durable annotation evidence.");
   expect(changed.web.sourceSnapshot.id).not.toBe(firstSnapshot.id);
   expect(changed.web.representation.id).not.toBe(firstRepresentation.id);
   expect(changed.web.representation.sourceSnapshotId).toBe(changed.web.sourceSnapshot.id);
@@ -620,7 +635,7 @@ test("serves local web snapshots, explicit refresh, and unified annotation resol
     },
   });
   expect(reconciled.changed).toBe(true);
-  expect(reconciled.threads).toHaveLength(4);
+  expect(reconciled.threads).toHaveLength(7);
   const reconciledById = new Map(reconciled.threads.map((thread) => [thread.block.id, thread]));
   const orphanedAnnotation = reconciledById.get(annotation.block.id)!;
   expect(orphanedAnnotation).toMatchObject({
@@ -660,6 +675,251 @@ test("serves local web snapshots, explicit refresh, and unified annotation resol
     method: { method: "local-fuzzy" },
   });
   expect(fuzzyResolution.candidates[0]!.confidence).toBeGreaterThanOrEqual(0.8);
+  const semanticResolution = reconciledById.get(semanticAnnotation.block.id)!.currentResolution;
+  expect(semanticResolution).toMatchObject({
+    status: "ambiguous",
+    resolvedTarget: null,
+    appliesCurrent: true,
+  });
+  expect(semanticResolution.candidates).toHaveLength(2);
+  const semanticPackage = await client.request<AnnotationAgentPromptPackage>({
+    action: "annotations.agent-package",
+    annotationId: semanticAnnotation.block.id,
+  });
+  expect(semanticPackage).toMatchObject({
+    annotationId: semanticAnnotation.block.id,
+    baseEventId: semanticResolution.id,
+    annotationBody: "protocol-reanchor-semantic",
+    originalPassage: "Semantic candidate",
+    candidates: [
+      expect.objectContaining({ index: 0, passage: "Semantic candidate" }),
+      expect.objectContaining({ index: 1, passage: "Semantic candidate" }),
+    ],
+  });
+  expect(semanticPackage.characterCount).toBeLessThanOrEqual(24_000);
+  await expect(client.request({
+    action: "annotations.agent-package",
+    annotationId: exactAnnotation.block.id,
+  })).rejects.toThrow("Only failed deterministic reconciliations");
+
+  const ambiguousInput = {
+    annotationId: semanticAnnotation.block.id,
+    baseEventId: semanticPackage.baseEventId,
+    modelId: "test/semantic-model",
+    result: {
+      status: "ambiguous" as const,
+      candidateIndexes: [0, 1],
+      confidence: 0.72,
+      rationale: "Both passages preserve the original local context.",
+      evidence: ["Candidate 0 and candidate 1 have identical text and context."],
+    },
+  };
+  const ambiguousProposal = await client.request<AnnotationAgentProposalReceipt>({
+    action: "annotations.propose-agent",
+    requestId: "semantic-ambiguous-1",
+    input: ambiguousInput,
+  });
+  expect(ambiguousProposal).toMatchObject({
+    deduplicated: false,
+    proposal: {
+      status: "ambiguous",
+      appliesCurrent: false,
+      confidence: 0.72,
+      reviewer: { kind: "agent", id: "test/semantic-model" },
+    },
+    annotation: {
+      currentResolution: { id: semanticPackage.baseEventId, status: "ambiguous" },
+    },
+  });
+  const rejectedProposal = await client.request<AnnotationRecord>({
+    action: "annotations.review-agent",
+    input: {
+      annotationId: semanticAnnotation.block.id,
+      proposalEventId: ambiguousProposal.proposal.id,
+      decision: "reject",
+    },
+  });
+  expect(rejectedProposal.currentResolution.id).toBe(semanticPackage.baseEventId);
+  expect(rejectedProposal.resolutionHistory.at(-1)).toMatchObject({
+    status: "rejected",
+    appliesCurrent: false,
+    method: {
+      kind: "human",
+      method: "rejected-agent-proposal",
+      proposalEventId: ambiguousProposal.proposal.id,
+    },
+  });
+
+  const reviewableInput = {
+    annotationId: semanticAnnotation.block.id,
+    baseEventId: semanticPackage.baseEventId,
+    modelId: "test/semantic-model",
+    result: {
+      status: "reanchored" as const,
+      candidateIndex: 0,
+      confidence: 0.9,
+      rationale: "The first candidate follows the document's logical section order.",
+      evidence: ["The first candidate precedes the duplicate in the revised representation."],
+    },
+  };
+  const reviewableProposal = await client.request<AnnotationAgentProposalReceipt>({
+    action: "annotations.propose-agent",
+    requestId: "semantic-reviewable-1",
+    input: reviewableInput,
+  });
+  expect(reviewableProposal.proposal).toMatchObject({
+    status: "probable",
+    appliesCurrent: false,
+    resolvedTarget: null,
+    confidence: 0.9,
+  });
+  const replayedProposal = await client.request<AnnotationAgentProposalReceipt>({
+    action: "annotations.propose-agent",
+    requestId: "semantic-reviewable-1",
+    input: {
+      ...reviewableInput,
+      result: {
+        ...reviewableInput.result,
+        confidence: 0.2,
+        rationale: "A retried model response must not replace the durable first result.",
+      },
+    },
+  });
+  expect(replayedProposal).toMatchObject({
+    deduplicated: true,
+    proposal: { id: reviewableProposal.proposal.id, confidence: 0.9 },
+  });
+  const acceptedProposal = await client.request<AnnotationRecord>({
+    action: "annotations.review-agent",
+    input: {
+      annotationId: semanticAnnotation.block.id,
+      proposalEventId: reviewableProposal.proposal.id,
+      decision: "accept",
+    },
+  });
+  expect(acceptedProposal.currentResolution).toMatchObject({
+    status: "resolved",
+    appliesCurrent: true,
+    method: {
+      kind: "human",
+      method: "accepted-agent-proposal",
+      proposalEventId: reviewableProposal.proposal.id,
+    },
+  });
+  expect(acceptedProposal.originalTarget).toEqual(semanticAnnotation.originalTarget);
+
+  const automaticPackage = await client.request<AnnotationAgentPromptPackage>({
+    action: "annotations.agent-package",
+    annotationId: automaticSemanticAnnotation.block.id,
+  });
+  const automaticInput = {
+    annotationId: automaticSemanticAnnotation.block.id,
+    baseEventId: automaticPackage.baseEventId,
+    modelId: "test/semantic-model",
+    result: {
+      status: "reanchored" as const,
+      candidateIndex: 1,
+      confidence: 0.97,
+      rationale: "The second candidate is supported by the revised section sequence.",
+      evidence: ["Candidate 1 occupies the intended semantic section."],
+    },
+  };
+  const automaticProposal = await client.request<AnnotationAgentProposalReceipt>({
+    action: "annotations.propose-agent",
+    requestId: "semantic-automatic-1",
+    input: automaticInput,
+  });
+  expect(automaticProposal).toMatchObject({
+    deduplicated: false,
+    proposal: {
+      status: "resolved",
+      appliesCurrent: true,
+      confidence: 0.97,
+      method: {
+        kind: "agent",
+        modelId: "test/semantic-model",
+        method: "semantic-reconciliation",
+      },
+    },
+    annotation: {
+      currentResolution: { status: "resolved" },
+    },
+  });
+  expect(await client.request<AnnotationAgentProposalReceipt | null>({
+    action: "annotations.agent-receipt",
+    requestId: "semantic-automatic-1",
+  })).toMatchObject({
+    deduplicated: true,
+    proposal: { id: automaticProposal.proposal.id },
+  });
+
+  const orphanPackage = await client.request<AnnotationAgentPromptPackage>({
+    action: "annotations.agent-package",
+    annotationId: orphanSemanticAnnotation.block.id,
+  });
+  expect(orphanPackage.candidates).toHaveLength(2);
+  const orphanProposal = await client.request<AnnotationAgentProposalReceipt>({
+    action: "annotations.propose-agent",
+    requestId: "semantic-orphaned-1",
+    input: {
+      annotationId: orphanSemanticAnnotation.block.id,
+      baseEventId: orphanPackage.baseEventId,
+      modelId: "test/semantic-model",
+      result: {
+        status: "orphaned",
+        confidence: 0.91,
+        rationale: "No candidate preserves the quoted claim.",
+        evidence: ["The revised representation contains no matching passage."],
+      },
+    },
+  });
+  expect(orphanProposal.proposal).toMatchObject({
+    status: "orphaned",
+    appliesCurrent: false,
+    confidence: 0.91,
+  });
+  await client.request<AnnotationRecord>({
+    action: "annotations.review-agent",
+    input: {
+      annotationId: orphanSemanticAnnotation.block.id,
+      proposalEventId: orphanProposal.proposal.id,
+      decision: "accept",
+    },
+  });
+  await expect(client.request({
+    action: "annotations.agent-package",
+    annotationId: orphanSemanticAnnotation.block.id,
+  })).rejects.toThrow("Only failed deterministic reconciliations");
+  const agentEvidence = await client.request<AnnotationAgentEvidenceSummary>({
+    action: "annotations.agent-evidence",
+    limit: 10,
+  });
+  expect(agentEvidence).toMatchObject({
+    acceptedCount: 3,
+    automaticCount: 1,
+    humanReviewedCount: 2,
+    truncated: false,
+  });
+  expect(agentEvidence.samples).toEqual(expect.arrayContaining([
+    expect.objectContaining({
+      proposalEventId: reviewableProposal.proposal.id,
+      acceptedBy: "human",
+      outcome: "reanchored",
+      originalPassage: "Semantic candidate",
+      resolvedPassage: "Semantic candidate",
+    }),
+    expect.objectContaining({
+      proposalEventId: automaticProposal.proposal.id,
+      acceptedBy: "automatic",
+      outcome: "reanchored",
+    }),
+    expect.objectContaining({
+      proposalEventId: orphanProposal.proposal.id,
+      acceptedBy: "human",
+      outcome: "orphaned",
+      resolvedPassage: null,
+    }),
+  ]));
   await reconcileEvent.promise;
   const reconcileEventCount = events.filter(({ action }) =>
     action === "annotations.reconcile"
@@ -672,7 +932,10 @@ test("serves local web snapshots, explicit refresh, and unified annotation resol
     },
   });
   expect(unchangedReconcile.changed).toBe(false);
-  expect(unchangedReconcile.threads[0]!.resolutionHistory).toHaveLength(2);
+  expect(
+    unchangedReconcile.threads.find(({ block }) => block.id === exactAnnotation.block.id)!
+      .resolutionHistory,
+  ).toHaveLength(2);
   await Bun.sleep(20);
   expect(events.filter(({ action }) =>
     action === "annotations.reconcile"
@@ -731,6 +994,114 @@ test("serves local web snapshots, explicit refresh, and unified annotation resol
     }),
   ]);
   expect(events.some((event) => event.action === "resources.open")).toBe(false);
+});
+
+test("rejects agent selections omitted from a bounded candidate package", () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-outliner-agent-package-"));
+  const store = new OutlinerStore(join(directory, "outliner.sqlite"));
+  cleanups.push(async () => {
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const passage = "semantic ".repeat(500).trim();
+  const originalText = `before ${passage} after`;
+  const source = store.create(originalText, null, "user");
+  const originalRepresentation: AnnotationRepresentation = {
+    id: "bounded-package-original",
+    subject: { kind: "block", blockId: source.id },
+    sourceSnapshot: {
+      kind: "block",
+      blockId: source.id,
+      updatedAt: source.updatedAt,
+      contentHash: annotationSourceHash(originalText),
+    },
+    adapter: null,
+    mediaType: "text/plain",
+    contentHash: annotationSourceHash(originalText),
+    capturedAt: source.updatedAt,
+  };
+  const start = originalText.indexOf(passage);
+  const annotation = store.createAnnotation("bounded-agent-create", {
+    target: {
+      representation: originalRepresentation,
+      anchor: createTextQuoteAnchor(originalText, start, start + passage.length),
+    },
+    body: "\u0001".repeat(4_000),
+    source: "user",
+  }).annotations[0]!;
+  const revisedText = `header\n${Array.from(
+    { length: 8 },
+    () => `before ${passage} after`,
+  ).join("\n")}`;
+  const revised = store.update(source.id, revisedText, source.updatedAt, {
+    author: "user",
+    actorId: "protocol-test",
+    sessionId: "bounded-package",
+  });
+  const revisedRepresentation: AnnotationRepresentation = {
+    id: "bounded-package-revised",
+    subject: { kind: "block", blockId: source.id },
+    sourceSnapshot: {
+      kind: "block",
+      blockId: source.id,
+      updatedAt: revised.updatedAt,
+      contentHash: annotationSourceHash(revisedText),
+    },
+    adapter: null,
+    mediaType: "text/plain",
+    contentHash: annotationSourceHash(revisedText),
+    capturedAt: revised.updatedAt,
+  };
+  const reconciled = store.reconcileAnnotationThreads({
+    subject: { kind: "block", blockId: source.id },
+    newRepresentation: revisedRepresentation,
+    content: revisedText,
+  });
+  const failed = reconciled.threads.find(({ block }) => block.id === annotation.block.id)!;
+  expect(failed.currentResolution.status).toBe("ambiguous");
+  expect(failed.currentResolution.candidates).toHaveLength(8);
+  const promptPackage = store.getAnnotationAgentPackage(annotation.block.id);
+  expect(promptPackage.truncated).toBe(true);
+  expect(promptPackage.candidates.length).toBeLessThan(failed.currentResolution.candidates.length);
+  expect(JSON.stringify(promptPackage)).toHaveLength(promptPackage.characterCount);
+  expect(promptPackage.characterCount).toBeLessThanOrEqual(24_000);
+  expect(() => store.proposeAnnotationAgentResolution("bounded-agent-proposal", {
+    annotationId: annotation.block.id,
+    baseEventId: promptPackage.baseEventId,
+    modelId: "test/model",
+    result: {
+      status: "reanchored",
+      candidateIndex: failed.currentResolution.candidates.length - 1,
+      confidence: 0.99,
+      rationale: "This candidate was not actually supplied.",
+      evidence: ["An omitted passage cannot support a model decision."],
+    },
+  })).toThrow("not supplied in its prompt package");
+  const reviewable = store.proposeAnnotationAgentResolution("bounded-agent-valid", {
+    annotationId: annotation.block.id,
+    baseEventId: promptPackage.baseEventId,
+    modelId: "test/model",
+    result: {
+      status: "reanchored",
+      candidateIndex: 0,
+      confidence: 0.9,
+      rationale: "The first supplied candidate preserves source order.",
+      evidence: ["Candidate 0 was present in the bounded package."],
+    },
+  });
+  store.reviewAnnotationAgentResolution({
+    annotationId: annotation.block.id,
+    proposalEventId: reviewable.proposal.id,
+    decision: "accept",
+  });
+  const evidence = store.summarizeAnnotationAgentEvidence(1);
+  expect(evidence).toMatchObject({
+    acceptedCount: 1,
+    humanReviewedCount: 1,
+    truncated: true,
+  });
+  expect(evidence.samples[0]!.originalPassage).toHaveLength(2_000);
+  expect(evidence.samples[0]!.resolvedPassage).toHaveLength(2_000);
 });
 
 
@@ -834,7 +1205,7 @@ test("serves mutations and property queries over the local socket", async () => 
   const client = new OutlinerClient(socket);
   const service = await client.request<OutlinerServiceStatus>({ action: "ping" });
   expect(service).toEqual({ status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION });
-  expect(service.protocolVersion).toBe(42);
+  expect(service.protocolVersion).toBe(43);
   const provenance = {
     actorId: "omp",
     sessionId: "session-1",
