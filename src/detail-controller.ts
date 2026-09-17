@@ -4,12 +4,9 @@ import {
   type OutlinerActionKeymap,
 } from "./outliner-actions";
 import {
-  annotationOffsetsForLineRange,
   annotationSourceHash,
-  createAnnotationAnchor,
+  createTextQuoteAnchor,
   extractAnnotationBody,
-  parseAnnotationBlock,
-  reanchorAnnotation,
 } from "./annotations";
 import {
   attentionClientState,
@@ -79,20 +76,25 @@ import { TextBuffer } from "./text-buffer";
 import type { TerminalKey } from "./terminal";
 import type {
   AnnotationBatchReceipt,
-  CreateWebResourceAnnotationInput,
   AnnotationCreateInput,
-  AnnotationReanchorInput,
-  AnnotationThread,
+  AnnotationListQuery,
+  AnnotationReconcileInput,
+  AnnotationReconcileReceipt,
+  AnnotationRepresentation,
+  AnnotationSubject,
   AnnotationTarget,
+  AnnotationThread,
   AttentionClientState,
   BacklinkCollection,
   BacklinkSource,
   BacklinkQuery,
   Block,
+  Resource,
   BookmarkStatus,
   BookmarkToggleReceipt,
   BlockSearchQuery,
   BrowsingContextState,
+  InternResourceReceipt,
   PageAddressCollection,
   OutlinerEvent,
   PropertyPatchOperation,
@@ -106,7 +108,6 @@ import type {
   OutlinerNavigationTarget,
   OutlinerUiCommand,
   ResourceDescription,
-  WebResourceAnnotation,
   ResolvedBlockReferences,
   VisibleBlockCollection,
 } from "./types";
@@ -252,9 +253,7 @@ export function visibleBacklinkSources(
     left.blockId.localeCompare(right.blockId)
   );
 }
-type DetailAnnotationTarget =
-  | AnnotationTarget
-  | ({ readonly kind: "web-resource" } & CreateWebResourceAnnotationInput);
+type DetailAnnotationTarget = AnnotationTarget;
 
 export interface DetailAnnotationDraft {
   requestId: string;
@@ -399,11 +398,12 @@ export interface DetailEffects {
     requestId: string;
     input: AnnotationCreateInput;
   }): Promise<AnnotationBatchReceipt>;
-  createWebAnnotation(input: CreateWebResourceAnnotationInput): Promise<WebResourceAnnotation>;
+  internFilesystem(path: string): Promise<InternResourceReceipt>;
   refreshResource(resourceId: string): Promise<ResourceDescription>;
   openExternal(url: string): void | Promise<void>;
-  listAnnotations(sourceBlockId: string): Promise<AnnotationThread[]>;
-  reanchorAnnotations(input: AnnotationReanchorInput): Promise<AnnotationThread[]>;
+  getAnnotation(annotationId: string): Promise<AnnotationThread>;
+  listAnnotations(query: AnnotationListQuery): Promise<AnnotationThread[]>;
+  reconcileAnnotations(input: AnnotationReconcileInput): Promise<AnnotationReconcileReceipt>;
   getAttention(): Promise<AttentionClientState>;
   acknowledgeAttention(markId?: string): Promise<AttentionClientState>;
   restoreBlock(blockId: string): Promise<Block>;
@@ -551,6 +551,142 @@ export function selectedDetailFileRange(state: Readonly<DetailState>): DetailLin
   };
 }
 
+function annotationOffsetsForLineRange(
+  text: string,
+  startLine: number,
+  endLine: number,
+): { start: number; end: number } {
+  const starts = [0];
+  for (let index = 0; index < text.length; index += 1) {
+    if (text.charCodeAt(index) === 10) starts.push(index + 1);
+  }
+  const start = starts[startLine - 1];
+  if (start === undefined || endLine < startLine) {
+    throw new Error("Annotation line range is outside the file");
+  }
+  const next = starts[endLine];
+  let end = next === undefined ? text.length : next - 1;
+  if (end > start && text.charCodeAt(end - 1) === 13) end -= 1;
+  if (end <= start) throw new Error("Annotation line range must contain text");
+  return { start, end };
+}
+
+function annotationLineRangeForOffsets(
+  text: string,
+  start: number,
+  end: number,
+): { startLine: number; endLine: number } {
+  let startLine = 1;
+  let endLine = 1;
+  for (let index = 0; index < end; index += 1) {
+    if (text.charCodeAt(index) !== 10) continue;
+    if (index < start) startLine += 1;
+    endLine += 1;
+  }
+  return { startLine, endLine };
+}
+
+
+function blockAnnotationRepresentation(block: Block): AnnotationRepresentation {
+  const contentHash = annotationSourceHash(block.text);
+  return {
+    id: `block:${block.id}:${contentHash}`,
+    subject: { kind: "block", blockId: block.id },
+    sourceSnapshot: {
+      kind: "block",
+      blockId: block.id,
+      updatedAt: block.updatedAt,
+      contentHash,
+    },
+    adapter: { id: "outliner.block-text", version: 1 },
+    mediaType: "text/markdown",
+    contentHash,
+    capturedAt: block.updatedAt,
+  };
+}
+
+function resourceAnnotationRepresentation(
+  description: ResourceDescription,
+): AnnotationRepresentation | null {
+  const filesystem = description.filesystem;
+  if (filesystem) {
+    const revision = filesystem.revision.revision;
+    if (revision.kind !== "filesystem") {
+      throw new Error("Filesystem Resource has a non-filesystem revision");
+    }
+    return {
+      id: `filesystem:${description.resource.id}:${revision.mtimeNs}:${revision.size}:${filesystem.contentHash}`,
+      subject: { kind: "resource", resourceId: description.resource.id },
+      sourceSnapshot: {
+        kind: "resource",
+        resourceId: description.resource.id,
+        sourceSnapshotId: null,
+        revision: filesystem.revision,
+      },
+      adapter: { id: "filesystem.text", version: 1 },
+      mediaType: description.resource.mediaType ?? "text/plain",
+      contentHash: filesystem.contentHash,
+      capturedAt: filesystem.capturedAt,
+    };
+  }
+  const web = description.web;
+  if (!web) return null;
+  return {
+    id: web.representation.id,
+    subject: { kind: "resource", resourceId: description.resource.id },
+    sourceSnapshot: {
+      kind: "resource",
+      resourceId: description.resource.id,
+      sourceSnapshotId: web.sourceSnapshot.id,
+      revision: web.sourceSnapshot.revision,
+    },
+    adapter: web.representation.adapter,
+    mediaType: web.representation.mediaType,
+    contentHash: web.representation.contentHash,
+    capturedAt: web.representation.derivedAt ??
+      web.sourceSnapshot.fetchedAt ??
+      description.resource.updatedAt,
+  };
+}
+
+function filesystemAnnotationRepresentation(
+  resource: Resource,
+  file: ReferencedFile,
+): AnnotationRepresentation {
+  if (resource.provider !== "filesystem") {
+    throw new Error("Filesystem annotation requires a filesystem Resource");
+  }
+  const sourceText = file.sourceText ?? file.lines.join("\n");
+  const contentHash = file.sourceHash ?? annotationSourceHash(sourceText);
+  const revisionParts = file.sourceVersion?.split(":");
+  const revision = revisionParts?.length === 2 &&
+      revisionParts.every((part) => /^\d+$/.test(part))
+    ? {
+        resourceId: resource.id,
+        addressVersion: resource.addressVersion,
+        revision: {
+          kind: "filesystem" as const,
+          mtimeNs: revisionParts[0]!,
+          size: revisionParts[1]!,
+        },
+      }
+    : null;
+  return {
+    id: `filesystem:${resource.id}:${file.sourceVersion ?? contentHash}:${contentHash}`,
+    subject: { kind: "resource", resourceId: resource.id },
+    sourceSnapshot: {
+      kind: "resource",
+      resourceId: resource.id,
+      sourceSnapshotId: null,
+      revision,
+    },
+    adapter: { id: "filesystem.text", version: 1 },
+    mediaType: resource.mediaType ?? "text/plain",
+    contentHash,
+    capturedAt: file.capturedAt ?? "1970-01-01T00:00:00.000Z",
+  };
+}
+
 export function renderedSelectionAnnotationTarget(
   state: Pick<
     DetailState,
@@ -574,32 +710,31 @@ export function renderedSelectionAnnotationTarget(
         : "canonical";
   const { snapshotText, ...evidence } = capture;
   const observation: RenderedPassageObservation = { ...evidence, projection };
-  if (projection === "canonical") {
-    const snapshotStart = snapshotText.indexOf(capture.quote);
-    const snapshotMatchIsUnique =
-      snapshotStart >= 0 &&
-      snapshotText.indexOf(capture.quote, snapshotStart + 1) < 0;
-    const start = selected.text.indexOf(capture.quote);
-    if (
-      snapshotMatchIsUnique &&
-      start >= 0 &&
-      selected.text.indexOf(capture.quote, start + 1) < 0
-    ) {
-      return {
-        kind: "block",
-        sourceBlockId: selected.id,
-        anchor: createAnnotationAnchor(
-          selected.text,
-          start,
-          start + capture.quote.length,
-          selected.updatedAt,
-          annotationSourceHash(selected.text),
-        ),
-        observation,
-      };
-    }
-  }
-  return { kind: "passage", sourceBlockId: selected.id, observation };
+  const match = snapshotText.indexOf(capture.quote);
+  const unique = match >= 0 && snapshotText.indexOf(capture.quote, match + 1) < 0;
+  const contentHash = annotationSourceHash(snapshotText);
+  return {
+    representation: {
+      id: `rendered:${capture.hostBlockId}:${capture.paneId}:${capture.contentRevision}:${contentHash}`,
+      subject: { kind: "block", blockId: selected.id },
+      sourceSnapshot: { kind: "rendered", observation },
+      adapter: { id: "herdr.rendered-passage", version: 1 },
+      mediaType: "text/plain",
+      contentHash,
+      capturedAt: capture.capturedAt,
+      observation,
+    },
+    anchor: unique
+      ? createTextQuoteAnchor(snapshotText, match, match + capture.quote.length)
+      : {
+          kind: "text-quote",
+          start: null,
+          end: null,
+          exact: capture.quote,
+          prefix: "",
+          suffix: "",
+        },
+  };
 }
 
 function detailBufferRangeOffsets(buffer: Readonly<TextBuffer>): { start: number; end: number } | null {
@@ -747,24 +882,17 @@ export function createDetailController(
   const loadFile = (block: Block): void => {
     let fileSourceBlockId = block.id;
     try {
-      if (getProperty(block.properties, "type")?.startsWith("annotation")) {
-        try {
-          const annotation = parseAnnotationBlock(block);
-          if (annotation.target.kind !== "file") {
-            state.referencedFile = null;
-            return;
-          }
-          const source = [...state.context.ancestors, state.context.selected, ...state.context.children]
-            .find((candidate) => candidate?.id === annotation.target.sourceBlockId);
-          if (!source) throw new Error(`Annotation source block is outside the loaded context: ${annotation.target.sourceBlockId}`);
-          state.referencedFile = effects.readFile(source);
-          fileSourceBlockId = source.id;
-        } catch {
-          state.referencedFile = effects.readFile(block);
-        }
-      } else {
-        state.referencedFile = effects.readFile(block);
+      const source = getProperty(block.properties, "type")?.startsWith("annotation")
+        ? [...state.context.ancestors].reverse().find((candidate) =>
+          getProperty(candidate.properties, "file")
+        )
+        : block;
+      if (!source) {
+        state.referencedFile = null;
+        return;
       }
+      state.referencedFile = effects.readFile(source);
+      fileSourceBlockId = source.id;
       const file = state.referencedFile;
       if (file) {
         const marks = state.attention.marks.map((mark) => {
@@ -808,53 +936,64 @@ export function createDetailController(
   };
 
   const loadAnnotations = async (expectedGeneration?: number): Promise<void> => {
-    const selected = state.context.selected;
-    if (!selected) {
-      if (expectedGeneration === undefined || expectedGeneration === loadGeneration) {
-        state.annotationThreads = [];
-      }
-      return;
-    }
-    let sourceBlockId = selected.id;
-    let sourceText = selected.text;
-    let sourceVersion = selected.updatedAt;
-    let sourceHash: string | undefined;
-    if (getProperty(selected.properties, "type")?.startsWith("annotation")) {
-      try {
-        const annotation = parseAnnotationBlock(selected);
-        sourceBlockId = annotation.target.sourceBlockId;
-        const source = [...state.context.ancestors, ...state.context.children]
-          .find((candidate) => candidate.id === sourceBlockId);
-        if (annotation.target.kind === "file" && state.referencedFile?.sourceText !== undefined) {
-          sourceText = state.referencedFile.sourceText;
-          sourceVersion = state.referencedFile.sourceVersion ?? source?.updatedAt ?? sourceVersion;
-          sourceHash = state.referencedFile.sourceHash;
-        } else if (source) {
-          sourceText = source.text;
-          sourceVersion = source.updatedAt;
-        }
-      } catch {
-        sourceBlockId = getProperty(selected.properties, "source-block") ?? selected.id;
-      }
-    } else if (state.referencedFile?.sourceText !== undefined) {
-      sourceText = state.referencedFile.sourceText;
-      sourceVersion = state.referencedFile.sourceVersion ?? selected.updatedAt;
-      sourceHash = state.referencedFile.sourceHash;
-    }
-    let threads: AnnotationThread[];
+    const targetAtStart = state.target;
+    let threads: AnnotationThread[] = [];
     try {
-      threads = await effects.reanchorAnnotations({
-        sourceBlockId,
-        sourceText,
-        sourceVersion,
-        ...(sourceHash ? { sourceHash } : {}),
-      });
+      if (targetAtStart?.kind === "resource") {
+        const description = detailResourceDescription(state);
+        if (!description) return;
+        const subject: Extract<AnnotationSubject, { readonly kind: "resource" }> = {
+          kind: "resource",
+          resourceId: description.resource.id,
+        };
+        const representation = resourceAnnotationRepresentation(description);
+        const content = description.web?.markdown ?? description.filesystem?.text ?? null;
+        threads = representation && content !== null && targetAtStart.revision === undefined
+          ? (await effects.reconcileAnnotations({
+              subject,
+              newRepresentation: representation,
+              content,
+            })).threads
+          : await effects.listAnnotations({ subject, includeResolved: true });
+      } else {
+        const selected = state.context.selected;
+        if (!selected) {
+          state.annotationThreads = [];
+          return;
+        }
+        if (getProperty(selected.properties, "type")?.startsWith("annotation")) {
+          threads = [await effects.getAnnotation(selected.id)];
+        } else if (state.referencedFile) {
+          const receipt = await effects.internFilesystem(state.referencedFile.absolutePath);
+          const subject: Extract<AnnotationSubject, { readonly kind: "resource" }> = {
+            kind: "resource",
+            resourceId: receipt.resource.id,
+          };
+          const representation = filesystemAnnotationRepresentation(
+            receipt.resource,
+            state.referencedFile,
+          );
+          const content = state.referencedFile.sourceText ?? state.referencedFile.lines.join("\n");
+          threads = (await effects.reconcileAnnotations({
+            subject,
+            newRepresentation: representation,
+            content,
+          })).threads;
+        } else {
+          const representation = blockAnnotationRepresentation(selected);
+          threads = (await effects.reconcileAnnotations({
+            subject: { kind: "block", blockId: selected.id },
+            newRepresentation: representation,
+            content: selected.text,
+          })).threads;
+        }
+      }
     } catch {
-      threads = await effects.listAnnotations(sourceBlockId).catch(() => []);
+      threads = [];
     }
     if (
       (expectedGeneration !== undefined && expectedGeneration !== loadGeneration) ||
-      detailBlockTarget(state)?.blockId !== selected.id
+      !sameNavigationTarget(state.target, targetAtStart)
     ) {
       return;
     }
@@ -1030,6 +1169,7 @@ export function createDetailController(
 
   const resourceDocumentText = (description: ResourceDescription): string => {
     const { resource, source, web, webHistory } = description;
+    if (description.filesystem) return description.filesystem.text;
     const externalUrl = web?.sourceSnapshot.canonicalUrl ??
       (resource.address.kind === "web" ? resource.address.url : null);
     const lines = web
@@ -1118,19 +1258,6 @@ export function createDetailController(
         );
       }
     }
-    if (webHistory?.annotations.length) {
-      lines.push("", "## Annotations");
-      for (const annotation of webHistory.annotations) {
-        lines.push(
-          "",
-          `> ${annotation.anchor.exact.replaceAll("\n", "\n> ")}`,
-          "",
-          annotation.body,
-          "",
-          `Original evidence: snapshot \`${annotation.sourceSnapshotId}\` · representation \`${annotation.representationId}\` · hash \`${annotation.representation.contentHash}\` · ${annotation.createdAt}`,
-        );
-      }
-    }
     lines.push("", "## Capabilities");
     for (const capability of RESOURCE_CAPABILITIES) {
       const decision = description.capabilities[capability];
@@ -1189,6 +1316,7 @@ export function createDetailController(
       state.projectedSelectedText = state.resolvedSelectedText;
       state.resolvedBreadcrumb = resourceAddressLabel(document.description.resource.address);
       state.mode = "preview";
+      await loadAnnotations(generation);
       return;
     }
 
@@ -1548,7 +1676,8 @@ export function createDetailController(
     sourceRange?: { start: number; end: number },
   ): Promise<void> => {
     const selected = state.context.selected;
-    const web = detailResourceDescription(state)?.web;
+    const description = detailResourceDescription(state);
+    const web = description?.web;
     if (!web && (!selected || selected.effectiveDeletedRootId)) {
       state.status = selected
         ? "Block is in Trash; restore before adding annotations"
@@ -1563,33 +1692,18 @@ export function createDetailController(
         state.status = "Select a non-empty source range before commenting";
         return;
       }
-      if (web) {
+      if (web && description) {
+        const representation = resourceAnnotationRepresentation(description);
+        if (!representation) throw new Error("Cached web representation is unavailable");
         target = {
-          kind: "web-resource",
-          resourceId: detailResourceDescription(state)!.resource.id,
-          sourceSnapshotId: web.sourceSnapshot.id,
-          representationId: web.representation.id,
-          anchor: {
-            start: offsets.start,
-            end: offsets.end,
-            exact: web.markdown.slice(offsets.start, offsets.end),
-            prefix: web.markdown.slice(Math.max(0, offsets.start - 64), offsets.start),
-            suffix: web.markdown.slice(offsets.end, offsets.end + 64),
-          },
-          body: "",
+          representation,
+          anchor: createTextQuoteAnchor(web.markdown, offsets.start, offsets.end),
         };
       } else {
-        const sourceText = selected!.text;
+        const source = selected!;
         target = {
-          kind: "block",
-          sourceBlockId: selected!.id,
-          anchor: createAnnotationAnchor(
-            sourceText,
-            offsets.start,
-            offsets.end,
-            selected!.updatedAt,
-            annotationSourceHash(sourceText),
-          ),
+          representation: blockAnnotationRepresentation(source),
+          anchor: createTextQuoteAnchor(source.text, offsets.start, offsets.end),
         };
       }
       returnMode = "preview";
@@ -1603,19 +1717,10 @@ export function createDetailController(
         file.sourceText ? range.startLine : range.startLine - file.firstLine + 1,
         file.sourceText ? range.endLine : range.endLine - file.firstLine + 1,
       );
+      const receipt = await effects.internFilesystem(file.absolutePath);
       target = {
-        kind: "file",
-        sourceBlockId: selected.id,
-        filePath: file.sourcePath,
-        startLine: range.startLine,
-        endLine: range.endLine,
-        anchor: createAnnotationAnchor(
-          sourceText,
-          offsetRange.start,
-          offsetRange.end,
-          file.sourceVersion ?? selected.updatedAt,
-          file.sourceHash ?? annotationSourceHash(sourceText),
-        ),
+        representation: filesystemAnnotationRepresentation(receipt.resource, file),
+        anchor: createTextQuoteAnchor(sourceText, offsetRange.start, offsetRange.end),
       };
       returnMode = "file";
       state.annotationRange = range;
@@ -1627,11 +1732,15 @@ export function createDetailController(
     state.draftPreviewLinked = false;
     state.completion = null;
     state.mode = "comment";
-    state.status = target.kind === "file"
-      ? `Locked · commenting on ${target.filePath}:${target.startLine}-${target.endLine}`
-      : target.kind === "web-resource"
-        ? `Locked · commenting on cached Markdown ${target.anchor.start}-${target.anchor.end}`
-        : `Locked · commenting on source range ${target.anchor.start}-${target.anchor.end}`;
+    const anchor = target.anchor;
+    const range = anchor.kind === "text-quote" && anchor.start !== null && anchor.end !== null
+      ? `${anchor.start}-${anchor.end}`
+      : "unpositioned quote";
+    state.status = returnMode === "file" && state.annotationRange
+      ? `Locked · commenting on ${state.referencedFile?.sourcePath}:${state.annotationRange.startLine}-${state.annotationRange.endLine}`
+      : target.representation.subject.kind === "resource"
+        ? `Locked · commenting on cached Markdown ${range}`
+        : `Locked · commenting on source range ${range}`;
   };
 
   const beginRenderedComment = async (
@@ -1668,8 +1777,9 @@ export function createDetailController(
     state.draftPreviewLinked = false;
     state.completion = null;
     state.mode = "comment";
-    state.status = target.kind === "block"
-      ? `Locked · rendered quote + source range ${target.anchor.start}-${target.anchor.end}`
+    const anchor = target.anchor;
+    state.status = anchor.kind === "text-quote" && anchor.start !== null && anchor.end !== null
+      ? `Locked · commenting on rendered quote ${anchor.start}-${anchor.end}`
       : "Locked · commenting on the captured rendered passage";
   };
 
@@ -1713,30 +1823,31 @@ export function createDetailController(
         const draft = state.annotationDraft;
         const body = state.buffer.text.trim();
         if (!body) throw new Error("Annotation body cannot be empty");
-        if (draft.target.kind === "web-resource") {
-          const { kind: _kind, ...input } = draft.target;
-          await effects.createWebAnnotation({ ...input, body });
-        } else {
-          await effects.createAnnotation({
-            requestId: draft.requestId,
-            input: {
-              target: draft.target,
-              body,
-              source: "user",
-            },
-          });
-        }
+        await effects.createAnnotation({
+          requestId: draft.requestId,
+          input: {
+            target: draft.target,
+            body,
+            source: "user",
+          },
+        });
         state.mode = draft.returnMode;
         state.annotationDraft = undefined;
         state.selectionAnchor = null;
-        if (draft.target.kind === "web-resource") await loadCurrentTarget(true);
-        state.status = draft.target.kind === "file"
-          ? `Annotation added for lines ${draft.target.startLine}-${draft.target.endLine}`
-          : draft.target.kind === "web-resource"
-            ? `Annotation added for cached Markdown ${draft.target.anchor.start}-${draft.target.anchor.end}`
-            : draft.target.kind === "block"
-              ? `Annotation added for source range ${draft.target.anchor.start}-${draft.target.anchor.end}`
-              : "Annotation added for captured rendered passage";
+        await loadAnnotations();
+        const anchor = draft.target.anchor;
+        const range = anchor.kind === "text-quote" &&
+            anchor.start !== null &&
+            anchor.end !== null
+          ? `${anchor.start}-${anchor.end}`
+          : "unpositioned quote";
+        state.status = draft.returnMode === "file" && state.annotationRange
+          ? `Annotation added for lines ${state.annotationRange.startLine}-${state.annotationRange.endLine}`
+          : draft.target.representation.sourceSnapshot.kind === "rendered"
+            ? "Annotation added for captured rendered passage"
+            : draft.target.representation.subject.kind === "resource"
+              ? `Annotation added for cached Markdown ${range}`
+              : `Annotation added for source range ${range}`;
       }
       if (!isBufferMode() && state.refreshPending) await refreshPendingTarget();
     } catch (error) {
@@ -2498,53 +2609,103 @@ export function createDetailController(
       case "annotation.reveal": {
         const selected = state.context.selected;
         if (!selected) break;
-        let annotation;
+        const annotationId = selected.id;
+        let annotation: AnnotationThread;
         try {
-          annotation = parseAnnotationBlock(selected);
+          annotation = await effects.getAnnotation(annotationId);
         } catch (error) {
           state.status = errorMessage(error);
           break;
         }
-        await loadBlock(annotation.target.sourceBlockId, true);
-        if (annotation.target.kind === "passage") {
-          state.mode = "preview";
-          state.status = "Revealed observed host block · no canonical source range";
+        let target = annotation.resolvedTarget;
+        if (annotation.currentResolution.status !== "resolved" || !target) {
+          state.status = `Annotation resolution is ${annotation.currentResolution.status}; no target can be revealed`;
           break;
         }
-        if (annotation.target.kind === "file") {
-          if (!state.referencedFile) {
-            state.status = `Referenced file unavailable: ${annotation.target.filePath}`;
+        const subject = target.representation.subject;
+        let openFile = state.referencedFile;
+        if (subject.kind === "block") {
+          await loadBlock(subject.blockId, true);
+        } else if (subject.kind === "resource" && openFile) {
+          const receipt = await effects.internFilesystem(openFile.absolutePath);
+          if (receipt.resource.id === subject.resourceId) {
+            await effects.reconcileAnnotations({
+              subject,
+              newRepresentation: filesystemAnnotationRepresentation(
+                receipt.resource,
+                openFile,
+              ),
+              content: openFile.sourceText ?? openFile.lines.join("\n"),
+            });
+          } else {
+            await loadNavigationTarget({ kind: "resource", resourceId: subject.resourceId }, true);
+            openFile = null;
+          }
+        } else if (subject.kind === "resource") {
+          await loadNavigationTarget({ kind: "resource", resourceId: subject.resourceId }, true);
+        } else {
+          state.status = "Legacy file annotation is orphaned and cannot be revealed";
+          break;
+        }
+        annotation = await effects.getAnnotation(annotationId);
+        target = annotation.resolvedTarget;
+        if (
+          annotation.currentResolution.status !== "resolved" ||
+          !target ||
+          target.anchor.kind !== "text-quote"
+        ) {
+          state.status = `Annotation resolution is ${annotation.currentResolution.status}; no positioned text quote can be revealed`;
+          break;
+        }
+        const anchor = target.anchor;
+        if (anchor.start === null || anchor.end === null) {
+          state.status = `Annotation resolution is ${annotation.currentResolution.status}; no positioned text quote can be revealed`;
+          break;
+        }
+        if (target.representation.subject.kind === "block") {
+          if (target.representation.sourceSnapshot.kind === "rendered") {
+            state.mode = "preview";
+            state.previewOffset = state.resolvedSelectedText
+              .slice(0, anchor.start)
+              .split(/\r?\n/)
+              .length - 1;
+          } else {
+            await beginAnnotationSelection();
+            if (state.buffer.text.slice(anchor.start, anchor.end) !== anchor.exact) {
+              state.status = "Resolved text quote no longer matches the loaded block";
+              break;
+            }
+            const start = detailBufferPointAtOffset(state.buffer.text, anchor.start);
+            const end = detailBufferPointAtOffset(state.buffer.text, anchor.end);
+            state.buffer.placeCursor(start.row, start.column);
+            state.buffer.placeCursor(end.row, end.column, true);
+            ensureEditorCursorVisible(viewport);
+          }
+        } else if (openFile && target.representation.subject.kind === "resource") {
+          const sourceText = openFile.sourceText ?? openFile.lines.join("\n");
+          if (sourceText.slice(anchor.start, anchor.end) !== anchor.exact) {
+            state.status = "Resolved text quote no longer matches the loaded file";
             break;
           }
+          const lineRange = annotationLineRangeForOffsets(sourceText, anchor.start, anchor.end);
           state.mode = "file";
-          state.selectionAnchor = Math.max(
-            0,
-            annotation.target.startLine - state.referencedFile.firstLine,
-          );
+          state.referencedFile = openFile;
+          state.selectionAnchor = Math.max(0, lineRange.startLine - openFile.firstLine);
           state.fileCursor = Math.min(
-            state.referencedFile.lines.length - 1,
-            Math.max(0, annotation.target.endLine - state.referencedFile.firstLine),
+            openFile.lines.length - 1,
+            Math.max(0, lineRange.endLine - openFile.firstLine),
           );
           ensureFileCursorVisible(viewport);
-          state.status = `Revealed ${annotation.target.filePath}:${annotation.target.startLine}-${annotation.target.endLine}`;
-          break;
+        } else {
+          const description = detailResourceDescription(state);
+          const resourceText = description?.web?.markdown ?? description?.filesystem?.text;
+          if (!resourceText || resourceText.slice(anchor.start, anchor.end) !== anchor.exact) {
+            state.status = "Resolved text quote is unavailable in the loaded Resource";
+            break;
+          }
+          state.previewOffset = resourceText.slice(0, anchor.start).split(/\r?\n/).length - 1;
         }
-        await beginAnnotationSelection();
-        const reanchored = reanchorAnnotation(
-          annotation.target.anchor,
-          state.buffer.text,
-          state.context.selected?.updatedAt ?? annotation.target.anchor.sourceVersion,
-        );
-        if (reanchored.state !== "anchored") {
-          state.status = `Annotation anchor is ${reanchored.state}; exact range not selected`;
-          break;
-        }
-        const start = detailBufferPointAtOffset(state.buffer.text, reanchored.anchor.start);
-        const end = detailBufferPointAtOffset(state.buffer.text, reanchored.anchor.end);
-        state.buffer.placeCursor(start.row, start.column);
-        state.buffer.placeCursor(end.row, end.column, true);
-        ensureEditorCursorVisible(viewport);
-        state.status = `Revealed source range ${reanchored.anchor.start}-${reanchored.anchor.end}`;
+        state.status = `Revealed resolved text quote ${anchor.start}-${anchor.end}`;
         break;
       }
       case "attention.acknowledge":
@@ -2915,7 +3076,6 @@ export function createDetailController(
             event.sourceId === description.source.id);
         if (!matchesTarget && !matchesDescription) return;
       } else if (event.domain === "content") {
-        if (state.target?.kind === "resource") return;
         invalidateBacklinks();
       }
       if (event.domain === "selection" || event.domain === "browsing-context") return;

@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
-import { lstatSync, realpathSync, statSync } from "node:fs";
-import { isAbsolute, join, relative, sep } from "node:path";
+import { lstatSync, readFileSync, realpathSync, statSync, type BigIntStats } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { Type, type Static } from "typebox";
 import { Parse } from "typebox/value";
 import {
@@ -20,7 +20,8 @@ import {
   resourceRevisionRefEquals,
   normalizeResourceSourceInput,
   type CreateResourceSourceInput,
-  type CreateWebResourceAnnotationInput,
+  type FilesystemResourceDocument,
+  type InternFilesystemResourceInput,
   type InternResourceReceipt,
   type Resource,
   type ResourceAddress,
@@ -29,12 +30,13 @@ import {
   type ResourceRevisionRef,
   type ResourceSource,
   type WebRepresentationProvenance,
-  type WebResourceAnnotation,
   type WebResourceHistory,
   type WebResourceDocument,
   type WebResourceStatus,
   type WebSourceSnapshotProvenance,
 } from "./resources";
+
+const MAX_FILESYSTEM_RESOURCE_BYTES = 2 * 1024 * 1024;
 
 interface SourceRow {
   id: string;
@@ -114,17 +116,6 @@ interface LegacyRepresentationEvidence {
   };
   readonly contentHash: string;
 }
-interface WebResourceAnnotationRow {
-  id: string;
-  resource_id: string;
-  source_snapshot_id: string;
-  representation_id: string;
-  revision_json: string;
-  representation_json: string;
-  anchor_json: string;
-  body: string;
-  created_at: string;
-}
 
 interface LegacyWebResourceDocumentRow {
   resource_id: string;
@@ -161,6 +152,7 @@ export interface ResourceCatalogOptions {
   readonly now?: () => string;
   readonly maximumWebBytes?: number;
   readonly webStaleAfterMs?: number;
+  readonly workspaceRoot?: string;
 }
 
 const DEFAULT_MAXIMUM_WEB_BYTES = 2 * 1024 * 1024;
@@ -209,13 +201,6 @@ const LegacyRepresentationEvidenceSchema = Type.Object({
   }),
   contentHash: Type.String(),
 });
-const WebResourceAnnotationAnchorSchema = Type.Object({
-  start: Type.Integer({ minimum: 0 }),
-  end: Type.Integer({ minimum: 1 }),
-  exact: Type.String(),
-  prefix: Type.String(),
-  suffix: Type.String(),
-});
 type InternIdentity = Static<typeof InternIdentitySchema>;
 type RelocationIdentity = Static<typeof RelocationIdentitySchema>;
 
@@ -251,18 +236,6 @@ function parseLegacyRepresentationEvidence(
   }
 }
 
-function parseWebResourceAnnotationAnchor(
-  value: unknown,
-): WebResourceAnnotation["anchor"] {
-  try {
-    return Parse(WebResourceAnnotationAnchorSchema, value);
-  } catch {
-    throw new ResourceCatalogError(
-      "invalid-input",
-      "Stored web annotation anchor is invalid",
-    );
-  }
-}
 
 
 
@@ -482,19 +455,6 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function annotationText(value: unknown, label: string, maximum: number): string {
-  if (typeof value !== "string") {
-    throw new ResourceCatalogError("invalid-input", `${label} must be a string`);
-  }
-  const normalized = value.trim();
-  if (!normalized || normalized.length > maximum) {
-    throw new ResourceCatalogError(
-      "invalid-input",
-      `${label} must be 1-${maximum} characters`,
-    );
-  }
-  return normalized;
-}
 
 
 export class ResourceCatalog {
@@ -503,6 +463,7 @@ export class ResourceCatalog {
   private readonly now: () => string;
   private readonly maximumWebBytes: number;
   private readonly webStaleAfterMs: number;
+  private readonly workspaceRoot: string;
   private readonly pendingWebRefreshes = new Map<string, Promise<ResourceDescription>>();
 
   constructor(
@@ -514,6 +475,7 @@ export class ResourceCatalog {
     this.now = options.now ?? (() => new Date().toISOString());
     this.maximumWebBytes = options.maximumWebBytes ?? DEFAULT_MAXIMUM_WEB_BYTES;
     this.webStaleAfterMs = options.webStaleAfterMs ?? DEFAULT_WEB_STALE_AFTER_MS;
+    this.workspaceRoot = resolve(options.workspaceRoot ?? ".");
     if (!Number.isFinite(this.webStaleAfterMs) || this.webStaleAfterMs < 0) {
       throw new ResourceCatalogError(
         "invalid-input",
@@ -594,6 +556,57 @@ export class ResourceCatalog {
       this.bumpSequence();
       return { resource: this.requireFromCurrentRead(id), created: true };
     })();
+  }
+  internFilesystem(value: InternFilesystemResourceInput): InternResourceReceipt {
+    if (!value || typeof value !== "object") {
+      throw new ResourceCatalogError("invalid-input", "Filesystem resource input must be an object");
+    }
+    if (typeof value.path !== "string" || !value.path.trim()) {
+      throw new ResourceCatalogError("invalid-input", "Filesystem resource path cannot be empty");
+    }
+    const absolutePath = resolve(this.workspaceRoot, value.path);
+    try {
+      if (!statSync(absolutePath).isFile()) {
+        throw new ResourceCatalogError("invalid-input", "Filesystem resource must be a regular file");
+      }
+    } catch (error) {
+      if (error instanceof ResourceCatalogError) throw error;
+      throw new ResourceCatalogError(
+        "source-unavailable",
+        `Filesystem resource is unavailable: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    const candidates = this.listSources()
+      .filter((source): source is Extract<ResourceSource, { provider: "filesystem" }> =>
+        source.provider === "filesystem"
+      )
+      .filter((source) => {
+        const pathFromRoot = relative(source.boundary.root, absolutePath);
+        return pathFromRoot !== ".." &&
+          !pathFromRoot.startsWith(`..${sep}`) &&
+          !isAbsolute(pathFromRoot);
+      })
+      .sort((left, right) =>
+        right.boundary.root.length - left.boundary.root.length ||
+        left.id.localeCompare(right.id)
+      );
+    const source = candidates[0] ?? this.createSource({
+      name: `Filesystem · ${basename(dirname(absolutePath)) || dirname(absolutePath)}`,
+      provider: "filesystem",
+      boundary: { root: dirname(absolutePath) },
+      policy: { deniedCapabilities: [] },
+    });
+    if (source.provider !== "filesystem") {
+      throw new ResourceCatalogError("provider-mismatch", "Filesystem source interning failed");
+    }
+    return this.intern({
+      sourceId: source.id,
+      address: {
+        kind: "filesystem",
+        path: relative(source.boundary.root, absolutePath).replaceAll(sep, "/"),
+      },
+      ...(value.mediaType === undefined ? {} : { mediaType: value.mediaType }),
+    });
   }
 
   get(resourceId: string): Resource | null {
@@ -680,6 +693,65 @@ export class ResourceCatalog {
     })();
   }
 
+  private filesystemReadFromCurrentRead(
+    resource: Resource,
+    source: ResourceSource,
+    requestedRevision: ResourceRevisionRef | null,
+  ): FilesystemResourceDocument {
+    if (
+      resource.provider !== "filesystem" ||
+      source.provider !== "filesystem" ||
+      resource.address.kind !== "filesystem"
+    ) {
+      throw new ResourceCatalogError(
+        "provider-mismatch",
+        "Filesystem resource identity is inconsistent",
+      );
+    }
+    const sourceRow = this.requireSourceRowFromCurrentRead(source.id);
+    this.assertConfinement(source, sourceRow.root_binding, resource.address);
+    const absolutePath = resolve(source.boundary.root, resource.address.path);
+    let stat: BigIntStats;
+    try {
+      stat = statSync(absolutePath, { bigint: true });
+    } catch {
+      throw new ResourceCatalogError("source-unavailable", "Filesystem Resource is unavailable");
+    }
+    if (!stat.isFile()) {
+      throw new ResourceCatalogError("source-unavailable", "Filesystem Resource is not a regular file");
+    }
+    if (stat.size > BigInt(MAX_FILESYSTEM_RESOURCE_BYTES)) {
+      throw new ResourceCatalogError(
+        "source-unavailable",
+        `Filesystem Resource exceeds ${MAX_FILESYSTEM_RESOURCE_BYTES / 1024 / 1024} MiB`,
+      );
+    }
+    const revision: ResourceRevisionRef = {
+      resourceId: resource.id,
+      addressVersion: resource.addressVersion,
+      revision: {
+        kind: "filesystem",
+        mtimeNs: stat.mtimeNs.toString(),
+        size: stat.size.toString(),
+      },
+    };
+    if (requestedRevision && !resourceRevisionRefEquals(requestedRevision, revision)) {
+      throw new ResourceCatalogError("stale-revision", "Filesystem Resource revision is unavailable");
+    }
+    let text: string;
+    try {
+      text = readFileSync(absolutePath, "utf8");
+    } catch {
+      throw new ResourceCatalogError("source-unavailable", "Filesystem Resource is unreadable");
+    }
+    return {
+      text,
+      contentHash: sha256(text),
+      capturedAt: new Date(Number(stat.mtimeMs)).toISOString(),
+      revision,
+    };
+  }
+
   describe(
     resourceId: string,
     destinationHostRegistered: boolean,
@@ -692,6 +764,18 @@ export class ResourceCatalog {
         ? null
         : normalizeResourceRevisionRef(revision, resource);
       const readingDenied = source.policy.deniedCapabilities.includes("read");
+      let filesystem: FilesystemResourceDocument | null = null;
+      if (resource.provider === "filesystem" && !readingDenied) {
+        try {
+          filesystem = this.filesystemReadFromCurrentRead(resource, source, requestedRevision);
+        } catch (error) {
+          if (
+            requestedRevision ||
+            !(error instanceof ResourceCatalogError) ||
+            error.code !== "source-unavailable"
+          ) throw error;
+        }
+      }
       const webRead = resource.provider === "web" && !readingDenied
         ? this.webReadFromCurrentRead(resource, requestedRevision)
         : null;
@@ -702,8 +786,13 @@ export class ResourceCatalog {
         capabilities: deriveResourceCapabilityReport(
           source,
           destinationHostRegistered,
-          resource.provider === "web" ? ["read", "refresh", "open-external"] : [],
+          resource.provider === "web"
+            ? ["read", "refresh", "open-external"]
+            : resource.provider === "filesystem"
+              ? ["read"]
+              : [],
         ),
+        filesystem,
         web: webRead?.document ?? null,
         webHistory: webRead?.history ?? null,
         webStatus: resource.provider === "web"
@@ -741,121 +830,6 @@ export class ResourceCatalog {
     return refresh;
   }
 
-  createWebAnnotation(value: unknown): WebResourceAnnotation {
-    if (typeof value !== "object" || value === null) {
-      throw new ResourceCatalogError("invalid-input", "Web annotation input must be an object");
-    }
-    const input = value as Partial<CreateWebResourceAnnotationInput>;
-    const resourceId = normalizeResourceId(input.resourceId);
-    const sourceSnapshotId = normalizeResourceId(
-      input.sourceSnapshotId,
-      "Web source snapshot ID",
-    );
-    const representationId = normalizeResourceId(
-      input.representationId,
-      "Web representation ID",
-    );
-    return this.database.transaction(() => {
-      const resource = this.requireFromCurrentRead(resourceId);
-      if (resource.provider !== "web") {
-        throw new ResourceCatalogError(
-          "provider-mismatch",
-          "Web annotations require a web resource",
-        );
-      }
-      const source = this.requireSourceFromCurrentRead(resource.sourceId);
-      if (source.policy.deniedCapabilities.includes("read")) {
-        throw new ResourceCatalogError(
-          "invalid-input",
-          "Workspace policy denies reading this resource",
-        );
-      }
-      const sourceSnapshot = this.webSourceSnapshotRowFromCurrentRead(sourceSnapshotId);
-      const representation = this.webRepresentationRowFromCurrentRead(representationId);
-      if (
-        !sourceSnapshot ||
-        sourceSnapshot.resource_id !== resourceId ||
-        !representation ||
-        representation.source_snapshot_id !== sourceSnapshotId
-      ) {
-        throw new ResourceCatalogError(
-          "stale-revision",
-          "Web annotation snapshot and representation IDs do not match this resource",
-        );
-      }
-      if (representation.markdown === null) {
-        throw new ResourceCatalogError(
-          "invalid-input",
-          "Web annotation representation content is unavailable",
-        );
-      }
-      const anchor = input.anchor;
-      if (
-        !anchor ||
-        !Number.isSafeInteger(anchor.start) ||
-        !Number.isSafeInteger(anchor.end) ||
-        anchor.start < 0 ||
-        anchor.end <= anchor.start ||
-        anchor.end > representation.markdown.length ||
-        representation.markdown.slice(anchor.start, anchor.end) !== anchor.exact
-      ) {
-        throw new ResourceCatalogError(
-          "invalid-input",
-          "Web annotation anchor must exactly match the immutable Markdown representation",
-        );
-      }
-      const prefix = representation.markdown.slice(
-        Math.max(0, anchor.start - 64),
-        anchor.start,
-      );
-      const suffix = representation.markdown.slice(anchor.end, anchor.end + 64);
-      if (anchor.prefix !== prefix || anchor.suffix !== suffix) {
-        throw new ResourceCatalogError(
-          "invalid-input",
-          "Web annotation context does not match the immutable Markdown representation",
-        );
-      }
-      const revision = normalizeRetainedResourceRevisionRef(
-        parsedJson(sourceSnapshot.revision_json, "Web source snapshot revision"),
-      );
-      const representationProvenance = this.webRepresentationProvenance(representation);
-      const annotation: WebResourceAnnotation = {
-        id: crypto.randomUUID(),
-        resourceId,
-        sourceSnapshotId,
-        representationId,
-        revision,
-        representation: representationProvenance,
-        anchor: {
-          start: anchor.start,
-          end: anchor.end,
-          exact: anchor.exact,
-          prefix,
-          suffix,
-        },
-        body: annotationText(input.body, "Web annotation body", 10_000),
-        createdAt: this.now(),
-      };
-      this.database.query(`
-        INSERT INTO web_resource_annotations (
-          id, resource_id, source_snapshot_id, representation_id,
-          revision_json, representation_json, anchor_json, body, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        annotation.id,
-        annotation.resourceId,
-        annotation.sourceSnapshotId,
-        annotation.representationId,
-        JSON.stringify(annotation.revision),
-        JSON.stringify(annotation.representation),
-        JSON.stringify(annotation.anchor),
-        annotation.body,
-        annotation.createdAt,
-      );
-      this.bumpSequence();
-      return annotation;
-    })();
-  }
 
 
   private async fetchWeb(
@@ -1332,30 +1306,6 @@ export class ResourceCatalog {
     };
   }
 
-  private webAnnotationFromRow(row: WebResourceAnnotationRow): WebResourceAnnotation {
-    const representation = this.webRepresentationRowFromCurrentRead(row.representation_id);
-    if (!representation) {
-      throw new ResourceCatalogError(
-        "invalid-input",
-        `Web annotation ${row.id} references a missing representation`,
-      );
-    }
-    return {
-      id: row.id,
-      resourceId: row.resource_id,
-      sourceSnapshotId: row.source_snapshot_id,
-      representationId: row.representation_id,
-      revision: normalizeRetainedResourceRevisionRef(
-        parsedJson(row.revision_json, "Web annotation revision"),
-      ),
-      representation: this.webRepresentationProvenance(representation),
-      anchor: parseWebResourceAnnotationAnchor(
-        parsedJson(row.anchor_json, "Web annotation anchor"),
-      ),
-      body: row.body,
-      createdAt: row.created_at,
-    };
-  }
 
   private webStatusFromCurrentRead(resource: Resource): WebResourceStatus {
     if (resource.provider !== "web") {
@@ -1404,21 +1354,11 @@ export class ResourceCatalog {
       WHERE ws.resource_id = ?
       ORDER BY wr.derived_at, wr.id
     `).all(resource.id) as WebRepresentationRow[];
-    const annotations = (this.database.query(`
-      SELECT id, resource_id, source_snapshot_id, representation_id,
-             revision_json, representation_json, anchor_json, body, created_at
-      FROM web_resource_annotations
-      WHERE resource_id = ?
-      ORDER BY created_at, id
-    `).all(resource.id) as WebResourceAnnotationRow[]).map((annotation) =>
-      this.webAnnotationFromRow(annotation)
-    );
     const history: WebResourceHistory = {
       sourceSnapshots: sourceRows.map((row) => this.webSourceSnapshotProvenance(row)),
       representations: representationRows.map((row) =>
         this.webRepresentationProvenance(row)
       ),
-      annotations,
     };
     let sourceRow: WebSourceSnapshotRow | null = null;
     let representationRow: WebRepresentationRow | null = null;
@@ -1673,24 +1613,26 @@ export class ResourceCatalog {
           checked_at TEXT,
           last_error TEXT
         );
-        CREATE TABLE IF NOT EXISTS web_resource_annotations (
-          id TEXT PRIMARY KEY,
-          resource_id TEXT NOT NULL REFERENCES resources(id) ON DELETE RESTRICT,
-          source_snapshot_id TEXT NOT NULL
-            REFERENCES web_source_snapshots(id) ON DELETE RESTRICT,
-          representation_id TEXT NOT NULL
-            REFERENCES web_representations(id) ON DELETE RESTRICT,
-          revision_json TEXT NOT NULL,
-          representation_json TEXT NOT NULL,
-          anchor_json TEXT NOT NULL,
-          body TEXT NOT NULL,
-          created_at TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS web_resource_annotations_resource
-          ON web_resource_annotations(resource_id, created_at, id);
-        CREATE INDEX IF NOT EXISTS web_resource_annotations_evidence
-          ON web_resource_annotations(source_snapshot_id, representation_id, created_at, id);
       `);
+      if (migratePie251Annotations) {
+        this.database.exec(`
+          CREATE TABLE web_resource_annotations (
+            id TEXT PRIMARY KEY,
+            resource_id TEXT NOT NULL REFERENCES resources(id) ON DELETE RESTRICT,
+            source_snapshot_id TEXT NOT NULL REFERENCES web_source_snapshots(id) ON DELETE RESTRICT,
+            representation_id TEXT NOT NULL REFERENCES web_representations(id) ON DELETE RESTRICT,
+            revision_json TEXT NOT NULL,
+            representation_json TEXT NOT NULL,
+            anchor_json TEXT NOT NULL,
+            body TEXT NOT NULL,
+            created_at TEXT NOT NULL
+          );
+          CREATE INDEX web_resource_annotations_resource
+            ON web_resource_annotations(resource_id, created_at, id);
+          CREATE INDEX web_resource_annotations_evidence
+            ON web_resource_annotations(source_snapshot_id, representation_id, created_at, id);
+        `);
+      }
       if (legacy) this.migrateLegacyRows();
       if (migratePie251Documents || migratePie251Annotations) {
         this.migratePie251WebRows(

@@ -59,7 +59,7 @@ import {
   type AnnotationBatchOperation,
   type AnnotationBatchReceipt,
   type AnnotationRecord,
-  type AnnotationTarget,
+  type AnnotationSubject,
   type AttentionClientState,
   type AttentionMarkInput,
   type AttentionTargetInput,
@@ -234,7 +234,7 @@ const propertyPatchOperationSchema = Type.Union([
   }),
 ]);
 
-const annotationAnchorSchema = Type.Object({
+const attentionAnchorSchema = Type.Object({
   start: Type.Integer({ minimum: 0, description: "UTF-16 start offset, inclusive" }),
   end: Type.Integer({ minimum: 1, description: "UTF-16 end offset, exclusive" }),
   excerpt: Type.String(),
@@ -244,21 +244,144 @@ const annotationAnchorSchema = Type.Object({
   sourceHash: Type.String(),
 });
 
-const annotationTargetSchema = Type.Union([
+const renderedPassageObservationSchema = Type.Object({
+  quote: Type.String(),
+  capturedAt: Type.String(),
+  hostBlockId: Type.String(),
+  paneId: Type.String(),
+  contentRevision: Type.Integer({ minimum: 0 }),
+  contextId: Type.String(),
+  detailClientId: Type.String(),
+  validation: Type.Literal("herdr-keybinding"),
+  projection: Type.Union([
+    Type.Literal("canonical"),
+    Type.Literal("resolved"),
+    Type.Literal("generated"),
+    Type.Literal("mixed"),
+  ]),
+});
+
+const annotationSubjectSchema = Type.Union([
+  Type.Object({ kind: Type.Literal("block"), blockId: Type.String() }),
+  Type.Object({ kind: Type.Literal("resource"), resourceId: Type.String() }),
+]);
+
+const resourceRevisionRefSchema = Type.Object({
+  resourceId: Type.String(),
+  addressVersion: Type.Integer({ minimum: 1 }),
+  revision: Type.Union([
+    Type.Object({
+      kind: Type.Literal("filesystem"),
+      mtimeNs: Type.String(),
+      size: Type.String(),
+    }),
+    Type.Object({
+      kind: Type.Literal("web"),
+      validator: Type.Union([
+        Type.Object({
+          kind: Type.Literal("etag"),
+          value: Type.String(),
+          weak: Type.Boolean(),
+        }),
+        Type.Object({ kind: Type.Literal("last-modified"), value: Type.String() }),
+        Type.Object({ kind: Type.Literal("content-hash"), value: Type.String() }),
+      ]),
+    }),
+    Type.Object({
+      kind: Type.Literal("github"),
+      validator: Type.Union([
+        Type.Object({ kind: Type.Literal("etag"), value: Type.String() }),
+        Type.Object({ kind: Type.Literal("updated-at"), value: Type.String() }),
+      ]),
+    }),
+  ]),
+});
+
+const annotationSourceSnapshotSchema = Type.Union([
   Type.Object({
     kind: Type.Literal("block"),
-    sourceBlockId: Type.String(),
-    anchor: annotationAnchorSchema,
+    blockId: Type.String(),
+    updatedAt: Type.String(),
+    contentHash: Type.String(),
   }),
   Type.Object({
-    kind: Type.Literal("file"),
-    sourceBlockId: Type.String(),
-    filePath: Type.String(),
-    startLine: Type.Integer({ minimum: 1 }),
-    endLine: Type.Integer({ minimum: 1 }),
-    anchor: annotationAnchorSchema,
+    kind: Type.Literal("resource"),
+    resourceId: Type.String(),
+    sourceSnapshotId: Type.Union([Type.String(), Type.Null()]),
+    revision: Type.Union([resourceRevisionRefSchema, Type.Null()]),
+  }),
+  Type.Object({
+    kind: Type.Literal("rendered"),
+    observation: renderedPassageObservationSchema,
   }),
 ]);
+
+const annotationRepresentationSchema = Type.Object({
+  id: Type.String(),
+  subject: annotationSubjectSchema,
+  sourceSnapshot: annotationSourceSnapshotSchema,
+  adapter: Type.Union([
+    Type.Object({ id: Type.String(), version: Type.Integer({ minimum: 1 }) }),
+    Type.Null(),
+  ]),
+  mediaType: Type.Union([Type.String(), Type.Null()]),
+  contentHash: Type.Union([Type.String(), Type.Null()]),
+  capturedAt: Type.String(),
+  observation: Type.Optional(renderedPassageObservationSchema),
+});
+
+const annotationAnchorSchema = Type.Union([
+  Type.Object({
+    kind: Type.Literal("text-quote"),
+    start: Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
+    end: Type.Union([Type.Integer({ minimum: 1 }), Type.Null()]),
+    exact: Type.String(),
+    prefix: Type.String(),
+    suffix: Type.String(),
+  }),
+  Type.Object({
+    kind: Type.Literal("dom-range"),
+    start: Type.Object({
+      selector: Type.String(),
+      textNode: Type.Integer({ minimum: 0 }),
+      offset: Type.Integer({ minimum: 0 }),
+    }),
+    end: Type.Object({
+      selector: Type.String(),
+      textNode: Type.Integer({ minimum: 0 }),
+      offset: Type.Integer({ minimum: 0 }),
+    }),
+    exact: Type.String(),
+  }),
+  Type.Object({
+    kind: Type.Literal("pdf-page-region"),
+    page: Type.Integer({ minimum: 1 }),
+    regions: Type.Array(Type.Object({
+      x: Type.Number(),
+      y: Type.Number(),
+      width: Type.Number({ minimum: 0 }),
+      height: Type.Number({ minimum: 0 }),
+    }), { minItems: 1 }),
+    exact: Type.Union([Type.String(), Type.Null()]),
+  }),
+  Type.Object({
+    kind: Type.Literal("structured-entity-field"),
+    entityType: Type.String(),
+    entityId: Type.String(),
+    fieldPath: Type.Array(Type.String(), { minItems: 1 }),
+    valueHash: Type.String(),
+  }),
+  Type.Object({
+    kind: Type.Literal("provider-comment-id"),
+    provider: Type.String(),
+    commentId: Type.String(),
+  }),
+]);
+
+const annotationTargetSchema = Type.Object({
+  representation: annotationRepresentationSchema,
+  anchor: annotationAnchorSchema,
+});
 
 const attentionTargetSchema = Type.Union([
   Type.Object({
@@ -267,7 +390,7 @@ const attentionTargetSchema = Type.Union([
     fragmentId: Type.Optional(Type.String()),
     sourceVersion: Type.Optional(Type.String()),
     sourceHash: Type.Optional(Type.String()),
-    anchor: Type.Optional(annotationAnchorSchema),
+    anchor: Type.Optional(attentionAnchorSchema),
   }),
   Type.Object({
     kind: Type.Literal("file"),
@@ -275,7 +398,7 @@ const attentionTargetSchema = Type.Union([
     filePath: Type.String(),
     startLine: Type.Integer({ minimum: 1 }),
     endLine: Type.Integer({ minimum: 1 }),
-    anchor: annotationAnchorSchema,
+    anchor: attentionAnchorSchema,
   }),
 ]);
 
@@ -2248,20 +2371,26 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
     ...outlinerToolPresentation("Outliner Annotations"),
     name: "outliner_annotations",
     label: "Outliner Annotations",
-    description: "Inspect durable annotation threads anchored to a block or file reference",
-    promptSnippet: "List durable comments for an Outliner source block",
+    description: "Inspect durable annotation threads for a block or Resource subject",
+    promptSnippet: "List durable comments for an Outliner block or Resource",
     parameters: Type.Object({
-      sourceBlockId: Type.Optional(Type.String()),
+      subject: Type.Optional(annotationSubjectSchema),
       includeResolved: Type.Optional(Type.Boolean()),
     }),
     async execute(_toolCallId, params) {
       await ensureService(false);
-      const sourceBlockId = params.sourceBlockId ?? await selectedBlockId();
-      if (!sourceBlockId) throw new Error("No annotation source block was provided or selected");
+      let subject: Exclude<AnnotationSubject, { readonly kind: "legacy-file" }>;
+      if (params.subject) {
+        subject = params.subject;
+      } else {
+        const blockId = await selectedBlockId();
+        if (!blockId) throw new Error("No annotation subject was provided or selected");
+        subject = { kind: "block", blockId };
+      }
       return toolResult(await client.request<AnnotationThread[]>({
         action: "annotations.list",
         query: {
-          sourceBlockId,
+          subject,
           includeResolved: params.includeResolved ?? true,
         },
       }));
@@ -2272,8 +2401,8 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
     ...outlinerToolPresentation("Outliner Annotate"),
     name: "outliner_annotate",
     label: "Outliner Annotate",
-    description: "Create one durable source-range comment without editing its target",
-    promptSnippet: "Annotate an exact UTF-16 range in an Outliner block or referenced file",
+    description: "Create one durable typed annotation without editing its subject",
+    promptSnippet: "Annotate typed representation evidence with a typed anchor",
     parameters: Type.Object({
       target: annotationTargetSchema,
       comment: Type.String(),
@@ -2285,7 +2414,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
         action: "annotations.create",
         requestId: params.requestId ?? `${context.sessionManager.getSessionId()}:${toolCallId}`,
         input: {
-          target: params.target as AnnotationTarget,
+          target: params.target,
           body: params.comment,
           source: "agent",
         },
@@ -2347,7 +2476,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
     ...outlinerToolPresentation("Outliner Annotation Batch"),
     name: "outliner_annotation_batch",
     label: "Outliner Annotation Batch",
-    description: "Atomically create or reply to multiple durable source annotations",
+    description: "Atomically create or reply to multiple durable typed annotations",
     promptSnippet: "Apply an idempotent all-or-nothing batch of Outliner comments",
     parameters: Type.Object({
       requestId: Type.Optional(Type.String()),
@@ -2374,7 +2503,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
               operationId: operation.operationId,
               type: "create",
               input: {
-                target: operation.target as AnnotationTarget,
+                target: operation.target,
                 body: operation.comment,
                 source: "agent",
               },

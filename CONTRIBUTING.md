@@ -208,7 +208,7 @@ CodeRabbit’s generic docstring warning is advisory in this repository. Add com
 
 ## Protocol and schema changes
 
-The current wire protocol is v40.
+The current wire protocol is v41.
 
 If request/response semantics change:
 

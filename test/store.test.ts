@@ -3,10 +3,20 @@ import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createAnnotationAnchor } from "../src/annotations";
+import {
+  annotationSourceHash,
+  createTextQuoteAnchor,
+} from "../src/annotations";
 import { PROPERTY_PARSER_VERSION } from "../src/properties";
 import { PAGE_ADDRESS_REGISTRY_VERSION } from "../src/page-addresses";
 import { OutlinerStore } from "../src/store";
+import type {
+  AnnotationCreateInput,
+  AnnotationRepresentation,
+  AnnotationTarget,
+  Block,
+  RenderedPassageObservation,
+} from "../src/types";
 import {
   isVirtualBranchOccurrence,
   projectVirtualBranches,
@@ -31,6 +41,39 @@ function insertIndexedProperty(
   store.database.query(
     "INSERT INTO block_properties (block_id, key, value, ordinal, raw, start, end, line, column, placement, scope, syntax) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 'metadata-line', 'block', 'bracket')",
   ).run(blockId, key, value, ordinal, raw, ordinal * 100, ordinal * 100 + raw.length, ordinal);
+}
+
+function blockAnnotationRepresentation(
+  block: Block,
+  id: string,
+): AnnotationRepresentation {
+  const contentHash = annotationSourceHash(block.text);
+  return {
+    id,
+    subject: { kind: "block", blockId: block.id },
+    sourceSnapshot: {
+      kind: "block",
+      blockId: block.id,
+      updatedAt: block.updatedAt,
+      contentHash,
+    },
+    adapter: null,
+    mediaType: "text/plain",
+    contentHash,
+    capturedAt: block.updatedAt,
+  };
+}
+
+function blockAnnotationTarget(
+  block: Block,
+  start: number,
+  end: number,
+  representationId: string,
+): AnnotationTarget {
+  return {
+    representation: blockAnnotationRepresentation(block, representationId),
+    anchor: createTextQuoteAnchor(block.text, start, end),
+  };
 }
 
 
@@ -2272,35 +2315,252 @@ Second paragraph`;
     rmSync(directory, { recursive: true, force: true });
   });
 
+  test("migrates legacy annotation evidence without changing thread identity", () => {
+    const store = makeStore();
+    const directory = stores[stores.length - 1].directory;
+    const path = join(directory, "outliner.sqlite");
+    const source = store.create("alpha beta gamma");
+    const promoted = store.create("Promoted decision");
+    const ordinary = store.create("Example\nBody [type::annotation]");
+    const encode = (value: string): string =>
+      `v1-${Buffer.from(value, "utf8").toString("base64url")}`;
+    const root = store.create([
+      "Comment on “ beta”",
+      [
+        "[type::annotation]",
+        "[annotation-source::user]",
+        "[annotation-status::resolved]",
+        `[promoted-block::${promoted.id}]`,
+        "[project::alpha]",
+        "[target-kind::block]",
+        `[source-block::${source.id}]`,
+        "[anchor-state::anchored]",
+        "[anchor-start::5]",
+        "[anchor-end::10]",
+        `[anchor-excerpt::${encode(" beta")}]`,
+        `[anchor-before::${encode("alpha")}]`,
+        `[anchor-after::${encode(" gamma")}]`,
+        `[source-version::${encode(source.updatedAt)}]`,
+        `[source-hash::${annotationSourceHash(source.text)}]`,
+      ].join(" "),
+      "Legacy root body [source-block::body-reference].",
+    ].join("\n"), source.id);
+    const reply = store.create([
+      "Comment on “beta”",
+      `[type::annotation-reply] [annotation-source::agent] [annotation-status::open] [parent-annotation::${root.id}]`,
+      "Legacy reply body.",
+    ].join("\n"), root.id);
+    const legacyFile = store.create([
+      "Comment on “ beta”",
+      [
+        "[type::annotation]",
+        "[annotation-source::user]",
+        "[annotation-status::open]",
+        "[target-kind::file]",
+        `[source-block::${source.id}]`,
+        `[target-file::${encode("missing.txt")}]`,
+        "[anchor-state::anchored]",
+        "[anchor-start::5]",
+        "[anchor-end::10]",
+        `[anchor-excerpt::${encode(" beta")}]`,
+        `[anchor-before::${encode("alpha")}]`,
+        `[anchor-after::${encode(" gamma")}]`,
+        `[source-version::${encode("legacy-version")}]`,
+        `[source-hash::${annotationSourceHash(source.text)}]`,
+      ].join(" "),
+      "Legacy file body.",
+    ].join("\n"), source.id);
+    const quarantinedText = [
+      "Comment on malformed legacy evidence",
+      [
+        "[type::annotation]",
+        "[annotation-source::user]",
+        "[annotation-status::invalid]",
+        "[target-kind::block]",
+        `[source-block::${source.id}]`,
+        "[anchor-state::anchored]",
+        "[anchor-start::not-a-number]",
+        "[anchor-end::10]",
+        `[anchor-excerpt::${encode(" beta")}]`,
+        `[source-version::${encode(source.updatedAt)}]`,
+        `[source-hash::${annotationSourceHash(source.text)}]`,
+      ].join(" "),
+      "Malformed body must survive.",
+    ].join("\n");
+    const quarantined = store.create(quarantinedText, source.id);
+    const invalidAnchorText = [
+      "Comment on invalid legacy offsets",
+      [
+        "[type::annotation]",
+        "[annotation-source::user]",
+        "[annotation-status::open]",
+        "[target-kind::block]",
+        `[source-block::${source.id}]`,
+        "[anchor-state::anchored]",
+        "[anchor-start::not-a-number]",
+        "[anchor-end::10]",
+        `[anchor-excerpt::${encode(" beta")}]`,
+        `[anchor-before::${encode("alpha")}]`,
+        `[anchor-after::${encode(" gamma")}]`,
+        `[source-version::${encode(source.updatedAt)}]`,
+        `[source-hash::${annotationSourceHash(source.text)}]`,
+      ].join(" "),
+      "Invalid offsets must not block startup.",
+    ].join("\n");
+    const invalidAnchor = store.create(invalidAnchorText, source.id);
+    const missingEvidenceText = [
+      "Comment on missing legacy evidence",
+      "[type::annotation] [annotation-source::user] [annotation-status::open] [target-kind::block] [project::retained]",
+      "Body without target evidence.",
+    ].join("\n");
+    const missingEvidence = store.create(missingEvidenceText, source.id);
+    const invalidStateText = root.text.replace(
+      "[anchor-state::anchored]",
+      "[anchor-state::invalid]",
+    );
+    const invalidState = store.create(invalidStateText, source.id);
+    store.database.exec(`
+      DELETE FROM metadata WHERE key = 'pie250_annotation_repository';
+      DROP TABLE annotation_resolution_events;
+      DROP TABLE annotation_targets;
+    `);
+    store.close();
 
-  test("creates idempotent source-range annotation threads with stable replies", () => {
+    const reopened = new OutlinerStore(path);
+    stores[stores.length - 1].store = reopened;
+    const migrated = reopened.getAnnotation(root.id);
+    const threads = reopened.listAnnotationThreads({
+      subject: { kind: "block", blockId: source.id },
+      includeResolved: true,
+    });
+
+    expect(migrated.block.id).toBe(root.id);
+    expect(migrated.body).toBe("Legacy root body [source-block::body-reference].");
+    expect(migrated.lifecycle).toBe("resolved");
+    expect(migrated.promotedBlockIds).toEqual([promoted.id]);
+    expect(migrated.originalTarget.representation.subject).toEqual({
+      kind: "block",
+      blockId: source.id,
+    });
+    expect(migrated.originalTarget.anchor).toMatchObject({
+      kind: "text-quote",
+      start: 5,
+      end: 10,
+      exact: " beta",
+    });
+    expect(migrated.currentResolution).toMatchObject({
+      sequence: 0,
+      status: "resolved",
+      appliesCurrent: true,
+    });
+    expect(threads[0]!.replies).toHaveLength(1);
+    expect(threads[0]!.replies[0]).toMatchObject({
+      block: { id: reply.id },
+      body: "Legacy reply body.",
+      source: "agent",
+      parentAnnotationId: root.id,
+    });
+    const migratedBlock = reopened.require(root.id);
+    expect(migratedBlock.updatedAt).toBe(root.updatedAt);
+    expect(migratedBlock.properties).toContainEqual({ key: "project", value: "alpha" });
+    expect(migratedBlock.properties.some((property) =>
+      property.key === "target-kind" ||
+      property.key === "source-block" ||
+      property.key === "anchor-excerpt"
+    )).toBe(false);
+    expect(reopened.require(ordinary.id).text).toBe("Example\nBody [type::annotation]");
+    const migratedFile = reopened.getAnnotation(legacyFile.id);
+    expect(migratedFile.originalTarget.representation.subject).toEqual({
+      kind: "legacy-file",
+      filePath: "missing.txt",
+      sourceBlockId: source.id,
+    });
+    expect(migratedFile.currentResolution.status).toBe("orphaned");
+    const legacyReply = reopened.replyToAnnotation("legacy-file-reply", {
+      annotationId: legacyFile.id,
+      body: "Still actionable.",
+      source: "agent",
+    }, "agent").annotations[0]!;
+    expect(legacyReply.parentAnnotationId).toBe(legacyFile.id);
+    expect(legacyReply.originalTarget).toEqual(migratedFile.originalTarget);
+    const resolvedLegacyFile = reopened.setAnnotationLifecycle({
+      annotationId: legacyFile.id,
+      lifecycle: "resolved",
+    }, { author: "agent", actorId: "omp" });
+    expect(resolvedLegacyFile.lifecycle).toBe("resolved");
+    expect(resolvedLegacyFile.originalTarget).toEqual(migratedFile.originalTarget);
+    const quarantinedBlocks = [
+      { block: quarantined, text: quarantinedText },
+      { block: invalidAnchor, text: invalidAnchorText },
+      { block: missingEvidence, text: missingEvidenceText },
+      { block: invalidState, text: invalidStateText },
+    ];
+    for (const entry of quarantinedBlocks) {
+      expect(reopened.require(entry.block.id).text).toBe(entry.text);
+      const quarantine = reopened.database.query(`
+        SELECT raw_text, reason
+        FROM annotation_migration_quarantine
+        WHERE annotation_block_id = ?
+      `).get(entry.block.id) as { raw_text: string; reason: string } | null;
+      expect(quarantine?.raw_text).toBe(entry.text);
+      expect(quarantine?.reason.length).toBeGreaterThan(0);
+      expect(reopened.database.query(`
+        SELECT annotation_block_id
+        FROM annotation_targets
+        WHERE annotation_block_id = ?
+      `).get(entry.block.id)).toBeNull();
+    }
+    expect(reopened.database.query(
+      "SELECT COUNT(*) AS count FROM annotation_migration_quarantine",
+    ).get()).toEqual({ count: quarantinedBlocks.length });
+    reopened.close();
+
+    const reopenedAgain = new OutlinerStore(path);
+    stores[stores.length - 1].store = reopenedAgain;
+    expect(reopenedAgain.listAnnotationThreads({
+      subject: { kind: "block", blockId: source.id },
+      includeResolved: true,
+    }).map((thread) => thread.block.id)).toEqual([root.id]);
+    expect(reopenedAgain.database.query(
+      "SELECT COUNT(*) AS count FROM annotation_migration_quarantine",
+    ).get()).toEqual({ count: quarantinedBlocks.length });
+    for (const entry of quarantinedBlocks) {
+      expect(reopenedAgain.require(entry.block.id).text).toBe(entry.text);
+    }
+  });
+
+
+
+  test("keeps annotation originals immutable while resolutions advance", () => {
     const store = makeStore();
     const source = store.create("alpha βeta gamma");
-    const target = {
-      kind: "block" as const,
-      sourceBlockId: source.id,
-      anchor: createAnnotationAnchor(source.text, 6, 10, source.updatedAt),
-    };
+    const originalTarget = blockAnnotationTarget(source, 6, 10, "block-source-v1");
+    const input = {
+      target: originalTarget,
+      body: "Check Unicode.",
+      source: "agent",
+    } satisfies AnnotationCreateInput;
     const created = store.createAnnotation(
       "annotation-create-1",
-      { target, body: "Check Unicode.", source: "agent" },
+      input,
       "agent",
       { actorId: "omp", sessionId: "session-1", taskId: "call-1" },
     );
     const replayed = store.createAnnotation(
       "annotation-create-1",
-      { target, body: "Ignored replay payload.", source: "agent" },
+      input,
       "agent",
       { actorId: "omp", sessionId: "session-1", taskId: "call-2" },
     );
     const annotation = created.annotations[0]!;
+
     expect(created.deduplicated).toBe(false);
     expect(replayed.deduplicated).toBe(true);
     expect(replayed.annotations[0]!.block.id).toBe(annotation.block.id);
-    expect(annotation.block.parentId).toBe(source.id);
-    expect(annotation.block.actorId).toBe("omp");
-    if (annotation.target.kind !== "block") throw new Error("Expected a block annotation");
-    expect(annotation.target.anchor.excerpt).toBe("βeta");
+    expect(annotation.originalTarget).toEqual(originalTarget);
+    expect(annotation.resolvedTarget).toEqual(originalTarget);
+    expect(annotation.currentResolution.status).toBe("resolved");
+    expect(annotation.resolutionHistory.map((event) => event.sequence)).toEqual([0]);
 
     const reply = store.replyToAnnotation(
       "annotation-reply-1",
@@ -2308,10 +2568,10 @@ Second paragraph`;
       "user",
     ).annotations[0]!;
     expect(reply.parentAnnotationId).toBe(annotation.block.id);
-    expect(reply.block.parentId).toBe(annotation.block.id);
+    expect(reply.originalTarget).toEqual(originalTarget);
 
     const threads = store.listAnnotationThreads({
-      sourceBlockId: source.id,
+      subject: { kind: "block", blockId: source.id },
       includeResolved: true,
     });
     expect(threads).toHaveLength(1);
@@ -2324,18 +2584,30 @@ Second paragraph`;
       source.updatedAt,
       { author: "user", actorId: "detail" },
     );
-    const shifted = store.reanchorAnnotationThreads({
-      sourceBlockId: source.id,
-      sourceText: shiftedSource.text,
-      sourceVersion: shiftedSource.updatedAt,
-    }, { author: "user", actorId: "detail" });
-    if (shifted[0]!.target.kind !== "block") throw new Error("Expected a block annotation");
-    if (shifted[0]!.replies[0]!.target.kind !== "block") {
-      throw new Error("Expected a block annotation reply");
+    const shiftedReceipt = store.reconcileAnnotationThreads({
+      subject: { kind: "block", blockId: source.id },
+      newRepresentation: blockAnnotationRepresentation(shiftedSource, "block-source-v2"),
+    });
+    expect(shiftedReceipt.changed).toBe(true);
+    const shifted = shiftedReceipt.threads;
+    const shiftedTarget = shifted[0]!.resolvedTarget;
+    if (!shiftedTarget || shiftedTarget.anchor.kind !== "text-quote") {
+      throw new Error("Expected a resolved text quote");
     }
-    expect(shifted[0]!.target.anchor.start).toBe(10);
-    expect(shifted[0]!.anchorState).toBe("anchored");
-    expect(shifted[0]!.replies[0]!.target.anchor.start).toBe(10);
+    expect(shifted[0]!.originalTarget).toEqual(originalTarget);
+    expect(shiftedTarget.anchor.start).toBe(10);
+    expect(shifted[0]!.currentResolution.status).toBe("resolved");
+    expect(shifted[0]!.resolutionHistory.map((event) => event.status)).toEqual([
+      "resolved",
+      "resolved",
+    ]);
+    expect(shifted[0]!.replies[0]!.resolvedTarget).toEqual(shiftedTarget);
+    const unchanged = store.reconcileAnnotationThreads({
+      subject: { kind: "block", blockId: source.id },
+      newRepresentation: blockAnnotationRepresentation(shiftedSource, "block-source-v2"),
+    });
+    expect(unchanged.changed).toBe(false);
+    expect(unchanged.threads[0]!.resolutionHistory).toHaveLength(2);
 
     const replacedSource = store.update(
       source.id,
@@ -2343,13 +2615,54 @@ Second paragraph`;
       shiftedSource.updatedAt,
       { author: "user", actorId: "detail" },
     );
-    const orphaned = store.reanchorAnnotationThreads({
-      sourceBlockId: source.id,
-      sourceText: replacedSource.text,
-      sourceVersion: replacedSource.updatedAt,
-    }, { author: "user", actorId: "detail" });
-    expect(orphaned[0]!.anchorState).toBe("orphaned");
-    expect(orphaned[0]!.replies[0]!.anchorState).toBe("orphaned");
+    const orphanedReceipt = store.reconcileAnnotationThreads({
+      subject: { kind: "block", blockId: source.id },
+      newRepresentation: blockAnnotationRepresentation(replacedSource, "block-source-v3"),
+    });
+    expect(orphanedReceipt.changed).toBe(true);
+    const orphaned = orphanedReceipt.threads[0]!;
+    expect(orphaned.originalTarget).toEqual(originalTarget);
+    expect(orphaned.resolvedTarget).toBeNull();
+    expect(orphaned.currentResolution.status).toBe("orphaned");
+    expect(orphaned.resolutionHistory.map((event) => event.status)).toEqual([
+      "resolved",
+      "resolved",
+      "orphaned",
+    ]);
+
+    const orphanedHistory = [...orphaned.resolutionHistory];
+    const approvedTarget = blockAnnotationTarget(
+      replacedSource,
+      10,
+      15,
+      "block-source-v3",
+    );
+    const approved = store.approveAnnotationResolution({
+      annotationId: annotation.block.id,
+      target: approvedTarget,
+    });
+    expect(approved.originalTarget).toEqual(originalTarget);
+    expect(approved.resolvedTarget).toEqual(approvedTarget);
+    expect(approved.currentResolution.status).toBe("resolved");
+    expect(approved.currentResolution.method).toEqual({
+      kind: "human",
+      method: "approved-target",
+    });
+    expect(approved.resolutionHistory.slice(0, orphanedHistory.length)).toEqual(
+      orphanedHistory,
+    );
+    expect(approved.resolutionHistory.map((event) => event.sequence)).toEqual([
+      0,
+      1,
+      2,
+      3,
+    ]);
+
+    const persisted = store.getAnnotation(annotation.block.id);
+    expect(persisted.originalTarget).toEqual(originalTarget);
+    expect(persisted.resolvedTarget).toEqual(approvedTarget);
+    expect(persisted.resolutionHistory).toEqual(approved.resolutionHistory);
+
     const promoted = store.create("Promoted decision");
     const resolved = store.setAnnotationLifecycle({
       annotationId: annotation.block.id,
@@ -2358,32 +2671,42 @@ Second paragraph`;
     }, { author: "agent", actorId: "omp" });
     expect(resolved.lifecycle).toBe("resolved");
     expect(resolved.promotedBlockIds).toEqual([promoted.id]);
+    expect(resolved.originalTarget).toEqual(originalTarget);
+    expect(resolved.resolvedTarget).toEqual(approvedTarget);
+    expect(resolved.resolutionHistory).toEqual(approved.resolutionHistory);
+    const replayedAfterSourceChange = store.createAnnotation(
+      "annotation-create-1",
+      input,
+      "agent",
+    );
+    expect(replayedAfterSourceChange.deduplicated).toBe(true);
+    expect(replayedAfterSourceChange.annotations[0]!.block.id).toBe(annotation.block.id);
   });
 
-  test("persists an annotation whose selected range starts at source offset zero", () => {
+  test("round-trips a text quote beginning at source offset zero", () => {
     const store = makeStore();
     const source = store.create("alpha 🧭 beta");
-    const receipt = store.createAnnotation("annotation-at-zero", {
-      target: {
-        kind: "block",
-        sourceBlockId: source.id,
-        anchor: createAnnotationAnchor(source.text, 0, 8, source.updatedAt),
-      },
+    const target = blockAnnotationTarget(source, 0, 8, "block-offset-zero");
+    const annotation = store.createAnnotation("annotation-at-zero", {
+      target,
       body: "Boundary anchor.",
       source: "user",
-    });
-    if (receipt.annotations[0]!.target.kind !== "block") {
-      throw new Error("Expected a block annotation");
+    }).annotations[0]!;
+    const persisted = store.getAnnotation(annotation.block.id);
+
+    expect(persisted.originalTarget).toEqual(target);
+    expect(persisted.resolvedTarget).toEqual(target);
+    if (
+      !persisted.resolvedTarget ||
+      persisted.resolvedTarget.anchor.kind !== "text-quote"
+    ) {
+      throw new Error("Expected a resolved text quote");
     }
-    expect(receipt.annotations[0]!.target.anchor.excerpt).toBe("alpha 🧭");
-    expect(receipt.annotations[0]!.block.properties).toContainEqual({
-      key: "anchor-before",
-      value: "v1-",
-    });
+    expect(persisted.resolvedTarget.anchor.start).toBe(0);
+    expect(persisted.resolvedTarget.anchor.exact).toBe("alpha 🧭");
   });
 
-
-  test("keeps observed hub quotes immutable across source refresh and replies", () => {
+  test("preserves rendered passage resolution during canonical block reconciliation", () => {
     const store = makeStore();
     const source = store.create("Hub\n!((view-next))");
     const observation = {
@@ -2394,11 +2717,28 @@ Second paragraph`;
       contentRevision: 42,
       contextId: "context-1",
       detailClientId: "detail-1",
-      validation: "herdr-keybinding" as const,
-      projection: "generated" as const,
-    };
+      validation: "herdr-keybinding",
+      projection: "generated",
+    } satisfies RenderedPassageObservation;
+    const originalTarget = {
+      representation: {
+        id: "rendered-context-1-r42",
+        subject: { kind: "block", blockId: source.id },
+        sourceSnapshot: { kind: "rendered", observation },
+        adapter: null,
+        mediaType: "text/plain",
+        contentHash: annotationSourceHash(observation.quote),
+        capturedAt: observation.capturedAt,
+        observation,
+      },
+      anchor: createTextQuoteAnchor(
+        observation.quote,
+        0,
+        observation.quote.length,
+      ),
+    } satisfies AnnotationTarget;
     const root = store.createAnnotation("observed-passage", {
-      target: { kind: "passage", sourceBlockId: source.id, observation },
+      target: originalTarget,
       body: "Discuss the displayed result.",
       source: "user",
     }).annotations[0]!;
@@ -2408,34 +2748,33 @@ Second paragraph`;
       source.updatedAt,
       { author: "user", actorId: "detail" },
     );
-    const threads = store.reanchorAnnotationThreads({
-      sourceBlockId: source.id,
-      sourceText: updated.text,
-      sourceVersion: updated.updatedAt,
-    }, { author: "user", actorId: "detail" });
+    const reconciliation = store.reconcileAnnotationThreads({
+      subject: { kind: "block", blockId: source.id },
+      newRepresentation: blockAnnotationRepresentation(updated, "block-hub-v2"),
+    });
+    expect(reconciliation.changed).toBe(false);
+    const thread = reconciliation.threads[0]!;
     const reply = store.replyToAnnotation("observed-reply", {
       annotationId: root.block.id,
       body: "Acknowledged.",
       source: "agent",
     }).annotations[0]!;
 
-    expect(threads[0]!.target).toEqual({
-      kind: "passage",
-      sourceBlockId: source.id,
-      observation,
-    });
-    expect(threads[0]!.anchorState).toBe("observed");
-    expect(reply.target).toEqual(threads[0]!.target);
+    expect(thread.originalTarget).toEqual(originalTarget);
+    expect(thread.resolvedTarget).toEqual(originalTarget);
+    expect(thread.currentResolution.status).toBe("resolved");
+    expect(thread.resolutionHistory.map((event) => event.status)).toEqual(["resolved"]);
+    expect(reply.originalTarget).toEqual(originalTarget);
+    expect(reply.resolvedTarget).toEqual(originalTarget);
+    expect(reply.currentResolution.status).toBe("resolved");
+    expect(reply.resolutionHistory).toEqual(thread.resolutionHistory);
   });
 
   test("rejects an invalid annotation batch without creating its valid prefix", () => {
     const store = makeStore();
     const source = store.create("one two");
-    const target = {
-      kind: "block" as const,
-      sourceBlockId: source.id,
-      anchor: createAnnotationAnchor(source.text, 0, 3, source.updatedAt),
-    };
+    const target = blockAnnotationTarget(source, 0, 3, "block-batch-source");
+
     expect(() =>
       store.createAnnotationBatch("annotation-batch-invalid", [
         {
@@ -2453,7 +2792,10 @@ Second paragraph`;
           },
         },
       ], "agent", { actorId: "omp" })
-    ).toThrow("Block not found");
-    expect(store.children(source.id)).toEqual([]);
+    ).toThrow();
+    expect(store.listAnnotationThreads({
+      subject: { kind: "block", blockId: source.id },
+      includeResolved: true,
+    })).toEqual([]);
   });
 });

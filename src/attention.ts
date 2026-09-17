@@ -1,12 +1,9 @@
-import {
-  annotationSourceHash,
-  normalizeAnnotationTarget,
-} from "./annotations";
+import { annotationSourceHash } from "./annotations";
 import type {
   AttentionClientState,
   AttentionMark,
   AttentionMarkInput,
-  AnnotationAnchor,
+  AttentionTextAnchor,
   AttentionRole,
   AttentionSourceState,
   AttentionTarget,
@@ -52,6 +49,39 @@ function normalizeRole(value: AttentionRole | undefined): AttentionRole {
   throw new Error(`Unsupported attention role: ${String(value)}`);
 }
 
+function normalizeTextAnchor(input: AttentionTextAnchor): AttentionTextAnchor {
+  if (!input || typeof input !== "object") {
+    throw new Error("Attention text anchor is required");
+  }
+  if (
+    !Number.isSafeInteger(input.start) ||
+    !Number.isSafeInteger(input.end) ||
+    input.start < 0 ||
+    input.end <= input.start
+  ) {
+    throw new Error("Attention range must select non-empty UTF-16 source text");
+  }
+  if (
+    typeof input.excerpt !== "string" ||
+    input.excerpt.length === 0 ||
+    input.end - input.start !== input.excerpt.length
+  ) {
+    throw new Error("Attention excerpt must match its UTF-16 range");
+  }
+  if (typeof input.contextBefore !== "string" || typeof input.contextAfter !== "string") {
+    throw new Error("Attention anchor context must be strings");
+  }
+  return {
+    start: input.start,
+    end: input.end,
+    excerpt: input.excerpt,
+    contextBefore: input.contextBefore,
+    contextAfter: input.contextAfter,
+    sourceVersion: printable(input.sourceVersion, "Attention source version"),
+    sourceHash: printable(input.sourceHash, "Attention source hash"),
+  };
+}
+
 function normalizeTarget(
   input: AttentionMarkInput["target"],
   source: Block,
@@ -61,39 +91,44 @@ function normalizeTarget(
   if (sourceBlockId !== source.id) throw new Error("Attention source block does not match resolved source");
 
   if (input.kind === "file") {
-    const target = normalizeAnnotationTarget({
+    const startLine = input.startLine;
+    const endLine = input.endLine;
+    if (
+      !Number.isSafeInteger(startLine) ||
+      !Number.isSafeInteger(endLine) ||
+      startLine < 1 ||
+      endLine < startLine
+    ) {
+      throw new Error("Attention file lines must form a positive range");
+    }
+    return {
       kind: "file",
       sourceBlockId,
-      filePath: input.filePath,
-      startLine: input.startLine,
-      endLine: input.endLine,
-      anchor: input.anchor,
-    });
-    if (target.kind !== "file") throw new Error("Invalid file attention target");
-    return target;
+      filePath: printable(input.filePath, "Attention file path", 2_000),
+      startLine,
+      endLine,
+      anchor: normalizeTextAnchor(input.anchor),
+    };
   }
   if (input.kind !== "block") {
     throw new Error(`Unsupported attention target kind: ${String((input as { kind?: unknown }).kind)}`);
   }
 
   const actualHash = annotationSourceHash(source.text);
-  const sourceVersion = input.anchor?.sourceVersion ?? input.sourceVersion ?? source.updatedAt;
-  const sourceHash = input.anchor?.sourceHash ?? input.sourceHash ?? actualHash;
+  const anchor = input.anchor ? normalizeTextAnchor(input.anchor) : undefined;
+  const sourceVersion = anchor?.sourceVersion ??
+    (input.sourceVersion === undefined
+      ? source.updatedAt
+      : printable(input.sourceVersion, "Attention source version"));
+  const sourceHash = anchor?.sourceHash ??
+    (input.sourceHash === undefined
+      ? actualHash
+      : printable(input.sourceHash, "Attention source hash"));
   if (sourceVersion !== source.updatedAt || sourceHash !== actualHash) {
     throw new Error("Attention source evidence does not match the current block");
   }
-  let anchor: AnnotationAnchor | undefined;
-  if (input.anchor) {
-    const target = normalizeAnnotationTarget({
-      kind: "block",
-      sourceBlockId,
-      anchor: input.anchor,
-    });
-    if (target.kind !== "block") throw new Error("Invalid block attention target");
-    if (source.text.slice(target.anchor.start, target.anchor.end) !== target.anchor.excerpt) {
-      throw new Error("Attention excerpt does not match the current block range");
-    }
-    anchor = target.anchor;
+  if (anchor && source.text.slice(anchor.start, anchor.end) !== anchor.excerpt) {
+    throw new Error("Attention excerpt does not match the current block range");
   }
   const fragmentId = input.fragmentId === undefined
     ? undefined

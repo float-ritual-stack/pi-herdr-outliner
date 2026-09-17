@@ -1,6 +1,6 @@
 import type {
   CreateResourceSourceInput,
-  CreateWebResourceAnnotationInput,
+  InternFilesystemResourceInput,
   InternResourceInput,
   RelocateResourceInput,
   ResourceRevisionRef,
@@ -8,7 +8,7 @@ import type {
 
 export type {
   CapabilityAssessment,
-  CreateWebResourceAnnotationInput,
+  InternFilesystemResourceInput,
   InternResourceReceipt,
   Resource,
   ResourceAddress,
@@ -24,8 +24,6 @@ export type {
   ResourceSource,
   WebRepresentationAdapter,
   WebRepresentationProvenance,
-  WebResourceAnnotation,
-  WebResourceAnnotationAnchor,
   WebResourceDocument,
   WebResourceProvenance,
   WebResourceStatus,
@@ -179,119 +177,245 @@ export interface BookmarkRemoveReceipt {
 
 export type AnnotationSource = "user" | "agent";
 export type AnnotationLifecycle = "open" | "resolved";
-export type AnnotationAnchorState = "anchored" | "ambiguous" | "orphaned" | "observed";
 
-export interface AnnotationAnchor {
-  start: number;
-  end: number;
-  excerpt: string;
-  contextBefore: string;
-  contextAfter: string;
-  sourceVersion: string;
-  sourceHash: string;
+export interface AnnotationAdapter {
+  readonly id: string;
+  readonly version: number;
 }
+
+export type AnnotationSubject =
+  | { readonly kind: "block"; readonly blockId: string }
+  | { readonly kind: "resource"; readonly resourceId: string }
+  | {
+      readonly kind: "legacy-file";
+      readonly sourceBlockId: string;
+      readonly filePath: string;
+    };
 
 export type RenderedPassageProjection = "canonical" | "resolved" | "generated" | "mixed";
 
 export interface RenderedSelectionEvidence {
-  quote: string;
-  capturedAt: string;
-  hostBlockId: string;
-  paneId: string;
-  contentRevision: number;
-  contextId: string;
-  detailClientId: string;
-  validation: "herdr-keybinding";
+  readonly quote: string;
+  readonly capturedAt: string;
+  readonly hostBlockId: string;
+  readonly paneId: string;
+  readonly contentRevision: number;
+  readonly contextId: string;
+  readonly detailClientId: string;
+  readonly validation: "herdr-keybinding";
 }
 
 export interface RenderedSelectionCapture extends RenderedSelectionEvidence {
-  snapshotText: string;
+  readonly snapshotText: string;
 }
 
 export interface RenderedPassageObservation extends RenderedSelectionEvidence {
-  projection: RenderedPassageProjection;
+  readonly projection: RenderedPassageProjection;
 }
 
-export type AnnotationTarget =
+export type AnnotationSourceSnapshot =
   | {
-      kind: "block";
-      sourceBlockId: string;
-      anchor: AnnotationAnchor;
-      observation?: RenderedPassageObservation;
+      readonly kind: "block";
+      readonly blockId: string;
+      readonly updatedAt: string;
+      readonly contentHash: string;
     }
   | {
-      kind: "file";
-      sourceBlockId: string;
-      filePath: string;
-      startLine: number;
-      endLine: number;
-      anchor: AnnotationAnchor;
+      readonly kind: "resource";
+      readonly resourceId: string;
+      readonly sourceSnapshotId: string | null;
+      readonly revision: ResourceRevisionRef | null;
     }
   | {
-      kind: "passage";
-      sourceBlockId: string;
-      observation: RenderedPassageObservation;
+      readonly kind: "rendered";
+      readonly observation: RenderedPassageObservation;
+    }
+  | {
+      readonly kind: "unknown";
+      readonly reason: string;
     };
 
+export interface AnnotationRepresentation {
+  readonly id: string;
+  readonly subject: AnnotationSubject;
+  readonly sourceSnapshot: AnnotationSourceSnapshot;
+  readonly adapter: AnnotationAdapter | null;
+  readonly mediaType: string | null;
+  readonly contentHash: string | null;
+  readonly capturedAt: string;
+  readonly observation?: RenderedPassageObservation;
+}
+
+export type AnnotationAnchor =
+  | {
+      readonly kind: "text-quote";
+      readonly start: number | null;
+      readonly end: number | null;
+      readonly exact: string;
+      readonly prefix: string;
+      readonly suffix: string;
+    }
+  | {
+      readonly kind: "dom-range";
+      readonly start: {
+        readonly selector: string;
+        readonly textNode: number;
+        readonly offset: number;
+      };
+      readonly end: {
+        readonly selector: string;
+        readonly textNode: number;
+        readonly offset: number;
+      };
+      readonly exact: string;
+    }
+  | {
+      readonly kind: "pdf-page-region";
+      readonly page: number;
+      readonly regions: readonly {
+        readonly x: number;
+        readonly y: number;
+        readonly width: number;
+        readonly height: number;
+      }[];
+      readonly exact: string | null;
+    }
+  | {
+      readonly kind: "structured-entity-field";
+      readonly entityType: string;
+      readonly entityId: string;
+      readonly fieldPath: readonly string[];
+      readonly valueHash: string;
+    }
+  | {
+      readonly kind: "provider-comment-id";
+      readonly provider: string;
+      readonly commentId: string;
+    };
+
+export interface AnnotationTarget {
+  readonly representation: AnnotationRepresentation;
+  readonly anchor: AnnotationAnchor;
+}
+
+export type AnnotationResolutionStatus =
+  | "resolved"
+  | "ambiguous"
+  | "orphaned"
+  | "unsupported"
+  | "rejected";
+
+export type AnnotationResolutionMethod =
+  | {
+      readonly kind: "codec";
+      readonly codecId: string;
+      readonly codecVersion: number;
+      readonly method: string;
+    }
+  | {
+      readonly kind: "human";
+      readonly method: string;
+    };
+
+export type AnnotationResolutionReviewer =
+  | { readonly kind: "system"; readonly id: string }
+  | { readonly kind: "user"; readonly id: string }
+  | { readonly kind: "agent"; readonly id: string };
+
+export interface AnnotationResolutionEvent {
+  readonly id: string;
+  readonly annotationId: string;
+  readonly sequence: number;
+  readonly sourceRepresentation: AnnotationRepresentation;
+  readonly targetRepresentation: AnnotationRepresentation;
+  readonly resolvedTarget: AnnotationTarget | null;
+  readonly method: AnnotationResolutionMethod;
+  readonly reviewer: AnnotationResolutionReviewer;
+  readonly confidence: number | null;
+  readonly status: AnnotationResolutionStatus;
+  readonly appliesCurrent: boolean;
+  readonly createdAt: string;
+}
+
 export interface AnnotationCreateInput {
-  target: AnnotationTarget;
-  body: string;
-  source: AnnotationSource;
+  readonly target: AnnotationTarget;
+  readonly body: string;
+  readonly source: AnnotationSource;
 }
 
 export interface AnnotationReplyInput {
-  annotationId: string;
-  body: string;
-  source: AnnotationSource;
+  readonly annotationId: string;
+  readonly body: string;
+  readonly source: AnnotationSource;
 }
 
 export type AnnotationBatchOperation =
-  | { operationId: string; type: "create"; input: AnnotationCreateInput }
-  | { operationId: string; type: "reply"; input: AnnotationReplyInput };
+  | { readonly operationId: string; readonly type: "create"; readonly input: AnnotationCreateInput }
+  | { readonly operationId: string; readonly type: "reply"; readonly input: AnnotationReplyInput };
 
 export interface AnnotationRecord {
-  block: Block;
-  target: AnnotationTarget;
-  body: string;
-  source: AnnotationSource;
-  lifecycle: AnnotationLifecycle;
-  promotedBlockIds?: string[];
-  anchorState: AnnotationAnchorState;
-  parentAnnotationId?: string;
+  readonly block: Block;
+  readonly originalTarget: AnnotationTarget;
+  readonly resolvedTarget: AnnotationTarget | null;
+  readonly currentResolution: AnnotationResolutionEvent;
+  readonly resolutionHistory: readonly AnnotationResolutionEvent[];
+  readonly body: string;
+  readonly source: AnnotationSource;
+  readonly lifecycle: AnnotationLifecycle;
+  readonly promotedBlockIds?: readonly string[];
+  readonly parentAnnotationId?: string;
 }
 
 export interface AnnotationThread extends AnnotationRecord {
-  replies: AnnotationRecord[];
+  readonly replies: AnnotationRecord[];
 }
 
 export interface AnnotationBatchReceipt {
-  annotations: AnnotationRecord[];
-  deduplicated: boolean;
+  readonly annotations: AnnotationRecord[];
+  readonly deduplicated: boolean;
 }
 
 export interface AnnotationListQuery {
-  sourceBlockId?: string;
-  filePath?: string;
-  lifecycle?: AnnotationLifecycle;
-  includeResolved?: boolean;
+  readonly subject: Exclude<AnnotationSubject, { readonly kind: "legacy-file" }>;
+  readonly lifecycle?: AnnotationLifecycle;
+  readonly includeResolved?: boolean;
 }
 
-export interface AnnotationReanchorInput {
-  sourceBlockId: string;
-  sourceText: string;
-  sourceVersion: string;
-  sourceHash?: string;
+export interface AnnotationReconcileInput {
+  readonly subject: Exclude<AnnotationSubject, { readonly kind: "legacy-file" }>;
+  readonly newRepresentation: AnnotationRepresentation;
+  readonly content?: string;
+}
+
+export interface AnnotationReconcileReceipt {
+  readonly threads: AnnotationThread[];
+  readonly changed: boolean;
+}
+
+export interface AnnotationApproveResolutionInput {
+  readonly annotationId: string;
+  readonly target: AnnotationTarget;
 }
 
 export interface AnnotationLifecycleInput {
-  annotationId: string;
-  lifecycle: AnnotationLifecycle;
-  promotedBlockId?: string;
+  readonly annotationId: string;
+  readonly lifecycle: AnnotationLifecycle;
+  readonly promotedBlockId?: string;
 }
+
 
 export type AttentionTone = "current" | "info" | "warning" | "error" | "match" | "dim";
 export type AttentionRole = "current" | "supporting";
 export type AttentionSourceState = "active" | "stale";
+export interface AttentionTextAnchor {
+  readonly start: number;
+  readonly end: number;
+  readonly excerpt: string;
+  readonly contextBefore: string;
+  readonly contextAfter: string;
+  readonly sourceVersion: string;
+  readonly sourceHash: string;
+}
 
 export type AttentionTargetInput =
   | {
@@ -300,7 +424,7 @@ export type AttentionTargetInput =
       fragmentId?: string;
       sourceVersion?: string;
       sourceHash?: string;
-      anchor?: AnnotationAnchor;
+      anchor?: AttentionTextAnchor;
     }
   | {
       kind: "file";
@@ -308,7 +432,7 @@ export type AttentionTargetInput =
       filePath: string;
       startLine: number;
       endLine: number;
-      anchor: AnnotationAnchor;
+      anchor: AttentionTextAnchor;
     };
 
 export type AttentionTarget =
@@ -318,7 +442,7 @@ export type AttentionTarget =
       fragmentId?: string;
       sourceVersion: string;
       sourceHash: string;
-      anchor?: AnnotationAnchor;
+      anchor?: AttentionTextAnchor;
     }
   | {
       kind: "file";
@@ -326,7 +450,7 @@ export type AttentionTarget =
       filePath: string;
       startLine: number;
       endLine: number;
-      anchor: AnnotationAnchor;
+      anchor: AttentionTextAnchor;
     };
 
 export interface AttentionMarkInput {
@@ -823,7 +947,7 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 40;
+export const OUTLINER_PROTOCOL_VERSION = 41;
 
 
 export interface OutlinerServiceStatus {
@@ -850,6 +974,7 @@ export type OutlinerRequest =
   | { id: string; action: "resource-sources.list" }
   | { id: string; action: "resource-sources.get"; sourceId: string }
   | { id: string; action: "resources.intern"; input: InternResourceInput }
+  | { id: string; action: "resources.intern-filesystem"; input: InternFilesystemResourceInput }
   | { id: string; action: "resources.get"; resourceId: string }
   | { id: string; action: "resources.relocate"; input: RelocateResourceInput }
   | {
@@ -869,11 +994,6 @@ export type OutlinerRequest =
       action: "resources.refresh";
       resourceId: string;
       destinationClientId: string;
-    }
-  | {
-      id: string;
-      action: "resources.web-annotations.create";
-      input: CreateWebResourceAnnotationInput;
     }
   | { id: string; action: "attention.get"; targetClientId: string }
   | { id: string; action: "attention.mark"; input: AttentionMarkInput }
@@ -1006,6 +1126,11 @@ export type OutlinerRequest =
     }
   | {
       id: string;
+      action: "annotations.get";
+      annotationId: string;
+    }
+  | {
+      id: string;
       action: "annotations.reply";
       requestId: string;
       input: AnnotationReplyInput;
@@ -1022,9 +1147,13 @@ export type OutlinerRequest =
     }
   | {
       id: string;
-      action: "annotations.reanchor";
-      input: AnnotationReanchorInput;
-      mutation: MutationProvenance;
+      action: "annotations.reconcile";
+      input: AnnotationReconcileInput;
+    }
+  | {
+      id: string;
+      action: "annotations.approve-resolution";
+      input: AnnotationApproveResolutionInput;
     }
   | {
       id: string;

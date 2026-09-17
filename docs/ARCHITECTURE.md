@@ -49,7 +49,7 @@ PageUp/PageDown move the selected expanded row's offset by one Tree body viewpor
 
 [`src/detail-main.ts`](../src/detail-main.ts) selects the Pi TUI Detail implementation, which separates:
 
-- [`DetailController`](../src/detail-controller.ts) — modes, effects, optimistic saves, read-only source-range selection, durable annotation creation/reanchoring/reveal, PreviewRegion actions, property-inspector state, lazy backlink state, file behavior, and cursor visibility;
+- [`DetailController`](../src/detail-controller.ts) — modes, effects, optimistic saves, unified typed annotation capture/reconciliation/reveal, PreviewRegion actions, property-inspector state, lazy backlink state, file behavior, and cursor visibility;
 - [`detail-pi.ts`](../src/detail-pi.ts) — terminal lifecycle, input, Pi layout switching, and dedicated-inspector startup;
 - [`detail-pi-preview.ts`](../src/detail-pi-preview.ts) — authored Markdown, anchored annotation gutter markers with inline threaded disclosure, callouts, property rows, and generated Backlinks in one `ScrollView`;
 - [`open-destination-chooser.ts`](../src/open-destination-chooser.ts) — shared destination state, fixed key handling, routing fallback, and idle dismissal for every open-capable Detail surface;
@@ -82,12 +82,13 @@ when one does not. `r` explicitly refreshes against the provider, `v` selects
 exact cached Markdown for an Outliner-owned annotation, and `Alt+O` opens the
 canonical HTTP URL externally. Detail renders the mutable
 `fresh | stale | unknown | refreshing | failed` status separately from the
-selected immutable content. `ResourceDescription.webHistory` carries retained
-source snapshots, representations, and annotations independently of the
-nullable selected document, so relocation and offline failure do not hide
-evidence. Detail exposes snapshot/representation identifiers and metadata,
-including explicit unknown fields on incomplete legacy evidence. Failed
-refreshes keep prior content and annotation evidence visible. Other Resource providers
+selected immutable content. `ResourceDescription.webHistory` carries only
+retained source snapshots and representations. Annotations are listed by
+Resource subject through `AnnotationRepository`, so relocation and offline
+failure do not hide target or resolution evidence. Detail exposes
+snapshot/representation identifiers and metadata, including explicit unknown
+fields on incomplete legacy evidence. Failed refreshes keep prior content and
+annotation history visible. Other Resource providers
 still render read-only identity metadata. Block editing, backlinks, and Tree
 reveal stay unavailable for Resource targets. An unlocked Detail is eligible for
 same-tab Tree previews and confirmed opens. Ordinary navigation can target only
@@ -291,28 +292,32 @@ project-documentation mutations.
 - `web_source_snapshots` — immutable provider observations keyed by snapshot ID, with Resource/address epoch, canonical URL, source hash, provider revision and validators, fetched time, and full source HTML. HTML is nullable for migrated legacy singleton caches; URL, source hash, and fetch time are also nullable for unmatched legacy annotation evidence that never recorded them.
 - `web_representations` — immutable named derivations keyed by representation ID and source snapshot ID, with media type, adapter identity and version, representation hash, derived time, and Markdown content. Markdown is nullable for metadata-only legacy annotation evidence, and its unrecorded derivation time remains null.
 - `web_resource_state` — one mutable row per web Resource containing current snapshot and representation pointers, five-state freshness, check/error diagnostics, address epoch, and the compare-and-swap version used to reject stale refresh completion.
-- `web_resource_annotations` — append-only annotation evidence with foreign keys to the Resource, source snapshot, and representation, plus retained provider revision and representation provenance, exact anchor, body, and timestamp.
+- `annotation_targets` — one immutable original target JSON document per root annotation block, with indexed block, Resource, or honest legacy-file subject identity.
+- `annotation_resolution_events` — append-only, per-annotation resolution history. The latest event with `applies_current` supplies current status and optional resolved target; rejected proposals remain history without moving current resolution.
+- `annotation_migration_quarantine` — raw legacy root blocks that cannot be parsed safely, preserving block ID, text, failure reason, and timestamp without fabricating a target.
 
-`web_resource_documents` no longer exists. Migration creates one immutable
-snapshot and representation for each legacy singleton cache, points
-`web_resource_state` at them, and attaches legacy annotations to those exact
-records in one transaction. The migration is idempotent. It marks unavailable
-legacy HTML, Markdown, URL, hash, fetch time, or derivation time as unknown
-instead of synthesizing bytes or metadata. Refresh stores source and
-representation records before it advances the state pointers; relocation
-clears those pointers for the new address epoch while `webHistory` keeps the
-retained evidence inspectable.
+Replies have no target row and materialize the root target and history when
+read. Ordinary blocks remain canonical for comment/reply content, outline
+placement, lifecycle, and promotion presentation. Their properties retain only
+annotation type/source/status, parent annotation, and promoted blocks.
+Migration preserves existing block, reply, and web annotation IDs and evidence
+transactionally. A legacy file path maps to a filesystem Resource only when an
+existing Resource matches; otherwise it becomes an explicit `legacy-file`
+subject with an orphaned migration event. Malformed legacy roots are quarantined
+verbatim and excluded from target migration and metadata stripping. Missing
+bytes and provenance remain unknown rather than being synthesized.
 
 ## Protocol
 
-The current protocol version is `40`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
+The current protocol version is `41`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
 
 ### Important request families
 
 - health: `ping`
 - canonical reads: `get`, `children`, `blocks.context`, `workspace.snapshot`
 - bounded search: `blocks.query`
-- resource identity and documents: `resource-sources.create | list | get`, `resources.intern | get | relocate | describe | open | refresh`, and `resources.web-annotations.create`
+- resource identity and documents: `resource-sources.create | list | get` and `resources.intern | intern-filesystem | get | relocate | describe | open | refresh`
+- unified annotations: `annotations.get | create | reply | batch | list | reconcile | approve-resolution | lifecycle`
 - browsing contexts and Tree previews: `browsing-context.get`, `browsing-context.publish`
 - typed navigation: `navigation.resolve` preflight and `navigation.dispatch` with explicit block/resource targets and `preview | open | reveal`; resource targets cannot use block-Tree `reveal`
 - selection-neutral capture: `capture.create`
@@ -739,15 +744,45 @@ row at the prior index or the previous surviving row.
 
 Editor undo/redo stores at most 100 per-session snapshots. Consecutive typing, backspace, and forward delete coalesce; cursor and selection state restore with text; divergent edits invalidate redo. New edit/comment sessions start with empty history. Modal editing, registers, macros, and programmable operator systems remain explicit non-goals for the custom buffer.
 
-## Durable source and rendered-passage annotations
+## Unified durable annotations
 
-Detail has two explicit annotation targets. Source targets keep the existing locked authored-text selection for canonical blocks and line-range selection for referenced files. They store renderer-neutral UTF-16 start/end offsets, an encoded exact excerpt, bounded before/after context, source version/hash, provenance, lifecycle, anchor state, and file identity/lines when applicable.
+`AnnotationRepository` is the sole durable target and resolution owner for
+block, filesystem Resource, rendered, web, structured, PDF, DOM, and provider
+annotations. Ordinary root/reply blocks remain canonical content and lifecycle
+presentation. Every root exposes an immutable `originalTarget`, an optional
+`resolvedTarget`, the `currentResolution`, and complete append-only
+`resolutionHistory`; replies materialize those root values without duplicating
+sidecar rows.
 
-Rendered-passage targets arrive from a retained Herdr copy-mode selection. A configured `plugin_action` command causes Herdr's client shell to validate anchor/cursor coordinates and `content_revision` through `command.invoke`; Herdr rejects stale coordinates before starting `float.pi-outliner.comment-selection`. Herdr exposes the validated exact text—but not those private coordinates—in the plugin context. The action accepts only that keybinding handoff, brackets live-Detail discovery with two bounded recent-output `pane.read` snapshots, and rejects changed revision/text/registration or a quote absent from the captured pane history. The service then revalidates pane, Detail client, browsing context, host block, validation method, capture time, and stable-snapshot evidence before broadcasting the command. Herdr copy mode owns multi-viewport selection and edge autoscroll; no clipboard or display server participates.
+An `AnnotationTarget` pairs one representation with one typed anchor.
+Representations identify their block or Resource subject, block/resource/
+rendered/unknown source snapshot evidence, adapter identity and version, media
+type, content hash, capture time, and optional rendered passage observation.
+Anchors are discriminated as `text-quote`, `dom-range`, `pdf-page-region`,
+`structured-entity-field`, or `provider-comment-id`. This is the codec seam:
+surfaces capture and display typed evidence without learning persistence or
+resolution-table details.
 
-The Detail classifies the frozen read projection at capture time. A canonical quote with one exact occurrence stores both its immutable rendered observation and the existing source anchor. Resolved, generated, transcluded, mixed, formatted-only, or ambiguous text stores a `passage` target with exact quote, capture time, host block, pane/revision, Detail client, browsing context, validation method, and projection class but no invented anchor. Replies inherit the root target. Projection refreshes never rewrite observations; reveal for an observed-only target returns to its host block.
+Block selection captures a block representation. File selection first calls
+`resources.intern-filesystem` and targets that filesystem Resource; the path is
+a locator, never annotation identity. Cached web selection reuses the retained
+source snapshot and representation. Herdr rendered selection retains its
+validated passage observation in a rendered representation and uses a text
+quote rather than a separate passage target. All surfaces then call the same
+`annotations.create` action and query by block or Resource subject.
 
-Both target types create ordinary canonical child blocks; replies are children of a root annotation. Reanchoring trusts source offsets only while source version or hash agrees. Changed sources search the excerpt and captured context; one defensible match updates canonical source targets and their replies, while tied matches become `ambiguous` and missing excerpts become `orphaned`. Observed-only targets remain `observed` and are skipped by source reanchoring. Detail shows exact source markers where an anchor exists, opens either canonical thread, and reveals block/file ranges only when defensible. Agent create/reply/batch operations use the same service path; request IDs make replays idempotent and the service validates an entire batch before its transaction. Annotation content never mutates the target block, file, or projection.
+Creation appends sequence 0 as resolved. Reconciliation appends another event:
+an unchanged position or unique exact quote resolves automatically, duplicate
+exact quotes become ambiguous, a missing quote becomes orphaned, and an anchor
+without a PIE-250 codec becomes unsupported. Approval appends a human-reviewed
+resolution. Rejected proposals stay in history and do not replace the latest
+applied current event. Detail renders original and current evidence and reveals
+only a currently resolved positioned text quote; orphaned and unsupported
+threads remain valid and visible.
+
+PIE-250 deliberately stops at unchanged-position and unique exact-quote
+reconciliation. Context ranking, fuzzy text, structural, semantic, and
+provider-specific resolution ladders belong to PIE-252.
 
 ## Ephemeral attention
 

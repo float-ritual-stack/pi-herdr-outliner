@@ -38,8 +38,9 @@ import {
 import {
   OUTLINER_PROTOCOL_VERSION,
   type AnnotationBatchReceipt,
-  type AnnotationReanchorInput,
-  type CreateWebResourceAnnotationInput,
+  type AnnotationListQuery,
+  type AnnotationReconcileInput,
+  type AnnotationReconcileReceipt,
   type AnnotationThread,
   type AttentionClientState,
   type BacklinkCollection,
@@ -47,11 +48,11 @@ import {
   type BookmarkStatus,
   type BookmarkToggleReceipt,
   type BrowsingContextState,
+  type InternResourceReceipt,
   type PageAddressCollection,
   type OutlinerNavigationTarget,
   type OutlinerServiceStatus,
   type ResourceDescription,
-  type WebResourceAnnotation,
   type ResolvedBlockReferences,
   type SelectionContext,
   type VisibleBlockCollection,
@@ -237,10 +238,10 @@ const effects: DetailEffects = {
       author: "user",
     });
   },
-  async createWebAnnotation(input: CreateWebResourceAnnotationInput) {
-    return client.request<WebResourceAnnotation>({
-      action: "resources.web-annotations.create",
-      input,
+  async internFilesystem(path) {
+    return client.request<InternResourceReceipt>({
+      action: "resources.intern-filesystem",
+      input: { path },
     });
   },
   async refreshResource(resourceId) {
@@ -254,17 +255,22 @@ const effects: DetailEffects = {
     );
   },
   openExternal: openExternalUrl,
-  async listAnnotations(sourceBlockId) {
-    return client.request<AnnotationThread[]>({
-      action: "annotations.list",
-      query: { sourceBlockId, includeResolved: true },
+  async getAnnotation(annotationId) {
+    return client.request<AnnotationThread>({
+      action: "annotations.get",
+      annotationId,
     });
   },
-  async reanchorAnnotations(input: AnnotationReanchorInput) {
+  async listAnnotations(query: AnnotationListQuery) {
     return client.request<AnnotationThread[]>({
-      action: "annotations.reanchor",
+      action: "annotations.list",
+      query,
+    });
+  },
+  async reconcileAnnotations(input: AnnotationReconcileInput) {
+    return client.request<AnnotationReconcileReceipt>({
+      action: "annotations.reconcile",
       input,
-      mutation: { author: "user", actorId: "detail" },
     });
   },
   async getAttention() {

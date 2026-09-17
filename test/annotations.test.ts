@@ -1,13 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
-  annotationOffsetsForLineRange,
-  createAnnotationAnchor,
-  formatAnnotation,
-  parseAnnotationBlock,
-  reanchorAnnotation,
+  createTextQuoteAnchor,
+  formatAnnotationBlock,
+  parseAnnotationBlockContent,
 } from "../src/annotations";
 import { parseProperties } from "../src/properties";
-import type { Block } from "../src/types";
+import type { AnnotationCreateInput, AnnotationTarget, Block } from "../src/types";
 
 function annotationBlock(text: string): Block {
   return {
@@ -22,107 +20,118 @@ function annotationBlock(text: string): Block {
   };
 }
 
-describe("durable annotation anchors", () => {
-  test("round-trips multiline Unicode block ranges in UTF-16 units", () => {
-    const source = "first\nemoji 🧭 and é\nlast";
-    const start = source.indexOf("🧭");
-    const end = source.indexOf("\nlast");
-    const anchor = createAnnotationAnchor(source, start, end, "block-version-1");
-    const text = formatAnnotation({
-      target: {
+function annotationTarget(): AnnotationTarget {
+  const source = "first\nemoji 🧭 and é\nlast";
+  const start = source.indexOf("🧭");
+  const end = source.indexOf("\nlast");
+  return {
+    representation: {
+      id: "representation-1",
+      subject: {
         kind: "block",
-        sourceBlockId: "22222222-2222-4222-8222-222222222222",
-        anchor,
+        blockId: "22222222-2222-4222-8222-222222222222",
       },
-      body: "Keep the grapheme and combining mark exact.",
+      sourceSnapshot: {
+        kind: "block",
+        blockId: "22222222-2222-4222-8222-222222222222",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        contentHash: "source-hash",
+      },
+      adapter: null,
+      mediaType: "text/plain",
+      contentHash: "representation-hash",
+      capturedAt: "2026-01-01T00:00:00.000Z",
+    },
+    anchor: createTextQuoteAnchor(source, start, end),
+  };
+}
+
+function annotationInput(body: string, source: AnnotationCreateInput["source"]): AnnotationCreateInput {
+  return {
+    target: annotationTarget(),
+    body,
+    source,
+  };
+}
+
+describe("annotation block content", () => {
+  test("round-trips root content and lifecycle state", () => {
+    const body = "Keep the grapheme and combining mark exact.\nVerify it before resolving.";
+    const text = formatAnnotationBlock(annotationInput(body, "agent"), undefined, {
+      lifecycle: "resolved",
+      promotedBlockIds: [
+        "33333333-3333-4333-8333-333333333333",
+        "44444444-4444-4444-8444-444444444444",
+      ],
+    });
+
+    const content = parseAnnotationBlockContent(annotationBlock(text));
+
+    expect({
+      body: content.body,
+      source: content.source,
+      lifecycle: content.lifecycle,
+      promotedBlockIds: content.promotedBlockIds,
+      parentAnnotationId: content.parentAnnotationId,
+    }).toEqual({
+      body,
       source: "agent",
+      lifecycle: "resolved",
+      promotedBlockIds: [
+        "33333333-3333-4333-8333-333333333333",
+        "44444444-4444-4444-8444-444444444444",
+      ],
+      parentAnnotationId: undefined,
     });
-
-    expect(text.split("\n")[0]).toBe("Comment on “🧭 and é”");
-    expect(text.split("\n")[0]).not.toContain("22222222-2222-4222-8222-222222222222");
-
-    const parsed = parseAnnotationBlock(annotationBlock(text));
-    expect(parsed.target.kind).toBe("block");
-    if (parsed.target.kind !== "block") throw new Error("Expected a block annotation");
-    expect(parsed.target.anchor).toEqual(anchor);
-    expect(parsed.target.anchor.end - parsed.target.anchor.start).toBe(anchor.excerpt.length);
-    expect(parsed.body).toBe("Keep the grapheme and combining mark exact.");
   });
 
-  test("computes exact CRLF file offsets without including delimiters", () => {
-    const source = "one\r\ntwo α\r\nthree\r\n";
-    const range = annotationOffsetsForLineRange(source, 2, 3);
-    expect(source.slice(range.start, range.end)).toBe("two α\r\nthree");
-  });
+  test("round-trips reply membership with an open lifecycle", () => {
+    const parentAnnotationId = "55555555-5555-4555-8555-555555555555";
+    const text = formatAnnotationBlock(
+      annotationInput("A follow-up from the reviewer.", "user"),
+      parentAnnotationId,
+    );
 
-  test("keeps offsets when the excerpt is unchanged at its original location", () => {
-    const source = "prefix target suffix";
-    const anchor = createAnnotationAnchor(source, 7, 13, "v1");
-    const result = reanchorAnnotation(anchor, source, "v2");
-    expect(result.state).toBe("anchored");
-    expect(result.anchor.start).toBe(7);
-    expect(result.anchor.sourceVersion).toBe("v2");
-  });
+    const content = parseAnnotationBlockContent(annotationBlock(text));
 
-  test("reanchors uniquely after text is inserted before the range", () => {
-    const source = "prefix target suffix";
-    const anchor = createAnnotationAnchor(source, 7, 13, "v1");
-    const current = "new " + source;
-    const result = reanchorAnnotation(anchor, current, "v2");
-    expect(result.state).toBe("anchored");
-    expect(result.anchor.start).toBe(11);
-    expect(result.anchor.excerpt).toBe("target");
-  });
-
-  test("uses captured context to distinguish repeated excerpts", () => {
-    const source = "left-A target right-A | left-B target right-B";
-    const start = source.lastIndexOf("target");
-    const anchor = createAnnotationAnchor(source, start, start + 6, "v1", undefined, 8);
-    const current = "left-B target right-B | left-A target right-A";
-    const result = reanchorAnnotation(anchor, current, "v2");
-    expect(result.state).toBe("anchored");
-    expect(current.slice(result.anchor.start, result.anchor.end)).toBe("target");
-    expect(current.slice(result.anchor.end, result.anchor.end + 8)).toBe(" right-B");
-  });
-
-  test("reports ambiguity and orphaning instead of guessing", () => {
-    const repeated = "x target y x target y";
-    const anchor = createAnnotationAnchor(repeated, 2, 8, "v1", undefined, 1);
-    const moved = reanchorAnnotation(anchor, "zz target q zz target q", "v2");
-    expect(moved.state).toBe("ambiguous");
-    expect(reanchorAnnotation(anchor, "gone", "v3").state).toBe("orphaned");
-  });
-
-  test("round-trips an immutable rendered passage without a fabricated source anchor", () => {
-    const observation = {
-      quote: "Resolved [type::roadmap-item]\n[target-kind::file] result",
-      capturedAt: "2026-01-02T03:04:05.000Z",
-      hostBlockId: "22222222-2222-4222-8222-222222222222",
-      paneId: "w1:p2",
-      contentRevision: 42,
-      contextId: "context-1",
-      detailClientId: "detail-1",
-      validation: "herdr-keybinding" as const,
-      projection: "mixed" as const,
-    };
-    const text = formatAnnotation({
-      target: {
-        kind: "passage",
-        sourceBlockId: observation.hostBlockId,
-        observation,
-      },
-      body: "Comment on what was shown.",
+    expect({
+      body: content.body,
+      source: content.source,
+      lifecycle: content.lifecycle,
+      parentAnnotationId: content.parentAnnotationId,
+    }).toEqual({
+      body: "A follow-up from the reviewer.",
       source: "user",
+      lifecycle: "open",
+      parentAnnotationId,
     });
+  });
 
-    expect(text.split("\n")[0]).toContain("\\[type::roadmap-item]");
-    const parsed = parseAnnotationBlock(annotationBlock(text));
-    expect(parsed.target).toEqual({
-      kind: "passage",
-      sourceBlockId: observation.hostBlockId,
-      observation,
-    });
-    expect(parsed.anchorState).toBe("observed");
-    expect(parsed.block.properties.some(({ key }) => key === "anchor-start")).toBe(false);
+  test("rejects unsupported lifecycle state", () => {
+    const block = annotationBlock(
+      "Comment on “selection”\n[type::annotation] [annotation-source::user] [annotation-status::archived]\nBody",
+    );
+
+    expect(() => parseAnnotationBlockContent(block)).toThrow();
+  });
+
+  test("rejects unknown source snapshots on new annotations", () => {
+    const target = annotationTarget();
+    const invalidInput = {
+      ...annotationInput("New annotation", "agent"),
+      target: {
+        ...target,
+        representation: {
+          ...target.representation,
+          sourceSnapshot: {
+            kind: "unknown" as const,
+            label: "unverified input",
+          },
+        },
+      },
+    };
+    expect(() => formatAnnotationBlock(invalidInput as unknown as AnnotationCreateInput)).toThrow(
+      "Unsupported annotation source snapshot: unknown",
+    );
   });
 });

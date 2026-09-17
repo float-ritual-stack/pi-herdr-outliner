@@ -416,23 +416,80 @@ describe("detail ANSI renderer", () => {
     expect(fileFrame).toContain("\x1b[48;5;238m>12 │ return one + two;\x1b[0m");
 
     const annotationBlock = block(
-      "Comment on src/example.ts:10-12\n[type::annotation] [file::src/example.ts]\nNeeds a guard.",
-      [
-        { key: "type", value: "annotation" },
-        { key: "file", value: "src/example.ts" },
-      ],
+      "Comment on source selection\n[type::annotation] [annotation-source::user] [annotation-status::open]\nNeeds a guard.",
+      [{ key: "type", value: "annotation" }],
     );
+    const representation = {
+      id: "filesystem-representation",
+      subject: {
+        kind: "resource" as const,
+        resourceId: "30000000-0000-4000-8000-000000000001",
+      },
+      sourceSnapshot: {
+        kind: "resource" as const,
+        resourceId: "30000000-0000-4000-8000-000000000001",
+        sourceSnapshotId: null,
+        revision: null,
+      },
+      adapter: { id: "filesystem.text", version: 1 },
+      mediaType: "text/plain",
+      contentHash: "fixture",
+      capturedAt: "2026-01-01T00:00:00.000Z",
+    };
+    const originalTarget = {
+      representation,
+      anchor: {
+        kind: "text-quote" as const,
+        start: 0,
+        end: 14,
+        exact: "const one = 1;",
+        prefix: "",
+        suffix: "\nconst two = 2;",
+      },
+    };
+    const resolution = {
+      id: "resolution-1",
+      annotationId: annotationBlock.id,
+      sequence: 1,
+      sourceRepresentation: representation,
+      targetRepresentation: representation,
+      resolvedTarget: null,
+      method: {
+        kind: "codec" as const,
+        codecId: "text-quote",
+        codecVersion: 1,
+        method: "unique-exact",
+      },
+      reviewer: { kind: "system" as const, id: "annotation-repository" },
+      confidence: null,
+      status: "orphaned" as const,
+      appliesCurrent: true,
+      createdAt: "2026-01-02T00:00:00.000Z",
+    };
     const annotationState = state({
       context: { selected: annotationBlock, ancestors: [], children: [] },
       resolvedBreadcrumb: "Annotation",
       resolvedSelectedText: annotationBlock.text,
       mode: "annotation",
       referencedFile,
+      annotationThreads: [{
+        block: annotationBlock,
+        originalTarget,
+        resolvedTarget: null,
+        currentResolution: resolution,
+        resolutionHistory: [resolution],
+        body: "Needs a guard.",
+        source: "user",
+        lifecycle: "open",
+        replies: [],
+      }],
     });
     const beforeOffset = annotationState.previewOffset;
 
-    const annotationFrame = renderDetailAnsi(annotationState, { width: 48, height: 12 });
-    expect(annotationFrame).toContain("\x1b[2mSource: src/example.ts:10-12\x1b[0m");
+    const annotationFrame = renderDetailAnsi(annotationState, { width: 100, height: 24 });
+    expect(annotationFrame).toContain("Original target: resource 30000000-0000-4000-8000-000000000001 @0-14");
+    expect(annotationFrame).toContain("Current resolution: orphaned");
+    expect(annotationFrame).toContain("#1 orphaned · current · text-quote@1:unique-exact");
     expect(annotationFrame).toContain("\x1b[1mComment\x1b[0m\nNeeds a guard.");
     expect(annotationState.previewOffset).toBe(beforeOffset);
   });

@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import { createAnnotationAnchor, extractAnnotationBody, formatAnnotation } from "../src/annotations";
 import { parseProperties, stripProperties } from "../src/properties";
 import { isDetailToggle, isModifiedEnter, isPrintableInput, TerminalInputDecoder } from "../src/terminal";
 import { TextBuffer } from "../src/text-buffer";
@@ -105,36 +104,5 @@ describe("terminal input", () => {
     expect(payloads).toEqual(["line one\r\n\x13\rline three"]);
     expect(decoder.consume("x", { name: "x", sequence: "x" })).toBe("pass");
     expect(decoder.consume("", { name: "return", shift: true })).toBe("modified-enter");
-  });
-});
-
-describe("durable annotations", () => {
-  test("records an exact file range and multiline body as indexed metadata", () => {
-    const source = "one\nselected α\nthree";
-    const body = "This assumption needs evidence.\nCould the agent verify it?";
-    const text = formatAnnotation({
-      target: {
-        kind: "file",
-        sourceBlockId: "block-123",
-        filePath: "docs/plan].md",
-        startLine: 2,
-        endLine: 2,
-        anchor: createAnnotationAnchor(source, 4, 14, "version-1"),
-      },
-      body,
-      source: "agent",
-    });
-
-    expect(text).toContain("Comment on docs/plan].md:2");
-    expect(text).toContain(body);
-    const properties = parseProperties(text);
-    expect(properties).toContainEqual({ key: "type", value: "annotation" });
-    expect(properties).toContainEqual({ key: "target-kind", value: "file" });
-    expect(properties).toContainEqual({ key: "source-block", value: "block-123" });
-    expect(properties).toContainEqual({ key: "anchor-start", value: "4" });
-    expect(properties).toContainEqual({ key: "anchor-end", value: "14" });
-    expect(properties).toContainEqual({ key: "line-start", value: "2" });
-    expect(properties).toContainEqual({ key: "line-end", value: "2" });
-    expect(extractAnnotationBody(text)).toBe(body);
   });
 });
