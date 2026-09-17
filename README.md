@@ -25,7 +25,7 @@ The project started as a small Friday-night experiment and grew into a durable w
 
 - SQLite-backed hierarchical blocks with stable UUIDs, sibling order, authors, timestamps, and one canonical graph per workspace root.
 - Workspace-isolated service and runtime paths.
-- JSON-lines RPC protocol v47 over a Unix socket.
+- JSON-lines RPC protocol v48 over a Unix socket.
 - Reactive canonical content/view broadcasts, per-process Tree/Detail registration with Detail lock availability, exact-client UI commands, and source-aware `preview | open | reveal` navigation.
 - Durable resources have UUID identities independent of blocks and mutable locators. Provider-qualified Sources bind filesystem roots or remote namespaces; overlapping Sources remain distinct, relocations preserve Resource IDs, provider revisions remain explicit, and capability resolution reports blockers across provider, credentials, workspace policy, host, and connectivity. Registered Detail hosts declare Surface, Placement, renderer, capability, credential, and connectivity facts; open/describe/refresh deterministically negotiate cached Markdown, embedded-browser, native-document, metadata, or external-link representations without changing Resource identity. PDF is a media type reachable through filesystem and web Sources: one captured binary snapshot can produce both native PDF and page-aware Markdown representations through versioned replaceable extractors.
 - Each Tree owns its cursor, occurrence selection, filter, viewport, collapsed rows, multiline expansion, explicit-navigation history, and browsing context; moving a Tree previews only in the first unlocked same-tab Detail and never replaces a locked anchor.
@@ -125,6 +125,43 @@ negotiate useful metadata in the TUI and an `external-link` on external hosts
 without fabricating an inline document. `Alt+O` launches only the negotiated
 current-Resource URL after `open-external` policy and host checks. Opening a
 deep link does not imply read or command authority.
+
+### Computed Resources
+
+Computed Sources name an in-process producer registry and carry the workspace
+permission allowlist for that registry. A producer registration declares a
+stable ID, positive version, TypeBox input schema, required permissions,
+determinism, cache policy, output media types, and one async callback. The
+service includes the deterministic `builtin.markdown-template` producer.
+
+`computed.invocations.create` persists structured inputs and exact dependency
+Resource revisions, then creates one computed Resource whose address is the
+invocation UUID. `computed.invocations.revise` uses optimistic invocation
+versions. Input changes increment the input version. Input or dependency
+changes invalidate only that invocation's selected result.
+Each immutable computed revision names its exact execution plus producer, input,
+and dependency versions, so pinned reads cannot drift to a later nondeterministic output.
+
+Authored text can refer to a producer only as `producer:<invocation-uuid>`.
+`computed.handlers.resolve` performs an exact persisted invocation lookup. It
+never evaluates note text, commands, module names, or executable snippets.
+
+Execution is explicit. `computed.execute`, or `resources.refresh` from Detail's
+`r` action, requires a registered Detail destination whose negotiated `refresh`
+capability is available. Before calling the producer, the registry checks every
+declared permission against the computed Source allowlist, validates and bounds
+canonical structured input to 256 KiB by default, and starts a 15-second
+abort-signaled execution deadline. Text output is limited to 1 MiB by default.
+Schema, permission, timeout, output, provider, and callback failures are typed,
+persisted, and available through `computed.executions.list`.
+
+Producers can return a transient representation, immutable snapshot, durable
+Resource reference, or typed failure. Transient content appears only in the
+execution receipt. A successful deterministic content-addressed result reuses
+the matching cache entry. Detail renders selected immutable Markdown before
+metadata, followed by the exact dependency provenance and latest failure when
+one exists. Opening or reopening the Resource reads local state only and never
+runs its producer.
 
 ## Quick start
 

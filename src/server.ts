@@ -35,6 +35,8 @@ import {
   type BookmarkRemoveReceipt,
   type BookmarkToggleReceipt,
   type CaptureReceipt,
+  type ComputedExecutionResult,
+  type ComputedInvocation,
   type DeliveryReceipt,
   type NavigationState,
   type OutlinerClientRegistration,
@@ -966,7 +968,8 @@ export class OutlinerServer {
     if (
       request.action !== "resources.open" &&
       request.action !== "resources.refresh" &&
-      request.action !== "resources.command.execute"
+      request.action !== "resources.command.execute" &&
+      request.action !== "computed.execute"
     ) {
       return this.handle(request, subscribedClient);
     }
@@ -990,7 +993,15 @@ export class OutlinerServer {
       } else if (request.action === "resources.refresh") {
         const resource = this.store.resources.require(request.resourceId);
         let description: ResourceDescription;
-        if (resource.provider === "jira" || resource.provider === "linear") {
+        if (resource.provider === "computed") {
+          const local = this.presentResource(
+            this.store.resources.describe(resource.id, true),
+            destination,
+          );
+          this.requireAvailableResourceCapability(local, "refresh", true);
+          await this.store.resources.executeComputedResource(resource.id, true);
+          description = this.store.resources.describe(resource.id, true);
+        } else if (resource.provider === "jira" || resource.provider === "linear") {
           const local = this.presentResource(
             this.store.resources.describe(resource.id, true),
             destination,
@@ -1004,6 +1015,21 @@ export class OutlinerServer {
           description = await this.store.resources.refreshWeb(resource.id, true);
         }
         result = this.presentResource(description, destination);
+      } else if (request.action === "computed.execute") {
+        const local = this.presentResource(
+          this.store.resources.describe(request.resourceId, true),
+          destination,
+        );
+        this.requireAvailableResourceCapability(local, "refresh", true);
+        const receipt = await this.store.resources.executeComputedResource(
+          request.resourceId,
+          true,
+        );
+        const description = this.presentResource(
+          this.store.resources.describe(request.resourceId, true),
+          destination,
+        );
+        result = { receipt, description } satisfies ComputedExecutionResult;
       } else {
         const input = normalizeResourceProviderCommandInput(request.input);
         const resource = this.store.resources.require(request.resourceId);
@@ -1092,6 +1118,18 @@ export class OutlinerServer {
         case "resource-sources.get":
           result = this.store.resources.requireSource(request.sourceId);
           break;
+        case "computed.invocations.create":
+          result = this.store.resources.createComputedInvocation(request.input);
+          break;
+        case "computed.invocations.revise":
+          result = this.store.resources.reviseComputedInvocation(request.input);
+          break;
+        case "computed.handlers.resolve":
+          result = this.store.resources.resolveComputedHandler(request.reference);
+          break;
+        case "computed.executions.list":
+          result = this.store.resources.computedExecutionHistory(request.resourceId);
+          break;
         case "resources.intern":
           result = this.store.resources.intern(request.input);
           break;
@@ -1154,6 +1192,7 @@ export class OutlinerServer {
           );
           break;
         }
+        case "computed.execute":
         case "resources.open":
         case "resources.refresh":
         case "resources.command.execute":
@@ -1627,6 +1666,19 @@ export class OutlinerServer {
         domain = "resource-catalog";
         sourceId = eventResultId(response.result, "Resource source");
         break;
+      case "computed.invocations.create":
+      case "computed.invocations.revise": {
+        const invocation = response.result as ComputedInvocation;
+        domain = "resource-catalog";
+        resourceId = invocation.resourceId;
+        break;
+      }
+      case "computed.execute": {
+        const execution = response.result as ComputedExecutionResult;
+        domain = "resource-catalog";
+        resourceId = execution.receipt.resourceId;
+        break;
+      }
       case "resources.intern": {
         const receipt = response.result as InternResourceReceipt;
         if (!receipt.created) return null;

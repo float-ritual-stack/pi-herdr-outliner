@@ -1,4 +1,6 @@
 import type {
+  ComputedExecutionReceipt,
+  CreateComputedInvocationInput,
   CreateResourceSourceInput,
   InternFilesystemResourceInput,
   InternResourceInput,
@@ -11,9 +13,22 @@ import type {
   ResourceRetentionPinInput,
   ResourceRetentionPolicyInput,
   ResourceRetentionReferenceInput,
+  ReviseComputedInvocationInput,
 } from "./resources";
 
 export type {
+  ComputedExecutionHistory,
+  ComputedExecutionReceipt,
+  ComputedExecutionReceiptOutput,
+  ComputedExecutionRecord,
+  ComputedExecutionRecordOutput,
+  ComputedHandlerResolution,
+  ComputedInvocation,
+  ComputedProducerDeclarationSnapshot,
+  ComputedResourceDocument,
+  ComputedResourceFailure,
+  ComputedResourceStatus,
+  CreateComputedInvocationInput,
   CapabilityAssessment,
   InternFilesystemResourceInput,
   InternResourceReceipt,
@@ -75,6 +90,7 @@ export type {
   WebRepresentationProvenance,
   WebResourceDocument,
   WebResourceProvenance,
+  ReviseComputedInvocationInput,
   WebResourceStatus,
   WebSourceSnapshotProvenance,
 } from "./resources";
@@ -1102,7 +1118,7 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 47;
+export const OUTLINER_PROTOCOL_VERSION = 48;
 
 
 export interface OutlinerServiceStatus {
@@ -1112,6 +1128,11 @@ export interface OutlinerServiceStatus {
 
 export interface ResourceProviderCommandResult {
   readonly receipt: ResourceProviderCommandReceipt;
+  readonly description: ResourceDescription;
+}
+
+export interface ComputedExecutionResult {
+  readonly receipt: ComputedExecutionReceipt;
   readonly description: ResourceDescription;
 }
 
@@ -1133,6 +1154,24 @@ export type OutlinerRequest =
   | { id: string; action: "resource-sources.create"; input: CreateResourceSourceInput }
   | { id: string; action: "resource-sources.list" }
   | { id: string; action: "resource-sources.get"; sourceId: string }
+  | {
+      id: string;
+      action: "computed.invocations.create";
+      input: CreateComputedInvocationInput;
+    }
+  | {
+      id: string;
+      action: "computed.invocations.revise";
+      input: ReviseComputedInvocationInput;
+    }
+  | { id: string; action: "computed.handlers.resolve"; reference: string }
+  | { id: string; action: "computed.executions.list"; resourceId: string }
+  | {
+      id: string;
+      action: "computed.execute";
+      resourceId: string;
+      destinationClientId: string;
+    }
   | { id: string; action: "resources.intern"; input: InternResourceInput }
   | { id: string; action: "resources.intern-filesystem"; input: InternFilesystemResourceInput }
   | { id: string; action: "resources.get"; resourceId: string }

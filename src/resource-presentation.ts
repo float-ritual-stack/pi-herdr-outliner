@@ -209,7 +209,7 @@ function orderedDefinitions(
   description: ResourceDescription,
   context: ResourcePresentationContext,
 ): readonly CandidateDefinition[] {
-  const { resource, web, filesystem, pdf, remoteEntity } = description;
+  const { resource, web, filesystem, pdf, remoteEntity, computed } = description;
   const unpinned = description.requestedRevision === null;
   const url = unpinned ? externalUrl(description) : null;
   const requestedPlacement = context.placement;
@@ -249,12 +249,14 @@ function orderedDefinitions(
       web !== null ||
       pdf != null ||
       remoteEntity != null ||
+      computed != null ||
       (filesystem != null && isTextualMediaType(resource.mediaType)),
     missingReason: "No local text or cached Markdown representation is available",
     adapter:
       web?.representation.adapter ??
       pdf?.representation.adapter ??
       remoteEntity?.representation.adapter ??
+      computed?.adapter ??
       null,
     externalUrl: url,
   };
