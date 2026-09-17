@@ -4,21 +4,31 @@ import { isAbsolute, join, relative, sep } from "node:path";
 import { Type, type Static } from "typebox";
 import { Parse } from "typebox/value";
 import {
+  BasicWebMarkdownExtractor,
+  sha256,
+  type WebMarkdownExtractor,
+} from "./web-markdown";
+import {
   ResourceCatalogError,
   deriveResourceCapabilityReport,
   normalizeInternResourceInput,
   normalizeRelocateResourceInput,
   normalizeResourceAddress,
   normalizeResourceId,
+  normalizeRetainedResourceRevisionRef,
   normalizeResourceRevisionRef,
+  resourceRevisionRefEquals,
   normalizeResourceSourceInput,
   type CreateResourceSourceInput,
+  type CreateWebResourceAnnotationInput,
   type InternResourceReceipt,
   type Resource,
   type ResourceAddress,
   type ResourceDescription,
   type ResourceRevisionRef,
   type ResourceSource,
+  type WebResourceAnnotation,
+  type WebResourceDocument,
 } from "./resources";
 
 interface SourceRow {
@@ -45,6 +55,44 @@ interface ResourceRow {
   created_at: string;
   updated_at: string;
 }
+interface WebResourceCacheRow {
+  address_version: number;
+  generation: number;
+  resource_id: string;
+  canonical_url: string;
+  source_hash: string;
+  markdown: string;
+  revision_json: string;
+  adapter_id: string;
+  adapter_version: number;
+  representation_hash: string;
+  etag: string | null;
+  last_modified: string | null;
+  freshness: "fresh" | "failed";
+  fetched_at: string;
+  checked_at: string;
+  last_error: string | null;
+}
+
+interface WebResourceAnnotationRow {
+  id: string;
+  resource_id: string;
+  revision_json: string;
+  representation_json: string;
+  anchor_json: string;
+  body: string;
+  created_at: string;
+}
+
+export interface ResourceCatalogOptions {
+  readonly fetch?: typeof globalThis.fetch;
+  readonly webExtractor?: WebMarkdownExtractor;
+  readonly now?: () => string;
+  readonly maximumWebBytes?: number;
+}
+
+const DEFAULT_MAXIMUM_WEB_BYTES = 2 * 1024 * 1024;
+
 
 interface LegacySourceRow {
   id: string;
@@ -265,9 +313,92 @@ function assertFilesystemConfinement(
     }
   }
 }
+function webEtag(response: Response): string | null {
+  const value = response.headers.get("etag")?.trim();
+  return value || null;
+}
+
+function webRevision(
+  resource: Extract<Resource, { provider: "web" }>,
+  etag: string | null,
+  lastModified: string | null,
+  sourceHash: string,
+): ResourceRevisionRef {
+  if (etag) {
+    const weak = etag.startsWith("W/");
+    const value = weak ? etag.slice(2) : etag;
+    return {
+      resourceId: resource.id,
+      addressVersion: resource.addressVersion,
+      revision: { kind: "web", validator: { kind: "etag", value, weak } },
+    };
+  }
+  if (lastModified) {
+    return {
+      resourceId: resource.id,
+      addressVersion: resource.addressVersion,
+      revision: {
+        kind: "web",
+        validator: { kind: "last-modified", value: lastModified },
+      },
+    };
+  }
+  return {
+    resourceId: resource.id,
+    addressVersion: resource.addressVersion,
+    revision: {
+      kind: "web",
+      validator: { kind: "content-hash", value: sourceHash },
+    },
+  };
+}
+
+function responseMediaType(response: Response): string {
+  return response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+}
+async function cancelResponseBody(response: Response): Promise<void> {
+  try {
+    await response.body?.cancel();
+  } catch {
+    // Preserve the provider validation error when a body cannot be cancelled.
+  }
+}
+
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function annotationText(value: unknown, label: string, maximum: number): string {
+  if (typeof value !== "string") {
+    throw new ResourceCatalogError("invalid-input", `${label} must be a string`);
+  }
+  const normalized = value.trim();
+  if (!normalized || normalized.length > maximum) {
+    throw new ResourceCatalogError(
+      "invalid-input",
+      `${label} must be 1-${maximum} characters`,
+    );
+  }
+  return normalized;
+}
+
 
 export class ResourceCatalog {
-  constructor(private readonly database: Database) {
+  private readonly fetcher: typeof globalThis.fetch;
+  private readonly webExtractor: WebMarkdownExtractor;
+  private readonly now: () => string;
+  private readonly maximumWebBytes: number;
+  private readonly pendingWebRefreshes = new Map<string, Promise<ResourceDescription>>();
+
+  constructor(
+    private readonly database: Database,
+    options: ResourceCatalogOptions = {},
+  ) {
+    this.fetcher = options.fetch ?? globalThis.fetch;
+    this.webExtractor = options.webExtractor ?? new BasicWebMarkdownExtractor();
+    this.now = options.now ?? (() => new Date().toISOString());
+    this.maximumWebBytes = options.maximumWebBytes ?? DEFAULT_MAXIMUM_WEB_BYTES;
     this.migrate();
   }
 
@@ -405,6 +536,10 @@ export class ResourceCatalog {
         resource.id,
         normalized.expectedVersion,
       );
+      if (resource.provider === "web") {
+        this.database.query("DELETE FROM web_resource_documents WHERE resource_id = ?")
+          .run(resource.id);
+      }
       this.bumpSequence();
       return this.requireFromCurrentRead(resource.id);
     })();
@@ -421,13 +556,497 @@ export class ResourceCatalog {
       const requestedRevision: ResourceRevisionRef | null = revision === undefined
         ? null
         : normalizeResourceRevisionRef(revision, resource);
+      const cachedWeb = source.policy.deniedCapabilities.includes("read")
+        ? null
+        : this.webDocumentFromCurrentRead(resource);
       return {
         resource,
         source,
         requestedRevision,
-        capabilities: deriveResourceCapabilityReport(source, destinationHostRegistered),
+        capabilities: deriveResourceCapabilityReport(
+          source,
+          destinationHostRegistered,
+          resource.provider === "web" ? ["read", "refresh", "open-external"] : [],
+        ),
+        web: requestedRevision && cachedWeb &&
+            !resourceRevisionRefEquals(requestedRevision, cachedWeb.revision)
+          ? null
+          : cachedWeb,
       };
     })();
+  }
+  async open(
+    resourceId: string,
+    destinationHostRegistered: boolean,
+    revision?: unknown,
+  ): Promise<ResourceDescription> {
+    const description = this.describe(resourceId, destinationHostRegistered, revision);
+    if (
+      description.resource.provider !== "web" ||
+      description.web ||
+      revision !== undefined
+    ) {
+      return description;
+    }
+    if (description.source.policy.deniedCapabilities.includes("read")) {
+      return { ...description, webError: "Workspace policy denies reading this resource" };
+    }
+    try {
+      return await this.refreshWeb(description.resource.id, destinationHostRegistered);
+    } catch (error) {
+      return { ...description, webError: errorText(error) };
+    }
+  }
+
+  refreshWeb(
+    resourceId: string,
+    destinationHostRegistered: boolean,
+  ): Promise<ResourceDescription> {
+    const normalized = normalizeResourceId(resourceId);
+    const pending = this.pendingWebRefreshes.get(normalized);
+    if (pending) return pending;
+    const refresh = this.performWebRefresh(normalized, destinationHostRegistered)
+      .finally(() => this.pendingWebRefreshes.delete(normalized));
+    this.pendingWebRefreshes.set(normalized, refresh);
+    return refresh;
+  }
+
+  createWebAnnotation(value: unknown): WebResourceAnnotation {
+    if (typeof value !== "object" || value === null) {
+      throw new ResourceCatalogError("invalid-input", "Web annotation input must be an object");
+    }
+    const input = value as Partial<CreateWebResourceAnnotationInput>;
+    const resourceId = normalizeResourceId(input.resourceId);
+    return this.database.transaction(() => {
+      const resource = this.requireFromCurrentRead(resourceId);
+      if (resource.provider !== "web") {
+        throw new ResourceCatalogError(
+          "provider-mismatch",
+          "Web annotations require a web resource",
+        );
+      }
+      const document = this.webDocumentFromCurrentRead(resource);
+      if (!document) {
+        throw new ResourceCatalogError(
+          "invalid-input",
+          "Web resource has no cached Markdown representation",
+        );
+      }
+      const revision = normalizeResourceRevisionRef(input.revision, resource);
+      if (!resourceRevisionRefEquals(revision, document.revision)) {
+        throw new ResourceCatalogError(
+          "stale-revision",
+          "Web annotation revision is not the current cached revision",
+        );
+      }
+      const representation = input.representation;
+      if (
+        !representation ||
+        representation.mediaType !== document.representation.mediaType ||
+        representation.adapter.id !== document.representation.adapter.id ||
+        representation.adapter.version !== document.representation.adapter.version ||
+        representation.contentHash !== document.representation.contentHash
+      ) {
+        throw new ResourceCatalogError(
+          "stale-revision",
+          "Web annotation representation is not the current cached representation",
+        );
+      }
+      const anchor = input.anchor;
+      if (
+        !anchor ||
+        !Number.isSafeInteger(anchor.start) ||
+        !Number.isSafeInteger(anchor.end) ||
+        anchor.start! < 0 ||
+        anchor.end! <= anchor.start! ||
+        anchor.end! > document.markdown.length ||
+        document.markdown.slice(anchor.start, anchor.end) !== anchor.exact
+      ) {
+        throw new ResourceCatalogError(
+          "invalid-input",
+          "Web annotation anchor must exactly match the cached Markdown",
+        );
+      }
+      const prefix = document.markdown.slice(Math.max(0, anchor.start! - 64), anchor.start);
+      const suffix = document.markdown.slice(anchor.end, anchor.end! + 64);
+      if (anchor.prefix !== prefix || anchor.suffix !== suffix) {
+        throw new ResourceCatalogError(
+          "invalid-input",
+          "Web annotation context does not match the cached Markdown",
+        );
+      }
+      const annotation: WebResourceAnnotation = {
+        id: crypto.randomUUID(),
+        resourceId,
+        revision,
+        representation: document.representation,
+        anchor: {
+          start: anchor.start,
+          end: anchor.end,
+          exact: anchor.exact,
+          prefix,
+          suffix,
+        },
+        body: annotationText(input.body, "Web annotation body", 10_000),
+        createdAt: this.now(),
+      };
+      this.database.query(
+        "INSERT INTO web_resource_annotations (id, resource_id, revision_json, representation_json, anchor_json, body, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      ).run(
+        annotation.id,
+        annotation.resourceId,
+        JSON.stringify(annotation.revision),
+        JSON.stringify(annotation.representation),
+        JSON.stringify(annotation.anchor),
+        annotation.body,
+        annotation.createdAt,
+      );
+      this.bumpSequence();
+      return annotation;
+    })();
+  }
+
+
+  private async fetchWeb(
+    source: Extract<ResourceSource, { provider: "web" }>,
+    initialUrl: string,
+    headers: Headers,
+    signal: AbortSignal,
+  ): Promise<{ response: Response; url: string }> {
+    let url = initialUrl;
+    for (let redirects = 0; redirects <= 5; redirects += 1) {
+      const normalized = normalizeResourceAddress(source, { kind: "web", url });
+      if (normalized.address.kind !== "web") {
+        throw new ResourceCatalogError("provider-mismatch", "Web redirect changed provider");
+      }
+      url = normalized.address.url;
+      const response = await this.fetcher(url, {
+        headers,
+        redirect: "manual",
+        signal,
+      });
+      if (![301, 302, 303, 307, 308].includes(response.status)) {
+        return { response, url };
+      }
+      const location = response.headers.get("location");
+      await response.body?.cancel();
+      if (!location) {
+        throw new ResourceCatalogError(
+          "source-unavailable",
+          "Web redirect omitted its Location header",
+        );
+      }
+      if (redirects === 5) {
+        throw new ResourceCatalogError(
+          "source-unavailable",
+          "Web redirect exceeded five hops",
+        );
+      }
+      url = new URL(location, url).href;
+    }
+    throw new ResourceCatalogError("source-unavailable", "Web redirect could not be resolved");
+  }
+
+  private async readWebBody(response: Response): Promise<string> {
+    if (!response.body) return "";
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let received = 0;
+    let body = "";
+    try {
+      while (true) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        received += chunk.value.byteLength;
+        if (received > this.maximumWebBytes) {
+          await reader.cancel();
+          throw new ResourceCatalogError(
+            "invalid-input",
+            `Web response exceeds ${this.maximumWebBytes} bytes`,
+          );
+        }
+        body += decoder.decode(chunk.value, { stream: true });
+      }
+      return body + decoder.decode();
+    } finally {
+      reader.releaseLock();
+    }
+  }
+
+  private async performWebRefresh(
+    resourceId: string,
+    destinationHostRegistered: boolean,
+  ): Promise<ResourceDescription> {
+    const snapshot = this.database.transaction(() => {
+      const resource = this.requireFromCurrentRead(resourceId);
+      const source = this.requireSourceFromCurrentRead(resource.sourceId);
+      if (resource.provider !== "web" || source.provider !== "web") {
+        throw new ResourceCatalogError(
+          "provider-mismatch",
+          "Only web resources can be fetched through the HTTP provider",
+        );
+      }
+      if (
+        source.policy.deniedCapabilities.includes("read") ||
+        source.policy.deniedCapabilities.includes("refresh")
+      ) {
+        throw new ResourceCatalogError(
+          "invalid-input",
+          "Workspace policy denies reading or refreshing this resource",
+        );
+      }
+      const cached = this.webCacheRowFromCurrentRead(resource.id);
+      return {
+        resource,
+        source,
+        cache: cached?.address_version === resource.addressVersion ? cached : null,
+      };
+    })();
+    const headers = new Headers({ Accept: "text/html,application/xhtml+xml" });
+    if (snapshot.cache?.etag) headers.set("If-None-Match", snapshot.cache.etag);
+    if (snapshot.cache?.last_modified) {
+      headers.set("If-Modified-Since", snapshot.cache.last_modified);
+    }
+    const checkedAt = this.now();
+    try {
+      const signal = AbortSignal.timeout(15_000);
+      let { response, url: canonicalUrl } = await this.fetchWeb(
+        snapshot.source,
+        snapshot.resource.address.url,
+        headers,
+        signal,
+      );
+      let cacheMatchesDerivation =
+        snapshot.cache?.canonical_url === canonicalUrl &&
+        snapshot.cache.adapter_id === this.webExtractor.adapter.id &&
+        snapshot.cache.adapter_version === this.webExtractor.adapter.version;
+      if (response.status === 304 && !cacheMatchesDerivation) {
+        await cancelResponseBody(response);
+        ({ response, url: canonicalUrl } = await this.fetchWeb(
+          snapshot.source,
+          snapshot.resource.address.url,
+          new Headers({ Accept: "text/html,application/xhtml+xml" }),
+          signal,
+        ));
+        cacheMatchesDerivation =
+          snapshot.cache?.canonical_url === canonicalUrl &&
+          snapshot.cache.adapter_id === this.webExtractor.adapter.id &&
+          snapshot.cache.adapter_version === this.webExtractor.adapter.version;
+      }
+      if (response.status === 304) {
+        if (!snapshot.cache) {
+          throw new ResourceCatalogError(
+            "source-unavailable",
+            "Web provider returned not-modified without a cached representation",
+          );
+        }
+        if (!cacheMatchesDerivation) {
+          throw new ResourceCatalogError(
+            "source-unavailable",
+            "Web provider returned not-modified after cached derivation provenance changed",
+          );
+        }
+        this.database.transaction(() => {
+          this.assertWebRefreshCurrent(
+            snapshot.resource,
+            snapshot.cache?.generation ?? 0,
+          );
+          this.database.query(
+            "UPDATE web_resource_documents SET generation = generation + 1, freshness = 'fresh', checked_at = ?, last_error = NULL WHERE resource_id = ?",
+          ).run(checkedAt, snapshot.resource.id);
+          this.bumpSequence();
+        })();
+        return this.describe(snapshot.resource.id, destinationHostRegistered);
+      }
+      if (!response.ok) {
+        await cancelResponseBody(response);
+        throw new ResourceCatalogError(
+          "source-unavailable",
+          `Web provider returned HTTP ${response.status}`,
+        );
+      }
+      const mediaType = responseMediaType(response);
+      if (mediaType !== "text/html" && mediaType !== "application/xhtml+xml") {
+        await cancelResponseBody(response);
+        throw new ResourceCatalogError(
+          "invalid-input",
+          `Web provider returned unsupported media type: ${mediaType || "unknown"}`,
+        );
+      }
+      const declaredLength = Number(response.headers.get("content-length"));
+      if (Number.isFinite(declaredLength) && declaredLength > this.maximumWebBytes) {
+        await cancelResponseBody(response);
+        throw new ResourceCatalogError(
+          "invalid-input",
+          `Web response exceeds ${this.maximumWebBytes} bytes`,
+        );
+      }
+      const html = await this.readWebBody(response);
+      const sourceHash = sha256(html);
+      const etag = webEtag(response);
+      const lastModified = response.headers.get("last-modified")?.trim() || null;
+      const revision = webRevision(snapshot.resource, etag, lastModified, sourceHash);
+      const unchanged =
+        cacheMatchesDerivation &&
+        snapshot.cache?.source_hash === sourceHash;
+      const markdown = unchanged
+        ? snapshot.cache!.markdown
+        : this.webExtractor.extract({ html, url: canonicalUrl });
+      if (!markdown) {
+        throw new ResourceCatalogError(
+          "invalid-input",
+          "Web Markdown extractor returned an empty representation",
+        );
+      }
+      const representationHash = unchanged
+        ? snapshot.cache!.representation_hash
+        : sha256(markdown);
+      const fetchedAt = unchanged ? snapshot.cache!.fetched_at : checkedAt;
+      this.database.transaction(() => {
+        this.assertWebRefreshCurrent(
+          snapshot.resource,
+          snapshot.cache?.generation ?? 0,
+        );
+        this.database.query(`
+          INSERT INTO web_resource_documents (
+            resource_id, address_version, generation, canonical_url, source_hash,
+            markdown, revision_json, adapter_id, adapter_version,
+            representation_hash, etag, last_modified, freshness, fetched_at,
+            checked_at, last_error
+          ) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'fresh', ?, ?, NULL)
+          ON CONFLICT(resource_id) DO UPDATE SET
+            address_version = excluded.address_version,
+            generation = web_resource_documents.generation + 1,
+            canonical_url = excluded.canonical_url,
+            source_hash = excluded.source_hash,
+            markdown = excluded.markdown,
+            revision_json = excluded.revision_json,
+            adapter_id = excluded.adapter_id,
+            adapter_version = excluded.adapter_version,
+            representation_hash = excluded.representation_hash,
+            etag = excluded.etag,
+            last_modified = excluded.last_modified,
+            freshness = 'fresh',
+            fetched_at = excluded.fetched_at,
+            checked_at = excluded.checked_at,
+            last_error = NULL
+        `).run(
+          snapshot.resource.id,
+          snapshot.resource.addressVersion,
+          canonicalUrl,
+          sourceHash,
+          markdown,
+          JSON.stringify(revision),
+          this.webExtractor.adapter.id,
+          this.webExtractor.adapter.version,
+          representationHash,
+          etag,
+          lastModified,
+          fetchedAt,
+          checkedAt,
+        );
+        this.bumpSequence();
+      })();
+      return this.describe(snapshot.resource.id, destinationHostRegistered);
+    } catch (error) {
+      if (
+        error instanceof ResourceCatalogError &&
+        error.code === "version-conflict"
+      ) {
+        throw error;
+      }
+      if (!snapshot.cache) {
+        if (error instanceof ResourceCatalogError) throw error;
+        throw new ResourceCatalogError(
+          "source-unavailable",
+          `Web refresh failed: ${errorText(error)}`,
+        );
+      }
+      this.database.transaction(() => {
+        this.assertWebRefreshCurrent(snapshot.resource, snapshot.cache!.generation);
+        this.database.query(
+          "UPDATE web_resource_documents SET generation = generation + 1, freshness = 'failed', checked_at = ?, last_error = ? WHERE resource_id = ?",
+        ).run(checkedAt, errorText(error), snapshot.resource.id);
+        this.bumpSequence();
+      })();
+      return this.describe(snapshot.resource.id, destinationHostRegistered);
+    }
+  }
+
+  private assertWebRefreshCurrent(
+    snapshotResource: Extract<Resource, { provider: "web" }>,
+    expectedGeneration: number,
+  ): void {
+    const resource = this.requireFromCurrentRead(snapshotResource.id);
+    const cache = this.webCacheRowFromCurrentRead(snapshotResource.id);
+    const currentGeneration =
+      cache?.address_version === resource.addressVersion ? cache.generation : 0;
+    if (
+      resource.provider !== "web" ||
+      resource.addressVersion !== snapshotResource.addressVersion ||
+      currentGeneration !== expectedGeneration
+    ) {
+      throw new ResourceCatalogError(
+        "version-conflict",
+        "Web resource changed while its refresh was in flight",
+      );
+    }
+  }
+
+  private webCacheRowFromCurrentRead(resourceId: string): WebResourceCacheRow | null {
+    return this.database.query(
+      "SELECT resource_id, address_version, generation, canonical_url, source_hash, markdown, revision_json, adapter_id, adapter_version, representation_hash, etag, last_modified, freshness, fetched_at, checked_at, last_error FROM web_resource_documents WHERE resource_id = ?",
+    ).get(resourceId) as WebResourceCacheRow | null;
+  }
+
+  private webAnnotationFromRow(row: WebResourceAnnotationRow): WebResourceAnnotation {
+    return {
+      id: row.id,
+      resourceId: row.resource_id,
+      revision: normalizeRetainedResourceRevisionRef(
+        parsedJson(row.revision_json, "Web annotation revision"),
+      ),
+      representation: parsedJson(
+        row.representation_json,
+        "Web annotation representation",
+      ) as WebResourceAnnotation["representation"],
+      anchor: parsedJson(
+        row.anchor_json,
+        "Web annotation anchor",
+      ) as WebResourceAnnotation["anchor"],
+      body: row.body,
+      createdAt: row.created_at,
+    };
+  }
+
+  private webDocumentFromCurrentRead(resource: Resource): WebResourceDocument | null {
+    if (resource.provider !== "web") return null;
+    const row = this.webCacheRowFromCurrentRead(resource.id);
+    if (!row || row.address_version !== resource.addressVersion) return null;
+    const revision = normalizeResourceRevisionRef(
+      parsedJson(row.revision_json, "Web resource revision"),
+      resource,
+    );
+    const annotations = (this.database.query(
+      "SELECT id, resource_id, revision_json, representation_json, anchor_json, body, created_at FROM web_resource_annotations WHERE resource_id = ? ORDER BY created_at, id",
+    ).all(resource.id) as WebResourceAnnotationRow[]).map((annotation) =>
+      this.webAnnotationFromRow(annotation)
+    );
+    return {
+      canonicalUrl: row.canonical_url,
+      markdown: row.markdown,
+      revision,
+      representation: {
+        mediaType: "text/markdown",
+        adapter: { id: row.adapter_id, version: row.adapter_version },
+        contentHash: row.representation_hash,
+      },
+      freshness: row.freshness,
+      fetchedAt: row.fetched_at,
+      checkedAt: row.checked_at,
+      lastError: row.last_error,
+      annotations,
+    };
   }
 
   private assertConfinement(
@@ -541,6 +1160,35 @@ export class ResourceCatalog {
           updated_at TEXT NOT NULL,
           UNIQUE (source_id, canonical_key)
         );
+        CREATE TABLE IF NOT EXISTS web_resource_documents (
+          resource_id TEXT PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE,
+          address_version INTEGER NOT NULL CHECK (address_version >= 1),
+          generation INTEGER NOT NULL CHECK (generation >= 1),
+          canonical_url TEXT NOT NULL,
+          source_hash TEXT NOT NULL,
+          markdown TEXT NOT NULL,
+          revision_json TEXT NOT NULL,
+          adapter_id TEXT NOT NULL,
+          adapter_version INTEGER NOT NULL CHECK (adapter_version >= 1),
+          representation_hash TEXT NOT NULL,
+          etag TEXT,
+          last_modified TEXT,
+          freshness TEXT NOT NULL CHECK (freshness IN ('fresh', 'failed')),
+          fetched_at TEXT NOT NULL,
+          checked_at TEXT NOT NULL,
+          last_error TEXT
+        );
+        CREATE TABLE IF NOT EXISTS web_resource_annotations (
+          id TEXT PRIMARY KEY,
+          resource_id TEXT NOT NULL REFERENCES resources(id) ON DELETE RESTRICT,
+          revision_json TEXT NOT NULL,
+          representation_json TEXT NOT NULL,
+          anchor_json TEXT NOT NULL,
+          body TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS web_resource_annotations_resource
+          ON web_resource_annotations(resource_id, created_at, id);
       `);
       if (legacy) this.migrateLegacyRows();
       this.upgradeFilesystemRootBindings();

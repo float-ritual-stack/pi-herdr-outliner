@@ -30,6 +30,7 @@ import type {
   OutlinerUiCommand,
   PageAddressCollection,
   SelectionContext,
+  ResourceDescription,
   VisibleBlockCollection,
 } from "../src/types";
 
@@ -219,6 +220,7 @@ function createHarness(
           source,
           requestedRevision: target.revision ?? null,
           capabilities: deriveResourceCapabilityReport(source, true),
+          web: null,
         },
       };
     },
@@ -353,6 +355,18 @@ function createHarness(
         deduplicated: false,
       };
     },
+    async createWebAnnotation(input) {
+      return {
+        id: "web-annotation-1",
+        ...input,
+        body: input.body,
+        createdAt: "created",
+      };
+    },
+    async refreshResource() {
+      throw new Error("No web resource configured");
+    },
+    openExternal() {},
     async listAnnotations() {
       return [];
     },
@@ -849,6 +863,148 @@ describe("detail controller projection and deferred refresh", () => {
     });
   });
 
+  test("opens, annotates, refreshes, and externally opens cached web Markdown", async () => {
+    const harness = createHarness(makeBlock({ id: "block-anchor" }));
+    const target = {
+      kind: "resource" as const,
+      resourceId: "10000000-0000-4000-8000-000000000001",
+    };
+    const source = {
+      id: "20000000-0000-4000-8000-000000000001",
+      name: "Web fixture",
+      provider: "web" as const,
+      boundary: { kind: "web" as const, baseUrl: "https://example.com/" },
+      policy: { deniedCapabilities: [] },
+      version: 1,
+      createdAt: "created",
+      updatedAt: "updated",
+    };
+    const resource = {
+      id: target.resourceId,
+      sourceId: source.id,
+      provider: "web" as const,
+      address: { kind: "web" as const, url: "https://example.com/article" },
+      version: 1,
+      addressVersion: 1,
+      mediaType: "text/html",
+      createdAt: "created",
+      updatedAt: "updated",
+    };
+    const description = (markdown: string, revision: string): ResourceDescription => ({
+      resource,
+      source,
+      requestedRevision: null,
+      capabilities: deriveResourceCapabilityReport(source, true),
+      web: {
+        canonicalUrl: resource.address.url,
+        markdown,
+        revision: {
+          resourceId: resource.id,
+          addressVersion: resource.addressVersion,
+          revision: {
+            kind: "web",
+            validator: { kind: "etag", value: revision, weak: false },
+          },
+        },
+        representation: {
+          mediaType: "text/markdown",
+          adapter: { id: "fixture", version: 1 },
+          contentHash: revision.repeat(64).slice(0, 64),
+        },
+        freshness: "fresh",
+        fetchedAt: "2026-09-17T12:00:00.000Z",
+        checkedAt: "2026-09-17T12:00:00.000Z",
+        lastError: null,
+        annotations: [],
+      },
+    });
+    let current = description("# First\n\nStable quote", "a");
+    const created: Array<Parameters<DetailEffects["createWebAnnotation"]>[0]> = [];
+    const externalUrls: string[] = [];
+    harness.effects.loadTarget = async () => ({ kind: "resource", target, description: current });
+    harness.effects.createWebAnnotation = async (input) => {
+      created.push(input);
+      return {
+        id: "annotation-1",
+        ...input,
+        createdAt: "2026-09-17T12:01:00.000Z",
+      };
+    };
+    harness.effects.refreshResource = async () => {
+      current = description("# Second\n\nChanged page", "b");
+      return current;
+    };
+    harness.effects.openExternal = (url) => {
+      externalUrls.push(url);
+    };
+    await harness.controller.initialize();
+    await harness.controller.onServiceEvent(event("ui", {
+      targetClientId: "detail-test",
+      command: "open",
+      target,
+    }), viewport);
+
+    expect(harness.controller.state.resolvedSelectedText.startsWith("# First\n\nStable quote"))
+      .toBe(true);
+    await harness.controller.dispatch({
+      type: "annotation.selection.begin",
+      sourceLine: 2,
+      sourceColumn: 0,
+    }, viewport);
+    await harness.controller.dispatch({
+      type: "annotation.selection.place",
+      row: 2,
+      column: 12,
+      extend: true,
+    }, viewport);
+    await harness.controller.dispatch({ type: "comment.begin" }, viewport);
+    await harness.controller.dispatch({ type: "buffer.insert", text: "Keep this evidence" }, viewport);
+    await harness.controller.dispatch({ type: "buffer.save" }, viewport);
+    expect(created[0]?.anchor.exact).toBe("Stable quote");
+    expect(created[0]?.body).toBe("Keep this evidence");
+
+    await harness.controller.dispatch({ type: "resource.open-external" }, viewport);
+    expect(externalUrls).toEqual(["https://example.com/article"]);
+    await harness.controller.dispatch({ type: "resource.refresh" }, viewport);
+    expect(harness.controller.state.resolvedSelectedText.startsWith("# Second\n\nChanged page"))
+      .toBe(true);
+    expect(harness.controller.state.status).toBe("Web resource refreshed");
+
+    current = {
+      ...description("# Unavailable", "c"),
+      web: null,
+      webError: "fixture offline",
+    };
+    await harness.controller.onServiceEvent({
+      ...event("resource-catalog"),
+      resourceId: resource.id,
+    }, viewport);
+    await harness.controller.dispatch({ type: "resource.open-external" }, viewport);
+    expect(externalUrls).toEqual([
+      "https://example.com/article",
+      "https://example.com/article",
+    ]);
+
+    current = {
+      ...current,
+      source: {
+        ...source,
+        policy: { deniedCapabilities: ["open-external"] },
+      },
+    };
+    await harness.controller.onServiceEvent({
+      ...event("resource-catalog"),
+      resourceId: resource.id,
+    }, viewport);
+    await harness.controller.dispatch({
+      type: "resource.open-url",
+      url: "https://example.com/linked",
+    }, viewport);
+    expect(externalUrls).toHaveLength(2);
+    expect(harness.controller.state.status).toBe(
+      "Workspace policy denies opening this resource externally",
+    );
+  });
   test("ignores a late resource load after a newer mixed-target navigation", async () => {
     const initial = makeBlock({ id: "block-anchor", text: "Anchor" });
     const harness = createHarness(initial);
@@ -859,6 +1015,7 @@ describe("detail controller projection and deferred refresh", () => {
       resourceId: "10000000-0000-4000-8000-000000000001",
     };
     const slow = Promise.withResolvers<DetailReadyDocument>();
+
     harness.effects.loadTarget = (target) =>
       target.kind === "resource" && target.resourceId === slowTarget.resourceId
         ? slow.promise

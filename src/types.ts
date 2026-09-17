@@ -1,5 +1,6 @@
 import type {
   CreateResourceSourceInput,
+  CreateWebResourceAnnotationInput,
   InternResourceInput,
   RelocateResourceInput,
   ResourceRevisionRef,
@@ -7,6 +8,7 @@ import type {
 
 export type {
   CapabilityAssessment,
+  CreateWebResourceAnnotationInput,
   InternResourceReceipt,
   Resource,
   ResourceAddress,
@@ -19,6 +21,10 @@ export type {
   ResourceRevision,
   ResourceRevisionRef,
   ResourceSource,
+  WebRepresentationAdapter,
+  WebResourceAnnotation,
+  WebResourceAnnotationAnchor,
+  WebResourceDocument,
 } from "./resources";
 
 export type BlockAuthor = "user" | "agent" | "system";
@@ -812,7 +818,7 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 38;
+export const OUTLINER_PROTOCOL_VERSION = 39;
 
 
 export interface OutlinerServiceStatus {
@@ -846,6 +852,23 @@ export type OutlinerRequest =
       action: "resources.describe";
       target: ResourceTarget;
       destinationClientId: string;
+    }
+  | {
+      id: string;
+      action: "resources.open";
+      target: ResourceTarget;
+      destinationClientId: string;
+    }
+  | {
+      id: string;
+      action: "resources.refresh";
+      resourceId: string;
+      destinationClientId: string;
+    }
+  | {
+      id: string;
+      action: "resources.web-annotations.create";
+      input: CreateWebResourceAnnotationInput;
     }
   | { id: string; action: "attention.get"; targetClientId: string }
   | { id: string; action: "attention.mark"; input: AttentionMarkInput }

@@ -22,6 +22,7 @@ import { detailEmbedIds } from "./detail-embeds";
 import { linkOutlinerMarkdown } from "./outliner-links";
 import {
   detailBlockTarget,
+  detailResourceDescription,
   visibleBacklinkSources,
   type DetailState,
 } from "./detail-controller";
@@ -203,6 +204,36 @@ export interface DetailPiPreviewOptions {
   headerPropertyKeys?: readonly string[];
 }
 
+interface PreviewSelectionSource {
+  text: string;
+  sourceId: string;
+  sourceVersion: string;
+  sourceHash: string;
+}
+
+function previewSelectionSource(
+  state: Readonly<DetailState>,
+): PreviewSelectionSource | null {
+  const selected = state.context.selected;
+  if (selected) {
+    return {
+      text: selected.text,
+      sourceId: selected.id,
+      sourceVersion: selected.updatedAt,
+      sourceHash: "",
+    };
+  }
+  const description = detailResourceDescription(state);
+  const web = description?.web;
+  if (!description || !web) return null;
+  return {
+    text: web.markdown,
+    sourceId: description.resource.id,
+    sourceVersion: web.representation.contentHash,
+    sourceHash: web.representation.contentHash,
+  };
+}
+
 function annotationSelectionOffsets(state: Readonly<DetailState>): {
   start: number;
   end: number;
@@ -223,24 +254,34 @@ function annotationSelectionOffsets(state: Readonly<DetailState>): {
 }
 
 function annotationSelectionMark(state: Readonly<DetailState>): AttentionMark | null {
-  const selected = state.context.selected;
-  if (!selected) return null;
+  const source = previewSelectionSource(state);
+  if (!source) return null;
   const target = state.mode === "comment"
     ? state.annotationDraft?.target
     : undefined;
   let anchor: AnnotationAnchor;
   if (target?.kind === "block") {
     anchor = target.anchor;
+  } else if (target?.kind === "web-resource") {
+    anchor = {
+      start: target.anchor.start,
+      end: target.anchor.end,
+      excerpt: target.anchor.exact,
+      contextBefore: target.anchor.prefix,
+      contextAfter: target.anchor.suffix,
+      sourceVersion: source.sourceVersion,
+      sourceHash: source.sourceHash,
+    };
   } else if (state.mode === "select") {
     const offsets = annotationSelectionOffsets(state);
     if (!offsets) return null;
     anchor = {
       ...offsets,
-      excerpt: selected.text.slice(offsets.start, offsets.end),
+      excerpt: source.text.slice(offsets.start, offsets.end),
       contextBefore: "",
       contextAfter: "",
-      sourceVersion: selected.updatedAt,
-      sourceHash: "",
+      sourceVersion: source.sourceVersion,
+      sourceHash: source.sourceHash,
     };
   } else {
     return null;
@@ -250,7 +291,7 @@ function annotationSelectionMark(state: Readonly<DetailState>): AttentionMark | 
     targetClientId: state.attention.targetClientId,
     target: {
       kind: "block",
-      sourceBlockId: selected.id,
+      sourceBlockId: source.sourceId,
       sourceVersion: anchor.sourceVersion,
       sourceHash: anchor.sourceHash,
       anchor,
@@ -989,12 +1030,13 @@ class DetailPreviewBody implements Component {
   render(width: number): string[] {
     const inspector = this.renderInspector(width);
     if (this.dedicatedInspector()) return inspector;
+    const selectionSource = previewSelectionSource(this.state);
     const authored = decorateAttentionLines(
       this.authored.render(width),
       annotationSelectionMark(this.state) ??
         currentAttentionMark(this.state.attention, detailBlockTarget(this.state)?.blockId ?? null),
       width,
-      this.state.context.selected?.text,
+      selectionSource?.text,
     );
     const lines = this.includeInspector()
       ? arrangeInlinePreview(authored, inspector).lines
@@ -1199,17 +1241,33 @@ export class DetailPiPreviewLayout extends VStack {
     return anchors ? nearestDraftSourceLine(anchors, this.scrollView.scrollTop) : null;
   }
 
+  private webMarkdownEndRow(annotated: AnnotationPreviewArrangement): number | null {
+    if (this.state.context.selected) return null;
+    const web = detailResourceDescription(this.state)?.web;
+    if (!web) return null;
+    return this.markdown.sourceLineRow(
+      annotated.contentWidth,
+      web.markdown.split(/\r?\n/).length,
+      annotated.markdownLines.length,
+    );
+  }
+
   sourceLineAtScroll(width: number): number | null {
-    const sourceText = this.state.context.selected?.text;
+    const sourceText = previewSelectionSource(this.state)?.text;
     if (!sourceText) return null;
     const contentWidth = this.scrollView.getContentWidth(width);
     const annotated = this.annotationPreview.renderArrangement(contentWidth);
+    const webEndRow = this.webMarkdownEndRow(annotated);
+    if (
+      webEndRow !== null &&
+      this.scrollView.scrollTop >= annotated.mapMarkdownRow(webEndRow)
+    ) return null;
     const anchors = draftSourceRowAnchors(
       sourceText,
       annotated.contentWidth,
       this.markdownTheme,
     ).map((row) => annotated.mapMarkdownRow(row));
-    if (!(this.options.splitActive?.() ?? false)) {
+    if (this.state.context.selected && !(this.options.splitActive?.() ?? false)) {
       const inspector = this.inspectorMarkdown.render(contentWidth);
       const arrangement = arrangeInlinePreview(annotated.lines, inspector);
       for (let index = 0; index < anchors.length; index += 1) {
@@ -1224,14 +1282,15 @@ export class DetailPiPreviewLayout extends VStack {
     viewportColumn: number,
     width: number,
   ): { row: number; column: number } | null {
-    const sourceText = this.state.context.selected?.text;
+    const sourceText = previewSelectionSource(this.state)?.text;
     if (!sourceText) return null;
     const contentWidth = this.scrollView.getContentWidth(width);
     const annotated = this.annotationPreview.renderArrangement(contentWidth);
-    const split = this.options.splitActive?.() ?? false;
+    const inlineInspector = Boolean(this.state.context.selected) &&
+      !(this.options.splitActive?.() ?? false);
     const arrangement = arrangeInlinePreview(
       annotated.lines,
-      split ? [] : this.inspectorMarkdown.render(contentWidth),
+      inlineInspector ? this.inspectorMarkdown.render(contentWidth) : [],
     );
     const sourceLines = sourceText.split(/\r?\n/);
     const markdownAnchors = draftSourceRowAnchors(
@@ -1244,6 +1303,8 @@ export class DetailPiPreviewLayout extends VStack {
     if (annotatedRow === null) return null;
     const markdownRow = annotated.markdownRowAt(annotatedRow);
     if (markdownRow === null) return null;
+    const webEndRow = this.webMarkdownEndRow(annotated);
+    if (webEndRow !== null && markdownRow >= webEndRow) return null;
     const sourceLine = nearestDraftSourceLine(markdownAnchors, markdownRow);
     if (sourceLine === null) return null;
     const markdownAnchor = markdownAnchors[sourceLine];

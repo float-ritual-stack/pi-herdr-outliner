@@ -42,7 +42,10 @@ import {
   resolveBlockReferences as resolveBlockReferenceText,
   resolveBlockReferencesWithStatus,
 } from "./references";
-import { ResourceCatalog } from "./resource-catalog";
+import {
+  ResourceCatalog,
+  type ResourceCatalogOptions,
+} from "./resource-catalog";
 import {
   formatWorkId,
   isConfiguredWorkIdPlaceholder,
@@ -435,12 +438,12 @@ export class OutlinerStore {
   readonly database: Database;
   readonly resources: ResourceCatalog;
 
-  constructor(path: string) {
+  constructor(path: string, resourceOptions: ResourceCatalogOptions = {}) {
     mkdirSync(dirname(path), { recursive: true });
     this.database = new Database(path, { create: true });
     this.database.exec("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;");
     this.migrate();
-    this.resources = new ResourceCatalog(this.database);
+    this.resources = new ResourceCatalog(this.database, resourceOptions);
     this.seed();
     this.ensureTrashView();
     this.ensureInbox();

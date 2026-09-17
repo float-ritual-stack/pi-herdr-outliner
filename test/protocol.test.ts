@@ -42,6 +42,7 @@ import type {
   InternResourceReceipt,
   ResourceDescription,
   ResourceSource,
+  WebResourceAnnotation,
   RoadmapItemCreateReceipt,
   WorkIdAllocation,
   WorkIdAllocatorStatus,
@@ -285,6 +286,96 @@ test("persists resources and dispatches resource targets without synthetic block
   ).toEqual(unavailableBlockTarget);
 });
 
+test("serves cached web resources, refresh, and annotation evidence over the protocol", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-outliner-web-protocol-"));
+  let etag = "\"v1\"";
+  let html = "<h1>Protocol</h1><p>Quoted evidence.</p>";
+  const store = new OutlinerStore(join(directory, "outliner.sqlite"), {
+    fetch: (async (_input, init) => {
+      if (new Headers(init?.headers).get("if-none-match") === etag) {
+        return new Response(null, { status: 304 });
+      }
+      return new Response(html, {
+        headers: { "content-type": "text/html", etag },
+      });
+    }) as typeof fetch,
+  });
+  const socket = join(directory, "outliner.sock");
+  const server = new OutlinerServer(store, socket);
+  await server.start();
+  const connected = Promise.withResolvers<void>();
+  const events: OutlinerEvent[] = [];
+  const annotationEvent = Promise.withResolvers<void>();
+  const watcher = new OutlinerClient(socket).watch({
+    client: { clientId: "web-detail", role: "detail", contextId: "web-context" },
+    onConnect: connected.resolve,
+    onEvent(event) {
+      events.push(event);
+      if (event.action === "resources.web-annotations.create") annotationEvent.resolve();
+    },
+  });
+  cleanups.push(async () => {
+    watcher.stop();
+    await server.close();
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  await connected.promise;
+  const client = new OutlinerClient(socket);
+  const source = await client.request<ResourceSource>({
+    action: "resource-sources.create",
+    input: {
+      name: "Protocol web",
+      provider: "web",
+      boundary: { baseUrl: "https://example.com/" },
+    },
+  });
+  const resource = (await client.request<InternResourceReceipt>({
+    action: "resources.intern",
+    input: {
+      sourceId: source.id,
+      address: { kind: "web", url: "https://example.com/article" },
+    },
+  })).resource;
+  const opened = await client.request<ResourceDescription>({
+    action: "resources.open",
+    target: { kind: "resource", resourceId: resource.id },
+    destinationClientId: "web-detail",
+  });
+  expect(opened.web?.markdown).toBe("# Protocol\n\nQuoted evidence.");
+  const start = opened.web!.markdown.indexOf("Quoted evidence");
+  const end = start + "Quoted evidence".length;
+  const annotation = await client.request<WebResourceAnnotation>({
+    action: "resources.web-annotations.create",
+    input: {
+      resourceId: resource.id,
+      revision: opened.web!.revision,
+      representation: opened.web!.representation,
+      anchor: {
+        start,
+        end,
+        exact: opened.web!.markdown.slice(start, end),
+        prefix: opened.web!.markdown.slice(Math.max(0, start - 64), start),
+        suffix: opened.web!.markdown.slice(end, end + 64),
+      },
+      body: "Protocol evidence",
+    },
+  });
+  await annotationEvent.promise;
+  expect(events.some((event) => event.action === "resources.open")).toBe(false);
+  expect(annotation.anchor.exact).toBe("Quoted evidence");
+
+  etag = "\"v2\"";
+  html = "<h1>Protocol changed</h1><p>New body.</p>";
+  const refreshed = await client.request<ResourceDescription>({
+    action: "resources.refresh",
+    resourceId: resource.id,
+    destinationClientId: "web-detail",
+  });
+  expect(refreshed.web?.markdown).toBe("# Protocol changed\n\nNew body.");
+  expect(refreshed.web?.annotations[0]).toEqual(annotation);
+});
+
 
 
 test("serves atomic idempotent annotation threads over the current protocol", async () => {
@@ -357,7 +448,7 @@ test("serves mutations and property queries over the local socket", async () => 
   const client = new OutlinerClient(socket);
   const service = await client.request<OutlinerServiceStatus>({ action: "ping" });
   expect(service).toEqual({ status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION });
-  expect(service.protocolVersion).toBe(38);
+  expect(service.protocolVersion).toBe(39);
   const provenance = {
     actorId: "omp",
     sessionId: "session-1",
