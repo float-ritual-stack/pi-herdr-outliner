@@ -110,7 +110,10 @@ function reanchorPdfTarget(
   const resolvedTarget = textResult.resolvedTarget
     ? pdfTargetFromTextTarget(textResult.resolvedTarget, content, pages)
     : null;
-  if (textResult.resolvedTarget && !resolvedTarget) {
+  if (
+    (textResult.resolvedTarget && !resolvedTarget) ||
+    (textResult.candidates.length > 0 && mappedCandidates.length === 0)
+  ) {
     return {
       resolvedTarget: null,
       method: method(PDF_CODEC, "page-region-unavailable"),

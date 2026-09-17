@@ -230,6 +230,73 @@ test("filesystem PDF keeps identity across native/text representations and audit
   }
 });
 
+test("opening a missing filesystem PDF preserves retained snapshots and history", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-outliner-missing-pdf-"));
+  const pdfPath = join(directory, "evidence.pdf");
+  const store = new OutlinerStore(join(directory, "outliner.sqlite"), { workspaceRoot: directory });
+  try {
+    writeFileSync(pdfPath, fixturePdf(1));
+    const resource = store.resources.internFilesystem({ path: pdfPath }).resource;
+    const first = await store.resources.open(resource.id, true);
+    expect(first.pdf).not.toBeNull();
+    rmSync(pdfPath);
+    const opened = await store.resources.open(resource.id, true);
+    expect(opened.pdf).toEqual(first.pdf);
+    expect(opened.pdfHistory).toEqual(first.pdfHistory);
+    await expect(store.resources.refreshPdf(resource.id, true)).rejects.toMatchObject({
+      code: "source-unavailable",
+    });
+  } finally {
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test.each([null, "4"])("HTTP PDF enforces the streaming limit with content-length %s", async (declaredLength) => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-outliner-pdf-limit-"));
+  let receivedChunks = 0;
+  let cancelled = false;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      receivedChunks += 1;
+      controller.enqueue(new Uint8Array(4));
+      if (receivedChunks === 10) controller.close();
+    },
+    cancel() {
+      cancelled = true;
+    },
+  }, { highWaterMark: 0 });
+  const headers = new Headers({ "content-type": "application/pdf" });
+  if (declaredLength !== null) headers.set("content-length", declaredLength);
+  const store = new OutlinerStore(join(directory, "outliner.sqlite"), {
+    maximumPdfBytes: 8,
+    fetch: (async () => new Response(body, { headers })) as typeof fetch,
+  });
+  try {
+    const source = store.resources.createSource({
+      name: "PDF limit fixture",
+      provider: "web",
+      boundary: { baseUrl: "https://example.com/" },
+    });
+    const resource = store.resources.intern({
+      sourceId: source.id,
+      address: { kind: "web", url: "https://example.com/evidence.pdf" },
+      mediaType: "application/pdf",
+    }).resource;
+    await expect(store.resources.refreshWeb(resource.id, true)).rejects.toMatchObject({
+      code: "invalid-input",
+      message: "PDF response exceeds 8 bytes",
+    });
+    expect(receivedChunks).toBe(3);
+    expect(cancelled).toBe(true);
+    expect(body.locked).toBe(false);
+    expect(store.resources.describe(resource.id, true).pdf).toBeNull();
+  } finally {
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("PDF retention evicts and purges unreachable binary and text payloads", async () => {
   const directory = mkdtempSync(join(tmpdir(), "pi-outliner-pdf-retention-"));
   const databasePath = join(directory, "outliner.sqlite");

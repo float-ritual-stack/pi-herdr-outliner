@@ -1071,7 +1071,14 @@ export class ResourceCatalog {
       resource.provider === "filesystem" &&
       revision === undefined
     ) {
-      await this.refreshPdf(resource.id, destinationHostRegistered);
+      try {
+        await this.refreshPdf(resource.id, destinationHostRegistered);
+      } catch (error) {
+        if (
+          !(error instanceof ResourceCatalogError) ||
+          error.code !== "source-unavailable"
+        ) throw error;
+      }
     }
     const description = this.describe(resource.id, destinationHostRegistered, revision);
     if (
@@ -1233,12 +1240,32 @@ export class ResourceCatalog {
         `PDF response exceeds ${this.maximumPdfBytes} bytes`,
       );
     }
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    if (bytes.byteLength > this.maximumPdfBytes) {
-      throw new ResourceCatalogError(
-        "invalid-input",
-        `PDF response exceeds ${this.maximumPdfBytes} bytes`,
-      );
+    if (!response.body) return new Uint8Array();
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let received = 0;
+    try {
+      while (true) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        received += chunk.value.byteLength;
+        if (received > this.maximumPdfBytes) {
+          await reader.cancel();
+          throw new ResourceCatalogError(
+            "invalid-input",
+            `PDF response exceeds ${this.maximumPdfBytes} bytes`,
+          );
+        }
+        chunks.push(chunk.value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    const bytes = new Uint8Array(received);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
     }
     return bytes;
   }
