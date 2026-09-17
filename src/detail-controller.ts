@@ -1870,7 +1870,10 @@ export function createDetailController(
         state.status = "$EDITOR returned an unchanged draft";
         return;
       }
-      state.buffer.replaceText(result.text);
+      if (!state.buffer.replaceText(result.text)) {
+        state.status = "$EDITOR returned an unchanged draft";
+        return;
+      }
       const layout = editorLayout(viewport);
       const maximumOffset = Math.max(
         0,
