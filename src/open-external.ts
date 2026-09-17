@@ -7,7 +7,9 @@ export function externalOpenCommand(
     throw new Error("External web resources must use HTTP or HTTPS");
   }
   if (platform === "darwin") return ["open", parsed.href];
-  if (platform === "win32") return ["cmd", "/c", "start", "", parsed.href];
+  if (platform === "win32") {
+    return ["rundll32", "url.dll,FileProtocolHandler", parsed.href];
+  }
   return ["xdg-open", parsed.href];
 }
 

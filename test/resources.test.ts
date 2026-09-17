@@ -17,6 +17,7 @@ import {
   type ResourceSource,
 } from "../src/resources";
 import { OutlinerStore } from "../src/store";
+import { BasicWebMarkdownExtractor } from "../src/web-markdown";
 
 function withWorkspace(run: (root: string, store: OutlinerStore) => void): void {
   const root = mkdtempSync(join(tmpdir(), "outliner-resources-"));
@@ -51,6 +52,15 @@ function filesystemSource(store: OutlinerStore, name: string, root: string): Res
     boundary: { root },
   });
 }
+
+test("web Markdown preserves out-of-range numeric entities without aborting extraction", () => {
+  const extractor = new BasicWebMarkdownExtractor();
+  const markdown = extractor.extract({
+    url: "https://example.com/",
+    html: "<p>&#65; &#x41; &amp; &#1114111; &#x10ffff; &#1114112; &#x110000;</p>",
+  });
+  expect(markdown).toBe("A A & \u{10ffff} \u{10ffff} &#1114112; &#x110000;");
+});
 
 test("resource identity is source-scoped and persists independently of blocks", () => {
   withWorkspace((root, store) => {
