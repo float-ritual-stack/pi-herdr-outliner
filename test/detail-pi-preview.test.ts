@@ -2121,6 +2121,39 @@ test("maps cached web Markdown points without requiring a selected block", () =>
   });
 });
 
+test("rejects generated web metadata rows for clicks and scroll source mapping", () => {
+  for (const width of [24, 60]) {
+    for (const ending of ["", "\n\n", "\r\n"]) {
+      const markdown = "# Web article\n\nA cached paragraph that wraps across rows and ends with finalword." + ending;
+      const detail = webState(markdown);
+      const layout = previewLayout(detail);
+      layout.scrollView.setScrollbar("hidden");
+      layout.syncState(width);
+      const rendered = layout.scrollView.render(width).map(stripTerminalSequences);
+      const lastContentRow = rendered.findIndex((line) => line.includes("finalword"));
+      const metadataRow = rendered.findIndex((line) => line.includes("Web resource"));
+      expect(lastContentRow).toBeGreaterThanOrEqual(0);
+      expect(metadataRow).toBeGreaterThan(lastContentRow);
+      expect(layout.sourcePointAtViewport(lastContentRow + 3, 0, width)?.row).toBe(2);
+      for (let row = lastContentRow + 1; row < rendered.length; row += 1) {
+        if (!rendered[row]!.trim()) continue;
+        expect(layout.sourcePointAtViewport(row + 3, 0, width)).toBeNull();
+      }
+
+      layout.scrollView.updateLayout(rendered.length, 1, () => {});
+      layout.scrollView.scrollTo(lastContentRow);
+      expect(layout.sourceLineAtScroll(width)).toBe(2);
+      expect(layout.sourcePointAtViewport(3, 0, width)?.row).toBe(2);
+      for (let row = lastContentRow + 1; row < rendered.length; row += 1) {
+        if (!rendered[row]!.trim()) continue;
+        layout.scrollView.scrollTo(row);
+        expect(layout.sourceLineAtScroll(width)).toBeNull();
+        expect(layout.sourcePointAtViewport(3, 0, width)).toBeNull();
+      }
+    }
+  }
+});
+
 test("highlights keyboard selection in cached web Markdown", () => {
   const markdown = "# Web article\n\nChoose the **cached phrase** from this paragraph.";
   const detail = webState(markdown);

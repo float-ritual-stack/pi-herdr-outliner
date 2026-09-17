@@ -1241,11 +1241,27 @@ export class DetailPiPreviewLayout extends VStack {
     return anchors ? nearestDraftSourceLine(anchors, this.scrollView.scrollTop) : null;
   }
 
+  private webMarkdownEndRow(annotated: AnnotationPreviewArrangement): number | null {
+    if (this.state.context.selected) return null;
+    const web = detailResourceDescription(this.state)?.web;
+    if (!web) return null;
+    return this.markdown.sourceLineRow(
+      annotated.contentWidth,
+      web.markdown.split(/\r?\n/).length,
+      annotated.markdownLines.length,
+    );
+  }
+
   sourceLineAtScroll(width: number): number | null {
     const sourceText = previewSelectionSource(this.state)?.text;
     if (!sourceText) return null;
     const contentWidth = this.scrollView.getContentWidth(width);
     const annotated = this.annotationPreview.renderArrangement(contentWidth);
+    const webEndRow = this.webMarkdownEndRow(annotated);
+    if (
+      webEndRow !== null &&
+      this.scrollView.scrollTop >= annotated.mapMarkdownRow(webEndRow)
+    ) return null;
     const anchors = draftSourceRowAnchors(
       sourceText,
       annotated.contentWidth,
@@ -1287,6 +1303,8 @@ export class DetailPiPreviewLayout extends VStack {
     if (annotatedRow === null) return null;
     const markdownRow = annotated.markdownRowAt(annotatedRow);
     if (markdownRow === null) return null;
+    const webEndRow = this.webMarkdownEndRow(annotated);
+    if (webEndRow !== null && markdownRow >= webEndRow) return null;
     const sourceLine = nearestDraftSourceLine(markdownAnchors, markdownRow);
     if (sourceLine === null) return null;
     const markdownAnchor = markdownAnchors[sourceLine];
