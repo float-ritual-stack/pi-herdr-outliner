@@ -7,13 +7,6 @@ export interface DetailEventSchedulerOptions {
   readonly supersedePreview: () => void;
 }
 
-interface ScheduledDetailEvent {
-  readonly event: OutlinerEvent;
-  readonly passivePreview: boolean;
-  obsolete: boolean;
-  sealed: boolean;
-}
-
 function isPassivePreview(event: OutlinerEvent, clientId: string): boolean {
   return event.domain === "ui" &&
     event.command?.targetClientId === clientId &&
@@ -30,48 +23,37 @@ function isPassivePreviewContext(event: OutlinerEvent): boolean {
  * ordered without ending a burst. Explicit work and other events seal the burst.
  */
 export class DetailEventScheduler {
-  private active: ScheduledDetailEvent | null = null;
-  private pendingPreview: ScheduledDetailEvent | null = null;
+  private cancelPreview: (() => void) | null = null;
 
   constructor(private readonly options: DetailEventSchedulerOptions) {}
 
   schedule(event: OutlinerEvent): void {
-    const scheduled: ScheduledDetailEvent = {
-      event,
-      passivePreview: isPassivePreview(event, this.options.clientId),
-      obsolete: false,
-      sealed: false,
-    };
-    if (scheduled.passivePreview) {
-      if (this.active?.passivePreview && !this.active.sealed) {
-        this.active.obsolete = true;
-        this.options.supersedePreview();
-      }
-      if (this.pendingPreview) this.pendingPreview.obsolete = true;
-      this.pendingPreview = scheduled;
-    } else if (!isPassivePreviewContext(event)) {
-      this.sealPreviewBatch();
+    if (!isPassivePreview(event, this.options.clientId)) {
+      if (!isPassivePreviewContext(event)) this.cancelPreview = null;
+      this.options.enqueue(() => this.options.handle(event));
+      return;
     }
+
+    this.cancelPreview?.();
+    let obsolete = false;
+    let active = false;
+    this.cancelPreview = () => {
+      obsolete = true;
+      if (active) this.options.supersedePreview();
+    };
     this.options.enqueue(async () => {
-      if (this.pendingPreview === scheduled) this.pendingPreview = null;
-      if (scheduled.obsolete) return;
-      this.active = scheduled;
+      if (obsolete) return;
+      active = true;
       try {
-        await this.options.handle(scheduled.event);
+        await this.options.handle(event);
       } finally {
-        if (this.active === scheduled) this.active = null;
+        active = false;
       }
     });
   }
 
   scheduleWork(task: () => void | Promise<void>): void {
-    this.sealPreviewBatch();
+    this.cancelPreview = null;
     this.options.enqueue(task);
-  }
-
-  private sealPreviewBatch(): void {
-    if (this.active?.passivePreview) this.active.sealed = true;
-    if (this.pendingPreview) this.pendingPreview.sealed = true;
-    this.pendingPreview = null;
   }
 }
