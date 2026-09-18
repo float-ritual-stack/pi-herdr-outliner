@@ -120,6 +120,7 @@ function harness(
       return "";
     },
     async onServiceEvent() {},
+    supersedePassivePreview() {},
     async onServiceConnect() {},
     onServiceDisconnect() {},
     onServiceError() {},

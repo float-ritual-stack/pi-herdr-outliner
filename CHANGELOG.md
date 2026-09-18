@@ -22,10 +22,12 @@ This file records notable user-facing changes. The project remains active dogfoo
 - Fresh databases use workspace seed version 4. The Documentation hub now includes a Resource reference section and an authored-links example with block, page, local-file, web, SSH-application, and Jira references.
 - Detail navigation uses explicit destination routing and preserves locked panes for block targets.
 - Resource Details expose negotiated presentation, provenance, capability, revision, and retention state without creating wrapper blocks.
+- Remote endpoint selection is project-scoped by invoking workspace; explicit environment overrides still win, unconfigured projects remain local, and legacy machine-global configs now require visible migration.
+- Detail keeps a bounded 32-target in-memory block cache that paints revisits immediately and revalidates authoritative revisions without weakening optimistic writes.
 
 ### Fixed
 
-- Rapid Tree navigation stays local while browsing-context publication coalesces to the newest pending Detail target; explicit opens wait for that preview stream to settle.
+- Rapid Tree navigation stays local while browsing-context publication and the Detail event scheduler coalesce passive previews to the newest pending target; obsolete loads cannot repaint and explicit opens remain ordered.
 - Remote client routing scopes pane identities to their originating host, withdraws stale topology until Herdr resynchronizes, and uses remote-aware service probe deadlines.
 - Comment composition keeps the cursor visible after three rows and uses matching wrap widths for scrolling and rendering.
 - Filesystem Resources now support read, edit, external editor, refresh, and source-backed comments through one canonical Resource identity.

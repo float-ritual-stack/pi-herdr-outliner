@@ -284,6 +284,120 @@ export type DetailReadyDocument =
       description: ResourceDescription;
     };
 
+type DetailBlockReadyDocument = Extract<DetailReadyDocument, { kind: "block" }>;
+
+interface DetailBlockCacheEntry {
+  document: DetailBlockReadyDocument;
+  projection: DetailReadProjection | null;
+  resolved: ResolvedBlockReferences | null;
+  stale: boolean;
+}
+
+interface DetailBlockRead {
+  projection: DetailReadProjection;
+  resolved: ResolvedBlockReferences;
+}
+
+/** One Detail process retains at most 32 block targets, including fragment variants. */
+export const DETAIL_BLOCK_CACHE_TARGET_LIMIT = 32;
+
+function blockCacheKey(target: DetailBlockReadyDocument["target"]): string {
+  return `${target.blockId}\u0000${target.fragmentId ?? ""}`;
+}
+
+function sameBlockRevision(left: Block | null, right: Block | null): boolean {
+  if (!left || !right) return left === right;
+  return left.id === right.id &&
+    left.updatedAt === right.updatedAt &&
+    left.parentId === right.parentId &&
+    left.position === right.position &&
+    left.deletedAt === right.deletedAt &&
+    left.effectiveDeletedRootId === right.effectiveDeletedRootId;
+}
+
+function sameBlockListRevision(
+  left: readonly Block[],
+  right: readonly Block[],
+): boolean {
+  return left.length === right.length &&
+    left.every((block, index) => sameBlockRevision(block, right[index] ?? null));
+}
+
+function sameBlockDocumentRevision(
+  left: DetailBlockReadyDocument,
+  right: DetailBlockReadyDocument,
+): boolean {
+  return sameBlockRevision(left.context.selected, right.context.selected) &&
+    sameBlockListRevision(left.context.ancestors, right.context.ancestors) &&
+    sameBlockListRevision(left.context.children, right.context.children);
+}
+
+function sameDetailBlockRead(
+  cached: DetailBlockCacheEntry,
+  current: DetailBlockRead,
+): boolean {
+  const cachedProjection = cached.projection;
+  const cachedResolved = cached.resolved;
+  if (
+    !cachedProjection ||
+    !cachedResolved ||
+    cachedProjection.text !== current.projection.text ||
+    cachedResolved.text !== current.resolved.text ||
+    cachedResolved.workIdPrefix !== current.resolved.workIdPrefix ||
+    cachedProjection.embedRanges.length !== current.projection.embedRanges.length ||
+    cachedProjection.embeds.length !== current.projection.embeds.length
+  ) {
+    return false;
+  }
+  const sameRanges = cachedProjection.embedRanges.every((range, index) => {
+    const candidate = current.projection.embedRanges[index];
+    return candidate !== undefined &&
+      range.startLine === candidate.startLine &&
+      range.endLine === candidate.endLine;
+  });
+  if (!sameRanges) return false;
+  return cachedProjection.embeds.every((embed, index) => {
+    const candidate = current.projection.embeds[index];
+    if (
+      candidate === undefined ||
+      embed.blockId !== candidate.blockId ||
+      embed.fragmentId !== candidate.fragmentId ||
+      embed.status !== candidate.status ||
+      embed.count !== candidate.count ||
+      embed.completeness?.kind !== candidate.completeness?.kind
+    ) {
+      return false;
+    }
+    if (embed.completeness?.kind !== "truncated") return true;
+    return candidate.completeness?.kind === "truncated" &&
+      embed.completeness.limit === candidate.completeness.limit;
+  });
+}
+
+function sameAnnotationThreads(
+  left: readonly AnnotationThread[],
+  right: readonly AnnotationThread[],
+): boolean {
+  return left.length === right.length &&
+    left.every((thread, index) => {
+      const candidate = right[index];
+      return candidate !== undefined &&
+        thread.block.id === candidate.block.id &&
+        thread.block.updatedAt === candidate.block.updatedAt &&
+        thread.currentResolution.id === candidate.currentResolution.id &&
+        thread.replies.length === candidate.replies.length &&
+        thread.replies.every((reply, replyIndex) => {
+          const candidateReply = candidate.replies[replyIndex];
+          return candidateReply !== undefined &&
+            reply.block.id === candidateReply.block.id &&
+            reply.block.updatedAt === candidateReply.block.updatedAt &&
+            reply.currentResolution.id === candidateReply.currentResolution.id;
+        });
+    });
+}
+
+type DetailLoadOutcome = "applied" | "unchanged" | "cached" | "superseded";
+
 export type DetailDocumentState =
   | { kind: "empty" }
   | { kind: "loading"; target: OutlinerNavigationTarget }
@@ -574,6 +688,7 @@ export interface DetailController {
   ): DetailResourceSelectionCapture | null;
   setPreviewRegions(regions: readonly PreviewRegion[]): void;
   onServiceEvent(event: OutlinerEvent, viewport: DetailViewport): Promise<void>;
+  supersedePassivePreview(): void;
   handleDestinationChooserKeypress(str: string, key: TerminalKey): Promise<boolean>;
   destinationChooserHelpText(): string;
   onServiceConnect(viewport: DetailViewport): Promise<void>;
@@ -970,6 +1085,33 @@ export function createDetailController(
   let destinationChooser: OpenDestinationChooser | undefined;
   const destinationReferences = new WeakMap<OpenDestinationTarget, OutlinerLinkTarget>();
   let loadGeneration = 0;
+  const blockCache = new Map<string, DetailBlockCacheEntry>();
+
+  const readBlockCache = (
+    target: DetailBlockReadyDocument["target"],
+  ): DetailBlockCacheEntry | null => {
+    const key = blockCacheKey(target);
+    const cached = blockCache.get(key);
+    if (!cached) return null;
+    blockCache.delete(key);
+    blockCache.set(key, cached);
+    return cached;
+  };
+
+  const writeBlockCache = (entry: DetailBlockCacheEntry): void => {
+    const key = blockCacheKey(entry.document.target);
+    blockCache.delete(key);
+    blockCache.set(key, entry);
+    while (blockCache.size > DETAIL_BLOCK_CACHE_TARGET_LIMIT) {
+      const oldestKey = blockCache.keys().next().value;
+      if (oldestKey === undefined) break;
+      blockCache.delete(oldestKey);
+    }
+  };
+
+  const markBlockCacheStale = (): void => {
+    for (const entry of blockCache.values()) entry.stale = true;
+  };
 
   const emit = (): void => onChange(state);
   const isBufferMode = (): boolean =>
@@ -1032,12 +1174,17 @@ export function createDetailController(
     state.workIdPrefix = resolved.workIdPrefix ?? null;
   };
 
-  const applyReadProjection = async (text: string, hostBlockId?: string): Promise<void> => {
+  const applyReadProjection = async (
+    text: string,
+    hostBlockId?: string,
+  ): Promise<DetailBlockRead> => {
     const projection = await effects.projectRead(text, hostBlockId);
+    const resolved = await effects.resolveReferences(projection.text);
     state.projectedSelectedText = projection.text;
     state.embedStates = projection.embeds;
     state.embedRanges = projection.embedRanges;
-    applyResolvedReferences(await effects.resolveReferences(projection.text));
+    applyResolvedReferences(resolved);
+    return { projection, resolved };
   };
 
   const loadAnnotations = async (expectedGeneration?: number): Promise<void> => {
@@ -1210,6 +1357,16 @@ export function createDetailController(
         context: { ...document.context, selected },
       },
     };
+  };
+
+  const cacheCurrentBlockRead = (read: DetailBlockRead): void => {
+    if (state.document.kind !== "ready" || state.document.document.kind !== "block") return;
+    writeBlockCache({
+      document: state.document.document,
+      projection: read.projection,
+      resolved: read.resolved,
+      stale: false,
+    });
   };
 
   const clearDocumentPresentation = (): void => {
@@ -1600,28 +1757,17 @@ export function createDetailController(
     return lines.join("\n");
   };
 
-  const applyReadyDocument = async (
-    document: DetailReadyDocument,
-    generation: number,
-    force: boolean,
-    record: boolean,
+  const applyReadyBlockPresentation = (
+    document: DetailBlockReadyDocument,
+    read: DetailBlockRead | null,
     previousTarget: OutlinerNavigationTarget | null,
-  ): Promise<void> => {
-    const previousContext = state.context;
+    record: boolean,
+    changed: boolean,
+  ): void => {
+    const next = document.context;
     const targetChanged = !sameNavigationTarget(previousTarget, document.target);
-    const nextSelected = document.kind === "block" ? document.context.selected : null;
-    const blockChanged = detailBlockTarget({ target: previousTarget })?.blockId !== nextSelected?.id;
-    const changed = document.kind === "resource" || targetChanged ||
-      nextSelected?.updatedAt !== previousContext.selected?.updatedAt;
-
-    let projection: DetailReadProjection | null = null;
-    let resolved: ResolvedBlockReferences | null = null;
-    if (document.kind === "block" && nextSelected && (force || changed)) {
-      projection = await effects.projectRead(nextSelected.text, nextSelected.id);
-      resolved = await effects.resolveReferences(projection.text);
-      if (generation !== loadGeneration) return;
-    }
-
+    const blockChanged =
+      detailBlockTarget({ target: previousTarget })?.blockId !== next.selected?.id;
     if (record) recordNavigation(previousTarget);
     state.document = { kind: "ready", document };
     state.refreshPending = false;
@@ -1629,33 +1775,20 @@ export function createDetailController(
     if (blockChanged) {
       state.previewRegions.disclosureOverrides.clear();
       state.attentionRevealSourceLine = null;
+      state.annotationThreads = [];
     }
     if (blockChanged || changed) invalidateBacklinks();
-    if (serviceConnected) await effects.setCurrentTarget(document.target);
-    if (generation !== loadGeneration) return;
     if (record) recordNavigation(document.target);
     else syncNavigationState();
-    if (!force && !changed) return;
     if (changed) state.status = "";
 
-    if (document.kind === "resource") {
-      clearDocumentPresentation();
-      state.resolvedSelectedText = resourceDocumentText(document.description);
-      state.projectedSelectedText = state.resolvedSelectedText;
-      state.resolvedBreadcrumb = resourceAddressLabel(document.description.resource.address);
-      state.mode = "preview";
-      await loadAnnotations(generation);
-      return;
-    }
-
-    const next = document.context;
-    syncPropertyInspector(next.selected, blockChanged);
-    if (next.selected && projection && resolved) {
-      state.projectedSelectedText = projection.text;
-      state.embedStates = projection.embeds;
-      state.embedRanges = projection.embedRanges;
-      applyResolvedReferences(resolved);
-    } else if (!next.selected) {
+    if (next.selected && read) {
+      syncPropertyInspector(next.selected, blockChanged);
+      state.projectedSelectedText = read.projection.text;
+      state.embedStates = read.projection.embeds;
+      state.embedRanges = read.projection.embedRanges;
+      applyResolvedReferences(read.resolved);
+    } else {
       clearDocumentPresentation();
     }
     refreshBreadcrumb();
@@ -1679,33 +1812,162 @@ export function createDetailController(
     } else if (next.selected?.effectiveDeletedRootId) {
       state.status = "In Trash — read-only · restore its direct Trash root";
     }
-    if ((state.mode === "file" || state.mode === "annotation") && next.selected) loadFile(next.selected);
-    else state.referencedFile = null;
+    if ((state.mode === "file" || state.mode === "annotation") && next.selected) {
+      loadFile(next.selected);
+    } else {
+      state.referencedFile = null;
+    }
+  };
+
+  const applyReadyDocument = async (
+    document: DetailReadyDocument,
+    generation: number,
+    force: boolean,
+    record: boolean,
+    previousTarget: OutlinerNavigationTarget | null,
+    cached: DetailBlockCacheEntry | null,
+  ): Promise<boolean> => {
+    const currentBlockDocument = state.document.kind === "ready" &&
+        state.document.document.kind === "block"
+      ? state.document.document
+      : null;
+    const targetChanged = !sameNavigationTarget(previousTarget, document.target);
+    const changed = document.kind === "resource" ||
+      targetChanged ||
+      currentBlockDocument === null ||
+      !sameBlockDocumentRevision(currentBlockDocument, document);
+
+    let read: DetailBlockRead | null = null;
+    if (document.kind === "block" && document.context.selected && (force || changed)) {
+      const projection = await effects.projectRead(
+        document.context.selected.text,
+        document.context.selected.id,
+      );
+      const resolved = await effects.resolveReferences(projection.text);
+      if (generation !== loadGeneration) return false;
+      read = { projection, resolved };
+    }
+
+    const revalidatedReadUnchanged = force &&
+      cached !== null &&
+      (read
+        ? sameDetailBlockRead(cached, read)
+        : document.kind === "block" &&
+          document.context.selected === null &&
+          cached.projection === null &&
+          cached.resolved === null);
+    if (
+      document.kind === "block" &&
+      !changed &&
+      (!force || revalidatedReadUnchanged)
+    ) {
+      if (cached) {
+        writeBlockCache({
+          document,
+          projection: read?.projection ?? cached.projection,
+          resolved: read?.resolved ?? cached.resolved,
+          stale: false,
+        });
+      }
+      if (serviceConnected) await effects.setCurrentTarget(document.target);
+      if (generation !== loadGeneration) return false;
+      const previousThreads = state.annotationThreads;
+      await loadAnnotations(generation);
+      if (generation !== loadGeneration) return false;
+      return !sameAnnotationThreads(previousThreads, state.annotationThreads);
+    }
+
+    if (document.kind === "resource") {
+      if (record) recordNavigation(previousTarget);
+      state.document = { kind: "ready", document };
+      state.refreshPending = false;
+      if (targetChanged) destinationChooser?.dispose();
+      clearDocumentPresentation();
+      state.status = "";
+      state.resolvedSelectedText = resourceDocumentText(document.description);
+      state.projectedSelectedText = state.resolvedSelectedText;
+      state.resolvedBreadcrumb = resourceAddressLabel(document.description.resource.address);
+      state.mode = "preview";
+      if (serviceConnected) await effects.setCurrentTarget(document.target);
+      if (generation !== loadGeneration) return false;
+      if (record) recordNavigation(document.target);
+      else syncNavigationState();
+      await loadAnnotations(generation);
+      return generation === loadGeneration;
+    }
+
+    applyReadyBlockPresentation(document, read, previousTarget, record, changed);
+    writeBlockCache({
+      document,
+      projection: read?.projection ?? null,
+      resolved: read?.resolved ?? null,
+      stale: false,
+    });
+    if (serviceConnected) await effects.setCurrentTarget(document.target);
+    if (generation !== loadGeneration) return false;
     await loadBacklinks();
-    if (generation !== loadGeneration) return;
+    if (generation !== loadGeneration) return false;
     await loadAnnotations(generation);
+    return generation === loadGeneration;
   };
 
   const loadNavigationTarget = async (
     target: OutlinerNavigationTarget,
     force = false,
     record = true,
-  ): Promise<void> => {
+    successStatus?: () => string,
+  ): Promise<DetailLoadOutcome> => {
     const generation = ++loadGeneration;
     const previousTarget = state.target;
-    state.document = { kind: "loading", target };
+    const cached = target.kind === "block" ? readBlockCache(target) : null;
     state.refreshPending = false;
-    emit();
+    const cachedPainted = cached !== null &&
+      !sameNavigationTarget(previousTarget, target);
+    if (cachedPainted) {
+      applyReadyBlockPresentation(
+        cached.document,
+        cached.projection && cached.resolved
+          ? { projection: cached.projection, resolved: cached.resolved }
+          : null,
+        previousTarget,
+        record,
+        true,
+      );
+      if (successStatus) state.status = successStatus();
+      emit();
+    } else if (!cached) {
+      state.document = { kind: "loading", target };
+      emit();
+    }
     try {
       const document = await effects.loadTarget(target);
-      if (generation !== loadGeneration) return;
+      if (generation !== loadGeneration) return "superseded";
       if (!sameNavigationTarget(document.target, target)) {
         throw new Error("Detail loader returned a different navigation target");
       }
-      await applyReadyDocument(document, generation, force, record, previousTarget);
+      const applied = await applyReadyDocument(
+        document,
+        generation,
+        (cached?.stale ?? false) || force,
+        cachedPainted ? false : record,
+        cachedPainted ? target : previousTarget,
+        cached,
+      );
+      if (generation !== loadGeneration) return "superseded";
+      if (successStatus) state.status = successStatus();
+      if (applied) return "applied";
+      return cachedPainted ? "cached" : "unchanged";
     } catch (error) {
-      if (generation !== loadGeneration) return;
+      if (generation !== loadGeneration) return "superseded";
       const message = errorMessage(error);
+      if (cached) {
+        cached.stale = true;
+        writeBlockCache(cached);
+        await effects.setCurrentTarget(target);
+        if (generation !== loadGeneration) return "superseded";
+        state.status = `Refresh failed · ${message}`;
+        return "applied";
+      }
       clearDocumentPresentation();
       state.document = { kind: "failed", target, message };
       if (record) {
@@ -1713,7 +1975,9 @@ export function createDetailController(
         recordNavigation(target);
       } else syncNavigationState();
       await effects.setCurrentTarget(target);
+      if (generation !== loadGeneration) return "superseded";
       state.status = `Target is no longer available · ${message}`;
+      return "applied";
     }
   };
 
@@ -1749,16 +2013,43 @@ export function createDetailController(
     else await loadBrowsingContext(force);
   };
 
-  const applyNavigationCommand = async (command: OutlinerUiCommand): Promise<boolean> => {
-    if (!("target" in command) || !command.target) return false;
+  const applyNavigationCommand = async (
+    command: OutlinerUiCommand,
+  ): Promise<DetailLoadOutcome | null> => {
+    if (!("target" in command) || !command.target) return null;
     if (
       state.connectionMode === "locked" &&
       (command.command === "preview" || command.command === "open")
     ) {
-      return false;
+      return null;
     }
-    await loadNavigationTarget(command.target, true, command.command !== "preview");
-    return true;
+    const successStatus = (): string => {
+      if (command.command === "preview") {
+        return command.target.kind === "resource"
+          ? "Previewing resource · L locks this resource"
+          : "Previewing Tree selection · L locks this block";
+      }
+      if (command.command === "open") {
+        return command.target.kind === "block" && command.target.fragmentId
+          ? `Opened fragment · ^${command.target.fragmentId} · line ${state.previewOffset + 1} · still unlocked`
+          : command.target.kind === "resource"
+            ? "Opened resource here · still unlocked · L locks this resource"
+            : "Opened here · still unlocked · L locks this block";
+      }
+      if (command.command === "replace") {
+        const noun = command.target.kind === "resource" ? "resource" : "block";
+        return state.connectionMode === "locked"
+          ? `Replaced here · remains locked · L unlocks this ${noun}`
+          : `Replaced here · still unlocked · L locks this ${noun}`;
+      }
+      return "";
+    };
+    return loadNavigationTarget(
+      command.target,
+      true,
+      command.command !== "preview",
+      successStatus,
+    );
   };
 
   const resolveDestinationTarget = async (
@@ -2088,7 +2379,8 @@ export function createDetailController(
       }
       replaceSelectedBlock(updated);
       syncPropertyInspector(updated, false);
-      await applyReadProjection(updated.text, updated.id);
+      const read = await applyReadProjection(updated.text, updated.id);
+      cacheCurrentBlockRead(read);
       refreshBreadcrumb();
       const editedEntry = state.propertyInspector.model?.entries[edit.ordinal];
       state.previewRegions.focusedRegionId = editedEntry?.occurrenceId ?? "property-inspector";
@@ -2337,7 +2629,8 @@ export function createDetailController(
             expectedUpdatedAt: selected.updatedAt,
           });
           replaceSelectedBlock(updated);
-          await applyReadProjection(updated.text, updated.id);
+          const read = await applyReadProjection(updated.text, updated.id);
+          cacheCurrentBlockRead(read);
           refreshBreadcrumb();
           state.mode = detailDisplayMode(updated);
           if (state.mode === "file" || state.mode === "annotation") loadFile(updated);
@@ -3555,16 +3848,21 @@ export function createDetailController(
     get state() {
       return state;
     },
-    initialize() {
-      return options.initialTarget
-        ? loadNavigationTarget(options.initialTarget, true, true)
-        : loadBrowsingContext(true);
+    async initialize() {
+      if (options.initialTarget) {
+        await loadNavigationTarget(options.initialTarget, true, true);
+      } else {
+        await loadBrowsingContext(true);
+      }
     },
     isBufferMode,
     dispatch,
     captureResourcePointerSelection,
     setPreviewRegions(regions) {
       reconcilePreviewRegions(state.previewRegions, regions);
+    },
+    supersedePassivePreview() {
+      loadGeneration += 1;
     },
     handleDestinationChooserKeypress(str, key) {
       return destinationChooser!.handleKeypress(str, key);
@@ -3660,30 +3958,14 @@ export function createDetailController(
           state.refreshPending = true;
           return;
         }
+        let navigationOutcome: DetailLoadOutcome | null = null;
         if ("target" in command && command.target) {
-          await applyNavigationCommand(command);
-          if (state.document.kind !== "failed") {
-            if (command.command === "preview") {
-              state.status = command.target.kind === "resource"
-                ? "Previewing resource · L locks this resource"
-                : "Previewing Tree selection · L locks this block";
-            } else if (command.command === "open") {
-              state.status = command.target.kind === "block" && command.target.fragmentId
-                ? `Opened fragment · ^${command.target.fragmentId} · line ${state.previewOffset + 1} · still unlocked`
-                : command.target.kind === "resource"
-                  ? "Opened resource here · still unlocked · L locks this resource"
-                  : "Opened here · still unlocked · L locks this block";
-            } else if (command.command === "replace") {
-              const noun = command.target.kind === "resource" ? "resource" : "block";
-              state.status = state.connectionMode === "locked"
-                ? `Replaced here · remains locked · L unlocks this ${noun}`
-                : `Replaced here · still unlocked · L locks this ${noun}`;
-            }
-          }
+          navigationOutcome = await applyNavigationCommand(command);
+          if (navigationOutcome === "superseded") return;
         }
         if (command.command === "edit") await beginEdit(viewport);
         if (command.command !== "preview") effects.focusSelf();
-        emit();
+        if (navigationOutcome !== "cached" || command.command === "edit") emit();
         return;
       }
       if (event.domain === "resource-catalog") {
@@ -3700,6 +3982,7 @@ export function createDetailController(
           );
         if (!matchesTarget && !matchesDescription) return;
       } else if (event.domain === "content") {
+        markBlockCacheStale();
         invalidateBacklinks();
       }
       if (event.domain === "selection" || event.domain === "browsing-context") return;
@@ -3712,6 +3995,7 @@ export function createDetailController(
       emit();
     },
     async onServiceConnect() {
+      markBlockCacheStale();
       serviceConnected = true;
       await effects.setLocked(state.connectionMode === "locked");
       await effects.setCurrentTarget(state.target);
@@ -3722,6 +4006,7 @@ export function createDetailController(
       emit();
     },
     onServiceDisconnect() {
+      markBlockCacheStale();
       serviceConnected = false;
       state.status = "Workspace service disconnected; reconnecting…";
       emit();

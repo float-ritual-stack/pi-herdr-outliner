@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { basename, isAbsolute, join, resolve } from "node:path";
 
 export interface OutlinerPaths {
   stateDir: string;
@@ -14,20 +14,54 @@ export interface OutlinerClientPaths extends OutlinerPaths {
   mode: "local" | "remote";
 }
 
-interface OutlinerClientConfig {
-  remote: boolean;
-  socketPath?: string;
+type OutlinerClientConfig =
+  | {
+    mode: "local";
+    workspaceRoot?: string;
+    label?: string;
+  }
+  | {
+    mode: "remote";
+    socketPath: string;
+    workspaceRoot?: string;
+    label?: string;
+  };
+
+const CLIENT_CONFIG_KEYS: Readonly<Record<string, true>> = {
+  workspaceRoot: true,
+  mode: true,
+  socketPath: true,
+  label: true,
+};
+
+function workspaceKey(workspaceRoot: string): string {
+  return createHash("sha256").update(workspaceRoot).digest("hex").slice(0, 12);
 }
 
-function clientConfigPath(env: NodeJS.ProcessEnv): string {
+function readableWorkspaceName(workspaceRoot: string): string {
+  const name = basename(workspaceRoot) || "root";
+  return name.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "workspace";
+}
+
+export function resolveClientConfigPath(
+  env: NodeJS.ProcessEnv = process.env,
+): string {
   const configuredPath = env.OUTLINER_CONFIG_PATH?.trim();
   if (configuredPath) return configuredPath;
-  const configHome = env.XDG_CONFIG_HOME?.trim() || join(homedir(), ".config");
-  return join(configHome, "pi-herdr-outliner", "client.json");
+  const workspaceRoot = resolve(env.OUTLINER_WORKSPACE_ROOT ?? process.cwd());
+  return join(
+    env.XDG_CONFIG_HOME?.trim() || join(homedir(), ".config"),
+    "pi-herdr-outliner",
+    "projects",
+    `${readableWorkspaceName(workspaceRoot)}--${workspaceKey(workspaceRoot)}`,
+    "client.json",
+  );
 }
 
-function readClientConfig(env: NodeJS.ProcessEnv): OutlinerClientConfig | undefined {
-  const path = clientConfigPath(env);
+function readClientConfig(
+  path: string,
+  workspaceRoot: string,
+): OutlinerClientConfig | undefined {
   let source: string;
   try {
     source = readFileSync(path, "utf8");
@@ -49,30 +83,85 @@ function readClientConfig(env: NodeJS.ProcessEnv): OutlinerClientConfig | undefi
     throw new Error(`Outliner client config at ${path} must be a JSON object`);
   }
   const record = value as Record<string, unknown>;
-  const unknownKey = Object.keys(record).find(
-    (key) => key !== "remote" && key !== "socketPath",
-  );
+  const unknownKey = Object.keys(record).find((key) => CLIENT_CONFIG_KEYS[key] !== true);
   if (unknownKey) {
     throw new Error(`Unknown Outliner client config key ${unknownKey} at ${path}`);
   }
-  if (typeof record.remote !== "boolean") {
-    throw new Error(`Outliner client config at ${path} requires boolean remote`);
+  if (record.mode !== "local" && record.mode !== "remote") {
+    throw new Error(`Outliner client config mode at ${path} must be "local" or "remote"`);
   }
-  if (record.socketPath !== undefined && typeof record.socketPath !== "string") {
-    throw new Error(`Outliner client config socketPath at ${path} must be a string`);
+  if (
+    record.workspaceRoot !== undefined &&
+    (typeof record.workspaceRoot !== "string" || record.workspaceRoot.trim() === "")
+  ) {
+    throw new Error(`Outliner client config workspaceRoot at ${path} must be a non-empty string`);
+  }
+  if (
+    typeof record.workspaceRoot === "string" &&
+    resolve(record.workspaceRoot) !== workspaceRoot
+  ) {
+    throw new Error(
+      `Outliner client config workspaceRoot at ${path} does not match invoking workspace ${workspaceRoot}`,
+    );
+  }
+  if (
+    record.label !== undefined &&
+    (typeof record.label !== "string" || record.label.trim() === "")
+  ) {
+    throw new Error(`Outliner client config label at ${path} must be a non-empty string`);
+  }
+  if (record.mode === "local") {
+    if (record.socketPath !== undefined) {
+      throw new Error(`Local Outliner client config at ${path} must not set socketPath`);
+    }
+    return {
+      mode: "local",
+      ...(record.workspaceRoot === undefined ? {} : { workspaceRoot: record.workspaceRoot }),
+      ...(record.label === undefined ? {} : { label: record.label }),
+    };
+  }
+  if (typeof record.socketPath !== "string" || !isAbsolute(record.socketPath)) {
+    throw new Error(
+      `Remote Outliner client config socketPath at ${path} must be an absolute Unix socket path`,
+    );
   }
   return {
-    remote: record.remote,
-    ...(record.socketPath === undefined ? {} : { socketPath: record.socketPath }),
+    mode: "remote",
+    socketPath: record.socketPath,
+    ...(record.workspaceRoot === undefined ? {} : { workspaceRoot: record.workspaceRoot }),
+    ...(record.label === undefined ? {} : { label: record.label }),
   };
+}
+
+function rejectLegacyClientConfig(env: NodeJS.ProcessEnv, projectConfigPath: string): void {
+  const legacyPath = join(
+    env.XDG_CONFIG_HOME?.trim() || join(homedir(), ".config"),
+    "pi-herdr-outliner",
+    "client.json",
+  );
+  try {
+    readFileSync(legacyPath, "utf8");
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "ENOENT"
+    ) return;
+    throw new Error(`Could not inspect legacy Outliner client config at ${legacyPath}`, {
+      cause: error,
+    });
+  }
+  throw new Error(
+    `Legacy Outliner client config found at ${legacyPath}; it is no longer loaded automatically. Create ${projectConfigPath} with mode "local" or "remote" (plus socketPath for remote), or set OUTLINER_CONFIG_PATH explicitly to a config using that schema.`,
+  );
 }
 
 export function resolvePaths(env: NodeJS.ProcessEnv = process.env): OutlinerPaths {
   const workspaceRoot = resolve(env.OUTLINER_WORKSPACE_ROOT ?? process.cwd());
   const baseStateDir =
     env.OUTLINER_STATE_DIR ?? join(homedir(), ".local", "state", "pi-herdr-outliner");
-  const workspaceKey = createHash("sha256").update(workspaceRoot).digest("hex").slice(0, 12);
-  const stateDir = join(baseStateDir, workspaceKey);
+  const workspaceKeyPart = workspaceKey(workspaceRoot);
+  const stateDir = join(baseStateDir, workspaceKeyPart);
 
   return {
     stateDir,
@@ -87,11 +176,18 @@ export function resolveClientPaths(
 ): OutlinerClientPaths {
   const paths = resolvePaths(env);
   const envRemote = env.OUTLINER_REMOTE?.trim();
-  const config = envRemote === undefined ? readClientConfig(env) : undefined;
-  const remote = envRemote ?? (config === undefined ? "" : config.remote ? "1" : "0");
+  const explicitConfigPath = env.OUTLINER_CONFIG_PATH?.trim();
+  const configPath = resolveClientConfigPath(env);
+  const config = envRemote === undefined
+    ? readClientConfig(configPath, paths.workspaceRoot)
+    : undefined;
+  if (envRemote === undefined && config === undefined && !explicitConfigPath) {
+    rejectLegacyClientConfig(env, configPath);
+  }
+  const remote = envRemote ?? (config?.mode === "remote" ? "1" : "0");
   const configuredSocket = (
     env.OUTLINER_SOCKET_PATH ??
-    (envRemote === undefined ? config?.socketPath : undefined) ??
+    (envRemote === undefined && config?.mode === "remote" ? config.socketPath : undefined) ??
     ""
   ).trim();
   if (remote !== "" && remote !== "0" && remote !== "1") {

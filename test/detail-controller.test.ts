@@ -8,6 +8,7 @@ import { createAnnotationAnchor } from "../src/annotations";
 import { emptyAttentionState } from "../src/attention";
 import { BufferComposer, bufferComposerEditorBody } from "../src/buffer-composer";
 import {
+  DETAIL_BLOCK_CACHE_TARGET_LIMIT,
   createDetailController,
   renderedSelectionAnnotationTarget,
   visibleBacklinkSources,
@@ -196,6 +197,7 @@ function createHarness(
     embedRanges: [],
   }),
   controllerOptions: DetailControllerOptions = {},
+  onChange: Parameters<typeof createDetailController>[1] = () => {},
 ): Harness {
   let selection: SelectionContext = { selected: initial, ancestors: [], children: [] };
   let update: DetailEffects["updateBlock"] = async (input) => makeBlock({
@@ -546,7 +548,7 @@ function createHarness(
     },
   };
   return {
-    controller: createDetailController(effects, undefined, controllerOptions),
+    controller: createDetailController(effects, onChange, controllerOptions),
     effects,
     calls,
     setSelection(next) {
@@ -710,6 +712,30 @@ describe("detail controller projection and deferred refresh", () => {
     expect(harness.controller.state.context.selected?.text).toBe(selected.text);
     expect(harness.calls.projectedReads).toEqual([selected.text, selected.text]);
     expect(harness.calls.projectedReadHosts).toEqual([selected.id, selected.id]);
+  });
+
+  test("force-refreshes a cached projection when a view event leaves block revisions unchanged", async () => {
+    const selected = makeBlock({ text: "Embedded\n!((view-next))" });
+    let projectionVersion = 1;
+    const harness = createHarness(
+      selected,
+      null,
+      async (text) => ({ text, references: [] }),
+      async () => ({
+        text: `Embedded projection ${projectionVersion}`,
+        embeds: [],
+        embedRanges: [],
+      }),
+    );
+    await harness.controller.initialize();
+    expect(harness.controller.state.projectedSelectedText).toBe("Embedded projection 1");
+
+    projectionVersion = 2;
+    await harness.controller.onServiceEvent(event("view"), viewport);
+
+    expect(harness.controller.state.context.selected?.updatedAt).toBe(selected.updatedAt);
+    expect(harness.controller.state.projectedSelectedText).toBe("Embedded projection 2");
+    expect(harness.calls.projectedReads).toEqual([selected.text, selected.text]);
   });
 
   test("toggles embedded item backgrounds per Detail without changing projection data", async () => {
@@ -2495,6 +2521,200 @@ describe("detail controller projection and deferred refresh", () => {
       .toBe(true);
     expect(harness.controller.state.previewRegions.regions[0]!.disclosure?.expanded)
       .toBe(true);
+  });
+
+  test("paints an A→B→A cache hit before unchanged revalidation settles", async () => {
+    const first = makeBlock({ id: "cache-a", text: "Cached A", updatedAt: "a-1" });
+    const paints: Array<{ id: string | null; projected: string }> = [];
+    const harness = createHarness(
+      first,
+      null,
+      async (text) => ({ text, references: [] }),
+      async (text) => ({ text, embeds: [], embedRanges: [] }),
+      {},
+      (state) => {
+        paints.push({
+          id: state.context.selected?.id ?? null,
+          projected: state.projectedSelectedText,
+        });
+      },
+    );
+    await harness.controller.initialize();
+    const originalLoadTarget = harness.effects.loadTarget;
+    await harness.controller.onServiceEvent(event("ui", {
+      targetClientId: "detail-test",
+      command: "preview",
+      target: { kind: "block", blockId: "cache-b" },
+    }), viewport);
+    const revalidation = Promise.withResolvers<DetailReadyDocument>();
+    harness.effects.loadTarget = (target) =>
+      target.kind === "block" && target.blockId === first.id
+        ? revalidation.promise
+        : originalLoadTarget(target);
+
+    const revisit = harness.controller.onServiceEvent(event("ui", {
+      targetClientId: "detail-test",
+      command: "preview",
+      target: { kind: "block", blockId: first.id },
+    }), viewport);
+
+    expect(harness.controller.state.context.selected?.id).toBe(first.id);
+    expect(harness.controller.state.projectedSelectedText).toBe(first.text);
+    expect(paints.at(-1)).toEqual({ id: first.id, projected: first.text });
+    const immediatePaintCount = paints.length;
+    const projectionsBeforeRevalidation = harness.calls.projectedReads.length;
+    revalidation.resolve({
+      kind: "block",
+      target: { kind: "block", blockId: first.id },
+      context: { selected: first, ancestors: [], children: [] },
+    });
+    await revisit;
+
+    expect(paints).toHaveLength(immediatePaintCount);
+    expect(harness.calls.projectedReads).toHaveLength(projectionsBeforeRevalidation + 1);
+  });
+
+  test("atomically replaces a cached projection when authoritative updatedAt changes", async () => {
+    const first = makeBlock({ id: "changed-a", text: "Old A", updatedAt: "a-1" });
+    const paints: Array<{ updatedAt: string | null; projected: string }> = [];
+    const harness = createHarness(
+      first,
+      null,
+      async (text) => ({ text, references: [] }),
+      async (text) => ({ text: `projected:${text}`, embeds: [], embedRanges: [] }),
+      {},
+      (state) => {
+        paints.push({
+          updatedAt: state.context.selected?.updatedAt ?? null,
+          projected: state.projectedSelectedText,
+        });
+      },
+    );
+    await harness.controller.initialize();
+    const originalLoadTarget = harness.effects.loadTarget;
+    await harness.controller.onServiceEvent(event("ui", {
+      targetClientId: "detail-test",
+      command: "preview",
+      target: { kind: "block", blockId: "changed-b" },
+    }), viewport);
+    const revalidation = Promise.withResolvers<DetailReadyDocument>();
+    harness.effects.loadTarget = (target) =>
+      target.kind === "block" && target.blockId === first.id
+        ? revalidation.promise
+        : originalLoadTarget(target);
+
+    const revisit = harness.controller.onServiceEvent(event("ui", {
+      targetClientId: "detail-test",
+      command: "preview",
+      target: { kind: "block", blockId: first.id },
+    }), viewport);
+    expect(harness.controller.state.context.selected?.updatedAt).toBe("a-1");
+    expect(harness.controller.state.projectedSelectedText).toBe("projected:Old A");
+
+    const changed = makeBlock({ id: first.id, text: "New A", updatedAt: "a-2" });
+    revalidation.resolve({
+      kind: "block",
+      target: { kind: "block", blockId: first.id },
+      context: { selected: changed, ancestors: [], children: [] },
+    });
+    await revisit;
+
+    expect(harness.controller.state.context.selected?.updatedAt).toBe("a-2");
+    expect(harness.controller.state.projectedSelectedText).toBe("projected:New A");
+    expect(paints).not.toContainEqual({
+      updatedAt: "a-2",
+      projected: "projected:Old A",
+    });
+  });
+
+  test("evicts the least-recently-used block target at the fixed cache bound", async () => {
+    const first = makeBlock({ id: "evicted-a", text: "First" });
+    const harness = createHarness(first);
+    await harness.controller.initialize();
+    for (let index = 0; index < DETAIL_BLOCK_CACHE_TARGET_LIMIT; index += 1) {
+      await harness.controller.onServiceEvent(event("ui", {
+        targetClientId: "detail-test",
+        command: "preview",
+        target: { kind: "block", blockId: `cache-target-${index}` },
+      }), viewport);
+    }
+    const originalLoadTarget = harness.effects.loadTarget;
+    const reload = Promise.withResolvers<DetailReadyDocument>();
+    harness.effects.loadTarget = (target) =>
+      target.kind === "block" && target.blockId === first.id
+        ? reload.promise
+        : originalLoadTarget(target);
+
+    const revisit = harness.controller.onServiceEvent(event("ui", {
+      targetClientId: "detail-test",
+      command: "preview",
+      target: { kind: "block", blockId: first.id },
+    }), viewport);
+
+    expect(harness.controller.state.document).toEqual({
+      kind: "loading",
+      target: { kind: "block", blockId: first.id },
+    });
+    reload.resolve({
+      kind: "block",
+      target: { kind: "block", blockId: first.id },
+      context: { selected: first, ancestors: [], children: [] },
+    });
+    await revisit;
+  });
+
+  test("suppresses an obsolete cached revalidation before the newest preview loads", async () => {
+    const first = makeBlock({ id: "superseded-a", text: "Old A", updatedAt: "a-1" });
+    const paints: string[] = [];
+    const harness = createHarness(
+      first,
+      null,
+      async (text) => ({ text, references: [] }),
+      async (text) => ({ text, embeds: [], embedRanges: [] }),
+      {},
+      (state) => {
+        if (state.context.selected) {
+          paints.push(`${state.context.selected.id}:${state.context.selected.text}`);
+        }
+      },
+    );
+    await harness.controller.initialize();
+    const originalLoadTarget = harness.effects.loadTarget;
+    await harness.controller.onServiceEvent(event("ui", {
+      targetClientId: "detail-test",
+      command: "preview",
+      target: { kind: "block", blockId: "superseded-b" },
+    }), viewport);
+    const obsolete = Promise.withResolvers<DetailReadyDocument>();
+    harness.effects.loadTarget = (target) =>
+      target.kind === "block" && target.blockId === first.id
+        ? obsolete.promise
+        : originalLoadTarget(target);
+    const staleLoad = harness.controller.onServiceEvent(event("ui", {
+      targetClientId: "detail-test",
+      command: "preview",
+      target: { kind: "block", blockId: first.id },
+    }), viewport);
+
+    harness.controller.supersedePassivePreview();
+    obsolete.resolve({
+      kind: "block",
+      target: { kind: "block", blockId: first.id },
+      context: {
+        selected: makeBlock({ id: first.id, text: "Obsolete A", updatedAt: "a-2" }),
+        ancestors: [],
+        children: [],
+      },
+    });
+    await staleLoad;
+    await harness.controller.onServiceEvent(event("ui", {
+      targetClientId: "detail-test",
+      command: "preview",
+      target: { kind: "block", blockId: "superseded-c" },
+    }), viewport);
+
+    expect(harness.controller.state.context.selected?.id).toBe("superseded-c");
+    expect(paints).not.toContain("superseded-a:Obsolete A");
   });
 
 });
