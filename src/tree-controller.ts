@@ -886,8 +886,27 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
           status = "";
           browsingPublicationStatus = "";
         }
+        effects.invalidate();
       }
     }
+  }
+
+  function startBrowsingPublicationPump(): Promise<void> {
+    if (browsingPublicationPump) return browsingPublicationPump;
+    const running = drainBrowsingPublications();
+    browsingPublicationPump = running;
+    const finish = (): void => {
+      if (browsingPublicationPump !== running) return;
+      browsingPublicationPump = null;
+      if (pendingBrowsingPublication) {
+        void startBrowsingPublicationPump().catch((error) => {
+          status = errorMessage(error);
+          effects.invalidate();
+        });
+      }
+    };
+    void running.then(finish, finish);
+    return running;
   }
 
   async function publishBrowsingTarget(
@@ -895,12 +914,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     dispatchPreview = true,
   ): Promise<void> {
     pendingBrowsingPublication = { target, dispatchPreview };
-    if (!browsingPublicationPump) {
-      browsingPublicationPump = drainBrowsingPublications().finally(() => {
-        browsingPublicationPump = null;
-      });
-    }
-    await browsingPublicationPump;
+    await startBrowsingPublicationPump();
   }
 
   async function publishBrowsingContext(blockId: string | null): Promise<void> {
@@ -940,6 +954,13 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       status = authoredLinkUnavailableReason(row) ?? "Authored target is unavailable";
       await publishBrowsingTarget(null, false);
     }
+  }
+
+  function queueDisplayRowSelection(row: TreeDisplayRow | undefined): void {
+    void publishDisplayRowSelection(row).catch((error) => {
+      status = errorMessage(error);
+      effects.invalidate();
+    });
   }
 
   async function selectVisibleBlock(
@@ -1940,6 +1961,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     const selected = rows[selectedIndex];
     let preferredRowId: string | undefined;
     let reloadRequired = false;
+    let queueSelectionPublication = false;
     const historyDirection = historyNavigationDirection(key);
     if (historyDirection) {
       await navigateTreeHistory(historyDirection);
@@ -1953,7 +1975,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         const delta = key.name === "up" ? -1 : 1;
         selectedIndex = Math.max(0, Math.min(rows.length - 1, selectedIndex + delta));
         resetExpandedBlockPaging();
-        await publishDisplayRowSelection(rows[selectedIndex]);
+        queueDisplayRowSelection(rows[selectedIndex]);
       } else if (key.name === "left") {
         if (selected.kind === "authored-link-header" && !selected.collapsed) {
           await handleDisclosure(selected.rowId);
@@ -2041,9 +2063,13 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         preferredRowId = await moveSibling(selected, 1);
         reloadRequired = true;
       }
-    } else if (key.name === "up") selectedIndex = Math.max(0, selectedIndex - 1);
-    else if (key.name === "down") selectedIndex = Math.min(rows.length - 1, selectedIndex + 1);
-    else if (key.name === "left" && selected) {
+    } else if (key.name === "up") {
+      selectedIndex = Math.max(0, selectedIndex - 1);
+      queueSelectionPublication = true;
+    } else if (key.name === "down") {
+      selectedIndex = Math.min(rows.length - 1, selectedIndex + 1);
+      queueSelectionPublication = true;
+    } else if (key.name === "left" && selected) {
       if (isVirtualBranchOccurrence(selected)) {
         if (!selected.collapsed && selected.hasChildren) {
           collapsedOccurrenceRowIds.add(selected.rowId);
@@ -2187,7 +2213,8 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     if (reloadRequired) await reload(preferredRowId);
     const visible = rows[selectedIndex];
     if (visible?.rowId !== selected?.rowId || reloadRequired) {
-      await publishDisplayRowSelection(visible);
+      if (queueSelectionPublication) queueDisplayRowSelection(visible);
+      else await publishDisplayRowSelection(visible);
     }
     effects.invalidate();
   }

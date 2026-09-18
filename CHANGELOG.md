@@ -25,6 +25,7 @@ This file records notable user-facing changes. The project remains active dogfoo
 
 ### Fixed
 
+- Rapid Tree navigation stays local while browsing-context publication coalesces to the newest pending Detail target.
 - Comment composition keeps the cursor visible after three rows and uses matching wrap widths for scrolling and rendering.
 - Filesystem Resources now support read, edit, external editor, refresh, and source-backed comments through one canonical Resource identity.
 - Cached web selections map to the retained representation before annotation creation.
