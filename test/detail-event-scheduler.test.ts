@@ -229,3 +229,64 @@ test("seals an active preview before explicit work and a later preview", async (
   expect(editedTargets).toEqual(["ordered-a"]);
   expect(target).toBe("ordered-a");
 });
+
+test("keeps a pending preview sealed after it becomes active across explicit work", async () => {
+  const queued: Array<() => void | Promise<void>> = [];
+  const unrelatedWork = Promise.withResolvers<void>();
+  const previewResponse = Promise.withResolvers<void>();
+  const started: string[] = [];
+  const editedTargets: string[] = [];
+  let target = "initial";
+  let locked = false;
+  let generation = 0;
+  let superseded = 0;
+  const scheduler = new DetailEventScheduler({
+    clientId: "detail-test",
+    enqueue(task) {
+      queued.push(task);
+    },
+    supersedePreview() {
+      superseded += 1;
+      generation += 1;
+    },
+    async handle(event) {
+      const command = event.command;
+      if (!command || command.command !== "preview") return;
+      if (command.target.kind !== "block" || locked) return;
+      const previewTarget = command.target.blockId;
+      const loadGeneration = ++generation;
+      started.push(previewTarget);
+      if (previewTarget === "pending-b") await previewResponse.promise;
+      if (loadGeneration === generation) target = previewTarget;
+    },
+  });
+
+  scheduler.scheduleWork(() => unrelatedWork.promise);
+  const blocker = queued.shift();
+  if (!blocker) throw new Error("Expected unrelated blocking work");
+  const blockedWork = blocker();
+  scheduler.schedule(navigationEvent("event-30", "preview", "pending-b"));
+  scheduler.scheduleWork(() => {
+    editedTargets.push(target);
+    locked = true;
+  });
+  scheduler.schedule(navigationEvent("event-31", "preview", "pending-c"));
+
+  unrelatedWork.resolve();
+  await blockedWork;
+  const pendingPreview = queued.shift();
+  if (!pendingPreview) throw new Error("Expected the sealed pending preview");
+  const previewLoad = pendingPreview();
+  scheduler.schedule(navigationEvent("event-32", "preview", "pending-d"));
+  previewResponse.resolve();
+  await previewLoad;
+  while (queued.length > 0) {
+    const next = queued.shift();
+    if (next) await next();
+  }
+
+  expect(superseded).toBe(0);
+  expect(started).toEqual(["pending-b"]);
+  expect(editedTargets).toEqual(["pending-b"]);
+  expect(target).toBe("pending-b");
+});

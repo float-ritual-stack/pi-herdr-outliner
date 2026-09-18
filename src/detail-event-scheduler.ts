@@ -71,6 +71,7 @@ export class DetailEventScheduler {
 
   private sealPreviewBatch(): void {
     if (this.active?.passivePreview) this.active.sealed = true;
+    if (this.pendingPreview) this.pendingPreview.sealed = true;
     this.pendingPreview = null;
   }
 }
