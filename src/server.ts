@@ -1140,6 +1140,14 @@ export class OutlinerServer {
         case "resources.intern-filesystem":
           result = this.store.resources.internFilesystem(request.input);
           break;
+        case "resources.lookup-filesystem": {
+          const lookup = this.store.resources.resolveAuthoredReference({
+            kind: "filesystem",
+            path: request.path,
+          });
+          result = lookup.kind === "ready" ? this.store.resources.require(lookup.resourceId) : null;
+          break;
+        }
         case "resources.get":
           result = this.store.resources.require(request.resourceId);
           break;

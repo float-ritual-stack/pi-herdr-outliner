@@ -27,7 +27,7 @@ The project started as a small Friday-night experiment and grew into a durable w
 
 - SQLite-backed hierarchical blocks with stable UUIDs, sibling order, authors, timestamps, and one canonical graph per workspace root.
 - Workspace-isolated service and runtime paths.
-- JSON-lines RPC protocol v52 over a Unix socket.
+- JSON-lines RPC protocol v53 over a Unix socket.
 - Reactive canonical content/view broadcasts, per-process Tree/Detail registration with Detail lock availability, exact-client UI commands, and source-aware `preview | open | reveal` navigation.
 - Durable resources have UUID identities independent of blocks and mutable locators. Provider-qualified Sources bind filesystem roots or remote namespaces; overlapping Sources remain distinct, relocations preserve Resource IDs, provider revisions remain explicit, and capability resolution reports blockers across provider, credentials, workspace policy, host, and connectivity. Registered Detail hosts declare Surface, Placement, renderer, capability, credential, and connectivity facts; open/describe/refresh deterministically negotiate cached Markdown, embedded-browser, native-document, metadata, or external-link representations without changing Resource identity. PDF is a media type reachable through filesystem and web Sources: one captured binary snapshot can produce both native PDF and page-aware Markdown representations through versioned replaceable extractors.
 - Each Tree owns its cursor, occurrence selection, filter, viewport, collapsed rows, multiline expansion, explicit-navigation history, and browsing context; moving a Tree previews only in the first unlocked same-tab Detail and never replaces a locked anchor.
@@ -1109,6 +1109,39 @@ The deterministic Tree profile defaults to 24,000 physical blocks and five
 and 1 ms for input handling; generated terminal-frame writes stay below 1 ms.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the workboard lifecycle, verification rules, and PR/restart workflow. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for service boundaries, protocol flow, persistence, projections, and failure behavior.
+
+### Real Herdr keyboard E2E
+
+```sh
+bun run test:e2e:herdr
+```
+
+This opt-in scenario requires Linux, Herdr 0.9.1 with protocol 22, and the
+checkout's installed Bun dependencies. It starts a private named headless Herdr
+server with a fresh project and tab, isolated XDG configuration, Outliner state,
+and keybindings. Its private plugin registry links this checkout. Existing
+Herdr workspaces and plugin registrations are unchanged.
+
+It first interrupts fixture preparation and verifies that cancellation cannot
+leave a private server running after cleanup.
+
+The scenario types `[file::README.md]` through Tree, reveals and selects its
+generated Resource row, then activates it twice. Read-only SQLite assertions
+check that passive authoring and discovery create no Sources or Resources.
+Activation must render the fixture in the actual Detail and preserve its
+canonical Resource identity on repeat.
+
+The command prints JSON containing `status` and `artifactDirectory`, and exits
+nonzero on failure. Every run retains its temporary project and artifacts,
+including the command timeline, assertion records, invocation log, process
+provenance, visible text and ANSI, topology, client registrations, and consistent
+SQLite snapshots. The runner stops its owned processes even on failure. Remove
+the printed artifact directory's parent when the evidence is no longer needed.
+
+Reusable lifecycle and terminal controls live in `test/e2e/herdr-runner.ts`.
+Product actions and assertions stay in `test/e2e/resource-authoring.ts`.
+This covers the keyboard path through real PTYs, not mouse input, an attached
+Herdr GUI, or live terminal resize.
 
 ## Project documents
 

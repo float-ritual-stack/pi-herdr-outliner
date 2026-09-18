@@ -534,6 +534,12 @@ const effects: DetailEffects = {
       input: { path },
     });
   },
+  async lookupFilesystem(path) {
+    return client.request<InternResourceReceipt["resource"] | null>({
+      action: "resources.lookup-filesystem",
+      path,
+    });
+  },
   async refreshResource(resourceId) {
     return client.request<ResourceDescription>(
       {
