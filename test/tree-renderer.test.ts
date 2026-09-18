@@ -969,7 +969,7 @@ describe("renderTreeFrame", () => {
     });
   });
 
-  test("sanitizes generated authored-link labels and titles", () => {
+  test("sanitizes generated authored-link headers, labels, and titles", () => {
     const owner = block("owner-render", { text: "Owner", displayText: "Owner" });
     const ownerRow = physical(owner);
     const rows = composeAuthoredLinkRows([ownerRow], {
@@ -1011,9 +1011,17 @@ describe("renderTreeFrame", () => {
       },
     });
 
-    const frame = renderTreeFrame(view([owner], { rows }), 100, 9).frame;
+    const rowsWithUnsafeHeader = rows.map((row) =>
+      row.kind === "authored-link-header" && row.group === "outlinks"
+        ? { ...row, label: "Out\x1b[2Jlinks\x1b]52;c;SGVsbG8=\x07" }
+        : row,
+    );
+
+    const frame = renderTreeFrame(view([owner], { rows: rowsWithUnsafeHeader }), 100, 9).frame;
     const visible = stripTerminalSequences(frame);
 
+    expect(visible).toContain("Outlinks");
+    expect(frame).not.toContain("\x1b[2J");
     expect(visible).toContain("Label kept → Target safe");
     expect(frame).not.toContain("\x1b[2Jkept");
     expect(frame).not.toContain("\x1b]52;c;SGVsbG8=\x07");

@@ -484,7 +484,7 @@ export function renderTreeFrame(
         ? [
             truncateToWidth(
               `${"  ".repeat(row.depth)}${row.collapsed ? "▸" : "▾"} ${
-                row.label
+                sanitizeDynamicText(row.label)
               }  \x1b[2m${authoredHeaderStateText(row)}\x1b[0m`,
               width,
             ),
