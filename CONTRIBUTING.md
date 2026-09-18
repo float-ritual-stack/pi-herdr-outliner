@@ -97,7 +97,7 @@ Prefer clean cutovers: migrate every caller, test, and import, then remove obsol
 
 ### Canonical service
 
-- Only the service process opens SQLite.
+- Only the service process opens writable SQLite. E2E oracles may use read-only connections for assertions and consistent backups.
 - Tree, Detail, CLI, and agent tools are clients.
 - Workspace root resolution must be identical across processes.
 - Restarts reconstruct from service snapshots and events.

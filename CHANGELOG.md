@@ -13,10 +13,11 @@ This file records notable user-facing changes. The project remains active dogfoo
 - Human-authored Resource references through `[file::…]`, `[web::…]`, `[jira::…]`, and `[app::…]` properties.
 - Tree **Show authored links** branches for Outlinks and Resources. Passive discovery is read-only; explicit activation follows or interns unresolved targets.
 - A guided Herdr plugin installer, portable runtime discovery, external editor handoff, bookmarks, attention marks, and typed outline workflows.
+- An opt-in real Herdr keyboard E2E runner with isolated projects and retained failure evidence. Its Resource-authoring scenario checks passive discovery, Detail content, and repeat activation identity.
 
 ### Changed
 
-- The JSON-lines RPC protocol is version 52.
+- The JSON-lines RPC protocol is version 53, adding read-only filesystem Resource lookup.
 - Fresh databases use workspace seed version 4. The Documentation hub now includes a Resource reference section and an authored-links example with block, page, local-file, web, SSH-application, and Jira references.
 - Detail navigation uses explicit destination routing and preserves locked panes for block targets.
 - Resource Details expose negotiated presentation, provenance, capability, revision, and retention state without creating wrapper blocks.
@@ -26,6 +27,7 @@ This file records notable user-facing changes. The project remains active dogfoo
 - Filesystem Resources now support read, edit, external editor, refresh, and source-backed comments through one canonical Resource identity.
 - Cached web selections map to the retained representation before annotation creation.
 - Rendered selection validation now rejects stale pane content and changed browsing contexts.
+- Passive file previews load existing Resource annotations without creating a Source or Resource. Explicit activation and comment creation still register files when needed.
 - External editor recovery preserves large drafts and resolves the user's interactive-shell editor configuration.
 
 ### Known limits
