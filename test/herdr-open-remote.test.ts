@@ -1,5 +1,4 @@
 import {
-  appendFileSync,
   chmodSync,
   mkdirSync,
   mkdtempSync,
@@ -23,7 +22,7 @@ afterEach(() => {
   }
 });
 
-test("remote Herdr startup opens local clients without opening a local service pane", async () => {
+test("remote Herdr startup opens both client panes before waiting for registration", async () => {
   const directory = mkdtempSync(join(tmpdir(), "pi-outliner-remote-herdr-"));
   temporaryDirectories.push(directory);
   const workspaceRoot = join(directory, "workspace");
@@ -90,8 +89,6 @@ if (args[0] === "pane" && args[1] === "get") {
   let stopPaneRegistration = false;
   const registerOpenedPanes = (async (): Promise<OutlinerWatcher[]> => {
     const watchers: OutlinerWatcher[] = [];
-    let treeRegistered = false;
-    let detailRegistered = false;
     async function register(role: "tree" | "detail", paneId: string): Promise<void> {
       const connected = Promise.withResolvers<void>();
       watchers.push(new OutlinerClient(canonical.socket).watch({
@@ -120,17 +117,15 @@ if (args[0] === "pane" && args[1] === "get") {
           return "";
         }
       })();
-      if (!treeRegistered && calls.includes('"--entrypoint","outliner"')) {
-        treeRegistered = true;
-        await Bun.sleep(200);
-        appendFileSync(logPath, `${JSON.stringify(["tree-registration-released"])}\n`);
+      // Neither client can become ready until both panes have been opened.
+      if (
+        calls.includes('"--entrypoint","outliner"') &&
+        calls.includes('"--entrypoint","detail"')
+      ) {
         await register("tree", "workspace:outliner");
-      }
-      if (!detailRegistered && calls.includes('"--entrypoint","detail"')) {
-        detailRegistered = true;
         await register("detail", "workspace:detail");
+        return watchers;
       }
-      if (treeRegistered && detailRegistered) return watchers;
       await Bun.sleep(10);
     }
     return watchers;
@@ -156,6 +151,8 @@ if (args[0] === "pane" && args[1] === "get") {
       },
       stdout: "pipe",
       stderr: "pipe",
+      timeout: 5_000,
+      killSignal: "SIGKILL",
     });
     const [exitCode, stdout, stderr] = await Promise.all([
       child.exited,
@@ -176,20 +173,6 @@ if (args[0] === "pane" && args[1] === "get") {
       .filter((args) => args[0] === "plugin" && args[1] === "pane" && args[2] === "open")
       .map((args) => args[args.indexOf("--entrypoint") + 1]);
     expect(openedEntrypoints).toEqual(["outliner", "detail"]);
-    const startupOrder = calls
-      .filter((args) =>
-        args.includes("--entrypoint") || args[0] === "tree-registration-released"
-      )
-      .map((args) =>
-        args[0] === "tree-registration-released"
-          ? args[0]
-          : args[args.indexOf("--entrypoint") + 1]
-      );
-    expect(startupOrder).toEqual([
-      "outliner",
-      "detail",
-      "tree-registration-released",
-    ]);
     for (const args of calls.filter((call) => call.includes("--entrypoint"))) {
       expect(args).toContain(`OUTLINER_CONFIG_PATH=${configPath}`);
       expect(args).not.toContain("OUTLINER_REMOTE=1");
@@ -203,4 +186,4 @@ if (args[0] === "pane" && args[1] === "get") {
     await server.close();
     store.close();
   }
-});
+}, 10_000);

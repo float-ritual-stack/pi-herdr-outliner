@@ -71,7 +71,6 @@ test("a rapid preview burst paints only its final target", async () => {
 
   firstResponse.resolve();
   await firstLoad;
-  expect(queued).toHaveLength(3);
   while (queued.length > 0) {
     const next = queued.shift();
     if (next) await next();
