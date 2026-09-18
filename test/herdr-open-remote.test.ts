@@ -87,9 +87,11 @@ if (args[0] === "pane" && args[1] === "get") {
   chmodSync(herdr, 0o755);
 
   let stopPaneRegistration = false;
+  const paneRegistrationStopped = Promise.withResolvers<void>();
   const registerOpenedPanes = (async (): Promise<OutlinerWatcher[]> => {
     const watchers: OutlinerWatcher[] = [];
     async function register(role: "tree" | "detail", paneId: string): Promise<void> {
+      if (stopPaneRegistration) return;
       const connected = Promise.withResolvers<void>();
       watchers.push(new OutlinerClient(canonical.socket).watch({
         client: {
@@ -107,7 +109,7 @@ if (args[0] === "pane" && args[1] === "get") {
         onConnect: connected.resolve,
         onEvent() {},
       }));
-      await connected.promise;
+      await Promise.race([connected.promise, paneRegistrationStopped.promise]);
     }
     while (!stopPaneRegistration) {
       const calls = (() => {
@@ -180,6 +182,7 @@ if (args[0] === "pane" && args[1] === "get") {
     }
   } finally {
     stopPaneRegistration = true;
+    paneRegistrationStopped.resolve();
     const openedPaneWatchers = await registerOpenedPanes;
     await Promise.all(openedPaneWatchers.map((watcher) => watcher.stop()));
     await foreignWatcher.stop();
