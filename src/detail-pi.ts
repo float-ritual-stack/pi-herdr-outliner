@@ -18,7 +18,7 @@ import {
   type TuiInputListener,
 } from "@earendil-works/pi-tui";
 import { OutlinerClient, type OutlinerWatcher } from "./client";
-import { BufferComposer } from "./buffer-composer";
+import { BUFFER_COMPOSER_HEIGHT, BufferComposer, bufferComposerEditorBody } from "./buffer-composer";
 import {
   actionMenuItemText,
   filterActionMenuItems,
@@ -318,6 +318,9 @@ function viewport(): DetailViewport {
       ? detailDraftSplitWidths(width).editor
       : width,
     height: terminal.rows,
+    editorBody: controller.state.mode === "comment"
+      ? bufferComposerEditorBody(width)
+      : undefined,
   };
 }
 
@@ -1252,7 +1255,7 @@ synchronizeLayout = () => {
   if (mode === "comment" && !composerHandle) {
     composerHandle = tui.showOverlay(composer, {
       width: "100%",
-      maxHeight: 7,
+      maxHeight: BUFFER_COMPOSER_HEIGHT,
       anchor: "bottom-center",
       nonCapturing: true,
     });
