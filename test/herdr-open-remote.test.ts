@@ -87,12 +87,9 @@ if (args[0] === "pane" && args[1] === "get") {
   chmodSync(herdr, 0o755);
 
   let stopPaneRegistration = false;
-  const paneRegistrationStopped = Promise.withResolvers<void>();
   const registerOpenedPanes = (async (): Promise<OutlinerWatcher[]> => {
     const watchers: OutlinerWatcher[] = [];
-    async function register(role: "tree" | "detail", paneId: string): Promise<void> {
-      if (stopPaneRegistration) return;
-      const connected = Promise.withResolvers<void>();
+    function register(role: "tree" | "detail", paneId: string): void {
       watchers.push(new OutlinerClient(canonical.socket).watch({
         client: {
           clientId: `opened-local-${role}`,
@@ -106,10 +103,8 @@ if (args[0] === "pane" && args[1] === "get") {
             tabId: "workspace:tab",
           },
         },
-        onConnect: connected.resolve,
         onEvent() {},
       }));
-      await Promise.race([connected.promise, paneRegistrationStopped.promise]);
     }
     while (!stopPaneRegistration) {
       const calls = (() => {
@@ -124,8 +119,8 @@ if (args[0] === "pane" && args[1] === "get") {
         calls.includes('"--entrypoint","outliner"') &&
         calls.includes('"--entrypoint","detail"')
       ) {
-        await register("tree", "workspace:outliner");
-        await register("detail", "workspace:detail");
+        register("tree", "workspace:outliner");
+        register("detail", "workspace:detail");
         return watchers;
       }
       await Bun.sleep(10);
@@ -182,7 +177,6 @@ if (args[0] === "pane" && args[1] === "get") {
     }
   } finally {
     stopPaneRegistration = true;
-    paneRegistrationStopped.resolve();
     const openedPaneWatchers = await registerOpenedPanes;
     await Promise.all(openedPaneWatchers.map((watcher) => watcher.stop()));
     await foreignWatcher.stop();
