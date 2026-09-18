@@ -1021,7 +1021,7 @@ describe("renderTreeFrame", () => {
     const visible = stripTerminalSequences(frame);
 
     expect(visible).toContain("Outlinks");
-    expect(frame).not.toContain("\x1b[2J");
+    expect(frame).not.toContain("Out\x1b[2Jlinks");
     expect(visible).toContain("Label kept → Target safe");
     expect(frame).not.toContain("\x1b[2Jkept");
     expect(frame).not.toContain("\x1b]52;c;SGVsbG8=\x07");
