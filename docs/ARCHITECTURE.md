@@ -310,13 +310,16 @@ Herdr pane commands explicitly pass the invoking pane's foreground working
 directory to new plugin panes.
 
 [`resolveClientPaths()`](../src/paths.ts) adds an explicit local/remote endpoint
-mode without changing canonical workspace storage paths. The default
-`~/.config/pi-herdr-outliner/client.json` file is the durable configuration
-surface for Herdr-spawned processes; `OUTLINER_REMOTE` and
-`OUTLINER_SOCKET_PATH` are environment overrides. Remote mode requires an
-absolute forwarded Unix-socket path, gives requests a network-appropriate
-deadline, and prevents `server-main.ts` and plugin actions from starting a
-second service.
+mode without changing canonical workspace storage paths. Normal configuration
+is derived from the resolved invoking workspace and lives at
+`~/.config/pi-herdr-outliner/projects/<workspace-name>--<workspace-hash>/client.json`.
+An unconfigured project remains local. `OUTLINER_CONFIG_PATH` selects an
+explicit config; `OUTLINER_REMOTE` and `OUTLINER_SOCKET_PATH` override project
+configuration. The retired machine-global `client.json` never redirects
+projects implicitly and produces an actionable migration error when encountered
+without a project config. Remote mode requires an absolute forwarded Unix-socket
+path, gives requests a network-appropriate deadline, and prevents
+`server-main.ts` and plugin actions from starting a second service.
 
 Remote Tree and Detail registrations own their Herdr topology. They publish the
 rendering host's hostname, pane, terminal, workspace, tab, coordinates,
@@ -325,6 +328,21 @@ Herdr event registry. The canonical service reconciles same-host registrations
 against its own Herdr registry but preserves foreign-host topology. Navigation
 requires matching host and tab identity, preventing pane-ID collisions and
 cross-machine focus or routing.
+
+Passive Tree previews are disposable. Tree publication and the Detail event
+scheduler each keep at most one active preview and the newest pending target;
+newer previews invalidate the active load generation so obsolete responses
+cannot paint. Explicit opens, replacements, edits, comments, and non-preview
+events remain in the ordered Detail work lane.
+
+Each Detail process owns a 32-target LRU of block contexts and projected reads.
+A cache hit paints immediately while an authoritative `blocks.context` request
+revalidates block, ancestor, child, projection, reference, and annotation
+revisions. Coarse content and connection events mark entries stale. A changed
+revision replaces the document and projection atomically; an unchanged response
+does not repaint. The cache is process-memory only, excludes Resources, and
+never supplies mutation authority: writes continue to use canonical
+`expectedUpdatedAt` checks.
 
 A workspace root scopes canonical data, not browsing authority. Tree/Detail
 client identity, browsing-context identity, targets, histories, tab numbers,

@@ -12,6 +12,7 @@ import {
   type DetailViewport,
 } from "./detail-controller";
 import { projectDetailRead } from "./detail-embeds";
+import { DetailEventScheduler } from "./detail-event-scheduler";
 import { createDetailKeyHandler, detailActionScopes } from "./detail-keymap";
 import { renderDetailAnsi } from "./detail-renderer";
 import { completeReferencedPaths, readReferencedFile } from "./files";
@@ -420,6 +421,12 @@ function enqueueWork(task: () => void | Promise<void>): void {
     controller.onServiceError(error);
   });
 }
+const serviceEventScheduler = new DetailEventScheduler({
+  clientId,
+  enqueue: enqueueWork,
+  handle: (event) => controller.onServiceEvent(event, viewport()),
+  supersedePreview: () => controller.supersedePassivePreview(),
+});
 
 let inputDecoder = new TerminalInputDecoder((text) => {
   pendingPaste = text;
@@ -480,7 +487,7 @@ function startWatcher(): void {
       if (!runtimeInitialized) firstWatcherConnection.reject(error);
       else enqueueWork(() => controller.onServiceError(error));
     },
-    onEvent: (event) => enqueueWork(() => controller.onServiceEvent(event, viewport())),
+    onEvent: (event) => serviceEventScheduler.schedule(event),
   });
 }
 

@@ -47,7 +47,7 @@ Pi/OMP users can invoke `/outliner`; supported coding clients can use the projec
 - `src/virtual-branches.ts` owns projection semantics.
 - `pi-extension/index.ts` is a host adapter, not a second implementation of the service.
 
-Reuse these seams. Do not add a second property parser, query path, local block cache, or independent persistence layer.
+Reuse these seams. Do not add a second property parser, query path, authoritative block cache, or independent persistence layer. A bounded disposable Detail preview cache may retain service-owned revisions but never authorizes writes.
 
 ## Workboard lifecycle
 

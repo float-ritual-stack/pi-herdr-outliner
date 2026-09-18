@@ -36,6 +36,7 @@ import {
   type DetailEffects,
   type DetailViewport,
 } from "./detail-controller";
+import { DetailEventScheduler } from "./detail-event-scheduler";
 import { layoutDetailEditor } from "./detail-editor-layout";
 import {
   detailEditorPointAtClick,
@@ -640,6 +641,12 @@ function enqueueWork(task: () => void | Promise<void>): void {
     controller.onServiceError(error);
   });
 }
+const serviceEventScheduler = new DetailEventScheduler({
+  clientId,
+  enqueue: enqueueWork,
+  handle: (event) => controller.onServiceEvent(event, viewport()),
+  supersedePreview: () => controller.supersedePassivePreview(),
+});
 
 async function waitForService(): Promise<void> {
   const deadline = Date.now() + (paths.mode === "remote" ? 30_000 : 5_000);
@@ -697,7 +704,7 @@ function startWatcher(): void {
       if (!runtimeInitialized) firstWatcherConnection.reject(error);
       else enqueueWork(() => controller.onServiceError(error));
     },
-    onEvent: (event) => enqueueWork(() => controller.onServiceEvent(event, viewport())),
+    onEvent: (event) => serviceEventScheduler.schedule(event),
   });
 }
 

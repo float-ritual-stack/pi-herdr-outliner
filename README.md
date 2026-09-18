@@ -1110,26 +1110,49 @@ Host float-box-outliner
   ExitOnForwardFailure yes
 ```
 
-Keep that tunnel running with `ssh -NT float-box-outliner`. On the workstation,
-create `~/.config/pi-herdr-outliner/client.json`:
+Keep that tunnel running with `ssh -NT float-box-outliner`. Client endpoint
+selection is project-scoped. From the invoking project, print its config path:
+
+```sh
+bun -e 'import { resolveClientConfigPath } from "/path/to/pi-herdr-outliner/src/paths.ts"; console.log(resolveClientConfigPath({ ...process.env, OUTLINER_WORKSPACE_ROOT: process.cwd() }))'
+```
+
+The path has the form
+`~/.config/pi-herdr-outliner/projects/<workspace-name>--<stable-hash>/client.json`.
+Create it with the local invoking workspace identity and forwarded socket:
 
 ```json
 {
-  "remote": true,
-  "socketPath": "/absolute/local/float-box.sock"
+  "workspaceRoot": "/absolute/local/project",
+  "mode": "remote",
+  "socketPath": "/absolute/local/float-box.sock",
+  "label": "float-box:/absolute/remote/project"
 }
 ```
 
-The fixed config file is read by every plugin entrypoint, including processes
-spawned by an already-running Herdr server. `OUTLINER_CONFIG_PATH` selects a
-different JSON file. For one-off shells, `OUTLINER_REMOTE=1` and an absolute
-`OUTLINER_SOCKET_PATH` override the file.
+Projects without this file keep their normal local per-project database.
+`OUTLINER_CONFIG_PATH` explicitly selects another config. For one-off shells,
+`OUTLINER_REMOTE=1` with an absolute `OUTLINER_SOCKET_PATH` overrides project
+configuration; `OUTLINER_REMOTE=0` forces local mode.
+
+The former machine-global `~/.config/pi-herdr-outliner/client.json` is not
+applied automatically. If it remains and no project config exists, startup
+reports a migration error with the derived destination path. Move the file,
+replace `"remote": true` with `"mode": "remote"`, and retain `socketPath`.
 
 Install or link the same Outliner revision on both hosts, start the service only
 on the canonical host, then invoke `open` normally on the workstation. Remote
 mode never creates a local service pane or database. Tree and Detail register
 their workstation hostname and live Herdr topology with the canonical service,
 so routing remains local to that host even when pane IDs overlap.
+
+Each Detail process keeps a disposable 32-target block cache. Revisiting a
+cached block paints its context and projection immediately, then revalidates
+against the canonical service; changed revisions replace the cached paint and
+stale responses cannot replace a newer target. Resources continue to use their
+provider-specific immutable revision model and are not stored in this cache.
+Rapid passive Tree previews are latest-wins in both the publisher and Detail
+event queue. Explicit opens, edits, and navigation retain ordered delivery.
 
 The forwarded socket exposes the complete Outliner RPC to the local account.
 Keep it in a user-private directory and use an authenticated SSH connection.

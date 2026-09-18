@@ -51,7 +51,7 @@ test("remote Herdr startup opens local clients without opening a local service p
   const logPath = join(directory, "herdr-calls.jsonl");
   const configPath = join(directory, "client.json");
   writeFileSync(configPath, JSON.stringify({
-    remote: true,
+    mode: "remote",
     socketPath: canonical.socket,
   }));
   writeFileSync(
