@@ -462,7 +462,8 @@ function startWatcher(): void {
       clientId,
       initialRuntime: runtime,
       herdrSocketPath: process.env.HERDR_SOCKET_PATH,
-      onError: (error) => enqueueWork(() => controller.onServiceError(error)),
+      onError: (error) =>
+        serviceEventScheduler.scheduleWork(() => controller.onServiceError(error)),
     })
     : null;
   watcher = client.watch({
@@ -477,15 +478,17 @@ function startWatcher(): void {
     onConnect: async () => {
       await runtimeSync?.synchronize();
       firstWatcherConnection.resolve();
-      if (runtimeInitialized) enqueueWork(() => controller.onServiceConnect(viewport()));
+      if (runtimeInitialized) {
+        serviceEventScheduler.scheduleWork(() => controller.onServiceConnect(viewport()));
+      }
     },
     onDisconnect: () => {
       runtimeSync?.suspend();
-      enqueueWork(() => controller.onServiceDisconnect());
+      serviceEventScheduler.scheduleWork(() => controller.onServiceDisconnect());
     },
     onError: (error) => {
       if (!runtimeInitialized) firstWatcherConnection.reject(error);
-      else enqueueWork(() => controller.onServiceError(error));
+      else serviceEventScheduler.scheduleWork(() => controller.onServiceError(error));
     },
     onEvent: (event) => serviceEventScheduler.schedule(event),
   });
@@ -546,10 +549,12 @@ async function handleInput(str: string, key: TerminalKey): Promise<void> {
 }
 
 process.stdin.on("keypress", (str: string, key: TerminalKey) => {
-  enqueueWork(() => handleInput(str, key));
+  serviceEventScheduler.scheduleWork(() => handleInput(str, key));
 });
 
 process.stdout.on("resize", () => {
-  enqueueWork(() => controller.dispatch({ type: "viewport.changed" }, viewport()));
+  serviceEventScheduler.scheduleWork(() =>
+    controller.dispatch({ type: "viewport.changed" }, viewport())
+  );
 });
 draw();

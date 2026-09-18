@@ -1948,7 +1948,7 @@ export function createDetailController(
       const applied = await applyReadyDocument(
         document,
         generation,
-        cached?.stale ?? force,
+        (cached?.stale ?? false) || force,
         cachedPainted ? false : record,
         cachedPainted ? target : previousTarget,
         cached,

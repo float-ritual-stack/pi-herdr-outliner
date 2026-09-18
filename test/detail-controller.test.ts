@@ -714,6 +714,30 @@ describe("detail controller projection and deferred refresh", () => {
     expect(harness.calls.projectedReadHosts).toEqual([selected.id, selected.id]);
   });
 
+  test("force-refreshes a cached projection when a view event leaves block revisions unchanged", async () => {
+    const selected = makeBlock({ text: "Embedded\n!((view-next))" });
+    let projectionVersion = 1;
+    const harness = createHarness(
+      selected,
+      null,
+      async (text) => ({ text, references: [] }),
+      async () => ({
+        text: `Embedded projection ${projectionVersion}`,
+        embeds: [],
+        embedRanges: [],
+      }),
+    );
+    await harness.controller.initialize();
+    expect(harness.controller.state.projectedSelectedText).toBe("Embedded projection 1");
+
+    projectionVersion = 2;
+    await harness.controller.onServiceEvent(event("view"), viewport);
+
+    expect(harness.controller.state.context.selected?.updatedAt).toBe(selected.updatedAt);
+    expect(harness.controller.state.projectedSelectedText).toBe("Embedded projection 2");
+    expect(harness.calls.projectedReads).toEqual([selected.text, selected.text]);
+  });
+
   test("toggles embedded item backgrounds per Detail without changing projection data", async () => {
     const selected = makeBlock({ text: "Recommendation\n!((view-next))" });
     const harness = createHarness(selected);
@@ -2547,7 +2571,7 @@ describe("detail controller projection and deferred refresh", () => {
     await revisit;
 
     expect(paints).toHaveLength(immediatePaintCount);
-    expect(harness.calls.projectedReads).toHaveLength(projectionsBeforeRevalidation);
+    expect(harness.calls.projectedReads).toHaveLength(projectionsBeforeRevalidation + 1);
   });
 
   test("atomically replaces a cached projection when authoritative updatedAt changes", async () => {

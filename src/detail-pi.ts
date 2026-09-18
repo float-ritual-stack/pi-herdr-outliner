@@ -258,7 +258,7 @@ const tui = new DetailTuiAltScreen(terminal, false, undefined, {
     const pointer = pendingLinkClick;
     pendingLinkClick = { activate: false, routing: "first-unlocked", suppress: false };
     if (pointer.suppress || stopping) return;
-    enqueueWork(async () => {
+    serviceEventScheduler.scheduleWork(async () => {
       if (controller.state.destinationChooser.active) {
         await controller.handleDestinationChooserKeypress("", { name: "pointer" });
         return;
@@ -679,7 +679,8 @@ function startWatcher(): void {
       clientId,
       initialRuntime: runtime,
       herdrSocketPath: process.env.HERDR_SOCKET_PATH,
-      onError: (error) => enqueueWork(() => controller.onServiceError(error)),
+      onError: (error) =>
+        serviceEventScheduler.scheduleWork(() => controller.onServiceError(error)),
     })
     : null;
   watcher = client.watch({
@@ -694,15 +695,17 @@ function startWatcher(): void {
     onConnect: async () => {
       await runtimeSync?.synchronize();
       firstWatcherConnection.resolve();
-      if (runtimeInitialized) enqueueWork(() => controller.onServiceConnect(viewport()));
+      if (runtimeInitialized) {
+        serviceEventScheduler.scheduleWork(() => controller.onServiceConnect(viewport()));
+      }
     },
     onDisconnect: () => {
       runtimeSync?.suspend();
-      enqueueWork(() => controller.onServiceDisconnect());
+      serviceEventScheduler.scheduleWork(() => controller.onServiceDisconnect());
     },
     onError: (error) => {
       if (!runtimeInitialized) firstWatcherConnection.reject(error);
-      else enqueueWork(() => controller.onServiceError(error));
+      else serviceEventScheduler.scheduleWork(() => controller.onServiceError(error));
     },
     onEvent: (event) => serviceEventScheduler.schedule(event),
   });
@@ -817,7 +820,7 @@ function showActionMenu(
   const menu = new FuzzyActionMenu(items, 13);
   menu.onSelect = (actionId) => {
     closeActionMenu();
-    enqueueWork(() => invoke(actionId));
+    serviceEventScheduler.scheduleWork(() => invoke(actionId));
   };
   menu.onCancel = () => {
     closeActionMenu();
@@ -1180,7 +1183,7 @@ function scheduleInputFlush(): void {
   if (inputFlushTimer) clearTimeout(inputFlushTimer);
   inputFlushTimer = setTimeout(() => {
     inputFlushTimer = undefined;
-    enqueueWork(() => {
+    serviceEventScheduler.scheduleWork(() => {
       if (generation === inputGeneration && !stopping) return flushInput();
     });
   }, INPUT_IDLE_FLUSH_MS);
@@ -1316,7 +1319,7 @@ tui.addOutlinerInputListener(
   createPiDetailInputListener(
     (data) => {
       if (!stopping) {
-        enqueueWork(() => handleInput(data));
+        serviceEventScheduler.scheduleWork(() => handleInput(data));
         scheduleInputFlush();
       }
     },
@@ -1325,7 +1328,9 @@ tui.addOutlinerInputListener(
 );
 
 function handleResize(): void {
-  enqueueWork(() => controller.dispatch({ type: "viewport.changed" }, viewport()));
+  serviceEventScheduler.scheduleWork(() =>
+    controller.dispatch({ type: "viewport.changed" }, viewport())
+  );
 }
 
 async function initialize(): Promise<void> {
