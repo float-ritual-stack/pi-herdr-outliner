@@ -232,6 +232,7 @@ test("opens a property inspector from the moved pane's live identity", () => {
   const originalHerdrEnv = process.env.HERDR_ENV;
   const originalPaneId = process.env.HERDR_PANE_ID;
   const originalStateDir = process.env.OUTLINER_STATE_DIR;
+  const originalConfigPath = process.env.OUTLINER_CONFIG_PATH;
   const originalSummaryProperties = process.env.OUTLINER_PROPERTY_SUMMARY_KEYS;
   const originalDestinationTimeout = process.env.OUTLINER_OPEN_DESTINATION_TIMEOUT_MS;
   const originalRemote = process.env.OUTLINER_REMOTE;
@@ -240,6 +241,7 @@ test("opens a property inspector from the moved pane's live identity", () => {
     process.env.HERDR_ENV = "1";
     process.env.HERDR_PANE_ID = "w1:p2";
     process.env.OUTLINER_STATE_DIR = "/tmp/outliner-state";
+    delete process.env.OUTLINER_CONFIG_PATH;
     process.env.OUTLINER_PROPERTY_SUMMARY_KEYS = "work-stage,status";
     process.env.OUTLINER_OPEN_DESTINATION_TIMEOUT_MS = "9000";
     process.env.OUTLINER_REMOTE = "1";
@@ -346,6 +348,8 @@ if (args[0] === "pane" && args[1] === "current") {
     else process.env.OUTLINER_REMOTE = originalRemote;
     if (originalSocketPath === undefined) delete process.env.OUTLINER_SOCKET_PATH;
     else process.env.OUTLINER_SOCKET_PATH = originalSocketPath;
+    if (originalConfigPath === undefined) delete process.env.OUTLINER_CONFIG_PATH;
+    else process.env.OUTLINER_CONFIG_PATH = originalConfigPath;
     if (originalSummaryProperties === undefined) {
       delete process.env.OUTLINER_PROPERTY_SUMMARY_KEYS;
     } else {

@@ -161,7 +161,10 @@ async function waitForService(): Promise<void> {
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
     try {
-      const service = await client.request<OutlinerServiceStatus>({ action: "ping" }, 300);
+      const service = await client.request<OutlinerServiceStatus>(
+        { action: "ping" },
+        paths.mode === "remote" ? undefined : 300,
+      );
       if (service.protocolVersion === OUTLINER_PROTOCOL_VERSION) return;
     } catch {
       // Retry until the startup deadline.

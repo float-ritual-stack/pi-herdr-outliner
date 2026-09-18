@@ -901,6 +901,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       if (pendingBrowsingPublication) {
         void startBrowsingPublicationPump().catch((error) => {
           status = errorMessage(error);
+          browsingPublicationStatus = status;
           effects.invalidate();
         });
       }
@@ -959,6 +960,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   function queueDisplayRowSelection(row: TreeDisplayRow | undefined): void {
     void publishDisplayRowSelection(row).catch((error) => {
       status = errorMessage(error);
+      browsingPublicationStatus = status;
       effects.invalidate();
     });
   }

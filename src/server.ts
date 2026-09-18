@@ -882,7 +882,9 @@ export class OutlinerServer {
     right: OutlinerClientRegistration,
   ): boolean {
     return Boolean(
-      left.runtime?.workspaceId &&
+      left.runtime?.hostname &&
+      right.runtime?.hostname &&
+      left.runtime.workspaceId &&
       left.runtime.tabId &&
       left.runtime.hostname === right.runtime?.hostname &&
       left.runtime.workspaceId === right.runtime?.workspaceId &&

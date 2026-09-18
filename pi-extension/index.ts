@@ -902,7 +902,7 @@ function assertCompatibleProtocol(service: OutlinerServiceStatus): void {
   }
 }
 
-async function pingService(timeoutMs: number): Promise<void> {
+async function pingService(timeoutMs?: number): Promise<void> {
   const service = await client.request<OutlinerServiceStatus>({ action: "ping" }, timeoutMs);
   assertCompatibleProtocol(service);
 }
@@ -912,7 +912,7 @@ async function waitForService(timeoutMs = 5000): Promise<void> {
   let lastError: unknown;
   while (Date.now() < deadline) {
     try {
-      await pingService(400);
+      await pingService(paths.mode === "remote" ? undefined : 400);
       return;
     } catch (error) {
       lastError = error;
@@ -945,7 +945,7 @@ async function runWorkflowOrchestrator(
 
 async function ensureService(focus: boolean): Promise<void> {
   const service = await client
-    .request<OutlinerServiceStatus>({ action: "ping" }, 300)
+    .request<OutlinerServiceStatus>({ action: "ping" }, paths.mode === "remote" ? undefined : 300)
     .catch(() => null);
   if (service) {
     assertCompatibleProtocol(service);

@@ -1211,6 +1211,46 @@ describe("createTreeController", () => {
     await Bun.sleep(0);
 
     expect(controller.view().status).toBe("Preview publication failed");
+
+    failPublication = false;
+    await controller.handleKeypress("", { name: "up" }, "pass");
+    await Bun.sleep(0);
+
+    expect(controller.view().workspaceContextBlockId).toBe(first.id);
+    expect(controller.view().status).toBe("");
+  });
+
+  test("clears a restarted publication pump error after a later success", async () => {
+    const first = block("first");
+    const second = block("second", { position: 1 });
+    const third = block("third", { position: 2 });
+    const fourth = block("fourth", { position: 3 });
+    const delayedSecond = Promise.withResolvers<never>();
+    const delayedThird = Promise.withResolvers<never>();
+    const fake = harness((input) => {
+      if (input.action === "workspace.snapshot") {
+        return snapshot([first, second, third, fourth], first);
+      }
+      if (input.action !== "browsing-context.publish") return undefined;
+      if (publishedBlockId(input) === second.id) return delayedSecond.promise;
+      if (publishedBlockId(input) === third.id) return delayedThird.promise;
+      return undefined;
+    });
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+
+    await controller.handleKeypress("", { name: "down" }, "pass");
+    await controller.handleKeypress("", { name: "down" }, "pass");
+    delayedSecond.reject(new Error("Initial publication failed"));
+    await Bun.sleep(0);
+    delayedThird.reject(new Error("Restarted publication failed"));
+    await Bun.sleep(0);
+    expect(controller.view().status).toBe("Restarted publication failed");
+
+    await controller.handleKeypress("", { name: "down" }, "pass");
+    await Bun.sleep(0);
+    expect(controller.view().workspaceContextBlockId).toBe(fourth.id);
+    expect(controller.view().status).toBe("");
   });
 
   test("receives workspace context publication without moving the local cursor", async () => {

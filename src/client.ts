@@ -45,6 +45,7 @@ export class OutlinerWatcher {
   constructor(
     private readonly socketPath: string,
     private readonly handlers: OutlinerWatchHandlers,
+    private readonly acknowledgementTimeoutMs = LOCAL_REQUEST_TIMEOUT_MS,
   ) {
     this.connect();
   }
@@ -86,7 +87,7 @@ export class OutlinerWatcher {
       socket.write(`${JSON.stringify(request)}\n`);
       acknowledgementTimer = setTimeout(() => {
         socket.destroy(new Error("Outliner subscription was not acknowledged"));
-      }, 3_000);
+      }, this.acknowledgementTimeoutMs);
     });
     socket.on("data", (chunk: string) => {
       buffer += chunk;
@@ -186,6 +187,6 @@ export class OutlinerClient {
   }
 
   watch(handlers: OutlinerWatchHandlers): OutlinerWatcher {
-    return new OutlinerWatcher(this.socketPath, handlers);
+    return new OutlinerWatcher(this.socketPath, handlers, this.requestTimeoutMs);
   }
 }
