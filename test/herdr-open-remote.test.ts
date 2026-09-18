@@ -1,4 +1,12 @@
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, test } from "bun:test";
@@ -114,6 +122,8 @@ if (args[0] === "pane" && args[1] === "get") {
       })();
       if (!treeRegistered && calls.includes('"--entrypoint","outliner"')) {
         treeRegistered = true;
+        await Bun.sleep(200);
+        appendFileSync(logPath, `${JSON.stringify(["tree-registration-released"])}\n`);
         await register("tree", "workspace:outliner");
       }
       if (!detailRegistered && calls.includes('"--entrypoint","detail"')) {
@@ -166,6 +176,20 @@ if (args[0] === "pane" && args[1] === "get") {
       .filter((args) => args[0] === "plugin" && args[1] === "pane" && args[2] === "open")
       .map((args) => args[args.indexOf("--entrypoint") + 1]);
     expect(openedEntrypoints).toEqual(["outliner", "detail"]);
+    const startupOrder = calls
+      .filter((args) =>
+        args.includes("--entrypoint") || args[0] === "tree-registration-released"
+      )
+      .map((args) =>
+        args[0] === "tree-registration-released"
+          ? args[0]
+          : args[args.indexOf("--entrypoint") + 1]
+      );
+    expect(startupOrder).toEqual([
+      "outliner",
+      "detail",
+      "tree-registration-released",
+    ]);
     for (const args of calls.filter((call) => call.includes("--entrypoint"))) {
       expect(args).toContain(`OUTLINER_CONFIG_PATH=${configPath}`);
       expect(args).not.toContain("OUTLINER_REMOTE=1");
