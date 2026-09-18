@@ -1,3 +1,4 @@
+import { CURSOR_MARKER, stripTerminalSequences } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "bun:test";
 import {
   attentionClientState,
@@ -5,6 +6,7 @@ import {
 } from "../src/attention";
 import { createAnnotationAnchor } from "../src/annotations";
 import { emptyAttentionState } from "../src/attention";
+import { BufferComposer } from "../src/buffer-composer";
 import {
   createDetailController,
   renderedSelectionAnnotationTarget,
@@ -2932,6 +2934,60 @@ describe("detail controller saves and annotations", () => {
     expect(harness.controller.state.status).toBe("Revealed resolved text quote 0-3");
     expect(harness.controller.state.previewOffset).toBe(0);
   });
+
+  test("keeps the comment composer cursor visible across newlines, wrapping, and resize", async () => {
+    const { controller } = createHarness(makeBlock());
+    let composerViewport: DetailViewport = { width: 80, height: 24 };
+    await controller.initialize();
+    await controller.dispatch({
+      type: "comment.begin",
+      sourceRange: { start: 0, end: 1 },
+    }, composerViewport);
+    const composer = new BufferComposer(() => ({
+      title: "Comment",
+      context: "R",
+      buffer: controller.state.buffer,
+      placeholder: "",
+      commitAction: "Ctrl+S",
+      cancelAction: "Esc",
+      viewportOffset: controller.state.editorVisualOffset,
+    }));
+    const body = () => composer.render(composerViewport.width).slice(3, 6);
+
+    await controller.dispatch({
+      type: "buffer.insert",
+      text: "line1\nline2\nline3\nline4",
+    }, composerViewport);
+    expect(body().some((line) => line.includes("line4"))).toBe(true);
+    expect(body().some((line) => line.includes(CURSOR_MARKER))).toBe(true);
+
+    for (let index = 0; index < 3; index += 1) {
+      await controller.dispatch({ type: "buffer.move", direction: "up" }, composerViewport);
+    }
+    expect(body()[0]).toContain("line1");
+    expect(body()[0]).toContain(CURSOR_MARKER);
+
+    await controller.dispatch({ type: "buffer.select-all" }, composerViewport);
+    composerViewport = { width: 20, height: 24 };
+    await controller.dispatch({
+      type: "buffer.insert",
+      text: `${"A".repeat(15)}${"B".repeat(15)}${"C".repeat(14)}`,
+    }, composerViewport);
+    expect(stripTerminalSequences(body()[0]!)).toContain("A".repeat(15));
+    expect(stripTerminalSequences(body()[1]!)).toContain("B".repeat(15));
+    expect(body()[2]).toContain(CURSOR_MARKER);
+
+    composerViewport = { width: 16, height: 24 };
+    await controller.dispatch({ type: "viewport.changed" }, composerViewport);
+    expect(body()[2]).toContain(CURSOR_MARKER);
+    expect(stripTerminalSequences(body()[2]!)).toContain("C".repeat(11));
+
+    composerViewport = { width: 20, height: 24 };
+    await controller.dispatch({ type: "viewport.changed" }, composerViewport);
+    expect(stripTerminalSequences(body()[0]!)).toContain("A".repeat(15));
+    expect(body()[2]).toContain(CURSOR_MARKER);
+  });
+
   test("selects an exact block source range and opens a local comment composer", async () => {
     const harness = createHarness(makeBlock({ text: "alpha 🧭 beta\nsecond" }));
     await harness.controller.initialize();
