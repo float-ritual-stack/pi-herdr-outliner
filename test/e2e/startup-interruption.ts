@@ -31,17 +31,31 @@ const statusProcess = Bun.spawn(["herdr", "--session", isolation.sessionName, "s
   env: environment,
   stdout: "pipe",
   stderr: "pipe",
+  timeout: 5_000,
+  killSignal: "SIGKILL",
 });
-const status: unknown = JSON.parse(await new Response(statusProcess.stdout).text());
-assert.equal(await statusProcess.exited, 0);
+const [statusExitCode, statusOutput] = await Promise.all([
+  statusProcess.exited,
+  new Response(statusProcess.stdout).text(),
+  new Response(statusProcess.stderr).text(),
+]);
+const status: unknown = JSON.parse(statusOutput);
+assert.equal(statusExitCode, 0);
 assert.ok(typeof status === "object" && status !== null && "running" in status && typeof status.running === "boolean");
 if (status.running) {
   const stop = Bun.spawn(["herdr", "--session", isolation.sessionName, "server", "stop"], {
     env: environment,
     stdout: "pipe",
     stderr: "pipe",
+    timeout: 5_000,
+    killSignal: "SIGKILL",
   });
-  assert.equal(await stop.exited, 0, "Regression probe must clean up the leaked private server");
+  const [stopExitCode] = await Promise.all([
+    stop.exited,
+    new Response(stop.stdout).text(),
+    new Response(stop.stderr).text(),
+  ]);
+  assert.equal(stopExitCode, 0, "Regression probe must clean up the leaked private server");
 }
 assert.equal(status.running, false, "Cancelled preparation must not start a detached server after cleanup");
 process.stdout.write(`${JSON.stringify({ status: "passed", scenario: "startup-interruption", artifactDirectory: result.artifactDirectory })}\n`);
