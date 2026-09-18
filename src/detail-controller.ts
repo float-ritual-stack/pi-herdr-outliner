@@ -428,6 +428,7 @@ export interface DetailEffects {
     input: AnnotationCreateInput;
   }): Promise<AnnotationBatchReceipt>;
   internFilesystem(path: string): Promise<InternResourceReceipt>;
+  lookupFilesystem(path: string): Promise<InternResourceReceipt["resource"] | null>;
   refreshResource(resourceId: string): Promise<ResourceDescription>;
   openExternal(url: string): void | Promise<void>;
   getAnnotation(annotationId: string): Promise<AnnotationThread>;
@@ -1069,21 +1070,20 @@ export function createDetailController(
         if (getProperty(selected.properties, "type")?.startsWith("annotation")) {
           threads = [await effects.getAnnotation(selected.id)];
         } else if (state.referencedFile) {
-          const receipt = await effects.internFilesystem(state.referencedFile.absolutePath);
-          const subject: Extract<AnnotationSubject, { readonly kind: "resource" }> = {
-            kind: "resource",
-            resourceId: receipt.resource.id,
-          };
-          const representation = filesystemAnnotationRepresentation(
-            receipt.resource,
-            state.referencedFile,
-          );
-          const content = state.referencedFile.sourceText ?? state.referencedFile.lines.join("\n");
-          threads = (await effects.reconcileAnnotations({
-            subject,
-            newRepresentation: representation,
-            content,
-          })).threads;
+          const resource = await effects.lookupFilesystem(state.referencedFile.absolutePath);
+          if (resource) {
+            const subject: Extract<AnnotationSubject, { readonly kind: "resource" }> = {
+              kind: "resource",
+              resourceId: resource.id,
+            };
+            const representation = filesystemAnnotationRepresentation(resource, state.referencedFile);
+            const content = state.referencedFile.sourceText ?? state.referencedFile.lines.join("\n");
+            threads = (await effects.reconcileAnnotations({
+              subject,
+              newRepresentation: representation,
+              content,
+            })).threads;
+          }
         } else {
           const representation = blockAnnotationRepresentation(selected);
           threads = (await effects.reconcileAnnotations({

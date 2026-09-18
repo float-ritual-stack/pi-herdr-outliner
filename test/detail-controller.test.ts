@@ -73,6 +73,21 @@ function filePreview(overrides: Partial<ReferencedFile> = {}): ReferencedFile {
     ...overrides,
   };
 }
+
+function fileResource(path: string): ResourceDescription["resource"] {
+  return {
+    id: "30000000-0000-4000-8000-000000000001",
+    sourceId: "20000000-0000-4000-8000-000000000001",
+    provider: "filesystem",
+    address: { kind: "filesystem", path },
+    version: 1,
+    addressVersion: 1,
+    mediaType: "text/plain",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+}
+
 function annotationRecord(
   target: AnnotationTarget,
   overrides: Partial<AnnotationRecord> = {},
@@ -442,19 +457,12 @@ function createHarness(
     async internFilesystem(path) {
       calls.filesystemInterns.push(path);
       return {
-        resource: {
-          id: "30000000-0000-4000-8000-000000000001",
-          sourceId: "20000000-0000-4000-8000-000000000001",
-          provider: "filesystem",
-          address: { kind: "filesystem", path },
-          version: 1,
-          addressVersion: 1,
-          mediaType: "text/plain",
-          createdAt: "2026-01-01T00:00:00.000Z",
-          updatedAt: "2026-01-01T00:00:00.000Z",
-        },
+        resource: fileResource(path),
         created: false,
       };
+    },
+    async lookupFilesystem(path) {
+      return fileResource(path);
     },
     async refreshResource() {
       throw new Error("No web resource configured");

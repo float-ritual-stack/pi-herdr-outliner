@@ -1123,7 +1123,7 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 52;
+export const OUTLINER_PROTOCOL_VERSION = 53;
 
 
 export interface OutlinerServiceStatus {
@@ -1180,6 +1180,7 @@ export type OutlinerRequest =
     }
   | { id: string; action: "resources.intern"; input: InternResourceInput }
   | { id: string; action: "resources.intern-filesystem"; input: InternFilesystemResourceInput }
+  | { id: string; action: "resources.lookup-filesystem"; path: string }
   | {
       id: string;
       action: "resources.follow-authored";

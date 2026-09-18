@@ -131,6 +131,12 @@ function computedDetailEffects(
     async internFilesystem() {
       return unavailable();
     },
+    async lookupFilesystem(path) {
+      return client.request<ResourceDescription["resource"] | null>({
+        action: "resources.lookup-filesystem",
+        path,
+      });
+    },
     async refreshResource(resourceId) {
       return client.request<ResourceDescription>({
         action: "resources.refresh",
