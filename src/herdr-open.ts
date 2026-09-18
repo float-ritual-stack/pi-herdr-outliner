@@ -158,7 +158,8 @@ function openPane(
 
 async function waitForService(): Promise<void> {
   const client = createOutlinerClient(paths);
-  const deadline = Date.now() + 15_000;
+  const remote = paths.mode === "remote";
+  const deadline = Date.now() + (remote ? 60_000 : 15_000);
   while (Date.now() < deadline) {
     try {
       const service = await client.request<OutlinerServiceStatus>(

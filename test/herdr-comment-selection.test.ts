@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { hostname } from "node:os";
 import type { RequestInput } from "../src/client";
 import { OutlinerClient } from "../src/client";
 import {
@@ -16,7 +17,12 @@ const detail: OutlinerClientRegistration = {
     kind: "block",
     blockId: "11111111-1111-4111-8111-111111111111",
   },
-  runtime: { paneId: "w1:p2", workspaceId: "w1", tabId: "w1:t1" },
+  runtime: {
+    hostname: hostname(),
+    paneId: "w1:p2",
+    workspaceId: "w1",
+    tabId: "w1:t1",
+  },
 };
 
 test("requires Herdr's revision-validated keybinding selection handoff", () => {
@@ -36,13 +42,20 @@ test("requires Herdr's revision-validated keybinding selection handoff", () => {
   })).toEqual({ paneId: "w1:p2", quote: "  exact rendered quote  " });
 });
 
-test("targets only the live Detail that owns the invoking pane", () => {
+test("targets only the live Detail that owns the invoking host and pane", () => {
   expect(requireInvokingDetail([
     { ...detail, role: "tree", clientId: "tree-1" },
+    {
+      ...detail,
+      clientId: "foreign-detail",
+      runtime: { hostname: "foreign-host", paneId: "w1:p2" },
+    },
     detail,
-    { ...detail, clientId: "detail-2", runtime: { paneId: "w1:p3" } },
-  ], "w1:p2")).toEqual(detail);
-  expect(() => requireInvokingDetail([], "w1:p2")).toThrow("not in a live Outliner Detail");
+    { ...detail, clientId: "detail-2", runtime: { hostname: hostname(), paneId: "w1:p3" } },
+  ], "w1:p2", hostname())).toEqual(detail);
+  expect(() => requireInvokingDetail([], "w1:p2", hostname())).toThrow(
+    "not in a live Outliner Detail",
+  );
 });
 
 test("dispatches the immutable quote with pane revision and projection identity inputs", async () => {

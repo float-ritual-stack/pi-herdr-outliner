@@ -1,4 +1,5 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { hostname } from "node:os";
 import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
@@ -907,7 +908,8 @@ async function pingService(timeoutMs?: number): Promise<void> {
   assertCompatibleProtocol(service);
 }
 
-async function waitForService(timeoutMs = 5000): Promise<void> {
+
+async function waitForService(timeoutMs = paths.mode === "remote" ? 60_000 : 5_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   let lastError: unknown;
   while (Date.now() < deadline) {
@@ -1069,10 +1071,13 @@ function requireRoadmapTask(block: Block): string {
 export function selectRecentFocusedOutlinerClient(
   clients: readonly OutlinerClientRegistration[],
   recentPaneIds: readonly string[],
+  invokingHostname: string,
 ): OutlinerClientRegistration | undefined {
   const clientsByPaneId = new Map(
     clients.flatMap((registration) =>
-      registration.runtime?.paneId ? [[registration.runtime.paneId, registration] as const] : []
+      registration.runtime?.hostname === invokingHostname && registration.runtime.paneId
+        ? [[registration.runtime.paneId, registration] as const]
+        : []
     ),
   );
   for (const paneId of recentPaneIds) {
@@ -1086,19 +1091,22 @@ export function selectCapturedResponseTree(
   hostRuntime: OutlinerClientRuntime | undefined,
   recentPaneIds: readonly string[],
 ): OutlinerClientRegistration | undefined {
-  if (hostRuntime?.tabId) {
-    const sameTab = trees.filter((tree) => {
+  const invokingHostname = hostRuntime?.hostname;
+  if (!invokingHostname) return undefined;
+  const localTrees = trees.filter((tree) => tree.runtime?.hostname === invokingHostname);
+  if (hostRuntime.tabId) {
+    const sameTab = localTrees.filter((tree) => {
       const runtime = tree.runtime;
       if (!runtime || runtime.tabId !== hostRuntime.tabId) return false;
       return !hostRuntime.workspaceId || runtime.workspaceId === hostRuntime.workspaceId;
     });
     if (sameTab.length === 1) return sameTab[0];
     if (sameTab.length > 1) {
-      return selectRecentFocusedOutlinerClient(sameTab, recentPaneIds);
+      return selectRecentFocusedOutlinerClient(sameTab, recentPaneIds, invokingHostname);
     }
   }
-  return selectRecentFocusedOutlinerClient(trees, recentPaneIds) ??
-    (trees.length === 1 ? trees[0] : undefined);
+  return selectRecentFocusedOutlinerClient(localTrees, recentPaneIds, invokingHostname) ??
+    (localTrees.length === 1 ? localTrees[0] : undefined);
 }
 
 
@@ -1374,7 +1382,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
     const recentPaneIds = focusRegistry?.recentFocusedPaneIds() ?? [];
     const target = selectCapturedResponseTree(
       trees,
-      currentPaneIdentity(),
+      currentPaneIdentity() ?? { hostname: hostname() },
       recentPaneIds,
     );
     if (!target) return false;
@@ -1748,6 +1756,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
     const focusedClient = selectRecentFocusedOutlinerClient(
       clients,
       focusRegistry.recentFocusedPaneIds(),
+      hostname(),
     );
     if (!focusedClient) return null;
     const directTarget = focusedClient.currentTarget;

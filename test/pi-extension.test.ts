@@ -1,5 +1,6 @@
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { hostname } from "node:os";
 import { join } from "node:path";
 import { expect, spyOn, test } from "bun:test";
 import type {
@@ -1673,6 +1674,7 @@ test("captures through command, tool, and exact standalone dispatch without an a
         clientId: "tree-client",
         role: "tree",
         contextId: "tree-context",
+        runtime: { hostname: hostname(), paneId: "tree-pane" },
       }] as T;
     }
     if (input.action === "selection.set") {
@@ -2098,19 +2100,25 @@ test("formats compact bounded selection context", () => {
   expect(formatted).not.toContain("large large");
 });
 
-test("selects the most recently focused registered Outliner client", () => {
+test("selects the most recently focused registered client on the invoking host", () => {
   const clients: OutlinerClientRegistration[] = [
     {
       clientId: "detail-follow",
       role: "detail",
       contextId: "follow",
-      runtime: { paneId: "pane-follow" },
+      runtime: { hostname: "local", paneId: "pane-follow" },
+    },
+    {
+      clientId: "foreign-collision",
+      role: "detail",
+      contextId: "foreign",
+      runtime: { hostname: "foreign", paneId: "pane-temp" },
     },
     {
       clientId: "detail-temp",
       role: "detail",
       contextId: "temp",
-      runtime: { paneId: "pane-temp" },
+      runtime: { hostname: "local", paneId: "pane-temp" },
     },
     {
       clientId: "tree-without-runtime",
@@ -2122,10 +2130,12 @@ test("selects the most recently focused registered Outliner client", () => {
   expect(selectRecentFocusedOutlinerClient(
     clients,
     ["agent-pane", "pane-temp", "pane-follow"],
-  )).toBe(clients[1]);
+    "local",
+  )).toBe(clients[2]);
   expect(selectRecentFocusedOutlinerClient(
     clients,
     ["agent-pane", "unknown-pane"],
+    "local",
   )).toBeUndefined();
 });
 
@@ -2135,19 +2145,29 @@ test("prefers the unique Tree in the host tab before cross-tab focus history", (
       clientId: "same-tab",
       role: "tree",
       contextId: "same",
-      runtime: { paneId: "pane-same", workspaceId: "workspace", tabId: "tab-a" },
+      runtime: {
+        hostname: "local",
+        paneId: "pane-same",
+        workspaceId: "workspace",
+        tabId: "tab-a",
+      },
     },
     {
       clientId: "other-tab",
       role: "tree",
       contextId: "other",
-      runtime: { paneId: "pane-other", workspaceId: "workspace", tabId: "tab-b" },
+      runtime: {
+        hostname: "foreign",
+        paneId: "pane-other",
+        workspaceId: "workspace",
+        tabId: "tab-b",
+      },
     },
   ];
 
   expect(selectCapturedResponseTree(
     trees,
-    { paneId: "host", workspaceId: "workspace", tabId: "tab-a" },
+    { hostname: "local", paneId: "host", workspaceId: "workspace", tabId: "tab-a" },
     ["pane-other"],
   )).toBe(trees[0]);
 });
@@ -2158,22 +2178,42 @@ test("uses same-tab focus history only when that tab has multiple Trees", () => 
       clientId: "first",
       role: "tree",
       contextId: "first",
-      runtime: { paneId: "pane-first", workspaceId: "workspace", tabId: "tab-a" },
+      runtime: {
+        hostname: "local",
+        paneId: "pane-first",
+        workspaceId: "workspace",
+        tabId: "tab-a",
+      },
     },
     {
       clientId: "second",
       role: "tree",
       contextId: "second",
-      runtime: { paneId: "pane-second", workspaceId: "workspace", tabId: "tab-a" },
+      runtime: {
+        hostname: "local",
+        paneId: "pane-second",
+        workspaceId: "workspace",
+        tabId: "tab-a",
+      },
     },
     {
       clientId: "other-tab",
       role: "tree",
       contextId: "other",
-      runtime: { paneId: "pane-other", workspaceId: "workspace", tabId: "tab-b" },
+      runtime: {
+        hostname: "foreign",
+        paneId: "pane-other",
+        workspaceId: "workspace",
+        tabId: "tab-b",
+      },
     },
   ];
-  const host = { paneId: "host", workspaceId: "workspace", tabId: "tab-a" };
+  const host = {
+    hostname: "local",
+    paneId: "host",
+    workspaceId: "workspace",
+    tabId: "tab-a",
+  };
 
   expect(selectCapturedResponseTree(trees, host, ["pane-other", "pane-second"])).toBe(trees[1]);
   expect(selectCapturedResponseTree(trees, host, ["pane-other"])).toBeUndefined();

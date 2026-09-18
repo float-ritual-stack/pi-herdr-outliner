@@ -910,6 +910,16 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     return running;
   }
 
+  async function flushBrowsingPublications(): Promise<void> {
+    while (browsingPublicationPump) {
+      try {
+        await browsingPublicationPump;
+      } catch {
+        // Queued publication reports its own failure; only ordering matters here.
+      }
+    }
+  }
+
   async function publishBrowsingTarget(
     target: OutlinerNavigationTarget | null,
     dispatchPreview = true,
@@ -1076,6 +1086,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       effects.invalidate();
       return;
     }
+    await flushBrowsingPublications();
     if (selected.kind === "authored-link") {
       const activation = authoredLinkActivation(selected);
       if (activation.kind === "unavailable") {
@@ -1527,6 +1538,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     }
     navigationIndex = targetIndex;
     if (canonical.effectiveDeletedRootId) {
+      await flushBrowsingPublications();
       await effects.request({ action: "navigation.dispatch", sourceClientId: effects.clientId, target: { kind: "block", blockId: canonical.id }, intent: "open", });
       status = "Navigation history opened deleted block read-only in first unlocked Detail";
       return;
@@ -1568,6 +1580,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     selected: TreeRow,
     intent: OutlinerNavigationIntent,
   ): Promise<void> {
+    await flushBrowsingPublications();
     const reference = firstOutlinerReference(selected.block.text, workIdPrefix);
     if (!reference) {
       status = "Selected block has no block or page references";

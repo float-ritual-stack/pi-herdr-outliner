@@ -1191,6 +1191,72 @@ describe("createTreeController", () => {
     expect(controller.view().workspaceContextBlockId).toBe(fourth.id);
   });
 
+  test("publishes the selected preview before explicit reference navigation", async () => {
+    const first = block("first");
+    const intermediate = block("intermediate", { position: 1 });
+    const source = block("source01", {
+      position: 2,
+      text: "Source points to ((target01))",
+      displayText: "Source points to ((target01))",
+    });
+    const target = block("target01", {
+      position: 3,
+      text: "Target",
+      displayText: "Target",
+    });
+    const delayedIntermediate = Promise.withResolvers<{
+      contextId: string;
+      target: { kind: "block"; blockId: string };
+    }>();
+    let delayIntermediate = false;
+    const fake = harness((input) => {
+      if (input.action === "workspace.snapshot") {
+        return snapshot([first, intermediate, source, target], first);
+      }
+      if (input.action === "browsing-context.publish") {
+        const blockId = publishedBlockId(input);
+        if (delayIntermediate && blockId === intermediate.id) {
+          return delayedIntermediate.promise;
+        }
+        return { contextId: input.contextId, target: input.target };
+      }
+      if (input.action === "get") return input.blockId === target.id ? target : source;
+      return undefined;
+    });
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+    delayIntermediate = true;
+
+    await controller.handleKeypress("", { name: "down" }, "pass");
+    await controller.handleKeypress("", { name: "down" }, "pass");
+    const navigation = controller.handleAction("tree.reference.open");
+    await Bun.sleep(0);
+
+    expect(fake.calls.some((call) => call.action === "navigation.dispatch")).toBe(false);
+    delayedIntermediate.resolve({
+      contextId: "tree-test-context",
+      target: { kind: "block", blockId: intermediate.id },
+    });
+    await navigation;
+
+    expect(
+      fake.calls
+        .filter((call) =>
+          call.action === "browsing-context.publish" || call.action === "navigation.dispatch"
+        )
+        .map((call) =>
+          call.action === "browsing-context.publish"
+            ? `preview:${publishedBlockId(call)}`
+            : `open:${call.target.kind === "block" ? call.target.blockId : ""}`
+        ),
+    ).toEqual([
+      `preview:${first.id}`,
+      `preview:${intermediate.id}`,
+      `preview:${source.id}`,
+      `open:${target.id}`,
+    ]);
+  });
+
   test("reports a queued browsing publication failure without blocking movement", async () => {
     const first = block("first");
     const second = block("second", { position: 1 });

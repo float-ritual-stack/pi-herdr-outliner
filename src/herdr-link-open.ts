@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { hostname } from "node:os";
 import { join } from "node:path";
 import { createOutlinerClient } from "./client";
 import { listLiveClients } from "./client-target";
@@ -33,8 +34,11 @@ if (!clickedUrl) {
   const client = createOutlinerClient(paths);
   const paneId = pluginInvocationPaneId();
   if (!paneId) throw new Error("Herdr plugin link context has no source pane");
+  const localHostname = hostname();
   const source = (await listLiveClients(client)).find(
-    (registration) => registration.runtime?.paneId === paneId,
+    (registration) =>
+      registration.runtime?.hostname === localHostname &&
+      registration.runtime.paneId === paneId,
   );
   if (!source) throw new Error("The source Outliner pane is not registered");
   const navigation = await navigateOutlinerLink(client, clickedUrl, {

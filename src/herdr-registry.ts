@@ -444,7 +444,9 @@ export class HerdrRuntimeRegistry {
   }
 
   markStale(): void {
+    if (this.phase === "stale") return;
     this.phase = "stale";
+    this.revision += 1;
   }
 
   paneIdForTerminal(terminalId: string): string | undefined {

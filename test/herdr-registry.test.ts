@@ -34,6 +34,18 @@ test("snapshot replacement is atomic and validates references and terminal ident
   expect(registry.paneIdForTerminal("term-1")).toBe("p1");
 });
 
+test("stale transitions invalidate runtime consumers once", () => {
+  const registry = new HerdrRuntimeRegistry();
+  registry.replaceSnapshot(snapshot());
+
+  registry.markStale();
+  expect(registry.phase).toBe("stale");
+  expect(registry.revision).toBe(2);
+
+  registry.markStale();
+  expect(registry.revision).toBe(2);
+});
+
 test("pane moves preserve terminal identity and are idempotent", () => {
   const registry = new HerdrRuntimeRegistry();
   registry.replaceSnapshot(snapshot());

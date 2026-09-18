@@ -70,6 +70,7 @@ export function startClientRuntimeSync(options: {
     diagnostic: () => {},
     includePaneAgentStatus: false,
   });
+  const identityRuntime = { hostname: hostname(), terminalId };
   let stopped = false;
   let active = false;
   let revision = -1;
@@ -84,7 +85,7 @@ export function startClientRuntimeSync(options: {
       if (!force && revision === observedRevision) return;
       const runtime = registry.phase === "ready"
         ? runtimeForTerminal(registry, terminalId)
-        : lastRuntime;
+        : identityRuntime;
       if (!force && sameRuntime(lastRuntime, runtime)) {
         revision = observedRevision;
         return;

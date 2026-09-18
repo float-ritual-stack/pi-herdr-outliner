@@ -25,7 +25,8 @@ This file records notable user-facing changes. The project remains active dogfoo
 
 ### Fixed
 
-- Rapid Tree navigation stays local while browsing-context publication coalesces to the newest pending Detail target.
+- Rapid Tree navigation stays local while browsing-context publication coalesces to the newest pending Detail target; explicit opens wait for that preview stream to settle.
+- Remote client routing scopes pane identities to their originating host, withdraws stale topology until Herdr resynchronizes, and uses remote-aware service probe deadlines.
 - Comment composition keeps the cursor visible after three rows and uses matching wrap widths for scrolling and rendering.
 - Filesystem Resources now support read, edit, external editor, refresh, and source-backed comments through one canonical Resource identity.
 - Cached web selections map to the retained representation before annotation creation.

@@ -32,7 +32,12 @@ test("Herdr link action delegates an exact block URI to shared focus and reveal"
       clientId: "herdr-link-tree",
       role: "tree",
       contextId: "herdr-link-context",
-      runtime: { hostname: hostname(), workspaceId: "workspace", tabId: "tab", paneId: "pane-a" },
+      runtime: {
+        hostname: hostname(),
+        workspaceId: "workspace",
+        tabId: "tab",
+        paneId: "pane-a",
+      },
     },
     onConnect: sourceConnected.resolve,
     onEvent: () => {},
@@ -42,7 +47,12 @@ test("Herdr link action delegates an exact block URI to shared focus and reveal"
       clientId: "herdr-link-detail",
       role: "detail",
       contextId: "herdr-link-context",
-      runtime: { hostname: hostname(), workspaceId: "workspace", tabId: "tab", paneId: "pane-c" },
+      runtime: {
+        hostname: hostname(),
+        workspaceId: "workspace",
+        tabId: "tab",
+        paneId: "pane-c",
+      },
     },
     onConnect: detailConnected.resolve,
     onEvent: (event) => {
