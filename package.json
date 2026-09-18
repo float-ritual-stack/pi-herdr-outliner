@@ -17,7 +17,7 @@
     "goto": "bun run src/cli.ts goto",
     "check": "tsc --noEmit",
     "test": "bun test",
-    "test:e2e:herdr": "bun run test/e2e/resource-authoring.ts"
+    "test:e2e:herdr": "bun run test/e2e/startup-interruption.ts && bun run test/e2e/resource-authoring.ts"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "^0.84.2",

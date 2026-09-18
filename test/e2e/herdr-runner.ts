@@ -875,6 +875,7 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
     const stdoutFd = openSync(join(artifactDirectory, "herdr-server.stdout.log"), "a");
     const stderrFd = openSync(join(artifactDirectory, "herdr-server.stderr.log"), "a");
     try {
+      abort.signal.throwIfAborted();
       resources.server = spawn(herdrBinary, ["--session", sessionName, "server"], {
         cwd: projectRoot,
         env: environment,

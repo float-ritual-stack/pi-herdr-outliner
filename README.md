@@ -1120,6 +1120,9 @@ server with a fresh project and tab, isolated XDG configuration, Outliner state,
 and keybindings. Its private plugin registry links this checkout. Existing
 Herdr workspaces and plugin registrations are unchanged.
 
+It first interrupts fixture preparation and verifies that cancellation cannot
+leave a private server running after cleanup.
+
 The scenario types `[file::README.md]` through Tree, reveals and selects its
 generated Resource row, then activates it twice. Read-only SQLite assertions
 check that passive authoring and discovery create no Sources or Resources.
