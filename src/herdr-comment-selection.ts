@@ -1,8 +1,8 @@
 import { createConnection } from "node:net";
 import { listLiveClients, sendClientCommand } from "./client-target";
-import { OutlinerClient } from "./client";
+import { createOutlinerClient, OutlinerClient } from "./client";
 import { pluginInvocationWorkspaceRoot } from "./pane-control";
-import { resolvePaths } from "./paths";
+import { resolveClientPaths } from "./paths";
 import type { OutlinerClientRegistration, RenderedSelectionCapture } from "./types";
 
 interface HerdrSelectionContext {
@@ -177,8 +177,8 @@ export async function dispatchNativeSelectionComment(options: {
   const herdrSocketPath = requiredText(env.HERDR_SOCKET_PATH, "Herdr socket");
   const invocation = nativeSelectionInvocation(env);
   const workspaceRoot = pluginInvocationWorkspaceRoot(env);
-  const paths = resolvePaths({ ...env, OUTLINER_WORKSPACE_ROOT: workspaceRoot });
-  const client = options.client ?? new OutlinerClient(paths.socket);
+  const paths = resolveClientPaths({ ...env, OUTLINER_WORKSPACE_ROOT: workspaceRoot });
+  const client = options.client ?? createOutlinerClient(paths);
   const detail = requireInvokingDetail(
     await listLiveClients(client, "detail"),
     invocation.paneId,

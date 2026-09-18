@@ -29,7 +29,7 @@ import {
   selectActiveDelivery,
   type DeliveryIdentity,
 } from "../src/delivery-lifecycle";
-import { OutlinerClient } from "../src/client";
+import { createOutlinerClient } from "../src/client";
 import { HerdrRuntimeRegistry } from "../src/herdr-registry";
 import { HerdrRegistryRunner } from "../src/herdr-runtime";
 import {
@@ -39,7 +39,7 @@ import {
   type PullRequestSnapshot,
 } from "./delivery-lifecycle";
 import { inspectWorkEnvironment, type ExtensionExec } from "./work-environment";
-import { resolvePaths } from "../src/paths";
+import { resolveClientPaths } from "../src/paths"
 import { currentPaneIdentity } from "../src/pane-control";
 import { getProperty, parsePropertyRecords } from "../src/properties";
 import { blockDisplayTitle } from "../src/references";
@@ -101,8 +101,8 @@ import {
 
 const execFileAsync = promisify(execFile);
 const extensionRoot = dirname(dirname(fileURLToPath(import.meta.url)));
-const paths = resolvePaths();
-const client = new OutlinerClient(paths.socket);
+const paths = resolveClientPaths();
+const client = createOutlinerClient(paths);
 let headlessServer: ChildProcess | null = null;
 
 export type OutlinerHostActorId = "omp" | "pi";
@@ -950,6 +950,12 @@ async function ensureService(focus: boolean): Promise<void> {
   if (service) {
     assertCompatibleProtocol(service);
     if (!focus || process.env.HERDR_ENV !== "1") return;
+  }
+
+  if (!service && paths.mode === "remote") {
+    throw new Error(
+      `Remote Outliner service is unavailable at ${paths.socket}; start the SSH tunnel and retry`,
+    );
   }
 
   if (process.env.HERDR_ENV === "1") {

@@ -1112,6 +1112,33 @@ describe("createTreeController", () => {
     expect(fake.calls.at(-1)).toEqual({ action: "browsing-context.publish", sourceClientId: "tree-test", contextId: "tree-test-context", target: { kind: "block", blockId: "first" } });
   });
 
+  test("clears a stale unavailable Detail status after preview routing recovers", async () => {
+    const first = block("first");
+    const second = block("second", { position: 1 });
+    let publicationCount = 0;
+    const fake = harness((input) => {
+      if (input.action === "workspace.snapshot") return snapshot([first, second], first);
+      if (input.action !== "browsing-context.publish") return undefined;
+      publicationCount += 1;
+      return {
+        contextId: input.contextId,
+        target: { selected: null, ancestors: [], children: [] },
+        ...(publicationCount === 1
+          ? { unavailable: "No Detail is available in this tab · open another Detail" }
+          : {}),
+      };
+    });
+    const controller = createTreeController(fake.effects);
+
+    await controller.initialize();
+    expect(controller.view().status).toBe(
+      "No Detail is available in this tab · open another Detail",
+    );
+
+    await controller.handleKeypress("", { name: "down" }, "pass");
+    expect(controller.view().status).toBe("");
+  });
+
   test("receives workspace context publication without moving the local cursor", async () => {
     const first = block("first");
     const second = block("second", { position: 1 });

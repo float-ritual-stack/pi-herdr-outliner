@@ -192,6 +192,7 @@ function invokeHerdr(herdr: string, args: string[]): string {
 
 function runtimeFromPane(pane: HerdrPane): OutlinerClientRuntime {
   return {
+    hostname: hostname(),
     paneId: pane.pane_id,
     ...(pane.terminal_id ? { terminalId: pane.terminal_id } : {}),
     ...(pane.workspace_id ? { workspaceId: pane.workspace_id } : {}),
@@ -348,6 +349,9 @@ export function openDetailPane(
   );
   for (const name of [
     "OUTLINER_STATE_DIR",
+    "OUTLINER_CONFIG_PATH",
+    "OUTLINER_REMOTE",
+    "OUTLINER_SOCKET_PATH",
     "OUTLINER_KEYBINDINGS_PATH",
     "OUTLINER_RIGHT_CLICK",
     "OUTLINER_PROPERTY_SUMMARY_KEYS",
@@ -409,6 +413,9 @@ export function openBacklinkPeekPopup(
   ];
   for (const name of [
     "OUTLINER_STATE_DIR",
+    "OUTLINER_CONFIG_PATH",
+    "OUTLINER_REMOTE",
+    "OUTLINER_SOCKET_PATH",
     "OUTLINER_OPEN_DESTINATION_TIMEOUT_MS",
   ] as const) {
     if (process.env[name] !== undefined) {
@@ -458,6 +465,9 @@ export function openVirtualBranchNavigatorPopup(
   }
   for (const name of [
     "OUTLINER_STATE_DIR",
+    "OUTLINER_CONFIG_PATH",
+    "OUTLINER_REMOTE",
+    "OUTLINER_SOCKET_PATH",
     "OUTLINER_OPEN_DESTINATION_TIMEOUT_MS",
   ] as const) {
     if (process.env[name] !== undefined) {
@@ -496,8 +506,15 @@ export function openCapturePopup(
     `OUTLINER_CAPTURE_REQUEST_ID=${crypto.randomUUID()}`,
     "--focus",
   ];
-  if (process.env.OUTLINER_STATE_DIR) {
-    args.push("--env", `OUTLINER_STATE_DIR=${process.env.OUTLINER_STATE_DIR}`);
+  for (const name of [
+    "OUTLINER_STATE_DIR",
+    "OUTLINER_CONFIG_PATH",
+    "OUTLINER_REMOTE",
+    "OUTLINER_SOCKET_PATH",
+  ] as const) {
+    if (process.env[name] !== undefined) {
+      args.push("--env", `${name}=${process.env[name]}`);
+    }
   }
   invokeHerdr(herdr, args);
 }

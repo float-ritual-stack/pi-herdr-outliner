@@ -2,7 +2,11 @@ import { emitKeypressEvents } from "node:readline";
 import { PassThrough } from "node:stream";
 import { setTimeout as sleep } from "node:timers/promises";
 import { StdinBuffer } from "@earendil-works/pi-tui";
-import { OutlinerClient, type OutlinerWatcher, type RequestInput } from "./client";
+import { createOutlinerClient, type OutlinerWatcher, type RequestInput } from "./client";
+import {
+  startClientRuntimeSync,
+  type ClientRuntimeSync,
+} from "./client-runtime-sync";
 import { completeReferencedPaths, readReferencedFile } from "./files";
 import { OutlinerActionKeymap } from "./outliner-actions";
 import { navigateOutlinerLink } from "./outliner-links";
@@ -16,7 +20,7 @@ import {
   outlinerRightClickOwnership,
 } from "./pane-control";
 import { parsePropertySummaryKeys } from "./property-summary";
-import { resolvePaths } from "./paths";
+import { resolveClientPaths } from "./paths";
 import { TerminalInputDecoder, type TerminalKey } from "./terminal";
 import { createTreeController } from "./tree-controller";
 import {
@@ -33,8 +37,8 @@ import {
 import { renderTreeFrame } from "./tree-renderer";
 import { OUTLINER_PROTOCOL_VERSION, type OutlinerServiceStatus } from "./types";
 
-const paths = resolvePaths();
-const client = new OutlinerClient(paths.socket);
+const paths = resolveClientPaths();
+const client = createOutlinerClient(paths);
 const clientId = crypto.randomUUID();
 const browsingContextId = process.env.OUTLINER_BROWSING_CONTEXT_ID?.trim() || clientId;
 const inputDecoder = new TerminalInputDecoder();
@@ -50,6 +54,7 @@ const keypressInput = keyboardInput ?? process.stdin;
 const enableMouse = "\x1b[?1000h\x1b[?1006h";
 const disableMouse = "\x1b[?1006l\x1b[?1000l";
 let watcher: OutlinerWatcher | null = null;
+let runtimeSync: ClientRuntimeSync | null = null;
 let stopping = false;
 let workQueue = Promise.resolve();
 let scrollStartEntryIndex = 0;
@@ -85,6 +90,7 @@ function stop(): void {
   }
   stopping = true;
   watcher?.stop();
+  void runtimeSync?.stop();
   if (process.stdin.isTTY) process.stdin.setRawMode(false);
   mouseInput?.destroy();
   keyboardInput?.destroy();
@@ -153,10 +159,13 @@ const controller = createTreeController({
 });
 
 async function waitForService(): Promise<void> {
-  const deadline = Date.now() + 5000;
+  const deadline = Date.now() + (paths.mode === "remote" ? 30_000 : 5_000);
   while (Date.now() < deadline) {
     try {
-      const service = await client.request<OutlinerServiceStatus>({ action: "ping" }, 300);
+      const service = await client.request<OutlinerServiceStatus>(
+        { action: "ping" },
+        paths.mode === "remote" ? 3_000 : 300,
+      );
       if (service.protocolVersion === OUTLINER_PROTOCOL_VERSION) return;
     } catch {
       // Retry until the startup deadline.
@@ -233,6 +242,15 @@ function startWatcher(): void {
   } catch (error) {
     console.error(errorMessage(error));
   }
+  runtimeSync = paths.mode === "remote"
+    ? startClientRuntimeSync({
+      client,
+      clientId,
+      initialRuntime: runtime,
+      herdrSocketPath: process.env.HERDR_SOCKET_PATH,
+      onError: (error) => enqueueWork(() => controller.handleError(error)),
+    })
+    : null;
   watcher = client.watch({
     client: {
       clientId,
@@ -240,8 +258,14 @@ function startWatcher(): void {
       contextId: browsingContextId,
       runtime,
     },
-    onConnect: () => enqueueWork(() => controller.handleConnect()),
-    onDisconnect: () => enqueueWork(() => controller.handleDisconnect()),
+    onConnect: async () => {
+      await runtimeSync?.synchronize();
+      enqueueWork(() => controller.handleConnect());
+    },
+    onDisconnect: () => {
+      runtimeSync?.suspend();
+      enqueueWork(() => controller.handleDisconnect());
+    },
     onError: (error) => enqueueWork(() => controller.handleError(error)),
     onEvent: (event) => enqueueWork(() => controller.handleServiceEvent(event)),
   });

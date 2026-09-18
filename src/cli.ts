@@ -4,13 +4,13 @@ import {
   focusBlockByQuery,
   formatBlockFocusMatch,
 } from "./block-focus";
-import { OutlinerClient, type RequestInput } from "./client";
+import { createOutlinerClient, type RequestInput } from "./client";
 import { requireClientIdForRole } from "./client-target";
-import { resolvePaths } from "./paths";
+import { resolveClientPaths } from "./paths";
 import { navigateOutlinerLink } from "./outliner-links";
 import type { BlockSearchQuery, CaptureReceipt } from "./types";
 
-
+const paths = resolveClientPaths();
 function parseLimit(value: string | undefined, fallback: number): number {
   const limit = value === undefined ? fallback : Number(value);
   if (!Number.isInteger(limit) || limit <= 0) {
@@ -20,7 +20,7 @@ function parseLimit(value: string | undefined, fallback: number): number {
 }
 
 const [command = "list", ...rest] = process.argv.slice(2);
-const client = new OutlinerClient(resolvePaths().socket);
+const client = createOutlinerClient(paths);
 let request: RequestInput | null = null;
 let directResult: unknown;
 

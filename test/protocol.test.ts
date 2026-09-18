@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createConnection, createServer, Socket } from "node:net";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   annotationSourceHash,
@@ -2886,6 +2886,7 @@ test("reconciles long-lived clients against live Herdr pane topology", async () 
     action: "clients.list",
   });
   expect(initialClients.find(({ clientId }) => clientId === "tree-live")?.runtime).toEqual({
+    hostname: hostname(),
     paneId: "tree-pane-old",
     terminalId: "term-tree",
     workspaceId: "ws-old",
@@ -2932,6 +2933,7 @@ test("reconciles long-lived clients against live Herdr pane topology", async () 
     action: "clients.list",
   });
   expect(movedClients.find(({ clientId }) => clientId === "tree-live")?.runtime).toEqual({
+    hostname: hostname(),
     paneId: "tree-pane-renamed",
     terminalId: "term-tree",
     workspaceId: "ws-new",
@@ -2956,6 +2958,7 @@ test("reconciles long-lived clients against live Herdr pane topology", async () 
     action: "clients.list",
   });
   expect(reorderedClients.find(({ clientId }) => clientId === "tree-live")?.runtime).toEqual({
+    hostname: hostname(),
     paneId: "tree-pane-final",
     terminalId: "term-tree",
     workspaceId: "ws-new",
@@ -2990,6 +2993,111 @@ test("reconciles long-lived clients against live Herdr pane topology", async () 
     intent: "reveal",
   })).rejects.toThrow();
   expect(connectionCount).toBe(registrations.length);
+});
+
+test("preserves client-owned topology and routes only within its host", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-outliner-remote-topology-"));
+  const store = new OutlinerStore(join(directory, "outliner.sqlite"));
+  const socket = join(directory, "outliner.sock");
+  const server = new OutlinerServer(store, socket, new HerdrRuntimeRegistry());
+  await server.start();
+  const registrations: OutlinerClientRegistration[] = [
+    {
+      clientId: "remote-tree",
+      role: "tree",
+      contextId: "remote",
+      runtime: {
+        hostname: "laptop-a.invalid",
+        paneId: "tree-pane",
+        terminalId: "tree-terminal",
+        workspaceId: "workspace",
+        tabId: "tab",
+        paneX: 0,
+        paneY: 0,
+      },
+    },
+    {
+      clientId: "remote-detail",
+      role: "detail",
+      contextId: "remote",
+      locked: false,
+      runtime: {
+        hostname: "laptop-a.invalid",
+        paneId: "detail-pane",
+        terminalId: "detail-terminal",
+        workspaceId: "workspace",
+        tabId: "tab",
+        paneX: 40,
+        paneY: 0,
+      },
+    },
+    {
+      clientId: "other-host-detail",
+      role: "detail",
+      contextId: "remote",
+      locked: false,
+      runtime: {
+        hostname: "laptop-b.invalid",
+        paneId: "other-pane",
+        terminalId: "other-terminal",
+        workspaceId: "workspace",
+        tabId: "tab",
+        paneX: 1,
+        paneY: 0,
+      },
+    },
+  ];
+  const connected = registrations.map(() => Promise.withResolvers<void>());
+  const watchers = registrations.map((registration, index) =>
+    new OutlinerClient(socket).watch({
+      client: registration,
+      onConnect: connected[index]!.resolve,
+      onEvent() {},
+    })
+  );
+  cleanups.push(async () => {
+    await Promise.all(watchers.map((watcher) => watcher.stop()));
+    await server.close();
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  await Promise.all(connected.map(({ promise }) => promise));
+  const client = new OutlinerClient(socket);
+
+  const clients = await client.request<OutlinerClientRegistration[]>({
+    action: "clients.list",
+  });
+  expect(clients.find(({ clientId }) => clientId === "remote-tree")?.runtime)
+    .toEqual(registrations[0]!.runtime);
+  expect(await client.request<OutlinerNavigationDispatch>({
+    action: "navigation.resolve",
+    sourceClientId: "remote-tree",
+    intent: "open",
+  })).toMatchObject({
+    targetClientId: "remote-detail",
+    resolution: "unlocked",
+  });
+  const movedRuntime = {
+    ...registrations[1]!.runtime,
+    tabId: "other-tab",
+    focused: true,
+    visible: true,
+  };
+  await client.request({
+    action: "clients.update",
+    clientId: "remote-detail",
+    runtime: movedRuntime,
+  });
+  const movedClients = await client.request<OutlinerClientRegistration[]>({
+    action: "clients.list",
+  });
+  expect(movedClients.find(({ clientId }) => clientId === "remote-detail")?.runtime)
+    .toEqual(movedRuntime);
+  await expect(client.request({
+    action: "navigation.resolve",
+    sourceClientId: "remote-tree",
+    intent: "open",
+  })).rejects.toThrow("No Detail is available in this tab");
 });
 
 test("targets ephemeral attention, advances atomically, stales on edits, and expires", async () => {

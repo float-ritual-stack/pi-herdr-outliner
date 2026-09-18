@@ -1095,6 +1095,46 @@ only once; restarts and package upgrades never overwrite local guide changes.
 The schema remains migration-owned rather than being distributed as a prebuilt
 SQLite database.
 
+### Remote client mode
+
+A workstation can render Tree and Detail panes locally while another host owns
+the canonical service and SQLite database. Forward the service's Unix socket
+over SSH:
+
+```sshconfig
+Host float-box-outliner
+  HostName float-box
+  User evan
+  LocalForward /absolute/local/float-box.sock /absolute/remote/outliner.sock
+  StreamLocalBindUnlink yes
+  ExitOnForwardFailure yes
+```
+
+Keep that tunnel running with `ssh -NT float-box-outliner`. On the workstation,
+create `~/.config/pi-herdr-outliner/client.json`:
+
+```json
+{
+  "remote": true,
+  "socketPath": "/absolute/local/float-box.sock"
+}
+```
+
+The fixed config file is read by every plugin entrypoint, including processes
+spawned by an already-running Herdr server. `OUTLINER_CONFIG_PATH` selects a
+different JSON file. For one-off shells, `OUTLINER_REMOTE=1` and an absolute
+`OUTLINER_SOCKET_PATH` override the file.
+
+Install or link the same Outliner revision on both hosts, start the service only
+on the canonical host, then invoke `open` normally on the workstation. Remote
+mode never creates a local service pane or database. Tree and Detail register
+their workstation hostname and live Herdr topology with the canonical service,
+so routing remains local to that host even when pane IDs overlap.
+
+The forwarded socket exposes the complete Outliner RPC to the local account.
+Keep it in a user-private directory and use an authenticated SSH connection.
+Client and service protocol versions must match.
+
 ## Development
 
 ```sh

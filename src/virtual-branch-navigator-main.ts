@@ -1,12 +1,12 @@
 import { emitKeypressEvents } from "node:readline";
 import { getMarkdownTheme, initTheme } from "@earendil-works/pi-coding-agent";
-import { OutlinerClient } from "./client";
+import { createOutlinerClient } from "./client";
 import { listLiveClients } from "./client-target";
 import { projectDetailRead } from "./detail-embeds";
 import type { DetailReadPreviewDocument } from "./detail-pi-preview";
 import { OutlinerActionKeymap } from "./outliner-actions";
 import { currentPaneRuntime, openDetailPane } from "./pane-control";
-import { resolvePaths } from "./paths";
+import { resolveClientPaths } from "./paths";
 import { ALL_DETAILS_LOCKED_ERROR } from "./navigation-routes";
 import { openDestinationTimeoutFromEnvironment } from "./open-destination-chooser";
 import { blockDisplayTitle } from "./references";
@@ -70,8 +70,8 @@ function parseLaunch(): VirtualBranchNavigatorLaunch {
 }
 
 const launch = parseLaunch();
-const paths = resolvePaths();
-const client = new OutlinerClient(paths.socket);
+const paths = resolveClientPaths();
+const client = createOutlinerClient(paths);
 const actionKeymap = OutlinerActionKeymap.load();
 const destinationTimeoutMs = openDestinationTimeoutFromEnvironment(
   process.env.OUTLINER_OPEN_DESTINATION_TIMEOUT_MS,

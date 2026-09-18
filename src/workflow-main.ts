@@ -1,6 +1,6 @@
 import { parseArgs } from "node:util";
-import { OutlinerClient } from "./client";
-import { resolvePaths } from "./paths";
+import { createOutlinerClient } from "./client";
+import { resolveClientPaths } from "./paths";
 import { orchestrateWorkflowRun } from "./workflow-orchestrator";
 
 const { values } = parseArgs({
@@ -13,6 +13,6 @@ const { values } = parseArgs({
 const runId = values["run-id"]?.trim();
 if (!runId) throw new Error("workflow runner requires --run-id");
 
-const client = new OutlinerClient(resolvePaths().socket);
+const client = createOutlinerClient(resolveClientPaths());
 const result = await orchestrateWorkflowRun(client, runId);
 console.log(JSON.stringify(result, null, 2));

@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
+import { hostname as systemHostname } from "node:os";
 import { dirname } from "node:path";
 import {
   ATTENTION_MAX_SUPPORTING_MARKS,
@@ -99,6 +100,7 @@ export class OutlinerServer {
   private readonly attentionStates = new Map<string, AttentionClientState>();
   private readonly attentionTimers = new Map<string, Timer>();
   private readonly workflows: WorkflowManager;
+  private readonly hostname = systemHostname();
 
   constructor(
     readonly store: OutlinerStore,
@@ -250,6 +252,54 @@ export class OutlinerServer {
     }
   }
 
+  private normalizeClientRuntime(
+    runtime: OutlinerClientRuntime | undefined,
+  ): OutlinerClientRuntime | undefined {
+    if (runtime === undefined) return undefined;
+    if (!runtime || typeof runtime !== "object" || Array.isArray(runtime)) {
+      throw new Error("Client runtime must be an object");
+    }
+    const stringKeys = ["hostname", "paneId", "terminalId", "workspaceId", "tabId"] as const;
+    const numberKeys = ["paneX", "paneY"] as const;
+    const booleanKeys = ["focused", "visible"] as const;
+    const runtimeKeys = [...stringKeys, ...numberKeys, ...booleanKeys];
+    const unknownKey = Object.keys(runtime)
+      .find((key) => !runtimeKeys.includes(key as typeof runtimeKeys[number]));
+    if (unknownKey) throw new Error(`Invalid client runtime ${unknownKey}`);
+    const stringEntries = stringKeys.flatMap((key) => {
+      const value = runtime[key];
+      if (value === undefined) return [];
+      if (
+        typeof value !== "string" ||
+        !value.trim() ||
+        value.length > 500 ||
+        /[\u0000-\u001f\u007f]/.test(value)
+      ) {
+        throw new Error(`Invalid client runtime ${key}`);
+      }
+      return [[key, value.trim()] as const];
+    });
+    const numberEntries = numberKeys.flatMap((key) => {
+      const value = runtime[key];
+      if (value === undefined) return [];
+      if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+        throw new Error(`Invalid client runtime ${key}`);
+      }
+      return [[key, value] as const];
+    });
+    const booleanEntries = booleanKeys.flatMap((key) => {
+      const value = runtime[key];
+      if (value === undefined) return [];
+      if (typeof value !== "boolean") {
+        throw new Error(`Invalid client runtime ${key}`);
+      }
+      return [[key, value] as const];
+    });
+    return stringEntries.length > 0 || numberEntries.length > 0 || booleanEntries.length > 0
+      ? Object.fromEntries([...stringEntries, ...numberEntries, ...booleanEntries])
+      : undefined;
+  }
+
   private registerSubscriber(
     socket: Socket,
     registration: OutlinerClientRegistration,
@@ -278,46 +328,7 @@ export class OutlinerServer {
         throw new Error(`Client ID is already registered: ${clientId}`);
       }
     }
-    let runtime: OutlinerClientRuntime | undefined;
-    if (registration.runtime !== undefined) {
-      if (
-        !registration.runtime ||
-        typeof registration.runtime !== "object" ||
-        Array.isArray(registration.runtime)
-      ) {
-        throw new Error("Client runtime must be an object");
-      }
-      const stringKeys = ["paneId", "terminalId", "workspaceId", "tabId"] as const;
-      const numberKeys = ["paneX", "paneY"] as const;
-      const runtimeKeys = [...stringKeys, ...numberKeys];
-      const unknownKey = Object.keys(registration.runtime)
-        .find((key) => !runtimeKeys.includes(key as typeof runtimeKeys[number]));
-      if (unknownKey) throw new Error(`Invalid client runtime ${unknownKey}`);
-      const stringEntries = stringKeys.flatMap((key) => {
-        const value = registration.runtime?.[key];
-        if (value === undefined) return [];
-        if (
-          typeof value !== "string" ||
-          !value.trim() ||
-          value.length > 500 ||
-          /[\u0000-\u001f\u007f]/.test(value)
-        ) {
-          throw new Error(`Invalid client runtime ${key}`);
-        }
-        return [[key, value.trim()] as const];
-      });
-      const numberEntries = numberKeys.flatMap((key) => {
-        const value = registration.runtime?.[key];
-        if (value === undefined) return [];
-        if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
-          throw new Error(`Invalid client runtime ${key}`);
-        }
-        return [[key, value] as const];
-      });
-      if (stringEntries.length > 0 || numberEntries.length > 0) {
-        runtime = Object.fromEntries([...stringEntries, ...numberEntries]);
-      }
-    }
+    const runtime = this.normalizeClientRuntime(registration.runtime);
     if (registration.locked !== undefined && typeof registration.locked !== "boolean") {
       throw new Error("Client locked state must be boolean");
     }
@@ -342,7 +353,7 @@ export class OutlinerServer {
       ...(runtime ? { runtime } : {}),
       ...(resourcePresentation ? { resourcePresentation } : {}),
     };
-    const stored = this.herdrRegistry === undefined
+    const stored = this.herdrRegistry === undefined || this.clientOwnsTopology(normalized)
       ? normalized
       : this.withoutTopology(normalized);
     this.subscribers.set(socket, stored);
@@ -352,19 +363,30 @@ export class OutlinerServer {
   private withoutTopology(
     client: OutlinerClientRegistration,
   ): OutlinerClientRegistration {
-    const terminalId = client.runtime?.terminalId;
+    const { hostname, terminalId } = client.runtime ?? {};
     const registration = { ...client };
     delete registration.runtime;
-    return terminalId === undefined
+    return hostname === undefined && terminalId === undefined
       ? registration
-      : { ...registration, runtime: { terminalId } };
+      : {
+        ...registration,
+        runtime: {
+          ...(hostname === undefined ? {} : { hostname }),
+          ...(terminalId === undefined ? {} : { terminalId }),
+        },
+      };
+  }
+
+  private clientOwnsTopology(client: OutlinerClientRegistration): boolean {
+    const clientHostname = client.runtime?.hostname;
+    return clientHostname !== undefined && clientHostname !== this.hostname;
   }
 
   private reconcileClientRuntime(
     client: OutlinerClientRegistration,
   ): OutlinerClientRegistration {
     const registry = this.herdrRegistry;
-    if (registry === undefined) return client;
+    if (registry === undefined || this.clientOwnsTopology(client)) return client;
 
     const unavailable = this.withoutTopology(client);
     const terminalId = unavailable.runtime?.terminalId;
@@ -390,6 +412,7 @@ export class OutlinerServer {
     return {
       ...client,
       runtime: {
+        hostname: this.hostname,
         paneId: pane.pane_id,
         terminalId: pane.terminal_id,
         workspaceId: pane.workspace_id,
@@ -497,10 +520,18 @@ export class OutlinerServer {
 
   private updateClient(
     clientId: string,
-    update: { locked?: boolean; currentTarget?: OutlinerNavigationTarget | null },
+    update: {
+      locked?: boolean;
+      currentTarget?: OutlinerNavigationTarget | null;
+      runtime?: OutlinerClientRuntime | null;
+    },
   ): OutlinerClientRegistration {
-    if (update.locked === undefined && update.currentTarget === undefined) {
-      throw new Error("Client update must change locked or currentTarget");
+    if (
+      update.locked === undefined &&
+      update.currentTarget === undefined &&
+      update.runtime === undefined
+    ) {
+      throw new Error("Client update must change locked, currentTarget, or runtime");
     }
     for (const [socket, client] of this.subscribers) {
       if (client.clientId !== clientId) continue;
@@ -513,6 +544,13 @@ export class OutlinerServer {
         delete updated.currentTarget;
       } else if (update.currentTarget !== undefined) {
         updated.currentTarget = this.normalizeNavigationTarget(update.currentTarget, "retain");
+      }
+      if (update.runtime === null) {
+        delete updated.runtime;
+      } else if (update.runtime !== undefined) {
+        const runtime = this.normalizeClientRuntime(update.runtime);
+        if (runtime === undefined) delete updated.runtime;
+        else updated.runtime = runtime;
       }
       this.subscribers.set(socket, updated);
       return this.reconcileClientRuntime(updated);
@@ -846,6 +884,7 @@ export class OutlinerServer {
     return Boolean(
       left.runtime?.workspaceId &&
       left.runtime.tabId &&
+      left.runtime.hostname === right.runtime?.hostname &&
       left.runtime.workspaceId === right.runtime?.workspaceId &&
       left.runtime.tabId === right.runtime?.tabId
     );

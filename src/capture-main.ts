@@ -1,10 +1,10 @@
 import { emitKeypressEvents } from "node:readline";
-import { OutlinerClient } from "./client";
+import { createOutlinerClient } from "./client";
 import {
   CapturePopupController,
   renderCapturePopupFrame,
 } from "./capture-popup";
-import { resolvePaths } from "./paths";
+import { resolveClientPaths } from "./paths";
 import {
   BRACKETED_PASTE_DISABLE,
   BRACKETED_PASTE_ENABLE,
@@ -17,8 +17,8 @@ if (process.env.HERDR_ENV !== "1") {
   throw new Error("Quick capture popup requires Herdr");
 }
 
-const paths = resolvePaths();
-const client = new OutlinerClient(paths.socket);
+const paths = resolveClientPaths();
+const client = createOutlinerClient(paths);
 const requestId = process.env.OUTLINER_CAPTURE_REQUEST_ID?.trim() || crypto.randomUUID();
 const capturedFromBlockId = process.env.OUTLINER_CAPTURE_FROM_BLOCK_ID?.trim() || undefined;
 const draft = await client.request<QuickCaptureDraft | null>({ action: "capture.draft.get" });

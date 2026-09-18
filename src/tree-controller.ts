@@ -304,6 +304,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   let expandedBlockOffset = 0;
   let lastVisibleCanonicalId: string | null = null;
   let status = "";
+  let browsingPublicationStatus = "";
   let refreshPending = false;
   let attention = emptyAttentionState(effects.clientId);
   const actionKeymap = effects.actionKeymap ?? DEFAULT_OUTLINER_ACTION_KEYMAP;
@@ -878,7 +879,13 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       if (!pendingBrowsingPublication) {
         workspaceContextBlockId =
           desired.target?.kind === "block" ? desired.target.blockId : null;
-        if (publication.unavailable) status = publication.unavailable;
+        if (publication.unavailable) {
+          status = publication.unavailable;
+          browsingPublicationStatus = publication.unavailable;
+        } else if (status === browsingPublicationStatus) {
+          status = "";
+          browsingPublicationStatus = "";
+        }
       }
     }
   }

@@ -3,11 +3,11 @@ import { join } from "node:path";
 import { HerdrRuntimeRegistry } from "./herdr-registry";
 import { HerdrRegistryRunner } from "./herdr-runtime";
 import { registerServicePaneState, removeLegacyClientPaneStates } from "./pane-control";
-import { resolvePaths } from "./paths";
+import { resolveServicePaths } from "./paths";
 import { OutlinerServer } from "./server";
 import { OutlinerStore } from "./store";
 
-const paths = resolvePaths();
+const paths = resolveServicePaths();
 mkdirSync(paths.stateDir, { recursive: true });
 const paneStatePath = join(paths.stateDir, "service-pane.json");
 const store = new OutlinerStore(paths.database, { workspaceRoot: paths.workspaceRoot });
