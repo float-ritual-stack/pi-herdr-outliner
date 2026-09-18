@@ -309,6 +309,23 @@ The directory contains the SQLite database, Unix socket, and remembered
 Herdr pane commands explicitly pass the invoking pane's foreground working
 directory to new plugin panes.
 
+[`resolveClientPaths()`](../src/paths.ts) adds an explicit local/remote endpoint
+mode without changing canonical workspace storage paths. The default
+`~/.config/pi-herdr-outliner/client.json` file is the durable configuration
+surface for Herdr-spawned processes; `OUTLINER_REMOTE` and
+`OUTLINER_SOCKET_PATH` are environment overrides. Remote mode requires an
+absolute forwarded Unix-socket path, gives requests a network-appropriate
+deadline, and prevents `server-main.ts` and plugin actions from starting a
+second service.
+
+Remote Tree and Detail registrations own their Herdr topology. They publish the
+rendering host's hostname, pane, terminal, workspace, tab, coordinates,
+visibility, and focus state, then update that runtime projection from the local
+Herdr event registry. The canonical service reconciles same-host registrations
+against its own Herdr registry but preserves foreign-host topology. Navigation
+requires matching host and tab identity, preventing pane-ID collisions and
+cross-machine focus or routing.
+
 A workspace root scopes canonical data, not browsing authority. Tree/Detail
 client identity, browsing-context identity, targets, histories, tab numbers,
 labels, and pane titles are not stored in role-keyed files or canonical tables.

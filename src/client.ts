@@ -13,6 +13,21 @@ export type RequestInput = OutlinerRequest extends infer Request
     : never
   : never;
 
+const LOCAL_REQUEST_TIMEOUT_MS = 3_000;
+const REMOTE_REQUEST_TIMEOUT_MS = 30_000;
+
+export interface OutlinerClientEndpoint {
+  socket: string;
+  mode: "local" | "remote";
+}
+
+export function createOutlinerClient(endpoint: OutlinerClientEndpoint): OutlinerClient {
+  return new OutlinerClient(
+    endpoint.socket,
+    endpoint.mode === "remote" ? REMOTE_REQUEST_TIMEOUT_MS : LOCAL_REQUEST_TIMEOUT_MS,
+  );
+}
+
 export interface OutlinerWatchHandlers {
   client: OutlinerClientRegistration;
   onConnect?: () => void | Promise<void>;
@@ -30,6 +45,7 @@ export class OutlinerWatcher {
   constructor(
     private readonly socketPath: string,
     private readonly handlers: OutlinerWatchHandlers,
+    private readonly acknowledgementTimeoutMs = LOCAL_REQUEST_TIMEOUT_MS,
   ) {
     this.connect();
   }
@@ -71,7 +87,7 @@ export class OutlinerWatcher {
       socket.write(`${JSON.stringify(request)}\n`);
       acknowledgementTimer = setTimeout(() => {
         socket.destroy(new Error("Outliner subscription was not acknowledged"));
-      }, 3_000);
+      }, this.acknowledgementTimeoutMs);
     });
     socket.on("data", (chunk: string) => {
       buffer += chunk;
@@ -131,9 +147,12 @@ export class OutlinerWatcher {
 }
 
 export class OutlinerClient {
-  constructor(readonly socketPath: string) {}
+  constructor(
+    readonly socketPath: string,
+    private readonly requestTimeoutMs = LOCAL_REQUEST_TIMEOUT_MS,
+  ) {}
 
-  request<T>(input: RequestInput, timeoutMs = 3000): Promise<T> {
+  request<T>(input: RequestInput, timeoutMs = this.requestTimeoutMs): Promise<T> {
     const request = { ...input, id: crypto.randomUUID() } as OutlinerRequest;
     const responseReceived = Promise.withResolvers<T>();
     const socket = createConnection(this.socketPath);
@@ -168,6 +187,6 @@ export class OutlinerClient {
   }
 
   watch(handlers: OutlinerWatchHandlers): OutlinerWatcher {
-    return new OutlinerWatcher(this.socketPath, handlers);
+    return new OutlinerWatcher(this.socketPath, handlers, this.requestTimeoutMs);
   }
 }

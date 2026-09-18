@@ -6,14 +6,14 @@ import {
   type BacklinkPeekLaunch,
   type BacklinkPeekPreview,
 } from "./backlink-peek";
-import { OutlinerClient } from "./client";
+import { createOutlinerClient } from "./client";
 import { OutlinerActionKeymap } from "./outliner-actions";
 import { projectedSourceLine } from "./detail-pi-preview";
 import { listLiveClients } from "./client-target";
 import { visibleBacklinkSources, type DetailBacklinkState } from "./detail-controller";
 import { projectDetailRead } from "./detail-embeds";
 import { openDetailPane } from "./pane-control";
-import { resolvePaths } from "./paths";
+import { resolveClientPaths } from "./paths";
 import { ALL_DETAILS_LOCKED_ERROR } from "./navigation-routes";
 import { openDestinationTimeoutFromEnvironment } from "./open-destination-chooser";
 import {
@@ -60,12 +60,12 @@ function parseLaunch(): BacklinkPeekLaunch {
 }
 
 const launch = parseLaunch();
-const paths = resolvePaths();
+const paths = resolveClientPaths();
 const destinationTimeoutMs = openDestinationTimeoutFromEnvironment(
   process.env.OUTLINER_OPEN_DESTINATION_TIMEOUT_MS,
 );
 const actionKeymap = OutlinerActionKeymap.load();
-const client = new OutlinerClient(paths.socket);
+const client = createOutlinerClient(paths);
 const collection = await client.request<BacklinkCollection>({
   action: "references.backlinks",
   query: { targetBlockId: launch.targetBlockId, limit: 50 },

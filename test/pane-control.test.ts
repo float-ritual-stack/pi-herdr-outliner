@@ -232,14 +232,20 @@ test("opens a property inspector from the moved pane's live identity", () => {
   const originalHerdrEnv = process.env.HERDR_ENV;
   const originalPaneId = process.env.HERDR_PANE_ID;
   const originalStateDir = process.env.OUTLINER_STATE_DIR;
+  const originalConfigPath = process.env.OUTLINER_CONFIG_PATH;
   const originalSummaryProperties = process.env.OUTLINER_PROPERTY_SUMMARY_KEYS;
   const originalDestinationTimeout = process.env.OUTLINER_OPEN_DESTINATION_TIMEOUT_MS;
+  const originalRemote = process.env.OUTLINER_REMOTE;
+  const originalSocketPath = process.env.OUTLINER_SOCKET_PATH;
   try {
     process.env.HERDR_ENV = "1";
     process.env.HERDR_PANE_ID = "w1:p2";
     process.env.OUTLINER_STATE_DIR = "/tmp/outliner-state";
+    delete process.env.OUTLINER_CONFIG_PATH;
     process.env.OUTLINER_PROPERTY_SUMMARY_KEYS = "work-stage,status";
     process.env.OUTLINER_OPEN_DESTINATION_TIMEOUT_MS = "9000";
+    process.env.OUTLINER_REMOTE = "1";
+    process.env.OUTLINER_SOCKET_PATH = "/tmp/forwarded-outliner.sock";
     writeFileSync(
       herdr,
       `#!/usr/bin/env bun
@@ -295,6 +301,10 @@ if (args[0] === "pane" && args[1] === "current") {
       "--env",
       "OUTLINER_STATE_DIR=/tmp/outliner-state",
       "--env",
+      "OUTLINER_REMOTE=1",
+      "--env",
+      "OUTLINER_SOCKET_PATH=/tmp/forwarded-outliner.sock",
+      "--env",
       "OUTLINER_PROPERTY_SUMMARY_KEYS=work-stage,status",
       "--env",
       "OUTLINER_OPEN_DESTINATION_TIMEOUT_MS=9000",
@@ -334,6 +344,12 @@ if (args[0] === "pane" && args[1] === "current") {
     else process.env.HERDR_PANE_ID = originalPaneId;
     if (originalStateDir === undefined) delete process.env.OUTLINER_STATE_DIR;
     else process.env.OUTLINER_STATE_DIR = originalStateDir;
+    if (originalRemote === undefined) delete process.env.OUTLINER_REMOTE;
+    else process.env.OUTLINER_REMOTE = originalRemote;
+    if (originalSocketPath === undefined) delete process.env.OUTLINER_SOCKET_PATH;
+    else process.env.OUTLINER_SOCKET_PATH = originalSocketPath;
+    if (originalConfigPath === undefined) delete process.env.OUTLINER_CONFIG_PATH;
+    else process.env.OUTLINER_CONFIG_PATH = originalConfigPath;
     if (originalSummaryProperties === undefined) {
       delete process.env.OUTLINER_PROPERTY_SUMMARY_KEYS;
     } else {
@@ -371,6 +387,7 @@ if (args[0] === "pane" && args[1] === "current") {
     chmodSync(herdr, 0o755);
 
     expect(currentPaneIdentity(herdr)).toEqual({
+      hostname: hostname(),
       paneId: "w1:p2",
       terminalId: "term-2",
       workspaceId: "w1",
@@ -381,6 +398,7 @@ if (args[0] === "pane" && args[1] === "current") {
     )).toEqual([["pane", "current", "--current"]]);
 
     expect(currentPaneRuntime(herdr)).toEqual({
+      hostname: hostname(),
       paneId: "w1:p2",
       terminalId: "term-2",
       workspaceId: "w1",
@@ -480,11 +498,15 @@ test("opens transient panes through manifest-owned Herdr popup placement", () =>
   const originalPaneId = process.env.HERDR_PANE_ID;
   const originalStateDir = process.env.OUTLINER_STATE_DIR;
   const originalDestinationTimeout = process.env.OUTLINER_OPEN_DESTINATION_TIMEOUT_MS;
+  const originalRemote = process.env.OUTLINER_REMOTE;
+  const originalSocketPath = process.env.OUTLINER_SOCKET_PATH;
   try {
     process.env.HERDR_ENV = "1";
     process.env.HERDR_PANE_ID = "w1:p2";
     process.env.OUTLINER_STATE_DIR = "/tmp/outliner-state";
     process.env.OUTLINER_OPEN_DESTINATION_TIMEOUT_MS = "9000";
+    process.env.OUTLINER_REMOTE = "1";
+    process.env.OUTLINER_SOCKET_PATH = "/tmp/forwarded-outliner.sock";
     writeFileSync(
       herdr,
       `#!/usr/bin/env bun
@@ -512,6 +534,8 @@ if (args[0] === "plugin" && args[1] === "pane" && args[2] === "open") {
     expect(openCall).toContain("capture");
     expect(openCall).toContain("OUTLINER_WORKSPACE_ROOT=/workspace");
     expect(openCall).toContain("OUTLINER_CAPTURE_FROM_BLOCK_ID=origin");
+    expect(openCall).toContain("OUTLINER_REMOTE=1");
+    expect(openCall).toContain("OUTLINER_SOCKET_PATH=/tmp/forwarded-outliner.sock");
     expect(openCall.find((argument) => argument.startsWith("OUTLINER_CAPTURE_REQUEST_ID=")))
       .toMatch(/^OUTLINER_CAPTURE_REQUEST_ID=[0-9a-f-]{36}$/);
     expect(openCall).toContain("--focus");
@@ -542,6 +566,8 @@ if (args[0] === "plugin" && args[1] === "pane" && args[2] === "open") {
     expect(backlinkOpen).toContain("OUTLINER_BACKLINK_SORT_FIELD=created");
     expect(backlinkOpen).toContain("OUTLINER_BACKLINK_SORT_DIRECTION=asc");
     expect(backlinkOpen).toContain("OUTLINER_OPEN_DESTINATION_TIMEOUT_MS=9000");
+    expect(backlinkOpen).toContain("OUTLINER_REMOTE=1");
+    expect(backlinkOpen).toContain("OUTLINER_SOCKET_PATH=/tmp/forwarded-outliner.sock");
     expect(backlinkOpen).toContain("--focus");
     expect(backlinkOpen).not.toContain("--placement");
     expect(backlinkOpen).not.toContain("--cwd");
@@ -566,6 +592,8 @@ if (args[0] === "plugin" && args[1] === "pane" && args[2] === "open") {
     expect(navigatorOpen).toContain("OUTLINER_NAVIGATOR_VIEW_ID=next-view");
     expect(navigatorOpen).toContain("OUTLINER_NAVIGATOR_ADAPTER=bookmark");
     expect(navigatorOpen).toContain("OUTLINER_OPEN_DESTINATION_TIMEOUT_MS=9000");
+    expect(navigatorOpen).toContain("OUTLINER_REMOTE=1");
+    expect(navigatorOpen).toContain("OUTLINER_SOCKET_PATH=/tmp/forwarded-outliner.sock");
     expect(navigatorOpen).toContain("--focus");
     expect(navigatorOpen).not.toContain("--placement");
     expect(navigatorOpen).not.toContain("--cwd");
@@ -576,6 +604,10 @@ if (args[0] === "plugin" && args[1] === "pane" && args[2] === "open") {
     else process.env.HERDR_PANE_ID = originalPaneId;
     if (originalStateDir === undefined) delete process.env.OUTLINER_STATE_DIR;
     else process.env.OUTLINER_STATE_DIR = originalStateDir;
+    if (originalRemote === undefined) delete process.env.OUTLINER_REMOTE;
+    else process.env.OUTLINER_REMOTE = originalRemote;
+    if (originalSocketPath === undefined) delete process.env.OUTLINER_SOCKET_PATH;
+    else process.env.OUTLINER_SOCKET_PATH = originalSocketPath;
     if (originalDestinationTimeout === undefined) {
       delete process.env.OUTLINER_OPEN_DESTINATION_TIMEOUT_MS;
     } else {

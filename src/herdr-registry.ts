@@ -402,6 +402,7 @@ function agentDetectionPatch(data: Record<string, unknown>): Record<string, unkn
 export class HerdrRuntimeRegistry {
   phase: HerdrRegistryPhase = "empty";
   generation = 0;
+  revision = 0;
   version: string | null = null;
   protocol: number | null = null;
   workspaces: ReadonlyMap<string, HerdrWorkspace> = new Map();
@@ -437,12 +438,15 @@ export class HerdrRuntimeRegistry {
     this.protocol = snapshot.protocol;
     this.commit(state);
     this.generation += 1;
+    this.revision += 1;
     this.phase = "ready";
     if (state.focusedPaneId) this.recordFocusedPane(state.focusedPaneId);
   }
 
   markStale(): void {
+    if (this.phase === "stale") return;
     this.phase = "stale";
+    this.revision += 1;
   }
 
   paneIdForTerminal(terminalId: string): string | undefined {
@@ -471,6 +475,7 @@ export class HerdrRuntimeRegistry {
       this.reduce(state, event, data);
       validateState(state);
       this.commit(state);
+      this.revision += 1;
       if (event === "pane_focused") this.recordFocusedPane(stringField(data, "pane_id"));
       const topologyChanged =
         panesBefore.size !== state.panes.size || [...panesBefore].some((paneId) => !state.panes.has(paneId));

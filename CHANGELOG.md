@@ -14,16 +14,19 @@ This file records notable user-facing changes. The project remains active dogfoo
 - Tree **Show authored links** branches for Outlinks and Resources. Passive discovery is read-only; explicit activation follows or interns unresolved targets.
 - A guided Herdr plugin installer, portable runtime discovery, external editor handoff, bookmarks, attention marks, and typed outline workflows.
 - An opt-in real Herdr keyboard E2E runner with isolated projects and retained failure evidence. Its Resource-authoring scenario checks passive discovery, Detail content, and repeat activation identity.
+- Remote Tree, Detail, popup, CLI, and Pi clients over an SSH-forwarded Unix socket, with persistent client configuration and host-scoped pane routing.
 
 ### Changed
 
-- The JSON-lines RPC protocol is version 53, adding read-only filesystem Resource lookup.
+- The JSON-lines RPC protocol is version 54, adding client-owned remote runtime topology updates.
 - Fresh databases use workspace seed version 4. The Documentation hub now includes a Resource reference section and an authored-links example with block, page, local-file, web, SSH-application, and Jira references.
 - Detail navigation uses explicit destination routing and preserves locked panes for block targets.
 - Resource Details expose negotiated presentation, provenance, capability, revision, and retention state without creating wrapper blocks.
 
 ### Fixed
 
+- Rapid Tree navigation stays local while browsing-context publication coalesces to the newest pending Detail target; explicit opens wait for that preview stream to settle.
+- Remote client routing scopes pane identities to their originating host, withdraws stale topology until Herdr resynchronizes, and uses remote-aware service probe deadlines.
 - Comment composition keeps the cursor visible after three rows and uses matching wrap widths for scrolling and rendering.
 - Filesystem Resources now support read, edit, external editor, refresh, and source-backed comments through one canonical Resource identity.
 - Cached web selections map to the retained representation before annotation creation.

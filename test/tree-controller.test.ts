@@ -1112,6 +1112,213 @@ describe("createTreeController", () => {
     expect(fake.calls.at(-1)).toEqual({ action: "browsing-context.publish", sourceClientId: "tree-test", contextId: "tree-test-context", target: { kind: "block", blockId: "first" } });
   });
 
+  test("clears a stale unavailable Detail status after preview routing recovers", async () => {
+    const first = block("first");
+    const second = block("second", { position: 1 });
+    let publicationCount = 0;
+    const fake = harness((input) => {
+      if (input.action === "workspace.snapshot") return snapshot([first, second], first);
+      if (input.action !== "browsing-context.publish") return undefined;
+      publicationCount += 1;
+      return {
+        contextId: input.contextId,
+        target: { selected: null, ancestors: [], children: [] },
+        ...(publicationCount === 1
+          ? { unavailable: "No Detail is available in this tab · open another Detail" }
+          : {}),
+      };
+    });
+    const controller = createTreeController(fake.effects);
+
+    await controller.initialize();
+    expect(controller.view().status).toBe(
+      "No Detail is available in this tab · open another Detail",
+    );
+
+    await controller.handleKeypress("", { name: "down" }, "pass");
+    await Bun.sleep(0);
+    expect(controller.view().status).toBe("");
+  });
+
+  test("keeps rapid movement local and publishes only the newest pending target", async () => {
+    const first = block("first");
+    const second = block("second", { position: 1 });
+    const third = block("third", { position: 2 });
+    const fourth = block("fourth", { position: 3 });
+    const delayedSecond = Promise.withResolvers<{
+      contextId: string;
+      target: { kind: "block"; blockId: string };
+    }>();
+    let delaySecond = false;
+    const fake = harness((input) => {
+      if (input.action === "workspace.snapshot") {
+        return snapshot([first, second, third, fourth], first);
+      }
+      if (input.action !== "browsing-context.publish") return undefined;
+      const blockId = publishedBlockId(input);
+      if (delaySecond && blockId === second.id) return delayedSecond.promise;
+      return {
+        contextId: input.contextId,
+        target: input.target,
+      };
+    });
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+    delaySecond = true;
+
+    await controller.handleKeypress("", { name: "down" }, "pass");
+    await controller.handleKeypress("", { name: "down" }, "pass");
+    await controller.handleKeypress("", { name: "down" }, "pass");
+
+    expect(selectedBlockRow(controller).canonicalId).toBe(fourth.id);
+    expect(
+      fake.calls
+        .filter((call) => call.action === "browsing-context.publish")
+        .map((call) => publishedBlockId(call)),
+    ).toEqual([first.id, second.id]);
+
+    delayedSecond.resolve({
+      contextId: "tree-test-context",
+      target: { kind: "block", blockId: second.id },
+    });
+    await Bun.sleep(0);
+
+    expect(
+      fake.calls
+        .filter((call) => call.action === "browsing-context.publish")
+        .map((call) => publishedBlockId(call)),
+    ).toEqual([first.id, second.id, fourth.id]);
+    expect(controller.view().workspaceContextBlockId).toBe(fourth.id);
+  });
+
+  test("publishes the selected preview before explicit reference navigation", async () => {
+    const first = block("first");
+    const intermediate = block("intermediate", { position: 1 });
+    const source = block("source01", {
+      position: 2,
+      text: "Source points to ((target01))",
+      displayText: "Source points to ((target01))",
+    });
+    const target = block("target01", {
+      position: 3,
+      text: "Target",
+      displayText: "Target",
+    });
+    const delayedIntermediate = Promise.withResolvers<{
+      contextId: string;
+      target: { kind: "block"; blockId: string };
+    }>();
+    let delayIntermediate = false;
+    const fake = harness((input) => {
+      if (input.action === "workspace.snapshot") {
+        return snapshot([first, intermediate, source, target], first);
+      }
+      if (input.action === "browsing-context.publish") {
+        const blockId = publishedBlockId(input);
+        if (delayIntermediate && blockId === intermediate.id) {
+          return delayedIntermediate.promise;
+        }
+        return { contextId: input.contextId, target: input.target };
+      }
+      if (input.action === "get") return input.blockId === target.id ? target : source;
+      return undefined;
+    });
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+    delayIntermediate = true;
+
+    await controller.handleKeypress("", { name: "down" }, "pass");
+    await controller.handleKeypress("", { name: "down" }, "pass");
+    const navigation = controller.handleAction("tree.reference.open");
+    await Bun.sleep(0);
+
+    expect(fake.calls.some((call) => call.action === "navigation.dispatch")).toBe(false);
+    delayedIntermediate.resolve({
+      contextId: "tree-test-context",
+      target: { kind: "block", blockId: intermediate.id },
+    });
+    await navigation;
+
+    expect(
+      fake.calls
+        .filter((call) =>
+          call.action === "browsing-context.publish" || call.action === "navigation.dispatch"
+        )
+        .map((call) =>
+          call.action === "browsing-context.publish"
+            ? `preview:${publishedBlockId(call)}`
+            : `open:${call.target.kind === "block" ? call.target.blockId : ""}`
+        ),
+    ).toEqual([
+      `preview:${first.id}`,
+      `preview:${intermediate.id}`,
+      `preview:${source.id}`,
+      `open:${target.id}`,
+    ]);
+  });
+
+  test("reports a queued browsing publication failure without blocking movement", async () => {
+    const first = block("first");
+    const second = block("second", { position: 1 });
+    let failPublication = false;
+    const fake = harness((input) => {
+      if (input.action === "workspace.snapshot") return snapshot([first, second], first);
+      if (input.action === "browsing-context.publish" && failPublication) {
+        throw new Error("Preview publication failed");
+      }
+      return undefined;
+    });
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+    failPublication = true;
+
+    await controller.handleKeypress("", { name: "down" }, "pass");
+    expect(selectedBlockRow(controller).canonicalId).toBe(second.id);
+    await Bun.sleep(0);
+
+    expect(controller.view().status).toBe("Preview publication failed");
+
+    failPublication = false;
+    await controller.handleKeypress("", { name: "up" }, "pass");
+    await Bun.sleep(0);
+
+    expect(controller.view().workspaceContextBlockId).toBe(first.id);
+    expect(controller.view().status).toBe("");
+  });
+
+  test("clears a restarted publication pump error after a later success", async () => {
+    const first = block("first");
+    const second = block("second", { position: 1 });
+    const third = block("third", { position: 2 });
+    const fourth = block("fourth", { position: 3 });
+    const delayedSecond = Promise.withResolvers<never>();
+    const delayedThird = Promise.withResolvers<never>();
+    const fake = harness((input) => {
+      if (input.action === "workspace.snapshot") {
+        return snapshot([first, second, third, fourth], first);
+      }
+      if (input.action !== "browsing-context.publish") return undefined;
+      if (publishedBlockId(input) === second.id) return delayedSecond.promise;
+      if (publishedBlockId(input) === third.id) return delayedThird.promise;
+      return undefined;
+    });
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+
+    await controller.handleKeypress("", { name: "down" }, "pass");
+    await controller.handleKeypress("", { name: "down" }, "pass");
+    delayedSecond.reject(new Error("Initial publication failed"));
+    await Bun.sleep(0);
+    delayedThird.reject(new Error("Restarted publication failed"));
+    await Bun.sleep(0);
+    expect(controller.view().status).toBe("Restarted publication failed");
+
+    await controller.handleKeypress("", { name: "down" }, "pass");
+    await Bun.sleep(0);
+    expect(controller.view().workspaceContextBlockId).toBe(fourth.id);
+    expect(controller.view().status).toBe("");
+  });
+
   test("receives workspace context publication without moving the local cursor", async () => {
     const first = block("first");
     const second = block("second", { position: 1 });

@@ -1,6 +1,10 @@
 import { emitKeypressEvents } from "node:readline";
 import { setTimeout as sleep } from "node:timers/promises";
-import { OutlinerClient, type OutlinerWatcher } from "./client";
+import { createOutlinerClient, type OutlinerWatcher } from "./client";
+import {
+  startClientRuntimeSync,
+  type ClientRuntimeSync,
+} from "./client-runtime-sync";
 import { OutlinerActionKeymap } from "./outliner-actions";
 import {
   createDetailController,
@@ -31,7 +35,7 @@ import {
   openDetailPane,
   openVirtualBranchNavigatorPopup,
 } from "./pane-control";
-import { resolvePaths } from "./paths";
+import { resolveClientPaths } from "./paths";
 import { openDestinationTimeoutFromEnvironment } from "./open-destination-chooser";
 import {
   BRACKETED_PASTE_DISABLE,
@@ -65,8 +69,8 @@ import {
 
 const WEB_RESOURCE_REQUEST_TIMEOUT_MS = 17_000;
 
-const paths = resolvePaths();
-const client = new OutlinerClient(paths.socket);
+const paths = resolveClientPaths();
+const client = createOutlinerClient(paths);
 const clientId = crypto.randomUUID();
 const browsingContextId = process.env.OUTLINER_BROWSING_CONTEXT_ID?.trim() || clientId;
 const actionKeymap = OutlinerActionKeymap.load();
@@ -86,6 +90,7 @@ const initialTarget = detailTargetFromEnvironment(process.env.OUTLINER_DETAIL_TA
 let stopping = false;
 let externalEditorActive = false;
 let watcher: OutlinerWatcher | null = null;
+let runtimeSync: ClientRuntimeSync | null = null;
 let workQueue = Promise.resolve();
 let pendingPaste: string | null = null;
 
@@ -421,10 +426,13 @@ let inputDecoder = new TerminalInputDecoder((text) => {
 });
 
 async function waitForService(): Promise<void> {
-  const deadline = Date.now() + 5000;
+  const deadline = Date.now() + (paths.mode === "remote" ? 30_000 : 5_000);
   while (Date.now() < deadline) {
     try {
-      const service = await client.request<OutlinerServiceStatus>({ action: "ping" }, 300);
+      const service = await client.request<OutlinerServiceStatus>(
+        { action: "ping" },
+        paths.mode === "remote" ? 3_000 : 300,
+      );
       if (service.protocolVersion === OUTLINER_PROTOCOL_VERSION) return;
     } catch {
       // Retry until the startup deadline.
@@ -441,6 +449,15 @@ function startWatcher(): void {
   } catch (error) {
     console.error(errorMessage(error));
   }
+  runtimeSync = paths.mode === "remote"
+    ? startClientRuntimeSync({
+      client,
+      clientId,
+      initialRuntime: runtime,
+      herdrSocketPath: process.env.HERDR_SOCKET_PATH,
+      onError: (error) => enqueueWork(() => controller.onServiceError(error)),
+    })
+    : null;
   watcher = client.watch({
     client: {
       clientId,
@@ -450,11 +467,15 @@ function startWatcher(): void {
       runtime,
       resourcePresentation: TUI_RESOURCE_PRESENTATION_CONTEXT,
     },
-    onConnect: () => {
+    onConnect: async () => {
+      await runtimeSync?.synchronize();
       firstWatcherConnection.resolve();
       if (runtimeInitialized) enqueueWork(() => controller.onServiceConnect(viewport()));
     },
-    onDisconnect: () => enqueueWork(() => controller.onServiceDisconnect()),
+    onDisconnect: () => {
+      runtimeSync?.suspend();
+      enqueueWork(() => controller.onServiceDisconnect());
+    },
     onError: (error) => {
       if (!runtimeInitialized) firstWatcherConnection.reject(error);
       else enqueueWork(() => controller.onServiceError(error));
@@ -467,6 +488,7 @@ function stop(): void {
   if (stopping) return;
   stopping = true;
   watcher?.stop();
+  void runtimeSync?.stop();
   if (process.stdin.isTTY) process.stdin.setRawMode(false);
   process.stdout.write(`${BRACKETED_PASTE_DISABLE}\x1b[?25h\x1b[?1049l`);
   process.exit(0);

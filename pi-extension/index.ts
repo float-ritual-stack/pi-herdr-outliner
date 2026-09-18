@@ -1,4 +1,5 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { hostname } from "node:os";
 import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
@@ -29,7 +30,7 @@ import {
   selectActiveDelivery,
   type DeliveryIdentity,
 } from "../src/delivery-lifecycle";
-import { OutlinerClient } from "../src/client";
+import { createOutlinerClient } from "../src/client";
 import { HerdrRuntimeRegistry } from "../src/herdr-registry";
 import { HerdrRegistryRunner } from "../src/herdr-runtime";
 import {
@@ -39,7 +40,7 @@ import {
   type PullRequestSnapshot,
 } from "./delivery-lifecycle";
 import { inspectWorkEnvironment, type ExtensionExec } from "./work-environment";
-import { resolvePaths } from "../src/paths";
+import { resolveClientPaths } from "../src/paths"
 import { currentPaneIdentity } from "../src/pane-control";
 import { getProperty, parsePropertyRecords } from "../src/properties";
 import { blockDisplayTitle } from "../src/references";
@@ -101,8 +102,8 @@ import {
 
 const execFileAsync = promisify(execFile);
 const extensionRoot = dirname(dirname(fileURLToPath(import.meta.url)));
-const paths = resolvePaths();
-const client = new OutlinerClient(paths.socket);
+const paths = resolveClientPaths();
+const client = createOutlinerClient(paths);
 let headlessServer: ChildProcess | null = null;
 
 export type OutlinerHostActorId = "omp" | "pi";
@@ -902,17 +903,18 @@ function assertCompatibleProtocol(service: OutlinerServiceStatus): void {
   }
 }
 
-async function pingService(timeoutMs: number): Promise<void> {
+async function pingService(timeoutMs?: number): Promise<void> {
   const service = await client.request<OutlinerServiceStatus>({ action: "ping" }, timeoutMs);
   assertCompatibleProtocol(service);
 }
 
-async function waitForService(timeoutMs = 5000): Promise<void> {
+
+async function waitForService(timeoutMs = paths.mode === "remote" ? 60_000 : 5_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   let lastError: unknown;
   while (Date.now() < deadline) {
     try {
-      await pingService(400);
+      await pingService(paths.mode === "remote" ? undefined : 400);
       return;
     } catch (error) {
       lastError = error;
@@ -945,11 +947,17 @@ async function runWorkflowOrchestrator(
 
 async function ensureService(focus: boolean): Promise<void> {
   const service = await client
-    .request<OutlinerServiceStatus>({ action: "ping" }, 300)
+    .request<OutlinerServiceStatus>({ action: "ping" }, paths.mode === "remote" ? undefined : 300)
     .catch(() => null);
   if (service) {
     assertCompatibleProtocol(service);
     if (!focus || process.env.HERDR_ENV !== "1") return;
+  }
+
+  if (!service && paths.mode === "remote") {
+    throw new Error(
+      `Remote Outliner service is unavailable at ${paths.socket}; start the SSH tunnel and retry`,
+    );
   }
 
   if (process.env.HERDR_ENV === "1") {
@@ -1063,10 +1071,13 @@ function requireRoadmapTask(block: Block): string {
 export function selectRecentFocusedOutlinerClient(
   clients: readonly OutlinerClientRegistration[],
   recentPaneIds: readonly string[],
+  invokingHostname: string,
 ): OutlinerClientRegistration | undefined {
   const clientsByPaneId = new Map(
     clients.flatMap((registration) =>
-      registration.runtime?.paneId ? [[registration.runtime.paneId, registration] as const] : []
+      registration.runtime?.hostname === invokingHostname && registration.runtime.paneId
+        ? [[registration.runtime.paneId, registration] as const]
+        : []
     ),
   );
   for (const paneId of recentPaneIds) {
@@ -1080,19 +1091,22 @@ export function selectCapturedResponseTree(
   hostRuntime: OutlinerClientRuntime | undefined,
   recentPaneIds: readonly string[],
 ): OutlinerClientRegistration | undefined {
-  if (hostRuntime?.tabId) {
-    const sameTab = trees.filter((tree) => {
+  const invokingHostname = hostRuntime?.hostname;
+  if (!invokingHostname) return undefined;
+  const localTrees = trees.filter((tree) => tree.runtime?.hostname === invokingHostname);
+  if (hostRuntime.tabId) {
+    const sameTab = localTrees.filter((tree) => {
       const runtime = tree.runtime;
       if (!runtime || runtime.tabId !== hostRuntime.tabId) return false;
       return !hostRuntime.workspaceId || runtime.workspaceId === hostRuntime.workspaceId;
     });
     if (sameTab.length === 1) return sameTab[0];
     if (sameTab.length > 1) {
-      return selectRecentFocusedOutlinerClient(sameTab, recentPaneIds);
+      return selectRecentFocusedOutlinerClient(sameTab, recentPaneIds, invokingHostname);
     }
   }
-  return selectRecentFocusedOutlinerClient(trees, recentPaneIds) ??
-    (trees.length === 1 ? trees[0] : undefined);
+  return selectRecentFocusedOutlinerClient(localTrees, recentPaneIds, invokingHostname) ??
+    (localTrees.length === 1 ? localTrees[0] : undefined);
 }
 
 
@@ -1368,7 +1382,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
     const recentPaneIds = focusRegistry?.recentFocusedPaneIds() ?? [];
     const target = selectCapturedResponseTree(
       trees,
-      currentPaneIdentity(),
+      currentPaneIdentity() ?? { hostname: hostname() },
       recentPaneIds,
     );
     if (!target) return false;
@@ -1742,6 +1756,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
     const focusedClient = selectRecentFocusedOutlinerClient(
       clients,
       focusRegistry.recentFocusedPaneIds(),
+      hostname(),
     );
     if (!focusedClient) return null;
     const directTarget = focusedClient.currentTarget;

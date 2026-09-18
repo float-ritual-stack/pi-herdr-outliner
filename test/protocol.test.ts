@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createConnection, createServer, Socket } from "node:net";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   annotationSourceHash,
@@ -9,7 +9,7 @@ import {
   createTextQuoteAnchor,
 } from "../src/annotations";
 import { decodeAuthoredLinksSnapshot } from "../src/authored-links";
-import { OutlinerClient } from "../src/client";
+import { createOutlinerClient, OutlinerClient } from "../src/client";
 import { HerdrRuntimeRegistry, type HerdrSessionSnapshot } from "../src/herdr-registry";
 import { OutlinerServer } from "../src/server";
 import { OutlinerStore } from "../src/store";
@@ -2514,6 +2514,62 @@ test("watchers reconnect when a subscription is not acknowledged", async () => {
   expect(connectionCount).toBe(2);
 }, 6_000);
 
+test.each(["remote", "custom"] as const)(
+  "%s client timeout allows subscription acknowledgements beyond the local deadline",
+  async (mode) => {
+    const directory = mkdtempSync(join(tmpdir(), "pi-outliner-delayed-subscription-"));
+    const socketPath = join(directory, "outliner.sock");
+    const connected = Promise.withResolvers<void>();
+    const errors: Error[] = [];
+    let connectionCount = 0;
+    const server = createServer((socket) => {
+      connectionCount += 1;
+      let buffer = "";
+      let acknowledgementTimer: ReturnType<typeof setTimeout> | undefined;
+      socket.setEncoding("utf8");
+      socket.once("close", () => clearTimeout(acknowledgementTimer));
+      socket.on("data", (chunk: string) => {
+        buffer += chunk;
+        const newline = buffer.indexOf("\n");
+        if (newline < 0 || acknowledgementTimer) return;
+        const request = JSON.parse(buffer.slice(0, newline)) as OutlinerRequest;
+        acknowledgementTimer = setTimeout(() => {
+          socket.write(`${JSON.stringify({ id: request.id, ok: true, result: { subscribed: true } })}\n`);
+        }, 3_200);
+      });
+    });
+    const listening = Promise.withResolvers<void>();
+    server.once("error", listening.reject);
+    server.listen(socketPath, listening.resolve);
+    await listening.promise;
+
+    const client = mode === "remote"
+      ? createOutlinerClient({ socket: socketPath, mode })
+      : new OutlinerClient(socketPath, 5_000);
+    const watcher = client.watch({
+      client: { clientId: "delayed-tree", role: "tree", contextId: "delayed-tree" },
+      onConnect: connected.resolve,
+      onEvent: () => {},
+      onError: (error) => {
+        errors.push(error);
+        connected.reject(error);
+      },
+    });
+    cleanups.push(async () => {
+      await watcher.stop();
+      const closed = Promise.withResolvers<void>();
+      server.close((error) => (error ? closed.reject(error) : closed.resolve()));
+      await closed.promise;
+      rmSync(directory, { recursive: true, force: true });
+    });
+
+    await connected.promise;
+    expect(connectionCount).toBe(1);
+    expect(errors).toEqual([]);
+  },
+  6_000,
+);
+
 test("stopping a connected watcher does not report a disconnect", async () => {
   const directory = mkdtempSync(join(tmpdir(), "pi-outliner-stop-watcher-"));
   const socketPath = join(directory, "outliner.sock");
@@ -2569,12 +2625,12 @@ test("routes previews and opens to the first spatially unlocked Detail", async (
   await server.start();
 
   const registrations: OutlinerClientRegistration[] = [
-    { clientId: "tree-a", role: "tree", contextId: "context-a", runtime: { workspaceId: "ws", tabId: "tab-1", paneId: "pane-a", paneX: 0, paneY: 0 } },
-    { clientId: "tree-b", role: "tree", contextId: "context-b", runtime: { workspaceId: "ws", tabId: "tab-1", paneId: "pane-b", paneX: 0, paneY: 20 } },
-    { clientId: "detail-c", role: "detail", contextId: "context-a", locked: false, runtime: { workspaceId: "ws", tabId: "tab-1", paneId: "pane-c", paneX: 40, paneY: 0 } },
-    { clientId: "detail-d", role: "detail", contextId: "context-d", locked: false, runtime: { workspaceId: "ws", tabId: "tab-1", paneId: "pane-d", paneX: 80, paneY: 0 } },
-    { clientId: "tree-oi", role: "tree", contextId: "context-oi", runtime: { workspaceId: "ws", tabId: "tab-oi", paneId: "pane-oi-tree", paneX: 0, paneY: 0 } },
-    { clientId: "detail-oi", role: "detail", contextId: "context-oi", locked: false, runtime: { workspaceId: "ws", tabId: "tab-oi", paneId: "pane-oi-detail", paneX: 40, paneY: 0 } },
+    { clientId: "tree-a", role: "tree", contextId: "context-a", runtime: { hostname: hostname(), workspaceId: "ws", tabId: "tab-1", paneId: "pane-a", paneX: 0, paneY: 0 } },
+    { clientId: "tree-b", role: "tree", contextId: "context-b", runtime: { hostname: hostname(), workspaceId: "ws", tabId: "tab-1", paneId: "pane-b", paneX: 0, paneY: 20 } },
+    { clientId: "detail-c", role: "detail", contextId: "context-a", locked: false, runtime: { hostname: hostname(), workspaceId: "ws", tabId: "tab-1", paneId: "pane-c", paneX: 40, paneY: 0 } },
+    { clientId: "detail-d", role: "detail", contextId: "context-d", locked: false, runtime: { hostname: hostname(), workspaceId: "ws", tabId: "tab-1", paneId: "pane-d", paneX: 80, paneY: 0 } },
+    { clientId: "tree-oi", role: "tree", contextId: "context-oi", runtime: { hostname: hostname(), workspaceId: "ws", tabId: "tab-oi", paneId: "pane-oi-tree", paneX: 0, paneY: 0 } },
+    { clientId: "detail-oi", role: "detail", contextId: "context-oi", locked: false, runtime: { hostname: hostname(), workspaceId: "ws", tabId: "tab-oi", paneId: "pane-oi-detail", paneX: 40, paneY: 0 } },
   ];
   const connected = registrations.map(() => Promise.withResolvers<void>());
   const received = new Map<string, OutlinerEvent[]>();
@@ -2886,6 +2942,7 @@ test("reconciles long-lived clients against live Herdr pane topology", async () 
     action: "clients.list",
   });
   expect(initialClients.find(({ clientId }) => clientId === "tree-live")?.runtime).toEqual({
+    hostname: hostname(),
     paneId: "tree-pane-old",
     terminalId: "term-tree",
     workspaceId: "ws-old",
@@ -2932,6 +2989,7 @@ test("reconciles long-lived clients against live Herdr pane topology", async () 
     action: "clients.list",
   });
   expect(movedClients.find(({ clientId }) => clientId === "tree-live")?.runtime).toEqual({
+    hostname: hostname(),
     paneId: "tree-pane-renamed",
     terminalId: "term-tree",
     workspaceId: "ws-new",
@@ -2956,6 +3014,7 @@ test("reconciles long-lived clients against live Herdr pane topology", async () 
     action: "clients.list",
   });
   expect(reorderedClients.find(({ clientId }) => clientId === "tree-live")?.runtime).toEqual({
+    hostname: hostname(),
     paneId: "tree-pane-final",
     terminalId: "term-tree",
     workspaceId: "ws-new",
@@ -2990,6 +3049,166 @@ test("reconciles long-lived clients against live Herdr pane topology", async () 
     intent: "reveal",
   })).rejects.toThrow();
   expect(connectionCount).toBe(registrations.length);
+});
+
+test("requires known hostnames for same-tab routing without a registry", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-outliner-unknown-host-"));
+  const store = new OutlinerStore(join(directory, "outliner.sqlite"));
+  const socket = join(directory, "outliner.sock");
+  const server = new OutlinerServer(store, socket);
+  await server.start();
+  const runtime = { workspaceId: "workspace", tabId: "tab" };
+  const registrations: OutlinerClientRegistration[] = [
+    { clientId: "tree", role: "tree", contextId: "tree-context", runtime },
+    { clientId: "detail", role: "detail", contextId: "detail-context", runtime },
+  ];
+  const connected = registrations.map(() => Promise.withResolvers<void>());
+  const watchers = registrations.map((registration, index) =>
+    new OutlinerClient(socket).watch({
+      client: registration,
+      onConnect: connected[index]!.resolve,
+      onEvent() {},
+    })
+  );
+  cleanups.push(async () => {
+    await Promise.all(watchers.map((watcher) => watcher.stop()));
+    await server.close();
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  await Promise.all(connected.map(({ promise }) => promise));
+  const client = new OutlinerClient(socket);
+
+  for (const treeHostname of [undefined, "laptop.invalid"]) {
+    await client.request({
+      action: "clients.update",
+      clientId: "tree",
+      runtime: { ...runtime, ...(treeHostname ? { hostname: treeHostname } : {}) },
+    });
+    await expect(client.request({
+      action: "navigation.resolve", sourceClientId: "tree", intent: "open",
+    })).rejects.toThrow("No Detail is available in this tab");
+    await expect(client.request({
+      action: "navigation.resolve", sourceClientId: "detail", intent: "reveal",
+    })).rejects.toThrow("No Tree destination is available");
+  }
+
+  await client.request({
+    action: "clients.update",
+    clientId: "detail",
+    runtime: { ...runtime, hostname: "laptop.invalid" },
+  });
+  expect(await client.request<OutlinerNavigationDispatch>({
+    action: "navigation.resolve", sourceClientId: "tree", intent: "open",
+  })).toMatchObject({ targetClientId: "detail", resolution: "unlocked" });
+  expect(await client.request<OutlinerNavigationDispatch>({
+    action: "navigation.resolve", sourceClientId: "detail", intent: "reveal",
+  })).toMatchObject({ targetClientId: "tree", resolution: "same-tab" });
+});
+
+test("preserves client-owned topology and routes only within its host", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-outliner-remote-topology-"));
+  const store = new OutlinerStore(join(directory, "outliner.sqlite"));
+  const socket = join(directory, "outliner.sock");
+  const server = new OutlinerServer(store, socket, new HerdrRuntimeRegistry());
+  await server.start();
+  const registrations: OutlinerClientRegistration[] = [
+    {
+      clientId: "remote-tree",
+      role: "tree",
+      contextId: "remote",
+      runtime: {
+        hostname: "laptop-a.invalid",
+        paneId: "tree-pane",
+        terminalId: "tree-terminal",
+        workspaceId: "workspace",
+        tabId: "tab",
+        paneX: 0,
+        paneY: 0,
+      },
+    },
+    {
+      clientId: "remote-detail",
+      role: "detail",
+      contextId: "remote",
+      locked: false,
+      runtime: {
+        hostname: "laptop-a.invalid",
+        paneId: "detail-pane",
+        terminalId: "detail-terminal",
+        workspaceId: "workspace",
+        tabId: "tab",
+        paneX: 40,
+        paneY: 0,
+      },
+    },
+    {
+      clientId: "other-host-detail",
+      role: "detail",
+      contextId: "remote",
+      locked: false,
+      runtime: {
+        hostname: "laptop-b.invalid",
+        paneId: "other-pane",
+        terminalId: "other-terminal",
+        workspaceId: "workspace",
+        tabId: "tab",
+        paneX: 1,
+        paneY: 0,
+      },
+    },
+  ];
+  const connected = registrations.map(() => Promise.withResolvers<void>());
+  const watchers = registrations.map((registration, index) =>
+    new OutlinerClient(socket).watch({
+      client: registration,
+      onConnect: connected[index]!.resolve,
+      onEvent() {},
+    })
+  );
+  cleanups.push(async () => {
+    await Promise.all(watchers.map((watcher) => watcher.stop()));
+    await server.close();
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  await Promise.all(connected.map(({ promise }) => promise));
+  const client = new OutlinerClient(socket);
+
+  const clients = await client.request<OutlinerClientRegistration[]>({
+    action: "clients.list",
+  });
+  expect(clients.find(({ clientId }) => clientId === "remote-tree")?.runtime)
+    .toEqual(registrations[0]!.runtime);
+  expect(await client.request<OutlinerNavigationDispatch>({
+    action: "navigation.resolve",
+    sourceClientId: "remote-tree",
+    intent: "open",
+  })).toMatchObject({
+    targetClientId: "remote-detail",
+    resolution: "unlocked",
+  });
+  const movedRuntime = {
+    ...registrations[1]!.runtime,
+    tabId: "other-tab",
+    focused: true,
+    visible: true,
+  };
+  await client.request({
+    action: "clients.update",
+    clientId: "remote-detail",
+    runtime: movedRuntime,
+  });
+  const movedClients = await client.request<OutlinerClientRegistration[]>({
+    action: "clients.list",
+  });
+  expect(movedClients.find(({ clientId }) => clientId === "remote-detail")?.runtime)
+    .toEqual(movedRuntime);
+  await expect(client.request({
+    action: "navigation.resolve",
+    sourceClientId: "remote-tree",
+    intent: "open",
+  })).rejects.toThrow("No Detail is available in this tab");
 });
 
 test("targets ephemeral attention, advances atomically, stales on edits, and expires", async () => {

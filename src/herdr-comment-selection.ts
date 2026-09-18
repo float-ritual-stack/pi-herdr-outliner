@@ -1,8 +1,9 @@
 import { createConnection } from "node:net";
+import { hostname } from "node:os";
 import { listLiveClients, sendClientCommand } from "./client-target";
-import { OutlinerClient } from "./client";
+import { createOutlinerClient, OutlinerClient } from "./client";
 import { pluginInvocationWorkspaceRoot } from "./pane-control";
-import { resolvePaths } from "./paths";
+import { resolveClientPaths } from "./paths";
 import type { OutlinerClientRegistration, RenderedSelectionCapture } from "./types";
 
 interface HerdrSelectionContext {
@@ -64,9 +65,13 @@ export function nativeSelectionInvocation(
 export function requireInvokingDetail(
   clients: readonly OutlinerClientRegistration[],
   paneId: string,
+  invokingHostname: string,
 ): OutlinerClientRegistration {
   const matches = clients.filter(
-    (client) => client.role === "detail" && client.runtime?.paneId === paneId,
+    (client) =>
+      client.role === "detail" &&
+      client.runtime?.hostname === invokingHostname &&
+      client.runtime.paneId === paneId,
   );
   if (matches.length === 0) {
     throw new Error("The selected rendered passage is not in a live Outliner Detail");
@@ -176,18 +181,21 @@ export async function dispatchNativeSelectionComment(options: {
   if (env.HERDR_ENV !== "1") throw new Error("Comment on selection requires Herdr");
   const herdrSocketPath = requiredText(env.HERDR_SOCKET_PATH, "Herdr socket");
   const invocation = nativeSelectionInvocation(env);
+  const invokingHostname = hostname();
   const workspaceRoot = pluginInvocationWorkspaceRoot(env);
-  const paths = resolvePaths({ ...env, OUTLINER_WORKSPACE_ROOT: workspaceRoot });
-  const client = options.client ?? new OutlinerClient(paths.socket);
+  const paths = resolveClientPaths({ ...env, OUTLINER_WORKSPACE_ROOT: workspaceRoot });
+  const client = options.client ?? createOutlinerClient(paths);
   const detail = requireInvokingDetail(
     await listLiveClients(client, "detail"),
     invocation.paneId,
+    invokingHostname,
   );
   const readPane = options.readPane ?? readHerdrPaneSnapshot;
   const before = await readPane(herdrSocketPath, invocation.paneId);
   const confirmedDetail = requireInvokingDetail(
     await listLiveClients(client, "detail"),
     invocation.paneId,
+    invokingHostname,
   );
   const after = await readPane(herdrSocketPath, invocation.paneId);
   if (

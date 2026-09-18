@@ -892,6 +892,7 @@ export type OutlinerNavigationIntent = "preview" | "open" | "reveal";
 
 export type OutlinerNavigationTarget = BlockTarget | ResourceTarget;
 export interface OutlinerClientRuntime {
+  hostname?: string;
   paneId?: string;
   terminalId?: string;
   workspaceId?: string;
@@ -1123,7 +1124,7 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 53;
+export const OUTLINER_PROTOCOL_VERSION = 54;
 
 
 export interface OutlinerServiceStatus {
@@ -1156,6 +1157,7 @@ export type OutlinerRequest =
       clientId: string;
       locked?: boolean;
       currentTarget?: OutlinerNavigationTarget | null;
+      runtime?: OutlinerClientRuntime | null;
     }
   | { id: string; action: "resource-sources.create"; input: CreateResourceSourceInput }
   | { id: string; action: "resource-sources.list" }

@@ -17,7 +17,11 @@ import {
   type OverlayHandle,
   type TuiInputListener,
 } from "@earendil-works/pi-tui";
-import { OutlinerClient, type OutlinerWatcher } from "./client";
+import { createOutlinerClient, type OutlinerWatcher } from "./client";
+import {
+  startClientRuntimeSync,
+  type ClientRuntimeSync,
+} from "./client-runtime-sync";
 import { BUFFER_COMPOSER_HEIGHT, BufferComposer, bufferComposerEditorBody } from "./buffer-composer";
 import {
   actionMenuItemText,
@@ -85,7 +89,7 @@ import {
 import { openExternalUrl } from "./open-external";
 import { readHerdrPaneSnapshot } from "./herdr-comment-selection";
 import { TUI_RESOURCE_PRESENTATION_CONTEXT } from "./resource-presentation";
-import { resolvePaths } from "./paths";
+import { resolveClientPaths } from "./paths";
 import { openDestinationTimeoutFromEnvironment } from "./open-destination-chooser";
 import {
   isTreeMouseSequence,
@@ -168,8 +172,8 @@ const destinationTimeoutMs = openDestinationTimeoutFromEnvironment(
 );
 const WEB_RESOURCE_REQUEST_TIMEOUT_MS = 17_000;
 
-const paths = resolvePaths();
-const client = new OutlinerClient(paths.socket);
+const paths = resolveClientPaths();
+const client = createOutlinerClient(paths);
 const clientId = crypto.randomUUID();
 const browsingContextId = process.env.OUTLINER_BROWSING_CONTEXT_ID?.trim() || clientId;
 const actionKeymap = OutlinerActionKeymap.load();
@@ -292,6 +296,7 @@ const tui = new DetailTuiAltScreen(terminal, false, undefined, {
 let stopping = false;
 let externalEditorActive = false;
 let watcher: OutlinerWatcher | null = null;
+let runtimeSync: ClientRuntimeSync | null = null;
 let workQueue = Promise.resolve();
 const firstWatcherConnection = Promise.withResolvers<void>();
 let runtimeInitialized = false;
@@ -637,10 +642,13 @@ function enqueueWork(task: () => void | Promise<void>): void {
 }
 
 async function waitForService(): Promise<void> {
-  const deadline = Date.now() + 5000;
+  const deadline = Date.now() + (paths.mode === "remote" ? 30_000 : 5_000);
   while (Date.now() < deadline) {
     try {
-      const service = await client.request<OutlinerServiceStatus>({ action: "ping" }, 300);
+      const service = await client.request<OutlinerServiceStatus>(
+        { action: "ping" },
+        paths.mode === "remote" ? 3_000 : 300,
+      );
       if (service.protocolVersion === OUTLINER_PROTOCOL_VERSION) return;
     } catch {
       // Retry until the startup deadline.
@@ -658,6 +666,15 @@ function startWatcher(): void {
     console.error(errorMessage(error));
   }
   detailPaneId = runtime?.paneId;
+  runtimeSync = paths.mode === "remote"
+    ? startClientRuntimeSync({
+      client,
+      clientId,
+      initialRuntime: runtime,
+      herdrSocketPath: process.env.HERDR_SOCKET_PATH,
+      onError: (error) => enqueueWork(() => controller.onServiceError(error)),
+    })
+    : null;
   watcher = client.watch({
     client: {
       clientId,
@@ -667,11 +684,15 @@ function startWatcher(): void {
       runtime,
       resourcePresentation: TUI_RESOURCE_PRESENTATION_CONTEXT,
     },
-    onConnect: () => {
+    onConnect: async () => {
+      await runtimeSync?.synchronize();
       firstWatcherConnection.resolve();
       if (runtimeInitialized) enqueueWork(() => controller.onServiceConnect(viewport()));
     },
-    onDisconnect: () => enqueueWork(() => controller.onServiceDisconnect()),
+    onDisconnect: () => {
+      runtimeSync?.suspend();
+      enqueueWork(() => controller.onServiceDisconnect());
+    },
     onError: (error) => {
       if (!runtimeInitialized) firstWatcherConnection.reject(error);
       else enqueueWork(() => controller.onServiceError(error));
@@ -691,7 +712,8 @@ async function stop(exitCode = 0): Promise<void> {
   }
   stopping = true;
   if (inputFlushTimer) clearTimeout(inputFlushTimer);
-  watcher?.stop();
+  await runtimeSync?.stop();
+  await watcher?.stop();
   process.stdout.off("resize", handleResize);
   try {
     await terminal.drainInput(100, 20);

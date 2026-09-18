@@ -24,6 +24,7 @@ test("snapshot replacement is atomic and validates references and terminal ident
   invalid.panes.push({ pane_id: "p2", terminal_id: "term-1", workspace_id: "w1", tab_id: "t1" });
   expect(() => registry.replaceSnapshot(invalid)).toThrow(HerdrSnapshotError);
   expect(registry.generation).toBe(1);
+  expect(registry.revision).toBe(1);
   expect([...registry.panes.keys()]).toEqual(["p1"]);
   expect(registry.paneIdForTerminal("term-1")).toBe("p1");
 
@@ -31,6 +32,18 @@ test("snapshot replacement is atomic and validates references and terminal ident
   broken.tabs[0] = { ...broken.tabs[0], workspace_id: "missing" };
   expect(() => registry.replaceSnapshot(broken)).toThrow(HerdrSnapshotError);
   expect(registry.paneIdForTerminal("term-1")).toBe("p1");
+});
+
+test("stale transitions invalidate runtime consumers once", () => {
+  const registry = new HerdrRuntimeRegistry();
+  registry.replaceSnapshot(snapshot());
+
+  registry.markStale();
+  expect(registry.phase).toBe("stale");
+  expect(registry.revision).toBe(2);
+
+  registry.markStale();
+  expect(registry.revision).toBe(2);
 });
 
 test("pane moves preserve terminal identity and are idempotent", () => {
@@ -44,10 +57,12 @@ test("pane moves preserve terminal identity and are idempotent", () => {
     closed_workspace_id: "w1", closed_tab_id: "t1",
   });
   expect(registry.applyEvent(moved)).toEqual({ kind: "applied", topologyChanged: true });
+  expect(registry.revision).toBe(2);
   expect(registry.paneIdForTerminal("term-1")).toBe("p9");
   expect(registry.agents.get("term-1")?.pane_id).toBe("p9");
   expect(registry.focusedPaneId).toBe("p9");
   expect(registry.applyEvent(moved)).toEqual({ kind: "applied", topologyChanged: false });
+  expect(registry.revision).toBe(3);
 });
 
 test("focus, layout, and dedicated status events update registry state", () => {

@@ -1,8 +1,9 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { hostname } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { OutlinerClient } from "./client";
+import { createOutlinerClient } from "./client";
 import { listLiveClients, sendClientCommand } from "./client-target";
 import {
   selectExistingDetailClient,
@@ -14,7 +15,7 @@ import {
   type PaneEntrypoint,
   resolveServicePaneId,
 } from "./pane-control";
-import { resolvePaths } from "./paths";
+import { resolveClientPaths } from "./paths";
 import {
   OUTLINER_PROTOCOL_VERSION,
   type OutlinerClientRegistration,
@@ -81,8 +82,15 @@ if (currentPaneId) {
   workspaceRoot = invocationPane?.foreground_cwd ?? invocationPane?.cwd ?? workspaceRoot;
 }
 
-const paths = resolvePaths({ ...process.env, OUTLINER_WORKSPACE_ROOT: workspaceRoot });
+const paths = resolveClientPaths({ ...process.env, OUTLINER_WORKSPACE_ROOT: workspaceRoot });
 mkdirSync(paths.stateDir, { recursive: true });
+
+const localHostname = hostname();
+function localHerdrClients(
+  clients: OutlinerClientRegistration[],
+): OutlinerClientRegistration[] {
+  return clients.filter((client) => client.runtime?.hostname === localHostname);
+}
 
 function rememberPane(entrypoint: PaneEntrypoint, paneId: string): void {
   const statePath = join(paths.stateDir, `${entrypoint}-pane.json`);
@@ -123,8 +131,15 @@ function openPane(
     options.placement,
     "--no-focus",
   ];
-  if (process.env.OUTLINER_STATE_DIR) {
-    args.push("--env", `OUTLINER_STATE_DIR=${process.env.OUTLINER_STATE_DIR}`);
+  for (const name of [
+    "OUTLINER_STATE_DIR",
+    "OUTLINER_CONFIG_PATH",
+    "OUTLINER_REMOTE",
+    "OUTLINER_SOCKET_PATH",
+  ] as const) {
+    if (process.env[name] !== undefined) {
+      args.push("--env", `${name}=${process.env[name]}`);
+    }
   }
   for (const [key, value] of Object.entries(options.env ?? {})) {
     args.push("--env", `${key}=${value}`);
@@ -142,11 +157,15 @@ function openPane(
 }
 
 async function waitForService(): Promise<void> {
-  const client = new OutlinerClient(paths.socket);
-  const deadline = Date.now() + 15_000;
+  const client = createOutlinerClient(paths);
+  const remote = paths.mode === "remote";
+  const deadline = Date.now() + (remote ? 60_000 : 15_000);
   while (Date.now() < deadline) {
     try {
-      const service = await client.request<OutlinerServiceStatus>({ action: "ping" }, 300);
+      const service = await client.request<OutlinerServiceStatus>(
+        { action: "ping" },
+        paths.mode === "remote" ? undefined : 300,
+      );
       if (service.protocolVersion === OUTLINER_PROTOCOL_VERSION) return;
     } catch {
       // Retry until the startup deadline.
@@ -156,9 +175,10 @@ async function waitForService(): Promise<void> {
   throw new Error(`Compatible outliner service did not become ready at ${paths.socket}`);
 }
 
-const servicePane =
-  resolveServicePaneId(paths.stateDir, herdr) ??
-  openPane("service", { placement: "tab" });
+const servicePane = paths.mode === "remote"
+  ? null
+  : resolveServicePaneId(paths.stateDir, herdr) ??
+    openPane("service", { placement: "tab" });
 await waitForService();
 
 function invocationTarget(): {
@@ -176,30 +196,49 @@ function invocationTarget(): {
 async function focusExisting(
   trees?: OutlinerClientRegistration[],
 ): Promise<{
-  servicePane: string;
+  servicePane: string | null;
   focusedClientId: string;
   workspaceRoot: string;
 }> {
   const liveTrees =
-    trees ?? await listLiveClients(new OutlinerClient(paths.socket), "tree");
+    trees ?? localHerdrClients(await listLiveClients(createOutlinerClient(paths), "tree"));
   const selected = selectTreeClientForInvocation(
     liveTrees,
     invocationTarget(),
     requestedClientId,
   );
-  await sendClientCommand(new OutlinerClient(paths.socket), selected.clientId, {
+  await sendClientCommand(createOutlinerClient(paths), selected.clientId, {
     command: "focus",
   });
   return { servicePane, focusedClientId: selected.clientId, workspaceRoot };
 }
 
-function openHere(): {
-  servicePane: string;
+async function waitForClientPane(
+  paneId: string,
+  role: "tree" | "detail",
+): Promise<void> {
+  const client = createOutlinerClient(paths);
+  const deadline = Date.now() + (paths.mode === "remote" ? 60_000 : 5_000);
+  while (Date.now() < deadline) {
+    try {
+      const registration = localHerdrClients(await listLiveClients(client, role))
+        .find((candidate) => candidate.runtime?.paneId === paneId);
+      if (registration) return;
+    } catch {
+      // Retry until the pane has initialized and registered.
+    }
+    await sleep(100);
+  }
+  throw new Error(`Outliner ${role} did not become ready in pane ${paneId}`);
+}
+
+async function openHere(): Promise<{
+  servicePane: string | null;
   outlinerPane: string;
   detailPane: string;
   browsingContextId: string;
   workspaceRoot: string;
-} {
+}> {
   if (!currentPaneId) {
     throw new Error("open-here requires Herdr invocation pane context");
   }
@@ -210,12 +249,18 @@ function openHere(): {
     direction: "right",
     env: { OUTLINER_BROWSING_CONTEXT_ID: browsingContextId },
   });
+  await waitForClientPane(outlinerPane, "tree");
   const detailPane = openPane("detail", {
     placement: "split",
     targetPane: outlinerPane,
     direction: "down",
     env: { OUTLINER_BROWSING_CONTEXT_ID: browsingContextId },
   });
+  execFileSync(herdr, ["plugin", "pane", "focus", detailPane], {
+    stdio: "ignore",
+    timeout: HERDR_SYNC_TIMEOUT_MS,
+  });
+  await waitForClientPane(detailPane, "detail");
   execFileSync(herdr, ["plugin", "pane", "focus", outlinerPane], {
     stdio: "ignore",
     timeout: HERDR_SYNC_TIMEOUT_MS,
@@ -224,18 +269,18 @@ function openHere(): {
 }
 
 async function ensureDetail(): Promise<{
-  servicePane: string;
+  servicePane: string | null;
   treePane: string;
   detailPane: string;
   browsingContextId: string;
   opened: boolean;
   workspaceRoot: string;
 }> {
-  const client = new OutlinerClient(paths.socket);
-  const clients = await listLiveClients(client);
+  const client = createOutlinerClient(paths);
+  const clients = localHerdrClients(await listLiveClients(client));
   const trees = clients.filter((candidate) => candidate.role === "tree");
   if (trees.length === 0 && !requestedClientId) {
-    const opened = openHere();
+    const opened = await openHere();
     return {
       servicePane: opened.servicePane,
       treePane: opened.outlinerPane,
@@ -289,15 +334,17 @@ let result: object;
 if (mode === "service-only") {
   result = { servicePane, workspaceRoot };
 } else if (mode === "open-here") {
-  result = openHere();
+  result = await openHere();
 } else if (mode === "ensure-detail") {
   result = await ensureDetail();
 } else if (mode === "focus-existing") {
   result = await focusExisting();
 } else {
-  const trees = await listLiveClients(new OutlinerClient(paths.socket), "tree");
+  const trees = localHerdrClients(
+    await listLiveClients(createOutlinerClient(paths), "tree"),
+  );
   result = trees.length === 0 && !requestedClientId
-    ? openHere()
+    ? await openHere()
     : await focusExisting(trees);
 }
 process.stdout.write(`${JSON.stringify(result)}\n`);
