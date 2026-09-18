@@ -457,7 +457,8 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
             load: { kind: "loading" },
           };
           recomposeAuthoredRows();
-          continue;
+          effects.invalidate();
+          break;
         }
         authoredLinksPanel = {
           ...authoredLinksPanel,
@@ -901,8 +902,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
 
   function headerSelectionStatus(row: AuthoredLinkHeaderRow): string {
     if (row.state.kind !== "ready") return row.state.message;
-    const group = row.group === "outlinks" ? "Outlinks" : "Resources";
-    const details = [`${row.state.entryCount} authored ${group}`];
+    const details = [`${row.state.entryCount} authored ${row.label}`];
     if (row.state.invalidCount > 0) details.push(`${row.state.invalidCount} invalid`);
     if (row.state.limited) details.push("limited");
     if (row.state.diagnostics[0]) details.push(row.state.diagnostics[0].message);
@@ -1577,9 +1577,13 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     selectedIndex = rowIndex;
     if (row.kind === "authored-link-header") {
       if (authoredLinksPanel.kind !== "open") return;
-      authoredLinksPanel = row.group === "outlinks"
-        ? { ...authoredLinksPanel, outlinksCollapsed: !authoredLinksPanel.outlinksCollapsed }
-        : { ...authoredLinksPanel, resourcesCollapsed: !authoredLinksPanel.resourcesCollapsed };
+      authoredLinksPanel = {
+        ...authoredLinksPanel,
+        collapsedGroups: {
+          ...authoredLinksPanel.collapsedGroups,
+          [row.group]: !authoredLinksPanel.collapsedGroups[row.group],
+        },
+      };
       recomposeAuthoredRows(row.rowId);
       await publishDisplayRowSelection(rows[selectedIndex]);
       effects.invalidate();
@@ -1667,8 +1671,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         kind: "open",
         owner: { rowId: selected.rowId, blockId: selected.canonicalId },
         generation: authoredLinksGeneration,
-        outlinksCollapsed: false,
-        resourcesCollapsed: false,
+        collapsedGroups: { outlinks: false, resources: false },
         load: { kind: "loading" },
       };
       await reload(selected.rowId, { exactRowIdOnly: true });

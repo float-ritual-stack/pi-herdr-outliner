@@ -8,6 +8,7 @@ import {
 import { DEFAULT_OUTLINER_ACTION_KEYMAP } from "../src/outliner-actions";
 import type { TreeView } from "../src/tree-controller";
 import { renderTreeFrame, treeSemanticState } from "../src/tree-renderer";
+import { composeAuthoredLinkRows } from "../src/tree-rows";
 import { truncate } from "../src/terminal";
 import type { VisibleBlock } from "../src/types";
 import type {
@@ -966,6 +967,56 @@ describe("renderTreeFrame", () => {
       rowId: child.rowId,
       disclosureColumn: -1,
     });
+  });
+
+  test("sanitizes generated authored-link labels and titles", () => {
+    const owner = block("owner-render", { text: "Owner", displayText: "Owner" });
+    const ownerRow = physical(owner);
+    const rows = composeAuthoredLinkRows([ownerRow], {
+      kind: "open",
+      owner: { rowId: ownerRow.rowId, blockId: owner.id },
+      generation: 1,
+      collapsedGroups: { outlinks: false, resources: false },
+      load: {
+        kind: "ready",
+        snapshot: {
+          kind: "ready",
+          ownerId: owner.id,
+          ownerTextDigest: "0".repeat(64),
+          outlinks: {
+            entries: [{
+              kind: "outlink",
+              key: "target",
+              label: "Label \x1b[2Jkept",
+              firstSpan: { start: 0, end: 1 },
+              occurrenceCount: 1,
+              referenceKind: "block",
+              resolution: {
+                kind: "ready",
+                target: { kind: "block", blockId: "target-render" },
+                title: "Target \x1b]52;c;SGVsbG8=\x07safe",
+              },
+            }],
+            completeness: { kind: "complete" },
+            invalidCount: 0,
+            diagnostics: [],
+          },
+          resources: {
+            entries: [],
+            completeness: { kind: "complete" },
+            invalidCount: 0,
+            diagnostics: [],
+          },
+        },
+      },
+    });
+
+    const frame = renderTreeFrame(view([owner], { rows }), 100, 9).frame;
+    const visible = stripTerminalSequences(frame);
+
+    expect(visible).toContain("Label kept → Target safe");
+    expect(frame).not.toContain("\x1b[2Jkept");
+    expect(frame).not.toContain("\x1b]52;c;SGVsbG8=\x07");
   });
 });
 

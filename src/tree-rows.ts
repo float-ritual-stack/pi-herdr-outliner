@@ -1,5 +1,6 @@
 import type {
   AuthoredLinkDiagnostic,
+  AuthoredLinkGroup,
   AuthoredLinkGroupName,
   AuthoredLinksSnapshot,
   AuthoredOutlink,
@@ -13,6 +14,27 @@ export interface AuthoredLinksOwnerOccurrence {
   readonly blockId: string;
 }
 
+export interface AuthoredLinkGroupProvider {
+  readonly group: AuthoredLinkGroupName;
+  readonly label: string;
+  select(
+    snapshot: Extract<AuthoredLinksSnapshot, { readonly kind: "ready" }>,
+  ): AuthoredLinkGroup<AuthoredOutlink | AuthoredResourceLink>;
+}
+
+export const AUTHORED_LINK_GROUP_PROVIDERS = [
+  {
+    group: "outlinks",
+    label: "Outlinks",
+    select: (snapshot) => snapshot.outlinks,
+  },
+  {
+    group: "resources",
+    label: "Resources",
+    select: (snapshot) => snapshot.resources,
+  },
+] satisfies readonly AuthoredLinkGroupProvider[];
+
 export type AuthoredLinksPanelLoad =
   | { readonly kind: "loading" }
   | { readonly kind: "ready"; readonly snapshot: AuthoredLinksSnapshot }
@@ -22,8 +44,7 @@ export interface OpenAuthoredLinksPanel {
   readonly kind: "open";
   readonly owner: AuthoredLinksOwnerOccurrence;
   readonly generation: number;
-  readonly outlinksCollapsed: boolean;
-  readonly resourcesCollapsed: boolean;
+  readonly collapsedGroups: Readonly<Record<AuthoredLinkGroupName, boolean>>;
   readonly load: AuthoredLinksPanelLoad;
 }
 
@@ -56,6 +77,7 @@ export interface AuthoredLinkHeaderRow {
   readonly parentRowId: string;
   readonly owner: AuthoredLinksOwnerOccurrence;
   readonly group: AuthoredLinkGroupName;
+  readonly label: string;
   readonly depth: number;
   readonly collapsed: boolean;
   readonly state: AuthoredLinkHeaderState;
@@ -94,7 +116,7 @@ export function authoredLinkRowId(
 
 function headerState(
   panel: OpenAuthoredLinksPanel,
-  group: AuthoredLinkGroupName,
+  provider: AuthoredLinkGroupProvider,
 ): AuthoredLinkHeaderState {
   if (panel.load.kind === "loading") {
     return { kind: "loading", message: "Loading authored links" };
@@ -115,7 +137,7 @@ function headerState(
       message: `Owner text exceeds ${snapshot.maximumUtf16Units} UTF-16 units`,
     };
   }
-  const linkGroup = group === "outlinks" ? snapshot.outlinks : snapshot.resources;
+  const linkGroup = provider.select(snapshot);
   return {
     kind: "ready",
     entryCount: linkGroup.entries.length,
@@ -128,31 +150,39 @@ function headerState(
 function headerRow(
   ownerRow: TreeRow,
   panel: OpenAuthoredLinksPanel,
-  group: AuthoredLinkGroupName,
+  provider: AuthoredLinkGroupProvider,
 ): AuthoredLinkHeaderRow {
-  const collapsed = group === "outlinks"
-    ? panel.outlinksCollapsed
-    : panel.resourcesCollapsed;
   return {
     kind: "authored-link-header",
-    rowId: authoredLinkHeaderRowId(ownerRow.rowId, group),
+    rowId: authoredLinkHeaderRowId(ownerRow.rowId, provider.group),
     parentRowId: ownerRow.rowId,
     owner: panel.owner,
-    group,
+    group: provider.group,
+    label: provider.label,
     depth: ownerRow.depth + 1,
-    collapsed,
-    state: headerState(panel, group),
+    collapsed: panel.collapsedGroups[provider.group],
+    state: headerState(panel, provider),
   };
 }
 
 function groupEntries(
   panel: OpenAuthoredLinksPanel,
-  group: AuthoredLinkGroupName,
+  provider: AuthoredLinkGroupProvider,
 ): readonly (AuthoredOutlink | AuthoredResourceLink)[] {
   if (panel.load.kind !== "ready" || panel.load.snapshot.kind !== "ready") return [];
-  return group === "outlinks"
-    ? panel.load.snapshot.outlinks.entries
-    : panel.load.snapshot.resources.entries;
+  return provider.select(panel.load.snapshot).entries;
+}
+
+function groupVisible(
+  panel: OpenAuthoredLinksPanel,
+  provider: AuthoredLinkGroupProvider,
+): boolean {
+  if (panel.load.kind !== "ready" || panel.load.snapshot.kind !== "ready") return true;
+  const group = provider.select(panel.load.snapshot);
+  return group.entries.length > 0 ||
+    group.invalidCount > 0 ||
+    group.diagnostics.length > 0 ||
+    group.completeness.kind === "limited";
 }
 
 export function composeAuthoredLinkRows(
@@ -175,17 +205,18 @@ export function composeAuthoredLinkRows(
       : projectedRow;
     composed.push(row);
     if (!ownsPanel || row.collapsed) continue;
-    for (const group of ["outlinks", "resources"] as const) {
-      const header = headerRow(row, panel, group);
+    for (const provider of AUTHORED_LINK_GROUP_PROVIDERS) {
+      if (!groupVisible(panel, provider)) continue;
+      const header = headerRow(row, panel, provider);
       composed.push(header);
       if (header.collapsed) continue;
-      for (const link of groupEntries(panel, group)) {
+      for (const link of groupEntries(panel, provider)) {
         composed.push({
           kind: "authored-link",
-          rowId: authoredLinkRowId(row.rowId, group, link.key),
+          rowId: authoredLinkRowId(row.rowId, provider.group, link.key),
           parentRowId: header.rowId,
           owner: panel.owner,
-          group,
+          group: provider.group,
           depth: row.depth + 2,
           link,
         });

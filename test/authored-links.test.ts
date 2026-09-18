@@ -121,6 +121,46 @@ test("preserves unresolved page addresses without registering them during enumer
   });
 });
 
+test("preserves long valid page addresses across the authored-links protocol", () => {
+  withStore((store) => {
+    const address = "a".repeat(250);
+    const owner = store.create(`[[${address}]]`);
+
+    const decoded = decodeAuthoredLinksSnapshot(readAuthoredLinks(store, owner.id));
+
+    if (decoded.kind !== "ready") throw new Error(`Expected ready result, got ${decoded.kind}`);
+    expect(decoded.outlinks.entries[0]?.resolution).toMatchObject({
+      kind: "unregistered-page",
+      address,
+    });
+    const resolution = decoded.outlinks.entries[0]?.resolution;
+    if (resolution?.kind !== "unregistered-page") {
+      throw new Error("Expected an unregistered page");
+    }
+    expect(resolution.reason.length).toBeLessThanOrEqual(240);
+  });
+});
+
+test("reports a stale block fragment as unavailable", () => {
+  withStore((store) => {
+    const target = store.create("Target without the authored fragment");
+    const owner = store.create(`((${target.id}^removed-anchor))`);
+
+    const result = readAuthoredLinks(store, owner.id);
+
+    if (result.kind !== "ready") throw new Error(`Expected ready result, got ${result.kind}`);
+    expect(result.outlinks.entries).toEqual([
+      expect.objectContaining({
+        referenceKind: "block",
+        resolution: {
+          kind: "missing",
+          reason: `Fragment not found: ${target.id}^removed-anchor`,
+        },
+      }),
+    ]);
+  });
+});
+
 test("projects human-authored Resource properties without creating catalog entries", () => {
   withStore((store) => {
     const owner = store.create([

@@ -19,7 +19,7 @@ import {
 } from "./property-summary";
 import { blockDisplayTitle } from "./references";
 import { layoutExpandedBlock } from "./tree-layout";
-import { renderMarkdownLine, truncate } from "./terminal";
+import { renderMarkdownLine, sanitizeDynamicText, truncate } from "./terminal";
 import type { Block, VisibleBlock } from "./types";
 import type { TreeQuickCompletion, TreeView } from "./tree-controller";
 import {
@@ -312,16 +312,20 @@ function renderQuickCompletionRows(
 }
 function authoredHeaderStateText(row: AuthoredLinkHeaderRow): string {
   const { state } = row;
-  if (state.kind === "loading") return state.message;
-  if (state.kind === "error") return `Error: ${state.message}`;
-  if (state.kind === "unavailable") return state.message;
-  const details = [countLabel(state.entryCount, "link")];
-  if (state.invalidCount > 0) details.push(countLabel(state.invalidCount, "invalid reference"));
-  if (state.limited) details.push("results limited");
-  if (state.diagnostics.length > 0) {
-    details.push(state.diagnostics.map((diagnostic) => diagnostic.message).join("; "));
+  let text: string;
+  if (state.kind === "loading") text = state.message;
+  else if (state.kind === "error") text = `Error: ${state.message}`;
+  else if (state.kind === "unavailable") text = state.message;
+  else {
+    const details = [countLabel(state.entryCount, "link")];
+    if (state.invalidCount > 0) details.push(countLabel(state.invalidCount, "invalid reference"));
+    if (state.limited) details.push("results limited");
+    if (state.diagnostics.length > 0) {
+      details.push(state.diagnostics.map((diagnostic) => diagnostic.message).join("; "));
+    }
+    text = details.join(" · ");
   }
-  return details.join(" · ");
+  return sanitizeDynamicText(text);
 }
 
 function renderAuthoredLinkDisplay(row: AuthoredLinkRow, width: number): string {
@@ -347,7 +351,7 @@ function renderAuthoredLinkDisplay(row: AuthoredLinkRow, width: number): string 
       ? `${row.link.label} · Resource not registered · Enter creates${duplicateLabel}`
       : `${row.link.label} · unavailable: ${resolution.reason}${duplicateLabel}`;
   }
-  return truncateToWidth(`${prefix}${content}`, width);
+  return truncateToWidth(`${prefix}${sanitizeDynamicText(content)}`, width);
 }
 
 export function renderTreeFrame(
@@ -480,7 +484,7 @@ export function renderTreeFrame(
         ? [
             truncateToWidth(
               `${"  ".repeat(row.depth)}${row.collapsed ? "▸" : "▾"} ${
-                row.group === "outlinks" ? "Outlinks" : "Resources"
+                row.label
               }  \x1b[2m${authoredHeaderStateText(row)}\x1b[0m`,
               width,
             ),

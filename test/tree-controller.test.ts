@@ -498,6 +498,11 @@ describe("createTreeController", () => {
     const controller = createTreeController(fake.effects);
     await controller.initialize();
     await controller.handleAction("tree.authored-links.toggle");
+    expect(
+      controller.view().rows
+        .filter((row) => row.kind === "authored-link-header")
+        .map((row) => row.group),
+    ).toEqual(["outlinks"]);
     const pageRow = controller.view().rows.find((row) => row.kind === "authored-link");
     if (!pageRow || pageRow.kind !== "authored-link") {
       throw new Error("Expected generated page Outlink");
@@ -581,6 +586,11 @@ describe("createTreeController", () => {
     const controller = createTreeController(fake.effects);
     await controller.initialize();
     await controller.handleAction("tree.authored-links.toggle");
+    expect(
+      controller.view().rows
+        .filter((row) => row.kind === "authored-link-header")
+        .map((row) => row.group),
+    ).toEqual(["resources"]);
     const resourceRow = controller.view().rows.find((row) =>
       row.kind === "authored-link" && row.group === "resources"
     );
@@ -1390,6 +1400,73 @@ describe("createTreeController", () => {
     await controller.handleKeypress("", { name: "escape" }, "pass");
     expect(fake.calls.slice(callsBeforeEvent).map((call) => call.action)).toEqual(["workspace.snapshot"]);
     expect(controller.view().mode).toBe("browse");
+    expect(controller.view().refreshPending).toBe(false);
+  });
+
+  test("waits for a fresh owner snapshot after a deferred content event", async () => {
+    const previousOwner = block("owner-stale", {
+      text: "Owner before",
+      displayText: "Owner before",
+    });
+    const currentOwner = block("owner-stale", {
+      text: "Owner after",
+      displayText: "Owner after",
+      updatedAt: "2026-08-22T00:01:00.000Z",
+    });
+    let snapshotCount = 0;
+    let authoredRequestCount = 0;
+    let contentChanged = false;
+    let snapshotIsCurrent = false;
+    const authoredSnapshot = (owner: VisibleBlock) => ({
+      kind: "ready" as const,
+      ownerId: owner.id,
+      ownerTextDigest: authoredTextDigest(owner.text),
+      outlinks: {
+        entries: [],
+        completeness: { kind: "complete" as const },
+        invalidCount: 0,
+        diagnostics: [],
+      },
+      resources: {
+        entries: [],
+        completeness: { kind: "complete" as const },
+        invalidCount: 0,
+        diagnostics: [],
+      },
+    });
+    const fake = harness((input) => {
+      if (input.action === "workspace.snapshot") {
+        snapshotCount += 1;
+        snapshotIsCurrent = contentChanged && snapshotCount >= 3;
+        const owner = snapshotIsCurrent ? currentOwner : previousOwner;
+        return snapshot([owner], owner);
+      }
+      if (input.action === "blocks.authored-links") {
+        authoredRequestCount += 1;
+        if (!contentChanged || snapshotIsCurrent) {
+          return authoredSnapshot(snapshotIsCurrent ? currentOwner : previousOwner);
+        }
+        return authoredSnapshot(authoredRequestCount === 2 ? currentOwner : previousOwner);
+      }
+      return undefined;
+    });
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+    await controller.handleAction("tree.authored-links.toggle");
+    expect(authoredRequestCount).toBe(1);
+
+    await controller.handleKeypress("e", { name: "e" }, "pass");
+    contentChanged = true;
+    await controller.handleServiceEvent(event("content", previousOwner.id));
+    expect(controller.view().refreshPending).toBe(true);
+
+    await controller.handleServiceEvent(event("resource-catalog"));
+    expect(authoredRequestCount).toBe(2);
+    expect(controller.view().refreshPending).toBe(true);
+
+    await controller.handleKeypress("", { name: "escape" }, "pass");
+    expect(snapshotCount).toBe(3);
+    expect(authoredRequestCount).toBe(3);
     expect(controller.view().refreshPending).toBe(false);
   });
 

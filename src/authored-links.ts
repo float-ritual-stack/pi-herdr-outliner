@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto";
-import { isFragmentId } from "./fragments";
+import { isFragmentId, resolveFragment } from "./fragments";
 import {
   outlinerReferenceOccurrences,
   protectedCodeRanges,
   rangesOverlap,
   type OutlinerReferenceOccurrence,
 } from "./reference-occurrences";
+import { PAGE_ADDRESS_MAX_LENGTH } from "./page-addresses";
 import {
   authoredResourceReferenceKey,
   authoredResourceReferenceOccurrences,
@@ -309,6 +310,23 @@ function resolveOutlink(
         },
       };
     }
+    if (candidate.fragmentId) {
+      const fragment = resolveFragment(block.text, candidate.fragmentId);
+      if (fragment.status !== "resolved") {
+        const reason = fragment.status === "missing"
+          ? `Fragment not found: ${block.id}^${candidate.fragmentId}`
+          : `Fragment is duplicated: ${block.id}^${candidate.fragmentId}`;
+        return {
+          kind: "outlink",
+          key: targetKey(target),
+          referenceKind: "block",
+          label: presentation(candidate.label ?? title),
+          firstSpan: { start: candidate.start, end: candidate.end },
+          occurrenceCount: 1,
+          resolution: { kind: "missing", reason: presentation(reason) },
+        };
+      }
+    }
     return {
       kind: "outlink",
       key: targetKey(target),
@@ -364,7 +382,7 @@ function resolveOutlink(
       ? {
           kind: "unregistered-page",
           address: candidate.address,
-          reason: `Page is not registered: ${candidate.address}`,
+          reason: presentation(`Page is not registered: ${candidate.address}`),
         }
       : {
           kind: "missing",
@@ -699,7 +717,7 @@ function decodeOutlink(value: unknown, index: number): AuthoredOutlink {
       address: string(
         resolutionInput.address,
         `${label} page address`,
-        AUTHORED_LINKS_MAX_PRESENTATION_UNITS,
+        PAGE_ADDRESS_MAX_LENGTH,
       ),
       reason: string(
         resolutionInput.reason,
