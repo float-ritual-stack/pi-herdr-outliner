@@ -6,7 +6,7 @@ import {
 } from "../src/attention";
 import { createAnnotationAnchor } from "../src/annotations";
 import { emptyAttentionState } from "../src/attention";
-import { BufferComposer } from "../src/buffer-composer";
+import { BufferComposer, bufferComposerEditorBody } from "../src/buffer-composer";
 import {
   createDetailController,
   renderedSelectionAnnotationTarget,
@@ -2943,6 +2943,7 @@ describe("detail controller saves and annotations", () => {
       type: "comment.begin",
       sourceRange: { start: 0, end: 1 },
     }, composerViewport);
+    composerViewport.editorBody = bufferComposerEditorBody(composerViewport.width);
     const composer = new BufferComposer(() => ({
       title: "Comment",
       context: "R",
@@ -2968,7 +2969,7 @@ describe("detail controller saves and annotations", () => {
     expect(body()[0]).toContain(CURSOR_MARKER);
 
     await controller.dispatch({ type: "buffer.select-all" }, composerViewport);
-    composerViewport = { width: 20, height: 24 };
+    composerViewport = { width: 20, height: 24, editorBody: bufferComposerEditorBody(20) };
     await controller.dispatch({
       type: "buffer.insert",
       text: `${"A".repeat(15)}${"B".repeat(15)}${"C".repeat(14)}`,
@@ -2977,12 +2978,12 @@ describe("detail controller saves and annotations", () => {
     expect(stripTerminalSequences(body()[1]!)).toContain("B".repeat(15));
     expect(body()[2]).toContain(CURSOR_MARKER);
 
-    composerViewport = { width: 16, height: 24 };
+    composerViewport = { width: 16, height: 24, editorBody: bufferComposerEditorBody(16) };
     await controller.dispatch({ type: "viewport.changed" }, composerViewport);
     expect(body()[2]).toContain(CURSOR_MARKER);
     expect(stripTerminalSequences(body()[2]!)).toContain("C".repeat(11));
 
-    composerViewport = { width: 20, height: 24 };
+    composerViewport = { width: 20, height: 24, editorBody: bufferComposerEditorBody(20) };
     await controller.dispatch({ type: "viewport.changed" }, composerViewport);
     expect(stripTerminalSequences(body()[0]!)).toContain("A".repeat(15));
     expect(body()[2]).toContain(CURSOR_MARKER);

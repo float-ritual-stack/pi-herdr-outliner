@@ -127,6 +127,7 @@ export interface DetailViewport {
   width: number;
   editorWidth?: number;
   height: number;
+  editorBody?: Readonly<{ contentWidth: number; height: number }>;
 }
 
 export interface DetailCompletionItem {
@@ -870,6 +871,7 @@ export function detailVisibleEditorHeight(
   state: Pick<DetailState, "completion">,
   viewport: DetailViewport,
 ): number {
+  if (viewport.editorBody) return viewport.editorBody.height;
   const completionRows = state.completion
     ? 1 + Math.min(6, state.completion.items.length)
     : 0;
@@ -1852,7 +1854,7 @@ export function createDetailController(
       state.buffer.lines,
       state.buffer.row,
       state.buffer.column,
-      viewport.editorWidth ?? viewport.width,
+      viewport.editorBody ?? viewport.editorWidth ?? viewport.width,
       state.buffer.selectionRange,
     );
 

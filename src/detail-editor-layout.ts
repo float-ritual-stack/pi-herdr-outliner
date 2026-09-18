@@ -104,7 +104,7 @@ export function layoutDetailEditor(
   lines: readonly string[],
   logicalCursorRow: number,
   logicalCursorColumn: number,
-  viewportWidth: number,
+  viewportWidth: number | Readonly<{ contentWidth: number }>,
   selection: TextBufferRange | null = null,
 ): DetailEditorLayout {
   const lineNumberWidth = Math.max(
@@ -113,7 +113,9 @@ export function layoutDetailEditor(
   );
   const contentWidth = Math.max(
     1,
-    Math.floor(viewportWidth) - lineNumberWidth - 1,
+    typeof viewportWidth === "number"
+      ? Math.floor(viewportWidth) - lineNumberWidth - 1
+      : Math.floor(viewportWidth.contentWidth),
   );
   const wrapWidth = Math.max(1, contentWidth - 1);
   const cursorLogicalRow = Math.max(

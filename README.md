@@ -694,6 +694,8 @@ revision, captured output, registered Detail/context/host block changes, or the
 exact quote is absent from that bounded pane history. No clipboard is read. Both
 paths lock that exact Detail and open the composer over the existing reader;
 `Ctrl+S` creates the comment and `Esc` cancels without creating anything.
+The composer shows three body rows and scrolls to keep the cursor visible as you
+type or resize the pane.
 
 Every capture constructs one typed `AnnotationTarget`: a representation with
 block, Resource, rendered, or unknown source-snapshot evidence plus one of the

@@ -9,6 +9,13 @@ import { layoutDetailEditor } from "./detail-editor-layout";
 import { sanitizeDynamicText } from "./terminal";
 import type { TextBuffer } from "./text-buffer";
 
+const BODY_HEIGHT = 3;
+export const BUFFER_COMPOSER_HEIGHT = BODY_HEIGHT + 4;
+
+export function bufferComposerEditorBody(width: number): { contentWidth: number; height: number } {
+  return { contentWidth: Math.max(1, Math.floor(width) - 4), height: BODY_HEIGHT };
+}
+
 export interface BufferComposerModel {
   title: string;
   context: string;
@@ -36,7 +43,7 @@ export class BufferComposer implements Component {
 
   render(width: number): string[] {
     const safeWidth = Math.max(1, Math.floor(width));
-    const innerWidth = Math.max(1, safeWidth - 4);
+    const editorBody = bufferComposerEditorBody(safeWidth);
     const model = this.model();
     const title = truncateToWidth(
       `─ ${sanitizeDynamicText(model.title)} `,
@@ -51,10 +58,10 @@ export class BufferComposer implements Component {
       model.buffer.lines,
       model.buffer.row,
       model.buffer.column,
-      innerWidth + 5,
+      editorBody,
     );
     const offset = Math.max(0, Math.floor(model.viewportOffset ?? 0));
-    const body = editor.rows.slice(offset, offset + 3).map((row, index) => {
+    const body = editor.rows.slice(offset, offset + editorBody.height).map((row, index) => {
       let text = row.text;
       if (offset + index === editor.cursorRow && this.focused) {
         const before = sliceByColumn(text, 0, editor.cursorColumn, true);
@@ -65,7 +72,7 @@ export class BufferComposer implements Component {
       }
       return framed(` ${text}`, safeWidth);
     });
-    while (body.length < 3) body.push(framed("", safeWidth));
+    while (body.length < editorBody.height) body.push(framed("", safeWidth));
     if (!model.buffer.text && body.length > 0) {
       body[0] = framed(` \x1b[2m${sanitizeDynamicText(model.placeholder)}\x1b[0m`, safeWidth);
       if (this.focused) body[0] = body[0]!.replace("\x1b[2m", `${CURSOR_MARKER}\x1b[2m`);
