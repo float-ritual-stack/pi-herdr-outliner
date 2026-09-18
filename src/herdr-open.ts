@@ -249,7 +249,6 @@ async function openHere(): Promise<{
     direction: "right",
     env: { OUTLINER_BROWSING_CONTEXT_ID: browsingContextId },
   });
-  await waitForClientPane(outlinerPane, "tree");
   const detailPane = openPane("detail", {
     placement: "split",
     targetPane: outlinerPane,
@@ -260,7 +259,10 @@ async function openHere(): Promise<{
     stdio: "ignore",
     timeout: HERDR_SYNC_TIMEOUT_MS,
   });
-  await waitForClientPane(detailPane, "detail");
+  await Promise.all([
+    waitForClientPane(outlinerPane, "tree"),
+    waitForClientPane(detailPane, "detail"),
+  ]);
   execFileSync(herdr, ["plugin", "pane", "focus", outlinerPane], {
     stdio: "ignore",
     timeout: HERDR_SYNC_TIMEOUT_MS,
