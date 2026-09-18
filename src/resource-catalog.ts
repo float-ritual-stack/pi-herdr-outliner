@@ -1285,20 +1285,7 @@ export class ResourceCatalog {
         `Filesystem resource is unavailable: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
-    const candidates = this.listSources()
-      .filter((source): source is Extract<ResourceSource, { provider: "filesystem" }> =>
-        source.provider === "filesystem"
-      )
-      .filter((source) => {
-        const pathFromRoot = relative(source.boundary.root, absolutePath);
-        return pathFromRoot !== ".." &&
-          !pathFromRoot.startsWith(`..${sep}`) &&
-          !isAbsolute(pathFromRoot);
-      })
-      .sort((left, right) =>
-        right.boundary.root.length - left.boundary.root.length ||
-        left.id.localeCompare(right.id)
-      );
+    const candidates = this.filesystemSourceCandidates(absolutePath);
     const source = candidates[0] ?? this.createSource({
       name: `Filesystem · ${basename(dirname(absolutePath)) || dirname(absolutePath)}`,
       provider: "filesystem",
