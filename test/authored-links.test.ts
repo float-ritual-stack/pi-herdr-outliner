@@ -177,6 +177,31 @@ test("projects human-authored Resource properties without creating catalog entri
   });
 });
 
+test("ignores oversized unrelated properties while rejecting oversized Resource properties", () => {
+  withStore((store) => {
+    const value = "x".repeat(4_097);
+    const owner = store.create(`[note::${value}]`);
+    const result = readAuthoredLinks(store, owner.id);
+
+    if (result.kind !== "ready") throw new Error(`Expected ready result, got ${result.kind}`);
+    expect(result.resources.entries).toEqual([]);
+    expect(result.resources.invalidCount).toBe(0);
+    expect(result.resources.diagnostics).toEqual([]);
+
+    for (const key of ["file", "web", "jira", "app"]) {
+      const resourceOwner = store.create(`[${key}::${value}]`);
+      const resourceResult = readAuthoredLinks(store, resourceOwner.id);
+
+      if (resourceResult.kind !== "ready") throw new Error(`Expected ready result, got ${resourceResult.kind}`);
+      expect(resourceResult.resources.entries).toEqual([]);
+      expect(resourceResult.resources.invalidCount).toBe(1);
+      expect(resourceResult.resources.diagnostics.map((item) => item.message)).toEqual([
+        "Authored Resource locator exceeds 4096 UTF-16 units",
+      ]);
+    }
+  });
+});
+
 test("contains lookup errors and decodes long authored Resource locators", () => {
   withStore((store) => {
     const target = store.create("Valid target");

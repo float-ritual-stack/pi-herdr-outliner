@@ -85,6 +85,10 @@ export function authoredResourceReferenceOccurrences(
 ): AuthoredResourceReferenceOccurrence[] {
   const occurrences: AuthoredResourceReferenceOccurrence[] = [];
   for (const property of parsePropertyRecords(text)) {
+    if (
+      property.key !== "file" && property.key !== "web" &&
+      property.key !== "jira" && property.key !== "app"
+    ) continue;
     const value = property.value.trim();
     const range = { start: property.start, end: property.end };
     if (value.length > MAX_AUTHORED_RESOURCE_LOCATOR_UNITS) {
