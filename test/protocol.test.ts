@@ -1449,7 +1449,7 @@ test("serves mutations and property queries over the local socket", async () => 
   const client = new OutlinerClient(socket);
   const service = await client.request<OutlinerServiceStatus>({ action: "ping" });
   expect(service).toEqual({ status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION });
-  expect(service.protocolVersion).toBe(51);
+  expect(service.protocolVersion).toBe(52);
   const provenance = {
     actorId: "omp",
     sessionId: "session-1",

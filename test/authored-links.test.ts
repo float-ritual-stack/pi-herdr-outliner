@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
   AUTHORED_LINKS_MAX_ENTRIES_PER_GROUP,
   AUTHORED_LINKS_MAX_TEXT_UNITS,
+  decodeAuthoredLinksSnapshot,
   readAuthoredLinks,
 } from "../src/authored-links";
 import { OutlinerStore } from "../src/store";
@@ -117,6 +118,96 @@ test("preserves unresolved page addresses without registering them during enumer
         },
       }),
     ]);
+  });
+});
+
+test("projects human-authored Resource properties without creating catalog entries", () => {
+  withStore((store) => {
+    const owner = store.create([
+      "[file::docs/plan.md]",
+      "[web::https://example.test/guide]",
+      "[jira::PIE-515]",
+      "[file::evan@evans-box/path/report#final?.md]",
+    ].join("\n"));
+    const sequenceBefore = store.sequence;
+
+    const result = readAuthoredLinks(store, owner.id);
+
+    expect(store.sequence).toBe(sequenceBefore);
+    if (result.kind !== "ready") throw new Error(`Expected ready result, got ${result.kind}`);
+    expect(result.resources.entries.map((entry) => ({
+      label: entry.label,
+      resolution: entry.resolution,
+    }))).toEqual([
+      {
+        label: "docs/plan.md",
+        resolution: {
+          kind: "unregistered",
+          reference: { kind: "filesystem", path: "docs/plan.md" },
+          reason: "File is not registered: docs/plan.md",
+        },
+      },
+      {
+        label: "https://example.test/guide",
+        resolution: {
+          kind: "unregistered",
+          reference: { kind: "web", url: "https://example.test/guide" },
+          reason: "Web Resource is not registered: https://example.test/guide",
+        },
+      },
+      {
+        label: "PIE-515",
+        resolution: {
+          kind: "missing",
+          reason: "No Jira Source is configured for PIE-515",
+        },
+      },
+      {
+        label: "evan@evans-box/path/report#final?.md",
+        resolution: {
+          kind: "unregistered",
+          reference: {
+            kind: "application",
+            uri: "ssh://evan@evans-box/path/report%23final%3F.md",
+          },
+          reason: "Application Resource is not registered: ssh://evan@evans-box/path/report%23final%3F.md",
+        },
+      },
+    ]);
+  });
+});
+
+test("contains lookup errors and decodes long authored Resource locators", () => {
+  withStore((store) => {
+    const target = store.create("Valid target");
+    const longUrl = `https://example.test/${"segment".repeat(50)}`;
+    const oversizedNormalizedUrl = `https://example.test/${"é".repeat(700)}`;
+    const oversizedJiraKey = `${"P".repeat(300)}-1`;
+    const owner = store.create([
+      `((${target.id}))`,
+      "[file::~other/plan.md]",
+      `[web::${longUrl}]`,
+      `[web::${oversizedNormalizedUrl}]`,
+      `[jira::${oversizedJiraKey}]`,
+    ].join("\n"));
+
+    const result = readAuthoredLinks(store, owner.id);
+    const decoded = decodeAuthoredLinksSnapshot(result);
+
+    if (decoded.kind !== "ready") throw new Error(`Expected ready result, got ${decoded.kind}`);
+    expect(decoded.outlinks.entries).toHaveLength(1);
+    expect(decoded.resources.entries).toHaveLength(2);
+    expect(decoded.resources.invalidCount).toBe(2);
+    expect(decoded.resources.diagnostics.map((item) => item.message)).toEqual([
+      "Web Resource URL exceeds 4096 UTF-16 units",
+      "Jira Resource key exceeds 255 UTF-16 units",
+    ]);
+    expect(decoded.resources.entries[0]?.resolution).toMatchObject({
+      kind: "missing",
+      reason: "Only current-user home paths using ~/ are supported: ~other/plan.md",
+    });
+    expect(decoded.resources.entries[1]?.key.length).toBeLessThan(1_024);
+    expect(decoded.resources.entries[1]?.resolution.kind).toBe("unregistered");
   });
 });
 

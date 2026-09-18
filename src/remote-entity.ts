@@ -39,6 +39,11 @@ export interface RemoteEntityProviderClientOptions {
   readonly requestTimeoutMs?: number;
 }
 
+export interface RemoteEntityLocatorResolution {
+  readonly entityId: string;
+  readonly locator: string;
+}
+
 export interface RemoteEntityProviderClient {
   observe(
     resource: RemoteEntityResource,
@@ -49,6 +54,10 @@ export interface RemoteEntityProviderClient {
     source: RemoteEntitySource,
     input: ResourceProviderCommandInput,
   ): Promise<ResourceProviderCommandReceipt>;
+  resolveLocator?(
+    source: RemoteEntitySource,
+    locator: string,
+  ): Promise<RemoteEntityLocatorResolution>;
 }
 
 export const REMOTE_ENTITY_MARKDOWN_ADAPTER: ResourceRepresentationAdapter = {
@@ -657,6 +666,42 @@ export class DefaultRemoteEntityProviderClient implements RemoteEntityProviderCl
       throw providerError(`${provider} provider request failed`);
     }
     return readJsonResponse(response, provider, this.maximumResponseBytes);
+  }
+
+  async resolveLocator(
+    source: RemoteEntitySource,
+    locator: string,
+  ): Promise<RemoteEntityLocatorResolution> {
+    const credential = await this.credential(source);
+    if (source.provider === "jira") {
+      const key = locator.trim().toUpperCase();
+      if (!key.startsWith(`${source.boundary.project}-`)) {
+        throw new ResourceCatalogError("outside-source", "Jira issue key is outside its source project");
+      }
+      const url = new URL(
+        `/rest/api/3/issue/${encodeURIComponent(key)}`,
+        source.boundary.origin,
+      );
+      url.searchParams.set("fields", "summary");
+      const response = await this.request("jira", url.href, {
+        method: "GET",
+        headers: {
+          accept: "application/json",
+          authorization: `Bearer ${credential}`,
+        },
+      });
+      const issue = record(response.value, "Jira issue");
+      const entityId = requiredString(issue.id, "Jira issue ID", 255);
+      const resolvedKey = requiredString(issue.key, "Jira issue key", 255).toUpperCase();
+      if (!resolvedKey.startsWith(`${source.boundary.project}-`)) {
+        throw new ResourceCatalogError("outside-source", "Jira issue is outside its source project");
+      }
+      return { entityId, locator: resolvedKey };
+    }
+    throw new ResourceCatalogError(
+      "provider-mismatch",
+      `${source.provider} does not support locator-based Resource creation`,
+    );
   }
 
   async observe(

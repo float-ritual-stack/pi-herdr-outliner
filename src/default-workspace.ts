@@ -1,4 +1,4 @@
-export const DEFAULT_WORKSPACE_SEED_VERSION = 2;
+export const DEFAULT_WORKSPACE_SEED_VERSION = 3;
 export const AGENT_DOCUMENTATION_SYSTEM_DOC = "agent-documentation-guide";
 export const AUTHORED_LINKS_EXAMPLE_SYSTEM_DOC = "authored-links-example";
 
@@ -6,19 +6,9 @@ interface SeedBlock {
   readonly id: string;
   readonly updatedAt: string;
 }
-interface SeedResource {
-  readonly id: string;
-}
-
-
 interface DefaultWorkspaceSeedWriter {
   create(text: string, parentId: string | null): SeedBlock;
   update(block: SeedBlock, text: string): SeedBlock;
-  createWebResource(input: {
-    readonly sourceName: string;
-    readonly baseUrl: string;
-    readonly url: string;
-  }): SeedResource;
   select(blockId: string): void;
 }
 
@@ -166,11 +156,8 @@ export function seedDefaultWorkspace(writer: DefaultWorkspaceSeedWriter): void {
     "",
     ...sections.flatMap(({ block }) => [`!((${block.id}))`, ""]),
   ].join("\n").trimEnd());
-  const authoredLinksResource = writer.createWebResource({
-    sourceName: "Outliner documentation",
-    baseUrl: "https://github.com/float-ritual-stack/pi-herdr-outliner",
-    url: "https://github.com/float-ritual-stack/pi-herdr-outliner/blob/main/README.md",
-  });
+  const authoredLinksGuideUrl =
+    "https://github.com/float-ritual-stack/pi-herdr-outliner/blob/main/README.md";
   writer.create([
     `Authored links example [type::example] [system-doc::${AUTHORED_LINKS_EXAMPLE_SYSTEM_DOC}] [page::outliner-authored-links-example]`,
     "",
@@ -178,9 +165,9 @@ export function seedDefaultWorkspace(writer: DefaultWorkspaceSeedWriter): void {
     "",
     `- Existing block: ((${referencesSection.block.id}|References guide))`,
     "- Unregistered page: [[Planning scratchpad]]",
-    `- Resource: [README authored-links guide](pi-outliner://resource/${authoredLinksResource.id})`,
+    `- Human-authored web Resource: [web::${authoredLinksGuideUrl}]`,
     "",
-    "Showing the generated Outlinks and Resources branches is read-only. Press Enter on the unregistered page to create or follow it; press Enter on the Resource to open its canonical Resource identity.",
+    "Showing the generated Outlinks and Resources branches is read-only. Press Enter on the unregistered page or Resource to create it only when navigating.",
   ].join("\n"), documentation.id);
 
   writer.create([

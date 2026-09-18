@@ -5,7 +5,7 @@ import type {
   AuthoredOutlink,
   AuthoredResourceLink,
 } from "./authored-links";
-import type { OutlinerNavigationTarget } from "./types";
+import type { AuthoredResourceReference, OutlinerNavigationTarget } from "./types";
 import type { TreeRow } from "./virtual-branches";
 
 export interface AuthoredLinksOwnerOccurrence {
@@ -198,6 +198,7 @@ export function composeAuthoredLinkRows(
 export type AuthoredLinkActivation =
   | { readonly kind: "target"; readonly target: OutlinerNavigationTarget }
   | { readonly kind: "follow-page"; readonly address: string }
+  | { readonly kind: "follow-resource"; readonly reference: AuthoredResourceReference }
   | { readonly kind: "unavailable"; readonly reason: string };
 
 export function authoredLinkActivation(row: AuthoredLinkRow): AuthoredLinkActivation {
@@ -205,6 +206,9 @@ export function authoredLinkActivation(row: AuthoredLinkRow): AuthoredLinkActiva
   if (resolution.kind === "ready") return { kind: "target", target: resolution.target };
   if (resolution.kind === "unregistered-page") {
     return { kind: "follow-page", address: resolution.address };
+  }
+  if (resolution.kind === "unregistered") {
+    return { kind: "follow-resource", reference: resolution.reference };
   }
   return { kind: "unavailable", reason: resolution.reason };
 }
@@ -222,6 +226,9 @@ export function authoredLinkUnavailableReason(row: AuthoredLinkRow): string | nu
   if (resolution.kind === "ready") return null;
   if (resolution.kind === "unregistered-page") {
     return `${resolution.reason} · Enter creates the page`;
+  }
+  if (resolution.kind === "unregistered") {
+    return `${resolution.reason} · Enter creates the Resource`;
   }
   return resolution.reason;
 }

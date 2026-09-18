@@ -266,6 +266,27 @@ test("Jira observation maps immutable identity, ADF, metadata, provenance, and d
   );
   expect(JSON.stringify(document)).not.toContain(secret);
 });
+test("Jira locator resolution obtains immutable identity only on request", async () => {
+  const requests: Array<{ url: string; init: RequestInit | undefined }> = [];
+  const client = new DefaultRemoteEntityProviderClient({
+    fetch: (async (input: string | URL | Request, init?: RequestInit) => {
+      requests.push({ url: String(input), init });
+      return jsonResponse({ id: "10001", key: "PLAT-42", fields: {} });
+    }) as typeof fetch,
+    resolveCredential: () => "jira-secret-token",
+  });
+
+  expect(requests).toHaveLength(0);
+  const resolved = await client.resolveLocator(jiraSource(), "plat-42");
+
+  expect(resolved).toEqual({ entityId: "10001", locator: "PLAT-42" });
+  expect(requests).toHaveLength(1);
+  expect(requests[0]?.url).toContain("/rest/api/3/issue/PLAT-42?");
+  expect(new Headers(requests[0]?.init?.headers).get("authorization")).toBe(
+    "Bearer jira-secret-token",
+  );
+});
+
 
 test("Linear observation maps GraphQL issue response without changing entity identity", async () => {
   const requests: Array<{ url: string; init: RequestInit | undefined }> = [];

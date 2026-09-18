@@ -343,6 +343,8 @@ function renderAuthoredLinkDisplay(row: AuthoredLinkRow, width: number): string 
     const resolution = row.link.resolution;
     content = resolution.kind === "ready"
       ? `${row.link.label} → ${resolution.sourceName} · ${resolution.provider} · ${resolution.addressLabel}${duplicateLabel}`
+      : resolution.kind === "unregistered"
+      ? `${row.link.label} · Resource not registered · Enter creates${duplicateLabel}`
       : `${row.link.label} · unavailable: ${resolution.reason}${duplicateLabel}`;
   }
   return truncateToWidth(`${prefix}${content}`, width);

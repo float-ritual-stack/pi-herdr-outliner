@@ -71,12 +71,15 @@ test("seeds and preserves an agent-readable documentation workspace", async () =
     ]);
     expect(authoredLinks.resources.entries).toEqual([
       expect.objectContaining({
-        label: "README authored-links guide",
-        resolution: expect.objectContaining({
-          kind: "ready",
-          provider: "web",
-          sourceName: "Outliner documentation",
-        }),
+        label: "https://github.com/float-ritual-stack/pi-herdr-outliner/blob/main/README.md",
+        resolution: {
+          kind: "unregistered",
+          reference: {
+            kind: "web",
+            url: "https://github.com/float-ritual-stack/pi-herdr-outliner/blob/main/README.md",
+          },
+          reason: "Web Resource is not registered: https://github.com/float-ritual-stack/pi-herdr-outliner/blob/main/README.md",
+        },
       }),
     ]);
 

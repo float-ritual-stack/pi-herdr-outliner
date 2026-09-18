@@ -1187,7 +1187,6 @@ function normalizeApplicationAddress(
     invalid("Application resource URI must be absolute");
   }
   if (
-    parsed.username ||
     parsed.password ||
     parsed.hash ||
     ENCODED_PATH_ESCAPE.test(parsed.pathname)

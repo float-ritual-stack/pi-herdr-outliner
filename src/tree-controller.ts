@@ -61,6 +61,7 @@ import type {
   BookmarkStatus,
   BookmarkToggleReceipt,
   BlockCollectionCompleteness,
+  InternResourceReceipt,
   OutlinerEvent,
   OutlinerNavigationIntent,
   OutlinerNavigationDispatch,
@@ -1055,6 +1056,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       try {
         let target: OutlinerNavigationTarget;
         let createdPage = false;
+        let createdResource = false;
         if (activation.kind === "follow-page") {
           const resolved = await resolveOutlinerLinkTarget(effects, {
             kind: "page",
@@ -1062,6 +1064,13 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
           });
           target = { kind: "block", blockId: resolved.block.id };
           createdPage = resolved.created === true;
+        } else if (activation.kind === "follow-resource") {
+          const receipt = await effects.request<InternResourceReceipt>({
+            action: "resources.follow-authored",
+            reference: activation.reference,
+          });
+          target = { kind: "resource", resourceId: receipt.resource.id };
+          createdResource = receipt.created;
         } else {
           target = activation.target;
         }
@@ -1074,6 +1083,8 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         );
         status = createdPage
           ? "Page created and opened in first unlocked Detail"
+          : createdResource
+          ? "Resource created and opened in first unlocked Detail"
           : "Authored target opened in first unlocked Detail";
       } catch (error) {
         status = errorMessage(error);
@@ -1199,7 +1210,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     const line = quickInputText();
     const target = completionTargetAtCursor(line, quickBuffer.column);
     if (!target) {
-      status = "Type [[named address]], [[target|label]], or ((fuzzy block))";
+      status = "Type [[address]], ((block)), or [file::path] for Resource path completion";
       return;
     }
     let items: MutableQuickCompletion["items"];

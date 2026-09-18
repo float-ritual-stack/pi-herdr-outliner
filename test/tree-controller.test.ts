@@ -523,6 +523,91 @@ describe("createTreeController", () => {
     });
   });
 
+  test("creates a human-authored Resource only when its generated row is activated", async () => {
+    const owner = block("owner002", {
+      text: "Owner [file::notes/today.md]",
+      displayText: "Owner",
+    });
+    const resourceId = "30000000-0000-4000-8000-000000000030";
+    const sourceId = "40000000-0000-4000-8000-000000000040";
+    const resource = {
+      id: resourceId,
+      sourceId,
+      provider: "filesystem" as const,
+      address: { kind: "filesystem" as const, path: "today.md" },
+      version: 1,
+      addressVersion: 1,
+      mediaType: "text/markdown",
+      createdAt: "2026-09-17T00:00:00.000Z",
+      updatedAt: "2026-09-17T00:00:00.000Z",
+    };
+    const fake = harness((input) => {
+      if (input.action === "workspace.snapshot") return snapshot([owner], owner);
+      if (input.action === "blocks.authored-links") {
+        return {
+          kind: "ready",
+          ownerId: owner.id,
+          ownerTextDigest: authoredTextDigest(owner.text),
+          outlinks: {
+            entries: [],
+            completeness: { kind: "complete" },
+            invalidCount: 0,
+            diagnostics: [],
+          },
+          resources: {
+            entries: [{
+              kind: "resource",
+              key: JSON.stringify(["filesystem", "notes/today.md"]),
+              label: "notes/today.md",
+              firstSpan: { start: 6, end: owner.text.length },
+              occurrenceCount: 1,
+              resolution: {
+                kind: "unregistered",
+                reference: { kind: "filesystem", path: "notes/today.md" },
+                reason: "File is not registered: notes/today.md",
+              },
+            }],
+            completeness: { kind: "complete" },
+            invalidCount: 0,
+            diagnostics: [],
+          },
+        };
+      }
+      if (input.action === "resources.follow-authored") {
+        return { resource, created: true };
+      }
+      return undefined;
+    });
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+    await controller.handleAction("tree.authored-links.toggle");
+    const resourceRow = controller.view().rows.find((row) =>
+      row.kind === "authored-link" && row.group === "resources"
+    );
+    if (!resourceRow || resourceRow.kind !== "authored-link") {
+      throw new Error("Expected generated human-authored Resource row");
+    }
+
+    await controller.handleRowClick(resourceRow.rowId);
+    expect(lastCall(fake.calls, "browsing-context.publish")).toMatchObject({
+      target: null,
+      dispatchPreview: false,
+    });
+    expect(fake.calls.some((call) => call.action === "resources.follow-authored")).toBe(false);
+
+    await controller.handleKeypress("", { name: "return" }, "pass");
+
+    expect(lastCall(fake.calls, "resources.follow-authored")).toEqual({
+      action: "resources.follow-authored",
+      reference: { kind: "filesystem", path: "notes/today.md" },
+    });
+    expect(lastCall(fake.calls, "navigation.dispatch")).toMatchObject({
+      target: { kind: "resource", resourceId },
+      intent: "open",
+      preserveSource: true,
+    });
+  });
+
 
   test("fuzzy goto previews candidates and reveals the selected block", async () => {
     const first = block("first", { text: "Inbox", displayText: "Inbox" });

@@ -122,6 +122,120 @@ test("filesystem interning creates a reusable source for the file's directory", 
     expect(repeated).toEqual({ resource: first.resource, created: false });
   });
 });
+test("human-authored Resource references intern only when explicitly followed", async () => {
+  const root = mkdtempSync(join(tmpdir(), "outliner-authored-resources-"));
+  const store = new OutlinerStore(join(root, "workspace.sqlite"));
+  try {
+    mkdirSync(join(root, "notes"));
+    writeFileSync(join(root, "notes/today.md"), "# Today\n");
+
+    expect(store.resources.resolveAuthoredReference({
+      kind: "filesystem",
+      path: "notes/today.md",
+    })).toMatchObject({ kind: "unregistered" });
+    const file = await store.resources.followAuthoredReference({
+      kind: "filesystem",
+      path: "notes/today.md",
+    });
+    const web = await store.resources.followAuthoredReference({
+      kind: "web",
+      url: "https://example.test/guide",
+    });
+    const remoteFile = await store.resources.followAuthoredReference({
+      kind: "application",
+      uri: "ssh://evan@evans-box/path/to/file",
+    });
+
+    expect(file).toMatchObject({
+      created: true,
+      resource: { provider: "filesystem", address: { path: "today.md" } },
+    });
+    expect(web).toMatchObject({
+      created: true,
+      resource: {
+        provider: "web",
+        address: { url: "https://example.test/guide" },
+      },
+    });
+    expect(remoteFile).toMatchObject({
+      created: true,
+      resource: {
+        provider: "application",
+        address: { uri: "ssh://evan@evans-box/path/to/file" },
+      },
+    });
+    expect(store.resources.resolveAuthoredReference({
+      kind: "filesystem",
+      path: "notes/today.md",
+    })).toEqual({ kind: "ready", resourceId: file.resource.id });
+    expect(await store.resources.followAuthoredReference({
+      kind: "web",
+      url: "https://example.test/guide",
+    })).toEqual({ resource: web.resource, created: false });
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test("Jira shorthand resolves through its configured Source only on activation", async () => {
+  const root = mkdtempSync(join(tmpdir(), "outliner-authored-jira-"));
+  const resolvedLocators: string[] = [];
+  const store = new OutlinerStore(join(root, "workspace.sqlite"), {
+    remoteEntityClient: {
+      async resolveLocator(_source, locator) {
+        resolvedLocators.push(locator);
+        return { entityId: "immutable-515", locator };
+      },
+      async observe() {
+        throw new Error("Not used by authored-reference activation");
+      },
+      async execute() {
+        throw new Error("Not used by authored-reference activation");
+      },
+    },
+  });
+  try {
+    store.resources.createSource({
+      name: "Product Jira",
+      provider: "jira",
+      boundary: {
+        origin: "https://jira.example.test",
+        project: "PC",
+        credentialEnv: "JIRA_TOKEN",
+      },
+    });
+    expect(store.resources.resolveAuthoredReference({
+      kind: "jira",
+      key: "PC-515",
+    })).toEqual({
+      kind: "unregistered",
+      reason: "Jira issue is not registered: PC-515",
+    });
+
+    const receipt = await store.resources.followAuthoredReference({
+      kind: "jira",
+      key: "PC-515",
+    });
+
+    expect(resolvedLocators).toEqual(["PC-515"]);
+    expect(receipt).toMatchObject({
+      created: true,
+      resource: {
+        provider: "jira",
+        address: { entityId: "immutable-515", key: "PC-515" },
+      },
+    });
+    expect(store.resources.resolveAuthoredReference({
+      kind: "jira",
+      key: "PC-515",
+    })).toEqual({ kind: "ready", resourceId: receipt.resource.id });
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("filesystem descriptions expose immutable text evidence and reject stale revisions", () => {
   withWorkspace((root, store) => {

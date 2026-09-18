@@ -13,6 +13,7 @@ import {
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { Type, type Static } from "typebox";
 import { Parse } from "typebox/value";
+import { resolveReferencedPath } from "./files";
 import {
   BasicWebMarkdownExtractor,
   sha256,
@@ -25,6 +26,10 @@ import {
   REMOTE_ENTITY_MARKDOWN_ADAPTER,
   type RemoteEntityProviderClient,
 } from "./remote-entity";
+import type {
+  AuthoredResourceReference,
+  AuthoredResourceReferenceLookup,
+} from "./resource-references";
 import {
   ComputedProducerError,
   canonicalJson,
@@ -1312,6 +1317,247 @@ export class ResourceCatalog {
       mediaType: value.mediaType ?? (/\.pdf$/i.test(absolutePath) ? "application/pdf" : undefined),
     });
   }
+  private filesystemSourceCandidates(
+    absolutePath: string,
+  ): Array<Extract<ResourceSource, { provider: "filesystem" }>> {
+    return this.listSources()
+      .filter((source): source is Extract<ResourceSource, { provider: "filesystem" }> =>
+        source.provider === "filesystem"
+      )
+      .filter((source) => {
+        const pathFromRoot = relative(source.boundary.root, absolutePath);
+        return pathFromRoot !== ".." &&
+          !pathFromRoot.startsWith(`..${sep}`) &&
+          !isAbsolute(pathFromRoot);
+      })
+      .sort((left, right) =>
+        right.boundary.root.length - left.boundary.root.length ||
+        left.id.localeCompare(right.id)
+      );
+  }
+
+  private webSourceCandidates(
+    url: string,
+  ): Array<Extract<ResourceSource, { provider: "web" }>> {
+    return this.listSources()
+      .filter((source): source is Extract<ResourceSource, { provider: "web" }> =>
+        source.provider === "web"
+      )
+      .filter((source) => {
+        try {
+          normalizeResourceAddress(source, { kind: "web", url });
+          return true;
+        } catch {
+          return false;
+        }
+      })
+      .sort((left, right) =>
+        right.boundary.baseUrl.length - left.boundary.baseUrl.length ||
+        left.id.localeCompare(right.id)
+      );
+  }
+
+  private jiraSourceCandidates(
+    key: string,
+  ): Array<Extract<ResourceSource, { provider: "jira" }>> {
+    return this.listSources()
+      .filter((source): source is Extract<ResourceSource, { provider: "jira" }> =>
+        source.provider === "jira" && key.startsWith(`${source.boundary.project}-`)
+      )
+      .sort((left, right) => left.id.localeCompare(right.id));
+  }
+
+  private applicationSourceCandidates(
+    uri: string,
+  ): Array<Extract<ResourceSource, { provider: "application" }>> {
+    return this.listSources()
+      .filter((source): source is Extract<ResourceSource, { provider: "application" }> =>
+        source.provider === "application"
+      )
+      .filter((source) => {
+        try {
+          normalizeResourceAddress(source, { kind: "application", uri });
+          return true;
+        } catch {
+          return false;
+        }
+      })
+      .sort((left, right) =>
+        right.boundary.namespace.length - left.boundary.namespace.length ||
+        left.id.localeCompare(right.id)
+      );
+  }
+
+  resolveAuthoredReference(
+    reference: AuthoredResourceReference,
+  ): AuthoredResourceReferenceLookup {
+    if (reference.kind === "filesystem") {
+      const absolutePath = resolveReferencedPath(reference.path, this.workspaceRoot);
+      const candidates = this.filesystemSourceCandidates(absolutePath);
+      const source = candidates[0];
+      if (!source) {
+        return { kind: "unregistered", reason: `File is not registered: ${reference.path}` };
+      }
+      const resource = this.find(source.id, {
+        kind: "filesystem",
+        path: relative(source.boundary.root, absolutePath).replaceAll(sep, "/"),
+      });
+      return resource
+        ? { kind: "ready", resourceId: resource.id }
+        : { kind: "unregistered", reason: `File is not registered: ${reference.path}` };
+    }
+    if (reference.kind === "web") {
+      const candidates = this.webSourceCandidates(reference.url);
+      const source = candidates[0];
+      if (!source) {
+        return { kind: "unregistered", reason: `Web Resource is not registered: ${reference.url}` };
+      }
+      if (
+        candidates[1] &&
+        candidates[1].boundary.baseUrl.length === source.boundary.baseUrl.length
+      ) {
+        return {
+          kind: "unavailable",
+          reason: `Multiple Web Sources match: ${reference.url}`,
+        };
+      }
+      const resource = this.find(source.id, { kind: "web", url: reference.url });
+      return resource
+        ? { kind: "ready", resourceId: resource.id }
+        : { kind: "unregistered", reason: `Web Resource is not registered: ${reference.url}` };
+    }
+    if (reference.kind === "jira") {
+      const candidates = this.jiraSourceCandidates(reference.key);
+      if (candidates.length === 0) {
+        return {
+          kind: "unavailable",
+          reason: `No Jira Source is configured for ${reference.key}`,
+        };
+      }
+      if (candidates.length > 1) {
+        return {
+          kind: "unavailable",
+          reason: `Multiple Jira Sources match ${reference.key}`,
+        };
+      }
+      const row = this.database.query(`
+        SELECT id
+        FROM resources
+        WHERE source_id = ?
+          AND provider = 'jira'
+          AND json_extract(address_json, '$.key') = ?
+        ORDER BY id
+        LIMIT 1
+      `).get(candidates[0]!.id, reference.key) as { id: string } | null;
+      return row
+        ? { kind: "ready", resourceId: row.id }
+        : { kind: "unregistered", reason: `Jira issue is not registered: ${reference.key}` };
+    }
+    const candidates = this.applicationSourceCandidates(reference.uri);
+    const source = candidates[0];
+    if (!source) {
+      return {
+        kind: "unregistered",
+        reason: `Application Resource is not registered: ${reference.uri}`,
+      };
+    }
+    if (
+      candidates[1] &&
+      candidates[1].boundary.namespace.length === source.boundary.namespace.length
+    ) {
+      return {
+        kind: "unavailable",
+        reason: `Multiple Application Sources match: ${reference.uri}`,
+      };
+    }
+    const resource = this.find(source.id, { kind: "application", uri: reference.uri });
+    return resource
+      ? { kind: "ready", resourceId: resource.id }
+      : {
+          kind: "unregistered",
+          reason: `Application Resource is not registered: ${reference.uri}`,
+        };
+  }
+
+  async followAuthoredReference(
+    reference: AuthoredResourceReference,
+  ): Promise<InternResourceReceipt> {
+    const resolution = this.resolveAuthoredReference(reference);
+    if (resolution.kind === "ready") {
+      return { resource: this.require(resolution.resourceId), created: false };
+    }
+    if (resolution.kind === "unavailable") {
+      throw new ResourceCatalogError("invalid-input", resolution.reason);
+    }
+    if (reference.kind === "filesystem") {
+      return this.internFilesystem({
+        path: resolveReferencedPath(reference.path, this.workspaceRoot),
+      });
+    }
+    if (reference.kind === "web") {
+      const url = new URL(reference.url);
+      const source = this.webSourceCandidates(reference.url)[0] ?? this.createSource({
+        name: `Web · ${url.hostname}`,
+        provider: "web",
+        boundary: { baseUrl: url.origin },
+      });
+      return this.intern({
+        sourceId: source.id,
+        address: { kind: "web", url: reference.url },
+      });
+    }
+    if (reference.kind === "jira") {
+      const source = this.jiraSourceCandidates(reference.key)[0];
+      if (!source) {
+        throw new ResourceCatalogError(
+          "invalid-input",
+          `No Jira Source is configured for ${reference.key}`,
+        );
+      }
+      if (source.policy.deniedCapabilities.includes("read")) {
+        throw new ResourceCatalogError("invalid-input", "Workspace policy denies reading this Jira Source");
+      }
+      if (!this.remoteEntityClient.resolveLocator) {
+        throw new ResourceCatalogError(
+          "source-unavailable",
+          "Jira locator resolution is unavailable",
+        );
+      }
+      const resolved = await this.remoteEntityClient.resolveLocator(source, reference.key);
+      return this.intern({
+        sourceId: source.id,
+        address: {
+          kind: "jira",
+          entityId: resolved.entityId,
+          key: resolved.locator,
+        },
+      });
+    }
+    const uri = new URL(reference.uri);
+    const pathSegments = uri.pathname.split("/").filter(Boolean);
+    if (pathSegments.length === 0) {
+      throw new ResourceCatalogError(
+        "invalid-input",
+        "Application Resource URI must include a namespace path",
+      );
+    }
+    const source = this.applicationSourceCandidates(reference.uri)[0] ?? this.createSource({
+      name: `${uri.protocol.slice(0, -1).toUpperCase()} · ${uri.host}/${
+        decodeURIComponent(pathSegments[0]!)
+      }`,
+      provider: "application",
+      boundary: {
+        scheme: uri.protocol.slice(0, -1),
+        authority: uri.host,
+        namespace: decodeURIComponent(pathSegments[0]!),
+      },
+    });
+    return this.intern({
+      sourceId: source.id,
+      address: { kind: "application", uri: reference.uri },
+    });
+  }
+
 
   get(resourceId: string): Resource | null {
     const normalized = normalizeResourceId(resourceId);

@@ -6,6 +6,13 @@ import {
   rangesOverlap,
   type OutlinerReferenceOccurrence,
 } from "./reference-occurrences";
+import {
+  authoredResourceReferenceKey,
+  authoredResourceReferenceOccurrences,
+  type AuthoredResourceReference,
+  type AuthoredResourceReferenceOccurrence,
+  type AuthoredResourceReferenceLookup,
+} from "./resource-references";
 import { blockDisplayTitle } from "./references";
 import {
   normalizeResourceId,
@@ -94,13 +101,18 @@ export type AuthoredResourceResolution =
       readonly addressLabel: string;
     }
   | {
+      readonly kind: "unregistered";
+      readonly reference: AuthoredResourceReference;
+      readonly reason: string;
+    }
+  | {
       readonly kind: "missing";
       readonly reason: string;
     };
 
 export interface AuthoredResourceLink extends AuthoredLinkEntryBase {
   readonly kind: "resource";
-  readonly resourceId: string;
+  readonly resourceId?: string;
   readonly resolution: AuthoredResourceResolution;
 }
 
@@ -137,6 +149,7 @@ export interface AuthoredLinksDataSource {
   readonly resources: {
     get(resourceId: string): Resource | null;
     getSource(sourceId: string): ResourceSource | null;
+    resolveAuthoredReference(reference: AuthoredResourceReference): AuthoredResourceReferenceLookup;
   };
 }
 
@@ -153,7 +166,8 @@ type ResourceReferenceCandidate =
       readonly start: number;
       readonly end: number;
       readonly message: string;
-    };
+    }
+  | AuthoredResourceReferenceOccurrence;
 
 type AuthoredCandidate = OutlinerReferenceOccurrence | ResourceReferenceCandidate;
 
@@ -237,6 +251,7 @@ function resourceReferenceCandidates(text: string): ResourceReferenceCandidate[]
       ...range,
     });
   }
+  candidates.push(...authoredResourceReferenceOccurrences(text));
   return candidates;
 }
 
@@ -360,19 +375,71 @@ function resolveOutlink(
 
 function resolveResource(
   source: AuthoredLinksDataSource,
-  candidate: Extract<ResourceReferenceCandidate, { kind: "resource" }>,
+  candidate: Exclude<
+    ResourceReferenceCandidate,
+    { kind: "invalid-resource" | "invalid-authored-resource" }
+  >,
 ): AuthoredResourceLink {
-  const key = targetKey({ kind: "resource", resourceId: candidate.resourceId });
-  const resource = source.resources.get(candidate.resourceId);
+  let resourceId: string;
+  let authoredLabel: string;
+  if (candidate.kind === "resource") {
+    resourceId = candidate.resourceId;
+    authoredLabel = candidate.label ?? candidate.resourceId;
+  } else {
+    authoredLabel = candidate.label;
+    let lookup: AuthoredResourceReferenceLookup;
+    try {
+      lookup = source.resources.resolveAuthoredReference(candidate.reference);
+    } catch (error) {
+      return {
+        kind: "resource",
+        key: authoredResourceReferenceKey(candidate.reference),
+        label: presentation(candidate.label),
+        firstSpan: { start: candidate.start, end: candidate.end },
+        occurrenceCount: 1,
+        resolution: {
+          kind: "missing",
+          reason: presentation(error instanceof Error ? error.message : String(error)),
+        },
+      };
+    }
+    if (lookup.kind === "unregistered") {
+      return {
+        kind: "resource",
+        key: authoredResourceReferenceKey(candidate.reference),
+        label: presentation(candidate.label),
+        firstSpan: { start: candidate.start, end: candidate.end },
+        occurrenceCount: 1,
+        resolution: {
+          kind: "unregistered",
+          reference: candidate.reference,
+          reason: presentation(lookup.reason),
+        },
+      };
+    }
+    if (lookup.kind === "unavailable") {
+      return {
+        kind: "resource",
+        key: authoredResourceReferenceKey(candidate.reference),
+        label: presentation(candidate.label),
+        firstSpan: { start: candidate.start, end: candidate.end },
+        occurrenceCount: 1,
+        resolution: { kind: "missing", reason: presentation(lookup.reason) },
+      };
+    }
+    resourceId = lookup.resourceId;
+  }
+  const key = targetKey({ kind: "resource", resourceId });
+  const resource = source.resources.get(resourceId);
   if (!resource) {
     return {
       kind: "resource",
       key,
-      resourceId: candidate.resourceId,
-      label: presentation(candidate.label ?? candidate.resourceId),
+      resourceId,
+      label: presentation(authoredLabel),
       firstSpan: { start: candidate.start, end: candidate.end },
       occurrenceCount: 1,
-      resolution: { kind: "missing", reason: `Resource is not cataloged: ${candidate.resourceId}` },
+      resolution: { kind: "missing", reason: `Resource is not cataloged: ${resourceId}` },
     };
   }
   const resourceSource = source.resources.getSource(resource.sourceId);
@@ -380,8 +447,8 @@ function resolveResource(
     return {
       kind: "resource",
       key,
-      resourceId: candidate.resourceId,
-      label: presentation(candidate.label ?? resourceAddressLabel(resource.address)),
+      resourceId,
+      label: presentation(authoredLabel || resourceAddressLabel(resource.address)),
       firstSpan: { start: candidate.start, end: candidate.end },
       occurrenceCount: 1,
       resolution: { kind: "missing", reason: `Resource Source is missing: ${resource.sourceId}` },
@@ -391,8 +458,8 @@ function resolveResource(
   return {
     kind: "resource",
     key,
-    resourceId: candidate.resourceId,
-    label: presentation(candidate.label ?? addressLabel),
+    resourceId,
+    label: presentation(authoredLabel || addressLabel),
     firstSpan: { start: candidate.start, end: candidate.end },
     occurrenceCount: 1,
     resolution: {
@@ -450,7 +517,7 @@ export function readAuthoredLinks(
   let resourceEntryLimited = false;
 
   for (const candidate of scanned) {
-    if (candidate.kind === "invalid-resource") {
+    if (candidate.kind === "invalid-resource" || candidate.kind === "invalid-authored-resource") {
       resourceInvalidCount += 1;
       if (resourceDiagnostics.length < AUTHORED_LINKS_MAX_DIAGNOSTICS_PER_GROUP) {
         resourceDiagnostics.push({
@@ -460,7 +527,7 @@ export function readAuthoredLinks(
       }
       continue;
     }
-    if (candidate.kind === "resource") {
+    if (candidate.kind === "resource" || candidate.kind === "authored-resource") {
       const resolved = resolveResource(source, candidate);
       const existing = resourceIndex.get(resolved.key);
       if (existing !== undefined) {
@@ -553,6 +620,38 @@ function decodeResourceTarget(value: unknown, label: string): ResourceTarget {
   return { kind: "resource", resourceId: normalizeResourceId(input.resourceId) };
 }
 
+function decodeAuthoredResourceReference(
+  value: unknown,
+  label: string,
+): AuthoredResourceReference {
+  const input = record(value, label);
+  if (input.kind === "filesystem") {
+    return {
+      kind: "filesystem",
+      path: string(input.path, `${label} path`, 4_096),
+    };
+  }
+  if (input.kind === "web") {
+    return {
+      kind: "web",
+      url: string(input.url, `${label} URL`, 4_096),
+    };
+  }
+  if (input.kind === "jira") {
+    return {
+      kind: "jira",
+      key: string(input.key, `${label} key`, 255),
+    };
+  }
+  if (input.kind === "application") {
+    return {
+      kind: "application",
+      uri: string(input.uri, `${label} URI`, 4_096),
+    };
+  }
+  throw new Error(`${label} kind is invalid`);
+}
+
 function decodeEntryBase(value: Record<string, unknown>, label: string): AuthoredLinkEntryBase {
   return {
     key: string(value.key, `${label} key`, 1_024),
@@ -628,10 +727,13 @@ function decodeResource(value: unknown, index: number): AuthoredResourceLink {
   const label = `Authored Resource link ${index + 1}`;
   const input = record(value, label);
   if (input.kind !== "resource") throw new Error(`${label} kind must be resource`);
-  const resourceId = normalizeResourceId(input.resourceId);
+  const resourceId = input.resourceId === undefined
+    ? undefined
+    : normalizeResourceId(input.resourceId);
   const resolutionInput = record(input.resolution, `${label} resolution`);
   let resolution: AuthoredResourceResolution;
   if (resolutionInput.kind === "ready") {
+    if (!resourceId) throw new Error(`${label} ready resolution requires a Resource ID`);
     const target = decodeResourceTarget(resolutionInput.target, `${label} target`);
     if (target.resourceId !== resourceId) throw new Error(`${label} target does not match its Resource ID`);
     const provider = string(resolutionInput.provider, `${label} provider`, 32);
@@ -642,6 +744,16 @@ function decodeResource(value: unknown, index: number): AuthoredResourceLink {
       sourceName: string(resolutionInput.sourceName, `${label} Source name`, AUTHORED_LINKS_MAX_PRESENTATION_UNITS),
       provider,
       addressLabel: string(resolutionInput.addressLabel, `${label} address label`, AUTHORED_LINKS_MAX_PRESENTATION_UNITS),
+    };
+  } else if (resolutionInput.kind === "unregistered") {
+    if (resourceId) throw new Error(`${label} unregistered resolution must not contain a Resource ID`);
+    resolution = {
+      kind: "unregistered",
+      reference: decodeAuthoredResourceReference(
+        resolutionInput.reference,
+        `${label} authored reference`,
+      ),
+      reason: string(resolutionInput.reason, `${label} reason`, AUTHORED_LINKS_MAX_PRESENTATION_UNITS),
     };
   } else if (resolutionInput.kind === "missing") {
     resolution = {
@@ -654,7 +766,7 @@ function decodeResource(value: unknown, index: number): AuthoredResourceLink {
   return {
     ...decodeEntryBase(input, label),
     kind: "resource",
-    resourceId,
+    ...(resourceId ? { resourceId } : {}),
     resolution,
   };
 }

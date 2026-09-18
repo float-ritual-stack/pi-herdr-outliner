@@ -970,9 +970,23 @@ export class OutlinerServer {
       request.action !== "resources.open" &&
       request.action !== "resources.refresh" &&
       request.action !== "resources.command.execute" &&
+      request.action !== "resources.follow-authored" &&
       request.action !== "computed.execute"
     ) {
       return this.handle(request, subscribedClient);
+    }
+    if (request.action === "resources.follow-authored") {
+      try {
+        const result = await this.store.resources.followAuthoredReference(request.reference);
+        return { id: request.id, ok: true, result, sequence: this.store.sequence };
+      } catch (error) {
+        return {
+          id: request.id,
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+          sequence: this.store.sequence,
+        };
+      }
     }
     try {
       const destination = this.clientById(request.destinationClientId);
@@ -1202,6 +1216,7 @@ export class OutlinerServer {
         case "computed.execute":
         case "resources.open":
         case "resources.refresh":
+        case "resources.follow-authored":
         case "resources.command.execute":
           throw new Error(`${request.action} requires asynchronous dispatch`);
         case "attention.get":
@@ -1694,6 +1709,13 @@ export class OutlinerServer {
         break;
       }
       case "resources.intern-filesystem": {
+        const receipt = response.result as InternResourceReceipt;
+        if (!receipt.created) return null;
+        domain = "resource-catalog";
+        resourceId = receipt.resource.id;
+        break;
+      }
+      case "resources.follow-authored": {
         const receipt = response.result as InternResourceReceipt;
         if (!receipt.created) return null;
         domain = "resource-catalog";
