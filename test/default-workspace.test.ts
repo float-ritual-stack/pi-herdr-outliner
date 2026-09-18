@@ -20,6 +20,7 @@ const EXPECTED_GUIDE_SECTIONS = [
   "operating-flow",
   "splitting-documents",
   "references",
+  "resources",
   "virtual-branches",
   "mutation-discipline",
   "completion",
@@ -71,6 +72,14 @@ test("seeds and preserves an agent-readable documentation workspace", async () =
     ]);
     expect(authoredLinks.resources.entries).toEqual([
       expect.objectContaining({
+        label: "README.md",
+        resolution: {
+          kind: "unregistered",
+          reference: { kind: "filesystem", path: "README.md" },
+          reason: "File is not registered: README.md",
+        },
+      }),
+      expect.objectContaining({
         label: "https://github.com/float-ritual-stack/pi-herdr-outliner/blob/main/README.md",
         resolution: {
           kind: "unregistered",
@@ -79,6 +88,24 @@ test("seeds and preserves an agent-readable documentation workspace", async () =
             url: "https://github.com/float-ritual-stack/pi-herdr-outliner/blob/main/README.md",
           },
           reason: "Web Resource is not registered: https://github.com/float-ritual-stack/pi-herdr-outliner/blob/main/README.md",
+        },
+      }),
+      expect.objectContaining({
+        label: "user@example-host/path/to/file.md",
+        resolution: {
+          kind: "unregistered",
+          reference: {
+            kind: "application",
+            uri: "ssh://user@example-host/path/to/file.md",
+          },
+          reason: "Application Resource is not registered: ssh://user@example-host/path/to/file.md",
+        },
+      }),
+      expect.objectContaining({
+        label: "EXAMPLE-1",
+        resolution: {
+          kind: "missing",
+          reason: "No Jira Source is configured for EXAMPLE-1",
         },
       }),
     ]);

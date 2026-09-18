@@ -11,6 +11,8 @@ The same service is exposed to Pi/OMP as agent tools, so notes, decisions, quest
 
 > **Status:** active dogfood. The plugin is installable from the GitHub source checkout, but there is not yet a stable tagged release; schema and interaction details can still change.
 
+See [`CHANGELOG.md`](CHANGELOG.md) for notable changes after the first dogfood tag.
+
 ## Why this exists
 
 The project started as a small Friday-night experiment and grew into a durable workspace with a few explicit constraints:
@@ -37,7 +39,7 @@ The project started as a small Friday-night experiment and grew into a durable w
 - Plain-clickable Work IDs, canonical UUIDs, exact references, and `[[address]]` links inside Tree/Detail, with OSC 8 `pi-outliner://` links retained for external terminal interoperability.
 - Tree can project a selected block's authored Outlinks and Resources as read-only generated branches. Enumeration never creates pages, Resources, Sources, or provider traffic. Explicit activation follows or creates unresolved ordinary `[[page]]` links and human-authored `[file::…]`, `[web::…]`, `[jira::…]`, and `[app::…]` Resources; unresolved Work IDs stay unavailable.
 - Property-driven virtual branches with ranked or timestamp-sorted canonical roots, read-only contextual descendants through relative depth 2, independent occurrence disclosure, a 1,000-row branch budget, property-aware creation, and persisted manual root ordering.
-- Fresh databases seed a versioned, agent-readable Documentation hub with addressable sections, native transclusions, one exact cross-reference, and a working property-driven virtual branch.
+- Fresh databases seed version 4 of the agent-readable Documentation hub. The seed includes addressable sections, native transclusions, one exact cross-reference, a working property-driven virtual branch, and an authored-links example with block, page, local-file, web, SSH-application, and Jira references.
 - Agent-created blocks retain immutable creator provenance. Every later text or property mutation records its own `user`, `agent`, or `system` identity plus available actor, session, and task IDs, so edit attribution never depends on the creator.
 - Recoverable deletion preserves canonical structure and identity, excludes Trash content from normal queries/completions, and requires explicit identifier-confirmed purge.
 - Idempotent zero-context-loss Tree capture writes ordinary canonical children under one stable workspace Inbox without moving selection or navigation history.
@@ -126,6 +128,9 @@ negotiate useful metadata in the TUI and an `external-link` on external hosts
 without fabricating an inline document. `Alt+O` launches only the negotiated
 current-Resource URL after `open-external` policy and host checks. Opening a
 deep link does not imply read or command authority.
+
+An SSH URI authored through `[file::user@host/path]` uses this application
+path. It does not read the remote file or produce commentable source text.
 
 ### Computed Resources
 
@@ -365,14 +370,31 @@ Tree inserts two generated branches under that exact occurrence:
   explicit errors rather than creating placeholders.
 
 Fresh databases include **Authored links example** beneath **Documentation**.
-It has one resolved block link, one initially unregistered page link, and one
-human-authored `[web::…]` Resource. Both page and Resource creation therefore
-exercise the same create-on-navigation rule without fixture UUIDs. With a live
-Tree, focus it from the project root with:
+It has one resolved block link, one initially unregistered page link, and
+human-authored local-file, web, SSH-application, and Jira Resources. Showing
+the branches is read-only. Activation demonstrates create-on-navigation,
+missing-file errors, application metadata, and the configured-Source
+requirement for Jira without fixture Resource UUIDs. With a live Tree, focus
+the example from the project root with:
 
 ```sh
 bun run goto "Authored links example"
 ```
+
+Known limits in the current dogfood build:
+
+- Resource activation does not yet open the block destination chooser when the
+  current Detail is locked. This is tracked as PIE-260.
+- `[file::user@host/path]` creates an SSH application deep link, not a
+  source-backed remote file. SSH-backed text and `[ssh::host/path]` authoring
+  are tracked as PIE-261.
+- Metadata-only Resource fields are readable but not commentable. Structured
+  metadata comments are tracked as PIE-262.
+- Authored Resource properties are actionable through Tree's generated branch
+  but remain plain text in Detail. Inline activation is tracked as PIE-263.
+- Direct comments work on filesystem text, cached web Markdown, and extracted
+  PDF text. Computed and remote-entity cached Markdown support is tracked as
+  PIE-264.
 
 Activating an inline Backlinks source opens a transient preview over the
 invoking Detail instead of consuming another reader. `Left` and `Right` traverse
