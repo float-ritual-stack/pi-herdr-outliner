@@ -83,6 +83,8 @@ test("Herdr link action delegates an exact block URI to shared focus and reveal"
             focused_pane_id: "pane-a",
           }),
           OUTLINER_STATE_DIR: stateRoot,
+          OUTLINER_REMOTE: "0",
+          OUTLINER_SOCKET_PATH: "",
         },
         stdout: "pipe",
         stderr: "pipe",
