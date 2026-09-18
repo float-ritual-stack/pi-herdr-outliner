@@ -83,7 +83,7 @@ function fenceMarker(
   return relativeIndent >= 0 && relativeIndent <= 3 ? match[2] : null;
 }
 
-export function protectedMarkdownRanges(text: string): TextRange[] {
+export function protectedCodeRanges(text: string): TextRange[] {
   const ranges: TextRange[] = [];
   const listContainers: ListContainer[] = [];
   let activeFence: {
@@ -157,10 +157,18 @@ export function protectedMarkdownRanges(text: string): TextRange[] {
     }
     lineStart = lineEnd + 1;
   }
-  for (const pattern of [/(`+)[^\n]*?\1/g, /!?\[[^\]\n]*\]\([^)\n]*\)/g]) {
+  for (const pattern of [/(`+)[^\n]*?\1/g]) {
     for (const match of text.matchAll(pattern)) {
       ranges.push({ start: match.index, end: match.index + match[0].length });
     }
+  }
+  return ranges;
+}
+
+export function protectedMarkdownRanges(text: string): TextRange[] {
+  const ranges = protectedCodeRanges(text);
+  for (const match of text.matchAll(/!?\[[^\]\n]*\]\([^)\n]*\)/g)) {
+    ranges.push({ start: match.index, end: match.index + match[0].length });
   }
   return ranges;
 }

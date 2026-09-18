@@ -1,3 +1,4 @@
+import type { AuthoredResourceReference } from "./resource-references";
 import type {
   ComputedExecutionReceipt,
   CreateComputedInvocationInput,
@@ -16,6 +17,7 @@ import type {
   ResourceRetentionReferenceInput,
   ReviseComputedInvocationInput,
 } from "./resources";
+export type { AuthoredResourceReference } from "./resource-references";
 
 export type {
   ComputedExecutionHistory,
@@ -1121,7 +1123,7 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 50;
+export const OUTLINER_PROTOCOL_VERSION = 52;
 
 
 export interface OutlinerServiceStatus {
@@ -1142,6 +1144,7 @@ export interface ComputedExecutionResult {
 export type OutlinerRequest =
   | { id: string; action: "ping" }
   | { id: string; action: "blocks.query"; query: BlockSearchQuery }
+  | { id: string; action: "blocks.authored-links"; ownerBlockId: string }
   | { id: string; action: "get"; blockId: string }
   | { id: string; action: "children"; parentId: string | null }
   | { id: string; action: "workspace.snapshot"; view?: WorkspaceSnapshotView }
@@ -1177,6 +1180,11 @@ export type OutlinerRequest =
     }
   | { id: string; action: "resources.intern"; input: InternResourceInput }
   | { id: string; action: "resources.intern-filesystem"; input: InternFilesystemResourceInput }
+  | {
+      id: string;
+      action: "resources.follow-authored";
+      reference: AuthoredResourceReference;
+    }
   | { id: string; action: "resources.get"; resourceId: string }
   | { id: string; action: "resources.relocate"; input: RelocateResourceInput }
   | {

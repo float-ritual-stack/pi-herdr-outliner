@@ -1,11 +1,11 @@
-export const DEFAULT_WORKSPACE_SEED_VERSION = 1;
+export const DEFAULT_WORKSPACE_SEED_VERSION = 4;
 export const AGENT_DOCUMENTATION_SYSTEM_DOC = "agent-documentation-guide";
+export const AUTHORED_LINKS_EXAMPLE_SYSTEM_DOC = "authored-links-example";
 
 interface SeedBlock {
   readonly id: string;
   readonly updatedAt: string;
 }
-
 interface DefaultWorkspaceSeedWriter {
   create(text: string, parentId: string | null): SeedBlock;
   update(block: SeedBlock, text: string): SeedBlock;
@@ -67,6 +67,23 @@ const DOCUMENTATION_SECTIONS = [
       "Generated embeds are non-recursive, report failures or truncation explicitly, and are bounded to 16 per document.",
       "",
       "Complete when changing the source updates every composed reading surface without copied prose.",
+    ],
+  },
+  {
+    key: "resources",
+    title: "Resources",
+    lines: [
+      "A Resource gives file-backed or external material a stable UUID without creating a wrapper block.",
+      "",
+      "- `[file::docs/plan.md]` addresses a local file.",
+      "- `[file::user@example-host/path/to/file.md]` addresses an SSH application deep link.",
+      "- `[web::https://example.com/guide]` addresses a website.",
+      "- `[jira::EXAMPLE-1]` addresses an issue through a configured Jira Source.",
+      "- `[app::scheme://authority/namespace/item]` addresses a generic application deep link.",
+      "",
+      "Showing authored Resource rows and moving selection are read-only. Press Enter to resolve or intern an unregistered Resource only when navigating.",
+      "",
+      "Filesystem text, cached web Markdown, and extracted PDF text support source-backed comments. Application Resources expose metadata and external-open behavior but do not fabricate local content.",
     ],
   },
   {
@@ -141,7 +158,11 @@ export function seedDefaultWorkspace(writer: DefaultWorkspaceSeedWriter): void {
   const virtualBranchesSection = sections.find(({ definition }) =>
     definition.key === "virtual-branches"
   );
+  const referencesSection = sections.find(({ definition }) =>
+    definition.key === "references"
+  );
   if (!virtualBranchesSection) throw new Error("Default documentation seed is missing virtual branches");
+  if (!referencesSection) throw new Error("Default documentation seed is missing references");
 
   writer.update(guide, [
     guideTitle,
@@ -152,6 +173,24 @@ export function seedDefaultWorkspace(writer: DefaultWorkspaceSeedWriter): void {
     "",
     ...sections.flatMap(({ block }) => [`!((${block.id}))`, ""]),
   ].join("\n").trimEnd());
+  const authoredLinksGuideUrl =
+    "https://github.com/float-ritual-stack/pi-herdr-outliner/blob/main/README.md";
+  writer.create([
+    `Authored links example [type::example] [system-doc::${AUTHORED_LINKS_EXAMPLE_SYSTEM_DOC}] [page::outliner-authored-links-example]`,
+    "",
+    "Select this block in Tree, open the action menu with `?`, and invoke `Show authored links`.",
+    "",
+    `- Existing block: ((${referencesSection.block.id}|References guide))`,
+    "- Unregistered page: [[Planning scratchpad]]",
+    "- Local file Resource: [file::README.md]",
+    `- Web Resource: [web::${authoredLinksGuideUrl}]`,
+    "- SSH application Resource: [file::user@example-host/path/to/file.md]",
+    "- Jira Resource: [jira::EXAMPLE-1]",
+    "",
+    "Showing the generated Outlinks and Resources branches is read-only. Press Enter on an unregistered page or Resource to create it only when navigating.",
+    "",
+    "The local file must exist before activation. The SSH example is an external application link, and the Jira example requires one configured Source for project `EXAMPLE`.",
+  ].join("\n"), documentation.id);
 
   writer.create([
     "Project documentation [type::virtual-branch]",

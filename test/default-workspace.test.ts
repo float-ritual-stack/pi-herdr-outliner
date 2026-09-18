@@ -2,8 +2,10 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { readAuthoredLinks } from "../src/authored-links";
 import {
   AGENT_DOCUMENTATION_SYSTEM_DOC,
+  AUTHORED_LINKS_EXAMPLE_SYSTEM_DOC,
   DEFAULT_WORKSPACE_SEED_VERSION,
 } from "../src/default-workspace";
 import { getProperty } from "../src/properties";
@@ -18,6 +20,7 @@ const EXPECTED_GUIDE_SECTIONS = [
   "operating-flow",
   "splitting-documents",
   "references",
+  "resources",
   "virtual-branches",
   "mutation-discipline",
   "completion",
@@ -48,6 +51,64 @@ test("seeds and preserves an agent-readable documentation workspace", async () =
       kind: "page",
       block: { id: guide.id },
     });
+    const authoredLinksExamples = store.queryBlocks({
+      filters: [{ key: "system-doc", value: AUTHORED_LINKS_EXAMPLE_SYSTEM_DOC }],
+      limit: 2,
+    }).blocks;
+    expect(authoredLinksExamples).toHaveLength(1);
+    const authoredLinksExample = authoredLinksExamples[0]!;
+    expect(store.resolvePageAddress("outliner-authored-links-example")).toMatchObject({
+      status: "resolved",
+      kind: "page",
+      block: { id: authoredLinksExample.id },
+    });
+    const authoredLinks = readAuthoredLinks(store, authoredLinksExample.id);
+    if (authoredLinks.kind !== "ready") {
+      throw new Error(`Expected ready authored links, got ${authoredLinks.kind}`);
+    }
+    expect(authoredLinks.outlinks.entries.map((entry) => entry.resolution.kind)).toEqual([
+      "ready",
+      "unregistered-page",
+    ]);
+    expect(authoredLinks.resources.entries).toEqual([
+      expect.objectContaining({
+        label: "README.md",
+        resolution: {
+          kind: "unregistered",
+          reference: { kind: "filesystem", path: "README.md" },
+          reason: "File is not registered: README.md",
+        },
+      }),
+      expect.objectContaining({
+        label: "https://github.com/float-ritual-stack/pi-herdr-outliner/blob/main/README.md",
+        resolution: {
+          kind: "unregistered",
+          reference: {
+            kind: "web",
+            url: "https://github.com/float-ritual-stack/pi-herdr-outliner/blob/main/README.md",
+          },
+          reason: "Web Resource is not registered: https://github.com/float-ritual-stack/pi-herdr-outliner/blob/main/README.md",
+        },
+      }),
+      expect.objectContaining({
+        label: "user@example-host/path/to/file.md",
+        resolution: {
+          kind: "unregistered",
+          reference: {
+            kind: "application",
+            uri: "ssh://user@example-host/path/to/file.md",
+          },
+          reason: "Application Resource is not registered: ssh://user@example-host/path/to/file.md",
+        },
+      }),
+      expect.objectContaining({
+        label: "EXAMPLE-1",
+        resolution: {
+          kind: "missing",
+          reason: "No Jira Source is configured for EXAMPLE-1",
+        },
+      }),
+    ]);
 
     const documentation = store.get(guide.parentId!);
     expect(documentation).not.toBeNull();

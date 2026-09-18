@@ -2402,7 +2402,7 @@ export function createDetailController(
     const line = state.buffer.lines[state.buffer.row];
     const target = completionTargetAtCursor(line, state.buffer.column);
     if (!target) {
-      state.status = "Type [[named address]], [[target|label]], or ((fuzzy block))";
+      state.status = "Type [[address]], ((block)), or [file::path] for Resource path completion";
       return;
     }
 
