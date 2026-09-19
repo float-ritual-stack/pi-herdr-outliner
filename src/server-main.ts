@@ -28,8 +28,13 @@ try {
   } catch (closeError) {
     console.error(`Failed to close outliner service after startup error: ${String(closeError)}`);
   }
-  if (ownsPaneState) rmSync(paneStatePath, { force: true });
-  store.close();
+  try {
+    if (ownsPaneState) rmSync(paneStatePath, { force: true });
+  } catch (cleanupError) {
+    console.error(`Failed to remove outliner service pane state after startup error: ${String(cleanupError)}`);
+  } finally {
+    store.close();
+  }
   throw error;
 }
 console.log(JSON.stringify({ status: "ready", socket: paths.socket, database: paths.database }));
@@ -53,9 +58,21 @@ async function stop(): Promise<void> {
     exitCode = 1;
     console.error(`Failed to close outliner service: ${String(error)}`);
   } finally {
-    rmSync(paneStatePath, { force: true });
-    store.close();
-    process.exit(exitCode);
+    try {
+      rmSync(paneStatePath, { force: true });
+    } catch (error) {
+      exitCode = 1;
+      console.error(`Failed to remove outliner service pane state: ${String(error)}`);
+    } finally {
+      try {
+        store.close();
+      } catch (error) {
+        exitCode = 1;
+        console.error(`Failed to close outliner store: ${String(error)}`);
+      } finally {
+        process.exit(exitCode);
+      }
+    }
   }
 }
 

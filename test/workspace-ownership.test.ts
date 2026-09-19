@@ -17,6 +17,7 @@ test("a second writable store cannot recover another owner's live web refresh", 
   });
   let contender: OutlinerStore | undefined;
   let rejected: unknown;
+  let pending: ReturnType<typeof owner.resources.refreshWeb> | undefined;
   try {
     const source = owner.resources.createSource({
       name: "Ownership fixture",
@@ -27,7 +28,7 @@ test("a second writable store cannot recover another owner's live web refresh", 
       sourceId: source.id,
       address: { kind: "web", url: "https://example.com/ownership" },
     });
-    const pending = owner.resources.refreshWeb(resource.id, true);
+    pending = owner.resources.refreshWeb(resource.id, true);
     const sequence = owner.sequence;
     try {
       contender = new OutlinerStore(path);
@@ -48,6 +49,7 @@ test("a second writable store cannot recover another owner's live web refresh", 
     expect(result.web?.markdown).toBe("# Original owner's result");
   } finally {
     response.resolve(new Response("cleanup"));
+    await Promise.allSettled([pending]);
     contender?.close();
     owner.close();
     rmSync(root, { recursive: true, force: true });

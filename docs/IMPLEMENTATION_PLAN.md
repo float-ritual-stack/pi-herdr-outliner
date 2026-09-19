@@ -119,7 +119,8 @@ Record tool/dependency versions where the behavior depends on them.
 
 ## Safety packages
 
-New scenario filenames below are planned files, not commands that exist today.
+The S1 scenario `test/e2e/workspace-ownership.ts` is implemented. The remaining
+new scenario filenames below are planned files, not commands that exist today.
 Each defect needs a focused regression that fails before its fix, plus evidence
 from the real service or UI path appropriate to the claim.
 
@@ -130,7 +131,7 @@ Acquire exclusive ownership for the canonical workspace/database identity before
 opening writable SQLite, running migrations, or recovering work. A preliminary
 ping does not establish ownership. Release only ownership acquired by this process.
 
-Proposed scenario: `test/e2e/workspace-ownership.ts`. Keep an operation in flight,
+Implemented scenario: `test/e2e/workspace-ownership.ts`. Keep an operation in flight,
 launch a second actual service against the same fixture, verify rejection without
 state changes, and let the original operation finish. Cover computed, web, and
 remote-entity recovery with focused variants. Also exercise legitimate recovery

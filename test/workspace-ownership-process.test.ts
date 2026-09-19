@@ -39,6 +39,43 @@ function launchService(root: string) {
   return { child, stderr, startup };
 }
 
+for (const phase of ["startup", "shutdown"] as const) {
+  test(`${phase} pane-state cleanup failure still releases ownership and exits`, async () => {
+    const root = mkdtempSync(join(tmpdir(), "outliner-service-cleanup-"));
+    const stateDir = join(root, "state");
+    const paneStatePath = join(stateDir, "service-pane.json");
+    const legacyPaneStatePath = join(stateDir, "outliner-pane.json");
+    const services: ReturnType<typeof launchService>[] = [];
+    try {
+      mkdirSync(join(root, "project"));
+      mkdirSync(stateDir);
+      // Directories make non-recursive pane-state removal fail deterministically.
+      mkdirSync(paneStatePath);
+      if (phase === "startup") mkdirSync(legacyPaneStatePath);
+      const service = launchService(root);
+      services.push(service);
+      expect(await service.startup()).toBe(phase === "shutdown");
+      if (phase === "shutdown") service.child.kill("SIGTERM");
+      expect(await service.child.exited).toBe(1);
+      expect(await service.stderr).toContain("Failed to remove outliner service pane state");
+
+      rmSync(paneStatePath, { recursive: true });
+      if (phase === "startup") rmSync(legacyPaneStatePath, { recursive: true });
+      const successor = launchService(root);
+      services.push(successor);
+      expect(await successor.startup()).toBe(true);
+      successor.child.kill("SIGTERM");
+      expect(await successor.child.exited).toBe(0);
+    } finally {
+      for (const service of services) {
+        if (service.child.exitCode === null) service.child.kill("SIGKILL");
+      }
+      await Promise.all(services.map((service) => service.child.exited));
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 20_000);
+}
+
 test("simultaneous services elect one owner and recover a real refresh after SIGKILL", async () => {
   const root = mkdtempSync(join(tmpdir(), "outliner-service-owner-"));
   mkdirSync(join(root, "project"));
