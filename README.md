@@ -1210,6 +1210,7 @@ Herdr GUI, or live terminal resize.
 
 - [Architecture](docs/ARCHITECTURE.md)
 - [Contributing and delivery workflow](CONTRIBUTING.md)
+- [Proposed safety and Herdr/Pi implementation plan](docs/IMPLEMENTATION_PLAN.md)
 - [OpenCode port requirements](docs/OPENCODE_PORT.md)
 - [Archived early feedback](docs/archive/misc-feedback.md)
 
