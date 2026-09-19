@@ -148,6 +148,66 @@ test("compact previews retain resolved fragment links and the exact authored-tex
   }
 });
 
+test("compact previews retain references by source span rather than matching labels", () => {
+  const directory = mkdtempSync(join(tmpdir(), "outliner-tree-index-reference-spans-"));
+  const store = new OutlinerStore(join(directory, "outliner.sqlite"));
+  try {
+    const hidden = store.create("Shared title");
+    const visible = store.create("Shared title");
+    const hiddenRef = `((${hidden.id}|same))`;
+    const visibleRef = `((${visible.id}|same))`;
+    const cases = [
+      {
+        text: `[related::${hiddenRef}] See ${visibleRef} [type::note]`,
+        preview: "See ((same))", ids: [visible.id],
+      },
+      {
+        text: `[related::${hiddenRef}]\r\n  See ${visibleRef}  \r\n${hiddenRef}`,
+        preview: "See ((same))", ids: [visible.id],
+      },
+      {
+        text: `[related::${hiddenRef}] Literal ((same)) [type::note]`,
+        preview: "Literal ((same))", ids: [],
+      },
+      {
+        text: `See ${visibleRef} [related::${hiddenRef}] then ${visibleRef} [type::note]`,
+        preview: "See ((same))  then ((same))", ids: [visible.id, visible.id],
+      },
+      {
+        text: `[related::((${hidden.id}))] See ((${visible.id})) [type::note]`,
+        preview: "See ((Shared title))", ids: [visible.id],
+      },
+      {
+        text: `Header\r\n${visibleRef}\n${hiddenRef}`,
+        preview: "Header ↵ ((same)) ↵ ((same))", ids: [visible.id, hidden.id],
+      },
+      {
+        text: `((same)) ${"x".repeat(496)}${hiddenRef}`,
+        preview: `((same)) ${"x".repeat(496)}((same…`, ids: [],
+      },
+      {
+        text: `${"x".repeat(503)}${visibleRef}tail`,
+        preview: `${"x".repeat(503)}((same))…`, ids: [visible.id],
+      },
+      {
+        text: `[related::${hiddenRef}]`,
+        ids: [],
+      },
+    ];
+    const sources = cases.map(fixture => store.create(fixture.text));
+    const index = store.readTreeIndex();
+    for (const [i, fixture] of cases.entries()) {
+      const source = sources[i]!;
+      const entry = index.blocks.find(block => block.id === source.id)!;
+      expect(entry.preview).toBe(fixture.preview ?? source.id);
+      expect(entry.previewReferences.map(reference => reference.blockId)).toEqual(fixture.ids);
+    }
+  } finally {
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("bounded Tree previews preserve graphemes and do not transfer an aliased target's long title", () => {
   const directory = mkdtempSync(join(tmpdir(), "outliner-tree-index-bounds-"));
   const store = new OutlinerStore(join(directory, "outliner.sqlite"));
