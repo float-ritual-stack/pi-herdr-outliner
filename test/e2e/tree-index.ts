@@ -23,9 +23,10 @@ const result = await runHerdrScenario({
     const card = await create("PIE-269 card [probe::tree-index]", root.id);
     const child = await create("PIE-269 contextual child", card.id);
     const board = await create("PIE-269 board [type::virtual-branch] [query::probe=tree-index]", root.id);
+    const reference = await create(`[related::((${long.id}|same))] [status::complete]\nLiteral ((same)) then ((${card.id}|same))`, root.id);
     const sizes = [120, 700, 2100, 7000, 20000];
     const paragraph = "A synthetic document paragraph with exact editable source text. ";
-    for (let i = initial.physical.blocks.length + 6; i < 1000; i++) {
+    for (let i = initial.physical.blocks.length + 7; i < 1000; i++) {
       const bucket = i % 100;
       const size = sizes[bucket < 19 ? 0 : bucket < 51 ? 1 : bucket < 91 ? 2 : bucket < 99 ? 3 : 4]!;
       await create(`Document ${i}${i % 2 === 0 ? " [status::planned] [type::note]" : ""}\n${paragraph.repeat(Math.ceil(size / paragraph.length)).slice(0, size)}\nExact body ending ${i}`, root.id);
@@ -57,7 +58,7 @@ const result = await runHerdrScenario({
       query => session.client.request<VisibleBlockCollection>({ action: "blocks.query", query }), baseline.virtualOccurrenceRanks);
     assert.deepEqual(projected.rows.map(row => [row.rowId, row.depth]), previous.rows.map(row => [row.rowId, row.depth]));
     await session.record("compact-index-measurements", { transport, baselineBytes, indexBytes, snapshotRequestMs, indexRequestMs, indexParseMs, projectionMs,
-      blockCount: 1000, bodySizeBands: sizes, bandPercentages: [19, 32, 40, 8, 1], taggedFillers: "every other document", fixtureExceptions: "seeded documents and six navigation/edit/projection targets",
+      blockCount: 1000, bodySizeBands: sizes, bandPercentages: [19, 32, 40, 8, 1], taggedFillers: "every other document", fixtureExceptions: "seeded documents and seven navigation/edit/projection targets",
       timingScope: "direct service request/parse and client projection, before independent Tree launch; same host" });
 
     const remote = await session.openRemoteBrowsingContext("pi-tui", transport);
@@ -81,6 +82,13 @@ const result = await runHerdrScenario({
       await session.keys(remote.tree, "enter");
       await selected(id);
     };
+    await goto(reference.id, reference.id);
+    await session.waitVisible(remote.tree, "Literal ((same)) then ((same))");
+    await session.checkpoint("02-reference-provenance");
+    const previewReferences = byId.get(reference.id)!.previewReferences;
+    assert.deepEqual(previewReferences, [{ blockId: card.id, label: "same", status: "resolved", start: 22, end: 30 }]);
+    await session.record("compact-reference-provenance", { sourceId: reference.id, hiddenTargetId: long.id, visibleTargetId: card.id,
+      previewReferences, limitation: "Herdr pane.read ANSI omits OSC 8 metadata; emitted hyperlink columns are verified by the renderer regression, not these captured frames" });
     await goto("END-OF-EXACT-EDIT", editable.id);
     await session.keys(remote.tree, "e");
     await session.waitVisible(remote.tree, "END-OF-EXACT-EDIT");

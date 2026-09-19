@@ -1053,8 +1053,13 @@ export interface VisibleBlockCollection {
 
 export interface TreeIndexBlock extends Omit<VisibleBlock, "text" | "displayText" | "propertyMatches"> {
   preview: string;
-  previewReferences: BlockReferenceResolution[];
+  previewReferences: TreePreviewReference[];
   textDigest: string;
+}
+
+export interface TreePreviewReference extends BlockReferenceResolution {
+  start: number;
+  end: number;
 }
 
 export interface TreeIndexCollection {

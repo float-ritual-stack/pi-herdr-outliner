@@ -543,6 +543,7 @@ export function renderTreeFrame(
             optionalSuffix,
             width,
           ),
+          prefix.length + (semanticTreatment ? semanticTreatment.sgr.length + semanticTreatment.glyph.length + 1 : 0),
         ),
       ];
     } else {

@@ -419,6 +419,17 @@ describe("outliner link rendering", () => {
   const targetId = "550e8400-e29b-41d4-a716-446655440000";
   const target = block(targetId, "Target decision [type::decision]");
 
+  test("keeps canonical IDs inside stale references nonactionable", () => {
+    const aliasId = "550e8400-e29b-41d4-a716-446655440005";
+    const text = `((${aliasId} · Missing fragment)) then ${aliasId}`;
+    const linker = createOutlinerTextLinker([{
+      blockId: targetId, fragmentId: "gone", label: aliasId, status: "stale",
+    }], () => true, "PIE");
+    const rendered = linker.link(text);
+    expect(getOsc8LinkAtColumn(rendered, text.indexOf(aliasId))).toBeUndefined();
+    expect(getOsc8LinkAtColumn(rendered, text.lastIndexOf(aliasId))).toBe(outlinerLinkUri("block", aliasId));
+  });
+
   test("renders service-resolved fragment links without downloading the target body", () => {
     const text = "Read ((a paragraph))";
     const linker = createOutlinerTextLinker([{

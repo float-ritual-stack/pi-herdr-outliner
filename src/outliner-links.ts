@@ -26,6 +26,7 @@ import { isWorkIdAddress } from "./page-addresses";
 import type {
   Block,
   BlockReferenceResolution,
+  TreePreviewReference,
   OutlinerNavigationIntent,
   PageAddressFollowResult,
   PageAddressResolution,
@@ -555,29 +556,33 @@ export function linkOutlinerMarkdown(
 }
 
 export interface OutlinerTextLinker {
-  link(text: string): string;
+  link(text: string, referenceOffset?: number): string;
 }
 
 export function createOutlinerTextLinker(
-  resolved: readonly BlockReferenceResolution[],
+  resolved: readonly (BlockReferenceResolution | TreePreviewReference)[],
   hasBlock: (blockId: string) => boolean,
   workIdPrefix: string | null = null,
 ): OutlinerTextLinker {
   const references = resolved.map(reference => ({
     visible: blockReferenceDisplayText(reference),
+    ...("start" in reference ? { start: reference.start, end: reference.end } : {}),
     uri: reference.status === "resolved" || reference.status === "deleted"
       ? outlinerLinkUri("block", reference.blockId, { fragmentId: reference.fragmentId })
       : null,
   }));
   const consumedReferences = new Set<number>();
   return {
-    link(text: string): string {
+    link(text: string, referenceOffset = 0): string {
       const exactSpans: LinkSpan[] = [];
       const referenceRanges: TextRange[] = [];
       for (let index = 0; index < references.length; index += 1) {
         if (consumedReferences.has(index)) continue;
         const reference = references[index];
-        let start = text.indexOf(reference.visible);
+        let start = reference.start === undefined
+          ? text.indexOf(reference.visible)
+          : reference.start + referenceOffset;
+        if (reference.start !== undefined && text.slice(start, reference.end! + referenceOffset) !== reference.visible) continue;
         while (
           start >= 0 &&
           referenceRanges.some((range) =>
@@ -590,7 +595,7 @@ export function createOutlinerTextLinker(
         const range = { start, end: start + reference.visible.length };
         referenceRanges.push(range);
         consumedReferences.add(index);
-        if (reference.uri) exactSpans.push({ ...range, uri: reference.uri });
+        exactSpans.push({ ...range, uri: reference.uri });
       }
       const spans = selectLinkSpans(
         text,

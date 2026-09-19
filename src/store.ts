@@ -38,6 +38,7 @@ import {
 } from "./page-addresses";
 import {
   blockReferenceDisplayText,
+  blockReferenceOccurrences,
   resolveBlockReferences as resolveBlockReferenceText,
   resolveBlockReferencesWithStatus,
 } from "./references";
@@ -436,24 +437,27 @@ function boundedTreeLabel(text: string): string {
 }
 
 function compactTreeBlock(
-  { text, displayText, propertyMatches: _matches, ...metadata }: VisibleBlock,
+  { text, displayText: _displayText, propertyMatches: _matches, ...metadata }: VisibleBlock,
   lookup: (blockId: string) => Block | null,
 ): TreeIndexBlock {
-  const title = metadata.properties.length
-    ? firstLineWithoutPropertyTokens(displayText)?.trim() || metadata.id
-    : displayText.replace(/\r?\n/g, " ↵ ");
-  const preview = boundedTreeLabel(title);
+  const source = metadata.properties.length
+    ? firstLineWithoutPropertyTokens(text)?.trim() || metadata.id
+    : text.replace(/\r?\n/g, " ↵ ");
+  const resolved = resolveBlockReferencesWithStatus(source, lookup);
+  const preview = boundedTreeLabel(resolved.text);
+  const retainedLength = preview === resolved.text ? preview.length : preview.length - 1;
+  const occurrences = blockReferenceOccurrences(source);
   let offset = 0;
-  const previewReferences = resolveBlockReferencesWithStatus(text, lookup).references.filter(reference => {
+  const previewReferences = resolved.references.flatMap((reference, index) => {
+    const occurrence = occurrences[index]!;
     const label = blockReferenceDisplayText(reference);
-    const start = preview.indexOf(label, offset);
-    if (start < 0) return false;
-    offset = start + label.length;
-    return true;
-  }).map(reference => {
-    if (reference.label === undefined) return reference;
+    const start = occurrence.start + offset;
+    const end = start + label.length;
+    offset += label.length - (occurrence.end - occurrence.start);
+    if (end > retainedLength) return [];
+    if (reference.label === undefined) return [{ ...reference, start, end }];
     const { title: _title, ...aliased } = reference;
-    return aliased;
+    return [{ ...aliased, start, end }];
   });
   return {
     ...metadata,

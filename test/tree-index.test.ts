@@ -8,6 +8,27 @@ import { OutlinerStore } from "../src/store";
 import type { Block, TreeFocusCollection, TreeIndexCollection, TreeIndexSnapshot } from "../src/types";
 import { projectVirtualBranches } from "../src/virtual-branches";
 import { readAuthoredLinks } from "../src/authored-links";
+import { createOutlinerTextLinker, outlinerLinkUri } from "../src/outliner-links";
+import { getOsc8LinkAtColumn } from "@earendil-works/pi-tui";
+
+test("compact references retain source identity after hidden properties and repeated labels", () => {
+  const directory = mkdtempSync(join(tmpdir(), "outliner-tree-index-reference-source-"));
+  const store = new OutlinerStore(join(directory, "outliner.sqlite"));
+  try {
+    const hidden = store.create("Hidden target");
+    const visible = store.create("Visible target");
+    const source = store.create(`[related::((${hidden.id}|same))]\nLiteral ((same)) then ((${visible.id}|same))`);
+    const entry = store.readTreeIndex().blocks.find(block => block.id === source.id)!;
+    expect(entry.preview).toBe("Literal ((same)) then ((same))");
+    expect(entry.previewReferences.map(reference => reference.blockId)).toEqual([visible.id]);
+    const rendered = createOutlinerTextLinker(entry.previewReferences, () => true).link(entry.preview);
+    expect(getOsc8LinkAtColumn(rendered, entry.preview.indexOf("same"))).toBeUndefined();
+    expect(getOsc8LinkAtColumn(rendered, entry.preview.lastIndexOf("same"))).toBe(outlinerLinkUri("block", visible.id));
+  } finally {
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 test("Tree receives complete structure and bounded previews while exact bodies remain available", async () => {
   const directory = mkdtempSync(join(tmpdir(), "outliner-tree-index-"));
@@ -136,7 +157,7 @@ test("compact previews retain resolved fragment links and the exact authored-tex
     const entry = store.readTreeIndex().blocks.find(block => block.id === source.id)!;
     expect(entry.preview).toBe("See ((the paragraph))");
     expect(entry.previewReferences).toEqual([{
-      blockId: target.id, fragmentId: "anchor", label: "the paragraph", status: "resolved",
+      blockId: target.id, fragmentId: "anchor", label: "the paragraph", status: "resolved", start: 4, end: 21,
     }]);
     const authored = readAuthoredLinks(store, source.id);
     expect(authored.kind).toBe("ready");
@@ -161,7 +182,7 @@ test("bounded Tree previews preserve graphemes and do not transfer an aliased ta
     expect(index.blocks.find(block => block.id === source.id)!.preview).toBe("x".repeat(510) + "…");
     const aliased = index.blocks.find(block => block.id === alias.id)!;
     expect(aliased.preview).toBe("Open ((short))");
-    expect(aliased.previewReferences).toEqual([{ blockId: target.id, label: "short", status: "resolved" }]);
+    expect(aliased.previewReferences).toEqual([{ blockId: target.id, label: "short", status: "resolved", start: 5, end: 14 }]);
     expect(Buffer.byteLength(JSON.stringify(aliased))).toBeLessThan(1_000);
     const focused = store.focusTree(target.id);
     expect(focused.matches[0]!.title).toHaveLength(512);

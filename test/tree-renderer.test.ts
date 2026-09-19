@@ -440,6 +440,22 @@ describe("renderTreeFrame", () => {
       `pi-outliner://block/${id}`,
     );
   });
+  test("places compact reference spans after indentation and semantic decoration", () => {
+    const targetId = "550e8400-e29b-41d4-a716-446655440006";
+    const hiddenId = "550e8400-e29b-41d4-a716-446655440007";
+    const source = block("reference-source", {
+      text: `[related::((${hiddenId}|same))] [status::complete]\nLiteral ((same)) then ((${targetId}|same))`,
+      displayText: "[related::((same))] [status::complete]\nLiteral ((same)) then ((same))",
+      properties: [{ key: "status", value: "complete" }],
+      depth: 1,
+    });
+    const frame = renderTreeFrame(view([source, block(targetId), block(hiddenId)]), 120, 12).frame;
+    const line = frame.split("\n").find(line => stripTerminalSequences(line).includes("Literal ((same)) then ((same))"))!;
+    expect(line).toBeDefined();
+    const visible = stripTerminalSequences(line);
+    expect(getOsc8LinkAtColumn(line, visible.indexOf("same"))).toBeUndefined();
+    expect(getOsc8LinkAtColumn(line, visible.lastIndexOf("same"))).toBe(`pi-outliner://block/${targetId}`);
+  });
   test("links only Work IDs for the configured project prefix", () => {
     const linked = block("custom-work", {
       text: "ABC-001 and PIE-001",
