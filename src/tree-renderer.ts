@@ -12,29 +12,30 @@ import {
 import { completionWindow } from "./completion";
 import { createOutlinerTextLinker } from "./outliner-links";
 import { quickInsertionPoint } from "./quick-edit";
-import { firstLineWithoutPropertyTokens } from "./properties";
 import {
   DEFAULT_PROPERTY_SUMMARY_KEYS,
   propertySummarySegments,
 } from "./property-summary";
-import { blockDisplayTitle } from "./references";
 import { layoutExpandedBlock } from "./tree-layout";
 import { renderMarkdownLine, sanitizeDynamicText, truncate } from "./terminal";
-import type { Block, VisibleBlock } from "./types";
+import type { Block, TreeIndexBlock } from "./types";
 import type { TreeQuickCompletion, TreeView } from "./tree-controller";
 import {
   isBlockTreeRow,
   type AuthoredLinkHeaderRow,
   type AuthoredLinkRow,
-  type TreeDisplayRow,
+  type TreeDisplayRow as ProjectedDisplayRow,
 } from "./tree-rows";
 import type { TreeMouseTarget } from "./tree-mouse";
 import {
   decorateVirtualBranchDefinitionText,
   virtualBranchStateLabel,
-  type TreeRow,
+  type TreeRow as ProjectedTreeRow,
   type VirtualBranchState,
 } from "./virtual-branches";
+
+type TreeRow = ProjectedTreeRow<TreeIndexBlock>;
+type TreeDisplayRow = ProjectedDisplayRow<TreeIndexBlock>;
 
 function countLabel(count: number, singular: string): string {
   return `${count} ${singular}${count === 1 ? "" : "s"}`;
@@ -64,19 +65,19 @@ function branchStatusText(state: VirtualBranchState): string {
 
 function virtualBranchCreationHelp(
   state: VirtualBranchState | undefined,
-  physicalBlocksById: ReadonlyMap<string, VisibleBlock>,
+  physicalBlocksById: ReadonlyMap<string, TreeIndexBlock>,
 ): string | null {
   const config = state?.config;
   if (!config || config.readOnly || !config.create || !config.createParentId) return null;
   const parent = physicalBlocksById.get(config.createParentId);
-  const parentTitle = parent ? blockDisplayTitle(parent) : config.createParentId;
+  const parentTitle = parent?.preview ?? config.createParentId;
   return `Create canonical under ${parentTitle} · sets [${config.create.key}::${config.create.value}] · ↵ save · ⎋ cancel`;
 }
 
 function isCanonicalDescendant(
   candidateId: string,
   ancestorId: string,
-  physicalBlocksById: ReadonlyMap<string, VisibleBlock>,
+  physicalBlocksById: ReadonlyMap<string, TreeIndexBlock>,
 ): boolean {
   let candidate = physicalBlocksById.get(candidateId);
   while (candidate?.parentId) {
@@ -89,7 +90,7 @@ function isCanonicalDescendant(
 function isVisualDescendant(
   candidate: TreeRow,
   ancestor: TreeRow,
-  physicalBlocksById: ReadonlyMap<string, VisibleBlock>,
+  physicalBlocksById: ReadonlyMap<string, TreeIndexBlock>,
 ): boolean {
   if (ancestor.kind === "occurrence") return false;
   if (candidate.kind === "occurrence") {
@@ -185,11 +186,6 @@ function propertyKeysForRow(
     if (configured !== undefined) return configured;
   }
   return options.propertyKeys ?? DEFAULT_PROPERTY_SUMMARY_KEYS;
-}
-
-function collapsedBlockTitle(block: VisibleBlock): string {
-  if (block.properties.length === 0) return block.displayText.replace(/\r?\n/g, " ↵ ");
-  return firstLineWithoutPropertyTokens(block.displayText)?.trim() || block.id;
 }
 
 function renderSummarySegment(label: string, value: string): string {
@@ -507,9 +503,11 @@ export function renderTreeFrame(
       return result;
     }
 
+    const document = row.multilineExpanded ? view.expandedDocuments.get(block.id) : undefined;
+    if (row.multilineExpanded && !document) throw new Error(`Missing expanded Tree document: ${block.id}`);
     const linker = createOutlinerTextLinker(
-      block.text,
-      (blockId) => view.physicalBlocksById.get(blockId) ?? null,
+      document?.resolved.references ?? block,
+      (blockId) => view.physicalBlocksById.has(blockId),
       view.workIdPrefix,
     );
 
@@ -539,17 +537,18 @@ export function renderTreeFrame(
         linker.link(
           renderCollapsedRow(
             prefix,
-            semanticText(collapsedBlockTitle(block), semanticTreatment),
+            semanticText(block.preview, semanticTreatment),
             summary,
             fixedSuffix,
             optionalSuffix,
             width,
           ),
+          prefix.length + (semanticTreatment ? semanticTreatment.sgr.length + semanticTreatment.glyph.length + 1 : 0),
         ),
       ];
     } else {
       const displayText = decorateVirtualBranchDefinitionText(
-        `${semanticText(block.displayText, semanticTreatment)}${trashLabel}`,
+        `${semanticText(document!.resolved.text, semanticTreatment)}${trashLabel}`,
         branchState,
       );
       const expandedRows = layoutExpandedBlock({
@@ -724,7 +723,7 @@ export function renderTreeFrame(
     if (selectedRow?.kind === "occurrence") {
       output.push(
         `\x1b[33;1m${truncate(
-          `Move canonical block “${blockDisplayTitle(selectedRow.block)}” and its descendants to Trash? y/N`,
+          `Move canonical block “${selectedRow.block.preview}” and its descendants to Trash? y/N`,
           width,
         )}\x1b[0m`,
       );

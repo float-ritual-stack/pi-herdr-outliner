@@ -1051,6 +1051,28 @@ export interface VisibleBlockCollection {
   completeness: BlockCollectionCompleteness;
 }
 
+export interface TreeIndexBlock extends Omit<VisibleBlock, "text" | "displayText" | "propertyMatches"> {
+  preview: string;
+  previewReferences: TreePreviewReference[];
+  textDigest: string;
+}
+
+export interface TreePreviewReference {
+  start: number;
+  end: number;
+  target: Pick<BlockReferenceResolution, "blockId" | "fragmentId"> | null;
+}
+
+export interface TreeIndexCollection {
+  blocks: TreeIndexBlock[];
+  completeness: BlockCollectionCompleteness;
+}
+
+export interface TreeFocusCollection {
+  matches: Array<{ block: Pick<Block, "id">; title: string }>;
+  completeness: BlockCollectionCompleteness;
+}
+
 export type BacklinkReferenceKind = "block" | "page" | "work-id" | "property";
 
 interface BacklinkOccurrenceBase {
@@ -1127,7 +1149,7 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 58;
+export const OUTLINER_PROTOCOL_VERSION = 59;
 
 
 export interface OutlinerServiceStatus {
@@ -1154,6 +1176,9 @@ export type OutlinerRequest =
   | { id: string; action: "files.read"; path: string }
   | { id: string; action: "files.complete"; prefix: string }
   | { id: string; action: "workspace.snapshot"; view?: WorkspaceSnapshotView }
+  | { id: string; action: "tree.index"; view?: WorkspaceSnapshotView }
+  | { id: string; action: "tree.query"; query: BlockSearchQuery }
+  | { id: string; action: "tree.focus"; query: string }
   | { id: string; action: "events.subscribe"; client: OutlinerClientRegistration }
   | { id: string; action: "clients.list"; role?: OutlinerClientRole }
   | {
@@ -1552,6 +1577,19 @@ export interface WorkspaceSnapshot {
   visible: VisibleBlockCollection;
   physical: VisibleBlockCollection;
   selection: SelectionContext;
+  virtualOccurrenceRanks: VirtualOccurrenceRank[];
+  sequence: number;
+  workIdPrefix?: string;
+}
+
+export interface TreeIndexSnapshot {
+  blocks: TreeIndexBlock[];
+  physicalBlockIds: string[];
+  visible: {
+    rows: Pick<VisibleBlock, "id" | "depth" | "propertyMatches">[];
+    completeness: BlockCollectionCompleteness;
+  };
+  selectedBlockId: string | null;
   virtualOccurrenceRanks: VirtualOccurrenceRank[];
   sequence: number;
   workIdPrefix?: string;

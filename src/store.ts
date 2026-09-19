@@ -4,7 +4,9 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { acquireWorkspaceOwnership } from "./workspace-ownership";
 import { AnnotationRepository } from "./annotation-repository";
+import { authoredTextDigest } from "./authored-links";
 import { resolveBacklinkRelation } from "./backlinks";
+import { rankBlockFocusMatches } from "./block-focus";
 import {
   BOOKMARKS_SYSTEM_VIEW,
   BOOKMARK_TYPE,
@@ -35,6 +37,8 @@ import {
   type NormalizedPageAddress,
 } from "./page-addresses";
 import {
+  blockReferenceDisplayText,
+  blockReferenceOccurrences,
   resolveBlockReferences as resolveBlockReferenceText,
   resolveBlockReferencesWithStatus,
 } from "./references";
@@ -111,6 +115,10 @@ import type {
   RoadmapItemPriority,
   RoadmapWorkStage,
   SelectionContext,
+  TreeIndexBlock,
+  TreeIndexCollection,
+  TreeFocusCollection,
+  TreeIndexSnapshot,
   VirtualOccurrenceRank,
   VisibleBlock,
   VisibleBlockCollection,
@@ -418,6 +426,100 @@ function assertNoReservedRoadmapProperties(title: string, body: string): void {
       `Roadmap title and body cannot include reserved property: ${reservedProperty.key}`,
     );
   }
+}
+
+const treeLabelSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
+function boundedTreeLabel(text: string): string {
+  if (text.length <= 512) return text;
+  const boundary = treeLabelSegmenter.segment(text).containing(511)!.index;
+  return `${text.slice(0, boundary)}…`;
+}
+
+function compactTreeBlock(
+  { text, displayText: _displayText, propertyMatches: _matches, ...metadata }: VisibleBlock,
+  lookup: (blockId: string) => Block | null,
+): TreeIndexBlock {
+  const resolved = resolveBlockReferencesWithStatus(text, lookup);
+  let offset = 0;
+  let spans = blockReferenceOccurrences(text).map((occurrence, index) => {
+    const reference = resolved.references[index]!;
+    const start = occurrence.start + offset;
+    const end = start + blockReferenceDisplayText(reference).length;
+    offset = end - occurrence.end;
+    return {
+      start,
+      end,
+      target: reference.status === "resolved" || reference.status === "deleted"
+        ? { blockId: reference.blockId, ...(reference.fragmentId ? { fragmentId: reference.fragmentId } : {}) }
+        : null,
+    };
+  });
+  let title = resolved.text;
+  const replaceRanges = (ranges: Array<{ start: number; end: number }>, replacement: string) => {
+    const parts: string[] = [];
+    let cursor = 0;
+    for (const range of [...ranges, { start: title.length, end: title.length }]) {
+      parts.push(title.slice(cursor, range.start));
+      if (range.end > range.start) parts.push(replacement);
+      cursor = range.end;
+    }
+    const mapPosition = (position: number): number => {
+      let delta = 0;
+      for (const range of ranges) {
+        if (position <= range.start) break;
+        if (position < range.end) return range.start + delta;
+        delta += replacement.length - (range.end - range.start);
+      }
+      return position + delta;
+    };
+    spans = spans.flatMap(span => {
+      const start = mapPosition(span.start);
+      const end = mapPosition(span.end);
+      if (start >= end) return [];
+      // Removing an inner label token preserves the reference. Cutting either
+      // delimiter preserves only nonactionable provenance for the visible text.
+      const clipped = ranges.some(range =>
+        (range.start <= span.start && span.start < range.end) ||
+        (range.start < span.end && span.end <= range.end));
+      return [{ start, end, target: clipped ? null : span.target }];
+    });
+    title = parts.join("");
+  };
+  if (metadata.properties.length) {
+    replaceRanges(parsePropertyRecords(title), "");
+    let lineStart = 0;
+    for (const line of title.split("\n")) {
+      if (line.trim()) {
+        const start = lineStart + line.length - line.trimStart().length;
+        const end = lineStart + line.trimEnd().length;
+        replaceRanges([{ start: 0, end: start }, { start: end, end: title.length }], "");
+        break;
+      }
+      lineStart += line.length + 1;
+    }
+    if (!title.trim()) {
+      title = metadata.id;
+      spans = [];
+    }
+  } else {
+    replaceRanges(Array.from(title.matchAll(/\r?\n/g), match => ({
+      start: match.index, end: match.index + match[0].length,
+    })), " ↵ ");
+  }
+  const preview = boundedTreeLabel(title);
+  const visibleEnd = preview === title ? title.length : preview.length - 1;
+  const previewReferences = spans.filter(span => span.start < visibleEnd).map(({ start, end, target }) => ({
+    start,
+    end: Math.min(end, visibleEnd),
+    target: end <= visibleEnd ? target : null,
+  }));
+  return {
+    ...metadata,
+    preview,
+    previewReferences,
+    textDigest: authoredTextDigest(text),
+  };
 }
 
 export class OutlinerStore {
@@ -1935,6 +2037,54 @@ export class OutlinerStore {
         sequence: this.sequence,
         virtualOccurrenceRanks: this.virtualOccurrenceRanksFromCurrentRead(),
         ...(workIdPrefix ? { workIdPrefix } : {}),
+      };
+    })();
+  }
+
+  focusTree(query: string): TreeFocusCollection {
+    if (typeof query !== "string") throw new Error("Tree focus query must be text");
+    return this.database.transaction(() => {
+      const blocks = [...this.loadGraph().byId.values()].filter(block => !block.effectiveDeletedRootId);
+      const matches = rankBlockFocusMatches(blocks, query, 21);
+      return {
+        matches: matches.slice(0, 20).map(({ block, title }) => ({ block: { id: block.id }, title: boundedTreeLabel(title) })),
+        completeness: matches.length > 20
+          ? { kind: "truncated" as const, limit: 20 }
+          : { kind: "complete" as const },
+      };
+    })();
+  }
+
+  queryTree(query: BlockSearchQuery): TreeIndexCollection {
+    return this.database.transaction(() => {
+      const result = this.queryBlocks(query);
+      return { ...result, blocks: result.blocks.map(block => compactTreeBlock(block, id => this.getFromCurrentRead(id))) };
+    })();
+  }
+
+  readTreeIndex(view: WorkspaceSnapshotView = {}): TreeIndexSnapshot {
+    return this.database.transaction(() => {
+      const snapshot = this.readWorkspaceSnapshot(view);
+      const compact = (block: VisibleBlock) => compactTreeBlock(block, id => this.getFromCurrentRead(id));
+      const blocks = new Map(snapshot.physical.blocks.map(block => [block.id, compact(block)]));
+      for (const block of snapshot.visible.blocks) {
+        if (!blocks.has(block.id)) blocks.set(block.id, compact(block));
+      }
+      return {
+        blocks: [...blocks.values()],
+        physicalBlockIds: snapshot.physical.blocks.map(block => block.id),
+        visible: {
+          rows: snapshot.visible.blocks.map(({ id, depth, propertyMatches }) => ({
+            id,
+            depth,
+            ...(propertyMatches ? { propertyMatches } : {}),
+          })),
+          completeness: snapshot.visible.completeness,
+        },
+        selectedBlockId: snapshot.selection.selected?.id ?? null,
+        virtualOccurrenceRanks: snapshot.virtualOccurrenceRanks,
+        sequence: snapshot.sequence,
+        ...(snapshot.workIdPrefix ? { workIdPrefix: snapshot.workIdPrefix } : {}),
       };
     })();
   }

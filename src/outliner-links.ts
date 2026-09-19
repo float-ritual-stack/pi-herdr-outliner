@@ -8,6 +8,7 @@ import { requireUniqueClientId, sendClientCommand } from "./client-target";
 import { isFragmentId, resolveFragment } from "./fragments";
 import {
   blockDisplayTitle,
+  blockReferenceDisplayText,
   blockReferenceEnvelopeRanges,
   blockReferenceOccurrences,
 } from "./references";
@@ -24,6 +25,8 @@ import {
 import { isWorkIdAddress } from "./page-addresses";
 import type {
   Block,
+  BlockReferenceResolution,
+  TreeIndexBlock,
   OutlinerNavigationIntent,
   PageAddressFollowResult,
   PageAddressResolution,
@@ -553,62 +556,46 @@ export function linkOutlinerMarkdown(
 }
 
 export interface OutlinerTextLinker {
-  link(text: string): string;
+  link(text: string, referenceOffset?: number): string;
 }
 
 export function createOutlinerTextLinker(
-  rawText: string,
-  lookup: (blockId: string) => Block | null,
+  resolved: readonly BlockReferenceResolution[] | Pick<TreeIndexBlock, "preview" | "previewReferences">,
+  hasBlock: (blockId: string) => boolean,
   workIdPrefix: string | null = null,
 ): OutlinerTextLinker {
-  const references = blockReferenceOccurrences(rawText).map((reference) => {
-    const target = lookup(reference.blockId);
-    const fragmentSuffix = reference.fragmentId ? `^${reference.fragmentId}` : "";
-    if (!target) {
-      return {
-        visible:
-          `((${reference.blockId}${fragmentSuffix}${reference.label !== undefined ? `|${reference.label}` : ""}))`,
-        uri: null,
-      };
-    }
-    const title = blockDisplayTitle(target);
-    const presentation = reference.label ?? title;
-    if (target.effectiveDeletedRootId) {
-      return {
-        visible:
-          `((${presentation}${reference.label === undefined ? fragmentSuffix : ""} · Trash))`,
-        uri: outlinerLinkUri("block", reference.blockId, {
-          fragmentId: reference.fragmentId,
-        }),
-      };
-    }
-    if (reference.fragmentId) {
-      const fragment = resolveFragment(target.text, reference.fragmentId);
-      if (fragment.status !== "resolved") {
-        const state = fragment.status === "missing" ? "Missing fragment" : "Duplicate fragment";
-        return {
-          visible:
-            `((${presentation}${reference.label === undefined ? fragmentSuffix : ""} · ${state}))`,
-          uri: null,
-        };
-      }
-    }
-    return {
-      visible: `((${presentation}${reference.label === undefined ? fragmentSuffix : ""}))`,
-      uri: outlinerLinkUri("block", reference.blockId, {
-        fragmentId: reference.fragmentId,
-      }),
-    };
-  });
+  const references = "preview" in resolved ? resolved.previewReferences.map(reference => ({
+    visible: resolved.preview.slice(reference.start, reference.end),
+    start: reference.start,
+    end: reference.end,
+    uri: reference.target
+      ? outlinerLinkUri("block", reference.target.blockId, { fragmentId: reference.target.fragmentId })
+      : null,
+  })) : resolved.map(reference => ({
+    visible: blockReferenceDisplayText(reference),
+    start: undefined,
+    end: undefined,
+    uri: reference.status === "resolved" || reference.status === "deleted"
+      ? outlinerLinkUri("block", reference.blockId, { fragmentId: reference.fragmentId })
+      : null,
+  }));
   const consumedReferences = new Set<number>();
   return {
-    link(text: string): string {
+    link(text: string, referenceOffset = 0): string {
       const exactSpans: LinkSpan[] = [];
       const referenceRanges: TextRange[] = [];
       for (let index = 0; index < references.length; index += 1) {
         if (consumedReferences.has(index)) continue;
         const reference = references[index];
-        let start = text.indexOf(reference.visible);
+        let start = reference.start === undefined
+          ? text.indexOf(reference.visible)
+          : reference.start + referenceOffset;
+        if (reference.start !== undefined && text.slice(start, reference.end! + referenceOffset) !== reference.visible) {
+          let retained = 0;
+          while (retained < reference.visible.length && text[start + retained] === reference.visible[retained]) retained += 1;
+          if (retained > 0) exactSpans.push({ start, end: start + retained, uri: null });
+          continue;
+        }
         while (
           start >= 0 &&
           referenceRanges.some((range) =>
@@ -621,12 +608,12 @@ export function createOutlinerTextLinker(
         const range = { start, end: start + reference.visible.length };
         referenceRanges.push(range);
         consumedReferences.add(index);
-        if (reference.uri) exactSpans.push({ ...range, uri: reference.uri });
+        exactSpans.push({ ...range, uri: reference.uri });
       }
       const spans = selectLinkSpans(
         text,
         exactSpans,
-        (blockId) => lookup(blockId) !== null,
+        hasBlock,
         workIdPrefix,
       );
       return renderLinkSpans(text, spans, hyperlink);

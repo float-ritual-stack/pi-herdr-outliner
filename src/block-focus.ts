@@ -153,7 +153,7 @@ export function shortBlockId(blockId: string): string {
 
 export function uniqueBlockFocusIdentifier(
   blockId: string,
-  matches: readonly BlockFocusMatch[],
+  matches: readonly { block: Pick<Block, "id"> }[],
   minimumLength = 8,
 ): string {
   const startLength = Math.max(1, Math.min(minimumLength, blockId.length));
@@ -167,7 +167,7 @@ export function uniqueBlockFocusIdentifier(
 }
 
 export function formatBlockFocusMatch(
-  match: BlockFocusMatch,
+  match: { block: Pick<Block, "id">; title: string },
   identifier = shortBlockId(match.block.id),
 ): string {
   return `${identifier} · ${match.title}`;

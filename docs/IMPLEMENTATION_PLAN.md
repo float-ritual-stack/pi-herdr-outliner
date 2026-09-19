@@ -42,6 +42,10 @@ views beside agents, and persistent activity displays remain valid Herdr uses.
 - S4 / PIE-278, [PR #122](https://github.com/float-ritual-stack/pi-herdr-outliner/pull/122):
   content-qualified filesystem revisions, PDF refresh/history checks, and actual
   stale-file-save proof. PIE-280 retains the separate external-writer race.
+- S5 / PIE-279, [PR #123](https://github.com/float-ritual-stack/pi-herdr-outliner/pull/123):
+  service-owned file previews and completion, passive catalog reads, and actual
+  Pi/ANSI proof with separate client/service roots. Controller regressions cover
+  obsolete file-read results and cached-file repainting separately.
 
 Preserve these behaviors. PIE-270 does not establish progressive cold loading,
 Tree body caching, Resource caching, or structural conflict protection for all
@@ -62,7 +66,7 @@ not one large PR.
 | Shipped foundation | S3 / PIE-277: enforce block edit revisions | BAD DESIGN addressed: silent stale writes and common false conflicts. | Preserve migration, required-token, stale-write, and sibling-reorder regressions. |
 | Shipped foundation | S4 / PIE-278: identify file contents in revisions | BUG addressed: equal size/time concealed changed bytes. | Preserve byte identity, legacy PDF history, and stale-file-save proof; PIE-280 remains separate. |
 | Separate safety follow-up | PIE-280: preserve external edits during file replacement | BUG: another writer can lose bytes between validation and rename. | Choose a supported commit/recovery contract; hashing alone does not solve it. Consult the workboard for scheduling. |
-| After S4 in the queue | S5 / PIE-279: make file reads service-owned | BAD DESIGN: preview routes can read different hosts' bytes. | Preserve passive-read semantics and explicit resource creation. |
+| Shipped foundation | S5 / PIE-279: make file reads service-owned | BAD DESIGN addressed: preview routes read different hosts' bytes. | Preserve passive-read semantics, exact file evidence, and explicit resource creation. |
 | Alongside safety work | I1: observers are not destinations | BUG: navigator subscriptions advertise a false Detail identity. | Narrow subscription change; attached-client popup proof. |
 | Alongside safety work | I2: chooser destination outcomes | BUG: missing eligible readers do not consistently trigger the offered split action. | Typed routing result and all chooser callers updated. |
 | Alongside safety work | I3: Pi focus-loss handling | BUG: consumed focus loss can leave selection autoscroll active. | Focused terminal test plus attached-client input proof. |
@@ -80,14 +84,19 @@ Safety work and small interaction fixes can proceed independently. A layout
 rewrite is not a dependency of S1-S5. A2 can be prototyped before all fixes land,
 but shipping its editing/capture behavior requires the relevant safety fixes.
 
-The safety delivery sequence is S2, S3, S4, S5; consult the workboard for current
-queue status. This is delivery priority, not a claim that S4 technically depends
-on S3 or S3 on S2. PIE-269 and PIE-271 remain
-planned after safety work; prefer PIE-269 first for cold Tree transfer cost, but
-their implementations are independent. Neither performance work nor A2 blocks
-the safety fixes. A2's bounded layout experiment does not require either read
-optimization. PIE-272 and PIE-273 may close with evidence that no new machinery
-is needed.
+S1-S5 are the shipped safety foundation. Reuse their regression and application
+proof; their former queue order does not create technical dependencies between
+the remaining packages. Prefer PIE-269 first for cold Tree transfer cost, then
+PIE-271 for cold Detail paint. Their implementations are independent: connectivity
+from PIE-268 and cached revisits from PIE-270 did not implement either behavior.
+Consult the workboard for current execution status.
+
+PIE-273 uses PIE-269's measurements; PIE-272 uses PIE-271's measurements. Neither
+gate justifies infrastructure in advance, and either may close with evidence
+that no additional machinery is needed. I1-I5 remain separate interaction fixes;
+A1-A3 remain a later ownership/layout experiment. A2 does not require either read
+optimization. PIE-280 is an independent unresolved safety follow-up, not a
+performance or layout dependency; retain its explicit external-write limitation.
 
 Hard dependencies:
 
@@ -131,6 +140,9 @@ The runner already provides:
 - One additional remote-mode Tree/Detail context in a separate owned workspace
   root, using either supported Detail renderer. Record its endpoint, process
   environment, and registrations; capture its panes alongside the original views.
+- A bounded private forwarding socket for that context's Tree, recording request
+  bytes/counts and timings without changing service responses. The compact-index
+  journey also records parse/projection cost and the first observed Tree frame.
 - One owned PTY-attached Herdr client for popup input, with raw ANSI and current-screen checkpoints decoded by test-only `@xterm/headless`.
 - A read-only SQLite connection and consistent checkpoint copies.
 - Terminal text/ANSI, topology, registrations, invocation logs, process evidence,
@@ -139,7 +151,9 @@ The runner already provides:
 Its current limits are material: one canonical service, a bounded startup
 contender, and at most one extra Tree/Detail context; one attached Herdr client
 and capture-popup launch; no second attached client or real mouse/resize journey. A passing
-existing scenario does not cover those paths.
+existing scenario does not cover those paths. The forwarding fixture observes
+normal delivery; it does not yet hold or reorder responses or exercise two-host
+SSH. A held goto reply is covered separately by a Tree controller regression.
 
 `startup-interruption.ts` deliberately expects its inner fixture to fail after
 SIGINT and then verifies cleanup. Its outer test reports success. Distinguish
@@ -156,7 +170,7 @@ expected injected failure from failed scenario verification when reading artifac
 | I3 / A2 | Add attached-client mouse/focus input and PTY resize evidence. | Input reaches the real host/application path; capture resized frames and resulting state. |
 | I5 | Attach two controlled clients to the private Herdr server. | Record both client actions and the context selected for each explicit source. |
 | A2 | Support one narrowly defined composed launch alongside the existing detached launch. | One host pane may contain two logical views; fixtures no longer require distinct Tree and Detail pane IDs for that case. |
-| PIE-269 / PIE-271 | Add bounded request-byte/timing capture and deterministic response barriers at the existing read seam; use a private forwarded socket for transport measurements. | Keyboard-driven cold/revisit navigation, reordered replies, exact final targets, and bounded reads. Report actual two-host evidence separately from a local forwarding fixture. |
+| PIE-269 (measurement implemented) / PIE-271 | Reuse bounded request-byte/timing capture and the private forwarding socket. Add deterministic response barriers at the existing read seam for progressive-loading proof. | Keyboard-driven cold/revisit navigation, exact final targets, and bounded reads; hold/reorder optional Detail replies for PIE-271. Report actual two-host evidence separately from a local forwarding fixture. |
 
 Keep process ownership, timeouts, transport, and artifact capture in the runner.
 Keep domain actions and SQL assertions in each scenario. This is not a new test
@@ -315,7 +329,7 @@ live Herdr session is not a disposable fixture.
 
 ### PIE-269 — compact Tree index
 
-`src/tree-controller.ts:reload()` still consumes complete `visible` and
+At baseline `53be3c0`, `src/tree-controller.ts:reload()` consumes complete `visible` and
 `physical` collections from `workspace.snapshot`. Start at that read boundary
 and the corresponding `src/store.ts`, `src/server.ts`, `src/types.ts`, and
 `src/virtual-branches.ts` contracts. Preserve a complete structural graph while
@@ -330,7 +344,23 @@ existing body operations before adding another cache. Preserve filters,
 transclusions, virtual occurrence identity, collapse, and selection re-anchoring.
 Do not silently truncate structural data or substring-search a shortened preview.
 
-Proposed scenario: `test/e2e/tree-index.ts`. Compare local and private
+Account for the current full-body consumers when deleting this path. Tree's fuzzy
+goto must still match full canonical text; perform that matching at the service.
+Collapsed rows need service-derived block/fragment link metadata and authored-link
+identity, not copies of referenced documents. Expanded rows fetch exact text when
+needed. Quick edits must use both the text and edit revision from the same exact
+read, even if the compact row describes an older revision. Preserve the existing
+row rendering, link targets, source identity, and selection/scroll behavior.
+
+Resolve references from authored source before transforming the preview. Carry
+their spans through hidden-property removal, properties inside labels, newline
+display, and service/terminal clipping. Fully hidden references disappear;
+surviving unresolved or clipped text stays nonactionable and cannot acquire a
+different target through generic UUID detection. Check emitted hyperlink columns
+in renderer regressions: Herdr's captured ANSI frames omit OSC 8 metadata and
+cannot prove those links or host click behavior.
+
+Scenario: `bun run test:e2e:tree-index` (`test/e2e/tree-index.ts`). Compare direct and private
 forwarded-socket cold loads on one representative fixture, recording bytes,
 transfer/parse/projection time, first visible frame, and on-demand body requests.
 Use real keys to expand/edit a long row and navigate physical and virtual rows;
@@ -338,18 +368,38 @@ then mutate/reorder through another client and revalidate. Verify exact bodies,
 stable selection, equivalent ordering, and complete projections. Define the
 performance budget against the recorded baseline before claiming improvement.
 
+Full-text goto must keep the input lane responsive while waiting for the service.
+Keep at most one search in flight, skip superseded intermediate queries, and
+accept only the latest query's result. Enter waits for that result. Prove this
+with a held read, and inspect actual Tree request counts in the forwarded journey.
+
+The first delivery budget is a complete 1,000-block response below 1 MB and at
+least 75% smaller than `workspace.snapshot` for the same fixture. Shape its
+document-size bands from aggregate workspace measurements; retain a separate
+long-document stress case. Record the distribution, property/reference mix, and
+exact tested source, and remeasure the final response with all required metadata.
+A prototype service response meeting this budget does not prove that Tree uses
+it or that first-frame latency improved.
+
 Delete the obsolete full-snapshot Tree path after migrating every Tree caller.
 Retain any full-snapshot operation still required by a different consumer.
 
 ### PIE-271 — primary Detail content before optional enrichment
 
-`src/detail-controller.ts:applyReadyDocument()` still awaits projection and
+On merged main, `src/detail-controller.ts:applyReadyDocument()` still awaits projection and
 reference resolution before applying an uncached block, then awaits optional
 work in the same load path. Split that concrete path using its existing target
 generation checks and the existing `src/detail.ts` / `src/detail-pi.ts` effects.
 Paint the exact primary document first; apply each enrichment only to its
 matching target and revision. Enrichment failure must not erase readable primary
 content or pretend its actions are ready.
+
+Primary paint must also release Detail's ordered input/event lane. Emitting a
+frame and then awaiting enrichment in that lane still stalls navigation and
+editing. Keep optional completion guarded by the existing target generation and
+document revision; it must not reset scroll, record navigation twice, or replace
+an active draft/selection. Reuse the existing event scheduler rather than adding
+another coordinator.
 
 Keep reference navigation disabled until the displayed source's references are
 resolved. Annotations require the exact representation identity/hash; source
@@ -476,6 +526,13 @@ For each work package in this plan:
    changed behavior, cleanup outcome, and remaining coverage limits in the PR/proof.
    Re-run affected checks after changes or conflict resolution. Verify the integrated
    main checkout in a fresh private fixture after merge before claiming delivery.
+
+Merged delivery and deployment to an existing user session are separate claims.
+Record the running service/client protocol alongside the tested revision. Follow
+the [service connection diagnostics](../CONTRIBUTING.md#connecting-to-the-running-service)
+for access failures or a version mismatch; a successful host probe is not evidence
+of a broken remote transport. Updating the shared session requires its own
+coordinated service/client cutover and live acceptance evidence.
 
 Drive the UI through real input for UI claims. Use production CLI/RPC entrypoints
 for service/CLI claims. SQLite connections are read-only oracles and backup

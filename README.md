@@ -1268,6 +1268,16 @@ explicit Resource activation. Passive reads leave catalog identities unchanged.
 The runner records those clients' roots, socket, registrations, and process
 provenance. This is a same-host ownership test, not two-host SSH evidence.
 
+`bun run test:e2e:tree-index` prepares 1,000 blocks through the service and runs
+the Tree journey with direct and privately forwarded sockets. Real keys search
+full text beyond the preview, edit exact text, expand virtual rows, and navigate
+contextual children after another client edits and reorders blocks. The fixture
+compares complete projections and records response bytes, parse/projection time,
+Tree request counts, visible frames, and cleanup. First-frame timing runs from
+launch to the first observed populated frame and includes host/polling overhead.
+The forwarding observer records its own parsing cost; this is not two-host SSH
+latency evidence.
+
 ## Project documents
 
 - [Architecture](docs/ARCHITECTURE.md)

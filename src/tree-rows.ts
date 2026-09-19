@@ -6,8 +6,8 @@ import type {
   AuthoredOutlink,
   AuthoredResourceLink,
 } from "./authored-links";
-import type { AuthoredResourceReference, OutlinerNavigationTarget } from "./types";
-import type { TreeRow } from "./virtual-branches";
+import type { AuthoredResourceReference, OutlinerNavigationTarget, VisibleBlock } from "./types";
+import type { ProjectionBlock, TreeRow } from "./virtual-branches";
 
 export interface AuthoredLinksOwnerOccurrence {
   readonly rowId: string;
@@ -93,9 +93,9 @@ export interface AuthoredLinkRow {
   readonly link: AuthoredOutlink | AuthoredResourceLink;
 }
 
-export type TreeDisplayRow = TreeRow | AuthoredLinkHeaderRow | AuthoredLinkRow;
+export type TreeDisplayRow<T extends ProjectionBlock = VisibleBlock> = TreeRow<T> | AuthoredLinkHeaderRow | AuthoredLinkRow;
 
-export function isBlockTreeRow(row: TreeDisplayRow | undefined): row is TreeRow {
+export function isBlockTreeRow<T extends ProjectionBlock>(row: TreeDisplayRow<T> | undefined): row is TreeRow<T> {
   return row?.kind === "physical" || row?.kind === "occurrence";
 }
 
@@ -147,8 +147,8 @@ function headerState(
   };
 }
 
-function headerRow(
-  ownerRow: TreeRow,
+function headerRow<T extends ProjectionBlock>(
+  ownerRow: TreeRow<T>,
   panel: OpenAuthoredLinksPanel,
   provider: AuthoredLinkGroupProvider,
 ): AuthoredLinkHeaderRow {
@@ -185,18 +185,18 @@ function groupVisible(
     group.completeness.kind === "limited";
 }
 
-export function composeAuthoredLinkRows(
-  blockRows: readonly TreeRow[],
+export function composeAuthoredLinkRows<T extends ProjectionBlock>(
+  blockRows: readonly TreeRow<T>[],
   panel: AuthoredLinksPanel,
   ownerCollapsed?: boolean,
-): TreeDisplayRow[] {
+): TreeDisplayRow<T>[] {
   if (panel.kind === "closed") return [...blockRows];
-  const composed: TreeDisplayRow[] = [];
+  const composed: TreeDisplayRow<T>[] = [];
   for (const projectedRow of blockRows) {
     const ownsPanel =
       projectedRow.rowId === panel.owner.rowId &&
       projectedRow.canonicalId === panel.owner.blockId;
-    const row: TreeRow = ownsPanel
+    const row: TreeRow<T> = ownsPanel
       ? {
           ...projectedRow,
           hasChildren: true,
@@ -264,7 +264,7 @@ export function authoredLinkUnavailableReason(row: AuthoredLinkRow): string | nu
   return resolution.reason;
 }
 
-export function authoredLinkFallbackRowIds(row: TreeDisplayRow): readonly string[] {
+export function authoredLinkFallbackRowIds<T extends ProjectionBlock>(row: TreeDisplayRow<T>): readonly string[] {
   if (row.kind === "authored-link") {
     return [authoredLinkHeaderRowId(row.owner.rowId, row.group), row.owner.rowId];
   }

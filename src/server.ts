@@ -1144,6 +1144,15 @@ export class OutlinerServer {
         case "workspace.snapshot":
           result = this.store.readWorkspaceSnapshot(request.view);
           break;
+        case "tree.index":
+          result = this.store.readTreeIndex(request.view);
+          break;
+        case "tree.query":
+          result = this.store.queryTree(request.query);
+          break;
+        case "tree.focus":
+          result = this.store.focusTree(request.query);
+          break;
         case "events.subscribe":
           result = { subscribed: true, client: subscribedClient ?? request.client };
           break;

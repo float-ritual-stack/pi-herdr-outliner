@@ -491,7 +491,8 @@ The current protocol version is `OUTLINER_PROTOCOL_VERSION`, defined in [`src/ty
 
 - health: `ping`
 - canonical reads: `get`, `children`, `blocks.context`, `workspace.snapshot`
-- bounded search: `blocks.query`
+- compact Tree reads: `tree.index`
+- bounded search: `blocks.query`, `tree.query`, `tree.focus`
 - resource identity and documents: `resource-sources.create | list | get` and `resources.intern | intern-filesystem | get | relocate | describe | open | refresh`
 - resource retention: `resources.retention.get | configure | inspect | pin | unpin | reference | unreference` and explicit `resources.collect` eviction/purge passes
 - computed producers: `computed.invocations.create`, `computed.invocations.revise`, `computed.handlers.resolve`, `computed.executions.list`, and async `computed.execute`
@@ -687,7 +688,9 @@ The service normalizes every query before regular graph traversal or ranked virt
 
 Property filters default to block metadata. Explicit `line`, `inline`, or `all` queries use the same derived index and return matching record context—scope, ordinal, line, column, and source span—on each result. Human text surfaces share one minimal property-filter parser: whitespace-separated positive-AND clauses, `key` presence, `key=value`/`key::value` equality, and double-quoted spaced values with `\\` and `\"` escapes. Tree and Pi commands use the expression parser; each repeated CLI `--filter` is parsed as one clause so a shell-quoted value containing spaces remains exact. Virtual branches persist the canonical expression in `[query::…]`; their omitted scope therefore remains block-only. Agent tools remain structured and bypass the shorthand.
 
-`workspace.snapshot.view.query` uses the same model for bounded Tree filtering while retaining a separate complete physical collection for canonical ancestry and projection construction. `rankViewId` is internal projection context and is rejected from snapshot queries.
+`tree.index.view.query` uses the same model for bounded Tree filtering. The response retains complete physical membership for canonical ancestry and projection construction, with one compact record per block identity and separate visible-row depths. Records contain bounded previews, service-resolved reference metadata, and authored-text digests instead of full document bodies. `tree.query` returns compact matches using the same canonical query engine; `tree.focus` ranks fuzzy goto matches against full canonical text, including text beyond the preview. `rankViewId` is internal projection context and is rejected from index view queries.
+
+Compact-preview references carry exact spans in the preview text. The service recognizes references in authored text and maps their spans through property removal, line presentation, and truncation; labels are presentation, never reference identity. Complete actionable spans carry a canonical target. Unresolved and clipped spans retain a null target, preventing generic UUID detection from turning them into different links. Tree fetches exact bodies through `get` for editing, expanded rows, and reference activation. A quick edit uses the text and revision from that same read; compact previews never authorize a save. Expanded text and reference presentation are revalidated against the service sequence and body revision. `workspace.snapshot` remains available to independent consumers that need its full visible and physical collections; it is no longer Tree's reload operation.
 
 ### Idempotent capture
 

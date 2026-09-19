@@ -8,7 +8,9 @@ import {
 import { DEFAULT_OUTLINER_ACTION_KEYMAP } from "../src/outliner-actions";
 import type { TreeView } from "../src/tree-controller";
 import { renderTreeFrame, treeSemanticState } from "../src/tree-renderer";
-import { composeAuthoredLinkRows } from "../src/tree-rows";
+import { composeAuthoredLinkRows, isBlockTreeRow, type TreeDisplayRow } from "../src/tree-rows";
+import { resolveBlockReferencesWithStatus } from "../src/references";
+import { treeIndexFixture } from "./tree-fixtures";
 import { truncate } from "../src/terminal";
 import type { VisibleBlock } from "../src/types";
 import type {
@@ -107,14 +109,24 @@ function branchState(overrides: Partial<VirtualBranchState> = {}): VirtualBranch
 
 function view(
   inputRows: ReadonlyArray<VisibleBlock | TreeRow>,
-  overrides: Partial<TreeView> = {},
+  overrides: Omit<Partial<TreeView>, "rows"> & { rows?: TreeDisplayRow[] } = {},
 ): TreeView {
-  const rows = inputRows.map((row) => (isTreeRow(row) ? row : physical(row)));
+  const originalRows = overrides.rows ?? inputRows.map((row) => (isTreeRow(row) ? row : physical(row)));
+  const documents = new Map(originalRows.filter(isBlockTreeRow).map(row => [row.canonicalId, row.block]));
+  const lookup = (id: string) => documents.get(id) ?? null;
+  const rows = originalRows.map(row => isBlockTreeRow(row)
+    ? { ...row, block: treeIndexFixture(row.block, lookup) }
+    : row);
+  const { rows: _rows, ...rest } = overrides;
   return {
     workspaceRoot: "/w",
     rows,
+    expandedDocuments: new Map(originalRows.filter(isBlockTreeRow).filter(row => row.multilineExpanded).map(row => [row.canonicalId, {
+      block: row.block,
+      resolved: { ...resolveBlockReferencesWithStatus(row.block.text, lookup), text: row.block.displayText },
+    }])),
     physicalBlocksById: new Map(
-      rows.filter((row): row is PhysicalTreeRow => row.kind === "physical").map((row) => [
+      rows.filter(row => row.kind === "physical").map((row) => [
         row.canonicalId,
         row.block,
       ]),
@@ -137,7 +149,7 @@ function view(
     expandedBlockOffset: 0,
     status: "ready",
     refreshPending: false,
-    ...overrides,
+    ...rest,
     workspaceContextBlockId: overrides.workspaceContextBlockId ?? null,
   };
 }
@@ -427,6 +439,53 @@ describe("renderTreeFrame", () => {
     expect(getOsc8LinkAtColumn(line!, visible.indexOf(id) + 2)).toBe(
       `pi-outliner://block/${id}`,
     );
+  });
+  test("places compact reference spans after indentation and semantic decoration", () => {
+    const targetId = "550e8400-e29b-41d4-a716-446655440006";
+    const hiddenId = "550e8400-e29b-41d4-a716-446655440007";
+    const source = block("reference-source", {
+      text: `[related::((${hiddenId}|same))] [status::complete]\nLiteral ((same)) then ((${targetId}|same))`,
+      displayText: "[related::((same))] [status::complete]\nLiteral ((same)) then ((same))",
+      properties: [{ key: "status", value: "complete" }],
+      depth: 1,
+    });
+    const frame = renderTreeFrame(view([source, block(targetId), block(hiddenId)]), 120, 12).frame;
+    const line = frame.split("\n").find(line => stripTerminalSequences(line).includes("Literal ((same)) then ((same))"))!;
+    expect(line).toBeDefined();
+    const visible = stripTerminalSequences(line);
+    expect(getOsc8LinkAtColumn(line, visible.indexOf("same"))).toBeUndefined();
+    expect(getOsc8LinkAtColumn(line, visible.lastIndexOf("same"))).toBe(`pi-outliner://block/${targetId}`);
+  });
+  test("compact fixtures omit hidden reference spans and retain clipped spans without targets", () => {
+    const targetId = "550e8400-e29b-41d4-a716-446655440006";
+    const target = block(targetId);
+    for (const start of [500, 511, 600]) {
+      const prefix = "x".repeat(start);
+      const source = block("reference-source", {
+        text: `${prefix}((${targetId}|long reference))`,
+        displayText: `${prefix}((long reference))`,
+      });
+      const compact = treeIndexFixture(source, id => id === targetId ? target : null);
+      expect(compact.preview.length).toBe(512);
+      expect(compact.previewReferences).toEqual(
+        start < 511 ? [{ start, end: 511, target: null }] : [],
+      );
+    }
+  });
+  test("clipping a stale reference cannot activate its canonical-ID alias", () => {
+    const targetId = "550e8400-e29b-41d4-a716-446655440006";
+    const aliasId = "550e8400-e29b-41d4-a716-446655440007";
+    const source = block("stale-reference-source", {
+      text: `((${targetId}^gone|${aliasId}))`,
+      displayText: `((${aliasId} · Missing fragment))`,
+    });
+    const tree = view([source, block(targetId), block(aliasId)]);
+    for (const width of [100, 44]) {
+      const line = renderTreeFrame(tree, width, 12).frame.split("\n")
+        .find(line => stripTerminalSequences(line).includes(`((${aliasId}`))!;
+      expect(line).toBeDefined();
+      expect(getOsc8LinkAtColumn(line, stripTerminalSequences(line).indexOf(aliasId))).toBeUndefined();
+    }
   });
   test("links only Work IDs for the configured project prefix", () => {
     const linked = block("custom-work", {
@@ -896,23 +955,24 @@ describe("renderTreeFrame", () => {
   });
 
   test("bounds block rendering work when selection jumps across a large complete projection", () => {
-    let displayTextReads = 0;
-    const rows = Array.from({ length: 20_000 }, (_, index) => {
-      const candidate = block(`large-${index}`, { position: index });
-      Object.defineProperty(candidate, "displayText", {
+    let previewReads = 0;
+    const rows = Array.from({ length: 20_000 }, (_, index) => block(`large-${index}`, { position: index }));
+    const current = view(rows, { selectedIndex: 15_000 });
+    for (const row of current.rows) {
+      if (!isBlockTreeRow(row)) continue;
+      const preview = row.block.preview;
+      Object.defineProperty(row.block, "preview", {
         get() {
-          displayTextReads += 1;
-          return candidate.text;
+          previewReads += 1;
+          return preview;
         },
       });
-      return candidate;
-    });
-
-    const rendered = renderTreeFrame(view(rows, { selectedIndex: 15_000 }), 80, 10, 0);
+    }
+    const rendered = renderTreeFrame(current, 80, 10, 0);
 
     expect(rendered.scrollStartEntryIndex).toBe(14_997);
     expect(rendered.frame).toContain("\x1b[48;5;238m\x1b[1m• large-15000");
-    expect(displayTextReads).toBeLessThanOrEqual(4);
+    expect(previewReads).toBeLessThanOrEqual(4);
   });
 
   test("recomputes viewport bounds after width, expansion, and projection replacement", () => {

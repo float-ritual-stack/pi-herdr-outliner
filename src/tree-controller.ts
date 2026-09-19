@@ -1,12 +1,10 @@
 import type { RequestInput } from "./client";
 import {
-  authoredTextDigest,
   decodeAuthoredLinksSnapshot,
 } from "./authored-links";
 import { emptyAttentionState } from "./attention";
 import {
   formatBlockFocusMatch,
-  rankBlockFocusMatches,
   uniqueBlockFocusIdentifier,
 } from "./block-focus";
 import {
@@ -52,7 +50,7 @@ import {
   isBlockTreeRow,
   type AuthoredLinksPanel,
   type AuthoredLinkHeaderRow,
-  type TreeDisplayRow,
+  type TreeDisplayRow as ProjectedDisplayRow,
 } from "./tree-rows";
 import { isVirtualBranchDefinition } from "./virtual-branches";
 import { TextBuffer } from "./text-buffer";
@@ -71,9 +69,11 @@ import type {
   OutlinerNavigationTarget,
   PageAddressCollection,
   PropertyCatalogItem,
-  VisibleBlock,
-  VisibleBlockCollection,
-  WorkspaceSnapshot,
+  TreeIndexBlock,
+  TreeIndexCollection,
+  TreeFocusCollection,
+  TreeIndexSnapshot,
+  ResolvedBlockReferences,
 } from "./types";
 import {
   buildVirtualBranchCreationText,
@@ -81,12 +81,22 @@ import {
   isVirtualBranchOccurrence,
   isVirtualBranchRootOccurrence,
   projectVirtualBranches,
-  type PhysicalTreeRow,
-  type TreeRow,
-  type VirtualBranchOccurrenceRow,
+  type PhysicalTreeRow as ProjectedPhysicalRow,
+  type TreeRow as ProjectedTreeRow,
+  type VirtualBranchOccurrenceRow as ProjectedOccurrenceRow,
   type VirtualBranchState,
   type TreePresentationState,
 } from "./virtual-branches";
+
+type TreeRow = ProjectedTreeRow<TreeIndexBlock>;
+type PhysicalTreeRow = ProjectedPhysicalRow<TreeIndexBlock>;
+type VirtualBranchOccurrenceRow = ProjectedOccurrenceRow<TreeIndexBlock>;
+type TreeDisplayRow = ProjectedDisplayRow<TreeIndexBlock>;
+
+export interface ExpandedTreeDocument {
+  readonly block: Block;
+  readonly resolved: ResolvedBlockReferences;
+}
 
 export type TreeInputMode =
   | "edit"
@@ -114,7 +124,8 @@ export interface TreeQuickCompletion {
 export interface TreeView {
   readonly workspaceRoot: string;
   readonly rows: readonly TreeDisplayRow[];
-  readonly physicalBlocksById: ReadonlyMap<string, VisibleBlock>;
+  readonly physicalBlocksById: ReadonlyMap<string, TreeIndexBlock>;
+  readonly expandedDocuments: ReadonlyMap<string, ExpandedTreeDocument>;
   readonly physicalRowCount: number;
   readonly occurrenceRowCount: number;
   readonly workIdPrefix: string | null;
@@ -161,7 +172,7 @@ export interface TreeController {
   view(): TreeView;
   initialize(): Promise<void>;
   handleKeypress(str: string, key: TerminalKey, inputAction: TerminalInputAction): Promise<void>;
-  handlePaste(text: string): void;
+  handlePaste(text: string): Promise<void>;
   handleDisclosure(rowId: string): Promise<void>;
   handleRowClick(rowId: string, activate?: boolean): Promise<void>;
   handleAction(actionId: string, origin?: { column: number; row: number }): Promise<void>;
@@ -230,7 +241,7 @@ function rowIndexForIdentity(
 function fallbackRowBeforeDelete(
   rows: readonly TreeDisplayRow[],
   selectedIndex: number,
-  physicalBlocksById: ReadonlyMap<string, VisibleBlock>,
+  physicalBlocksById: ReadonlyMap<string, TreeIndexBlock>,
 ): TreeRow | null {
   const selected = rows[selectedIndex];
   if (!isBlockTreeRow(selected)) return null;
@@ -270,7 +281,10 @@ function fallbackRowBeforeDelete(
 export function createTreeController(effects: TreeControllerEffects): TreeController {
   let baseRows: TreeRow[] = [];
   let rows: TreeDisplayRow[] = [];
-  let physicalBlocksById = new Map<string, VisibleBlock>();
+  let physicalBlocksById = new Map<string, TreeIndexBlock>();
+  let expandedDocuments = new Map<string, ExpandedTreeDocument>();
+  let indexSequence: number | null = null;
+  let quickEditSource: Pick<Block, "id" | "revision"> | null = null;
   let physicalRowCount = 0;
   let occurrenceRowCount = 0;
   let workIdPrefix: string | null = null;
@@ -293,6 +307,8 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   let mode: TreeMode = "browse";
   let quickBuffer = new TextBuffer();
   let quickCompletion: MutableQuickCompletion | null = null;
+  let gotoSearch: Promise<void> | null = null;
+  let gotoSearchPending = false;
   let viewerLines: string[] = [];
   let viewerPath = "";
   let viewerOffset = 0;
@@ -349,6 +365,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       workspaceRoot: effects.workspaceRoot,
       rows,
       physicalBlocksById,
+      expandedDocuments,
       physicalRowCount,
       occurrenceRowCount,
       workIdPrefix,
@@ -376,7 +393,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     };
   }
 
-  function panelOwnerBlock(): VisibleBlock | null {
+  function panelOwnerBlock(): TreeIndexBlock | null {
     if (authoredLinksPanel.kind === "closed") return null;
     return physicalBlocksById.get(authoredLinksPanel.owner.blockId) ?? null;
   }
@@ -445,7 +462,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         if (
           decoded.kind === "ready" &&
           currentOwner &&
-          decoded.ownerTextDigest !== authoredTextDigest(currentOwner.text)
+          decoded.ownerTextDigest !== currentOwner.textDigest
         ) {
           authoredLinksDirty = true;
           authoredLinksPanel = {
@@ -494,8 +511,8 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     options?: { exactRowIdOnly?: boolean },
   ): Promise<boolean> {
     const currentSelected = rows[selectedIndex];
-    const snapshot = await effects.request<WorkspaceSnapshot>({
-      action: "workspace.snapshot",
+    const snapshot = await effects.request<TreeIndexSnapshot>({
+      action: "tree.index",
       view: activeFilter
         ? {
             query: {
@@ -506,11 +523,14 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         : undefined,
     });
     workIdPrefix = snapshot.workIdPrefix ?? null;
-    if (snapshot.physical.completeness.kind === "truncated") {
-      throw new Error(
-        `Workspace snapshot physical blocks are truncated at ${snapshot.physical.completeness.limit}; canonical ancestry is unavailable`,
-      );
-    }
+    const indexed = new Map(snapshot.blocks.map(block => [block.id, block]));
+    const requireEntry = (id: string): TreeIndexBlock => {
+      const block = indexed.get(id);
+      if (!block) throw new Error(`Tree index is missing canonical entry ${id}`);
+      return block;
+    };
+    const physical = snapshot.physicalBlockIds.map(requireEntry);
+    const visible = snapshot.visible.rows.map(row => ({ ...requireEntry(row.id), ...row }));
 
     const presentation: TreePresentationState = {
       collapsedBlockIds: activeFilter ? uncollapsedPresentationIds : collapsedBlockIds,
@@ -518,21 +538,36 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       multilineExpandedRowIds,
     };
     const projection = await projectVirtualBranches(
-      snapshot.visible.blocks,
-      snapshot.physical.blocks,
-      (query) => effects.request<VisibleBlockCollection>({ action: "blocks.query", query }),
+      visible,
+      physical,
+      (query) => effects.request<TreeIndexCollection>({ action: "tree.query", query }),
       snapshot.virtualOccurrenceRanks,
       presentation,
     );
+    const expanded = new Map(projection.rows.filter(row => row.multilineExpanded).map(row => [row.canonicalId, row.block]));
+    const loaded = new Map<string, ExpandedTreeDocument>();
+    await Promise.all([...expanded].map(async ([id, entry]) => {
+      const retained = indexSequence === snapshot.sequence ? expandedDocuments.get(id) : undefined;
+      if (retained?.block.revision === entry.revision) {
+        loaded.set(id, retained);
+        return;
+      }
+      const block = await effects.request<Block>({ action: "get", blockId: id });
+      if (block.revision !== entry.revision) throw new Error("Block changed while expanding; refresh the Tree");
+      const resolved = await effects.request<ResolvedBlockReferences>({ action: "references.resolve", text: block.text });
+      loaded.set(id, { block, resolved });
+    }));
+    expandedDocuments = loaded;
+    indexSequence = snapshot.sequence;
     baseRows = projection.rows;
-    physicalBlocksById = new Map(snapshot.physical.blocks.map((block) => [block.id, block]));
+    physicalBlocksById = new Map(physical.map((block) => [block.id, block]));
     if (authoredLinksPanel.kind === "open" && authoredLinksPanel.load.kind === "ready") {
       const loaded = authoredLinksPanel.load.snapshot;
       const owner = panelOwnerBlock();
       if (
         loaded.kind === "ready" &&
         owner &&
-        loaded.ownerTextDigest !== authoredTextDigest(owner.text)
+        loaded.ownerTextDigest !== owner.textDigest
       ) {
         authoredLinksPanel = {
           ...authoredLinksPanel,
@@ -546,7 +581,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       authoredLinksPanel,
       authoredLinksOwnerCollapsed(),
     );
-    const serviceSelectedId = snapshot.selection.selected?.id ?? null;
+    const serviceSelectedId = snapshot.selectedBlockId;
     let nextIndex = -1;
     if (preferredRowId !== undefined) {
       if (preferredRowId) {
@@ -607,7 +642,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     let marker = row.kind === "occurrence" ? "◇" : "•";
     if (row.hasChildren) marker = row.collapsed ? "▸" : "▾";
     const branchState = row.kind === "physical" ? branchStates.get(row.canonicalId) : undefined;
-    const displayText = decorateVirtualBranchDefinitionText(row.block.displayText, branchState);
+    const displayText = decorateVirtualBranchDefinitionText(expandedDocuments.get(row.canonicalId)?.resolved.text ?? row.block.preview, branchState);
     return layoutExpandedBlock({
       text: displayText,
       width: effects.terminalWidth(),
@@ -651,7 +686,9 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
 
   function resetQuickEditor(): void {
     quickBuffer = new TextBuffer();
+    quickEditSource = null;
     quickCompletion = null;
+    gotoSearchPending = false;
   }
 
 
@@ -710,18 +747,42 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     effects.invalidate();
   }
 
-  function refreshGotoCompletion(): void {
+  function queueGotoCompletion(): void {
+    quickCompletion = null;
+    status = quickInputText().trim() ? "Searching…" : GOTO_PROMPT;
+    gotoSearchPending = true;
+    if (gotoSearch) return;
+    gotoSearch = (async () => {
+      while (gotoSearchPending && mode === "goto") {
+        gotoSearchPending = false;
+        try {
+          await refreshGotoCompletion();
+        } catch (error) {
+          if (mode === "goto" && !gotoSearchPending) handleError(error);
+        }
+      }
+    })().finally(() => {
+      gotoSearch = null;
+      if (gotoSearchPending && mode === "goto") queueGotoCompletion();
+      effects.invalidate();
+    });
+  }
+
+  async function finishGotoCompletion(): Promise<void> {
+    if (!quickCompletion && !gotoSearch) queueGotoCompletion();
+    while (gotoSearch) await gotoSearch;
+  }
+
+  async function refreshGotoCompletion(): Promise<void> {
     const query = quickInputText().trim();
     if (!query) {
       quickCompletion = null;
       status = GOTO_PROMPT;
       return;
     }
-    const matches = rankBlockFocusMatches(
-      [...physicalBlocksById.values()],
-      query,
-      20,
-    );
+    quickCompletion = null;
+    const { matches, completeness } = await effects.request<TreeFocusCollection>({ action: "tree.focus", query });
+    if (mode !== "goto" || quickInputText().trim() !== query) return;
     if (matches.length === 0) {
       quickCompletion = null;
       status = `No block matches: ${query}`;
@@ -739,7 +800,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         insertion: match.block.id,
         blockId: match.block.id,
       })),
-      truncatedLimit: null,
+      truncatedLimit: completeness.kind === "truncated" ? completeness.limit : null,
     };
     status = "";
   }
@@ -767,11 +828,12 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     if (!text.trim()) return mode === "edit" ? selected.canonicalId : null;
 
     if (mode === "edit") {
+      if (!quickEditSource || quickEditSource.id !== selected.canonicalId) throw new Error("The draft has no matching source revision");
       await effects.request<Block>({
         action: "update",
         blockId: selected.canonicalId,
         text,
-        expectedRevision: selected.block.revision,
+        expectedRevision: quickEditSource.revision,
         mutation: { author: "user", actorId: "tree" },
       });
       return selected.canonicalId;
@@ -1149,7 +1211,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     }
     try {
       await effects.createDetailPane(selected.canonicalId, direction);
-      status = `Opened new independent Detail ${direction} for ${blockDisplayTitle(selected.block)}`;
+      status = `Opened new independent Detail ${direction} for ${selected.block.preview}`;
     } catch (error) {
       status = errorMessage(error);
     }
@@ -1271,15 +1333,15 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         blockId: address.blockId,
       }));
     } else {
-      const collection = await effects.request<VisibleBlockCollection>({
-        action: "blocks.query",
+      const collection = await effects.request<TreeIndexCollection>({
+        action: "tree.query",
         query: { text: target.query || undefined, limit: 20 },
       });
       if (collection.completeness.kind === "truncated") {
         truncatedLimit = collection.completeness.limit;
       }
       items = collection.blocks.map((block) => ({
-        label: blockDisplayTitle(block),
+        label: block.preview,
         insertion: `((${block.id}))`,
         blockId: block.id,
       }));
@@ -1318,7 +1380,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     quickCompletion = null;
   }
 
-  async function openReferencedFile(block: Block): Promise<void> {
+  async function openReferencedFile(block: Pick<Block, "properties">): Promise<void> {
     const rowId = rows[selectedIndex]?.rowId;
     const path = getProperty(block.properties, "file");
     if (!path) {
@@ -1593,7 +1655,8 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     intent: OutlinerNavigationIntent,
   ): Promise<void> {
     await flushBrowsingPublications();
-    const reference = firstOutlinerReference(selected.block.text, workIdPrefix);
+    const source = await effects.request<Block>({ action: "get", blockId: selected.canonicalId });
+    const reference = firstOutlinerReference(source.text, workIdPrefix);
     if (!reference) {
       status = "Selected block has no block or page references";
       return;
@@ -1744,7 +1807,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       } else {
         try {
           await effects.openVirtualBranchNavigator(selected.canonicalId);
-          status = `Opened virtual navigator for ${blockDisplayTitle(selected.block)}`;
+          status = `Opened virtual navigator for ${selected.block.preview}`;
         } catch (error) {
           status = errorMessage(error);
         }
@@ -1795,7 +1858,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
             physicalSource: true,
           });
           effects.focusSelf();
-          status = `Revealed source ${blockDisplayTitle(selected.block)}`;
+          status = `Revealed source ${selected.block.preview}`;
         } catch (error) {
           status = errorMessage(error);
         }
@@ -1828,12 +1891,12 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     await handleKeypress(input.str, input.key, "pass", false);
   }
 
-  function handlePaste(text: string): void {
+  async function handlePaste(text: string): Promise<void> {
     if (mode === "action-menu") {
       updateActionMenuQuery(actionMenuQuery + text);
     } else if (mode !== "browse" && mode !== "delete" && mode !== "viewer") {
       quickBuffer.insert(text);
-      if (mode === "goto") refreshGotoCompletion();
+      if (mode === "goto") queueGotoCompletion();
     }
     effects.invalidate();
   }
@@ -1941,15 +2004,15 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       } else if (key.name === "down") {
         moveQuickCompletion(1);
       } else if (key.name === "tab") {
-        if (!quickCompletion) refreshGotoCompletion();
+        if (!quickCompletion) await finishGotoCompletion();
         else moveQuickCompletion(key.shift ? -1 : 1, true);
       } else if (key.name === "return") {
-        if (!quickCompletion) refreshGotoCompletion();
+        if (!quickCompletion) await finishGotoCompletion();
         if (quickCompletion) await acceptGotoCompletion();
         return;
       } else {
         const queryChanged = updateQuickBuffer(str, key);
-        if (queryChanged) refreshGotoCompletion();
+        if (queryChanged) queueGotoCompletion();
       }
       effects.invalidate();
       return;
@@ -2155,11 +2218,13 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         effects.invalidate();
         return;
       }
-      if (selected.block.text.includes("\n")) {
+      const exact = await effects.request<Block>({ action: "get", blockId: selected.canonicalId });
+      if (exact.text.includes("\n")) {
         await handoffToDetail();
         return;
       }
-      await beginInput("edit", selected.block.text);
+      quickEditSource = { id: exact.id, revision: exact.revision };
+      await beginInput("edit", exact.text);
       return;
     } else if (key.name === "tab" && selected) {
       if (isVirtualBranchOccurrence(selected)) {
