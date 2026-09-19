@@ -66,6 +66,12 @@ through the execution tool's approved host-access path. With Codex
 approval result. A successful host ping identifies an execution-boundary issue;
 use that approved path for subsequent service requests.
 
+If `OutlinerClient.requireCompatibleService()` reports an incompatible
+`protocolVersion`, the service is reachable but its protocol differs from the
+client's. Restart the service and all clients together on the same version,
+then retry. This is recovery from a confirmed protocol mismatch, not a
+connection probe.
+
 Use the running service's CLI/RPC for workboard writes. If access remains
 blocked, record the endpoint, execution context, and exact error. Service
 restarts, socket removal, and writable database access are not connection probes.
