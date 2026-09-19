@@ -51,12 +51,16 @@ views beside agents, and persistent activity displays remain valid Herdr uses.
   bodies. The 1,000-block fixture transfers 737,800 bytes instead of 8,263,314
   (91.1% smaller). Direct and forwarded private journeys pass on merged main
   `e728c35`; hyperlink source spans have separate renderer regression evidence.
+- PIE-271, [PR #125](https://github.com/float-ritual-stack/pi-herdr-outliner/pull/125):
+  primary Detail paint and input-lane release before optional enrichment, guarded
+  deferred presentation, and actual direct/forwarded application proof. Retain
+  the block/file annotation identity guards; PIE-281 owns the older placement defects.
 
 Preserve these behaviors. PIE-270 does not establish progressive cold loading,
 Tree body caching, Resource caching, or structural conflict protection for all
 mutations. Its old `tree.index` prerequisite and blanket structural-revision
 claim are removed from the completed scope. S3 owns the mutation-contract audit;
-PIE-269 delivers the Tree read cutover; PIE-271 owns progressive cold Detail reads.
+PIE-269 and PIE-271 deliver the Tree read cutover and progressive cold Detail reads.
 
 ## Delivery order and dependencies
 
@@ -79,9 +83,10 @@ not one large PR.
 | Before host cleanup | I4: authoritative host projection | FRAGILE: event ordering can leave stale pane state. | Verify supported-version event behavior; fix refresh before deleting subscriptions. |
 | Before composed-view targeting | I5: explicit agent source view | FRAGILE: shared focus history cannot identify a particular attached client's intent. | Bounded two-client reproduction and source-view contract. |
 | Shipped read foundation | PIE-269: compact Tree index | Duplicate full-body Tree transfer removed. | Preserve exact body revisions, reference spans, complete projections, and live journey proof. |
-| After safety work | PIE-271: progressive Detail loading | Paint an uncached primary document before optional enrichment. | Preserve S3-S5 contracts and the existing cache; no compact-index or backlink-index prerequisite. |
-| Measurement gate after PIE-271 | PIE-272: assess backlink indexing | Remove full-graph backlink cost only if it remains material. | Profile the changed Detail path before choosing an index. |
-| Measurement gate after PIE-269 | PIE-273: assess server windows | Establish whether compact complete snapshots remain too expensive. | Compact-index measurements; no cache-delivery prerequisite. |
+| Shipped read foundation | PIE-271: progressive Detail loading | Primary content and input no longer wait for optional enrichment. | Preserve S3-S5 contracts, cache/draft behavior, readiness, and source identity. |
+| Measured gate | PIE-272: assess backlink indexing | No reverse-reference index justified in the measured envelope. | Reopen against the recorded workload/budgets when disclosure cost becomes material. |
+| Measured gate | PIE-273: assess server windows | Compact bytes pass; growth revalidation fails in ranked queries. | Fix the measured query path under PIE-235 before reconsidering a cursor protocol. |
+| Measured performance follow-up | PIE-235: virtual-branch loading at scale | Existing task also owns the ranked property-query bottleneck exposed by PIE-273. | Preserve query/order/completeness contracts; distinguish live service cost from the original client-only profile. |
 | After routing contract is clear | A1: primary reader ownership | BAD DESIGN: host geometry decides ordinary navigation destinations. | I1; reuse I2's explicit destination outcomes. |
 | Experiment | A2: one Tree/Detail surface | Test whether coordination can actually disappear. | A1; bounded rendering; explicit internal focus and resource retention. |
 | After experiment passes | A3: remove replaced coordination | Delete demonstrated redundancy while preserving detached behavior. | A2 acceptance evidence and affected callers migrated. |
@@ -93,15 +98,16 @@ but shipping its editing/capture behavior requires the relevant safety fixes.
 S1-S5 are the shipped safety foundation. Reuse their regression and application
 proof; their former queue order does not create technical dependencies between
 the remaining packages. PIE-269's compact Tree delivery is the baseline for the
-scale gate; PIE-271 remains the cold Detail package. Their implementations are
+scale gate; PIE-271 delivers the cold Detail package. Their implementations are
 independent: connectivity from PIE-268 and cached revisits from PIE-270 did not
 implement either behavior.
 Consult the workboard for current execution status.
 
-PIE-273 uses PIE-269's measurements; PIE-272 uses PIE-271's measurements. Neither
-gate justifies infrastructure in advance, and either may close with evidence
-that no additional machinery is needed. I1-I5 remain separate interaction fixes;
-A1-A3 remain a later ownership/layout experiment. A2 does not require either read
+PIE-273 uses PIE-269's measurements; PIE-272 uses PIE-271's measurements. Their
+recorded decisions justify no new backlink index or cursor subsystem. PIE-273
+does not establish acceptable growth latency: PIE-235 retains the failing query
+path. I1-I5 remain separate interaction fixes; A1-A3 remain a later
+ownership/layout experiment. A2 does not require either read
 optimization. PIE-280 is an independent unresolved safety follow-up, not a
 performance or layout dependency; retain its explicit external-write limitation.
 PIE-281 records pre-existing annotation placement defects found during PIE-271
@@ -343,7 +349,8 @@ live Herdr session is not a disposable fixture.
 ### PIE-269 — compact Tree index
 
 Delivered by PR #124. The following are retained contracts and acceptance checks,
-not a second implementation queue. PIE-273 owns any measurement-driven follow-up.
+not a second implementation queue. PIE-273 records the scale decision and reopening
+criteria; PIE-235 owns the measured ranked-query follow-up.
 
 At baseline `53be3c0`, `src/tree-controller.ts:reload()` consumes complete `visible` and
 `physical` collections from `workspace.snapshot`. Start at that read boundary
@@ -402,6 +409,9 @@ Retain any full-snapshot operation still required by a different consumer.
 
 ### PIE-271 — primary Detail content before optional enrichment
 
+Delivered by PR #125. Preserve these contracts and the application journey;
+this section is not an unfinished implementation queue.
+
 At baseline `e728c35`, `src/detail-controller.ts:applyReadyDocument()` awaits projection and
 reference resolution before applying an uncached block, then awaits optional
 work in the same load path. Split that concrete path using its existing target
@@ -440,9 +450,21 @@ is required by this package.
 
 ### PIE-272 / PIE-273 — evidence before more infrastructure
 
-- PIE-272 first measures backlink disclosure after PIE-271. If full-graph reads
-  still dominate, maintain a rebuildable reverse-reference index transactionally
-  from canonical block text and addresses. Verify page rename, Work-ID allocation,
+The gates have recorded decisions on the canonical work items. Both private
+1,000/5,000-block journeys ran on merged `b367586`, with budgets declared before
+measurement, actual direct/forwarded keyboard actions, and retained source/provenance.
+Backlinks met the disclosure budgets, so PIE-272 adds no reverse-reference index.
+Complete Tree responses remained about 91% smaller and met their byte budgets.
+However, the 5,000-block projection and mutation-revalidation budgets failed;
+ranked `tree.query` calls dominated. PIE-273 therefore adds no window/cursor/replay
+system and retains the narrower fix under existing PIE-235. A completed decision
+gate does not mean that growth responsiveness is fixed.
+
+Keep the following reopening criteria:
+
+- PIE-272 measures backlink disclosure after PIE-271. If full-graph reads exceed
+  the recorded service/UI budgets, evaluate a rebuildable reverse-reference index
+  maintained transactionally from canonical block text and addresses. Verify page rename, Work-ID allocation,
   property references, delete/restore, and bounded result completeness against
   current resolution behavior. Remove the repeated scan when all affected callers
   migrate. The service index does not depend on the Detail cache.
@@ -450,11 +472,42 @@ is required by this package.
   revalidation, and representative workspace growth after PIE-269. It is a
   decision gate, not a commitment to cursors, replay, or leased views. Close it
   if the complete index meets the stated budget; otherwise propose the smallest
-  bounded protocol change with hierarchy, occurrence, concurrency, and reconnect
-  evidence.
+  bounded change at the measured bottleneck. A protocol change needs hierarchy,
+  occurrence, concurrency, and reconnect evidence; a slow SQL access path does
+  not justify cursor state.
 
 Keep measurements with the canonical task proof. Local latency injection and
 this agent's host-socket access check do not establish two-host SSH behavior.
+
+### PIE-235 — remove repeated work from virtual-branch loading
+
+Reuse the existing task rather than create another scale project. The original
+24,000-block client-only projection profile and PIE-273's live ranked-query cost
+are distinct measurements. Preserve both acceptance tracks.
+
+The immediate service boundary is `OutlinerStore.queryRankedBlocksFromCurrentRead()`
+in `src/store.ts`. On the retained 5,000-block fixture, its correlated property
+checks choose `properties_scope_key_value` by scope/key, then test `LOWER(value)`
+and the candidate block ID across that shared key range. Seeded `type=bookmark`
+and `type=project-doc` queries each take roughly half a second. A read-only
+comparison using the existing block-ID primary index returns identical ordered
+rows in roughly 16 ms. This diagnosis supports a query/access-path fix; it does
+not establish a shipped fix or mandate the diagnostic index hint.
+
+Remove the repeated key-range scans while preserving case-insensitive filters,
+property scope, deletion/subtree rules, authored ranks, canonical fallback order,
+exact bodies/revisions, and explicit completeness. Prefer an existing authoritative
+lookup over a new cache or store. No cursor, replay, or leased-view protocol is
+required by this evidence.
+
+Verify query contracts with focused regressions, then repeat the private
+1,000/5,000-block Tree load and mutation/reorder journey. Retain exact projection
+membership/order, selected-row behavior, and request counts. The predeclared
+5,000-block budgets are parse plus projection below 250 ms and mutation-to-frame
+below one second in the measured two-context workload. Re-run the separate
+24,000-block client profile; a faster SQL query does not prove that cost fixed.
+Detailed samples, query plans, diagnosis scripts, and scheduling stay on PIE-235
+and the completed PIE-272/273 proof records.
 
 ### PIE-281 — annotation representation and coordinate identity
 
