@@ -172,10 +172,10 @@ function computedDetailEffects(
     async queryPageAddresses() {
       return { addresses: [], completeness: { kind: "complete" } };
     },
-    readFile() {
+    async readFile() {
       return unavailable();
     },
-    completeFiles() {
+    async completeFiles() {
       return [];
     },
     async focusOutliner() {},

@@ -39,6 +39,7 @@ export interface HerdrScenarioSession {
   rejectCompetingService(): Promise<CommandResult>;
   attachClient(): Promise<{ write(input: string): Promise<void>; visible(): Promise<string> }>;
   openCapturePopup(blockId: string, socketPath: string): Promise<void>;
+  openRemoteBrowsingContext(renderer?: "pi-tui" | "ansi"): Promise<{ workspaceRoot: string; tree: string; detail: string }>;
   focus(paneId: string): Promise<void>;
   keys(paneId: string, ...keys: string[]): Promise<void>;
   text(paneId: string, text: string): Promise<void>;
@@ -448,6 +449,10 @@ async function readProcessEnvironment(pid: number): Promise<Record<string, strin
     "OUTLINER_STATE_DIR",
     "OUTLINER_KEYBINDINGS_PATH",
     "OUTLINER_DETAIL_RENDERER",
+    "OUTLINER_WORKSPACE_ROOT",
+    "OUTLINER_REMOTE",
+    "OUTLINER_SOCKET_PATH",
+    "OUTLINER_BROWSING_CONTEXT_ID",
   ];
   const selected: Record<string, string> = {};
   for (const key of allowed) {
@@ -592,6 +597,7 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
   let serverLaunchError: Error | null = null;
   let clientOutput = "";
   let panes: HerdrScenarioSession["panes"] | null = null;
+  const extraPanes: Record<string, string> = {};
   let checkpointNumber = 0;
   let environment: Record<string, string> = {};
   let herdrBinary = "herdr";
@@ -663,6 +669,54 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
     });
   };
 
+  const verifyProcess = async (paneId: string, expectedCwd: string, expectedExtra: Record<string, string> = {}): Promise<ProcessEvidence> => {
+    const paneOutput = await runHerdr(["pane", "get", paneId]);
+    const paneResult = parseResult(paneOutput.stdout, "pane_info", `pane get ${paneId}`);
+    const pane = parsePane(paneResult.pane, `pane get ${paneId}.result.pane`);
+    const status = herdrStatus;
+    if (!pane || !status) throw new Error(`Missing verified pane identity for ${paneId}`);
+    const evidence = await poll<ProcessEvidence | null>({
+      label: `isolated process environment for ${paneId}`,
+      timeoutMs: STARTUP_TIMEOUT_MS,
+      signal: abort.signal,
+      artifacts,
+      read: async () => {
+        const output = await runHerdr(["pane", "process-info", "--pane", paneId], 5_000);
+        const info = parseProcessInfo(output.stdout);
+        if (info.paneId !== paneId) throw new Error(`process-info returned ${info.paneId} for ${paneId}`);
+        const candidates = [
+          ...info.processes,
+          ...(info.shellPid && !info.processes.some((candidate) => candidate.pid === info.shellPid)
+            ? [{ pid: info.shellPid, name: "shell" }]
+            : []),
+        ];
+        for (const candidate of candidates) {
+          try {
+            const cwd = await processCwd(candidate.pid);
+            const candidateEnvironment = await readProcessEnvironment(candidate.pid);
+            if (cwd === expectedCwd && environmentMatches(candidateEnvironment, pane, status, { ...environment, ...expectedExtra }) &&
+                  Object.entries(expectedExtra).every(([key, value]) => candidateEnvironment[key] === value)) {
+              return {
+                paneId,
+                pid: candidate.pid,
+                name: candidate.name,
+                cwd,
+                ...(candidate.cmdline ? { cmdline: candidate.cmdline } : {}),
+                environment: candidateEnvironment,
+              };
+            }
+          } catch {
+            // Foreground process snapshots race normal exec transitions; poll the next snapshot.
+          }
+        }
+        return null;
+      },
+      accept: (value) => value !== null,
+    });
+    if (!evidence) throw new Error(`No matching process environment for ${paneId}`);
+    return evidence;
+  };
+
   const captureAll = async (operations: Promise<unknown>[]): Promise<void> => {
     const results = await Promise.allSettled(operations);
     const errors = results.flatMap((result) => result.status === "rejected" ? [result.reason] : []);
@@ -678,14 +732,7 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
     await mkdir(paneDirectory, { recursive: true });
     const timeoutMs = cleanup ? 5_000 : COMMAND_TIMEOUT_MS;
     const signal = cleanup ? null : abort.signal;
-    const labels: Array<keyof HerdrScenarioSession["panes"]> = [
-      "launcher",
-      "service",
-      "tree",
-      "detail",
-    ];
-    await captureAll(labels.map(async (label) => {
-      const paneId = ownedPanes[label];
+    await captureAll(Object.entries({ ...ownedPanes, ...extraPanes }).map(async ([label, paneId]) => {
       const [visibleText, visibleAnsi] = await Promise.all([
         paneRead(paneId, "visible", "text", timeoutMs, signal),
         paneRead(paneId, "visible", "ansi", timeoutMs, signal),
@@ -731,7 +778,7 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
       capturedAt: new Date().toISOString(),
       database: databasePath,
       databaseSha256: hash(await readFile(databasePath)),
-      panes: ownedPanes,
+      panes: { ...ownedPanes, ...extraPanes },
     }));
     if (resources.screen) {
       await new Promise<void>((resolve) => resources.screen!.write("", resolve));
@@ -808,6 +855,55 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
             await artifacts.event("input", { kind: "attached-client", input });
           },
         };
+      },
+      async openRemoteBrowsingContext(renderer = "pi-tui") {
+        if (extraPanes.remoteTree) throw new Error("This fixture already owns a remote browsing context");
+        const workspaceRoot = join(runRoot, "client-project");
+        await mkdir(workspaceRoot);
+        const contextId = crypto.randomUUID();
+        const workspaceId = (await getRegistrations()).find(value => value.runtime?.paneId === ownedPanes.tree)?.runtime?.workspaceId;
+        if (!workspaceId) throw new Error("Owned Tree has no verified workspace");
+        const socket = resolvePaths({ OUTLINER_STATE_DIR: outlinerState, OUTLINER_WORKSPACE_ROOT: projectRoot }).socket;
+        const clientEnvironment = {
+          OUTLINER_WORKSPACE_ROOT: workspaceRoot,
+          OUTLINER_REMOTE: "1",
+          OUTLINER_SOCKET_PATH: socket,
+          OUTLINER_BROWSING_CONTEXT_ID: contextId,
+          OUTLINER_DETAIL_RENDERER: renderer,
+        };
+        const open = async (entrypoint: "outliner" | "detail", target: string): Promise<string> => {
+          const output = await runHerdr([
+            "plugin", "pane", "open", "--plugin", PLUGIN_ID, "--entrypoint", entrypoint,
+            "--placement", entrypoint === "outliner" ? "tab" : "split",
+            "--focus",
+            ...(entrypoint === "detail"
+              ? ["--target-pane", target, "--direction", "down"]
+              : ["--workspace", workspaceId]),
+            ...Object.entries(clientEnvironment).flatMap(([key, value]) => ["--env", `${key}=${value}`]),
+          ]);
+          const envelope = recordValue(parseJson(output.stdout, "remote pane open"), "remote pane open");
+          const result = recordValue(envelope.result, "remote pane open.result");
+          const opened = recordValue(result.plugin_pane, "remote pane open.result.plugin_pane");
+          const pane = parsePane(opened.pane, "remote pane open.result.plugin_pane.pane");
+          if (pane.workspaceId !== workspaceId) throw new Error("Remote launch escaped the owned workspace");
+          if (owned.has(pane.paneId)) throw new Error("Remote launch returned an existing pane");
+          owned.add(pane.paneId);
+          extraPanes[entrypoint === "outliner" ? "remoteTree" : "remoteDetail"] = pane.paneId;
+          processEvidence.push(await verifyProcess(pane.paneId, pluginRoot, clientEnvironment));
+          return pane.paneId;
+        };
+        const tree = await open("outliner", ownedPanes.launcher);
+        const detail = await open("detail", tree);
+        await poll({
+          label: "remote browsing context registrations", timeoutMs: STARTUP_TIMEOUT_MS,
+          signal: abort.signal, artifacts, read: getRegistrations,
+          accept: values => values.filter(value => value.contextId === contextId).length === 2 &&
+            values.some(value => value.contextId === contextId && value.role === "tree" && value.runtime?.paneId === tree) &&
+            values.some(value => value.contextId === contextId && value.role === "detail" && value.runtime?.paneId === detail),
+        });
+        await artifacts.write("process-environments.json", processEvidence);
+        await artifacts.write("remote-browsing-context.json", { workspaceRoot, serviceRoot: projectRoot, tree, detail, contextId, clientEnvironment });
+        return { workspaceRoot, tree, detail };
       },
       async openCapturePopup(blockId, socketPath) {
         if (!resources.client) throw new Error("Popup evidence requires an attached client");
@@ -1210,50 +1306,6 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
       waitOwnedVisible(action.detailPane, "Workspace"),
     ]);
 
-    const verifyProcess = async (paneId: string, expectedCwd: string): Promise<ProcessEvidence> => {
-      const pane = paneInfos.get(paneId);
-      const status = herdrStatus;
-      if (!pane || !status) throw new Error(`Missing verified pane identity for ${paneId}`);
-      const evidence = await poll<ProcessEvidence | null>({
-        label: `isolated process environment for ${paneId}`,
-        timeoutMs: STARTUP_TIMEOUT_MS,
-        signal: abort.signal,
-        artifacts,
-        read: async () => {
-          const output = await runHerdr(["pane", "process-info", "--pane", paneId], 5_000);
-          const info = parseProcessInfo(output.stdout);
-          if (info.paneId !== paneId) throw new Error(`process-info returned ${info.paneId} for ${paneId}`);
-          const candidates = [
-            ...info.processes,
-            ...(info.shellPid && !info.processes.some((candidate) => candidate.pid === info.shellPid)
-              ? [{ pid: info.shellPid, name: "shell" }]
-              : []),
-          ];
-          for (const candidate of candidates) {
-            try {
-              const cwd = await processCwd(candidate.pid);
-              const candidateEnvironment = await readProcessEnvironment(candidate.pid);
-              if (cwd === expectedCwd && environmentMatches(candidateEnvironment, pane, status, environment)) {
-                return {
-                  paneId,
-                  pid: candidate.pid,
-                  name: candidate.name,
-                  cwd,
-                  ...(candidate.cmdline ? { cmdline: candidate.cmdline } : {}),
-                  environment: candidateEnvironment,
-                };
-              }
-            } catch {
-              // Foreground process snapshots race normal exec transitions; poll the next snapshot.
-            }
-          }
-          return null;
-        },
-        accept: (value) => value !== null,
-      });
-      if (!evidence) throw new Error(`No matching process environment for ${paneId}`);
-      return evidence;
-    };
     processEvidence = await Promise.all([
       verifyProcess(launcher.paneId, projectRoot),
       verifyProcess(action.servicePane, pluginRoot),

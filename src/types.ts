@@ -1127,7 +1127,7 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 57;
+export const OUTLINER_PROTOCOL_VERSION = 58;
 
 
 export interface OutlinerServiceStatus {
@@ -1151,6 +1151,8 @@ export type OutlinerRequest =
   | { id: string; action: "blocks.authored-links"; ownerBlockId: string }
   | { id: string; action: "get"; blockId: string }
   | { id: string; action: "children"; parentId: string | null }
+  | { id: string; action: "files.read"; path: string }
+  | { id: string; action: "files.complete"; prefix: string }
   | { id: string; action: "workspace.snapshot"; view?: WorkspaceSnapshotView }
   | { id: string; action: "events.subscribe"; client: OutlinerClientRegistration }
   | { id: string; action: "clients.list"; role?: OutlinerClientRole }

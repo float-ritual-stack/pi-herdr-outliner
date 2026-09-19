@@ -7,7 +7,6 @@ import {
   startClientRuntimeSync,
   type ClientRuntimeSync,
 } from "./client-runtime-sync";
-import { completeReferencedPaths, readReferencedFile } from "./files";
 import { OutlinerActionKeymap } from "./outliner-actions";
 import { navigateOutlinerLink } from "./outliner-links";
 import {
@@ -106,14 +105,6 @@ const controller = createTreeController({
   actionKeymap,
   request<T>(input: RequestInput): Promise<T> {
     return client.request<T>(input);
-  },
-  filesystem: {
-    completeReferencedPaths(prefix) {
-      return completeReferencedPaths(prefix, paths.workspaceRoot);
-    },
-    readReferencedFile(block) {
-      return readReferencedFile(block, paths.workspaceRoot);
-    },
   },
   async createDetailPane(blockId, direction) {
     const detailContextId = crypto.randomUUID();

@@ -1,3 +1,4 @@
+import { getProperty } from "./properties";
 import { setTimeout as sleep } from "node:timers/promises";
 import { getMarkdownTheme, initTheme } from "@earendil-works/pi-coding-agent";
 import {
@@ -66,7 +67,7 @@ import {
   detailDraftSplitWidths,
 } from "./detail-pi-renderer";
 import { parsePropertySummaryKeys } from "./property-summary";
-import { completeReferencedPaths, readReferencedFile } from "./files";
+import { referencedFilePreview, type FileContents, type ReferencedPathCandidate } from "./files";
 import {
   editTextInExternalEditor,
   resolveExternalEditorConfiguration,
@@ -593,11 +594,14 @@ const effects: DetailEffects = {
   async queryPageAddresses(query, limit) {
     return client.request<PageAddressCollection>({ action: "pages.complete", query, limit });
   },
-  readFile(block) {
-    return readReferencedFile(block, paths.workspaceRoot);
+  async readFile(block) {
+    const path = getProperty(block.properties, "file");
+    if (!path) throw new Error("Selected block has no [file::path] property");
+    const contents = await client.request<FileContents>({ action: "files.read", path });
+    return referencedFilePreview(block, contents);
   },
-  completeFiles(query) {
-    return completeReferencedPaths(query, paths.workspaceRoot);
+  async completeFiles(query) {
+    return client.request<ReferencedPathCandidate[]>({ action: "files.complete", prefix: query });
   },
   async focusOutliner() {
     await focusTreeForClient(client, clientId);
