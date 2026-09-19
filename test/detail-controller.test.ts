@@ -501,11 +501,11 @@ function createHarness(
       calls.pageQueries.push({ query, limit });
       return pageQueryResults.shift() ?? { addresses: [], completeness: { kind: "complete" } };
     },
-    readFile() {
+    async readFile() {
       if (!referencedFile) throw new Error("file unavailable");
       return referencedFile;
     },
-    completeFiles(query) {
+    async completeFiles(query) {
       return query === "src/"
         ? [
             { sourcePath: "src/components/", isDirectory: true },
@@ -3117,7 +3117,7 @@ describe("detail controller saves and annotations", () => {
       displayPath: "other.ts",
       sourcePath: "other.ts",
     });
-    harness.effects.readFile = () => unrelatedFile;
+    harness.effects.readFile = async () => unrelatedFile;
     const internFilesystem = harness.effects.internFilesystem;
     harness.effects.internFilesystem = async (path) => {
       const receipt = await internFilesystem(path);
@@ -4445,4 +4445,48 @@ test("reveals exact targeted attention without mutating source or durable annota
   expect(harness.controller.state.status).toBe(
     "Attention cue acknowledged; active marks remain",
   );
+});
+
+test("Detail waits for service file contents before exposing a file preview", async () => {
+  const block = makeBlock({ properties: [{ key: "file", value: "today.txt" }] });
+  const harness = createHarness(block);
+  harness.effects.readFile = async () => filePreview({ lines: ["SERVICE CONTENT"] });
+  await harness.controller.initialize();
+  expect(harness.controller.state.referencedFile?.lines).toEqual(["SERVICE CONTENT"]);
+  expect(harness.controller.state.mode).toBe("file");
+});
+
+test("a delayed file read cannot attach its bytes to a newer Detail target", async () => {
+  const first = makeBlock({ id: "delayed-file", properties: [{ key: "file", value: "old.txt" }] });
+  const harness = createHarness(first);
+  const entered = Promise.withResolvers<void>();
+  const delayed = Promise.withResolvers<ReferencedFile>();
+  harness.effects.readFile = async () => { entered.resolve(); return delayed.promise; };
+  const opening = harness.controller.initialize();
+  await entered.promise;
+  await harness.controller.onServiceEvent(event("ui", {
+    targetClientId: "detail-test", command: "preview", target: { kind: "block", blockId: "new-target" },
+  }), viewport);
+  delayed.resolve(filePreview({ lines: ["OLD FILE CONTENT"] }));
+  await opening;
+  expect(harness.controller.state.context.selected?.id).toBe("new-target");
+  expect(harness.controller.state.referencedFile).toBeNull();
+  expect(harness.controller.state.mode).toBe("preview");
+});
+
+test("a cached file revisit publishes the completed service preview", async () => {
+  const first = makeBlock({ id: "cached-file", properties: [{ key: "file", value: "today.txt" }] });
+  const paints: Array<readonly string[] | null> = [];
+  const harness = createHarness(first, filePreview({ lines: ["SERVICE FILE"] }), undefined, undefined, {}, state => {
+    paints.push(state.referencedFile?.lines ?? null);
+  });
+  await harness.controller.initialize();
+  await harness.controller.onServiceEvent(event("ui", {
+    targetClientId: "detail-test", command: "preview", target: { kind: "block", blockId: "another-block" },
+  }), viewport);
+  await harness.controller.onServiceEvent(event("ui", {
+    targetClientId: "detail-test", command: "preview", target: { kind: "block", blockId: first.id },
+  }), viewport);
+  expect(harness.controller.state.referencedFile?.lines).toEqual(["SERVICE FILE"]);
+  expect(paints.at(-1)).toEqual(["SERVICE FILE"]);
 });

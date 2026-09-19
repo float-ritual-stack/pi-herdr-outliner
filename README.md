@@ -348,8 +348,12 @@ Tree inserts two generated branches under that exact occurrence:
   address and transactionally creates its registered page only when necessary.
   An unresolved Work ID is never created implicitly.
 - **Resources** recognizes human-authored provider references:
-  - `[file::docs/plan.md]` addresses a local file. While editing in Tree or
-    Detail, type `[file::` and invoke completion to browse workspace paths.
+  - `[file::docs/plan.md]` addresses a file on the Outliner service's host.
+    Relative paths use the service workspace; `~/` uses the service user's home.
+    Tree and both Detail renderers read and complete these paths through the
+    service, including in remote mode. Line ranges and rendering stay in the
+    client. Passive previews and completion do not create Sources or Resources;
+    explicit activation still owns registration.
   - `[file::evan@evans-box/path/to/file]` addresses an SSH application
     Resource. The Source and Resource are created only when the row is opened.
   - `[web::https://example.com/guide]` addresses a web Resource.
@@ -1255,6 +1259,14 @@ They verify stale Detail/CLI rejection, retained drafts, sibling reordering,
 metadata-preserving external file replacement, and explicit cancellation/reload
 before a fresh save. The file journey does not claim to close the separate
 validation/rename race.
+
+`bun run test:e2e:file-authority` runs the file ownership journey for both Pi and
+ANSI Detail. The fixture opens one additional remote-mode Tree/Detail pair with
+its own workspace root, deliberately writes different contents at the same path,
+and checks service-owned previews, path completion, preserved line ranges, and
+explicit Resource activation. Passive reads leave catalog identities unchanged.
+The runner records those clients' roots, socket, registrations, and process
+provenance. This is a same-host ownership test, not two-host SSH evidence.
 
 ## Project documents
 

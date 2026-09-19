@@ -46,6 +46,18 @@ owner is running.
 
 The service logs the resolved socket and database paths after startup and handles orderly shutdown on `SIGINT`, `SIGTERM`, or `SIGHUP`.
 
+The service also owns authored filesystem reads and path completion. `files.read`
+and `files.complete` use its workspace and home directory, with no client-local
+fallback. `ResourceCatalog.readFilesystemReference` applies Source read policy
+and filesystem confinement without creating a Source or Resource. It shares the
+bounded text-file reader and byte revision calculation with registered filesystem
+Resources. Clients apply authored line ranges and render the returned text;
+source coordinates and decoded-text hashes still identify the full source.
+Asynchronous Detail reads are discarded after a target change, and cached file
+revisits publish the completed preview. Explicit Resource activation remains
+separate from passive inspection.
+
+
 ### Tree client
 
 [`src/outliner.ts`](../src/outliner.ts) is a standalone terminal process using:

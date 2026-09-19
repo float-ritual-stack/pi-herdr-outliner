@@ -19,7 +19,8 @@ import {
   pageAddressCompletion,
   pageCompletionLookupQuery,
 } from "./completion";
-import type { ReferencedFile, ReferencedPathCandidate } from "./files";
+import { referencedFilePreview, type FileContents, type ReferencedPathCandidate } from "./files";
+import { getProperty } from "./properties";
 import {
   firstOutlinerReference,
   resolveOutlinerLinkTarget,
@@ -140,17 +141,11 @@ export interface TreeView {
   readonly actionMenuQuery?: string;
 }
 
-export interface TreeFilesystem {
-  completeReferencedPaths(prefix: string): ReferencedPathCandidate[];
-  readReferencedFile(block: Block): ReferencedFile;
-}
-
 export interface TreeControllerEffects {
   readonly workspaceRoot: string;
   readonly clientId: string;
   readonly browsingContextId: string;
   request<T>(input: RequestInput): Promise<T>;
-  readonly filesystem: TreeFilesystem;
   createDetailPane(blockId: string, direction?: "right" | "down"): Promise<void>;
   openCapturePopup(capturedFromBlockId: string): Promise<void>;
   openVirtualBranchNavigator(viewId: string, adapter?: "bookmark"): void | Promise<void>;
@@ -1257,7 +1252,8 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     let items: MutableQuickCompletion["items"];
     let truncatedLimit: number | null = null;
     if (target.kind === "file") {
-      items = effects.filesystem.completeReferencedPaths(target.query).map((candidate) => ({
+      const candidates = await effects.request<ReferencedPathCandidate[]>({ action: "files.complete", prefix: target.query });
+      items = candidates.map((candidate) => ({
         label: candidate.sourcePath,
         insertion: `[file::${candidate.sourcePath}${candidate.isDirectory ? "" : "]"}`,
       }));
@@ -1322,15 +1318,31 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     quickCompletion = null;
   }
 
-  function openReferencedFile(block: Block): void {
+  async function openReferencedFile(block: Block): Promise<void> {
+    const rowId = rows[selectedIndex]?.rowId;
+    const path = getProperty(block.properties, "file");
+    if (!path) {
+      status = "Selected block has no [file::path] property";
+      return;
+    }
+    mode = "viewer";
+    viewerLines = [];
+    viewerPath = path;
+    viewerOffset = 0;
+    status = "Loading file…";
+    effects.invalidate();
     try {
-      const file = effects.filesystem.readReferencedFile(block);
+      const contents = await effects.request<FileContents>({ action: "files.read", path });
+      if (mode !== "viewer" || rows[selectedIndex]?.rowId !== rowId) return;
+      const file = referencedFilePreview(block, contents);
       viewerLines = file.lines;
       viewerPath = `${file.displayPath}${file.firstLine > 1 ? `:${file.firstLine}` : ""}`;
       viewerOffset = 0;
       mode = "viewer";
       status = "";
     } catch (error) {
+      if (mode !== "viewer" || rows[selectedIndex]?.rowId !== rowId) return;
+      mode = "browse";
       status = errorMessage(error);
     }
   }
@@ -2214,7 +2226,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       await createDetailPane("down");
       return;
     } else if (key.name === "delete" && selected) mode = "delete";
-    else if (str === "f" && selected) openReferencedFile(selected.block);
+    else if (str === "f" && selected) await openReferencedFile(selected.block);
     else if (str === "L") {
       status = "Lock or unlock from a Detail pane";
       effects.invalidate();

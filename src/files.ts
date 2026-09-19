@@ -3,8 +3,18 @@ import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { getProperty } from "./properties";
 import type { Block } from "./types";
+import { ResourceCatalogError, type ResourceRevision } from "./resources";
 
-const MAX_PREVIEW_BYTES = 2 * 1024 * 1024;
+export const MAX_TEXT_FILE_BYTES = 2 * 1024 * 1024;
+
+export interface FileContents {
+  readonly absolutePath: string;
+  readonly displayPath: string;
+  readonly text: string;
+  readonly revision: Extract<ResourceRevision, { kind: "filesystem" }> & { readonly contentHash: string };
+  readonly contentHash: string;
+  readonly capturedAt: string;
+}
 
 export interface ReferencedFile {
   absolutePath: string;
@@ -77,31 +87,55 @@ export function completeReferencedPaths(
     .slice(0, Math.max(0, limit));
 }
 
-export function readReferencedFile(block: Block, workspaceRoot: string): ReferencedFile {
-  const sourcePath = getProperty(block.properties, "file");
-  if (!sourcePath) throw new Error("Selected block has no [file::path] property");
-
+export function readFileContents(sourcePath: string, workspaceRoot: string): FileContents {
   const absolutePath = resolveReferencedPath(sourcePath, workspaceRoot);
-  const stat = statSync(absolutePath, { bigint: true });
-  if (!stat.isFile()) throw new Error(`Not a regular file: ${sourcePath}`);
-  if (stat.size > BigInt(MAX_PREVIEW_BYTES)) throw new Error(`File exceeds the ${MAX_PREVIEW_BYTES / 1024 / 1024} MiB preview limit`);
-
-  const bytes = readFileSync(absolutePath);
-  const sourceText = bytes.toString("utf8");
-  const allLines = sourceText.split(/\r?\n/);
-  const firstLine = Math.max(1, Number(getProperty(block.properties, "line-start") ?? 1));
-  const requestedEnd = Number(getProperty(block.properties, "line-end") ?? allLines.length);
-  const lastLine = Math.max(firstLine, Math.min(allLines.length, requestedEnd));
-
+  let stat;
+  let bytes: Buffer;
+  try {
+    stat = statSync(absolutePath, { bigint: true });
+    if (!stat.isFile()) throw new Error("not a regular file");
+    if (stat.size > BigInt(MAX_TEXT_FILE_BYTES)) {
+      throw new Error(`exceeds ${MAX_TEXT_FILE_BYTES / 1024 / 1024} MiB`);
+    }
+    bytes = readFileSync(absolutePath);
+  } catch (error) {
+    throw new ResourceCatalogError(
+      "source-unavailable",
+      `Filesystem Resource is unavailable: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  const text = bytes.toString("utf8");
   return {
     absolutePath,
     displayPath: relative(workspaceRoot, absolutePath) || absolutePath,
+    text,
+    revision: {
+      kind: "filesystem",
+      mtimeNs: stat.mtimeNs.toString(),
+      size: stat.size.toString(),
+      contentHash: new Bun.CryptoHasher("sha256").update(bytes).digest("hex"),
+    },
+    contentHash: new Bun.CryptoHasher("sha256").update(text).digest("hex"),
+    capturedAt: new Date(Number(stat.mtimeMs)).toISOString(),
+  };
+}
+
+export function referencedFilePreview(block: Block, contents: FileContents): ReferencedFile {
+  const sourcePath = getProperty(block.properties, "file");
+  if (!sourcePath) throw new Error("Selected block has no [file::path] property");
+  const allLines = contents.text.split(/\r?\n/);
+  const firstLine = Math.max(1, Number(getProperty(block.properties, "line-start") ?? 1));
+  const requestedEnd = Number(getProperty(block.properties, "line-end") ?? allLines.length);
+  const lastLine = Math.max(firstLine, Math.min(allLines.length, requestedEnd));
+  return {
+    absolutePath: contents.absolutePath,
+    displayPath: contents.displayPath,
     sourcePath,
     lines: allLines.slice(firstLine - 1, lastLine),
     firstLine,
-    sourceText,
-    sourceVersion: `${stat.mtimeNs}:${stat.size}:${new Bun.CryptoHasher("sha256").update(bytes).digest("hex")}`,
-    sourceHash: new Bun.CryptoHasher("sha256").update(sourceText).digest("hex"),
-    capturedAt: new Date(Number(stat.mtimeMs)).toISOString(),
+    sourceText: contents.text,
+    sourceVersion: `${contents.revision.mtimeNs}:${contents.revision.size}:${contents.revision.contentHash}`,
+    sourceHash: contents.contentHash,
+    capturedAt: contents.capturedAt,
   };
 }

@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { completeReferencedPaths, readReferencedFile, resolveReferencedPath } from "../src/files";
+import { completeReferencedPaths, readFileContents, referencedFilePreview, resolveReferencedPath } from "../src/files";
 import { OutlinerStore } from "../src/store";
 
 test("reads the line range declared by a file-reference block", () => {
@@ -13,7 +13,7 @@ test("reads the line range declared by a file-reference block", () => {
 
   try {
     const block = store.create("Plan [file::docs/plan.md] [line-start::2] [line-end::3]");
-    const file = readReferencedFile(block, workspace);
+    const file = referencedFilePreview(block, readFileContents(block.properties.find(p => p.key === "file")!.value, workspace));
 
     expect(file.sourcePath).toBe("docs/plan.md");
     expect(file.firstLine).toBe(2);
@@ -31,7 +31,7 @@ test("file-reference evidence keeps the original byte revision separate from dec
   const store = new OutlinerStore(join(workspace, "db.sqlite"));
   try {
     const block = store.create("Encoded [file::encoded.txt]");
-    const preview = readReferencedFile(block, workspace);
+    const preview = referencedFilePreview(block, readFileContents(block.properties.find(p => p.key === "file")!.value, workspace));
     const resource = store.resources.internFilesystem({ path }).resource;
     const document = store.resources.describe(resource.id, true).filesystem!;
     if (document.revision.revision.kind !== "filesystem") throw new Error("Expected file revision");

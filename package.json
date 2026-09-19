@@ -21,7 +21,8 @@
     "test:e2e:ownership": "bun run test/e2e/workspace-ownership.ts",
     "test:e2e:capture": "bun run test/e2e/capture-retry.ts",
     "test:e2e:edit-conflicts": "bun run test/e2e/edit-conflicts.ts",
-    "test:e2e:file-revisions": "bun run test/e2e/file-revisions.ts"
+    "test:e2e:file-revisions": "bun run test/e2e/file-revisions.ts",
+    "test:e2e:file-authority": "bun run test/e2e/file-authority.ts && bun run test/e2e/file-authority.ts --ansi"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "^0.84.2",

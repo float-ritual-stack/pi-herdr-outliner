@@ -556,8 +556,8 @@ export interface DetailEffects {
   resolveReference(target: OutlinerLinkTarget): Promise<ResolvedOutlinerLinkTarget>;
   queryBlocks(query: BlockSearchQuery): Promise<VisibleBlockCollection>;
   queryPageAddresses(query: string | undefined, limit: number): Promise<PageAddressCollection>;
-  readFile(block: Block): ReferencedFile;
-  completeFiles(query: string): ReferencedPathCandidate[];
+  readFile(block: Block): Promise<ReferencedFile>;
+  completeFiles(query: string): Promise<ReferencedPathCandidate[]>;
   focusOutliner(): Promise<void>;
   openPropertyInspectorPane(blockId: string): string | Promise<string>;
   openVirtualBranchNavigator(viewId: string, adapter?: "bookmark"): void | Promise<void>;
@@ -1129,7 +1129,12 @@ export function createDetailController(
     state.resolvedBreadcrumb = titles.join(" › ");
   };
 
-  const loadFile = (block: Block): void => {
+  const loadFile = async (block: Block): Promise<boolean> => {
+    const generation = loadGeneration;
+    const mode = state.mode;
+    const isCurrent = (): boolean => generation === loadGeneration &&
+      state.context.selected?.id === block.id && state.mode === mode;
+    state.referencedFile = null;
     let fileSourceBlockId = block.id;
     try {
       const source = getProperty(block.properties, "type")?.startsWith("annotation")
@@ -1137,11 +1142,10 @@ export function createDetailController(
           getProperty(candidate.properties, "file")
         )
         : block;
-      if (!source) {
-        state.referencedFile = null;
-        return;
-      }
-      state.referencedFile = effects.readFile(source);
+      if (!source) return false;
+      const loaded = await effects.readFile(source);
+      if (!isCurrent()) return false;
+      state.referencedFile = loaded;
       fileSourceBlockId = source.id;
       const file = state.referencedFile;
       if (file) {
@@ -1166,9 +1170,12 @@ export function createDetailController(
       state.fileCursor = 0;
       state.fileOffset = 0;
       state.selectionAnchor = null;
+      return true;
     } catch (error) {
+      if (!isCurrent()) return false;
       state.referencedFile = null;
       state.status = errorMessage(error);
+      return false;
     }
   };
 
@@ -1815,11 +1822,7 @@ export function createDetailController(
     } else if (next.selected?.effectiveDeletedRootId) {
       state.status = "In Trash — read-only · restore its direct Trash root";
     }
-    if ((state.mode === "file" || state.mode === "annotation") && next.selected) {
-      loadFile(next.selected);
-    } else {
-      state.referencedFile = null;
-    }
+    state.referencedFile = null;
   };
 
   const applyReadyDocument = async (
@@ -1900,6 +1903,10 @@ export function createDetailController(
     }
 
     applyReadyBlockPresentation(document, read, previousTarget, record, changed);
+    if ((state.mode === "file" || state.mode === "annotation") && document.context.selected) {
+      await loadFile(document.context.selected);
+      if (generation !== loadGeneration) return false;
+    }
     writeBlockCache({
       document,
       projection: read?.projection ?? null,
@@ -1938,6 +1945,11 @@ export function createDetailController(
       );
       if (successStatus) state.status = successStatus();
       emit();
+      if ((state.mode === "file" || state.mode === "annotation") && cached.document.context.selected) {
+        await loadFile(cached.document.context.selected);
+        if (generation !== loadGeneration) return "superseded";
+        emit();
+      }
     } else if (!cached) {
       state.document = { kind: "loading", target };
       emit();
@@ -2636,7 +2648,7 @@ export function createDetailController(
           cacheCurrentBlockRead(read);
           refreshBreadcrumb();
           state.mode = detailDisplayMode(updated);
-          if (state.mode === "file" || state.mode === "annotation") loadFile(updated);
+          if (state.mode === "file" || state.mode === "annotation") await loadFile(updated);
           else state.referencedFile = null;
         } else {
           const description = detailResourceDescription(state);
@@ -2708,7 +2720,7 @@ export function createDetailController(
     let emptyStatus = "";
     let completionStatus = "";
     if (target.kind === "file") {
-      items = effects.completeFiles(target.query).map((candidate) => ({
+      items = (await effects.completeFiles(target.query)).map((candidate) => ({
         label: candidate.sourcePath,
         insertion: `[file::${candidate.sourcePath}${candidate.isDirectory ? "" : "]"}`,
       }));
@@ -3821,8 +3833,7 @@ export function createDetailController(
         if (state.mode === "annotation") {
           if (state.referencedFile) state.mode = "file";
         } else if (state.context.selected) {
-          loadFile(state.context.selected);
-          if (state.referencedFile) state.mode = "file";
+          if (await loadFile(state.context.selected)) state.mode = "file";
         }
         break;
       case "view.block":

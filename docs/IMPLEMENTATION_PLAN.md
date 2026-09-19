@@ -39,6 +39,9 @@ views beside agents, and persistent activity displays remain valid Herdr uses.
 - S3 / PIE-277, [PR #121](https://github.com/float-ritual-stack/pi-herdr-outliner/pull/121):
   required atomic block edit revisions, migrated writers, and actual stale-save
   and sibling-reorder proof. Position changes do not invalidate text drafts.
+- S4 / PIE-278, [PR #122](https://github.com/float-ritual-stack/pi-herdr-outliner/pull/122):
+  content-qualified filesystem revisions, PDF refresh/history checks, and actual
+  stale-file-save proof. PIE-280 retains the separate external-writer race.
 
 Preserve these behaviors. PIE-270 does not establish progressive cold loading,
 Tree body caching, Resource caching, or structural conflict protection for all
@@ -57,7 +60,7 @@ not one large PR.
 | Shipped foundation | S1 / PIE-275: own the workspace before writable startup | BLOCKER addressed: a second launch could invalidate live work. | Preserve the ownership and recovery regressions. |
 | Shipped foundation | S2 / PIE-276: bind capture receipts to submissions | BLOCKER addressed: a retry could discard newly typed text. | S1 before deploying any required receipt migration; attached-client support for popup proof. |
 | Shipped foundation | S3 / PIE-277: enforce block edit revisions | BAD DESIGN addressed: silent stale writes and common false conflicts. | Preserve migration, required-token, stale-write, and sibling-reorder regressions. |
-| After S3 in the queue | S4 / PIE-278: identify file contents in revisions | BUG: equal size/time can conceal changed bytes. | Focused file-write contract test and live Detail save path. |
+| Shipped foundation | S4 / PIE-278: identify file contents in revisions | BUG addressed: equal size/time concealed changed bytes. | Preserve byte identity, legacy PDF history, and stale-file-save proof; PIE-280 remains separate. |
 | Separate safety follow-up | PIE-280: preserve external edits during file replacement | BUG: another writer can lose bytes between validation and rename. | Choose a supported commit/recovery contract; hashing alone does not solve it. Consult the workboard for scheduling. |
 | After S4 in the queue | S5 / PIE-279: make file reads service-owned | BAD DESIGN: preview routes can read different hosts' bytes. | Preserve passive-read semantics and explicit resource creation. |
 | Alongside safety work | I1: observers are not destinations | BUG: navigator subscriptions advertise a false Detail identity. | Narrow subscription change; attached-client popup proof. |
@@ -125,14 +128,17 @@ The runner already provides:
   `registrations`, `checkpoint`, and `record` operations.
 - A production client for the private service and a bounded
   `rejectCompetingService` operation against that same workspace.
+- One additional remote-mode Tree/Detail context in a separate owned workspace
+  root, using either supported Detail renderer. Record its endpoint, process
+  environment, and registrations; capture its panes alongside the original views.
 - One owned PTY-attached Herdr client for popup input, with raw ANSI and current-screen checkpoints decoded by test-only `@xterm/headless`.
 - A read-only SQLite connection and consistent checkpoint copies.
 - Terminal text/ANSI, topology, registrations, invocation logs, process evidence,
   and cleanup of owned processes on success, failure, and interruption.
 
-Its current limits are material: fixed launcher/service/Tree/Detail pane roles;
-one project/canonical service with a bounded startup contender; one attached
-Herdr client and capture-popup launch; no second attached client or real mouse/resize journey. A passing
+Its current limits are material: one canonical service, a bounded startup
+contender, and at most one extra Tree/Detail context; one attached Herdr client
+and capture-popup launch; no second attached client or real mouse/resize journey. A passing
 existing scenario does not cover those paths.
 
 `startup-interruption.ts` deliberately expects its inner fixture to fail after
@@ -146,7 +152,7 @@ expected injected failure from failed scenario verification when reading artifac
 | S1 (implemented) | Launch and track one additional service process against the private workspace; hold a real async operation at a deterministic barrier. | Rejected second startup changes no live operation state; cleanup leaves no owned survivor. |
 | S2 (implemented; reusable by I1) | Attach a real Herdr client through an owned PTY; send modal input through that client and retain its output. | Open, operate, and close the actual popup. A popup has no pane ID: sending keys to the underlying pane is not popup proof. |
 | S3 / A1 / I4 | Open, move, resize, and close additional owned views using supported Herdr operations; record returned identities. | Track the moved terminal and current pane ID; actions stay within the private server. |
-| S5 | Give client and service different fixture roots with the same relative filename. | Both UI routes display service-owned bytes; describe this as simulated remote ownership unless SSH is also exercised. |
+| S5 (implemented) | Give client and service different fixture roots with the same relative filename. | Both UI routes display service-owned bytes; describe this as simulated remote ownership unless SSH is also exercised. |
 | I3 / A2 | Add attached-client mouse/focus input and PTY resize evidence. | Input reaches the real host/application path; capture resized frames and resulting state. |
 | I5 | Attach two controlled clients to the private Herdr server. | Record both client actions and the context selected for each explicit source. |
 | A2 | Support one narrowly defined composed launch alongside the existing detached launch. | One host pane may contain two logical views; fixtures no longer require distinct Tree and Detail pane IDs for that case. |
@@ -164,7 +170,7 @@ Record tool/dependency versions where the behavior depends on them.
 
 ## Safety packages
 
-S1-S4 have runnable scenarios identified below. Other new scenario filenames are
+S1-S5 have runnable scenarios identified below. Other new scenario filenames are
 planned files, not commands that exist today.
 Each defect needs a focused regression that fails before its fix, plus evidence
 from the real service or UI path appropriate to the claim.
@@ -270,10 +276,14 @@ Use service reads for both embedded and detached presentation; keep line ranges
 and rendering local. Passive previews must remain passive, without silently
 interning a Resource or refreshing its provider.
 
-Proposed scenario: `test/e2e/file-authority.ts`. Give client and service different
-bytes at the same relative path. Follow each supported preview/open route and
+Scenario: `bun run test:e2e:file-authority` (`test/e2e/file-authority.ts`) runs
+both Pi and ANSI Detail with a remote-mode client context and a separate fixture
+root. Give client and service different bytes at the same relative path. Follow each supported preview/open route and
 verify service-owned content; verify passive reads leave catalog identities and
-counts unchanged. Retain the existing resource-authoring journey.
+counts unchanged. Exercise service-owned completion and ensure asynchronous file
+reads cannot overwrite a newer target or leave a cached revisit unpainted. Retain
+the existing resource-authoring journey. Split roots on one host establish file
+ownership, not actual two-host SSH behavior.
 
 ## Interaction packages
 

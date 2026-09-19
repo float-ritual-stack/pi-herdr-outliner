@@ -131,6 +131,7 @@ function harness(
       request: async <T>(input: RequestInput): Promise<T> => {
         result.calls.push(input);
         const response = await respond(input);
+        if (response === undefined && input.action === "files.complete") return [] as T;
         if (response === undefined && input.action === "clients.list") {
           return [{
             clientId: input.role === "tree" ? clientId : "detail-test",
@@ -173,12 +174,6 @@ function harness(
           } as T;
         }
         return response as T;
-      },
-      filesystem: {
-        completeReferencedPaths: () => [],
-        readReferencedFile: () => {
-          throw new Error("not configured");
-        },
       },
       createDetailPane: async (blockId, direction = "down") => {
         result.createdDetails.push(blockId);
@@ -2277,9 +2272,9 @@ describe("createTreeController", () => {
     let card: VisibleBlock | null = block("card", {
       text: "Card",
       displayText: "Card",
-      properties: [{ key: "status", value: "Doing" }],
+      properties: [{ key: "status", value: "Doing" }, { key: "file", value: "card.txt" }],
     });
-    let openedFileId = "";
+    let openedFilePath = "";
     const fake = harness((input) => {
       const physical = card ? [definition, card] : [definition];
       if (input.action === "workspace.snapshot") return snapshot(physical, definition);
@@ -2290,22 +2285,18 @@ describe("createTreeController", () => {
         card = { ...card, text: input.text, displayText: input.text };
         return card;
       }
+      if (input.action === "files.read") {
+        openedFilePath = input.path;
+        return { absolutePath: "/workspace/card.txt", displayPath: "card.txt", text: "card",
+          revision: { kind: "filesystem", mtimeNs: "1", size: "4", contentHash: "a".repeat(64) },
+          contentHash: "a".repeat(64), capturedAt: "2026-09-19T00:00:00.000Z" };
+      }
       if (input.action === "delete") {
         card = null;
         return undefined;
       }
       return undefined;
     });
-    fake.effects.filesystem.readReferencedFile = (selected) => {
-      openedFileId = selected.id;
-      return {
-        absolutePath: "/workspace/card.txt",
-        displayPath: "card.txt",
-        sourcePath: "card.txt",
-        firstLine: 1,
-        lines: ["card"],
-      };
-    };
     const controller = createTreeController(fake.effects);
     await controller.initialize();
     await controller.handleKeypress("", { name: "down" }, "pass");
@@ -2318,7 +2309,7 @@ describe("createTreeController", () => {
     expect(selectedBlockRow(controller).multilineExpanded).toBe(true);
 
     await controller.handleKeypress("f", { name: "f" }, "pass");
-    expect(openedFileId).toBe("card");
+    expect(openedFilePath).toBe("card.txt");
     await controller.handleKeypress("", { name: "escape" }, "pass");
 
     await controller.handleKeypress("e", { name: "e" }, "pass");
@@ -2951,4 +2942,29 @@ test("isolates Tree attention and reveals only on explicit instruction", async (
   await controller.handleKeypress("", { name: "x", ctrl: true }, "pass");
   expect(controller.view().attention.marks).toEqual([]);
   expect(controller.view().status).toBe("Attention cue acknowledged; active marks remain");
+});
+
+test("the file viewer uses service content while retaining the authored line range", async () => {
+  const reference = block("file-reference", {
+    text: "Today [file::today.txt] [line-start::2] [line-end::2]",
+    properties: [
+      { key: "file", value: "today.txt" },
+      { key: "line-start", value: "2" },
+      { key: "line-end", value: "2" },
+    ],
+  });
+  const fake = harness(input => {
+    if (input.action === "workspace.snapshot") return snapshot([reference], reference);
+    if (input.action === "files.read") return {
+      absolutePath: "/service/today.txt", displayPath: "today.txt", text: "first\nSERVER SECOND\nlast",
+      revision: { kind: "filesystem", mtimeNs: "1", size: "24", contentHash: "a".repeat(64) },
+      contentHash: "a".repeat(64), capturedAt: "2026-09-19T00:00:00.000Z",
+    };
+  });
+  const controller = createTreeController(fake.effects);
+  await controller.initialize();
+  await controller.handleKeypress("f", { name: "f" }, "pass");
+  expect(controller.view().mode).toBe("viewer");
+  expect(controller.view().viewerLines).toEqual(["SERVER SECOND"]);
+  expect(controller.view().viewerPath).toBe("today.txt:2");
 });

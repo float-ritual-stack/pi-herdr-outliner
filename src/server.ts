@@ -1135,6 +1135,12 @@ export class OutlinerServer {
         case "children":
           result = this.store.children(request.parentId);
           break;
+        case "files.complete":
+          result = this.store.resources.completeFilesystemPaths(request.prefix);
+          break;
+        case "files.read":
+          result = this.store.resources.readFilesystemReference(request.path);
+          break;
         case "workspace.snapshot":
           result = this.store.readWorkspaceSnapshot(request.view);
           break;

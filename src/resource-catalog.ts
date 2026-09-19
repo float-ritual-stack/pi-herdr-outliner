@@ -13,7 +13,7 @@ import {
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { Type, type Static } from "typebox";
 import { Parse } from "typebox/value";
-import { resolveReferencedPath } from "./files";
+import { completeReferencedPaths, readFileContents, resolveReferencedPath, MAX_TEXT_FILE_BYTES, type FileContents, type ReferencedPathCandidate } from "./files";
 import {
   BasicWebMarkdownExtractor,
   sha256,
@@ -92,8 +92,6 @@ import {
   type ResourceProviderCommandInput,
   type ResourceProviderCommandReceipt,
 } from "./resources";
-
-const MAX_FILESYSTEM_RESOURCE_BYTES = 2 * 1024 * 1024;
 
 interface SourceRow {
   id: string;
@@ -827,21 +825,21 @@ function filesystemRootBinding(root: string): string {
 }
 
 function assertFilesystemConfinement(
-  source: Extract<ResourceSource, { provider: "filesystem" }>,
+  root: string,
   rootBinding: string | null,
   address: Extract<ResourceAddress, { kind: "filesystem" }>,
 ): void {
   if (!rootBinding) {
     throw new ResourceCatalogError("source-unavailable", "Filesystem source has no root binding");
   }
-  const currentBinding = filesystemRootBinding(source.boundary.root);
+  const currentBinding = filesystemRootBinding(root);
   if (currentBinding !== rootBinding) {
     throw new ResourceCatalogError(
       "source-unavailable",
       "Filesystem source root no longer resolves to its bound directory identity",
     );
   }
-  const boundRoot = realpathSync(source.boundary.root);
+  const boundRoot = realpathSync(root);
   const candidate = join(boundRoot, ...address.path.split("/"));
   const fromRoot = relative(boundRoot, candidate);
   if (fromRoot === ".." || fromRoot.startsWith(`..${sep}`) || isAbsolute(fromRoot)) {
@@ -1304,6 +1302,30 @@ export class ResourceCatalog {
       mediaType: value.mediaType ?? (/\.pdf$/i.test(absolutePath) ? "application/pdf" : undefined),
     });
   }
+  completeFilesystemPaths(prefix: string): ReferencedPathCandidate[] {
+    return completeReferencedPaths(prefix, this.workspaceRoot);
+  }
+
+  readFilesystemReference(path: string): FileContents {
+    if (typeof path !== "string" || !path.trim()) {
+      throw new ResourceCatalogError("invalid-input", "Filesystem reference path cannot be empty");
+    }
+    const absolutePath = resolveReferencedPath(path, this.workspaceRoot);
+    const source = this.filesystemSourceCandidates(absolutePath)[0];
+    if (source?.policy.deniedCapabilities.includes("read")) {
+      throw new ResourceCatalogError("invalid-input", "Workspace policy denies reading this filesystem Source");
+    }
+    // Use the same boundary explicit interning would choose, without creating a Source.
+    const root = source?.boundary.root ?? dirname(absolutePath);
+    const binding = source
+      ? this.requireSourceRowFromCurrentRead(source.id).root_binding
+      : filesystemRootBinding(root);
+    assertFilesystemConfinement(root, binding, {
+      kind: "filesystem", path: relative(root, absolutePath).replaceAll(sep, "/"),
+    });
+    return readFileContents(path, this.workspaceRoot);
+  }
+
   private filesystemSourceCandidates(
     absolutePath: string,
   ): Array<Extract<ResourceSource, { provider: "filesystem" }>> {
@@ -1693,10 +1715,10 @@ export class ResourceCatalog {
     if (typeof input.text !== "string") {
       throw new ResourceCatalogError("invalid-input", "Filesystem Resource text must be a string");
     }
-    if (Buffer.byteLength(input.text, "utf8") > MAX_FILESYSTEM_RESOURCE_BYTES) {
+    if (Buffer.byteLength(input.text, "utf8") > MAX_TEXT_FILE_BYTES) {
       throw new ResourceCatalogError(
         "invalid-input",
-        `Filesystem Resource exceeds ${MAX_FILESYSTEM_RESOURCE_BYTES / 1024 / 1024} MiB`,
+        `Filesystem Resource exceeds ${MAX_TEXT_FILE_BYTES / 1024 / 1024} MiB`,
       );
     }
     const expectedRevision = normalizeResourceRevisionRef(input.expectedRevision, resource);
@@ -1755,47 +1777,19 @@ export class ResourceCatalog {
     }
     const sourceRow = this.requireSourceRowFromCurrentRead(source.id);
     this.assertConfinement(source, sourceRow.root_binding, resource.address);
-    const absolutePath = resolve(source.boundary.root, resource.address.path);
-    let stat: BigIntStats;
-    try {
-      stat = statSync(absolutePath, { bigint: true });
-    } catch {
-      throw new ResourceCatalogError("source-unavailable", "Filesystem Resource is unavailable");
-    }
-    if (!stat.isFile()) {
-      throw new ResourceCatalogError("source-unavailable", "Filesystem Resource is not a regular file");
-    }
-    if (stat.size > BigInt(MAX_FILESYSTEM_RESOURCE_BYTES)) {
-      throw new ResourceCatalogError(
-        "source-unavailable",
-        `Filesystem Resource exceeds ${MAX_FILESYSTEM_RESOURCE_BYTES / 1024 / 1024} MiB`,
-      );
-    }
-    let bytes: Buffer;
-    try {
-      bytes = readFileSync(absolutePath);
-    } catch {
-      throw new ResourceCatalogError("source-unavailable", "Filesystem Resource is unreadable");
-    }
+    const contents = readFileContents(resource.address.path, source.boundary.root);
     const revision: ResourceRevisionRef = {
       resourceId: resource.id,
       addressVersion: resource.addressVersion,
-      revision: {
-        kind: "filesystem",
-        mtimeNs: stat.mtimeNs.toString(),
-        size: stat.size.toString(),
-        contentHash: byteHash(bytes),
-      },
+      revision: contents.revision,
     };
     if (requestedRevision && !resourceRevisionRefEquals(requestedRevision, revision)) {
       throw new ResourceCatalogError("stale-revision", "Filesystem Resource revision is unavailable");
     }
-    // The revision identifies file bytes; representation evidence identifies decoded text.
-    const text = bytes.toString("utf8");
     return {
-      text,
-      contentHash: sha256(text),
-      capturedAt: new Date(Number(stat.mtimeMs)).toISOString(),
+      text: contents.text,
+      contentHash: contents.contentHash,
+      capturedAt: contents.capturedAt,
       revision,
     };
   }
@@ -4657,7 +4651,7 @@ export class ResourceCatalog {
     address: ResourceAddress,
   ): void {
     if (source.provider === "filesystem" && address.kind === "filesystem") {
-      assertFilesystemConfinement(source, rootBinding, address);
+      assertFilesystemConfinement(source.boundary.root, rootBinding, address);
       return;
     }
     if (source.provider !== address.kind) {
