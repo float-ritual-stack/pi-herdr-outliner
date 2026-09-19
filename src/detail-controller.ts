@@ -3125,7 +3125,7 @@ export function createDetailController(
       case "reference.open":
       case "reference.follow":
       case "reference.reveal": {
-        if (state.readStatus !== "ready") {
+        if (intent.type !== "reference.open" && state.readStatus !== "ready") {
           state.status = "References are not ready · preview enrichment is incomplete";
           break;
         }
