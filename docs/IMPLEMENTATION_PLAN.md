@@ -280,10 +280,10 @@ Scenario: `bun run test:e2e:file-authority` (`test/e2e/file-authority.ts`) runs
 both Pi and ANSI Detail with a remote-mode client context and a separate fixture
 root. Give client and service different bytes at the same relative path. Follow each supported preview/open route and
 verify service-owned content; verify passive reads leave catalog identities and
-counts unchanged. Exercise service-owned completion and ensure asynchronous file
-reads cannot overwrite a newer target or leave a cached revisit unpainted. Retain
-the existing resource-authoring journey. Split roots on one host establish file
-ownership, not actual two-host SSH behavior.
+counts unchanged. Exercise service-owned completion. Retain the existing
+resource-authoring journey. Split roots on one host establish file ownership,
+not actual two-host SSH behavior. Stale-file-read protection and cached-revisit
+repainting are covered by controller regressions, not this E2E scenario.
 
 ## Interaction packages
 

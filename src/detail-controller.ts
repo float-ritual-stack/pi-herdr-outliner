@@ -1088,6 +1088,7 @@ export function createDetailController(
   let destinationChooser: OpenDestinationChooser | undefined;
   const destinationReferences = new WeakMap<OpenDestinationTarget, OutlinerLinkTarget>();
   let loadGeneration = 0;
+  let fileReadGeneration = 0;
   const blockCache = new Map<string, DetailBlockCacheEntry>();
 
   const readBlockCache = (
@@ -1130,9 +1131,11 @@ export function createDetailController(
   };
 
   const loadFile = async (block: Block): Promise<boolean> => {
+    const fileGeneration = ++fileReadGeneration;
     const generation = loadGeneration;
     const mode = state.mode;
-    const isCurrent = (): boolean => generation === loadGeneration &&
+    const isCurrent = (): boolean => fileGeneration === fileReadGeneration &&
+      generation === loadGeneration &&
       state.context.selected?.id === block.id && state.mode === mode;
     state.referencedFile = null;
     let fileSourceBlockId = block.id;
@@ -3837,6 +3840,7 @@ export function createDetailController(
         }
         break;
       case "view.block":
+        fileReadGeneration += 1;
         state.mode = "preview";
         state.previewOffset = 0;
         break;

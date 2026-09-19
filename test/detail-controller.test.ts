@@ -4474,6 +4474,51 @@ test("a delayed file read cannot attach its bytes to a newer Detail target", asy
   expect(harness.controller.state.mode).toBe("preview");
 });
 
+for (const outcome of ["resolved", "rejected"] as const) {
+  test(`view.block supersedes a pending file read that is ${outcome}`, async () => {
+    const block = makeBlock({ properties: [{ key: "file", value: "today.txt" }] });
+    const harness = createHarness(block, filePreview());
+    await harness.controller.initialize();
+    await harness.controller.dispatch({ type: "view.block" }, viewport);
+    const entered = Promise.withResolvers<void>();
+    const delayed = Promise.withResolvers<ReferencedFile>();
+    harness.effects.readFile = async () => { entered.resolve(); return delayed.promise; };
+    const opening = harness.controller.dispatch({ type: "view.file" }, viewport);
+    await entered.promise;
+    await harness.controller.dispatch({ type: "view.block" }, viewport);
+    await harness.controller.dispatch({ type: "status.set", message: "Block view selected" }, viewport);
+    if (outcome === "resolved") delayed.resolve(filePreview({ lines: ["OBSOLETE CONTENT"] }));
+    else delayed.reject(new Error("Obsolete file error"));
+    await opening;
+    expect(harness.controller.state.mode).toBe("preview");
+    expect(harness.controller.state.context.selected?.id).toBe(block.id);
+    expect(harness.controller.state.referencedFile).toBeNull();
+    expect(harness.controller.state.status).toBe("Block view selected");
+  });
+}
+
+test("view.block cancels file bytes without cancelling target publication", async () => {
+  const harness = createHarness(makeBlock());
+  await harness.controller.initialize();
+  await harness.controller.onServiceConnect();
+  const block = makeBlock({ id: "pending-file", properties: [{ key: "file", value: "today.txt" }] });
+  harness.setSelection({ selected: block, ancestors: [], children: [] });
+  const entered = Promise.withResolvers<void>();
+  const delayed = Promise.withResolvers<ReferencedFile>();
+  harness.effects.readFile = async () => { entered.resolve(); return delayed.promise; };
+  const opening = harness.controller.onServiceEvent(event("ui", {
+    targetClientId: "detail-test", command: "preview", target: { kind: "block", blockId: block.id },
+  }), viewport);
+  await entered.promise;
+  await harness.controller.dispatch({ type: "view.block" }, viewport);
+  delayed.resolve(filePreview({ lines: ["OBSOLETE CONTENT"] }));
+  await opening;
+  expect(harness.controller.state.mode).toBe("preview");
+  expect(harness.controller.state.context.selected?.id).toBe(block.id);
+  expect(harness.controller.state.referencedFile).toBeNull();
+  expect(harness.calls.currentBlocks.at(-1)).toBe(block.id);
+});
+
 test("a cached file revisit publishes the completed service preview", async () => {
   const first = makeBlock({ id: "cached-file", properties: [{ key: "file", value: "today.txt" }] });
   const paints: Array<readonly string[] | null> = [];
