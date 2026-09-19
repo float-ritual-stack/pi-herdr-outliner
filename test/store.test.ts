@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setSystemTime, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -335,7 +335,7 @@ describe("OutlinerStore", () => {
 
     const retitled = store.retitleCapture(
       receipt.block.id,
-      receipt.block.updatedAt,
+      receipt.block.revision,
       "Concise generated title",
       { author: "agent", actorId: "omp", sessionId: "session" },
     );
@@ -352,7 +352,7 @@ describe("OutlinerStore", () => {
     expect(() =>
       store.retitleCapture(
         receipt.block.id,
-        receipt.block.updatedAt,
+        receipt.block.revision,
         "Stale replacement",
         { author: "agent", actorId: "omp" },
       )
@@ -360,7 +360,7 @@ describe("OutlinerStore", () => {
     expect(() =>
       store.retitleCapture(
         receipt.block.id,
-        retitled.updatedAt,
+        retitled.revision,
         "Invalid [status::title]",
         { author: "agent", actorId: "omp" },
       )
@@ -650,7 +650,7 @@ Second paragraph`;
     expect(store.propertyCatalog("category")).not.toContainEqual(
       expect.objectContaining({ value: "trash-test" }),
     );
-    expect(() => store.update(child.id, "changed")).toThrow("is in Trash");
+    expect(() => store.update(child.id, "changed", child.revision)).toThrow("is in Trash");
 
     const trashRoots = store.queryBlocks({
       filters: [{ key: "deleted", value: "true" }],
@@ -798,7 +798,7 @@ Second paragraph`;
       sessionId: "session-1",
       taskId: "tool-call-1",
     }));
-    const updated = store.update(agentBlock.id, "Updated artifact", agentBlock.updatedAt);
+    const updated = store.update(agentBlock.id, "Updated artifact", agentBlock.revision);
     expect(updated).toEqual(expect.objectContaining({
       actorId: "omp",
       sessionId: "session-1",
@@ -834,24 +834,24 @@ Second paragraph`;
     const firstUserEdit = store.update(
       agentCreated.id,
       "Agent-created note edited by user",
-      agentCreated.updatedAt,
+      agentCreated.revision,
       { author: "user", actorId: "detail" },
     );
     store.update(
       userCreated.id,
       "User-created note edited by agent",
-      userCreated.updatedAt,
+      userCreated.revision,
       { author: "agent", actorId: "omp", sessionId: "session-1", taskId: "call-1" },
     );
     const secondUserEdit = store.update(
       agentCreated.id,
       "Newest user text",
-      firstUserEdit.updatedAt,
+      firstUserEdit.revision,
       { author: "user", actorId: "tree" },
     );
     const patched = store.patchProperties(
       other.id,
-      other.updatedAt,
+      other.revision,
       [{ op: "replace", ordinal: 0, value: "done" }],
       { author: "user", actorId: "detail" },
     );
@@ -877,7 +877,7 @@ Second paragraph`;
     const afterWatermark = store.update(
       userCreated.id,
       "Now edited by user",
-      store.require(userCreated.id).updatedAt,
+      store.require(userCreated.id).revision,
       { author: "user", actorId: "detail" },
     );
     const incremental = store.recentEditActivity({
@@ -1206,12 +1206,12 @@ Second paragraph`;
     const first = store.create("First [status::open] [type::task]");
     store.create("Second [status::open] [type::task]");
     store.create("Third [status::done] [type::task]");
-    expect(() => store.patchProperties(first.id, first.updatedAt, [])).toThrow(
+    expect(() => store.patchProperties(first.id, first.revision, [])).toThrow(
       "requires at least one operation",
     );
     expect(store.require(first.id).updatedAt).toBe(first.updatedAt);
 
-    const patched = store.patchProperties(first.id, first.updatedAt, [
+    const patched = store.patchProperties(first.id, first.revision, [
       { op: "replace", ordinal: 0, value: "doing" },
       { op: "append", key: "owner", value: "evan" },
     ]);
@@ -1230,20 +1230,20 @@ Second paragraph`;
       { key: "status", value: "100%", count: 1 },
     ]);
     expect(() =>
-      store.patchProperties(first.id, first.updatedAt, [{ op: "append", key: "late", value: "no" }]),
+      store.patchProperties(first.id, first.revision, [{ op: "append", key: "late", value: "no" }]),
     ).toThrow("Block changed since editing began");
   });
 
   test("rejects a stale editor save instead of overwriting a newer change", () => {
     const store = makeStore();
     const original = store.create("Original");
-    const updated = store.update(original.id, "Agent update", original.updatedAt);
+    const updated = store.update(original.id, "Agent update", original.revision);
 
-    expect(() => store.update(original.id, "Stale user edit", original.updatedAt)).toThrow(
+    expect(() => store.update(original.id, "Stale user edit", original.revision)).toThrow(
       "Block changed since editing began",
     );
     expect(store.require(original.id).text).toBe("Agent update");
-    expect(updated.updatedAt).not.toBe(original.updatedAt);
+    expect(updated.revision).toBeGreaterThan(original.revision);
   });
 
   test("moves blocks without allowing hierarchy cycles", () => {
@@ -1463,7 +1463,7 @@ Second paragraph`;
       reservedCount: 0,
       observedPrefixes: [],
     });
-    expect(() => store.allocateWorkId(first.id, first.updatedAt)).toThrow(
+    expect(() => store.allocateWorkId(first.id, first.revision)).toThrow(
       "Configure the project Work-ID prefix",
     );
     expect(store.configureWorkIdPrefix("pei")).toMatchObject({
@@ -1474,13 +1474,13 @@ Second paragraph`;
       prefix: "PIE",
       nextWorkId: "PIE-001",
     });
-    const firstAllocation = store.allocateWorkId(first.id, first.updatedAt);
+    const firstAllocation = store.allocateWorkId(first.id, first.revision);
     const [secondAllocation, thirdAllocation] = await Promise.all([
       Promise.resolve().then(() =>
-        store.allocateWorkId(second.id, second.updatedAt)
+        store.allocateWorkId(second.id, second.revision)
       ),
       Promise.resolve().then(() =>
-        store.allocateWorkId(third.id, third.updatedAt)
+        store.allocateWorkId(third.id, third.revision)
       ),
     ]);
 
@@ -1515,13 +1515,13 @@ Second paragraph`;
     store.configureWorkIdPrefix("PIE");
 
     expect(() =>
-      store.allocateWorkId(selfAssignment.id, "stale")
+      store.allocateWorkId(selfAssignment.id, selfAssignment.revision + 1)
     ).toThrow("changed since editing began");
     expect(store.get(selfAssignment.id)?.text).toContain("[work-id::PIE-XXX]");
 
     const allocation = store.allocateWorkId(
       selfAssignment.id,
-      selfAssignment.updatedAt,
+      selfAssignment.revision,
     );
     expect(allocation).toMatchObject({
       workId: "PIE-001",
@@ -1540,14 +1540,14 @@ Second paragraph`;
     );
     const shiftedAllocation = store.allocateWorkId(
       shiftedPlaceholder.id,
-      shiftedPlaceholder.updatedAt,
+      shiftedPlaceholder.revision,
     );
     expect(shiftedAllocation.block.text).toBe(
       "Body [note::keep] more text\nwork-id:: PIE-002",
     );
 
     expect(() =>
-      store.allocateWorkId(wrongPrefix.id, wrongPrefix.updatedAt)
+      store.allocateWorkId(wrongPrefix.id, wrongPrefix.revision)
     ).toThrow("already has a Work ID");
     expect(store.get(wrongPrefix.id)?.text).toContain("[work-id::OTHER-XXX]");
   });
@@ -1561,7 +1561,7 @@ Second paragraph`;
       block: { text: "RFC-2119 [page::RFC-2119]" },
     });
     expect(
-      store.allocateWorkId(work.id, work.updatedAt).workId,
+      store.allocateWorkId(work.id, work.revision).workId,
     ).toBe("ABC-001");
     expect(store.resolvePageAddress("abc-001").block?.id).toBe(work.id);
     expect(() => store.followPageAddress("ABC-002")).toThrow(
@@ -1758,11 +1758,11 @@ Second paragraph`;
       "already has immutable reservations",
     );
     expect(() =>
-      store.allocateWorkId(allocated.id, "stale")
+      store.allocateWorkId(allocated.id, allocated.revision + 1)
     ).toThrow("changed since editing began");
     const allocation = store.allocateWorkId(
       allocated.id,
-      allocated.updatedAt,
+      allocated.revision,
     );
     const otherPrefix = store.create("Other project [work-id::OTHER-001]");
     const malformed = store.create("Malformed work [work-id::PIE-x]");
@@ -1774,7 +1774,7 @@ Second paragraph`;
     expect(store.resolvePageAddress("PIE-7").status).toBe("missing");
     expect(allocation.workId).toBe("PIE-124");
     expect(() =>
-      store.allocateWorkId(existing.id, existing.updatedAt)
+      store.allocateWorkId(existing.id, existing.revision)
     ).toThrow("already has a Work ID");
 
     store.delete(allocated.id);
@@ -1782,7 +1782,7 @@ Second paragraph`;
     expect(() => store.create("Illegal reuse [work-id::PIE-124]")).toThrow(
       `already belongs to block ${allocated.id}`,
     );
-    expect(store.allocateWorkId(afterPurge.id, afterPurge.updatedAt).workId).toBe(
+    expect(store.allocateWorkId(afterPurge.id, afterPurge.revision).workId).toBe(
       "PIE-125",
     );
     store.create("Manual future [work-id::PIE-200]");
@@ -2015,7 +2015,7 @@ Second paragraph`;
     const store = makeStore();
     store.configureWorkIdPrefix("PIE");
     const source = store.create("Source mentions [[Future Page]]");
-    const updated = store.update(source.id, "Source still mentions [[Future Page]]");
+    const updated = store.update(source.id, "Source still mentions [[Future Page]]", source.revision);
     const before = store.traversePreorder({}).length;
     expect(updated.text).toContain("[[Future Page]]");
     expect(store.completePageAddresses("future", 20).addresses).toEqual([]);
@@ -2063,10 +2063,10 @@ Second paragraph`;
     const store = makeStore();
     const page = store.create("Knowledge [page::Old Address]");
 
-    expect(() => store.renamePageAddress(page.id, "New Address", "stale")).toThrow(
+    expect(() => store.renamePageAddress(page.id, "New Address", page.revision + 1)).toThrow(
       "Block changed since editing began",
     );
-    expect(store.renamePageAddress(page.id, "New Address", page.updatedAt)).toEqual({
+    expect(store.renamePageAddress(page.id, "New Address", page.revision)).toEqual({
       address: "New Address",
       normalizedAddress: "new address",
       blockId: page.id,
@@ -2084,9 +2084,9 @@ Second paragraph`;
     });
     expect(store.require(page.id).text).toBe("Knowledge [page::New Address]");
 
-    const updated = store.update(page.id, "Knowledge revised [page::New Address]");
+    const updated = store.update(page.id, "Knowledge revised [page::New Address]", store.require(page.id).revision);
     expect(updated.text).toContain("Knowledge revised");
-    expect(() => store.update(page.id, "Knowledge [page::Third Address]")).toThrow(
+    expect(() => store.update(page.id, "Knowledge [page::Third Address]", updated.revision)).toThrow(
       "changes require pages.rename",
     );
     expect(store.addPageAlias(page.id, "Knowledge Hub")).toEqual({
@@ -2098,18 +2098,18 @@ Second paragraph`;
     expect(store.resolvePageAddress("knowledge hub").block?.id).toBe(page.id);
 
     const current = store.require(page.id);
-    const removedAlias = store.removePageAddress(page.id, "Knowledge Hub", current.updatedAt);
+    const removedAlias = store.removePageAddress(page.id, "Knowledge Hub", current.revision);
     expect(removedAlias.removed.kind).toBe("alias");
     const removedPage = store.removePageAddress(
       page.id,
       "New Address",
-      removedAlias.block.updatedAt,
+      removedAlias.block.revision,
     );
     expect(removedPage.removed.kind).toBe("page");
     expect(removedPage.block.text.trimEnd()).toBe("Knowledge revised");
     expect(store.resolvePageAddress("new address").status).toBe("missing");
     expect(store.resolvePageAddress("old address").block?.id).toBe(page.id);
-    expect(store.update(page.id, "Knowledge without a primary page").text).toBe(
+    expect(store.update(page.id, "Knowledge without a primary page", removedPage.block.revision).text).toBe(
       "Knowledge without a primary page",
     );
   });
@@ -2294,7 +2294,7 @@ Second paragraph`;
     expect(reopened.resolvePageAddress("Two").status).toBe("missing");
     expect(reopened.restore(legacy.id).effectiveDeletedRootId).toBeUndefined();
     expect(reopened.resolvePageAddress("One").status).toBe("missing");
-    reopened.update(legacy.id, "Legacy repaired [page::One]");
+    reopened.update(legacy.id, "Legacy repaired [page::One]", reopened.require(legacy.id).revision);
     expect(reopened.resolvePageAddress("One").block?.id).toBe(legacy.id);
   });
 
@@ -2596,7 +2596,7 @@ Second paragraph`;
     const otherReply = store.replyToAnnotation("retained-reply", {
       annotationId: otherRoot.id, body: "Retained reply.", source: "user",
     }).annotations[0]!.block;
-    store.patchProperties(otherReply.id, otherReply.updatedAt, [
+    store.patchProperties(otherReply.id, otherReply.revision, [
       { op: "append", key: "parent-annotation", value: root.id },
     ]);
     const replyChild = store.create("Reply child", reply.id);
@@ -2731,7 +2731,7 @@ Second paragraph`;
     const shiftedSource = store.update(
       source.id,
       `new ${source.text}`,
-      source.updatedAt,
+      source.revision,
       { author: "user", actorId: "detail" },
     );
     const shiftedReceipt = store.reconcileAnnotationThreads({
@@ -2762,7 +2762,7 @@ Second paragraph`;
     const replacedSource = store.update(
       source.id,
       "new alpha delta gamma",
-      shiftedSource.updatedAt,
+      shiftedSource.revision,
       { author: "user", actorId: "detail" },
     );
     const orphanedReceipt = store.reconcileAnnotationThreads({
@@ -2833,6 +2833,28 @@ Second paragraph`;
     expect(replayedAfterSourceChange.annotations[0]!.block.id).toBe(annotation.block.id);
   });
 
+  test("a sibling move cannot make an unchanged annotation source stale", () => {
+    const store = makeStore();
+    try {
+      setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+      const source = store.create("alpha beta");
+      const sibling = store.create("Sibling");
+      const target = blockAnnotationTarget(source, 0, 5, "unchanged-after-move");
+      setSystemTime(new Date("2026-01-02T00:00:00.000Z"));
+      store.move(sibling.id, null, 0);
+      const receipt = store.createAnnotation("after-move", {
+        target, body: "Still the same passage", source: "user",
+      });
+      expect(receipt.annotations[0]!.originalTarget).toEqual(target);
+      store.update(source.id, "gamma beta", source.revision);
+      expect(() => store.createAnnotation("after-text-edit", {
+        target, body: "Actually stale", source: "user",
+      })).toThrow("snapshot is stale");
+    } finally {
+      setSystemTime();
+    }
+  });
+
   test("round-trips a text quote beginning at source offset zero", () => {
     const store = makeStore();
     const source = store.create("alpha 🧭 beta");
@@ -2895,7 +2917,7 @@ Second paragraph`;
     const updated = store.update(
       source.id,
       "Hub\n!((view-next))\nchanged",
-      source.updatedAt,
+      source.revision,
       { author: "user", actorId: "detail" },
     );
     const reconciliation = store.reconcileAnnotationThreads({

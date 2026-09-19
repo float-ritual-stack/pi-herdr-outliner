@@ -9,6 +9,7 @@ import type { AnnotationCreateInput, AnnotationTarget, Block } from "../src/type
 
 function annotationBlock(text: string): Block {
   return {
+    revision: 1,
     id: "11111111-1111-4111-8111-111111111111",
     parentId: "22222222-2222-4222-8222-222222222222",
     position: 0,

@@ -67,9 +67,9 @@ Never create a placeholder roadmap block and allocate its Work ID afterward. `ou
 
 ## Update
 
-1. Resolve the item by Work ID and read its latest `updatedAt` and property ordinals.
+1. Resolve the item by Work ID and read its latest integer `revision` and property ordinals.
 2. Use `outliner_property_patch` for metadata. Replace the exact scalar property ordinal instead of appending a second value.
-3. Use `outliner_update` with `expectedUpdatedAt` for title, contract, or acceptance changes.
+3. Use `outliner_update` with `expectedRevision` for title, contract, or acceptance changes.
 4. Re-read after each optimistic mutation before another mutation.
 5. Verify scalar uniqueness and required metadata after the update.
 

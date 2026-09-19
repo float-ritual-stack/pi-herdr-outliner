@@ -776,7 +776,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         action: "update",
         blockId: selected.canonicalId,
         text,
-        expectedUpdatedAt: selected.block.updatedAt,
+        expectedRevision: selected.block.revision,
         mutation: { author: "user", actorId: "tree" },
       });
       return selected.canonicalId;

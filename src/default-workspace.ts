@@ -4,7 +4,7 @@ export const AUTHORED_LINKS_EXAMPLE_SYSTEM_DOC = "authored-links-example";
 
 interface SeedBlock {
   readonly id: string;
-  readonly updatedAt: string;
+  readonly revision: number;
 }
 interface DefaultWorkspaceSeedWriter {
   create(text: string, parentId: string | null): SeedBlock;

@@ -37,6 +37,7 @@ const plainMarkdownTheme: MarkdownTheme = {
 
 function block(id: string, text = id, properties: Block["properties"] = []): Block {
   return {
+    revision: 1,
     id,
     parentId: null,
     position: 0,

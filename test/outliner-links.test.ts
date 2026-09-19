@@ -13,6 +13,7 @@ import type { Block } from "../src/types";
 
 function block(id: string, text: string): Block {
   return {
+    revision: 1,
     id,
     parentId: null,
     position: 0,

@@ -64,7 +64,7 @@ test("imports exact UTF-8 text only after terminal restoration and removes the t
   const phases: string[] = [];
   try {
     const result = await editTextInExternalEditor(
-      { text: "before\n", expectedUpdatedAt: "version-1" },
+      { text: "before\n", expectedRevision: "version-1" },
       {
         editor: `fixture-editor --wait`,
         cwd: root,
@@ -75,7 +75,7 @@ test("imports exact UTF-8 text only after terminal restoration and removes the t
         restoreTerminal() {
           phases.push("restore");
         },
-        async currentUpdatedAt() {
+        async currentRevision() {
           phases.push("check");
           return "version-1";
         },
@@ -110,14 +110,14 @@ test("preserves a leading U+FEFF and treats an untouched file as unchanged", asy
   try {
     const text = "\uFEFFauthored";
     const result = await editTextInExternalEditor(
-      { text, expectedUpdatedAt: "version-1" },
+      { text, expectedRevision: "version-1" },
       {
         editor: "fixture-editor",
         cwd: root,
         temporaryRoot: root,
         suspendTerminal() {},
         restoreTerminal() {},
-        async currentUpdatedAt() {
+        async currentRevision() {
           return "version-1";
         },
         async run() {
@@ -140,7 +140,7 @@ test("nonzero editor exit preserves the original draft and identifies recovery c
   let restored = false;
   try {
     const error = await editTextInExternalEditor(
-      { text: "before", expectedUpdatedAt: "version-1" },
+      { text: "before", expectedRevision: "version-1" },
       {
         editor: "fixture-editor",
         cwd: root,
@@ -149,7 +149,7 @@ test("nonzero editor exit preserves the original draft and identifies recovery c
         restoreTerminal() {
           restored = true;
         },
-        async currentUpdatedAt() {
+        async currentRevision() {
           throw new Error("must not check after editor failure");
         },
         async run(_command, candidate) {
@@ -177,14 +177,14 @@ test("concurrent canonical changes reject import and retain the edited file", as
   let filePath = "";
   try {
     const error = await editTextInExternalEditor(
-      { text: "before", expectedUpdatedAt: "version-1" },
+      { text: "before", expectedRevision: "version-1" },
       {
         editor: "fixture-editor",
         cwd: root,
         temporaryRoot: root,
         suspendTerminal() {},
         restoreTerminal() {},
-        async currentUpdatedAt() {
+        async currentRevision() {
           return "version-2";
         },
         async run(_command, candidate) {
@@ -211,7 +211,7 @@ test("terminal restoration failure blocks import and retains the edited file", a
   let checkedVersion = false;
   try {
     const error = await editTextInExternalEditor(
-      { text: "before", expectedUpdatedAt: "version-1" },
+      { text: "before", expectedRevision: "version-1" },
       {
         editor: "fixture-editor",
         cwd: root,
@@ -220,7 +220,7 @@ test("terminal restoration failure blocks import and retains the edited file", a
         restoreTerminal() {
           throw new Error("pane unavailable");
         },
-        async currentUpdatedAt() {
+        async currentRevision() {
           checkedVersion = true;
           return "version-1";
         },

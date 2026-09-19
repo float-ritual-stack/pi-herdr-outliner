@@ -202,6 +202,7 @@ test("opens direction-aware Detail splits from preview bindings", async () => {
   const detailState = state();
   detailState.mode = "preview";
   detailState.context.selected = {
+    revision: 1,
     id: "block-1",
     parentId: null,
     position: 0,
@@ -458,6 +459,7 @@ test("restores direct Trash roots from file mode", async () => {
   const detailState = state();
   detailState.mode = "file";
   detailState.context.selected = {
+    revision: 1,
     id: "deleted-file",
     parentId: null,
     position: 0,
@@ -737,7 +739,7 @@ test("maps property value editing keys without entering the full block editor", 
     occurrenceId: "property:block-1:status:0:8-25",
     ordinal: 0,
     blockId: "block-1",
-    expectedUpdatedAt: "version-1",
+    expectedRevision: 1,
     buffer: new TextBuffer("planned"),
   };
   const detail = harness(detailState, false);

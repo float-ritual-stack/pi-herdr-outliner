@@ -151,7 +151,7 @@ Prefer clean cutovers: migrate every caller, test, and import, then remove obsol
 
 ### Mutations
 
-- Agent and long-form Detail updates use `expectedUpdatedAt` optimistic concurrency.
+- Every normal block text writer requires the positive integer `expectedRevision` from its original read. Text changes advance `Block.revision`; timestamps and sibling moves do not authorize or invalidate an edit.
 - Property patches change eligible textual tokens and rebuild the derived index.
 - A projected occurrence always mutates its canonical block.
 - Reject ambiguous projected hierarchy/order operations rather than guessing.
@@ -235,7 +235,7 @@ CodeRabbit’s generic docstring warning is advisory in this repository. Add com
 
 ## Protocol and schema changes
 
-The current wire protocol is v41.
+The current wire protocol is `OUTLINER_PROTOCOL_VERSION` in [src/types.ts](src/types.ts).
 
 If request/response semantics change:
 

@@ -32,7 +32,7 @@ Read [Roadmap items](references/roadmap-items.md) before creating, editing, prom
 1. Search for duplicates and related work before creating a new item.
 2. Use `outliner_roadmap_create`; never assemble a roadmap block with `outliner_create` followed by separate Work-ID and metadata mutations.
 3. Default new work to `work-stage=unprioritized`. Promote only when the owner explicitly requests it or a governing roadmap decision already records the promotion.
-4. Update metadata with `outliner_property_patch` and prose with `outliner_update` using the latest `updatedAt`.
+4. Update metadata with `outliner_property_patch` and prose with `outliner_update` using the latest `revision`.
 5. Change lane membership through `work-stage`. Change ordering within a lane or track with `outliner_branch_rank`; never physically move canonical items to rank virtual occurrences.
 6. Query the item after mutation and verify its canonical parent, required properties, virtual-branch memberships, and explicit rank.
 

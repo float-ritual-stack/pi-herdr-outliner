@@ -138,7 +138,7 @@ export interface DetailCompletionItem {
     fragmentId: string;
     lineIndex: number;
     text: string;
-    expectedUpdatedAt: string;
+    expectedRevision: number;
   };
 }
 
@@ -176,7 +176,7 @@ export interface DetailPropertyValueEdit {
   occurrenceId: string;
   ordinal: number;
   blockId: string;
-  expectedUpdatedAt: string;
+  expectedRevision: number;
   buffer: TextBuffer;
 }
 
@@ -308,6 +308,7 @@ function blockCacheKey(target: DetailBlockReadyDocument["target"]): string {
 function sameBlockRevision(left: Block | null, right: Block | null): boolean {
   if (!left || !right) return left === right;
   return left.id === right.id &&
+    left.revision === right.revision &&
     left.updatedAt === right.updatedAt &&
     left.parentId === right.parentId &&
     left.position === right.position &&
@@ -383,14 +384,14 @@ function sameAnnotationThreads(
       const candidate = right[index];
       return candidate !== undefined &&
         thread.block.id === candidate.block.id &&
-        thread.block.updatedAt === candidate.block.updatedAt &&
+        thread.block.revision === candidate.block.revision &&
         thread.currentResolution.id === candidate.currentResolution.id &&
         thread.replies.length === candidate.replies.length &&
         thread.replies.every((reply, replyIndex) => {
           const candidateReply = candidate.replies[replyIndex];
           return candidateReply !== undefined &&
             reply.block.id === candidateReply.block.id &&
-            reply.block.updatedAt === candidateReply.block.updatedAt &&
+            reply.block.revision === candidateReply.block.revision &&
             reply.currentResolution.id === candidateReply.currentResolution.id;
         });
     });
@@ -509,7 +510,7 @@ export interface DetailEffects {
           kind: "block";
           blockId: string;
           text: string;
-          expectedUpdatedAt: string;
+          expectedRevision: number;
         }
       | {
           kind: "filesystem-resource";
@@ -531,11 +532,11 @@ export interface DetailEffects {
   updateBlock(input: {
     blockId: string;
     text: string;
-    expectedUpdatedAt: string;
+    expectedRevision: number;
   }): Promise<Block>;
   patchProperties(input: {
     blockId: string;
-    expectedUpdatedAt: string;
+    expectedRevision: number;
     operations: PropertyPatchOperation[];
   }): Promise<Block>;
   createAnnotation(input: {
@@ -2289,7 +2290,7 @@ export function createDetailController(
         kind: "block",
         blockId: selected.id,
         text: state.buffer.text,
-        expectedUpdatedAt: selected.updatedAt,
+        expectedRevision: selected.revision,
       });
       if (!result.changed) {
         result.cleanup();
@@ -2351,7 +2352,7 @@ export function createDetailController(
       occurrenceId: entry.occurrenceId,
       ordinal: entry.ordinal,
       blockId: selected.id,
-      expectedUpdatedAt: selected.updatedAt,
+      expectedRevision: selected.revision,
       buffer,
     };
     state.status = `Editing ${entry.key} · ↵ save · ⎋ cancel`;
@@ -2369,7 +2370,7 @@ export function createDetailController(
     try {
       const updated = await effects.patchProperties({
         blockId: edit.blockId,
-        expectedUpdatedAt: edit.expectedUpdatedAt,
+        expectedRevision: edit.expectedRevision,
         operations: [{ op: "replace", ordinal: edit.ordinal, value: edit.buffer.text }],
       });
       state.propertyInspector.edit = null;
@@ -2626,7 +2627,7 @@ export function createDetailController(
           const updated = await effects.updateBlock({
             blockId: selected.id,
             text: state.buffer.text,
-            expectedUpdatedAt: selected.updatedAt,
+            expectedRevision: selected.revision,
           });
           replaceSelectedBlock(updated);
           const read = await applyReadProjection(updated.text, updated.id);
@@ -2770,7 +2771,7 @@ export function createDetailController(
                       fragmentId: ensured.fragmentId,
                       lineIndex: candidate.lineIndex,
                       text: ensured.text,
-                      expectedUpdatedAt: block.updatedAt,
+                      expectedRevision: block.revision,
                     },
                   }
                 : {}),
@@ -2819,7 +2820,7 @@ export function createDetailController(
         await effects.updateBlock({
           blockId: item.anchor.blockId,
           text: item.anchor.text,
-          expectedUpdatedAt: item.anchor.expectedUpdatedAt,
+          expectedRevision: item.anchor.expectedRevision,
         });
       }
     }

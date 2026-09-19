@@ -14,7 +14,7 @@ test("a receipt binds the original submission across edits and restart", () => {
     const source = store.create("Capture context");
     const original = store.capture("bound-request", "Original", "cli", source.id,
       "agent", { actorId: "codex", sessionId: "session", taskId: "task" });
-    store.update(original.block.id, "Edited after capture", original.block.updatedAt);
+    store.update(original.block.id, "Edited after capture", original.block.revision);
     store.close();
     store = new OutlinerStore(path);
 

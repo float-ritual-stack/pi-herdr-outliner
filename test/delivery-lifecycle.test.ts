@@ -57,6 +57,7 @@ async function repository(): Promise<{ root: string; remote: string }> {
 
 function block(id: string, text: string, properties: Block["properties"]): Block {
   return {
+    revision: 1,
     id,
     parentId: "task",
     position: 0,

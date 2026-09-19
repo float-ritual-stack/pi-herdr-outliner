@@ -50,6 +50,7 @@ const viewport: DetailViewport = { width: 60, height: 12 };
 
 function makeBlock(overrides: Partial<Block> = {}): Block {
   return {
+    revision: 1,
     id: "block-1",
     parentId: null,
     position: 0,
@@ -138,7 +139,7 @@ interface Harness {
     setSelections: string[];
     projectedReads: string[];
     projectedReadHosts: Array<string | undefined>;
-    updates: Array<{ blockId: string; text: string; expectedUpdatedAt: string }>;
+    updates: Array<{ blockId: string; text: string; expectedRevision: number }>;
     externalDrafts: Array<Parameters<DetailEffects["editExternalDraft"]>[0]>;
     filesystemWrites: Array<Parameters<DetailEffects["writeFilesystemResource"]>[0]>;
     propertyPatches: Array<Parameters<DetailEffects["patchProperties"]>[0]>;
@@ -203,6 +204,7 @@ function createHarness(
   let update: DetailEffects["updateBlock"] = async (input) => makeBlock({
     id: input.blockId,
     text: input.text,
+    revision: input.expectedRevision + 1,
     updatedAt: "version-2",
     properties: initial.properties,
   });
@@ -419,6 +421,7 @@ function createHarness(
       const updated = makeBlock({
         ...current,
         text: patchPropertyText(current.text, input.operations),
+        revision: current.revision + 1,
         updatedAt: "version-2",
       });
       if (selection.selected?.id === input.blockId) {
@@ -2574,9 +2577,9 @@ describe("detail controller projection and deferred refresh", () => {
     expect(harness.calls.projectedReads).toHaveLength(projectionsBeforeRevalidation + 1);
   });
 
-  test("atomically replaces a cached projection when authoritative updatedAt changes", async () => {
+  test("atomically replaces a cached projection when the authoritative edit revision changes", async () => {
     const first = makeBlock({ id: "changed-a", text: "Old A", updatedAt: "a-1" });
-    const paints: Array<{ updatedAt: string | null; projected: string }> = [];
+    const paints: Array<{ revision: number | null; projected: string }> = [];
     const harness = createHarness(
       first,
       null,
@@ -2585,7 +2588,7 @@ describe("detail controller projection and deferred refresh", () => {
       {},
       (state) => {
         paints.push({
-          updatedAt: state.context.selected?.updatedAt ?? null,
+          revision: state.context.selected?.revision ?? null,
           projected: state.projectedSelectedText,
         });
       },
@@ -2608,10 +2611,10 @@ describe("detail controller projection and deferred refresh", () => {
       command: "preview",
       target: { kind: "block", blockId: first.id },
     }), viewport);
-    expect(harness.controller.state.context.selected?.updatedAt).toBe("a-1");
+    expect(harness.controller.state.context.selected?.revision).toBe(1);
     expect(harness.controller.state.projectedSelectedText).toBe("projected:Old A");
 
-    const changed = makeBlock({ id: first.id, text: "New A", updatedAt: "a-2" });
+    const changed = makeBlock({ id: first.id, text: "New A", revision: 2, updatedAt: "a-1" });
     revalidation.resolve({
       kind: "block",
       target: { kind: "block", blockId: first.id },
@@ -2619,10 +2622,10 @@ describe("detail controller projection and deferred refresh", () => {
     });
     await revisit;
 
-    expect(harness.controller.state.context.selected?.updatedAt).toBe("a-2");
+    expect(harness.controller.state.context.selected?.revision).toBe(2);
     expect(harness.controller.state.projectedSelectedText).toBe("projected:New A");
     expect(paints).not.toContainEqual({
-      updatedAt: "a-2",
+      revision: 2,
       projected: "projected:Old A",
     });
   });
@@ -2728,7 +2731,7 @@ describe("detail controller saves and annotations", () => {
     await harness.controller.dispatch({ type: "buffer.save" }, viewport);
 
     expect(harness.calls.updates).toEqual([
-      { blockId: "block-1", text: "raw changed", expectedUpdatedAt: "original-version" },
+      { blockId: "block-1", text: "raw changed", expectedRevision: 1 },
     ]);
     expect(harness.controller.state.context.selected?.updatedAt).toBe("version-2");
     expect(harness.controller.state.resolvedSelectedText).toBe("resolved:raw changed");
@@ -2745,7 +2748,7 @@ describe("detail controller saves and annotations", () => {
         kind: "block",
         blockId: "block-1",
         text: "canonical",
-        expectedUpdatedAt: "original-version",
+        expectedRevision: 1,
       });
       return {
         text: "",
@@ -2811,7 +2814,7 @@ describe("detail controller saves and annotations", () => {
     expect(harness.calls.updates).toEqual([{
       blockId: "block-1",
       text: "editor draft\nwith several\nchanged lines",
-      expectedUpdatedAt: "original-version",
+      expectedRevision: 1,
     }]);
   });
 
@@ -2906,7 +2909,7 @@ describe("detail controller saves and annotations", () => {
     await harness.controller.dispatch({ type: "buffer.save" }, viewport);
 
     expect(harness.calls.updates).toEqual([
-      { blockId: "block-1", text: "raw changed", expectedUpdatedAt: "original-version" },
+      { blockId: "block-1", text: "raw changed", expectedRevision: 1 },
     ]);
   });
 
@@ -2934,7 +2937,7 @@ describe("detail controller saves and annotations", () => {
     await harness.controller.dispatch({ type: "buffer.insert", text: "A " }, viewport);
     await harness.controller.dispatch({ type: "buffer.save" }, viewport);
     expect(harness.calls.updates).toEqual([
-      { blockId: "block-1", text: "A beta", expectedUpdatedAt: "original-version" },
+      { blockId: "block-1", text: "A beta", expectedRevision: 1 },
     ]);
   });
 
@@ -3647,7 +3650,7 @@ describe("detail controller completion, navigation, and focus", () => {
     expect(harness.calls.updates).toMatchObject([{
       blockId: "fragment-target",
       text: "Target\n\n## Durable heading ^durable-heading\nBody",
-      expectedUpdatedAt: target.updatedAt,
+      expectedRevision: target.revision,
     }]);
     expect(harness.controller.state.buffer.text).toBe(
       "See ((fragment-target^durable-heading))",
@@ -4315,7 +4318,7 @@ describe("Detail property inspector integration", () => {
 
     expect(harness.calls.propertyPatches).toEqual([{
       blockId: "property-source",
-      expectedUpdatedAt: "version-1",
+      expectedRevision: 1,
       operations: [{ op: "replace", ordinal: 0, value: "complete" }],
     }]);
     expect(controller.state.context.selected?.text).toBe(

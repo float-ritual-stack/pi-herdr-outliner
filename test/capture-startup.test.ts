@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { OUTLINER_PROTOCOL_VERSION } from "../src/types";
 
-test("capture entrypoints reject an incompatible service before touching drafts or content", async () => {
+test("changed write entrypoints reject an incompatible service before touching drafts or content", async () => {
   const root = mkdtempSync(join(tmpdir(), "capture-old-service-"));
   const socketPath = join(root, "old.sock");
   const actions: string[] = [];
@@ -23,7 +23,12 @@ test("capture entrypoints reject an incompatible service before touching drafts 
   });
   await new Promise<void>((resolve) => server.listen(socketPath, resolve));
   try {
-    for (const args of [["src/capture-main.ts"], ["src/cli.ts", "capture", "--text", "Must not be sent"]]) {
+    for (const args of [
+      ["src/capture-main.ts"],
+      ["src/cli.ts", "capture", "--text", "Must not be sent"],
+      ["src/cli.ts", "update", "--id", "block-1", "--text", "Must not be sent", "--expected", "1"],
+      ["src/cli.ts", "work-id-allocate", "--id", "block-1", "--expected", "1"],
+    ]) {
       const child = Bun.spawn([process.execPath, ...args], {
         cwd: join(import.meta.dir, ".."),
         env: { ...process.env, HERDR_ENV: "1", OUTLINER_REMOTE: "1", OUTLINER_SOCKET_PATH: socketPath,
@@ -34,7 +39,7 @@ test("capture entrypoints reject an incompatible service before touching drafts 
       expect(exitCode).toBe(1);
       expect(stderr).toContain("incompatible Outliner protocol");
     }
-    expect(actions).toEqual(["ping", "ping"]);
+    expect(actions).toEqual(["ping", "ping", "ping", "ping"]);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     rmSync(root, { recursive: true, force: true });

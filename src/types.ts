@@ -177,6 +177,7 @@ export interface Block {
   parentId: string | null;
   position: number;
   text: string;
+  revision: number;
   author: BlockAuthor;
   actorId?: string;
   sessionId?: string;
@@ -1126,7 +1127,7 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 55;
+export const OUTLINER_PROTOCOL_VERSION = 56;
 
 
 export interface OutlinerServiceStatus {
@@ -1312,7 +1313,7 @@ export type OutlinerRequest =
       id: string;
       action: "bookmarks.remove";
       recordId: string;
-      expectedUpdatedAt: string;
+      expectedRevision: number;
     }
   | {
       id: string;
@@ -1342,7 +1343,7 @@ export type OutlinerRequest =
       id: string;
       action: "capture.retitle";
       blockId: string;
-      expectedUpdatedAt: string;
+      expectedRevision: number;
       title: string;
       mutation: MutationProvenance;
     }
@@ -1438,7 +1439,7 @@ export type OutlinerRequest =
       action: "update";
       blockId: string;
       text: string;
-      expectedUpdatedAt?: string;
+      expectedRevision: number;
       mutation: MutationProvenance;
     }
   | { id: string; action: "move"; blockId: string; parentId: string | null; position?: number }
@@ -1467,7 +1468,7 @@ export type OutlinerRequest =
       action: "pages.rename";
       blockId: string;
       address: string;
-      expectedUpdatedAt: string;
+      expectedRevision: number;
     }
   | { id: string; action: "pages.alias"; blockId: string; address: string }
   | {
@@ -1475,13 +1476,13 @@ export type OutlinerRequest =
       action: "pages.remove";
       blockId: string;
       address: string;
-      expectedUpdatedAt: string;
+      expectedRevision: number;
     }
   | {
       id: string;
       action: "properties.patch";
       blockId: string;
-      expectedUpdatedAt: string;
+      expectedRevision: number;
       operations: PropertyPatchOperation[];
       mutation: MutationProvenance;
     }
@@ -1512,7 +1513,7 @@ export type OutlinerRequest =
       id: string;
       action: "work-ids.allocate";
       blockId: string;
-      expectedUpdatedAt: string;
+      expectedRevision: number;
     };
 
 export type OutlinerResponse =

@@ -38,6 +38,7 @@ const detailHelp = (mode: "preview" | "edit", width: number): string =>
 
 function block(text: string, properties: Block["properties"] = []): Block {
   return {
+    revision: 1,
     id: "block-1",
     parentId: null,
     position: 0,

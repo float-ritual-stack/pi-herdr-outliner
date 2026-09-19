@@ -34,6 +34,8 @@ views beside agents, and persistent activity displays remain valid Herdr uses.
   scheduling. The cache shipped without PIE-269's proposed compact Tree index.
 - S1 / PIE-275, [PR #119](https://github.com/float-ritual-stack/pi-herdr-outliner/pull/119):
   exclusive writable-store ownership and its real-service regression.
+- S2 / PIE-276, [PR #120](https://github.com/float-ritual-stack/pi-herdr-outliner/pull/120):
+  payload-bound capture receipts, uncertain-submission recovery, and real popup proof.
 
 Preserve these behaviors. PIE-270 does not establish progressive cold loading,
 Tree body caching, Resource caching, or structural conflict protection for all
@@ -50,7 +52,7 @@ not one large PR.
 | Order | Package | Impact | Dependency |
 | --- | --- | --- | --- |
 | Shipped foundation | S1 / PIE-275: own the workspace before writable startup | BLOCKER addressed: a second launch could invalidate live work. | Preserve the ownership and recovery regressions. |
-| First queued | S2 / PIE-276: bind capture receipts to submissions | BLOCKER: a retry can discard newly typed text. | S1 before deploying any required receipt migration; attached-client support for popup proof. |
+| Shipped foundation | S2 / PIE-276: bind capture receipts to submissions | BLOCKER addressed: a retry could discard newly typed text. | S1 before deploying any required receipt migration; attached-client support for popup proof. |
 | After S2 in the queue | S3 / PIE-277: enforce block edit revisions | BAD DESIGN: silent stale writes and common false conflicts. | S1 before migration; one coordinated protocol/caller cutover. |
 | After S3 in the queue | S4 / PIE-278: identify file contents in revisions | BUG: equal size/time can conceal changed bytes. | Focused file-write contract test and live Detail save path. |
 | After S4 in the queue | S5 / PIE-279: make file reads service-owned | BAD DESIGN: preview routes can read different hosts' bytes. | Preserve passive-read semantics and explicit resource creation. |
@@ -71,8 +73,9 @@ Safety work and small interaction fixes can proceed independently. A layout
 rewrite is not a dependency of S1-S5. A2 can be prototyped before all fixes land,
 but shipping its editing/capture behavior requires the relevant safety fixes.
 
-The live Next queue is ordered S2, S3, S4, S5. This is delivery priority, not a
-claim that S4 technically depends on S3 or S3 on S2. PIE-269 and PIE-271 remain
+The safety delivery sequence is S2, S3, S4, S5; consult the workboard for current
+queue status. This is delivery priority, not a claim that S4 technically depends
+on S3 or S3 on S2. PIE-269 and PIE-271 remain
 planned after safety work; prefer PIE-269 first for cold Tree transfer cost, but
 their implementations are independent. Neither performance work nor A2 blocks
 the safety fixes. A2's bounded layout experiment does not require either read
@@ -205,11 +208,15 @@ Change `src/store.ts`, request types, server dispatch, CLI, Tree/Detail, and age
 callers together. Introduce an authoritative edit revision with atomic
 compare-and-update. Normal writes require the original revision. Define lifecycle
 validation explicitly; unrelated position changes do not invalidate text drafts.
-Keep display timestamps separate. Update incompatible protocol versions and all
-callers in the same cutover; an optional old-token bypass preserves the defect.
+Keep display timestamps separate. Body revisions survive position changes and
+unchanged delete/restore cycles; text saves still require an active block at the
+time of the write. Historical annotation timestamps remain evidence metadata;
+the existing content hash validates exact source bytes. Update incompatible
+protocol versions and all callers in the same cutover; an optional old-token
+bypass preserves the defect.
 
-Proposed scenario: `test/e2e/edit-conflicts.ts`. Hold a real Detail draft while a
-second client changes the block; a stale UI/CLI save must fail and preserve both
+Scenario: `bun run test:e2e:edit-conflicts` (`test/e2e/edit-conflicts.ts`). Hold a
+real Detail draft while a second client changes the block; a stale UI/CLI save must fail and preserve both
 the newer stored content and recoverable draft. A sibling reorder must allow an
 unchanged-content draft to save. Use a focused frozen/backwards-clock regression
 for version reuse. Run migration twice on a copied old-schema fixture and verify

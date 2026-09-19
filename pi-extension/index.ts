@@ -1450,7 +1450,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
     return client.request<Block>({
       action: "properties.patch",
       blockId: block.id,
-      expectedUpdatedAt: block.updatedAt,
+      expectedRevision: block.revision,
       operations,
       mutation: agentMutation(actorId, context, taskId),
     });
@@ -1617,7 +1617,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
       : await client.request<Block>({
         action: "properties.patch",
         blockId: task.id,
-        expectedUpdatedAt: task.updatedAt,
+        expectedRevision: task.revision,
         operations: [propertyTransition(task, "work-stage", "doing")],
         mutation: agentMutation(actorId, context, "outliner-task:start"),
       });
@@ -1643,7 +1643,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
     const updated = await client.request<Block>({
       action: "properties.patch",
       blockId: task.id,
-      expectedUpdatedAt: task.updatedAt,
+      expectedRevision: task.revision,
       operations: [propertyTransition(task, "work-stage", "next")],
       mutation: agentMutation(actorId, context, "outliner-task:pause"),
     });
@@ -1708,7 +1708,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
     const updated = await client.request<Block>({
       action: "properties.patch",
       blockId: task.id,
-      expectedUpdatedAt: task.updatedAt,
+      expectedRevision: task.revision,
       operations,
       mutation: agentMutation(actorId, context, "outliner-task:complete"),
     });
@@ -2061,7 +2061,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
             captureBlock = await client.request<Block>({
               action: "capture.retitle",
               blockId: receipt.block.id,
-              expectedUpdatedAt: receipt.block.updatedAt,
+              expectedRevision: receipt.block.revision,
               title,
               mutation: agentMutation(actorId, context, activeTaskId ?? undefined),
             });
@@ -2947,11 +2947,11 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
     name: "outliner_update",
     label: "Outliner Update",
     description: "Update an existing outliner block only if it is still the version the agent read",
-    promptSnippet: "Optimistically update a shared outliner block using its updatedAt version",
+    promptSnippet: "Optimistically update a shared outliner block using its integer edit revision",
     parameters: Type.Object({
       blockId: Type.String(),
       text: Type.String(),
-      expectedUpdatedAt: Type.String(),
+      expectedRevision: Type.Integer({ minimum: 1 }),
     }),
     async execute(toolCallId, params, _signal, _onUpdate, context) {
       await ensureService(false);
@@ -2960,7 +2960,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
           action: "update",
           blockId: params.blockId,
           text: params.text,
-          expectedUpdatedAt: params.expectedUpdatedAt,
+          expectedRevision: params.expectedRevision,
           mutation: agentMutation(actorId, context, toolCallId),
         }),
       );
@@ -2975,7 +2975,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
     promptSnippet: "Patch indexed outliner properties with optimistic concurrency",
     parameters: Type.Object({
       blockId: Type.String(),
-      expectedUpdatedAt: Type.String(),
+      expectedRevision: Type.Integer({ minimum: 1 }),
       operations: Type.Array(propertyPatchOperationSchema, { minItems: 1 }),
     }),
     async execute(toolCallId, params, _signal, _onUpdate, context) {
@@ -2984,7 +2984,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
         await client.request<Block>({
           action: "properties.patch",
           blockId: params.blockId,
-          expectedUpdatedAt: params.expectedUpdatedAt,
+          expectedRevision: params.expectedRevision,
           operations: params.operations,
           mutation: agentMutation(actorId, context, toolCallId),
         }),
@@ -3042,15 +3042,15 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
         Type.String({ description: "Required for resolve, follow, rename, alias, and remove" }),
       ),
       blockId: Type.Optional(Type.String({ description: "Required for rename, alias, and remove" })),
-      expectedUpdatedAt: Type.Optional(
-        Type.String({ description: "Required for rename and remove" }),
+      expectedRevision: Type.Optional(
+        Type.Integer({ minimum: 1, description: "Required for rename and remove" }),
       ),
       query: Type.Optional(Type.String({ description: "Optional substring filter for complete" })),
       limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
     }),
     async execute(toolCallId, params, _signal, _onUpdate, context) {
       await ensureService(false);
-      const requireField = (value: string | undefined, field: string): string => {
+      const requireField = <T extends string | number>(value: T | undefined, field: string): T => {
         if (value === undefined || value === "") {
           throw new Error(`outliner_page ${params.operation} requires ${field}`);
         }
@@ -3080,7 +3080,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
             action: "pages.rename",
             blockId: requireField(params.blockId, "blockId"),
             address: requireField(params.address, "address"),
-            expectedUpdatedAt: requireField(params.expectedUpdatedAt, "expectedUpdatedAt"),
+            expectedRevision: requireField(params.expectedRevision, "expectedRevision"),
           }));
         case "alias":
           return toolResult(await client.request({
@@ -3093,7 +3093,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
             action: "pages.remove",
             blockId: requireField(params.blockId, "blockId"),
             address: requireField(params.address, "address"),
-            expectedUpdatedAt: requireField(params.expectedUpdatedAt, "expectedUpdatedAt"),
+            expectedRevision: requireField(params.expectedRevision, "expectedRevision"),
           }));
         default: {
           const unsupported: never = params.operation;
@@ -3116,8 +3116,8 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
         Type.Literal("allocate"),
       ]),
       blockId: Type.Optional(Type.String({ description: "Required for allocate" })),
-      expectedUpdatedAt: Type.Optional(
-        Type.String({ description: "Required for allocate" }),
+      expectedRevision: Type.Optional(
+        Type.Integer({ minimum: 1, description: "Required for allocate" }),
       ),
       prefix: Type.Optional(
         Type.String({ description: "Required for configure" }),
@@ -3137,13 +3137,13 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
           prefix: params.prefix,
         }));
       }
-      if (!params.blockId || !params.expectedUpdatedAt) {
-        throw new Error("outliner_work_id allocate requires blockId and expectedUpdatedAt");
+      if (!params.blockId || !params.expectedRevision) {
+        throw new Error("outliner_work_id allocate requires blockId and expectedRevision");
       }
       return toolResult(await client.request({
         action: "work-ids.allocate",
         blockId: params.blockId,
-        expectedUpdatedAt: params.expectedUpdatedAt,
+        expectedRevision: params.expectedRevision,
       }));
     },
   });

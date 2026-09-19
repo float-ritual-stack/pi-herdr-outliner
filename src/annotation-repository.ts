@@ -138,7 +138,7 @@ interface RepositoryBlocks {
   readonly update: (
     blockId: string,
     text: string,
-    expectedUpdatedAt: string,
+    expectedRevision: number,
     mutation: MutationProvenance,
   ) => Block;
   readonly insertCanonical: (
@@ -928,7 +928,7 @@ export class AnnotationRepository {
         undefined,
         { lifecycle: input.lifecycle, promotedBlockIds, allowLegacy: true },
       ),
-      record.block.updatedAt,
+      record.block.revision,
       mutation,
     );
     return this.materialize(parseAnnotationBlockContent(updated), this.targetRow(annotationId));
@@ -1016,10 +1016,11 @@ export class AnnotationRepository {
     const representation = target.representation;
     if (representation.sourceSnapshot.kind === "block") {
       const block = this.blocks.requireActive(representation.sourceSnapshot.blockId);
-      if (
-        block.updatedAt !== representation.sourceSnapshot.updatedAt ||
-        annotationSourceHash(block.text) !== representation.sourceSnapshot.contentHash
-      ) throw new Error("Annotation block snapshot is stale");
+      // Historical timestamps are observation metadata. Exact source bytes own
+      // passage identity; moving the block cannot invalidate an annotation.
+      if (annotationSourceHash(block.text) !== representation.sourceSnapshot.contentHash) {
+        throw new Error("Annotation block snapshot is stale");
+      }
     }
     const content = this.representationContent(representation);
     if (representation.subject.kind === "resource" && content === null) {

@@ -1277,7 +1277,7 @@ test("rejects agent selections omitted from a bounded candidate package", () => 
     { length: 8 },
     () => `before ${passage} after`,
   ).join("\n")}`;
-  const revised = store.update(source.id, revisedText, source.updatedAt, {
+  const revised = store.update(source.id, revisedText, source.revision, {
     author: "user",
     actorId: "protocol-test",
     sessionId: "bounded-package",
@@ -1508,7 +1508,7 @@ test("serves mutations and property queries over the local socket", async () => 
   const allocation = await client.request<WorkIdAllocation>({
     action: "work-ids.allocate",
     blockId: workTarget.id,
-    expectedUpdatedAt: workTarget.updatedAt,
+    expectedRevision: workTarget.revision,
   });
   expect(allocation).toMatchObject({
     workId: "PIE-001",
@@ -1635,7 +1635,7 @@ test("serves mutations and property queries over the local socket", async () => 
     action: "pages.rename",
     blockId: followedPage.block!.id,
     address: "Renamed Protocol Page",
-    expectedUpdatedAt: followedPage.block!.updatedAt,
+    expectedRevision: followedPage.block!.revision,
   })).toMatchObject({ address: "Renamed Protocol Page", kind: "page" });
   expect(await client.request<PageAddressRecord>({
     action: "pages.alias",
@@ -1650,7 +1650,7 @@ test("serves mutations and property queries over the local socket", async () => 
     action: "pages.remove",
     blockId: followedPage.block!.id,
     address: "Protocol Alias",
-    expectedUpdatedAt: renamedPageBlock.updatedAt,
+    expectedRevision: renamedPageBlock.revision,
   })).toMatchObject({ removed: { address: "Protocol Alias", kind: "alias" } });
   expect(await client.request<PageAddressResolution>({
     action: "pages.resolve",
@@ -1660,7 +1660,7 @@ test("serves mutations and property queries over the local socket", async () => 
     id: "invalid-patch",
     action: "properties.patch",
     blockId: block.id,
-    expectedUpdatedAt: block.updatedAt,
+    expectedRevision: block.revision,
     operations: [{ op: "bogus", ordinal: 0 }],
   } as unknown as OutlinerRequest);
   expect(invalidPatch.ok).toBe(false);
@@ -1689,7 +1689,7 @@ test("serves mutations and property queries over the local socket", async () => 
   const patched = await client.request<Block>({
     action: "properties.patch",
     blockId: block.id,
-    expectedUpdatedAt: block.updatedAt,
+    expectedRevision: block.revision,
     operations: [
       { op: "replace", ordinal: 1, value: "doing" },
       { op: "append", key: "priority", value: "high" },
@@ -1703,9 +1703,20 @@ test("serves mutations and property queries over the local socket", async () => 
     action: "update",
     blockId: patched.id,
     text: `${patched.text}\nUser note`,
-    expectedUpdatedAt: patched.updatedAt,
+    expectedRevision: patched.revision,
     mutation: { author: "user", actorId: "detail" },
   });
+  await expect(client.request({
+    action: "update", blockId: patched.id, text: "Unversioned overwrite",
+    mutation: { author: "user", actorId: "old-client" },
+  } as never)).rejects.toThrow("requires a positive integer revision");
+  await expect(client.request({
+    action: "update", blockId: patched.id, text: "Stale overwrite",
+    expectedRevision: patched.revision,
+    mutation: { author: "user", actorId: "stale-client" },
+  })).rejects.toThrow("changed since editing began");
+  expect((await client.request<Block>({ action: "get", blockId: patched.id })).text)
+    .toBe(userUpdated.text);
   const activity = await client.request<BlockEditActivityPage>({
     action: "activity.recent",
     author: "user",
@@ -1881,7 +1892,7 @@ test("streams workspace mutations and transient UI commands to subscribers", asy
   const retitledCapture = await client.request<Block>({
     action: "capture.retitle",
     blockId: capture.block.id,
-    expectedUpdatedAt: capture.block.updatedAt,
+    expectedRevision: capture.block.revision,
     title: "Concise reactive title",
     mutation: { author: "agent", actorId: "omp" },
   });
@@ -1892,7 +1903,7 @@ test("streams workspace mutations and transient UI commands to subscribers", asy
   await client.request({
     action: "work-ids.allocate",
     blockId: block.id,
-    expectedUpdatedAt: block.updatedAt,
+    expectedRevision: block.revision,
   });
   await client.request({ action: "selection.set", blockId: block.id });
   await client.request({ action: "navigation.back" });
@@ -1976,7 +1987,7 @@ test("streams bookmark toggles and removals as content events", async () => {
   const removed = await client.request<BookmarkRemoveReceipt>({
     action: "bookmarks.remove",
     recordId: added.record.id,
-    expectedUpdatedAt: added.record.updatedAt,
+    expectedRevision: added.record.revision,
   });
   await received.promise;
 
@@ -3366,7 +3377,7 @@ test("targets ephemeral attention, advances atomically, stales on edits, and exp
     action: "update",
     blockId: source.id,
     text: `prefix ${source.text}`,
-    expectedUpdatedAt: source.updatedAt,
+    expectedRevision: source.revision,
     mutation: { author: "user", actorId: "test" },
   });
   await staleAttention.promise;

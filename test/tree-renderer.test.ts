@@ -21,6 +21,7 @@ import type {
 
 function block(id: string, overrides: Partial<VisibleBlock> = {}): VisibleBlock {
   return {
+    revision: 1,
     id,
     parentId: null,
     position: 0,

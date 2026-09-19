@@ -8,6 +8,7 @@ import type { Block } from "../src/types";
 
 function block(text: string): Block {
   return {
+    revision: 1,
     id: "relation-view",
     parentId: null,
     position: 0,

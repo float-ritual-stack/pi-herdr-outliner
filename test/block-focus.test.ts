@@ -11,6 +11,7 @@ import type { VisibleBlock, WorkspaceSnapshot } from "../src/types";
 
 function block(id: string, text: string, position = 0): VisibleBlock {
   return {
+    revision: 1,
     id,
     parentId: null,
     position,
