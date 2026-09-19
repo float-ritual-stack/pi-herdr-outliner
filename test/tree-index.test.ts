@@ -62,6 +62,45 @@ test("preview newline flattening cannot create a reference absent from authored 
   }
 });
 
+test("removing properties inside a reference label preserves its original target or disabled state", () => {
+  const directory = mkdtempSync(join(tmpdir(), "outliner-tree-index-reference-property-"));
+  const store = new OutlinerStore(join(directory, "outliner.sqlite"));
+  try {
+    const target = store.create("Reference target without the requested fragment");
+    const alias = store.create("Unrelated live block");
+    for (const fragment of ["^gone", ""]) {
+      const source = store.create(`((${target.id}${fragment}|${alias.id} [tag::x])) [type::note]`);
+      const entry = store.readTreeIndex().blocks.find(block => block.id === source.id)!;
+      const preview = `((${alias.id} ${fragment ? " · Missing fragment" : ""}))`;
+      expect(entry.preview).toBe(preview);
+      expect(entry.previewReferences).toEqual([{ start: 0, end: preview.length, target: fragment ? null : { blockId: target.id } }]);
+      const rendered = createOutlinerTextLinker(entry, id => store.get(id) !== null).link(entry.preview);
+      expect(getOsc8LinkAtColumn(rendered, 2)).toBe(fragment ? undefined : outlinerLinkUri("block", target.id));
+    }
+  } finally {
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("trimming a partially hidden reference does not turn its label into another link", () => {
+  const directory = mkdtempSync(join(tmpdir(), "outliner-tree-index-reference-trim-"));
+  const store = new OutlinerStore(join(directory, "outliner.sqlite"));
+  try {
+    const target = store.create("Reference target");
+    const alias = store.create("Unrelated live block");
+    const source = store.create(`[tag::((${target.id}|discard]  ${alias.id})) [type::note]`);
+    const entry = store.readTreeIndex().blocks.find(block => block.id === source.id)!;
+    expect(entry.preview).toBe(`${alias.id}))`);
+    expect(entry.previewReferences).toEqual([{ start: 0, end: 38, target: null }]);
+    const rendered = createOutlinerTextLinker(entry, id => store.get(id) !== null).link(entry.preview);
+    expect(getOsc8LinkAtColumn(rendered, 0)).toBeUndefined();
+  } finally {
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("Tree receives complete structure and bounded previews while exact bodies remain available", async () => {
   const directory = mkdtempSync(join(tmpdir(), "outliner-tree-index-"));
   const store = new OutlinerStore(join(directory, "outliner.sqlite"));

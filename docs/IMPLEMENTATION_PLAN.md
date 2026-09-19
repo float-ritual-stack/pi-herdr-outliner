@@ -352,6 +352,14 @@ needed. Quick edits must use both the text and edit revision from the same exact
 read, even if the compact row describes an older revision. Preserve the existing
 row rendering, link targets, source identity, and selection/scroll behavior.
 
+Resolve references from authored source before transforming the preview. Carry
+their spans through hidden-property removal, properties inside labels, newline
+display, and service/terminal clipping. Fully hidden references disappear;
+surviving unresolved or clipped text stays nonactionable and cannot acquire a
+different target through generic UUID detection. Check emitted hyperlink columns
+in renderer regressions: Herdr's captured ANSI frames omit OSC 8 metadata and
+cannot prove those links or host click behavior.
+
 Scenario: `bun run test:e2e:tree-index` (`test/e2e/tree-index.ts`). Compare direct and private
 forwarded-socket cold loads on one representative fixture, recording bytes,
 transfer/parse/projection time, first visible frame, and on-demand body requests.
@@ -385,6 +393,13 @@ generation checks and the existing `src/detail.ts` / `src/detail-pi.ts` effects.
 Paint the exact primary document first; apply each enrichment only to its
 matching target and revision. Enrichment failure must not erase readable primary
 content or pretend its actions are ready.
+
+Primary paint must also release Detail's ordered input/event lane. Emitting a
+frame and then awaiting enrichment in that lane still stalls navigation and
+editing. Keep optional completion guarded by the existing target generation and
+document revision; it must not reset scroll, record navigation twice, or replace
+an active draft/selection. Reuse the existing event scheduler rather than adding
+another coordinator.
 
 Keep reference navigation disabled until the displayed source's references are
 resolved. Annotations require the exact representation identity/hash; source

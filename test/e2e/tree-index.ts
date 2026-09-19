@@ -23,7 +23,7 @@ const result = await runHerdrScenario({
     const card = await create("PIE-269 card [probe::tree-index]", root.id);
     const child = await create("PIE-269 contextual child", card.id);
     const board = await create("PIE-269 board [type::virtual-branch] [query::probe=tree-index]", root.id);
-    const reference = await create(`[related::((${long.id}|same))] [status::complete]\nLiteral ((same)) then ((${card.id}|same))`, root.id);
+    const reference = await create(`[related::((${long.id}|same))] [status::complete]\nLiteral ((same)) then ((${card.id}|same[tag::x]))`, root.id);
     const sizes = [120, 700, 2100, 7000, 20000];
     const paragraph = "A synthetic document paragraph with exact editable source text. ";
     for (let i = initial.physical.blocks.length + 7; i < 1000; i++) {

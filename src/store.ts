@@ -447,29 +447,44 @@ function compactTreeBlock(
     const start = occurrence.start + offset;
     const end = start + blockReferenceDisplayText(reference).length;
     offset = end - occurrence.end;
-    return { start, end, reference };
+    return {
+      start,
+      end,
+      target: reference.status === "resolved" || reference.status === "deleted"
+        ? { blockId: reference.blockId, ...(reference.fragmentId ? { fragmentId: reference.fragmentId } : {}) }
+        : null,
+    };
   });
   let title = resolved.text;
   const replaceRanges = (ranges: Array<{ start: number; end: number }>, replacement: string) => {
     const parts: string[] = [];
-    const retained: typeof spans = [];
     let cursor = 0;
-    let delta = 0;
-    let spanIndex = 0;
     for (const range of [...ranges, { start: title.length, end: title.length }]) {
       parts.push(title.slice(cursor, range.start));
-      while (spanIndex < spans.length && spans[spanIndex]!.start < range.start) {
-        const span = spans[spanIndex++]!;
-        if (span.start >= cursor && span.end <= range.start) {
-          retained.push({ ...span, start: span.start + delta, end: span.end + delta });
-        }
-      }
       if (range.end > range.start) parts.push(replacement);
-      delta += replacement.length - (range.end - range.start);
       cursor = range.end;
     }
+    const mapPosition = (position: number): number => {
+      let delta = 0;
+      for (const range of ranges) {
+        if (position <= range.start) break;
+        if (position < range.end) return range.start + delta;
+        delta += replacement.length - (range.end - range.start);
+      }
+      return position + delta;
+    };
+    spans = spans.flatMap(span => {
+      const start = mapPosition(span.start);
+      const end = mapPosition(span.end);
+      if (start >= end) return [];
+      // Removing an inner label token preserves the reference. Cutting either
+      // delimiter preserves only nonactionable provenance for the visible text.
+      const clipped = ranges.some(range =>
+        (range.start <= span.start && span.start < range.end) ||
+        (range.start < span.end && span.end <= range.end));
+      return [{ start, end, target: clipped ? null : span.target }];
+    });
     title = parts.join("");
-    spans = retained;
   };
   if (metadata.properties.length) {
     replaceRanges(parsePropertyRecords(title), "");
@@ -478,9 +493,7 @@ function compactTreeBlock(
       if (line.trim()) {
         const start = lineStart + line.length - line.trimStart().length;
         const end = lineStart + line.trimEnd().length;
-        spans = spans.filter(span => span.start >= start && span.end <= end)
-          .map(span => ({ ...span, start: span.start - start, end: span.end - start }));
-        title = title.slice(start, end);
+        replaceRanges([{ start: 0, end: start }, { start: end, end: title.length }], "");
         break;
       }
       lineStart += line.length + 1;
@@ -496,12 +509,10 @@ function compactTreeBlock(
   }
   const preview = boundedTreeLabel(title);
   const visibleEnd = preview === title ? title.length : preview.length - 1;
-  const previewReferences = spans.filter(span => span.start < visibleEnd).map(({ start, end, reference }) => ({
+  const previewReferences = spans.filter(span => span.start < visibleEnd).map(({ start, end, target }) => ({
     start,
     end: Math.min(end, visibleEnd),
-    target: end <= visibleEnd && (reference.status === "resolved" || reference.status === "deleted")
-      ? { blockId: reference.blockId, ...(reference.fragmentId ? { fragmentId: reference.fragmentId } : {}) }
-      : null,
+    target: end <= visibleEnd ? target : null,
   }));
   return {
     ...metadata,
