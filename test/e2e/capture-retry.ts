@@ -77,6 +77,7 @@ const result = await runHerdrScenario({
           output, (current) => current.includes(text), 35_000);
       };
       const open = async () => {
+        await session.waitFor("previous popup has exited", output, (frame) => !frame.includes("Quick capture"));
         await session.openCapturePopup(origin.id, socketPath);
         await waitOutput("Quick capture");
       };
@@ -141,6 +142,7 @@ const result = await runHerdrScenario({
       await waitOutput("Quick capture");
       await paste("S2 ordinary Tree capture retained");
       await terminal.write("\x1b");
+      await session.waitFor("ordinary popup exits after retain", output, (frame) => !frame.includes("Quick capture"));
       const ordinary = await session.waitFor("ordinary popup retains draft", readDraft,
         (draft) => draft?.text === "S2 ordinary Tree capture retained");
       assert.equal(ordinary?.capturedFromBlockId,
