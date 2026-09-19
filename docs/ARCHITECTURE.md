@@ -370,12 +370,20 @@ its exact primary text first and releases the ordered work lane. Optional
 projection, reference, and annotation reads run outside that lane; their guarded
 completion updates return through it. They must match the current target
 generation and document, and defer while a draft or selection is active.
-Unresolved references remain authored text with navigation disabled. Enrichment
+Unresolved references remain authored text; navigation derived from them is
+disabled, while explicit canonical targets remain usable. Enrichment
 failure preserves readable primary content. Only equality with the displayed
 presentation permits skipping its repaint: a cached read may not yet have been
 displayed. Coarse content and connection events mark cache entries stale. The
 cache is process-memory only, excludes Resources, and never supplies mutation
 authority: writes continue to use canonical `expectedRevision` checks.
+
+Changing a block revision or file representation clears retained annotation
+ranges before primary paint. Rendered-passage markers wait for enrichment;
+canonical-source comments can use the exact primary text immediately. These
+guards do not establish a mapping from Herdr screen-capture offsets to Markdown
+source offsets; the separate PIE-281 follow-up owns that existing limitation and
+the distinction between stored file resolution history and newly displayed bytes.
 
 A workspace root scopes canonical data, not browsing authority. Tree/Detail
 client identity, browsing-context identity, targets, histories, tab numbers,

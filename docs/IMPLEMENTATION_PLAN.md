@@ -71,6 +71,7 @@ not one large PR.
 | Shipped foundation | S3 / PIE-277: enforce block edit revisions | BAD DESIGN addressed: silent stale writes and common false conflicts. | Preserve migration, required-token, stale-write, and sibling-reorder regressions. |
 | Shipped foundation | S4 / PIE-278: identify file contents in revisions | BUG addressed: equal size/time concealed changed bytes. | Preserve byte identity, legacy PDF history, and stale-file-save proof; PIE-280 remains separate. |
 | Separate safety follow-up | PIE-280: preserve external edits during file replacement | BUG: another writer can lose bytes between validation and rename. | Choose a supported commit/recovery contract; hashing alone does not solve it. Consult the workboard for scheduling. |
+| Separate correctness follow-up | PIE-281: annotation representation and coordinate identity | BUG: captured-screen offsets and old file resolutions can be applied to different displayed bytes. | Reuse annotation history and Resource identity; settle the coordinate contract before A2 comment/selection parity claims. |
 | Shipped foundation | S5 / PIE-279: make file reads service-owned | BAD DESIGN addressed: preview routes read different hosts' bytes. | Preserve passive-read semantics, exact file evidence, and explicit resource creation. |
 | Alongside safety work | I1: observers are not destinations | BUG: navigator subscriptions advertise a false Detail identity. | Narrow subscription change; attached-client popup proof. |
 | Alongside safety work | I2: chooser destination outcomes | BUG: missing eligible readers do not consistently trigger the offered split action. | Typed routing result and all chooser callers updated. |
@@ -103,6 +104,9 @@ that no additional machinery is needed. I1-I5 remain separate interaction fixes;
 A1-A3 remain a later ownership/layout experiment. A2 does not require either read
 optimization. PIE-280 is an independent unresolved safety follow-up, not a
 performance or layout dependency; retain its explicit external-write limitation.
+PIE-281 records pre-existing annotation placement defects found during PIE-271
+review. It is independent of the read-performance gates and is not an expansion
+of PIE-271 into a new annotation subsystem.
 
 Hard dependencies:
 
@@ -413,8 +417,9 @@ document revision; it must not reset scroll, record navigation twice, or replace
 an active draft/selection. Reuse the existing event scheduler rather than adding
 another coordinator.
 
-Keep reference navigation disabled until the displayed source's references are
-resolved. Annotations require the exact representation identity/hash; source
+Keep navigation derived from displayed references disabled until those references
+are resolved. Explicit canonical targets, such as property targets, remain usable
+without that enrichment. Annotations require the exact representation identity/hash; source
 coordinates must continue to name the displayed text. Keep backlinks lazy and
 preserve cached revisits, dirty drafts, explicit-open ordering, and stale-result
 suppression. Resources keep provider-specific revisions and passive reads.
@@ -450,6 +455,28 @@ is required by this package.
 
 Keep measurements with the canonical task proof. Local latency injection and
 this agent's host-socket access check do not establish two-host SSH behavior.
+
+### PIE-281 — annotation representation and coordinate identity
+
+Two baseline defects need their own bounded fix. Herdr rendered-passage captures
+include terminal chrome, wrapping, and recent history. `renderedSelectionAnnotationTarget()`
+in `src/detail-controller.ts` correctly preserves that quote and snapshot hash,
+but `detailAnnotationGroups()` in `src/detail-pi-preview.ts` interprets its offsets
+in filtered projected Markdown. These are different coordinate systems. Comparing
+their hashes would hide comments, not establish a valid mapping. Separately,
+`buildDetailAnnotationView()` in `src/detail-renderer.ts` can show a stored file
+resolution beside newly read bytes without proving that they still match.
+
+Preserve immutable quotes and resolution history. Position a comment only when
+the displayed representation and coordinate mapping are established; keep
+unpositioned comments reachable. Reuse the existing annotation and Resource
+contracts. A private attached-client journey must capture real wrapped/projected
+text, then reopen/reflow/refresh it, and exercise a file changed since its stored
+resolution. Verify exact quote/range identity or an explicit unpositioned outcome.
+Resolve this before claiming A2 source-selection parity; coordinate with I5
+source-view identity and PIE-265 thread navigation. PIE-271's readiness and
+source-replacement guards do not claim to repair the pre-existing ready-state
+placement contract. The workboard owns scheduling and detailed reproduction proof.
 
 ## Application surface experiment and deletion
 
