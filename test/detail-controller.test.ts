@@ -4500,7 +4500,7 @@ for (const outcome of ["resolved", "rejected"] as const) {
 test("view.block cancels file bytes without cancelling target publication", async () => {
   const harness = createHarness(makeBlock());
   await harness.controller.initialize();
-  await harness.controller.onServiceConnect();
+  await harness.controller.onServiceConnect(viewport);
   const block = makeBlock({ id: "pending-file", properties: [{ key: "file", value: "today.txt" }] });
   harness.setSelection({ selected: block, ancestors: [], children: [] });
   const entered = Promise.withResolvers<void>();
