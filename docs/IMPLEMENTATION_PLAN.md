@@ -140,6 +140,9 @@ The runner already provides:
 - One additional remote-mode Tree/Detail context in a separate owned workspace
   root, using either supported Detail renderer. Record its endpoint, process
   environment, and registrations; capture its panes alongside the original views.
+- A bounded private forwarding socket for that context's Tree, recording request
+  bytes/counts and timings without changing service responses. The compact-index
+  journey also records parse/projection cost and the first observed Tree frame.
 - One owned PTY-attached Herdr client for popup input, with raw ANSI and current-screen checkpoints decoded by test-only `@xterm/headless`.
 - A read-only SQLite connection and consistent checkpoint copies.
 - Terminal text/ANSI, topology, registrations, invocation logs, process evidence,
@@ -148,7 +151,9 @@ The runner already provides:
 Its current limits are material: one canonical service, a bounded startup
 contender, and at most one extra Tree/Detail context; one attached Herdr client
 and capture-popup launch; no second attached client or real mouse/resize journey. A passing
-existing scenario does not cover those paths.
+existing scenario does not cover those paths. The forwarding fixture observes
+normal delivery; it does not yet hold or reorder responses or exercise two-host
+SSH. A held goto reply is covered separately by a Tree controller regression.
 
 `startup-interruption.ts` deliberately expects its inner fixture to fail after
 SIGINT and then verifies cleanup. Its outer test reports success. Distinguish
@@ -165,7 +170,7 @@ expected injected failure from failed scenario verification when reading artifac
 | I3 / A2 | Add attached-client mouse/focus input and PTY resize evidence. | Input reaches the real host/application path; capture resized frames and resulting state. |
 | I5 | Attach two controlled clients to the private Herdr server. | Record both client actions and the context selected for each explicit source. |
 | A2 | Support one narrowly defined composed launch alongside the existing detached launch. | One host pane may contain two logical views; fixtures no longer require distinct Tree and Detail pane IDs for that case. |
-| PIE-269 / PIE-271 | Add bounded request-byte/timing capture and deterministic response barriers at the existing read seam; use a private forwarded socket for transport measurements. | Keyboard-driven cold/revisit navigation, reordered replies, exact final targets, and bounded reads. Report actual two-host evidence separately from a local forwarding fixture. |
+| PIE-269 (measurement implemented) / PIE-271 | Reuse bounded request-byte/timing capture and the private forwarding socket. Add deterministic response barriers at the existing read seam for progressive-loading proof. | Keyboard-driven cold/revisit navigation, exact final targets, and bounded reads; hold/reorder optional Detail replies for PIE-271. Report actual two-host evidence separately from a local forwarding fixture. |
 
 Keep process ownership, timeouts, transport, and artifact capture in the runner.
 Keep domain actions and SQL assertions in each scenario. This is not a new test
