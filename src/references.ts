@@ -6,6 +6,19 @@ import type {
   ResolvedBlockReferences,
 } from "./types";
 
+export function blockReferenceDisplayText(reference: BlockReferenceResolution): string {
+  const fragment = reference.fragmentId ? `^${reference.fragmentId}` : "";
+  if (reference.status === "missing") {
+    return `((${reference.blockId}${fragment}${reference.label !== undefined ? `|${reference.label}` : ""}))`;
+  }
+  const title = reference.label ?? reference.title ?? reference.blockId;
+  const label = `${title}${reference.label === undefined ? fragment : ""}`;
+  const suffix = reference.status === "deleted" ? " · Trash"
+    : reference.status === "stale" ? " · Missing fragment"
+    : reference.status === "duplicate" ? " · Duplicate fragment" : "";
+  return `((${label}${suffix}))`;
+}
+
 const BLOCK_REFERENCE_PATTERN =
   /\(\(([A-Za-z0-9_-]{8,})(?:\^([A-Za-z0-9][A-Za-z0-9_-]{0,63}))?(?:\|((?:(?!\)\))[^\r\n])+))?\)\)/g;
 const BLOCK_REFERENCE_ENVELOPE_PATTERN = /\(\((?:(?!\)\))[\s\S])*\)\)/g;
@@ -63,51 +76,22 @@ export function resolveBlockReferencesWithStatus(
     (reference, blockId: string, fragmentId: string | undefined, label: string | undefined) => {
       if (label !== undefined && !label.trim()) return reference;
       const block = lookup(blockId);
-      if (!block) {
-        references.push({
-          blockId,
-          ...(fragmentId ? { fragmentId } : {}),
-          status: "missing",
-          ...(label !== undefined ? { label } : {}),
-        });
-        return reference;
-      }
-      const title = blockDisplayTitle(block);
-      const visible = label ?? title;
-      if (block.effectiveDeletedRootId) {
-        references.push({
-          blockId,
-          ...(fragmentId ? { fragmentId } : {}),
-          status: "deleted",
-          ...(label !== undefined ? { label } : {}),
-          title,
-          deletionRootId: block.effectiveDeletedRootId,
-        });
-        return `((${visible}${label === undefined && fragmentId ? `^${fragmentId}` : ""} · Trash))`;
-      }
-      if (fragmentId) {
+      let status: BlockReferenceResolution["status"] = block ? "resolved" : "missing";
+      if (block?.effectiveDeletedRootId) status = "deleted";
+      else if (block && fragmentId) {
         const fragment = resolveFragment(block.text, fragmentId);
-        if (fragment.status !== "resolved") {
-          const status = fragment.status === "missing" ? "stale" : "duplicate";
-          references.push({
-            blockId,
-            fragmentId,
-            ...(label !== undefined ? { label } : {}),
-            status,
-            title,
-          });
-          const suffix = status === "stale" ? "Missing fragment" : "Duplicate fragment";
-          return `((${visible}${label === undefined ? `^${fragmentId}` : ""} · ${suffix}))`;
-        }
+        if (fragment.status !== "resolved") status = fragment.status === "missing" ? "stale" : "duplicate";
       }
-      references.push({
+      const resolution: BlockReferenceResolution = {
         blockId,
         ...(fragmentId ? { fragmentId } : {}),
         ...(label !== undefined ? { label } : {}),
-        status: "resolved",
-        title,
-      });
-      return `((${visible}${label === undefined && fragmentId ? `^${fragmentId}` : ""}))`;
+        status,
+        ...(block ? { title: blockDisplayTitle(block) } : {}),
+        ...(block?.effectiveDeletedRootId ? { deletionRootId: block.effectiveDeletedRootId } : {}),
+      };
+      references.push(resolution);
+      return blockReferenceDisplayText(resolution);
     },
   );
   return { text: resolved, references };

@@ -4,7 +4,9 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { acquireWorkspaceOwnership } from "./workspace-ownership";
 import { AnnotationRepository } from "./annotation-repository";
+import { authoredTextDigest } from "./authored-links";
 import { resolveBacklinkRelation } from "./backlinks";
+import { rankBlockFocusMatches } from "./block-focus";
 import {
   BOOKMARKS_SYSTEM_VIEW,
   BOOKMARK_TYPE,
@@ -35,6 +37,7 @@ import {
   type NormalizedPageAddress,
 } from "./page-addresses";
 import {
+  blockReferenceDisplayText,
   resolveBlockReferences as resolveBlockReferenceText,
   resolveBlockReferencesWithStatus,
 } from "./references";
@@ -111,6 +114,10 @@ import type {
   RoadmapItemPriority,
   RoadmapWorkStage,
   SelectionContext,
+  TreeIndexBlock,
+  TreeIndexCollection,
+  TreeFocusCollection,
+  TreeIndexSnapshot,
   VirtualOccurrenceRank,
   VisibleBlock,
   VisibleBlockCollection,
@@ -418,6 +425,42 @@ function assertNoReservedRoadmapProperties(title: string, body: string): void {
       `Roadmap title and body cannot include reserved property: ${reservedProperty.key}`,
     );
   }
+}
+
+const treeLabelSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
+function boundedTreeLabel(text: string): string {
+  if (text.length <= 512) return text;
+  const boundary = treeLabelSegmenter.segment(text).containing(511)!.index;
+  return `${text.slice(0, boundary)}…`;
+}
+
+function compactTreeBlock(
+  { text, displayText, propertyMatches: _matches, ...metadata }: VisibleBlock,
+  lookup: (blockId: string) => Block | null,
+): TreeIndexBlock {
+  const title = metadata.properties.length
+    ? firstLineWithoutPropertyTokens(displayText)?.trim() || metadata.id
+    : displayText.replace(/\r?\n/g, " ↵ ");
+  const preview = boundedTreeLabel(title);
+  let offset = 0;
+  const previewReferences = resolveBlockReferencesWithStatus(text, lookup).references.filter(reference => {
+    const label = blockReferenceDisplayText(reference);
+    const start = preview.indexOf(label, offset);
+    if (start < 0) return false;
+    offset = start + label.length;
+    return true;
+  }).map(reference => {
+    if (reference.label === undefined) return reference;
+    const { title: _title, ...aliased } = reference;
+    return aliased;
+  });
+  return {
+    ...metadata,
+    preview,
+    previewReferences,
+    textDigest: authoredTextDigest(text),
+  };
 }
 
 export class OutlinerStore {
@@ -1935,6 +1978,54 @@ export class OutlinerStore {
         sequence: this.sequence,
         virtualOccurrenceRanks: this.virtualOccurrenceRanksFromCurrentRead(),
         ...(workIdPrefix ? { workIdPrefix } : {}),
+      };
+    })();
+  }
+
+  focusTree(query: string): TreeFocusCollection {
+    if (typeof query !== "string") throw new Error("Tree focus query must be text");
+    return this.database.transaction(() => {
+      const blocks = [...this.loadGraph().byId.values()].filter(block => !block.effectiveDeletedRootId);
+      const matches = rankBlockFocusMatches(blocks, query, 21);
+      return {
+        matches: matches.slice(0, 20).map(({ block, title }) => ({ block: { id: block.id }, title: boundedTreeLabel(title) })),
+        completeness: matches.length > 20
+          ? { kind: "truncated" as const, limit: 20 }
+          : { kind: "complete" as const },
+      };
+    })();
+  }
+
+  queryTree(query: BlockSearchQuery): TreeIndexCollection {
+    return this.database.transaction(() => {
+      const result = this.queryBlocks(query);
+      return { ...result, blocks: result.blocks.map(block => compactTreeBlock(block, id => this.getFromCurrentRead(id))) };
+    })();
+  }
+
+  readTreeIndex(view: WorkspaceSnapshotView = {}): TreeIndexSnapshot {
+    return this.database.transaction(() => {
+      const snapshot = this.readWorkspaceSnapshot(view);
+      const compact = (block: VisibleBlock) => compactTreeBlock(block, id => this.getFromCurrentRead(id));
+      const blocks = new Map(snapshot.physical.blocks.map(block => [block.id, compact(block)]));
+      for (const block of snapshot.visible.blocks) {
+        if (!blocks.has(block.id)) blocks.set(block.id, compact(block));
+      }
+      return {
+        blocks: [...blocks.values()],
+        physicalBlockIds: snapshot.physical.blocks.map(block => block.id),
+        visible: {
+          rows: snapshot.visible.blocks.map(({ id, depth, propertyMatches }) => ({
+            id,
+            depth,
+            ...(propertyMatches ? { propertyMatches } : {}),
+          })),
+          completeness: snapshot.visible.completeness,
+        },
+        selectedBlockId: snapshot.selection.selected?.id ?? null,
+        virtualOccurrenceRanks: snapshot.virtualOccurrenceRanks,
+        sequence: snapshot.sequence,
+        ...(snapshot.workIdPrefix ? { workIdPrefix: snapshot.workIdPrefix } : {}),
       };
     })();
   }

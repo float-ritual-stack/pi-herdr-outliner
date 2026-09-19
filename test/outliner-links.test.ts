@@ -9,7 +9,12 @@ import {
   outlinerLinkUri,
   parseOutlinerLinkUri,
 } from "../src/outliner-links";
+import { resolveBlockReferencesWithStatus } from "../src/references";
 import type { Block } from "../src/types";
+
+function linkerForRawReferences(text: string, lookup: (id: string) => Block | null, prefix: string | null = null) {
+  return createOutlinerTextLinker(resolveBlockReferencesWithStatus(text, lookup).references, id => lookup(id) !== null, prefix);
+}
 
 function block(id: string, text: string): Block {
   return {
@@ -414,10 +419,22 @@ describe("outliner link rendering", () => {
   const targetId = "550e8400-e29b-41d4-a716-446655440000";
   const target = block(targetId, "Target decision [type::decision]");
 
+  test("renders service-resolved fragment links without downloading the target body", () => {
+    const text = "Read ((a paragraph))";
+    const linker = createOutlinerTextLinker([{
+      blockId: targetId, fragmentId: "anchor", label: "a paragraph", title: "Target decision", status: "resolved",
+    }], id => id === targetId);
+    const rendered = linker.link(text);
+    expect(stripTerminalSequences(rendered)).toBe(text);
+    expect(getOsc8LinkAtColumn(rendered, text.indexOf("paragraph"))).toBe(
+      outlinerLinkUri("block", targetId, { fragmentId: "anchor" }),
+    );
+  });
+
   test("emits OSC 8 links for pages, work IDs, exact metadata IDs, and resolved references", () => {
     const raw = `[[Future Page]] PIE-133 depends on [decision::${targetId}] and ((${targetId}))`;
     const resolved = `[[Future Page]] PIE-133 depends on [decision::${targetId}] and ((Target decision))`;
-    const linker = createOutlinerTextLinker(
+    const linker = linkerForRawReferences(
       raw,
       (id) => id === targetId ? target : null,
       "PIE",
@@ -441,7 +458,7 @@ describe("outliner link rendering", () => {
       `[[PIE-123|some title · PIE-123]] and PIE-123 and ((${targetId}))`;
     const titledTarget = block(targetId, "Target decision · PIE-123 [type::decision]");
     const resolved = raw.replace(`((${targetId}))`, "((Target decision · PIE-123))");
-    const linker = createOutlinerTextLinker(
+    const linker = linkerForRawReferences(
       raw,
       (id) => id === targetId ? titledTarget : null,
       "PIE",
@@ -488,7 +505,7 @@ describe("outliner link rendering", () => {
     const anchored = block(targetId, "Target decision\n\n## Durable ^durable");
     const raw = `((${targetId}^durable))`;
     const resolved = "((Target decision^durable))";
-    const linker = createOutlinerTextLinker(raw, () => anchored);
+    const linker = linkerForRawReferences(raw, () => anchored);
     const rendered = linker.link(resolved);
 
     expect(stripTerminalSequences(rendered)).toBe(resolved);
@@ -528,7 +545,7 @@ describe("outliner link rendering", () => {
       "((same **label** PIE-123))",
       "((same **label** PIE-123))",
     ].join(" ");
-    const linker = createOutlinerTextLinker(
+    const linker = linkerForRawReferences(
       raw,
       (id) => id === targetId
         ? block(targetId, "Target\n\n## Durable ^durable")
@@ -566,7 +583,7 @@ describe("outliner link rendering", () => {
     expect(stripTerminalSequences(missing)).toBe("missing label · Missing target");
     expect(getOsc8LinkAtColumn(missing, 2)).toBeUndefined();
     expect(firstOutlinerReference(invalid, "PIE")).toBeNull();
-    expect(createOutlinerTextLinker(invalid, () => target).link(invalid)).toBe(invalid);
+    expect(linkerForRawReferences(invalid, () => target).link(invalid)).toBe(invalid);
   });
 
   test("consumes protected references before linking later rendered rows", () => {
@@ -574,7 +591,7 @@ describe("outliner link rendering", () => {
     const secondId = "550e8400-e29b-41d4-a716-446655440002";
     const first = block(firstId, "Shared title");
     const second = block(secondId, "Shared title");
-    const linker = createOutlinerTextLinker(
+    const linker = linkerForRawReferences(
       `\`((${firstId}))\`\n((${secondId}))`,
       (id) => {
         if (id === firstId) return first;
@@ -593,7 +610,7 @@ describe("outliner link rendering", () => {
     const unresolvedId = "550e8400-e29b-41d4-a716-446655440003";
     const targetId = "550e8400-e29b-41d4-a716-446655440004";
     const target = block(targetId, unresolvedId);
-    const linker = createOutlinerTextLinker(
+    const linker = linkerForRawReferences(
       `((${unresolvedId}))\n((${targetId}))`,
       (id) => id === targetId ? target : null,
     );
@@ -670,16 +687,16 @@ describe("outliner link rendering", () => {
       value: "Page",
     });
     expect(firstOutlinerReference("[[PIE-135]")).toBeNull();
-    const malformed = createOutlinerTextLinker("[[PIE-135]", () => null).link("[[PIE-135]");
+    const malformed = linkerForRawReferences("[[PIE-135]", () => null).link("[[PIE-135]");
     expect(getOsc8LinkAtColumn(malformed, 3)).toBeUndefined();
     expect(firstOutlinerReference("pie-136")).toBeNull();
-    const lowercase = createOutlinerTextLinker("pie-136", () => null).link("pie-136");
+    const lowercase = linkerForRawReferences("pie-136", () => null).link("pie-136");
     expect(getOsc8LinkAtColumn(lowercase, 2)).toBeUndefined();
     expect(firstOutlinerReference("ABC-001", "ABC")).toEqual({
       kind: "work",
       value: "ABC-001",
     });
-    const customPrefix = createOutlinerTextLinker(
+    const customPrefix = linkerForRawReferences(
       "ABC-001",
       () => null,
       "ABC",
@@ -689,7 +706,7 @@ describe("outliner link rendering", () => {
     );
     expect(firstOutlinerReference("ABC-001_foo")).toBeNull();
     expect(firstOutlinerReference("foo_ABC-001")).toBeNull();
-    const embedded = createOutlinerTextLinker("ABC-001_foo", () => null).link(
+    const embedded = linkerForRawReferences("ABC-001_foo", () => null).link(
       "ABC-001_foo",
     );
     expect(getOsc8LinkAtColumn(embedded, 2)).toBeUndefined();

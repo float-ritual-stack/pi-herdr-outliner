@@ -8,7 +8,9 @@ import {
 import { DEFAULT_OUTLINER_ACTION_KEYMAP } from "../src/outliner-actions";
 import type { TreeView } from "../src/tree-controller";
 import { renderTreeFrame, treeSemanticState } from "../src/tree-renderer";
-import { composeAuthoredLinkRows } from "../src/tree-rows";
+import { composeAuthoredLinkRows, isBlockTreeRow, type TreeDisplayRow } from "../src/tree-rows";
+import { resolveBlockReferencesWithStatus } from "../src/references";
+import { treeIndexFixture } from "./tree-fixtures";
 import { truncate } from "../src/terminal";
 import type { VisibleBlock } from "../src/types";
 import type {
@@ -107,14 +109,24 @@ function branchState(overrides: Partial<VirtualBranchState> = {}): VirtualBranch
 
 function view(
   inputRows: ReadonlyArray<VisibleBlock | TreeRow>,
-  overrides: Partial<TreeView> = {},
+  overrides: Omit<Partial<TreeView>, "rows"> & { rows?: TreeDisplayRow[] } = {},
 ): TreeView {
-  const rows = inputRows.map((row) => (isTreeRow(row) ? row : physical(row)));
+  const originalRows = overrides.rows ?? inputRows.map((row) => (isTreeRow(row) ? row : physical(row)));
+  const documents = new Map(originalRows.filter(isBlockTreeRow).map(row => [row.canonicalId, row.block]));
+  const lookup = (id: string) => documents.get(id) ?? null;
+  const rows = originalRows.map(row => isBlockTreeRow(row)
+    ? { ...row, block: treeIndexFixture(row.block, lookup) }
+    : row);
+  const { rows: _rows, ...rest } = overrides;
   return {
     workspaceRoot: "/w",
     rows,
+    expandedDocuments: new Map(originalRows.filter(isBlockTreeRow).filter(row => row.multilineExpanded).map(row => [row.canonicalId, {
+      block: row.block,
+      resolved: { ...resolveBlockReferencesWithStatus(row.block.text, lookup), text: row.block.displayText },
+    }])),
     physicalBlocksById: new Map(
-      rows.filter((row): row is PhysicalTreeRow => row.kind === "physical").map((row) => [
+      rows.filter(row => row.kind === "physical").map((row) => [
         row.canonicalId,
         row.block,
       ]),
@@ -137,7 +149,7 @@ function view(
     expandedBlockOffset: 0,
     status: "ready",
     refreshPending: false,
-    ...overrides,
+    ...rest,
     workspaceContextBlockId: overrides.workspaceContextBlockId ?? null,
   };
 }
@@ -896,23 +908,24 @@ describe("renderTreeFrame", () => {
   });
 
   test("bounds block rendering work when selection jumps across a large complete projection", () => {
-    let displayTextReads = 0;
-    const rows = Array.from({ length: 20_000 }, (_, index) => {
-      const candidate = block(`large-${index}`, { position: index });
-      Object.defineProperty(candidate, "displayText", {
+    let previewReads = 0;
+    const rows = Array.from({ length: 20_000 }, (_, index) => block(`large-${index}`, { position: index }));
+    const current = view(rows, { selectedIndex: 15_000 });
+    for (const row of current.rows) {
+      if (!isBlockTreeRow(row)) continue;
+      const preview = row.block.preview;
+      Object.defineProperty(row.block, "preview", {
         get() {
-          displayTextReads += 1;
-          return candidate.text;
+          previewReads += 1;
+          return preview;
         },
       });
-      return candidate;
-    });
-
-    const rendered = renderTreeFrame(view(rows, { selectedIndex: 15_000 }), 80, 10, 0);
+    }
+    const rendered = renderTreeFrame(current, 80, 10, 0);
 
     expect(rendered.scrollStartEntryIndex).toBe(14_997);
     expect(rendered.frame).toContain("\x1b[48;5;238m\x1b[1m• large-15000");
-    expect(displayTextReads).toBeLessThanOrEqual(4);
+    expect(previewReads).toBeLessThanOrEqual(4);
   });
 
   test("recomputes viewport bounds after width, expansion, and projection replacement", () => {

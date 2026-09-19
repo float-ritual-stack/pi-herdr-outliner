@@ -4,7 +4,10 @@ import type { RequestInput } from "../src/client";
 import { TerminalInputDecoder } from "../src/terminal";
 import { createTreeController, type TreeControllerEffects, type TreeView } from "../src/tree-controller";
 import { renderTreeFrame } from "../src/tree-renderer";
-import type { BlockProperty, VisibleBlock, VisibleBlockCollection, WorkspaceSnapshot } from "../src/types";
+import type { BlockProperty, TreeIndexBlock, TreeIndexCollection, TreeIndexSnapshot } from "../src/types";
+import { emptyAttentionState } from "../src/attention";
+import { authoredTextDigest } from "../src/authored-links";
+import { isBlockTreeRow } from "../src/tree-rows";
 import { projectVirtualBranches, type TreePresentationState } from "../src/virtual-branches";
 
 const blockCount = positiveInteger(process.env.PIE_TREE_PROFILE_BLOCKS, 24_000);
@@ -49,7 +52,7 @@ function properties(index: number): BlockProperty[] {
   return result;
 }
 
-function createFixture(): VisibleBlock[] {
+function createFixture(): TreeIndexBlock[] {
   return Array.from({ length: blockCount }, (_, index) => {
     const groupOffset = index % 120;
     const depth = groupOffset === 0 ? 0 : groupOffset < 12 ? 1 : 2;
@@ -60,32 +63,32 @@ function createFixture(): VisibleBlock[] {
         : index - groupOffset + 1 + ((groupOffset - 12) % 11);
     const id = `block-${index.toString().padStart(6, "0")}`;
     const subject = `PIE-${(index % 2_000).toString().padStart(3, "0")} realistic outline item ${index}`;
-    const text = index % 97 === 0
-      ? `${subject}\nSupporting context line for wrapping, references, and markdown rendering.\n- deterministic item ${index}`
-      : `${subject} [status::${index % 5 === 0 ? "active" : "backlog"}]`;
     return {
       id,
       parentId: parentIndex === null ? null : `block-${parentIndex.toString().padStart(6, "0")}`,
       position: groupOffset,
-      text,
+      revision: 1,
+      preview: subject,
+      previewReferences: [],
+      textDigest: authoredTextDigest(subject),
       author: index % 7 === 0 ? "agent" : "user",
       createdAt: timestamp,
       updatedAt: timestamp,
       properties: properties(index),
       depth,
       hasChildren: groupOffset === 0 || (groupOffset > 0 && groupOffset < 12),
-      displayText: text,
-    } satisfies VisibleBlock;
+    } satisfies TreeIndexBlock;
   });
 }
 
 const physical = createFixture();
 const branchMatches = physical.filter((_, index) => index % 5 === 0).slice(0, 201);
 const complete = { kind: "complete" } as const;
-const snapshot: WorkspaceSnapshot = {
-  visible: { blocks: physical, completeness: complete },
-  physical: { blocks: physical, completeness: complete },
-  selection: { selected: physical[Math.floor(physical.length / 2)] ?? null, ancestors: [], children: [] },
+const snapshot: TreeIndexSnapshot = {
+  blocks: physical,
+  physicalBlockIds: physical.map(block => block.id),
+  visible: { rows: physical.map(({id, depth}) => ({ id, depth })), completeness: complete },
+  selectedBlockId: physical[Math.floor(physical.length / 2)]?.id ?? null,
   virtualOccurrenceRanks: [],
   sequence: 1,
   workIdPrefix: "PIE",
@@ -95,13 +98,14 @@ const presentation: TreePresentationState = {
   multilineExpandedRowIds: new Set(),
 };
 
-function queryBlocks(): Promise<VisibleBlockCollection> {
+function queryBlocks(): Promise<TreeIndexCollection> {
   return Promise.resolve({ blocks: branchMatches, completeness: complete });
 }
 
 function request<T>(input: RequestInput): Promise<T> {
-  if (input.action === "workspace.snapshot") return Promise.resolve(snapshot as T);
-  if (input.action === "blocks.query") return Promise.resolve({ blocks: branchMatches, completeness: complete } as T);
+  if (input.action === "attention.get") return Promise.resolve(emptyAttentionState(input.targetClientId) as T);
+  if (input.action === "tree.index") return Promise.resolve(snapshot as T);
+  if (input.action === "tree.query") return Promise.resolve({ blocks: branchMatches, completeness: complete } as T);
   return Promise.resolve({} as T);
 }
 
@@ -110,10 +114,8 @@ const effects: TreeControllerEffects = {
   clientId: "tree-profiler",
   browsingContextId: "tree-profiler-context",
   request,
-  filesystem: {
-    completeReferencedPaths: () => [],
-    readReferencedFile: () => ({ path: "", content: "" }),
-  },
+  openCapturePopup: async () => {},
+  openVirtualBranchNavigator: () => {},
   createDetailPane: async () => {},
   focusSelf: () => {},
   terminalWidth: () => width,
@@ -156,7 +158,8 @@ await measure("layout-render", iterations, () => {
   scrollStart = rendered.scrollStartEntryIndex;
   frame = rendered.frame;
 });
-const selectedText = controller.view().rows[selectedIndex]?.block.displayText.match(/realistic outline item \d+/)?.[0];
+const selectedRow = controller.view().rows[selectedIndex];
+const selectedText = isBlockTreeRow(selectedRow) ? selectedRow.block.preview.match(/realistic outline item \d+/)?.[0] : undefined;
 if (!selectedText || !frame.includes(selectedText)) {
   throw new Error("Rendered frame did not contain the selected projected row");
 }

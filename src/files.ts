@@ -120,7 +120,7 @@ export function readFileContents(sourcePath: string, workspaceRoot: string): Fil
   };
 }
 
-export function referencedFilePreview(block: Block, contents: FileContents): ReferencedFile {
+export function referencedFilePreview(block: Pick<Block, "properties">, contents: FileContents): ReferencedFile {
   const sourcePath = getProperty(block.properties, "file");
   if (!sourcePath) throw new Error("Selected block has no [file::path] property");
   const allLines = contents.text.split(/\r?\n/);

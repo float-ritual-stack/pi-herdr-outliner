@@ -1,10 +1,14 @@
 import { describe, expect, test } from "bun:test";
+import { setImmediate } from "node:timers/promises";
 import {
   attentionClientState,
   emptyAttentionState,
   normalizeAttentionMark,
 } from "../src/attention";
 import { authoredTextDigest } from "../src/authored-links";
+import { rankBlockFocusMatches } from "../src/block-focus";
+import { resolveBlockReferencesWithStatus } from "../src/references";
+import { treeIndexFixture } from "./tree-fixtures";
 import type { RequestInput } from "../src/client";
 import { OutlinerActionKeymap } from "../src/outliner-actions";
 import {
@@ -14,12 +18,12 @@ import {
 } from "../src/tree-controller";
 import {
   isBlockTreeRow,
-  type TreeDisplayRow,
+  type TreeDisplayRow as ProjectedDisplayRow,
 } from "../src/tree-rows";
 import { layoutExpandedBlock } from "../src/tree-layout";
 import {
   decorateVirtualBranchDefinitionText,
-  type TreeRow,
+  type TreeRow as ProjectedTreeRow,
 } from "../src/virtual-branches";
 import type {
   Block,
@@ -27,8 +31,14 @@ import type {
   OutlinerEvent,
   VisibleBlock,
   VirtualOccurrenceRank,
-  WorkspaceSnapshot,
+  TreeIndexBlock,
+  TreeIndexSnapshot,
+  TreeFocusCollection,
 } from "../src/types";
+
+type TreeRow = ProjectedTreeRow<TreeIndexBlock>;
+type TreeDisplayRow = ProjectedDisplayRow<TreeIndexBlock>;
+const fixtureSources = new WeakMap<TreeIndexBlock, VisibleBlock>();
 
 function block(
   id: string,
@@ -57,21 +67,25 @@ function snapshot(
   options: {
     physicalBlocks?: VisibleBlock[];
     visibleCompleteness?: BlockCollectionCompleteness;
-    physicalCompleteness?: BlockCollectionCompleteness;
     virtualOccurrenceRanks?: VirtualOccurrenceRank[];
     workIdPrefix?: string;
   } = {},
-): WorkspaceSnapshot {
+): TreeIndexSnapshot {
+  const physical = options.physicalBlocks ?? blocks;
+  const documents = new Map([...blocks, ...physical].map(block => [block.id, block]));
+  const compact = [...documents.values()].map(block => {
+    const entry = treeIndexFixture(block, id => documents.get(id) ?? null);
+    fixtureSources.set(entry, block);
+    return entry;
+  });
   return {
+    blocks: compact,
+    physicalBlockIds: physical.map(block => block.id),
     visible: {
-      blocks,
+      rows: blocks.map(({id, depth, propertyMatches}) => ({ id, depth, ...(propertyMatches ? { propertyMatches } : {}) })),
       completeness: options.visibleCompleteness ?? { kind: "complete" },
     },
-    physical: {
-      blocks: options.physicalBlocks ?? blocks,
-      completeness: options.physicalCompleteness ?? { kind: "complete" },
-    },
-    selection: { selected, ancestors: [], children: [] },
+    selectedBlockId: selected?.id ?? null,
     virtualOccurrenceRanks: options.virtualOccurrenceRanks ?? [],
     sequence: 1,
     workIdPrefix: options.workIdPrefix,
@@ -114,6 +128,7 @@ function harness(
   respond: (input: RequestInput) => unknown | Promise<unknown>,
   clientId = "tree-test",
 ): Harness {
+  const documents = new Map<string, Block>();
   const result: Harness = {
     calls: [],
     focused: [],
@@ -131,6 +146,29 @@ function harness(
       request: async <T>(input: RequestInput): Promise<T> => {
         result.calls.push(input);
         const response = await respond(input);
+        if (input.action === "tree.index" && response) {
+          documents.clear();
+          for (const entry of (response as TreeIndexSnapshot).blocks) {
+            const source = fixtureSources.get(entry);
+            if (source) documents.set(source.id, source);
+          }
+        }
+        if (input.action === "tree.query" && response) {
+          const collection = response as { blocks: VisibleBlock[]; completeness: BlockCollectionCompleteness };
+          for (const source of collection.blocks) documents.set(source.id, source);
+          return { ...collection, blocks: collection.blocks.map(source => treeIndexFixture(source, id => documents.get(id) ?? null)) } as T;
+        }
+        if (response === undefined && input.action === "get") return (documents.get(input.blockId) ?? null) as T;
+        if (response === undefined && input.action === "references.resolve") {
+          return resolveBlockReferencesWithStatus(input.text, id => documents.get(id) ?? null) as T;
+        }
+        if (response === undefined && input.action === "tree.focus") {
+          const matches = rankBlockFocusMatches([...documents.values()], input.query, 21);
+          return {
+            matches: matches.slice(0, 20).map(({block, title}) => ({ block: { id: block.id }, title })),
+            completeness: matches.length > 20 ? { kind: "truncated", limit: 20 } : { kind: "complete" },
+          } as T;
+        }
         if (response === undefined && input.action === "files.complete") return [] as T;
         if (response === undefined && input.action === "clients.list") {
           return [{
@@ -220,11 +258,36 @@ function lastCall(calls: readonly RequestInput[], action: RequestInput["action"]
 }
 
 describe("createTreeController", () => {
+  test("edits the exact on-demand body with the revision from that read, not the compact preview", async () => {
+    const original = block("exact-edit", { revision: 4 });
+    const { text: _text, displayText: _displayText, ...metadata } = original;
+    const index: TreeIndexSnapshot = {
+      blocks: [{ ...metadata, preview: "Short row preview", previewReferences: [], textDigest: "old-digest" }],
+      physicalBlockIds: [original.id], visible: { rows: [{ id: original.id, depth: 0 }], completeness: { kind: "complete" } },
+      selectedBlockId: original.id, sequence: 1, virtualOccurrenceRanks: [],
+    };
+    const text = "Exact editable body ".repeat(40) + "LAST BYTE";
+    const exact = { ...original, revision: 5, text };
+    const fake = harness(input => {
+      if (input.action === "tree.index") return index;
+      if (input.action === "get") return exact;
+      if (input.action === "update") return { ...exact, revision: 6, text: input.text };
+      return undefined;
+    });
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+    await controller.handleKeypress("e", { name: "e" }, "pass");
+    expect(controller.view().quickInput).toBe(text);
+    await controller.handleKeypress("!", { name: "!" }, "pass");
+    await controller.handleKeypress("", { name: "return" }, "pass");
+    expect(lastCall(fake.calls, "update")).toMatchObject({ blockId: original.id, expectedRevision: 5, text: text + "!" });
+  });
+
   test("remaps browse actions, suppresses stale defaults, and invokes the action menu", async () => {
     const first = block("first");
     const second = block("second", { position: 1 });
     const fake = harness((input) =>
-      input.action === "workspace.snapshot" ? snapshot([first, second], first) : undefined
+      input.action === "tree.index" ? snapshot([first, second], first) : undefined
     );
     fake.effects = {
       ...fake.effects,
@@ -261,7 +324,7 @@ describe("createTreeController", () => {
     const second = block("second", { position: 1 });
     let snapshotCount = 0;
     const fake = harness((input) => {
-      if (input.action === "workspace.snapshot") {
+      if (input.action === "tree.index") {
         snapshotCount += 1;
         return snapshotCount === 1
           ? snapshot([first, second], second)
@@ -284,7 +347,7 @@ describe("createTreeController", () => {
     const first = block("first");
     const second = block("second", { position: 1 });
     const fake = harness((input) =>
-      input.action === "workspace.snapshot" ? snapshot([first, second], first) : undefined
+      input.action === "tree.index" ? snapshot([first, second], first) : undefined
     );
     const controller = createTreeController(fake.effects);
     await controller.initialize();
@@ -321,12 +384,12 @@ describe("createTreeController", () => {
     });
     const ownerOccurrenceRowId = `occurrence:${definition.id}:${owner.id}`;
     const fake = harness((input) => {
-      if (input.action === "workspace.snapshot") {
+      if (input.action === "tree.index") {
         return snapshot([definition], definition, {
           physicalBlocks: [definition, owner, target],
         });
       }
-      if (input.action === "blocks.query") {
+      if (input.action === "tree.query") {
         return { blocks: [owner], completeness: { kind: "complete" } };
       }
       if (input.action === "blocks.authored-links") {
@@ -439,7 +502,7 @@ describe("createTreeController", () => {
       displayText: "Future Page",
     });
     const fake = harness((input) => {
-      if (input.action === "workspace.snapshot") return snapshot([owner], owner);
+      if (input.action === "tree.index") return snapshot([owner], owner);
       if (input.action === "blocks.authored-links") {
         return {
           kind: "ready",
@@ -543,7 +606,7 @@ describe("createTreeController", () => {
       updatedAt: "2026-09-17T00:00:00.000Z",
     };
     const fake = harness((input) => {
-      if (input.action === "workspace.snapshot") return snapshot([owner], owner);
+      if (input.action === "tree.index") return snapshot([owner], owner);
       if (input.action === "blocks.authored-links") {
         return {
           kind: "ready",
@@ -628,7 +691,7 @@ describe("createTreeController", () => {
       displayText: "Unrelated note",
     });
     const fake = harness((input) =>
-      input.action === "workspace.snapshot"
+      input.action === "tree.index"
         ? snapshot([first, target, other], first)
         : undefined,
     );
@@ -641,6 +704,7 @@ describe("createTreeController", () => {
       { sequence: "rdmp reviw" },
       "pass",
     );
+    await setImmediate();
 
     expect(controller.view().mode).toBe("goto");
     expect(controller.view().quickCompletion?.items[0]).toMatchObject({
@@ -653,6 +717,39 @@ describe("createTreeController", () => {
     expect(selectedBlockRow(controller).canonicalId).toBe(target.id);
     expect(lastCall(fake.calls, "browsing-context.publish")).toEqual({ action: "browsing-context.publish", sourceClientId: "tree-test", contextId: "tree-test-context", target: { kind: "block", blockId: target.id } });
   });
+
+  test("keeps goto typing responsive and coalesces intermediate queries behind a slow read", async () => {
+    const first = block("first");
+    const target = block("target01", { position: 1, text: "Violet research", displayText: "Violet research" });
+    const started = Promise.withResolvers<void>();
+    const held = Promise.withResolvers<TreeFocusCollection>();
+    const queries: string[] = [];
+    const fake = harness(input => {
+      if (input.action === "tree.index") return snapshot([first, target], first);
+      if (input.action === "tree.focus") {
+        queries.push(input.query);
+        if (input.query === "v") { started.resolve(); return held.promise; }
+        return { matches: [{ block: { id: target.id }, title: "Violet research" }], completeness: { kind: "complete" } };
+      }
+      return undefined;
+    });
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+    await controller.handleKeypress("g", { name: "g" }, "pass");
+    let inputQueue = Promise.resolve();
+    for (const text of ["v", "io", "let"]) {
+      inputQueue = inputQueue.then(() => controller.handleKeypress(text, { sequence: text }, "pass"));
+    }
+    await started.promise;
+    await setImmediate(); // Drain the input lane while its transport remains held.
+    const typedBeforeReply = controller.view().quickInput;
+    held.resolve({ matches: [{ block: { id: first.id }, title: "Obsolete result" }], completeness: { kind: "complete" } });
+    await inputQueue;
+    await controller.handleKeypress("", { name: "return" }, "pass");
+    expect(typedBeforeReply).toBe("violet");
+    expect(queries).toEqual(["v", "violet"]);
+    expect(selectedBlockRow(controller).canonicalId).toBe(target.id);
+  });
   test("separates canonical source reveal from authored reference reveal", async () => {
     const source = block("source01", {
       text: "Source points to ((target01))",
@@ -660,7 +757,7 @@ describe("createTreeController", () => {
     });
     const target = block("target01", { position: 1, text: "Target", displayText: "Target" });
     const fake = harness((input) => {
-      if (input.action === "workspace.snapshot") return snapshot([source, target], source);
+      if (input.action === "tree.index") return snapshot([source, target], source);
       if (input.action === "get") return input.blockId === source.id ? source : target;
       return undefined;
     });
@@ -713,7 +810,7 @@ describe("createTreeController", () => {
     });
     let selected = source;
     const fake = harness((input) => {
-      if (input.action === "workspace.snapshot") return snapshot([source, target], selected);
+      if (input.action === "tree.index") return snapshot([source, target], selected);
       if (input.action === "pages.resolve") {
         return {
           address: input.address,
@@ -759,7 +856,7 @@ describe("createTreeController", () => {
     const target = block("target01", { position: 1, text: "Target", displayText: "Target" });
     let selected = source;
     const fake = harness((input) => {
-      if (input.action === "workspace.snapshot") {
+      if (input.action === "tree.index") {
         return snapshot([source, target], selected, { workIdPrefix: "ABC" });
       }
       if (input.action === "pages.resolve") {
@@ -805,8 +902,8 @@ describe("createTreeController", () => {
     });
     let selected: Block = source;
     const fake = harness((input) => {
-      if (input.action === "workspace.snapshot") return snapshot([source], selected);
-      if (input.action === "get") return deleted;
+      if (input.action === "tree.index") return snapshot([source], selected);
+      if (input.action === "get") return input.blockId === source.id ? source : deleted;
       if (input.action === "browsing-context.publish") {
         selected = publishedBlockId(input) === deleted.id ? deleted : source;
         return { selected, ancestors: [], children: [] };
@@ -824,7 +921,7 @@ describe("createTreeController", () => {
   test("keeps Detail locking out of the Tree command surface", async () => {
     const root = block("root", { text: "Root", displayText: "Root" });
     const fake = harness((input) =>
-      input.action === "workspace.snapshot" ? snapshot([root], root) : undefined
+      input.action === "tree.index" ? snapshot([root], root) : undefined
     );
     const controller = createTreeController(fake.effects);
     await controller.initialize();
@@ -838,7 +935,7 @@ describe("createTreeController", () => {
   test("opens right and lower Details while Delete retains confirmation", async () => {
     const root = block("root", { text: "Root", displayText: "Root" });
     const fake = harness((input) =>
-      input.action === "workspace.snapshot" ? snapshot([root], root) : undefined
+      input.action === "tree.index" ? snapshot([root], root) : undefined
     );
     const controller = createTreeController(fake.effects);
     await controller.initialize();
@@ -865,7 +962,7 @@ describe("createTreeController", () => {
       displayText: "Roadmap triage",
     });
     const fake = harness((input) =>
-      input.action === "workspace.snapshot"
+      input.action === "tree.index"
         ? snapshot([review, triage], review)
         : undefined,
     );
@@ -873,6 +970,7 @@ describe("createTreeController", () => {
     await controller.initialize();
     await controller.handleKeypress("g", { name: "g" }, "pass");
     await controller.handleKeypress("roadmap", { sequence: "roadmap" }, "pass");
+    await setImmediate();
 
     expect(controller.view().quickCompletion?.index).toBe(0);
     await controller.handleKeypress("", { name: "tab", shift: true }, "pass");
@@ -887,14 +985,14 @@ describe("createTreeController", () => {
     );
     const selected = blocks.at(-1)!;
     const fake = harness((input) =>
-      input.action === "workspace.snapshot" ? snapshot(blocks, selected) : undefined,
+      input.action === "tree.index" ? snapshot(blocks, selected) : undefined,
     );
     const controller = createTreeController(fake.effects);
 
     await controller.initialize();
 
     expect(fake.calls[0]).toEqual({
-      action: "workspace.snapshot",
+      action: "tree.index",
       view: undefined,
     });
     expect(controller.view().rows).toHaveLength(501);
@@ -915,7 +1013,7 @@ describe("createTreeController", () => {
       properties: [{ key: "status", value: "in review" }],
     });
     const fake = harness((input) => {
-      if (input.action === "workspace.snapshot") {
+      if (input.action === "tree.index") {
         const filtered = input.view?.query?.filters?.[0]?.value === "in progress";
         return snapshot(filtered ? [alpha] : [alpha, beta], alpha, {
           physicalBlocks: [alpha, beta],
@@ -965,8 +1063,8 @@ describe("createTreeController", () => {
 
     expect(controller.view().activeFilter).toBe('status="in progress"');
     expect(canonicalRowIds(controller.view().rows)).toEqual(["alpha"]);
-    expect(lastCall(fake.calls, "workspace.snapshot")).toEqual({
-      action: "workspace.snapshot",
+    expect(lastCall(fake.calls, "tree.index")).toEqual({
+      action: "tree.index",
       view: {
         query: {
           filters: [{ key: "status", value: "in progress" }],
@@ -987,7 +1085,7 @@ describe("createTreeController", () => {
   test("opens a Herdr capture popup without moving the selected Tree row", async () => {
     const origin = block("origin", { text: "Deep origin" });
     const fake = harness((input) =>
-      input.action === "workspace.snapshot" ? snapshot([origin], origin) : undefined
+      input.action === "tree.index" ? snapshot([origin], origin) : undefined
     );
     const controller = createTreeController(fake.effects);
     await controller.initialize();
@@ -1009,7 +1107,7 @@ describe("createTreeController", () => {
     });
     const ordinary = block("ordinary", { position: 1 });
     const fake = harness((input) =>
-      input.action === "workspace.snapshot" ? snapshot([view, ordinary], view) : undefined
+      input.action === "tree.index" ? snapshot([view, ordinary], view) : undefined
     );
     const controller = createTreeController(fake.effects);
     await controller.initialize();
@@ -1032,7 +1130,7 @@ describe("createTreeController", () => {
     });
     const record = block("bookmark-record", { parentId: root.id });
     const fake = harness((input) => {
-      if (input.action === "workspace.snapshot") return snapshot([target], target);
+      if (input.action === "tree.index") return snapshot([target], target);
       if (input.action === "bookmarks.status") {
         return { root, targetBlockId: target.id, record: null };
       }
@@ -1061,7 +1159,7 @@ describe("createTreeController", () => {
   test("keeps Tree selection stable when the capture popup cannot open", async () => {
     const origin = block("origin");
     const fake = harness((input) =>
-      input.action === "workspace.snapshot" ? snapshot([origin], origin) : undefined
+      input.action === "tree.index" ? snapshot([origin], origin) : undefined
     );
     fake.effects.openCapturePopup = async () => {
       throw new Error("popup unavailable");
@@ -1080,7 +1178,7 @@ describe("createTreeController", () => {
     const visible = block("visible");
     const hidden = block("hidden", { parentId: "visible", depth: 1 });
     const fake = harness((input) =>
-      input.action === "workspace.snapshot"
+      input.action === "tree.index"
         ? snapshot([visible], visible, {
             physicalBlocks: [visible, hidden],
             visibleCompleteness: { kind: "truncated", limit: 1 },
@@ -1099,7 +1197,7 @@ describe("createTreeController", () => {
   test("publishes the first visible row only when the service has no selection", async () => {
     const first = block("first");
     const fake = harness((input) =>
-      input.action === "workspace.snapshot" ? snapshot([first], null) : undefined,
+      input.action === "tree.index" ? snapshot([first], null) : undefined,
     );
     const controller = createTreeController(fake.effects);
 
@@ -1113,7 +1211,7 @@ describe("createTreeController", () => {
     const second = block("second", { position: 1 });
     let publicationCount = 0;
     const fake = harness((input) => {
-      if (input.action === "workspace.snapshot") return snapshot([first, second], first);
+      if (input.action === "tree.index") return snapshot([first, second], first);
       if (input.action !== "browsing-context.publish") return undefined;
       publicationCount += 1;
       return {
@@ -1147,7 +1245,7 @@ describe("createTreeController", () => {
     }>();
     let delaySecond = false;
     const fake = harness((input) => {
-      if (input.action === "workspace.snapshot") {
+      if (input.action === "tree.index") {
         return snapshot([first, second, third, fourth], first);
       }
       if (input.action !== "browsing-context.publish") return undefined;
@@ -1206,7 +1304,7 @@ describe("createTreeController", () => {
     }>();
     let delayIntermediate = false;
     const fake = harness((input) => {
-      if (input.action === "workspace.snapshot") {
+      if (input.action === "tree.index") {
         return snapshot([first, intermediate, source, target], first);
       }
       if (input.action === "browsing-context.publish") {
@@ -1258,7 +1356,7 @@ describe("createTreeController", () => {
     const second = block("second", { position: 1 });
     let failPublication = false;
     const fake = harness((input) => {
-      if (input.action === "workspace.snapshot") return snapshot([first, second], first);
+      if (input.action === "tree.index") return snapshot([first, second], first);
       if (input.action === "browsing-context.publish" && failPublication) {
         throw new Error("Preview publication failed");
       }
@@ -1290,7 +1388,7 @@ describe("createTreeController", () => {
     const delayedSecond = Promise.withResolvers<never>();
     const delayedThird = Promise.withResolvers<never>();
     const fake = harness((input) => {
-      if (input.action === "workspace.snapshot") {
+      if (input.action === "tree.index") {
         return snapshot([first, second, third, fourth], first);
       }
       if (input.action !== "browsing-context.publish") return undefined;
@@ -1319,7 +1417,7 @@ describe("createTreeController", () => {
     const first = block("first");
     const second = block("second", { position: 1 });
     const fake = harness((input) =>
-      input.action === "workspace.snapshot" ? snapshot([first, second], first) : undefined,
+      input.action === "tree.index" ? snapshot([first, second], first) : undefined,
     );
     const controller = createTreeController(fake.effects);
 
@@ -1345,7 +1443,7 @@ describe("createTreeController", () => {
     });
     let workspaceSelection: Block = root;
     const respond = (input: RequestInput): unknown => {
-      if (input.action === "workspace.snapshot") {
+      if (input.action === "tree.index") {
         const visible = input.view ? [peer] : [root, child, peer];
         return snapshot(visible, workspaceSelection, {
           physicalBlocks: [root, child, peer],
@@ -1417,7 +1515,7 @@ describe("createTreeController", () => {
     const parent = block("parent", { hasChildren: true });
     const hidden = block("hidden", { parentId: parent.id, depth: 1 });
     const fake = harness((input) =>
-      input.action === "workspace.snapshot"
+      input.action === "tree.index"
         ? snapshot([parent, hidden], parent)
         : undefined,
     );
@@ -1445,7 +1543,7 @@ describe("createTreeController", () => {
     const parentA = block("parent-a", { hasChildren: true });
     const parentB = block("parent-b", { position: 1, hasChildren: true });
     const fake = harness((input) =>
-      input.action === "workspace.snapshot"
+      input.action === "tree.index"
         ? snapshot([first, selected], selected, {
             physicalBlocks: [parentA, first, parentB, selected],
           })
@@ -1460,44 +1558,40 @@ describe("createTreeController", () => {
     expect(controller.view().status).toBe("No previous sibling to indent beneath");
   });
 
-  test("refuses an initial snapshot with truncated physical ancestry", async () => {
+  test("refuses an initial index missing canonical ancestry", async () => {
     const selected = block("selected");
     const fake = harness((input) =>
-      input.action === "workspace.snapshot"
-        ? snapshot([selected], selected, {
-            physicalCompleteness: { kind: "truncated", limit: 500 },
-          })
+      input.action === "tree.index"
+        ? { ...snapshot([selected], selected), blocks: [] }
         : undefined,
     );
     const controller = createTreeController(fake.effects);
 
     await expect(controller.initialize()).rejects.toThrow(
-      "Workspace snapshot physical blocks are truncated at 500; canonical ancestry is unavailable",
+      "Tree index is missing canonical entry selected",
     );
     expect(controller.view().rows).toEqual([]);
     expect(controller.view().physicalBlocksById.size).toBe(0);
     expect(fake.calls.some((call) => call.action === "browsing-context.publish")).toBe(false);
   });
 
-  test("retains the prior complete tree when a refresh has truncated physical ancestry", async () => {
+  test("retains the prior complete tree when a refreshed index is missing canonical ancestry", async () => {
     const stable = block("stable");
     const replacement = block("replacement");
     let snapshotCount = 0;
     const fake = harness((input) => {
-      if (input.action !== "workspace.snapshot") return undefined;
+      if (input.action !== "tree.index") return undefined;
       snapshotCount += 1;
       return snapshotCount === 1
         ? snapshot([stable], stable)
-        : snapshot([replacement], replacement, {
-            physicalCompleteness: { kind: "truncated", limit: 1 },
-          });
+        : { ...snapshot([replacement], replacement), blocks: [] };
     });
     const controller = createTreeController(fake.effects);
     await controller.initialize();
     const completeView = controller.view();
 
     await expect(controller.handleServiceEvent(event("content"))).rejects.toThrow(
-      "Workspace snapshot physical blocks are truncated at 1; canonical ancestry is unavailable",
+      "Tree index is missing canonical entry replacement",
     );
 
     expect(controller.view().rows).toBe(completeView.rows);
@@ -1512,7 +1606,7 @@ describe("createTreeController", () => {
     const effectOrder: string[] = [];
     const fake = harness((input) => {
       effectOrder.push(input.action);
-      if (input.action === "workspace.snapshot") {
+      if (input.action === "tree.index") {
         snapshotCount += 1;
         return snapshotCount === 1 ? snapshot([parent], parent) : snapshot([parent, created], parent);
       }
@@ -1530,7 +1624,7 @@ describe("createTreeController", () => {
     expect(effectOrder).toEqual([
       "create",
       "move",
-      "workspace.snapshot",
+      "tree.index",
       "browsing-context.publish",
       "navigation.resolve",
       "ui.command.send",
@@ -1551,7 +1645,7 @@ describe("createTreeController", () => {
       displayText: "First line\nSecond line",
     });
     const fake = harness((input) =>
-      input.action === "workspace.snapshot" ? snapshot([selected], selected) : undefined
+      input.action === "tree.index" ? snapshot([selected], selected) : undefined
     );
     const controller = createTreeController(fake.effects);
     await controller.initialize();
@@ -1574,7 +1668,7 @@ describe("createTreeController", () => {
   test("single-line Enter stays reader-only until explicit e", async () => {
     const selected = block("selected", { text: "One line", displayText: "One line" });
     const fake = harness((input) =>
-      input.action === "workspace.snapshot" ? snapshot([selected], selected) : undefined
+      input.action === "tree.index" ? snapshot([selected], selected) : undefined
     );
     const controller = createTreeController(fake.effects);
     await controller.initialize();
@@ -1590,7 +1684,7 @@ describe("createTreeController", () => {
 
   test("defers service events during editing and reloads once editing is cancelled", async () => {
     const selected = block("selected");
-    const fake = harness((input) => input.action === "workspace.snapshot" ? snapshot([selected], selected) : undefined);
+    const fake = harness((input) => input.action === "tree.index" ? snapshot([selected], selected) : undefined);
     const controller = createTreeController(fake.effects);
     await controller.initialize();
 
@@ -1601,7 +1695,7 @@ describe("createTreeController", () => {
     expect(controller.view().refreshPending).toBe(true);
 
     await controller.handleKeypress("", { name: "escape" }, "pass");
-    expect(fake.calls.slice(callsBeforeEvent).map((call) => call.action)).toEqual(["workspace.snapshot"]);
+    expect(fake.calls.slice(callsBeforeEvent).map((call) => call.action)).toEqual(["tree.index"]);
     expect(controller.view().mode).toBe("browse");
     expect(controller.view().refreshPending).toBe(false);
   });
@@ -1638,7 +1732,7 @@ describe("createTreeController", () => {
       },
     });
     const fake = harness((input) => {
-      if (input.action === "workspace.snapshot") {
+      if (input.action === "tree.index") {
         snapshotCount += 1;
         snapshotIsCurrent = contentChanged && snapshotCount >= 3;
         const owner = snapshotIsCurrent ? currentOwner : previousOwner;
@@ -1676,7 +1770,7 @@ describe("createTreeController", () => {
   test("applies registered symbolic-address completion without generic block fallback", async () => {
     const selected = block("selected", { text: "[[ho", displayText: "[[ho" });
     const fake = harness((input) => {
-      if (input.action === "workspace.snapshot") return snapshot([selected], selected);
+      if (input.action === "tree.index") return snapshot([selected], selected);
       if (input.action === "pages.complete") {
         return {
           addresses: [{
@@ -1701,7 +1795,7 @@ describe("createTreeController", () => {
       query: "ho",
       limit: 20,
     }]);
-    expect(fake.calls.some((call) => call.action === "blocks.query")).toBe(false);
+    expect(fake.calls.some((call) => call.action === "tree.query")).toBe(false);
     expect(controller.view().quickCompletion?.items[0]).toEqual({
       label: "home — Home",
       insertion: "[[home]]",
@@ -1718,7 +1812,7 @@ describe("createTreeController", () => {
       displayText: "[[some title - PIE-175",
     });
     const fake = harness((input) => {
-      if (input.action === "workspace.snapshot") {
+      if (input.action === "tree.index") {
         return { ...snapshot([selected], selected), workIdPrefix: "PIE" };
       }
       if (input.action === "pages.complete") {
@@ -1755,7 +1849,7 @@ describe("createTreeController", () => {
   test("honors key precedence for close and detail-toggle inputs", async () => {
     const selected = block("selected");
     const fake = harness((input) => {
-      if (input.action === "workspace.snapshot") return snapshot([selected], selected);
+      if (input.action === "tree.index") return snapshot([selected], selected);
       return undefined;
     });
     const controller = createTreeController(fake.effects);
@@ -1781,7 +1875,7 @@ describe("createTreeController", () => {
     });
     const next = block("next", { position: 1 });
     const fake = harness((input) =>
-      input.action === "workspace.snapshot"
+      input.action === "tree.index"
         ? snapshot([expanded, next], expanded)
         : undefined,
     );
@@ -1813,6 +1907,32 @@ describe("createTreeController", () => {
     expect(controller.view().status).toBe("");
   });
 
+  test("revalidates an expanded reference on sequence changes and releases exact bodies on collapse", async () => {
+    const source = block("source01", { text: "Body\n((target01))", displayText: "Body\n((Old title))" });
+    let target = block("target01", { text: "Old title", displayText: "Old title", position: 1 });
+    let sequence = 1;
+    const fake = harness(input => input.action === "tree.index"
+      ? { ...snapshot([source, target], source), sequence }
+      : undefined);
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+    expect(controller.view().expandedDocuments.size).toBe(0);
+    expect(fake.calls.filter(call => call.action === "get")).toHaveLength(0);
+    await controller.handleKeypress(".", { name: "." }, "pass");
+    expect(controller.view().expandedDocuments.get(source.id)?.resolved.text).toBe("Body\n((Old title))");
+    const reads = fake.calls.filter(call => call.action === "get").length;
+    await controller.handleConnect();
+    expect(fake.calls.filter(call => call.action === "get")).toHaveLength(reads);
+
+    target = { ...target, revision: 2, text: "New title", displayText: "New title" };
+    sequence = 2;
+    await controller.handleServiceEvent(event("content", target.id));
+    expect(controller.view().expandedDocuments.get(source.id)?.resolved.text).toBe("Body\n((New title))");
+    expect(selectedBlockRow(controller).canonicalId).toBe(source.id);
+    await controller.handleKeypress(".", { name: "." }, "pass");
+    expect(controller.view().expandedDocuments.size).toBe(0);
+  });
+
   test("pages through the decorated rows of an expanded virtual branch", async () => {
     const text = [
       "A".repeat(70),
@@ -1831,8 +1951,8 @@ describe("createTreeController", () => {
       properties: [{ key: "status", value: "Next" }],
     });
     const fake = harness((input) => {
-      if (input.action === "workspace.snapshot") return snapshot([definition], definition);
-      if (input.action === "blocks.query") {
+      if (input.action === "tree.index") return snapshot([definition], definition);
+      if (input.action === "tree.query") {
         return { blocks: [match], completeness: { kind: "complete" } };
       }
       return undefined;
@@ -1873,8 +1993,8 @@ describe("createTreeController", () => {
       properties: [{ key: "status", value: "Next" }],
     });
     const fake = harness((input) => {
-      if (input.action === "workspace.snapshot") return snapshot([definition], definition);
-      if (input.action === "blocks.query") {
+      if (input.action === "tree.index") return snapshot([definition], definition);
+      if (input.action === "tree.query") {
         return { blocks: [match], completeness: { kind: "complete" } };
       }
       return undefined;
@@ -1949,8 +2069,8 @@ describe("createTreeController", () => {
     const physical = [nextView, doingView, doneView, next, doing, done];
     let queryCount = 0;
     const fake = harness((input) => {
-      if (input.action === "workspace.snapshot") return snapshot(physical, nextView);
-      if (input.action === "blocks.query") {
+      if (input.action === "tree.index") return snapshot(physical, nextView);
+      if (input.action === "tree.query") {
         queryCount += 1;
         const status = input.query.filters?.[0]?.value;
         const match = physical.find((candidate) =>
@@ -2002,11 +2122,11 @@ describe("createTreeController", () => {
     const effectOrder: string[] = [];
     const fake = harness((input) => {
       effectOrder.push(input.action);
-      if (input.action === "workspace.snapshot") {
+      if (input.action === "tree.index") {
         const physical = created ? [definition, parent, created] : [definition, parent];
         return snapshot(physical, definition);
       }
-      if (input.action === "blocks.query") {
+      if (input.action === "tree.query") {
         return {
           blocks: created ? [created] : [],
           completeness: { kind: "complete" },
@@ -2039,8 +2159,8 @@ describe("createTreeController", () => {
     }]);
     expect(effectOrder).toEqual([
       "create",
-      "workspace.snapshot",
-      "blocks.query",
+      "tree.index",
+      "tree.query",
       "browsing-context.publish",
     ]);
     expect(fake.calls.some((call) => call.action === "move")).toBe(false);
@@ -2054,7 +2174,7 @@ describe("createTreeController", () => {
     let physical = [parent, child, successor];
     let selected: Block | null = parent;
     const fake = harness((input) => {
-      if (input.action === "workspace.snapshot") return snapshot(physical, selected);
+      if (input.action === "tree.index") return snapshot(physical, selected);
       if (input.action === "browsing-context.publish") {
         selected = physical.find((candidate) => candidate.id === publishedBlockId(input)) ?? null;
         return undefined;
@@ -2093,8 +2213,8 @@ describe("createTreeController", () => {
     let physical = [definition, card, successor, tail];
     let selected: Block | null = card;
     const fake = harness((input) => {
-      if (input.action === "workspace.snapshot") return snapshot(physical, selected);
-      if (input.action === "blocks.query") {
+      if (input.action === "tree.index") return snapshot(physical, selected);
+      if (input.action === "tree.query") {
         return {
           blocks: cardPresent ? [card] : [],
           completeness: { kind: "complete" },
@@ -2127,7 +2247,7 @@ describe("createTreeController", () => {
     const added = block("added", { position: 1 });
     let physical = [selected];
     const fake = harness((input) =>
-      input.action === "workspace.snapshot" ? snapshot(physical, selected) : undefined
+      input.action === "tree.index" ? snapshot(physical, selected) : undefined
     );
     const controller = createTreeController(fake.effects);
     await controller.initialize();
@@ -2150,7 +2270,7 @@ describe("createTreeController", () => {
     let physical = [previous, deleted];
     let selected: Block | null = deleted;
     const fake = harness((input) => {
-      if (input.action === "workspace.snapshot") return snapshot(physical, selected);
+      if (input.action === "tree.index") return snapshot(physical, selected);
       if (input.action === "browsing-context.publish") {
         selected = physical.find((candidate) => candidate.id === publishedBlockId(input)) ?? null;
         return undefined;
@@ -2188,8 +2308,8 @@ describe("createTreeController", () => {
     let physical = [definition, successor, card];
     let selected: Block | null = definition;
     const fake = harness((input) => {
-      if (input.action === "workspace.snapshot") return snapshot(physical, selected);
-      if (input.action === "blocks.query") {
+      if (input.action === "tree.index") return snapshot(physical, selected);
+      if (input.action === "tree.query") {
         return { blocks: [card], completeness: { kind: "complete" } };
       }
       if (input.action === "browsing-context.publish") {
@@ -2228,12 +2348,12 @@ describe("createTreeController", () => {
     let deleted = false;
     let serviceSelected: Block | null = laneView;
     const fake = harness((input) => {
-      if (input.action === "workspace.snapshot") {
+      if (input.action === "tree.index") {
         // The fallback row's canonical block also disappears externally, while its
         // occurrence in the lane view survives.
         return snapshot(deleted ? [laneView, tail] : [laneView, target, card, tail], serviceSelected);
       }
-      if (input.action === "blocks.query") {
+      if (input.action === "tree.query") {
         return { blocks: [card], completeness: { kind: "complete" } };
       }
       if (input.action === "browsing-context.publish") {
@@ -2277,8 +2397,8 @@ describe("createTreeController", () => {
     let openedFilePath = "";
     const fake = harness((input) => {
       const physical = card ? [definition, card] : [definition];
-      if (input.action === "workspace.snapshot") return snapshot(physical, definition);
-      if (input.action === "blocks.query") {
+      if (input.action === "tree.index") return snapshot(physical, definition);
+      if (input.action === "tree.query") {
         return { blocks: card ? [card] : [], completeness: { kind: "complete" } };
       }
       if (input.action === "update" && card) {
@@ -2366,10 +2486,10 @@ describe("createTreeController", () => {
       properties: [{ key: "status", value: "Doing" }],
     });
     const fake = harness((input) => {
-      if (input.action === "workspace.snapshot") {
+      if (input.action === "tree.index") {
         return snapshot([definition, parent, card], definition);
       }
-      if (input.action === "blocks.query") {
+      if (input.action === "tree.query") {
         return { blocks: [card], completeness: { kind: "complete" } };
       }
       if (input.action === "get") return card;
@@ -2413,10 +2533,10 @@ describe("createTreeController", () => {
     });
     let matches = true;
     const fake = harness((input) => {
-      if (input.action === "workspace.snapshot") {
+      if (input.action === "tree.index") {
         return snapshot([definition, context, card], definition);
       }
-      if (input.action === "blocks.query") {
+      if (input.action === "tree.query") {
         return { blocks: matches ? [card] : [], completeness: { kind: "complete" } };
       }
       return undefined;
@@ -2463,11 +2583,11 @@ describe("createTreeController", () => {
     let deleted = false;
     let serviceSelected: Block | null = doingView;
     const fake = harness((input) => {
-      if (input.action === "workspace.snapshot") {
+      if (input.action === "tree.index") {
         const active = deleted ? [doingView, trashView, context] : [doingView, trashView, context, card];
         return snapshot(active, serviceSelected);
       }
-      if (input.action === "blocks.query") {
+      if (input.action === "tree.query") {
         if (input.query.includeDeleted) {
           return {
             blocks: deleted ? [trashedCard] : [],
@@ -2522,10 +2642,10 @@ describe("createTreeController", () => {
     const card = block("card");
     let secondMatches = true;
     const fake = harness((input) => {
-      if (input.action === "workspace.snapshot") {
+      if (input.action === "tree.index") {
         return snapshot([firstView, secondView, card], firstView);
       }
-      if (input.action === "blocks.query") {
+      if (input.action === "tree.query") {
         const lane = input.query.filters?.[0]?.value;
         return {
           blocks: lane === "first" || secondMatches ? [card] : [],
@@ -2580,8 +2700,8 @@ describe("createTreeController", () => {
     const matches = [block("one"), block("two"), block("three")];
     const physical = [limited, failed, readOnly, invalid, parent, ...matches];
     const fake = harness((input) => {
-      if (input.action === "workspace.snapshot") return snapshot(physical, readOnly);
-      if (input.action === "blocks.query") {
+      if (input.action === "tree.index") return snapshot(physical, readOnly);
+      if (input.action === "tree.query") {
         const status = input.query.filters?.[0]?.value;
         if (status === "Next") throw new Error("query unavailable");
         return {
@@ -2632,12 +2752,12 @@ describe("createTreeController", () => {
     });
     let ranks: VirtualOccurrenceRank[] = [];
     const fake = harness((input) => {
-      if (input.action === "workspace.snapshot") {
+      if (input.action === "tree.index") {
         return snapshot([definition, first, second], definition, {
           virtualOccurrenceRanks: ranks,
         });
       }
-      if (input.action === "blocks.query") {
+      if (input.action === "tree.query") {
         return { blocks: [first, second], completeness: { kind: "complete" } };
       }
       if (input.action === "virtual.occurrences.reorder") {
@@ -2702,8 +2822,8 @@ describe("createTreeController", () => {
       properties: [{ key: "status", value: "Done" }],
     });
     const fake = harness((input) => {
-      if (input.action === "workspace.snapshot") return snapshot([definition, first, second]);
-      if (input.action === "blocks.query") {
+      if (input.action === "tree.index") return snapshot([definition, first, second]);
+      if (input.action === "tree.query") {
         expect(input.query.sort).toEqual({ field: "updated", direction: "desc" });
         return { blocks: [first, second], completeness: { kind: "complete" } };
       }
@@ -2731,10 +2851,10 @@ describe("createTreeController", () => {
     });
     const card = block("card", { properties: [{ key: "status", value: "Doing" }] });
     const fake = harness((input) => {
-      if (input.action === "workspace.snapshot") {
+      if (input.action === "tree.index") {
         return snapshot([definition, card], definition);
       }
-      if (input.action === "blocks.query") {
+      if (input.action === "tree.query") {
         return { blocks: [card], completeness: { kind: "complete" } };
       }
       return undefined;
@@ -2785,8 +2905,8 @@ describe("createTreeController", () => {
     });
     const physical = [definition, first, child, second];
     const fake = harness((input) => {
-      if (input.action === "workspace.snapshot") return snapshot(physical, definition);
-      if (input.action === "blocks.query") {
+      if (input.action === "tree.index") return snapshot(physical, definition);
+      if (input.action === "tree.query") {
         return { blocks: [first, second], completeness: { kind: "complete" } };
       }
       return undefined;
@@ -2844,10 +2964,10 @@ describe("createTreeController", () => {
     const makeTrashHarness = () => {
       let present = true;
       const fake = harness((input) => {
-        if (input.action === "workspace.snapshot") {
+        if (input.action === "tree.index") {
           return snapshot([definition], definition);
         }
-        if (input.action === "blocks.query") {
+        if (input.action === "tree.query") {
           return {
             blocks: present ? [deleted] : [],
             completeness: { kind: "complete" },
@@ -2898,7 +3018,7 @@ test("isolates Tree attention and reveals only on explicit instruction", async (
   const first = block("first");
   const target = block("target", { position: 1 });
   const fake = harness((input) =>
-    input.action === "workspace.snapshot" ? snapshot([first, target], first) : undefined
+    input.action === "tree.index" ? snapshot([first, target], first) : undefined
   );
   const controller = createTreeController(fake.effects);
   await controller.initialize();
@@ -2954,7 +3074,7 @@ test("the file viewer uses service content while retaining the authored line ran
     ],
   });
   const fake = harness(input => {
-    if (input.action === "workspace.snapshot") return snapshot([reference], reference);
+    if (input.action === "tree.index") return snapshot([reference], reference);
     if (input.action === "files.read") return {
       absolutePath: "/service/today.txt", displayPath: "today.txt", text: "first\nSERVER SECOND\nlast",
       revision: { kind: "filesystem", mtimeNs: "1", size: "24", contentHash: "a".repeat(64) },

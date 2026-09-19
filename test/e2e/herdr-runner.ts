@@ -18,6 +18,7 @@ import { join, resolve, sep } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { OutlinerClient } from "../../src/client";
 import { resolvePaths } from "../../src/paths";
+import { forwardService, type ForwardedRequest } from "./service-forwarder";
 import {
   OUTLINER_PROTOCOL_VERSION,
   type OutlinerClientRegistration,
@@ -39,7 +40,8 @@ export interface HerdrScenarioSession {
   rejectCompetingService(): Promise<CommandResult>;
   attachClient(): Promise<{ write(input: string): Promise<void>; visible(): Promise<string> }>;
   openCapturePopup(blockId: string, socketPath: string): Promise<void>;
-  openRemoteBrowsingContext(renderer?: "pi-tui" | "ansi"): Promise<{ workspaceRoot: string; tree: string; detail: string }>;
+  openRemoteBrowsingContext(renderer?: "pi-tui" | "ansi", treeTransport?: "direct" | "forwarded"): Promise<{ workspaceRoot: string; tree: string; detail: string; firstTreeFrameMs: number }>;
+  forwardedTreeRequests(): readonly ForwardedRequest[];
   focus(paneId: string): Promise<void>;
   keys(paneId: string, ...keys: string[]): Promise<void>;
   text(paneId: string, text: string): Promise<void>;
@@ -588,11 +590,12 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
   let primaryFailurePhase: string | undefined;
   const evidenceErrors: unknown[] = [];
   const cleanupErrors: unknown[] = [];
-  const resources: { server: ChildProcess | null; database: Database | null; client: Bun.Subprocess | null; screen: Screen | null } = {
+  const resources: { server: ChildProcess | null; database: Database | null; client: Bun.Subprocess | null; screen: Screen | null; treeForwarder: Awaited<ReturnType<typeof forwardService>> | null } = {
     server: null,
     database: null,
     client: null,
     screen: null,
+    treeForwarder: null,
   };
   let serverLaunchError: Error | null = null;
   let clientOutput = "";
@@ -856,7 +859,10 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
           },
         };
       },
-      async openRemoteBrowsingContext(renderer = "pi-tui") {
+      forwardedTreeRequests() {
+        return resources.treeForwarder?.measurements() ?? [];
+      },
+      async openRemoteBrowsingContext(renderer = "pi-tui", treeTransport = "direct") {
         if (extraPanes.remoteTree) throw new Error("This fixture already owns a remote browsing context");
         const workspaceRoot = join(runRoot, "client-project");
         await mkdir(workspaceRoot);
@@ -864,6 +870,9 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
         const workspaceId = (await getRegistrations()).find(value => value.runtime?.paneId === ownedPanes.tree)?.runtime?.workspaceId;
         if (!workspaceId) throw new Error("Owned Tree has no verified workspace");
         const socket = resolvePaths({ OUTLINER_STATE_DIR: outlinerState, OUTLINER_WORKSPACE_ROOT: projectRoot }).socket;
+        if (treeTransport === "forwarded") {
+          resources.treeForwarder = await forwardService(join(runRoot, "tree-forward.sock"), socket);
+        }
         const clientEnvironment = {
           OUTLINER_WORKSPACE_ROOT: workspaceRoot,
           OUTLINER_REMOTE: "1",
@@ -872,6 +881,9 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
           OUTLINER_DETAIL_RENDERER: renderer,
         };
         const open = async (entrypoint: "outliner" | "detail", target: string): Promise<string> => {
+          const paneEnvironment = entrypoint === "outliner" && resources.treeForwarder
+            ? { ...clientEnvironment, OUTLINER_SOCKET_PATH: resources.treeForwarder.socketPath }
+            : clientEnvironment;
           const output = await runHerdr([
             "plugin", "pane", "open", "--plugin", PLUGIN_ID, "--entrypoint", entrypoint,
             "--placement", entrypoint === "outliner" ? "tab" : "split",
@@ -879,7 +891,7 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
             ...(entrypoint === "detail"
               ? ["--target-pane", target, "--direction", "down"]
               : ["--workspace", workspaceId]),
-            ...Object.entries(clientEnvironment).flatMap(([key, value]) => ["--env", `${key}=${value}`]),
+            ...Object.entries(paneEnvironment).flatMap(([key, value]) => ["--env", `${key}=${value}`]),
           ]);
           const envelope = recordValue(parseJson(output.stdout, "remote pane open"), "remote pane open");
           const result = recordValue(envelope.result, "remote pane open.result");
@@ -889,10 +901,16 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
           if (owned.has(pane.paneId)) throw new Error("Remote launch returned an existing pane");
           owned.add(pane.paneId);
           extraPanes[entrypoint === "outliner" ? "remoteTree" : "remoteDetail"] = pane.paneId;
-          processEvidence.push(await verifyProcess(pane.paneId, pluginRoot, clientEnvironment));
+          processEvidence.push(await verifyProcess(pane.paneId, pluginRoot, paneEnvironment));
           return pane.paneId;
         };
+        const started = performance.now();
         const tree = await open("outliner", ownedPanes.launcher);
+        await poll({ label: "remote Tree first populated frame", timeoutMs: STARTUP_TIMEOUT_MS,
+          signal: abort.signal, artifacts, read: () => paneRead(tree, "visible", "text"),
+          accept: text => text.includes("Workspace") && text.includes("physical blocks"),
+        });
+        const firstTreeFrameMs = performance.now() - started;
         const detail = await open("detail", tree);
         await poll({
           label: "remote browsing context registrations", timeoutMs: STARTUP_TIMEOUT_MS,
@@ -902,8 +920,9 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
             values.some(value => value.contextId === contextId && value.role === "detail" && value.runtime?.paneId === detail),
         });
         await artifacts.write("process-environments.json", processEvidence);
-        await artifacts.write("remote-browsing-context.json", { workspaceRoot, serviceRoot: projectRoot, tree, detail, contextId, clientEnvironment });
-        return { workspaceRoot, tree, detail };
+        await artifacts.write("remote-browsing-context.json", { workspaceRoot, serviceRoot: projectRoot, tree, detail, contextId, clientEnvironment, treeTransport, treeSocket: resources.treeForwarder?.socketPath ?? socket, firstTreeFrameMs,
+          timingScope: "launch to first observed populated Tree frame; includes host/process verification and polling overhead" });
+        return { workspaceRoot, tree, detail, firstTreeFrameMs };
       },
       async openCapturePopup(blockId, socketPath) {
         if (!resources.client) throw new Error("Popup evidence requires an attached client");
@@ -1380,6 +1399,15 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
     resources.database = null;
 
     phase = "cleanup";
+    if (resources.treeForwarder) {
+      try {
+        await artifacts.write("forwarded-tree-requests.json", resources.treeForwarder.measurements());
+      } catch (error) {
+        evidenceErrors.push(error);
+      } finally {
+        await resources.treeForwarder.close().catch(error => cleanupErrors.push(error));
+      }
+    }
     if (resources.client) {
       const ownedClient = resources.client;
       try {

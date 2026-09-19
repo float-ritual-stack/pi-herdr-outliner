@@ -8,6 +8,7 @@ import { requireUniqueClientId, sendClientCommand } from "./client-target";
 import { isFragmentId, resolveFragment } from "./fragments";
 import {
   blockDisplayTitle,
+  blockReferenceDisplayText,
   blockReferenceEnvelopeRanges,
   blockReferenceOccurrences,
 } from "./references";
@@ -24,6 +25,7 @@ import {
 import { isWorkIdAddress } from "./page-addresses";
 import type {
   Block,
+  BlockReferenceResolution,
   OutlinerNavigationIntent,
   PageAddressFollowResult,
   PageAddressResolution,
@@ -557,49 +559,16 @@ export interface OutlinerTextLinker {
 }
 
 export function createOutlinerTextLinker(
-  rawText: string,
-  lookup: (blockId: string) => Block | null,
+  resolved: readonly BlockReferenceResolution[],
+  hasBlock: (blockId: string) => boolean,
   workIdPrefix: string | null = null,
 ): OutlinerTextLinker {
-  const references = blockReferenceOccurrences(rawText).map((reference) => {
-    const target = lookup(reference.blockId);
-    const fragmentSuffix = reference.fragmentId ? `^${reference.fragmentId}` : "";
-    if (!target) {
-      return {
-        visible:
-          `((${reference.blockId}${fragmentSuffix}${reference.label !== undefined ? `|${reference.label}` : ""}))`,
-        uri: null,
-      };
-    }
-    const title = blockDisplayTitle(target);
-    const presentation = reference.label ?? title;
-    if (target.effectiveDeletedRootId) {
-      return {
-        visible:
-          `((${presentation}${reference.label === undefined ? fragmentSuffix : ""} · Trash))`,
-        uri: outlinerLinkUri("block", reference.blockId, {
-          fragmentId: reference.fragmentId,
-        }),
-      };
-    }
-    if (reference.fragmentId) {
-      const fragment = resolveFragment(target.text, reference.fragmentId);
-      if (fragment.status !== "resolved") {
-        const state = fragment.status === "missing" ? "Missing fragment" : "Duplicate fragment";
-        return {
-          visible:
-            `((${presentation}${reference.label === undefined ? fragmentSuffix : ""} · ${state}))`,
-          uri: null,
-        };
-      }
-    }
-    return {
-      visible: `((${presentation}${reference.label === undefined ? fragmentSuffix : ""}))`,
-      uri: outlinerLinkUri("block", reference.blockId, {
-        fragmentId: reference.fragmentId,
-      }),
-    };
-  });
+  const references = resolved.map(reference => ({
+    visible: blockReferenceDisplayText(reference),
+    uri: reference.status === "resolved" || reference.status === "deleted"
+      ? outlinerLinkUri("block", reference.blockId, { fragmentId: reference.fragmentId })
+      : null,
+  }));
   const consumedReferences = new Set<number>();
   return {
     link(text: string): string {
@@ -626,7 +595,7 @@ export function createOutlinerTextLinker(
       const spans = selectLinkSpans(
         text,
         exactSpans,
-        (blockId) => lookup(blockId) !== null,
+        hasBlock,
         workIdPrefix,
       );
       return renderLinkSpans(text, spans, hyperlink);
