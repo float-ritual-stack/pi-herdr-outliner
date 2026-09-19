@@ -333,31 +333,27 @@ function sameBlockDocumentRevision(
     sameBlockListRevision(left.context.children, right.context.children);
 }
 
-function sameDetailBlockRead(
-  cached: DetailBlockCacheEntry,
+function sameDisplayedBlockRead(
+  state: Readonly<DetailState>,
   current: DetailBlockRead,
 ): boolean {
-  const cachedProjection = cached.projection;
-  const cachedResolved = cached.resolved;
   if (
-    !cachedProjection ||
-    !cachedResolved ||
-    cachedProjection.text !== current.projection.text ||
-    cachedResolved.text !== current.resolved.text ||
-    cachedResolved.workIdPrefix !== current.resolved.workIdPrefix ||
-    cachedProjection.embedRanges.length !== current.projection.embedRanges.length ||
-    cachedProjection.embeds.length !== current.projection.embeds.length
+    state.projectedSelectedText !== current.projection.text ||
+    state.resolvedSelectedText !== current.resolved.text ||
+    state.workIdPrefix !== (current.resolved.workIdPrefix ?? null) ||
+    state.embedRanges.length !== current.projection.embedRanges.length ||
+    state.embedStates.length !== current.projection.embeds.length
   ) {
     return false;
   }
-  const sameRanges = cachedProjection.embedRanges.every((range, index) => {
+  const sameRanges = state.embedRanges.every((range, index) => {
     const candidate = current.projection.embedRanges[index];
     return candidate !== undefined &&
       range.startLine === candidate.startLine &&
       range.endLine === candidate.endLine;
   });
   if (!sameRanges) return false;
-  return cachedProjection.embeds.every((embed, index) => {
+  return state.embedStates.every((embed, index) => {
     const candidate = current.projection.embeds[index];
     if (
       candidate === undefined ||
@@ -1140,6 +1136,7 @@ export function createDetailController(
     const isCurrent = (): boolean => fileGeneration === fileReadGeneration &&
       generation === loadGeneration &&
       state.context.selected?.id === block.id && state.mode === mode;
+    const previousFile = state.referencedFile;
     state.referencedFile = null;
     let fileSourceBlockId = block.id;
     try {
@@ -1151,6 +1148,9 @@ export function createDetailController(
       if (!source) return false;
       const loaded = await effects.readFile(source);
       if (!isCurrent()) return false;
+      if (previousFile?.absolutePath !== loaded?.absolutePath ||
+        previousFile?.sourceHash !== loaded?.sourceHash ||
+        previousFile?.sourceVersion !== loaded?.sourceVersion) state.annotationThreads = [];
       state.referencedFile = loaded;
       fileSourceBlockId = source.id;
       const file = state.referencedFile;
@@ -1801,6 +1801,7 @@ export function createDetailController(
     const targetChanged = !sameNavigationTarget(previousTarget, document.target);
     const blockChanged =
       detailBlockTarget({ target: previousTarget })?.blockId !== next.selected?.id;
+    const revisionChanged = state.context.selected?.revision !== next.selected?.revision;
     if (record) recordNavigation(previousTarget);
     state.document = { kind: "ready", document };
     state.refreshPending = false;
@@ -1808,8 +1809,8 @@ export function createDetailController(
     if (blockChanged) {
       state.previewRegions.disclosureOverrides.clear();
       state.attentionRevealSourceLine = null;
-      state.annotationThreads = [];
     }
+    if (blockChanged || revisionChanged) state.annotationThreads = [];
     if (blockChanged || changed) invalidateBacklinks();
     if (record) recordNavigation(document.target);
     else syncNavigationState();
@@ -1912,7 +1913,7 @@ export function createDetailController(
                 state.refreshPending = true;
                 return;
               }
-              if (cached && !changed && state.readStatus === "ready" && sameDetailBlockRead(cached, read)) return;
+              if (state.readStatus === "ready" && sameDisplayedBlockRead(state, read)) return;
               state.projectedSelectedText = projection.text;
               state.embedStates = projection.embeds;
               state.embedRanges = projection.embedRanges;

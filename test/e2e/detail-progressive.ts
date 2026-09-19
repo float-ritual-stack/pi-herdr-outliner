@@ -20,6 +20,7 @@ const result = await runHerdrScenario({
     const obsolete = await create(`Progressive obsolete\nOBSOLETE PRIMARY CONTENT\n((${b.id}|Related B))`);
     const failed = await create(`Progressive failure\nFAILURE PRIMARY CONTENT\n((${b.id}|Related B))`);
     const source = await create(`Progressive source\nSOURCE PRIMARY CONTENT\n((${b.id}|Related B))`);
+    const deferred = await create(`Progressive deferred\nDEFERRED PRIMARY CONTENT\n((${b.id}))`);
     const file = await create("Progressive file [file::progressive.md]");
     // Resource creation is fixture setup. Reading and selecting its exact source
     // below use the real UI; the catalog must remain unchanged during those reads.
@@ -120,6 +121,24 @@ const result = await runHerdrScenario({
     assert.equal((await read(failed.id)).text, failed.text);
     await session.checkpoint("04-failure-retains-readable-editable-content");
 
+    await goto(deferred, "DEFERRED PRIMARY CONTENT");
+    await session.waitVisible(remote.detail, "Progressive B");
+    const renamed = hold("references.resolve", "DEFERRED PRIMARY CONTENT");
+    await session.client.request({ action: "update", blockId: b.id, expectedRevision: b.revision,
+      text: "Changed reference title\nB PRIMARY CONTENT", mutation: { author: "agent", actorId: "pie-271-fixture" } });
+    await held(renamed);
+    await session.keys(remote.detail, "e");
+    await session.waitVisible(remote.detail, "Locked for editing");
+    await session.text(remote.detail, " CANCELLED-REFERENCE-DRAFT");
+    renamed?.release();
+    await session.waitVisible(remote.detail, "CANCELLED-REFERENCE-DRAFT");
+    await session.checkpoint("04-changed-reference-deferred-during-edit");
+    await session.keys(remote.detail, "escape");
+    await session.waitVisible(remote.detail, "Changed reference title");
+    await session.waitVisible(remote.detail, "e edit");
+    assert.equal((await read(deferred.id)).text, deferred.text);
+    await session.checkpoint("04-deferred-reference-displayed-after-cancel");
+
     const revisitMs = await goto(saved, "A PRIMARY CONTENT");
     await session.waitVisible(remote.detail, "DRAFT-SURVIVES");
     await session.keys(remote.detail, "o");
@@ -152,6 +171,19 @@ const result = await runHerdrScenario({
     await session.record("canonical-source-selection", annotation.originalTarget);
     await session.waitVisible(remote.detail, "e edit");
     await session.checkpoint("05-source-coordinates-survive-enrichment");
+
+    const changedAnnotations = hold("annotations.reconcile", source.id);
+    const replacement = "Replacement source\nDIFFERENT PRIMARY SOURCE\nNo previous quote remains.";
+    await session.client.request({ action: "update", blockId: source.id, expectedRevision: source.revision,
+      text: replacement, mutation: { author: "agent", actorId: "pie-271-fixture" } });
+    await held(changedAnnotations);
+    const replacedFrame = await session.waitVisible(remote.detail, "DIFFERENT PRIMARY SOURCE");
+    // The former full-source annotation used the title line as its disclosure
+    // marker. Those old offsets must not mark the replacement document.
+    assert.ok(!replacedFrame.includes("+ Replacement source"));
+    await session.record("changed-source-before-annotations", { revision: (await read(source.id)).revision, barrier: changedAnnotations?.state });
+    await session.checkpoint("05-new-revision-without-old-annotation-ranges");
+    changedAnnotations?.release();
 
     await goto(file, "PROVIDER PRIMARY CONTENT");
     const resourceBarrier = hold("annotations.reconcile", receipt.resource.id);

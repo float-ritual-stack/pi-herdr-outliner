@@ -943,7 +943,7 @@ describe("Pi Markdown detail preview", () => {
       layout.scrollView.render(72).map(stripTerminalSequences).join("\n"),
     ).toContain("Check this range.");
   });
-  test("shows resolved rendered-passage threads in the default Detail preview", () => {
+  test("shows rendered-passage threads only after preview enrichment is ready", () => {
     const rendered = "Hub\n\nGenerated result";
     const detail = state(rendered, "Hub\n\n!((virtual-branch))");
     const observation = {
@@ -982,6 +982,13 @@ describe("Pi Markdown detail preview", () => {
       ),
     ];
     const layout = previewLayout(detail);
+
+    detail.readStatus = "pending";
+    detail.resolvedSelectedText = detail.context.selected!.text;
+    layout.render(72);
+    expect(detail.previewRegions.regions.some(region => region.kind === "annotation")).toBe(false);
+    detail.readStatus = "ready";
+    detail.resolvedSelectedText = rendered;
 
     const collapsed = layout.render(72).map(stripTerminalSequences);
     const region = detail.previewRegions.regions.find((candidate) =>

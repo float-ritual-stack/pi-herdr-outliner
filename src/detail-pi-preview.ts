@@ -1003,6 +1003,7 @@ function detailAnnotationGroups(
     ) continue;
     const starts = sourceLineStarts(selected.text);
     if (target.representation.sourceSnapshot.kind === "rendered") {
+      if (state.readStatus !== "ready") continue;
       const startLine = sourceLineAt(renderedStarts, anchor.start);
       const endLine = sourceLineAt(
         renderedStarts,

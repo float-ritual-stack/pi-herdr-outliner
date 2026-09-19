@@ -705,6 +705,59 @@ describe("detail controller projection and deferred refresh", () => {
     expect(frames).toContain(1);
   });
 
+  test("removes old annotation ranges before painting a changed block revision", async () => {
+    const original = makeBlock({ text: "Original source\nOld document" });
+    const annotations = Promise.withResolvers<Awaited<ReturnType<DetailEffects["reconcileAnnotations"]>>>();
+    const paints: Array<{ revision: number | undefined; annotations: number }> = [];
+    const harness = createHarness(original, null, undefined, undefined, {}, state => {
+      paints.push({ revision: state.context.selected?.revision, annotations: state.annotationThreads.length });
+    });
+    harness.effects.reconcileAnnotations = async input => ({ threads: [{ ...annotationRecord({
+      representation: input.newRepresentation,
+      anchor: { kind: "text-quote", start: 0, end: 8, exact: "Original", prefix: "", suffix: " source" },
+    }), replies: [] }], changed: true });
+    await harness.controller.initialize();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(harness.controller.state.annotationThreads).toHaveLength(1);
+    harness.effects.reconcileAnnotations = () => annotations.promise;
+    harness.setSelection({ selected: makeBlock({ text: "Different replacement\nNew document", revision: 2 }), ancestors: [], children: [] });
+    try {
+      await harness.controller.onServiceEvent(event("content"), viewport);
+      expect(harness.controller.state.context.selected?.revision).toBe(2);
+      expect(paints.filter(paint => paint.revision === 2).length).toBeGreaterThan(0);
+      expect(paints.filter(paint => paint.revision === 2).every(paint => paint.annotations === 0)).toBe(true);
+    } finally {
+      annotations.resolve({ threads: [], changed: true });
+    }
+  });
+
+  test("clears retained annotations when a file changes without a block revision change", async () => {
+    const block = makeBlock({ properties: [{ key: "file", value: "src/example.ts" }] });
+    const original = filePreview({ lines: ["Original source"], sourceHash: "old-file" });
+    const annotations = Promise.withResolvers<Awaited<ReturnType<DetailEffects["reconcileAnnotations"]>>>();
+    const paints: Array<{ hash: string | undefined; annotations: number }> = [];
+    const harness = createHarness(block, original, undefined, undefined, {}, state => {
+      paints.push({ hash: state.referencedFile?.sourceHash, annotations: state.annotationThreads.length });
+    });
+    harness.effects.reconcileAnnotations = async input => ({ threads: [{ ...annotationRecord({
+      representation: input.newRepresentation,
+      anchor: { kind: "text-quote", start: 0, end: 8, exact: "Original", prefix: "", suffix: " source" },
+    }), replies: [] }], changed: true });
+    await harness.controller.initialize();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(harness.controller.state.annotationThreads).toHaveLength(1);
+    harness.effects.readFile = async () => filePreview({ lines: ["Changed source"], sourceHash: "new-file" });
+    harness.effects.reconcileAnnotations = () => annotations.promise;
+    try {
+      await harness.controller.onServiceEvent(event("content"), viewport);
+      expect(harness.controller.state.context.selected?.revision).toBe(block.revision);
+      expect(harness.controller.state.referencedFile?.sourceHash).toBe("new-file");
+      expect(paints.filter(paint => paint.hash === "new-file").every(paint => paint.annotations === 0)).toBe(true);
+    } finally {
+      annotations.resolve({ threads: [], changed: true });
+    }
+  });
+
   test("preserves the readable primary document when optional projection fails", async () => {
     const projection = Promise.withResolvers<Awaited<ReturnType<DetailEffects["projectRead"]>>>();
     const failed = Promise.withResolvers<void>();
@@ -792,6 +845,35 @@ describe("detail controller projection and deferred refresh", () => {
     await old.promise;
     expect(harness.controller.state.backlinks.loading).toBe(false);
     expect(harness.controller.state.backlinks.collection).toEqual(current);
+  });
+
+  test("displays enrichment deferred during editing after the draft is cancelled", async () => {
+    const held = Promise.withResolvers<ResolvedBlockReferences>();
+    const deferred = Promise.withResolvers<void>();
+    let reads = 0;
+    const harness = createHarness(makeBlock({ text: "See ((target01))" }), null, async () => {
+      reads += 1;
+      if (reads === 1) return { text: "See ((Old target))", references: [] };
+      if (reads === 2) return held.promise;
+      return { text: "See ((New target))", references: [] };
+    });
+    await harness.controller.initialize();
+    expect(harness.controller.state.resolvedSelectedText).toBe("See ((Old target))");
+    harness.effects.enqueueViewUpdate = update => {
+      update();
+      if (harness.controller.state.refreshPending) deferred.resolve();
+    };
+    await harness.controller.onServiceEvent(event("content"), viewport);
+    await harness.controller.dispatch({ type: "edit.begin" }, viewport);
+    held.resolve({ text: "See ((New target))", references: [] });
+    await deferred.promise;
+    expect(harness.controller.state.buffer.text).toBe("See ((target01))");
+    expect(harness.controller.state.resolvedSelectedText).toBe("See ((Old target))");
+    await harness.controller.dispatch({ type: "buffer.cancel" }, viewport);
+    await harness.controller.refreshPendingSelection();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(harness.controller.state.resolvedSelectedText).toBe("See ((New target))");
+    expect(harness.controller.state.refreshPending).toBe(false);
   });
 
   test("chooses annotation before file and preserves raw text for editing", async () => {
