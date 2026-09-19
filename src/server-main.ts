@@ -28,8 +28,8 @@ try {
   } catch (closeError) {
     console.error(`Failed to close outliner service after startup error: ${String(closeError)}`);
   }
-  store.close();
   if (ownsPaneState) rmSync(paneStatePath, { force: true });
+  store.close();
   throw error;
 }
 console.log(JSON.stringify({ status: "ready", socket: paths.socket, database: paths.database }));
@@ -53,8 +53,8 @@ async function stop(): Promise<void> {
     exitCode = 1;
     console.error(`Failed to close outliner service: ${String(error)}`);
   } finally {
-    store.close();
     rmSync(paneStatePath, { force: true });
+    store.close();
     process.exit(exitCode);
   }
 }

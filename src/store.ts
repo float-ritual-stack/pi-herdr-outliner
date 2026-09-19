@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { acquireWorkspaceOwnership } from "./workspace-ownership";
 import { AnnotationRepository } from "./annotation-repository";
 import { resolveBacklinkRelation } from "./backlinks";
 import {
@@ -416,52 +417,68 @@ function assertNoReservedRoadmapProperties(title: string, body: string): void {
 }
 
 export class OutlinerStore {
+  private readonly releaseOwnership: () => void;
   readonly database: Database;
   readonly resources: ResourceCatalog;
   readonly annotations: AnnotationRepository;
 
   constructor(path: string, resourceOptions: ResourceCatalogOptions = {}) {
     mkdirSync(dirname(path), { recursive: true });
-    this.database = new Database(path, { create: true });
-    this.database.exec("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;");
-    this.migrate();
-    this.resources = new ResourceCatalog(this.database, {
-      workspaceRoot: dirname(path),
-      ...resourceOptions,
-    });
-    this.annotations = new AnnotationRepository(this.database, this.resources, {
-      create: (text, parentId, author, provenance) =>
-        this.create(text, parentId, author, provenance),
-      update: (blockId, text, expectedUpdatedAt, mutation) =>
-        this.update(blockId, text, expectedUpdatedAt, mutation),
-      insertCanonical: (id, text, parentId, author, createdAt) =>
-        this.insertCanonicalBlock(id, text, parentId, author, createdAt),
-      replaceCanonicalText: (blockId, text) =>
-        this.replaceCanonicalBlockText(blockId, text),
-      markMutation: () => this.bumpSequence(),
-      requireActive: (blockId) => this.requireActive(blockId),
-      get: (blockId) => this.get(blockId),
-      listAnnotations: () => (
-        this.database.query(`
-          SELECT DISTINCT b.id
-          FROM blocks b
-          JOIN block_properties p ON p.block_id = b.id
-          WHERE p.key = 'type'
-            AND p.value IN ('annotation', 'annotation-reply')
-            AND p.scope = 'block'
-          ORDER BY b.created_at, b.id
-        `).all() as Array<{ id: string }>
-      ).map(({ id }) => this.get(id)).filter((block): block is Block => block !== null),
-    });
-    this.seed();
-    this.ensureTrashView();
-    this.ensureInbox();
-    this.ensureBookmarks();
+    this.releaseOwnership = acquireWorkspaceOwnership(path);
+    let database: Database | undefined;
+    try {
+      this.database = database = new Database(path, { create: true });
+      this.database.exec("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;");
+      this.migrate();
+      this.resources = new ResourceCatalog(this.database, {
+        workspaceRoot: dirname(path),
+        ...resourceOptions,
+      });
+      this.annotations = new AnnotationRepository(this.database, this.resources, {
+        create: (text, parentId, author, provenance) =>
+          this.create(text, parentId, author, provenance),
+        update: (blockId, text, expectedUpdatedAt, mutation) =>
+          this.update(blockId, text, expectedUpdatedAt, mutation),
+        insertCanonical: (id, text, parentId, author, createdAt) =>
+          this.insertCanonicalBlock(id, text, parentId, author, createdAt),
+        replaceCanonicalText: (blockId, text) =>
+          this.replaceCanonicalBlockText(blockId, text),
+        markMutation: () => this.bumpSequence(),
+        requireActive: (blockId) => this.requireActive(blockId),
+        get: (blockId) => this.get(blockId),
+        listAnnotations: () => (
+          this.database.query(`
+            SELECT DISTINCT b.id
+            FROM blocks b
+            JOIN block_properties p ON p.block_id = b.id
+            WHERE p.key = 'type'
+              AND p.value IN ('annotation', 'annotation-reply')
+              AND p.scope = 'block'
+            ORDER BY b.created_at, b.id
+          `).all() as Array<{ id: string }>
+        ).map(({ id }) => this.get(id)).filter((block): block is Block => block !== null),
+      });
+      this.seed();
+      this.ensureTrashView();
+      this.ensureInbox();
+      this.ensureBookmarks();
+    } catch (error) {
+      try {
+        database?.close();
+      } finally {
+        this.releaseOwnership();
+      }
+      throw error;
+    }
   }
 
 
   close(): void {
-    this.database.close();
+    try {
+      this.database.close();
+    } finally {
+      this.releaseOwnership();
+    }
   }
 
   get sequence(): number {
