@@ -1278,6 +1278,16 @@ launch to the first observed populated frame and includes host/polling overhead.
 The forwarding observer records its own parsing cost; this is not two-host SSH
 latency evidence.
 
+`bun run test:e2e:detail-progressive` drives cold Detail reads and cached revisits
+with direct and privately forwarded sockets. Matched optional reference or
+annotation replies can be held, failed, or released after navigation. Real keys
+verify that primary content stays readable and editable, late replies preserve
+drafts and newer targets, unresolved links stay disabled, and block/Resource
+comments retain exact source ranges and provider revisions. The fixture records
+selection-to-primary timing, forwarded request counts, checkpoints, and cleanup.
+These same-host observations do not establish two-host SSH latency or host mouse
+behavior; emitted hyperlinks have separate renderer regressions.
+
 ## Project documents
 
 - [Architecture](docs/ARCHITECTURE.md)

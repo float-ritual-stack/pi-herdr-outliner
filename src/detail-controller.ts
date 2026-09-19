@@ -436,6 +436,7 @@ export interface DetailState {
   canNavigateForward: boolean;
   resolvedSelectedText: string;
   projectedSelectedText: string;
+  readStatus: "pending" | "ready" | "failed";
   embedStates: DetailEmbedState[];
   embedRanges: DetailEmbedRange[];
   embedBackgroundEnabled: boolean;
@@ -481,6 +482,7 @@ export function detailResourceTarget(
 export interface DetailEffects {
   readonly clientId: string;
   readonly browsingContextId: string;
+  enqueueViewUpdate(update: () => void): void;
   focusSelf(): void;
   getBrowsingContext(): Promise<BrowsingContextState>;
   loadTarget(target: OutlinerNavigationTarget): Promise<DetailReadyDocument>;
@@ -1030,6 +1032,7 @@ export function createDetailController(
     canNavigateForward: false,
     resolvedSelectedText: "",
     projectedSelectedText: "",
+    readStatus: "pending",
     embedStates: [],
     embedRanges: [],
     embedBackgroundEnabled: true,
@@ -1185,6 +1188,7 @@ export function createDetailController(
   const applyResolvedReferences = (resolved: ResolvedBlockReferences): void => {
     state.resolvedSelectedText = resolved.text;
     state.workIdPrefix = resolved.workIdPrefix ?? null;
+    state.readStatus = "ready";
   };
 
   const applyReadProjection = async (
@@ -1200,8 +1204,10 @@ export function createDetailController(
     return { projection, resolved };
   };
 
-  const loadAnnotations = async (expectedGeneration?: number): Promise<void> => {
+  const loadAnnotations = async (expectedGeneration = loadGeneration): Promise<void> => {
     const targetAtStart = state.target;
+    const documentAtStart = state.document;
+    const fileAtStart = state.referencedFile;
     let threads: AnnotationThread[] = [];
     try {
       if (targetAtStart?.kind === "resource") {
@@ -1231,15 +1237,15 @@ export function createDetailController(
         }
         if (getProperty(selected.properties, "type")?.startsWith("annotation")) {
           threads = [await effects.getAnnotation(selected.id)];
-        } else if (state.referencedFile) {
-          const resource = await effects.lookupFilesystem(state.referencedFile.absolutePath);
+        } else if (fileAtStart) {
+          const resource = await effects.lookupFilesystem(fileAtStart.absolutePath);
           if (resource) {
             const subject: Extract<AnnotationSubject, { readonly kind: "resource" }> = {
               kind: "resource",
               resourceId: resource.id,
             };
-            const representation = filesystemAnnotationRepresentation(resource, state.referencedFile);
-            const content = state.referencedFile.sourceText ?? state.referencedFile.lines.join("\n");
+            const representation = filesystemAnnotationRepresentation(resource, fileAtStart);
+            const content = fileAtStart.sourceText ?? fileAtStart.lines.join("\n");
             threads = (await effects.reconcileAnnotations({
               subject,
               newRepresentation: representation,
@@ -1258,13 +1264,17 @@ export function createDetailController(
     } catch {
       threads = [];
     }
-    if (
-      (expectedGeneration !== undefined && expectedGeneration !== loadGeneration) ||
-      !sameNavigationTarget(state.target, targetAtStart)
-    ) {
-      return;
-    }
-    state.annotationThreads = threads;
+    effects.enqueueViewUpdate(() => {
+      if (expectedGeneration !== loadGeneration || state.document !== documentAtStart ||
+        state.referencedFile !== fileAtStart || !sameNavigationTarget(state.target, targetAtStart) ||
+        sameAnnotationThreads(state.annotationThreads, threads)) return;
+      if (isBufferMode()) {
+        state.refreshPending = true;
+        return;
+      }
+      state.annotationThreads = threads;
+      emit();
+    });
   };
 
   const invalidateBacklinks = (): void => {
@@ -1298,7 +1308,10 @@ export function createDetailController(
   };
 
   const loadBacklinks = async (): Promise<void> => {
+    const generation = loadGeneration;
     const targetBlockId = detailBlockTarget(state)?.blockId;
+    const isCurrent = (): boolean => generation === loadGeneration &&
+      detailBlockTarget(state)?.blockId === targetBlockId;
     if (
       !state.backlinks.expanded ||
       !targetBlockId ||
@@ -1313,16 +1326,22 @@ export function createDetailController(
         targetBlockId,
         limit: 50,
       });
-      if (state.backlinks.expanded && detailBlockTarget(state)?.blockId === targetBlockId) {
-        state.backlinks.collection = collection;
-        clampBacklinkSelection();
+      if (state.backlinks.expanded && isCurrent()) {
+        if (isBufferMode()) state.refreshPending = true;
+        else {
+          state.backlinks.collection = collection;
+          clampBacklinkSelection();
+        }
       }
     } catch (error) {
-      if (state.backlinks.expanded && detailBlockTarget(state)?.blockId === targetBlockId) {
+      if (state.backlinks.expanded && isCurrent()) {
         state.backlinks.error = errorMessage(error);
       }
     } finally {
-      if (detailBlockTarget(state)?.blockId === targetBlockId) state.backlinks.loading = false;
+      if (isCurrent()) {
+        state.backlinks.loading = false;
+        effects.enqueueViewUpdate(() => { if (isCurrent()) emit(); });
+      }
     }
   };
 
@@ -1385,6 +1404,7 @@ export function createDetailController(
   const clearDocumentPresentation = (): void => {
     state.resolvedSelectedText = "";
     state.projectedSelectedText = "";
+    state.readStatus = "pending";
     state.embedStates = [];
     state.embedRanges = [];
     state.workIdPrefix = null;
@@ -1795,12 +1815,13 @@ export function createDetailController(
     else syncNavigationState();
     if (changed) state.status = "";
 
-    if (next.selected && read) {
+    if (next.selected) {
       syncPropertyInspector(next.selected, blockChanged);
-      state.projectedSelectedText = read.projection.text;
-      state.embedStates = read.projection.embeds;
-      state.embedRanges = read.projection.embedRanges;
-      applyResolvedReferences(read.resolved);
+      state.projectedSelectedText = read?.projection.text ?? next.selected.text;
+      state.embedStates = read?.projection.embeds ?? [];
+      state.embedRanges = read?.projection.embedRanges ?? [];
+      applyResolvedReferences(read?.resolved ?? { text: next.selected.text, references: [] });
+      state.readStatus = read ? "ready" : "pending";
     } else {
       clearDocumentPresentation();
     }
@@ -1841,50 +1862,10 @@ export function createDetailController(
       ? state.document.document
       : null;
     const targetChanged = !sameNavigationTarget(previousTarget, document.target);
-    const changed = document.kind === "resource" ||
-      targetChanged ||
-      currentBlockDocument === null ||
-      !sameBlockDocumentRevision(currentBlockDocument, document);
-
-    let read: DetailBlockRead | null = null;
-    if (document.kind === "block" && document.context.selected && (force || changed)) {
-      const projection = await effects.projectRead(
-        document.context.selected.text,
-        document.context.selected.id,
-      );
-      const resolved = await effects.resolveReferences(projection.text);
-      if (generation !== loadGeneration) return false;
-      read = { projection, resolved };
-    }
-
-    const revalidatedReadUnchanged = force &&
-      cached !== null &&
-      (read
-        ? sameDetailBlockRead(cached, read)
-        : document.kind === "block" &&
-          document.context.selected === null &&
-          cached.projection === null &&
-          cached.resolved === null);
-    if (
-      document.kind === "block" &&
-      !changed &&
-      (!force || revalidatedReadUnchanged)
-    ) {
-      if (cached) {
-        writeBlockCache({
-          document,
-          projection: read?.projection ?? cached.projection,
-          resolved: read?.resolved ?? cached.resolved,
-          stale: false,
-        });
-      }
-      if (serviceConnected) await effects.setCurrentTarget(document.target);
-      if (generation !== loadGeneration) return false;
-      const previousThreads = state.annotationThreads;
-      await loadAnnotations(generation);
-      if (generation !== loadGeneration) return false;
-      return !sameAnnotationThreads(previousThreads, state.annotationThreads);
-    }
+    const changed = document.kind === "resource" || targetChanged ||
+      currentBlockDocument === null || !sameBlockDocumentRevision(currentBlockDocument, document);
+    const isCurrent = (): boolean => generation === loadGeneration &&
+      state.document.kind === "ready" && state.document.document === document;
 
     if (document.kind === "resource") {
       if (record) recordNavigation(previousTarget);
@@ -1895,33 +1876,74 @@ export function createDetailController(
       state.status = "";
       state.resolvedSelectedText = resourceDocumentText(document.description);
       state.projectedSelectedText = state.resolvedSelectedText;
+      state.readStatus = "ready";
       state.resolvedBreadcrumb = resourceAddressLabel(document.description.resource.address);
       state.mode = "preview";
-      if (serviceConnected) await effects.setCurrentTarget(document.target);
-      if (generation !== loadGeneration) return false;
       if (record) recordNavigation(document.target);
       else syncNavigationState();
-      await loadAnnotations(generation);
-      return generation === loadGeneration;
+      emit();
+    } else {
+      const cachedRead = cached && sameBlockDocumentRevision(cached.document, document) &&
+        cached.projection && cached.resolved
+        ? { projection: cached.projection, resolved: cached.resolved }
+        : null;
+      if (changed) {
+        applyReadyBlockPresentation(document, cachedRead, previousTarget, record, true);
+        emit();
+      } else {
+        state.document = { kind: "ready", document };
+      }
+      writeBlockCache({ document, projection: cachedRead?.projection ?? null,
+        resolved: cachedRead?.resolved ?? null, stale: false });
+      const selected = document.context.selected;
+      if (selected && (force || changed || !cachedRead)) {
+        // Only completed state updates enter the existing input/event lane.
+        // Waiting for optional reads here would stall every later keypress.
+        void (async () => {
+          try {
+            const projection = await effects.projectRead(selected.text, selected.id);
+            if (!isCurrent()) return;
+            const resolved = await effects.resolveReferences(projection.text);
+            effects.enqueueViewUpdate(() => {
+              if (!isCurrent()) return;
+              const read = { projection, resolved };
+              writeBlockCache({ document, ...read, stale: false });
+              if (isBufferMode()) {
+                state.refreshPending = true;
+                return;
+              }
+              if (cached && !changed && state.readStatus === "ready" && sameDetailBlockRead(cached, read)) return;
+              state.projectedSelectedText = projection.text;
+              state.embedStates = projection.embeds;
+              state.embedRanges = projection.embedRanges;
+              applyResolvedReferences(resolved);
+              refreshBreadcrumb();
+              emit();
+            });
+          } catch (error) {
+            effects.enqueueViewUpdate(() => {
+              if (!isCurrent()) return;
+              if (isBufferMode()) state.refreshPending = true;
+              else {
+                state.readStatus = "failed";
+                state.status = `Preview enrichment failed · ${errorMessage(error)}`;
+                emit();
+              }
+            });
+          }
+        })();
+      }
+      if ((state.mode === "file" || state.mode === "annotation") && selected) {
+        await loadFile(selected);
+        if (!isCurrent()) return false;
+        emit();
+      }
     }
-
-    applyReadyBlockPresentation(document, read, previousTarget, record, changed);
-    if ((state.mode === "file" || state.mode === "annotation") && document.context.selected) {
-      await loadFile(document.context.selected);
-      if (generation !== loadGeneration) return false;
-    }
-    writeBlockCache({
-      document,
-      projection: read?.projection ?? null,
-      resolved: read?.resolved ?? null,
-      stale: false,
-    });
     if (serviceConnected) await effects.setCurrentTarget(document.target);
-    if (generation !== loadGeneration) return false;
-    await loadBacklinks();
-    if (generation !== loadGeneration) return false;
-    await loadAnnotations(generation);
-    return generation === loadGeneration;
+    if (!isCurrent()) return false;
+    void loadBacklinks();
+    void loadAnnotations(generation);
+    return changed;
   };
 
   const loadNavigationTarget = async (
@@ -3102,6 +3124,10 @@ export function createDetailController(
       case "reference.open":
       case "reference.follow":
       case "reference.reveal": {
+        if (state.readStatus !== "ready") {
+          state.status = "References are not ready · preview enrichment is incomplete";
+          break;
+        }
         const reference = intent.type === "reference.open"
           ? intent.target
           : state.context.selected
@@ -4009,7 +4035,6 @@ export function createDetailController(
         return;
       }
       await loadCurrentTarget(true);
-      await loadBacklinks();
       emit();
     },
     async onServiceConnect() {

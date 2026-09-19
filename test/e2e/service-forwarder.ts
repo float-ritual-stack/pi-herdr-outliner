@@ -8,17 +8,36 @@ export interface ForwardedRequest {
   elapsedMs: number;
   observationParseMs: number;
   ok: boolean;
+  held?: boolean;
+  injectedError?: string;
 }
 
-// The private Tree connects through this socket unchanged. Observe the existing
-// newline protocol; forward subscription events without turning them into RPCs.
+export interface OptionalResponseMatch {
+  action: "references.resolve" | "annotations.reconcile";
+  contains: string;
+}
+
+export interface ResponseBarrier {
+  readonly state: "armed" | "requested" | "held" | "released";
+  readonly received: Promise<void>;
+  release(error?: string): void;
+}
+
+// Private clients use the existing newline protocol. Only explicitly armed
+// optional-read replies can be held; subscription events always pass through.
 export async function forwardService(socketPath: string, upstreamPath: string) {
   const sockets = new Set<Socket>();
   const requests: ForwardedRequest[] = [];
   const errors: string[] = [];
+  const barriers: Array<{
+    match: OptionalResponseMatch;
+    state: ResponseBarrier["state"];
+    deliver: ((error?: string) => void) | null;
+    received: ReturnType<typeof Promise.withResolvers<void>>;
+  }> = [];
   const server = createServer(downstream => {
     const upstream = createConnection(upstreamPath);
-    const pending = new Map<string, { action: string; blockId?: string; bytes: number; started: number }>();
+    const pending = new Map<string, { action: string; blockId?: string; bytes: number; started: number; barrier?: typeof barriers[number] }>();
     for (const socket of [downstream, upstream]) {
       sockets.add(socket);
       socket.on("close", () => { sockets.delete(socket); });
@@ -47,26 +66,43 @@ export async function forwardService(socketPath: string, upstreamPath: string) {
     observe(downstream, line => {
       const request = JSON.parse(line);
       if (pending.size >= 100 || requests.length >= 20_000) throw new Error("Forwarder evidence budget exceeded");
-      pending.set(request.id, { action: request.action, blockId: request.blockId, bytes: Buffer.byteLength(line) + 1, started: performance.now() });
+      const barrier = barriers.find(candidate => candidate.state === "armed" &&
+        candidate.match.action === request.action && line.includes(candidate.match.contains));
+      if (barrier) barrier.state = "requested";
+      pending.set(request.id, { action: request.action, blockId: request.blockId, bytes: Buffer.byteLength(line) + 1, started: performance.now(), barrier });
     });
     observe(upstream, line => {
       const started = performance.now();
       const response = JSON.parse(line);
       const observationParseMs = performance.now() - started;
       const request = pending.get(response.id);
-      if (!request) return;
+      if (!request) {
+        downstream.write(`${line}\n`);
+        return;
+      }
       pending.delete(response.id);
-      requests.push({
-        action: request.action,
-        ...(request.blockId ? { blockId: request.blockId } : {}),
-        requestBytes: request.bytes,
-        responseBytes: Buffer.byteLength(line) + 1,
-        elapsedMs: performance.now() - request.started,
-        observationParseMs,
-        ok: response.ok === true,
-      });
+      const deliver = (error?: string) => {
+        const delivered = error === undefined ? line : JSON.stringify({ id: response.id, ok: false, error });
+        requests.push({
+          action: request.action,
+          ...(request.blockId ? { blockId: request.blockId } : {}),
+          requestBytes: request.bytes,
+          responseBytes: Buffer.byteLength(delivered) + 1,
+          elapsedMs: performance.now() - request.started,
+          observationParseMs,
+          ok: error === undefined && response.ok === true,
+          ...(request.barrier ? { held: true } : {}),
+          ...(error === undefined ? {} : { injectedError: error }),
+        });
+        if (!downstream.destroyed) downstream.write(`${delivered}\n`);
+      };
+      if (request.barrier) {
+        request.barrier.state = "held";
+        request.barrier.deliver = deliver;
+        request.barrier.received.resolve();
+      } else deliver();
     });
-    downstream.pipe(upstream).pipe(downstream);
+    downstream.pipe(upstream);
     downstream.on("close", () => upstream.destroy());
     upstream.on("close", () => downstream.destroy());
   });
@@ -76,6 +112,21 @@ export async function forwardService(socketPath: string, upstreamPath: string) {
   });
   return {
     socketPath,
+    holdNext(match: OptionalResponseMatch): ResponseBarrier {
+      if (!match.contains || barriers.length >= 16) throw new Error("Invalid or excessive response barriers");
+      const barrier: typeof barriers[number] = { match, state: "armed", deliver: null, received: Promise.withResolvers<void>() };
+      barriers.push(barrier);
+      return {
+        get state() { return barrier.state; },
+        received: barrier.received.promise,
+        release(error) {
+          if (!barrier.deliver || barrier.state !== "held") throw new Error("Response barrier has no held reply");
+          barrier.deliver(error);
+          barrier.deliver = null;
+          barrier.state = "released";
+        },
+      };
+    },
     measurements(): readonly ForwardedRequest[] {
       if (errors.length) throw new Error(errors.join("; "));
       return requests.map(request => ({ ...request }));

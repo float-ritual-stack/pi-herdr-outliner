@@ -23,6 +23,7 @@ function state(): DetailState {
     canNavigateForward: false,
     resolvedSelectedText: "",
     projectedSelectedText: "",
+    readStatus: "ready",
     embedStates: [],
     embedRanges: [],
     embedBackgroundEnabled: true,

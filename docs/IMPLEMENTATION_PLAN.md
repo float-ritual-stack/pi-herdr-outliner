@@ -46,12 +46,17 @@ views beside agents, and persistent activity displays remain valid Herdr uses.
   service-owned file previews and completion, passive catalog reads, and actual
   Pi/ANSI proof with separate client/service roots. Controller regressions cover
   obsolete file-read results and cached-file repainting separately.
+- PIE-269, [PR #124](https://github.com/float-ritual-stack/pi-herdr-outliner/pull/124):
+  complete compact Tree index, service-side full-text goto, and exact on-demand
+  bodies. The 1,000-block fixture transfers 737,800 bytes instead of 8,263,314
+  (91.1% smaller). Direct and forwarded private journeys pass on merged main
+  `e728c35`; hyperlink source spans have separate renderer regression evidence.
 
 Preserve these behaviors. PIE-270 does not establish progressive cold loading,
 Tree body caching, Resource caching, or structural conflict protection for all
 mutations. Its old `tree.index` prerequisite and blanket structural-revision
 claim are removed from the completed scope. S3 owns the mutation-contract audit;
-PIE-269 and PIE-271 own the remaining Tree and Detail read work.
+PIE-269 delivers the Tree read cutover; PIE-271 owns progressive cold Detail reads.
 
 ## Delivery order and dependencies
 
@@ -72,7 +77,7 @@ not one large PR.
 | Alongside safety work | I3: Pi focus-loss handling | BUG: consumed focus loss can leave selection autoscroll active. | Focused terminal test plus attached-client input proof. |
 | Before host cleanup | I4: authoritative host projection | FRAGILE: event ordering can leave stale pane state. | Verify supported-version event behavior; fix refresh before deleting subscriptions. |
 | Before composed-view targeting | I5: explicit agent source view | FRAGILE: shared focus history cannot identify a particular attached client's intent. | Bounded two-client reproduction and source-view contract. |
-| After safety work | PIE-269: compact Tree index | Remove duplicate full-body transfer on Tree loads. | Reuse S3's body revision contract; no dependency on PIE-271 or A2. |
+| Shipped read foundation | PIE-269: compact Tree index | Duplicate full-body Tree transfer removed. | Preserve exact body revisions, reference spans, complete projections, and live journey proof. |
 | After safety work | PIE-271: progressive Detail loading | Paint an uncached primary document before optional enrichment. | Preserve S3-S5 contracts and the existing cache; no compact-index or backlink-index prerequisite. |
 | Measurement gate after PIE-271 | PIE-272: assess backlink indexing | Remove full-graph backlink cost only if it remains material. | Profile the changed Detail path before choosing an index. |
 | Measurement gate after PIE-269 | PIE-273: assess server windows | Establish whether compact complete snapshots remain too expensive. | Compact-index measurements; no cache-delivery prerequisite. |
@@ -86,9 +91,10 @@ but shipping its editing/capture behavior requires the relevant safety fixes.
 
 S1-S5 are the shipped safety foundation. Reuse their regression and application
 proof; their former queue order does not create technical dependencies between
-the remaining packages. Prefer PIE-269 first for cold Tree transfer cost, then
-PIE-271 for cold Detail paint. Their implementations are independent: connectivity
-from PIE-268 and cached revisits from PIE-270 did not implement either behavior.
+the remaining packages. PIE-269's compact Tree delivery is the baseline for the
+scale gate; PIE-271 remains the cold Detail package. Their implementations are
+independent: connectivity from PIE-268 and cached revisits from PIE-270 did not
+implement either behavior.
 Consult the workboard for current execution status.
 
 PIE-273 uses PIE-269's measurements; PIE-272 uses PIE-271's measurements. Neither
@@ -140,8 +146,10 @@ The runner already provides:
 - One additional remote-mode Tree/Detail context in a separate owned workspace
   root, using either supported Detail renderer. Record its endpoint, process
   environment, and registrations; capture its panes alongside the original views.
-- A bounded private forwarding socket for that context's Tree, recording request
-  bytes/counts and timings without changing service responses. The compact-index
+- Bounded private forwarding sockets for that context's Tree and Detail, recording
+  request bytes/counts and timings. Detail can hold or fail a specifically matched
+  reference-resolution or annotation-reconciliation response; unrelated replies
+  and subscription events continue. The compact-index
   journey also records parse/projection cost and the first observed Tree frame.
 - One owned PTY-attached Herdr client for popup input, with raw ANSI and current-screen checkpoints decoded by test-only `@xterm/headless`.
 - A read-only SQLite connection and consistent checkpoint copies.
@@ -151,9 +159,10 @@ The runner already provides:
 Its current limits are material: one canonical service, a bounded startup
 contender, and at most one extra Tree/Detail context; one attached Herdr client
 and capture-popup launch; no second attached client or real mouse/resize journey. A passing
-existing scenario does not cover those paths. The forwarding fixture observes
-normal delivery; it does not yet hold or reorder responses or exercise two-host
-SSH. A held goto reply is covered separately by a Tree controller regression.
+existing scenario does not cover those paths. Optional Detail response barriers
+exercise delayed, failed, and reordered completions on one host; they do not
+establish two-host SSH behavior. A held goto reply is covered separately by a
+Tree controller regression.
 
 `startup-interruption.ts` deliberately expects its inner fixture to fail after
 SIGINT and then verifies cleanup. Its outer test reports success. Distinguish
@@ -170,7 +179,7 @@ expected injected failure from failed scenario verification when reading artifac
 | I3 / A2 | Add attached-client mouse/focus input and PTY resize evidence. | Input reaches the real host/application path; capture resized frames and resulting state. |
 | I5 | Attach two controlled clients to the private Herdr server. | Record both client actions and the context selected for each explicit source. |
 | A2 | Support one narrowly defined composed launch alongside the existing detached launch. | One host pane may contain two logical views; fixtures no longer require distinct Tree and Detail pane IDs for that case. |
-| PIE-269 (measurement implemented) / PIE-271 | Reuse bounded request-byte/timing capture and the private forwarding socket. Add deterministic response barriers at the existing read seam for progressive-loading proof. | Keyboard-driven cold/revisit navigation, exact final targets, and bounded reads; hold/reorder optional Detail replies for PIE-271. Report actual two-host evidence separately from a local forwarding fixture. |
+| PIE-269 / PIE-271 | Reuse bounded request-byte/timing capture and narrowly matched optional Detail response barriers. | Keyboard-driven cold/revisit navigation, exact final targets, and bounded reads; hold/reorder optional Detail replies for PIE-271. Report actual two-host evidence separately from a local forwarding fixture. |
 
 Keep process ownership, timeouts, transport, and artifact capture in the runner.
 Keep domain actions and SQL assertions in each scenario. This is not a new test
@@ -325,9 +334,12 @@ reconnect events, and the surrounding terminal arrangement. Claim a nesting
 regression only after the layer responsible is demonstrated. The current chat's
 live Herdr session is not a disposable fixture.
 
-## Remaining remote-read work
+## Remote-read contracts and remaining work
 
 ### PIE-269 — compact Tree index
+
+Delivered by PR #124. The following are retained contracts and acceptance checks,
+not a second implementation queue. PIE-273 owns any measurement-driven follow-up.
 
 At baseline `53be3c0`, `src/tree-controller.ts:reload()` consumes complete `visible` and
 `physical` collections from `workspace.snapshot`. Start at that read boundary
@@ -386,7 +398,7 @@ Retain any full-snapshot operation still required by a different consumer.
 
 ### PIE-271 — primary Detail content before optional enrichment
 
-On merged main, `src/detail-controller.ts:applyReadyDocument()` still awaits projection and
+At baseline `e728c35`, `src/detail-controller.ts:applyReadyDocument()` awaits projection and
 reference resolution before applying an uncached block, then awaits optional
 work in the same load path. Split that concrete path using its existing target
 generation checks and the existing `src/detail.ts` / `src/detail-pi.ts` effects.
@@ -407,7 +419,7 @@ coordinates must continue to name the displayed text. Keep backlinks lazy and
 preserve cached revisits, dirty drafts, explicit-open ordering, and stale-result
 suppression. Resources keep provider-specific revisions and passive reads.
 
-Proposed scenario: `test/e2e/detail-progressive.ts`. Delay and fail reference or
+Scenario: `bun run test:e2e:detail-progressive` (`test/e2e/detail-progressive.ts`). Delay and fail reference or
 annotation enrichment behind deterministic barriers. Actual Detail must show
 the cold primary content before release, retain it on enrichment failure, and
 reject an old response after A→B navigation. Exercise link/comment readiness,

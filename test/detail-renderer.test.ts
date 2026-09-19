@@ -98,6 +98,7 @@ function state(overrides: Partial<DetailState> = {}): DetailState {
     canNavigateForward: false,
     resolvedSelectedText: "",
     projectedSelectedText: "",
+    readStatus: "ready",
     embedStates: [],
     embedRanges: [],
     embedBackgroundEnabled: true,
@@ -699,6 +700,7 @@ test("renders exact Detail attention with a non-color rail and return summary", 
     target: { kind: "block", blockId: selected.id },
     resolvedSelectedText: selected.text,
     projectedSelectedText: selected.text,
+    readStatus: "ready",
     attention: attentionClientState("detail-test", [mark], 2),
   }), { width: 48, height: 10 });
   const visible = lines.map(stripTerminalSequences);

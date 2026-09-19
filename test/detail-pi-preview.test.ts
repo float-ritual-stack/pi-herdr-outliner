@@ -166,6 +166,7 @@ function state(text: string, rawText = "raw edit source"): DetailState {
     canNavigateForward: false,
     resolvedSelectedText: text,
     projectedSelectedText: rawText,
+    readStatus: "ready",
     embedStates: [],
     embedRanges: [],
     embedBackgroundEnabled: true,
@@ -455,6 +456,38 @@ function renderedDocument(layout: DetailPiPreviewLayout, width: number): string[
 }
 
 describe("Pi Markdown detail preview", () => {
+  test("does not report a missing reference before resolution has completed", () => {
+    const source = "Related ((550e8400-e29b-41d4-a716-446655440123|Reference label))";
+    const detail = state(source, source);
+    detail.readStatus = "pending";
+    const layout = new DetailPiPreviewLayout(detail, plainMarkdownTheme, false);
+    expect(renderedDocument(layout, 120).join("\n")).not.toContain("Missing target");
+    detail.readStatus = "ready";
+    expect(renderedDocument(layout, 120).join("\n")).toContain("Reference label · Missing target");
+  });
+
+  test("enables reference hyperlinks only after the displayed source becomes ready", () => {
+    const capabilities = getCapabilities();
+    setCapabilities({ ...capabilities, hyperlinks: true });
+    try {
+      const id = "550e8400-e29b-41d4-a716-446655440123";
+      const source = `Reference ${id}`;
+      const detail = state(source, source);
+      detail.readStatus = "pending";
+      const layout = new DetailPiPreviewLayout(detail, plainMarkdownTheme, true);
+      const link = () => {
+        layout.syncState();
+        const line = layout.markdown.render(120).find(row => stripTerminalSequences(row).includes(id))!;
+        return getOsc8LinkAtColumn(line, stripTerminalSequences(line).indexOf(id));
+      };
+      expect(link()).toBeUndefined();
+      detail.readStatus = "ready";
+      expect(link()).toBe(outlinerLinkUri("block", id));
+    } finally {
+      setCapabilities(capabilities);
+    }
+  });
+
   test("synchronizes Markdown before the viewport layout renders child nodes directly", () => {
     const detail = state("Body rendered by the child Markdown component");
     const layout = previewLayout(detail);
@@ -1249,6 +1282,26 @@ describe("Pi Markdown detail preview", () => {
       stripTerminalSequences(line).includes("line 15")
     );
     expect(layout.scrollView.scrollTop).toBe(inspectorHeight + shiftedTargetRow);
+  });
+
+  test("late enrichment preserves scrolling away from the opened fragment", () => {
+    const text = Array.from({ length: 30 }, (_, index) => `line ${index}`).join("\n");
+    const detail = state(text, text);
+    detail.readStatus = "pending";
+    setBlockDocument(detail, detail.context, { kind: "block", blockId: "block-1", fragmentId: "decision" });
+    detail.previewOffset = 10;
+    const layout = previewLayout(detail);
+    layout.scrollView.setScrollbar("hidden");
+    const contentHeight = renderedDocument(layout, 40).length;
+    layout.scrollView.updateLayout(contentHeight, 6, () => {});
+    layout.render(40);
+    layout.scrollView.scrollBy(3);
+    const userScroll = layout.scrollView.scrollTop;
+
+    detail.resolvedSelectedText = text.replace("line 0", "Resolved opening line");
+    detail.readStatus = "ready";
+    layout.render(40);
+    expect(layout.scrollView.scrollTop).toBe(userScroll);
   });
 
   test("maps fragment lines through embed projection and wrapped Markdown rows", () => {

@@ -1205,6 +1205,7 @@ export class DetailPiPreviewLayout extends VStack {
   readonly scrollView: ScrollView;
   private renderedSourceText: string | undefined;
   private renderedRawText: string | undefined;
+  private renderedReferencesReady: boolean | undefined;
   private renderedWorkIdPrefix: string | null | undefined;
   private renderedBacklinksDocument: string | undefined;
   private renderedInspectorDocument: string | undefined;
@@ -1231,6 +1232,7 @@ export class DetailPiPreviewLayout extends VStack {
   private previousAnnotationFocusedId: string | null = null;
   private pendingAnnotationSelectionScroll = false;
   private pendingFragmentScroll = false;
+  private fragmentScrollTop: number | null = null;
   private fragmentRenderScheduled = false;
   private draftProjection: CachedDetailDraftProjection | null = null;
   private scheduledDraftText: string | undefined;
@@ -1671,26 +1673,31 @@ export class DetailPiPreviewLayout extends VStack {
       authoredCallouts !== previousAuthoredCallouts &&
       ((previousAuthoredCallouts?.regions.length ?? 0) > 0 ||
         authoredCallouts.regions.length > 0);
+    const referencesReady = draftText !== null || this.state.readStatus === "ready";
     const sourceChanged =
       sourceText !== this.renderedSourceText ||
       rawText !== this.renderedRawText ||
+      referencesReady !== this.renderedReferencesReady ||
       workIdPrefix !== this.renderedWorkIdPrefix ||
       embedPresentation !== this.renderedEmbedPresentation ||
       this.draftProjectionError !== this.renderedDraftProjectionError;
     if (sourceChanged || calloutSourceChanged) {
       this.renderedSourceText = sourceText;
       this.renderedRawText = rawText;
+      this.renderedReferencesReady = referencesReady;
       this.renderedWorkIdPrefix = workIdPrefix;
       this.renderedEmbedPresentation = embedPresentation;
       this.renderedDraftProjectionError = this.draftProjectionError;
-      const document = selected
+      const document = !selected
+        ? sourceText
+        : referencesReady
         ? renderPreviewDocument(
             sourceText,
             rawText,
             this.linksEnabled,
             workIdPrefix,
           )
-        : sourceText;
+        : detailMarkdownPresentation(sanitizeMarkdownDocument(sourceText));
       const renderedText = this.draftProjectionError
         ? `${document}\n\n> Draft preview error: ${
           sanitizeMarkdownDocument(this.draftProjectionError).replace(/\r?\n/g, " ")
@@ -1780,7 +1787,7 @@ export class DetailPiPreviewLayout extends VStack {
       this.resetScroll ||
       selectionChanged ||
       fragmentChanged ||
-      (sourceChanged && fragmentId)
+      (sourceChanged && fragmentId && this.scrollView.scrollTop === this.fragmentScrollTop)
     ) {
       this.pendingFragmentScroll = true;
     }
@@ -1848,6 +1855,7 @@ export class DetailPiPreviewLayout extends VStack {
     this.scrollView.scrollTo(
       detailBlockTarget(this.state)?.fragmentId ? fragmentRow : 0,
     );
+    this.fragmentScrollTop = this.scrollView.scrollTop;
     return this.scrollView.scrollTop !== previousScrollTop;
   }
 

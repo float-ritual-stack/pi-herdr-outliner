@@ -43,6 +43,7 @@ import type {
   PageAddressCollection,
   SelectionContext,
   ResourceDescription,
+  ResolvedBlockReferences,
   VisibleBlockCollection,
 } from "../src/types";
 
@@ -253,6 +254,7 @@ function createHarness(
   };
   const effects: DetailEffects = {
     clientId: "detail-test",
+    enqueueViewUpdate(update) { update(); },
     browsingContextId: "context-test",
     focusSelf() {
       calls.selfFocuses += 1;
@@ -583,6 +585,215 @@ function event(domain: OutlinerEvent["domain"], command?: OutlinerEvent["command
 }
 
 describe("detail controller projection and deferred refresh", () => {
+  test("paints uncached primary content while projection is still pending", async () => {
+    const block = makeBlock({ id: "cold-primary", text: "Readable primary document" });
+    const projection = Promise.withResolvers<Awaited<ReturnType<DetailEffects["projectRead"]>>>();
+    const started = Promise.withResolvers<void>();
+    const enriched = Promise.withResolvers<void>();
+    const painted: string[] = [];
+    const harness = createHarness(
+      block,
+      null,
+      async (text) => ({ text, references: [] }),
+      () => {
+        started.resolve();
+        return projection.promise;
+      },
+      {},
+      (state) => {
+        if (state.document.kind === "ready") painted.push(state.resolvedSelectedText);
+        if (state.resolvedSelectedText === "Enriched document") enriched.resolve();
+      },
+    );
+    const loading = harness.controller.initialize();
+    try {
+      await started.promise;
+      expect(painted).toContain("Readable primary document");
+      expect(harness.controller.state.context.selected?.id).toBe(block.id);
+    } finally {
+      projection.resolve({ text: "Enriched document", embeds: [], embedRanges: [] });
+      await loading;
+    }
+    await enriched.promise;
+    expect(harness.controller.state.resolvedSelectedText).toBe("Enriched document");
+  });
+
+  test("releases the input lane for editing while cold projection is pending", async () => {
+    const block = makeBlock({ id: "cold-editable", text: "Exact editable source" });
+    const projection = Promise.withResolvers<Awaited<ReturnType<DetailEffects["projectRead"]>>>();
+    const started = Promise.withResolvers<void>();
+    const deferredForDraft = Promise.withResolvers<void>();
+    const harness = createHarness(block, null, async text => ({ text, references: [] }), () => {
+      started.resolve();
+      return projection.promise;
+    });
+    harness.effects.enqueueViewUpdate = update => {
+      update();
+      if (harness.controller.state.refreshPending) deferredForDraft.resolve();
+    };
+    const input = harness.controller.initialize().then(async () => {
+      await harness.controller.dispatch({ type: "edit.begin" }, viewport);
+      await harness.controller.dispatch({ type: "buffer.insert", text: " + draft" }, viewport);
+      return true;
+    });
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await started.promise;
+      const completed = await Promise.race([
+        input,
+        new Promise<boolean>(resolve => { deadline = setTimeout(() => resolve(false), 1000); }),
+      ]);
+      expect(completed).toBe(true);
+      expect(harness.controller.state.mode).toBe("edit");
+      expect(harness.controller.state.buffer.text).toBe("Exact editable source + draft");
+    } finally {
+      clearTimeout(deadline);
+      projection.resolve({ text: "Optional presentation", embeds: [], embedRanges: [] });
+      await input;
+    }
+    await deferredForDraft.promise;
+    expect(harness.controller.state.mode).toBe("edit");
+    expect(harness.controller.state.buffer.text).toBe("Exact editable source + draft");
+  });
+
+  test("keeps reference actions unavailable until this document's resolution completes", async () => {
+    const text = "Open ((550e8400-e29b-41d4-a716-446655440123|reference))";
+    const resolution = Promise.withResolvers<ResolvedBlockReferences>();
+    const started = Promise.withResolvers<void>();
+    const resolved = Promise.withResolvers<void>();
+    const harness = createHarness(makeBlock({ text }), null, () => {
+      started.resolve();
+      return resolution.promise;
+    }, undefined, {}, state => {
+      if (state.resolvedSelectedText === "Resolved reference") resolved.resolve();
+    });
+    try {
+      await harness.controller.initialize();
+      await started.promise;
+      await harness.controller.dispatch({ type: "reference.follow" }, viewport);
+      expect(harness.controller.state.destinationChooser.active).toBe(false);
+      expect(harness.controller.state.status).toContain("References are not ready");
+    } finally {
+      resolution.resolve({ text: "Resolved reference", references: [] });
+      await resolved.promise;
+    }
+    await harness.controller.dispatch({ type: "reference.follow" }, viewport);
+    expect(harness.controller.state.destinationChooser.active).toBe(true);
+    await harness.controller.handleDestinationChooserKeypress("", { name: "escape" });
+  });
+
+  test("paints annotation enrichment that arrives after the primary document", async () => {
+    const annotations = Promise.withResolvers<Awaited<ReturnType<DetailEffects["reconcileAnnotations"]>>>();
+    const frames: number[] = [];
+    let captured: AnnotationReconcileInput | undefined;
+    const harness = createHarness(makeBlock(), null, undefined, undefined, {}, state => {
+      frames.push(state.annotationThreads.length);
+    });
+    harness.effects.reconcileAnnotations = input => {
+      captured = input;
+      return annotations.promise;
+    };
+    await harness.controller.initialize();
+    expect(harness.controller.state.document.kind).toBe("ready");
+    expect(captured).toBeDefined();
+    const thread = { ...annotationRecord({
+      representation: captured!.newRepresentation,
+      anchor: { kind: "text-quote" as const, start: 0, end: 3, exact: "Raw", prefix: "", suffix: " block text" },
+    }), replies: [] };
+    annotations.resolve({ threads: [thread], changed: true });
+    await annotations.promise;
+    expect(frames).toContain(1);
+  });
+
+  test("preserves the readable primary document when optional projection fails", async () => {
+    const projection = Promise.withResolvers<Awaited<ReturnType<DetailEffects["projectRead"]>>>();
+    const failed = Promise.withResolvers<void>();
+    const block = makeBlock({ text: "Readable despite enrichment failure" });
+    const harness = createHarness(block, null, undefined, () => projection.promise, {}, state => {
+      if (state.readStatus === "failed") failed.resolve();
+    });
+    await harness.controller.initialize();
+    projection.reject(new Error("projection unavailable"));
+    await failed.promise;
+    expect(harness.controller.state.document.kind).toBe("ready");
+    expect(harness.controller.state.resolvedSelectedText).toBe(block.text);
+    expect(harness.controller.state.status).toContain("projection unavailable");
+    await harness.controller.dispatch({ type: "edit.begin" }, viewport);
+    expect(harness.controller.state.buffer.text).toBe(block.text);
+  });
+
+  test("an old resolved preview cannot replace the newer target or its scroll", async () => {
+    const first = makeBlock({ id: "delayed-first", text: "First primary" });
+    const oldResolution = Promise.withResolvers<ResolvedBlockReferences>();
+    const firstStarted = Promise.withResolvers<void>();
+    const completion = Promise.withResolvers<void>();
+    const harness = createHarness(first, null, text => {
+      if (text !== first.text) return Promise.resolve({ text, references: [] });
+      firstStarted.resolve();
+      return oldResolution.promise;
+    });
+    await harness.controller.initialize();
+    await firstStarted.promise;
+    harness.setSelection({ selected: makeBlock({ id: "current-second", text: "Current line\n".repeat(30) }), ancestors: [], children: [] });
+    await harness.controller.onServiceEvent(event("ui", {
+      targetClientId: "detail-test", command: "open", target: { kind: "block", blockId: "current-second" },
+    }), viewport);
+    await harness.controller.dispatch({ type: "preview.navigate", direction: "pagedown" }, viewport);
+    const scroll = harness.controller.state.previewOffset;
+    expect(scroll).toBeGreaterThan(0);
+    const newest = harness.controller.state.resolvedSelectedText;
+    harness.effects.enqueueViewUpdate = update => { update(); completion.resolve(); };
+    oldResolution.resolve({ text: "Obsolete resolved first", references: [] });
+    await completion.promise;
+    expect(harness.controller.state.target).toEqual({ kind: "block", blockId: "current-second" });
+    expect(harness.controller.state.resolvedSelectedText).toBe(newest);
+    expect(harness.controller.state.previewOffset).toBe(scroll);
+  });
+
+  test("refreshes expanded backlinks once without holding the primary navigation lane", async () => {
+    const harness = createHarness(makeBlock());
+    await harness.controller.initialize();
+    await harness.controller.dispatch({ type: "backlinks.toggle" }, viewport);
+    const result = Promise.withResolvers<BacklinkCollection>();
+    const started = Promise.withResolvers<void>();
+    let requests = 0;
+    harness.effects.queryBacklinks = () => { requests += 1; started.resolve(); return result.promise; };
+    const refresh = harness.controller.onServiceEvent(event("content"), viewport);
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await started.promise;
+      const completed = await Promise.race([
+        refresh.then(() => true),
+        new Promise<boolean>(resolve => { deadline = setTimeout(() => resolve(false), 1000); }),
+      ]);
+      expect(completed).toBe(true);
+      expect(requests).toBe(1);
+    } finally {
+      clearTimeout(deadline);
+      result.resolve({ targetBlockId: "block-1", sources: [], completeness: { kind: "complete" } });
+      await refresh;
+    }
+  });
+
+  test("finishes backlink loading after the same target is revalidated during a pending read", async () => {
+    const harness = createHarness(makeBlock());
+    await harness.controller.initialize();
+    await harness.controller.dispatch({ type: "backlinks.toggle" }, viewport);
+    const old = Promise.withResolvers<BacklinkCollection>();
+    const current = { targetBlockId: "block-1", sources: [], completeness: { kind: "complete" as const } };
+    let requests = 0;
+    harness.effects.queryBacklinks = () => ++requests === 1 ? old.promise : Promise.resolve(current);
+    await harness.controller.onServiceEvent(event("content"), viewport);
+    expect(harness.controller.state.backlinks.loading).toBe(true);
+    await harness.controller.onServiceEvent(event("ui", {
+      targetClientId: "detail-test", command: "preview", target: { kind: "block", blockId: "block-1" },
+    }), viewport);
+    old.resolve(current);
+    await old.promise;
+    expect(harness.controller.state.backlinks.loading).toBe(false);
+    expect(harness.controller.state.backlinks.collection).toEqual(current);
+  });
+
   test("chooses annotation before file and preserves raw text for editing", async () => {
     const block = makeBlock({
       text: "Raw ((reference))",
@@ -2336,14 +2547,17 @@ describe("detail controller projection and deferred refresh", () => {
       id: "source-block",
       text: "## First ^first\nSee ((target01))\n## Second ^second",
     });
+    const ready = Promise.withResolvers<void>();
     const harness = createHarness(
       source,
       null,
       undefined,
       undefined,
       { initialTarget: { kind: "block", blockId: source.id, fragmentId: "first" } },
+      state => { if (state.readStatus === "ready") ready.resolve(); },
     );
     await harness.controller.initialize();
+    await ready.promise;
     await harness.controller.dispatch({ type: "reference.follow" }, viewport);
     expect(harness.controller.state.destinationChooser.active).toBe(true);
 

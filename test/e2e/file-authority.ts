@@ -16,7 +16,7 @@ const result = await runHerdrScenario({
   },
   async run(session) {
     await session.attachClient();
-    const remote = await session.openRemoteBrowsingContext(renderer);
+    const remote = await session.openRemoteBrowsingContext({ renderer });
     await writeFile(join(remote.workspaceRoot, "authority.txt"), "CLIENT FIRST\nCLIENT WRONG LINE\nCLIENT LAST");
     await writeFile(join(remote.workspaceRoot, "client-only.txt"), "Wrong completion target");
     const identities = () => ({

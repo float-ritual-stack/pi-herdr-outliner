@@ -72,6 +72,7 @@ function computedDetailEffects(
 ): DetailEffects {
   return {
     clientId: CAPABLE_DETAIL_ID,
+    enqueueViewUpdate(update) { update(); },
     browsingContextId: "computed-context",
     focusSelf() {},
     async getBrowsingContext() {
