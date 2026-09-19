@@ -1,16 +1,17 @@
-# Data safety and Herdr/Pi implementation plan
+# Data safety, remote performance, and Herdr/Pi implementation plan
 
-Proposed sequence and acceptance criteria, prepared 2026-09-18. No runtime fixes
-or harness extensions are implemented by this document. The Outliner workboard
-remains authoritative for owners, Work IDs, branches, PRs, and task status; this
-document records the design dependencies and required evidence for this work.
+Sequence and acceptance criteria, reconciled 2026-09-19 against merged code and
+the live workboard. The Outliner workboard is authoritative for ownership, Work
+IDs, branches, PRs, and task status. This document records design dependencies and required evidence;
+editing it does not implement or complete a package.
 
 ## Outcome
 
 Protect saved text and running work first. Correct application identity and
-navigation next. Then test one outliner-owned Tree/Detail surface while keeping
-independently useful Herdr views. Use the existing real-application harness to
-prove changed behavior before declaring a work package complete.
+navigation, and finish measured remote-read improvements. Test one
+outliner-owned Tree/Detail surface while keeping independently useful Herdr
+views. Use the existing real-application harness to prove changed behavior before
+declaring a work package complete.
 
 | Owner | Responsibilities |
 | --- | --- |
@@ -23,23 +24,45 @@ Closing a view releases that view's state and resources; deleting canonical data
 remains a separate explicit operation. Detached references, independent editors,
 views beside agents, and persistent activity displays remain valid Herdr uses.
 
+## Reuse the shipped baseline
+
+- PIE-268, [PR #115](https://github.com/float-ritual-stack/pi-herdr-outliner/pull/115):
+  remote clients and nonblocking Tree selection publication.
+- PIE-270, [PR #116](https://github.com/float-ritual-stack/pi-herdr-outliner/pull/116):
+  project-scoped endpoints, a disposable 32-target Detail block cache, and
+  latest-wins passive previews. PRs #117/#118 fix remote startup and simplify
+  scheduling. The cache shipped without PIE-269's proposed compact Tree index.
+- S1 / PIE-275, [PR #119](https://github.com/float-ritual-stack/pi-herdr-outliner/pull/119):
+  exclusive writable-store ownership and its real-service regression.
+
+Preserve these behaviors. PIE-270 does not establish progressive cold loading,
+Tree body caching, Resource caching, or structural conflict protection for all
+mutations. Its old `tree.index` prerequisite and blanket structural-revision
+claim are removed from the completed scope. S3 owns the mutation-contract audit;
+PIE-269 and PIE-271 own the remaining Tree and Detail read work.
+
 ## Delivery order and dependencies
 
-Each identifier below names a work package in this plan, not a new roadmap ID.
-Use a focused branch per invariant; groups describe priority, not one large PR.
+S/I/A labels identify packages in this plan; PIE identifiers name canonical
+workboard records. Use a focused branch per invariant; groups describe priority,
+not one large PR.
 
 | Order | Package | Impact | Dependency |
 | --- | --- | --- | --- |
-| Immediate | S1: own the workspace before writable startup | BLOCKER: a second launch can invalidate live work. | Existing harness plus a bounded second-process fixture. |
-| Immediate | S2: bind capture receipts to submissions | BLOCKER: a retry can discard newly typed text. | S1 before deploying any required receipt migration; attached-client support for popup proof. |
-| Next | S3: enforce block edit revisions | BAD DESIGN: silent stale writes and common false conflicts. | S1 before migration; one coordinated protocol/caller cutover. |
-| Next | S4: identify file contents in revisions | BUG: equal size/time can conceal changed bytes. | Focused file-write contract test and live Detail save path. |
-| Next | S5: make file reads service-owned | BAD DESIGN: preview routes can read different hosts' bytes. | Preserve passive-read semantics and explicit resource creation. |
+| Shipped foundation | S1 / PIE-275: own the workspace before writable startup | BLOCKER addressed: a second launch could invalidate live work. | Preserve the ownership and recovery regressions. |
+| First queued | S2 / PIE-276: bind capture receipts to submissions | BLOCKER: a retry can discard newly typed text. | S1 before deploying any required receipt migration; attached-client support for popup proof. |
+| After S2 in the queue | S3 / PIE-277: enforce block edit revisions | BAD DESIGN: silent stale writes and common false conflicts. | S1 before migration; one coordinated protocol/caller cutover. |
+| After S3 in the queue | S4 / PIE-278: identify file contents in revisions | BUG: equal size/time can conceal changed bytes. | Focused file-write contract test and live Detail save path. |
+| After S4 in the queue | S5 / PIE-279: make file reads service-owned | BAD DESIGN: preview routes can read different hosts' bytes. | Preserve passive-read semantics and explicit resource creation. |
 | Alongside safety work | I1: observers are not destinations | BUG: navigator subscriptions advertise a false Detail identity. | Narrow subscription change; attached-client popup proof. |
 | Alongside safety work | I2: chooser destination outcomes | BUG: missing eligible readers do not consistently trigger the offered split action. | Typed routing result and all chooser callers updated. |
 | Alongside safety work | I3: Pi focus-loss handling | BUG: consumed focus loss can leave selection autoscroll active. | Focused terminal test plus attached-client input proof. |
 | Before host cleanup | I4: authoritative host projection | FRAGILE: event ordering can leave stale pane state. | Verify supported-version event behavior; fix refresh before deleting subscriptions. |
 | Before composed-view targeting | I5: explicit agent source view | FRAGILE: shared focus history cannot identify a particular attached client's intent. | Bounded two-client reproduction and source-view contract. |
+| After safety work | PIE-269: compact Tree index | Remove duplicate full-body transfer on Tree loads. | Reuse S3's body revision contract; no dependency on PIE-271 or A2. |
+| After safety work | PIE-271: progressive Detail loading | Paint an uncached primary document before optional enrichment. | Preserve S3-S5 contracts and the existing cache; no compact-index or backlink-index prerequisite. |
+| Measurement gate after PIE-271 | PIE-272: assess backlink indexing | Remove full-graph backlink cost only if it remains material. | Profile the changed Detail path before choosing an index. |
+| Measurement gate after PIE-269 | PIE-273: assess server windows | Establish whether compact complete snapshots remain too expensive. | Compact-index measurements; no cache-delivery prerequisite. |
 | After routing contract is clear | A1: primary reader ownership | BAD DESIGN: host geometry decides ordinary navigation destinations. | I1; reuse I2's explicit destination outcomes. |
 | Experiment | A2: one Tree/Detail surface | Test whether coordination can actually disappear. | A1; bounded rendering; explicit internal focus and resource retention. |
 | After experiment passes | A3: remove replaced coordination | Delete demonstrated redundancy while preserving detached behavior. | A2 acceptance evidence and affected callers migrated. |
@@ -47,6 +70,14 @@ Use a focused branch per invariant; groups describe priority, not one large PR.
 Safety work and small interaction fixes can proceed independently. A layout
 rewrite is not a dependency of S1-S5. A2 can be prototyped before all fixes land,
 but shipping its editing/capture behavior requires the relevant safety fixes.
+
+The live Next queue is ordered S2, S3, S4, S5. This is delivery priority, not a
+claim that S4 technically depends on S3 or S3 on S2. PIE-269 and PIE-271 remain
+planned after safety work; prefer PIE-269 first for cold Tree transfer cost, but
+their implementations are independent. Neither performance work nor A2 blocks
+the safety fixes. A2's bounded layout experiment does not require either read
+optimization. PIE-272 and PIE-273 may close with evidence that no new machinery
+is needed.
 
 Hard dependencies:
 
@@ -68,13 +99,15 @@ The existing runnable baseline is:
 
 ```sh
 bun run test:e2e:herdr
+bun run test:e2e:ownership
 ```
 
-On the reviewed clean baseline, commit
-`71f01b72f6ff9a7837627ce3460c7dd0d54692f3`, this command passed on Linux with Herdr
-0.9.1/protocol 22 and locked Pi 0.84.2. Retained visible output and read-only
-database assertions showed one canonical Resource on first and repeated
-activation. This baseline proves the existing journey, not the outstanding fixes.
+On clean merged main `ae2ee326dff9610923be962de6a56e64b2a33e5e`, both commands
+passed on Linux with Herdr 0.9.1/protocol 22 and locked Pi 0.84.2. Retained visible
+output and read-only database assertions showed one canonical Resource on first
+and repeated activation, and an unchanged live refresh after competing service
+startup was rejected. PIE-275's proof owns the detailed evidence. These journeys
+do not prove the outstanding fixes.
 
 The runner already provides:
 
@@ -83,13 +116,16 @@ The runner already provides:
 - Actual service, Tree, and Detail processes with verified provenance.
 - `focus`, `keys`, `text`, `visible`, `waitVisible`, bounded `waitFor`,
   `registrations`, `checkpoint`, and `record` operations.
+- A production client for the private service and a bounded
+  `rejectCompetingService` operation against that same workspace.
 - A read-only SQLite connection and consistent checkpoint copies.
 - Terminal text/ANSI, topology, registrations, invocation logs, process evidence,
   and cleanup of owned processes on success, failure, and interruption.
 
 Its current limits are material: fixed launcher/service/Tree/Detail pane roles;
-one project/service; no attached Herdr client; no popup input/capture; no real
-mouse or resize journey. A passing existing scenario does not cover those paths.
+one project/canonical service with a bounded startup contender; no attached
+Herdr client; no popup input/capture; no real mouse or resize journey. A passing
+existing scenario does not cover those paths.
 
 `startup-interruption.ts` deliberately expects its inner fixture to fail after
 SIGINT and then verifies cleanup. Its outer test reports success. Distinguish
@@ -99,13 +135,14 @@ expected injected failure from failed scenario verification when reading artifac
 
 | First consumer | Small extension | Required proof |
 | --- | --- | --- |
-| S1 | Launch and track one additional service process against the private workspace; hold a real async operation at a deterministic barrier. | Rejected second startup changes no live operation state; cleanup leaves no owned survivor. |
+| S1 (implemented) | Launch and track one additional service process against the private workspace; hold a real async operation at a deterministic barrier. | Rejected second startup changes no live operation state; cleanup leaves no owned survivor. |
 | S2 / I1 | Attach a real Herdr client through an owned PTY; send modal input through that client and retain its output. | Open, operate, and close the actual popup. A popup has no pane ID: sending keys to the underlying pane is not popup proof. |
 | S3 / A1 / I4 | Open, move, resize, and close additional owned views using supported Herdr operations; record returned identities. | Track the moved terminal and current pane ID; actions stay within the private server. |
 | S5 | Give client and service different fixture roots with the same relative filename. | Both UI routes display service-owned bytes; describe this as simulated remote ownership unless SSH is also exercised. |
 | I3 / A2 | Add attached-client mouse/focus input and PTY resize evidence. | Input reaches the real host/application path; capture resized frames and resulting state. |
 | I5 | Attach two controlled clients to the private Herdr server. | Record both client actions and the context selected for each explicit source. |
 | A2 | Support one narrowly defined composed launch alongside the existing detached launch. | One host pane may contain two logical views; fixtures no longer require distinct Tree and Detail pane IDs for that case. |
+| PIE-269 / PIE-271 | Add bounded request-byte/timing capture and deterministic response barriers at the existing read seam; use a private forwarded socket for transport measurements. | Keyboard-driven cold/revisit navigation, reordered replies, exact final targets, and bounded reads. Report actual two-host evidence separately from a local forwarding fixture. |
 
 Keep process ownership, timeouts, transport, and artifact capture in the runner.
 Keep domain actions and SQL assertions in each scenario. This is not a new test
@@ -124,12 +161,13 @@ new scenario filenames below are planned files, not commands that exist today.
 Each defect needs a focused regression that fails before its fix, plus evidence
 from the real service or UI path appropriate to the claim.
 
-### S1 — exclusive workspace ownership (F2)
+### S1 — exclusive workspace ownership (F2; PIE-275)
 
-Change `src/server-main.ts`, service startup, and constructor recovery ordering.
-Acquire exclusive ownership for the canonical workspace/database identity before
-opening writable SQLite, running migrations, or recovering work. A preliminary
-ping does not establish ownership. Release only ownership acquired by this process.
+The implemented boundary is `src/workspace-ownership.ts`, the `OutlinerStore`
+constructor, and `src/server-main.ts` cleanup. Preserve exclusive ownership for
+the canonical database identity before writable open, migrations, and recovery.
+A preliminary ping does not establish ownership. Release only ownership acquired
+by this process.
 
 Implemented scenario: `test/e2e/workspace-ownership.ts`. Keep an operation in flight,
 launch a second actual service against the same fixture, verify rejection without
@@ -140,7 +178,7 @@ after an owned process dies. Preserve an old-schema fixture for later migration 
 Complete when the second launch cannot mutate the first service's work, and a
 subsequent legitimate owner can recover interrupted work.
 
-### S2 — exact capture acknowledgement (F1)
+### S2 — exact capture acknowledgement (F1; PIE-276)
 
 Change `src/capture-popup.ts`, capture persistence/receipts, and all capture
 callers needed for the contract. Bind each request ID to its submitted payload;
@@ -159,7 +197,7 @@ Complete when no retry clears unacknowledged text and same-payload retry remains
 idempotent. Confirm closing/reopening preserves the recovery policy and leaves
 ordinary Tree navigation unchanged.
 
-### S3 — one block editing contract (F3/F5)
+### S3 — one block editing contract (F3/F5; PIE-277)
 
 Change `src/store.ts`, request types, server dispatch, CLI, Tree/Detail, and agent
 callers together. Introduce an authoritative edit revision with atomic
@@ -178,7 +216,14 @@ canonical text, identities, and timestamps are preserved.
 Complete when every normal writer enforces the same contract and each of those
 distinct stale-write/reorder invariants is covered.
 
-### S4 — file revision identity and the separate write race (F6)
+Also audit the remaining hierarchy/lifecycle write preconditions that PIE-270's
+old description incorrectly claimed were implemented. Identify the authoritative
+checks for move, delete, and restore, and distinguish confirmed stale-write
+defects from unspecified policy. The Detail cache provides no structural write
+authority. Define an operation's missing precondition from a concrete failing
+case; do not add a universal structural counter merely to satisfy the old wording.
+
+### S4 — file revision identity and the separate write race (F6; PIE-278)
 
 Change `src/resources.ts` revision normalization/comparison and
 `src/resource-catalog.ts` filesystem read/write handling. Include the existing
@@ -195,7 +240,7 @@ contract and the bounded reproduction before choosing a permanent fix. Track it
 separately if the revision change lands first; do not claim all file-write races
 are solved by that change.
 
-### S5 — one file-reading authority (F4)
+### S5 — one file-reading authority (F4; PIE-279)
 
 Remove service-owned reference reads from client-local filesystem paths in
 `src/outliner.ts` and `src/detail-pi.ts` (and any remaining supported renderer).
@@ -233,6 +278,84 @@ session and record socket/binary identity, registry readiness, registrations,
 reconnect events, and the surrounding terminal arrangement. Claim a nesting
 regression only after the layer responsible is demonstrated. The current chat's
 live Herdr session is not a disposable fixture.
+
+## Remaining remote-read work
+
+### PIE-269 — compact Tree index
+
+`src/tree-controller.ts:reload()` still consumes complete `visible` and
+`physical` collections from `workspace.snapshot`. Start at that read boundary
+and the corresponding `src/store.ts`, `src/server.ts`, `src/types.ts`, and
+`src/virtual-branches.ts` contracts. Preserve a complete structural graph while
+removing duplicate full document bodies from the Tree response. The earlier
+948-block/7.38 MB measurement is historical evidence, not a current benchmark.
+
+Return stable identity, parent/order, child/deletion state, bounded row previews,
+and the properties/ranks needed for projection. Use the service sequence for
+complete-index revalidation and S3's edit revision for exact body reads. Fetch
+bodies only where selected/expanded/edited presentation needs them; reuse the
+existing body operations before adding another cache. Preserve filters,
+transclusions, virtual occurrence identity, collapse, and selection re-anchoring.
+Do not silently truncate structural data or substring-search a shortened preview.
+
+Proposed scenario: `test/e2e/tree-index.ts`. Compare local and private
+forwarded-socket cold loads on one representative fixture, recording bytes,
+transfer/parse/projection time, first visible frame, and on-demand body requests.
+Use real keys to expand/edit a long row and navigate physical and virtual rows;
+then mutate/reorder through another client and revalidate. Verify exact bodies,
+stable selection, equivalent ordering, and complete projections. Define the
+performance budget against the recorded baseline before claiming improvement.
+
+Delete the obsolete full-snapshot Tree path after migrating every Tree caller.
+Retain any full-snapshot operation still required by a different consumer.
+
+### PIE-271 — primary Detail content before optional enrichment
+
+`src/detail-controller.ts:applyReadyDocument()` still awaits projection and
+reference resolution before applying an uncached block, then awaits optional
+work in the same load path. Split that concrete path using its existing target
+generation checks and the existing `src/detail.ts` / `src/detail-pi.ts` effects.
+Paint the exact primary document first; apply each enrichment only to its
+matching target and revision. Enrichment failure must not erase readable primary
+content or pretend its actions are ready.
+
+Keep reference navigation disabled until the displayed source's references are
+resolved. Annotations require the exact representation identity/hash; source
+coordinates must continue to name the displayed text. Keep backlinks lazy and
+preserve cached revisits, dirty drafts, explicit-open ordering, and stale-result
+suppression. Resources keep provider-specific revisions and passive reads.
+
+Proposed scenario: `test/e2e/detail-progressive.ts`. Delay and fail reference or
+annotation enrichment behind deterministic barriers. Actual Detail must show
+the cold primary content before release, retain it on enrichment failure, and
+reject an old response after A→B navigation. Exercise link/comment readiness,
+source positions, cache revisits, and a provider-backed Resource. Record
+selection-to-primary latency and request counts locally and through the private
+forwarded socket; repeat the affected journey on two hosts for remote UX claims.
+
+Neighbor prefetch is removed from the required scope. Measure the simpler path
+first. Any later bounded prefetch must be justified by remaining latency and
+must not intern Resources, refresh providers, execute producers, or reconcile
+annotations speculatively. No new enrichment scheduler or read-session framework
+is required by this package.
+
+### PIE-272 / PIE-273 — evidence before more infrastructure
+
+- PIE-272 first measures backlink disclosure after PIE-271. If full-graph reads
+  still dominate, maintain a rebuildable reverse-reference index transactionally
+  from canonical block text and addresses. Verify page rename, Work-ID allocation,
+  property references, delete/restore, and bounded result completeness against
+  current resolution behavior. Remove the repeated scan when all affected callers
+  migrate. The service index does not depend on the Detail cache.
+- PIE-273 measures complete-index bytes, parse/projection time, mutation
+  revalidation, and representative workspace growth after PIE-269. It is a
+  decision gate, not a commitment to cursors, replay, or leased views. Close it
+  if the complete index meets the stated budget; otherwise propose the smallest
+  bounded protocol change with hierarchy, occurrence, concurrency, and reconnect
+  evidence.
+
+Keep measurements with the canonical task proof. Local latency injection and
+this agent's host-socket access check do not establish two-host SSH behavior.
 
 ## Application surface experiment and deletion
 
@@ -356,5 +479,5 @@ Merged-main verification (when claiming delivered):
 ```
 
 The root [AGENTS.md](../AGENTS.md) directs implementation agents to these
-verification requirements. The work packages remain proposed; adding this
-instruction does not complete any runtime fixes or harness extensions.
+verification requirements. Keep completion evidence on the canonical work item;
+planned acceptance criteria are not evidence that an implementation exists.
