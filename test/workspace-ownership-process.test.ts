@@ -42,13 +42,16 @@ function launchService(root: string) {
 for (const phase of ["startup", "shutdown"] as const) {
   test(`${phase} pane-state cleanup failure still releases ownership and exits`, async () => {
     const root = mkdtempSync(join(tmpdir(), "outliner-service-cleanup-"));
-    const stateDir = join(root, "state");
+    const { stateDir } = resolvePaths({
+      OUTLINER_WORKSPACE_ROOT: join(root, "project"),
+      OUTLINER_STATE_DIR: join(root, "state"),
+    });
     const paneStatePath = join(stateDir, "service-pane.json");
     const legacyPaneStatePath = join(stateDir, "outliner-pane.json");
     const services: ReturnType<typeof launchService>[] = [];
     try {
       mkdirSync(join(root, "project"));
-      mkdirSync(stateDir);
+      mkdirSync(stateDir, { recursive: true });
       // Directories make non-recursive pane-state removal fail deterministically.
       mkdirSync(paneStatePath);
       if (phase === "startup") mkdirSync(legacyPaneStatePath);
