@@ -37,6 +37,7 @@ function popup(options: {
       return {
         requestId: input.requestId,
         text: input.text,
+        ...(input.submittedText === undefined ? {} : { submittedText: input.submittedText }),
         cursorRow: input.cursorRow,
         cursorColumn: input.cursorColumn,
         ...(input.capturedFromBlockId
@@ -89,6 +90,7 @@ describe("CapturePopupController", () => {
     expect(state.persists.at(-1)).toEqual({
       requestId: "capture-request",
       text: "First line\nSecond line",
+      submittedText: "First line\nSecond line",
       cursorRow: 1,
       cursorColumn: 11,
       capturedFromBlockId: "origin",

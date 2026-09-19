@@ -1,4 +1,5 @@
 import { Database } from "bun:sqlite";
+import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { acquireWorkspaceOwnership } from "./workspace-ownership";
@@ -137,11 +138,13 @@ interface BlockRow {
 interface CaptureRequestRow {
   block_id: string;
   inbox_block_id: string;
+  payload_hash: string | null;
 }
 
 interface QuickCaptureDraftRow {
   request_id: string;
   text: string;
+  submitted_text: string | null;
   cursor_row: number;
   cursor_column: number;
   captured_from_block_id: string | null;
@@ -957,14 +960,26 @@ export class OutlinerStore {
     const normalizedText = text.trim();
     if (!normalizedText) throw new Error("Capture text cannot be empty");
     if (!CAPTURE_SOURCES.has(source)) throw new Error(`Invalid capture source: ${String(source)}`);
+    const creator = normalizeCreatorProvenance(author, provenance);
+    // Retried tool calls may have new session/task IDs. Original creation provenance stays immutable.
+    const payloadHash = createHash("sha256").update(JSON.stringify([
+      normalizedText, source, capturedFromBlockId || null, author,
+      creator.actorId,
+    ])).digest("hex");
 
     return this.database.transaction((): CaptureReceipt => {
       const existing = this.database
         .query(
-          "SELECT block_id, inbox_block_id FROM capture_requests WHERE request_id = ?",
+          "SELECT block_id, inbox_block_id, payload_hash FROM capture_requests WHERE request_id = ?",
         )
         .get(normalizedRequestId) as CaptureRequestRow | null;
       if (existing) {
+        if (existing.payload_hash === null) {
+          throw new Error(`Capture receipt predates payload validation; inspect saved capture ${existing.block_id} before retrying`);
+        }
+        if (existing.payload_hash !== payloadHash) {
+          throw new Error("Capture request ID already belongs to a different submission");
+        }
         const block = this.getFromCurrentRead(existing.block_id);
         if (!block) {
           throw new Error(`Capture receipt target no longer exists: ${normalizedRequestId}`);
@@ -1003,9 +1018,9 @@ export class OutlinerStore {
       );
       this.database
         .query(
-          "INSERT INTO capture_requests (request_id, block_id, inbox_block_id, created_at) VALUES (?, ?, ?, ?)",
+          "INSERT INTO capture_requests (request_id, block_id, inbox_block_id, created_at, payload_hash) VALUES (?, ?, ?, ?, ?)",
         )
-        .run(normalizedRequestId, block.id, inbox.id, capturedAt);
+        .run(normalizedRequestId, block.id, inbox.id, capturedAt, payloadHash);
       return { block, inboxBlockId: inbox.id, deduplicated: false };
     })();
   }
@@ -1050,7 +1065,11 @@ export class OutlinerStore {
 
   saveQuickCaptureDraft(input: QuickCaptureDraftSaveInput): QuickCaptureDraft {
     const requestId = normalizeCaptureRequestId(input.requestId);
-    if (typeof input.text !== "string" || !input.text.trim()) {
+    if (input.submittedText !== undefined &&
+      (typeof input.submittedText !== "string" || !input.submittedText.trim())) {
+      throw new Error("Quick Capture submitted text must be non-empty");
+    }
+    if (typeof input.text !== "string" || (!input.text.trim() && input.submittedText === undefined)) {
       throw new Error("Quick Capture draft text cannot be empty");
     }
     if (!Number.isInteger(input.cursorRow) || input.cursorRow < 0) {
@@ -1081,17 +1100,21 @@ export class OutlinerStore {
       if ((current?.revision ?? null) !== input.expectedRevision) {
         throw new Error("Quick Capture draft changed; close this popup and reopen the current draft");
       }
-      const revision = (current?.revision ?? 0) + 1;
+      const previous = this.database.query(
+        "SELECT revision FROM quick_capture_draft WHERE singleton = 1",
+      ).get() as { revision: number } | null;
+      const revision = (previous?.revision ?? 0) + 1;
       const updatedAt = new Date(
         Math.max(Date.now(), current ? Date.parse(current.updatedAt) + 1 : 0),
       ).toISOString();
       this.database.query(`
         INSERT INTO quick_capture_draft
-          (singleton, request_id, text, cursor_row, cursor_column, captured_from_block_id, revision, updated_at)
-        VALUES (1, ?, ?, ?, ?, ?, ?, ?)
+          (singleton, request_id, text, submitted_text, cursor_row, cursor_column, captured_from_block_id, revision, updated_at)
+        VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(singleton) DO UPDATE SET
           request_id = excluded.request_id,
           text = excluded.text,
+          submitted_text = excluded.submitted_text,
           cursor_row = excluded.cursor_row,
           cursor_column = excluded.cursor_column,
           captured_from_block_id = excluded.captured_from_block_id,
@@ -1100,6 +1123,7 @@ export class OutlinerStore {
       `).run(
         requestId,
         input.text,
+        input.submittedText?.trim() ?? null,
         input.cursorRow,
         input.cursorColumn,
         input.capturedFromBlockId ?? null,
@@ -1122,7 +1146,13 @@ export class OutlinerStore {
       if ((current?.revision ?? null) !== expectedRevision) {
         throw new Error("Quick Capture draft changed; close this popup and reopen the current draft");
       }
-      if (current) this.database.query("DELETE FROM quick_capture_draft WHERE singleton = 1").run();
+      // Keep the revision after clearing; delayed cleanup must never match a new draft.
+      if (current) this.database.query(`
+        UPDATE quick_capture_draft
+        SET request_id = '', text = '', submitted_text = NULL,
+          cursor_row = 0, cursor_column = 0, captured_from_block_id = NULL
+        WHERE singleton = 1
+      `).run();
       return null;
     })();
   }
@@ -2332,14 +2362,15 @@ export class OutlinerStore {
 
   private quickCaptureDraftFromCurrentRead(): QuickCaptureDraft | null {
     const row = this.database.query(`
-      SELECT request_id, text, cursor_row, cursor_column, captured_from_block_id, revision, updated_at
+      SELECT request_id, text, submitted_text, cursor_row, cursor_column, captured_from_block_id, revision, updated_at
       FROM quick_capture_draft
       WHERE singleton = 1
     `).get() as QuickCaptureDraftRow | null;
-    if (!row) return null;
+    if (!row || (!row.text && row.submitted_text === null)) return null;
     return {
       requestId: row.request_id,
       text: row.text,
+      ...(row.submitted_text === null ? {} : { submittedText: row.submitted_text }),
       cursorRow: row.cursor_row,
       cursorColumn: row.cursor_column,
       ...(row.captured_from_block_id
@@ -2431,12 +2462,14 @@ export class OutlinerStore {
         request_id TEXT PRIMARY KEY,
         block_id TEXT NOT NULL,
         inbox_block_id TEXT NOT NULL,
-        created_at TEXT NOT NULL
+        created_at TEXT NOT NULL,
+        payload_hash TEXT
       );
       CREATE TABLE IF NOT EXISTS quick_capture_draft (
         singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
         request_id TEXT NOT NULL,
         text TEXT NOT NULL,
+        submitted_text TEXT,
         cursor_row INTEGER NOT NULL CHECK (cursor_row >= 0),
         cursor_column INTEGER NOT NULL CHECK (cursor_column >= 0),
         captured_from_block_id TEXT REFERENCES blocks(id) ON DELETE SET NULL,
@@ -2464,6 +2497,7 @@ export class OutlinerStore {
       CREATE INDEX IF NOT EXISTS block_edit_activity_block_cursor
         ON block_edit_activity(block_id, activity_id DESC);
     `);
+    this.migrateCaptureState();
     this.migrateBlockStateColumns();
     this.retireTreePresentationState();
     this.migratePropertyIndex();
@@ -2473,6 +2507,18 @@ export class OutlinerStore {
     this.migratePageAddressRegistry();
     this.reconcileWorkIdAddresses();
     this.migrateNavigationHistory();
+  }
+
+  private migrateCaptureState(): void {
+    const columns = this.database.query("PRAGMA table_info(capture_requests)").all() as Array<{ name: string }>;
+    if (!columns.some(column => column.name === "payload_hash")) {
+      // Original payloads cannot be reconstructed from captures that may have been edited.
+      this.database.exec("ALTER TABLE capture_requests ADD COLUMN payload_hash TEXT");
+    }
+    const draftColumns = this.database.query("PRAGMA table_info(quick_capture_draft)").all() as Array<{ name: string }>;
+    if (!draftColumns.some(column => column.name === "submitted_text")) {
+      this.database.exec("ALTER TABLE quick_capture_draft ADD COLUMN submitted_text TEXT");
+    }
   }
 
   private migrateBlockStateColumns(): void {

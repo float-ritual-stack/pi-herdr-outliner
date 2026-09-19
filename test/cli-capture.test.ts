@@ -110,12 +110,18 @@ test("captures literal multiline heredoc/stdin content and prints a compact rece
   const replay = await runCli([
     "capture",
     "--text",
-    "ignored retry",
+    input,
     "--request-id",
     "cli-heredoc-1",
+    "--captured-from",
+    origin.id,
   ], env);
   expect(replay.exitCode).toBe(0);
   expect(JSON.parse(replay.stdout)).toEqual({ ...receipt, deduplicated: true });
+  const changed = await runCli(["capture", "--text", "Changed retry", "--request-id", "cli-heredoc-1"], env);
+  expect(changed.exitCode).toBe(1);
+  expect(changed.stderr).toContain("different submission");
+  expect(store.require(receipt.blockId).text).toBe(storedText);
 });
 
 test("auto-reads non-TTY stdin and rejects conflicting input modes", async () => {

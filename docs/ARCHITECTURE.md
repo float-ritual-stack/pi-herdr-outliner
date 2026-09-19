@@ -668,7 +668,7 @@ interface CaptureReceipt {
 }
 ```
 
-`capture_requests` persists request ID → block/Inbox receipts without a foreign-key cascade. A retry returns the original block with `deduplicated: true`, including after reconnect/service restart, and emits no second content event. A purged receipt target fails explicitly rather than creating a duplicate.
+`capture_requests` persists request ID → block/Inbox receipts and an immutable submission hash without a foreign-key cascade. The hash covers normalized text, source, captured-from UUID, author, and actor. Session/tool-call identifiers may change on retry; original creation provenance remains unchanged. A matching retry returns the original block with `deduplicated: true`, including after reconnect/service restart, and emits no second content event. Changed payloads and legacy receipts with no original payload evidence fail explicitly; migration never derives the submission from mutable block text. A purged receipt target fails explicitly rather than creating a duplicate.
 
 Capture text remains ordinary editable/movable content. The service preserves authored newlines and appends indexed lifecycle/context properties (`type=capture`, `status=unprocessed`, source, timestamp, optional captured-from UUID) as the trailing block-scoped property run on the first authored line. This keeps the useful title first while retaining query semantics. Immutable agent provenance stays in the existing block fields, and the mutation never calls selection or navigation operations.
 
@@ -998,6 +998,8 @@ the three pane-routing actions exported by the plugin manifest:
   quote plus snapshot evidence to that Detail. The default in-pane path uses Pi
   TUI's application-owned drag selection, captures the current Herdr pane
   revision when that selection is copied, and binds `c` directly in preview.
+
+`quick_capture_draft` retains editable text separately from optional `submitted_text`, the fixed payload of an uncertain submission. The popup resolves that submission before assigning a new request ID to changed text. Clearing removes the draft payload while retaining its monotonic revision counter, so delayed cleanup cannot match a replacement draft.
 
 Tree quick capture opens the manifest `capture` entrypoint with Herdr `placement = "popup"` anchored to the active Tree. The popup process reuses the same text-buffer command mapping, layout, and editor-row renderer as Detail; only Ctrl+S save and Esc/Ctrl+C cancellation are wired to `capture.create` and popup exit. It is not a Tree or Detail registry client and never changes browsing context or selection.
 

@@ -71,6 +71,7 @@ switch (command) {
       throw new Error("capture requires --text or stdin");
     }
     const text = values.text ?? await Bun.stdin.text();
+    await client.requireCompatibleService();
     request = {
       action: "capture.create",
       requestId: values["request-id"] ?? crypto.randomUUID(),

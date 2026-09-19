@@ -784,9 +784,9 @@ Useful title [type::capture] [status::unprocessed] [capture-source::tree] [captu
 Optional supporting detail on later lines.
 ```
 
-The optional captured-from block is context evidence, not the capture’s parent. Lifecycle metadata is a trailing block-scoped property run on the first authored line, so the useful title remains first; compact Tree rows hide that metadata and supporting lines until expanded. The Inbox can be renamed or moved while retaining its canonical identity, and new captures appear at its top. Persistent request receipts make retries idempotent across reconnects and service restarts; Quick Capture clears its retained draft only after a successful or deduplicated receipt. Capture never changes workspace selection/history; the Tree restores the exact prior row and shows a compact receipt. Routing, enrichment, Inbox processing, and concrete third-party launcher integrations remain later work.
+The optional captured-from block is context evidence, not the capture’s parent. Lifecycle metadata is a trailing block-scoped property run on the first authored line, so the useful title remains first; compact Tree rows hide that metadata and supporting lines until expanded. The Inbox can be renamed or moved while retaining its canonical identity, and new captures appear at its top. Persistent receipts bind each request ID to normalized text, source, captured-from context, author, and actor. Changed submissions under the same ID are rejected; same-payload retries remain idempotent after restart. Quick Capture retains the original submitted text while its outcome is uncertain. If the user edits after a failure, retry acknowledges the original submission and leaves the changed draft open under a new identity; another explicit Ctrl+S captures that draft. Cleanup clears only its acknowledged draft revision, and revisions are not reused after clearing. Capture never changes workspace selection/history; the Tree restores the exact prior row and shows a compact receipt. Routing, enrichment, Inbox processing, and concrete third-party launcher integrations remain later work.
 
-CLI accepts `--text`, explicit `--stdin`, or automatic non-TTY stdin/heredoc input. `--request-id` provides caller-controlled retry identity and `--captured-from` records optional context. Receipt JSON is written to stdout; service failure exits nonzero without a local fallback.
+CLI accepts `--text`, explicit `--stdin`, or automatic non-TTY stdin/heredoc input. `--request-id` provides caller-controlled retry identity and `--captured-from` records optional context. Receipt JSON is written to stdout; service failure exits nonzero without a local fallback. Retry with the same text and context. New CLI and popup clients reject an incompatible service before capture; restart the service and clients together for protocol upgrades. Legacy receipts without payload evidence reject replay and identify the existing capture for manual inspection; migration preserves retained drafts rather than guessing what was submitted.
 
 The Pi extension registers `/capture` and `outliner_capture`. An exact standalone `float.dispatch(…)` input is intercepted by the Pi/OMP input hook, durably captured, acknowledged, and handled without starting an agent turn. Embedded/conversational markers are left untouched; malformed markers report a warning and continue as ordinary input.
 
@@ -1219,6 +1219,21 @@ uses the same private Herdr runner and retained artifacts. Resource setup and
 refresh use production RPC; this is a service/visible-result check, not a
 keyboard authoring claim. `test/workspace-ownership-process.test.ts` additionally
 covers simultaneous service starts and legitimate recovery after `SIGKILL`.
+
+The capture safety journey drives a real attached Herdr client:
+
+```sh
+bun run test:e2e:capture
+```
+
+It saves through the actual popup, rejects one draft cleanup, types more, and
+verifies that retry retains the new draft. It also drops a committed reply,
+closes/reopens, and checks same-submission deduplication, then returns to Tree
+keyboard navigation and its `c` command. A private socket proxy injects faults;
+production code has no test switches. Raw PTY output and current rendered screens
+(decoded with test-only `@xterm/headless`) accompany database snapshots. The
+fixture owns and stops its attached client. This is a local forwarding fixture,
+not two-host SSH evidence, mouse coverage, or multi-client verification.
 
 ## Project documents
 

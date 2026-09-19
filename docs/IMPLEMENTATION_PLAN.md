@@ -118,13 +118,14 @@ The runner already provides:
   `registrations`, `checkpoint`, and `record` operations.
 - A production client for the private service and a bounded
   `rejectCompetingService` operation against that same workspace.
+- One owned PTY-attached Herdr client for popup input, with raw ANSI and current-screen checkpoints decoded by test-only `@xterm/headless`.
 - A read-only SQLite connection and consistent checkpoint copies.
 - Terminal text/ANSI, topology, registrations, invocation logs, process evidence,
   and cleanup of owned processes on success, failure, and interruption.
 
 Its current limits are material: fixed launcher/service/Tree/Detail pane roles;
-one project/canonical service with a bounded startup contender; no attached
-Herdr client; no popup input/capture; no real mouse or resize journey. A passing
+one project/canonical service with a bounded startup contender; one attached
+Herdr client and capture-popup launch; no second attached client or real mouse/resize journey. A passing
 existing scenario does not cover those paths.
 
 `startup-interruption.ts` deliberately expects its inner fixture to fail after
@@ -136,7 +137,7 @@ expected injected failure from failed scenario verification when reading artifac
 | First consumer | Small extension | Required proof |
 | --- | --- | --- |
 | S1 (implemented) | Launch and track one additional service process against the private workspace; hold a real async operation at a deterministic barrier. | Rejected second startup changes no live operation state; cleanup leaves no owned survivor. |
-| S2 / I1 | Attach a real Herdr client through an owned PTY; send modal input through that client and retain its output. | Open, operate, and close the actual popup. A popup has no pane ID: sending keys to the underlying pane is not popup proof. |
+| S2 (implemented; reusable by I1) | Attach a real Herdr client through an owned PTY; send modal input through that client and retain its output. | Open, operate, and close the actual popup. A popup has no pane ID: sending keys to the underlying pane is not popup proof. |
 | S3 / A1 / I4 | Open, move, resize, and close additional owned views using supported Herdr operations; record returned identities. | Track the moved terminal and current pane ID; actions stay within the private server. |
 | S5 | Give client and service different fixture roots with the same relative filename. | Both UI routes display service-owned bytes; describe this as simulated remote ownership unless SSH is also exercised. |
 | I3 / A2 | Add attached-client mouse/focus input and PTY resize evidence. | Input reaches the real host/application path; capture resized frames and resulting state. |
@@ -156,8 +157,7 @@ Record tool/dependency versions where the behavior depends on them.
 
 ## Safety packages
 
-The S1 scenario `test/e2e/workspace-ownership.ts` is implemented. The remaining
-new scenario filenames below are planned files, not commands that exist today.
+S1 (`test/e2e/workspace-ownership.ts`) and S2 (`test/e2e/capture-retry.ts`) have runnable scenarios. The remaining new scenario filenames below are planned files, not commands that exist today.
 Each defect needs a focused regression that fails before its fix, plus evidence
 from the real service or UI path appropriate to the claim.
 
@@ -186,12 +186,14 @@ an uncertain submission retains both. Acknowledgement permits clearing only the
 acknowledged draft revision. Blindly assigning a fresh request ID after an
 uncertain commit can duplicate a capture and is not the fix.
 
-Proposed scenario: `test/e2e/capture-retry.ts`. In a real popup, commit a capture,
+Implemented scenario: `test/e2e/capture-retry.ts` (`bun run test:e2e:capture`). In a real popup, commit a capture,
 fail draft cleanup, type more, and retry. The added bytes remain durably
 recoverable. Separately lose the committed reply and retry the original payload;
 one capture exists across retry/restart. Inject faults at an existing transport
 or operation seam in the private fixture, and record exactly what failed; keep
 production behavior free of test-only switches.
+
+The protocol-55 implementation retains uncertain submission text separately from later edits and never resets the draft revision counter on clear. Legacy receipts have no reconstructable payload: reject their replay, identify the saved capture for inspection, and preserve the draft. Current CLI/popup entrypoints reject incompatible services.
 
 Complete when no retry clears unacknowledged text and same-payload retry remains
 idempotent. Confirm closing/reopening preserves the recovery policy and leaves
