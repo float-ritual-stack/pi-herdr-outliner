@@ -17,6 +17,7 @@ const timestamp = "2026-08-29T00:00:00.000Z";
 
 function block(id: string, text: string, properties: Block["properties"] = []): Block {
   return {
+    revision: 1,
     id,
     parentId: null,
     position: 0,

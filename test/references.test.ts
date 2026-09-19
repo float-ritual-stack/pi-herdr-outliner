@@ -10,6 +10,7 @@ import { outlinerReferenceOccurrences } from "../src/reference-occurrences";
 import type { Block } from "../src/types";
 
 const target: Block = {
+  revision: 1,
   id: "11111111-1111-4111-8111-111111111111",
   parentId: null,
   position: 0,

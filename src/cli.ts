@@ -11,6 +11,13 @@ import { navigateOutlinerLink } from "./outliner-links";
 import type { BlockSearchQuery, CaptureReceipt } from "./types";
 
 const paths = resolveClientPaths();
+function parseRevision(value: string | undefined): number {
+  const revision = Number(value);
+  if (!Number.isSafeInteger(revision) || revision < 1) {
+    throw new Error("--expected must be the positive integer revision read before editing");
+  }
+  return revision;
+}
 function parseLimit(value: string | undefined, fallback: number): number {
   const limit = value === undefined ? fallback : Number(value);
   if (!Number.isInteger(limit) || limit <= 0) {
@@ -110,6 +117,7 @@ switch (command) {
       options: {
         id: { type: "string" },
         text: { type: "string" },
+        expected: { type: "string" },
       },
       strict: true,
     });
@@ -118,6 +126,7 @@ switch (command) {
       action: "update",
       blockId: values.id,
       text: values.text,
+      expectedRevision: parseRevision(values.expected),
       mutation: { author: "user", actorId: "cli" },
     };
     break;
@@ -243,7 +252,7 @@ switch (command) {
     request = {
       action: "work-ids.allocate",
       blockId: values.id,
-      expectedUpdatedAt: values.expected,
+      expectedRevision: parseRevision(values.expected),
     };
     break;
   }
@@ -271,6 +280,9 @@ switch (command) {
     throw new Error(`Unknown command: ${command}`);
 }
 
+// Older services treat an absent timestamp token as an unconditional update.
+// Never send the integer contract to one of those services.
+if (request && "expectedRevision" in request) await client.requireCompatibleService();
 const result = request ? await client.request(request) : directResult;
 if (command === "capture") {
   const receipt = result as CaptureReceipt;

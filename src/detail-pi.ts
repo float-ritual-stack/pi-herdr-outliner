@@ -451,12 +451,12 @@ const effects: DetailEffects = {
   },
   editExternalDraft(input) {
     const configuration = resolveExternalEditorConfiguration();
-    const expectedUpdatedAt = input.kind === "block"
-      ? input.expectedUpdatedAt
+    const expectedRevision = input.kind === "block"
+      ? String(input.expectedRevision)
       : JSON.stringify(input.expectedRevision);
     return editTextInExternalEditor({
       text: input.text,
-      expectedUpdatedAt,
+      expectedRevision,
     }, {
       editor: configuration.editor,
       environment: configuration.environment,
@@ -480,12 +480,12 @@ const effects: DetailEffects = {
           externalEditorActive = false;
         }
       },
-      async currentUpdatedAt() {
+      async currentRevision() {
         if (input.kind === "block") {
-          return (await client.request<Block>({
+          return String((await client.request<Block>({
             action: "get",
             blockId: input.blockId,
-          })).updatedAt;
+          })).revision);
         }
         const description = await client.request<ResourceDescription>({
           action: "resources.describe",

@@ -24,6 +24,7 @@ import type { Block } from "../src/types";
 
 function block(text: string): Block {
   return {
+    revision: 1,
     id: "block-1",
     parentId: null,
     position: 0,

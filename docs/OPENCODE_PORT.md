@@ -49,7 +49,7 @@ in `setup`. JSON Schema input instead of typebox:
   core workflow tools the model should call by name).
 - Tools to register (same semantics as pi):
   1. `outliner.create` — text (+ `[prop::value]` markers), optional parentId, author.
-  2. `outliner.update` — blockId, text, optional optimistic-concurrency `expectedUpdatedAt`.
+  2. `outliner.update` — blockId, text, required positive integer `expectedRevision`.
   3. `outliner.query` — text / property filters / subtreeRootId / optional caller limit.
      The executor must send `blocks.query` with `limit ?? 100` and return the complete
      `VisibleBlockCollection` (`{ blocks, completeness }`), not a bare block array.

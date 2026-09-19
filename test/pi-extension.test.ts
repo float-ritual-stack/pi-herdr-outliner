@@ -191,7 +191,7 @@ test("registers the workspace commands and annotation-aware tools", () => {
     registeredTools.find((definition) => definition.name === "outliner_workflow")?.parameters,
   );
   expect(createSchema).not.toContain("author");
-  expect(updateSchema).toContain("expectedUpdatedAt");
+  expect(updateSchema).toContain("expectedRevision");
   expect(attentionSchema).toContain("advance");
   expect(attentionSchema).toContain("clientId");
   expect(attentionSchema).toContain("expiresInMs");
@@ -382,6 +382,7 @@ test("injects bounded user edit activity, deduplicates selection, and restores i
       {
         cursor: 11,
         block: {
+          revision: 1,
           id: "recent-block",
           parentId: null,
           position: 0,
@@ -400,6 +401,7 @@ test("injects bounded user edit activity, deduplicates selection, and restores i
       {
         cursor: 10,
         block: {
+          revision: 1,
           id: "focused-block",
           parentId: null,
           position: 0,
@@ -512,6 +514,7 @@ test("orients Pi and OMP sessions from live Git state without mutating the repos
   const originalRequest = OutlinerClient.prototype.request;
   const originalHerdrEnv = process.env.HERDR_ENV;
   const task: Block = {
+    revision: 1,
     id: "task-pie-182",
     parentId: null,
     position: 0,
@@ -684,6 +687,7 @@ test("drives an explicit task through context, focus, durable proof, and complet
   ].join("\n");
 
   let task: Block = {
+    revision: 1,
     id: "task-id",
     parentId: null,
     position: 0,
@@ -804,6 +808,7 @@ test("drives an explicit task through context, focus, durable proof, and complet
         `[work-branch::${workBranch}] [delivery-stage::work]`,
       ].join(" ");
       deliveryRecord = {
+        revision: 1,
         id: "delivery-id",
         parentId: task.id,
         position: 0,
@@ -845,6 +850,7 @@ test("drives an explicit task through context, focus, durable proof, and complet
     }
     if (input.action === "create") {
       artifact = {
+        revision: 1,
         id: "proof-id",
         parentId: input.parentId ?? null,
         position: 0,
@@ -1186,6 +1192,7 @@ test("requires the current protocol, attributes agent creates and page follows, 
   const collection: VisibleBlockCollection = {
     blocks: [
       {
+        revision: 1,
         id: "match-id",
         parentId: null,
         position: 0,
@@ -1271,7 +1278,7 @@ test("requires the current protocol, attributes agent creates and page follows, 
         operation?: "follow" | "status" | "configure" | "allocate";
         address?: string;
         blockId?: string;
-        expectedUpdatedAt?: string;
+        expectedRevision?: number;
         prefix?: string;
         role?: "tree" | "detail";
         viewId?: string;
@@ -1388,7 +1395,7 @@ test("requires the current protocol, attributes agent creates and page follows, 
     await tools.get("outliner_work_id")!.execute("work-allocate", {
       operation: "allocate",
       blockId: "work-block",
-      expectedUpdatedAt: "version-1",
+      expectedRevision: 1,
     });
     const clientsResult = await tools.get("outliner_clients")!.execute("clients", {
       role: "tree",
@@ -1465,7 +1472,7 @@ test("requires the current protocol, attributes agent creates and page follows, 
     expect(requests.find((request) => request.action === "work-ids.allocate")).toEqual({
       action: "work-ids.allocate",
       blockId: "work-block",
-      expectedUpdatedAt: "version-1",
+      expectedRevision: 1,
     });
     expect(requests.find((request) => request.action === "clients.list")).toEqual({
       action: "clients.list",
@@ -1591,6 +1598,7 @@ test("captures through command, tool, and exact standalone dispatch without an a
   };
 
   const selectionBlock: Block = {
+    revision: 1,
     id: "selected-context",
     parentId: null,
     position: 0,
@@ -1928,7 +1936,7 @@ test("captures through command, tool, and exact standalone dispatch without an a
     expect(retitles).toEqual([
       expect.objectContaining({
         blockId: "capture-2",
-        expectedUpdatedAt: "updated",
+        expectedRevision: 1,
         title: "Captured roadmap decision",
         mutation: expect.objectContaining({
           author: "agent",
@@ -2071,6 +2079,7 @@ test("captures through command, tool, and exact standalone dispatch without an a
 
 test("formats compact bounded selection context", () => {
   const baseBlock: Block = {
+    revision: 1,
     id: "selected-id",
     parentId: null,
     position: 0,

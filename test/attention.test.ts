@@ -15,6 +15,7 @@ import {
 import type { Block, OutlinerClientRegistration } from "../src/types";
 
 const source: Block = {
+  revision: 1,
   id: "source-block",
   parentId: null,
   position: 0,

@@ -125,6 +125,7 @@ interface BlockRow {
   parent_id: string | null;
   position: number;
   text: string;
+  revision: number;
   author: BlockAuthor;
   actor_id: string | null;
   session_id: string | null;
@@ -440,8 +441,8 @@ export class OutlinerStore {
       this.annotations = new AnnotationRepository(this.database, this.resources, {
         create: (text, parentId, author, provenance) =>
           this.create(text, parentId, author, provenance),
-        update: (blockId, text, expectedUpdatedAt, mutation) =>
-          this.update(blockId, text, expectedUpdatedAt, mutation),
+        update: (blockId, text, expectedRevision, mutation) =>
+          this.update(blockId, text, expectedRevision, mutation),
         insertCanonical: (id, text, parentId, author, createdAt) =>
           this.insertCanonicalBlock(id, text, parentId, author, createdAt),
         replaceCanonicalText: (blockId, text) =>
@@ -581,9 +582,9 @@ export class OutlinerStore {
   }
 
   private replaceCanonicalBlockText(id: string, text: string): Block {
-    this.require(id);
     this.database.transaction(() => {
-      this.database.query("UPDATE blocks SET text = ? WHERE id = ?").run(text, id);
+      const block = this.require(id);
+      this.writeBlockText(block.id, text, block.revision, block.updatedAt);
       this.replaceProperties(id, parsePropertyRecords(text));
     })();
     return this.require(id);
@@ -664,11 +665,11 @@ export class OutlinerStore {
     })();
   }
 
-  removeBookmark(recordId: string, expectedUpdatedAt: string): BookmarkRemoveReceipt {
+  removeBookmark(recordId: string, expectedRevision: number): BookmarkRemoveReceipt {
     return this.database.transaction(() => {
       const root = this.requireBookmarksRootFromCurrentRead();
       const record = this.requireBookmarkRecordFromCurrentRead(root, recordId);
-      if (record.record.updatedAt !== expectedUpdatedAt) {
+      if (record.record.revision !== expectedRevision) {
         throw new Error("Bookmark changed; refresh and retry");
       }
       return {
@@ -1027,7 +1028,7 @@ export class OutlinerStore {
 
   retitleCapture(
     blockId: string,
-    expectedUpdatedAt: string,
+    expectedRevision: number,
     title: string,
     mutation: MutationProvenance,
   ): Block {
@@ -1054,7 +1055,7 @@ export class OutlinerStore {
     return this.update(
       blockId,
       `${normalizedTitle} ${metadata}${remainingText}`,
-      expectedUpdatedAt,
+      expectedRevision,
       mutation,
     );
   }
@@ -1160,19 +1161,14 @@ export class OutlinerStore {
   update(
     id: string,
     text: string,
-    expectedUpdatedAt: string | undefined = undefined,
+    expectedRevision: number,
     mutation: MutationProvenance = { author: "system" },
     kind: "text" | "properties" = "text",
   ): Block {
-    const existing = this.requireActive(id);
-    if (expectedUpdatedAt && existing.updatedAt !== expectedUpdatedAt) {
-      throw new Error(`Block changed since editing began: ${id}`);
-    }
     const provenance = normalizeMutationProvenance(mutation);
-    const timestamp = Math.max(Date.now(), Date.parse(existing.updatedAt) + 1);
-    const editedAt = new Date(timestamp).toISOString();
     this.database.transaction(() => {
-      this.database.query("UPDATE blocks SET text = ?, updated_at = ? WHERE id = ?").run(text, editedAt, id);
+      this.requireActive(id);
+      const editedAt = this.writeBlockText(id, text, expectedRevision);
       this.replaceProperties(id, parsePropertyRecords(text));
       this.database.query(`
         INSERT INTO block_edit_activity
@@ -1192,19 +1188,36 @@ export class OutlinerStore {
     return this.require(id);
   }
 
+  private writeBlockText(
+    id: string,
+    text: string,
+    expectedRevision: number,
+    editedAt = new Date().toISOString(),
+  ): string {
+    if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) {
+      throw new Error("Block edit requires a positive integer revision");
+    }
+    const result = this.database.query(`
+      UPDATE blocks SET text = ?, revision = revision + 1, updated_at = ?
+      WHERE id = ? AND revision = ?
+    `).run(text, editedAt, id, expectedRevision);
+    if (result.changes !== 1) throw new Error(`Block changed since editing began: ${id}`);
+    return editedAt;
+  }
+
   patchProperties(
     id: string,
-    expectedUpdatedAt: string,
+    expectedRevision: number,
     operations: PropertyPatchOperation[],
     mutation: MutationProvenance = { author: "system" },
   ): Block {
     if (operations.length === 0) throw new Error("Property patch requires at least one operation");
     const existing = this.requireActive(id);
-    if (existing.updatedAt !== expectedUpdatedAt) {
+    if (existing.revision !== expectedRevision) {
       throw new Error(`Block changed since editing began: ${id}`);
     }
     const text = patchPropertyText(existing.text, operations);
-    return this.update(id, text, expectedUpdatedAt, mutation, "properties");
+    return this.update(id, text, expectedRevision, mutation, "properties");
   }
 
   recentEditActivity(options: {
@@ -1618,14 +1631,14 @@ export class OutlinerStore {
   renamePageAddress(
     blockId: string,
     address: string,
-    expectedUpdatedAt: string,
+    expectedRevision: number,
   ): PageAddressRecord {
     const nextAddress = normalizePageAddress(address);
     return this.database.transaction(() => {
       const block = this.getFromCurrentRead(blockId);
       if (!block) throw new Error(`Block not found: ${blockId}`);
       if (block.effectiveDeletedRootId) throw new Error(`Block is in Trash: ${blockId}`);
-      if (block.updatedAt !== expectedUpdatedAt) {
+      if (block.revision !== expectedRevision) {
         throw new Error(`Block changed since editing began: ${blockId}`);
       }
       const pageTokens = parsePropertyRecords(block.text).filter(
@@ -1671,9 +1684,7 @@ export class OutlinerStore {
         }
       }
 
-      const timestamp = new Date(Math.max(Date.now(), Date.parse(block.updatedAt) + 1)).toISOString();
-      this.database.query("UPDATE blocks SET text = ?, updated_at = ? WHERE id = ?")
-        .run(nextText, timestamp, blockId);
+      this.writeBlockText(blockId, nextText, expectedRevision);
       this.replaceProperties(blockId, parsePropertyRecords(nextText));
       this.bumpSequence();
       const renamed: PageAddressRecord = {
@@ -1717,14 +1728,14 @@ export class OutlinerStore {
   removePageAddress(
     blockId: string,
     address: string,
-    expectedUpdatedAt: string,
+    expectedRevision: number,
   ): PageAddressRemoval {
     const normalized = normalizePageAddress(address);
     return this.database.transaction(() => {
       const block = this.getFromCurrentRead(blockId);
       if (!block) throw new Error(`Block not found: ${blockId}`);
       if (block.effectiveDeletedRootId) throw new Error(`Block is in Trash: ${blockId}`);
-      if (block.updatedAt !== expectedUpdatedAt) {
+      if (block.revision !== expectedRevision) {
         throw new Error(`Block changed since editing began: ${blockId}`);
       }
       const row = this.pageAddressRowFromCurrentRead(normalized.normalizedAddress);
@@ -1747,9 +1758,7 @@ export class OutlinerStore {
         );
         if (!token) throw new Error(`Block has no matching page declaration: ${blockId}`);
         const nextText = patchPropertyText(block.text, [{ op: "remove", ordinal: token.ordinal }]);
-        const timestamp = new Date(Math.max(Date.now(), Date.parse(block.updatedAt) + 1)).toISOString();
-        this.database.query("UPDATE blocks SET text = ?, updated_at = ? WHERE id = ?")
-          .run(nextText, timestamp, blockId);
+        this.writeBlockText(blockId, nextText, expectedRevision);
         this.replaceProperties(blockId, parsePropertyRecords(nextText));
         updated = this.getFromCurrentRead(blockId)!;
       }
@@ -1795,13 +1804,13 @@ export class OutlinerStore {
 
   allocateWorkId(
     blockId: string,
-    expectedUpdatedAt: string,
+    expectedRevision: number,
   ): WorkIdAllocation {
     return this.database.transaction(() => {
       const block = this.getFromCurrentRead(blockId);
       if (!block) throw new Error(`Block not found: ${blockId}`);
       if (block.effectiveDeletedRootId) throw new Error(`Block is in Trash: ${blockId}`);
-      if (block.updatedAt !== expectedUpdatedAt) {
+      if (block.revision !== expectedRevision) {
         throw new Error(`Block changed since editing began: ${blockId}`);
       }
       const allocator = this.workIdAllocatorFromCurrentRead();
@@ -1828,12 +1837,8 @@ export class OutlinerStore {
         ? { op: "replace", ordinal: workIdProperties[0]!.ordinal, value: workId }
         : { op: "append", key: "work-id", value: workId };
       const nextText = patchPropertyText(block.text, [workIdOperation]);
-      const updatedAt = new Date(
-        Math.max(Date.now(), Date.parse(block.updatedAt) + 1),
-      ).toISOString();
       const properties = parsePropertyRecords(nextText);
-      this.database.query("UPDATE blocks SET text = ?, updated_at = ? WHERE id = ?")
-        .run(nextText, updatedAt, blockId);
+      this.writeBlockText(blockId, nextText, expectedRevision);
       this.replaceProperties(blockId, properties);
       this.bumpSequence();
       return {
@@ -2390,6 +2395,7 @@ export class OutlinerStore {
         parent_id TEXT REFERENCES blocks(id) ON DELETE CASCADE,
         position INTEGER NOT NULL,
         text TEXT NOT NULL,
+        revision INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1),
         author TEXT NOT NULL CHECK (author IN ('user', 'agent', 'system')),
         actor_id TEXT,
         session_id TEXT,
@@ -2529,6 +2535,9 @@ export class OutlinerStore {
         ).map((column) => column.name),
       );
       const needsEffectiveDeletionBackfill = !existingColumns.has("effective_deleted_root_id");
+      if (!existingColumns.has("revision")) {
+        this.database.exec("ALTER TABLE blocks ADD COLUMN revision INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1)");
+      }
       const textColumns = [
         "actor_id",
         "session_id",
@@ -2931,7 +2940,7 @@ export class OutlinerStore {
       seedDefaultWorkspace({
         create: (text, parentId) => this.create(text, parentId, "system"),
         update: (block, text) =>
-          this.update(block.id, text, block.updatedAt, { author: "system" }),
+          this.update(block.id, text, block.revision, { author: "system" }),
         select: (blockId) => {
           this.setSelection(blockId);
         },
@@ -2954,6 +2963,7 @@ export class OutlinerStore {
       parentId: row.parent_id,
       position: row.position,
       text: row.text,
+      revision: row.revision,
       author: row.author,
       ...(row.actor_id ? { actorId: row.actor_id } : {}),
       ...(row.session_id ? { sessionId: row.session_id } : {}),

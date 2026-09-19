@@ -36,7 +36,7 @@ Use the actual configured prefix in place of `PIE`.
 
 1. Read the focused block with `outliner_selection` when the marker came from focus or a tool result.
 2. Locate an explicit source block before mutating when the marker appeared only in a prompt. Ask for the source only when no tool-visible block can establish it.
-3. Capture the source UUID, complete `text`, `updatedAt`, marker form, and exact intended occurrence.
+3. Capture the source UUID, complete `text`, `revision`, marker form, and exact intended occurrence.
 4. Stop if multiple identical occurrences make the requested occurrence ambiguous.
 
 ### 2. Search bounded candidates
@@ -61,7 +61,7 @@ Treat confidence as shared intent, not merely similar vocabulary. Prefer an exis
 
 1. Re-read the source if any intervening tool call may have changed it.
 2. Replace only the selected marker according to the marker table.
-3. Call `outliner_update` with the complete updated text and the source's current `updatedAt`.
+3. Call `outliner_update` with the complete updated text and the source's current `revision`.
 4. On optimistic conflict, preserve the marker, re-read, and reconsider the exact occurrence.
 5. Use `outliner_focus` on the reused target when presenting the decision to the user.
 
@@ -73,13 +73,13 @@ For self-assignment through `[work-id::<PREFIX>-XXX]`:
 
 1. Confirm the source is the intended durable work item and contains exactly one configured placeholder property.
 2. Add missing roadmap metadata with `outliner_property_patch` only when required, preserving the placeholder.
-3. Call `outliner_work_id` with `operation: "allocate"`, the source UUID, and its latest `updatedAt`.
+3. Call `outliner_work_id` with `operation: "allocate"`, the source UUID, and its latest `revision`.
 4. Rely on the allocator's transaction to replace the placeholder atomically. Do not perform a preliminary marker removal.
 
 For `[[<PREFIX>-XXX]]` or `[issue::<PREFIX>-XXX]`:
 
 1. Create one canonical target with `outliner_create`. Include concise intent, `[type::roadmap-item]`, appropriate planned metadata, and `[source-block::<source-uuid>]`.
-2. Allocate its Work ID with `outliner_work_id` using the returned `updatedAt`.
+2. Allocate its Work ID with `outliner_work_id` using the returned `revision`.
 3. Re-read the source if necessary.
 4. Replace only the source marker with the target UUID form from the marker table through `outliner_update`.
 5. If source update conflicts after target creation, leave `XXX` intact. On retry, search first and reuse the newly created target rather than creating another.

@@ -44,7 +44,7 @@ describe("canonical bookmarks", () => {
     store.update(
       root.id,
       "Bookmarks [system-view::bookmarks] [query::type=bookmark] [limit::1000] [summary-properties::target,bookmark-created]",
-      root.updatedAt,
+      root.revision,
       { author: "user", actorId: "test" },
     );
     expect(() => store.bookmarksRoot()).toThrow(
@@ -92,7 +92,7 @@ describe("canonical bookmarks", () => {
     const target = store.create("Original title");
     const added = store.toggleBookmark(target.id, null);
 
-    const renamed = store.update(target.id, "Renamed target", target.updatedAt, {
+    const renamed = store.update(target.id, "Renamed target", target.revision, {
       author: "user",
       actorId: "test",
     });
@@ -115,10 +115,10 @@ describe("canonical bookmarks", () => {
       target: null,
       unavailableReason: "Bookmark target is in Trash",
     });
-    expect(() => store.removeBookmark(added.record.id, "stale")).toThrow(
+    expect(() => store.removeBookmark(added.record.id, added.record.revision + 1)).toThrow(
       "Bookmark changed; refresh and retry",
     );
-    const removed = store.removeBookmark(added.record.id, added.record.updatedAt);
+    const removed = store.removeBookmark(added.record.id, added.record.revision);
     expect(removed.targetBlockId).toBe(target.id);
     expect(removed.record.deletedAt).toBeDefined();
   });

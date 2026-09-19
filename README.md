@@ -430,6 +430,7 @@ Multiline capture with literal $VARIABLE and Unicode 🐢.
 EOF
 bun run cli list --subtree <block-uuid> --text "route snapshot" --limit 20
 bun run cli create --text "A durable note [type::note]"
+bun run cli update --id <block-uuid> --text "Revised note" --expected <revision>
 bun run cli selection
 bun run cli clients --role tree
 bun run goto 40bd0864
@@ -437,10 +438,12 @@ bun run goto --query "roadmap review"
 bun run goto --client <client-uuid> --query "roadmap review"
 bun run cli work-id-status
 bun run cli work-id-configure --prefix PIE
-bun run cli work-id-allocate --id <block-uuid> --expected <updatedAt>
+bun run cli work-id-allocate --id <block-uuid> --expected <revision>
 ```
 
-The CLI resolves the same workspace-scoped socket and database as the service. `goto` accepts a full UUID, unique short prefix, or unambiguous fuzzy title/content query. Eight-character IDs are convenience labels, not a uniqueness guarantee; ambiguous queries return full-UUID candidates without changing selection. Work-ID configuration is normally one-time; allocation requires the exact block UUID and its latest `updatedAt`, available in bounded `list` results. A successful allocation atomically persists both the immutable reservation and the block's `[work-id::…]` property/address; a failed request consumes neither the number nor a reservation.
+Text updates require the integer `revision` returned by the read before editing. Omitting `--expected` or saving an old revision fails without replacing newer text. Sibling moves do not invalidate an unchanged text draft.
+
+The CLI resolves the same workspace-scoped socket and database as the service. `goto` accepts a full UUID, unique short prefix, or unambiguous fuzzy title/content query. Eight-character IDs are convenience labels, not a uniqueness guarantee; ambiguous queries return full-UUID candidates without changing selection. Work-ID configuration is normally one-time; allocation requires the exact block UUID and its latest integer `revision`, available in bounded `list` results. A successful allocation atomically persists both the immutable reservation and the block's `[work-id::…]` property/address; a failed request consumes neither the number nor a reservation.
 
 ## Keyboard controls
 

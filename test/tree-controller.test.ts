@@ -35,6 +35,7 @@ function block(
   overrides: Partial<VisibleBlock> = {},
 ): VisibleBlock {
   return {
+    revision: 1,
     id,
     parentId: null,
     position: 0,
@@ -2327,7 +2328,7 @@ describe("createTreeController", () => {
       action: "update",
       blockId: "card",
       text: "Card!",
-      expectedUpdatedAt: "2026-08-22T00:00:00.000Z",
+      expectedRevision: 1,
       mutation: { author: "user", actorId: "tree" },
     });
     expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe(

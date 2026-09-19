@@ -24,7 +24,7 @@ describe("semantic backlink relation", () => {
     const workspace = store();
     let target = workspace.create("Target decision [page::Target Page]");
     workspace.configureWorkIdPrefix("PIE");
-    target = workspace.allocateWorkId(target.id, target.updatedAt).block;
+    target = workspace.allocateWorkId(target.id, target.revision).block;
 
     const source = workspace.create([
       "Grouped source",
@@ -106,7 +106,7 @@ describe("semantic backlink relation", () => {
     workspace.update(
       target.id,
       "Target\n\n## Renamed heading ^durable-heading",
-      target.updatedAt,
+      target.revision,
     );
     const after = workspace.queryBacklinks({ targetBlockId: target.id, limit: 10 });
     expect(after.sources.map((candidate) => candidate.blockId)).toEqual([source.id]);

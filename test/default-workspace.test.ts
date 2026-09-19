@@ -162,7 +162,7 @@ test("seeds and preserves an agent-readable documentation workspace", async () =
     const locallyEdited = store.update(
       guide.id,
       `${guide.text}\n\nLocal documentation convention.`,
-      guide.updatedAt,
+      guide.revision,
       { author: "user" },
     );
     store.close();

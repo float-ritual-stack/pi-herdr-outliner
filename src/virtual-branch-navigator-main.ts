@@ -262,7 +262,7 @@ const controller = new VirtualBranchNavigatorController(launch.sourceRole, {
         await client.request<BookmarkRemoveReceipt>({
           action: "bookmarks.remove",
           recordId: resolution.record.id,
-          expectedUpdatedAt: resolution.record.updatedAt,
+          expectedRevision: resolution.record.revision,
         });
       },
     }

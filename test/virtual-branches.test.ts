@@ -18,6 +18,7 @@ function visibleBlock(
   overrides: Partial<VisibleBlock> = {},
 ): VisibleBlock {
   return {
+    revision: 1,
     id,
     parentId: null,
     position: 0,

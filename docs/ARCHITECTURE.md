@@ -358,7 +358,7 @@ revisions. Coarse content and connection events mark entries stale. A changed
 revision replaces the document and projection atomically; an unchanged response
 does not repaint. The cache is process-memory only, excludes Resources, and
 never supplies mutation authority: writes continue to use canonical
-`expectedUpdatedAt` checks.
+`expectedRevision` checks.
 
 A workspace root scopes canonical data, not browsing authority. Tree/Detail
 client identity, browsing-context identity, targets, histories, tab numbers,
@@ -376,11 +376,32 @@ The SQLite schema is created in [`OutlinerStore.migrate()`](../src/store.ts):
 | `parent_id` | Canonical parent; cascading delete |
 | `position` | Sibling order beneath the parent |
 | `text` | Canonical raw block text |
+| `revision` | Positive integer edit version; advances atomically with every text write |
 | `author` | `user`, `agent`, or `system` |
 | `actor_id`, `session_id`, `task_id` | Optional immutable creator provenance for agent-authored blocks |
 | `deleted_at` | Direct tombstone timestamp; null for blocks not independently deleted |
 | `effective_deleted_root_id` | Materialized nearest direct deleted ancestor, including self |
-| `created_at`, `updated_at` | Version and audit timestamps |
+| `created_at`, `updated_at` | Display and audit timestamps; never edit preconditions |
+
+Normal text writes require `expectedRevision` from the original read. The service
+checks it and increments `revision` in the same SQL update, within the transaction
+that validates canonical properties and records the edit. CLI `update --expected`
+and every Tree, Detail, property, page, Work-ID, capture-retitle, and agent caller
+use this contract. Old databases gain revision 1 without rewriting IDs, text, or
+timestamps. Deploy the service and clients together; older wire contracts are
+incompatible, and the changed CLI writes check the service protocol first.
+
+An edit also requires the block to be active at save time, including its ancestors.
+Move/delete/restore are explicit operations on the current canonical hierarchy:
+move requires active source/destination and rejects cycles; delete requires an
+active block; restore requires a direct Trash root with active ancestors. They
+do not use a body revision to guess structural intent. A move, or a delete/restore
+cycle with unchanged text, leaves the text revision unchanged. This contract does
+not claim stale relative structural operations are protected by a separate counter.
+
+Annotation captures validate their exact source content hash. Historic snapshot
+timestamps remain observation metadata; rearranging unchanged text cannot make
+a captured passage stale.
 
 ### `block_properties`
 
@@ -452,7 +473,7 @@ bytes and provenance remain unknown rather than being synthesized.
 
 ## Protocol
 
-The current protocol version is `48`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
+The current protocol version is `OUTLINER_PROTOCOL_VERSION`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
 
 ### Important request families
 
@@ -706,7 +727,7 @@ topology. There is no retained-replay quiet window and no per-cursor CLI polling
 
 While Detail is editing/commenting, it is locked before the mutable buffer
 opens. Content and exact-target refreshes are marked pending instead of
-replacing that buffer. Save uses `expectedUpdatedAt`; conflicts preserve the
+replacing that buffer. Save uses `expectedRevision`; conflicts preserve the
 buffer and surface the error.
 
 Tree and Detail navigation histories are process-local and bounded to 200 exact

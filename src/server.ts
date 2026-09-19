@@ -1493,7 +1493,7 @@ export class OutlinerServer {
           );
           break;
         case "bookmarks.remove":
-          result = this.store.removeBookmark(request.recordId, request.expectedUpdatedAt);
+          result = this.store.removeBookmark(request.recordId, request.expectedRevision);
           break;
         case "annotations.list":
           result = this.store.listAnnotationThreads(request.query);
@@ -1579,7 +1579,7 @@ export class OutlinerServer {
         case "capture.retitle":
           result = this.store.retitleCapture(
             request.blockId,
-            request.expectedUpdatedAt,
+            request.expectedRevision,
             request.title,
             request.mutation,
           );
@@ -1597,7 +1597,7 @@ export class OutlinerServer {
           result = this.store.update(
             request.blockId,
             request.text,
-            request.expectedUpdatedAt,
+            request.expectedRevision,
             request.mutation,
           );
           break;
@@ -1643,7 +1643,7 @@ export class OutlinerServer {
           result = this.store.renamePageAddress(
             request.blockId,
             request.address,
-            request.expectedUpdatedAt,
+            request.expectedRevision,
           );
           break;
         case "pages.alias":
@@ -1653,7 +1653,7 @@ export class OutlinerServer {
           result = this.store.removePageAddress(
             request.blockId,
             request.address,
-            request.expectedUpdatedAt,
+            request.expectedRevision,
           );
           break;
         case "work-ids.status":
@@ -1665,13 +1665,13 @@ export class OutlinerServer {
         case "work-ids.allocate":
           result = this.store.allocateWorkId(
             request.blockId,
-            request.expectedUpdatedAt,
+            request.expectedRevision,
           );
           break;
         case "properties.patch":
           result = this.store.patchProperties(
             request.blockId,
-            request.expectedUpdatedAt,
+            request.expectedRevision,
             request.operations,
             request.mutation,
           );

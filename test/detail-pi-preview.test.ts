@@ -63,6 +63,7 @@ import type {
 
 function block(id: string, text: string): Block {
   return {
+    revision: 1,
     id,
     parentId: null,
     position: 0,
@@ -2096,7 +2097,7 @@ describe("structured property inspector presentations", () => {
       occurrenceId: entry.occurrenceId,
       ordinal: entry.ordinal,
       blockId: detail.context.selected!.id,
-      expectedUpdatedAt: detail.context.selected!.updatedAt,
+      expectedRevision: detail.context.selected!.revision,
       buffer,
     };
     detail.previewRegions.focusedRegionId = entry.occurrenceId;

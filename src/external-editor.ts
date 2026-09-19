@@ -35,7 +35,7 @@ export class ExternalEditorError extends Error {
 
 export interface ExternalEditorInput {
   readonly text: string;
-  readonly expectedUpdatedAt: string;
+  readonly expectedRevision: string;
 }
 
 export interface ExternalEditorResult {
@@ -133,7 +133,7 @@ export interface ExternalEditorOptions {
   readonly temporaryRoot?: string;
   readonly suspendTerminal: () => void | Promise<void>;
   readonly restoreTerminal: () => void | Promise<void>;
-  readonly currentUpdatedAt: () => Promise<string>;
+  readonly currentRevision: () => Promise<string>;
   readonly run?: ExternalEditorRunner;
 }
 
@@ -346,9 +346,9 @@ export async function editTextInExternalEditor(
     throw failure("read-failed", "The external editor returned no readable text", filePath);
   }
 
-  let currentUpdatedAt: string;
+  let currentRevision: string;
   try {
-    currentUpdatedAt = await options.currentUpdatedAt();
+    currentRevision = await options.currentRevision();
   } catch (error) {
     throw failure(
       "conflict-check-failed",
@@ -357,7 +357,7 @@ export async function editTextInExternalEditor(
       error,
     );
   }
-  if (currentUpdatedAt !== input.expectedUpdatedAt) {
+  if (currentRevision !== input.expectedRevision) {
     throw failure(
       "version-conflict",
       "The canonical block changed while the external editor was open; the Detail draft was not changed",
