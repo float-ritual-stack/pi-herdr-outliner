@@ -26,7 +26,7 @@ import { isWorkIdAddress } from "./page-addresses";
 import type {
   Block,
   BlockReferenceResolution,
-  TreePreviewReference,
+  TreeIndexBlock,
   OutlinerNavigationIntent,
   PageAddressFollowResult,
   PageAddressResolution,
@@ -560,13 +560,21 @@ export interface OutlinerTextLinker {
 }
 
 export function createOutlinerTextLinker(
-  resolved: readonly (BlockReferenceResolution | TreePreviewReference)[],
+  resolved: readonly BlockReferenceResolution[] | Pick<TreeIndexBlock, "preview" | "previewReferences">,
   hasBlock: (blockId: string) => boolean,
   workIdPrefix: string | null = null,
 ): OutlinerTextLinker {
-  const references = resolved.map(reference => ({
+  const references = "preview" in resolved ? resolved.previewReferences.map(reference => ({
+    visible: resolved.preview.slice(reference.start, reference.end),
+    start: reference.start,
+    end: reference.end,
+    uri: reference.target
+      ? outlinerLinkUri("block", reference.target.blockId, { fragmentId: reference.target.fragmentId })
+      : null,
+  })) : resolved.map(reference => ({
     visible: blockReferenceDisplayText(reference),
-    ...("start" in reference ? { start: reference.start, end: reference.end } : {}),
+    start: undefined,
+    end: undefined,
     uri: reference.status === "resolved" || reference.status === "deleted"
       ? outlinerLinkUri("block", reference.blockId, { fragmentId: reference.fragmentId })
       : null,
@@ -582,7 +590,12 @@ export function createOutlinerTextLinker(
         let start = reference.start === undefined
           ? text.indexOf(reference.visible)
           : reference.start + referenceOffset;
-        if (reference.start !== undefined && text.slice(start, reference.end! + referenceOffset) !== reference.visible) continue;
+        if (reference.start !== undefined && text.slice(start, reference.end! + referenceOffset) !== reference.visible) {
+          let retained = 0;
+          while (retained < reference.visible.length && text[start + retained] === reference.visible[retained]) retained += 1;
+          if (retained > 0) exactSpans.push({ start, end: start + retained, uri: null });
+          continue;
+        }
         while (
           start >= 0 &&
           referenceRanges.some((range) =>

@@ -506,7 +506,7 @@ export function renderTreeFrame(
     const document = row.multilineExpanded ? view.expandedDocuments.get(block.id) : undefined;
     if (row.multilineExpanded && !document) throw new Error(`Missing expanded Tree document: ${block.id}`);
     const linker = createOutlinerTextLinker(
-      document?.resolved.references ?? block.previewReferences,
+      document?.resolved.references ?? block,
       (blockId) => view.physicalBlocksById.has(blockId),
       view.workIdPrefix,
     );

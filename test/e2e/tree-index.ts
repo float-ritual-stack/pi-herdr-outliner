@@ -86,7 +86,7 @@ const result = await runHerdrScenario({
     await session.waitVisible(remote.tree, "Literal ((same)) then ((same))");
     await session.checkpoint("02-reference-provenance");
     const previewReferences = byId.get(reference.id)!.previewReferences;
-    assert.deepEqual(previewReferences, [{ blockId: card.id, label: "same", status: "resolved", start: 22, end: 30 }]);
+    assert.deepEqual(previewReferences, [{ start: 22, end: 30, target: { blockId: card.id } }]);
     await session.record("compact-reference-provenance", { sourceId: reference.id, hiddenTargetId: long.id, visibleTargetId: card.id,
       previewReferences, limitation: "Herdr pane.read ANSI omits OSC 8 metadata; emitted hyperlink columns are verified by the renderer regression, not these captured frames" });
     await goto("END-OF-EXACT-EDIT", editable.id);

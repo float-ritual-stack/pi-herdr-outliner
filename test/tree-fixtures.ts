@@ -22,7 +22,13 @@ export function treeIndexFixture(
     const start = occurrence.start + offset;
     const end = start + blockReferenceDisplayText(reference).length;
     offset += end - start - (occurrence.end - occurrence.start);
-    return { ...reference, start, end };
+    return {
+      start,
+      end: Math.min(end, title.length > 512 ? 511 : title.length),
+      target: end <= (title.length > 512 ? 511 : title.length) && (reference.status === "resolved" || reference.status === "deleted")
+        ? { blockId: reference.blockId, ...(reference.fragmentId ? { fragmentId: reference.fragmentId } : {}) }
+        : null,
+    };
   });
   return {
     ...metadata,

@@ -1057,9 +1057,10 @@ export interface TreeIndexBlock extends Omit<VisibleBlock, "text" | "displayText
   textDigest: string;
 }
 
-export interface TreePreviewReference extends BlockReferenceResolution {
+export interface TreePreviewReference {
   start: number;
   end: number;
+  target: Pick<BlockReferenceResolution, "blockId" | "fragmentId"> | null;
 }
 
 export interface TreeIndexCollection {

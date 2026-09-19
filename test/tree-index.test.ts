@@ -20,10 +20,42 @@ test("compact references retain source identity after hidden properties and repe
     const source = store.create(`[related::((${hidden.id}|same))]\nLiteral ((same)) then ((${visible.id}|same))`);
     const entry = store.readTreeIndex().blocks.find(block => block.id === source.id)!;
     expect(entry.preview).toBe("Literal ((same)) then ((same))");
-    expect(entry.previewReferences.map(reference => reference.blockId)).toEqual([visible.id]);
-    const rendered = createOutlinerTextLinker(entry.previewReferences, () => true).link(entry.preview);
+    expect(entry.previewReferences.map(reference => reference.target?.blockId)).toEqual([visible.id]);
+    const rendered = createOutlinerTextLinker(entry, () => true).link(entry.preview);
     expect(getOsc8LinkAtColumn(rendered, entry.preview.indexOf("same"))).toBeUndefined();
     expect(getOsc8LinkAtColumn(rendered, entry.preview.lastIndexOf("same"))).toBe(outlinerLinkUri("block", visible.id));
+  } finally {
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("preview truncation retains nonactionable reference provenance", () => {
+  const directory = mkdtempSync(join(tmpdir(), "outliner-tree-index-partial-reference-"));
+  const store = new OutlinerStore(join(directory, "outliner.sqlite"));
+  try {
+    const target = store.create("Reference target without the requested fragment");
+    const alias = store.create("Unrelated live block");
+    const source = store.create(`((${target.id}^gone|${alias.id} ${"x".repeat(600)}))`);
+    const entry = store.readTreeIndex().blocks.find(block => block.id === source.id)!;
+    expect(entry.previewReferences).toEqual([{ start: 0, end: 511, target: null }]);
+    const rendered = createOutlinerTextLinker(entry, () => true).link(entry.preview);
+    expect(getOsc8LinkAtColumn(rendered, 2)).toBeUndefined();
+  } finally {
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("preview newline flattening cannot create a reference absent from authored text", () => {
+  const directory = mkdtempSync(join(tmpdir(), "outliner-tree-index-authored-reference-"));
+  const store = new OutlinerStore(join(directory, "outliner.sqlite"));
+  try {
+    const target = store.create("Reference target");
+    const source = store.create(`See ((${target.id}|line\nbreak))`);
+    const entry = store.readTreeIndex().blocks.find(block => block.id === source.id)!;
+    expect(entry.preview).toBe(`See ((${target.id}|line ↵ break))`);
+    expect(entry.previewReferences).toEqual([]);
   } finally {
     store.close();
     rmSync(directory, { recursive: true, force: true });
@@ -157,12 +189,72 @@ test("compact previews retain resolved fragment links and the exact authored-tex
     const entry = store.readTreeIndex().blocks.find(block => block.id === source.id)!;
     expect(entry.preview).toBe("See ((the paragraph))");
     expect(entry.previewReferences).toEqual([{
-      blockId: target.id, fragmentId: "anchor", label: "the paragraph", status: "resolved", start: 4, end: 21,
+      start: 4, end: 21, target: { blockId: target.id, fragmentId: "anchor" },
     }]);
     const authored = readAuthoredLinks(store, source.id);
     expect(authored.kind).toBe("ready");
     if (authored.kind === "ready") expect(entry.textDigest).toBe(authored.ownerTextDigest);
     expect(JSON.stringify(entry)).not.toContain("Unshown body");
+  } finally {
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("compact previews retain references by source span rather than matching labels", () => {
+  const directory = mkdtempSync(join(tmpdir(), "outliner-tree-index-reference-spans-"));
+  const store = new OutlinerStore(join(directory, "outliner.sqlite"));
+  try {
+    const hidden = store.create("Shared title");
+    const visible = store.create("Shared title");
+    const hiddenRef = `((${hidden.id}|same))`;
+    const visibleRef = `((${visible.id}|same))`;
+    const cases = [
+      {
+        text: `[related::${hiddenRef}] See ${visibleRef} [type::note]`,
+        preview: "See ((same))", ids: [visible.id],
+      },
+      {
+        text: `[related::${hiddenRef}]\r\n  See ${visibleRef}  \r\n${hiddenRef}`,
+        preview: "See ((same))", ids: [visible.id],
+      },
+      {
+        text: `[related::${hiddenRef}] Literal ((same)) [type::note]`,
+        preview: "Literal ((same))", ids: [],
+      },
+      {
+        text: `See ${visibleRef} [related::${hiddenRef}] then ${visibleRef} [type::note]`,
+        preview: "See ((same))  then ((same))", ids: [visible.id, visible.id],
+      },
+      {
+        text: `[related::((${hidden.id}))] See ((${visible.id})) [type::note]`,
+        preview: "See ((Shared title))", ids: [visible.id],
+      },
+      {
+        text: `Header\r\n${visibleRef}\n${hiddenRef}`,
+        preview: "Header ↵ ((same)) ↵ ((same))", ids: [visible.id, hidden.id],
+      },
+      {
+        text: `((same)) ${"x".repeat(496)}${hiddenRef}`,
+        preview: `((same)) ${"x".repeat(496)}((same…`, ids: [],
+      },
+      {
+        text: `${"x".repeat(503)}${visibleRef}tail`,
+        preview: `${"x".repeat(503)}((same))…`, ids: [visible.id],
+      },
+      {
+        text: `[related::${hiddenRef}]`,
+        ids: [],
+      },
+    ];
+    const sources = cases.map(fixture => store.create(fixture.text));
+    const index = store.readTreeIndex();
+    for (const [i, fixture] of cases.entries()) {
+      const source = sources[i]!;
+      const entry = index.blocks.find(block => block.id === source.id)!;
+      expect(entry.preview).toBe(fixture.preview ?? source.id);
+      expect(entry.previewReferences.flatMap(reference => reference.target ? [reference.target.blockId] : [])).toEqual(fixture.ids);
+    }
   } finally {
     store.close();
     rmSync(directory, { recursive: true, force: true });
@@ -182,7 +274,7 @@ test("bounded Tree previews preserve graphemes and do not transfer an aliased ta
     expect(index.blocks.find(block => block.id === source.id)!.preview).toBe("x".repeat(510) + "…");
     const aliased = index.blocks.find(block => block.id === alias.id)!;
     expect(aliased.preview).toBe("Open ((short))");
-    expect(aliased.previewReferences).toEqual([{ blockId: target.id, label: "short", status: "resolved", start: 5, end: 14 }]);
+    expect(aliased.previewReferences).toEqual([{ start: 5, end: 14, target: { blockId: target.id } }]);
     expect(Buffer.byteLength(JSON.stringify(aliased))).toBeLessThan(1_000);
     const focused = store.focusTree(target.id);
     expect(focused.matches[0]!.title).toHaveLength(512);

@@ -456,6 +456,21 @@ describe("renderTreeFrame", () => {
     expect(getOsc8LinkAtColumn(line, visible.indexOf("same"))).toBeUndefined();
     expect(getOsc8LinkAtColumn(line, visible.lastIndexOf("same"))).toBe(`pi-outliner://block/${targetId}`);
   });
+  test("clipping a stale reference cannot activate its canonical-ID alias", () => {
+    const targetId = "550e8400-e29b-41d4-a716-446655440006";
+    const aliasId = "550e8400-e29b-41d4-a716-446655440007";
+    const source = block("stale-reference-source", {
+      text: `((${targetId}^gone|${aliasId}))`,
+      displayText: `((${aliasId} · Missing fragment))`,
+    });
+    const tree = view([source, block(targetId), block(aliasId)]);
+    for (const width of [100, 44]) {
+      const line = renderTreeFrame(tree, width, 12).frame.split("\n")
+        .find(line => stripTerminalSequences(line).includes(`((${aliasId}`))!;
+      expect(line).toBeDefined();
+      expect(getOsc8LinkAtColumn(line, stripTerminalSequences(line).indexOf(aliasId))).toBeUndefined();
+    }
+  });
   test("links only Work IDs for the configured project prefix", () => {
     const linked = block("custom-work", {
       text: "ABC-001 and PIE-001",
