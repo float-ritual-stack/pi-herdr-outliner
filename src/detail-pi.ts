@@ -358,6 +358,7 @@ async function openTargetInNewDetail(
 const effects: DetailEffects = {
   clientId,
   browsingContextId,
+  enqueueViewUpdate: enqueueWork,
   focusSelf() {
     if (process.env.HERDR_ENV === "1") focusCurrentPane();
   },

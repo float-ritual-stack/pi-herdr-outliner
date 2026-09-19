@@ -23,7 +23,8 @@
     "test:e2e:edit-conflicts": "bun run test/e2e/edit-conflicts.ts",
     "test:e2e:file-revisions": "bun run test/e2e/file-revisions.ts",
     "test:e2e:file-authority": "bun run test/e2e/file-authority.ts && bun run test/e2e/file-authority.ts --ansi",
-    "test:e2e:tree-index": "bun run test/e2e/tree-index.ts && bun run test/e2e/tree-index.ts --forwarded"
+    "test:e2e:tree-index": "bun run test/e2e/tree-index.ts && bun run test/e2e/tree-index.ts --forwarded",
+    "test:e2e:detail-progressive": "bun run test/e2e/detail-progressive.ts && bun run test/e2e/detail-progressive.ts --forwarded"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "^0.84.2",

@@ -61,7 +61,7 @@ const result = await runHerdrScenario({
       blockCount: 1000, bodySizeBands: sizes, bandPercentages: [19, 32, 40, 8, 1], taggedFillers: "every other document", fixtureExceptions: "seeded documents and seven navigation/edit/projection targets",
       timingScope: "direct service request/parse and client projection, before independent Tree launch; same host" });
 
-    const remote = await session.openRemoteBrowsingContext("pi-tui", transport);
+    const remote = await session.openRemoteBrowsingContext({ treeTransport: transport });
     await session.waitVisible(remote.tree, "1000 physical blocks");
     const coldRequests = session.forwardedTreeRequests();
     if (transport === "forwarded") {

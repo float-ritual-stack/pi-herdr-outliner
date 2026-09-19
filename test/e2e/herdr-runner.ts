@@ -18,7 +18,7 @@ import { join, resolve, sep } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { OutlinerClient } from "../../src/client";
 import { resolvePaths } from "../../src/paths";
-import { forwardService, type ForwardedRequest } from "./service-forwarder";
+import { forwardService, type ForwardedRequest, type OptionalResponseMatch, type ResponseBarrier } from "./service-forwarder";
 import {
   OUTLINER_PROTOCOL_VERSION,
   type OutlinerClientRegistration,
@@ -40,8 +40,10 @@ export interface HerdrScenarioSession {
   rejectCompetingService(): Promise<CommandResult>;
   attachClient(): Promise<{ write(input: string): Promise<void>; visible(): Promise<string> }>;
   openCapturePopup(blockId: string, socketPath: string): Promise<void>;
-  openRemoteBrowsingContext(renderer?: "pi-tui" | "ansi", treeTransport?: "direct" | "forwarded"): Promise<{ workspaceRoot: string; tree: string; detail: string; firstTreeFrameMs: number }>;
+  openRemoteBrowsingContext(options?: { renderer?: "pi-tui" | "ansi"; treeTransport?: "direct" | "forwarded"; detailTransport?: "direct" | "forwarded" }): Promise<{ workspaceRoot: string; tree: string; detail: string; firstTreeFrameMs: number }>;
   forwardedTreeRequests(): readonly ForwardedRequest[];
+  forwardedDetailRequests(): readonly ForwardedRequest[];
+  holdDetailResponse(match: OptionalResponseMatch): ResponseBarrier;
   focus(paneId: string): Promise<void>;
   keys(paneId: string, ...keys: string[]): Promise<void>;
   text(paneId: string, text: string): Promise<void>;
@@ -590,12 +592,13 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
   let primaryFailurePhase: string | undefined;
   const evidenceErrors: unknown[] = [];
   const cleanupErrors: unknown[] = [];
-  const resources: { server: ChildProcess | null; database: Database | null; client: Bun.Subprocess | null; screen: Screen | null; treeForwarder: Awaited<ReturnType<typeof forwardService>> | null } = {
+  const resources: { server: ChildProcess | null; database: Database | null; client: Bun.Subprocess | null; screen: Screen | null; treeForwarder: Awaited<ReturnType<typeof forwardService>> | null; detailForwarder: Awaited<ReturnType<typeof forwardService>> | null } = {
     server: null,
     database: null,
     client: null,
     screen: null,
     treeForwarder: null,
+    detailForwarder: null,
   };
   let serverLaunchError: Error | null = null;
   let clientOutput = "";
@@ -862,7 +865,14 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
       forwardedTreeRequests() {
         return resources.treeForwarder?.measurements() ?? [];
       },
-      async openRemoteBrowsingContext(renderer = "pi-tui", treeTransport = "direct") {
+      forwardedDetailRequests() {
+        return resources.detailForwarder?.measurements() ?? [];
+      },
+      holdDetailResponse(match) {
+        if (!resources.detailForwarder) throw new Error("Detail response barriers require the private forwarded transport");
+        return resources.detailForwarder.holdNext(match);
+      },
+      async openRemoteBrowsingContext({ renderer = "pi-tui", treeTransport = "direct", detailTransport = "direct" } = {}) {
         if (extraPanes.remoteTree) throw new Error("This fixture already owns a remote browsing context");
         const workspaceRoot = join(runRoot, "client-project");
         await mkdir(workspaceRoot);
@@ -873,6 +883,9 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
         if (treeTransport === "forwarded") {
           resources.treeForwarder = await forwardService(join(runRoot, "tree-forward.sock"), socket);
         }
+        if (detailTransport === "forwarded") {
+          resources.detailForwarder = await forwardService(join(runRoot, "detail-forward.sock"), socket);
+        }
         const clientEnvironment = {
           OUTLINER_WORKSPACE_ROOT: workspaceRoot,
           OUTLINER_REMOTE: "1",
@@ -881,8 +894,9 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
           OUTLINER_DETAIL_RENDERER: renderer,
         };
         const open = async (entrypoint: "outliner" | "detail", target: string): Promise<string> => {
-          const paneEnvironment = entrypoint === "outliner" && resources.treeForwarder
-            ? { ...clientEnvironment, OUTLINER_SOCKET_PATH: resources.treeForwarder.socketPath }
+          const forwarder = entrypoint === "outliner" ? resources.treeForwarder : resources.detailForwarder;
+          const paneEnvironment = forwarder
+            ? { ...clientEnvironment, OUTLINER_SOCKET_PATH: forwarder.socketPath }
             : clientEnvironment;
           const output = await runHerdr([
             "plugin", "pane", "open", "--plugin", PLUGIN_ID, "--entrypoint", entrypoint,
@@ -920,7 +934,8 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
             values.some(value => value.contextId === contextId && value.role === "detail" && value.runtime?.paneId === detail),
         });
         await artifacts.write("process-environments.json", processEvidence);
-        await artifacts.write("remote-browsing-context.json", { workspaceRoot, serviceRoot: projectRoot, tree, detail, contextId, clientEnvironment, treeTransport, treeSocket: resources.treeForwarder?.socketPath ?? socket, firstTreeFrameMs,
+        await artifacts.write("remote-browsing-context.json", { workspaceRoot, serviceRoot: projectRoot, tree, detail, contextId, clientEnvironment, treeTransport, treeSocket: resources.treeForwarder?.socketPath ?? socket,
+          detailTransport, detailSocket: resources.detailForwarder?.socketPath ?? socket, firstTreeFrameMs,
           timingScope: "launch to first observed populated Tree frame; includes host/process verification and polling overhead" });
         return { workspaceRoot, tree, detail, firstTreeFrameMs };
       },
@@ -1399,13 +1414,14 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
     resources.database = null;
 
     phase = "cleanup";
-    if (resources.treeForwarder) {
+    for (const [view, forwarder] of [["tree", resources.treeForwarder], ["detail", resources.detailForwarder]] as const) {
+      if (!forwarder) continue;
       try {
-        await artifacts.write("forwarded-tree-requests.json", resources.treeForwarder.measurements());
+        await artifacts.write(`forwarded-${view}-requests.json`, forwarder.measurements());
       } catch (error) {
         evidenceErrors.push(error);
       } finally {
-        await resources.treeForwarder.close().catch(error => cleanupErrors.push(error));
+        await forwarder.close().catch(error => cleanupErrors.push(error));
       }
     }
     if (resources.client) {
