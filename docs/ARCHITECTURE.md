@@ -28,7 +28,23 @@ flowchart LR
 - service-pane registration, and
 - the live Herdr runtime-registry runner when Herdr is available.
 
-The service is the only process that opens the workspace SQLite database. It logs the resolved socket and database paths after startup and handles orderly shutdown on `SIGINT`, `SIGTERM`, or `SIGHUP`.
+The service is the only process that opens the workspace SQLite database for
+writing. `OutlinerStore` acquires exclusive workspace ownership before opening
+that database, including migrations and interrupted-work recovery. The lock is
+a held SQLite writer reservation (`BEGIN IMMEDIATE`) on a `.owner.sqlite` file beside
+the canonical database path. It contains no application data. The sidecar stays
+in place; closing the store or process death releases its OS lock. Read-only
+observers of the application database remain supported. Store initialization
+failure also releases ownership. Service shutdown removes its pane metadata
+before releasing ownership.
+
+All writable owners must use this contract. When upgrading from a version that
+predates ownership locking, stop its service before starting the new version;
+the old binary does not acquire this lock. As with the application SQLite
+database, use local storage and do not remove or replace the lock file while an
+owner is running.
+
+The service logs the resolved socket and database paths after startup and handles orderly shutdown on `SIGINT`, `SIGTERM`, or `SIGHUP`.
 
 ### Tree client
 

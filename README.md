@@ -1206,10 +1206,25 @@ Product actions and assertions stay in `test/e2e/resource-authoring.ts`.
 This covers the keyboard path through real PTYs, not mouse input, an attached
 Herdr GUI, or live terminal resize.
 
+The workspace-ownership journey is a separate service regression:
+
+```sh
+bun run test:e2e:ownership
+```
+
+It holds a real HTTP refresh at a fixture barrier, starts a competing service,
+checks that the live refresh, sequence, and service-pane registration stay
+unchanged, and displays the original owner's completed result in Detail. It
+uses the same private Herdr runner and retained artifacts. Resource setup and
+refresh use production RPC; this is a service/visible-result check, not a
+keyboard authoring claim. `test/workspace-ownership-process.test.ts` additionally
+covers simultaneous service starts and legitimate recovery after `SIGKILL`.
+
 ## Project documents
 
 - [Architecture](docs/ARCHITECTURE.md)
 - [Contributing and delivery workflow](CONTRIBUTING.md)
+- [Proposed safety and Herdr/Pi implementation plan](docs/IMPLEMENTATION_PLAN.md)
 - [OpenCode port requirements](docs/OPENCODE_PORT.md)
 - [Archived early feedback](docs/archive/misc-feedback.md)
 

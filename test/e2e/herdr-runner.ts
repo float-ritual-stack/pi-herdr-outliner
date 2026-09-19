@@ -34,6 +34,8 @@ export interface HerdrScenarioSession {
   readonly artifactDirectory: string;
   readonly panes: { launcher: string; service: string; tree: string; detail: string };
   readonly database: Database;
+  readonly client: OutlinerClient;
+  rejectCompetingService(): Promise<CommandResult>;
   focus(paneId: string): Promise<void>;
   keys(paneId: string, ...keys: string[]): Promise<void>;
   text(paneId: string, text: string): Promise<void>;
@@ -240,6 +242,7 @@ async function runCommand(options: {
   artifacts: Artifacts;
   timeoutMs?: number;
   signal?: AbortSignal;
+  expectedExitCode?: number;
 }): Promise<CommandResult> {
   const timeoutMs = options.timeoutMs ?? COMMAND_TIMEOUT_MS;
   await options.artifacts.event("request", {
@@ -270,7 +273,7 @@ async function runCommand(options: {
     stdout,
     stderr,
   });
-  if (exitCode !== 0) {
+  if (exitCode !== (options.expectedExitCode ?? 0)) {
     throw new Error(`command exited ${exitCode}: ${commandDisplay(options.args).join(" ")}\nstdout:\n${stdout}\nstderr:\n${stderr}`);
   }
   return { stdout, stderr, exitCode };
@@ -739,6 +742,20 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
       artifactDirectory,
       panes: ownedPanes,
       database: readonlyDatabase,
+      client: new OutlinerClient(resolvePaths({
+        OUTLINER_STATE_DIR: outlinerState,
+        OUTLINER_WORKSPACE_ROOT: projectRoot,
+      }).socket),
+      rejectCompetingService() {
+        return runCommand({
+          args: [process.execPath, "run", join(pluginRoot, "src/server-main.ts")],
+          cwd: pluginRoot,
+          env: { ...environment, OUTLINER_WORKSPACE_ROOT: projectRoot },
+          artifacts,
+          signal: abort.signal,
+          expectedExitCode: 1,
+        });
+      },
       async focus(paneId) {
         requireOwned(paneId);
         await runHerdr(["plugin", "pane", "focus", paneId]);
