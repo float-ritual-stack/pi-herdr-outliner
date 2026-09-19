@@ -16,19 +16,21 @@ export function treeIndexFixture(
     ? firstLineWithoutPropertyTokens(text)?.trim() || metadata.id
     : text.replace(/\r?\n/g, " ↵ ");
   const occurrences = blockReferenceOccurrences(source);
+  const previewEnd = title.length > 512 ? 511 : title.length;
   let offset = 0;
-  const references = resolveBlockReferencesWithStatus(source, lookup).references.map((reference, index) => {
+  const references = resolveBlockReferencesWithStatus(source, lookup).references.flatMap((reference, index) => {
     const occurrence = occurrences[index]!;
     const start = occurrence.start + offset;
     const end = start + blockReferenceDisplayText(reference).length;
     offset += end - start - (occurrence.end - occurrence.start);
-    return {
+    if (start >= previewEnd) return [];
+    return [{
       start,
-      end: Math.min(end, title.length > 512 ? 511 : title.length),
-      target: end <= (title.length > 512 ? 511 : title.length) && (reference.status === "resolved" || reference.status === "deleted")
+      end: Math.min(end, previewEnd),
+      target: end <= previewEnd && (reference.status === "resolved" || reference.status === "deleted")
         ? { blockId: reference.blockId, ...(reference.fragmentId ? { fragmentId: reference.fragmentId } : {}) }
         : null,
-    };
+    }];
   });
   return {
     ...metadata,

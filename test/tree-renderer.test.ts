@@ -456,6 +456,22 @@ describe("renderTreeFrame", () => {
     expect(getOsc8LinkAtColumn(line, visible.indexOf("same"))).toBeUndefined();
     expect(getOsc8LinkAtColumn(line, visible.lastIndexOf("same"))).toBe(`pi-outliner://block/${targetId}`);
   });
+  test("compact fixtures omit hidden reference spans and retain clipped spans without targets", () => {
+    const targetId = "550e8400-e29b-41d4-a716-446655440006";
+    const target = block(targetId);
+    for (const start of [500, 511, 600]) {
+      const prefix = "x".repeat(start);
+      const source = block("reference-source", {
+        text: `${prefix}((${targetId}|long reference))`,
+        displayText: `${prefix}((long reference))`,
+      });
+      const compact = treeIndexFixture(source, id => id === targetId ? target : null);
+      expect(compact.preview.length).toBe(512);
+      expect(compact.previewReferences).toEqual(
+        start < 511 ? [{ start, end: 511, target: null }] : [],
+      );
+    }
+  });
   test("clipping a stale reference cannot activate its canonical-ID alias", () => {
     const targetId = "550e8400-e29b-41d4-a716-446655440006";
     const aliasId = "550e8400-e29b-41d4-a716-446655440007";
