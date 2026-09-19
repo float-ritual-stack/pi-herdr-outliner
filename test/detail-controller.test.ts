@@ -71,7 +71,7 @@ function filePreview(overrides: Partial<ReferencedFile> = {}): ReferencedFile {
     sourcePath: "src/example.ts",
     lines: ["one", "two", "three", "four", "five", "six", "seven", "eight"],
     firstLine: 10,
-    sourceVersion: "1770000000000000000:39",
+    sourceVersion: `1770000000000000000:39:${"a".repeat(64)}`,
     sourceHash: "filesystem-content-hash",
     capturedAt: "2026-02-02T00:00:00.000Z",
     ...overrides,

@@ -36,6 +36,9 @@ views beside agents, and persistent activity displays remain valid Herdr uses.
   exclusive writable-store ownership and its real-service regression.
 - S2 / PIE-276, [PR #120](https://github.com/float-ritual-stack/pi-herdr-outliner/pull/120):
   payload-bound capture receipts, uncertain-submission recovery, and real popup proof.
+- S3 / PIE-277, [PR #121](https://github.com/float-ritual-stack/pi-herdr-outliner/pull/121):
+  required atomic block edit revisions, migrated writers, and actual stale-save
+  and sibling-reorder proof. Position changes do not invalidate text drafts.
 
 Preserve these behaviors. PIE-270 does not establish progressive cold loading,
 Tree body caching, Resource caching, or structural conflict protection for all
@@ -53,8 +56,9 @@ not one large PR.
 | --- | --- | --- | --- |
 | Shipped foundation | S1 / PIE-275: own the workspace before writable startup | BLOCKER addressed: a second launch could invalidate live work. | Preserve the ownership and recovery regressions. |
 | Shipped foundation | S2 / PIE-276: bind capture receipts to submissions | BLOCKER addressed: a retry could discard newly typed text. | S1 before deploying any required receipt migration; attached-client support for popup proof. |
-| After S2 in the queue | S3 / PIE-277: enforce block edit revisions | BAD DESIGN: silent stale writes and common false conflicts. | S1 before migration; one coordinated protocol/caller cutover. |
+| Shipped foundation | S3 / PIE-277: enforce block edit revisions | BAD DESIGN addressed: silent stale writes and common false conflicts. | Preserve migration, required-token, stale-write, and sibling-reorder regressions. |
 | After S3 in the queue | S4 / PIE-278: identify file contents in revisions | BUG: equal size/time can conceal changed bytes. | Focused file-write contract test and live Detail save path. |
+| Separate safety follow-up | PIE-280: preserve external edits during file replacement | BUG: another writer can lose bytes between validation and rename. | Choose a supported commit/recovery contract; hashing alone does not solve it. Consult the workboard for scheduling. |
 | After S4 in the queue | S5 / PIE-279: make file reads service-owned | BAD DESIGN: preview routes can read different hosts' bytes. | Preserve passive-read semantics and explicit resource creation. |
 | Alongside safety work | I1: observers are not destinations | BUG: navigator subscriptions advertise a false Detail identity. | Narrow subscription change; attached-client popup proof. |
 | Alongside safety work | I2: chooser destination outcomes | BUG: missing eligible readers do not consistently trigger the offered split action. | Typed routing result and all chooser callers updated. |
@@ -160,7 +164,8 @@ Record tool/dependency versions where the behavior depends on them.
 
 ## Safety packages
 
-S1 (`test/e2e/workspace-ownership.ts`) and S2 (`test/e2e/capture-retry.ts`) have runnable scenarios. The remaining new scenario filenames below are planned files, not commands that exist today.
+S1-S4 have runnable scenarios identified below. Other new scenario filenames are
+planned files, not commands that exist today.
 Each defect needs a focused regression that fails before its fix, plus evidence
 from the real service or UI path appropriate to the claim.
 
@@ -238,7 +243,7 @@ Change `src/resources.ts` revision normalization/comparison and
 `src/resource-catalog.ts` filesystem read/write handling. Include the existing
 content hash consistently in authoritative revisions, including pinned reads.
 
-Proposed scenario: `test/e2e/file-revisions.ts`. Open a real Detail edit, replace
+Scenario: `bun run test:e2e:file-revisions` (`test/e2e/file-revisions.ts`). Open a real Detail edit, replace
 the file externally with same-sized bytes and restored modification time, then
 save. Reject the stale save, retain the draft, and preserve the external bytes.
 
@@ -248,6 +253,14 @@ does not constrain an external editor. Record the supported writer/recovery
 contract and the bounded reproduction before choosing a permanent fix. Track it
 separately if the revision change lands first; do not claim all file-write races
 are solved by that change.
+
+The interval is now reproduced with a separate process writing at the final rename
+boundary. PIE-280 (`257e4e40-31c1-45b9-b8ca-7fb853af29fc`) owns the unresolved
+commit/recovery contract. Current saves detect stale content at validation but
+require exclusion of external writes through replacement; they provide no
+recovery copy for that interval. Keep PIE-280 open when S4's revision identity
+lands. Its fix must reject a conflicting commit or retain both versions durably,
+including failure during commit. Do not hide this behind another internal lock.
 
 ### S5 — one file-reading authority (F4; PIE-279)
 

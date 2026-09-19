@@ -746,6 +746,12 @@ Long physical lines wrap without changing raw text. Continuation rows remain ass
 
 External block editing never writes the canonical block directly. From preview it first opens and locks an ordinary Detail draft; from edit mode it sends the exact unsaved buffer. Save and Esc remain the block commit/discard boundary. Writable, unpinned text filesystem Resources use the same private editor adapter, but a changed returned draft is revision-checked and written back to the source immediately; `e` instead opens the built-in buffer and commits through `Ctrl+S`. Detail uses exported `$VISUAL` or `$EDITOR` directly; when Herdr's plugin environment omits them, it reads those values and `PATH` from the user's interactive shell without evaluating the editor value as shell code. Outliner leaves the alternate screen, waits for that editor in the same local or SSH/Herdr PTY, restores the originating Detail and viewport, then imports valid UTF-8 only if the captured block version or filesystem revision is unchanged. Failed launches, nonzero exits, restoration failures, and version conflicts preserve the private recovery file and leave canonical content unchanged.
 
+Filesystem saves compare the opened file's content hash, size, and modification
+time; a conflict retains the Detail draft and leaves the file unchanged. The
+check and final rename are separate operations: avoid concurrent external writes
+during a save. Writes in that interval can still be overwritten without an
+automatic recovery copy; PIE-280 tracks this remaining limitation.
+
 In edit mode, wheel/trackpad input scrolls the region under the pointer. Editor scrolling changes only its visual viewport; it never moves the text cursor. The next keyboard cursor movement restores cursor-follow. A primary press-drag-release gesture in the editor maps through headers, split geometry, line-number width, wrapping, tabs, grapheme boundaries, and Unicode display width to a valid source range, with edge dragging scrolling the editor viewport. Preview clicks retain their existing link and region actions.
 
 Wide split scrolling is independent by default. `Ctrl+L` enables an ephemeral linked mode, shown by `↔` in the editor header. Linked movement uses draft source-line anchors rather than proportional row offsets; generated projections without a shared raw-source anchor leave the peer unchanged. Link state and manual viewport state reset on edit-session or viewport changes and never modify block text.
@@ -1237,6 +1243,18 @@ production code has no test switches. Raw PTY output and current rendered screen
 (decoded with test-only `@xterm/headless`) accompany database snapshots. The
 fixture owns and stops its attached client. This is a local forwarding fixture,
 not two-host SSH evidence, mouse coverage, or multi-client verification.
+
+The editing safety journeys also use the private attached client:
+
+```sh
+bun run test:e2e:edit-conflicts
+bun run test:e2e:file-revisions
+```
+
+They verify stale Detail/CLI rejection, retained drafts, sibling reordering,
+metadata-preserving external file replacement, and explicit cancellation/reload
+before a fresh save. The file journey does not claim to close the separate
+validation/rename race.
 
 ## Project documents
 

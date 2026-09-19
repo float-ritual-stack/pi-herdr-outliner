@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createPdfPageRegionAnchor } from "../src/annotations";
@@ -94,6 +94,71 @@ class PrefixedPdfExtractor implements PdfTextExtractor {
     };
   }
 }
+
+test("filesystem PDF refresh notices replacement bytes despite unchanged file metadata", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pdf-same-metadata-"));
+  const path = join(root, "source.pdf");
+  const store = new OutlinerStore(join(root, "db.sqlite"));
+  try {
+    const firstBytes = fixturePdf(1);
+    const secondBytes = fixturePdf(2);
+    expect(secondBytes.length).toBe(firstBytes.length);
+    writeFileSync(path, firstBytes);
+    utimesSync(path, 1_700_000_000, 1_700_000_000);
+    const resource = store.resources.internFilesystem({ path }).resource;
+    const first = await store.resources.open(resource.id, true);
+    writeFileSync(path, secondBytes);
+    utimesSync(path, 1_700_000_000, 1_700_000_000);
+    const second = await store.resources.refresh(resource.id, true);
+    expect(second.pdf?.markdown).toContain("Durable claim revision 2");
+    expect(second.pdf?.sourceSnapshot.revision).not.toEqual(first.pdf?.sourceSnapshot.revision);
+    expect(store.resources.describe(resource.id, true, first.pdf!.sourceSnapshot.revision).pdf?.markdown)
+      .toContain("Durable claim revision 1");
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("legacy PDF revisions read unique retained evidence and reject ambiguous history", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pdf-legacy-revision-"));
+  const path = join(root, "source.pdf");
+  const databasePath = join(root, "db.sqlite");
+  let store = new OutlinerStore(databasePath);
+  try {
+    writeFileSync(path, fixturePdf(1));
+    const resource = store.resources.internFilesystem({ path }).resource;
+    const first = await store.resources.open(resource.id, true);
+    const revision = first.pdf!.sourceSnapshot.revision;
+    if (revision.revision.kind !== "filesystem") throw new Error("Expected a file revision");
+    const { contentHash: _hash, ...metadata } = revision.revision;
+    const legacy = { ...revision, revision: metadata };
+    // Reconstruct the persisted format issued before filesystem hashes existed.
+    store.database.query("UPDATE pdf_source_snapshots SET revision_json = ? WHERE id = ?")
+      .run(JSON.stringify(legacy), first.pdf!.sourceSnapshot.id);
+    store.close();
+    store = new OutlinerStore(databasePath);
+    const retained = store.resources.describe(resource.id, true, legacy);
+    expect(retained.pdf?.sourceSnapshot.id).toBe(first.pdf!.sourceSnapshot.id);
+    expect(retained.pdf?.markdown).toContain("Durable claim revision 1");
+    const refreshed = await store.resources.refresh(resource.id, true);
+    expect(refreshed.pdf?.sourceSnapshot.revision.revision).toMatchObject({
+      kind: "filesystem", contentHash: first.pdf!.sourceSnapshot.contentHash,
+    });
+    expect(store.resources.describe(resource.id, true, legacy).pdf?.sourceSnapshot.id)
+      .toBe(first.pdf!.sourceSnapshot.id);
+    writeFileSync(path, fixturePdf(2));
+    const second = await store.resources.refresh(resource.id, true);
+    // Two old observations can carry the same metadata while their bytes differ.
+    store.database.query("UPDATE pdf_source_snapshots SET revision_json = ? WHERE id = ?")
+      .run(JSON.stringify(legacy), second.pdf!.sourceSnapshot.id);
+    expect(() => store.resources.describe(resource.id, true, legacy))
+      .toThrow("PDF Resource revision is unavailable");
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("filesystem PDF keeps identity across native/text representations and auditable reanchors", async () => {
   const directory = mkdtempSync(join(tmpdir(), "pi-outliner-pdf-"));

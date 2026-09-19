@@ -86,7 +86,8 @@ export function readReferencedFile(block: Block, workspaceRoot: string): Referen
   if (!stat.isFile()) throw new Error(`Not a regular file: ${sourcePath}`);
   if (stat.size > BigInt(MAX_PREVIEW_BYTES)) throw new Error(`File exceeds the ${MAX_PREVIEW_BYTES / 1024 / 1024} MiB preview limit`);
 
-  const sourceText = readFileSync(absolutePath, "utf8");
+  const bytes = readFileSync(absolutePath);
+  const sourceText = bytes.toString("utf8");
   const allLines = sourceText.split(/\r?\n/);
   const firstLine = Math.max(1, Number(getProperty(block.properties, "line-start") ?? 1));
   const requestedEnd = Number(getProperty(block.properties, "line-end") ?? allLines.length);
@@ -99,7 +100,7 @@ export function readReferencedFile(block: Block, workspaceRoot: string): Referen
     lines: allLines.slice(firstLine - 1, lastLine),
     firstLine,
     sourceText,
-    sourceVersion: `${stat.mtimeNs}:${stat.size}`,
+    sourceVersion: `${stat.mtimeNs}:${stat.size}:${new Bun.CryptoHasher("sha256").update(bytes).digest("hex")}`,
     sourceHash: new Bun.CryptoHasher("sha256").update(sourceText).digest("hex"),
     capturedAt: new Date(Number(stat.mtimeMs)).toISOString(),
   };

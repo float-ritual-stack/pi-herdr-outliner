@@ -916,7 +916,23 @@ row at the prior index or the previous surviving row.
 - The controller keeps the active visual cursor row inside the editor viewport, including completion-height and terminal-size changes.
 - Completion replaces raw line ranges and does not resolve block references into saved text.
 - Ctrl+S uses optimistic concurrency for blocks and writable, unpinned text filesystem Resources. Esc discards the complete edit session.
-- `Edit in $EDITOR` is a draft adapter, not an unchecked storage path: renderer effects resolve exported editor settings directly or recover `VISUAL`, `EDITOR`, and `PATH` from the user's interactive shell when Herdr omits them; the resolved editor value is still parsed and launched without a shell. Renderer effects own private temporary files and terminal yield/restore. The controller imports changed UTF-8 with one `TextBuffer` history entry for blocks only after the captured canonical version still matches; the normal optimistic Save action remains the canonical block mutation boundary. For writable filesystem Resources, the same version check compares the captured `ResourceRevisionRef`, then a provider write atomically replaces the confined source file and reopens the latest representation. Inline Resource edits use the same revision-checked provider write on Ctrl+S.
+- `Edit in $EDITOR` is a draft adapter, not an unchecked storage path: renderer effects resolve exported editor settings directly or recover `VISUAL`, `EDITOR`, and `PATH` from the user's interactive shell when Herdr omits them; the resolved editor value is still parsed and launched without a shell. Renderer effects own private temporary files and terminal yield/restore. The controller imports changed UTF-8 with one `TextBuffer` history entry for blocks only after the captured canonical version still matches; the normal optimistic Save action remains the canonical block mutation boundary. For writable filesystem Resources, the same version check compares the captured `ResourceRevisionRef`, then a provider write replaces the confined source file by rename and reopens the latest representation. Inline Resource edits use the same revision-checked provider write on Ctrl+S.
+
+Filesystem revisions include SHA-256 of the original file bytes alongside size
+and modification time. Text evidence separately hashes the decoded representation.
+Reads of current files, saves, and PDF refreshes compare content identity; equal
+metadata cannot conceal replaced bytes. Old retained references may lack a hash:
+they cannot match a current file revision or authorize a write. A legacy PDF
+reference remains readable only when it identifies one retained immutable snapshot;
+ambiguous history is unavailable. Stored historical evidence is not rewritten
+using today's file contents.
+
+File replacement is still a check followed by rename, not an atomic conditional
+write against arbitrary external editors. Safe use requires excluding external
+writes during that interval. Another process can commit after validation and lose
+its bytes at rename; there is currently no automatic recovery copy. S4 reproduced
+this independently and tracks its permanent commit/recovery contract as PIE-280.
+A hash recheck or service-local mutex does not make external writers cooperate.
 
 Editor undo/redo stores at most 100 per-session snapshots. Consecutive typing, backspace, and forward delete coalesce; cursor and selection state restore with text; divergent edits invalidate redo. New edit/comment sessions start with empty history. Modal editing, registers, macros, and programmable operator systems remain explicit non-goals for the custom buffer.
 
