@@ -7,6 +7,7 @@ import {
   renameSync,
   rmSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -300,6 +301,62 @@ test("filesystem writes enforce the opened revision", () => {
         }),
       "stale-revision",
     );
+  });
+});
+
+test("filesystem revisions reject replacement bytes with unchanged size and modification time", () => {
+  withWorkspace((root, store) => {
+    const path = join(root, "same-metadata.txt");
+    writeFileSync(path, "ORIGINAL");
+    utimesSync(path, 1_700_000_000, 1_700_000_000);
+    const resource = store.resources.internFilesystem({ path }).resource;
+    const opened = store.resources.describe(resource.id, true).filesystem!;
+    writeFileSync(path, "REPLACED");
+    utimesSync(path, 1_700_000_000, 1_700_000_000);
+    const current = store.resources.describe(resource.id, true).filesystem!;
+    expect(current.contentHash).not.toBe(opened.contentHash);
+    expectCatalogError(() => store.resources.describe(resource.id, true, opened.revision), "stale-revision");
+    expectCatalogError(() => store.resources.writeFilesystem({
+      resourceId: resource.id, expectedRevision: opened.revision, text: "MY DRAFT",
+    }), "stale-revision");
+    expect(readFileSync(path, "utf8")).toBe("REPLACED");
+  });
+});
+
+test("legacy metadata-only revisions cannot authorize a current file read or write", () => {
+  withWorkspace((root, store) => {
+    const path = join(root, "legacy-token.txt");
+    writeFileSync(path, "Keep current bytes");
+    const resource = store.resources.internFilesystem({ path }).resource;
+    const opened = store.resources.describe(resource.id, true).filesystem!;
+    if (opened.revision.revision.kind !== "filesystem") throw new Error("Expected a file revision");
+    const { contentHash, ...metadataOnly } = opened.revision.revision;
+    expect(contentHash).toMatch(/^[0-9a-f]{64}$/);
+    const legacy = { ...opened.revision, revision: metadataOnly };
+    expectCatalogError(() => store.resources.describe(resource.id, true, legacy), "stale-revision");
+    expectCatalogError(() => store.resources.writeFilesystem({
+      resourceId: resource.id, expectedRevision: legacy, text: "Unverified replacement",
+    }), "stale-revision");
+    expect(readFileSync(path, "utf8")).toBe("Keep current bytes");
+  });
+});
+
+test("filesystem revision identity uses original bytes even when decoded text is equal", () => {
+  withWorkspace((root, store) => {
+    const path = join(root, "encoded.txt");
+    writeFileSync(path, Buffer.from([0x80]));
+    utimesSync(path, 1_700_000_000, 1_700_000_000);
+    const resource = store.resources.internFilesystem({ path }).resource;
+    const opened = store.resources.describe(resource.id, true).filesystem!;
+    writeFileSync(path, Buffer.from([0x81]));
+    utimesSync(path, 1_700_000_000, 1_700_000_000);
+    const current = store.resources.describe(resource.id, true).filesystem!;
+    expect(current.text).toBe(opened.text);
+    expect(current.contentHash).toBe(opened.contentHash);
+    expectCatalogError(() => store.resources.writeFilesystem({
+      resourceId: resource.id, expectedRevision: opened.revision, text: "Replacement",
+    }), "stale-revision");
+    expect(readFileSync(path)).toEqual(Buffer.from([0x81]));
   });
 });
 

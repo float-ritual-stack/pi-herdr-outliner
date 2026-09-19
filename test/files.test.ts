@@ -24,6 +24,26 @@ test("reads the line range declared by a file-reference block", () => {
   }
 });
 
+test("file-reference evidence keeps the original byte revision separate from decoded text", () => {
+  const workspace = mkdtempSync(join(tmpdir(), "file-byte-evidence-"));
+  const path = join(workspace, "encoded.txt");
+  writeFileSync(path, Buffer.from([0x80]));
+  const store = new OutlinerStore(join(workspace, "db.sqlite"));
+  try {
+    const block = store.create("Encoded [file::encoded.txt]");
+    const preview = readReferencedFile(block, workspace);
+    const resource = store.resources.internFilesystem({ path }).resource;
+    const document = store.resources.describe(resource.id, true).filesystem!;
+    if (document.revision.revision.kind !== "filesystem") throw new Error("Expected file revision");
+    expect(preview.sourceVersion?.split(":")[2]).toBe(document.revision.revision.contentHash!);
+    expect(preview.sourceHash).toBe(document.contentHash);
+    expect(preview.sourceHash).not.toBe(document.revision.revision.contentHash!);
+  } finally {
+    store.close();
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
 test("expands current-user home references without treating the tilde as a workspace directory", () => {
   expect(resolveReferencedPath("~/test/plan.md", "/workspace", "/home/evan")).toBe(
     "/home/evan/test/plan.md",

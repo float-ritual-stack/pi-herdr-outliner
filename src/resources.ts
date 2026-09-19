@@ -279,6 +279,8 @@ export type ResourceRevision =
       readonly kind: "filesystem";
       readonly mtimeNs: string;
       readonly size: string;
+      /** Absent only on retained references issued before content identity was recorded. */
+      readonly contentHash?: string;
     }
   | {
       readonly kind: "web";
@@ -1453,6 +1455,12 @@ function normalizeProviderRevision(
   revision: Record<string, unknown>,
 ): ResourceRevisionRef {
   if (revision.kind === "filesystem") {
+    const contentHash = revision.contentHash === undefined
+      ? undefined
+      : printable(revision.contentHash, "Filesystem revision content hash", 64).toLowerCase();
+    if (contentHash !== undefined && !/^[0-9a-f]{64}$/.test(contentHash)) {
+      invalid("Filesystem revision content hash must be SHA-256");
+    }
     return {
       resourceId,
       addressVersion,
@@ -1460,6 +1468,7 @@ function normalizeProviderRevision(
         kind: "filesystem",
         mtimeNs: decimalInteger(revision.mtimeNs, "Filesystem revision mtimeNs"),
         size: decimalInteger(revision.size, "Filesystem revision size"),
+        ...(contentHash === undefined ? {} : { contentHash }),
       },
     };
   }
@@ -1627,7 +1636,8 @@ export function resourceRevisionRefEquals(
   }
   if (left.revision.kind === "filesystem" && right.revision.kind === "filesystem") {
     return left.revision.mtimeNs === right.revision.mtimeNs &&
-      left.revision.size === right.revision.size;
+      left.revision.size === right.revision.size &&
+      left.revision.contentHash === right.revision.contentHash;
   }
   if (left.revision.kind === "web" && right.revision.kind === "web") {
     const leftValidator = left.revision.validator;

@@ -869,8 +869,9 @@ function filesystemAnnotationRepresentation(
   const sourceText = file.sourceText ?? file.lines.join("\n");
   const contentHash = file.sourceHash ?? annotationSourceHash(sourceText);
   const revisionParts = file.sourceVersion?.split(":");
-  const revision = revisionParts?.length === 2 &&
-      revisionParts.every((part) => /^\d+$/.test(part))
+  const revision = revisionParts?.length === 3 &&
+      revisionParts.slice(0, 2).every((part) => /^\d+$/.test(part)) &&
+      /^[0-9a-f]{64}$/.test(revisionParts[2]!)
     ? {
         resourceId: resource.id,
         addressVersion: resource.addressVersion,
@@ -878,6 +879,7 @@ function filesystemAnnotationRepresentation(
           kind: "filesystem" as const,
           mtimeNs: revisionParts[0]!,
           size: revisionParts[1]!,
+          contentHash: revisionParts[2]!,
         },
       }
     : null;

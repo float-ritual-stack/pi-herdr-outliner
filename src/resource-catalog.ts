@@ -1771,6 +1771,12 @@ export class ResourceCatalog {
         `Filesystem Resource exceeds ${MAX_FILESYSTEM_RESOURCE_BYTES / 1024 / 1024} MiB`,
       );
     }
+    let bytes: Buffer;
+    try {
+      bytes = readFileSync(absolutePath);
+    } catch {
+      throw new ResourceCatalogError("source-unavailable", "Filesystem Resource is unreadable");
+    }
     const revision: ResourceRevisionRef = {
       resourceId: resource.id,
       addressVersion: resource.addressVersion,
@@ -1778,17 +1784,14 @@ export class ResourceCatalog {
         kind: "filesystem",
         mtimeNs: stat.mtimeNs.toString(),
         size: stat.size.toString(),
+        contentHash: byteHash(bytes),
       },
     };
     if (requestedRevision && !resourceRevisionRefEquals(requestedRevision, revision)) {
       throw new ResourceCatalogError("stale-revision", "Filesystem Resource revision is unavailable");
     }
-    let text: string;
-    try {
-      text = readFileSync(absolutePath, "utf8");
-    } catch {
-      throw new ResourceCatalogError("source-unavailable", "Filesystem Resource is unreadable");
-    }
+    // The revision identifies file bytes; representation evidence identifies decoded text.
+    const text = bytes.toString("utf8");
     return {
       text,
       contentHash: sha256(text),
@@ -1861,14 +1864,15 @@ export class ResourceCatalog {
     };
     let snapshot: PdfSourceSnapshotRow | null = null;
     if (requestedRevision) {
-      snapshot = snapshots.find((candidate) =>
+      const matching = snapshots.filter((candidate) =>
         resourceRevisionRefEquals(
           normalizeRetainedResourceRevisionRef(
             parsedJson(candidate.revision_json, "PDF source snapshot revision"),
           ),
           requestedRevision,
         )
-      ) ?? null;
+      );
+      snapshot = matching.length === 1 ? matching[0]! : null;
       if (!snapshot) {
         throw new ResourceCatalogError("stale-revision", "PDF Resource revision is unavailable");
       }
@@ -3193,6 +3197,13 @@ export class ResourceCatalog {
           `PDF Resource exceeds ${this.maximumPdfBytes} bytes`,
         );
       }
+      let bytes: Uint8Array;
+      try {
+        bytes = new Uint8Array(readFileSync(absolutePath));
+      } catch {
+        throw new ResourceCatalogError("source-unavailable", "PDF Resource is unreadable");
+      }
+      const contentHash = byteHash(bytes);
       const revision: ResourceRevisionRef = {
         resourceId: initial.resource.id,
         addressVersion: initial.resource.addressVersion,
@@ -3200,6 +3211,7 @@ export class ResourceCatalog {
           kind: "filesystem",
           mtimeNs: stat.mtimeNs.toString(),
           size: stat.size.toString(),
+          contentHash,
         },
       };
       if (
@@ -3214,15 +3226,9 @@ export class ResourceCatalog {
       ) {
         return this.describe(initial.resource.id, destinationHostRegistered);
       }
-      let bytes: Uint8Array;
-      try {
-        bytes = new Uint8Array(readFileSync(absolutePath));
-      } catch {
-        throw new ResourceCatalogError("source-unavailable", "PDF Resource is unreadable");
-      }
       observation = {
         locator: initial.resource.address.path,
-        contentHash: byteHash(bytes),
+        contentHash,
         revision,
         etag: null,
         lastModified: null,
