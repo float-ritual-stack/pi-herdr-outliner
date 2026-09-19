@@ -199,6 +199,7 @@ export interface CaptureReceipt {
 export interface QuickCaptureDraft {
   requestId: string;
   text: string;
+  submittedText?: string;
   cursorRow: number;
   cursorColumn: number;
   capturedFromBlockId?: string;
@@ -209,6 +210,7 @@ export interface QuickCaptureDraft {
 export interface QuickCaptureDraftSaveInput {
   requestId: string;
   text: string;
+  submittedText?: string;
   cursorRow: number;
   cursorColumn: number;
   capturedFromBlockId?: string;
@@ -1124,7 +1126,7 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 54;
+export const OUTLINER_PROTOCOL_VERSION = 55;
 
 
 export interface OutlinerServiceStatus {

@@ -18,7 +18,8 @@
     "check": "tsc --noEmit",
     "test": "bun test",
     "test:e2e:herdr": "bun run test/e2e/startup-interruption.ts && bun run test/e2e/resource-authoring.ts",
-    "test:e2e:ownership": "bun run test/e2e/workspace-ownership.ts"
+    "test:e2e:ownership": "bun run test/e2e/workspace-ownership.ts",
+    "test:e2e:capture": "bun run test/e2e/capture-retry.ts"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "^0.84.2",
@@ -31,6 +32,7 @@
   },
   "devDependencies": {
     "@types/bun": "latest",
+    "@xterm/headless": "6.0.0",
     "typescript": "^5.9.3"
   }
 }

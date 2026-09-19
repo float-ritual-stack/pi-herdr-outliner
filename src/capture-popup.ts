@@ -46,7 +46,8 @@ export class CapturePopupController {
   status: string;
   saving = false;
   private closed = false;
-  private readonly requestId: string;
+  private requestId: string;
+  private submittedText: string | undefined;
   private readonly capturedFromBlockId: string | undefined;
   private draftRevision: number | null;
   private readonly persistDelayMs: number;
@@ -61,6 +62,7 @@ export class CapturePopupController {
   ) {
     const draft = options.draft;
     this.requestId = draft?.requestId ?? options.requestId;
+    this.submittedText = draft?.submittedText;
     this.capturedFromBlockId = draft?.capturedFromBlockId ?? options.capturedFromBlockId;
     this.draftRevision = draft?.revision ?? null;
     this.persistDelayMs = options.persistDelayMs ?? 250;
@@ -138,10 +140,12 @@ export class CapturePopupController {
 
   private enqueueDraftPersistence(): Promise<void> {
     const text = this.buffer.text;
+    const requestId = this.requestId;
+    const submittedText = this.submittedText;
     const cursorRow = this.buffer.row;
     const cursorColumn = this.buffer.column;
     const operation = this.persistenceTail.then(async () => {
-      if (!text.trim()) {
+      if (!text.trim() && submittedText === undefined) {
         if (this.draftRevision !== null) {
           await this.effects.clearDraft(this.draftRevision);
           this.draftRevision = null;
@@ -149,8 +153,9 @@ export class CapturePopupController {
         return;
       }
       const draft = await this.effects.persistDraft({
-        requestId: this.requestId,
+        requestId,
         text,
+        ...(submittedText === undefined ? {} : { submittedText }),
         cursorRow,
         cursorColumn,
         ...(this.capturedFromBlockId
@@ -206,7 +211,7 @@ export class CapturePopupController {
 
   private async save(): Promise<void> {
     const text = this.buffer.text.trim();
-    if (!text) {
+    if (!text && this.submittedText === undefined) {
       this.status = "Capture text cannot be empty";
       this.effects.invalidate();
       return;
@@ -216,13 +221,31 @@ export class CapturePopupController {
     this.effects.invalidate();
     let captured = false;
     try {
+      this.submittedText ??= text;
       await this.flushDraft();
       await this.effects.save({
         requestId: this.requestId,
-        text,
+        text: this.submittedText,
         capturedFromBlockId: this.capturedFromBlockId,
       });
       captured = true;
+      if (text && text !== this.submittedText) {
+        const previousRequestId = this.requestId;
+        const previousSubmittedText = this.submittedText;
+        this.requestId = crypto.randomUUID();
+        this.submittedText = undefined;
+        try {
+          await this.flushDraft();
+        } catch (error) {
+          this.requestId = previousRequestId;
+          this.submittedText = previousSubmittedText;
+          throw error;
+        }
+        this.saving = false;
+        this.status = "Previous capture saved; changed draft retained. Ctrl+S to capture it.";
+        this.effects.invalidate();
+        return;
+      }
       await this.effects.clearDraft(this.draftRevision);
       this.draftRevision = null;
       this.closed = true;

@@ -1837,7 +1837,7 @@ test("streams workspace mutations and transient UI commands to subscribers", asy
   const replay = await client.request<CaptureReceipt>({
     action: "capture.create",
     requestId: "event-capture",
-    text: "Ignored retry",
+    text: "Reactive capture",
     source: "tree",
     capturedFromBlockId: block.id,
   });

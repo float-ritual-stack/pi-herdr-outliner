@@ -1,7 +1,8 @@
 import { Database } from "bun:sqlite";
+import { Terminal as Screen } from "@xterm/headless";
 import { createHash } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
-import { closeSync, openSync } from "node:fs";
+import { appendFileSync, closeSync, openSync } from "node:fs";
 import {
   appendFile,
   mkdir,
@@ -36,6 +37,8 @@ export interface HerdrScenarioSession {
   readonly database: Database;
   readonly client: OutlinerClient;
   rejectCompetingService(): Promise<CommandResult>;
+  attachClient(): Promise<{ write(input: string): Promise<void>; visible(): Promise<string> }>;
+  openCapturePopup(blockId: string, socketPath: string): Promise<void>;
   focus(paneId: string): Promise<void>;
   keys(paneId: string, ...keys: string[]): Promise<void>;
   text(paneId: string, text: string): Promise<void>;
@@ -45,6 +48,7 @@ export interface HerdrScenarioSession {
     label: string,
     read: () => T | Promise<T>,
     accept: (value: T) => boolean,
+    timeoutMs?: number,
   ): Promise<T>;
   registrations(): Promise<OutlinerClientRegistration[]>;
   checkpoint(name: string): Promise<void>;
@@ -579,11 +583,14 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
   let primaryFailurePhase: string | undefined;
   const evidenceErrors: unknown[] = [];
   const cleanupErrors: unknown[] = [];
-  const resources: { server: ChildProcess | null; database: Database | null } = {
+  const resources: { server: ChildProcess | null; database: Database | null; client: Bun.Subprocess | null; screen: Screen | null } = {
     server: null,
     database: null,
+    client: null,
+    screen: null,
   };
   let serverLaunchError: Error | null = null;
+  let clientOutput = "";
   let panes: HerdrScenarioSession["panes"] | null = null;
   let checkpointNumber = 0;
   let environment: Record<string, string> = {};
@@ -726,6 +733,13 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
       databaseSha256: hash(await readFile(databasePath)),
       panes: ownedPanes,
     }));
+    if (resources.screen) {
+      await new Promise<void>((resolve) => resources.screen!.write("", resolve));
+      const screen = resources.screen.buffer.active;
+      const lines = Array.from({ length: resources.screen.rows }, (_, row) =>
+        screen.getLine(screen.viewportY + row)?.translateToString(true) ?? "");
+      await writeFile(join(directory, "attached-client.visible.txt"), `${lines.join("\n")}\n`);
+    }
     await artifacts.event("checkpoint", { name, directory });
   };
 
@@ -755,6 +769,53 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
           signal: abort.signal,
           expectedExitCode: 1,
         });
+      },
+      async attachClient() {
+        if (resources.client) throw new Error("This fixture already owns an attached Herdr client");
+        abort.signal.throwIfAborted();
+        const decoder = new TextDecoder();
+        const screen = new Screen({ cols: 220, rows: 60, allowProposedApi: true });
+        resources.screen = screen;
+        const clientEnvironment: Record<string, string> = { ...environment, TERM: "xterm-256color" };
+        // This is the outer fixture terminal, not a process inside a Herdr pane.
+        delete clientEnvironment.HERDR_ENV;
+        resources.client = Bun.spawn([herdrBinary, "--session", sessionName], {
+          cwd: projectRoot,
+          env: clientEnvironment,
+          terminal: {
+            cols: 220, rows: 60,
+            data(_terminal, bytes) {
+              appendFileSync(join(artifactDirectory, "attached-client.ansi"), bytes);
+              screen.write(bytes);
+              clientOutput = (clientOutput + decoder.decode(bytes, { stream: true })).slice(-2_000_000);
+            },
+          },
+        });
+        const ownedClient = resources.client;
+        await artifacts.write("attached-client.json", { pid: ownedClient.pid, cols: 220, rows: 60 });
+        return {
+          async visible() {
+            if (ownedClient.exitCode !== null) throw new Error(`Attached Herdr client exited ${ownedClient.exitCode}: ${clientOutput}`);
+            await new Promise<void>((resolve) => screen.write("", resolve));
+            const buffer = screen.buffer.active;
+            return Array.from({ length: screen.rows }, (_, row) =>
+              buffer.getLine(buffer.viewportY + row)?.translateToString(true) ?? "").join("\n");
+          },
+          async write(input) {
+            abort.signal.throwIfAborted();
+            if (ownedClient.exitCode !== null || !ownedClient.terminal) throw new Error("Attached Herdr client exited");
+            ownedClient.terminal.write(input);
+            await artifacts.event("input", { kind: "attached-client", input });
+          },
+        };
+      },
+      async openCapturePopup(blockId, socketPath) {
+        if (!resources.client) throw new Error("Popup evidence requires an attached client");
+        await runHerdr(["plugin", "pane", "open", "--plugin", PLUGIN_ID, "--entrypoint", "capture",
+          "--env", `OUTLINER_WORKSPACE_ROOT=${projectRoot}`,
+          "--env", `OUTLINER_CAPTURE_FROM_BLOCK_ID=${blockId}`,
+          "--env", "OUTLINER_REMOTE=1",
+          "--env", `OUTLINER_SOCKET_PATH=${socketPath}`]);
       },
       async focus(paneId) {
         requireOwned(paneId);
@@ -804,9 +865,9 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
         await artifacts.event("condition", { label: `visible ${paneId}`, text, status: "accepted" });
         return visible;
       },
-      waitFor(label, read, accept) {
+      waitFor(label, read, accept, timeoutMs) {
         if (!label.trim()) return Promise.reject(new Error("waitFor requires a label"));
-        return poll({ label, read, accept, signal: abort.signal, artifacts });
+        return poll({ label, read, accept, timeoutMs, signal: abort.signal, artifacts });
       },
       registrations: getRegistrations,
       checkpoint: captureCheckpoint,
@@ -833,7 +894,7 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
       mkdir(join(runRoot, "tmp"), { recursive: true }),
     ]);
     await Promise.all([
-      writeFile(join(configHome, "herdr", "config.toml"), ""),
+      writeFile(join(configHome, "herdr", "config.toml"), "onboarding = false\n"),
       writeFile(keymapPath, "{}\n"),
     ]);
 
@@ -1267,6 +1328,24 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
     resources.database = null;
 
     phase = "cleanup";
+    if (resources.client) {
+      const ownedClient = resources.client;
+      try {
+        if (ownedClient.exitCode === null) ownedClient.kill("SIGTERM");
+        const exited = await Promise.race([ownedClient.exited.then(() => true), delay(2_000).then(() => false)]);
+        if (!exited) ownedClient.kill("SIGKILL");
+        await Promise.race([
+          ownedClient.exited,
+          delay(2_000).then(() => { throw new Error("Attached Herdr client survived cleanup"); }),
+        ]);
+        await artifacts.write("attached-client-exit.json", { pid: ownedClient.pid, exitCode: ownedClient.exitCode });
+      } catch (error) {
+        cleanupErrors.push(error);
+      } finally {
+        ownedClient.terminal?.close();
+        resources.screen?.dispose();
+      }
+    }
     const ownedServer = resources.server;
     const serverPid = ownedServer?.pid;
     if (ownedServer && serverPid) {

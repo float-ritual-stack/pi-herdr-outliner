@@ -269,7 +269,7 @@ describe("OutlinerStore", () => {
 
     const replay = store.capture(
       "capture-request-1",
-      "Different retry text",
+      "First line\nSecond line",
       "tree",
       source.id,
     );
@@ -299,7 +299,7 @@ describe("OutlinerStore", () => {
     ]);
     expect(store.children(inbox.id).map((block) => block.position)).toEqual([0, 1, 2]);
 
-    const replay = store.capture("capture-newest-1", "Replacement text", "cli");
+    const replay = store.capture("capture-newest-1", "First capture", "cli");
     expect(replay.deduplicated).toBe(true);
     expect(replay.block.id).toBe(first.block.id);
     expect(store.children(inbox.id).map((block) => block.id)).toEqual([

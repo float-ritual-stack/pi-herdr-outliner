@@ -51,6 +51,33 @@ Reuse these seams. Do not add a second property parser, query path, authoritativ
 
 ## Workboard lifecycle
 
+### Connecting to the running service
+
+Resolve the endpoint through `resolveClientPaths()` in `src/paths.ts`, so the
+CLI and agent requests use the same project configuration and environment.
+Remote clients connect to the configured SSH-forwarded socket; see
+[remote client mode](README.md#remote-client-mode).
+
+An agent sandbox can expose a socket file while a connection to its host
+listener returns `ENOENT`. That error alone does not establish a service outage.
+Check the resolved endpoint and socket, then repeat the same read-only `ping`
+through the execution tool's approved host-access path. With Codex
+`exec_command`, request `sandbox_permissions: "require_escalated"`; follow the
+approval result. A successful host ping identifies an execution-boundary issue;
+use that approved path for subsequent service requests.
+
+If `OutlinerClient.requireCompatibleService()` reports an incompatible
+`protocolVersion`, the service is reachable but its protocol differs from the
+client's. Restart the service and all clients together on the same version,
+then retry. This is recovery from a confirmed protocol mismatch, not a
+connection probe.
+
+Use the running service's CLI/RPC for workboard writes. If access remains
+blocked, record the endpoint, execution context, and exact error. Service
+restarts, socket removal, and writable database access are not connection probes.
+
+### Task status
+
 The durable roadmap lives inside Pi Outliner. Roadmap items remain under the physical roadmap and appear in the workboard through virtual branches.
 
 Every actionable item needs both:
