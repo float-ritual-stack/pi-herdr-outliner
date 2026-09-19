@@ -656,7 +656,7 @@ describe("detail controller projection and deferred refresh", () => {
     expect(harness.controller.state.buffer.text).toBe("Exact editable source + draft");
   });
 
-  test("keeps reference actions unavailable until this document's resolution completes", async () => {
+  test("gates derived references but allows explicit targets while resolution is pending", async () => {
     const text = "Open ((550e8400-e29b-41d4-a716-446655440123|reference))";
     const resolution = Promise.withResolvers<ResolvedBlockReferences>();
     const started = Promise.withResolvers<void>();
@@ -670,9 +670,18 @@ describe("detail controller projection and deferred refresh", () => {
     try {
       await harness.controller.initialize();
       await started.promise;
-      await harness.controller.dispatch({ type: "reference.follow" }, viewport);
-      expect(harness.controller.state.destinationChooser.active).toBe(false);
-      expect(harness.controller.state.status).toContain("References are not ready");
+      for (const type of ["reference.follow", "reference.reveal"] as const) {
+        await harness.controller.dispatch({ type }, viewport);
+        expect(harness.controller.state.destinationChooser.active).toBe(false);
+        expect(harness.controller.state.status).toContain("References are not ready");
+      }
+      expect(harness.calls.navigationDispatches).toEqual([]);
+      await harness.controller.dispatch({
+        type: "reference.open",
+        target: { kind: "block", value: "explicit-target" },
+      }, viewport);
+      expect(harness.controller.state.destinationChooser.active).toBe(true);
+      await harness.controller.handleDestinationChooserKeypress("", { name: "escape" });
     } finally {
       resolution.resolve({ text: "Resolved reference", references: [] });
       await resolved.promise;
@@ -720,6 +729,34 @@ describe("detail controller projection and deferred refresh", () => {
     expect(harness.controller.state.status).toContain("projection unavailable");
     await harness.controller.dispatch({ type: "edit.begin" }, viewport);
     expect(harness.controller.state.buffer.text).toBe(block.text);
+  });
+
+  test("opens explicit targets after optional projection fails", async () => {
+    const projection = Promise.withResolvers<Awaited<ReturnType<DetailEffects["projectRead"]>>>();
+    const failed = Promise.withResolvers<void>();
+    const harness = createHarness(makeBlock(), null, undefined, () => projection.promise, {}, state => {
+      if (state.readStatus === "failed") failed.resolve();
+    });
+    await harness.controller.initialize();
+    projection.reject(new Error("projection unavailable"));
+    await failed.promise;
+    for (const type of ["reference.follow", "reference.reveal"] as const) {
+      await harness.controller.dispatch({ type }, viewport);
+      expect(harness.controller.state.status).toContain("References are not ready");
+    }
+    expect(harness.calls.navigationDispatches).toEqual([]);
+    expect(harness.controller.state.destinationChooser.active).toBe(false);
+    await harness.controller.dispatch({
+      type: "reference.open",
+      target: { kind: "block", value: "explicit-target" },
+      routing: "first-unlocked",
+    }, viewport);
+    expect(harness.calls.navigationDispatches).toEqual([{
+      blockId: "explicit-target",
+      intent: "open",
+      preserveSource: false,
+    }]);
+    expect(harness.controller.state.context.selected?.id).toBe("explicit-target");
   });
 
   test("an old resolved preview cannot replace the newer target or its scroll", async () => {
