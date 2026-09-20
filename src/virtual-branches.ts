@@ -659,20 +659,9 @@ interface NestedOccurrenceComposition<T extends ProjectionBlock = VisibleBlock> 
 function composeNestedOccurrences<T extends ProjectionBlock>(
   rootViewId: string,
   rootDefinitionDepth: number,
-  projectedByViewId: ReadonlyMap<string, readonly VirtualBranchOccurrenceRow<T>[]>,
+  childrenByView: ReadonlyMap<string, ReadonlyMap<string, readonly VirtualBranchOccurrenceRow<T>[]>>,
   presentation: TreePresentationState,
 ): NestedOccurrenceComposition<T> {
-  const childrenByView = new Map<string, Map<string, VirtualBranchOccurrenceRow<T>[]>>();
-  for (const [viewId, rows] of projectedByViewId) {
-    const children = new Map<string, VirtualBranchOccurrenceRow<T>[]>();
-    for (const row of rows) {
-      const siblings = children.get(row.parentRowId);
-      if (siblings) siblings.push(row);
-      else children.set(row.parentRowId, [row]);
-    }
-    childrenByView.set(viewId, children);
-  }
-
   const composed: VirtualBranchOccurrenceRow<T>[] = [];
   let depthTruncated = false;
   let budgetTruncated = false;
@@ -804,24 +793,31 @@ export async function projectVirtualBranches<T extends ProjectionBlock>(
     ),
   );
   const branchStates = new Map<string, VirtualBranchState>();
-  const occurrences = new Map<string, readonly VirtualBranchOccurrenceRow<T>[]>();
+  const childrenByView = new Map<string, Map<string, VirtualBranchOccurrenceRow<T>[]>>();
   for (const branch of projected) {
     branchStates.set(branch.definitionId, branch.state);
-    occurrences.set(branch.definitionId, branch.rows);
+    const children = new Map<string, VirtualBranchOccurrenceRow<T>[]>();
+    for (const row of branch.rows) {
+      const siblings = children.get(row.parentRowId);
+      if (siblings) siblings.push(row);
+      else children.set(row.parentRowId, [row]);
+    }
+    childrenByView.set(branch.definitionId, children);
   }
 
   const rows: TreeRow<T>[] = [];
   let occurrenceRowCount = 0;
   for (const physical of physicalRows) {
-    const row = !physical.hasChildren && (occurrences.get(physical.canonicalId)?.length ?? 0) > 0
+    const hasVirtualChildren = (childrenByView.get(physical.canonicalId)?.get(physical.canonicalId)?.length ?? 0) > 0;
+    const row = !physical.hasChildren && hasVirtualChildren
       ? { ...physical, hasChildren: true }
       : physical;
     rows.push(row);
-    if (row.collapsed) continue;
+    if (row.collapsed || !hasVirtualChildren) continue;
     const composition = composeNestedOccurrences(
       physical.canonicalId,
       physical.depth,
-      occurrences,
+      childrenByView,
       presentation,
     );
     rows.push(...composition.rows);

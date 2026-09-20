@@ -1176,13 +1176,27 @@ Client and service protocol versions must match.
 ```sh
 bun run check
 bun test
-bun run profile:tree
+bun run profile:tree --check-budget
 ```
 
 The deterministic Tree profile defaults to 24,000 physical blocks and five
-200-root virtual branches. The current performance guardrails are p95 below
-50 ms for projection/controller initialization, 5 ms for viewport layout/render,
-and 1 ms for input handling; generated terminal-frame writes stay below 1 ms.
+200-root virtual branches. `--check-budget` enforces p50 below 25 ms and p95 below
+50 ms for projection/controller initialization, p95 below 5 ms for viewport
+layout/render, and p95 below 1 ms for input handling and terminal-frame writes.
+Omit the flag to report timings without a pass/fail gate.
+
+The separate real-application scale journey uses the private Herdr runner:
+
+```sh
+bun run test/e2e/tree-scale.ts 1000
+bun run test/e2e/tree-scale.ts 5000
+```
+
+It checks complete projection and authored ordering, then drives Tree navigation
+while mutations and reorders revalidate two active browsing contexts. It retains
+frames and forwarded request counts. Parse plus projection p95 must stay below
+100/250 ms at 1,000/5,000 blocks, and mutation-to-frame p95 below one second.
+These are same-host measurements; they do not establish SSH or bandwidth latency.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the workboard lifecycle, verification rules, and PR/restart workflow. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for service boundaries, protocol flow, persistence, projections, and failure behavior.
 

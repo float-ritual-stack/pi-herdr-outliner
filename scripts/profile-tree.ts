@@ -16,6 +16,8 @@ const projectionIterations = Math.max(8, Math.ceil(iterations / 8));
 const width = positiveInteger(process.env.COLUMNS, 100);
 const height = positiveInteger(process.env.LINES, 32);
 const timestamp = "2026-08-31T00:00:00.000Z";
+const checkBudget = process.argv.includes("--check-budget");
+const failedBudgets: string[] = [];
 
 function positiveInteger(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
@@ -34,7 +36,14 @@ async function measure(name: string, count: number, operation: () => void | Prom
     await operation();
     if (index >= 3) samples.push(performance.now() - started);
   }
-  console.log(`${name.padEnd(24)} p50=${percentile(samples, 0.5).toFixed(3)}ms p95=${percentile(samples, 0.95).toFixed(3)}ms`);
+  const p50 = percentile(samples, 0.5);
+  const p95 = percentile(samples, 0.95);
+  console.log(`${name.padEnd(24)} p50=${p50.toFixed(3)}ms p95=${p95.toFixed(3)}ms`);
+  const projection = name === "projection" || name === "controller-initialize";
+  const p95Budget = projection ? 50 : name.startsWith("layout-") ? 5 : 1;
+  if (checkBudget && ((projection && p50 >= 25) || p95 >= p95Budget)) {
+    failedBudgets.push(`${name}: expected ${projection ? "p50 <25ms and " : ""}p95 <${p95Budget}ms`);
+  }
 }
 
 function properties(index: number): BlockProperty[] {
@@ -173,3 +182,5 @@ try {
 } finally {
   closeSync(nullFd);
 }
+
+if (failedBudgets.length > 0) throw new Error(failedBudgets.join("; "));
