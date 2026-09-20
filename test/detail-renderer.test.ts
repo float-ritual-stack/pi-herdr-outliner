@@ -9,6 +9,7 @@ import { createAnnotationAnchor } from "../src/annotations";
 import { DEFAULT_OUTLINER_ACTION_KEYMAP } from "../src/outliner-actions";
 import type { DetailState } from "../src/detail-controller";
 import {
+  buildDetailAnnotationView,
   renderDetailAnsi,
   renderDetailLines,
 } from "../src/detail-renderer";
@@ -534,13 +535,29 @@ describe("detail ANSI renderer", () => {
 
     const annotationFrame = renderDetailAnsi(annotationState, { width: 100, height: 24 });
     expect(annotationFrame).toContain("Original target: resource 30000000-0000-4000-8000-000000000001 @0-14");
-    expect(annotationFrame).toContain("Current resolution: orphaned");
+    expect(annotationFrame).toContain("Stored resolution: orphaned");
     expect(annotationFrame).toContain("#1 orphaned · current · text-quote@1:unique-exact");
     expect(annotationFrame).toContain("#2 orphaned · semantic-reconciliation · agent:provider/model · 0.82");
     expect(annotationFrame).toContain("rationale · The revised source no longer contains the claim.");
     expect(annotationFrame).toContain("evidence · No supplied candidate preserves “const one = 1;”.");
     expect(annotationFrame).toContain("\x1b[1mComment\x1b[0m\nNeeds a guard.");
     expect(annotationState.previewOffset).toBe(beforeOffset);
+    const staleTarget = annotationState.annotationThreads[0]!.originalTarget;
+    const staleResolution = { ...resolution, status: "resolved" as const, resolvedTarget: staleTarget };
+    const staleFileState = {
+      ...annotationState,
+      referencedFile: { ...referencedFile, lines: ["Different replacement"], sourceText: "Different replacement" },
+      annotationThreads: [{
+        ...annotationState.annotationThreads[0]!,
+        currentResolution: staleResolution,
+        resolvedTarget: staleTarget,
+        resolutionHistory: [staleResolution],
+      }],
+    };
+    const staleFrame = buildDetailAnnotationView(staleFileState, 100).join("\n");
+    expect(staleFrame).toContain("const one = 1;");
+    expect(staleFrame).not.toContain("Different replacement");
+    expect(staleFrame).toContain("Stored resolution: resolved");
   });
 });
 

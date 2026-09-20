@@ -731,13 +731,22 @@ page map. Rendered block selections retain the validated host/pane/revision
 observation as representation evidence instead of inventing canonical source
 coordinates.
 
+Pane-capture comments appear in an **Unpositioned comments** disclosure below the
+document. Expand it to read the original quote, comment and replies, or open the
+thread. Screen offsets include chrome, wrapping and history, so they never place
+a marker in Markdown or choose a source scroll position after reflow. Positioned
+source and Resource comments retain their inline markers.
+
 `v` remains the keyboard-first source-comment operation. It freezes the current
 read projection, maps Shift-motion or primary-button drag to UTF-16 source text,
 and opens the same composer with `c`. Mouse users can drag cached block or
 Resource text directly in preview without pressing `v`. File selection first
 interns the path as a filesystem Resource; file paths are locators, not
-annotation identity. Annotation view `r`
-reveals only a currently resolved positioned text quote. Probable, unresolved,
+annotation identity. Annotation view preserves original evidence and the stored
+resolution history; it does not preview a file found in an ancestor's properties.
+Press `r` to open the annotation's actual block or Resource and reveal a currently
+resolved positioned text quote. A pane-capture comment opens its host with an
+explicit unpositioned status. Probable, unresolved,
 ambiguous, orphaned, unsupported, and rejected records remain valid, visible
 history rather than being coerced into a location.
 

@@ -339,7 +339,7 @@ export function buildDetailAnnotationView(
       output.push(`│ ${fitDynamicText(line, Math.max(1, width - 2))}`);
     }
     output.push(`\x1b[2m${fitDynamicText(
-      `Current resolution: ${annotation.currentResolution.status}${
+      `Stored resolution: ${annotation.currentResolution.status}${
         annotation.resolvedTarget ? ` · ${annotationTargetLabel(annotation.resolvedTarget)}` : ""
       }`,
       width,
@@ -374,23 +374,6 @@ export function buildDetailAnnotationView(
       } else if (event.method.kind === "human" && event.method.proposalEventId) {
         output.push(fitDynamicText(`  proposal · ${event.method.proposalEventId}`, width));
       }
-    }
-    output.push("─".repeat(width));
-  }
-  if (state.referencedFile) {
-    const file = state.referencedFile;
-    const lastLine = file.firstLine + Math.max(0, file.lines.length - 1);
-    output.push(
-      `\x1b[2m${fitDynamicText(
-        `Source: ${file.sourcePath}:${file.firstLine}-${lastLine}`,
-        width,
-      )}\x1b[0m`,
-    );
-    const lineNumberWidth = String(lastLine).length;
-    for (const [index, line] of file.lines.entries()) {
-      const lineNumber = file.firstLine + index;
-      const prefix = `${String(lineNumber).padStart(lineNumberWidth)} │ `;
-      output.push(`${prefix}${fitDynamicText(line, Math.max(1, width - prefix.length))}`);
     }
     output.push("─".repeat(width));
   }
