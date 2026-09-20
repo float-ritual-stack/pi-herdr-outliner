@@ -1029,6 +1029,46 @@ Second paragraph`;
     expect(store.readWorkspaceSnapshot().virtualOccurrenceRanks).toEqual([]);
   });
 
+  test("ranked queries preserve scoped membership, case folding, subtree deletion and complete rows", () => {
+    const store = makeStore();
+    const view = store.create("Scope board [type::virtual-branch] [query::tag=next]");
+    const root = store.create("Search subtree");
+    const text = (title: string) => `${title} [tag::NEXT] [tag::next] [owner::evan]\n\nBody [inline-tag::Next]\nline-tag:: next`;
+    const first = store.create(text("First match"), root.id);
+    const second = store.create(text("Second match"), root.id);
+    const fallback = store.create(text("Fallback match"), root.id);
+    store.create("Wrong value [tag::later] [owner::evan]", root.id);
+    store.create("Missing owner [tag::next]", root.id);
+    store.create(text("Outside match"));
+    const deletedParent = store.create("Deleted subtree", root.id);
+    store.create(text("Deleted match"), deletedParent.id);
+    store.delete(deletedParent.id);
+    store.reorderVirtualOccurrences(view.id, [second.id, first.id]);
+
+    for (const [propertyScope, key] of [
+      ["block", "tag"], ["inline", "inline-tag"], ["line", "line-tag"], ["all", "inline-tag"],
+    ] as const) {
+      const query = { filters: [{ key, value: "nExT" }, { key }], propertyScope,
+        subtreeRootId: root.id, text: "MATCH", limit: 10 };
+      const canonical = store.queryBlocks(query);
+      expect(canonical.blocks.map(block => block.id)).toEqual([first.id, second.id, fallback.id]);
+      const ranked = store.queryBlocks({ ...query, rankViewId: view.id });
+      expect(ranked).toEqual({
+        blocks: [canonical.blocks[1], canonical.blocks[0], canonical.blocks[2]],
+        completeness: { kind: "complete" },
+      });
+      expect(store.queryBlocks({ ...query, rankViewId: view.id, limit: 2 })).toEqual({
+        blocks: ranked.blocks.slice(0, 2), completeness: { kind: "truncated", limit: 2 },
+      });
+      expect(store.queryBlocks({ ...query, rankViewId: view.id, text: "no-such-text" })).toEqual({
+        blocks: [], completeness: { kind: "complete" },
+      });
+    }
+    const blockFilters = [{ key: "tag", value: "next" }, { key: "owner" }];
+    expect(store.queryBlocks({ filters: blockFilters, rankViewId: view.id, subtreeRootId: root.id, limit: 10 })
+      .blocks.map(block => block.id)).toEqual([second.id, first.id, fallback.id]);
+  });
+
   test("always returns canonical descendants for client-local projection", () => {
     const store = makeStore();
     const parent = store.create("Parent");

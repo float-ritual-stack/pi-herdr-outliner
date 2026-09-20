@@ -2161,15 +2161,17 @@ export class OutlinerStore {
     const predicates: string[] = [];
     const propertyScope = query.propertyScope ?? "block";
     const propertyScopePredicate = propertyScope === "all" ? "" : " AND property.scope = ?";
+    // Compute each matching ID set once. A correlated EXISTS can rescan the
+    // entire scope/key range for every block when LOWER(value) prevents a lookup.
     for (const filter of query.filters ?? []) {
       if (filter.value === undefined) {
         predicates.push(
-          `EXISTS (SELECT 1 FROM block_properties property WHERE property.block_id = block.id AND property.key = ?${propertyScopePredicate})`,
+          `block.id IN (SELECT property.block_id FROM block_properties property WHERE property.key = ?${propertyScopePredicate})`,
         );
         parameters.push(filter.key);
       } else {
         predicates.push(
-          `EXISTS (SELECT 1 FROM block_properties property WHERE property.block_id = block.id AND property.key = ? AND LOWER(property.value) = LOWER(?)${propertyScopePredicate})`,
+          `block.id IN (SELECT property.block_id FROM block_properties property WHERE property.key = ? AND LOWER(property.value) = LOWER(?)${propertyScopePredicate})`,
         );
         parameters.push(filter.key, filter.value);
       }
