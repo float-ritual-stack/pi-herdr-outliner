@@ -128,6 +128,20 @@ test("renders a bounded virtual-branch embed without changing authored source", 
   expect(requester.calls).not.toContainEqual({ action: "get", blockId: "nested-target" });
 });
 
+test("embedded batch rows retain the view's configured lifecycle summary", async () => {
+  const text = "Batch [type::virtual-branch] [query::type=roadmap-item] [summary-properties::status,work-stage,priority]";
+  const definition = block("batch-view", text, parseProperties(text));
+  const item = block("member-id", "Implemented", [
+    { key: "type", value: "roadmap-item" }, { key: "status", value: "planned" },
+    { key: "work-stage", value: "review" }, { key: "priority", value: "high" },
+  ]);
+  const requester = new FakeRequester(new Map([definition, item].map(b => [b.id, b])),
+    new Map([[definition.id, { blocks: [visible(item)], completeness: { kind: "complete" } }]]));
+  const projection = await projectDetailRead(requester, "!((batch-view))");
+  expect(projection.text).toContain("- ((member-id)) · stage review · priority high");
+  expect(projection.text).not.toContain("planned");
+});
+
 test("requests timestamp ordering before bounding an embedded virtual branch", async () => {
   const definitionText = [
     "Recent completions",

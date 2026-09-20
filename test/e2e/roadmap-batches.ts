@@ -81,6 +81,13 @@ const result = await runHerdrScenario({
     await session.waitVisible(session.panes.tree, "queued");
     await batchFrame(session.panes.tree, ["review", "validate", "queued"]);
     await session.checkpoint("02-independent-stage-and-membership");
+    const hub = await create(`PIE-289 batch overview\n\n!((${board.id}))`);
+    await goto(session.panes.tree, hub.id);
+    await session.keys(session.panes.tree, "enter");
+    await session.waitVisible(session.panes.detail, "stage review");
+    await session.waitVisible(session.panes.detail, "stage validate");
+    await session.waitVisible(session.panes.detail, "stage queued");
+    await session.checkpoint("02b-batch-overview-shows-next-actions");
     await goto(session.panes.tree, items[0]!.id);
     await session.keys(session.panes.tree, "enter");
     await session.waitVisible(session.panes.detail, "stage review");

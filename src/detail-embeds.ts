@@ -3,6 +3,7 @@ import { MAX_BLOCK_QUERY_LIMIT } from "./block-query";
 import { resolveFragmentSlice, stripFragmentAnchors } from "./fragments";
 import { propertyReferenceOccurrences } from "./reference-occurrences";
 import { blockDisplayTitle } from "./references";
+import { propertySummarySegments } from "./property-summary";
 import {
   isRelationViewDefinition,
   parseRelationViewConfig,
@@ -162,7 +163,11 @@ async function projectVirtualBranch(
     return {
       text: [
         linkedHeading(definition.id, suffix),
-        ...projected.blocks.map((block) => `- ((${block.id}))`),
+        ...projected.blocks.map((block) => {
+          const summary = propertySummarySegments(block.properties, parsed.config!.summaryPropertyKeys ?? [])
+            .map(segment => segment.plain).join(" · ");
+          return `- ((${block.id}))${summary ? ` · ${summary}` : ""}`;
+        }),
       ].join("\n"),
       state: {
         blockId: definition.id,
