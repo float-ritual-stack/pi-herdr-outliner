@@ -18,6 +18,7 @@ import { join, resolve, sep } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { OutlinerClient } from "../../src/client";
 import { resolvePaths } from "../../src/paths";
+import { readHerdrPaneSnapshot, type HerdrPaneSnapshot } from "../../src/herdr-comment-selection";
 import { forwardService, type ForwardedRequest, type OptionalResponseMatch, type ResponseBarrier } from "./service-forwarder";
 import {
   OUTLINER_PROTOCOL_VERSION,
@@ -38,7 +39,7 @@ export interface HerdrScenarioSession {
   readonly database: Database;
   readonly client: OutlinerClient;
   rejectCompetingService(): Promise<CommandResult>;
-  attachClient(): Promise<{ write(input: string): Promise<void>; visible(): Promise<string> }>;
+  attachClient(): Promise<{ write(input: string): Promise<void>; visible(): Promise<string>; resize(columns: number, rows: number): Promise<void> }>;
   openCapturePopup(blockId: string, socketPath: string): Promise<void>;
   openRemoteBrowsingContext(options?: { renderer?: "pi-tui" | "ansi"; treeTransport?: "direct" | "forwarded"; detailTransport?: "direct" | "forwarded" }): Promise<{ workspaceRoot: string; tree: string; detail: string; firstTreeFrameMs: number }>;
   forwardedTreeRequests(): readonly ForwardedRequest[];
@@ -48,6 +49,7 @@ export interface HerdrScenarioSession {
   keys(paneId: string, ...keys: string[]): Promise<void>;
   text(paneId: string, text: string): Promise<void>;
   visible(paneId: string): Promise<string>;
+  paneSnapshot(paneId: string): Promise<HerdrPaneSnapshot>;
   waitVisible(paneId: string, text: string): Promise<string>;
   waitFor<T>(
     label: string,
@@ -847,6 +849,16 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
         const ownedClient = resources.client;
         await artifacts.write("attached-client.json", { pid: ownedClient.pid, cols: 220, rows: 60 });
         return {
+          async resize(columns, rows) {
+            abort.signal.throwIfAborted();
+            if (!Number.isSafeInteger(columns) || !Number.isSafeInteger(rows) || columns < 20 || rows < 10) {
+              throw new Error("Attached terminal requires integer dimensions of at least 20 columns and 10 rows");
+            }
+            if (ownedClient.exitCode !== null || !ownedClient.terminal) throw new Error("Attached Herdr client exited");
+            screen.resize(columns, rows);
+            ownedClient.terminal.resize(columns, rows);
+            await artifacts.event("input", { kind: "attached-client-resize", columns, rows });
+          },
           async visible() {
             if (ownedClient.exitCode !== null) throw new Error(`Attached Herdr client exited ${ownedClient.exitCode}: ${clientOutput}`);
             await new Promise<void>((resolve) => screen.write("", resolve));
@@ -971,6 +983,13 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
       async visible(paneId) {
         requireOwned(paneId);
         return paneRead(paneId, "visible", "text");
+      },
+      async paneSnapshot(paneId) {
+        requireOwned(paneId);
+        if (!herdrStatus) throw new Error("Private Herdr server is unavailable");
+        const snapshot = await readHerdrPaneSnapshot(herdrStatus.socket, paneId);
+        await artifacts.record(`pane-capture-${safeName(paneId)}`, snapshot);
+        return snapshot;
       },
       async waitVisible(paneId, text) {
         requireOwned(paneId);

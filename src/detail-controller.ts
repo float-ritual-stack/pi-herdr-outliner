@@ -735,21 +735,6 @@ function annotationOffsetsForLineRange(
   return { start, end };
 }
 
-function annotationLineRangeForOffsets(
-  text: string,
-  start: number,
-  end: number,
-): { startLine: number; endLine: number } {
-  let startLine = 1;
-  let endLine = 1;
-  for (let index = 0; index < end; index += 1) {
-    if (text.charCodeAt(index) !== 10) continue;
-    if (index < start) startLine += 1;
-    endLine += 1;
-  }
-  return { startLine, endLine };
-}
-
 
 function blockAnnotationRepresentation(block: Block): AnnotationRepresentation {
   const contentHash = annotationSourceHash(block.text);
@@ -980,8 +965,7 @@ function detailBufferPointAtOffset(text: string, offset: number): { row: number;
 
 export function detailAnnotationLineCount(state: Readonly<DetailState>): number {
   const comment = extractAnnotationBody(state.resolvedSelectedText) || "(No comment text)";
-  const sourceLines = state.referencedFile ? state.referencedFile.lines.length + 2 : 0;
-  return sourceLines + 1 + comment.split(/\r?\n/).length;
+  return 1 + comment.split(/\r?\n/).length;
 }
 
 export function detailVisibleEditorHeight(
@@ -1138,27 +1122,19 @@ export function createDetailController(
       state.context.selected?.id === block.id && state.mode === mode;
     const previousFile = state.referencedFile;
     state.referencedFile = null;
-    let fileSourceBlockId = block.id;
     try {
-      const source = getProperty(block.properties, "type")?.startsWith("annotation")
-        ? [...state.context.ancestors].reverse().find((candidate) =>
-          getProperty(candidate.properties, "file")
-        )
-        : block;
-      if (!source) return false;
-      const loaded = await effects.readFile(source);
+      const loaded = await effects.readFile(block);
       if (!isCurrent()) return false;
       if (previousFile?.absolutePath !== loaded?.absolutePath ||
         previousFile?.sourceHash !== loaded?.sourceHash ||
         previousFile?.sourceVersion !== loaded?.sourceVersion) state.annotationThreads = [];
       state.referencedFile = loaded;
-      fileSourceBlockId = source.id;
       const file = state.referencedFile;
       if (file) {
         const marks = state.attention.marks.map((mark) => {
           if (
             mark.target.kind !== "file" ||
-            mark.target.sourceBlockId !== fileSourceBlockId
+            mark.target.sourceBlockId !== block.id
           ) return mark;
           const matches =
             file.sourceVersion === mark.target.anchor.sourceVersion &&
@@ -1934,7 +1910,7 @@ export function createDetailController(
           }
         })();
       }
-      if ((state.mode === "file" || state.mode === "annotation") && selected) {
+      if (state.mode === "file" && selected) {
         await loadFile(selected);
         if (!isCurrent()) return false;
         emit();
@@ -1971,7 +1947,7 @@ export function createDetailController(
       );
       if (successStatus) state.status = successStatus();
       emit();
-      if ((state.mode === "file" || state.mode === "annotation") && cached.document.context.selected) {
+      if (state.mode === "file" && cached.document.context.selected) {
         await loadFile(cached.document.context.selected);
         if (generation !== loadGeneration) return "superseded";
         emit();
@@ -2674,7 +2650,7 @@ export function createDetailController(
           cacheCurrentBlockRead(read);
           refreshBreadcrumb();
           state.mode = detailDisplayMode(updated);
-          if (state.mode === "file" || state.mode === "annotation") await loadFile(updated);
+          if (state.mode === "file") await loadFile(updated);
           else state.referencedFile = null;
         } else {
           const description = detailResourceDescription(state);
@@ -3575,24 +3551,8 @@ export function createDetailController(
           break;
         }
         const subject = target.representation.subject;
-        let openFile = state.referencedFile;
         if (subject.kind === "block") {
           await loadBlock(subject.blockId, true);
-        } else if (subject.kind === "resource" && openFile) {
-          const receipt = await effects.internFilesystem(openFile.absolutePath);
-          if (receipt.resource.id === subject.resourceId) {
-            await effects.reconcileAnnotations({
-              subject,
-              newRepresentation: filesystemAnnotationRepresentation(
-                receipt.resource,
-                openFile,
-              ),
-              content: openFile.sourceText ?? openFile.lines.join("\n"),
-            });
-          } else {
-            await loadNavigationTarget({ kind: "resource", resourceId: subject.resourceId }, true);
-            openFile = null;
-          }
         } else if (subject.kind === "resource") {
           await loadNavigationTarget({ kind: "resource", resourceId: subject.resourceId }, true);
         } else {
@@ -3618,13 +3578,12 @@ export function createDetailController(
         if (target.representation.subject.kind === "block") {
           if (target.representation.sourceSnapshot.kind === "rendered") {
             state.mode = "preview";
-            state.previewOffset = state.resolvedSelectedText
-              .slice(0, anchor.start)
-              .split(/\r?\n/)
-              .length - 1;
+            state.status = "Opened source; captured pane quote is unpositioned";
+            break;
           } else {
             await beginAnnotationSelection();
-            if (state.buffer.text.slice(anchor.start, anchor.end) !== anchor.exact) {
+            if (target.representation.contentHash !== annotationSourceHash(state.buffer.text) ||
+              state.buffer.text.slice(anchor.start, anchor.end) !== anchor.exact) {
               state.status = "Resolved text quote no longer matches the loaded block";
               break;
             }
@@ -3634,27 +3593,16 @@ export function createDetailController(
             state.buffer.placeCursor(end.row, end.column, true);
             ensureEditorCursorVisible(viewport);
           }
-        } else if (openFile && target.representation.subject.kind === "resource") {
-          const sourceText = openFile.sourceText ?? openFile.lines.join("\n");
-          if (sourceText.slice(anchor.start, anchor.end) !== anchor.exact) {
-            state.status = "Resolved text quote no longer matches the loaded file";
-            break;
-          }
-          const lineRange = annotationLineRangeForOffsets(sourceText, anchor.start, anchor.end);
-          state.mode = "file";
-          state.referencedFile = openFile;
-          state.selectionAnchor = Math.max(0, lineRange.startLine - openFile.firstLine);
-          state.fileCursor = Math.min(
-            openFile.lines.length - 1,
-            Math.max(0, lineRange.endLine - openFile.firstLine),
-          );
-          ensureFileCursorVisible(viewport);
         } else {
           const description = detailResourceDescription(state);
           const resourceText = description?.pdf?.markdown ??
             description?.web?.markdown ??
             description?.filesystem?.text;
+          const representation = description && resourceAnnotationRepresentation(description);
           if (!resourceText || anchor.start === null || anchor.end === null ||
+            representation?.contentHash !== target.representation.contentHash ||
+            target.representation.subject.kind !== "resource" ||
+            description?.resource.id !== target.representation.subject.resourceId ||
             resourceText.slice(anchor.start, anchor.end) !== anchor.exact) {
             state.status = "Resolved text quote is unavailable in the loaded Resource";
             break;

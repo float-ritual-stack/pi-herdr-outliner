@@ -3491,7 +3491,7 @@ describe("detail controller saves and annotations", () => {
       command: "open",
       target: { kind: "block", blockId: annotationId },
     }), viewport);
-    expect(harness.controller.state.referencedFile?.absolutePath).toBe(unrelatedFile.absolutePath);
+    expect(harness.controller.state.referencedFile).toBeNull();
     await harness.controller.dispatch({ type: "annotation.reveal" }, viewport);
     expect(harness.controller.state.resolvedSelectedText).toBe(content);
     expect(harness.controller.state.context.selected).toBeNull();
@@ -3760,6 +3760,39 @@ describe("detail controller saves and annotations", () => {
         exact: "βeta",
       },
     });
+  });
+
+  test("reveals a captured passage's host without treating pane offsets as source offsets", async () => {
+    const block = makeBlock({ text: "Hub\n\nGenerated result\n\nUnrelated ending" });
+    const harness = createHarness(block, null, async (text) => ({ text, references: [] }));
+    await harness.controller.initialize();
+    await harness.controller.dispatch({
+      type: "annotation.comment.direct",
+      capture: { kind: "rendered", capture: {
+        quote: "Generated result", capturedAt: "2026-09-19T12:00:00.000Z", hostBlockId: block.id,
+        paneId: "w1:p2", contentRevision: 43, contextId: "context-test", detailClientId: "detail-test",
+        validation: "detail-pointer", snapshotText: `History\n${"Chrome\n".repeat(15)}${block.text}`,
+      } },
+    }, viewport);
+    await harness.controller.dispatch({ type: "buffer.insert", text: "Keep captured evidence" }, viewport);
+    await harness.controller.dispatch({ type: "buffer.save" }, viewport);
+    const annotation = harness.controller.state.annotationThreads[0]!;
+    await harness.controller.dispatch({ type: "lock.toggle" }, viewport);
+    harness.effects.loadTarget = async (target) => {
+      if (target.kind !== "block") throw new Error("Expected block");
+      const selected = target.blockId === block.id ? block : {
+        ...annotation.block, properties: [{ key: "type", value: "annotation" }],
+      };
+      return { kind: "block", target, context: { selected, ancestors: [], children: [] } };
+    };
+    await harness.controller.onServiceEvent(event("ui", {
+      targetClientId: "detail-test", command: "open", target: { kind: "block", blockId: annotation.block.id },
+    }), viewport);
+    await harness.controller.dispatch({ type: "annotation.reveal" }, viewport);
+    expect(harness.controller.state.context.selected?.id).toBe(block.id);
+    expect(harness.controller.state.previewOffset).toBe(0);
+    expect(harness.controller.state.status).toContain("unpositioned");
+    expect(harness.controller.state.annotationThreads[0]!.originalTarget).toEqual(annotation.originalTarget);
   });
 
 

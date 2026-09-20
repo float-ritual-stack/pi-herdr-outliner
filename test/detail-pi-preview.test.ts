@@ -13,13 +13,13 @@ import {
   emptyAttentionState,
   normalizeAttentionMark,
 } from "../src/attention";
-import { createAnnotationAnchor } from "../src/annotations";
+import { annotationSourceHash, createAnnotationAnchor } from "../src/annotations";
 import {
   DEFAULT_DETAIL_CALLOUT_THEME,
   type DetailCalloutTheme,
 } from "../src/detail-callout-theme";
 import { parseDetailCallouts } from "../src/detail-callouts";
-import type { DetailState } from "../src/detail-controller";
+import { renderedSelectionAnnotationTarget, type DetailState } from "../src/detail-controller";
 import {
   DetailPiPreviewLayout,
   draftSourceRowAnchors,
@@ -88,11 +88,11 @@ function textTarget(
         kind: "block",
         blockId: "block-1",
         updatedAt: "updated",
-        contentHash: "fixture",
+        contentHash: annotationSourceHash(text),
       },
       adapter: { id: "outliner.block-text", version: 1 },
       mediaType: "text/markdown",
-      contentHash: "fixture",
+      contentHash: annotationSourceHash(text),
       capturedAt: "2026-01-01T00:00:00.000Z",
     },
     anchor: {
@@ -943,10 +943,11 @@ describe("Pi Markdown detail preview", () => {
       layout.scrollView.render(72).map(stripTerminalSequences).join("\n"),
     ).toContain("Check this range.");
   });
-  test("shows rendered-passage threads only after preview enrichment is ready", () => {
-    const rendered = "Hub\n\nGenerated result";
+  test("keeps pane-capture annotations reachable without applying screen offsets to Markdown", () => {
+    const rendered = "Hub\n\n[Generated result](outliner://block/target)\n\nUnrelated final paragraph";
     const detail = state(rendered, "Hub\n\n!((virtual-branch))");
-    const observation = {
+    const capturedFrame = previewLayout(detail).render(36).map(stripTerminalSequences).join("\n");
+    const target = renderedSelectionAnnotationTarget(detail, {
       quote: "Generated result",
       capturedAt: "2026-01-02T03:04:05.000Z",
       hostBlockId: "block-1",
@@ -955,25 +956,9 @@ describe("Pi Markdown detail preview", () => {
       contextId: "context-1",
       detailClientId: "detail-1",
       validation: "herdr-keybinding" as const,
-      projection: "generated" as const,
-    };
-    const representation: AnnotationRepresentation = {
-      id: "rendered-1",
-      subject: { kind: "block", blockId: "block-1" },
-      sourceSnapshot: { kind: "rendered", observation },
-      adapter: { id: "herdr.rendered-passage", version: 1 },
-      mediaType: "text/plain",
-      contentHash: "rendered-hash",
-      capturedAt: observation.capturedAt,
-      observation,
-    };
-    const start = rendered.indexOf(observation.quote);
-    const target = textTarget(
-      rendered,
-      start,
-      start + observation.quote.length,
-      representation,
-    );
+      snapshotText: `Previous terminal history\n${capturedFrame}`,
+    });
+    expect(target.anchor.kind === "text-quote" && target.anchor.start).toBeGreaterThan(rendered.length);
     detail.annotationThreads = [
       annotationThread(
         "annotation-rendered",
@@ -983,23 +968,34 @@ describe("Pi Markdown detail preview", () => {
     ];
     const layout = previewLayout(detail);
 
-    detail.readStatus = "pending";
-    detail.resolvedSelectedText = detail.context.selected!.text;
-    layout.render(72);
-    expect(detail.previewRegions.regions.some(region => region.kind === "annotation")).toBe(false);
-    detail.readStatus = "ready";
-    detail.resolvedSelectedText = rendered;
+    for (const width of [36, 72]) {
+      const collapsed = layout.render(width).map(stripTerminalSequences);
+      const region = detail.previewRegions.regions.find((candidate) =>
+        candidate.kind === "annotation"
+      )!;
+      expect(region.sourceSpan).toBeNull();
+      expect(collapsed.find((line) => line.includes("Generated result"))).not.toStartWith("+ ");
+      expect(collapsed.find((line) => line.includes("Unrelated final"))).not.toStartWith("+ ");
+      expect(collapsed.join("\n")).toContain("Unpositioned comments");
+      expect(togglePreviewRegionDisclosure(detail.previewRegions, region.id)).toBe(true);
+      const expanded = layout.render(width).map(stripTerminalSequences).join("\n");
+      expect(expanded).toContain("Discuss the generated result.");
+      expect(expanded).toContain("Generated result");
+      expect(detail.annotationThreads[0]!.originalTarget).toEqual(target);
+      expect(togglePreviewRegionDisclosure(detail.previewRegions, region.id)).toBe(false);
+    }
+  });
 
-    const collapsed = layout.render(72).map(stripTerminalSequences);
-    const region = detail.previewRegions.regions.find((candidate) =>
-      candidate.kind === "annotation"
-    )!;
-    expect(region.sourceSpan).toBeNull();
-    expect(collapsed.find((line) => line.includes("Generated result"))).toStartWith("+ ");
-    expect(togglePreviewRegionDisclosure(detail.previewRegions, region.id)).toBe(true);
-    expect(layout.render(72).map(stripTerminalSequences).join("\n")).toContain(
-      "Discuss the generated result.",
-    );
+  test("keeps a stale source representation unpositioned even when its quote still exists", () => {
+    const original = "Title\n\nTarget quote\n\nOriginal ending";
+    const current = original.replace("Original ending", "Different ending");
+    const detail = state(current, current);
+    const start = original.indexOf("Target quote");
+    detail.annotationThreads = [annotationThread("stale-source", textTarget(original, start, start + 12), "Keep this evidence")];
+    const layout = previewLayout(detail);
+    const frame = layout.render(50).map(stripTerminalSequences);
+    expect(frame.find((line) => line.includes("Target quote"))).not.toStartWith("+ ");
+    expect(frame.join("\n")).toContain("Unpositioned comments");
   });
 
   test("shows Resource threads at offsets matching the displayed historical representation", () => {
