@@ -1259,6 +1259,7 @@ export class DetailPiPreviewLayout extends VStack {
   readonly scrollView: ScrollView;
   private renderedSourceText: string | undefined;
   private renderedBlockRevision: number | undefined;
+  private renderedBlockId: string | undefined;
   private renderedRawText: string | undefined;
   private renderedReferencesReady: boolean | undefined;
   private renderedWorkIdPrefix: string | null | undefined;
@@ -1732,6 +1733,7 @@ export class DetailPiPreviewLayout extends VStack {
     const sourceChanged =
       sourceText !== this.renderedSourceText ||
       selected?.revision !== this.renderedBlockRevision ||
+      selected?.id !== this.renderedBlockId ||
       rawText !== this.renderedRawText ||
       referencesReady !== this.renderedReferencesReady ||
       workIdPrefix !== this.renderedWorkIdPrefix ||
@@ -1740,6 +1742,7 @@ export class DetailPiPreviewLayout extends VStack {
     if (sourceChanged || calloutSourceChanged) {
       this.renderedSourceText = sourceText;
       this.renderedBlockRevision = selected?.revision;
+      this.renderedBlockId = selected?.id;
       this.renderedRawText = rawText;
       this.renderedReferencesReady = referencesReady;
       this.renderedWorkIdPrefix = workIdPrefix;

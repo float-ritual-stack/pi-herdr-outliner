@@ -446,6 +446,13 @@ describe("outliner link URIs", () => {
 });
 
 describe("outliner link rendering", () => {
+  test("a malformed neighboring Resource token does not disable a valid link", () => {
+    const source = block("source-block-001", "References\n\nUse [file::okay.md] and [web::not-a-url].");
+    const links = resourceOccurrenceLinks(source, source.text);
+    expect([...links.values()].map(parseOutlinerLinkUri)).toEqual([
+      resourceOccurrenceLink(source, { start: 16, end: 31 }),
+    ]);
+  });
   test("Resource links preserve duplicate occurrence spans across metadata removal and resolved labels", () => {
     const raw = "Source [file::metadata.md]\n\nSee ((target01)) then [file::same.md] and [file::same.md].\n`[file::literal.md]`";
     const source = block("source-block-001", raw);

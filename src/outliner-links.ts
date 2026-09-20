@@ -223,10 +223,12 @@ export function resourceOccurrenceLinks(
   const resources = new Set(authoredResourceReferenceOccurrences(block.text)
     .filter(reference => reference.kind === "authored-resource").map(reference => reference.start));
   const projected = parsePropertyRecords(projectedText);
+  const displayedResources = new Set(authoredResourceReferenceOccurrences(projectedText)
+    .filter(reference => reference.kind === "authored-resource").map(reference => reference.start));
   for (const line of new Set(source.filter(record => resources.has(record.start)).map(record => record.line))) {
     const authored = source.filter(record => record.line === line && resources.has(record.start));
     const displayed = projected.filter(record => record.line === projectedLine(line) &&
-      ["file", "web", "jira", "app"].includes(record.key));
+      displayedResources.has(record.start));
     // An embed or unknown projection must not lend its coordinates to the host.
     if (authored.length !== displayed.length || authored.some((record, index) =>
       record.raw !== displayed[index]!.raw
