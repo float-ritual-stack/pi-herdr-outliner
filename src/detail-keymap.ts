@@ -270,6 +270,16 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
       case "detail.resource.open-external":
         await dispatch({ type: "resource.open-external" });
         return true;
+      case "detail.annotation.previous":
+      case "detail.annotation.next":
+        await dispatch({ type: "annotation.thread.move", delta: actionId === "detail.annotation.next" ? 1 : -1 });
+        return true;
+      case "detail.annotation.reply":
+        await dispatch({ type: "annotation.thread.reply" });
+        return true;
+      case "detail.annotation.lifecycle":
+        await dispatch({ type: "annotation.thread.lifecycle" });
+        return true;
       case "detail.annotation.reveal":
         await dispatch({ type: "annotation.reveal" });
         return true;

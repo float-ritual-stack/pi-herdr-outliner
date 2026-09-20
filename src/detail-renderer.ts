@@ -10,7 +10,7 @@ import {
   decorateAttentionLines,
 } from "./attention-render";
 import { currentAttentionMark } from "./attention";
-import { extractAnnotationBody } from "./annotations";
+import { annotationTargetLabel, buildDetailAnnotationView } from "./detail-annotations";
 import { completionWindow } from "./completion";
 import { outlinerLinkUri } from "./outliner-links";
 import { filterPropertyInspectorEntries } from "./property-inspector";
@@ -34,7 +34,6 @@ import {
 } from "./property-summary";
 import { renderTextBufferEditorRow } from "./text-buffer-editor";
 import { renderMarkdownLine, sanitizeDynamicText } from "./terminal";
-import type { AnnotationRecord, AnnotationTarget } from "./types";
 
 const ESC = "\x1b[";
 
@@ -281,111 +280,6 @@ function appendCompletion(
     const label = fitDynamicText(completion.items[index].label, Math.max(1, width - 2));
     output.push(index === completion.index ? `\x1b[7m› ${label}\x1b[0m` : `  ${label}`);
   }
-}
-
-function annotationTargetLabel(target: AnnotationTarget): string {
-  const subject = target.representation.subject;
-  const subjectLabel = subject.kind === "block"
-    ? `block ${subject.blockId}`
-    : subject.kind === "resource"
-      ? `resource ${subject.resourceId}`
-      : `legacy file ${subject.filePath}`;
-  const anchor = target.anchor;
-  if (anchor.kind === "text-quote") {
-    const position = anchor.start !== null && anchor.end !== null
-      ? ` @${anchor.start}-${anchor.end}`
-      : " · unpositioned";
-    return `${subjectLabel}${position}`;
-  }
-  return `${subjectLabel} · ${anchor.kind}`;
-}
-
-function annotationTargetText(target: AnnotationTarget): string {
-  const anchor = target.anchor;
-  switch (anchor.kind) {
-    case "text-quote":
-    case "dom-range":
-      return anchor.exact;
-    case "pdf-page-region":
-      return anchor.exact ?? `PDF page ${anchor.page}`;
-    case "structured-entity-field":
-      return `${anchor.entityType} ${anchor.entityId} · ${anchor.fieldPath.join(".")}`;
-    case "provider-comment-id":
-      return `${anchor.provider} comment ${anchor.commentId}`;
-  }
-}
-
-function selectedAnnotationRecord(state: Readonly<DetailState>): AnnotationRecord | null {
-  const selectedId = state.context.selected?.id;
-  if (!selectedId) return null;
-  for (const thread of state.annotationThreads) {
-    if (thread.block.id === selectedId) return thread;
-    const reply = thread.replies.find((candidate) => candidate.block.id === selectedId);
-    if (reply) return reply;
-  }
-  return null;
-}
-
-export function buildDetailAnnotationView(
-  state: Readonly<DetailState>,
-  width: number,
-): string[] {
-  if (!state.context.selected) return [];
-  const output: string[] = [];
-  const annotation = selectedAnnotationRecord(state);
-  if (annotation) {
-    output.push(`\x1b[2m${fitDynamicText(
-      `Original target: ${annotationTargetLabel(annotation.originalTarget)}`,
-      width,
-    )}\x1b[0m`);
-    for (const line of annotationTargetText(annotation.originalTarget).split(/\r?\n/)) {
-      output.push(`│ ${fitDynamicText(line, Math.max(1, width - 2))}`);
-    }
-    output.push(`\x1b[2m${fitDynamicText(
-      `Stored resolution: ${annotation.currentResolution.status}${
-        annotation.resolvedTarget ? ` · ${annotationTargetLabel(annotation.resolvedTarget)}` : ""
-      }`,
-      width,
-    )}\x1b[0m`);
-    if (annotation.resolvedTarget) {
-      for (const line of annotationTargetText(annotation.resolvedTarget).split(/\r?\n/)) {
-        output.push(`│ ${fitDynamicText(line, Math.max(1, width - 2))}`);
-      }
-    }
-    output.push("\x1b[1mResolution history\x1b[0m");
-    for (const event of annotation.resolutionHistory) {
-      const method = event.method.kind === "codec"
-        ? `${event.method.codecId}@${event.method.codecVersion}:${event.method.method}`
-        : event.method.method;
-      output.push(fitDynamicText(
-        `#${event.sequence} ${event.status}${event.appliesCurrent ? " · current" : ""} · ${method} · ${event.reviewer.kind}:${event.reviewer.id}${
-          event.confidence === null ? "" : ` · ${event.confidence}`
-        }`,
-        width,
-      ));
-      for (const [index, candidate] of event.candidates.entries()) {
-        output.push(fitDynamicText(
-          `  candidate ${index + 1} · ${candidate.confidence.toFixed(3)} · ${annotationTargetLabel(candidate.target)}`,
-          width,
-        ));
-      }
-      if (event.method.kind === "agent") {
-        output.push(fitDynamicText(`  rationale · ${event.method.rationale}`, width));
-        for (const evidence of event.method.evidence) {
-          output.push(fitDynamicText(`  evidence · ${evidence}`, width));
-        }
-      } else if (event.method.kind === "human" && event.method.proposalEventId) {
-        output.push(fitDynamicText(`  proposal · ${event.method.proposalEventId}`, width));
-      }
-    }
-    output.push("─".repeat(width));
-  }
-  output.push("\x1b[1mComment\x1b[0m");
-  const comment = extractAnnotationBody(state.resolvedSelectedText);
-  for (const line of (comment || "(No comment text)").split(/\r?\n/)) {
-    output.push(renderMarkdownLine(fitDynamicText(line, width)));
-  }
-  return output;
 }
 
 export interface DetailRenderOptions {

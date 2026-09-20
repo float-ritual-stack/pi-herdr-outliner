@@ -127,6 +127,8 @@ function computedDetailEffects(
     async patchProperties() {
       return unavailable();
     },
+    async replyAnnotation() { throw new Error("Not used"); },
+    async setAnnotationLifecycle() { throw new Error("Not used"); },
     async createAnnotation() {
       return unavailable();
     },

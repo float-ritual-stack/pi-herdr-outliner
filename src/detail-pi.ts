@@ -109,6 +109,7 @@ import {
   type AnnotationReconcileInput,
   type AnnotationReconcileReceipt,
   type AnnotationThread,
+  type AnnotationRecord,
   type AttentionClientState,
   type BacklinkCollection,
   type Block,
@@ -537,6 +538,12 @@ const effects: DetailEffects = {
       author: "user",
     });
   },
+  async replyAnnotation(input) {
+    return client.request<AnnotationBatchReceipt>({ action: "annotations.reply", ...input, author: "user" });
+  },
+  async setAnnotationLifecycle(input) {
+    return client.request<AnnotationRecord>({ action: "annotations.lifecycle", input, mutation: { author: "user", actorId: "detail" } });
+  },
   async internFilesystem(path) {
     return client.request<InternResourceReceipt>({
       action: "resources.intern-filesystem",
@@ -561,7 +568,7 @@ const effects: DetailEffects = {
   },
   openExternal: openExternalUrl,
   async getAnnotation(annotationId) {
-    return client.request<AnnotationThread>({
+    return client.request<AnnotationRecord>({
       action: "annotations.get",
       annotationId,
     });
@@ -1242,6 +1249,8 @@ const preview = new DetailPiPreviewLayout(
 );
 const draftSplit = new DetailPiDraftSplitLayout(customFrame, preview);
 const composer = new BufferComposer(() => {
+  const reply = controller.state.annotationReplyDraft;
+  const thread = reply ? controller.state.annotationThreads.find(thread => thread.block.id === reply.annotationId) : null;
   const target = controller.state.annotationDraft?.target;
   const context = target?.anchor.kind === "text-quote"
     ? target.anchor.exact
@@ -1251,14 +1260,14 @@ const composer = new BufferComposer(() => {
         ? target.anchor.exact ?? ""
         : "";
   return {
-    title: target?.referenceContext
+    title: reply ? "Reply to comment" : target?.referenceContext
       ? "Comment on this reference"
       : target?.representation.subject.kind === "resource"
       ? "Comment on Resource selection"
       : "Comment on selection",
-    context,
+    context: thread?.body ?? context,
     buffer: controller.state.buffer,
-    placeholder: "Write a comment…",
+    placeholder: reply ? "Write a reply…" : "Write a comment…",
     commitAction: "Ctrl+S",
     cancelAction: "Esc",
     viewportOffset: controller.state.editorVisualOffset,

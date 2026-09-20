@@ -20,6 +20,7 @@ import {
 import { OutlinerActionKeymap } from "../src/outliner-actions";
 import { detailBacklinkRegions } from "../src/detail-pi-preview";
 import { detailPropertyInspectorRegions } from "../src/property-inspector";
+import { renderDetailLines } from "../src/detail-renderer";
 import type { ReferencedFile } from "../src/files";
 import type { OutlinerLinkTarget } from "../src/outliner-links";
 import { patchPropertyText } from "../src/properties";
@@ -470,6 +471,8 @@ function createHarness(
         deduplicated: false,
       };
     },
+    async replyAnnotation() { throw new Error("No reply handler configured"); },
+    async setAnnotationLifecycle() { throw new Error("No lifecycle handler configured"); },
     async internFilesystem(path) {
       calls.filesystemInterns.push(path);
       return {
@@ -592,6 +595,26 @@ function event(domain: OutlinerEvent["domain"], command?: OutlinerEvent["command
 }
 
 describe("detail controller projection and deferred refresh", () => {
+  test("scrolls past annotation evidence and history to the final comment line", async () => {
+    const source = makeBlock({ text: Array.from({ length: 20 }, (_, i) => `Captured evidence ${i}`).join("\n") });
+    const target = renderedSelectionAnnotationTarget({
+      context: { selected: source, ancestors: [], children: [] },
+      resolvedSelectedText: source.text,
+      projectedSelectedText: source.text,
+    }, {
+      quote: source.text, snapshotText: source.text, capturedAt: "2026-09-19T12:00:00.000Z",
+      hostBlockId: source.id, paneId: "w1:p2", contentRevision: 1, contextId: "context-test",
+      detailClientId: "detail-test", validation: "detail-pointer",
+    });
+    const annotation = makeBlock({ id: "annotation-1", text: "Evidence comment\n[type::annotation]\nFinal comment sentinel", properties: [{ key: "type", value: "annotation" }] });
+    const harness = createHarness(annotation, null, async text => ({ text, references: [] }));
+    harness.effects.getAnnotation = async () => ({ ...annotationRecord(target, { block: annotation, body: "Final comment sentinel" }), replies: [] });
+    await harness.controller.initialize();
+    expect(renderDetailLines(harness.controller.state, viewport).join("\n")).not.toContain("Final comment sentinel");
+    await harness.controller.dispatch({ type: "preview.navigate", direction: "bottom" }, viewport);
+    expect(renderDetailLines(harness.controller.state, viewport).join("\n")).toContain("Final comment sentinel");
+  });
+
   test("paints uncached primary content while projection is still pending", async () => {
     const block = makeBlock({ id: "cold-primary", text: "Readable primary document" });
     const projection = Promise.withResolvers<Awaited<ReturnType<DetailEffects["projectRead"]>>>();
@@ -696,6 +719,103 @@ describe("detail controller projection and deferred refresh", () => {
     await harness.controller.dispatch({ type: "reference.follow" }, viewport);
     expect(harness.controller.state.destinationChooser.active).toBe(true);
     await harness.controller.handleDestinationChooserKeypress("", { name: "escape" });
+  });
+
+  test("annotation events preserve a Resource reader and its viewport", async () => {
+    const harness = createHarness(makeBlock(), null, undefined, undefined, {
+      initialTarget: { kind: "resource", resourceId: "resource-1" },
+    });
+    await harness.controller.initialize();
+    await harness.controller.dispatch({ type: "preview.navigate", direction: "bottom" }, viewport);
+    const before = harness.controller.state.document;
+    const offset = harness.controller.state.previewOffset;
+    expect(offset).toBeGreaterThan(0);
+    await harness.controller.onServiceEvent({ id: "annotation-event", domain: "content", action: "annotations.lifecycle", sequence: 1 }, viewport);
+    expect(harness.controller.state.document).toBe(before);
+    expect(harness.controller.state.previewOffset).toBe(offset);
+  });
+
+  test("thread navigation orders source ranges and reaches ambiguous and orphaned comments", async () => {
+    const text = "Title\nFirst phrase\nLast phrase";
+    const harness = createHarness(makeBlock({ text }), null, async text => ({ text, references: [] }));
+    harness.effects.reconcileAnnotations = async input => {
+      const thread = (id: string, exact: string, status: "resolved" | "ambiguous" | "orphaned" = "resolved"): AnnotationThread => {
+        const start = text.indexOf(exact);
+        const record = annotationRecord({ representation: input.newRepresentation,
+          anchor: { kind: "text-quote", start, end: start + exact.length, exact, prefix: "", suffix: "" } },
+          { block: makeBlock({ id }), body: id });
+        return { ...record, currentResolution: { ...record.currentResolution, status },
+          resolvedTarget: status === "resolved" ? record.resolvedTarget : null, replies: [] };
+      };
+      return { threads: [thread("last", "Last"), thread("orphan", "First", "orphaned"),
+        thread("first", "First"), thread("ambiguous", "First", "ambiguous")], changed: true };
+    };
+    await harness.controller.initialize();
+    const target = harness.controller.state.target;
+    for (const id of ["first", "last", "ambiguous", "orphan", "first"]) {
+      await harness.controller.dispatch({ type: "annotation.thread.move", delta: 1 }, viewport);
+      expect(harness.controller.state.selectedAnnotationId).toBe(id);
+      expect(harness.controller.state.target).toEqual(target);
+    }
+    expect(harness.controller.state.status).toContain("wrapped");
+    await harness.controller.dispatch({ type: "annotation.thread.move", delta: -1 }, viewport);
+    expect(harness.controller.state.selectedAnnotationId).toBe("orphan");
+    expect(harness.calls.updates).toEqual([]);
+  });
+
+  test("reply retry, cancel, resolve and reopen preserve the source and viewport", async () => {
+    const text = "Title\nPhrase\nLast line";
+    const harness = createHarness(makeBlock({ text }), null, async text => ({ text, references: [] }));
+    let thread: AnnotationThread;
+    harness.effects.reconcileAnnotations = async input => {
+      thread ??= { ...annotationRecord({ representation: input.newRepresentation,
+        anchor: { kind: "text-quote", start: 6, end: 12, exact: "Phrase", prefix: "", suffix: "" } }), replies: [] };
+      return { threads: [thread], changed: true };
+    };
+    harness.effects.getAnnotation = async () => thread;
+    const submissions: Array<Parameters<DetailEffects["replyAnnotation"]>[0]> = [];
+    harness.effects.replyAnnotation = async input => {
+      submissions.push(input);
+      if (submissions.length === 1) throw new Error("Reply transport failed");
+      const reply = { ...annotationRecord(thread.originalTarget, { block: makeBlock({ id: "reply-1" }), body: input.input.body }), parentAnnotationId: thread.block.id };
+      thread = { ...thread, replies: [reply] };
+      return { annotations: [reply], deduplicated: false };
+    };
+    harness.effects.setAnnotationLifecycle = async input => {
+      thread = { ...thread, lifecycle: input.lifecycle, block: { ...thread.block, revision: thread.block.revision + 1 } };
+      return thread;
+    };
+    await harness.controller.initialize();
+    await harness.controller.dispatch({ type: "annotation.thread.move", delta: 1 }, viewport);
+    await harness.controller.dispatch({ type: "preview.navigate", direction: "bottom" }, viewport);
+    const target = harness.controller.state.target;
+    const offset = harness.controller.state.previewOffset;
+    const source = harness.controller.state.context.selected;
+    await harness.controller.dispatch({ type: "annotation.thread.reply" }, viewport);
+    const requestId = harness.controller.state.annotationReplyDraft!.requestId;
+    expect(harness.controller.state.annotationDraft).toBeUndefined();
+    await harness.controller.dispatch({ type: "buffer.insert", text: "Human reply\nsecond line" }, viewport);
+    await harness.controller.dispatch({ type: "buffer.save" }, viewport);
+    expect(harness.controller.state.mode).toBe("comment");
+    expect(harness.controller.state.status).toBe("Reply transport failed");
+    expect(harness.controller.state.buffer.text).toBe("Human reply\nsecond line");
+    await harness.controller.dispatch({ type: "buffer.save" }, viewport);
+    expect(submissions.map(input => input.requestId)).toEqual([requestId, requestId]);
+    expect(submissions[1]!.input).toEqual({ annotationId: "annotation-1", body: "Human reply\nsecond line", source: "user" });
+    expect(harness.controller.state.annotationThreads[0]!.replies[0]!.body).toBe("Human reply\nsecond line");
+    expect(harness.controller.state.annotationReplyDraft).toBeUndefined();
+    for (const lifecycle of ["resolved", "open"] as const) {
+      await harness.controller.dispatch({ type: "annotation.thread.lifecycle" }, viewport);
+      expect(harness.controller.state.annotationThreads[0]!.lifecycle).toBe(lifecycle);
+    }
+    await harness.controller.dispatch({ type: "annotation.thread.reply" }, viewport);
+    await harness.controller.dispatch({ type: "buffer.cancel" }, viewport);
+    expect(harness.controller.state.mode).toBe("preview");
+    expect(harness.controller.state.target).toEqual(target);
+    expect(harness.controller.state.previewOffset).toBe(offset);
+    expect(harness.controller.state.context.selected).toBe(source);
+    expect(harness.calls.focuses).toBe(0);
+    expect(harness.calls.updates).toEqual([]);
   });
 
   test("paints annotation enrichment that arrives after the primary document", async () => {

@@ -54,6 +54,7 @@ import {
   type AnnotationReconcileInput,
   type AnnotationReconcileReceipt,
   type AnnotationThread,
+  type AnnotationRecord,
   type AttentionClientState,
   type BacklinkCollection,
   type Block,
@@ -313,6 +314,12 @@ const effects: DetailEffects = {
       author: "user",
     });
   },
+  async replyAnnotation(input) {
+    return client.request<AnnotationBatchReceipt>({ action: "annotations.reply", ...input, author: "user" });
+  },
+  async setAnnotationLifecycle(input) {
+    return client.request<AnnotationRecord>({ action: "annotations.lifecycle", input, mutation: { author: "user", actorId: "detail" } });
+  },
   async internFilesystem(path) {
     return client.request<InternResourceReceipt>({
       action: "resources.intern-filesystem",
@@ -337,7 +344,7 @@ const effects: DetailEffects = {
   },
   openExternal: openExternalUrl,
   async getAnnotation(annotationId) {
-    return client.request<AnnotationThread>({
+    return client.request<AnnotationRecord>({
       action: "annotations.get",
       annotationId,
     });

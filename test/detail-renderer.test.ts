@@ -1,3 +1,4 @@
+import { buildDetailAnnotationView } from "../src/detail-annotations";
 import { getOsc8LinkAtColumn, stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "bun:test";
 import {
@@ -9,7 +10,6 @@ import { createAnnotationAnchor } from "../src/annotations";
 import { DEFAULT_OUTLINER_ACTION_KEYMAP } from "../src/outliner-actions";
 import type { DetailState } from "../src/detail-controller";
 import {
-  buildDetailAnnotationView,
   renderDetailAnsi,
   renderDetailLines,
 } from "../src/detail-renderer";
