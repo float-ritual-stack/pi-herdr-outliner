@@ -815,11 +815,18 @@ function resourceAnnotationRepresentation(
   };
 }
 
-function resourceAnnotationText(description: ResourceDescription | null): string | null {
-  return description?.pdf?.markdown ??
+export function displayedResourceText(
+  state: Pick<DetailState, "document" | "resolvedSelectedText">,
+): string | null {
+  const description = detailResourceDescription(state);
+  if (description?.presentation && description.presentation.selected?.representation !== "cached-markdown") return null;
+  const text = description?.pdf?.markdown ??
     description?.web?.markdown ??
     description?.filesystem?.text ??
     null;
+  // Resource documents render selected source bytes first, followed by optional
+  // metadata. Availability alone does not establish this coordinate mapping.
+  return text !== null && state.resolvedSelectedText.startsWith(text) ? text : null;
 }
 
 function pdfAnnotationAnchor(
@@ -2417,7 +2424,7 @@ export function createDetailController(
   ): Promise<void> => {
     const selected = state.context.selected;
     const description = detailResourceDescription(state);
-    const resourceText = resourceAnnotationText(description);
+    const resourceText = displayedResourceText(state);
     if (description?.pdf && sourceLine >= description.pdf.markdown.split("\n").length) {
       state.status = "Select PDF text, not resource metadata, before adding annotations";
       return;
@@ -2425,7 +2432,7 @@ export function createDetailController(
     if (!resourceText && (!selected || selected.effectiveDeletedRootId)) {
       state.status = selected
         ? "Block is in Trash; restore before adding annotations"
-        : "This resource has no local text to annotate";
+        : "This view has no source text to annotate";
       return;
     }
     await setLocked(true);
@@ -2446,11 +2453,11 @@ export function createDetailController(
     const selected = state.context.selected;
     const description = detailResourceDescription(state);
     const pdf = description?.pdf;
-    const resourceText = resourceAnnotationText(description);
+    const resourceText = displayedResourceText(state);
     if (!resourceText && (!selected || selected.effectiveDeletedRootId)) {
       state.status = selected
         ? "Block is in Trash; restore before adding annotations"
-        : "This resource has no local text to annotate";
+        : "This view has no source text to annotate";
       return;
     }
     let target: DetailAnnotationTarget;
@@ -2520,7 +2527,7 @@ export function createDetailController(
   ): DetailResourceSelectionCapture | null => {
     if (anchor.row === focus.row && anchor.column === focus.column) return null;
     const description = detailResourceDescription(state);
-    const text = resourceAnnotationText(description);
+    const text = displayedResourceText(state);
     const representation = description ? resourceAnnotationRepresentation(description) : null;
     if (!description || !text || !representation) return null;
     const anchorBeforeFocus = anchor.row < focus.row ||
@@ -2594,7 +2601,7 @@ export function createDetailController(
       return;
     }
     const description = detailResourceDescription(state);
-    const text = resourceAnnotationText(description);
+    const text = displayedResourceText(state);
     const representation = description ? resourceAnnotationRepresentation(description) : null;
     if (
       !description ||
@@ -3595,16 +3602,14 @@ export function createDetailController(
           }
         } else {
           const description = detailResourceDescription(state);
-          const resourceText = description?.pdf?.markdown ??
-            description?.web?.markdown ??
-            description?.filesystem?.text;
+          const resourceText = displayedResourceText(state);
           const representation = description && resourceAnnotationRepresentation(description);
           if (!resourceText || anchor.start === null || anchor.end === null ||
             representation?.contentHash !== target.representation.contentHash ||
             target.representation.subject.kind !== "resource" ||
             description?.resource.id !== target.representation.subject.resourceId ||
             resourceText.slice(anchor.start, anchor.end) !== anchor.exact) {
-            state.status = "Resolved text quote is unavailable in the loaded Resource";
+            state.status = "Resolved text quote is not displayed in this Resource view";
             break;
           }
           state.previewOffset = resourceText.slice(0, anchor.start).split(/\r?\n/).length - 1;
