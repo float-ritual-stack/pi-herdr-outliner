@@ -752,6 +752,29 @@ explicit unpositioned status. Probable, unresolved,
 ambiguous, orphaned, unsupported, and rejected records remain valid, visible
 history rather than being coerced into a location.
 
+### Comments on individual Resource references
+
+The same file can appear several times in a block without becoming several
+Resources. In Detail, `o` opens the existing Properties choices when there are
+multiple references. Select a particular row with `Tab`, then press `c` to
+comment on that use. This does not open the file or create a Resource. Selecting
+an exact reference token with the source-selection controls also preserves its
+occurrence.
+
+Opening that row with `o` carries its context into the Resource reader. A passage
+comment there keeps both the host occurrence and the file representation/version
+and quote. Opening the Resource directly gives a file-global view; its comments
+have no reference context. Navigation history keeps repeated uses distinct.
+
+Original source evidence is immutable. Moving an unchanged reference line can
+retain placement only when that line is unique in both the captured and current
+block. Deleting or ambiguously copying a reference leaves the thread recoverable
+under Unpositioned comments. Editing the reference's own line also requires
+explicit reattachment through the existing annotation approval operation. A
+later unique survivor does not silently inherit an earlier comment. Reattachment
+never erases the original target or history. Contextual Resource reveals request
+the recorded revision; unavailable old file bytes are not replaced by newer bytes.
+
 ### Detail edit and comment modes
 
 | Key | Action |

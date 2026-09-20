@@ -1307,6 +1307,25 @@ describe("detail controller projection and deferred refresh", () => {
     expect(harness.controller.state.context.selected?.text).toBe(source.text);
   });
 
+  test("navigation history distinguishes two uses of the same Resource", async () => {
+    const source = makeBlock({ id: "source-block-001", updatedAt: "2026-01-01T00:00:00.000Z",
+      text: "References\n\nFirst [file::same.md].\nSecond [file::same.md]." });
+    const harness = createHarness(source);
+    await harness.controller.initialize();
+    const target = (start: number) => ({ kind: "resource" as const, resourceId: fileResource("same.md").id,
+      referenceContext: createAnnotationReferenceContext(source, start, start + 15) });
+    const first = target(source.text.indexOf("[file::"));
+    const second = target(source.text.lastIndexOf("[file::"));
+    for (const target of [first, second]) {
+      await harness.controller.onServiceEvent(event("ui", { targetClientId: "detail-test", command: "open", target }), viewport);
+      expect(harness.controller.state.target).toEqual(target);
+    }
+    await harness.controller.dispatch({ type: "navigation.back" }, viewport);
+    expect(harness.controller.state.target).toEqual(first);
+    await harness.controller.dispatch({ type: "navigation.forward" }, viewport);
+    expect(harness.controller.state.target).toEqual(second);
+  });
+
   test("follows a durable fragment reference to its anchored preview line", async () => {
     const source = makeBlock({ text: "See ((target01^decision|the approved boundary))" });
     const target = makeBlock({

@@ -531,6 +531,29 @@ source-view identity and PIE-265 thread navigation. PIE-271's readiness and
 source-replacement guards do not claim to repair the pre-existing ready-state
 placement contract. The workboard owns scheduling and detailed reproduction proof.
 
+### Reference occurrences and thread controls — PIE-263, PIE-282, PIE-265
+
+PIE-263 supplies one explicit activation path for authored Resource references,
+carrying source block/revision/span and preserving metadata versus inline scope.
+PIE-282 builds occurrence comments on that path and PIE-281's representation
+guards. The same Resource can have independent host-use comments and global
+comments; a contextual Resource passage carries both anchors. Keep the existing
+AnnotationRepository as owner, with immutable occurrence evidence in target JSON.
+Do not introduce a second occurrence store or clone Resources.
+
+Reconciliation must never transfer a deleted or ambiguous reference's annotation
+to a surviving identical mention. Exact unchanged source or a containing line
+unique in both original/current text is the bounded automatic contract. Other
+changes remain recoverable and require explicit reattachment. Test creation,
+navigation history, movement, duplication/deletion, reply/lifecycle, service
+restart and unchanged authored text through public contracts and real input.
+
+PIE-265 owns reachable global/contextual/unpositioned threads, reply/resolve/reopen,
+document-order navigation, preserved reader state, and complete evidence scrolling.
+Its UI derives placement from the same source-identity rules. The combined-surface
+experiment depends on all three for final comment/navigation parity, but does not
+own their persistence or make their state models identical.
+
 ## Application surface experiment and deletion
 
 ### A1 — ordinary navigation owns a primary reader

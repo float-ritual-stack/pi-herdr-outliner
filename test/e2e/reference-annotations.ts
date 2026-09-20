@@ -30,8 +30,15 @@ const result = await runHerdrScenario({
       await s.focus(tree); await s.keys(tree, "g"); await s.waitVisible(tree, "Goto:");
       await s.text(tree, host.id); await s.waitVisible(tree, host.id.slice(0, 8));
       await s.keys(tree, "enter");
+      await s.waitFor("Goto accepted", () => s.visible(tree), frame => !frame.includes("Goto:"));
       await s.waitFor("source opened", current, c => c.currentTarget?.kind === "block" && c.currentTarget.blockId === host.id);
-      await s.focus(detail); await s.waitVisible(detail, "Occurrence annotation fixture");
+      await s.focus(detail);
+      const frame = await s.waitVisible(detail, "Occurrence annotation fixture");
+      if (frame.includes("▾ Properties")) {
+        await s.keys(detail, "p");
+        await s.waitFor("Properties closed", () => s.visible(detail), frame => !frame.includes("▾ Properties"));
+      }
+      await s.waitVisible(detail, "First use");
     };
     const saveComment = async (body: string) => {
       await s.waitVisible(detail, "Ctrl+S save");
@@ -62,7 +69,8 @@ const result = await runHerdrScenario({
     const target = (await current()).currentTarget;
     assert.ok(target?.kind === "resource" && target.referenceContext);
     assert.equal(target.referenceContext.anchor.start, text.lastIndexOf("[file::"));
-    await s.keys(detail, "v"); await terminal.write("\u0001"); await s.keys(detail, "c");
+    await s.keys(detail, "v"); await s.waitVisible(detail, "⎋ cancel");
+    await s.keys(detail, ...Array(19).fill("shift+right")); await s.keys(detail, "c");
     const passage = await saveComment("File passage in the second reference context");
     assert.equal(passage.originalTarget.representation.subject.kind, "resource");
     assert.equal(passage.originalTarget.referenceContext?.anchor.start, second.originalTarget.referenceContext?.anchor.start);
@@ -76,7 +84,8 @@ const result = await runHerdrScenario({
     } });
     await s.waitFor("file-global target", current, c => c.currentTarget?.kind === "resource" && !c.currentTarget.referenceContext);
     await s.waitVisible(detail, "Shared file passage");
-    await s.keys(detail, "v"); await terminal.write("\u0001"); await s.keys(detail, "c");
+    await s.keys(detail, "v"); await s.waitVisible(detail, "⎋ cancel");
+    await s.keys(detail, ...Array(19).fill("shift+right")); await s.keys(detail, "c");
     await s.waitVisible(detail, "Ctrl+S save"); await s.text(detail, "File-global comment"); await terminal.write("\u0013");
     const resourceThreads = await s.waitFor("file-global comment persisted", () => s.client.request<AnnotationThread[]>({
       action: "annotations.list", query: { subject: { kind: "resource", resourceId: target.resourceId }, includeResolved: true },
@@ -87,7 +96,7 @@ const result = await runHerdrScenario({
     await s.checkpoint("04-global-and-contextual-comments");
 
     await goto(); await s.keys(detail, "e"); await s.waitVisible(detail, "⌃S save");
-    await terminal.write("\u0001");
+    await terminal.write("\u001ba");
     await s.text(detail, "Occurrence annotation fixture\n\nFirst use [file::same.md].\nFirst use [file::same.md].");
     await terminal.write("\u0013");
     const changed = await s.waitFor("ambiguous and missing uses retained", hostThreads,

@@ -3626,7 +3626,8 @@ export function createDetailController(
         } else if (subject.kind === "resource") {
           const snapshot = target.representation.sourceSnapshot;
           await loadNavigationTarget({ kind: "resource", resourceId: subject.resourceId,
-            ...(snapshot.kind === "resource" && snapshot.revision ? { revision: snapshot.revision } : {}),
+            ...(target.referenceContext && snapshot.kind === "resource" && snapshot.revision
+              ? { revision: snapshot.revision } : {}),
             ...(target.referenceContext ? { referenceContext: target.referenceContext } : {}),
           }, true);
         } else {
