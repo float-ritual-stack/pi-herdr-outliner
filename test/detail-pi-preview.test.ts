@@ -47,6 +47,7 @@ import {
   type ResourceSource,
 } from "../src/resources";
 import { createOpenDestinationChooserState } from "../src/open-destination-chooser";
+import { negotiateResourcePresentation, TUI_RESOURCE_PRESENTATION_CONTEXT } from "../src/resource-presentation";
 import {
   SourceSpannedMarkdown,
   sourceSpannedMarkdownSegments,
@@ -1093,6 +1094,45 @@ describe("Pi Markdown detail preview", () => {
     expect(layout.render(72).map(stripTerminalSequences).join("\n")).toContain(
       "Discuss the Resource evidence.",
     );
+  });
+
+  test("keeps available Resource text unpositioned when metadata is the selected presentation", () => {
+    const text = "Actual source\n\nStable quote";
+    const detail = filesystemState(text);
+    if (detail.document.kind !== "ready" || detail.document.document.kind !== "resource") throw new Error("Resource fixture required");
+    const resourceDocument = detail.document.document;
+    const originalDescription = resourceDocument.description;
+    const binaryDescription = { ...originalDescription, resource: { ...originalDescription.resource, mediaType: "application/octet-stream" } };
+    const description = { ...binaryDescription, presentation: negotiateResourcePresentation(binaryDescription, TUI_RESOURCE_PRESENTATION_CONTEXT) };
+    detail.document = { kind: "ready", document: { ...resourceDocument, description } };
+    if (!description.filesystem) throw new Error("Filesystem fixture required");
+    expect(description.presentation.selected?.representation).toBe("metadata");
+    const representation: AnnotationRepresentation = {
+      id: `filesystem:${description.resource.id}:1:${text.length}:${description.filesystem.contentHash}`,
+      subject: { kind: "resource", resourceId: description.resource.id },
+      sourceSnapshot: { kind: "resource", resourceId: description.resource.id, sourceSnapshotId: null, revision: description.filesystem.revision },
+      adapter: { id: "filesystem.text", version: 1 }, mediaType: "application/octet-stream",
+      contentHash: description.filesystem.contentHash, capturedAt: description.filesystem.capturedAt,
+    };
+    detail.annotationThreads = [annotationThread("metadata-source-annotation", textTarget(text, text.indexOf("Stable quote"), text.length, representation), "Retain hidden source comment")];
+    detail.resolvedSelectedText = "# notes/fixture.md\n\nStable Resource link\n\n## Negotiated presentation\n\n- Representation: metadata";
+    detail.projectedSelectedText = detail.resolvedSelectedText;
+    const layout = previewLayout(detail);
+    const frame = layout.render(72).map(stripTerminalSequences);
+    expect(frame.some((line) => line.startsWith("+ ") && line.includes("notes/fixture.md"))).toBe(false);
+    expect(frame.join("\n")).toContain("Unpositioned comments");
+    expect(layout.sourcePointAtViewport(3, 5, 72)).toBeNull();
+    expect(layout.sourceLineAtScroll(72)).toBeNull();
+    const region = detail.previewRegions.regions.find((candidate) => candidate.kind === "annotation")!;
+    expect(togglePreviewRegionDisclosure(detail.previewRegions, region.id)).toBe(true);
+    const expanded = layout.render(72).map(stripTerminalSequences).join("\n");
+    expect(expanded).toContain("Retain hidden source comment");
+    expect(expanded).toContain("Stable quote");
+    const textualDescription = { ...originalDescription, presentation: negotiateResourcePresentation(originalDescription, TUI_RESOURCE_PRESENTATION_CONTEXT) };
+    expect(textualDescription.presentation.selected?.representation).toBe("cached-markdown");
+    detail.document = { kind: "ready", document: { ...resourceDocument, description: textualDescription } };
+    expect(layout.render(72).map(stripTerminalSequences).join("\n")).toContain("Unpositioned comments");
+    expect(layout.sourcePointAtViewport(3, 5, 72)).toBeNull();
   });
 
 
