@@ -673,7 +673,7 @@ test("renders lock state as a compact clickable icon", () => {
   )[0]!;
 
   expect(stripTerminalSequences(unlocked)).toContain("🔓");
-  expect(stripTerminalSequences(locked)).toContain("🔒");
+  expect(stripTerminalSequences(locked)).toContain("🔐");
   expect(unlocked).not.toContain("Detail");
   expect(unlocked).not.toContain("Unlocked");
 });

@@ -326,7 +326,7 @@ describe("Pi TUI Detail component", () => {
     const visible = stripTerminalSequences(rendered);
 
     expect(visible).toContain("○ Edit · draft");
-    expect(visible).toContain("🔒");
+    expect(visible).toContain("🔐");
     expect(rendered).toContain("^W focus");
   });
 

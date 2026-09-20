@@ -201,7 +201,7 @@ function renderHeaderControls(state: Readonly<DetailState>): string {
   const locked = state.connectionMode === "locked";
   const lock = outlinerActionLink(
     "detail.lock.toggle",
-    `${locked ? "\x1b[33m🔒" : "\x1b[32m🔓"}\x1b[0m`,
+    `${locked ? "\x1b[33m🔐" : "\x1b[32m🔓"}\x1b[0m`,
   );
   const menu = outlinerActionLink("detail.menu.open", "\x1b[2;36m[⋯]\x1b[0m");
   return `${lock} ${menu}`;
