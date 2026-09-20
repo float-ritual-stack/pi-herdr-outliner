@@ -36,6 +36,36 @@ test("roadmap creation and edits have one lifecycle authority; other block statu
   expect(store.create("Capture [type::capture] [status::unprocessed]").properties).toContainEqual({ key: "status", value: "unprocessed" });
 });
 
+test("superseded roadmap writes require exactly one replacement link", () => {
+  const store = fixture();
+  const replacement = store.createRoadmapItem({ ...input, title: "Replacement" }).block;
+  const text = "Retired [type::roadmap-item] [work-stage::Superseded]";
+  const link = `[superseded-by::${replacement.id}]`;
+  expect(() => store.create(text)).toThrow("exactly one superseded-by");
+  expect(() => store.create(`${text} ${link} ${link}`)).toThrow("exactly one superseded-by");
+  const { block } = store.createRoadmapItem(input);
+  expect(() => store.update(block.id, text, block.revision)).toThrow("exactly one superseded-by");
+  const stage = parsePropertyRecords(block.text).find(p => p.key === "work-stage")!;
+  expect(() => store.patchProperties(block.id, block.revision, [
+    { op: "replace", ordinal: stage.ordinal, value: "superseded" },
+  ])).toThrow("exactly one superseded-by");
+  expect(store.require(block.id)).toEqual(block);
+  const retired = store.patchProperties(block.id, block.revision, [
+    { op: "replace", ordinal: stage.ordinal, value: "superseded" },
+    { op: "append", key: "superseded-by", value: replacement.id },
+  ]);
+  const supersededBy = parsePropertyRecords(retired.text).find(p => p.key === "superseded-by")!;
+  expect(() => store.patchProperties(retired.id, retired.revision, [
+    { op: "remove", ordinal: supersededBy.ordinal },
+  ])).toThrow("exactly one superseded-by");
+  expect(() => store.patchProperties(retired.id, retired.revision, [
+    { op: "append", key: "superseded-by", value: replacement.id },
+  ])).toThrow("exactly one superseded-by");
+  expect(store.require(retired.id)).toEqual(retired);
+  expect(store.create(`${text} ${link}`).properties).toContainEqual({ key: "superseded-by", value: replacement.id });
+  expect(store.create("Note [type::capture] [work-stage::superseded]").properties).toContainEqual({ key: "work-stage", value: "superseded" });
+});
+
 test("batch membership survives delivery, reopening and restart without absorbing new backlog", () => {
   let store = fixture();
   const batch = store.create("Commitment [type::work-batch] [project::test]");

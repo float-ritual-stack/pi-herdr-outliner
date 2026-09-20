@@ -1383,6 +1383,9 @@ export class OutlinerStore {
     if (stages.length !== 1 || ![...Object.keys(ROADMAP_CREATE_STAGES), "done", "superseded"].includes(stages[0]!.toLowerCase())) {
       throw new Error("Roadmap items require exactly one valid work-stage");
     }
+    if (stages[0]!.toLowerCase() === "superseded" && values("superseded-by").length !== 1) {
+      throw new Error("Superseded roadmap items require exactly one superseded-by link");
+    }
     const batches = values("work-batch");
     if (batches.length > 1) throw new Error("Roadmap items have at most one work-batch");
     if (batches[0]) {
