@@ -73,6 +73,39 @@ test("separate uses of one Resource retain context, global scope, replies and li
   expect(entry.store.require(host.id).text).toBe(host.text);
 });
 
+test("adding the context lookup index preserves ordered block and Resource threads across repeated startup", () => {
+  const { entry, host, resource, passage } = fixture();
+  const referenceContext = context(host, host.text.indexOf("[file::"));
+  const targets: AnnotationTarget[] = [
+    { representation: hostRepresentation(host), anchor: createTextQuoteAnchor(host.text, 0, 10) },
+    { ...passage, referenceContext },
+    { representation: referenceContext.representation, anchor: referenceContext.anchor, referenceContext },
+    passage,
+  ];
+  const records = targets.map((target, index) => entry.store.createAnnotation(`indexed-${index}`, {
+    target, body: `Thread ${index}`, source: "user",
+  }).annotations[0]!);
+  const blockQuery = { subject: { kind: "block" as const, blockId: host.id }, includeResolved: true };
+  const resourceQuery = { subject: { kind: "resource" as const, resourceId: resource.id }, includeResolved: true };
+  const blockThreads = entry.store.listAnnotationThreads(blockQuery);
+  const resourceThreads = entry.store.listAnnotationThreads(resourceQuery);
+  const orderedIds = (members: typeof records) => [...members]
+    .sort((left, right) => left.block.createdAt.localeCompare(right.block.createdAt) || left.block.id.localeCompare(right.block.id))
+    .map(record => record.block.id);
+  expect(blockThreads.map(thread => thread.block.id)).toEqual(orderedIds(records.slice(0, 3)));
+  expect(resourceThreads.map(thread => thread.block.id)).toEqual(orderedIds([records[1]!, records[3]!]));
+
+  // Simulate an existing workspace before the derived lookup index was added.
+  entry.store.database.exec("DROP INDEX IF EXISTS annotation_targets_reference_context");
+  for (let restart = 0; restart < 2; restart += 1) {
+    entry.store.close();
+    entry.store = new OutlinerStore(join(entry.root, "outline.sqlite"));
+    expect(entry.store.listAnnotationThreads(blockQuery)).toEqual(blockThreads);
+    expect(entry.store.listAnnotationThreads(resourceQuery)).toEqual(resourceThreads);
+    expect(entry.store.require(host.id)).toEqual(host);
+  }
+});
+
 test("context capture rejects stale hosts and a different canonical Resource without creating a thread", () => {
   const { entry, host, resource, passage } = fixture();
   const referenceContext = context(host, host.text.indexOf("[file::"));
