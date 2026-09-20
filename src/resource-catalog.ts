@@ -1776,6 +1776,7 @@ export class ResourceCatalog {
     const sourceRow = this.requireSourceRowFromCurrentRead(source.id);
     this.assertConfinement(source, sourceRow.root_binding, resource.address);
     recoverFilesystemSave(resolve(source.boundary.root, resource.address.path));
+    this.assertConfinement(source, sourceRow.root_binding, resource.address);
     const contents = readFileContents(resource.address.path, source.boundary.root);
     const revision: ResourceRevisionRef = {
       resourceId: resource.id,

@@ -37,6 +37,9 @@ function writeDurable(path: string, text: string, mode = 0o600): void {
 function restoreAbsentTarget(path: string, directory: string): void {
   const original = join(directory, "original");
   try {
+    if (!lstatSync(original).isFile()) {
+      throw new ResourceCatalogError("source-unavailable", "Filesystem save recovery original must be a regular file");
+    }
     // A hard link publishes only into an absent pathname. An external writer's
     // new file always wins; never "recover" by renaming over it.
     linkSync(original, path);

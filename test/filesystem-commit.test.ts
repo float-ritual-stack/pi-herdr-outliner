@@ -2,6 +2,37 @@ import { expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import { join } from "node:path";
 import { OutlinerStore } from "../src/store";
+import { createHash, randomUUID } from "node:crypto";
+
+test("pending recovery cannot publish a symlink outside a confined Source", () => {
+  const root = fs.mkdtempSync("/tmp/outliner-file-recovery-boundary-");
+  const sourceRoot = join(root, "source");
+  fs.mkdirSync(sourceRoot);
+  const path = join(sourceRoot, "note.txt");
+  const outside = join(root, "outside.txt");
+  fs.writeFileSync(path, "ORIGINAL");
+  fs.writeFileSync(outside, "OUTSIDE-SOURCE-SENTINEL");
+  const store = new OutlinerStore(join(root, "outline.sqlite"));
+  try {
+    const source = store.resources.createSource({ name: "confined", provider: "filesystem",
+      boundary: { root: sourceRoot }, policy: { deniedCapabilities: [] } });
+    const resource = store.resources.intern({ sourceId: source.id,
+      address: { kind: "filesystem", path: "note.txt" } }).resource;
+    fs.unlinkSync(path);
+    const name = `.outliner-save-${randomUUID()}`;
+    const directory = join(sourceRoot, name);
+    fs.mkdirSync(directory, { mode: 0o700 });
+    fs.writeFileSync(join(directory, "save.json"), JSON.stringify({ target: "note.txt" }));
+    fs.symlinkSync(outside, join(directory, "original"));
+    const marker = join(sourceRoot, `.outliner-save-${createHash("sha256").update("note.txt").digest("hex").slice(0, 24)}.pending`);
+    fs.writeFileSync(marker, name);
+    const description = store.resources.describe(resource.id, true);
+    expect(description.filesystem).toBeNull();
+    expect(fs.existsSync(path)).toBe(false);
+    expect(fs.existsSync(marker)).toBe(true);
+    expect(fs.readFileSync(outside, "utf8")).toBe("OUTSIDE-SOURCE-SENTINEL");
+  } finally { store.close(); fs.rmSync(root, { recursive: true, force: true }); }
+});
 
 for (const writerKind of ["in-place", "replacement"] as const) {
 test(`a ${writerKind} writer at the filesystem commit boundary retains its bytes and the submitted draft`, () => {
