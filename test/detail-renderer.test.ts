@@ -17,6 +17,7 @@ import { parsePropertySummaryKeys } from "../src/property-summary";
 import { TextBuffer } from "../src/text-buffer";
 import { deriveResourceCapabilityReport } from "../src/resources";
 import type { Block } from "../src/types";
+import { createPropertyInspectorModel, detailPropertyInspectorRegions } from "../src/property-inspector";
 const ACTION_MENU = "\x1b]8;;pi-outliner-action:detail.menu.open\x1b\\\x1b[2;36m[⋯]\x1b[0m\x1b]8;;\x1b\\";
 const UNLOCKED = "\x1b]8;;pi-outliner-action:detail.lock.toggle\x1b\\\x1b[32m🔓\x1b[0m\x1b]8;;\x1b\\";
 const detailHeader = (title: string, width: number): string[] => {
@@ -154,6 +155,24 @@ function state(overrides: Partial<DetailState> = {}): DetailState {
 }
 
 describe("detail ANSI renderer", () => {
+  test("draws distinct Resource choices and keeps the focused occurrence visible", () => {
+    const source = block("Resource choices\n\n" + Array.from({ length: 15 }, (_, index) =>
+      `Use ${index} [file::same.md].`).join("\n"));
+    const detail = state({ context: { selected: source, ancestors: [], children: [] } });
+    detail.propertyInspector.model = createPropertyInspectorModel(source.id, source.text);
+    detail.propertyInspector.expanded = true;
+    const entry = detail.propertyInspector.model.entries.at(-1)!;
+    detail.previewRegions.regions = detailPropertyInspectorRegions(detail);
+    detail.previewRegions.focusedRegionId = entry.occurrenceId;
+    const lines = renderDetailLines(detail, { width: 60, height: 10 });
+    expect(lines).toHaveLength(10);
+    expect(lines.map(stripTerminalSequences).join("\n")).toContain("▶ file::same.md · inline · L17:C8");
+    expect(lines.every(line => visibleWidth(line) <= 60)).toBe(true);
+    detail.propertyInspector.model = null;
+    detail.context.selected = null;
+    detail.resolvedSelectedText = "RESOURCE BYTES";
+    expect(renderDetailLines(detail, { width: 60, height: 10 }).join("\n")).toContain("RESOURCE BYTES");
+  });
   test("renders the fixed no-selection frame", () => {
     const width = 64;
     const rendered = renderDetailAnsi(state(), { width, height: 8 });

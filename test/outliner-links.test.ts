@@ -8,7 +8,11 @@ import {
   navigateOutlinerLink,
   outlinerLinkUri,
   parseOutlinerLinkUri,
+  followResourceOccurrence,
+  resourceOccurrenceLink,
+  resourceOccurrenceLinks,
 } from "../src/outliner-links";
+import { propertyInspectorAuthoredText } from "../src/property-inspector";
 import { resolveBlockReferencesWithStatus } from "../src/references";
 import type { Block } from "../src/types";
 
@@ -31,6 +35,32 @@ function block(id: string, text: string): Block {
 }
 
 describe("outliner link URIs", () => {
+  test("Resource activation validates the occurrence before explicit catalog creation", async () => {
+    const source = block("source-block-001", "Source\n\nFirst [file::same.md] and second [file::same.md]");
+    const start = source.text.lastIndexOf("[file::same.md]");
+    const target = resourceOccurrenceLink(source, { start, end: start + 15 });
+    const requests: RequestInput[] = [];
+    const requester = { async request<T>(request: RequestInput): Promise<T> {
+      requests.push(request);
+      return (request.action === "get" ? source : { resource: { id: "resource-same" }, created: true }) as T;
+    } };
+    await expect(followResourceOccurrence(requester, target)).resolves.toMatchObject({ resource: { id: "resource-same" } });
+    expect(requests).toEqual([
+      { action: "get", blockId: source.id },
+      { action: "resources.follow-authored", reference: { kind: "filesystem", path: "same.md" } },
+    ]);
+    requests.length = 0;
+    source.revision += 1;
+    await expect(followResourceOccurrence(requester, target)).rejects.toThrow("Reference source changed");
+    expect(requests.map(request => request.action)).toEqual(["get"]);
+  });
+  test("Resource occurrence links identify an exact source revision and span", () => {
+    const occurrence = { revision: 7, start: 20, end: 35 };
+    const uri = outlinerLinkUri("reference", "source-block-001", { occurrence });
+    expect(parseOutlinerLinkUri(uri)).toEqual({ kind: "reference", value: "source-block-001", occurrence });
+    expect(() => parseOutlinerLinkUri("pi-outliner://reference/source-block-001")).toThrow();
+    expect(() => parseOutlinerLinkUri(uri.replace("end=35", "end=19"))).toThrow();
+  });
   test("round-trips exact blocks and encoded shared-goto queries", () => {
     const blockId = "550e8400-e29b-41d4-a716-446655440000";
     expect(parseOutlinerLinkUri(outlinerLinkUri("block", blockId))).toEqual({
@@ -416,6 +446,22 @@ describe("outliner link URIs", () => {
 });
 
 describe("outliner link rendering", () => {
+  test("Resource links preserve duplicate occurrence spans across metadata removal and resolved labels", () => {
+    const raw = "Source [file::metadata.md]\n\nSee ((target01)) then [file::same.md] and [file::same.md].\n`[file::literal.md]`";
+    const source = block("source-block-001", raw);
+    const projected = propertyInspectorAuthoredText(raw);
+    const resolved = projected.replace("((target01))", "((A much longer target title))");
+    const links = resourceOccurrenceLinks(source, projected);
+    expect(links.size).toBe(2);
+    const targets = [...links.values()].map(parseOutlinerLinkUri);
+    expect(targets.map(target => target.occurrence?.start)).toEqual([
+      raw.indexOf("[file::same.md]"), raw.lastIndexOf("[file::same.md]"),
+    ]);
+    const markdown = linkOutlinerMarkdown(resolved, projected, null, true, links);
+    for (const uri of links.values()) expect(markdown).toContain(uri);
+    expect(markdown).toContain("`[file::literal.md]`");
+    expect(linkOutlinerMarkdown(resolved, projected, null, false, links)).not.toContain("//reference/");
+  });
   const targetId = "550e8400-e29b-41d4-a716-446655440000";
   const target = block(targetId, "Target decision [type::decision]");
 

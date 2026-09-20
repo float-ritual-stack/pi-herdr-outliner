@@ -1,13 +1,17 @@
+import type { DetailState } from "./detail-controller";
+import type { PreviewRegion } from "./detail-preview-regions";
 import { pageAddressReferences, tryNormalizePageAddress } from "./page-addresses";
 import { parsePropertyRecords } from "./properties";
 import { blockReferenceOccurrences } from "./references";
 import type { PropertyPlacement, PropertyRecord, PropertyScope, PropertySyntax } from "./types";
 import { isCanonicalWorkId } from "./work-ids";
+import { authoredResourceReferenceOccurrences } from "./resource-references";
 
 const CANONICAL_BLOCK_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export type PropertyInspectorTarget =
+  | { readonly kind: "resource-reference"; readonly source: "authored-reference" }
   | {
       readonly kind: "block";
       readonly blockId: string;
@@ -123,10 +127,15 @@ export function createPropertyInspectorModel(
   blockId: string,
   canonicalText: string,
 ): PropertyInspectorModel {
+  const resources = new Set(authoredResourceReferenceOccurrences(canonicalText)
+    .filter(reference => reference.kind === "authored-resource")
+    .map(reference => reference.start));
   const entries = parsePropertyRecords(canonicalText).map((record) => ({
     ...record,
     occurrenceId: propertyInspectorOccurrenceId(blockId, record),
-    target: classifyPropertyInspectorTarget(record.key, record.value),
+    target: resources.has(record.start)
+      ? { kind: "resource-reference" as const, source: "authored-reference" as const }
+      : classifyPropertyInspectorTarget(record.key, record.value),
   }));
   return { blockId, canonicalText, entries };
 }
@@ -211,4 +220,100 @@ export function groupPropertyInspectorEntries(
     label,
     entries: groupEntries,
   }));
+}
+
+function propertyGroupLabel(
+  entry: PropertyInspectorEntry,
+  groupBy: PropertyInspectorGroupBy,
+): string {
+  switch (groupBy) {
+    case "key":
+      return entry.key;
+    case "scope":
+      return entry.scope;
+    case "target":
+      return entry.target?.kind ?? "plain";
+  }
+}
+
+function propertyGroupId(groupBy: PropertyInspectorGroupBy, label: string): string {
+  return `property-group:${groupBy}:${encodeURIComponent(label)}`;
+}
+
+function propertyEntryParentId(
+  state: Readonly<DetailState>,
+  entry: PropertyInspectorEntry,
+): string {
+  const groupBy = state.propertyInspector.groupBy;
+  return groupBy
+    ? propertyGroupId(groupBy, propertyGroupLabel(entry, groupBy))
+    : "property-inspector";
+}
+
+export function detailPropertyInspectorRegions(
+  state: Readonly<DetailState>,
+): PreviewRegion[] {
+  if (!state.propertyInspector.model) return [];
+  const inspector = state.propertyInspector;
+  const expanded = inspector.presentation === "dedicated" || inspector.expanded;
+  const entries = expanded ? filterPropertyInspectorEntries(inspector.model?.entries ?? [], { query: inspector.filterDraft ?? inspector.filter }) : [];
+  const groupBy = inspector.groupBy;
+  const groups = groupBy
+    ? groupPropertyInspectorEntries(entries, groupBy)
+    : [];
+  const childIds = groupBy
+    ? groups.map((group) => propertyGroupId(groupBy, group.label))
+    : entries.map((entry) => entry.occurrenceId);
+  const regions: PreviewRegion[] = [{
+    id: "property-inspector",
+    kind: "property-inspector",
+    sourceSpan: null,
+    parentId: null,
+    childIds,
+    focusable: inspector.presentation === "inline",
+    disclosure: {
+      defaultExpanded: inspector.presentation === "dedicated",
+      expanded,
+    },
+    activation: inspector.presentation === "dedicated"
+      ? null
+      : { type: "property-inspector.disclosure.toggle" },
+  }];
+  if (groupBy) {
+    for (const group of groups) {
+      regions.push({
+        id: propertyGroupId(groupBy, group.label),
+        kind: "property-group",
+        sourceSpan: null,
+        parentId: "property-inspector",
+        childIds: group.entries.map((entry) => entry.occurrenceId),
+        focusable: false,
+        disclosure: null,
+        activation: null,
+      });
+    }
+  }
+  for (const entry of entries) {
+    regions.push({
+      id: entry.occurrenceId,
+      kind: "property-entry",
+      sourceSpan: {
+        start: entry.start,
+        end: entry.end,
+        startLine: entry.line,
+        endLine: entry.line + entry.raw.split(/\r?\n/).length - 1,
+      },
+      parentId: propertyEntryParentId(state, entry),
+      childIds: [],
+      focusable: true,
+      disclosure: null,
+      activation: entry.target
+        ? {
+          type: "property-inspector.target.open",
+          occurrenceId: entry.occurrenceId,
+        }
+        : null,
+    });
+  }
+  return regions;
 }

@@ -82,7 +82,7 @@ import {
   openVirtualBranchNavigatorPopup,
   outlinerRightClickOwnership,
 } from "./pane-control";
-import { parseOutlinerLinkUri, resolveOutlinerLinkTarget } from "./outliner-links";
+import { followResourceOccurrence, parseOutlinerLinkUri, resolveOutlinerLinkTarget } from "./outliner-links";
 import {
   dispatchNavigation,
   focusTreeForClient,
@@ -529,6 +529,7 @@ const effects: DetailEffects = {
   async resolveReference(target) {
     return resolveOutlinerLinkTarget(client, target);
   },
+  followResourceOccurrence: target => followResourceOccurrence(client, target),
   async createAnnotation(input) {
     return client.request<AnnotationBatchReceipt>({
       action: "annotations.create",

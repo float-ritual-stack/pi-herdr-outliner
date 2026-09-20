@@ -36,6 +36,7 @@ import type { ReferencedFile, ReferencedPathCandidate } from "./files";
 import {
   firstOutlinerReference,
   outlinerLinkUri,
+  resourceOccurrenceLink,
   type OutlinerLinkTarget,
   type ResolvedOutlinerLinkTarget,
 } from "./outliner-links";
@@ -212,6 +213,9 @@ export function propertyInspectorTargetLink(
   target: PropertyInspectorTarget,
   options: { preserveSource?: boolean; intent?: "reveal" } = {},
 ): OutlinerLinkTarget {
+  if (target.kind === "resource-reference") {
+    throw new Error("Resource property navigation requires its source occurrence");
+  }
   if (target.kind === "block") {
     return {
       kind: "block",
@@ -552,6 +556,7 @@ export interface DetailEffects {
   acknowledgeAttention(markId?: string): Promise<AttentionClientState>;
   restoreBlock(blockId: string): Promise<Block>;
   resolveReference(target: OutlinerLinkTarget): Promise<ResolvedOutlinerLinkTarget>;
+  followResourceOccurrence(target: OutlinerLinkTarget): Promise<InternResourceReceipt>;
   queryBlocks(query: BlockSearchQuery): Promise<VisibleBlockCollection>;
   queryPageAddresses(query: string | undefined, limit: number): Promise<PageAddressCollection>;
   readFile(block: Block): Promise<ReferencedFile>;
@@ -2097,6 +2102,12 @@ export function createDetailController(
     target: OpenDestinationTarget,
     reference: OutlinerLinkTarget,
   ): Promise<void> => {
+    if (reference.kind === "reference") {
+      const receipt = await effects.followResourceOccurrence(reference);
+      target.target = { kind: "resource", resourceId: receipt.resource.id };
+      target.title = resourceAddressLabel(receipt.resource.address);
+      return;
+    }
     if (reference.kind === "resource") {
       target.target = { kind: "resource", resourceId: reference.value };
       target.title = reference.value;
@@ -3129,13 +3140,28 @@ export function createDetailController(
           state.status = "References are not ready · preview enrichment is incomplete";
           break;
         }
+        const resourceEntries = state.propertyInspector.model?.entries.filter(entry =>
+          entry.target?.kind === "resource-reference"
+        ) ?? [];
+        if (intent.type !== "reference.open" && resourceEntries.length > 1) {
+          if (!state.propertyInspector.expanded) {
+            await dispatch({ type: "property-inspector.disclosure.toggle" }, viewport);
+          }
+          state.propertyInspector.filter = "";
+          state.propertyInspector.filterDraft = null;
+          state.previewRegions.focusedRegionId = resourceEntries[0]!.occurrenceId;
+          state.status = "Choose a reference in Properties · Tab selects · o opens · p closes";
+          break;
+        }
         const reference = intent.type === "reference.open"
           ? intent.target
+          : state.context.selected && resourceEntries.length === 1
+            ? resourceOccurrenceLink(state.context.selected, resourceEntries[0]!)
           : state.context.selected
             ? firstOutlinerReference(state.projectedSelectedText, state.workIdPrefix)
             : null;
         if (!reference) {
-          state.status = "Selected block has no block or page references";
+          state.status = "Selected block has no actionable references";
           break;
         }
         const navigationIntent: OutlinerNavigationIntent =
@@ -3173,9 +3199,12 @@ export function createDetailController(
           }
           break;
         }
-        if (reference.kind === "resource") {
+        if (reference.kind === "resource" || reference.kind === "reference") {
+          const resourceId = reference.kind === "reference"
+            ? (await effects.followResourceOccurrence(reference)).resource.id
+            : reference.value;
           await effects.dispatchNavigation(
-            { kind: "resource", resourceId: reference.value },
+            { kind: "resource", resourceId },
             "reveal",
             { focusTarget: true },
           );
@@ -3377,7 +3406,12 @@ export function createDetailController(
         }
         await dispatch({
           type: "reference.open",
-          target: propertyInspectorTargetLink(entry.target, {
+          target: entry.target.kind === "resource-reference" && state.context.selected
+            ? { ...resourceOccurrenceLink(state.context.selected, entry),
+                preserveSource: state.propertyInspector.presentation === "dedicated",
+                ...(intent.intent === "reveal" ? { intent: "reveal" as const } : {}),
+              }
+            : propertyInspectorTargetLink(entry.target, {
             preserveSource: state.propertyInspector.presentation === "dedicated",
             ...(intent.intent === "reveal" ? { intent: "reveal" as const } : {}),
           }),

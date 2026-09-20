@@ -23,6 +23,8 @@ import {
   resolveNavigationDestination,
 } from "./navigation-routes";
 import { isWorkIdAddress } from "./page-addresses";
+import { authoredResourceReferenceOccurrences } from "./resource-references";
+import { parsePropertyRecords } from "./properties";
 import type {
   Block,
   BlockReferenceResolution,
@@ -31,6 +33,7 @@ import type {
   PageAddressFollowResult,
   PageAddressResolution,
   Resource,
+  InternResourceReceipt,
 } from "./types";
 
 const OUTLINER_SCHEME = "pi-outliner:";
@@ -39,7 +42,13 @@ const BLOCK_ID_TOKEN_PATTERN = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4
 
 const TERMINAL_CONTROL_PATTERN = /[\u0000-\u001f\u007f]/;
 
-export type OutlinerLinkKind = "block" | "goto" | "page" | "resource" | "work";
+export type OutlinerLinkKind = "block" | "goto" | "page" | "resource" | "reference" | "work";
+
+export interface ResourceOccurrenceAddress {
+  revision: number;
+  start: number;
+  end: number;
+}
 
 export interface OutlinerLinkTarget {
   kind: OutlinerLinkKind;
@@ -47,6 +56,7 @@ export interface OutlinerLinkTarget {
   fragmentId?: string;
   preserveSource?: boolean;
   intent?: "reveal";
+  occurrence?: ResourceOccurrenceAddress;
 }
 
 export interface OutlinerLinkNavigation {
@@ -75,6 +85,7 @@ export function outlinerLinkUri(
     preserveSource?: boolean;
     intent?: "reveal";
     fragmentId?: string;
+    occurrence?: ResourceOccurrenceAddress;
   } = {},
 ): string {
   const normalized = value.trim();
@@ -83,7 +94,7 @@ export function outlinerLinkUri(
   }
   if (!normalized) throw new Error("Outliner link target cannot be empty");
   if (
-    (kind === "block" && !BLOCK_ID_PATTERN.test(normalized)) ||
+    ((kind === "block" || kind === "reference") && !BLOCK_ID_PATTERN.test(normalized)) ||
     (kind === "work" && !isWorkIdAddress(normalized))
   ) {
     throw new Error(`Invalid outliner ${kind} target: ${normalized}`);
@@ -95,6 +106,15 @@ export function outlinerLinkUri(
   if (options.preserveSource) query.set("preserveSource", "1");
   if (options.intent) query.set("intent", options.intent);
   if (options.fragmentId) query.set("fragment", options.fragmentId);
+  if (kind === "reference" || options.occurrence) {
+    const occurrence = options.occurrence;
+    if (kind !== "reference" || !occurrence || !validOccurrenceAddress(occurrence)) {
+      throw new Error("Resource reference requires an exact source revision and span");
+    }
+    query.set("revision", String(occurrence.revision));
+    query.set("start", String(occurrence.start));
+    query.set("end", String(occurrence.end));
+  }
   const suffix = query.size > 0 ? `?${query}` : "";
   return `${OUTLINER_SCHEME}//${kind}/${encodeURIComponent(normalized)}${suffix}`;
 }
@@ -119,6 +139,7 @@ export function parseOutlinerLinkUri(uri: string): OutlinerLinkTarget {
     kind !== "goto" &&
     kind !== "page" &&
     kind !== "resource" &&
+    kind !== "reference" &&
     kind !== "work"
   ) {
     throw new Error(`Unsupported outliner link kind: ${parsed.hostname}`);
@@ -133,9 +154,16 @@ export function parseOutlinerLinkUri(uri: string): OutlinerLinkTarget {
   const preserveSourceValues = parsed.searchParams.getAll("preserveSource");
   const intentValues = parsed.searchParams.getAll("intent");
   const fragmentValues = parsed.searchParams.getAll("fragment");
+  const occurrenceKeys = ["revision", "start", "end"];
+  const occurrence = kind === "reference" ? {
+    revision: Number(parsed.searchParams.get("revision")),
+    start: Number(parsed.searchParams.get("start")),
+    end: Number(parsed.searchParams.get("end")),
+  } : undefined;
   if (
     [...parsed.searchParams.keys()].some((key) =>
-      key !== "preserveSource" && key !== "intent" && key !== "fragment"
+      key !== "preserveSource" && key !== "intent" && key !== "fragment" &&
+      !(kind === "reference" && occurrenceKeys.includes(key))
     ) ||
     preserveSourceValues.length > 1 ||
     (preserveSourceValues.length === 1 && preserveSourceValues[0] !== "1") ||
@@ -143,14 +171,18 @@ export function parseOutlinerLinkUri(uri: string): OutlinerLinkTarget {
     (intentValues.length === 1 && intentValues[0] !== "reveal") ||
     fragmentValues.length > 1 ||
     (fragmentValues.length === 1 &&
-      (kind !== "block" || !isFragmentId(fragmentValues[0]!)))
+      (kind !== "block" || !isFragmentId(fragmentValues[0]!))) ||
+    (kind === "reference" && (occurrenceKeys.some(key =>
+      parsed.searchParams.getAll(key).length !== 1 ||
+      !/^\d+$/.test(parsed.searchParams.get(key)!)
+    ) || !validOccurrenceAddress(occurrence!)))
   ) {
     throw new Error("Invalid outliner link navigation constraints");
   }
   if (
     !value ||
     TERMINAL_CONTROL_PATTERN.test(value) ||
-    (kind === "block" && !BLOCK_ID_PATTERN.test(value)) ||
+    ((kind === "block" || kind === "reference") && !BLOCK_ID_PATTERN.test(value)) ||
     (kind === "work" && !isWorkIdAddress(value))
   ) {
     throw new Error(`Invalid outliner ${kind} target`);
@@ -161,7 +193,72 @@ export function parseOutlinerLinkUri(uri: string): OutlinerLinkTarget {
     ...(fragmentValues.length === 1 ? { fragmentId: fragmentValues[0] } : {}),
     ...(preserveSourceValues.length === 1 ? { preserveSource: true } : {}),
     ...(intentValues.length === 1 ? { intent: "reveal" as const } : {}),
+    ...(occurrence ? { occurrence } : {}),
   };
+}
+
+function validOccurrenceAddress(value: ResourceOccurrenceAddress): boolean {
+  return Number.isSafeInteger(value.revision) && value.revision > 0 &&
+    Number.isSafeInteger(value.start) && value.start >= 0 &&
+    Number.isSafeInteger(value.end) && value.end > value.start;
+}
+
+export function resourceOccurrenceLink(
+  block: Pick<Block, "id" | "revision">,
+  span: { start: number; end: number },
+): OutlinerLinkTarget {
+  return { kind: "reference", value: block.id, occurrence: {
+    revision: block.revision, start: span.start, end: span.end,
+  } };
+}
+
+/** Map authored tokens through the existing line projection, preserving duplicates. */
+export function resourceOccurrenceLinks(
+  block: Pick<Block, "id" | "revision" | "text">,
+  projectedText: string,
+  projectedLine: (sourceLine: number) => number = line => line,
+): ReadonlyMap<number, string> {
+  const links = new Map<number, string>();
+  const source = parsePropertyRecords(block.text).filter(record => record.scope !== "block");
+  const resources = new Set(authoredResourceReferenceOccurrences(block.text)
+    .filter(reference => reference.kind === "authored-resource").map(reference => reference.start));
+  const projected = parsePropertyRecords(projectedText);
+  for (const line of new Set(source.filter(record => resources.has(record.start)).map(record => record.line))) {
+    const authored = source.filter(record => record.line === line && resources.has(record.start));
+    const displayed = projected.filter(record => record.line === projectedLine(line) &&
+      ["file", "web", "jira", "app"].includes(record.key));
+    // An embed or unknown projection must not lend its coordinates to the host.
+    if (authored.length !== displayed.length || authored.some((record, index) =>
+      record.raw !== displayed[index]!.raw
+    )) continue;
+    authored.forEach((record, index) => {
+      const target = resourceOccurrenceLink(block, { start: record.start, end: record.end });
+      links.set(displayed[index]!.start, outlinerLinkUri(target.kind, target.value, target));
+    });
+  }
+  return links;
+}
+
+/** Activation rechecks source identity before the existing explicit Resource follow. */
+export async function followResourceOccurrence(
+  requester: BlockFocusRequester,
+  target: OutlinerLinkTarget,
+): Promise<InternResourceReceipt> {
+  if (target.kind !== "reference" || !target.occurrence || !validOccurrenceAddress(target.occurrence)) {
+    throw new Error("Resource reference requires an exact source revision and span");
+  }
+  const block = await requester.request<Block>({ action: "get", blockId: target.value });
+  if (block.deletedAt || block.effectiveDeletedRootId || block.revision !== target.occurrence.revision) {
+    throw new Error("Reference source changed; reopen the block before following it");
+  }
+  const occurrence = authoredResourceReferenceOccurrences(block.text).find(reference =>
+    reference.start === target.occurrence!.start && reference.end === target.occurrence!.end
+  );
+  if (!occurrence) throw new Error("Resource reference occurrence no longer exists");
+  if (occurrence.kind === "invalid-authored-resource") throw new Error(occurrence.message);
+  return requester.request<InternResourceReceipt>({
+    action: "resources.follow-authored", reference: occurrence.reference,
+  });
 }
 
 export interface ResolvedOutlinerLinkTarget {
@@ -177,7 +274,7 @@ export async function resolveOutlinerLinkTarget(
   if (target.kind === "goto") {
     throw new Error("Fuzzy goto links require a Tree destination");
   }
-  if (target.kind === "resource") {
+  if (target.kind === "resource" || target.kind === "reference") {
     throw new Error("Resource links resolve through Resource navigation");
   }
   if (target.kind === "block") {
@@ -236,8 +333,10 @@ export async function navigateOutlinerLink(
       title: focused.resolution.match.title,
     };
   }
-  if (target.kind === "resource") {
-    const resource = await requester.request<Resource>({
+  if (target.kind === "resource" || target.kind === "reference") {
+    const resource = target.kind === "reference"
+      ? (await followResourceOccurrence(requester, target)).resource
+      : await requester.request<Resource>({
       action: "resources.get",
       resourceId: target.value,
     });
@@ -540,10 +639,42 @@ export function linkOutlinerMarkdown(
   rawText: string,
   workIdPrefix: string | null = null,
   linksEnabled = true,
+  resourceLinks: ReadonlyMap<number, string> = new Map(),
 ): string {
+  // Block-reference presentation changes lengths. Map only unchanged source
+  // segments; an authored Resource token is never inferred from rendered labels.
+  const resources: LinkSpan[] = [];
+  let rawCursor = 0;
+  let resolvedCursor = 0;
+  const replacements = resolvedReferenceSpans(rawText, resolvedText);
+  const rawReferences = blockReferenceOccurrences(rawText);
+  for (const occurrence of authoredResourceReferenceOccurrences(rawText)) {
+    const uri = resourceLinks.get(occurrence.start);
+    if (!uri) continue;
+    rawCursor = 0;
+    resolvedCursor = 0;
+    let valid = true;
+    for (const reference of rawReferences) {
+      if (reference.start >= occurrence.start) break;
+      resolvedCursor += reference.start - rawCursor;
+      const authored = rawText.slice(reference.start, reference.end);
+      if (resolvedText.startsWith(authored, resolvedCursor)) resolvedCursor += authored.length;
+      else {
+        const replacement = replacements.find(span => span.start === resolvedCursor);
+        if (!replacement) { valid = false; break; }
+        resolvedCursor = replacement.end;
+      }
+      rawCursor = reference.end;
+    }
+    const start = resolvedCursor + occurrence.start - rawCursor;
+    const token = rawText.slice(occurrence.start, occurrence.end);
+    if (valid && resolvedText.slice(start, start + token.length) === token) {
+      resources.push({ start, end: start + token.length, uri });
+    }
+  }
   const spans = selectLinkSpans(
     resolvedText,
-    resolvedReferenceSpans(rawText, resolvedText),
+    [...replacements, ...resources],
     () => true,
     workIdPrefix,
   );

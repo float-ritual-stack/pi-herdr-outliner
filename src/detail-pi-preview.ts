@@ -1,3 +1,4 @@
+import { detailPropertyInspectorRegions } from "./property-inspector";
 import {
   Key,
   Markdown,
@@ -19,7 +20,7 @@ import {
 } from "./detail-callouts";
 import type { DetailCalloutTheme } from "./detail-callout-theme";
 import { detailEmbedIds } from "./detail-embeds";
-import { linkOutlinerMarkdown } from "./outliner-links";
+import { linkOutlinerMarkdown, resourceOccurrenceLinks } from "./outliner-links";
 import {
   detailBlockTarget,
   detailResourceDescription,
@@ -35,7 +36,6 @@ import {
   type PreviewRegionState,
 } from "./detail-preview-regions";
 import {
-  detailPropertyInspectorRegions,
   renderPropertyInspectorDocument,
 } from "./detail-pi-renderer";
 import { stripFragmentAnchors } from "./fragments";
@@ -436,6 +436,7 @@ function renderPreviewDocument(
   rawText: string,
   linksEnabled: boolean,
   workIdPrefix: string | null,
+  resourceLinks: ReadonlyMap<number, string> = new Map(),
 ): string {
   const sanitizedSource = sanitizeMarkdownDocument(sourceText);
   // Sanitize authored text before generated links or presentation-only Markdown are added.
@@ -445,6 +446,9 @@ function renderPreviewDocument(
       sanitizeMarkdownDocument(rawText),
       workIdPrefix,
       linksEnabled,
+      new Map([...resourceLinks].map(([offset, uri]) => [
+        sanitizeMarkdownDocument(rawText.slice(0, offset)).length, uri,
+      ])),
     ),
   );
 }
@@ -1205,6 +1209,7 @@ export class DetailPiPreviewLayout extends VStack {
   readonly backlinkMarkdown: Markdown;
   readonly scrollView: ScrollView;
   private renderedSourceText: string | undefined;
+  private renderedBlockRevision: number | undefined;
   private renderedRawText: string | undefined;
   private renderedReferencesReady: boolean | undefined;
   private renderedWorkIdPrefix: string | null | undefined;
@@ -1677,6 +1682,7 @@ export class DetailPiPreviewLayout extends VStack {
     const referencesReady = draftText !== null || this.state.readStatus === "ready";
     const sourceChanged =
       sourceText !== this.renderedSourceText ||
+      selected?.revision !== this.renderedBlockRevision ||
       rawText !== this.renderedRawText ||
       referencesReady !== this.renderedReferencesReady ||
       workIdPrefix !== this.renderedWorkIdPrefix ||
@@ -1684,6 +1690,7 @@ export class DetailPiPreviewLayout extends VStack {
       this.draftProjectionError !== this.renderedDraftProjectionError;
     if (sourceChanged || calloutSourceChanged) {
       this.renderedSourceText = sourceText;
+      this.renderedBlockRevision = selected?.revision;
       this.renderedRawText = rawText;
       this.renderedReferencesReady = referencesReady;
       this.renderedWorkIdPrefix = workIdPrefix;
@@ -1697,6 +1704,9 @@ export class DetailPiPreviewLayout extends VStack {
             rawText,
             this.linksEnabled,
             workIdPrefix,
+            draftText === null
+              ? resourceOccurrenceLinks(selected, rawText, renderedLineForAuthoredLine)
+              : new Map(),
           )
         : detailMarkdownPresentation(sanitizeMarkdownDocument(sourceText));
       const renderedText = this.draftProjectionError

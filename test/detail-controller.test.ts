@@ -19,7 +19,7 @@ import {
 } from "../src/detail-controller";
 import { OutlinerActionKeymap } from "../src/outliner-actions";
 import { detailBacklinkRegions } from "../src/detail-pi-preview";
-import { detailPropertyInspectorRegions } from "../src/detail-pi-renderer";
+import { detailPropertyInspectorRegions } from "../src/property-inspector";
 import type { ReferencedFile } from "../src/files";
 import type { OutlinerLinkTarget } from "../src/outliner-links";
 import { patchPropertyText } from "../src/properties";
@@ -440,6 +440,10 @@ function createHarness(
         };
       }
       return selection.selected!;
+    },
+    async followResourceOccurrence(target) {
+      calls.followedReferences.push(target);
+      return { resource: fileResource("same.md"), created: false };
     },
     async resolveReference(target) {
       calls.followedReferences.push(target);
@@ -1249,6 +1253,33 @@ describe("detail controller projection and deferred refresh", () => {
 
     await harness.controller.dispatch({ type: "edit.begin" }, viewport);
     expect(harness.controller.state.status).toContain("restore before editing");
+  });
+
+  test("multiple Resource occurrences use Properties without interning until an occurrence is chosen", async () => {
+    const source = makeBlock({ id: "source-block-001", text: "References\n\nOne [file::same.md] and two [file::same.md]." });
+    const harness = createHarness(source);
+    await harness.controller.initialize();
+    await harness.controller.dispatch({ type: "reference.follow" }, viewport);
+    expect(harness.controller.state.propertyInspector.expanded).toBe(true);
+    expect(harness.controller.state.status).toContain("Choose a reference");
+    expect(harness.calls.followedReferences).toEqual([]);
+    const entry = harness.controller.state.propertyInspector.model!.entries[1]!;
+    harness.controller.setPreviewRegions(detailPropertyInspectorRegions(harness.controller.state));
+    await harness.controller.dispatch({ type: "property-inspector.disclosure.toggle" }, viewport);
+    await harness.controller.dispatch({ type: "reference.follow" }, viewport);
+    harness.controller.setPreviewRegions(detailPropertyInspectorRegions(harness.controller.state));
+    expect(harness.controller.state.previewRegions.focusedRegionId).toBe(
+      harness.controller.state.propertyInspector.model!.entries[0]!.occurrenceId,
+    );
+    await harness.controller.dispatch({
+      type: "property-inspector.target.open", occurrenceId: entry.occurrenceId, intent: "open",
+    }, viewport);
+    expect(harness.calls.followedReferences).toEqual([]);
+    await harness.controller.handleDestinationChooserKeypress("", { name: "return" });
+    expect(harness.calls.followedReferences).toEqual([{
+      kind: "reference", value: source.id, preserveSource: false,
+      occurrence: { revision: source.revision, start: entry.start, end: entry.end },
+    }]);
   });
 
   test("follows a durable fragment reference to its anchored preview line", async () => {
