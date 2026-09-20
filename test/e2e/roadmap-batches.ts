@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { fileURLToPath } from "node:url";
 import { OutlinerClient } from "../../src/client";
 import { parsePropertyRecords } from "../../src/properties";
 import type { Block, RoadmapItemCreateReceipt, VisibleBlockCollection } from "../../src/types";
@@ -6,7 +7,14 @@ import { runHerdrScenario } from "./herdr-runner";
 
 const result = await runHerdrScenario({
   name: "roadmap-batches",
-  async prepare() {},
+  async prepare(projectRoot) {
+    for (const args of [["init", "-b", "main"], ["config", "user.name", "Batch fixture"],
+      ["config", "user.email", "fixture@example.invalid"], ["commit", "--allow-empty", "-m", "Fixture"],
+      ["remote", "add", "origin", "https://github.com/fixture/outliner-batch-test.git"]]) {
+      const command = Bun.spawnSync(["git", ...args], { cwd: projectRoot });
+      assert.equal(command.exitCode, 0, command.stderr.toString());
+    }
+  },
   async run(session) {
     const create = (text: string, parentId: string | null = null) => session.client.request<Block>({ action: "create", text, parentId });
     await session.client.request({ action: "work-ids.configure", prefix: "PIE" });
@@ -16,8 +24,10 @@ const result = await runHerdrScenario({
     const input = { project: "batch-fixture", arc: "workflow", tracks: ["workflow"], priority: "high" as const };
     const items: Block[] = [];
     for (const title of ["First outcome", "Second outcome", "Third outcome"]) {
-      items.push((await session.client.request<RoadmapItemCreateReceipt>({ action: "roadmap.items.create", input: { ...input, title, workBatchId: batch.id } })).block);
+      items.push((await session.client.request<RoadmapItemCreateReceipt>({ action: "roadmap.items.create", input: { ...input, title, workBatchId: batch.id,
+        ...(items.length === 2 ? { dependsOn: [items[1]!.id] } : {}) } })).block);
     }
+    await session.client.request({ action: "virtual.occurrences.reorder", viewId: board.id, orderedBlockIds: items.map(item => item.id) });
     const followup = (await session.client.request<RoadmapItemCreateReceipt>({ action: "roadmap.items.create", input: { ...input, title: "Discovered future work" } })).block;
     const members = async (client = session.client) => client.request<VisibleBlockCollection>({ action: "blocks.query", query: { filters: [{ key: "work-batch", value: batch.id }], propertyScope: "block", limit: 10 } });
     const verifyMembers = async (client = session.client) => {
@@ -49,9 +59,23 @@ const result = await runHerdrScenario({
     await session.keys(session.panes.tree, "down", "down", "down");
     await batchFrame(session.panes.tree, ["queued"]);
     await session.checkpoint("01-committed-scope");
-    await stage(items[1]!, "doing");
-    await stage(items[0]!, "review");
-    await stage(items[1]!, "validate");
+    const agentProcess = async (mode: string, sessionFile?: string) => {
+      const process = Bun.spawn(["bun", fileURLToPath(new URL("./roadmap-agent-session.ts", import.meta.url)),
+        mode, session.artifactDirectory, batch.id, items[0]!.id, items[1]!.id, ...(sessionFile ? [sessionFile] : [])], {
+        cwd: session.projectRoot, env: { ...Bun.env, HERDR_ENV: "0", OUTLINER_REMOTE: "1",
+          OUTLINER_SOCKET_PATH: session.client.socketPath, OUTLINER_WORKSPACE_ROOT: session.projectRoot,
+          OUTLINER_CONFIG_PATH: `${session.artifactDirectory}/absent-client-config.json` }, stdout: "pipe", stderr: "pipe",
+      });
+      const [stdout, stderr, code] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
+      await session.record(`pi-session-${mode}`, { stdout, stderr, code });
+      assert.equal(code, 0, stderr);
+      return JSON.parse(stdout.trim().split("\n").at(-1)!);
+    };
+    const started = await agentProcess("start");
+    const resumed = await agentProcess("resume", started.sessionFile);
+    assert.notEqual(started.pid, resumed.pid);
+    assert.deepEqual(resumed.status, started.status);
+    await verifyMembers();
     await session.waitVisible(session.panes.tree, "validate");
     await session.waitVisible(session.panes.tree, "review");
     await session.waitVisible(session.panes.tree, "queued");
@@ -74,14 +98,14 @@ const result = await runHerdrScenario({
     await verifyMembers(fresh);
     const remote = await session.openRemoteBrowsingContext();
     await goto(remote.tree, board.id);
-    await session.keys(remote.tree, "down", "down", "down", "down");
+    await session.keys(remote.tree, "down", "down", "down", "down", "down", "down");
     await batchFrame(remote.tree, ["review", "done", "queued"]);
     await session.checkpoint("04-fresh-reader-retains-scope");
     await assert.rejects(() => session.client.request({ action: "properties.patch", mutation: { author: "agent", actorId: "batch-harness" }, blockId: followup.id, expectedRevision: followup.revision, operations: [{ op: "append", key: "status", value: "planned" }] }), /work-stage/);
     await session.client.request({ action: "delete", blockId: board.id });
     await verifyMembers();
     await session.record("batch-contract", { batch: batch.id, members: items.map(item => item.id), followup: followup.id, superseded: retired.id, proof: proof.id, viewRemovalPreservedItems: true,
-      evidence: "Actual Tree keyboard navigation and Detail rendering; lifecycle metadata written through production RPC. Agent binding/resume and service restart are covered by focused regressions." });
+      evidence: "Actual Tree keyboard navigation and Detail rendering; real Pi SDK processes start tasks in a different order from authored rank and restore the same persisted binding and report. Stage advancement is production RPC fixture input, not a live PR/merge; third item depends on the second and remains queued. No model request is made. Service restart is covered by a focused regression." });
   },
 });
 console.log(JSON.stringify(result));

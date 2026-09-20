@@ -6,6 +6,7 @@ import { OutlinerStore } from "../src/store";
 import { parsePropertyRecords } from "../src/properties";
 import { treeSemanticState } from "../src/tree-renderer";
 import { migrateRoadmapText } from "../src/roadmap-migration";
+import { propertySummarySegments } from "../src/property-summary";
 
 const fixtures: Array<{ store: OutlinerStore; directory: string }> = [];
 function fixture() {
@@ -64,11 +65,67 @@ test("invalid batch membership cannot consume a work ID or attach to another pro
   expect(store.workIdAllocatorStatus().nextWorkId).toBe("PIE-001");
 });
 
+test("referenced batches retain their identity and project, including through ancestor deletion", () => {
+  const store = fixture();
+  const parent = store.create("Batch folder");
+  const batch = store.create("Commitment [type::work-batch] [project::test]", parent.id);
+  const member = store.createRoadmapItem({ ...input, workBatchId: batch.id }).block;
+  expect(() => store.update(batch.id, "Renamed [type::work-batch] [project::other]", batch.revision)).toThrow("members");
+  expect(() => store.update(batch.id, "No longer a batch [project::test]", batch.revision)).toThrow("members");
+  expect(() => store.delete(parent.id)).toThrow("members");
+  store.delete(member.id);
+  expect(() => store.delete(batch.id)).toThrow("members");
+  store.restore(member.id);
+  store.update(batch.id, "Renamed [type::Work-Batch] [project::TEST]", batch.revision);
+  expect(store.update(member.id, member.text + "\n\nStill editable", member.revision).text).toContain("Still editable");
+  store.move(member.id, batch.id);
+  store.delete(parent.id);
+  store.restore(parent.id);
+  expect(store.require(member.id).effectiveDeletedRootId).toBeUndefined();
+});
+
+test("roadmap type and value casing follows the same contract as property queries", () => {
+  const store = fixture();
+  expect(() => store.create("Bad [type::Roadmap-Item] [status::planned] [work-stage::doing]")).toThrow("work-stage");
+  expect(() => store.create("Bad [type::Roadmap-Item] [work-stage::invented]")).toThrow("work-stage");
+  const block = store.create("Mixed [type::Roadmap-Item] [work-stage::Review]");
+  expect(store.queryBlocks({ filters: [{ key: "type", value: "roadmap-item" }], limit: 10 }).blocks.map(b => b.id)).toContain(block.id);
+  const legacy = "Mixed [type::Roadmap-Item] [status::Planned] [work-stage::Next]";
+  expect(migrateRoadmapText({ id: "mixed", text: legacy })).toBe("Mixed [type::Roadmap-Item]  [work-stage::queued]");
+  expect(propertySummarySegments([...block.properties, { key: "status", value: "planned" }]).map(s => s.key)).toEqual(["work-stage"]);
+});
+
 test("roadmap styling follows stage alone and superseded work never looks delivered", () => {
   const properties = [{ key: "type", value: "roadmap-item" }, { key: "status", value: "complete" }];
   expect(treeSemanticState({ properties: [...properties, { key: "work-stage", value: "unprioritized" }] })).toBe("unprioritized");
   expect(treeSemanticState({ properties: [...properties, { key: "work-stage", value: "superseded" }] })).not.toBe("done");
   expect(treeSemanticState({ properties: [{ key: "status", value: "complete" }] })).toBe("done");
+});
+
+test("delivery and task transitions commit together; retry preserves deliberate rework", () => {
+  const store = fixture();
+  const task = store.createRoadmapItem({ ...input, workStage: "doing" }).block;
+  const { delivery } = store.ensureDelivery({ taskBlockId: task.id, deliveryKey: "PIE-001/primary",
+    repository: "fixture/repository", baseBranch: "main", workBranch: "feature/pie-001" });
+  const sync = () => store.syncDelivery({ taskBlockId: task.id, deliveryBlockId: delivery.id,
+    expectedDeliveryRevision: store.require(delivery.id).revision, expectedTaskRevision: store.require(task.id).revision,
+    pullRequest: { number: 1, url: "https://github.com/fixture/repository/pull/1", state: "OPEN", mergeCommit: null } }, { author: "agent", actorId: "fixture" });
+  store.database.exec(`CREATE TRIGGER reject_task_update BEFORE UPDATE OF text ON blocks WHEN old.id = '${task.id}' BEGIN SELECT RAISE(ABORT, 'fixture interruption'); END`);
+  expect(sync).toThrow("fixture interruption");
+  expect(store.require(delivery.id).revision).toBe(delivery.revision);
+  expect(store.require(task.id).revision).toBe(task.revision);
+  store.database.exec("DROP TRIGGER reject_task_update");
+  expect(sync().task.properties).toContainEqual({ key: "work-stage", value: "review" });
+  const reviewing = store.require(task.id);
+  store.update(task.id, reviewing.text.replace("work-stage::review", "work-stage::doing"), reviewing.revision);
+  const repeated = sync();
+  expect(repeated.changed).toBe(false);
+  expect(repeated.task.properties).toContainEqual({ key: "work-stage", value: "doing" });
+  const other = store.createRoadmapItem({ ...input, title: "Another task" }).block;
+  store.move(delivery.id, other.id);
+  expect(sync).toThrow("expected task");
+  expect(store.require(other.id).revision).toBe(other.revision);
+  expect(store.require(delivery.id).revision).toBe(repeated.delivery.revision);
 });
 
 test("migration preserves supersession, historical prose and idempotence; conflicts stop it", () => {

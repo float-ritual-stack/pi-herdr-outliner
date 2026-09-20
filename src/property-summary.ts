@@ -1,4 +1,5 @@
 import { sanitizeDynamicText } from "./terminal";
+import { matchesFilters } from "./properties";
 import type { BlockProperty } from "./types";
 
 export const DEFAULT_PROPERTY_SUMMARY_KEYS = [
@@ -34,7 +35,7 @@ export function propertySummarySegments(
   properties: readonly BlockProperty[],
   keys: readonly string[] = DEFAULT_PROPERTY_SUMMARY_KEYS,
 ): PropertySummarySegment[] {
-  const roadmap = properties.some(property => property.key === "type" && property.value === "roadmap-item");
+  const roadmap = matchesFilters(properties, [{ key: "type", value: "roadmap-item" }]);
   return keys.filter(key => !roadmap || key !== "status").flatMap((key) => {
     const values = [...new Set(
       properties

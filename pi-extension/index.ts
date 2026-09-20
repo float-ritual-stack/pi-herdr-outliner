@@ -43,7 +43,7 @@ import {
 import { inspectWorkEnvironment, type ExtensionExec } from "./work-environment";
 import { resolveClientPaths } from "../src/paths"
 import { currentPaneIdentity } from "../src/pane-control";
-import { getProperty, parsePropertyRecords } from "../src/properties";
+import { getProperty, matchesFilters, parsePropertyRecords } from "../src/properties";
 import { blockDisplayTitle } from "../src/references";
 import {
   containsWorkIdPlaceholder,
@@ -76,6 +76,7 @@ import {
   type CaptureReceipt,
   type CaptureSource,
   type DeliveryReceipt,
+  type DeliverySyncReceipt,
   type OutlinerClientRegistration,
   type OutlinerClientRuntime,
   type OutlinerServiceStatus,
@@ -1069,7 +1070,7 @@ function workId(block: Block): string | undefined {
 }
 
 function requireRoadmapTask(block: Block): string {
-  if (getProperty(block.properties, "type") !== "roadmap-item") {
+  if (!matchesFilters(block.properties, [{ key: "type", value: "roadmap-item" }])) {
     throw new Error(`Block is not a roadmap item: ${block.id}`);
   }
   const identifier = workId(block);
@@ -1173,7 +1174,7 @@ function formatContext(
   const dependencies = options.dependencies
     ?.slice(0, 8)
     .map((block) => {
-      const key = block.properties.some(property => property.key === "type" && property.value === "roadmap-item") ? "work-stage" : "status";
+      const key = matchesFilters(block.properties, [{ key: "type", value: "roadmap-item" }]) ? "work-stage" : "status";
       const state = getProperty(block.properties, key);
       return `- [${block.id}] ${blockDisplayTitle(block)}${state ? ` · ${key}=${state}` : ""}`;
     })
@@ -1556,38 +1557,18 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
     if (!exec) throw new Error("This host does not expose pi.exec for delivery synchronization");
     const pullRequest = await inspectPullRequest(exec, current.delivery, context.signal,);
     if (!pullRequest) return { task, delivery: current.delivery, pullRequest: null };
-    const nextStage = current.delivery.stage === "complete"
-      ? "complete"
-      : pullRequest.state === "MERGED" && pullRequest.mergeCommit
-        ? "validate"
-        : "review";
-    const values: Record<string, string> = {
-      "delivery-stage": nextStage,
-      "pull-request-number": String(pullRequest.number),
-      "pull-request-url": pullRequest.url,
-      "pull-request-state": pullRequest.state.toLowerCase(),
-    };
-    if (pullRequest.mergeCommit) values["merge-commit"] = pullRequest.mergeCommit;
-    const updatedDelivery = await patchBlockProperties(
-      current.delivery.block,
-      values,
-      context,
-      "outliner-delivery:sync",
-    );
-    const taskStage = getProperty(task.properties, "work-stage");
-    const nextTaskStage = nextStage === "validate"
-      ? "validate"
-      : nextStage === "review"
-        ? "review"
-        : taskStage;
-    const updatedTask = nextTaskStage && nextTaskStage !== taskStage && !["done", "superseded"].includes(taskStage ?? "")
-      ? await patchBlockProperties(
-        task,
-        { "work-stage": nextTaskStage },
-        context,
-        "outliner-delivery:sync",
-      )
-      : task;
+    const result = await client.request<DeliverySyncReceipt>({
+      action: "deliveries.sync",
+      input: {
+        taskBlockId: task.id,
+        deliveryBlockId: current.delivery.block.id,
+        expectedDeliveryRevision: current.delivery.block.revision,
+        expectedTaskRevision: task.revision,
+        pullRequest,
+      },
+      mutation: agentMutation(actorId, context, "outliner-delivery:sync"),
+    });
+    const { task: updatedTask, delivery: updatedDelivery } = result;
     const delivery = parseDeliveryIdentity(updatedDelivery);
     context.ui.setStatus(
       "pi-outliner-delivery",
@@ -1617,7 +1598,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
         `Another task is active in this session: ${active ? workId(active) ?? active.id : activeTaskId}. Pause, complete, or clear it before switching.`,
       );
     }
-    const stage = getProperty(task.properties, "work-stage");
+    const stage = getProperty(task.properties, "work-stage")?.toLowerCase();
     if (stage === "done" || stage === "superseded") {
       throw new Error(`Cannot start completed task: ${workId(task) ?? task.id}`);
     }
@@ -1651,7 +1632,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
     await ensureService(false);
     const task = await currentTask();
     if (!task) throw new Error("No active Outliner task");
-    const updated = getProperty(task.properties, "work-stage") === "doing" ? await client.request<Block>({
+    const updated = getProperty(task.properties, "work-stage")?.toLowerCase() === "doing" ? await client.request<Block>({
       action: "properties.patch",
       blockId: task.id,
       expectedRevision: task.revision,
@@ -1680,6 +1661,9 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
     await ensureService(false);
     const activeTask = await currentTask();
     if (!activeTask) throw new Error("No active Outliner task");
+    if (getProperty(activeTask.properties, "work-stage")?.toLowerCase() === "superseded") {
+      throw new Error("Cannot complete a superseded task; explicitly reopen it first");
+    }
     const synchronized = await syncDelivery(activeTask, context);
     const task = synchronized.task;
     if (

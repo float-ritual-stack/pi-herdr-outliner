@@ -43,6 +43,7 @@ import {
   type ComputedExecutionResult,
   type ComputedInvocation,
   type DeliveryReceipt,
+  type DeliverySyncReceipt,
   type NavigationState,
   type OutlinerClientRegistration,
   type OutlinerClientRole,
@@ -1632,6 +1633,9 @@ export class OutlinerServer {
             request.provenance,
           );
           break;
+        case "deliveries.sync":
+          result = this.store.syncDelivery(request.input, request.mutation);
+          break;
         case "deliveries.ensure":
           result = this.store.ensureDelivery(
             request.input,
@@ -1916,6 +1920,13 @@ export class OutlinerServer {
         domain = "content";
         blockId = (response.result as RoadmapItemCreateReceipt).block.id;
         break;
+      case "deliveries.sync": {
+        const receipt = response.result as DeliverySyncReceipt;
+        if (!receipt.changed) return null;
+        domain = "content";
+        blockId = receipt.task.id;
+        break;
+      }
       case "deliveries.ensure": {
         const receipt = response.result as DeliveryReceipt;
         if (!receipt.created) return null;

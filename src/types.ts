@@ -887,6 +887,20 @@ export interface DeliveryReceipt {
   created: boolean;
 }
 
+export interface DeliverySyncInput {
+  taskBlockId: string;
+  deliveryBlockId: string;
+  expectedDeliveryRevision: number;
+  expectedTaskRevision: number;
+  pullRequest: { number: number; url: string; state: "OPEN" | "CLOSED" | "MERGED"; mergeCommit: string | null };
+}
+
+export interface DeliverySyncReceipt {
+  task: Block;
+  delivery: Block;
+  changed: boolean;
+}
+
 export type OutlinerClientRole = "tree" | "detail" | "composed";
 export type OutlinerRegion = "tree" | "detail";
 
@@ -1365,6 +1379,12 @@ export type OutlinerRequest =
       input: RoadmapItemCreateInput;
       author?: BlockAuthor;
       provenance?: BlockProvenance;
+    }
+  | {
+      id: string;
+      action: "deliveries.sync";
+      input: DeliverySyncInput;
+      mutation: MutationProvenance;
     }
   | {
       id: string;

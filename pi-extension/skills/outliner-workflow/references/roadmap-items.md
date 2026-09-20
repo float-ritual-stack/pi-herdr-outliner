@@ -27,6 +27,11 @@ member views query `work-batch=<batch UUID>`. Membership survives stage changes,
 pause, review, completion and session restart. Batch progress comes from members,
 not another mutable status or completion counter.
 
+A referenced batch retains its type and project. Reassign members before
+removing it; Trash members still retain their commitment. Deleting a batch and
+all its members together is allowed, as is restoring that subtree. Deleting a
+query view alone never deletes its members.
+
 Relationships (`work-batch`, `depends-on`, `related-to`, `source-block`, `proof`,
 `superseded-by`) contain canonical block UUIDs, not Work IDs or titles.
 
@@ -59,8 +64,9 @@ the batch before changing membership; keep these decisions as history.
 - `outliner_task pause` clears the session binding. Doing returns to Queued;
   Review and Validate retain their next action. Membership remains unchanged.
 - `outliner_delivery sync` uses the exact PR's live facts: open delivery reaches
-  Review, merge reaches Validate. Delivery identity records Git facts; it does
-  not own batch scope.
+  Review, merge reaches Validate. Those delivery transitions advance the item;
+  repeated sync of unchanged facts preserves explicit rework in Doing.
+  Delivery identity records Git facts; it does not own batch scope.
 - `outliner_task complete` requires linked proof and, for recorded code delivery,
   a merged PR. It sets Done and clears the session binding.
 - `outliner_task clear` repairs binding without changing the item's progress.

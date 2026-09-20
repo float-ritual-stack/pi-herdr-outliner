@@ -15,7 +15,7 @@ import {
   parseBookmarksRoot,
   type BookmarkRecord,
 } from "./bookmarks";
-import { isValidGitBranchName } from "./delivery-lifecycle";
+import { isValidGitBranchName, parseDeliveryIdentity } from "./delivery-lifecycle";
 import { seedDefaultWorkspace } from "./default-workspace";
 import { migrateRoadmapText } from "./roadmap-migration";
 import {
@@ -93,6 +93,8 @@ import type {
   NavigationState,
   DeliveryEnsureInput,
   DeliveryReceipt,
+  DeliverySyncInput,
+  DeliverySyncReceipt,
   MutationProvenance,
   PageAddressCollection,
   PageAddressFollowResult,
@@ -997,7 +999,7 @@ export class OutlinerStore {
       const task = this.requireActive(taskBlockId);
       const type = task.properties.filter((property) => property.key === "type");
       const identifiers = task.properties.filter((property) => property.key === "work-id");
-      if (type.length !== 1 || type[0]!.value !== "roadmap-item") {
+      if (type.length !== 1 || type[0]!.value.toLowerCase() !== "roadmap-item") {
         throw new Error(`Delivery parent is not a roadmap item: ${task.id}`);
       }
       if (identifiers.length !== 1) {
@@ -1051,6 +1053,50 @@ export class OutlinerStore {
         provenance,
       );
       return { task, delivery, created: true };
+    })();
+  }
+
+  syncDelivery(input: DeliverySyncInput, mutation: MutationProvenance): DeliverySyncReceipt {
+    return this.database.transaction(() => {
+      const deliveryBlock = this.requireActive(input.deliveryBlockId);
+      const delivery = parseDeliveryIdentity(deliveryBlock);
+      if (deliveryBlock.parentId !== input.taskBlockId) throw new Error("Delivery no longer belongs to the expected task");
+      const task = this.requireActive(input.taskBlockId);
+      this.validateRoadmapText(task.text);
+      if (!matchesFilters(task.properties, [{ key: "type", value: "roadmap-item" }])) {
+        throw new Error("Delivery must belong to a roadmap item");
+      }
+      if (deliveryBlock.revision !== input.expectedDeliveryRevision || task.revision !== input.expectedTaskRevision) {
+        throw new Error("Delivery or task changed since synchronization began");
+      }
+      const pr = input.pullRequest;
+      if (!Number.isSafeInteger(pr.number) || pr.number < 1 ||
+        pr.url !== `https://github.com/${delivery.repository}/pull/${pr.number}` ||
+        !["OPEN", "CLOSED", "MERGED"].includes(pr.state) ||
+        (pr.state === "MERGED" && !pr.mergeCommit)) {
+        throw new Error("Invalid pull request facts for this delivery");
+      }
+      const nextStage = delivery.stage === "complete" ? "complete" : pr.state === "MERGED" ? "validate" : "review";
+      const values: Record<string, string> = { "delivery-stage": nextStage,
+        "pull-request-number": String(pr.number), "pull-request-url": pr.url, "pull-request-state": pr.state.toLowerCase() };
+      if (pr.mergeCommit) values["merge-commit"] = normalizeRoadmapText(pr.mergeCommit, "Merge commit");
+      const records = parsePropertyRecords(deliveryBlock.text).filter(property => property.scope === "block");
+      const operations = Object.entries(values).flatMap(([key, value]): PropertyPatchOperation[] => {
+        const existing = records.filter(property => property.key === key);
+        if (existing.length > 1) throw new Error(`Delivery has ambiguous ${key}`);
+        if (existing[0]?.value === value) return [];
+        return [existing[0] ? { op: "replace", ordinal: existing[0].ordinal, value } : { op: "append", key, value }];
+      });
+      const updatedDelivery = operations.length
+        ? this.patchProperties(deliveryBlock.id, deliveryBlock.revision, operations, mutation) : deliveryBlock;
+      const stage = parsePropertyRecords(task.text).find(property => property.scope === "block" && property.key === "work-stage")!;
+      // Commit both records together. Repeating unchanged PR facts preserves
+      // an explicit return to Doing; an interrupted transition commits neither.
+      const advance = nextStage !== delivery.stage && nextStage !== "complete" &&
+        !["done", "superseded", nextStage].includes(stage.value.toLowerCase());
+      const updatedTask = advance ? this.patchProperties(task.id, task.revision,
+        [{ op: "replace", ordinal: stage.ordinal, value: nextStage }], mutation) : task;
+      return { task: updatedTask, delivery: updatedDelivery, changed: operations.length > 0 || advance };
     })();
   }
 
@@ -1304,6 +1350,17 @@ export class OutlinerStore {
     editedAt = new Date().toISOString(),
   ): string {
     this.validateRoadmapText(text);
+    if (this.roadmapMembersOfBatches([id]).length) {
+      const previous = this.require(id).properties;
+      const next = parsePropertyRecords(text).filter(property => property.scope === "block");
+      const oldProject = previous.filter(property => property.key === "project");
+      const newProject = next.filter(property => property.key === "project");
+      if (!matchesFilters(next, [{ key: "type", value: "work-batch" }]) ||
+        oldProject.length !== 1 || newProject.length !== 1 ||
+        oldProject[0]!.value.toLowerCase() !== newProject[0]!.value.toLowerCase()) {
+        throw new Error("A batch with members must retain its type and project; reassign members first");
+      }
+    }
     if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) {
       throw new Error("Block edit requires a positive integer revision");
     }
@@ -1318,27 +1375,43 @@ export class OutlinerStore {
   private validateRoadmapText(text: string): void {
     const properties = parsePropertyRecords(text).filter(property => property.scope === "block");
     const values = (key: string) => properties.filter(property => property.key === key).map(property => property.value);
-    if (!values("type").includes("roadmap-item")) return;
+    if (!matchesFilters(properties, [{ key: "type", value: "roadmap-item" }])) return;
     if (values("status").length > 0) {
       throw new Error("Roadmap items use work-stage as their lifecycle; remove the status property");
     }
     const stages = values("work-stage");
-    if (stages.length !== 1 || ![...Object.keys(ROADMAP_CREATE_STAGES), "done", "superseded"].includes(stages[0]!)) {
+    if (stages.length !== 1 || ![...Object.keys(ROADMAP_CREATE_STAGES), "done", "superseded"].includes(stages[0]!.toLowerCase())) {
       throw new Error("Roadmap items require exactly one valid work-stage");
     }
     const batches = values("work-batch");
     if (batches.length > 1) throw new Error("Roadmap items have at most one work-batch");
     if (batches[0]) {
       const batch = this.requireActive(normalizeRoadmapRelationshipId(batches[0], "work-batch"));
-      if (!batch.properties.some(property => property.key === "type" && property.value === "work-batch")) {
+      if (!matchesFilters(batch.properties, [{ key: "type", value: "work-batch" }])) {
         throw new Error("work-batch must reference a work-batch block");
       }
       const projects = values("project");
       const batchProjects = batch.properties.filter(property => property.key === "project");
-      if (projects.length !== 1 || batchProjects.length !== 1 || projects[0] !== batchProjects[0]!.value) {
+      if (projects.length !== 1 || batchProjects.length !== 1 || projects[0]!.toLowerCase() !== batchProjects[0]!.value.toLowerCase()) {
         throw new Error("work-batch must belong to the item's project");
       }
     }
+  }
+
+  private roadmapMembersOfBatches(batchIds: readonly string[]): string[] {
+    if (!batchIds.length) return [];
+    // Include Trash: restoring a member must not resurrect a dangling commitment.
+    const rows = this.database.query(`
+      SELECT DISTINCT membership.block_id FROM block_properties membership
+      WHERE membership.scope = 'block' AND membership.key = 'work-batch'
+        AND LOWER(membership.value) IN (${batchIds.map(() => "?").join(",")})
+        AND EXISTS (
+          SELECT 1 FROM block_properties type
+          WHERE type.block_id = membership.block_id AND type.scope = 'block'
+            AND type.key = 'type' AND LOWER(type.value) = 'roadmap-item'
+        )
+    `).all(...batchIds) as Array<{ block_id: string }>;
+    return rows.map(row => row.block_id);
   }
 
   patchProperties(
@@ -1471,6 +1544,10 @@ export class OutlinerStore {
     this.requireActive(id);
     const deletedAt = new Date().toISOString();
     this.database.transaction(() => {
+      const subtree = new Set(this.subtreeIdsFromCurrentRead(id));
+      if (this.roadmapMembersOfBatches([...subtree]).some(member => !subtree.has(member))) {
+        throw new Error("Cannot delete a batch with members outside the deleted subtree; reassign members first");
+      }
       this.database.query("UPDATE blocks SET deleted_at = ?, updated_at = ? WHERE id = ?")
         .run(deletedAt, deletedAt, id);
       this.recomputeEffectiveDeletion();
