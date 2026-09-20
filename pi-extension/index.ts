@@ -1763,7 +1763,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
     const directTarget = focusedClient.role === "composed" && focusedClient.focusedRegion === "tree"
       ? focusedClient.treeSelection?.target
       : focusedClient.currentTarget;
-    const browsing = directTarget
+    const browsing = focusedClient.role === "composed" || directTarget
       ? null
       : await client.request<BrowsingContextState>({
           action: "browsing-context.get",
