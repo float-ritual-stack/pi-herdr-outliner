@@ -278,6 +278,7 @@ const resourceRevisionRefSchema = Type.Object({
       kind: Type.Literal("filesystem"),
       mtimeNs: Type.String(),
       size: Type.String(),
+      contentHash: Type.Optional(Type.String()),
     }),
     Type.Object({
       kind: Type.Literal("web"),
@@ -334,15 +335,17 @@ const annotationRepresentationSchema = Type.Object({
   observation: Type.Optional(renderedPassageObservationSchema),
 });
 
+const annotationTextQuoteAnchorSchema = Type.Object({
+  kind: Type.Literal("text-quote"),
+  start: Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
+  end: Type.Union([Type.Integer({ minimum: 1 }), Type.Null()]),
+  exact: Type.String(),
+  prefix: Type.String(),
+  suffix: Type.String(),
+});
+
 const annotationAnchorSchema = Type.Union([
-  Type.Object({
-    kind: Type.Literal("text-quote"),
-    start: Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
-    end: Type.Union([Type.Integer({ minimum: 1 }), Type.Null()]),
-    exact: Type.String(),
-    prefix: Type.String(),
-    suffix: Type.String(),
-  }),
+  annotationTextQuoteAnchorSchema,
   Type.Object({
     kind: Type.Literal("dom-range"),
     start: Type.Object({
@@ -389,6 +392,11 @@ const annotationAnchorSchema = Type.Union([
 const annotationTargetSchema = Type.Object({
   representation: annotationRepresentationSchema,
   anchor: annotationAnchorSchema,
+  referenceContext: Type.Optional(Type.Object({
+    representation: annotationRepresentationSchema,
+    anchor: annotationTextQuoteAnchorSchema,
+    sourceText: Type.String(),
+  }, { description: "Evidence for this authored reference occurrence: its canonical containing block, exact token span, and original block text. Omit for a subject-wide comment." })),
 });
 
 const attentionTargetSchema = Type.Union([
@@ -2602,7 +2610,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
     name: "outliner_annotate",
     label: "Outliner Annotate",
     description: "Create one durable typed annotation without editing its subject",
-    promptSnippet: "Annotate typed representation evidence with a typed anchor",
+    promptSnippet: "Annotate typed representation evidence; include referenceContext to comment on a particular authored use, omit it for a subject-wide comment",
     parameters: Type.Object({
       target: annotationTargetSchema,
       comment: Type.String(),
