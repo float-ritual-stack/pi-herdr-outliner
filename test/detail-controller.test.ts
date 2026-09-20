@@ -4,7 +4,7 @@ import {
   attentionClientState,
   normalizeAttentionMark,
 } from "../src/attention";
-import { createAnnotationAnchor } from "../src/annotations";
+import { createAnnotationAnchor, createAnnotationReferenceContext } from "../src/annotations";
 import { emptyAttentionState } from "../src/attention";
 import { BufferComposer, bufferComposerEditorBody } from "../src/buffer-composer";
 import {
@@ -21,7 +21,7 @@ import { composedTreeNavigation } from "../src/composed-surface";
 import { DetailEventScheduler } from "../src/detail-event-scheduler";
 import { OutlinerActionKeymap } from "../src/outliner-actions";
 import { detailBacklinkRegions } from "../src/detail-pi-preview";
-import { detailPropertyInspectorRegions } from "../src/detail-pi-renderer";
+import { detailPropertyInspectorRegions } from "../src/property-inspector";
 import type { ReferencedFile } from "../src/files";
 import type { OutlinerLinkTarget } from "../src/outliner-links";
 import { patchPropertyText } from "../src/properties";
@@ -442,6 +442,13 @@ function createHarness(
         };
       }
       return selection.selected!;
+    },
+    async followResourceOccurrence(target) {
+      calls.followedReferences.push(target);
+      const block = selection.selected!;
+      return { resource: fileResource("same.md"), created: false,
+        referenceContext: createAnnotationReferenceContext(block, target.occurrence!.start, target.occurrence!.end),
+      };
     },
     async resolveReference(target) {
       calls.followedReferences.push(target);
@@ -1251,6 +1258,74 @@ describe("detail controller projection and deferred refresh", () => {
 
     await harness.controller.dispatch({ type: "edit.begin" }, viewport);
     expect(harness.controller.state.status).toContain("restore before editing");
+  });
+
+  test("multiple Resource occurrences use Properties without interning until an occurrence is chosen", async () => {
+    const source = makeBlock({ id: "source-block-001", updatedAt: "2026-01-01T00:00:00.000Z", text: "References\n\nOne [file::same.md] and two [file::same.md]." });
+    const harness = createHarness(source);
+    await harness.controller.initialize();
+    await harness.controller.dispatch({ type: "reference.follow" }, viewport);
+    expect(harness.controller.state.propertyInspector.expanded).toBe(true);
+    expect(harness.controller.state.status).toContain("Choose a reference");
+    expect(harness.calls.followedReferences).toEqual([]);
+    const entry = harness.controller.state.propertyInspector.model!.entries[1]!;
+    harness.controller.setPreviewRegions(detailPropertyInspectorRegions(harness.controller.state));
+    await harness.controller.dispatch({ type: "property-inspector.disclosure.toggle" }, viewport);
+    await harness.controller.dispatch({ type: "reference.follow" }, viewport);
+    harness.controller.setPreviewRegions(detailPropertyInspectorRegions(harness.controller.state));
+    expect(harness.controller.state.previewRegions.focusedRegionId).toBe(
+      harness.controller.state.propertyInspector.model!.entries[0]!.occurrenceId,
+    );
+    await harness.controller.dispatch({
+      type: "property-inspector.target.open", occurrenceId: entry.occurrenceId, intent: "open",
+    }, viewport);
+    expect(harness.calls.followedReferences).toEqual([]);
+    await harness.controller.handleDestinationChooserKeypress("", { name: "return" });
+    expect(harness.calls.followedReferences).toEqual([{
+      kind: "reference", value: source.id, preserveSource: false,
+      occurrence: { revision: source.revision, start: entry.start, end: entry.end },
+    }]);
+    expect(harness.controller.state.target).toMatchObject({ kind: "resource",
+      referenceContext: { sourceText: source.text, anchor: { start: entry.start, end: entry.end } },
+    });
+  });
+
+  test("comments on the focused reference occurrence without opening or interning its Resource", async () => {
+    const source = makeBlock({ id: "source-block-001", updatedAt: "2026-01-01T00:00:00.000Z",
+      text: "References\n\nFirst [file::same.md].\nSecond [file::same.md]." });
+    const harness = createHarness(source);
+    await harness.controller.initialize();
+    await harness.controller.dispatch({ type: "reference.follow" }, viewport);
+    harness.controller.setPreviewRegions(detailPropertyInspectorRegions(harness.controller.state));
+    const entry = harness.controller.state.propertyInspector.model!.entries[1]!;
+    harness.controller.state.previewRegions.focusedRegionId = entry.occurrenceId;
+    await harness.controller.dispatch({ type: "annotation.comment.direct", capture: null }, viewport);
+    expect(harness.controller.state.mode).toBe("comment");
+    expect(harness.controller.state.annotationDraft?.target.referenceContext?.anchor.start).toBe(entry.start);
+    expect(harness.calls.followedReferences).toEqual([]);
+    await harness.controller.dispatch({ type: "buffer.insert", text: "Second use only" }, viewport);
+    await harness.controller.dispatch({ type: "buffer.save" }, viewport);
+    expect(harness.calls.creates[0]?.input.target.referenceContext?.anchor.start).toBe(entry.start);
+    expect(harness.controller.state.context.selected?.text).toBe(source.text);
+  });
+
+  test("navigation history distinguishes two uses of the same Resource", async () => {
+    const source = makeBlock({ id: "source-block-001", updatedAt: "2026-01-01T00:00:00.000Z",
+      text: "References\n\nFirst [file::same.md].\nSecond [file::same.md]." });
+    const harness = createHarness(source);
+    await harness.controller.initialize();
+    const target = (start: number) => ({ kind: "resource" as const, resourceId: fileResource("same.md").id,
+      referenceContext: createAnnotationReferenceContext(source, start, start + 15) });
+    const first = target(source.text.indexOf("[file::"));
+    const second = target(source.text.lastIndexOf("[file::"));
+    for (const target of [first, second]) {
+      await harness.controller.onServiceEvent(event("ui", { targetClientId: "detail-test", command: "open", target }), viewport);
+      expect(harness.controller.state.target).toEqual(target);
+    }
+    await harness.controller.dispatch({ type: "navigation.back" }, viewport);
+    expect(harness.controller.state.target).toEqual(first);
+    await harness.controller.dispatch({ type: "navigation.forward" }, viewport);
+    expect(harness.controller.state.target).toEqual(second);
   });
 
   test("follows a durable fragment reference to its anchored preview line", async () => {
@@ -3446,7 +3521,6 @@ describe("detail controller saves and annotations", () => {
       remoteStatus: null,
       availableCommands: [],
     };
-    const target = { kind: "resource" as const, resourceId };
     const unrelatedFile = filePreview({
       absolutePath: "/workspace/other.ts",
       displayPath: "other.ts",
@@ -3469,7 +3543,7 @@ describe("detail controller saves and annotations", () => {
       return receipt;
     };
     harness.effects.loadTarget = async (candidate) => candidate.kind === "resource"
-      ? { kind: "resource", target, description }
+      ? { kind: "resource", target: candidate, description }
       : {
           kind: "block",
           target: candidate,
@@ -4949,4 +5023,43 @@ test("composed Tree preserves its source occurrence while opening the local Deta
   expect((await navigation.resolve("open", {preserveSource: true})).targetClientId).toBe("detail-test");
   await navigation.dispatch({kind: "block", blockId: "linked-target"}, "open", {preserveSource: true});
   expect(harness.controller.state.context.selected?.id).toBe("linked-target");
+});
+
+test("retained pointer selections preserve occurrence or global scope across navigation", async () => {
+  const host = makeBlock({ id: "context-host", updatedAt: "2026-09-19T00:00:00.000Z", text: "First [file::same.md].\nSecond [file::same.md]." });
+  const harness = createHarness(host);
+  const load = harness.effects.loadTarget;
+  const resource = fileResource("same.md");
+  harness.effects.loadTarget = async target => {
+    const loaded = await load(target);
+    if (loaded.kind !== "resource") return loaded;
+    return { ...loaded, description: { ...loaded.description, filesystem: {
+      text: "Shared file passage", contentHash: "a".repeat(64), capturedAt: "2026-09-19T00:00:00.000Z",
+      revision: { resourceId: resource.id, resourceVersion: 1, addressVersion: 1,
+        revision: { kind: "filesystem", mtimeNs: "1", size: "19", contentHash: "a".repeat(64) } },
+    } } };
+  };
+  await harness.controller.initialize();
+  const target = (start: number) => ({ kind: "resource" as const, resourceId: resource.id,
+    referenceContext: createAnnotationReferenceContext(host, start, start + 15) });
+  const first = target(host.text.indexOf("[file::"));
+  const second = target(host.text.lastIndexOf("[file::"));
+  await harness.controller.onServiceEvent(event("ui", { targetClientId: "detail-test", command: "open", target: first }), viewport);
+  const capture = harness.controller.captureResourcePointerSelection({row: 0, column: 0}, {row: 0, column: 5});
+  expect(capture).not.toBeNull();
+  await harness.controller.onServiceEvent(event("ui", { targetClientId: "detail-test", command: "open", target: second }), viewport);
+  await harness.controller.dispatch({ type: "annotation.comment.direct", capture }, viewport);
+  expect(harness.controller.state.mode).toBe("preview");
+  expect(harness.controller.state.annotationDraft).toBeUndefined();
+  expect(harness.controller.state.status).toContain("reference context changed");
+  await harness.controller.onServiceEvent(event("ui", { targetClientId: "detail-test", command: "open", target: { kind: "resource", resourceId: resource.id } }), viewport);
+  await harness.controller.dispatch({ type: "annotation.comment.direct", capture }, viewport);
+  expect(harness.controller.state.annotationDraft).toBeUndefined();
+  const globalCapture = harness.controller.captureResourcePointerSelection({ row: 0, column: 0 }, { row: 0, column: 5 });
+  await harness.controller.onServiceEvent(event("ui", { targetClientId: "detail-test", command: "open", target: first }), viewport);
+  await harness.controller.dispatch({ type: "annotation.comment.direct", capture: globalCapture }, viewport);
+  expect(harness.controller.state.annotationDraft).toBeUndefined();
+  await harness.controller.dispatch({ type: "annotation.comment.direct", capture }, viewport);
+  expect(harness.controller.state.mode).toBe("comment");
+  expect(harness.controller.state.annotationDraft?.target.referenceContext).toEqual(first.referenceContext);
 });

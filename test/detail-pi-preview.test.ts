@@ -1,3 +1,4 @@
+import { detailPropertyInspectorRegions } from "../src/property-inspector";
 import {
   getCapabilities,
   getOsc8LinkAtColumn,
@@ -30,7 +31,6 @@ import {
   sanitizeMarkdownDocument,
 } from "../src/detail-pi-preview";
 import {
-  detailPropertyInspectorRegions,
   renderPropertyInspectorDocument,
 } from "../src/detail-pi-renderer";
 import { createPropertyInspectorModel } from "../src/property-inspector";
@@ -39,7 +39,7 @@ import {
   resolvePreviewPointerAction,
   togglePreviewRegionDisclosure,
 } from "../src/detail-preview-regions";
-import { outlinerLinkUri } from "../src/outliner-links";
+import { outlinerLinkUri, parseOutlinerLinkUri } from "../src/outliner-links";
 import {
   deriveResourceCapabilityReport,
   type Resource,
@@ -457,6 +457,38 @@ function renderedDocument(layout: DetailPiPreviewLayout, width: number): string[
 }
 
 describe("Pi Markdown detail preview", () => {
+  test("renders distinct Resource occurrence links and renews them after metadata-only edits", () => {
+    const capabilities = getCapabilities();
+    setCapabilities({ ...capabilities, hyperlinks: true });
+    try {
+      const source = "References [status::open]\n\nFirst [file::same.md] and second [file::same.md].";
+      const detail = state(source, source);
+      detail.context.selected!.id = "source-block-001";
+      const layout = new DetailPiPreviewLayout(detail, plainMarkdownTheme, true);
+      const targets = () => {
+        layout.syncState();
+        const line = layout.markdown.render(120).find(row => stripTerminalSequences(row).includes("First"))!;
+        const visible = stripTerminalSequences(line);
+        return [visible.indexOf("file::"), visible.lastIndexOf("file::")].map(column =>
+          parseOutlinerLinkUri(getOsc8LinkAtColumn(line, column)!));
+      };
+      const initial = targets();
+      expect(initial.map(target => target.occurrence?.start)).toEqual([
+        source.indexOf("[file::same.md]"), source.lastIndexOf("[file::same.md]"),
+      ]);
+      setBlockDocument(detail, {
+        selected: { ...detail.context.selected!, id: "source-block-002" }, ancestors: [], children: [],
+      });
+      expect(targets().map(target => target.value)).toEqual(["source-block-002", "source-block-002"]);
+      detail.context.selected!.text = source.replace("open", "done");
+      detail.context.selected!.revision += 1;
+      detail.projectedSelectedText = detail.context.selected!.text;
+      detail.resolvedSelectedText = detail.context.selected!.text;
+      expect(targets().map(target => target.occurrence?.revision)).toEqual([2, 2]);
+    } finally {
+      setCapabilities(capabilities);
+    }
+  });
   test("does not report a missing reference before resolution has completed", () => {
     const source = "Related ((550e8400-e29b-41d4-a716-446655440123|Reference label))";
     const detail = state(source, source);
@@ -2865,4 +2897,51 @@ test("decorates the exact active attention phrase in Pi preview", () => {
   expect(wrapped.map(stripTerminalSequences).join("\n")).toContain("target phrase");
   expect(wrapped.some((line) => line.includes("\x1b[1;4;32m"))).toBe(true);
   expect(wrapped.every((line) => visibleWidth(line) <= 24)).toBe(true);
+});
+
+test("deleted contextual occurrence stays unpositioned in Resource view", async () => {
+  const { createAnnotationReferenceContext } = await import("../src/annotations");
+  const { OutlinerStore } = await import("../src/store");
+  const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const root = mkdtempSync("/tmp/pie282-spec-record-");
+  const rendered = "Shared file passage\nSecond file line";
+  writeFileSync(join(root, "same.md"), rendered);
+  const store = new OutlinerStore(join(root, "outline.sqlite"));
+  try {
+    const host = store.create("First [file::same.md].\nSecond [file::same.md].");
+    const resource = store.resources.internFilesystem({ path: join(root, "same.md") }).resource;
+    const description = store.resources.describe(resource.id, true);
+    const file = description.filesystem!;
+    const rev = file.revision.revision;
+    if (rev.kind !== "filesystem") throw new Error("File fixture required");
+    const representation: AnnotationRepresentation = {
+      id: `filesystem:${resource.id}:${rev.mtimeNs}:${rev.size}:${file.contentHash}`,
+      subject: { kind: "resource", resourceId: resource.id },
+      sourceSnapshot: { kind: "resource", resourceId: resource.id, sourceSnapshotId: null, revision: file.revision },
+      adapter: { id: "filesystem.text", version: 1 }, mediaType: "text/plain",
+      contentHash: file.contentHash, capturedAt: file.capturedAt,
+    };
+    const referenceContext = createAnnotationReferenceContext(host, host.text.indexOf("[file::"), host.text.indexOf("[file::") + 15);
+    const target = { ...textTarget(rendered, 0, 19, representation), referenceContext };
+    store.createAnnotation("capture", { target, body: "FIRST USE ONLY", source: "user" });
+    const changed = store.update(host.id, "Second [file::same.md].", host.revision, { author: "user", actorId: "spec-review" });
+    const hash = annotationSourceHash(changed.text);
+    store.reconcileAnnotationThreads({ subject: { kind: "block", blockId: host.id }, newRepresentation: {
+      ...referenceContext.representation, id: `block:${host.id}:${hash}`, contentHash: hash,
+      sourceSnapshot: { kind: "block", blockId: host.id, updatedAt: changed.updatedAt, contentHash: hash },
+    }});
+    const threads = store.listAnnotationThreads({ subject: { kind: "resource", resourceId: resource.id } });
+    expect(threads[0]!.currentResolution.status).toBe("orphaned");
+    expect(threads[0]!.resolvedTarget).toBeNull();
+    const detail = filesystemState(rendered);
+    const navigationTarget = { kind: "resource" as const, resourceId: resource.id };
+    detail.document = { kind: "ready", document: { kind: "resource", target: navigationTarget, description } };
+    Object.assign(detail, { target: navigationTarget, resource });
+    detail.annotationThreads = threads;
+    const layout = previewLayout(detail);
+    const frame = layout.render(72).map(stripTerminalSequences).join("\n");
+    expect(frame).toContain("Unpositioned comments");
+    expect(frame.split("\n").find(line => line.includes("Shared file passage"))).not.toStartWith("+ ");
+  } finally { store.close(); rmSync(root, { recursive: true, force: true }); }
 });

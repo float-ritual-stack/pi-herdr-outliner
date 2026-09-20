@@ -13,6 +13,7 @@ import { currentAttentionMark } from "./attention";
 import { extractAnnotationBody } from "./annotations";
 import { completionWindow } from "./completion";
 import { outlinerLinkUri } from "./outliner-links";
+import { filterPropertyInspectorEntries } from "./property-inspector";
 import { blockDisplayTitle } from "./references";
 import { resourceAddressLabel } from "./resources";
 import { outlinerActionLink } from "./outliner-actions";
@@ -156,8 +157,11 @@ function renderDetailMetadata(
 ): string {
   const resource = detailResourceDescription(state);
   if (resource) {
+    const context = state.target?.kind === "resource" ? state.target.referenceContext : undefined;
     return fitDynamicText(
-      `resource · ${resource.source.name} · ${resource.resource.provider}`,
+      context
+        ? `reference · ${context.sourceText.split(/\r?\n/)[0]} · line ${context.sourceText.slice(0, context.anchor.start!).split("\n").length}`
+        : `resource · ${resource.source.name} · ${resource.resource.provider}`,
       width,
     );
   }
@@ -429,6 +433,27 @@ export function renderDetailLines(
       output.push(renderTextBufferEditorRow(layout, row, state.editorVisualOffset + index));
     });
     appendCompletion(output, state, width, height);
+  } else if (state.propertyInspector.model &&
+      (state.propertyInspector.expanded || state.propertyInspector.presentation === "dedicated")) {
+    const inspector = state.propertyInspector;
+    const entries = filterPropertyInspectorEntries(inspector.model?.entries ?? [], {
+      query: inspector.filterDraft ?? inspector.filter,
+    });
+    const focused = entries.findIndex(entry => entry.occurrenceId === state.previewRegions.focusedRegionId);
+    const available = Math.max(1, bodyHeight - 2);
+    const start = Math.max(0, Math.min(
+      focused >= 0 ? focused - Math.floor(available / 2) : inspector.viewportOffset,
+      entries.length - available,
+    ));
+    output.push(`Properties · ${entries.length} records`);
+    for (const entry of entries.slice(start, start + available)) {
+      const edit = inspector.edit?.occurrenceId === entry.occurrenceId ? inspector.edit.buffer : null;
+      const value = edit ? `${edit.text.slice(0, edit.column)}▏${edit.text.slice(edit.column)}` : entry.value;
+      output.push(fitDynamicText(`${state.previewRegions.focusedRegionId === entry.occurrenceId ? "▶" : " "} ${entry.key}::${value} · ${entry.scope} · L${entry.line + 1}:C${entry.column + 1}`, width));
+    }
+    output.push(fitDynamicText(inspector.filterDraft !== null
+      ? `Filter: ${inspector.filterDraft}▏ · Enter applies · Esc cancels`
+      : "Tab selects · o opens · Enter edits · / filters · p closes", width));
   } else if (state.mode === "annotation") {
     for (const line of buildDetailAnnotationView(state, width).slice(
       state.previewOffset,

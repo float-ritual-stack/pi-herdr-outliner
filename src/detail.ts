@@ -1,4 +1,5 @@
 import { getProperty } from "./properties";
+import { detailPropertyInspectorRegions } from "./property-inspector";
 import { emitKeypressEvents } from "node:readline";
 import { setTimeout as sleep } from "node:timers/promises";
 import { createOutlinerClient, type OutlinerWatcher } from "./client";
@@ -21,7 +22,7 @@ import {
   editTextInExternalEditor,
   resolveExternalEditorConfiguration,
 } from "./external-editor";
-import { resolveOutlinerLinkTarget } from "./outliner-links";
+import { followResourceOccurrence, resolveOutlinerLinkTarget } from "./outliner-links";
 import {
   dispatchNavigation,
   focusTreeForClient,
@@ -304,6 +305,7 @@ const effects: DetailEffects = {
   async resolveReference(target) {
     return resolveOutlinerLinkTarget(client, target);
   },
+  followResourceOccurrence: target => followResourceOccurrence(client, target),
   async createAnnotation(input) {
     return client.request<AnnotationBatchReceipt>({
       action: "annotations.create",
@@ -400,6 +402,7 @@ const effects: DetailEffects = {
 };
 
 function draw(): void {
+  controller.setPreviewRegions(detailPropertyInspectorRegions(controller.state));
   process.stdout.write(renderDetailAnsi(controller.state, viewport(), {
     helpText: actionKeymap.helpText("detail", detailActionScopes(controller.state, {
       bufferMode: controller.isBufferMode(),

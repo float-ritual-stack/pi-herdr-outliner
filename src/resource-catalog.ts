@@ -1,19 +1,17 @@
 import { Database } from "bun:sqlite";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import {
   lstatSync,
   readFileSync,
   realpathSync,
-  renameSync,
   statSync,
-  unlinkSync,
-  writeFileSync,
   type BigIntStats,
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { Type, type Static } from "typebox";
 import { Parse } from "typebox/value";
 import { completeReferencedPaths, readFileContents, resolveReferencedPath, MAX_TEXT_FILE_BYTES, type FileContents, type ReferencedPathCandidate } from "./files";
+import { commitFilesystemText, recoverFilesystemSave } from "./filesystem-commit";
 import {
   BasicWebMarkdownExtractor,
   sha256,
@@ -1000,6 +998,7 @@ export class ResourceCatalog {
     this.recoverInterruptedWebRefreshes();
     this.recoverInterruptedRemoteEntityRefreshes();
     this.recoverInterruptedComputedExecutions();
+    this.recoverInterruptedFilesystemSaves();
   }
 
   createSource(value: unknown): ResourceSource {
@@ -1732,33 +1731,32 @@ export class ResourceCatalog {
     const sourceRow = this.requireSourceRowFromCurrentRead(source.id);
     this.assertConfinement(source, sourceRow.root_binding, resource.address);
     const absolutePath = realpathSync(resolve(source.boundary.root, resource.address.path));
-    const stat = statSync(absolutePath, { bigint: true });
-    const temporaryPath = join(
-      dirname(absolutePath),
-      `.${basename(absolutePath)}.${process.pid}.${randomUUID()}.tmp`,
-    );
-    try {
-      writeFileSync(temporaryPath, input.text, {
-        encoding: "utf8",
-        flag: "wx",
-        mode: Number(stat.mode & 0o777n),
-      });
-      renameSync(temporaryPath, absolutePath);
-    } catch (error) {
-      try {
-        unlinkSync(temporaryPath);
-      } catch {
-      }
-      throw new ResourceCatalogError(
-        "source-unavailable",
-        `Filesystem Resource could not be written: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
+    if (expectedRevision.revision.kind !== "filesystem") {
+      throw new ResourceCatalogError("provider-mismatch", "Filesystem writes require a filesystem revision");
     }
+    commitFilesystemText(absolutePath, input.text, expectedRevision.revision, () =>
+      this.assertConfinement(source, sourceRow.root_binding, resource.address));
     return this.filesystemReadFromCurrentRead(resource, source, null);
   }
 
+  private recoverInterruptedFilesystemSaves(): void {
+    const rows = this.database.query(
+      "SELECT id FROM resources WHERE provider = 'filesystem'",
+    ).all() as Array<{ id: string }>;
+    for (const { id } of rows) {
+      try {
+        const resource = this.require(id);
+        const source = this.requireSource(resource.sourceId);
+        if (resource.address.kind !== "filesystem" || source.provider !== "filesystem") continue;
+        const sourceRow = this.requireSourceRowFromCurrentRead(source.id);
+        this.assertConfinement(source, sourceRow.root_binding, resource.address);
+        recoverFilesystemSave(resolve(source.boundary.root, resource.address.path));
+      } catch {
+        // An unavailable Source must not prevent service startup. A later read
+        // retries recovery and surfaces its error without discarding the marker.
+      }
+    }
+  }
 
   private filesystemReadFromCurrentRead(
     resource: Resource,
@@ -1776,6 +1774,8 @@ export class ResourceCatalog {
       );
     }
     const sourceRow = this.requireSourceRowFromCurrentRead(source.id);
+    this.assertConfinement(source, sourceRow.root_binding, resource.address);
+    recoverFilesystemSave(resolve(source.boundary.root, resource.address.path));
     this.assertConfinement(source, sourceRow.root_binding, resource.address);
     const contents = readFileContents(resource.address.path, source.boundary.root);
     const revision: ResourceRevisionRef = {

@@ -3,6 +3,9 @@ import { tmpdir } from "node:os";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { expect, spyOn, test } from "bun:test";
+import type { TSchema } from "typebox";
+import { Value } from "typebox/value";
+import { createAnnotationReferenceContext } from "../src/annotations";
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -214,6 +217,28 @@ test("registers the workspace commands and annotation-aware tools", () => {
   expect(workflowSchema).toContain("walkthrough");
   expect(workflowSchema).toContain("promotion_preview");
   expect(workflowSchema).not.toContain("javascript");
+});
+
+test("annotation tools validate reference context while retaining ordinary comment targets", () => {
+  const schemas = new Map<string, TSchema>();
+  outlinerExtension({
+    registerTool(definition: { name: string; parameters: TSchema }) {
+      schemas.set(definition.name, definition.parameters);
+    },
+    registerCommand() {}, registerEntryRenderer() {}, appendEntry() {}, on() {},
+  } as unknown as ExtensionAPI);
+  const referenceContext = createAnnotationReferenceContext({
+    id: "host", text: "First [file::same.txt]", updatedAt: "2026-09-19T00:00:00.000Z",
+  }, 6, 22);
+  const target = { representation: referenceContext.representation, anchor: referenceContext.anchor };
+  const single = schemas.get("outliner_annotate")!;
+  const batch = schemas.get("outliner_annotation_batch")!;
+  expect(Value.Check(single, { target, comment: "Whole block" })).toBe(true);
+  expect(Value.Check(single, { target: { ...target, referenceContext }, comment: "This use" })).toBe(true);
+  expect(Value.Check(single, { target: { ...target, referenceContext: { ...referenceContext, sourceText: 7 } }, comment: "Invalid evidence" })).toBe(false);
+  const operation = { operationId: "one", type: "create", target: { ...target, referenceContext }, comment: "This use" };
+  expect(Value.Check(batch, { operations: [operation] })).toBe(true);
+  expect(Value.Check(batch, { operations: [{ ...operation, target: { ...target, referenceContext: { ...referenceContext, anchor: { kind: "provider-comment-id", provider: "invented", commentId: "x" } } } }] })).toBe(false);
 });
 
 test("loads command support without a custom entry renderer", () => {

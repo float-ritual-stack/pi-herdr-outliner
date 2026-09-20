@@ -528,6 +528,22 @@ The complete authored metadata remains available in expanded rows and the
 property inspector. Detail also right-aligns the clickable `🔓`/`🔒` lock and
 `[⋯]` action controls.
 
+Resource properties use the same activation for metadata and inline mentions.
+Pi Detail links the authored `[file::…]`, `[web::…]`, `[jira::…]`, and `[app::…]`
+tokens without changing source text. Properties exposes every occurrence,
+including repeated mentions of one Resource, in both Detail renderers. Press
+`o` on a document with several Resource references to choose one in Properties;
+`Tab` selects an occurrence and `o` opens the destination chooser. Displaying or
+copying a reference never creates a Resource. Activation verifies the source
+revision and span before using the service's existing follow/create operation.
+After a source edit, stale links require reopening the block.
+
+The legacy file preview still honors block-level `line-start`/`line-end`.
+Explicit Resource navigation opens the complete Resource; those block-wide
+ranges are not applied to an arbitrary inline mention. References projected
+from embedded content without a known source mapping remain nonactionable in
+the host's body; open their source block to act on its actual occurrences.
+
 Tree rows also apply a fixed presentation-only treatment to direct canonical
 `status` and `work-stage` values. Blocked, doing/active, review/validate,
 done/complete, and unprioritized rows receive distinct one-column glyphs and
@@ -781,6 +797,29 @@ explicit unpositioned status. Probable, unresolved,
 ambiguous, orphaned, unsupported, and rejected records remain valid, visible
 history rather than being coerced into a location.
 
+### Comments on individual Resource references
+
+The same file can appear several times in a block without becoming several
+Resources. In Detail, `o` opens the existing Properties choices when there are
+multiple references. Select a particular row with `Tab`, then press `c` to
+comment on that use. This does not open the file or create a Resource. Selecting
+an exact reference token with the source-selection controls also preserves its
+occurrence.
+
+Opening that row with `o` carries its context into the Resource reader. A passage
+comment there keeps both the host occurrence and the file representation/version
+and quote. Opening the Resource directly gives a file-global view; its comments
+have no reference context. Navigation history keeps repeated uses distinct.
+
+Original source evidence is immutable. Moving an unchanged reference line can
+retain placement only when that line is unique in both the captured and current
+block. Deleting or ambiguously copying a reference leaves the thread recoverable
+under Unpositioned comments. Editing the reference's own line also requires
+explicit reattachment through the existing annotation approval operation. A
+later unique survivor does not silently inherit an earlier comment. Reattachment
+never erases the original target or history. Contextual Resource reveals request
+the recorded revision; unavailable old file bytes are not replaced by newer bytes.
+
 ### Detail edit and comment modes
 
 | Key | Action |
@@ -807,10 +846,36 @@ Long physical lines wrap without changing raw text. Continuation rows remain ass
 External block editing never writes the canonical block directly. From preview it first opens and locks an ordinary Detail draft; from edit mode it sends the exact unsaved buffer. Save and Esc remain the block commit/discard boundary. Writable, unpinned text filesystem Resources use the same private editor adapter, but a changed returned draft is revision-checked and written back to the source immediately; `e` instead opens the built-in buffer and commits through `Ctrl+S`. Detail uses exported `$VISUAL` or `$EDITOR` directly; when Herdr's plugin environment omits them, it reads those values and `PATH` from the user's interactive shell without evaluating the editor value as shell code. Outliner leaves the alternate screen, waits for that editor in the same local or SSH/Herdr PTY, restores the originating Detail and viewport, then imports valid UTF-8 only if the captured block version or filesystem revision is unchanged. Failed launches, nonzero exits, restoration failures, and version conflicts preserve the private recovery file and leave canonical content unchanged.
 
 Filesystem saves compare the opened file's content hash, size, and modification
-time; a conflict retains the Detail draft and leaves the file unchanged. The
-check and final rename are separate operations: avoid concurrent external writes
-during a save. Writes in that interval can still be overwritten without an
-automatic recovery copy; PIE-280 tracks this remaining limitation.
+time. A stale edit retains its Detail draft and leaves the source unchanged.
+During commit, Outliner first persists the submitted draft, then moves the current
+file into a private sibling recovery directory and publishes the draft only if
+the original pathname is still absent. A writer that changes the displaced file
+or creates a new file at that pathname produces a conflict; it is never silently
+replaced. The error names the recovery directory and Detail keeps the draft.
+
+Each attempted commit retains `.outliner-save-<UUID>/` beside the source:
+`draft` contains the submitted text, `original` retains the displaced file when
+displacement occurred, and `save.json` identifies the target and opened revision.
+The directory is private (0700), drafts are 0600, and the published file preserves
+the source's permission bits. These copies are **not automatically deleted**:
+an external editor can continue writing through an old descriptor after a save,
+and those later bytes remain in `original`. To recover, inspect the directory
+named by the error (or the directories beside the file), compare `draft` and
+`original` with the current source, and copy the desired text to a new filename.
+Only remove a recovery directory after closing other editors and confirming
+that neither retained version is needed.
+
+This is a recoverable replacement contract, not atomic compare-and-swap. There
+is a brief interval where the source pathname is absent. An interrupted save's
+pending marker lets service startup (or the next Resource read) restore the
+displaced original **only when that pathname is absent**; an external replacement
+always stays in place. The submitted draft remains available after interruption.
+Files and parent directories are flushed before a save is acknowledged. This
+requires a local filesystem supporting hard links, rename, and directory fsync;
+unsupported primitives fail the save. Filesystem or hardware durability failures,
+hostile replacement of source directories, and concurrent deletion of recovery
+files are outside this contract. Fault tests cover Linux process interruption;
+power-loss and network-filesystem behavior have not been verified.
 
 In edit mode, wheel/trackpad input scrolls the region under the pointer. Editor scrolling changes only its visual viewport; it never moves the text cursor. The next keyboard cursor movement restores cursor-follow. A primary press-drag-release gesture in the editor maps through headers, split geometry, line-number width, wrapping, tabs, grapheme boundaries, and Unicode display width to a valid source range, with edge dragging scrolling the editor viewport. Preview clicks retain their existing link and region actions.
 
@@ -1055,7 +1120,7 @@ The project Pi extension is auto-discovered through [`.pi/extensions/outliner.ts
 
 `outliner_query` accepts structured filters such as `{ key: "status", value: "in progress" }`, plus optional text and subtree fields. The service normalizes keys/values and applies the same bounded semantics used by human surfaces. `outliner_focus` targets an explicit or unique live Tree client and returns compact structural context.
 
-Annotation tools use the same ordinary comment and reply blocks as Detail and the same relational target sidecar. `outliner_annotations` queries a block or Resource subject. `outliner_annotate` accepts a representation plus one of `text-quote`, `dom-range`, `pdf-page-region`, `structured-entity-field`, or `provider-comment-id`; it does not treat a file path as identity or use a web-specific creation path. Create and batch calls are idempotent, replies inherit the root target and history, and lifecycle changes can link promoted canonical blocks. The immutable original target is returned beside the current resolution and complete append-only history. Text and PDF quote anchors use deterministic unchanged, exact, contextual, and bounded local-fuzzy reconciliation; PDF results are mapped back to current page regions. Probable, unresolved, ambiguous, orphaned, unsupported, and rejected records remain preserved history rather than being coerced into a location.
+Annotation tools use the same ordinary comment and reply blocks as Detail and the same relational target sidecar. `outliner_annotations` queries a block or Resource subject. `outliner_annotate` accepts a representation plus one of `text-quote`, `dom-range`, `pdf-page-region`, `structured-entity-field`, or `provider-comment-id`; it does not treat a file path as identity or use a web-specific creation path. For an occurrence-scoped comment, pass `target.referenceContext` with the containing block representation, exact authored-reference anchor, and original `sourceText`; omit it for a subject-wide comment. File-passage comments retain the Resource representation and passage anchor alongside that context. Create and batch calls are idempotent, replies inherit the root target and history, and lifecycle changes can link promoted canonical blocks. The immutable original target is returned beside the current resolution and complete append-only history. Text and PDF quote anchors use deterministic unchanged, exact, contextual, and bounded local-fuzzy reconciliation; PDF results are mapped back to current page regions. Probable, unresolved, ambiguous, orphaned, unsupported, and rejected records remain preserved history rather than being coerced into a location.
 
 `outliner_attention` requires an explicit live client ID. It can mark, advance,
 acknowledge, clear, or inspect short-lived block/file attention. Exact UTF-16
@@ -1232,13 +1297,27 @@ Client and service protocol versions must match.
 ```sh
 bun run check
 bun test
-bun run profile:tree
+bun run profile:tree --check-budget
 ```
 
 The deterministic Tree profile defaults to 24,000 physical blocks and five
-200-root virtual branches. The current performance guardrails are p95 below
-50 ms for projection/controller initialization, 5 ms for viewport layout/render,
-and 1 ms for input handling; generated terminal-frame writes stay below 1 ms.
+200-root virtual branches. `--check-budget` enforces p50 below 25 ms and p95 below
+50 ms for projection/controller initialization, p95 below 5 ms for viewport
+layout/render, and p95 below 1 ms for input handling and terminal-frame writes.
+Omit the flag to report timings without a pass/fail gate.
+
+The separate real-application scale journey uses the private Herdr runner:
+
+```sh
+bun run test/e2e/tree-scale.ts 1000
+bun run test/e2e/tree-scale.ts 5000
+```
+
+It checks complete projection and authored ordering, then drives Tree navigation
+while mutations and reorders revalidate two active browsing contexts. It retains
+frames and forwarded request counts. Parse plus projection p95 must stay below
+100/250 ms at 1,000/5,000 blocks, and mutation-to-frame p95 below one second.
+These are same-host measurements; they do not establish SSH or bandwidth latency.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the workboard lifecycle, verification rules, and PR/restart workflow. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for service boundaries, protocol flow, persistence, projections, and failure behavior.
 

@@ -944,7 +944,7 @@ row at the prior index or the previous surviving row.
 - The controller keeps the active visual cursor row inside the editor viewport, including completion-height and terminal-size changes.
 - Completion replaces raw line ranges and does not resolve block references into saved text.
 - Ctrl+S uses optimistic concurrency for blocks and writable, unpinned text filesystem Resources. Esc discards the complete edit session.
-- `Edit in $EDITOR` is a draft adapter, not an unchecked storage path: renderer effects resolve exported editor settings directly or recover `VISUAL`, `EDITOR`, and `PATH` from the user's interactive shell when Herdr omits them; the resolved editor value is still parsed and launched without a shell. Renderer effects own private temporary files and terminal yield/restore. The controller imports changed UTF-8 with one `TextBuffer` history entry for blocks only after the captured canonical version still matches; the normal optimistic Save action remains the canonical block mutation boundary. For writable filesystem Resources, the same version check compares the captured `ResourceRevisionRef`, then a provider write replaces the confined source file by rename and reopens the latest representation. Inline Resource edits use the same revision-checked provider write on Ctrl+S.
+- `Edit in $EDITOR` is a draft adapter, not an unchecked storage path: renderer effects resolve exported editor settings directly or recover `VISUAL`, `EDITOR`, and `PATH` from the user's interactive shell when Herdr omits them; the resolved editor value is still parsed and launched without a shell. Renderer effects own private temporary files and terminal yield/restore. The controller imports changed UTF-8 with one `TextBuffer` history entry for blocks only after the captured canonical version still matches; the normal optimistic Save action remains the canonical block mutation boundary. For writable filesystem Resources, the same version check compares the captured `ResourceRevisionRef`, then a provider write uses the recoverable filesystem commit described below and reopens the latest representation. Inline Resource edits use the same revision-checked provider write on Ctrl+S.
 
 Filesystem revisions include SHA-256 of the original file bytes alongside size
 and modification time. Text evidence separately hashes the decoded representation.
@@ -955,12 +955,21 @@ reference remains readable only when it identifies one retained immutable snapsh
 ambiguous history is unavailable. Stored historical evidence is not rewritten
 using today's file contents.
 
-File replacement is still a check followed by rename, not an atomic conditional
-write against arbitrary external editors. Safe use requires excluding external
-writes during that interval. Another process can commit after validation and lose
-its bytes at rename; there is currently no automatic recovery copy. S4 reproduced
-this independently and tracks its permanent commit/recovery contract as PIE-280.
-A hash recheck or service-local mutex does not make external writers cooperate.
+Filesystem saves durably retain the submitted draft, displace the original inode
+into a private sibling recovery directory, then publish only into an absent
+pathname. A competing creation is never overwritten. Conflicts keep both versions
+and report their recovery directory; the Detail draft remains open. A pending
+marker lets startup or the next Resource read restore an absent source after a
+process interruption. Recovery rejects non-regular originals, never replaces a
+present target, and revalidates Source confinement before reading restored data.
+
+These portable primitives briefly leave the pathname absent; they do not provide
+atomic compare-and-swap against external editors. Retained originals can receive
+later writes through descriptors opened before the save. Recovery copies therefore
+require explicit manual cleanup after other editors close. See README's filesystem
+save recovery instructions. The contract requires local rename, hard links, and
+directory fsync; unsupported hard links fail before displacement. Power-loss and
+network-filesystem behavior are not established by the process-crash tests.
 
 Editor undo/redo stores at most 100 per-session snapshots. Consecutive typing, backspace, and forward delete coalesce; cursor and selection state restore with text; divergent edits invalidate redo. New edit/comment sessions start with empty history. Modal editing, registers, macros, and programmable operator systems remain explicit non-goals for the custom buffer.
 
@@ -991,6 +1000,32 @@ selection retain their validated passage observations in rendered
 representations and use text quotes rather than separate passage targets. All
 surfaces then call the same `annotations.create` action and query by block or
 Resource subject.
+
+Reference-scoped annotations add `referenceContext` to the existing target JSON:
+a canonical host-block representation, the exact authored token's text-quote
+anchor, and the complete captured host text. That text is immutable evidence,
+never another source authority or a read/write cache. A contextual Resource
+passage keeps its primary Resource/version and passage anchor independently.
+A comment on the occurrence alone uses the host token as its primary block
+target, so it also works when the referenced file is unavailable. Global
+Resource comments omit the context. Block queries include contextual Resource
+threads for that host; Resource queries expose both global and contextual file
+threads without cloning Resources or creating occurrence rows.
+
+Creation and explicit reattachment validate the current host bytes and exact
+authored occurrence; a contextual Resource passage must resolve to that same
+canonical Resource. Host reconciliation accepts the original exact span when
+the complete source is unchanged. Otherwise, it accepts only an unchanged
+containing line that occurs exactly once in both captured and current source,
+with the same token offset within the line. This permits surrounding insertion
+and line movement. Changed-line edits require explicit reattachment. A unique
+survivor of originally duplicate lines is not identity evidence. Observed
+deletion, ambiguous duplication, or locator reassignment leaves the thread
+unpositioned until explicit reattachment, even if later text matches the old
+snapshot. Host reconciliation never advances the primary Resource revision;
+explicit Resource reconciliation retains the host context on every result and
+candidate. Original evidence, replies, lifecycle, and resolution history remain
+in the existing repository.
 
 Creation appends sequence 0 as resolved. Reconciliation then runs the cheapest
 reliable deterministic pass: unchanged representation hash, provider-native

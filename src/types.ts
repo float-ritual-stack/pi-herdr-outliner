@@ -370,9 +370,17 @@ export type AnnotationAnchor =
       readonly commentId: string;
     };
 
+export interface AnnotationReferenceContext {
+  readonly representation: AnnotationRepresentation;
+  readonly anchor: Extract<AnnotationAnchor, { readonly kind: "text-quote" }>;
+  /** Immutable host evidence, never a read/write authority. */
+  readonly sourceText: string;
+}
+
 export interface AnnotationTarget {
   readonly representation: AnnotationRepresentation;
   readonly anchor: AnnotationAnchor;
+  readonly referenceContext?: AnnotationReferenceContext;
 }
 
 export type AnnotationResolutionStatus =
@@ -896,6 +904,7 @@ export interface ResourceTarget {
   kind: "resource";
   resourceId: string;
   revision?: ResourceRevisionRef;
+  referenceContext?: AnnotationReferenceContext;
 }
 
 export type OutlinerNavigationIntent = "preview" | "open" | "reveal";

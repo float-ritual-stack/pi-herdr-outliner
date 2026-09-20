@@ -5,6 +5,8 @@ import {
 } from "./outliner-actions";
 import {
   annotationSourceHash,
+  annotationReferenceContextsEqual,
+  createAnnotationReferenceContext,
   createPdfPageRegionAnchor,
   createTextQuoteAnchor,
   extractAnnotationBody,
@@ -36,8 +38,10 @@ import type { ReferencedFile, ReferencedPathCandidate } from "./files";
 import {
   firstOutlinerReference,
   outlinerLinkUri,
+  resourceOccurrenceLink,
   type OutlinerLinkTarget,
   type ResolvedOutlinerLinkTarget,
+  type FollowResourceOccurrenceReceipt,
 } from "./outliner-links";
 import { ALL_DETAILS_LOCKED_ERROR, PRIMARY_DETAIL_LOCKED_ERROR } from "./navigation-routes";
 import {
@@ -68,6 +72,7 @@ import {
 import { isTextualMediaType } from "./resource-presentation";
 import { isVirtualBranchDefinition } from "./virtual-branches";
 import { blockDisplayTitle } from "./references";
+import { authoredResourceReferenceOccurrences } from "./resource-references";
 import {
   RESOURCE_CAPABILITIES,
   RESOURCE_CAPABILITY_FACTORS,
@@ -84,6 +89,7 @@ import type {
   AnnotationReconcileInput,
   AnnotationReconcileReceipt,
   AnnotationRepresentation,
+  AnnotationReferenceContext,
   AnnotationSubject,
   AnnotationTarget,
   AnnotationThread,
@@ -213,6 +219,9 @@ export function propertyInspectorTargetLink(
   target: PropertyInspectorTarget,
   options: { preserveSource?: boolean; intent?: "reveal" } = {},
 ): OutlinerLinkTarget {
+  if (target.kind === "resource-reference") {
+    throw new Error("Resource property navigation requires its source occurrence");
+  }
   if (target.kind === "block") {
     return {
       kind: "block",
@@ -553,6 +562,7 @@ export interface DetailEffects {
   acknowledgeAttention(markId?: string): Promise<AttentionClientState>;
   restoreBlock(blockId: string): Promise<Block>;
   resolveReference(target: OutlinerLinkTarget): Promise<ResolvedOutlinerLinkTarget>;
+  followResourceOccurrence(target: OutlinerLinkTarget): Promise<FollowResourceOccurrenceReceipt>;
   queryBlocks(query: BlockSearchQuery): Promise<VisibleBlockCollection>;
   queryPageAddresses(query: string | undefined, limit: number): Promise<PageAddressCollection>;
   readFile(block: Block): Promise<ReferencedFile>;
@@ -581,6 +591,7 @@ export interface DetailResourceSelectionCapture {
   readonly kind: "resource";
   readonly resourceId: string;
   readonly representationId: string;
+  readonly referenceContext?: AnnotationReferenceContext;
   readonly start: number;
   readonly end: number;
   readonly exact: string;
@@ -1345,6 +1356,7 @@ export function createDetailController(
     }
     if (left.kind !== "resource" || right.kind !== "resource") return false;
     if (left.resourceId !== right.resourceId) return false;
+    if (!annotationReferenceContextsEqual(left.referenceContext, right.referenceContext)) return false;
     if (!left.revision || !right.revision) return left.revision === right.revision;
     return resourceRevisionRefEquals(left.revision, right.revision);
   };
@@ -2082,6 +2094,13 @@ export function createDetailController(
     target: OpenDestinationTarget,
     reference: OutlinerLinkTarget,
   ): Promise<void> => {
+    if (reference.kind === "reference") {
+      const receipt = await effects.followResourceOccurrence(reference);
+      target.target = { kind: "resource", resourceId: receipt.resource.id,
+        referenceContext: receipt.referenceContext };
+      target.title = resourceAddressLabel(receipt.resource.address);
+      return;
+    }
     if (reference.kind === "resource") {
       target.target = { kind: "resource", resourceId: reference.value };
       target.title = reference.value;
@@ -2479,6 +2498,8 @@ export function createDetailController(
           anchor: pdf
             ? pdfAnnotationAnchor(description, offsets.start, offsets.end)
             : createTextQuoteAnchor(resourceText, offsets.start, offsets.end),
+          ...(state.target?.kind === "resource" && state.target.referenceContext
+            ? { referenceContext: state.target.referenceContext } : {}),
         };
       } else {
         const source = selected!;
@@ -2486,6 +2507,12 @@ export function createDetailController(
           representation: blockAnnotationRepresentation(source),
           anchor: createTextQuoteAnchor(source.text, offsets.start, offsets.end),
         };
+        if (authoredResourceReferenceOccurrences(source.text).some(occurrence =>
+          occurrence.kind === "authored-resource" && occurrence.start === offsets.start && occurrence.end === offsets.end
+        )) {
+          const referenceContext = createAnnotationReferenceContext(source, offsets.start, offsets.end);
+          target = { representation: referenceContext.representation, anchor: referenceContext.anchor, referenceContext };
+        }
       }
       returnMode = "preview";
     } else {
@@ -2519,6 +2546,8 @@ export function createDetailController(
       : "unpositioned quote";
     state.status = returnMode === "file" && state.annotationRange
       ? `Locked · commenting on ${state.referencedFile?.sourcePath}:${state.annotationRange.startLine}-${state.annotationRange.endLine}`
+      : target.referenceContext
+        ? `Locked · commenting on this reference${target.representation.subject.kind === "resource" ? ` · Resource passage ${range}` : " occurrence"}`
       : target.representation.subject.kind === "resource"
         ? `Locked · commenting on cached Markdown ${range}`
         : `Locked · commenting on source range ${range}`;
@@ -2550,6 +2579,8 @@ export function createDetailController(
       kind: "resource",
       resourceId: description.resource.id,
       representationId: representation.id,
+      ...(state.target?.kind === "resource" && state.target.referenceContext
+        ? { referenceContext: state.target.referenceContext } : {}),
       start: offsets.start,
       end: offsets.end,
       exact: text.slice(offsets.start, offsets.end),
@@ -2620,6 +2651,11 @@ export function createDetailController(
       text.slice(capture.start, capture.end) !== capture.exact
     ) {
       state.status = "The Resource representation changed after the selection was captured";
+      return;
+    }
+    if (!annotationReferenceContextsEqual(capture.referenceContext,
+      state.target?.kind === "resource" ? state.target.referenceContext : undefined)) {
+      state.status = "The reference context changed after the selection was captured; select the passage again";
       return;
     }
     await beginComment({ start: capture.start, end: capture.end });
@@ -2705,6 +2741,8 @@ export function createDetailController(
           : "unpositioned quote";
         state.status = draft.returnMode === "file" && state.annotationRange
           ? `Annotation added for lines ${state.annotationRange.startLine}-${state.annotationRange.endLine}`
+          : draft.target.referenceContext
+            ? "Annotation added for this reference occurrence"
           : draft.target.representation.sourceSnapshot.kind === "rendered"
             ? "Annotation added for captured rendered passage"
             : draft.target.representation.subject.kind === "resource"
@@ -2901,13 +2939,19 @@ export function createDetailController(
       case "annotation.selection.begin":
         await beginAnnotationSelection(intent.sourceLine, intent.sourceColumn);
         break;
-      case "annotation.comment.direct":
-        if (!intent.capture) {
+      case "annotation.comment.direct": {
+        const property = state.propertyInspector.expanded
+          ? state.propertyInspector.model?.entries.find(entry => entry.occurrenceId === state.previewRegions.focusedRegionId)
+          : undefined;
+        if (property?.target?.kind === "resource-reference" && state.mode === "preview") {
+          await beginComment({ start: property.start, end: property.end });
+        } else if (!intent.capture) {
           state.status = "Drag across text before commenting";
         } else {
           await beginDirectComment(intent.capture);
         }
         break;
+      }
       case "resource.refresh": {
         const description = detailResourceDescription(state);
         if (
@@ -3115,13 +3159,28 @@ export function createDetailController(
           state.status = "References are not ready · preview enrichment is incomplete";
           break;
         }
+        const resourceEntries = state.propertyInspector.model?.entries.filter(entry =>
+          entry.target?.kind === "resource-reference"
+        ) ?? [];
+        if (intent.type !== "reference.open" && resourceEntries.length > 1) {
+          if (!state.propertyInspector.expanded) {
+            await dispatch({ type: "property-inspector.disclosure.toggle" }, viewport);
+          }
+          state.propertyInspector.filter = "";
+          state.propertyInspector.filterDraft = null;
+          state.previewRegions.focusedRegionId = resourceEntries[0]!.occurrenceId;
+          state.status = "Choose a reference in Properties · Tab selects · o opens · p closes";
+          break;
+        }
         const reference = intent.type === "reference.open"
           ? intent.target
+          : state.context.selected && resourceEntries.length === 1
+            ? resourceOccurrenceLink(state.context.selected, resourceEntries[0]!)
           : state.context.selected
             ? firstOutlinerReference(state.projectedSelectedText, state.workIdPrefix)
             : null;
         if (!reference) {
-          state.status = "Selected block has no block or page references";
+          state.status = "Selected block has no actionable references";
           break;
         }
         const navigationIntent: OutlinerNavigationIntent =
@@ -3159,9 +3218,13 @@ export function createDetailController(
           }
           break;
         }
-        if (reference.kind === "resource") {
+        if (reference.kind === "resource" || reference.kind === "reference") {
+          const followed = reference.kind === "reference"
+            ? await effects.followResourceOccurrence(reference) : null;
           await effects.dispatchNavigation(
-            { kind: "resource", resourceId: reference.value },
+            { kind: "resource", resourceId: followed?.resource.id ?? reference.value,
+              ...(followed ? { referenceContext: followed.referenceContext } : {}),
+            },
             "reveal",
             { focusTarget: true },
           );
@@ -3363,7 +3426,12 @@ export function createDetailController(
         }
         await dispatch({
           type: "reference.open",
-          target: propertyInspectorTargetLink(entry.target, {
+          target: entry.target.kind === "resource-reference" && state.context.selected
+            ? { ...resourceOccurrenceLink(state.context.selected, entry),
+                preserveSource: state.propertyInspector.presentation === "dedicated",
+                ...(intent.intent === "reveal" ? { intent: "reveal" as const } : {}),
+              }
+            : propertyInspectorTargetLink(entry.target, {
             preserveSource: state.propertyInspector.presentation === "dedicated",
             ...(intent.intent === "reveal" ? { intent: "reveal" as const } : {}),
           }),
@@ -3564,7 +3632,12 @@ export function createDetailController(
         if (subject.kind === "block") {
           await loadBlock(subject.blockId, true);
         } else if (subject.kind === "resource") {
-          await loadNavigationTarget({ kind: "resource", resourceId: subject.resourceId }, true);
+          const snapshot = target.representation.sourceSnapshot;
+          await loadNavigationTarget({ kind: "resource", resourceId: subject.resourceId,
+            ...(target.referenceContext && snapshot.kind === "resource" && snapshot.revision
+              ? { revision: snapshot.revision } : {}),
+            ...(target.referenceContext ? { referenceContext: target.referenceContext } : {}),
+          }, true);
         } else {
           state.status = "Legacy file annotation is orphaned and cannot be revealed";
           break;
