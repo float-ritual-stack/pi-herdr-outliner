@@ -5,8 +5,10 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import type { AnnotationRecord, AnnotationThread, Block, OutlinerClientRegistration } from "../../src/types";
 import { runHerdrScenario } from "./herdr-runner";
 
+const composed = process.argv.includes("--composed");
 const result = await runHerdrScenario({
-  name: "reference-annotations",
+  name: composed ? "reference-annotations-composed" : "reference-annotations",
+  layout: composed ? "composed" : "separate",
   async prepare(root) {
     await writeFile(join(root, "same.md"), "Shared file passage\nSecond file line");
   },
@@ -17,6 +19,13 @@ const result = await runHerdrScenario({
     assert.ok(registration);
     const current = async (): Promise<OutlinerClientRegistration> =>
       (await s.registrations()).find(c => c.clientId === registration.clientId)!;
+    const focusView = async (region: "tree" | "detail") => {
+      await s.focus(region === "tree" ? tree : detail);
+      if (composed && (await current()).focusedRegion !== region) {
+        await terminal.write("\u001b[17~");
+        await s.waitFor(`internal ${region} focus`, current, c => c.focusedRegion === region);
+      }
+    };
     const text = "Occurrence annotation fixture\n\nFirst use [file::same.md].\nSecond use [file::same.md].";
     const host = await s.client.request<Block>({ action: "create", parentId: null, text });
     const hostThreads = () => s.client.request<AnnotationThread[]>({
@@ -25,15 +34,15 @@ const result = await runHerdrScenario({
     const thread = (id: string) => s.client.request<AnnotationRecord>({ action: "annotations.get", annotationId: id });
     const goto = async () => {
       if ((await current()).locked) {
-        await s.focus(detail); await s.keys(detail, "L");
+        await focusView("detail"); await s.keys(detail, "L");
         await s.waitFor("reader unlocked", current, c => !c.locked);
       }
-      await s.focus(tree); await s.keys(tree, "g"); await s.waitVisible(tree, "Goto:");
+      await focusView("tree"); await s.keys(tree, "g"); await s.waitVisible(tree, "Goto:");
       await s.text(tree, host.id); await s.waitVisible(tree, host.id.slice(0, 8));
       await s.keys(tree, "enter");
       await s.waitFor("Goto accepted", () => s.visible(tree), frame => !frame.includes("Goto:"));
       await s.waitFor("source opened", current, c => c.currentTarget?.kind === "block" && c.currentTarget.blockId === host.id);
-      await s.focus(detail);
+      await focusView("detail");
       const frame = await s.waitVisible(detail, "Occurrence annotation fixture");
       if (frame.includes("▾ Properties")) {
         await s.keys(detail, "p");
@@ -80,7 +89,7 @@ const result = await runHerdrScenario({
 
     // Set up the explicit file-global view; the annotation itself uses real input.
     await s.client.request({ action: "ui.command.send", command: {
-      targetClientId: registration.clientId, command: "replace",
+      targetClientId: registration.clientId, ...(composed ? { targetRegion: "detail" as const } : {}), command: "replace",
       target: { kind: "resource", resourceId: target.resourceId },
     } });
     await s.waitFor("file-global target", current, c => c.currentTarget?.kind === "resource" && !c.currentTarget.referenceContext);
@@ -98,7 +107,7 @@ const result = await runHerdrScenario({
 
     const openOccurrence = async (referenceContext: NonNullable<typeof target.referenceContext>) => {
       await s.client.request({ action: "ui.command.send", command: {
-        targetClientId: registration.clientId, command: "replace",
+        targetClientId: registration.clientId, ...(composed ? { targetRegion: "detail" as const } : {}), command: "replace",
         target: { kind: "resource", resourceId: target.resourceId, referenceContext },
       } });
       await s.waitFor("occurrence target applied", current, c => c.currentTarget?.kind === "resource" &&
@@ -106,7 +115,7 @@ const result = await runHerdrScenario({
       await s.waitVisible(detail, "Shared file passage");
     };
     await openOccurrence(first.originalTarget.referenceContext!);
-    await s.focus(detail);
+    await focusView("detail");
     const pointerFrame = await s.waitFor("attached Resource frame", () => terminal.visible(),
       frame => frame.includes("Shared file passage") && frame.includes("line 3"));
     const lines = pointerFrame.split("\n");
@@ -122,7 +131,7 @@ const result = await runHerdrScenario({
     await s.waitVisible(detail, "Comment on this reference");
     await terminal.write("\u001b");
     await s.waitVisible(detail, "Comment cancelled");
-    await s.focus(detail);
+    await focusView("detail");
     await openOccurrence(second.originalTarget.referenceContext!);
     await s.keys(detail, "c");
     await s.waitVisible(detail, "reference context changed");
