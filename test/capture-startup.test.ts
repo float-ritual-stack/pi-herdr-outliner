@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { OutlinerClient } from "../src/client";
 import { OUTLINER_PROTOCOL_VERSION } from "../src/types";
 
 test("changed write entrypoints reject an incompatible service before touching drafts or content", async () => {
@@ -43,5 +44,30 @@ test("changed write entrypoints reject an incompatible service before touching d
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("composed clients reject published protocol 60 before attempting unsupported registration", async () => {
+  const root = mkdtempSync(join(tmpdir(), "composed-old-service-"));
+  const socketPath = join(root, "old.sock");
+  const actions: string[] = [];
+  const server = createServer(socket => {
+    let text = "";
+    socket.on("data", chunk => {
+      text += chunk;
+      if (!text.includes("\n")) return;
+      const request = JSON.parse(text.slice(0, text.indexOf("\n")));
+      actions.push(request.action);
+      // This released protocol supports occurrence context, but has no composed role.
+      socket.end(`${JSON.stringify({id: request.id, ok: true, result: {status: "ready", protocolVersion: 60}})}\n`);
+    });
+  });
+  await new Promise<void>(resolve => server.listen(socketPath, resolve));
+  try {
+    await expect(new OutlinerClient(socketPath).requireCompatibleService()).rejects.toThrow("incompatible Outliner protocol 60");
+    expect(actions).toEqual(["ping"]);
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    rmSync(root, {recursive: true, force: true});
   }
 });
