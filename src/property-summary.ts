@@ -34,7 +34,8 @@ export function propertySummarySegments(
   properties: readonly BlockProperty[],
   keys: readonly string[] = DEFAULT_PROPERTY_SUMMARY_KEYS,
 ): PropertySummarySegment[] {
-  return keys.flatMap((key) => {
+  const roadmap = properties.some(property => property.key === "type" && property.value === "roadmap-item");
+  return keys.filter(key => !roadmap || key !== "status").flatMap((key) => {
     const values = [...new Set(
       properties
         .filter((property) => property.key.toLowerCase() === key)

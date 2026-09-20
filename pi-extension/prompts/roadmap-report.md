@@ -16,9 +16,9 @@ Produce a current, decision-useful roadmap report that helps an owner quickly re
    - project goal, active initiatives, arcs, and tracks;
    - counts by work stage and priority;
    - Doing, Review, and Validate work;
-   - the ordered Next lane and why its first items are next;
+   - the agreed current/next batch, its full membership and next actions, with dependencies guiding execution order;
    - dependency chains, blockers, and dogfood or owner-decision gates;
-   - high-priority unprioritized work and metadata inconsistencies worth attention;
+   - ranked backlog candidates, deliberately deferred work and metadata inconsistencies worth attention;
    - recently completed capabilities only when they explain the current sequencing.
 4. Give a short recommendation section: the next one to three actions, the evidence for that order, and any decision the owner must make. Distinguish repository/runtime evidence from inference.
 5. Compose the report as an Outliner-native Detail artifact, not as a chat transcript pasted into a block. Use exact block references for the small set of canonical items worth opening, callouts for decisions/blockers/recommendations, and links or embeds to relevant virtual branches or canonical source when that is more useful than copying a frozen inventory. Keep native affordances semantic and bounded.

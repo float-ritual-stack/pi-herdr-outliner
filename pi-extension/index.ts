@@ -1173,8 +1173,9 @@ function formatContext(
   const dependencies = options.dependencies
     ?.slice(0, 8)
     .map((block) => {
-      const status = getProperty(block.properties, "status");
-      return `- [${block.id}] ${blockDisplayTitle(block)}${status ? ` · status=${status}` : ""}`;
+      const key = block.properties.some(property => property.key === "type" && property.value === "roadmap-item") ? "work-stage" : "status";
+      const state = getProperty(block.properties, key);
+      return `- [${block.id}] ${blockDisplayTitle(block)}${state ? ` · ${key}=${state}` : ""}`;
     })
     .join("\n");
   return boundAgentContext([
@@ -1579,7 +1580,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
       : nextStage === "review"
         ? "review"
         : taskStage;
-    const updatedTask = nextTaskStage && nextTaskStage !== taskStage
+    const updatedTask = nextTaskStage && nextTaskStage !== taskStage && !["done", "superseded"].includes(taskStage ?? "")
       ? await patchBlockProperties(
         task,
         { "work-stage": nextTaskStage },
@@ -1617,11 +1618,11 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
       );
     }
     const stage = getProperty(task.properties, "work-stage");
-    if (stage === "done" || stage === "complete") {
+    if (stage === "done" || stage === "superseded") {
       throw new Error(`Cannot start completed task: ${workId(task) ?? task.id}`);
     }
     const { delivery } = await ensureTaskDelivery(task, context);
-    const updated = stage === "doing"
+    const updated = ["doing", "review", "validate"].includes(stage ?? "")
       ? task
       : await client.request<Block>({
         action: "properties.patch",
@@ -1637,6 +1638,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
       blockId: updated.id,
       workId: requireRoadmapTask(updated),
       stage: getProperty(updated.properties, "work-stage"),
+      workBatchId: getProperty(updated.properties, "work-batch"),
       deliveryKey: delivery.key,
       repository: delivery.repository,
       baseBranch: delivery.baseBranch,
@@ -1649,19 +1651,20 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
     await ensureService(false);
     const task = await currentTask();
     if (!task) throw new Error("No active Outliner task");
-    const updated = await client.request<Block>({
+    const updated = getProperty(task.properties, "work-stage") === "doing" ? await client.request<Block>({
       action: "properties.patch",
       blockId: task.id,
       expectedRevision: task.revision,
-      operations: [propertyTransition(task, "work-stage", "next")],
+      operations: [propertyTransition(task, "work-stage", "queued")],
       mutation: agentMutation(actorId, context, "outliner-task:pause"),
-    });
+    }) : task;
     persistActiveTask(null);
     const presenceReported = await presentTask(context, null, "clear");
     return {
       blockId: updated.id,
       workId: requireRoadmapTask(updated),
       stage: getProperty(updated.properties, "work-stage"),
+      workBatchId: getProperty(updated.properties, "work-batch"),
       presenceReported,
     };
   }
@@ -1700,7 +1703,6 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
       throw new Error(`Proof block must be a child of or reference the active task: ${task.id}`);
     }
     const operations: PropertyPatchOperation[] = [
-      propertyTransition(task, "status", "complete"),
       propertyTransition(task, "work-stage", "done"),
     ];
     if (!task.properties.some((property) => property.key === "proof" && property.value === proof.id)) {
@@ -1727,7 +1729,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
       blockId: updated.id,
       workId: requireRoadmapTask(updated),
       stage: getProperty(updated.properties, "work-stage"),
-      status: getProperty(updated.properties, "status"),
+      workBatchId: getProperty(updated.properties, "work-batch"),
       proofBlockId: proof.id,
       presenceReported,
     };
@@ -1817,7 +1819,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
         const task = await currentTask();
         if (task) {
           const taskProperties = [
-            getProperty(task.properties, "status") && `status=${getProperty(task.properties, "status")}`,
+            getProperty(task.properties, "work-batch") && `work-batch=${getProperty(task.properties, "work-batch")}`,
             getProperty(task.properties, "work-stage") &&
             `work-stage=${getProperty(task.properties, "work-stage")}`,
           ].filter(Boolean).join(", ");
@@ -1984,7 +1986,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
         }
         if (operation === "pause") {
           const result = await pauseTask(context);
-          context.ui.notify(`Paused ${result.workId}; returned it to Next`, "info");
+          context.ui.notify(`Paused ${result.workId}; stage ${result.stage}`, "info");
           return;
         }
         if (operation === "complete") {
@@ -2226,7 +2228,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
             blockId: task.id,
             workId: requireRoadmapTask(task),
             stage: getProperty(task.properties, "work-stage"),
-            status: getProperty(task.properties, "status"),
+            workBatchId: getProperty(task.properties, "work-batch"),
           }
           : { blockId: null });
       }
@@ -2454,12 +2456,13 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
       ]),
       workStage: Type.Optional(Type.Union([
         Type.Literal("unprioritized"),
-        Type.Literal("next"),
+        Type.Literal("queued"),
         Type.Literal("doing"),
         Type.Literal("review"),
         Type.Literal("validate"),
         Type.Literal("later"),
       ])),
+      workBatchId: Type.Optional(Type.String({ description: "UUID of the agreed work-batch; defaults its new member to queued" })),
       project: Type.String(),
       arc: Type.String(),
       tracks: Type.Array(Type.String(), { minItems: 1 }),

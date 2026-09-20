@@ -83,7 +83,7 @@ test("round-trips idempotent delivery identity over the current protocol", async
     rmSync(directory, { recursive: true, force: true });
   });
   const task = store.create(
-    "PIE-182 lifecycle [type::roadmap-item] [work-id::PIE-182] [work-stage::next]",
+    "PIE-182 lifecycle [type::roadmap-item] [work-id::PIE-182] [work-stage::queued]",
   );
   const sequenceBefore = store.sequence;
   const client = new OutlinerClient(socket);

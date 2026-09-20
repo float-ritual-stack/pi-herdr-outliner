@@ -471,7 +471,7 @@ In another terminal, from the same workspace root:
 
 ```sh
 bun run cli list
-bun run cli list --filter work-stage=next --limit 20
+bun run cli list --filter work-stage=queued --limit 20
 bun run cli list --filter 'status=in progress' --filter project=pi-outliner --limit 20
 bun run cli capture --text "A quick thought"
 bun run cli capture <<'EOF'
@@ -905,7 +905,7 @@ Undo history is bounded to the current edit/comment session. Consecutive typing 
 A block stores canonical text plus structural fields. Properties are written directly in that text:
 
 ```text
-Investigate page navigation [type::roadmap-item] [status::planned] [work-stage::next]
+Investigate page navigation [type::roadmap-item] [work-stage::queued]
 ```
 
 Every deliberate non-literal property is indexed in `block_properties`; canonical `Block.text` remains the source of truth. The first contiguous property-only run after an optional subject line is block metadata, as is the trailing bracket-property run on the subject. Bare `key:: value` properties later in the body have `line` scope; later bracket tokens have `inline` scope. Literal examples inside inline/fenced code and escaped bracket syntax are not indexed.
@@ -1023,15 +1023,15 @@ Detection never searches, creates, allocates, relates, or rewrites by itself. Th
 A normal physical block becomes a virtual branch through properties:
 
 ```text
-Next
+Queued
 [type::virtual-branch]
-[query::work-stage=next]
-[create::work-stage=next]
+[query::work-stage=queued]
+[create::work-stage=queued]
 [create-parent::<canonical-work-queue-id>]
 [sort::updated]
 [direction::desc]
 [limit::20]
-[summary-properties::work-stage,status,priority]
+[summary-properties::work-stage,priority]
 ```
 
 Spaced values use the same canonical filter syntax:

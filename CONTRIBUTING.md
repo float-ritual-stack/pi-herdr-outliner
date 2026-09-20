@@ -78,33 +78,12 @@ restarts, socket removal, and writable database access are not connection probes
 
 ### Task status
 
-The durable roadmap lives inside Pi Outliner. Roadmap items remain under the physical roadmap and appear in the workboard through virtual branches.
-
-Every actionable item needs both:
-
-- a domain lifecycle property such as `[status::planned]`, and
-- an explicit board placement such as `[work-stage::next]`.
-
-`status` does not imply `work-stage`.
-
-Default flow:
-
-```text
-planned → [work-stage::next]
-implementation starts → [work-stage::doing]
-PR opens → [work-stage::review]
-merge completes → [work-stage::done]
-```
-
-When starting work:
-
-1. Move the roadmap item to Doing.
-2. Record the branch on the canonical item.
-3. Link implementation proof beneath that item.
-
-When opening a PR, move it to Review and record the PR number. After merge, record the main commit, mark the item Complete/Done, update the proof, and update the current-status block.
-
-After batch triage, verify both the `work-stage::next` query count and live `Next [V:N]` count. A correctly tagged canonical block should appear as one projected occurrence.
+Before planning, changing roadmap state or reporting delivery, read the live
+**How this workboard works** block `d5b3e557-a166-4c50-baad-7a0ed8db8fe6` through
+the configured Outliner service. It owns the working flow and scope decisions.
+The [roadmap operations reference](pi-extension/skills/outliner-workflow/references/roadmap-items.md)
+documents creation, batch membership, lifecycle transitions, ranking and migration.
+Keep current task status and verification evidence on the canonical work item.
 
 ## Branches and commits
 

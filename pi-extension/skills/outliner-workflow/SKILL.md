@@ -9,13 +9,13 @@ Treat the Outliner as the primary artifact surface and chat as the conversationa
 
 ## Establish the task
 
-1. Call `outliner_task` with `operation: "status"` before task-oriented work.
+1. Read the live **How this workboard works** block `d5b3e557-a166-4c50-baad-7a0ed8db8fe6` through the configured service, then call `outliner_task` with `operation: "status"`. Query the agreed batch before selecting an item.
 2. Start an explicitly named roadmap item with `operation: "start"` and its Work ID, full block ID, or unambiguous title when no task is active. For code delivery, this records and orients the repository, base branch, and Work-ID branch before Doing.
 3. Observe task start and its delivery identity before beginning repository mutation.
 4. Keep the session binding accurate when deliberately switching workflows: complete finished work, pause unfinished work, or use `clear` only for binding repair.
 5. Treat injected task and repository orientation as bounded advisory context, not an enforcement boundary or the entire task record. Query or focus blocks when more context is required.
 
-Use `pause` to return unfinished work to Next. Use `clear` only to repair session binding without changing roadmap metadata. Neither operation may be treated as a prerequisite for recovery or read-only inspection.
+Use `pause` to release the session binding: Doing returns to Queued; Review and Validate keep their stage. Batch membership persists. Use `clear` only to repair session binding without changing roadmap metadata. Neither operation may be treated as a prerequisite for recovery or read-only inspection.
 
 ## Keep delivery identity exact
 
@@ -31,7 +31,7 @@ Read [Roadmap items](references/roadmap-items.md) before creating, editing, prom
 
 1. Search for duplicates and related work before creating a new item.
 2. Use `outliner_roadmap_create`; never assemble a roadmap block with `outliner_create` followed by separate Work-ID and metadata mutations.
-3. Default new work to `work-stage=unprioritized`. Promote only when the owner explicitly requests it or a governing roadmap decision already records the promotion.
+3. Default new work to `work-stage=unprioritized`. Assign `work-batch` and queue it only after the owner commits that scope; membership survives later stage changes.
 4. Update metadata with `outliner_property_patch` and prose with `outliner_update` using the latest `revision`.
 5. Change lane membership through `work-stage`. Change ordering within a lane or track with `outliner_branch_rank`; never physically move canonical items to rank virtual occurrences.
 6. Query the item after mutation and verify its canonical parent, required properties, virtual-branch memberships, and explicit rank.
@@ -78,8 +78,7 @@ a connected set of blocks:
 
 Treat Tree focus as an explicit foreground action: it switches the user's active
 Herdr pane. Background agent work must query, publish, reveal, read, or send to
-explicit panes without focusing them. Preserve the existing Now/Next
-work-in-progress limit and never promote an item silently.
+explicit panes without focusing them. Preserve agreed batch scope; record authorized additions, removals and deferrals with reasons.
 
 ## Choose artifact or chat
 
@@ -130,7 +129,7 @@ Do not publish raw chain-of-thought, tentative guesses, repetitive tool output, 
 2. Synchronize an active delivery through Review to Validate after its exact PR merges.
 3. Publish an `implementation-proof` block beneath the active roadmap item.
 4. Call `outliner_task` with `operation: "complete"` and the proof block ID.
-5. Let the task tool require merged delivery facts when present, move canonical metadata to complete/done, and clear session presence.
+5. Let the task tool require merged delivery facts when present, set the canonical work-stage to done, and clear session presence.
 6. Leave a concise chat response pointing to the focused durable artifact.
 
 Never infer semantic completion from `agent_end`, `agent_settled`, idle state, or the absence of further tool calls. Completion requires an explicit tool action and linked proof.

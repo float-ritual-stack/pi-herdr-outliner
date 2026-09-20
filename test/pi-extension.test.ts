@@ -707,8 +707,8 @@ test("drives an explicit task through context, focus, durable proof, and complet
   const taskText = [
     "PIE-144 — Agent [context::inline-before] workflow [type::roadmap-item]",
     "owner:: evan",
-    "[status::planned] [priority::high]",
-    "[work-stage::next] [work-id::PIE-144] [depends-on::dependency-id]",
+    "[priority::high]",
+    "[work-stage::queued] [work-id::PIE-144] [depends-on::dependency-id] [work-batch::11111111-1111-4111-8111-111111111111]",
   ].join("\n");
 
   let task: Block = {
@@ -1038,7 +1038,7 @@ test("drives an explicit task through context, focus, durable proof, and complet
     expect(paused).toMatchObject({
       blockId: task.id,
       workId: "PIE-144",
-      stage: "next",
+      stage: "queued",
       presenceReported: true,
     });
 
@@ -1080,6 +1080,16 @@ test("drives an explicit task through context, focus, durable proof, and complet
     expect(reviewing.pullRequest).toMatchObject({ number: 44, state: "OPEN" });
     expect(reviewing.task.properties).toContainEqual({ key: "work-stage", value: "review" });
     expect(reviewing.delivery.stage).toBe("review");
+    const reviewWrites = requests.filter(request => request.action === "properties.patch").length;
+    const pausedReview = JSON.parse((await tools.get("outliner_task")!.execute(
+      "pause-review", { operation: "pause" }, undefined, undefined, context,
+    )).content[0]!.text);
+    expect(pausedReview).toMatchObject({ stage: "review", workBatchId: "11111111-1111-4111-8111-111111111111" });
+    const resumedReview = JSON.parse((await tools.get("outliner_task")!.execute(
+      "resume-review", { operation: "start", address: "PIE-144" }, undefined, undefined, context,
+    )).content[0]!.text);
+    expect(resumedReview).toMatchObject({ stage: "review", workBatchId: "11111111-1111-4111-8111-111111111111" });
+    expect(requests.filter(request => request.action === "properties.patch").length).toBe(reviewWrites);
 
     process.env.HERDR_ENV = "0";
     const focused = JSON.parse(
@@ -1141,7 +1151,7 @@ test("drives an explicit task through context, focus, durable proof, and complet
     expect(completed).toMatchObject({
       workId: "PIE-144",
       stage: "done",
-      status: "complete",
+      workBatchId: "11111111-1111-4111-8111-111111111111",
       proofBlockId: "proof-id",
     });
     expect(completed.presenceReported).toBe(true);
@@ -1150,10 +1160,12 @@ test("drives an explicit task through context, focus, durable proof, and complet
       { version: 1, blockId: null },
       { version: 1, blockId: task.id },
       { version: 1, blockId: null },
+      { version: 1, blockId: task.id },
+      { version: 1, blockId: null },
     ]);
     expect(task.properties).toEqual(expect.arrayContaining([
       { key: "work-stage", value: "done" },
-      { key: "status", value: "complete" },
+      { key: "work-batch", value: "11111111-1111-4111-8111-111111111111" },
       { key: "proof", value: "proof-id" },
     ]));
     expect(task.text).toContain("[context::inline-before]");
@@ -1166,14 +1178,13 @@ test("drives an explicit task through context, focus, durable proof, and complet
         request.action === "properties.patch" && request.blockId === task.id,
     );
     expect(transitions.map(({ operations }) => operations)).toEqual([
-      [{ op: "replace", ordinal: 5, value: "doing" }],
-      [{ op: "replace", ordinal: 5, value: "next" }],
-      [{ op: "replace", ordinal: 5, value: "doing" }],
-      [{ op: "replace", ordinal: 5, value: "review" }],
-      [{ op: "replace", ordinal: 5, value: "validate" }],
+      [{ op: "replace", ordinal: 4, value: "doing" }],
+      [{ op: "replace", ordinal: 4, value: "queued" }],
+      [{ op: "replace", ordinal: 4, value: "doing" }],
+      [{ op: "replace", ordinal: 4, value: "review" }],
+      [{ op: "replace", ordinal: 4, value: "validate" }],
       [
-        { op: "replace", ordinal: 3, value: "complete" },
-        { op: "replace", ordinal: 5, value: "done" },
+        { op: "replace", ordinal: 4, value: "done" },
         { op: "append", key: "proof", value: "proof-id" },
       ],
     ]);
@@ -1183,16 +1194,12 @@ test("drives an explicit task through context, focus, durable proof, and complet
     const currentPaneCalls = herdrCalls.filter(
       (args) => args[0] === "pane" && args[1] === "current",
     );
-    expect(currentPaneCalls).toHaveLength(4);
+    expect(currentPaneCalls).toHaveLength(6);
     const metadataCalls = herdrCalls.filter(
       (args) => args[0] === "pane" && args[1] === "report-metadata",
     );
-    expect(metadataCalls).toHaveLength(3);
-    expect(metadataCalls.map((args) => args[2])).toEqual([
-      "moved-pane",
-      "moved-pane",
-      "moved-pane",
-    ]);
+    expect(metadataCalls).toHaveLength(5);
+    expect(metadataCalls.every((args) => args[2] === "moved-pane")).toBe(true);
     expect(metadataCalls.some((args) => args.includes("launch-pane"))).toBe(false);
     expect(diagnostic).toHaveBeenCalledTimes(1);
     const identityDiagnostic = String(diagnostic.mock.calls[0]![0]);

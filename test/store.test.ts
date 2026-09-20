@@ -88,7 +88,7 @@ describe("OutlinerStore", () => {
   test("creates one immutable delivery identity per task and delivery key", () => {
     const store = makeStore();
     const task = store.create(
-      "PIE-182 lifecycle [type::roadmap-item] [work-id::PIE-182] [work-stage::next]",
+      "PIE-182 lifecycle [type::roadmap-item] [work-id::PIE-182] [work-stage::queued]",
     );
     const input = {
       taskBlockId: task.id,
@@ -1657,7 +1657,6 @@ Second paragraph`;
     );
     expect(receipt.block.properties).toEqual([
       { key: "type", value: "roadmap-item" },
-      { key: "status", value: "planned" },
       { key: "priority", value: "high" },
       { key: "work-stage", value: "unprioritized" },
       { key: "project", value: "pi-outliner" },

@@ -1,100 +1,100 @@
-# Roadmap items
+# Roadmap operations
 
-## Canonical model
+Read the live **How this workboard works** block
+`d5b3e557-a166-4c50-baad-7a0ed8db8fe6` for the owner's operating flow. Retrieve it
+through the configured service with `get`; do not change Tree focus to read it.
+This reference documents the metadata and tool contract.
 
-A roadmap item is one canonical block beneath the project's single active `[type::work-queue]` block. Lanes, capability maps, arcs, and tracks are virtual branches. They project canonical items and never own copies.
+## Canonical records
 
-Every roadmap item has these properties:
+A roadmap item is one block beneath its project's active `type=work-queue`.
+Views project that item; physical position does not express commitment or priority.
 
-- one `[type::roadmap-item]`;
-- one `[status::planned|complete]`;
-- one `[priority::high|medium|low]`;
-- one `[work-stage::unprioritized|later|next|doing|review|validate|done]`;
-- one `[project::<project>]`;
-- one `[arc::<arc>]`;
-- at least one `[track::<track>]`;
-- one allocator-issued immutable `[work-id::<PREFIX-NNN>]`.
+Required properties:
 
-`[depends-on]`, `[related-to]`, and `[source-block]` values are canonical block UUIDs. Never put a Work ID, a title, or a page name in a relationship property.
+- one `type=roadmap-item`, immutable allocator-issued `work-id`, and `project`;
+- one `work-stage=unprioritized|later|queued|doing|review|validate|done|superseded`;
+- one `priority=high|medium|low`, one `arc`, and at least one `track`.
 
-## Status and work stage answer different questions
+Roadmap items have no `status` property. `done` means accepted delivery with
+linked proof. `superseded` means retired into a linked `superseded-by` item; it
+does not count as shipped. Other block types retain their own status meanings.
 
-`status` records the roadmap item's outcome.
+An optional single `work-batch` property references a `type=work-batch` block
+in the same project. This item-side reference alone owns membership. Batch
+blocks contain the agreed objective, stopping point and scope decisions; their
+member views query `work-batch=<batch UUID>`. Membership survives stage changes,
+pause, review, completion and session restart. Batch progress comes from members,
+not another mutable status or completion counter.
 
-| Value | Meaning |
-| --- | --- |
-| `planned` | The work remains open. This value does not mean that the item is scheduled. |
-| `complete` | The work met its acceptance criteria and has linked proof. |
+Relationships (`work-batch`, `depends-on`, `related-to`, `source-block`, `proof`,
+`superseded-by`) contain canonical block UUIDs, not Work IDs or titles.
 
-`work-stage` records scheduling and delivery position.
+## Create and schedule
 
-| Value | Meaning |
-| --- | --- |
-| `unprioritized` | The item belongs to the planned backlog but has no execution commitment or lane rank. |
-| `later` | The owner deliberately deferred the item. |
-| `next` | The owner selected and ranked the item for near-term execution. Keep this lane small. |
-| `doing` | One agent session owns active implementation. |
-| `review` | The deliverable or pull request awaits review. |
-| `validate` | The change merged and awaits acceptance proof or field validation. |
-| `done` | The item is complete and links to proof. |
+1. Inspect the source and search for an existing outcome before allocating work.
+   Rough ideas may remain notes until they have a concrete outcome and observable
+   acceptance criteria.
+2. Use `outliner_roadmap_create` with title, body, priority, project, arc and tracks.
+   Source and relationship fields take UUIDs. New work defaults to `unprioritized`.
+3. After the owner commits scope, create an ordinary `work-batch` block with its
+   project and objective. Assign members through optimistic `work-batch` property
+   patches; use `queued` for selected items waiting to start. `workBatchId` on
+   roadmap creation validates the batch and defaults the new member to `queued`.
+4. Read back canonical metadata and query the batch with block-scoped properties.
+   Confirm complete results, exact membership, stage and branch-local rank.
 
-An open item keeps `[status::planned]` while its work stage changes. Completion changes both axes to `[status::complete] [work-stage::done]`.
+Near-term candidates can be refined and ranked without joining a batch. A small
+standalone fix can be explicitly queued without a batch. Related discoveries
+stay outside committed scope until the owner or an existing scope allowance
+authorizes their inclusion. Record additions, removals and deferral reasons on
+the batch before changing membership; keep these decisions as history.
 
-`accepted` is not a roadmap-item status. Findings, decisions, reviews, and feedback can use `[status::accepted]` to record a judgment. If an accepted source requires work, link it to an existing roadmap item or create a planned roadmap item with `[source-block::<source UUID>]`.
+## Execute and return
 
-## Intake and backlog review
+- `outliner_task start` binds a session and orients its delivery branch. Queued,
+  unprioritized or later work enters Doing. Attaching to Doing, Review or Validate
+  preserves its stage. Rework is an explicit stage edit, not a side effect of
+  resuming a session. Terminal items need an explicit reopen first.
+- `outliner_task pause` clears the session binding. Doing returns to Queued;
+  Review and Validate retain their next action. Membership remains unchanged.
+- `outliner_delivery sync` uses the exact PR's live facts: open delivery reaches
+  Review, merge reaches Validate. Delivery identity records Git facts; it does
+  not own batch scope.
+- `outliner_task complete` requires linked proof and, for recorded code delivery,
+  a merged PR. It sets Done and clears the session binding.
+- `outliner_task clear` repairs binding without changing the item's progress.
 
-Process candidate work in this order:
+Execution order follows dependencies and practical sequencing. A batch remains
+inspectable after its Queued view empties. Report the agreed scope, actual next
+actions, evidence, deviations and deferred discoveries when handing back.
+Record the run's authorized stopping point; review-ready is not accepted delivery.
 
-1. Read the source artifact and identify one concrete user outcome.
-2. Search roadmap titles, contracts, source links, dependencies, and related work for duplicates.
-3. If an existing item owns the outcome, link the source to that item and record the duplicate or routed disposition on the source.
-4. If no item owns the outcome, call `outliner_roadmap_create` with the complete contract and acceptance criteria. New items default to `unprioritized`.
-5. Query the item after creation. Verify its Work ID, canonical parent, required properties, source link, and capability-map memberships.
+## Edit, rank and query
 
-Do not convert every idea into work. A candidate needs a concrete user outcome, an observable acceptance condition, and enough evidence to distinguish it from existing work.
+Read the latest revision and property ordinals before every mutation. Use
+`outliner_property_patch` for metadata and `outliner_update` for prose. Replace
+scalar values instead of appending duplicates. Read back after each mutation.
 
-## Create
+Use `outliner_branch_rank` for ordering. Preserve canonical IDs, source parents,
+proofs and unrelated metadata. Capability maps still group the same items by
+arc or track; they do not schedule work.
 
-1. Use `outliner_query` to search the proposed title, governing arc, source block, and likely related items.
-2. Call `outliner_roadmap_create` with a title that contains neither a Work ID nor property tokens. Include the complete contract and acceptance criteria in `body`.
-3. Supply explicit `project`, `priority`, `arc`, and at least one `track`. Supply UUID relationships when known.
-4. Omit `workStage` unless the owner has explicitly chosen placement. The atomic default is `unprioritized`.
-5. Treat the returned `workId`, `workQueueId`, block, and branch memberships as the creation receipt.
-6. Query the new Work ID and verify the required metadata and parent.
+Current filters support property equality/presence, not OR/NOT. Use explicit
+stage views or a batch-wide view with stage summaries. Stage views and their
+creation defaults must agree; create roadmap work through the allocator tool,
+not by copying a projected item. Do not create records directly in Done or Review.
 
-Never create a placeholder roadmap block and allocate its Work ID afterward. `outliner_create` remains appropriate for notes and artifacts, not roadmap work.
+## Existing workspace cutover
 
-## Update
+`bun run scripts/migrate-roadmap.ts --project <project>` reports proposed item
+edits. Add `--apply --backup <new-file>` to retain before-images and apply through
+the service with revision checks. Conflicting legacy values stop planning;
+supersession is preserved, and rerunning makes no changes. Trash is left intact;
+restoring legacy roadmap items applies the same metadata conversion.
 
-1. Resolve the item by Work ID and read its latest integer `revision` and property ordinals.
-2. Use `outliner_property_patch` for metadata. Replace the exact scalar property ordinal instead of appending a second value.
-3. Use `outliner_update` with `expectedRevision` for title, contract, or acceptance changes.
-4. Re-read after each optimistic mutation before another mutation.
-5. Verify scalar uniqueness and required metadata after the update.
-
-Preserve the immutable Work ID and unrelated metadata.
-
-## Schedule and deliver
-
-Use this normal transition sequence:
-
-1. `unprioritized` or `later` to `next` after an explicit owner choice or a governing roadmap decision.
-2. `next` to `doing` through `outliner_task start`.
-3. `doing` to `review` through `outliner_delivery sync` after the pull request opens.
-4. `review` to `validate` through `outliner_delivery sync` after merge.
-5. `validate` to `done`, paired with `planned` to `complete`, through `outliner_task complete` with linked proof.
-
-`outliner_task pause` returns active work to `next`. `outliner_task clear` only repairs session binding and does not change roadmap metadata.
-
-Do not use invented work stages such as `accepted`, `now`, `proof`, or `dogfood-gated`. Record dependencies with `[depends-on]`, deferred work with `later`, and validation requirements in the item contract.
-
-## Capability maps and ranking
-
-Capability maps group the same canonical roadmap items by `[arc]` or `[track]`. They answer where the capability belongs. They do not answer when the team will execute it.
-
-Lane membership comes only from `work-stage`. Ordering is independent of membership. Call `outliner_branch_rank` with the virtual branch UUID and canonical item UUIDs to rank a lane or track. Existing ranked items omitted from the call retain their relative slots.
-
-Never use `outliner_move` to prioritize a lane or track. Never change `work-stage` only to alter ordering.
-
-A roadmap item can have several `[track]` properties. Each matching track branch projects the same canonical block. Exactly one block under the work queue remains authoritative.
+Migrate saved-view queries, creation defaults and current hub instructions as
+part of the workspace cutover. Preserve historical notes as history. Verify
+Tree/Detail and agent lifecycle operations in a private fixture before applying
+live changes. The application guide and current batch remain the authority for
+task status; repository documents contain no second task queue.

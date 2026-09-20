@@ -17,6 +17,7 @@ import {
 } from "./bookmarks";
 import { isValidGitBranchName } from "./delivery-lifecycle";
 import { seedDefaultWorkspace } from "./default-workspace";
+import { migrateRoadmapText } from "./roadmap-migration";
 import {
   normalizeBlockSearchQuery,
   parsePropertyFilterExpression,
@@ -357,9 +358,9 @@ const ROADMAP_PRIORITIES: Record<RoadmapItemPriority, true> = {
   medium: true,
   low: true,
 };
-const ROADMAP_WORK_STAGES: Record<Exclude<RoadmapWorkStage, "done">, true> = {
+const ROADMAP_CREATE_STAGES: Record<Exclude<RoadmapWorkStage, "done" | "superseded">, true> = {
   unprioritized: true,
-  next: true,
+  queued: true,
   doing: true,
   review: true,
   validate: true,
@@ -370,6 +371,7 @@ const RESERVED_ROADMAP_PROPERTY_KEYS: Record<string, true> = {
   status: true,
   priority: true,
   "work-stage": true,
+  "work-batch": true,
   project: true,
   arc: true,
   track: true,
@@ -623,6 +625,7 @@ export class OutlinerStore {
     const id = crypto.randomUUID();
 
     this.database.transaction(() => {
+      this.validateRoadmapText(text);
       const siblingCount = this.database
         .query("SELECT COUNT(*) AS count FROM blocks WHERE parent_id IS ?")
         .get(parentId) as { count: number };
@@ -873,8 +876,11 @@ export class OutlinerStore {
     if (ROADMAP_PRIORITIES[priority] !== true) {
       throw new Error(`Invalid roadmap priority: ${String(priority)}`);
     }
-    const workStage = input.workStage ?? "unprioritized";
-    if (ROADMAP_WORK_STAGES[workStage] !== true) {
+    const workBatchId = input.workBatchId === undefined
+      ? undefined
+      : normalizeRoadmapRelationshipId(input.workBatchId, "workBatchId");
+    const workStage = input.workStage ?? (workBatchId ? "queued" : "unprioritized");
+    if (ROADMAP_CREATE_STAGES[workStage] !== true) {
       throw new Error(`Invalid roadmap work stage: ${String(workStage)}`);
     }
     const project = normalizeRoadmapText(input.project, "Roadmap project");
@@ -918,9 +924,9 @@ export class OutlinerStore {
       }
       const properties: BlockProperty[] = [
         { key: "type", value: "roadmap-item" },
-        { key: "status", value: "planned" },
         { key: "priority", value: priority },
         { key: "work-stage", value: workStage },
+        ...(workBatchId ? [{ key: "work-batch", value: workBatchId }] : []),
         { key: "project", value: project },
         { key: "arc", value: arc },
         ...tracks.map((value) => ({ key: "track", value })),
@@ -931,6 +937,7 @@ export class OutlinerStore {
       ];
       const metadata = properties.map(formatProperty).join(" ");
       const text = `${workId} — ${title} ${metadata}${body ? `\n\n${body}` : ""}`;
+      this.validateRoadmapText(text);
       const id = crypto.randomUUID();
       const now = new Date().toISOString();
       const position = this.database.query(
@@ -1296,6 +1303,7 @@ export class OutlinerStore {
     expectedRevision: number,
     editedAt = new Date().toISOString(),
   ): string {
+    this.validateRoadmapText(text);
     if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) {
       throw new Error("Block edit requires a positive integer revision");
     }
@@ -1305,6 +1313,32 @@ export class OutlinerStore {
     `).run(text, editedAt, id, expectedRevision);
     if (result.changes !== 1) throw new Error(`Block changed since editing began: ${id}`);
     return editedAt;
+  }
+
+  private validateRoadmapText(text: string): void {
+    const properties = parsePropertyRecords(text).filter(property => property.scope === "block");
+    const values = (key: string) => properties.filter(property => property.key === key).map(property => property.value);
+    if (!values("type").includes("roadmap-item")) return;
+    if (values("status").length > 0) {
+      throw new Error("Roadmap items use work-stage as their lifecycle; remove the status property");
+    }
+    const stages = values("work-stage");
+    if (stages.length !== 1 || ![...Object.keys(ROADMAP_CREATE_STAGES), "done", "superseded"].includes(stages[0]!)) {
+      throw new Error("Roadmap items require exactly one valid work-stage");
+    }
+    const batches = values("work-batch");
+    if (batches.length > 1) throw new Error("Roadmap items have at most one work-batch");
+    if (batches[0]) {
+      const batch = this.requireActive(normalizeRoadmapRelationshipId(batches[0], "work-batch"));
+      if (!batch.properties.some(property => property.key === "type" && property.value === "work-batch")) {
+        throw new Error("work-batch must reference a work-batch block");
+      }
+      const projects = values("project");
+      const batchProjects = batch.properties.filter(property => property.key === "project");
+      if (projects.length !== 1 || batchProjects.length !== 1 || projects[0] !== batchProjects[0]!.value) {
+        throw new Error("work-batch must belong to the item's project");
+      }
+    }
   }
 
   patchProperties(
@@ -1462,6 +1496,10 @@ export class OutlinerStore {
       this.recomputeEffectiveDeletion();
       for (const blockId of this.subtreeIdsFromCurrentRead(id)) {
         const restored = this.getFromCurrentRead(blockId);
+        if (restored && !restored.effectiveDeletedRootId) {
+          const text = migrateRoadmapText(restored);
+          if (text !== restored.text) this.replaceCanonicalBlockText(blockId, text);
+        }
         if (
           restored &&
           !restored.effectiveDeletedRootId &&

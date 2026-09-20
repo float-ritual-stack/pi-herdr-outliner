@@ -128,7 +128,7 @@ export function treeSemanticState(block: Pick<Block, "properties">): TreeSemanti
     block.properties
       .filter((property) => property.key.toLowerCase() === key)
       .map((property) => property.value.toLowerCase());
-  const status = values("status");
+  const status = values("type").includes("roadmap-item") ? [] : values("status");
   const stage = values("work-stage");
   if (status.includes("blocked") || stage.includes("blocked")) return "blocked";
   if (
