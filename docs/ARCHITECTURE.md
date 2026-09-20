@@ -992,6 +992,32 @@ representations and use text quotes rather than separate passage targets. All
 surfaces then call the same `annotations.create` action and query by block or
 Resource subject.
 
+Reference-scoped annotations add `referenceContext` to the existing target JSON:
+a canonical host-block representation, the exact authored token's text-quote
+anchor, and the complete captured host text. That text is immutable evidence,
+never another source authority or a read/write cache. A contextual Resource
+passage keeps its primary Resource/version and passage anchor independently.
+A comment on the occurrence alone uses the host token as its primary block
+target, so it also works when the referenced file is unavailable. Global
+Resource comments omit the context. Block queries include contextual Resource
+threads for that host; Resource queries expose both global and contextual file
+threads without cloning Resources or creating occurrence rows.
+
+Creation and explicit reattachment validate the current host bytes and exact
+authored occurrence; a contextual Resource passage must resolve to that same
+canonical Resource. Host reconciliation accepts the original exact span when
+the complete source is unchanged. Otherwise, it accepts only an unchanged
+containing line that occurs exactly once in both captured and current source,
+with the same token offset within the line. This permits surrounding insertion
+and line movement. Changed-line edits require explicit reattachment. A unique
+survivor of originally duplicate lines is not identity evidence. Observed
+deletion, ambiguous duplication, or locator reassignment leaves the thread
+unpositioned until explicit reattachment, even if later text matches the old
+snapshot. Host reconciliation never advances the primary Resource revision;
+explicit Resource reconciliation retains the host context on every result and
+candidate. Original evidence, replies, lifecycle, and resolution history remain
+in the existing repository.
+
 Creation appends sequence 0 as resolved. Reconciliation then runs the cheapest
 reliable deterministic pass: unchanged representation hash, provider-native
 identity, structural replay with quote verification, unique exact quote,

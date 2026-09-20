@@ -1,11 +1,13 @@
 import { createHash } from "node:crypto";
 import { normalizeRetainedResourceRevisionRef } from "./resources";
 import { getProperty, stripProperties } from "./properties";
+import { authoredResourceReferenceOccurrences } from "./resource-references";
 import type {
   AnnotationAnchor,
   AnnotationCreateInput,
   AnnotationLifecycle,
   AnnotationRepresentation,
+  AnnotationReferenceContext,
   AnnotationResolutionEvent,
   AnnotationResolutionMethod,
   AnnotationResolutionCandidate,
@@ -388,7 +390,51 @@ export function normalizeAnnotationTarget(value: unknown, allowLegacy = false): 
   return {
     representation: normalizeAnnotationRepresentation(target.representation, allowLegacy),
     anchor: normalizeAnnotationAnchor(target.anchor),
+    ...(target.referenceContext === undefined ? {} : {
+      referenceContext: normalizeAnnotationReferenceContext(target.referenceContext),
+    }),
   };
+}
+
+export function normalizeAnnotationReferenceContext(value: unknown): AnnotationReferenceContext {
+  if (!value || typeof value !== "object") throw new Error("Annotation reference context must be an object");
+  const context = value as Record<string, unknown>;
+  const representation = normalizeAnnotationRepresentation(context.representation);
+  const anchor = normalizeAnnotationAnchor(context.anchor);
+  const sourceText = evidenceText(context.sourceText, "Reference context source text");
+  const hash = annotationSourceHash(sourceText);
+  if (representation.subject.kind !== "block" || representation.sourceSnapshot.kind !== "block" ||
+    representation.contentHash !== hash || representation.sourceSnapshot.contentHash !== hash) {
+    throw new Error("Reference context requires exact canonical block evidence");
+  }
+  if (anchor.kind !== "text-quote" || anchor.start === null || anchor.end === null ||
+    sourceText.slice(anchor.start, anchor.end) !== anchor.exact ||
+    sourceText.slice(Math.max(0, anchor.start - anchor.prefix.length), anchor.start) !== anchor.prefix ||
+    sourceText.slice(anchor.end, anchor.end + anchor.suffix.length) !== anchor.suffix ||
+    !authoredResourceReferenceOccurrences(sourceText).some(occurrence =>
+      occurrence.kind === "authored-resource" && occurrence.start === anchor.start && occurrence.end === anchor.end)) {
+    throw new Error("Reference context must identify one exact authored Resource occurrence");
+  }
+  return { representation, anchor, sourceText };
+}
+
+export function createAnnotationReferenceContext(
+  block: Pick<Block, "id" | "text" | "updatedAt">,
+  start: number,
+  end: number,
+): AnnotationReferenceContext {
+  const contentHash = annotationSourceHash(block.text);
+  return normalizeAnnotationReferenceContext({
+    representation: {
+      id: `block:${block.id}:${contentHash}`,
+      subject: { kind: "block", blockId: block.id },
+      sourceSnapshot: { kind: "block", blockId: block.id, updatedAt: block.updatedAt, contentHash },
+      adapter: { id: "outliner.block-text", version: 1 }, mediaType: "text/markdown",
+      contentHash, capturedAt: block.updatedAt,
+    },
+    anchor: createTextQuoteAnchor(block.text, start, end),
+    sourceText: block.text,
+  });
 }
 
 export function normalizeAnnotationCreateInput(

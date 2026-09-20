@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { isAbsolute, resolve } from "node:path";
 import {
   annotationSourceHash,
+  createAnnotationReferenceContext,
   formatAnnotationBlock,
   normalizeAnnotationCreateInput,
   normalizeAnnotationRepresentation,
@@ -19,6 +20,7 @@ import {
   normalizeResolutionCandidate,
 } from "./annotations";
 import { parsePropertyRecords } from "./properties";
+import { authoredResourceReferenceOccurrences } from "./resource-references";
 import { reanchorAnnotationTarget } from "./annotation-reanchoring";
 import type { ResourceCatalog } from "./resource-catalog";
 import { normalizeRetainedResourceRevisionRef } from "./resources";
@@ -39,6 +41,7 @@ import type {
   AnnotationReconcileInput,
   AnnotationReconcileReceipt,
   AnnotationRepresentation,
+  AnnotationReferenceContext,
   AnnotationResolutionCandidate,
   AnnotationResolutionEvent,
   AnnotationResolutionMethod,
@@ -59,6 +62,7 @@ import type {
 const SYSTEM_ANNOTATIONS_ROOT_ID = "7674db6f-6639-4d49-bb63-9ed50cdbba08";
 const MIGRATION_MARKER = "pie250_annotation_repository";
 const TEXT_CODEC = { kind: "codec", codecId: "text-quote", codecVersion: 1 } as const;
+const REFERENCE_CONTEXT_CODEC = { kind: "codec", codecId: "reference-context", codecVersion: 1 } as const;
 const TARGET_PROPERTY_KEYS = OBSOLETE_ANNOTATION_PROPERTY_KEYS;
 const AGENT_AUTOMATIC_THRESHOLD = 0.95;
 const AGENT_BODY_LIMIT = 4_000;
@@ -188,6 +192,41 @@ function sameRepresentation(
   right: AnnotationRepresentation,
 ): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function referenceContextInBlock(
+  context: AnnotationReferenceContext,
+  block: Block | null,
+): { context: AnnotationReferenceContext | null; status: "resolved" | "ambiguous" | "orphaned" } {
+  if (!block || block.effectiveDeletedRootId || block.deletedAt) return { context: null, status: "orphaned" };
+  if (block.text === context.sourceText) return { context, status: "resolved" };
+  const start = context.anchor.start!;
+  const end = context.anchor.end!;
+  const lineStart = context.sourceText.lastIndexOf("\n", start - 1) + 1;
+  const newline = context.sourceText.indexOf("\n", start);
+  const lineEnd = newline < 0 ? context.sourceText.length : newline;
+  if (end > lineEnd) return { context: null, status: "orphaned" };
+  const line = context.sourceText.slice(lineStart, lineEnd);
+  const matches = (text: string): number[] => {
+    const result: number[] = [];
+    let offset = 0;
+    for (const candidate of text.split("\n")) {
+      if (candidate === line) result.push(offset);
+      offset += candidate.length + 1;
+    }
+    return result;
+  };
+  const before = matches(context.sourceText);
+  const after = matches(block.text);
+  // A unique survivor cannot identify which of two earlier equal lines survived.
+  if (before.length !== 1 || after.length > 1) return { context: null, status: "ambiguous" };
+  if (after.length === 0) return { context: null, status: "orphaned" };
+  const mappedStart = after[0]! + start - lineStart;
+  try {
+    return { context: createAnnotationReferenceContext(block, mappedStart, mappedStart + end - start), status: "resolved" };
+  } catch {
+    return { context: null, status: "orphaned" };
+  }
 }
 
 function payloadHash(value: unknown): string {
@@ -375,7 +414,9 @@ export class AnnotationRepository {
     const subject = normalizeAnnotationSubject(query.subject, false);
     if (subject.kind === "legacy-file") throw new Error("legacy-file subjects are migration-only");
     const rows = subject.kind === "block"
-      ? this.database.query("SELECT * FROM annotation_targets WHERE block_id = ? ORDER BY created_at, annotation_block_id").all(subject.blockId)
+      ? this.database.query(`SELECT * FROM annotation_targets WHERE block_id = ?
+          OR json_extract(original_target_json, '$.referenceContext.representation.subject.blockId') = ?
+          ORDER BY created_at, annotation_block_id`).all(subject.blockId, subject.blockId)
       : this.database.query("SELECT * FROM annotation_targets WHERE resource_id = ? ORDER BY created_at, annotation_block_id").all(subject.resourceId);
     const rootIds = new Set((rows as AnnotationTargetRow[]).map((row) => row.annotation_block_id));
     if (rootIds.size === 0) return [];
@@ -458,6 +499,14 @@ export class AnnotationRepository {
     const original = parseStoredTarget(root.original_target_json);
     if (!sameSubject(original.representation.subject, target.representation.subject)) {
       throw new Error("Approved target must belong to the annotation subject");
+    }
+    if (original.referenceContext) {
+      if (!target.referenceContext || !sameSubject(original.referenceContext.representation.subject, target.referenceContext.representation.subject)) {
+        throw new Error("Approved context must preserve the original host");
+      }
+      this.validateCapture(target);
+    } else if (target.referenceContext) {
+      throw new Error("Approval cannot change a global annotation into a contextual annotation");
     }
     this.requireSubject(target.representation.subject);
     return this.database.transaction(() => {
@@ -694,6 +743,7 @@ export class AnnotationRepository {
         const candidate = current.candidates[normalizedResult.candidateIndex];
         if (!candidate) throw new Error("Agent selected an unavailable candidate");
         const automatic = normalizedResult.confidence >= AGENT_AUTOMATIC_THRESHOLD;
+        if (automatic) this.validateReferenceContext(candidate.target);
         proposal = this.appendEvent({
           annotationId,
           sourceRepresentation: current.targetRepresentation,
@@ -802,6 +852,10 @@ export class AnnotationRepository {
         const candidateIndex = input.candidateIndex ?? (proposal.candidates.length === 1 ? 0 : -1);
         const candidate = Number.isSafeInteger(candidateIndex) ? proposal.candidates[candidateIndex] : undefined;
         if (!candidate) throw new Error("Agent proposal acceptance requires a valid candidate index");
+        if (candidate.target.referenceContext && current.sequence > proposal.sequence) {
+          throw new Error("Agent proposal is stale because the annotation resolution changed");
+        }
+        this.validateReferenceContext(candidate.target);
         this.appendEvent({
           annotationId,
           sourceRepresentation: current.targetRepresentation,
@@ -985,6 +1039,7 @@ export class AnnotationRepository {
     content: string | null,
     pdfPages: readonly PdfPageText[],
   ): boolean {
+    if (record.originalTarget.referenceContext) return this.reconcileContextual(record, representation, content, pdfPages);
     const sourceRepresentation = record.currentResolution.targetRepresentation;
     if (sameRepresentation(sourceRepresentation, representation)) return false;
     if (
@@ -1012,7 +1067,104 @@ export class AnnotationRepository {
     return true;
   }
 
+  private reconcileContextual(
+    record: AnnotationRecord,
+    representation: AnnotationRepresentation,
+    content: string | null,
+    pdfPages: readonly PdfPageText[],
+  ): boolean {
+    const original = record.originalTarget;
+    const lastApproval = [...record.resolutionHistory].reverse().find(event =>
+      event.appliesCurrent && event.method.kind === "human" && event.resolvedTarget?.referenceContext);
+    const evidence = lastApproval?.resolvedTarget?.referenceContext ?? original.referenceContext!;
+    const hostSubject = evidence.representation.subject;
+    if (hostSubject.kind !== "block") throw new Error("Reference context must belong to a block");
+    const blocked = record.resolutionHistory.find(event => event.sequence > (lastApproval?.sequence ?? -1) &&
+      event.appliesCurrent && event.method.kind === "codec" && event.method.codecId === "reference-context" && event.status !== "resolved");
+    let located = blocked
+      ? { context: null, status: blocked.status }
+      : referenceContextInBlock(evidence, this.blocks.get(hostSubject.blockId));
+    if (located.context && original.representation.subject.kind === "resource" &&
+      this.referenceContextResourceId(located.context) !== original.representation.subject.resourceId) {
+      located = { context: null, status: "orphaned" };
+    }
+    const sourceRepresentation = record.currentResolution.targetRepresentation;
+    const resourceReconciliation = representation.subject.kind === "resource";
+    const targetRepresentation = resourceReconciliation ? representation : sourceRepresentation;
+    if (!located.context) {
+      if (blocked && sameRepresentation(sourceRepresentation, targetRepresentation)) return false;
+      this.appendEvent({
+        annotationId: record.block.id, sourceRepresentation, targetRepresentation,
+        resolvedTarget: null, method: { ...REFERENCE_CONTEXT_CODEC, method: "source-occurrence-unpositioned" },
+        reviewer: { kind: "system", id: "annotation-repository" }, confidence: null,
+        candidates: [], status: located.status, appliesCurrent: true,
+      });
+      return true;
+    }
+    const context = located.context;
+    if (!resourceReconciliation) {
+      // Host changes cannot repair an unresolved Resource passage.
+      if (!record.resolvedTarget) return false;
+      const target: AnnotationTarget = original.representation.subject.kind === "block"
+        ? { representation: context.representation, anchor: context.anchor, referenceContext: context }
+        : { ...record.resolvedTarget, referenceContext: context };
+      if (JSON.stringify(target) === JSON.stringify(record.resolvedTarget)) return false;
+      this.appendEvent({
+        annotationId: record.block.id, sourceRepresentation, targetRepresentation: target.representation,
+        resolvedTarget: target, method: { ...REFERENCE_CONTEXT_CODEC, method: "unique-source-line" },
+        reviewer: { kind: "system", id: "annotation-repository" }, confidence: 1,
+        candidates: [], status: "resolved", appliesCurrent: true,
+      });
+      return true;
+    }
+    if (sameRepresentation(sourceRepresentation, representation)) {
+      if (record.resolvedTarget && JSON.stringify(record.resolvedTarget.referenceContext) !== JSON.stringify(context)) {
+        return this.reconcileContextual(record, context.representation, context.sourceText, []);
+      }
+      return false;
+    }
+    const result = reanchorAnnotationTarget(record.resolvedTarget ?? original, representation, content, pdfPages);
+    this.appendEvent({
+      annotationId: record.block.id, sourceRepresentation, targetRepresentation: representation,
+      resolvedTarget: result.resolvedTarget ? { ...result.resolvedTarget, referenceContext: context } : null,
+      method: result.method, reviewer: { kind: "system", id: "annotation-repository" },
+      confidence: result.confidence,
+      candidates: result.candidates.map(candidate => ({ ...candidate, target: { ...candidate.target, referenceContext: context } })),
+      status: result.status, appliesCurrent: true,
+    });
+    return true;
+  }
+
+  private referenceContextResourceId(context: AnnotationReferenceContext): string | null {
+    const occurrence = authoredResourceReferenceOccurrences(context.sourceText).find(candidate =>
+      candidate.start === context.anchor.start && candidate.end === context.anchor.end);
+    if (!occurrence || occurrence.kind !== "authored-resource") return null;
+    const lookup = this.resources.resolveAuthoredReference(occurrence.reference);
+    return lookup.kind === "ready" ? lookup.resourceId : null;
+  }
+
+  private validateReferenceContext(target: AnnotationTarget): void {
+    const context = target.referenceContext;
+    if (context) {
+      const hostSubject = context.representation.subject;
+      if (hostSubject.kind !== "block") throw new Error("Reference context must belong to a block");
+      const host = this.blocks.requireActive(hostSubject.blockId);
+      if (host.text !== context.sourceText) throw new Error("Reference context block snapshot is stale");
+      if (target.representation.subject.kind === "resource") {
+        if (this.referenceContextResourceId(context) !== target.representation.subject.resourceId) {
+          throw new Error("Reference context does not resolve to the annotation Resource");
+        }
+      } else if (target.representation.subject.kind !== "block" ||
+        target.representation.subject.blockId !== hostSubject.blockId ||
+        target.representation.contentHash !== context.representation.contentHash ||
+        JSON.stringify(target.anchor) !== JSON.stringify(context.anchor)) {
+        throw new Error("Occurrence-only annotations must target their exact host token");
+      }
+    }
+  }
+
   private validateCapture(target: AnnotationTarget): void {
+    this.validateReferenceContext(target);
     const representation = target.representation;
     if (representation.sourceSnapshot.kind === "block") {
       const block = this.blocks.requireActive(representation.sourceSnapshot.blockId);
