@@ -5,6 +5,7 @@ import {
 } from "./outliner-actions";
 import {
   annotationSourceHash,
+  annotationReferenceContextsEqual,
   createAnnotationReferenceContext,
   createPdfPageRegionAnchor,
   createTextQuoteAnchor,
@@ -88,6 +89,7 @@ import type {
   AnnotationReconcileInput,
   AnnotationReconcileReceipt,
   AnnotationRepresentation,
+  AnnotationReferenceContext,
   AnnotationSubject,
   AnnotationTarget,
   AnnotationThread,
@@ -588,6 +590,7 @@ export interface DetailResourceSelectionCapture {
   readonly kind: "resource";
   readonly resourceId: string;
   readonly representationId: string;
+  readonly referenceContext?: AnnotationReferenceContext;
   readonly start: number;
   readonly end: number;
   readonly exact: string;
@@ -1351,12 +1354,7 @@ export function createDetailController(
     }
     if (left.kind !== "resource" || right.kind !== "resource") return false;
     if (left.resourceId !== right.resourceId) return false;
-    const leftContext = left.referenceContext;
-    const rightContext = right.referenceContext;
-    if (leftContext?.representation.id !== rightContext?.representation.id ||
-      leftContext?.sourceText !== rightContext?.sourceText ||
-      leftContext?.anchor.start !== rightContext?.anchor.start ||
-      leftContext?.anchor.end !== rightContext?.anchor.end) return false;
+    if (!annotationReferenceContextsEqual(left.referenceContext, right.referenceContext)) return false;
     if (!left.revision || !right.revision) return left.revision === right.revision;
     return resourceRevisionRefEquals(left.revision, right.revision);
   };
@@ -2578,6 +2576,8 @@ export function createDetailController(
       kind: "resource",
       resourceId: description.resource.id,
       representationId: representation.id,
+      ...(state.target?.kind === "resource" && state.target.referenceContext
+        ? { referenceContext: state.target.referenceContext } : {}),
       start: offsets.start,
       end: offsets.end,
       exact: text.slice(offsets.start, offsets.end),
@@ -2648,6 +2648,11 @@ export function createDetailController(
       text.slice(capture.start, capture.end) !== capture.exact
     ) {
       state.status = "The Resource representation changed after the selection was captured";
+      return;
+    }
+    if (!annotationReferenceContextsEqual(capture.referenceContext,
+      state.target?.kind === "resource" ? state.target.referenceContext : undefined)) {
+      state.status = "The reference context changed after the selection was captured; select the passage again";
       return;
     }
     await beginComment({ start: capture.start, end: capture.end });

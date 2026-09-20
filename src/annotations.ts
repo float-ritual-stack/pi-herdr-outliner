@@ -437,6 +437,18 @@ export function createAnnotationReferenceContext(
   });
 }
 
+export function annotationReferenceContextsEqual(
+  left: AnnotationReferenceContext | undefined,
+  right: AnnotationReferenceContext | undefined,
+): boolean {
+  if (!left || !right) return left === right;
+  return left.representation.subject.kind === "block" &&
+    right.representation.subject.kind === "block" &&
+    left.representation.subject.blockId === right.representation.subject.blockId &&
+    left.sourceText === right.sourceText &&
+    left.anchor.start === right.anchor.start && left.anchor.end === right.anchor.end;
+}
+
 export function normalizeAnnotationCreateInput(
   input: unknown,
   allowLegacy = false,

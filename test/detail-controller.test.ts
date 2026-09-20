@@ -4975,3 +4975,42 @@ test("a cached file revisit publishes the completed service preview", async () =
   expect(harness.controller.state.referencedFile?.lines).toEqual(["SERVICE FILE"]);
   expect(paints.at(-1)).toEqual(["SERVICE FILE"]);
 });
+
+test("retained pointer selections preserve occurrence or global scope across navigation", async () => {
+  const host = makeBlock({ id: "context-host", updatedAt: "2026-09-19T00:00:00.000Z", text: "First [file::same.md].\nSecond [file::same.md]." });
+  const harness = createHarness(host);
+  const load = harness.effects.loadTarget;
+  const resource = fileResource("same.md");
+  harness.effects.loadTarget = async target => {
+    const loaded = await load(target);
+    if (loaded.kind !== "resource") return loaded;
+    return { ...loaded, description: { ...loaded.description, filesystem: {
+      text: "Shared file passage", contentHash: "a".repeat(64), capturedAt: "2026-09-19T00:00:00.000Z",
+      revision: { resourceId: resource.id, resourceVersion: 1, addressVersion: 1,
+        revision: { kind: "filesystem", mtimeNs: "1", size: "19", contentHash: "a".repeat(64) } },
+    } } };
+  };
+  await harness.controller.initialize();
+  const target = (start: number) => ({ kind: "resource" as const, resourceId: resource.id,
+    referenceContext: createAnnotationReferenceContext(host, start, start + 15) });
+  const first = target(host.text.indexOf("[file::"));
+  const second = target(host.text.lastIndexOf("[file::"));
+  await harness.controller.onServiceEvent(event("ui", { targetClientId: "detail-test", command: "open", target: first }), viewport);
+  const capture = harness.controller.captureResourcePointerSelection({row: 0, column: 0}, {row: 0, column: 5});
+  expect(capture).not.toBeNull();
+  await harness.controller.onServiceEvent(event("ui", { targetClientId: "detail-test", command: "open", target: second }), viewport);
+  await harness.controller.dispatch({ type: "annotation.comment.direct", capture }, viewport);
+  expect(harness.controller.state.mode).toBe("preview");
+  expect(harness.controller.state.annotationDraft).toBeUndefined();
+  expect(harness.controller.state.status).toContain("reference context changed");
+  await harness.controller.onServiceEvent(event("ui", { targetClientId: "detail-test", command: "open", target: { kind: "resource", resourceId: resource.id } }), viewport);
+  await harness.controller.dispatch({ type: "annotation.comment.direct", capture }, viewport);
+  expect(harness.controller.state.annotationDraft).toBeUndefined();
+  const globalCapture = harness.controller.captureResourcePointerSelection({ row: 0, column: 0 }, { row: 0, column: 5 });
+  await harness.controller.onServiceEvent(event("ui", { targetClientId: "detail-test", command: "open", target: first }), viewport);
+  await harness.controller.dispatch({ type: "annotation.comment.direct", capture: globalCapture }, viewport);
+  expect(harness.controller.state.annotationDraft).toBeUndefined();
+  await harness.controller.dispatch({ type: "annotation.comment.direct", capture }, viewport);
+  expect(harness.controller.state.mode).toBe("comment");
+  expect(harness.controller.state.annotationDraft?.target.referenceContext).toEqual(first.referenceContext);
+});

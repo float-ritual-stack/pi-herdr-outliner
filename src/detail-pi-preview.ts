@@ -12,7 +12,7 @@ import {
   VStack,
 } from "@earendil-works/pi-tui";
 import { currentAttentionMark } from "./attention";
-import { annotationSourceHash } from "./annotations";
+import { annotationSourceHash, annotationReferenceContextsEqual } from "./annotations";
 import { decorateAttentionLines } from "./attention-render";
 import { DEFAULT_OUTLINER_ACTION_KEYMAP } from "./outliner-actions";
 import {
@@ -995,6 +995,14 @@ function detailAnnotationGroups(
   const unpositioned: AnnotationThread[] = [];
   for (const thread of state.annotationThreads) {
     let target = thread.resolvedTarget;
+    const originalContext = thread.originalTarget.referenceContext;
+    const currentContext = target?.referenceContext;
+    if (originalContext && (thread.currentResolution.status !== "resolved" || !currentContext ||
+      (displayedResourceTargetId && !annotationReferenceContextsEqual(currentContext,
+        state.target?.kind === "resource" ? state.target.referenceContext : undefined)))) {
+      unpositioned.push(thread);
+      continue;
+    }
     if (displayedResourceTargetId) {
       target = [...thread.resolutionHistory]
         .reverse()
@@ -1002,7 +1010,8 @@ function detailAnnotationGroups(
         .find((candidate) =>
           candidate?.representation.id === displayedResourceId &&
           candidate.representation.subject.kind === "resource" &&
-          candidate.representation.subject.resourceId === displayedResourceTargetId
+          candidate.representation.subject.resourceId === displayedResourceTargetId &&
+          (!originalContext || annotationReferenceContextsEqual(candidate.referenceContext, currentContext))
         ) ?? null;
     } else if (thread.currentResolution.status !== "resolved") {
       target = null;

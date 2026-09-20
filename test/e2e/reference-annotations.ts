@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import type { AnnotationRecord, AnnotationThread, Block, OutlinerClientRegistration } from "../../src/types";
 import { runHerdrScenario } from "./herdr-runner";
 
@@ -95,6 +96,46 @@ const result = await runHerdrScenario({
     assert.equal((s.database.query("SELECT count(*) AS n FROM resources").get() as { n: number }).n, 1);
     await s.checkpoint("04-global-and-contextual-comments");
 
+    const openOccurrence = async (referenceContext: NonNullable<typeof target.referenceContext>) => {
+      await s.client.request({ action: "ui.command.send", command: {
+        targetClientId: registration.clientId, command: "replace",
+        target: { kind: "resource", resourceId: target.resourceId, referenceContext },
+      } });
+      await s.waitFor("occurrence target applied", current, c => c.currentTarget?.kind === "resource" &&
+        c.currentTarget.referenceContext?.anchor.start === referenceContext.anchor.start);
+      await s.waitVisible(detail, "Shared file passage");
+    };
+    await openOccurrence(first.originalTarget.referenceContext!);
+    await s.focus(detail);
+    const pointerFrame = await s.waitFor("attached Resource frame", () => terminal.visible(),
+      frame => frame.includes("Shared file passage") && frame.includes("line 3"));
+    const lines = pointerFrame.split("\n");
+    const quote = "Shared file passage";
+    const row = lines.findIndex(line => line.includes(quote));
+    const column = visibleWidth(lines[row]!.slice(0, lines[row]!.indexOf(quote)));
+    await terminal.write(`\u001b[<0;${column + 1};${row + 1}M`);
+    await terminal.write(`\u001b[<32;${column + quote.length + 1};${row + 1}M`);
+    await terminal.write(`\u001b[<0;${column + quote.length + 1};${row + 1}m`);
+    // A visible composer acknowledges the PTY selection before a separate RPC
+    // channel navigates. Keep the drag and initial key on the same input stream.
+    await terminal.write("c");
+    await s.waitVisible(detail, "Comment on this reference");
+    await terminal.write("\u001b");
+    await s.waitVisible(detail, "Comment cancelled");
+    await s.focus(detail);
+    await openOccurrence(second.originalTarget.referenceContext!);
+    await s.keys(detail, "c");
+    await s.waitVisible(detail, "reference context changed");
+    assert.equal((await hostThreads()).length, 3);
+    await s.checkpoint("04b-pointer-selection-cannot-switch-occurrence");
+    await openOccurrence(first.originalTarget.referenceContext!);
+    await s.keys(detail, "c");
+    await s.waitVisible(detail, "Comment on this reference");
+    await terminal.write("\u001b");
+    await s.waitVisible(detail, "Comment cancelled");
+    await s.record("pointer-occurrence-evidence", { row, column, quote,
+      selectedContext: first.originalTarget.referenceContext, rejectedContext: second.originalTarget.referenceContext });
+
     await goto(); await s.keys(detail, "e"); await s.waitVisible(detail, "⌃S save");
     await terminal.write("\u001ba");
     await s.text(detail, "Occurrence annotation fixture\n\nFirst use [file::same.md].\nFirst use [file::same.md].");
@@ -106,9 +147,12 @@ const result = await runHerdrScenario({
     assert.deepEqual((await thread(second.block.id)).originalTarget, second.originalTarget);
     await s.waitVisible(detail, "Unpositioned comments");
     await s.checkpoint("05-ambiguous-and-deleted-uses-recoverable");
+    await openOccurrence(second.originalTarget.referenceContext!);
+    await s.waitVisible(detail, "Unpositioned comments (1)");
+    await s.checkpoint("05b-resource-history-does-not-restore-deleted-occurrence");
     await s.record("reference-annotation-result", { hostId: host.id, first, second, passage, changed,
       resourceThreads, input: "Real Properties occurrence selection, comment typing/save/reopen, Resource selection, source edit causing duplicate/deleted references",
-      limits: "File-global view set up through existing UI command; no native mouse claim. Restart/replies/lifecycle additionally covered through public repository tests and PIE-265." });
+      limits: "File-global and pointer-transition views set up through existing UI commands. Native pointer drag and comment/cancel keys exercised. Restart/replies/lifecycle additionally covered through public protocol tests and PIE-265." });
   },
 });
 process.stdout.write(`${JSON.stringify(result)}\n`);
