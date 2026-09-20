@@ -586,7 +586,11 @@ independent Tree selection, Detail target/revision and focused region; explicit
 commands and attention reveal/focus name the target region. `test:e2e:composed`
 checks real editing, undo/redo, cancellation, dirty keyboard close, preserved
 Tree scroll, narrow/wide resize, registry outage, detached move/close and native
-Resource pointer coordinates. The retained public-protocol regression also
+Resource pointer coordinates. Its `composed-boundaries.ts` journey holds actual
+Tree publication and edit-lock replies, proving publication can complete while
+Detail's ordered lane is occupied without changing the draft's target. It also
+opens generated Tree Outlinks and Resources in the local primary reader during
+registry failure, with no detached reader. The retained public-protocol regression
 checks collection protects a Resource revision while the composed Detail owns it.
 
 Scope boundary: external Herdr copy-mode selection lacks internal-region

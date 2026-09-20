@@ -9,6 +9,7 @@ import {
   mkdir,
   mkdtemp,
   readdir,
+  rename,
   readFile,
   realpath,
   stat,
@@ -20,7 +21,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { OutlinerClient } from "../../src/client";
 import { resolvePaths } from "../../src/paths";
 import { readHerdrPaneSnapshot, type HerdrPaneSnapshot } from "../../src/herdr-comment-selection";
-import { forwardService, type ForwardedRequest, type OptionalResponseMatch, type ResponseBarrier } from "./service-forwarder";
+import { forwardService, type ForwardedRequest, type OptionalResponseMatch, type ComposedResponseMatch, type ResponseBarrier } from "./service-forwarder";
 import {
   OUTLINER_PROTOCOL_VERSION,
   type OutlinerClientRegistration,
@@ -50,6 +51,8 @@ export interface HerdrScenarioSession {
   forwardedTreeRequests(): readonly ForwardedRequest[];
   forwardedDetailRequests(): readonly ForwardedRequest[];
   holdDetailResponse(match: OptionalResponseMatch): ResponseBarrier;
+  enableComposedResponseBarriers(): Promise<void>;
+  holdComposedResponse(match: ComposedResponseMatch): ResponseBarrier;
   focus(paneId: string): Promise<void>;
   keys(paneId: string, ...keys: string[]): Promise<void>;
   text(paneId: string, text: string): Promise<void>;
@@ -608,7 +611,11 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
     treeForwarder: null,
     detailForwarder: null,
   };
-  const fault = { proxy: null as Awaited<ReturnType<typeof registryFaultProxy>> | null };
+  const fault = {
+    proxy: null as Awaited<ReturnType<typeof registryFaultProxy>> | null,
+    composedForwarder: null as Awaited<ReturnType<typeof forwardService>> | null,
+    serviceSocket: "", serviceUpstream: "",
+  };
   let serverLaunchError: Error | null = null;
   let clientOutput = "";
   let panes: HerdrScenarioSession["panes"] | null = null;
@@ -925,6 +932,26 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
       holdDetailResponse(match) {
         if (!resources.detailForwarder) throw new Error("Detail response barriers require the private forwarded transport");
         return resources.detailForwarder.holdNext(match);
+      },
+      async enableComposedResponseBarriers() {
+        if (scenarioInput.layout !== "composed" || fault.composedForwarder) {
+          throw new Error("Response barriers require one owned composed surface");
+        }
+        const socket = resolvePaths({OUTLINER_STATE_DIR: outlinerState, OUTLINER_WORKSPACE_ROOT: projectRoot}).socket;
+        if (!resolve(socket).startsWith(`${resolve(runRoot)}${sep}`) || !(await stat(socket)).isSocket()) {
+          throw new Error("Composed response barriers require this run's service socket");
+        }
+        const upstream = join(runRoot, "service-upstream.sock");
+        await rename(socket, upstream);
+        try { fault.composedForwarder = await forwardService(socket, upstream); }
+        catch (error) { await rename(upstream, socket); throw error; }
+        fault.serviceSocket = socket;
+        fault.serviceUpstream = upstream;
+        await artifacts.event("composed-forwarder-installed", {socket, upstream});
+      },
+      holdComposedResponse(match) {
+        if (!fault.composedForwarder) throw new Error("Enable the private composed response transport first");
+        return fault.composedForwarder.holdNext(match);
       },
       async openRemoteBrowsingContext({ renderer = "pi-tui", treeTransport = "direct", detailTransport = "direct" } = {}) {
         if (extraPanes.remoteTree) throw new Error("This fixture already owns a remote browsing context");
@@ -1495,6 +1522,14 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
       } finally {
         await forwarder.close().catch(error => cleanupErrors.push(error));
       }
+    }
+    if (fault.composedForwarder) {
+      try {
+        await artifacts.write("forwarded-composed-requests.json", fault.composedForwarder.measurements());
+        await fault.composedForwarder.close();
+        await rename(fault.serviceUpstream, fault.serviceSocket);
+        await artifacts.event("composed-forwarder-restored", {socket: fault.serviceSocket});
+      } catch (error) { cleanupErrors.push(error); }
     }
     if (resources.client) {
       const ownedClient = resources.client;

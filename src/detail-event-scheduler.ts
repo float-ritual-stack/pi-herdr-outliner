@@ -34,6 +34,10 @@ export class DetailEventScheduler {
       return;
     }
 
+    this.schedulePreview(() => this.options.handle(event));
+  }
+
+  schedulePreview(task: () => Promise<void>): void {
     this.cancelPreview?.();
     let obsolete = false;
     let active = false;
@@ -45,7 +49,7 @@ export class DetailEventScheduler {
       if (obsolete) return;
       active = true;
       try {
-        await this.options.handle(event);
+        await task();
       } finally {
         active = false;
       }

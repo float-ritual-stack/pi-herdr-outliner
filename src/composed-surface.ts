@@ -1,7 +1,8 @@
 import { HStack, type Component } from "@earendil-works/pi-tui";
 import type { OutlinerRequester } from "./client-target";
 import { PiDetailInputStreamDecoder } from "./detail-pi-input";
-import type { TreeNavigation } from "./navigation-routes";
+import { PRIMARY_DETAIL_LOCKED_ERROR, type TreeNavigation } from "./navigation-routes";
+import type { createDetailController, DetailViewport } from "./detail-controller";
 import type { OutlinerActionKeymap } from "./outliner-actions";
 import { navigateOutlinerLink } from "./outliner-links";
 import { openCapturePopup, openVirtualBranchNavigatorPopup } from "./pane-control";
@@ -14,7 +15,58 @@ import {
   type TreeMouseTarget,
 } from "./tree-mouse";
 import { renderTreeFrame } from "./tree-renderer";
-import type { OutlinerNavigationTarget, OutlinerRegion } from "./types";
+import type { BrowsingContextPublication, OutlinerNavigationTarget, OutlinerRegion, OutlinerUiCommand } from "./types";
+
+/** Tree and Detail retain distinct selections even when they share one client. */
+export function composedTreeNavigation(options: {
+  client: OutlinerRequester;
+  clientId: string;
+  contextId: string;
+  detail: Pick<ReturnType<typeof createDetailController>, "state" | "handleUiCommand">;
+  viewport(): DetailViewport;
+  revealBlock(blockId: string): Promise<void>;
+  schedulePreview(task: () => Promise<void>): void;
+}): TreeNavigation {
+  const {client, clientId, contextId, detail} = options;
+  // Tree's source is its own occurrence, not the primary Detail's document.
+  const resolve: TreeNavigation["resolve"] = async (intent) => {
+    if (intent !== "reveal" && detail.state.connectionMode === "locked") {
+      throw new Error(PRIMARY_DETAIL_LOCKED_ERROR);
+    }
+    return {sourceClientId: clientId, targetClientId: clientId, intent, resolution: "context", targetRegion: intent === "reveal" ? "tree" : "detail"};
+  };
+  return {
+    readerLabel: "primary Detail",
+    async publish(target, previewTarget, rowId) {
+      const publication = await client.request<BrowsingContextPublication>({action: "browsing-context.publish", sourceClientId: clientId, contextId, target, dispatchPreview: false});
+      await client.request({action: "clients.update", clientId, treeSelection: target && rowId ? {target, rowId} : null});
+      if (target && previewTarget) {
+        // Publication runs outside the input lane. Queue the mutation without
+        // awaiting it: Tree can flush publications from inside that same lane.
+        options.schedulePreview(() => detail.handleUiCommand({command: "preview", targetClientId: clientId, targetRegion: "detail", target}, options.viewport()));
+      }
+      return publication;
+    },
+    resolve,
+    async dispatch(target, intent) {
+      const destination = await resolve(intent);
+      let command: OutlinerUiCommand;
+      if (intent === "reveal") {
+        if (target.kind !== "block") throw new Error("Tree can reveal only a block target");
+        command = {command: "reveal", targetClientId: clientId, targetRegion: "tree", target};
+        await options.revealBlock(target.blockId);
+      } else {
+        command = {command: intent, targetClientId: clientId, targetRegion: "detail", target};
+        await detail.handleUiCommand(command, options.viewport());
+      }
+      return {...destination, command};
+    },
+    async edit(blockId) {
+      await resolve("open");
+      await detail.handleUiCommand({command: "edit", targetClientId: clientId, targetRegion: "detail", target: {kind: "block", blockId}}, options.viewport());
+    },
+  };
+}
 
 export function composedWidths(width: number): { tree: number; detail: number; detailX: number } {
   const tree = Math.max(1, Math.min(40, Math.floor((width - 1) / 3)));

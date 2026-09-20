@@ -17,6 +17,8 @@ import {
   type DetailReadyDocument,
   type DetailViewport,
 } from "../src/detail-controller";
+import { composedTreeNavigation } from "../src/composed-surface";
+import { DetailEventScheduler } from "../src/detail-event-scheduler";
 import { OutlinerActionKeymap } from "../src/outliner-actions";
 import { detailBacklinkRegions } from "../src/detail-pi-preview";
 import { detailPropertyInspectorRegions } from "../src/detail-pi-renderer";
@@ -4900,4 +4902,51 @@ test("a cached file revisit publishes the completed service preview", async () =
   }), viewport);
   expect(harness.controller.state.referencedFile?.lines).toEqual(["SERVICE FILE"]);
   expect(paints.at(-1)).toEqual(["SERVICE FILE"]);
+});
+
+
+test("composed Tree publication settles during an edit lock without changing the draft owner", async () => {
+  const original = makeBlock({id: "source-A", text: "DRAFT-FROM-SOURCE-A"});
+  const harness = createHarness(original);
+  await harness.controller.initialize();
+  let lane = Promise.resolve();
+  const scheduler = new DetailEventScheduler({
+    clientId: "detail-test",
+    enqueue(task) { lane = lane.then(task); },
+    handle: event => harness.controller.onServiceEvent(event, viewport),
+    supersedePreview: () => harness.controller.supersedePassivePreview(),
+  });
+  const lock = Promise.withResolvers<void>();
+  const lockEntered = Promise.withResolvers<void>();
+  harness.effects.setLocked = async () => { lockEntered.resolve(); await lock.promise; };
+  const navigation = composedTreeNavigation({
+    client: {async request<T>() { return {} as T; }},
+    clientId: "detail-test", contextId: "context-test", detail: harness.controller,
+    viewport: () => viewport, revealBlock: async () => {},
+    schedulePreview: task => scheduler.schedulePreview(task),
+  });
+  scheduler.scheduleWork(() => harness.controller.dispatch({type: "edit.begin"}, viewport));
+  await lockEntered.promise;
+  // Tree flush can wait for this publication while the edit occupies the lane.
+  // It must settle without awaiting the queued local preview.
+  await navigation.publish({kind: "block", blockId: "source-B"}, true, "row-B");
+  expect(harness.controller.state.context.selected?.id).toBe(original.id);
+  lock.resolve();
+  await lane;
+  scheduler.scheduleWork(() => harness.controller.dispatch({type: "buffer.save"}, viewport));
+  await lane;
+  expect(harness.calls.updates[0]).toEqual({blockId: original.id, text: original.text, expectedRevision: original.revision});
+});
+
+test("composed Tree preserves its source occurrence while opening the local Detail", async () => {
+  const harness = createHarness(makeBlock());
+  await harness.controller.initialize();
+  const navigation = composedTreeNavigation({
+    client: {async request(input) { throw new Error(`Unexpected host routing: ${input.action}`); }},
+    clientId: "detail-test", contextId: "context-test", detail: harness.controller,
+    viewport: () => viewport, revealBlock: async () => {}, schedulePreview() {},
+  });
+  expect((await navigation.resolve("open", {preserveSource: true})).targetClientId).toBe("detail-test");
+  await navigation.dispatch({kind: "block", blockId: "linked-target"}, "open", {preserveSource: true});
+  expect(harness.controller.state.context.selected?.id).toBe("linked-target");
 });

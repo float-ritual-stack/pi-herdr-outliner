@@ -17,6 +17,11 @@ export interface OptionalResponseMatch {
   contains: string;
 }
 
+export type ComposedResponseMatch = {
+  action: "browsing-context.publish" | "clients.update";
+  contains: string;
+};
+
 export interface ResponseBarrier {
   readonly state: "armed" | "requested" | "held" | "released";
   readonly received: Promise<void>;
@@ -24,13 +29,13 @@ export interface ResponseBarrier {
 }
 
 // Private clients use the existing newline protocol. Only explicitly armed
-// optional-read replies can be held; subscription events always pass through.
+// replies can be held; subscription events always pass through.
 export async function forwardService(socketPath: string, upstreamPath: string) {
   const sockets = new Set<Socket>();
   const requests: ForwardedRequest[] = [];
   const errors: string[] = [];
   const barriers: Array<{
-    match: OptionalResponseMatch;
+    match: OptionalResponseMatch | ComposedResponseMatch;
     state: ResponseBarrier["state"];
     deliver: ((error?: string) => void) | null;
     received: ReturnType<typeof Promise.withResolvers<void>>;
@@ -112,7 +117,7 @@ export async function forwardService(socketPath: string, upstreamPath: string) {
   });
   return {
     socketPath,
-    holdNext(match: OptionalResponseMatch): ResponseBarrier {
+    holdNext(match: OptionalResponseMatch | ComposedResponseMatch): ResponseBarrier {
       if (!match.contains || barriers.length >= 16) throw new Error("Invalid or excessive response barriers");
       const barrier: typeof barriers[number] = { match, state: "armed", deliver: null, received: Promise.withResolvers<void>() };
       barriers.push(barrier);

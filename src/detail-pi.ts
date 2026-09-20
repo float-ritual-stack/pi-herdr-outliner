@@ -1,5 +1,5 @@
-import { ComposedLayout, ComposedTree, composedPointer, composedWidths } from "./composed-surface";
-import type { TreeNavigation, NavigationRouteOptions } from "./navigation-routes";
+import { ComposedLayout, ComposedTree, composedTreeNavigation, composedPointer, composedWidths } from "./composed-surface";
+import type { NavigationRouteOptions } from "./navigation-routes";
 import { getProperty } from "./properties";
 import { setTimeout as sleep } from "node:timers/promises";
 import { getMarkdownTheme, initTheme } from "@earendil-works/pi-coding-agent";
@@ -87,7 +87,6 @@ import {
 import { parseOutlinerLinkUri, resolveOutlinerLinkTarget } from "./outliner-links";
 import {
   dispatchNavigation,
-  PRIMARY_DETAIL_LOCKED_ERROR,
   focusTreeForClient,
   resolveNavigationDestination,
 } from "./navigation-routes";
@@ -118,11 +117,9 @@ import {
   type BookmarkStatus,
   type BookmarkToggleReceipt,
   type BrowsingContextState,
-  type BrowsingContextPublication,
   type OutlinerNavigationIntent,
   type OutlinerNavigationResolution,
   type OutlinerRegion,
-  type OutlinerUiCommand,
   type InternResourceReceipt,
   type PageAddressCollection,
   type OutlinerNavigationTarget,
@@ -421,10 +418,10 @@ const effects: DetailEffects = {
     await client.request({ action: "clients.update", clientId, currentTarget });
   },
   dispatchNavigation(target, intent, options) {
-    return composed ? localNavigation.dispatch(target, intent, options) : dispatchNavigation(client, clientId, target, intent, options);
+    return composed && !options?.preserveSource ? localNavigation.dispatch(target, intent) : dispatchNavigation(client, clientId, target, intent, options);
   },
   resolveNavigation(intent, options) {
-    return composed ? localNavigation.resolve(intent, options) : resolveNavigationDestination(client, clientId, intent, options);
+    return composed ? localResolution(intent, options) : resolveNavigationDestination(client, clientId, intent, options);
   },
   async resolveReferences(text) {
     return client.request<ResolvedBlockReferences>({ action: "references.resolve", text });
@@ -678,39 +675,13 @@ function requestStop(): void {
 
 async function localResolution(intent: OutlinerNavigationIntent, options: NavigationRouteOptions = {}): Promise<OutlinerNavigationResolution> {
   if (options.preserveSource) return resolveNavigationDestination(client, clientId, intent, options);
-  if (intent !== "reveal" && controller.state.connectionMode === "locked") {
-    throw new Error(PRIMARY_DETAIL_LOCKED_ERROR);
-  }
-  return {sourceClientId: clientId, targetClientId: clientId, intent, resolution: "context", targetRegion: intent === "reveal" ? "tree" : "detail"};
+  return localNavigation.resolve(intent);
 }
-const localNavigation: TreeNavigation = {
-  readerLabel: "primary Detail",
-  async publish(target, previewTarget, rowId) {
-    const publication = await client.request<BrowsingContextPublication>({action: "browsing-context.publish", sourceClientId: clientId, contextId: browsingContextId, target, dispatchPreview: false});
-    await client.request({action: "clients.update", clientId, treeSelection: target && rowId ? {target, rowId} : null});
-    if (target && previewTarget) await controller.handleUiCommand({command: "preview", targetClientId: clientId, targetRegion: "detail", target}, viewport());
-    return publication;
-  },
-  resolve: localResolution,
-  async dispatch(target, intent, options) {
-    if (options?.preserveSource) return dispatchNavigation(client, clientId, target, intent, options);
-    const destination = await localResolution(intent, options);
-    let command: OutlinerUiCommand;
-    if (intent === "reveal") {
-      if (target.kind !== "block") throw new Error("Tree can reveal only a block target");
-      command = {command: "reveal", targetClientId: clientId, targetRegion: "tree", target};
-      await composedTree!.controller.revealBlock(target.blockId);
-    } else {
-      command = {command: intent, targetClientId: clientId, targetRegion: "detail", target};
-      await controller.handleUiCommand(command, viewport());
-    }
-    return {...destination, command};
-  },
-  async edit(blockId) {
-    await localResolution("open");
-    await controller.handleUiCommand({command: "edit", targetClientId: clientId, targetRegion: "detail", target: {kind: "block", blockId}}, viewport());
-  },
-};
+const localNavigation = composedTreeNavigation({
+  client, clientId, contextId: browsingContextId, detail: controller, viewport,
+  revealBlock: (blockId) => composedTree!.controller.revealBlock(blockId),
+  schedulePreview: (task) => serviceEventScheduler.schedulePreview(task),
+});
 const composedTree = composed ? new ComposedTree({
   client, clientId, contextId: browsingContextId, workspaceRoot: paths.workspaceRoot,
   navigation: localNavigation, actionKeymap,

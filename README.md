@@ -61,9 +61,12 @@ reveal/focus requests must name `targetRegion: "tree" | "detail"` for this clien
 Walkthrough document steps target Detail. Resource retention uses Detail’s target,
 including its exact revision, regardless of which region has keyboard focus.
 
-Run `bun run test:e2e:composed` for the isolated actual-application journey. It
-records frames, state, native pointer input, registry fault/restoration, detached
-movement/closure and process cleanup. No shared user host is used.
+Run `bun run test:e2e:composed` for the isolated actual-application journeys.
+They record frames, state, native pointer input, registry fault/restoration,
+detached movement/closure and process cleanup. A held publication/edit-lock
+interleaving verifies that delayed Tree previews cannot change a draft's owner.
+Generated Outlinks and Resources also open locally during discovery failure.
+No shared user host is used.
 
 ## Current capabilities
 
