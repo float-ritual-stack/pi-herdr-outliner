@@ -8,6 +8,17 @@ import {
 } from "../src/property-inspector";
 
 const BLOCK_ID = "1176c501-63ed-4e57-ae04-c110ad591dc2";
+
+test("Resource properties retain separate actionable occurrences across metadata and prose", () => {
+  const text = "References [file::same.md]\n\nRead [file::same.md] again [file::same.md].\n`[file::literal.md]`";
+  const entries = createPropertyInspectorModel(BLOCK_ID, text).entries;
+  expect(entries).toHaveLength(3);
+  expect(entries.map(entry => entry.target?.kind)).toEqual([
+    "resource-reference", "resource-reference", "resource-reference",
+  ]);
+  expect(new Set(entries.map(entry => entry.occurrenceId)).size).toBe(3);
+  for (const entry of entries) expect(text.slice(entry.start, entry.end)).toBe("[file::same.md]");
+});
 const DEPENDENCY_IDS = [
   "a655c62d-4a19-4435-8a4b-9e063517e8d2",
   "92b957ce-d70f-471b-ac58-df4a5bda4068",

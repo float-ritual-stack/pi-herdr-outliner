@@ -483,6 +483,22 @@ The complete authored metadata remains available in expanded rows and the
 property inspector. Detail also right-aligns the clickable `🔓`/`🔒` lock and
 `[⋯]` action controls.
 
+Resource properties use the same activation for metadata and inline mentions.
+Pi Detail links the authored `[file::…]`, `[web::…]`, `[jira::…]`, and `[app::…]`
+tokens without changing source text. Properties exposes every occurrence,
+including repeated mentions of one Resource, in both Detail renderers. Press
+`o` on a document with several Resource references to choose one in Properties;
+`Tab` selects an occurrence and `o` opens the destination chooser. Displaying or
+copying a reference never creates a Resource. Activation verifies the source
+revision and span before using the service's existing follow/create operation.
+After a source edit, stale links require reopening the block.
+
+The legacy file preview still honors block-level `line-start`/`line-end`.
+Explicit Resource navigation opens the complete Resource; those block-wide
+ranges are not applied to an arbitrary inline mention. References projected
+from embedded content without a known source mapping remain nonactionable in
+the host's body; open their source block to act on its actual occurrences.
+
 Tree rows also apply a fixed presentation-only treatment to direct canonical
 `status` and `work-stage` values. Blocked, doing/active, review/validate,
 done/complete, and unprioritized rows receive distinct one-column glyphs and

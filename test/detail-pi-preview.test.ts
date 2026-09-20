@@ -1,3 +1,4 @@
+import { detailPropertyInspectorRegions } from "../src/property-inspector";
 import {
   getCapabilities,
   getOsc8LinkAtColumn,
@@ -30,7 +31,6 @@ import {
   sanitizeMarkdownDocument,
 } from "../src/detail-pi-preview";
 import {
-  detailPropertyInspectorRegions,
   renderPropertyInspectorDocument,
 } from "../src/detail-pi-renderer";
 import { createPropertyInspectorModel } from "../src/property-inspector";
@@ -39,7 +39,7 @@ import {
   resolvePreviewPointerAction,
   togglePreviewRegionDisclosure,
 } from "../src/detail-preview-regions";
-import { outlinerLinkUri } from "../src/outliner-links";
+import { outlinerLinkUri, parseOutlinerLinkUri } from "../src/outliner-links";
 import {
   deriveResourceCapabilityReport,
   type Resource,
@@ -457,6 +457,34 @@ function renderedDocument(layout: DetailPiPreviewLayout, width: number): string[
 }
 
 describe("Pi Markdown detail preview", () => {
+  test("renders distinct Resource occurrence links and renews them after metadata-only edits", () => {
+    const capabilities = getCapabilities();
+    setCapabilities({ ...capabilities, hyperlinks: true });
+    try {
+      const source = "References [status::open]\n\nFirst [file::same.md] and second [file::same.md].";
+      const detail = state(source, source);
+      detail.context.selected!.id = "source-block-001";
+      const layout = new DetailPiPreviewLayout(detail, plainMarkdownTheme, true);
+      const targets = () => {
+        layout.syncState();
+        const line = layout.markdown.render(120).find(row => stripTerminalSequences(row).includes("First"))!;
+        const visible = stripTerminalSequences(line);
+        return [visible.indexOf("file::"), visible.lastIndexOf("file::")].map(column =>
+          parseOutlinerLinkUri(getOsc8LinkAtColumn(line, column)!));
+      };
+      const initial = targets();
+      expect(initial.map(target => target.occurrence?.start)).toEqual([
+        source.indexOf("[file::same.md]"), source.lastIndexOf("[file::same.md]"),
+      ]);
+      detail.context.selected!.text = source.replace("open", "done");
+      detail.context.selected!.revision += 1;
+      detail.projectedSelectedText = detail.context.selected!.text;
+      detail.resolvedSelectedText = detail.context.selected!.text;
+      expect(targets().map(target => target.occurrence?.revision)).toEqual([2, 2]);
+    } finally {
+      setCapabilities(capabilities);
+    }
+  });
   test("does not report a missing reference before resolution has completed", () => {
     const source = "Related ((550e8400-e29b-41d4-a716-446655440123|Reference label))";
     const detail = state(source, source);
