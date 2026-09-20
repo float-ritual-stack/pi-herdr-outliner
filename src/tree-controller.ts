@@ -338,6 +338,10 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
           ? { ...item, label: hiding ? "Hide authored links" : "Show authored links" }
           : item
       );
+      if (isVirtualBranchOccurrence(selected) &&
+        (!isVirtualBranchRootOccurrence(selected) || branchStates.get(selected.viewId)?.config?.sort)) {
+        items = items.filter(item => item.id !== "tree.reorder.up" && item.id !== "tree.reorder.down");
+      }
     } else {
       items = items.filter((item) => {
         if (GENERATED_ROW_DISABLED_ACTIONS[item.id]) return false;

@@ -2886,6 +2886,8 @@ describe("createTreeController", () => {
       "Virtual branch is sorted by updated desc; manual reorder is disabled",
     );
     expect(fake.calls.some((call) => call.action === "virtual.occurrences.reorder")).toBe(false);
+    await controller.handleAction("tree.menu.open");
+    expect(controller.view().actionMenuItems?.some(item => item.id.startsWith("tree.reorder."))).toBe(false);
   });
 
   test("keeps occurrence hierarchy effects disabled and left selects its definition", async () => {
@@ -2974,6 +2976,9 @@ describe("createTreeController", () => {
       "Virtual occurrence reorder is disabled; canonical hierarchy unchanged",
     );
     expect(fake.calls.some((call) => call.action === "virtual.occurrences.reorder")).toBe(false);
+    await controller.handleAction("tree.menu.open");
+    expect(controller.view().actionMenuItems?.some(item => item.id.startsWith("tree.reorder."))).toBe(false);
+    await controller.handleKeypress("", { name: "escape" }, "pass");
 
     await controller.handleKeypress("", { name: "left" }, "pass");
     expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe(rootRowId);
