@@ -1558,6 +1558,8 @@ export class AnnotationRepository {
         )
       );
       CREATE INDEX IF NOT EXISTS annotation_targets_block ON annotation_targets(block_id, created_at, annotation_block_id);
+      CREATE INDEX IF NOT EXISTS annotation_targets_reference_context ON annotation_targets(
+        json_extract(original_target_json, '$.referenceContext.representation.subject.blockId'));
       CREATE INDEX IF NOT EXISTS annotation_targets_resource ON annotation_targets(resource_id, created_at, annotation_block_id);
       CREATE INDEX IF NOT EXISTS annotation_targets_legacy_file ON annotation_targets(legacy_source_block_id, legacy_file_path, annotation_block_id);
       CREATE TRIGGER IF NOT EXISTS annotation_targets_immutable
