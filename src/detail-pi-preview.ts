@@ -764,7 +764,7 @@ function annotationPanelLines(
   if (placement === "unpositioned") {
     const anchor = thread.originalTarget.anchor;
     if ("exact" in anchor && anchor.exact) {
-      body.unshift(...anchor.exact.split(/\r?\n/).map((line) => `> ${escapeGeneratedMarkdown(line)}`), "");
+      body.splice(3, 0, ...anchor.exact.split(/\r?\n/).map((line) => `> ${escapeGeneratedMarkdown(line)}`), "");
     }
     body.push("", `[Open thread](${outlinerLinkUri("block", thread.block.id)})`);
   }

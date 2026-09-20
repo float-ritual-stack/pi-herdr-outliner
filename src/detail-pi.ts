@@ -1271,6 +1271,7 @@ const composer = new BufferComposer(() => {
     commitAction: "Ctrl+S",
     cancelAction: "Esc",
     viewportOffset: controller.state.editorVisualOffset,
+    status: controller.state.status,
   };
 });
 let layoutRoot:

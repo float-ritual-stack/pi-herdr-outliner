@@ -1,3 +1,4 @@
+import { createPropertyInspectorModel } from "../src/property-inspector";
 import { expect, test } from "bun:test";
 import { emptyAttentionState } from "../src/attention";
 import { OutlinerActionKeymap, type OutlinerActionMenuItem } from "../src/outliner-actions";
@@ -344,6 +345,7 @@ test("resolves shared chords by ordered Detail context", async () => {
   const detailState = state();
   detailState.mode = "preview";
   detailState.propertyInspector.expanded = true;
+  detailState.propertyInspector.model = createPropertyInspectorModel("source-block", "Source [status::open]");
   detailState.backlinks.expanded = true;
   const detail = harness(detailState, false, { actionKeymap });
 
@@ -669,6 +671,7 @@ test("maps property inspector disclosure, pane, grouping, filtering, target, and
   const previewState = state();
   previewState.mode = "preview";
   previewState.propertyInspector.expanded = true;
+  previewState.propertyInspector.model = createPropertyInspectorModel("source-block", "Source [related-to::target-block]");
   previewState.previewRegions = {
     regions: [{
       id: "property:source:related-to:0:10-20",
@@ -780,4 +783,27 @@ test("an active destination chooser owns input before keymap actions", async () 
   ]);
   expect(stateHarness.stops.count).toBe(1);
   expect(stateHarness.intents).toEqual([]);
+});
+
+test("routes thread keys to navigation, root reply and lifecycle without entering source editing", async () => {
+  const detail = state();
+  detail.mode = "preview";
+  const h = harness(detail, false);
+  await h.press({ name: "]" }, "]");
+  await h.press({ name: "[" }, "[");
+  await h.press({ name: "c", shift: true }, "C");
+  await h.press({ name: "d", shift: true }, "D");
+  expect(h.intents).toEqual([
+    { type: "annotation.thread.move", delta: 1 }, { type: "annotation.thread.move", delta: -1 },
+    { type: "annotation.thread.reply" }, { type: "annotation.thread.lifecycle" },
+  ]);
+});
+
+test("an absent Properties inspector cannot steal Resource evidence scrolling", async () => {
+  const detail = { ...state(), mode: "preview" as const, target: { kind: "resource" as const, resourceId: "resource-1" } };
+  detail.propertyInspector.expanded = true;
+  detail.propertyInspector.model = null;
+  const h = harness(detail, false);
+  await h.press({ name: "g", shift: true }, "G");
+  expect(h.intents).toEqual([{ type: "preview.navigate", direction: "bottom" }]);
 });

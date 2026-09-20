@@ -775,6 +775,21 @@ later unique survivor does not silently inherit an earlier comment. Reattachment
 never erases the original target or history. Contextual Resource reveals request
 the recorded revision; unavailable old file bytes are not replaced by newer bytes.
 
+In Pi Detail, `[` and `]` select the previous or next comment in document order,
+then the unpositioned threads. Navigation wraps with an explicit status. The
+selected thread expands beside its passage or in **Unpositioned comments**;
+its pointer controls perform the same operations. `Shift+C` opens a multiline
+reply to that root thread. `Shift+D` resolves or reopens it. User and agent
+replies appear together. These actions retain the current document and reader
+viewport; explicit thread navigation scrolls its controls into view.
+
+Comments identify **Resource-wide**, **This reference**, or **Other reference**
+scope. Other occurrences and lost/ambiguous anchors stay reachable, with their
+original evidence. Failed saves remain in the composer with a visible status;
+`Esc` cancels the reply without returning focus to Tree. The ANSI annotation
+reader shares thread actions and includes replies; `G` reaches the final evidence
+and body. Its ordinary source preview retains the compact comment summary.
+
 ### Detail edit and comment modes
 
 | Key | Action |
@@ -1377,6 +1392,14 @@ comments retain exact source ranges and provider revisions. The fixture records
 selection-to-primary timing, forwarded request counts, checkpoints, and cleanup.
 These same-host observations do not establish two-host SSH latency or host mouse
 behavior; emitted hyperlinks have separate renderer regressions.
+
+`bun run test:e2e:annotation-threads` uses real keys in a private Herdr session
+for contextual/Resource-wide thread navigation, multiline replies, visible save
+validation, resolve/reopen and cancellation. It verifies preserved target and
+viewport, other-occurrence and orphan reachability, a 35-column Detail, and ANSI
+annotation evidence scrolling. Existing threads and an agent reply are seeded
+through public APIs. Pointer action routing has renderer/controller tests; the
+scenario does not claim native mouse activation.
 
 ## Project documents
 

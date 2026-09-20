@@ -87,7 +87,7 @@ export function detailActionScopes(
     return scopes;
   }
   if (state.backlinks.expanded && !propertyOccurrence) scopes.push("backlinks");
-  if (state.propertyInspector.expanded) scopes.push("property-inspector");
+  if (state.propertyInspector.model && state.propertyInspector.expanded) scopes.push("property-inspector");
   if (state.backlinks.expanded && propertyOccurrence) scopes.push("backlinks");
   scopes.push(state.mode);
   return scopes;
