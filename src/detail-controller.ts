@@ -1,3 +1,4 @@
+import { buildDetailAnnotationView, displayedResourceText, detailAnnotationGroups, selectedAnnotationThread } from "./detail-annotations";
 import type { BacklinkPeekLaunch } from "./backlink-peek";
 import {
   DEFAULT_OUTLINER_ACTION_KEYMAP,
@@ -9,7 +10,6 @@ import {
   createAnnotationReferenceContext,
   createPdfPageRegionAnchor,
   createTextQuoteAnchor,
-  extractAnnotationBody,
 } from "./annotations";
 import {
   attentionClientState,
@@ -83,6 +83,9 @@ import { TextBuffer, type TextBufferPoint, type TextBufferRange } from "./text-b
 import type { TerminalKey } from "./terminal";
 import type {
   AnnotationBatchReceipt,
+  AnnotationReplyInput,
+  AnnotationLifecycleInput,
+  AnnotationRecord,
   AnnotationAnchor,
   AnnotationCreateInput,
   AnnotationListQuery,
@@ -134,6 +137,11 @@ export interface DetailViewport {
   editorWidth?: number;
   height: number;
   editorBody?: Readonly<{ contentWidth: number; height: number }>;
+  preview?: Readonly<{
+    sourceLines: readonly string[];
+    annotationLines: readonly string[];
+    threadRows: ReadonlyMap<string, number>;
+  }>;
 }
 
 export interface DetailCompletionItem {
@@ -269,6 +277,12 @@ export function visibleBacklinkSources(
   );
 }
 type DetailAnnotationTarget = AnnotationTarget;
+
+export interface DetailAnnotationReplyDraft {
+  requestId: string;
+  annotationId: string;
+  returnMode: "preview" | "file" | "annotation";
+}
 
 export interface DetailAnnotationDraft {
   requestId: string;
@@ -463,6 +477,8 @@ export interface DetailState {
   attention: AttentionClientState;
   attentionRevealSourceLine: number | null;
   annotationDraft?: DetailAnnotationDraft;
+  annotationReplyDraft?: DetailAnnotationReplyDraft;
+  selectedAnnotationId?: string;
   completion: DetailCompletionState | null;
   status: string;
   busy: boolean;
@@ -551,11 +567,13 @@ export interface DetailEffects {
     requestId: string;
     input: AnnotationCreateInput;
   }): Promise<AnnotationBatchReceipt>;
+  replyAnnotation(input: { requestId: string; input: AnnotationReplyInput }): Promise<AnnotationBatchReceipt>;
+  setAnnotationLifecycle(input: AnnotationLifecycleInput): Promise<AnnotationRecord>;
   internFilesystem(path: string): Promise<InternResourceReceipt>;
   lookupFilesystem(path: string): Promise<InternResourceReceipt["resource"] | null>;
   refreshResource(resourceId: string): Promise<ResourceDescription>;
   openExternal(url: string): void | Promise<void>;
-  getAnnotation(annotationId: string): Promise<AnnotationThread>;
+  getAnnotation(annotationId: string): Promise<AnnotationRecord>;
   listAnnotations(query: AnnotationListQuery): Promise<AnnotationThread[]>;
   reconcileAnnotations(input: AnnotationReconcileInput): Promise<AnnotationReconcileReceipt>;
   getAttention(): Promise<AttentionClientState>;
@@ -606,6 +624,10 @@ export type DetailIntent =
   | { type: "edit.external" }
   | { type: "annotation.selection.begin"; sourceLine?: number; sourceColumn?: number }
   | { type: "annotation.comment.direct"; capture: DetailDirectSelectionCapture | null }
+  | { type: "annotation.thread.move"; delta: -1 | 1 }
+  | { type: "annotation.thread.select"; annotationId: string }
+  | { type: "annotation.thread.reply"; annotationId?: string }
+  | { type: "annotation.thread.lifecycle"; annotationId?: string }
   | { type: "resource.refresh" }
   | { type: "resource.open-external" }
   | { type: "resource.open-url"; url: string }
@@ -828,20 +850,6 @@ function resourceAnnotationRepresentation(
   };
 }
 
-export function displayedResourceText(
-  state: Pick<DetailState, "document" | "resolvedSelectedText">,
-): string | null {
-  const description = detailResourceDescription(state);
-  if (description?.presentation && description.presentation.selected?.representation !== "cached-markdown") return null;
-  const text = description?.pdf?.markdown ??
-    description?.web?.markdown ??
-    description?.filesystem?.text ??
-    null;
-  // Resource documents render selected source bytes first, followed by optional
-  // metadata. Availability alone does not establish this coordinate mapping.
-  return text !== null && state.resolvedSelectedText.startsWith(text) ? text : null;
-}
-
 function pdfAnnotationAnchor(
   description: ResourceDescription,
   start: number,
@@ -983,10 +991,7 @@ function detailBufferPointAtOffset(text: string, offset: number): { row: number;
   return { row: lines.length - 1, column: lines[lines.length - 1]!.length };
 }
 
-export function detailAnnotationLineCount(state: Readonly<DetailState>): number {
-  const comment = extractAnnotationBody(state.resolvedSelectedText) || "(No comment text)";
-  return 1 + comment.split(/\r?\n/).length;
-}
+
 
 export function detailVisibleEditorHeight(
   state: Pick<DetailState, "completion">,
@@ -1232,7 +1237,14 @@ export function createDetailController(
           return;
         }
         if (getProperty(selected.properties, "type")?.startsWith("annotation")) {
-          threads = [await effects.getAnnotation(selected.id)];
+          const record = await effects.getAnnotation(selected.id);
+          const rootId = record.parentAnnotationId ?? record.block.id;
+          const subject = record.originalTarget.representation.subject;
+          threads = subject.kind === "legacy-file" ? [{ ...record, replies: [] }]
+            : (await effects.listAnnotations({ subject, includeResolved: true }))
+              .filter(thread => thread.block.id === rootId);
+          // Quarantined legacy records still expose their immutable evidence.
+          if (threads.length === 0 && !record.parentAnnotationId) threads = [{ ...record, replies: [] }];
         } else if (fileAtStart) {
           const resource = await effects.lookupFilesystem(fileAtStart.absolutePath);
           if (resource) {
@@ -1264,7 +1276,7 @@ export function createDetailController(
       if (expectedGeneration !== loadGeneration || state.document !== documentAtStart ||
         state.referencedFile !== fileAtStart || !sameNavigationTarget(state.target, targetAtStart) ||
         sameAnnotationThreads(state.annotationThreads, threads)) return;
-      if (isBufferMode()) {
+      if (isBufferMode() && !state.annotationReplyDraft) {
         state.refreshPending = true;
         return;
       }
@@ -1796,6 +1808,8 @@ export function createDetailController(
   ): void => {
     const next = document.context;
     const targetChanged = !sameNavigationTarget(previousTarget, document.target);
+    const preserveAnnotationViewport = !targetChanged && state.mode === "annotation" &&
+      detailDisplayMode(next.selected) === "annotation";
     const blockChanged =
       detailBlockTarget({ target: previousTarget })?.blockId !== next.selected?.id;
     const revisionChanged = state.context.selected?.revision !== next.selected?.revision;
@@ -1807,7 +1821,7 @@ export function createDetailController(
       state.previewRegions.disclosureOverrides.clear();
       state.attentionRevealSourceLine = null;
     }
-    if (blockChanged || revisionChanged) state.annotationThreads = [];
+    if (blockChanged || (revisionChanged && !preserveAnnotationViewport)) state.annotationThreads = [];
     if (blockChanged || changed) invalidateBacklinks();
     if (record) recordNavigation(document.target);
     else syncNavigationState();
@@ -1824,9 +1838,9 @@ export function createDetailController(
       clearDocumentPresentation();
     }
     refreshBreadcrumb();
-    state.previewOffset = 0;
+    if (!preserveAnnotationViewport) state.previewOffset = 0;
     const fragmentId = document.target.fragmentId;
-    if (fragmentId && next.selected) {
+    if (!preserveAnnotationViewport && fragmentId && next.selected) {
       const fragment = resolveFragment(next.selected.text, fragmentId);
       if (fragment.status === "resolved") {
         state.previewOffset = fragment.anchor.lineIndex;
@@ -2671,7 +2685,87 @@ export function createDetailController(
     emit();
   };
 
+  const annotationGroups = () => detailAnnotationGroups(
+    state, line => line, state.resolvedSelectedText.split(/\r?\n/).length, state.resolvedSelectedText,
+  );
+
+  const selectAnnotationThread = (annotationId: string, reveal: boolean, viewport?: DetailViewport): boolean => {
+    const groups = annotationGroups();
+    const group = groups.find(group => group.threads.some(thread => thread.block.id === annotationId));
+    const threads = groups.flatMap(group => group.threads);
+    const index = threads.findIndex(thread => thread.block.id === annotationId);
+    if (!group || index < 0) {
+      state.status = "Comment thread is no longer available";
+      return false;
+    }
+    state.selectedAnnotationId = annotationId;
+    if (reveal) {
+      state.previewRegions.disclosureOverrides.set(group.regionId, true);
+      const region = state.previewRegions.regions.find(region => region.id === group.regionId);
+      if (region?.disclosure) region.disclosure.expanded = true;
+      state.previewRegions.focusedRegionId = `annotation-thread:${annotationId}`;
+      const preview = viewport?.preview;
+      const row = preview?.threadRows.get(annotationId);
+      if (viewport && preview && row !== undefined) {
+        const lineCount = preview.sourceLines.length + preview.annotationLines.length;
+        state.previewOffset = Math.min(row, Math.max(0, lineCount - Math.max(1, viewport.height - 5)));
+        state.propertyInspector.expanded = false;
+      }
+    }
+    state.status = `Comment ${index + 1} of ${threads.length} · ${group.placement} · ${threads[index]!.lifecycle}`;
+    return true;
+  };
+
+  const beginAnnotationReply = (annotationId?: string): void => {
+    if (isBufferMode() || state.busy) return;
+    if (annotationId && !selectAnnotationThread(annotationId, false)) return;
+    const thread = selectedAnnotationThread(state);
+    if (!thread) {
+      state.status = "Select a comment with [ or ] before replying";
+      return;
+    }
+    state.annotationReplyDraft = {
+      requestId: crypto.randomUUID(), annotationId: thread.block.id,
+      returnMode: state.mode as "preview" | "file" | "annotation",
+    };
+    state.annotationDraft = undefined;
+    state.buffer = new TextBuffer();
+    state.editorVisualOffset = 0;
+    state.editorViewportManual = false;
+    state.completion = null;
+    state.mode = "comment";
+    state.status = "Reply to selected comment · Ctrl+S saves · Esc cancels";
+  };
+
+  const changeAnnotationLifecycle = async (annotationId?: string): Promise<void> => {
+    if (isBufferMode() || state.busy) return;
+    if (annotationId && !selectAnnotationThread(annotationId, false)) return;
+    const thread = selectedAnnotationThread(state);
+    if (!thread) {
+      state.status = "Select a comment with [ or ] before resolving or reopening";
+      return;
+    }
+    state.busy = true;
+    try {
+      const lifecycle = thread.lifecycle === "open" ? "resolved" : "open";
+      const updated = await effects.setAnnotationLifecycle({ annotationId: thread.block.id, lifecycle });
+      state.annotationThreads = state.annotationThreads.map(current =>
+        current.block.id === updated.block.id ? { ...updated, replies: current.replies } : current);
+      state.status = lifecycle === "resolved" ? "Comment resolved" : "Comment reopened";
+    } catch (error) {
+      state.status = errorMessage(error);
+    } finally {
+      state.busy = false;
+    }
+  };
+
   const cancelBuffer = async (): Promise<void> => {
+    if (state.annotationReplyDraft) {
+      state.mode = state.annotationReplyDraft.returnMode;
+      state.annotationReplyDraft = undefined;
+      state.status = "Reply cancelled";
+      return;
+    }
     const cancelledMode = state.mode;
     state.mode = detailDisplayMode(state.context.selected);
     state.annotationDraft = undefined;
@@ -2717,6 +2811,18 @@ export function createDetailController(
           await loadCurrentTarget(true);
           state.status = "Filesystem Resource saved";
         }
+      } else if (state.mode === "comment" && state.annotationReplyDraft) {
+        const draft = state.annotationReplyDraft;
+        const body = state.buffer.text.trim();
+        if (!body) throw new Error("Reply body cannot be empty");
+        await effects.replyAnnotation({ requestId: draft.requestId, input: {
+          annotationId: draft.annotationId, body, source: "user",
+        } });
+        state.mode = draft.returnMode;
+        state.annotationReplyDraft = undefined;
+        await loadAnnotations();
+        state.status = "Reply added";
+        return;
       } else if (state.mode === "comment" && state.annotationDraft) {
         const draft = state.annotationDraft;
         const body = state.buffer.text.trim();
@@ -2898,9 +3004,10 @@ export function createDetailController(
     viewport: DetailViewport,
   ): void => {
     const lineCount = state.mode === "annotation"
-      ? detailAnnotationLineCount(state)
+      ? buildDetailAnnotationView(state, viewport.width).length
+      : viewport.preview ? viewport.preview.sourceLines.length + viewport.preview.annotationLines.length
       : state.resolvedSelectedText.split(/\r?\n/).length;
-    const maximum = Math.max(0, lineCount - 1);
+    const maximum = Math.max(0, lineCount - (state.mode === "annotation" || viewport.preview ? Math.max(1, viewport.height - 5) : 1));
     if (direction === "top") state.previewOffset = 0;
     else if (direction === "bottom") state.previewOffset = maximum;
     else {
@@ -2937,7 +3044,11 @@ export function createDetailController(
         await editExternalDraft(viewport);
         break;
       case "annotation.selection.begin":
-        await beginAnnotationSelection(intent.sourceLine, intent.sourceColumn);
+        if (state.mode === "preview" && viewport.preview && state.previewOffset >= viewport.preview.sourceLines.length) {
+          state.status = "Scroll to source text before starting a selection";
+        } else {
+          await beginAnnotationSelection(intent.sourceLine, intent.sourceColumn);
+        }
         break;
       case "annotation.comment.direct": {
         const property = state.propertyInspector.expanded
@@ -2952,6 +3063,25 @@ export function createDetailController(
         }
         break;
       }
+      case "annotation.thread.move": {
+        const threads = annotationGroups().flatMap(group => group.threads);
+        if (threads.length === 0) { state.status = "No comment threads in this document"; break; }
+        const current = threads.findIndex(thread => thread.block.id === selectedAnnotationThread(state)?.block.id);
+        const next = current < 0 ? (intent.delta > 0 ? 0 : threads.length - 1)
+          : (current + intent.delta + threads.length) % threads.length;
+        selectAnnotationThread(threads[next]!.block.id, true, viewport);
+        if (current >= 0 && (intent.delta > 0 ? next <= current : next >= current)) state.status += " · wrapped";
+        break;
+      }
+      case "annotation.thread.select":
+        selectAnnotationThread(intent.annotationId, true, viewport);
+        break;
+      case "annotation.thread.reply":
+        beginAnnotationReply(intent.annotationId);
+        break;
+      case "annotation.thread.lifecycle":
+        await changeAnnotationLifecycle(intent.annotationId);
+        break;
       case "resource.refresh": {
         const description = detailResourceDescription(state);
         if (
@@ -3274,6 +3404,9 @@ export function createDetailController(
           break;
         }
         state.previewRegions.focusedRegionId = region.id;
+        if (region.activation?.type === "annotation.thread.select") {
+          state.selectedAnnotationId = region.activation.annotationId;
+        }
         if (region.kind === "backlink-source") {
           const blockId = region.activation?.type === "backlink.open"
             ? region.activation.blockId
@@ -3286,6 +3419,9 @@ export function createDetailController(
       }
       case "preview.focus.move": {
         const region = movePreviewRegionFocus(state.previewRegions, intent.delta);
+        if (region?.activation?.type === "annotation.thread.select") {
+          state.selectedAnnotationId = region.activation.annotationId;
+        }
         if (region?.kind === "backlink-source") {
           const blockId = region.activation?.type === "backlink.open"
             ? region.activation.blockId
@@ -3308,6 +3444,12 @@ export function createDetailController(
               type: "preview.focus.set",
               regionId: intent.action.regionId,
             }, viewport);
+            break;
+          case "annotation.thread.select":
+          case "annotation.thread.reply":
+          case "annotation.thread.lifecycle":
+          case "annotation.thread.move":
+            await dispatch(intent.action, viewport);
             break;
           case "annotation.disclosure.toggle":
             state.previewRegions.focusedRegionId = intent.action.regionId;
@@ -3616,7 +3758,7 @@ export function createDetailController(
         const selected = state.context.selected;
         if (!selected) break;
         const annotationId = selected.id;
-        let annotation: AnnotationThread;
+        let annotation: AnnotationRecord;
         try {
           annotation = await effects.getAnnotation(annotationId);
         } catch (error) {
@@ -4044,6 +4186,13 @@ export function createDetailController(
       }
       if (event.domain === "ui") {
         if (event.command?.targetClientId === effects.clientId) await handleUiCommand(event.command, viewport);
+        return;
+      }
+      if (event.domain === "content" && event.action.startsWith("annotations.") &&
+        state.target?.kind === "resource") {
+        // Annotation writes do not change Resource bytes. Reloading the Resource
+        // here discards its scroll, disclosures and the selected thread.
+        await loadAnnotations();
         return;
       }
       if (event.domain === "resource-catalog") {

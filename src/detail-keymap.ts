@@ -87,7 +87,7 @@ export function detailActionScopes(
     return scopes;
   }
   if (state.backlinks.expanded && !propertyOccurrence) scopes.push("backlinks");
-  if (state.propertyInspector.expanded) scopes.push("property-inspector");
+  if (state.propertyInspector.model && state.propertyInspector.expanded) scopes.push("property-inspector");
   if (state.backlinks.expanded && propertyOccurrence) scopes.push("backlinks");
   scopes.push(state.mode);
   return scopes;
@@ -269,6 +269,16 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
         return true;
       case "detail.resource.open-external":
         await dispatch({ type: "resource.open-external" });
+        return true;
+      case "detail.annotation.previous":
+      case "detail.annotation.next":
+        await dispatch({ type: "annotation.thread.move", delta: actionId === "detail.annotation.next" ? 1 : -1 });
+        return true;
+      case "detail.annotation.reply":
+        await dispatch({ type: "annotation.thread.reply" });
+        return true;
+      case "detail.annotation.lifecycle":
+        await dispatch({ type: "annotation.thread.lifecycle" });
         return true;
       case "detail.annotation.reveal":
         await dispatch({ type: "annotation.reveal" });

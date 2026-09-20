@@ -24,6 +24,7 @@ export interface BufferComposerModel {
   commitAction: string;
   cancelAction: string;
   viewportOffset?: number;
+  status?: string;
 }
 
 function pad(value: string, width: number): string {
@@ -77,7 +78,9 @@ export class BufferComposer implements Component {
       body[0] = framed(` \x1b[2m${sanitizeDynamicText(model.placeholder)}\x1b[0m`, safeWidth);
       if (this.focused) body[0] = body[0]!.replace("\x1b[2m", `${CURSOR_MARKER}\x1b[2m`);
     }
-    const divider = safeWidth < 2 ? "─".repeat(safeWidth) : `├${"─".repeat(safeWidth - 2)}┤`;
+    const divider = safeWidth < 2 ? "─".repeat(safeWidth)
+      : model.status ? `├${pad(` ${sanitizeDynamicText(model.status)} `, safeWidth - 2)}┤`
+      : `├${"─".repeat(safeWidth - 2)}┤`;
     const footer = ` ${model.cancelAction} cancel · ${model.commitAction} save `;
     const bottom = safeWidth < 2
       ? "─".repeat(safeWidth)

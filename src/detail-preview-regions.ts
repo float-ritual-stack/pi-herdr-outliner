@@ -7,6 +7,7 @@ export interface PreviewSourceSpan {
 
 export type PreviewRegionKind =
   | "annotation"
+  | "annotation-thread"
   | "callout"
   | "backlinks"
   | "backlink-source"
@@ -17,6 +18,10 @@ export type PreviewRegionKind =
 export type PreviewRegionAction =
   | { type: "preview.region.focus"; regionId: string }
   | { type: "annotation.disclosure.toggle"; regionId: string }
+  | { type: "annotation.thread.select"; annotationId: string }
+  | { type: "annotation.thread.reply"; annotationId: string }
+  | { type: "annotation.thread.lifecycle"; annotationId: string }
+  | { type: "annotation.thread.move"; delta: -1 | 1 }
   | { type: "callout.disclosure.toggle"; regionId: string }
   | { type: "backlinks.disclosure.toggle" }
   | { type: "backlink.open"; blockId: string }
@@ -55,6 +60,13 @@ export function previewRegionActionUri(action: PreviewRegionAction): string {
     case "preview.region.focus":
       if (!action.regionId.trim()) throw new Error("Preview region ID cannot be empty");
       return `${DETAIL_PREVIEW_SCHEME}//focus/${encodeURIComponent(action.regionId)}`;
+    case "annotation.thread.move":
+      return `${DETAIL_PREVIEW_SCHEME}//annotation-${action.delta === 1 ? "next" : "previous"}`;
+    case "annotation.thread.select":
+    case "annotation.thread.reply":
+    case "annotation.thread.lifecycle":
+      if (!action.annotationId.trim()) throw new Error("Annotation ID cannot be empty");
+      return `${DETAIL_PREVIEW_SCHEME}//${action.type.replaceAll(".", "-")}/${encodeURIComponent(action.annotationId)}`;
     case "annotation.disclosure.toggle":
       return `${DETAIL_PREVIEW_SCHEME}//annotation-toggle/${encodeURIComponent(action.regionId)}`;
     case "callout.disclosure.toggle":
@@ -95,6 +107,15 @@ export function parsePreviewRegionActionUri(uri: string): PreviewRegionAction | 
     case "focus":
       if (!value) throw new Error("Invalid Detail preview region");
       return { type: "preview.region.focus", regionId: value };
+    case "annotation-next":
+    case "annotation-previous":
+      if (value) throw new Error("Invalid annotation navigation URI");
+      return { type: "annotation.thread.move", delta: parsed.hostname === "annotation-next" ? 1 : -1 };
+    case "annotation-thread-select":
+    case "annotation-thread-reply":
+    case "annotation-thread-lifecycle":
+      if (!value) throw new Error("Invalid annotation thread URI");
+      return { type: parsed.hostname.replaceAll("-", ".") as "annotation.thread.select" | "annotation.thread.reply" | "annotation.thread.lifecycle", annotationId: value };
     case "annotation-toggle":
       if (!value) throw new Error("Invalid Detail annotation region");
       return { type: "annotation.disclosure.toggle", regionId: value };

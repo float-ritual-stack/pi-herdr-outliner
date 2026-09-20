@@ -2,6 +2,7 @@ import {
   hyperlink,
   truncateToWidth,
   visibleWidth,
+  wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import {
   attentionBanner,
@@ -10,7 +11,7 @@ import {
   decorateAttentionLines,
 } from "./attention-render";
 import { currentAttentionMark } from "./attention";
-import { extractAnnotationBody } from "./annotations";
+import { annotationScopeLabel, annotationTargetText, buildDetailAnnotationView, detailAnnotationGroups } from "./detail-annotations";
 import { completionWindow } from "./completion";
 import { outlinerLinkUri } from "./outliner-links";
 import { filterPropertyInspectorEntries } from "./property-inspector";
@@ -34,7 +35,6 @@ import {
 } from "./property-summary";
 import { renderTextBufferEditorRow } from "./text-buffer-editor";
 import { renderMarkdownLine, sanitizeDynamicText } from "./terminal";
-import type { AnnotationRecord, AnnotationTarget } from "./types";
 
 const ESC = "\x1b[";
 
@@ -283,116 +283,52 @@ function appendCompletion(
   }
 }
 
-function annotationTargetLabel(target: AnnotationTarget): string {
-  const subject = target.representation.subject;
-  const subjectLabel = subject.kind === "block"
-    ? `block ${subject.blockId}`
-    : subject.kind === "resource"
-      ? `resource ${subject.resourceId}`
-      : `legacy file ${subject.filePath}`;
-  const anchor = target.anchor;
-  if (anchor.kind === "text-quote") {
-    const position = anchor.start !== null && anchor.end !== null
-      ? ` @${anchor.start}-${anchor.end}`
-      : " · unpositioned";
-    return `${subjectLabel}${position}`;
-  }
-  return `${subjectLabel} · ${anchor.kind}`;
-}
-
-function annotationTargetText(target: AnnotationTarget): string {
-  const anchor = target.anchor;
-  switch (anchor.kind) {
-    case "text-quote":
-    case "dom-range":
-      return anchor.exact;
-    case "pdf-page-region":
-      return anchor.exact ?? `PDF page ${anchor.page}`;
-    case "structured-entity-field":
-      return `${anchor.entityType} ${anchor.entityId} · ${anchor.fieldPath.join(".")}`;
-    case "provider-comment-id":
-      return `${anchor.provider} comment ${anchor.commentId}`;
-  }
-}
-
-function selectedAnnotationRecord(state: Readonly<DetailState>): AnnotationRecord | null {
-  const selectedId = state.context.selected?.id;
-  if (!selectedId) return null;
-  for (const thread of state.annotationThreads) {
-    if (thread.block.id === selectedId) return thread;
-    const reply = thread.replies.find((candidate) => candidate.block.id === selectedId);
-    if (reply) return reply;
-  }
-  return null;
-}
-
-export function buildDetailAnnotationView(
-  state: Readonly<DetailState>,
-  width: number,
-): string[] {
-  if (!state.context.selected) return [];
-  const output: string[] = [];
-  const annotation = selectedAnnotationRecord(state);
-  if (annotation) {
-    output.push(`\x1b[2m${fitDynamicText(
-      `Original target: ${annotationTargetLabel(annotation.originalTarget)}`,
-      width,
-    )}\x1b[0m`);
-    for (const line of annotationTargetText(annotation.originalTarget).split(/\r?\n/)) {
-      output.push(`│ ${fitDynamicText(line, Math.max(1, width - 2))}`);
-    }
-    output.push(`\x1b[2m${fitDynamicText(
-      `Stored resolution: ${annotation.currentResolution.status}${
-        annotation.resolvedTarget ? ` · ${annotationTargetLabel(annotation.resolvedTarget)}` : ""
-      }`,
-      width,
-    )}\x1b[0m`);
-    if (annotation.resolvedTarget) {
-      for (const line of annotationTargetText(annotation.resolvedTarget).split(/\r?\n/)) {
-        output.push(`│ ${fitDynamicText(line, Math.max(1, width - 2))}`);
-      }
-    }
-    output.push("\x1b[1mResolution history\x1b[0m");
-    for (const event of annotation.resolutionHistory) {
-      const method = event.method.kind === "codec"
-        ? `${event.method.codecId}@${event.method.codecVersion}:${event.method.method}`
-        : event.method.method;
-      output.push(fitDynamicText(
-        `#${event.sequence} ${event.status}${event.appliesCurrent ? " · current" : ""} · ${method} · ${event.reviewer.kind}:${event.reviewer.id}${
-          event.confidence === null ? "" : ` · ${event.confidence}`
-        }`,
-        width,
-      ));
-      for (const [index, candidate] of event.candidates.entries()) {
-        output.push(fitDynamicText(
-          `  candidate ${index + 1} · ${candidate.confidence.toFixed(3)} · ${annotationTargetLabel(candidate.target)}`,
-          width,
-        ));
-      }
-      if (event.method.kind === "agent") {
-        output.push(fitDynamicText(`  rationale · ${event.method.rationale}`, width));
-        for (const evidence of event.method.evidence) {
-          output.push(fitDynamicText(`  evidence · ${evidence}`, width));
-        }
-      } else if (event.method.kind === "human" && event.method.proposalEventId) {
-        output.push(fitDynamicText(`  proposal · ${event.method.proposalEventId}`, width));
-      }
-    }
-    output.push("─".repeat(width));
-  }
-  output.push("\x1b[1mComment\x1b[0m");
-  const comment = extractAnnotationBody(state.resolvedSelectedText);
-  for (const line of (comment || "(No comment text)").split(/\r?\n/)) {
-    output.push(renderMarkdownLine(fitDynamicText(line, width)));
-  }
-  return output;
-}
-
 export interface DetailRenderOptions {
   header?: DetailHeaderOptions;
   helpPrefix?: string;
   helpText?: string;
   chooserHelpText?: string;
+}
+
+/** Ordinary ANSI reader rows. Appended comment evidence has no source position. */
+export function buildDetailAnsiPreview(
+  state: Readonly<DetailState>,
+  width: number,
+): NonNullable<DetailViewport["preview"]> {
+  const sourceLines = state.resolvedSelectedText.split(/\r?\n/);
+  const annotationLines: string[] = [];
+  const threadRows = new Map<string, number>();
+  const groups = detailAnnotationGroups(state, line => line, sourceLines.length, state.resolvedSelectedText);
+  const append = (text: string, prefix = "") => {
+    for (const line of wrapTextWithAnsi(sanitizeDynamicText(text, true), Math.max(1, width - visibleWidth(prefix)))) {
+      annotationLines.push(`${prefix}${line}`);
+    }
+  };
+  if (groups.length > 0) {
+    annotationLines.push("", fitDynamicText(`Comments · ${state.annotationThreads.length} threads · [ previous · ] next`, width));
+    let index = 0;
+    for (const group of groups) {
+      for (const thread of group.threads) {
+        index += 1;
+        threadRows.set(thread.block.id, sourceLines.length + annotationLines.length);
+        append(`${thread.block.id === state.selectedAnnotationId ? "▶" : " "} Comment ${index} · ${thread.lifecycle}`);
+        append(`C reply · D ${thread.lifecycle === "open" ? "resolve" : "reopen"}`);
+        append(annotationScopeLabel(thread, state));
+        append(`${group.placement} · ${thread.currentResolution.status}`);
+        if (group.placement === "unpositioned") {
+          append("Original quote:");
+          append(annotationTargetText(thread.originalTarget), "│ ");
+        }
+        append(thread.body || "(No comment text)");
+        for (const reply of thread.replies) {
+          append(`${reply.source} reply:`);
+          append(reply.body);
+        }
+        annotationLines.push("");
+      }
+    }
+  }
+  return { sourceLines, annotationLines, threadRows };
 }
 
 export function renderDetailLines(
@@ -405,6 +341,7 @@ export function renderDetailLines(
   const bodyHeight = Math.max(1, height - 5);
   const output = renderDetailHeader(state, width, options.header);
   const bodyStart = output.length;
+  let sourceRowsInViewport: number | undefined;
 
   if (state.document.kind === "loading") {
     output.push(
@@ -501,31 +438,17 @@ export function renderDetailLines(
       );
     });
   } else {
-    const lines = state.resolvedSelectedText.split(/\r?\n/);
-    for (
-      let lineIndex = state.previewOffset;
-      lineIndex < Math.min(lines.length, state.previewOffset + bodyHeight);
-      lineIndex += 1
-    ) {
-      const rendered = renderMarkdownLine(fitDynamicText(lines[lineIndex]!, width));
-      output.push(
-        isEmbeddedLine(state, lineIndex) ? renderEmbedBackground(rendered, width) : rendered,
-      );
-    }
-    if (state.annotationThreads.length > 0 && output.length < height - 2) {
-      const threads = state.annotationThreads;
-      output.push(`\x1b[1mComments · ${threads.length} ${threads.length === 1 ? "thread" : "threads"}\x1b[0m`);
-      for (const [index, thread] of threads.entries()) {
-        if (output.length >= height - 2) break;
-        const target = thread.resolvedTarget ?? thread.originalTarget;
-        output.push(
-          fitDynamicText(
-            `[${index + 1}] ${annotationTargetLabel(target)} · ${thread.currentResolution.status} · ${thread.lifecycle} — ${thread.body}`,
-            width,
-          ),
-        );
+    const preview = viewport.preview ?? buildDetailAnsiPreview(state, width);
+    const lineCount = preview.sourceLines.length + preview.annotationLines.length;
+    for (let row = state.previewOffset; row < Math.min(lineCount, state.previewOffset + bodyHeight); row += 1) {
+      if (row < preview.sourceLines.length) {
+        const rendered = renderMarkdownLine(fitDynamicText(preview.sourceLines[row]!, width));
+        output.push(isEmbeddedLine(state, row) ? renderEmbedBackground(rendered, width) : rendered);
+      } else {
+        output.push(preview.annotationLines[row - preview.sourceLines.length]!);
       }
     }
+    sourceRowsInViewport = Math.max(0, Math.min(bodyHeight, preview.sourceLines.length - state.previewOffset));
   }
 
   while (output.length < height - 2) output.push("");
@@ -535,13 +458,14 @@ export function renderDetailLines(
       : detailHelpText(state.mode));
   if (state.mode === "preview") {
     const mark = currentAttentionMark(state.attention, detailBlockTarget(state)?.blockId ?? null);
+    const count = sourceRowsInViewport ?? output.length - bodyStart;
     const decorated = decorateAttentionLines(
-      output.slice(bodyStart),
+      output.slice(bodyStart, bodyStart + count),
       mark,
       width,
       state.context.selected?.text,
     );
-    output.splice(bodyStart, output.length - bodyStart, ...decorated);
+    output.splice(bodyStart, count, ...decorated);
   }
   output.push(...renderDetailFooter(
     state,

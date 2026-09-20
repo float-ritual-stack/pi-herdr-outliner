@@ -16,7 +16,7 @@ import {
 import { projectDetailRead } from "./detail-embeds";
 import { DetailEventScheduler } from "./detail-event-scheduler";
 import { createDetailKeyHandler, detailActionScopes } from "./detail-keymap";
-import { renderDetailAnsi } from "./detail-renderer";
+import { buildDetailAnsiPreview, renderDetailAnsi } from "./detail-renderer";
 import { referencedFilePreview, type FileContents, type ReferencedPathCandidate } from "./files";
 import {
   editTextInExternalEditor,
@@ -54,6 +54,7 @@ import {
   type AnnotationReconcileInput,
   type AnnotationReconcileReceipt,
   type AnnotationThread,
+  type AnnotationRecord,
   type AttentionClientState,
   type BacklinkCollection,
   type Block,
@@ -98,9 +99,11 @@ let workQueue = Promise.resolve();
 let pendingPaste: string | null = null;
 
 function viewport(): DetailViewport {
+  const width = process.stdout.columns ?? 100;
   return {
-    width: process.stdout.columns ?? 100,
+    width,
     height: process.stdout.rows ?? 30,
+    ...(controller.state.mode === "preview" ? { preview: buildDetailAnsiPreview(controller.state, width) } : {}),
   };
 }
 const firstWatcherConnection = Promise.withResolvers<void>();
@@ -313,6 +316,12 @@ const effects: DetailEffects = {
       author: "user",
     });
   },
+  async replyAnnotation(input) {
+    return client.request<AnnotationBatchReceipt>({ action: "annotations.reply", ...input, author: "user" });
+  },
+  async setAnnotationLifecycle(input) {
+    return client.request<AnnotationRecord>({ action: "annotations.lifecycle", input, mutation: { author: "user", actorId: "detail" } });
+  },
   async internFilesystem(path) {
     return client.request<InternResourceReceipt>({
       action: "resources.intern-filesystem",
@@ -337,7 +346,7 @@ const effects: DetailEffects = {
   },
   openExternal: openExternalUrl,
   async getAnnotation(annotationId) {
-    return client.request<AnnotationThread>({
+    return client.request<AnnotationRecord>({
       action: "annotations.get",
       annotationId,
     });

@@ -1,3 +1,4 @@
+import { displayedResourceText, detailAnnotationGroups, sourceLineStarts, sourceLineAt, selectedAnnotationThread, annotationScopeLabel, type DetailAnnotationGroup } from "./detail-annotations";
 import { detailPropertyInspectorRegions } from "./property-inspector";
 import {
   Key,
@@ -12,7 +13,6 @@ import {
   VStack,
 } from "@earendil-works/pi-tui";
 import { currentAttentionMark } from "./attention";
-import { annotationSourceHash, annotationReferenceContextsEqual } from "./annotations";
 import { decorateAttentionLines } from "./attention-render";
 import { DEFAULT_OUTLINER_ACTION_KEYMAP } from "./outliner-actions";
 import {
@@ -25,7 +25,6 @@ import { linkOutlinerMarkdown, outlinerLinkUri, resourceOccurrenceLinks } from "
 import {
   detailBlockTarget,
   detailResourceDescription,
-  displayedResourceText,
   visibleBacklinkSources,
   type DetailState,
 } from "./detail-controller";
@@ -71,25 +70,6 @@ export interface DetailReadPreviewDocument {
   projectedText: string;
   embedRanges: DetailState["embedRanges"];
   workIdPrefix: string | null;
-}
-
-function sourceLineStarts(text: string): number[] {
-  const starts = [0];
-  for (let index = text.indexOf("\n"); index >= 0; index = text.indexOf("\n", index + 1)) {
-    starts.push(index + 1);
-  }
-  return starts;
-}
-
-function sourceLineAt(starts: readonly number[], offset: number): number {
-  let low = 0;
-  let high = starts.length;
-  while (low + 1 < high) {
-    const middle = Math.floor((low + high) / 2);
-    if (starts[middle]! <= offset) low = middle;
-    else high = middle;
-  }
-  return low;
 }
 
 function embedSourceLines(text: string): number[] {
@@ -738,16 +718,6 @@ function arrangeInlinePreview(
   };
 }
 
-interface DetailAnnotationGroup {
-  regionId: string;
-  placement: "inline" | "unpositioned";
-  startLine: number;
-  endLine: number;
-  sourceLineCount: number;
-  sourceSpan: PreviewRegion["sourceSpan"];
-  threads: AnnotationThread[];
-}
-
 interface AnnotationPreviewArrangement {
   markdownLines: readonly string[];
   lines: string[];
@@ -771,19 +741,31 @@ function annotationPanelLines(
   width: number,
   theme: MarkdownTheme,
   placement: DetailAnnotationGroup["placement"],
+  selected: boolean,
+  scope: string,
 ): string[] {
   const panelWidth = Math.max(1, width);
   const title =
-    ` Comment ${index + 1} · ${thread.source} · ${placement === "unpositioned" ? "unpositioned" : thread.currentResolution.status} · ${thread.lifecycle} `;
+    ` ${selected ? "▶ " : ""}Comment ${index + 1} · ${thread.source} · ${placement === "unpositioned" ? "unpositioned" : thread.currentResolution.status} · ${thread.lifecycle} `;
   const top = truncateToWidth(
     `╭${title}${"─".repeat(Math.max(0, panelWidth - visibleWidth(title) - 1))}`,
     panelWidth,
   );
-  const body = thread.body.split(/\r?\n/).map(escapeGeneratedMarkdown);
+  const action = (label: string, type: "annotation.thread.select" | "annotation.thread.reply" | "annotation.thread.lifecycle") =>
+    `[${label}](${previewRegionActionUri({ type, annotationId: thread.block.id })})`;
+  const navigation = (label: string, delta: -1 | 1) =>
+    `[${label}](${previewRegionActionUri({ type: "annotation.thread.move", delta })})`;
+  const body = [
+    `${navigation("‹", -1)} ${action("Select", "annotation.thread.select")} ${navigation("›", 1)} · ${action("Reply", "annotation.thread.reply")} · ${action(thread.lifecycle === "open" ? "Resolve" : "Reopen", "annotation.thread.lifecycle")}`,
+    `${thread.source} · ${placement === "unpositioned" ? "unpositioned" : thread.currentResolution.status} · ${thread.lifecycle}`,
+    scope,
+    "",
+    ...thread.body.split(/\r?\n/).map(escapeGeneratedMarkdown),
+  ];
   if (placement === "unpositioned") {
     const anchor = thread.originalTarget.anchor;
     if ("exact" in anchor && anchor.exact) {
-      body.unshift(...anchor.exact.split(/\r?\n/).map((line) => `> ${escapeGeneratedMarkdown(line)}`), "");
+      body.splice(3, 0, ...anchor.exact.split(/\r?\n/).map((line) => `> ${escapeGeneratedMarkdown(line)}`), "");
     }
     body.push("", `[Open thread](${outlinerLinkUri("block", thread.block.id)})`);
   }
@@ -841,7 +823,7 @@ class DetailAnnotationPreview implements Component {
     const markers = new Map<number, DetailAnnotationGroup>();
     const insertions = new Map<
       number,
-      Array<{ regionId: string; lines: string[] }>
+      Array<{ regionId: string; groupId: string; lines: string[] }>
     >();
     for (const group of this.groups) {
       if (group.placement === "unpositioned") continue;
@@ -863,17 +845,14 @@ class DetailAnnotationPreview implements Component {
       );
       if (!region?.disclosure?.expanded) continue;
       const insertionRow = Math.max(startRow + 1, endBoundary);
-      const panel = group.threads.flatMap((thread) =>
-        annotationPanelLines(
-          thread,
-          this.state.annotationThreads.indexOf(thread),
-          contentWidth,
-          this.theme,
-          group.placement,
-        )
-      );
       const existing = insertions.get(insertionRow) ?? [];
-      existing.push({ regionId: group.regionId, lines: panel });
+      for (const thread of group.threads) {
+        existing.push({
+          regionId: `annotation-thread:${thread.block.id}`, groupId: group.regionId,
+          lines: annotationPanelLines(thread, this.groups.flatMap(group => group.threads).indexOf(thread),
+            contentWidth, this.theme, group.placement, selectedAnnotationThread(this.state)?.block.id === thread.block.id, annotationScopeLabel(thread, this.state)),
+        });
+      }
       insertions.set(insertionRow, existing);
     }
 
@@ -885,6 +864,7 @@ class DetailAnnotationPreview implements Component {
     for (let row = 0; row <= markdownLines.length; row += 1) {
       for (const panel of insertions.get(row) ?? []) {
         panelRows.set(panel.regionId, lines.length);
+        if (!panelRows.has(panel.groupId)) panelRows.set(panel.groupId, lines.length);
         for (const panelLine of panel.lines) {
           lines.push(`${" ".repeat(gutterWidth)}${panelLine}`);
           markdownRows.push(null);
@@ -937,7 +917,9 @@ class DetailAnnotationPreview implements Component {
       if (!region?.disclosure?.expanded) continue;
       panelRows.set(group.regionId, lines.length);
       for (const thread of group.threads) {
-        const panel = annotationPanelLines(thread, this.state.annotationThreads.indexOf(thread), outerWidth, this.theme, group.placement);
+        panelRows.set(`annotation-thread:${thread.block.id}`, lines.length);
+        const panel = annotationPanelLines(thread, this.groups.flatMap(group => group.threads).indexOf(thread), outerWidth,
+          this.theme, group.placement, selectedAnnotationThread(this.state)?.block.id === thread.block.id, annotationScopeLabel(thread, this.state));
         lines.push(...panel);
         markdownRows.push(...panel.map(() => null));
       }
@@ -965,198 +947,19 @@ class DetailAnnotationPreview implements Component {
   }
 }
 
-function displayedResourceRepresentationId(state: Readonly<DetailState>): string | null {
-  const description = detailResourceDescription(state);
-  if (!description || displayedResourceText(state) === null) return null;
-  if (description.pdf) return description.pdf.representation.id;
-  if (description.web) return description.web.representation.id;
-  const filesystem = description.filesystem;
-  if (!filesystem || filesystem.revision.revision.kind !== "filesystem") return null;
-  const revision = filesystem.revision.revision;
-  return `filesystem:${description.resource.id}:${revision.mtimeNs}:${revision.size}:${filesystem.contentHash}`;
-}
-
-function detailAnnotationGroups(
-  state: Readonly<DetailState>,
-  renderedLineForAuthoredLine: (line: number) => number,
-  renderedSourceLineCount: number,
-  renderedAnchorText: string,
-): DetailAnnotationGroup[] {
-  if (state.annotationThreads.length === 0) return [];
-  const selected = state.context.selected;
-  const blockContentHash = selected ? annotationSourceHash(selected.text) : null;
-  const displayedResourceTargetId = state.target?.kind === "resource"
-    ? state.target.resourceId
-    : null;
-  const displayedResourceId = displayedResourceTargetId
-    ? displayedResourceRepresentationId(state)
-    : null;
-  const renderedStarts = sourceLineStarts(renderedAnchorText);
-  const groups = new Map<string, DetailAnnotationGroup>();
-  const unpositioned: AnnotationThread[] = [];
-  for (const thread of state.annotationThreads) {
-    let target = thread.resolvedTarget;
-    const originalContext = thread.originalTarget.referenceContext;
-    const currentContext = target?.referenceContext;
-    if (originalContext && (thread.currentResolution.status !== "resolved" || !currentContext ||
-      (displayedResourceTargetId && !annotationReferenceContextsEqual(currentContext,
-        state.target?.kind === "resource" ? state.target.referenceContext : undefined)))) {
-      unpositioned.push(thread);
-      continue;
-    }
-    if (displayedResourceTargetId) {
-      target = [...thread.resolutionHistory]
-        .reverse()
-        .map((event) => event.resolvedTarget)
-        .find((candidate) =>
-          candidate?.representation.id === displayedResourceId &&
-          candidate.representation.subject.kind === "resource" &&
-          candidate.representation.subject.resourceId === displayedResourceTargetId &&
-          (!originalContext || annotationReferenceContextsEqual(candidate.referenceContext, currentContext))
-        ) ?? null;
-    } else if (thread.currentResolution.status !== "resolved") {
-      target = null;
-    }
-    if (
-      !target ||
-      (target.anchor.kind !== "text-quote" &&
-        target.anchor.kind !== "pdf-page-region")
-    ) {
-      unpositioned.push(thread);
-      continue;
-    }
-    const subject = target.representation.subject;
-    const anchor = target.anchor;
-    if (anchor.start === null || anchor.end === null || anchor.exact === null ||
-      target.representation.sourceSnapshot.kind === "rendered") {
-      // Pane captures include chrome, wrapping and history. Their offsets are
-      // evidence in that capture, never coordinates in this Markdown document.
-      unpositioned.push(thread);
-      continue;
-    }
-    if (
-      state.target?.kind === "resource" &&
-      subject.kind === "resource" &&
-      subject.resourceId === state.target.resourceId
-    ) {
-      const content = displayedResourceText(state);
-      if (content === null || content.slice(anchor.start, anchor.end) !== anchor.exact) {
-        unpositioned.push(thread);
-        continue;
-      }
-      const startLine = sourceLineAt(renderedStarts, anchor.start);
-      const endLine = sourceLineAt(renderedStarts, Math.max(anchor.start, anchor.end - 1));
-      const key = `resource:${startLine}`;
-      const existing = groups.get(key);
-      if (existing) {
-        existing.endLine = Math.max(existing.endLine, endLine);
-        existing.threads.push(thread);
-      } else {
-        groups.set(key, {
-          regionId: `annotation:${subject.resourceId}:resource:${startLine}`,
-          placement: "inline",
-          startLine,
-          endLine,
-          sourceLineCount: renderedSourceLineCount,
-          threads: [thread],
-          sourceSpan: null,
-        });
-      }
-      continue;
-    }
-    if (
-      !selected ||
-      subject.kind !== "block" ||
-      subject.blockId !== selected.id
-    ) continue;
-    const snapshot = target.representation.sourceSnapshot;
-    if (snapshot.kind !== "block" || snapshot.blockId !== selected.id || snapshot.contentHash !== blockContentHash ||
-      target.representation.contentHash !== blockContentHash ||
-      selected.text.slice(anchor.start, anchor.end) !== anchor.exact) {
-      unpositioned.push(thread);
-      continue;
-    }
-    const starts = sourceLineStarts(selected.text);
-    let markerOffset = anchor.start;
-    while (
-      markerOffset < anchor.end &&
-      /\s/.test(selected.text[markerOffset] ?? "")
-    ) markerOffset += 1;
-    const authoredStartLine = sourceLineAt(
-      starts,
-      markerOffset < anchor.end ? markerOffset : anchor.start,
-    );
-    const authoredEndLine = sourceLineAt(
-      starts,
-      Math.max(anchor.start, anchor.end - 1),
-    );
-    const startLine = renderedLineForAuthoredLine(authoredStartLine);
-    const endLine = renderedLineForAuthoredLine(authoredEndLine);
-    const key = `source:${startLine}`;
-    const existing = groups.get(key);
-    if (existing) {
-      existing.endLine = Math.max(existing.endLine, endLine);
-      existing.sourceSpan!.start = Math.min(existing.sourceSpan!.start, anchor.start);
-      existing.sourceSpan!.end = Math.max(existing.sourceSpan!.end, anchor.end);
-      existing.sourceSpan!.startLine = Math.min(
-        existing.sourceSpan!.startLine,
-        authoredStartLine,
-      );
-      existing.sourceSpan!.endLine = Math.max(
-        existing.sourceSpan!.endLine,
-        authoredEndLine,
-      );
-      existing.threads.push(thread);
-      continue;
-    }
-    groups.set(key, {
-      regionId: `annotation:${selected.id}:${authoredStartLine}`,
-      placement: "inline",
-      startLine,
-      endLine,
-      sourceLineCount: renderedSourceLineCount,
-      sourceSpan: {
-        start: anchor.start,
-        end: anchor.end,
-        startLine: authoredStartLine,
-        endLine: authoredEndLine,
-      },
-      threads: [thread],
-    });
-  }
-  return [
-    ...[...groups.values()].sort((left, right) => left.startLine - right.startLine),
-    ...(unpositioned.length === 0 ? [] : [{
-      regionId: `annotation:${displayedResourceTargetId ?? selected?.id}:unpositioned`,
-      placement: "unpositioned" as const,
-      startLine: renderedSourceLineCount,
-      endLine: renderedSourceLineCount,
-      sourceLineCount: renderedSourceLineCount,
-      sourceSpan: null,
-      threads: unpositioned,
-    }]),
-  ];
-}
-
 function detailAnnotationRegions(
   groups: readonly DetailAnnotationGroup[],
 ): PreviewRegion[] {
-  return groups.map((group) => ({
-    id: group.regionId,
-    kind: "annotation",
-    sourceSpan: group.sourceSpan,
-    parentId: null,
-    childIds: [],
-    focusable: true,
-    disclosure: {
-      defaultExpanded: false,
-      expanded: false,
-    },
-    activation: {
-      type: "annotation.disclosure.toggle",
-      regionId: group.regionId,
-    },
-  }));
+  return groups.flatMap((group): PreviewRegion[] => [{
+    id: group.regionId, kind: "annotation", sourceSpan: group.sourceSpan, parentId: null,
+    childIds: group.threads.map(thread => `annotation-thread:${thread.block.id}`),
+    focusable: true, disclosure: { defaultExpanded: false, expanded: false },
+    activation: { type: "annotation.disclosure.toggle", regionId: group.regionId },
+  }, ...group.threads.map((thread): PreviewRegion => ({
+    id: `annotation-thread:${thread.block.id}`, kind: "annotation-thread", sourceSpan: group.sourceSpan,
+    parentId: group.regionId, childIds: [], focusable: true, disclosure: null,
+    activation: { type: "annotation.thread.select", annotationId: thread.block.id },
+  }))]);
 }
 
 class DetailPreviewBody implements Component {
@@ -1831,7 +1634,7 @@ export class DetailPiPreviewLayout extends VStack {
     this.previousPropertyFocusedId = focusedPropertyId;
     const focusedAnnotation = this.state.previewRegions.regions.find((region) =>
       region.id === this.state.previewRegions.focusedRegionId &&
-      region.kind === "annotation"
+      (region.kind === "annotation" || region.kind === "annotation-thread")
     );
     const focusedAnnotationId = focusedAnnotation?.id ?? null;
     const focusedAnnotationExpanded = focusedAnnotation?.disclosure?.expanded;
@@ -1975,7 +1778,7 @@ export class DetailPiPreviewLayout extends VStack {
     const region = this.state.previewRegions.regions.find((candidate) =>
       candidate.id === regionId
     );
-    const panelRow = region?.disclosure?.expanded
+    const panelRow = region?.kind === "annotation-thread" || region?.disclosure?.expanded
       ? annotated.panelRows.get(regionId)
       : undefined;
     const targetRow = panelRow ?? annotated.markerRows.get(regionId);

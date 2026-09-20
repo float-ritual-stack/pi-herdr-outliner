@@ -269,6 +269,21 @@ describe("Pi TUI Detail component", () => {
     expect(lines.every((line) => visibleWidth(line) === 72)).toBe(true);
   });
 
+  test("shows a failed save inside the composer without hiding the draft or actions", () => {
+    const composer = new BufferComposer(() => ({
+      title: "Reply to comment", context: "Root comment", buffer: new TextBuffer("Retained reply"),
+      placeholder: "Write a reply…", commitAction: "Ctrl+S", cancelAction: "Esc", status: "Reply transport failed",
+    }));
+    const lines = composer.render(38);
+    const text = lines.map(stripTerminalSequences).join("\n");
+    expect(text).toContain("Reply transport failed");
+    expect(text).toContain("Retained reply");
+    expect(text).toContain("Root comment");
+    expect(text).toContain("Ctrl+S save");
+    expect(lines).toHaveLength(7);
+    expect(lines.every(line => visibleWidth(line) === 38)).toBe(true);
+  });
+
   test("allocates stable equal draft panes above the responsive breakpoint", () => {
     const widths: number[] = [];
     function pane(text: string) {

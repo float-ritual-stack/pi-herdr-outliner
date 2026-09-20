@@ -1,3 +1,4 @@
+import { annotationScopeLabel, detailAnnotationGroups } from "../src/detail-annotations";
 import { detailPropertyInspectorRegions } from "../src/property-inspector";
 import {
   getCapabilities,
@@ -14,7 +15,7 @@ import {
   emptyAttentionState,
   normalizeAttentionMark,
 } from "../src/attention";
-import { annotationSourceHash, createAnnotationAnchor } from "../src/annotations";
+import { annotationSourceHash, createAnnotationAnchor, createAnnotationReferenceContext } from "../src/annotations";
 import {
   DEFAULT_DETAIL_CALLOUT_THEME,
   type DetailCalloutTheme,
@@ -1098,6 +1099,62 @@ describe("Pi Markdown detail preview", () => {
     expect(layout.render(72).map(stripTerminalSequences).join("\n")).toContain(
       "Discuss the Resource evidence.",
     );
+  });
+
+  test("places contextual Resource threads only at the matching reference and keeps other or lost contexts reachable", () => {
+    const raw = "Reference host\n\nFirst [file::same.md].\nSecond [file::same.md].";
+    const host = state(raw, raw);
+    const first = createAnnotationReferenceContext({ ...host.context.selected!, updatedAt: "2026-09-19T12:00:00.000Z" }, raw.indexOf("[file::"), raw.indexOf("[file::") + "[file::same.md]".length);
+    const second = createAnnotationReferenceContext({ ...host.context.selected!, updatedAt: "2026-09-19T12:00:00.000Z" }, raw.lastIndexOf("[file::"), raw.lastIndexOf("[file::") + "[file::same.md]".length);
+    const text = "Resource passage";
+    const resource = filesystemState(text);
+    if (resource.document.kind !== "ready" || resource.document.document.kind !== "resource") throw new Error("Resource fixture required");
+    const document = resource.document.document;
+    const file = document.description.filesystem!;
+    const target = textTarget(text, 0, text.length, {
+      id: `filesystem:${document.description.resource.id}:1:${text.length}:${file.contentHash}`,
+      subject: { kind: "resource", resourceId: document.description.resource.id },
+      sourceSnapshot: { kind: "resource", resourceId: document.description.resource.id, sourceSnapshotId: null, revision: file.revision },
+      adapter: { id: "filesystem.text", version: 1 }, mediaType: "text/plain", contentHash: file.contentHash, capturedAt: file.capturedAt,
+    });
+    const global = annotationThread("annotation-global", target, "Resource-wide comment");
+    const firstThread = annotationThread("annotation-first", { ...target, referenceContext: first }, "First reference comment");
+    const secondThread = annotationThread("annotation-second", { ...target, referenceContext: second }, "Second reference comment");
+    const missing: AnnotationThread = { ...firstThread, block: block("annotation-missing", ""), resolvedTarget: null,
+      currentResolution: { ...firstThread.currentResolution, status: "ambiguous", resolvedTarget: null } };
+    resource.document = { kind: "ready", document: { ...document, target: { ...document.target, referenceContext: second } } };
+    Object.defineProperty(resource, "target", { get: () => resource.document.kind === "ready" ? resource.document.document.target : null });
+    resource.annotationThreads = [firstThread, secondThread, global, missing];
+    const groups = detailAnnotationGroups(resource, line => line, 1, text);
+    expect(groups.filter(group => group.placement === "inline").flatMap(group => group.threads.map(thread => thread.block.id))).toEqual(["annotation-global", "annotation-second"]);
+    expect(groups.find(group => group.placement === "unpositioned")!.threads.map(thread => thread.block.id)).toEqual(["annotation-first", "annotation-missing"]);
+    expect(annotationScopeLabel(global, resource)).toBe("Resource-wide");
+    expect(annotationScopeLabel(secondThread, resource)).toContain("This reference");
+    expect(annotationScopeLabel(firstThread, resource)).toContain("Other reference");
+    expect(annotationScopeLabel(missing, resource)).toContain("original");
+    const globalView = { ...resource, target: document.target };
+    expect(annotationScopeLabel(missing, globalView)).toContain("Other reference");
+    host.annotationThreads = [secondThread];
+    const hostGroup = detailAnnotationGroups(host, line => line, 4, raw)[0]!;
+    expect(hostGroup.placement).toBe("inline");
+    expect(hostGroup.sourceSpan?.start).toBe(raw.lastIndexOf("[file::"));
+    expect(hostGroup.startLine).toBe(3);
+    const capabilities = getCapabilities();
+    setCapabilities({ ...capabilities, hyperlinks: true });
+    try {
+    const layout = previewLayout(resource);
+    layout.render(45);
+    const unpositioned = resource.previewRegions.regions.find(region => region.id.endsWith(":unpositioned"))!;
+    togglePreviewRegionDisclosure(resource.previewRegions, unpositioned.id);
+    const rendered = layout.render(45);
+    const visible = rendered.map(stripTerminalSequences).join("\n");
+    expect(visible).toContain("First reference comment");
+    const replyUri = previewRegionActionUri({ type: "annotation.thread.reply", annotationId: "annotation-first" });
+    expect(rendered.join("\n")).toContain(replyUri);
+    expect(resolvePreviewPointerAction(parseDetailPreviewActionUri(replyUri)!, true)).toEqual({
+      type: "activate", action: { type: "annotation.thread.reply", annotationId: "annotation-first" },
+    });
+    } finally { setCapabilities(capabilities); }
   });
 
   test("keeps available Resource text unpositioned when metadata is the selected presentation", () => {
@@ -2944,4 +3001,27 @@ test("deleted contextual occurrence stays unpositioned in Resource view", async 
     expect(frame).toContain("Unpositioned comments");
     expect(frame.split("\n").find(line => line.includes("Shared file passage"))).not.toStartWith("+ ");
   } finally { store.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test("historical Resource thread navigation follows the displayed anchors within one line", () => {
+  const displayed = "Alpha quote then Beta quote";
+  const latest = "Beta quote then Alpha quote";
+  const detail = webState(displayed);
+  if (detail.document.kind !== "ready" || detail.document.document.kind !== "resource" || !detail.document.document.description.web) throw new Error("Missing fixture");
+  const web = detail.document.document.description.web;
+  const representation: AnnotationRepresentation = {
+    id: web.representation.id,
+    subject: { kind: "resource", resourceId: detail.document.document.description.resource.id },
+    sourceSnapshot: { kind: "resource", resourceId: detail.document.document.description.resource.id, sourceSnapshotId: web.sourceSnapshot.id, revision: web.sourceSnapshot.revision },
+    adapter: web.representation.adapter, mediaType: web.representation.mediaType,
+    contentHash: annotationSourceHash(displayed), capturedAt: web.representation.derivedAt!,
+  };
+  detail.annotationThreads = ["Alpha quote", "Beta quote"].map((quote, index) => {
+    const original = textTarget(displayed, displayed.indexOf(quote), displayed.indexOf(quote) + quote.length, representation);
+    const historical = annotationThread(`thread-${index}`, original, quote);
+    const current = annotationThread(`thread-${index}`, textTarget(latest, latest.indexOf(quote), latest.indexOf(quote) + quote.length, { ...representation, id: "newer-representation", contentHash: annotationSourceHash(latest) }), quote);
+    return { ...current, originalTarget: original, resolutionHistory: [...historical.resolutionHistory, ...current.resolutionHistory] };
+  });
+  const groups = detailAnnotationGroups(detail, line => line, 1, displayed);
+  expect(groups.flatMap(group => group.threads.map(thread => thread.block.id))).toEqual(["thread-0", "thread-1"]);
 });
