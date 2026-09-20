@@ -4,7 +4,7 @@ import {
   attentionClientState,
   normalizeAttentionMark,
 } from "../src/attention";
-import { createAnnotationAnchor } from "../src/annotations";
+import { createAnnotationAnchor, createAnnotationReferenceContext } from "../src/annotations";
 import { emptyAttentionState } from "../src/attention";
 import { BufferComposer, bufferComposerEditorBody } from "../src/buffer-composer";
 import {
@@ -443,7 +443,10 @@ function createHarness(
     },
     async followResourceOccurrence(target) {
       calls.followedReferences.push(target);
-      return { resource: fileResource("same.md"), created: false };
+      const block = selection.selected!;
+      return { resource: fileResource("same.md"), created: false,
+        referenceContext: createAnnotationReferenceContext(block, target.occurrence!.start, target.occurrence!.end),
+      };
     },
     async resolveReference(target) {
       calls.followedReferences.push(target);
@@ -1256,7 +1259,7 @@ describe("detail controller projection and deferred refresh", () => {
   });
 
   test("multiple Resource occurrences use Properties without interning until an occurrence is chosen", async () => {
-    const source = makeBlock({ id: "source-block-001", text: "References\n\nOne [file::same.md] and two [file::same.md]." });
+    const source = makeBlock({ id: "source-block-001", updatedAt: "2026-01-01T00:00:00.000Z", text: "References\n\nOne [file::same.md] and two [file::same.md]." });
     const harness = createHarness(source);
     await harness.controller.initialize();
     await harness.controller.dispatch({ type: "reference.follow" }, viewport);
@@ -1280,6 +1283,28 @@ describe("detail controller projection and deferred refresh", () => {
       kind: "reference", value: source.id, preserveSource: false,
       occurrence: { revision: source.revision, start: entry.start, end: entry.end },
     }]);
+    expect(harness.controller.state.target).toMatchObject({ kind: "resource",
+      referenceContext: { sourceText: source.text, anchor: { start: entry.start, end: entry.end } },
+    });
+  });
+
+  test("comments on the focused reference occurrence without opening or interning its Resource", async () => {
+    const source = makeBlock({ id: "source-block-001", updatedAt: "2026-01-01T00:00:00.000Z",
+      text: "References\n\nFirst [file::same.md].\nSecond [file::same.md]." });
+    const harness = createHarness(source);
+    await harness.controller.initialize();
+    await harness.controller.dispatch({ type: "reference.follow" }, viewport);
+    harness.controller.setPreviewRegions(detailPropertyInspectorRegions(harness.controller.state));
+    const entry = harness.controller.state.propertyInspector.model!.entries[1]!;
+    harness.controller.state.previewRegions.focusedRegionId = entry.occurrenceId;
+    await harness.controller.dispatch({ type: "annotation.comment.direct", capture: null }, viewport);
+    expect(harness.controller.state.mode).toBe("comment");
+    expect(harness.controller.state.annotationDraft?.target.referenceContext?.anchor.start).toBe(entry.start);
+    expect(harness.calls.followedReferences).toEqual([]);
+    await harness.controller.dispatch({ type: "buffer.insert", text: "Second use only" }, viewport);
+    await harness.controller.dispatch({ type: "buffer.save" }, viewport);
+    expect(harness.calls.creates[0]?.input.target.referenceContext?.anchor.start).toBe(entry.start);
+    expect(harness.controller.state.context.selected?.text).toBe(source.text);
   });
 
   test("follows a durable fragment reference to its anchored preview line", async () => {
@@ -3475,7 +3500,6 @@ describe("detail controller saves and annotations", () => {
       remoteStatus: null,
       availableCommands: [],
     };
-    const target = { kind: "resource" as const, resourceId };
     const unrelatedFile = filePreview({
       absolutePath: "/workspace/other.ts",
       displayPath: "other.ts",
@@ -3498,7 +3522,7 @@ describe("detail controller saves and annotations", () => {
       return receipt;
     };
     harness.effects.loadTarget = async (candidate) => candidate.kind === "resource"
-      ? { kind: "resource", target, description }
+      ? { kind: "resource", target: candidate, description }
       : {
           kind: "block",
           target: candidate,

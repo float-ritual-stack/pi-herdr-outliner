@@ -1,4 +1,5 @@
 import { hyperlink } from "@earendil-works/pi-tui";
+import { createAnnotationReferenceContext } from "./annotations";
 import {
   focusBlockByQuery,
   formatBlockFocusMatch,
@@ -34,6 +35,8 @@ import type {
   PageAddressResolution,
   Resource,
   InternResourceReceipt,
+  AnnotationReferenceContext,
+  ResourceTarget,
 } from "./types";
 
 const OUTLINER_SCHEME = "pi-outliner:";
@@ -242,10 +245,14 @@ export function resourceOccurrenceLinks(
 }
 
 /** Activation rechecks source identity before the existing explicit Resource follow. */
+export interface FollowResourceOccurrenceReceipt extends InternResourceReceipt {
+  readonly referenceContext: AnnotationReferenceContext;
+}
+
 export async function followResourceOccurrence(
   requester: BlockFocusRequester,
   target: OutlinerLinkTarget,
-): Promise<InternResourceReceipt> {
+): Promise<FollowResourceOccurrenceReceipt> {
   if (target.kind !== "reference" || !target.occurrence || !validOccurrenceAddress(target.occurrence)) {
     throw new Error("Resource reference requires an exact source revision and span");
   }
@@ -258,9 +265,10 @@ export async function followResourceOccurrence(
   );
   if (!occurrence) throw new Error("Resource reference occurrence no longer exists");
   if (occurrence.kind === "invalid-authored-resource") throw new Error(occurrence.message);
-  return requester.request<InternResourceReceipt>({
+  const receipt = await requester.request<InternResourceReceipt>({
     action: "resources.follow-authored", reference: occurrence.reference,
   });
+  return { ...receipt, referenceContext: createAnnotationReferenceContext(block, occurrence.start, occurrence.end) };
 }
 
 export interface ResolvedOutlinerLinkTarget {
@@ -336,13 +344,17 @@ export async function navigateOutlinerLink(
     };
   }
   if (target.kind === "resource" || target.kind === "reference") {
-    const resource = target.kind === "reference"
-      ? (await followResourceOccurrence(requester, target)).resource
+    const followed = target.kind === "reference"
+      ? await followResourceOccurrence(requester, target) : null;
+    const resource = followed
+      ? followed.resource
       : await requester.request<Resource>({
       action: "resources.get",
       resourceId: target.value,
     });
-    const navigationTarget = { kind: "resource" as const, resourceId: resource.id };
+    const navigationTarget: ResourceTarget = { kind: "resource", resourceId: resource.id,
+      ...(followed ? { referenceContext: followed.referenceContext } : {}),
+    };
     if (targets.sourceClientId) {
       const intent = target.intent ?? targets.intent ?? "open";
       const dispatched = await dispatchNavigation(

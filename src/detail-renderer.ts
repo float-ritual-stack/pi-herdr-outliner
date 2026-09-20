@@ -157,8 +157,11 @@ function renderDetailMetadata(
 ): string {
   const resource = detailResourceDescription(state);
   if (resource) {
+    const context = state.target?.kind === "resource" ? state.target.referenceContext : undefined;
     return fitDynamicText(
-      `resource · ${resource.source.name} · ${resource.resource.provider}`,
+      context
+        ? `reference · ${context.sourceText.split(/\r?\n/)[0]} · line ${context.sourceText.slice(0, context.anchor.start!).split("\n").length}`
+        : `resource · ${resource.source.name} · ${resource.resource.provider}`,
       width,
     );
   }

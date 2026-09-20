@@ -1251,7 +1251,9 @@ const composer = new BufferComposer(() => {
         ? target.anchor.exact ?? ""
         : "";
   return {
-    title: target?.representation.subject.kind === "resource"
+    title: target?.referenceContext
+      ? "Comment on this reference"
+      : target?.representation.subject.kind === "resource"
       ? "Comment on Resource selection"
       : "Comment on selection",
     context,

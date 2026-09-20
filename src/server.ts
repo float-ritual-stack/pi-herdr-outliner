@@ -10,6 +10,7 @@ import {
   normalizeAttentionMark,
 } from "./attention";
 import { readAuthoredLinks } from "./authored-links";
+import { normalizeAnnotationReferenceContext } from "./annotations";
 import type { HerdrRuntimeRegistry } from "./herdr-registry";
 import { isFragmentId, resolveFragment } from "./fragments";
 import { ALL_DETAILS_LOCKED_ERROR } from "./navigation-routes";
@@ -212,6 +213,8 @@ export class OutlinerServer {
       return { kind: "block", blockId, ...(fragmentId ? { fragmentId } : {}) };
     }
     if (value.kind === "resource") {
+      const referenceContext = "referenceContext" in value && value.referenceContext !== undefined
+        ? normalizeAnnotationReferenceContext(value.referenceContext) : undefined;
       const resourceId = normalizeResourceId(
         "resourceId" in value ? value.resourceId : undefined,
       );
@@ -226,6 +229,7 @@ export class OutlinerServer {
           kind: "resource",
           resourceId,
           ...(revision ? { revision } : {}),
+          ...(referenceContext ? { referenceContext } : {}),
         };
       }
       const resource = this.store.resources.require(resourceId);
@@ -236,6 +240,7 @@ export class OutlinerServer {
         kind: "resource",
         resourceId: resource.id,
         ...(revision ? { revision } : {}),
+        ...(referenceContext ? { referenceContext } : {}),
       };
     }
     throw new Error("Navigation target kind must be block or resource");

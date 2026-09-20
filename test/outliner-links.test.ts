@@ -29,7 +29,7 @@ function block(id: string, text: string): Block {
     text,
     author: "user",
     createdAt: "created",
-    updatedAt: "updated",
+    updatedAt: "2026-01-01T00:00:00.000Z",
     properties: [],
   };
 }
@@ -44,7 +44,10 @@ describe("outliner link URIs", () => {
       requests.push(request);
       return (request.action === "get" ? source : { resource: { id: "resource-same" }, created: true }) as T;
     } };
-    await expect(followResourceOccurrence(requester, target)).resolves.toMatchObject({ resource: { id: "resource-same" } });
+    await expect(followResourceOccurrence(requester, target)).resolves.toMatchObject({
+      resource: { id: "resource-same" },
+      referenceContext: { sourceText: source.text, anchor: { start, end: start + 15 } },
+    });
     expect(requests).toEqual([
       { action: "get", blockId: source.id },
       { action: "resources.follow-authored", reference: { kind: "filesystem", path: "same.md" } },
