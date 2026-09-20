@@ -8,7 +8,7 @@ import {
   projectVirtualBranches,
   type VirtualBranchConfig,
 } from "../src/virtual-branches";
-import type { BlockProperty, VisibleBlock, VisibleBlockCollection } from "../src/types";
+import type { BlockProperty, BlockSearchQuery, VisibleBlock, VisibleBlockCollection } from "../src/types";
 
 const timestamp = "2026-08-24T00:00:00.000Z";
 
@@ -546,6 +546,40 @@ describe("virtual branch projection", () => {
     }));
     expect(projection.branchStates.get(hubs.id)?.truncation.depth).toBe(false);
   });
+  test("keeps inline expansion local to physical, direct, and nested occurrences", async () => {
+    const outer = visibleBlock("outer", [
+      { key: "type", value: "virtual-branch" },
+      { key: "query", value: "group=board" },
+    ]);
+    const inner = visibleBlock("inner", [
+      { key: "type", value: "virtual-branch" },
+      { key: "query", value: "kind=note" },
+      { key: "group", value: "board" },
+    ]);
+    const note = visibleBlock("note", [{ key: "kind", value: "note" }], {
+      hasChildren: true,
+    });
+    const child = visibleBlock("child", [], { parentId: note.id, depth: 1 });
+    const physical = [outer, inner, note, child];
+    const query = async (query: BlockSearchQuery) => complete(
+      query.filters?.some((filter) => filter.key === "group") ? [inner] : [note],
+    );
+    const baseline = await projectVirtualBranches(physical, physical, query);
+    const targets = baseline.rows.filter((row) =>
+      row.canonicalId === note.id || row.canonicalId === child.id
+    );
+    expect(targets).toHaveLength(6);
+
+    for (const selected of targets) {
+      const projection = await projectVirtualBranches(physical, physical, query, [], {
+        collapsedBlockIds: new Set(),
+        multilineExpandedRowIds: new Set([selected.rowId]),
+      });
+      expect(projection.rows.filter((row) => row.multilineExpanded).map((row) => row.rowId))
+        .toEqual([selected.rowId]);
+    }
+  });
+
   test("cuts nested projection cycles at the active view boundary", async () => {
     const first = visibleBlock("first-view", [
       { key: "type", value: "virtual-branch" },

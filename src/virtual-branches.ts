@@ -719,6 +719,7 @@ function composeNestedOccurrences<T extends ProjectionBlock>(
       depth,
       hasChildren,
       collapsed,
+      multilineExpanded: presentation.multilineExpandedRowIds.has(rowId),
     };
     composed.push(row);
     if (collapsed) return;
