@@ -119,7 +119,8 @@ const result = await runHerdrScenario({
       editable = await s.client.request<Block>({ action: "update", blockId: editable.id, expectedRevision: editable.revision,
         text: `Scale source 00 UPDATED-${i} [probe::scale]\nEXACT SOURCE 0`,
         mutation: { author: "agent", actorId: "pie-235-fixture" } });
-      await s.waitVisible(remote.tree, `Scale source 00 UPDATED-${i}`);
+      await s.waitFor("physical and projected source show the same new text", () => s.visible(remote.tree),
+        frame => frame.split(`Scale source 00 UPDATED-${i}`).length - 1 === 2);
       await s.waitVisible(remote.detail, `Scale source 00 UPDATED-${i}`);
       mutations.push(performance.now() - started);
       await s.client.request({ action: "move", blockId: editable.id, parentId: root.id, position: i % 2 });
