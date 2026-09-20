@@ -8,8 +8,10 @@ import { runHerdrScenario } from "./herdr-runner";
 
 const originalText = ["# Thread document", "", "GLOBAL PASSAGE", ...Array.from({ length: 22 }, (_, i) => `Source line ${i + 1}`), "CONTEXT PASSAGE", ...Array.from({ length: 20 }, (_, i) => `ORPHAN evidence ${i + 1}`)].join("\n");
 const changedText = originalText.slice(0, originalText.indexOf("ORPHAN evidence")) + "Replacement tail";
+const composed = process.argv.includes("--composed");
 const result = await runHerdrScenario({
-  name: "annotation-threads",
+  name: composed ? "annotation-threads-composed" : "annotation-threads",
+  layout: composed ? "composed" : "separate",
   async prepare(root) { await writeFile(join(root, "threads.md"), originalText); },
   async run(s) {
     const terminal = await s.attachClient();
@@ -46,10 +48,19 @@ const result = await runHerdrScenario({
     const threads = () => s.client.request<AnnotationThread[]>({ action: "annotations.list", query: { subject: { kind: "resource", resourceId: resource.id }, includeResolved: true } });
     const thread = async (id: string) => (await threads()).find(t => t.block.id === id)!;
     const goto = async (blockId: string, panes = { tree, detail }) => {
-      await s.focus(panes.tree); await s.keys(panes.tree, "g"); await s.waitVisible(panes.tree, "Goto:");
+      await s.focus(panes.tree);
+      if (composed && panes.tree === tree && (await current()).focusedRegion !== "tree") {
+        await terminal.write("\u001b[17~");
+        await s.waitFor("Tree region focused", current, c => c.focusedRegion === "tree");
+      }
+      await s.keys(panes.tree, "g"); await s.waitVisible(panes.tree, "Goto:");
       await s.text(panes.tree, blockId); await s.waitVisible(panes.tree, blockId.slice(0, 8)); await s.keys(panes.tree, "enter");
       await s.waitFor("target published", s.registrations, cs => cs.some(c => c.runtime?.paneId === panes.detail && c.currentTarget?.kind === "block" && c.currentTarget.blockId === blockId));
       await s.focus(panes.detail);
+      if (composed && panes.detail === detail && (await current()).focusedRegion !== "detail") {
+        await terminal.write("\u001b[17~");
+        await s.waitFor("Detail region focused", current, c => c.focusedRegion === "detail");
+      }
     };
     await goto(host.id);
     await s.keys(detail, "o"); await s.waitVisible(detail, "Choose a reference");
@@ -64,14 +75,21 @@ const result = await runHerdrScenario({
     await s.waitVisible(detail, "Existing agent reply");
     const beforeReply = await s.visible(detail);
     await s.checkpoint("02-selected-contextual-thread");
-    const pointerFrame = await s.waitFor("thread controls in attached client", () => terminal.visible(), frame => frame.includes("‹ Select › · Reply · Resolve"));
+    const pointerFrame = await s.waitFor("selected thread controls in attached client", () => terminal.visible(), frame => {
+      const panel = frame.slice(frame.indexOf("▶ Comment 2"));
+      return frame.includes("▶ Comment 2") && panel.includes("‹ Select › · Reply · Resolve");
+    });
     const pointerLines = pointerFrame.split("\n");
-    const row = pointerLines.findIndex(line => line.includes("‹ Select › · Reply · Resolve"));
+    const panelStart = pointerLines.findIndex(line => line.includes("▶ Comment 2"));
+    const panelEnd = pointerLines.findIndex((line, index) => index > panelStart && line.includes("╰"));
+    const row = pointerLines.findIndex((line, index) => index > panelStart && index < panelEnd && line.includes("‹ Select › · Reply · Resolve"));
+    assert.ok(row > panelStart, "Reply control belongs to the selected contextual thread");
     const column = visibleWidth(pointerLines[row]!.slice(0, pointerLines[row]!.indexOf("Reply")));
     await s.record("native-thread-reply-click", { row, column, frame: pointerFrame });
     await terminal.write(`\u001b[<0;${column + 1};${row + 1}M`);
     await terminal.write(`\u001b[<0;${column + 1};${row + 1}m`);
     await s.waitVisible(detail, "Reply to comment");
+    await s.waitVisible(detail, "“Second reference thread”");
     await s.checkpoint("02a-native-reply-control");
     await s.keys(detail, "esc"); await s.waitVisible(detail, "Reply cancelled");
     assert.deepEqual((await current()).currentTarget, target);
@@ -99,6 +117,16 @@ const result = await runHerdrScenario({
     await s.checkpoint("06-other-occurrence-reachable");
     await s.keys(detail, "]"); await s.waitVisible(detail, "Comment 4 of 4"); await s.keys(detail, "G"); await s.waitVisible(detail, "Orphan final comment sentinel");
     await s.checkpoint("07-orphan-reachable");
+    if (composed) {
+      assert.deepEqual((await current()).currentTarget, target);
+      assert.equal((await s.client.request<Block>({ action: "get", blockId: host.id })).text, host.text);
+      assert.deepEqual((await s.client.request<AnnotationRecord>({ action: "annotations.get", annotationId: selected.block.id })).originalTarget, selected.originalTarget);
+      await s.record("composed-thread-controls", { target, beforeReply, threads: await threads(),
+        input: "Internal F6 focus, contextual Resource opening, native Reply click, multiline reply, resolve/reopen, cancellation, other occurrence and orphan navigation",
+        limits: "Standalone companion journey covers full ANSI appendix and narrow thread scrolling; composed-surface companion covers narrow/wide allocation." });
+      return;
+    }
+
     await s.keys(detail, "]"); await s.waitVisible(detail, "wrapped"); await s.waitVisible(detail, "File-wide thread");
     await s.keys(detail, "["); await s.waitVisible(detail, "Comment 4 of 4"); await s.keys(detail, "G"); await s.waitVisible(detail, "Orphan final comment sentinel");
     await terminal.resize(100, 32);
