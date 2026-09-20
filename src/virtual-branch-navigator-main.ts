@@ -1,5 +1,7 @@
 import { emitKeypressEvents } from "node:readline";
+import { PassThrough } from "node:stream";
 import { getMarkdownTheme, initTheme } from "@earendil-works/pi-coding-agent";
+import { StdinBuffer } from "@earendil-works/pi-tui";
 import { createOutlinerClient } from "./client";
 import { listLiveClients } from "./client-target";
 import { projectDetailRead } from "./detail-embeds";
@@ -296,6 +298,9 @@ function stop(exitCode = 0): void {
   if (stopping) return;
   stopping = true;
   void stopWatcher?.();
+  process.stdin.off("data", handleRawInput);
+  mouseInput.destroy();
+  keyboardInput.destroy();
   if (process.stdin.isTTY) process.stdin.setRawMode(false);
   process.stdout.off("resize", draw);
   process.stdout.write(`${BRACKETED_PASTE_DISABLE}\x1b[?1000l\x1b[?1006l\x1b[?25h\x1b[?1049l`);
@@ -304,18 +309,28 @@ function stop(exitCode = 0): void {
 
 initTheme(undefined, false);
 const inputDecoder = new TerminalInputDecoder();
-emitKeypressEvents(process.stdin);
+const mouseInput = new StdinBuffer();
+const keyboardInput = new PassThrough();
+function handleRawInput(data: string | Buffer): void {
+  mouseInput.process(data);
+}
+// Separate complete mouse reports before readline can turn their trailing m into a key.
+mouseInput.on("data", (sequence) => {
+  if (isTreeMouseSequence(sequence)) {
+    const clickedFrame = rendered;
+    if (clickedFrame) enqueueWork(() => controller.handleMouse(sequence, clickedFrame));
+  } else {
+    keyboardInput.write(sequence);
+  }
+});
+emitKeypressEvents(keyboardInput);
 if (process.stdin.isTTY) process.stdin.setRawMode(true);
 process.stdout.write(`\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1006h${BRACKETED_PASTE_ENABLE}`);
-process.stdin.on("keypress", (str: string | undefined, key: TerminalKey) => {
+process.stdin.on("data", handleRawInput);
+keyboardInput.on("keypress", (str: string | undefined, key: TerminalKey) => {
   const text = str ?? "";
   const sequence = key.sequence ?? text;
   if (!sequence && !key.name) return;
-  const clickedFrame = rendered;
-  if (isTreeMouseSequence(sequence) && clickedFrame) {
-    enqueueWork(() => controller.handleMouse(sequence, clickedFrame));
-    return;
-  }
   const action = inputDecoder.consume(text, key);
   enqueueWork(() => controller.handleKeypress(
     text,
