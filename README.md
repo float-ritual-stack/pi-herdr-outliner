@@ -751,10 +751,36 @@ Long physical lines wrap without changing raw text. Continuation rows remain ass
 External block editing never writes the canonical block directly. From preview it first opens and locks an ordinary Detail draft; from edit mode it sends the exact unsaved buffer. Save and Esc remain the block commit/discard boundary. Writable, unpinned text filesystem Resources use the same private editor adapter, but a changed returned draft is revision-checked and written back to the source immediately; `e` instead opens the built-in buffer and commits through `Ctrl+S`. Detail uses exported `$VISUAL` or `$EDITOR` directly; when Herdr's plugin environment omits them, it reads those values and `PATH` from the user's interactive shell without evaluating the editor value as shell code. Outliner leaves the alternate screen, waits for that editor in the same local or SSH/Herdr PTY, restores the originating Detail and viewport, then imports valid UTF-8 only if the captured block version or filesystem revision is unchanged. Failed launches, nonzero exits, restoration failures, and version conflicts preserve the private recovery file and leave canonical content unchanged.
 
 Filesystem saves compare the opened file's content hash, size, and modification
-time; a conflict retains the Detail draft and leaves the file unchanged. The
-check and final rename are separate operations: avoid concurrent external writes
-during a save. Writes in that interval can still be overwritten without an
-automatic recovery copy; PIE-280 tracks this remaining limitation.
+time. A stale edit retains its Detail draft and leaves the source unchanged.
+During commit, Outliner first persists the submitted draft, then moves the current
+file into a private sibling recovery directory and publishes the draft only if
+the original pathname is still absent. A writer that changes the displaced file
+or creates a new file at that pathname produces a conflict; it is never silently
+replaced. The error names the recovery directory and Detail keeps the draft.
+
+Each attempted commit retains `.outliner-save-<UUID>/` beside the source:
+`draft` contains the submitted text, `original` retains the displaced file when
+displacement occurred, and `save.json` identifies the target and opened revision.
+The directory is private (0700), drafts are 0600, and the published file preserves
+the source's permission bits. These copies are **not automatically deleted**:
+an external editor can continue writing through an old descriptor after a save,
+and those later bytes remain in `original`. To recover, inspect the directory
+named by the error (or the directories beside the file), compare `draft` and
+`original` with the current source, and copy the desired text to a new filename.
+Only remove a recovery directory after closing other editors and confirming
+that neither retained version is needed.
+
+This is a recoverable replacement contract, not atomic compare-and-swap. There
+is a brief interval where the source pathname is absent. An interrupted save's
+pending marker lets service startup (or the next Resource read) restore the
+displaced original **only when that pathname is absent**; an external replacement
+always stays in place. The submitted draft remains available after interruption.
+Files and parent directories are flushed before a save is acknowledged. This
+requires a local filesystem supporting hard links, rename, and directory fsync;
+unsupported primitives fail the save. Filesystem or hardware durability failures,
+hostile replacement of source directories, and concurrent deletion of recovery
+files are outside this contract. Fault tests cover Linux process interruption;
+power-loss and network-filesystem behavior have not been verified.
 
 In edit mode, wheel/trackpad input scrolls the region under the pointer. Editor scrolling changes only its visual viewport; it never moves the text cursor. The next keyboard cursor movement restores cursor-follow. A primary press-drag-release gesture in the editor maps through headers, split geometry, line-number width, wrapping, tabs, grapheme boundaries, and Unicode display width to a valid source range, with edge dragging scrolling the editor viewport. Preview clicks retain their existing link and region actions.
 
