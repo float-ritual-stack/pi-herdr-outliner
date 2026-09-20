@@ -30,7 +30,7 @@ import {
   type OutlinerActionKeymap,
   type OutlinerActionMenuItem,
 } from "./outliner-actions";
-import { dispatchNavigation } from "./navigation-routes";
+import type { TreeNavigation } from "./navigation-routes";
 import { layoutExpandedBlock } from "./tree-layout";
 import {
   historyNavigationDirection,
@@ -63,9 +63,6 @@ import type {
   InternResourceReceipt,
   OutlinerEvent,
   OutlinerNavigationIntent,
-  OutlinerNavigationDispatch,
-  OutlinerNavigationResolution,
-  BrowsingContextPublication,
   OutlinerNavigationTarget,
   PageAddressCollection,
   PropertyCatalogItem,
@@ -154,6 +151,7 @@ export interface TreeView {
 
 export interface TreeControllerEffects {
   readonly workspaceRoot: string;
+  readonly navigation: TreeNavigation;
   readonly clientId: string;
   readonly browsingContextId: string;
   request<T>(input: RequestInput): Promise<T>;
@@ -170,6 +168,7 @@ export interface TreeControllerEffects {
 
 export interface TreeController {
   view(): TreeView;
+  revealBlock(blockId: string): Promise<void>;
   initialize(): Promise<void>;
   handleKeypress(str: string, key: TerminalKey, inputAction: TerminalInputAction): Promise<void>;
   handlePaste(text: string): Promise<void>;
@@ -196,6 +195,7 @@ interface TreeNavigationEntry {
 }
 
 interface PendingBrowsingPublication {
+  rowId: string | null;
   readonly target: OutlinerNavigationTarget | null;
   readonly dispatchPreview: boolean;
 }
@@ -926,13 +926,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     while (pendingBrowsingPublication) {
       const desired = pendingBrowsingPublication;
       pendingBrowsingPublication = null;
-      const publication = await effects.request<BrowsingContextPublication>({
-        action: "browsing-context.publish",
-        sourceClientId: effects.clientId,
-        contextId: effects.browsingContextId,
-        target: desired.target,
-        ...(desired.dispatchPreview ? {} : { dispatchPreview: false }),
-      });
+      const publication = await effects.navigation.publish(desired.target, desired.dispatchPreview, desired.rowId);
       if (!pendingBrowsingPublication) {
         workspaceContextBlockId =
           desired.target?.kind === "block" ? desired.target.blockId : null;
@@ -981,7 +975,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     target: OutlinerNavigationTarget | null,
     dispatchPreview = true,
   ): Promise<void> {
-    pendingBrowsingPublication = { target, dispatchPreview };
+    pendingBrowsingPublication = { target, dispatchPreview, rowId: rows[selectedIndex]?.rowId ?? null };
     await startBrowsingPublicationPump();
   }
 
@@ -1172,18 +1166,16 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         } else {
           target = activation.target;
         }
-        await dispatchNavigation(
-          effects,
-          effects.clientId,
+        await effects.navigation.dispatch(
           target,
           "open",
           { preserveSource: true },
         );
         status = createdPage
-          ? "Page created and opened in first unlocked Detail"
+          ? `Page created and opened in ${effects.navigation.readerLabel}`
           : createdResource
-          ? "Resource created and opened in first unlocked Detail"
-          : "Authored target opened in first unlocked Detail";
+          ? `Resource created and opened in ${effects.navigation.readerLabel}`
+          : `Authored target opened in ${effects.navigation.readerLabel}`;
       } catch (error) {
         status = errorMessage(error);
       }
@@ -1191,11 +1183,11 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       return;
     }
     try {
-      await dispatchNavigation(effects, effects.clientId, {
+      await effects.navigation.dispatch({
         kind: "block",
         blockId: selected.canonicalId,
       }, "open");
-      status = "Reader opened in first unlocked Detail";
+      status = `Reader opened in ${effects.navigation.readerLabel}`;
     } catch (error) {
       status = errorMessage(error);
     }
@@ -1237,20 +1229,8 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     resetQuickEditor();
     await selectVisibleBlock(targetId, { preferredRowId: targetRowId });
     try {
-      const destination = await effects.request<OutlinerNavigationResolution>({
-        action: "navigation.resolve",
-        sourceClientId: effects.clientId,
-        intent: "open",
-      });
-      await effects.request({
-        action: "ui.command.send",
-        command: {
-          targetClientId: destination.targetClientId,
-          command: "edit",
-          target: { kind: "block", blockId: targetId },
-        },
-      });
-      status = "Multiline editor opened and locked in first unlocked Detail";
+      await effects.navigation.edit(targetId);
+      status = `Multiline editor opened and locked in ${effects.navigation.readerLabel}`;
     } catch (error) {
       status = errorMessage(error);
     }
@@ -1613,8 +1593,8 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     navigationIndex = targetIndex;
     if (canonical.effectiveDeletedRootId) {
       await flushBrowsingPublications();
-      await effects.request({ action: "navigation.dispatch", sourceClientId: effects.clientId, target: { kind: "block", blockId: canonical.id }, intent: "open", });
-      status = "Navigation history opened deleted block read-only in first unlocked Detail";
+      await effects.navigation.dispatch({kind: "block", blockId: canonical.id}, "open");
+      status = `Navigation history opened deleted block read-only in ${effects.navigation.readerLabel}`;
       return;
     }
 
@@ -1662,29 +1642,19 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       return;
     }
     if (reference.kind === "page") {
-      await effects.request({
-        action: "navigation.resolve",
-        sourceClientId: effects.clientId,
-        intent,
-      });
+      await effects.navigation.resolve(intent);
     }
     const resolved = await resolveOutlinerLinkTarget(effects, reference);
-    const dispatched = await effects.request<OutlinerNavigationDispatch>({
-      action: "navigation.dispatch",
-      sourceClientId: effects.clientId,
-      target: {
+    const dispatched = await effects.navigation.dispatch({
         kind: "block",
         blockId: resolved.block.id,
         ...(resolved.fragmentId ? { fragmentId: resolved.fragmentId } : {}),
-      },
-      intent,
-      ...(intent === "reveal" ? { focusTarget: true } : {}),
-    });
+      }, intent, {focusTarget: intent === "reveal"});
     const verb = intent === "open"
       ? resolved.created ? "Created and opened" : "Opened"
       : "Revealed";
     status = intent === "open"
-      ? `${verb} ${blockDisplayTitle(resolved.block)} in first unlocked Detail`
+      ? `${verb} ${blockDisplayTitle(resolved.block)} in ${effects.navigation.readerLabel}`
       : `${verb} ${blockDisplayTitle(resolved.block)} · ${dispatched.resolution}`;
   }
 
@@ -2317,6 +2287,12 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   }
   return {
     view,
+    async revealBlock(blockId) {
+      if (mode !== "browse") throw new Error("Finish or cancel the Tree editor before navigating");
+      await selectVisibleBlock(blockId, { recordNavigation: true, physicalSource: true });
+      effects.focusSelf();
+      effects.invalidate();
+    },
     initialize,
     handleKeypress,
     handlePaste,

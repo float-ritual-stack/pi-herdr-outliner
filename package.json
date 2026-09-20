@@ -25,7 +25,8 @@
     "test:e2e:file-authority": "bun run test/e2e/file-authority.ts && bun run test/e2e/file-authority.ts --ansi",
     "test:e2e:annotation-identity": "bun run test/e2e/annotation-identity.ts",
     "test:e2e:tree-index": "bun run test/e2e/tree-index.ts && bun run test/e2e/tree-index.ts --forwarded",
-    "test:e2e:detail-progressive": "bun run test/e2e/detail-progressive.ts && bun run test/e2e/detail-progressive.ts --forwarded"
+    "test:e2e:detail-progressive": "bun run test/e2e/detail-progressive.ts && bun run test/e2e/detail-progressive.ts --forwarded",
+    "test:e2e:composed": "bun run test/e2e/composed-surface.ts"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "^0.84.2",

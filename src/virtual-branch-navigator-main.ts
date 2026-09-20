@@ -21,7 +21,7 @@ import type {
   Block,
   BookmarkResolution,
   BookmarkRemoveReceipt,
-  OutlinerClientRole,
+  OutlinerRegion,
   ResolvedBlockReferences,
   VisibleBlockCollection,
   WorkspaceSnapshot,
@@ -62,7 +62,7 @@ function parseLaunch(): VirtualBranchNavigatorLaunch {
   }
   return {
     sourceClientId: requiredEnvironment("OUTLINER_NAVIGATOR_SOURCE_CLIENT_ID"),
-    sourceRole: sourceRole satisfies OutlinerClientRole,
+    sourceRole: sourceRole satisfies OutlinerRegion,
     browsingContextId: requiredEnvironment("OUTLINER_BROWSING_CONTEXT_ID"),
     viewId: requiredEnvironment("OUTLINER_NAVIGATOR_VIEW_ID"),
     ...(adapter === "bookmark" ? { adapter } : {}),
@@ -200,7 +200,7 @@ const controller = new VirtualBranchNavigatorController(launch.sourceRole, {
       action: "ui.command.send",
       command: {
         targetClientId: launch.sourceClientId,
-        command: "replace",
+        command: "replace", targetRegion: "detail",
         target: { kind: "block", blockId },
       },
     });

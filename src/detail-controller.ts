@@ -39,7 +39,7 @@ import {
   type OutlinerLinkTarget,
   type ResolvedOutlinerLinkTarget,
 } from "./outliner-links";
-import { ALL_DETAILS_LOCKED_ERROR } from "./navigation-routes";
+import { ALL_DETAILS_LOCKED_ERROR, PRIMARY_DETAIL_LOCKED_ERROR } from "./navigation-routes";
 import {
   createOpenDestinationChooserState,
   OpenDestinationChooser,
@@ -194,6 +194,7 @@ export interface DetailPropertyInspectorState {
 export interface DetailControllerOptions {
   propertyInspectorPresentation?: DetailPropertyInspectorPresentation;
   destinationTimeoutMs?: number;
+  readerLabel?: string;
   initialTarget?: OutlinerNavigationTarget;
   destinationScheduler?: OpenDestinationScheduler;
   actionKeymap?: OutlinerActionKeymap;
@@ -686,6 +687,7 @@ export interface DetailController {
     focus: TextBufferPoint,
   ): DetailResourceSelectionCapture | null;
   setPreviewRegions(regions: readonly PreviewRegion[]): void;
+  handleUiCommand(command: OutlinerUiCommand, viewport: DetailViewport): Promise<void>;
   onServiceEvent(event: OutlinerEvent, viewport: DetailViewport): Promise<void>;
   supersedePassivePreview(): void;
   handleDestinationChooserKeypress(str: string, key: TerminalKey): Promise<boolean>;
@@ -2105,10 +2107,10 @@ export function createDetailController(
       if (dispatched.targetClientId === effects.clientId) {
         await applyNavigationCommand(dispatched.command);
       }
-      state.status = `Opened ${target.title} in first unlocked Detail`;
+      state.status = `Opened ${target.title} in ${options.readerLabel ?? "first unlocked Detail"}`;
       return true;
     } catch (error) {
-      if (errorMessage(error) === ALL_DETAILS_LOCKED_ERROR) {
+      if (errorMessage(error) === ALL_DETAILS_LOCKED_ERROR || errorMessage(error) === PRIMARY_DETAIL_LOCKED_ERROR) {
         return false;
       }
       throw error;
@@ -2148,6 +2150,7 @@ export function createDetailController(
     invalidate: emit,
   }, {
     state: destinationChooserState,
+    readerLabel: options.readerLabel,
     ...(options.destinationTimeoutMs === undefined
       ? {}
       : { timeoutMs: options.destinationTimeoutMs }),
@@ -3842,6 +3845,58 @@ export function createDetailController(
     emit();
   };
 
+  async function handleUiCommand(command: OutlinerUiCommand, viewport: DetailViewport): Promise<void> {
+    if (command.command === "comment.selection") {
+      if (!command.renderedSelection) {
+        state.status = "Rendered selection payload is missing";
+      } else if (isBufferMode()) {
+        state.status = "Finish or cancel the current editor before commenting";
+      } else {
+        await beginRenderedComment(command.renderedSelection);
+      }
+      effects.focusSelf();
+      emit();
+      return;
+    }
+    if (command.command === "backlinks.select") {
+      if (
+        command.targetBlockId === detailBlockTarget(state)?.blockId &&
+        command.sourceBlockId
+      ) {
+        await loadBacklinks();
+        const index = visibleBacklinkSources(state.backlinks)
+          .findIndex((source) => source.blockId === command.sourceBlockId);
+        if (index >= 0) {
+          state.backlinks.selectedIndex = index;
+          state.previewRegions.focusedRegionId = `backlink:${command.sourceBlockId}`;
+        }
+      }
+      effects.focusSelf();
+      emit();
+      return;
+    }
+    if (
+      state.connectionMode === "locked" &&
+      (command.command === "preview" || command.command === "open")
+    ) {
+      return;
+    }
+    if (isBufferMode()) {
+      if ("target" in command && command.target) pendingUiCommand = command;
+      state.refreshPending = true;
+      return;
+    }
+    let navigationOutcome: DetailLoadOutcome | null = null;
+    if ("target" in command && command.target) {
+      navigationOutcome = await applyNavigationCommand(command);
+      if (navigationOutcome === "superseded") return;
+    }
+    if (command.command === "edit") await beginEdit(viewport);
+    if (command.command !== "preview") effects.focusSelf();
+    if (navigationOutcome !== "cached" || command.command === "edit") emit();
+    return;
+  }
+
   return {
     get state() {
       return state;
@@ -3854,6 +3909,7 @@ export function createDetailController(
       }
     },
     isBufferMode,
+    handleUiCommand,
     dispatch,
     captureResourcePointerSelection,
     setPreviewRegions(regions) {
@@ -3914,56 +3970,7 @@ export function createDetailController(
         return;
       }
       if (event.domain === "ui") {
-        const command = event.command;
-        if (!command || command.targetClientId !== effects.clientId) return;
-        if (command.command === "comment.selection") {
-          if (!command.renderedSelection) {
-            state.status = "Rendered selection payload is missing";
-          } else if (isBufferMode()) {
-            state.status = "Finish or cancel the current editor before commenting";
-          } else {
-            await beginRenderedComment(command.renderedSelection);
-          }
-          effects.focusSelf();
-          emit();
-          return;
-        }
-        if (command.command === "backlinks.select") {
-          if (
-            command.targetBlockId === detailBlockTarget(state)?.blockId &&
-            command.sourceBlockId
-          ) {
-            await loadBacklinks();
-            const index = visibleBacklinkSources(state.backlinks)
-              .findIndex((source) => source.blockId === command.sourceBlockId);
-            if (index >= 0) {
-              state.backlinks.selectedIndex = index;
-              state.previewRegions.focusedRegionId = `backlink:${command.sourceBlockId}`;
-            }
-          }
-          effects.focusSelf();
-          emit();
-          return;
-        }
-        if (
-          state.connectionMode === "locked" &&
-          (command.command === "preview" || command.command === "open")
-        ) {
-          return;
-        }
-        if (isBufferMode()) {
-          if ("target" in command && command.target) pendingUiCommand = command;
-          state.refreshPending = true;
-          return;
-        }
-        let navigationOutcome: DetailLoadOutcome | null = null;
-        if ("target" in command && command.target) {
-          navigationOutcome = await applyNavigationCommand(command);
-          if (navigationOutcome === "superseded") return;
-        }
-        if (command.command === "edit") await beginEdit(viewport);
-        if (command.command !== "preview") effects.focusSelf();
-        if (navigationOutcome !== "cached" || command.command === "edit") emit();
+        if (event.command?.targetClientId === effects.clientId) await handleUiCommand(event.command, viewport);
         return;
       }
       if (event.domain === "resource-catalog") {

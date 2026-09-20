@@ -28,7 +28,7 @@ import {
   parseTreeWheelEvent,
   treeClickActivates,
 } from "./tree-mouse";
-import type { Block, OutlinerClientRole } from "./types";
+import type { Block, OutlinerRegion } from "./types";
 import {
   virtualBranchStateLabel,
   type VirtualBranchOccurrenceRow,
@@ -37,7 +37,7 @@ import {
 
 export interface VirtualBranchNavigatorLaunch {
   sourceClientId: string;
-  sourceRole: OutlinerClientRole;
+  sourceRole: OutlinerRegion;
   browsingContextId: string;
   viewId: string;
   adapter?: "bookmark";
@@ -146,7 +146,7 @@ export class VirtualBranchNavigatorController {
   private closed = false;
 
   constructor(
-    readonly sourceRole: OutlinerClientRole,
+    readonly sourceRole: OutlinerRegion,
     private readonly effects: VirtualBranchNavigatorEffects,
     options: VirtualBranchNavigatorOptions = {},
   ) {

@@ -124,7 +124,7 @@ const controller = new BacklinkPeekController(
         action: "ui.command.send",
         command: {
           targetClientId: launch.sourceClientId,
-          command: "backlinks.select",
+          command: "backlinks.select", targetRegion: "detail",
           targetBlockId: launch.targetBlockId,
           sourceBlockId,
         },
@@ -133,7 +133,7 @@ const controller = new BacklinkPeekController(
     async replaceSource(sourceBlockId) {
       await client.request({
         action: "ui.command.send",
-        command: { targetClientId: launch.sourceClientId, command: "replace", target: { kind: "block", blockId: sourceBlockId },  },
+        command: { targetClientId: launch.sourceClientId, command: "replace", targetRegion: "detail", target: { kind: "block", blockId: sourceBlockId },  },
       });
     },
     async openInFirstUnlocked(sourceBlockId) {

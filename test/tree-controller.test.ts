@@ -1,3 +1,4 @@
+import { serviceTreeNavigation } from "../src/navigation-routes";
 import { describe, expect, test } from "bun:test";
 import { setImmediate } from "node:timers/promises";
 import {
@@ -140,6 +141,7 @@ function harness(
     invalidations: 0,
     stops: 0,
     effects: {
+      navigation: serviceTreeNavigation({request: input => result.effects.request(input)}, clientId, `${clientId}-context`),
       clientId,
       browsingContextId: `${clientId}-context`,
       workspaceRoot: "/workspace",
@@ -1658,7 +1660,7 @@ describe("createTreeController", () => {
     await controller.handleKeypress("e", { name: "e" }, "pass");
     expect(lastCall(fake.calls, "ui.command.send")).toEqual({
       action: "ui.command.send",
-      command: { targetClientId: "detail-test", command: "edit", target: { kind: "block", blockId: selected.id } },
+      command: { targetClientId: "detail-test", command: "edit", targetRegion: "detail", target: { kind: "block", blockId: selected.id } },
     });
     expect(controller.view().status).toBe(
       "Multiline editor opened and locked in first unlocked Detail",
@@ -2449,7 +2451,7 @@ describe("createTreeController", () => {
     await controller.handleKeypress("", { name: "e", ctrl: true }, "pass");
     expect(lastCall(fake.calls, "ui.command.send")).toEqual({
       action: "ui.command.send",
-      command: { targetClientId: "detail-test", command: "edit", target: { kind: "block", blockId: "card" } },
+      command: { targetClientId: "detail-test", command: "edit", targetRegion: "detail", target: { kind: "block", blockId: "card" } },
     });
     await controller.handleKeypress("", { name: "up" }, "pass");
     expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe(

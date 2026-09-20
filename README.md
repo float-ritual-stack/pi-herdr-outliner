@@ -23,6 +23,48 @@ The project started as a small Friday-night experiment and grew into a durable w
 4. **Visible incompleteness.** Bounded queries report whether their result is complete or truncated.
 5. **Properties remain text.** `[key::value]` tokens are readable canonical text and also indexed for queries.
 
+
+## Combined Tree and Detail experiment
+
+Herdr’s **Outliner: open combined Tree + Detail experiment** action opens a fixed
+Tree/Detail split in one pane. The normal separate-pane action remains available.
+From a Herdr pane, invoke it with:
+
+```sh
+herdr plugin action invoke open-composed --plugin float.pi-outliner
+```
+
+Tree owns its selected occurrence, history and scroll. Detail owns its target,
+lock, retained Resource revision, draft, undo/redo and scroll. Enter opens the
+selected target in the primary Detail; `F6` switches regions, and `q` returns from
+Detail to Tree. Ordinary navigation and focus remain usable while Herdr discovery
+is unavailable, provided the Outliner service is healthy. A locked primary reader
+stays locked; opening a different destination is explicit.
+
+The existing `o` destination chooser can replace the primary reader or open a
+separate Detail to the right/below. Herdr still places, moves and closes detached
+panes. Closing a view does not delete its blocks, Resources or annotations.
+`Ctrl+Q` refuses to close a composed surface while a text or comment draft is
+active. This is a keyboard guard, not draft persistence after a forced pane close
+or process kill.
+
+Native pointer selection inside Detail followed by `c` keeps source coordinates
+through the split and resize. Herdr’s external copy-mode comment action is refused
+for composed panes: its handoff identifies a pane and quote but cannot prove the
+internal region. Use Detail’s pointer selection and `c`, or a standalone Detail.
+Standalone copy-mode comments keep their existing behavior.
+
+One live `role: "composed"` registration represents the host pane. Its
+`treeSelection` and `currentTarget` describe different facts; `focusedRegion`
+identifies the active region. Agent `ui.command.send` requests and attention
+reveal/focus requests must name `targetRegion: "tree" | "detail"` for this client.
+Walkthrough document steps target Detail. Resource retention uses Detail’s target,
+including its exact revision, regardless of which region has keyboard focus.
+
+Run `bun run test:e2e:composed` for the isolated actual-application journey. It
+records frames, state, native pointer input, registry fault/restoration, detached
+movement/closure and process cleanup. No shared user host is used.
+
 ## Current capabilities
 
 - SQLite-backed hierarchical blocks with stable UUIDs, sibling order, authors, timestamps, and one canonical graph per workspace root.

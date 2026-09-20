@@ -1,3 +1,4 @@
+import { clientSupportsRole } from "./types";
 import { createConnection } from "node:net";
 import { hostname } from "node:os";
 import { listLiveClients, sendClientCommand } from "./client-target";
@@ -69,7 +70,7 @@ export function requireInvokingDetail(
 ): OutlinerClientRegistration {
   const matches = clients.filter(
     (client) =>
-      client.role === "detail" &&
+      clientSupportsRole(client, "detail") &&
       client.runtime?.hostname === invokingHostname &&
       client.runtime.paneId === paneId,
   );
@@ -80,6 +81,7 @@ export function requireInvokingDetail(
     throw new Error("Multiple Outliner Details claim the invoking Herdr pane");
   }
   const detail = matches[0]!;
+  if (detail.role === "composed") throw new Error("Herdr selection has no internal-region provenance in a combined Outliner; select inside Detail and press c instead");
   if (detail.currentTarget?.kind !== "block") {
     throw new Error("The invoking Detail has no open block");
   }
@@ -222,7 +224,7 @@ export async function dispatchNativeSelectionComment(options: {
     snapshotText: after.text,
   };
   await sendClientCommand(client, confirmedDetail.clientId, {
-    command: "comment.selection",
+    command: "comment.selection", targetRegion: "detail",
     renderedSelection: capture,
   });
   return capture;

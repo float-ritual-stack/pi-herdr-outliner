@@ -58,7 +58,7 @@ test("focuses the Tree selected by live same-tab routing", async () => {
       action: "ui.command.send",
       command: {
         targetClientId: "tree-visible",
-        command: "focus",
+        command: "focus", targetRegion: "tree",
       },
     },
   ]);

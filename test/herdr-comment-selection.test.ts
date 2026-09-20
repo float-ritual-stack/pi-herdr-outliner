@@ -112,6 +112,7 @@ test("dispatches the immutable quote with pane revision and projection identity 
     command: {
       targetClientId: "detail-1",
       command: "comment.selection",
+      targetRegion: "detail",
       renderedSelection: capture,
     },
   });
@@ -144,4 +145,10 @@ test("rejects a pane rerender between selection validation and dispatch", async 
       text: "Detail\n\nSelected passage",
     }),
   })).rejects.toThrow("changed after Herdr validated");
+});
+
+
+test("does not invent internal-region provenance for a composed pane's Herdr selection", () => {
+  const composed = {...detail, role: "composed" as const, focusedRegion: "detail" as const};
+  expect(() => requireInvokingDetail([composed], "w1:p2", hostname())).toThrow(/internal-region provenance/);
 });

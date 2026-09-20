@@ -632,6 +632,7 @@ export type AttentionTarget =
     };
 
 export interface AttentionMarkInput {
+  targetRegion?: OutlinerRegion;
   markId: string;
   targetClientId: string;
   target: AttentionTargetInput;
@@ -674,6 +675,7 @@ export interface AttentionClearInput {
 export interface AttentionAcknowledgeInput extends AttentionClearInput {}
 
 export interface AttentionInstruction {
+  targetRegion?: OutlinerRegion;
   markId: string;
   reveal: boolean;
   focus: boolean;
@@ -877,7 +879,12 @@ export interface DeliveryReceipt {
   created: boolean;
 }
 
-export type OutlinerClientRole = "tree" | "detail";
+export type OutlinerClientRole = "tree" | "detail" | "composed";
+export type OutlinerRegion = "tree" | "detail";
+
+export function clientSupportsRole(client: Pick<OutlinerClientRegistration, "role">, role: OutlinerClientRole): boolean {
+  return client.role === role || (client.role === "composed" && role !== "composed");
+}
 
 export interface BlockTarget {
   kind: "block";
@@ -914,6 +921,8 @@ export interface OutlinerClientRegistration {
   currentTarget?: OutlinerNavigationTarget;
   runtime?: OutlinerClientRuntime;
   resourcePresentation?: ResourcePresentationContext;
+  focusedRegion?: OutlinerRegion;
+  treeSelection?: { target: OutlinerNavigationTarget; rowId: string };
 }
 
 export type PageAddressKind = "page" | "alias" | "work-id";
@@ -1149,7 +1158,7 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 59;
+export const OUTLINER_PROTOCOL_VERSION = 60;
 
 
 export interface OutlinerServiceStatus {
@@ -1188,6 +1197,8 @@ export type OutlinerRequest =
       locked?: boolean;
       currentTarget?: OutlinerNavigationTarget | null;
       runtime?: OutlinerClientRuntime | null;
+      focusedRegion?: OutlinerRegion;
+      treeSelection?: { target: OutlinerNavigationTarget; rowId: string } | null;
     }
   | { id: string; action: "resource-sources.create"; input: CreateResourceSourceInput }
   | { id: string; action: "resource-sources.list" }
@@ -1595,7 +1606,7 @@ export interface TreeIndexSnapshot {
   workIdPrefix?: string;
 }
 
-export type OutlinerUiCommand =
+export type OutlinerUiCommand = (
   | {
       targetClientId: string;
       command: "focus";
@@ -1624,13 +1635,14 @@ export type OutlinerUiCommand =
       targetClientId: string;
       command: "comment.selection";
       renderedSelection: RenderedSelectionCapture;
-    };
+    }) & { targetRegion?: OutlinerRegion };
 
 export interface OutlinerNavigationResolution {
   sourceClientId: string;
   targetClientId: string;
   intent: OutlinerNavigationIntent;
   resolution: "unlocked" | "self" | "context" | "same-tab";
+  targetRegion?: OutlinerRegion;
 }
 
 export interface OutlinerNavigationDispatch extends OutlinerNavigationResolution {

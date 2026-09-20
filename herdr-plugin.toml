@@ -27,6 +27,12 @@ placement = "split"
 command = ["/bin/sh", "scripts/run-bun.sh", "run", "src/detail-main.ts"]
 
 [[panes]]
+id = "composed"
+title = "Outliner · Tree + Detail"
+placement = "split"
+command = ["/bin/sh", "scripts/run-bun.sh", "run", "src/composed-main.ts"]
+
+[[panes]]
 id = "capture"
 title = "Quick Capture"
 placement = "popup"
@@ -72,6 +78,13 @@ description = "Always open a new Tree and linked Detail beside the invoking pane
 contexts = ["workspace", "tab", "pane"]
 command = ["/bin/sh", "scripts/run-bun.sh", "run", "src/herdr-open.ts", "--mode", "open-here"]
 
+
+[[actions]]
+id = "open-composed"
+title = "Outliner: open combined Tree + Detail experiment"
+description = "Open one application-owned split, with explicit detached views still available."
+contexts = ["workspace", "tab", "pane"]
+command = ["/bin/sh", "scripts/run-bun.sh", "run", "src/herdr-open.ts", "--mode", "open-composed"]
 
 [[actions]]
 id = "comment-selection"

@@ -105,6 +105,7 @@ function harness(
   const controller: DetailController = {
     state: detailState,
     async initialize() {},
+    async handleUiCommand() {},
     isBufferMode: () => bufferMode,
     async dispatch(intent) {
       intents.push(intent);

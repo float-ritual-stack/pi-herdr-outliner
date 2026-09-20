@@ -4,9 +4,10 @@ import { hostname } from "node:os";
 import { join } from "node:path";
 import { Type, type Static } from "typebox";
 import { Parse } from "typebox/value";
-import type { OutlinerClientRole, OutlinerClientRuntime, OutlinerNavigationTarget } from "./types";
+import type { OutlinerRegion, OutlinerClientRuntime, OutlinerNavigationTarget } from "./types";
 
 export type PaneEntrypoint =
+  | "composed"
   | "service"
   | "outliner"
   | "detail"
@@ -429,7 +430,7 @@ export interface OpenVirtualBranchNavigatorPopupOptions {
   workspaceRoot: string;
   browsingContextId: string;
   sourceClientId: string;
-  sourceRole: OutlinerClientRole;
+  sourceRole: OutlinerRegion;
   viewId: string;
   adapter?: "bookmark";
 }

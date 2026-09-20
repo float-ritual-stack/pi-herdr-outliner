@@ -1,3 +1,4 @@
+import { serviceTreeNavigation } from "../src/navigation-routes";
 import { closeSync, openSync, writeSync } from "node:fs";
 import { performance } from "node:perf_hooks";
 import type { RequestInput } from "../src/client";
@@ -110,6 +111,7 @@ function request<T>(input: RequestInput): Promise<T> {
 }
 
 const effects: TreeControllerEffects = {
+  navigation: serviceTreeNavigation({request: input => effects.request(input)}, "tree-profiler", "tree-profiler-context"),
   workspaceRoot: "/profile/realistic-workspace",
   clientId: "tree-profiler",
   browsingContextId: "tree-profiler-context",

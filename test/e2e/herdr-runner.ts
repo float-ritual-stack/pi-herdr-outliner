@@ -1,3 +1,4 @@
+import { registryFaultProxy } from "./herdr-registry-fault";
 import { Database } from "bun:sqlite";
 import { Terminal as Screen } from "@xterm/headless";
 import { createHash } from "node:crypto";
@@ -38,6 +39,10 @@ export interface HerdrScenarioSession {
   readonly panes: { launcher: string; service: string; tree: string; detail: string };
   readonly database: Database;
   readonly client: OutlinerClient;
+  setRegistryUnavailable(unavailable: boolean): Promise<void>;
+  adoptDetached(clientId: string): Promise<string>;
+  moveDetachedToNewTab(paneId: string): Promise<void>;
+  closeDetached(paneId: string): Promise<void>;
   rejectCompetingService(): Promise<CommandResult>;
   attachClient(): Promise<{ write(input: string): Promise<void>; visible(): Promise<string>; resize(columns: number, rows: number): Promise<void> }>;
   openCapturePopup(blockId: string, socketPath: string): Promise<void>;
@@ -64,6 +69,7 @@ export interface HerdrScenarioSession {
 
 type Scenario = {
   name: string;
+  layout?: "separate" | "composed";
   prepare(projectRoot: string): Promise<void>;
   run(session: HerdrScenarioSession): Promise<void>;
 };
@@ -602,6 +608,7 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
     treeForwarder: null,
     detailForwarder: null,
   };
+  const fault = { proxy: null as Awaited<ReturnType<typeof registryFaultProxy>> | null };
   let serverLaunchError: Error | null = null;
   let clientOutput = "";
   let panes: HerdrScenarioSession["panes"] | null = null;
@@ -815,6 +822,41 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
         OUTLINER_STATE_DIR: outlinerState,
         OUTLINER_WORKSPACE_ROOT: projectRoot,
       }).socket),
+      async setRegistryUnavailable(unavailable) {
+        if (!fault.proxy) throw new Error("Registry faults are available only in the composed fixture");
+        await artifacts.event("registry-fault", fault.proxy.setDisabled(unavailable));
+        // This checks the live CLI path after the registry-only connection fault.
+        parseResult((await runHerdr(["api", "snapshot"])).stdout, "session_snapshot", "registry fault CLI check");
+      },
+      async adoptDetached(clientId) {
+        const registrations = await getRegistrations();
+        const primary = registrations.find(value => value.runtime?.paneId === ownedPanes.tree);
+        const detached = registrations.find(value => value.clientId === clientId);
+        if (detached?.role !== "detail" || !detached.runtime?.paneId || !primary?.runtime || detached.runtime.workspaceId !== primary.runtime.workspaceId || owned.has(detached.runtime.paneId)) {
+          throw new Error("Detached client is not a new Detail in the owned workspace");
+        }
+        const pane = parsePane(parseResult((await runHerdr(["pane", "get", detached.runtime.paneId])).stdout, "pane_info", "adopt detached").pane, "adopt detached pane");
+        if (pane.workspaceId !== primary.runtime.workspaceId) throw new Error("Detached pane escaped the private workspace");
+        processEvidence.push(await verifyProcess(pane.paneId, pluginRoot));
+        owned.add(pane.paneId);
+        extraPanes[`detached-${clientId}`] = pane.paneId;
+        await artifacts.record("detached-adopted", detached);
+        return pane.paneId;
+      },
+      async moveDetachedToNewTab(paneId) {
+        requireOwned(paneId);
+        if (Object.values(ownedPanes).includes(paneId)) throw new Error("Only an adopted detached pane may move");
+        await runHerdr(["pane", "move", paneId, "--new-tab", "--no-focus"]);
+        await artifacts.record("detached-moved", parseJson((await runHerdr(["pane", "get", paneId])).stdout, "moved pane"));
+      },
+      async closeDetached(paneId) {
+        requireOwned(paneId);
+        if (Object.values(ownedPanes).includes(paneId)) throw new Error("Only an adopted detached pane may close");
+        await runHerdr(["pane", "close", paneId]);
+        owned.delete(paneId);
+        for (const [key, value] of Object.entries(extraPanes)) if (value === paneId) delete extraPanes[key];
+        await artifacts.event("detached-closed", {paneId});
+      },
       rejectCompetingService() {
         return runCommand({
           args: [process.execPath, "run", join(pluginRoot, "src/server-main.ts")],
@@ -1150,6 +1192,10 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
       apiSnapshot: parseJson(snapshotOutput.stdout, "Herdr API snapshot"),
     });
 
+    if (scenario.layout === "composed") {
+      fault.proxy = await registryFaultProxy(herdrStatus.socket, join(runRoot, "host.sock"), runRoot);
+      await artifacts.event("registry-proxy-installed", {socketPath: herdrStatus.socket, sessionName});
+    }
     await setPhase("link-plugin");
     const linked = await runHerdr(["plugin", "link", pluginRoot, "--enabled"], STARTUP_TIMEOUT_MS);
     await artifacts.write("plugin-link.json", linked);
@@ -1211,7 +1257,8 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
     await artifacts.write("workspace.json", workspaceOutput);
 
     await setPhase("invoke-plugin");
-    const invocation = await runHerdr(["plugin", "action", "invoke", "open", "--plugin", PLUGIN_ID]);
+    const actionId = scenario.layout === "composed" ? "open-composed" : "open";
+    const invocation = await runHerdr(["plugin", "action", "invoke", actionId, "--plugin", PLUGIN_ID]);
     await artifacts.write("plugin-invocation.json", invocation);
     const invocationResult = parseResult(invocation.stdout, "plugin_action_invoked", "plugin action invoke");
     const invocationContext = recordValue(
@@ -1258,7 +1305,7 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
     }
     if (
       completedLog.plugin_id !== PLUGIN_ID ||
-      completedLog.action_id !== "open" ||
+      completedLog.action_id !== actionId ||
       completedLog.exit_code !== 0
     ) {
       throw new Error(`Plugin action ${logId} completed with mismatched identity or exit code`);
@@ -1269,7 +1316,8 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
     if (await realpath(action.workspaceRoot) !== projectRoot) {
       throw new Error(`Plugin action used workspace root ${action.workspaceRoot}, expected ${projectRoot}`);
     }
-    const paneIds = [launcher.paneId, action.servicePane, action.treePane, action.detailPane];
+    const paneIds = [launcher.paneId, action.servicePane, action.treePane, ...(scenario.layout === "composed" ? [] : [action.detailPane])];
+    if (scenario.layout === "composed" && action.treePane !== action.detailPane) throw new Error("Composed launch did not return one primary pane");
     if (new Set(paneIds).size !== paneIds.length) throw new Error("Plugin action returned duplicate owned pane IDs");
     panes = {
       launcher: launcher.paneId,
@@ -1315,6 +1363,7 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
       read: getRegistrations,
       accept: (values) => {
         const context = values.filter((registration) => registration.contextId === action.browsingContextId);
+        if (scenario.layout === "composed") return context.length === 1 && context[0]?.role === "composed" && context[0]?.runtime?.paneId === action.treePane;
         if (context.length !== 2) return false;
         const tree = context.filter(
           (registration) => registration.role === "tree" && registration.runtime?.paneId === action.treePane,
@@ -1363,7 +1412,7 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
       verifyProcess(launcher.paneId, projectRoot),
       verifyProcess(action.servicePane, pluginRoot),
       verifyProcess(action.treePane, pluginRoot),
-      verifyProcess(action.detailPane, pluginRoot),
+      ...(scenario.layout === "composed" ? [] : [verifyProcess(action.detailPane, pluginRoot)]),
     ]);
     await artifacts.write("process-environments.json", processEvidence);
 
@@ -1433,6 +1482,10 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
     resources.database = null;
 
     phase = "cleanup";
+    if (fault.proxy) {
+      try { await artifacts.event("registry-proxy-restored", await fault.proxy.close()); }
+      catch (error) { cleanupErrors.push(error); }
+    }
     for (const [view, forwarder] of [["tree", resources.treeForwarder], ["detail", resources.detailForwarder]] as const) {
       if (!forwarder) continue;
       try {

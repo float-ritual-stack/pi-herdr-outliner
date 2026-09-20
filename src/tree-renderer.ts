@@ -174,6 +174,8 @@ export interface TreeRenderResult {
 
 export interface TreeRenderOptions {
   readonly propertyKeys?: readonly string[];
+  readonly clearScreen?: boolean;
+  readonly focused?: boolean;
 }
 
 function propertyKeysForRow(
@@ -357,7 +359,7 @@ export function renderTreeFrame(
   initialScrollStartEntryIndex = 0,
   options: TreeRenderOptions = {},
 ): TreeRenderResult {
-  const output: string[] = [`${ESC}H${ESC}2J`];
+  const output: string[] = [options.clearScreen === false ? "" : `${ESC}H${ESC}2J`];
   const mouseTargets: Array<TreeMouseTarget | null | undefined> = [];
 
   if (view.mode === "viewer") {
@@ -383,7 +385,7 @@ export function renderTreeFrame(
 
   const paneMenu = outlinerActionLink("tree.menu.open", "[⋯]");
   output.push(
-    `\x1b[1;36mOutliner\x1b[0m  \x1b[2m${truncate(view.workspaceRoot, Math.max(10, width - 25))}\x1b[0m  ${paneMenu}`,
+    `\x1b[1;36m${options.focused === undefined ? "Outliner" : `${options.focused ? "●" : "○"} Tree`}\x1b[0m  \x1b[2m${truncate(view.workspaceRoot, Math.max(1, width - 25))}\x1b[0m  ${paneMenu}`,
   );
   const filterLabel = view.activeFilter ? `  \x1b[33mfilter: ${view.activeFilter}\x1b[0m` : "";
   const truncationLabel =
@@ -739,6 +741,6 @@ export function renderTreeFrame(
   }
   const help = view.actionHelpText ??
     DEFAULT_OUTLINER_ACTION_KEYMAP.helpText("tree", view.mode);
-  output.push(`\x1b[2m${truncate(help, width)}\x1b[0m`);
+  output.push(`\x1b[2m${truncate(options.focused === undefined ? help : `F6 Detail  ${help}`, width)}\x1b[0m`);
   return { frame: output.join("\n"), scrollStartEntryIndex, mouseTargets };
 }

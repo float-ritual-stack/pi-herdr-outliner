@@ -1,3 +1,5 @@
+import { ComposedLayout, ComposedTree, composedPointer, composedWidths } from "./composed-surface";
+import type { TreeNavigation, NavigationRouteOptions } from "./navigation-routes";
 import { getProperty } from "./properties";
 import { setTimeout as sleep } from "node:timers/promises";
 import { getMarkdownTheme, initTheme } from "@earendil-works/pi-coding-agent";
@@ -85,6 +87,7 @@ import {
 import { parseOutlinerLinkUri, resolveOutlinerLinkTarget } from "./outliner-links";
 import {
   dispatchNavigation,
+  PRIMARY_DETAIL_LOCKED_ERROR,
   focusTreeForClient,
   resolveNavigationDestination,
 } from "./navigation-routes";
@@ -115,6 +118,11 @@ import {
   type BookmarkStatus,
   type BookmarkToggleReceipt,
   type BrowsingContextState,
+  type BrowsingContextPublication,
+  type OutlinerNavigationIntent,
+  type OutlinerNavigationResolution,
+  type OutlinerRegion,
+  type OutlinerUiCommand,
   type InternResourceReceipt,
   type PageAddressCollection,
   type OutlinerNavigationTarget,
@@ -201,13 +209,21 @@ let latestDirectSelection: DetailDirectSelectionCapture | null = null;
 let pendingDirectSelection: Promise<DetailDirectSelectionCapture | null> | null = null;
 let pendingResourceSelectionRange: TextBufferRange | null = null;
 let directSelectionGeneration = 0;
-const terminal = new ProcessTerminal();
+const composed = process.env.OUTLINER_COMPOSED_SURFACE === "1";
+let focusedRegion: OutlinerRegion = "tree";
+const processTerminal = new ProcessTerminal();
+// Detail receives its allocated rectangle; Pi still owns the actual terminal.
+const terminal = {
+  get columns() { return composed ? composedWidths(processTerminal.columns).detail : processTerminal.columns; },
+  get rows() { return processTerminal.rows; },
+  drainInput: (quietMs: number, maxMs: number) => processTerminal.drainInput(quietMs, maxMs),
+};
 let detailPaneId: string | undefined;
 let inputStream = new PiDetailInputStreamDecoder();
 const INPUT_IDLE_FLUSH_MS = 10;
 let inputFlushTimer: ReturnType<typeof setTimeout> | undefined;
 let inputGeneration = 0;
-const tui = new DetailTuiAltScreen(terminal, false, undefined, {
+const tui = new DetailTuiAltScreen(processTerminal, false, undefined, {
   mouse: true,
   async copySelection(quote) {
     process.stdout.write(osc52ClipboardWrite(quote));
@@ -360,7 +376,8 @@ const effects: DetailEffects = {
   browsingContextId,
   enqueueViewUpdate: enqueueWork,
   focusSelf() {
-    if (process.env.HERDR_ENV === "1") focusCurrentPane();
+    if (composed) focusRegion("detail");
+    else if (process.env.HERDR_ENV === "1") focusCurrentPane();
   },
   async getBrowsingContext() {
     const browsingContext = await client.request<BrowsingContextState>({
@@ -404,10 +421,10 @@ const effects: DetailEffects = {
     await client.request({ action: "clients.update", clientId, currentTarget });
   },
   dispatchNavigation(target, intent, options) {
-    return dispatchNavigation(client, clientId, target, intent, options);
+    return composed ? localNavigation.dispatch(target, intent, options) : dispatchNavigation(client, clientId, target, intent, options);
   },
   resolveNavigation(intent, options) {
-    return resolveNavigationDestination(client, clientId, intent, options);
+    return composed ? localNavigation.resolve(intent, options) : resolveNavigationDestination(client, clientId, intent, options);
   },
   async resolveReferences(text) {
     return client.request<ResolvedBlockReferences>({ action: "references.resolve", text });
@@ -605,7 +622,8 @@ const effects: DetailEffects = {
     return client.request<ReferencedPathCandidate[]>({ action: "files.complete", prefix: query });
   },
   async focusOutliner() {
-    await focusTreeForClient(client, clientId);
+    if (composed) focusRegion("tree");
+    else await focusTreeForClient(client, clientId);
   },
   async openPropertyInspectorPane(blockId) {
     const contextId = crypto.randomUUID();
@@ -636,10 +654,72 @@ const controller = createDetailController(
       ? "dedicated"
       : "inline",
     destinationTimeoutMs,
+    ...(composed ? {readerLabel: "primary Detail"} : {}),
     initialTarget,
     actionKeymap,
   },
 );
+
+function focusRegion(region: OutlinerRegion): void {
+  if (focusedRegion === region) return;
+  focusedRegion = region;
+  if (runtimeInitialized) enqueueWork(async () => { await client.request({action: "clients.update", clientId, focusedRegion}); });
+  synchronizeLayout?.();
+}
+
+function requestStop(): void {
+  if (composed && (controller.state.mode === "edit" || controller.state.mode === "comment" ||
+      ["edit", "add-child", "add-sibling"].includes(composedTree!.controller.view().mode))) {
+    controller.onServiceError(new Error("Finish or cancel the draft before closing the Outliner"));
+    return;
+  }
+  void stop();
+}
+
+async function localResolution(intent: OutlinerNavigationIntent, options: NavigationRouteOptions = {}): Promise<OutlinerNavigationResolution> {
+  if (options.preserveSource) return resolveNavigationDestination(client, clientId, intent, options);
+  if (intent !== "reveal" && controller.state.connectionMode === "locked") {
+    throw new Error(PRIMARY_DETAIL_LOCKED_ERROR);
+  }
+  return {sourceClientId: clientId, targetClientId: clientId, intent, resolution: "context", targetRegion: intent === "reveal" ? "tree" : "detail"};
+}
+const localNavigation: TreeNavigation = {
+  readerLabel: "primary Detail",
+  async publish(target, previewTarget, rowId) {
+    const publication = await client.request<BrowsingContextPublication>({action: "browsing-context.publish", sourceClientId: clientId, contextId: browsingContextId, target, dispatchPreview: false});
+    await client.request({action: "clients.update", clientId, treeSelection: target && rowId ? {target, rowId} : null});
+    if (target && previewTarget) await controller.handleUiCommand({command: "preview", targetClientId: clientId, targetRegion: "detail", target}, viewport());
+    return publication;
+  },
+  resolve: localResolution,
+  async dispatch(target, intent, options) {
+    if (options?.preserveSource) return dispatchNavigation(client, clientId, target, intent, options);
+    const destination = await localResolution(intent, options);
+    let command: OutlinerUiCommand;
+    if (intent === "reveal") {
+      if (target.kind !== "block") throw new Error("Tree can reveal only a block target");
+      command = {command: "reveal", targetClientId: clientId, targetRegion: "tree", target};
+      await composedTree!.controller.revealBlock(target.blockId);
+    } else {
+      command = {command: intent, targetClientId: clientId, targetRegion: "detail", target};
+      await controller.handleUiCommand(command, viewport());
+    }
+    return {...destination, command};
+  },
+  async edit(blockId) {
+    await localResolution("open");
+    await controller.handleUiCommand({command: "edit", targetClientId: clientId, targetRegion: "detail", target: {kind: "block", blockId}}, viewport());
+  },
+};
+const composedTree = composed ? new ComposedTree({
+  client, clientId, contextId: browsingContextId, workspaceRoot: paths.workspaceRoot,
+  navigation: localNavigation, actionKeymap,
+  width: () => composedWidths(processTerminal.columns).tree,
+  height: () => processTerminal.rows,
+  focused: () => focusedRegion === "tree", focus: () => focusRegion("tree"),
+  invalidate: () => { synchronizeLayout?.(); }, stop: requestStop,
+  detach: openTargetInNewDetail,
+}) : null;
 
 function enqueueWork(task: () => void | Promise<void>): void {
   workQueue = workQueue.then(task).catch((error) => {
@@ -649,7 +729,28 @@ function enqueueWork(task: () => void | Promise<void>): void {
 const serviceEventScheduler = new DetailEventScheduler({
   clientId,
   enqueue: enqueueWork,
-  handle: (event) => controller.onServiceEvent(event, viewport()),
+  async handle(event) {
+    if (!composedTree) return controller.onServiceEvent(event, viewport());
+    if (event.domain === "ui") {
+      if (event.command?.targetClientId !== clientId) return;
+      if (event.command.targetRegion === "tree") {
+        await composedTree.controller.handleServiceEvent(event);
+        focusRegion("tree");
+      } else if (event.command.targetRegion === "detail") await controller.onServiceEvent(event, viewport());
+      else throw new Error("Composed UI commands require an explicit region");
+      if (event.command.command !== "preview" && process.env.HERDR_ENV === "1") focusCurrentPane();
+      return;
+    }
+    if (event.domain === "attention" && event.attentionInstruction) {
+      const region = event.attentionInstruction.targetRegion;
+      await composedTree.controller.handleServiceEvent(region === "tree" ? event : {...event, attentionInstruction: undefined});
+      await controller.onServiceEvent(region === "detail" ? event : {...event, attentionInstruction: undefined}, viewport());
+      if (event.attentionInstruction.focus && process.env.HERDR_ENV === "1") focusCurrentPane();
+      return;
+    }
+    await composedTree.controller.handleServiceEvent(event);
+    await controller.onServiceEvent(event, viewport());
+  },
   supersedePreview: () => controller.supersedePassivePreview(),
 });
 
@@ -691,7 +792,8 @@ function startWatcher(): void {
   watcher = client.watch({
     client: {
       clientId,
-      role: "detail",
+      role: composed ? "composed" : "detail",
+      ...(composed ? {focusedRegion} : {}),
       contextId: browsingContextId,
       locked: detailPresentation === "property-inspector",
       runtime,
@@ -701,12 +803,16 @@ function startWatcher(): void {
       await runtimeSync?.synchronize();
       firstWatcherConnection.resolve();
       if (runtimeInitialized) {
-        serviceEventScheduler.scheduleWork(() => controller.onServiceConnect(viewport()));
+        serviceEventScheduler.scheduleWork(async () => {
+          await composedTree?.controller.handleConnect();
+          await controller.onServiceConnect(viewport());
+          if (composed) await client.request({action: "clients.update", clientId, focusedRegion});
+        });
       }
     },
     onDisconnect: () => {
       runtimeSync?.suspend();
-      serviceEventScheduler.scheduleWork(() => controller.onServiceDisconnect());
+      serviceEventScheduler.scheduleWork(() => { composedTree?.controller.handleDisconnect(); controller.onServiceDisconnect(); });
     },
     onError: (error) => {
       if (!runtimeInitialized) firstWatcherConnection.reject(error);
@@ -1105,7 +1211,7 @@ function shouldPassDetailInputToTui(data: string): boolean {
 const handleKeypress = createDetailKeyHandler({
   controller,
   viewport,
-  stop: () => void stop(),
+  stop: requestStop,
   actionKeymap,
   openActionMenu: showActionMenu,
   focusDraftSplit,
@@ -1141,7 +1247,7 @@ async function handleDecodedInput(input: PiDetailInput): Promise<void> {
       input.key.ctrl &&
       input.key.name === "q"
     ) {
-      await stop();
+      requestStop();
       return;
     }
     pendingLinkClick = { activate: false, routing: "first-unlocked", suppress: false };
@@ -1189,7 +1295,7 @@ function scheduleInputFlush(): void {
   inputFlushTimer = setTimeout(() => {
     inputFlushTimer = undefined;
     serviceEventScheduler.scheduleWork(() => {
-      if (generation === inputGeneration && !stopping) return flushInput();
+      if (generation === inputGeneration && !stopping) return composedTree && focusedRegion === "tree" ? composedTree.flushInput() : flushInput();
     });
   }, INPUT_IDLE_FLUSH_MS);
 }
@@ -1199,8 +1305,8 @@ const customFrame = new DetailPiComponent({
   height: () => terminal.rows,
   header: () => {
     const propertyKeys = detailHeaderPropertyKeys;
-    if (!draftSplitActive()) return { propertyKeys };
-    const focused = draftSplitFocus === "editor";
+    if (!draftSplitActive()) return { propertyKeys, ...(composed ? {surface: `${focusedRegion === "detail" ? "●" : "○"} Detail`, focused: focusedRegion === "detail"} : {}) };
+    const focused = (!composed || focusedRegion === "detail") && draftSplitFocus === "editor";
     const linked = controller.state.draftPreviewLinked ? "↔ " : "";
     return {
       surface: `${linked}${focused ? "●" : "○"} Edit`,
@@ -1208,7 +1314,7 @@ const customFrame = new DetailPiComponent({
       propertyKeys,
     };
   },
-  helpText: () => actionKeymap.helpText("detail", activeDetailActionScopes()),
+  helpText: () => `${composed ? "F6 Tree  " : ""}${actionKeymap.helpText("detail", activeDetailActionScopes())}`,
 });
 const preview = new DetailPiPreviewLayout(
   controller.state,
@@ -1232,9 +1338,10 @@ const preview = new DetailPiPreviewLayout(
         workIdPrefix: resolved.workIdPrefix ?? null,
       };
     },
+    ...(composed ? {primaryFocused: () => focusedRegion === "detail"} : {}),
     splitActive: draftSplitActive,
-    focused: () => draftSplitFocus === "preview",
-    helpText: () => actionKeymap.helpText("detail", activeDetailActionScopes()),
+    focused: () => (!composed || focusedRegion === "detail") && draftSplitFocus === "preview",
+    helpText: () => `${composed ? "F6 Tree  " : ""}${actionKeymap.helpText("detail", activeDetailActionScopes())}`,
     chooserHelpText: () => controller.destinationChooserHelpText(),
     setRegions: (regions) => controller.setPreviewRegions(regions),
   },
@@ -1267,6 +1374,8 @@ let layoutRoot:
   | DetailPiDraftSplitLayout
   | undefined;
 let previousMode = controller.state.mode;
+const composedLayout = composedTree ? new ComposedLayout(composedTree, preview, () => processTerminal.columns) : null;
+let composerWidth = 0;
 
 synchronizeLayout = () => {
   const mode = controller.state.mode;
@@ -1295,9 +1404,13 @@ synchronizeLayout = () => {
     }
   }
 
+  composedLayout?.resize();
+  if (composerHandle && composerWidth !== terminal.columns) { composerHandle.hide(); composerHandle = null; }
   if (mode === "comment" && !composerHandle) {
+    composerWidth = terminal.columns;
     composerHandle = tui.showOverlay(composer, {
-      width: "100%",
+      width: composed ? terminal.columns : "100%",
+      ...(composed ? {col: composedWidths(processTerminal.columns).detailX} : {}),
       maxHeight: BUFFER_COMPOSER_HEIGHT,
       anchor: "bottom-center",
       nonCapturing: true,
@@ -1314,23 +1427,42 @@ synchronizeLayout = () => {
 
   if (nextRoot !== layoutRoot) {
     layoutRoot = nextRoot;
-    tui.setLayoutRoot(nextRoot);
+    if (composedLayout) composedLayout.setDetail(nextRoot);
+    tui.setLayoutRoot(composedLayout ?? nextRoot);
   }
   tui.requestRender();
 };
 synchronizeLayout();
 
-tui.addOutlinerInputListener(
-  createPiDetailInputListener(
-    (data) => {
-      if (!stopping) {
-        serviceEventScheduler.scheduleWork(() => handleInput(data));
-        scheduleInputFlush();
-      }
-    },
-    (data) => shouldPassDetailInputToTui(data),
-  ),
+const detailInputListener = createPiDetailInputListener(
+  data => {
+    if (!stopping) { serviceEventScheduler.scheduleWork(() => handleInput(data)); scheduleInputFlush(); }
+  },
+  data => shouldPassDetailInputToTui(data),
 );
+tui.addOutlinerInputListener(data => {
+  if (!composedTree) return detailInputListener(data);
+  const pointer = composedPointer(data, processTerminal.columns);
+  if (!pointer && !actionMenuHandle) {
+    // Keys are already split by Pi. Choose their region when they execute, after
+    // earlier keys have changed focus, not while they are entering the queue.
+    serviceEventScheduler.scheduleWork(async () => {
+      if (matchesKey(data, "f6")) focusRegion(focusedRegion === "tree" ? "detail" : "tree");
+      else if (focusedRegion === "tree" && !controller.state.destinationChooser.active) await composedTree.handleInput(data);
+      else await handleInput(data);
+    });
+    scheduleInputFlush();
+    return {consume: true};
+  }
+  if (pointer) serviceEventScheduler.scheduleWork(() => focusRegion(pointer.region));
+  if ((pointer?.region ?? focusedRegion) === "tree" && !actionMenuHandle && !controller.state.destinationChooser.active) {
+    serviceEventScheduler.scheduleWork(() => composedTree.handleInput(pointer?.data ?? data));
+    return {consume: true};
+  }
+  // Our editor/selection code uses local coordinates; native Pi selection sees
+  // the unchanged whole-terminal event after this listener returns.
+  return detailInputListener(pointer?.data ?? data);
+});
 
 function handleResize(): void {
   serviceEventScheduler.scheduleWork(() =>
@@ -1343,6 +1475,7 @@ async function initialize(): Promise<void> {
   startWatcher();
   await firstWatcherConnection.promise;
   await controller.initialize();
+  await composedTree?.controller.initialize();
   runtimeInitialized = true;
   await controller.onServiceConnect(viewport());
 }

@@ -193,6 +193,7 @@ interface CachedDetailDraftProjection extends DetailDraftProjection {
 }
 
 export interface DetailPiPreviewOptions {
+  primaryFocused?(): boolean;
   draftText?(): string | null;
   projectDraft?(text: string): Promise<DetailDraftProjection>;
   splitActive?(): boolean;
@@ -1216,6 +1217,10 @@ class DetailPreviewHeader implements Component {
     } else if (split) {
       const focused = this.options.focused?.() ?? false;
       header.surface = `${focused ? "●" : "○"} Draft`;
+      header.focused = focused;
+    } else if (this.options.primaryFocused) {
+      const focused = this.options.primaryFocused();
+      header.surface = `${focused ? "●" : "○"} Detail`;
       header.focused = focused;
     }
     return renderDetailHeader(this.state, width, header);

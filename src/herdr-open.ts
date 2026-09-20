@@ -18,6 +18,7 @@ import {
 import { resolveClientPaths } from "./paths";
 import {
   OUTLINER_PROTOCOL_VERSION,
+  clientSupportsRole,
   type OutlinerClientRegistration,
   type OutlinerServiceStatus,
 } from "./types";
@@ -52,6 +53,7 @@ if (
   mode !== "focus-or-open" &&
   mode !== "ensure-detail" &&
   mode !== "open-here" &&
+  mode !== "open-composed" &&
   mode !== "focus-existing" &&
   mode !== "service-only"
 ) {
@@ -65,7 +67,7 @@ if (clientArgument >= 0 && !requestedClientId) {
 }
 if (
   requestedClientId &&
-  (mode === "open-here" || mode === "service-only")
+  (mode === "open-here" || mode === "open-composed" || mode === "service-only")
 ) {
   throw new Error(`--client cannot be used with --mode ${mode}`);
 }
@@ -208,14 +210,14 @@ async function focusExisting(
     requestedClientId,
   );
   await sendClientCommand(createOutlinerClient(paths), selected.clientId, {
-    command: "focus",
+    command: "focus", targetRegion: "tree",
   });
   return { servicePane, focusedClientId: selected.clientId, workspaceRoot };
 }
 
 async function waitForClientPane(
   paneId: string,
-  role: "tree" | "detail",
+  role: "tree" | "detail" | "composed",
 ): Promise<void> {
   const client = createOutlinerClient(paths);
   const deadline = Date.now() + (paths.mode === "remote" ? 60_000 : 5_000);
@@ -270,6 +272,15 @@ async function openHere(): Promise<{
   return { servicePane, outlinerPane, detailPane, browsingContextId, workspaceRoot };
 }
 
+async function openComposed() {
+  if (!currentPaneId) throw new Error("open-composed requires Herdr invocation pane context");
+  const browsingContextId = crypto.randomUUID();
+  const pane = openPane("composed", {placement: "split", targetPane: currentPaneId, direction: "right", env: {OUTLINER_BROWSING_CONTEXT_ID: browsingContextId}});
+  await waitForClientPane(pane, "composed");
+  execFileSync(herdr, ["plugin", "pane", "focus", pane], {stdio: "ignore", timeout: HERDR_SYNC_TIMEOUT_MS});
+  return {servicePane, outlinerPane: pane, detailPane: pane, browsingContextId, workspaceRoot};
+}
+
 async function ensureDetail(): Promise<{
   servicePane: string | null;
   treePane: string;
@@ -280,7 +291,7 @@ async function ensureDetail(): Promise<{
 }> {
   const client = createOutlinerClient(paths);
   const clients = localHerdrClients(await listLiveClients(client));
-  const trees = clients.filter((candidate) => candidate.role === "tree");
+  const trees = clients.filter((candidate) => clientSupportsRole(candidate, "tree"));
   if (trees.length === 0 && !requestedClientId) {
     const opened = await openHere();
     return {
@@ -301,7 +312,7 @@ async function ensureDetail(): Promise<{
   if (!treePane) throw new Error("The selected Outliner Tree has no live Herdr pane");
   const existing = selectExistingDetailClient(clients, tree);
   if (existing) {
-    await sendClientCommand(client, existing.clientId, { command: "focus" });
+    await sendClientCommand(client, existing.clientId, { command: "focus", targetRegion: "detail" });
     const detailPane = existing.runtime?.paneId;
     if (!detailPane) throw new Error("The selected Outliner Detail has no live Herdr pane");
     return {
@@ -335,6 +346,8 @@ async function ensureDetail(): Promise<{
 let result: object;
 if (mode === "service-only") {
   result = { servicePane, workspaceRoot };
+} else if (mode === "open-composed") {
+  result = await openComposed();
 } else if (mode === "open-here") {
   result = await openHere();
 } else if (mode === "ensure-detail") {

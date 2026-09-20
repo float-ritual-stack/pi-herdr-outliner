@@ -1,3 +1,4 @@
+import { clientSupportsRole } from "./types";
 import type { RequestInput } from "./client";
 import type {
   OutlinerClientRegistration,
@@ -46,7 +47,7 @@ export async function requireClientIdForRole(
   const client = (await listLiveClients(requester))
     .find((registered) => registered.clientId === clientId);
   if (!client) throw new Error(`Client is not registered: ${clientId}`);
-  if (client.role !== role) {
+  if (!clientSupportsRole(client, role)) {
     throw new Error(`Client ${clientId} has role ${client.role}; expected ${role}`);
   }
   return clientId;

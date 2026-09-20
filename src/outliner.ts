@@ -1,3 +1,4 @@
+import { serviceTreeNavigation } from "./navigation-routes";
 import { emitKeypressEvents } from "node:readline";
 import { PassThrough } from "node:stream";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -99,6 +100,7 @@ function stop(): void {
 }
 
 const controller = createTreeController({
+  navigation: serviceTreeNavigation(client, clientId, browsingContextId),
   clientId,
   browsingContextId,
   workspaceRoot: paths.workspaceRoot,

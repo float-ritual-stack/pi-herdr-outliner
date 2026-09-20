@@ -577,6 +577,27 @@ Go forward only if this removes primary coordination while preserving those
 behaviors. Retain the existing document editor unless an alternative proves its
 selection, undo/redo, grapheme, source-position, scrolling, and save contracts.
 
+
+PIE-283 implements this as an opt-in `open-composed` action; the separate-pane
+launch remains available. The composed path uses one Pi terminal lifecycle,
+existing controllers and editor, one fixed horizontal split, local ordinary
+navigation and explicit detached operations. Its single registration exposes
+independent Tree selection, Detail target/revision and focused region; explicit
+commands and attention reveal/focus name the target region. `test:e2e:composed`
+checks real editing, undo/redo, cancellation, dirty keyboard close, preserved
+Tree scroll, narrow/wide resize, registry outage, detached move/close and native
+Resource pointer coordinates. The retained public-protocol regression also
+checks collection protects a Resource revision while the composed Detail owns it.
+
+Scope boundary: external Herdr copy-mode selection lacks internal-region
+provenance and is refused in composed panes. Detail-native pointer selection plus
+`c` remains supported. No claim is made that force-closing the host pane saves an
+unsaved draft. A3 default cutover and removal of standalone lifecycle/routing
+remain decisions after the opt-in experience has been evaluated. This experiment
+removes service navigation dispatch, pane discovery and host focus restoration
+from its ordinary interaction path; it does not pretend those shared adapters can
+be deleted while detached and standalone callers still use them.
+
 ### A3 — deletion after proof
 
 | Location | Delete for the ordinary composed interaction | Retain for independent views |

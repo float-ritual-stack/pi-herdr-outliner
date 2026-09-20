@@ -1,3 +1,4 @@
+import { clientSupportsRole } from "./types";
 import type { OutlinerClientRegistration } from "./types";
 
 export function selectTreeClient(
@@ -65,7 +66,7 @@ export function selectExistingDetailClient(
 ): OutlinerClientRegistration | undefined {
   const candidates = clients
     .filter((client) =>
-      client.role === "detail" &&
+      clientSupportsRole(client, "detail") &&
       (!tree.runtime?.tabId || client.runtime?.tabId === tree.runtime.tabId)
     )
     .sort((left, right) => {
