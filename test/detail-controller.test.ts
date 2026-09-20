@@ -20,7 +20,7 @@ import {
 import { OutlinerActionKeymap } from "../src/outliner-actions";
 import { detailBacklinkRegions } from "../src/detail-pi-preview";
 import { detailPropertyInspectorRegions } from "../src/property-inspector";
-import { renderDetailLines } from "../src/detail-renderer";
+import { buildDetailAnsiPreview, renderDetailLines } from "../src/detail-renderer";
 import type { ReferencedFile } from "../src/files";
 import type { OutlinerLinkTarget } from "../src/outliner-links";
 import { patchPropertyText } from "../src/properties";
@@ -721,6 +721,40 @@ describe("detail controller projection and deferred refresh", () => {
     await harness.controller.handleDestinationChooserKeypress("", { name: "escape" });
   });
 
+  test("ANSI ordinary preview exposes every full thread and reply through its existing scroll", async () => {
+    const text = "Source title\nSource phrase";
+    const harness = createHarness(makeBlock({ text }), null, async text => ({ text, references: [] }));
+    harness.effects.reconcileAnnotations = async input => {
+      const target: AnnotationTarget = { representation: input.newRepresentation,
+        anchor: { kind: "text-quote", start: 0, end: 6, exact: "Source", prefix: "", suffix: "" } };
+      const first = annotationRecord(target, { block: makeBlock({ id: "first-thread" }), body: "First body " + "wide ".repeat(24) + "WRAPPED-END" });
+      const second = annotationRecord(target, { block: makeBlock({ id: "orphan-thread" }), body: "Orphan body\nFINAL-BODY" });
+      return { threads: [{ ...first, replies: [] }, { ...second, resolvedTarget: null,
+        currentResolution: { ...second.currentResolution, status: "orphaned" },
+        replies: [{ ...annotationRecord(target, { body: "Agent reply\nFINAL-REPLY", source: "agent" }), parentAnnotationId: second.block.id }],
+      }], changed: true };
+    };
+    await harness.controller.initialize();
+    const frames: string[] = [];
+    const ansiViewport = (): DetailViewport => ({ ...viewport, preview: buildDetailAnsiPreview(harness.controller.state, viewport.width) });
+    for (let step = 0; step < 30; step += 1) {
+      frames.push(renderDetailLines(harness.controller.state, ansiViewport()).map(stripTerminalSequences).join("\n"));
+      await harness.controller.dispatch({ type: "preview.navigate", direction: "down" }, ansiViewport());
+    }
+    expect(frames.join("\n")).toContain("WRAPPED-END");
+    expect(frames.join("\n")).toContain("FINAL-BODY");
+    expect(frames.join("\n")).toContain("FINAL-REPLY");
+    expect(frames.some(frame => frame.includes("Agent reply\nFINAL-REPLY"))).toBe(true);
+    await harness.controller.dispatch({ type: "annotation.thread.move", delta: -1 }, ansiViewport());
+    expect(renderDetailLines(harness.controller.state, ansiViewport()).map(stripTerminalSequences).join("\n")).toContain("▶ Comment 2 · open");
+    await harness.controller.dispatch({ type: "annotation.selection.begin" }, ansiViewport());
+    expect(harness.controller.state.mode).toBe("preview");
+    expect(harness.controller.state.status).toContain("Scroll to source text");
+    await harness.controller.dispatch({ type: "preview.navigate", direction: "top" }, ansiViewport());
+    await harness.controller.dispatch({ type: "annotation.selection.begin" }, ansiViewport());
+    expect(harness.controller.state.mode).toBe("select");
+  });
+
   test("annotation events preserve a Resource reader and its viewport", async () => {
     const harness = createHarness(makeBlock(), null, undefined, undefined, {
       initialTarget: { kind: "resource", resourceId: "resource-1" },
@@ -733,6 +767,42 @@ describe("detail controller projection and deferred refresh", () => {
     await harness.controller.onServiceEvent({ id: "annotation-event", domain: "content", action: "annotations.lifecycle", sequence: 1 }, viewport);
     expect(harness.controller.state.document).toBe(before);
     expect(harness.controller.state.previewOffset).toBe(offset);
+  });
+
+  test("lifecycle events preserve a direct annotation's evidence viewport", async () => {
+    const block = makeBlock({ id: "annotation-root", text: "Comment\n[type::annotation]\n[status::open]\nBody", properties: [{ key: "type", value: "annotation" }] });
+    const source = Array.from({ length: 35 }, (_, i) => `Quote line ${i}`).join("\n");
+    const target: AnnotationTarget = {
+      representation: { id: "source-representation", subject: { kind: "block", blockId: "source" },
+        sourceSnapshot: { kind: "block", blockId: "source", updatedAt: "version-1", contentHash: "hash" },
+        adapter: null, mediaType: "text/plain", contentHash: "hash", capturedAt: "2026-09-20T00:00:00.000Z" },
+      anchor: { kind: "text-quote", start: 0, end: source.length, exact: source, prefix: "", suffix: "" },
+    };
+    const harness = createHarness(block, null, async text => ({ text, references: [] }));
+    let thread: AnnotationThread = { ...annotationRecord(target, { block }), replies: [] };
+    harness.effects.getAnnotation = async () => thread;
+    harness.effects.listAnnotations = async () => [thread];
+    harness.effects.setAnnotationLifecycle = async input => {
+      const updated = { ...thread.block, text: thread.block.text.replace(`status::${thread.lifecycle}`, `status::${input.lifecycle}`), revision: thread.block.revision + 1 };
+      thread = { ...thread, block: updated, lifecycle: input.lifecycle };
+      harness.setSelection({ selected: updated, ancestors: [], children: [] });
+      return thread;
+    };
+    await harness.controller.initialize();
+    await harness.controller.dispatch({ type: "preview.navigate", direction: "bottom" }, viewport);
+    const before = harness.controller.state.previewOffset;
+    expect(before).toBeGreaterThan(0);
+    for (const lifecycle of ["resolved", "open"] as const) {
+      await harness.controller.dispatch({ type: "annotation.thread.lifecycle" }, viewport);
+      const refresh = Promise.withResolvers<AnnotationThread[]>();
+      harness.effects.listAnnotations = () => refresh.promise;
+      await harness.controller.onServiceEvent({ id: "annotation-change", domain: "content", action: "annotations.lifecycle", sequence: 1, blockId: block.id }, viewport);
+      expect(harness.controller.state.previewOffset).toBe(before);
+      expect(harness.controller.state.context.selected?.revision).toBe(thread.block.revision);
+      expect(harness.controller.state.annotationThreads[0]?.lifecycle).toBe(lifecycle);
+      refresh.resolve([thread]);
+      await refresh.promise;
+    }
   });
 
   test("thread navigation orders source ranges and reaches ambiguous and orphaned comments", async () => {

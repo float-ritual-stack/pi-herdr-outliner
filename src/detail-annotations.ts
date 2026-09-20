@@ -105,14 +105,12 @@ export function detailAnnotationGroups(
   const renderedStarts = sourceLineStarts(renderedAnchorText);
   const groups = new Map<string, DetailAnnotationGroup>();
   const unpositioned: AnnotationThread[] = [];
-  for (const thread of [...state.annotationThreads].sort((left, right) => {
-    const start = (thread: AnnotationThread) => {
-      const target = thread.resolvedTarget;
-      const anchor = state.target?.kind === "block" ? target?.referenceContext?.anchor ?? target?.anchor : target?.anchor;
-      return anchor && "start" in anchor && typeof anchor.start === "number" ? anchor.start : Number.MAX_SAFE_INTEGER;
-    };
-    return start(left) - start(right) || left.block.createdAt.localeCompare(right.block.createdAt) || left.block.id.localeCompare(right.block.id);
-  })) {
+  const displayedOffsets = new Map<string, number>();
+  const compareThreads = (left: AnnotationThread, right: AnnotationThread): number =>
+    (displayedOffsets.get(left.block.id) ?? Number.MAX_SAFE_INTEGER) -
+      (displayedOffsets.get(right.block.id) ?? Number.MAX_SAFE_INTEGER) ||
+    left.block.createdAt.localeCompare(right.block.createdAt) || left.block.id.localeCompare(right.block.id);
+  for (const thread of state.annotationThreads) {
     let target = thread.resolvedTarget;
     const originalContext = thread.originalTarget.referenceContext;
     const currentContext = thread.resolvedTarget?.referenceContext;
@@ -167,6 +165,7 @@ export function detailAnnotationGroups(
         unpositioned.push(thread);
         continue;
       }
+      displayedOffsets.set(thread.block.id, anchor.start);
       const startLine = sourceLineAt(renderedStarts, anchor.start);
       const endLine = sourceLineAt(renderedStarts, Math.max(anchor.start, anchor.end - 1));
       const key = `resource:${startLine}`;
@@ -199,6 +198,7 @@ export function detailAnnotationGroups(
       unpositioned.push(thread);
       continue;
     }
+    displayedOffsets.set(thread.block.id, anchor.start);
     const starts = sourceLineStarts(selected.text);
     let markerOffset = anchor.start;
     while (
@@ -247,8 +247,10 @@ export function detailAnnotationGroups(
       threads: [thread],
     });
   }
+  const positioned = [...groups.values()].sort((left, right) => left.startLine - right.startLine);
+  for (const group of positioned) group.threads.sort(compareThreads);
   return [
-    ...[...groups.values()].sort((left, right) => left.startLine - right.startLine),
+    ...positioned,
     ...(unpositioned.length === 0 ? [] : [{
       regionId: `annotation:${displayedResourceTargetId ?? selected?.id}:unpositioned`,
       placement: "unpositioned" as const,
@@ -256,7 +258,7 @@ export function detailAnnotationGroups(
       endLine: renderedSourceLineCount,
       sourceLineCount: renderedSourceLineCount,
       sourceSpan: null,
-      threads: unpositioned,
+      threads: unpositioned.sort(compareThreads),
     }]),
   ];
 }
@@ -278,7 +280,7 @@ export function annotationTargetLabel(target: AnnotationTarget): string {
   return `${subjectLabel} · ${anchor.kind}`;
 }
 
-function annotationTargetText(target: AnnotationTarget): string {
+export function annotationTargetText(target: AnnotationTarget): string {
   const anchor = target.anchor;
   switch (anchor.kind) {
     case "text-quote":

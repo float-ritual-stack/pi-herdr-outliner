@@ -786,9 +786,11 @@ viewport; explicit thread navigation scrolls its controls into view.
 Comments identify **Resource-wide**, **This reference**, or **Other reference**
 scope. Other occurrences and lost/ambiguous anchors stay reachable, with their
 original evidence. Failed saves remain in the composer with a visible status;
-`Esc` cancels the reply without returning focus to Tree. The ANSI annotation
-reader shares thread actions and includes replies; `G` reaches the final evidence
-and body. Its ordinary source preview retains the compact comment summary.
+`Esc` cancels the reply without returning focus to Tree. The ANSI reader shares
+thread actions and appends complete, wrapped threads to the source preview.
+`[` and `]` reveal the selected thread; scrolling reaches unpositioned quotes,
+bodies and replies. Appended evidence is not selectable as source text. The
+annotation document also scrolls through its full evidence and history with `G`.
 
 ### Detail edit and comment modes
 
@@ -1396,10 +1398,10 @@ behavior; emitted hyperlinks have separate renderer regressions.
 `bun run test:e2e:annotation-threads` uses real keys in a private Herdr session
 for contextual/Resource-wide thread navigation, multiline replies, visible save
 validation, resolve/reopen and cancellation. It verifies preserved target and
-viewport, other-occurrence and orphan reachability, a 35-column Detail, and ANSI
-annotation evidence scrolling. Existing threads and an agent reply are seeded
-through public APIs. Pointer action routing has renderer/controller tests; the
-scenario does not claim native mouse activation.
+viewport, other-occurrence and orphan reachability, a narrow Detail, and ANSI
+ordinary-thread/evidence scrolling and operations. One real Pi Reply control
+click and cancellation runs through the attached Herdr client's mouse input.
+Existing threads and an agent reply are seeded through public APIs.
 
 ## Project documents
 

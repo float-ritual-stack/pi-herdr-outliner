@@ -3000,3 +3000,26 @@ test("deleted contextual occurrence stays unpositioned in Resource view", async 
     expect(frame.split("\n").find(line => line.includes("Shared file passage"))).not.toStartWith("+ ");
   } finally { store.close(); rmSync(root, { recursive: true, force: true }); }
 });
+
+test("historical Resource thread navigation follows the displayed anchors within one line", () => {
+  const displayed = "Alpha quote then Beta quote";
+  const latest = "Beta quote then Alpha quote";
+  const detail = webState(displayed);
+  if (detail.document.kind !== "ready" || detail.document.document.kind !== "resource" || !detail.document.document.description.web) throw new Error("Missing fixture");
+  const web = detail.document.document.description.web;
+  const representation: AnnotationRepresentation = {
+    id: web.representation.id,
+    subject: { kind: "resource", resourceId: detail.document.document.description.resource.id },
+    sourceSnapshot: { kind: "resource", resourceId: detail.document.document.description.resource.id, sourceSnapshotId: web.sourceSnapshot.id, revision: web.sourceSnapshot.revision },
+    adapter: web.representation.adapter, mediaType: web.representation.mediaType,
+    contentHash: annotationSourceHash(displayed), capturedAt: web.representation.derivedAt!,
+  };
+  detail.annotationThreads = ["Alpha quote", "Beta quote"].map((quote, index) => {
+    const original = textTarget(displayed, displayed.indexOf(quote), displayed.indexOf(quote) + quote.length, representation);
+    const historical = annotationThread(`thread-${index}`, original, quote);
+    const current = annotationThread(`thread-${index}`, textTarget(latest, latest.indexOf(quote), latest.indexOf(quote) + quote.length, { ...representation, id: "newer-representation", contentHash: annotationSourceHash(latest) }), quote);
+    return { ...current, originalTarget: original, resolutionHistory: [...historical.resolutionHistory, ...current.resolutionHistory] };
+  });
+  const groups = detailAnnotationGroups(detail, line => line, 1, displayed);
+  expect(groups.flatMap(group => group.threads.map(thread => thread.block.id))).toEqual(["thread-0", "thread-1"]);
+});

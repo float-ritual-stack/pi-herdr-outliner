@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { createAnnotationReferenceContext, createTextQuoteAnchor } from "../../src/annotations";
 import type { AnnotationBatchReceipt, AnnotationRecord, AnnotationTarget, AnnotationThread, Block, InternResourceReceipt, OutlinerClientRegistration, ResourceDescription } from "../../src/types";
 import { runHerdrScenario } from "./herdr-runner";
@@ -63,6 +64,18 @@ const result = await runHerdrScenario({
     await s.waitVisible(detail, "Existing agent reply");
     const beforeReply = await s.visible(detail);
     await s.checkpoint("02-selected-contextual-thread");
+    const pointerFrame = await s.waitFor("thread controls in attached client", () => terminal.visible(), frame => frame.includes("‹ Select › · Reply · Resolve"));
+    const pointerLines = pointerFrame.split("\n");
+    const row = pointerLines.findIndex(line => line.includes("‹ Select › · Reply · Resolve"));
+    const column = visibleWidth(pointerLines[row]!.slice(0, pointerLines[row]!.indexOf("Reply")));
+    await s.record("native-thread-reply-click", { row, column, frame: pointerFrame });
+    await terminal.write(`\u001b[<0;${column + 1};${row + 1}M`);
+    await terminal.write(`\u001b[<0;${column + 1};${row + 1}m`);
+    await s.waitVisible(detail, "Reply to comment");
+    await s.checkpoint("02a-native-reply-control");
+    await s.keys(detail, "esc"); await s.waitVisible(detail, "Reply cancelled");
+    assert.deepEqual((await current()).currentTarget, target);
+    assert.equal((await s.visible(detail)).split("\n")[3], beforeReply.split("\n")[3]);
     await s.keys(detail, "C"); await s.waitVisible(detail, "Reply to comment");
     await terminal.write("\u0013"); await s.waitVisible(detail, "Reply body cannot be empty");
     await s.checkpoint("03-empty-reply-keeps-composer");
@@ -97,14 +110,66 @@ const result = await runHerdrScenario({
     assert.equal((await s.client.request<Block>({ action: "get", blockId: host.id })).text, host.text);
     const afterFile = await s.client.request<ResourceDescription>({ action: "resources.describe", destinationClientId: registration.clientId, target: { kind: "resource", resourceId: resource.id } });
     assert.equal(afterFile.filesystem?.text, changedText);
+    await terminal.resize(220, 60);
     const ansi = await s.openRemoteBrowsingContext({ renderer: "ansi" });
+    // API focus does not replace the attached client's independently active tab.
+    const tabFrame = await s.waitFor("third tab is visible", () => terminal.visible(), frame => /\s3\s/.test(frame.split("\n")[0]!));
+    const tabColumn = visibleWidth(tabFrame.split("\n")[0]!.slice(0, tabFrame.split("\n")[0]!.indexOf("3")));
+    await terminal.write(`\u001b[<0;${tabColumn + 1};1M`);
+    await terminal.write(`\u001b[<0;${tabColumn + 1};1m`);
+    await s.waitFor("attached client displays ANSI tab", () => terminal.visible(), frame => frame.includes("client-project"));
     await goto(orphan.block.id, ansi);
     await s.waitVisible(ansi.detail, "Original target:");
     await s.keys(ansi.detail, "G"); await s.waitVisible(ansi.detail, "Orphan final comment sentinel");
     await s.checkpoint("09-ansi-evidence-bottom-reachable");
+    const evidenceRow = (await s.visible(ansi.detail)).split("\n")[3];
+    for (const lifecycle of ["resolved", "open"] as const) {
+      await s.keys(ansi.detail, "D");
+      await s.waitFor(`direct annotation ${lifecycle}`, () => thread(orphan.block.id), t => t.lifecycle === lifecycle);
+      await s.waitVisible(ansi.detail, "Orphan final comment sentinel");
+      assert.equal((await s.visible(ansi.detail)).split("\n")[3], evidenceRow);
+    }
+    await s.checkpoint("09a-annotation-lifecycle-keeps-evidence-viewport");
+    await goto(host.id, ansi);
+    await s.keys(ansi.detail, "o"); await s.waitVisible(ansi.detail, "Choose a reference");
+    await s.keys(ansi.detail, "tab", "o"); await s.waitVisible(ansi.detail, "Choose destination");
+    await s.keys(ansi.detail, "enter"); await s.waitVisible(ansi.detail, "GLOBAL PASSAGE");
+    const ansiCurrent = async () => (await s.registrations()).find(c => c.runtime?.paneId === ansi.detail)!;
+    const ansiTarget = (await ansiCurrent()).currentTarget;
+    assert.ok(ansiTarget?.kind === "resource" && ansiTarget.referenceContext);
+    await s.keys(ansi.detail, "]"); await s.waitVisible(ansi.detail, "▶ Comment 1"); await s.waitVisible(ansi.detail, "File-wide thread");
+    await s.keys(ansi.detail, "]"); await s.waitVisible(ansi.detail, "▶ Comment 2"); await s.waitVisible(ansi.detail, "This reference");
+    await s.waitVisible(ansi.detail, "Human reply second line");
+    const ansiBeforeReply = await s.visible(ansi.detail);
+    await s.checkpoint("10-ansi-contextual-thread-and-replies");
+    await s.keys(ansi.detail, "v"); await s.waitVisible(ansi.detail, "Scroll to source text");
+    await s.keys(ansi.detail, "C"); await s.waitVisible(ansi.detail, "Reply to selected comment");
+    await s.text(ansi.detail, "ANSI reply first line"); await s.keys(ansi.detail, "enter");
+    await s.text(ansi.detail, "ANSI reply final line"); await s.keys(ansi.detail, "ctrl+s");
+    await s.waitFor("ANSI reply persisted", () => thread(selected.block.id), t => t.replies.some(r => r.body === "ANSI reply first line\nANSI reply final line"));
+    await s.waitVisible(ansi.detail, "ANSI reply final line");
+    assert.deepEqual((await ansiCurrent()).currentTarget, ansiTarget);
+    assert.equal((await s.visible(ansi.detail)).split("\n")[3], ansiBeforeReply.split("\n")[3]);
+    await s.keys(ansi.detail, "D"); await s.waitFor("ANSI resolves selected thread", () => thread(selected.block.id), t => t.lifecycle === "resolved");
+    await s.waitVisible(ansi.detail, "D reopen");
+    await s.keys(ansi.detail, "D"); await s.waitFor("ANSI reopens selected thread", () => thread(selected.block.id), t => t.lifecycle === "open");
+    await s.waitVisible(ansi.detail, "D resolve");
+    await s.keys(ansi.detail, "C"); await s.waitVisible(ansi.detail, "Reply to selected comment");
+    await s.text(ansi.detail, "Discard ANSI reply"); await s.keys(ansi.detail, "esc"); await s.waitVisible(ansi.detail, "Reply cancelled");
+    assert.equal((await thread(selected.block.id)).replies.length, 3);
+    assert.deepEqual((await ansiCurrent()).currentTarget, ansiTarget);
+    assert.equal((await s.visible(ansi.detail)).split("\n")[3], ansiBeforeReply.split("\n")[3]);
+    await s.checkpoint("11-ansi-reply-and-lifecycle-preserve-reader");
+    await s.keys(ansi.detail, "]"); await s.waitVisible(ansi.detail, "▶ Comment 3"); await s.waitVisible(ansi.detail, "Other reference thread");
+    await s.keys(ansi.detail, "]"); await s.waitVisible(ansi.detail, "▶ Comment 4"); await s.waitVisible(ansi.detail, "unpositioned");
+    await terminal.resize(80, 28);
+    await s.waitFor("narrow ANSI viewport", () => s.visible(ansi.detail), frame => frame.split("\n")[0]!.length < 70);
+    await s.keys(ansi.detail, "G"); await s.waitVisible(ansi.detail, "Orphan final comment sentinel");
+    await s.checkpoint("12-ansi-narrow-orphan-body-reachable");
+    assert.equal((await s.client.request<Block>({ action: "get", blockId: host.id })).text, host.text);
     await s.record("thread-controls-result", { target, global, selected, other, orphan, threads: await threads(), beforeReply,
-      input: "Real Tree goto and Resource chooser; [/] navigation; C multiline reply and cancel; D resolve/reopen; narrow resize; ANSI G evidence navigation",
-      limits: "Initial threads and one agent reply are fixtures through public APIs. Pointer action URIs have renderer/controller coverage; no native pointer activation claimed." });
+      input: "Real Tree goto and Resource chooser; [/] navigation; native Pi Reply click and cancel; C multiline reply and cancel; D resolve/reopen; narrow resize; ANSI ordinary-thread and evidence navigation",
+      limits: "Initial threads and one agent reply are fixtures through public APIs. Native pointer activation proved through attached Herdr client; two-host SSH behavior not exercised." });
     const original = await s.client.request<AnnotationRecord>({ action: "annotations.get", annotationId: selected.block.id });
     assert.deepEqual(original.originalTarget, selected.originalTarget);
   },

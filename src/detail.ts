@@ -16,7 +16,7 @@ import {
 import { projectDetailRead } from "./detail-embeds";
 import { DetailEventScheduler } from "./detail-event-scheduler";
 import { createDetailKeyHandler, detailActionScopes } from "./detail-keymap";
-import { renderDetailAnsi } from "./detail-renderer";
+import { buildDetailAnsiPreview, renderDetailAnsi } from "./detail-renderer";
 import { referencedFilePreview, type FileContents, type ReferencedPathCandidate } from "./files";
 import {
   editTextInExternalEditor,
@@ -99,9 +99,11 @@ let workQueue = Promise.resolve();
 let pendingPaste: string | null = null;
 
 function viewport(): DetailViewport {
+  const width = process.stdout.columns ?? 100;
   return {
-    width: process.stdout.columns ?? 100,
+    width,
     height: process.stdout.rows ?? 30,
+    ...(controller.state.mode === "preview" ? { preview: buildDetailAnsiPreview(controller.state, width) } : {}),
   };
 }
 const firstWatcherConnection = Promise.withResolvers<void>();
