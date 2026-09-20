@@ -1132,6 +1132,8 @@ describe("Pi Markdown detail preview", () => {
     expect(annotationScopeLabel(secondThread, resource)).toContain("This reference");
     expect(annotationScopeLabel(firstThread, resource)).toContain("Other reference");
     expect(annotationScopeLabel(missing, resource)).toContain("original");
+    const globalView = { ...resource, target: document.target };
+    expect(annotationScopeLabel(missing, globalView)).toContain("Other reference");
     host.annotationThreads = [secondThread];
     const hostGroup = detailAnnotationGroups(host, line => line, 4, raw)[0]!;
     expect(hostGroup.placement).toBe("inline");

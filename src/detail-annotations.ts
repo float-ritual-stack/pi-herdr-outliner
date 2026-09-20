@@ -1,10 +1,10 @@
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { outlinerActionLink } from "./outliner-actions";
-import { annotationSourceHash, extractAnnotationBody } from "./annotations";
+import { annotationSourceHash, annotationReferenceContextsEqual, extractAnnotationBody } from "./annotations";
 import type { DetailState } from "./detail-controller";
 import type { PreviewRegion } from "./detail-preview-regions";
 import { renderMarkdownLine, sanitizeDynamicText } from "./terminal";
-import type { AnnotationRecord, AnnotationReferenceContext, AnnotationTarget, AnnotationThread } from "./types";
+import type { AnnotationRecord, AnnotationTarget, AnnotationThread } from "./types";
 
 function fitDynamicText(value: string, width: number): string {
   return truncateToWidth(sanitizeDynamicText(value), Math.max(0, width), "…").replaceAll("\x1b[0m", "");
@@ -66,15 +66,6 @@ function displayedResourceRepresentationId(state: Readonly<DetailState>): string
   return `filesystem:${description.resource.id}:${revision.mtimeNs}:${revision.size}:${filesystem.contentHash}`;
 }
 
-function sameReferenceContext(left: AnnotationReferenceContext | undefined, right: AnnotationReferenceContext | undefined): boolean {
-  return Boolean(left && right &&
-    left.representation.subject.kind === "block" && right.representation.subject.kind === "block" &&
-    left.representation.subject.blockId === right.representation.subject.blockId &&
-    left.representation.contentHash === right.representation.contentHash &&
-    left.anchor.start === right.anchor.start && left.anchor.end === right.anchor.end &&
-    left.anchor.exact === right.anchor.exact);
-}
-
 export function annotationScopeLabel(thread: AnnotationThread, state: Readonly<DetailState>): string {
   const original = thread.originalTarget.referenceContext;
   if (!original) return thread.originalTarget.representation.subject.kind === "resource" ? "Resource-wide" : "Block comment";
@@ -82,7 +73,7 @@ export function annotationScopeLabel(thread: AnnotationThread, state: Readonly<D
   const blockId = context.representation.subject.kind === "block" ? context.representation.subject.blockId : "unknown";
   const line = sourceLineAt(sourceLineStarts(context.sourceText), context.anchor.start ?? 0) + 1;
   const scope = state.target?.kind === "resource"
-    ? sameReferenceContext(thread.resolvedTarget?.referenceContext, state.target.referenceContext) ? "This reference" : "Other reference"
+    ? thread.resolvedTarget?.referenceContext && annotationReferenceContextsEqual(thread.resolvedTarget.referenceContext, state.target.referenceContext) ? "This reference" : "Other reference"
     : "Reference occurrence";
   return `${scope} · ${blockId.slice(0, 8)}:L${line}${thread.resolvedTarget ? "" : " · original"}`;
 }
@@ -119,7 +110,7 @@ export function detailAnnotationGroups(
       continue;
     }
     if (displayedResourceTargetId && originalContext &&
-      !sameReferenceContext(currentContext, state.target?.kind === "resource" ? state.target.referenceContext : undefined)) {
+      !annotationReferenceContextsEqual(currentContext, state.target?.kind === "resource" ? state.target.referenceContext : undefined)) {
       unpositioned.push(thread);
       continue;
     }
@@ -131,7 +122,7 @@ export function detailAnnotationGroups(
           candidate?.representation.id === displayedResourceId &&
           candidate.representation.subject.kind === "resource" &&
           candidate.representation.subject.resourceId === displayedResourceTargetId &&
-          (!originalContext || sameReferenceContext(candidate.referenceContext, currentContext))
+          (!originalContext || annotationReferenceContextsEqual(candidate.referenceContext, currentContext))
         ) ?? null;
     } else if (thread.currentResolution.status !== "resolved") {
       target = null;
