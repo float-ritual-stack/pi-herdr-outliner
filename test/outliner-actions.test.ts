@@ -36,6 +36,31 @@ function temporaryRawKeymap(contents: string): string {
 }
 
 describe("Outliner action keymap", () => {
+  test("exposes configurable reorder actions and rejects split collisions atomically", () => {
+    const path = temporaryKeymap({
+      "tree.reorder.up": ["Shift+ArrowUp"],
+      "tree.reorder.down": ["Shift+ArrowDown"],
+    });
+    const keymap = new OutlinerActionKeymap(path);
+    expect(keymap.resolve("tree", "browse", "", { name: "up", meta: true }).actionId).toBe("tree.reorder.up");
+    expect(keymap.resolve("tree", "browse", "", { name: "down", meta: true }).actionId).toBe("tree.reorder.down");
+    expect(keymap.reload()).toEqual({ ok: true });
+    expect(keymap.menuItems("tree", "browse")).toContainEqual(expect.objectContaining({
+      id: "tree.reorder.down", binding: "⇧↓", label: "Move item down",
+    }));
+    writeFileSync(path, JSON.stringify({
+      "tree.reorder.down": ["Shift+ArrowDown"],
+      "tree.detail.below": ["Shift+ArrowDown"],
+    }));
+    expect(keymap.reload()).toEqual({
+      ok: false,
+      error: expect.stringContaining("both use Shift+ArrowDown"),
+    });
+    expect(keymap.primaryBinding("tree.reorder.up")).toBe("Shift+ArrowUp");
+    expect(keymap.primaryBinding("tree.reorder.down")).toBe("Shift+ArrowDown");
+    expect(keymap.primaryBinding("tree.detail.below")).toBe("Alt+Shift+ArrowDown");
+  });
+
   test("normalizes terminal inputs and configurable chords", () => {
     expect(normalizeActionChord("control+shift+r")).toBe("Ctrl+Shift+R");
     expect(actionChordForInput("R", { name: "r", shift: true })).toBe("Shift+R");
@@ -130,27 +155,27 @@ describe("Outliner action keymap", () => {
 
   test("rebinds and disables Shift-letter actions for uppercase Pi input", () => {
     const rebound = new OutlinerActionKeymap("<test>", {
-      "tree.detail.below": ["Shift+X"],
+      "tree.current.reveal": ["Shift+X"],
     });
     expect(rebound.canonicalize("tree", "browse", "X", { name: "X" })).toMatchObject({
-      actionId: "tree.detail.below",
+      actionId: "tree.current.reveal",
       suppressed: false,
     });
-    expect(rebound.canonicalize("tree", "browse", "D", { name: "D" })).toMatchObject({
+    expect(rebound.canonicalize("tree", "browse", "R", { name: "R" })).toMatchObject({
       actionId: null,
       suppressed: true,
     });
 
-    const unbound = new OutlinerActionKeymap("<test>", { "tree.detail.below": [] });
-    expect(unbound.canonicalize("tree", "browse", "D", { name: "D" })).toMatchObject({
+    const unbound = new OutlinerActionKeymap("<test>", { "tree.current.reveal": [] });
+    expect(unbound.canonicalize("tree", "browse", "R", { name: "R" })).toMatchObject({
       actionId: null,
       suppressed: true,
     });
   });
   test("uses direction-aware pane defaults and supports rebound chords", () => {
     const defaults = new OutlinerActionKeymap("<test>");
-    expect(defaults.primaryBinding("tree.detail.right")).toBe("d");
-    expect(defaults.primaryBinding("tree.detail.below")).toBe("Shift+D");
+    expect(defaults.primaryBinding("tree.detail.right")).toBe("Alt+Shift+ArrowRight");
+    expect(defaults.primaryBinding("tree.detail.below")).toBe("Alt+Shift+ArrowDown");
     expect(defaults.primaryBinding("tree.delete")).toBe("Delete");
     expect(defaults.primaryBinding("detail.pane.right")).toBe("Alt+Shift+ArrowRight");
     expect(defaults.primaryBinding("detail.pane.below")).toBe("Alt+Shift+ArrowDown");
@@ -158,8 +183,8 @@ describe("Outliner action keymap", () => {
     const keymap = new OutlinerActionKeymap("<test>", { "tree.detail.right": ["Alt+D"] });
     expect(keymap.canonicalize("tree", "browse", "", { name: "d", meta: true })).toMatchObject({
       actionId: "tree.detail.right",
-      str: "d",
-      key: { name: "d" },
+      str: "",
+      key: { name: "right", meta: true, shift: true },
       suppressed: false,
     });
     expect(keymap.boundInput("tree.detail.right")).toEqual({

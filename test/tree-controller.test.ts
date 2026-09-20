@@ -934,6 +934,50 @@ describe("createTreeController", () => {
     expect(controller.view().status).toBe("Lock or unlock from a Detail pane");
     expect(fake.calls.some(({ action }) => action === "navigation.resolve")).toBe(false);
   });
+  test("reorders through rebound keys and menu actions without legacy keys moving data or opening panes", async () => {
+    const first = block("first");
+    const second = block("second", { position: 1 });
+    const siblings = [first, second];
+    const fake = harness((input) => {
+      if (input.action === "tree.index") return snapshot(siblings, second);
+      if (input.action === "children") return siblings;
+      if (input.action === "move") {
+        const index = siblings.findIndex(block => block.id === input.blockId);
+        const [moved] = siblings.splice(index, 1);
+        siblings.splice(input.position!, 0, moved!);
+        return moved;
+      }
+      return undefined;
+    });
+    fake.effects = { ...fake.effects, actionKeymap: new OutlinerActionKeymap("<test>", {
+      "tree.reorder.up": ["x"],
+      "tree.reorder.down": ["y"],
+    }) };
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+    await controller.handleKeypress("x", { name: "x" }, "pass");
+    expect(siblings.map(block => block.id)).toEqual(["second", "first"]);
+    expect(selectedBlockRow(controller).canonicalId).toBe(second.id);
+
+    await controller.handleAction("tree.menu.open");
+    expect(controller.view().actionMenuItems).toContainEqual(expect.objectContaining({
+      id: "tree.reorder.down", binding: "y",
+    }));
+    await controller.handlePaste("Move item down");
+    await controller.handleKeypress("", { name: "return" }, "pass");
+    expect(siblings.map(block => block.id)).toEqual(["first", "second"]);
+    expect(selectedBlockRow(controller).canonicalId).toBe(second.id);
+
+    fake.calls.length = 0;
+    await controller.handleKeypress("", { name: "up", meta: true }, "pass");
+    await controller.handleKeypress("", { name: "up", shift: true }, "pass");
+    await controller.handleKeypress("", { name: "down", shift: true }, "pass");
+    await controller.handleKeypress("d", { name: "d" }, "pass");
+    await controller.handleKeypress("D", { name: "d", shift: true }, "pass");
+    expect(fake.calls.some(call => call.action === "move")).toBe(false);
+    expect(fake.createdDetails).toEqual([]);
+  });
+
   test("opens right and lower Details while Delete retains confirmation", async () => {
     const root = block("root", { text: "Root", displayText: "Root" });
     const fake = harness((input) =>
@@ -942,8 +986,8 @@ describe("createTreeController", () => {
     const controller = createTreeController(fake.effects);
     await controller.initialize();
 
-    await controller.handleKeypress("d", { name: "d" }, "pass");
-    await controller.handleKeypress("D", { name: "d", shift: true }, "pass");
+    await controller.handleKeypress("", { name: "right", meta: true, shift: true }, "pass");
+    await controller.handleKeypress("", { name: "down", meta: true, shift: true }, "pass");
     await controller.handleKeypress("", { name: "delete" }, "pass");
 
     expect(fake.createdDetails).toEqual([root.id, root.id]);
@@ -2781,7 +2825,7 @@ describe("createTreeController", () => {
     );
     fake.calls.length = 0;
 
-    await controller.handleKeypress("", { name: "down", shift: true }, "pass");
+    await controller.handleKeypress("", { name: "down", meta: true }, "pass");
 
     expect(lastCall(fake.calls, "virtual.occurrences.reorder")).toEqual({
       action: "virtual.occurrences.reorder",
@@ -2802,7 +2846,7 @@ describe("createTreeController", () => {
     expect(fake.calls.some((call) => call.action === "move")).toBe(false);
 
     fake.calls.length = 0;
-    await controller.handleKeypress("", { name: "down", shift: true }, "pass");
+    await controller.handleKeypress("", { name: "down", meta: true }, "pass");
     expect(controller.view().status).toBe(
       "Already last in virtual branch; canonical order unchanged",
     );
@@ -2836,7 +2880,7 @@ describe("createTreeController", () => {
     await controller.handleKeypress("", { name: "down" }, "pass");
     fake.calls.length = 0;
 
-    await controller.handleKeypress("", { name: "down", shift: true }, "pass");
+    await controller.handleKeypress("", { name: "down", meta: true }, "pass");
 
     expect(controller.view().status).toBe(
       "Virtual branch is sorted by updated desc; manual reorder is disabled",
@@ -2925,7 +2969,7 @@ describe("createTreeController", () => {
     await controller.handleServiceEvent(event("content"));
     expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe(childRowId);
     fake.calls.length = 0;
-    await controller.handleKeypress("", { name: "down", shift: true }, "pass");
+    await controller.handleKeypress("", { name: "down", meta: true }, "pass");
     expect(controller.view().status).toBe(
       "Virtual occurrence reorder is disabled; canonical hierarchy unchanged",
     );

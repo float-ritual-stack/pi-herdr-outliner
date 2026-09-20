@@ -31,7 +31,7 @@ herdr plugin action invoke open-here --plugin float.pi-outliner
 
 `ensure-detail` focuses or creates a Detail for the Tree selected from the
 invoking pane/tab. `open-here` always creates a new linked Tree/Detail browsing
-context beside the invoking pane. Tree `d` / `Shift+D` and Detail
+context beside the invoking pane. Tree and Detail
 `Option+Shift+Right` / `Option+Shift+Down` create ordinary independent right/down Details.
 All pane identities come from live Herdr topology rather than labels or
 remembered pane IDs.

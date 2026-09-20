@@ -853,7 +853,7 @@ target `canonicalId`. Projected indent/outdent and add operations remain disable
 
 Branch count, completeness, and truncation remain root-only. Root-query truncation
 is distinct from depth and 1,000-row budget truncation, and all three are surfaced.
-Unsorted branches use persisted ranks and `Shift+Up` / `Shift+Down` reorder;
+Unsorted branches use persisted ranks and `Option+Up` / `Option+Down` reorder through the action registry;
 `workspace.snapshot` carries every occurrence rank in the same transactional read
 as the block graph, and projection reapplies those ranks before the root limit.
 Timestamp-sorted branches order all matched roots before the limit, ignore

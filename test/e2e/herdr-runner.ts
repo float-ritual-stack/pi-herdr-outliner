@@ -40,6 +40,7 @@ export interface HerdrScenarioSession {
   readonly panes: { launcher: string; service: string; tree: string; detail: string };
   readonly database: Database;
   readonly client: OutlinerClient;
+  setKeybindings(bindings: Record<string, string[]>): Promise<void>;
   setRegistryUnavailable(unavailable: boolean): Promise<void>;
   adoptDetached(clientId: string): Promise<string>;
   moveDetachedToNewTab(paneId: string): Promise<void>;
@@ -829,6 +830,10 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
         OUTLINER_STATE_DIR: outlinerState,
         OUTLINER_WORKSPACE_ROOT: projectRoot,
       }).socket),
+      async setKeybindings(bindings) {
+        await writeFile(keymapPath, `${JSON.stringify(bindings, null, 2)}\n`);
+        await artifacts.event("keybindings-written", { path: keymapPath, bindings });
+      },
       async setRegistryUnavailable(unavailable) {
         if (!fault.proxy) throw new Error("Registry faults are available only in the composed fixture");
         await artifacts.event("registry-fault", fault.proxy.setDisabled(unavailable));

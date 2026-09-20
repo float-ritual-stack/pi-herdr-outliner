@@ -359,8 +359,8 @@ canonical block in the first unlocked Detail in the same Herdr tab, ordered by
 pane position from left to right and then top to bottom. Preview updates never
 steal focus. Press `Enter` in Tree to focus that reader without locking it.
 
-Press `d` in Tree to create and focus an independent Detail to the right, or
-`Shift+D` to create it below. The new pane receives a fresh browsing context
+Press `Option+Shift+Right` in Tree to create and focus an independent Detail to the right, or
+`Option+Shift+Down` to create it below. The new pane receives a fresh browsing context
 seeded with the selected canonical block, so later Tree cursor movement does
 not replace it. It remains unlocked for explicit opens until you lock it.
 
@@ -576,6 +576,15 @@ an array of chords; an empty array leaves that action unbound:
 chords, unknown action IDs, active-scope collisions, or removing the only
 cancel route rejects the entire candidate and preserves the prior bindings.
 
+Tree reorder actions are `tree.reorder.up` / `tree.reorder.down`;
+`tree.move.up` / `tree.move.down` move selection. Reorder defaults to Option/Alt
+arrows and appears in `?`. Independent Detail placement uses Option/Alt+Shift
+arrows in both surfaces. The former hard-coded Shift-arrow reorder and Tree
+`d` / `Shift+D` split paths are removed. Existing configuration overrides still
+apply: remove old Shift-arrow split overrides to use the new defaults, or
+explicitly choose nonconflicting chords. Text-editor Shift-arrow selection is
+unchanged.
+
 ### Tree browse mode
 
 | Key | Action |
@@ -583,9 +592,9 @@ cancel route rejects the entire candidate and preserves the prior bindings.
 | `Up` / `Down` | Move selection |
 | `PageUp` / `PageDown` | Scroll within the selected multiline-expanded block |
 | `Left` / `Right` | Collapse/go to parent; expand/go to first child |
-| `Shift+Up` / `Shift+Down` | Reorder canonical siblings, or branch-local projected occurrences |
+| `Option+Up` / `Option+Down` | Reorder canonical siblings, or branch-local projected occurrences |
 | `Enter` | Focus the current block in the first unlocked same-tab Detail; remain unlocked |
-| `d` / `Shift+D` | Create and focus a new independent Detail to the right / below |
+| `Option+Shift+Right` / `Option+Shift+Down` | Create and focus a new independent Detail to the right / below |
 | `e` | Edit a single-line block inline; open and lock a multiline block in the first unlocked Detail |
 | `a` / `s` | Add child / sibling |
 | `c` | Open the Herdr quick-capture popup; Enter adds a line, Ctrl+S saves to Inbox, Esc retains and closes, Ctrl+D twice discards |
@@ -1075,7 +1084,7 @@ Detail lock state, or occurrence ranks; inside the chooser, `Esc` first dismisse
 that chooser. At narrow widths, `Tab` switches between the independently usable
 list and preview.
 
-`Shift+Up` / `Shift+Down` reorders matched roots within an unsorted branch using
+In Tree, `Option+Up` / `Option+Down` reorders matched roots within an unsorted branch using
 persisted occurrence ranks. Timestamp-sorted branches disable manual occurrence
 reorder. Contextual descendants never participate. Canonical parent/position
 order stays unchanged, and ranks survive temporary query mismatches.

@@ -221,6 +221,8 @@ const GENERATED_ROW_DISABLED_ACTIONS: Record<string, true> = {
   "tree.file.open": true,
   "tree.reference.open": true,
   "tree.reference.reveal": true,
+  "tree.reorder.up": true,
+  "tree.reorder.down": true,
   "tree.virtual-branch.open": true,
 };
 
@@ -1734,6 +1736,25 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       return;
     }
     const selected = rows[selectedIndex];
+    if (actionId === "tree.reorder.up" || actionId === "tree.reorder.down") {
+      const offset = actionId === "tree.reorder.up" ? -1 : 1;
+      let preferredRowId: string | null = null;
+      if (!isBlockTreeRow(selected)) {
+        status = "Select an ordinary block occurrence to reorder";
+      } else if (isVirtualBranchRootOccurrence(selected)) {
+        preferredRowId = await moveOccurrenceSibling(selected, offset);
+      } else if (isVirtualBranchOccurrence(selected)) {
+        occurrenceMutationDisabled("reorder");
+      } else {
+        preferredRowId = await moveSibling(selected, offset);
+      }
+      if (preferredRowId) {
+        await reload(preferredRowId);
+        await publishDisplayRowSelection(rows[selectedIndex]);
+      }
+      effects.invalidate();
+      return;
+    }
     if (actionId === "tree.authored-links.toggle") {
       if (!isBlockTreeRow(selected)) {
         status = "Select an ordinary block occurrence to show authored links";
@@ -2097,32 +2118,6 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       return;
     } else if (key.name === "pageup" || key.name === "pagedown") {
       scrollSelectedExpandedBlock(key.name);
-    } else if (key.shift && key.name === "up") {
-      if (selected && isVirtualBranchRootOccurrence(selected)) {
-        const movedRowId = await moveOccurrenceSibling(selected, -1);
-        if (movedRowId) {
-          preferredRowId = movedRowId;
-          reloadRequired = true;
-        }
-      } else if (selected && isVirtualBranchOccurrence(selected)) {
-        occurrenceMutationDisabled("reorder");
-      } else if (selected) {
-        preferredRowId = await moveSibling(selected, -1);
-        reloadRequired = true;
-      }
-    } else if (key.shift && key.name === "down") {
-      if (selected && isVirtualBranchRootOccurrence(selected)) {
-        const movedRowId = await moveOccurrenceSibling(selected, 1);
-        if (movedRowId) {
-          preferredRowId = movedRowId;
-          reloadRequired = true;
-        }
-      } else if (selected && isVirtualBranchOccurrence(selected)) {
-        occurrenceMutationDisabled("reorder");
-      } else if (selected) {
-        preferredRowId = await moveSibling(selected, 1);
-        reloadRequired = true;
-      }
     } else if (key.name === "up") {
       selectedIndex = Math.max(0, selectedIndex - 1);
       queueSelectionPublication = true;
@@ -2253,12 +2248,6 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       return;
     } else if (str === "/") {
       await beginInput("filter", activeFilter);
-      return;
-    } else if (str === "d" && selected) {
-      await createDetailPane("right");
-      return;
-    } else if (str === "D" && selected) {
-      await createDetailPane("down");
       return;
     } else if (key.name === "delete" && selected) mode = "delete";
     else if (str === "f" && selected) await openReferencedFile(selected.block);
