@@ -476,6 +476,10 @@ describe("Pi Markdown detail preview", () => {
       expect(initial.map(target => target.occurrence?.start)).toEqual([
         source.indexOf("[file::same.md]"), source.lastIndexOf("[file::same.md]"),
       ]);
+      setBlockDocument(detail, {
+        selected: { ...detail.context.selected!, id: "source-block-002" }, ancestors: [], children: [],
+      });
+      expect(targets().map(target => target.value)).toEqual(["source-block-002", "source-block-002"]);
       detail.context.selected!.text = source.replace("open", "done");
       detail.context.selected!.revision += 1;
       detail.projectedSelectedText = detail.context.selected!.text;
