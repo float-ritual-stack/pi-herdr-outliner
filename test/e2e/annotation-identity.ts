@@ -51,7 +51,8 @@ const result = await runHerdrScenario({
     await session.waitVisible(detail, quote);
     const snapshot = await session.paneSnapshot(detail);
     assert.ok(snapshot.text.includes(quote));
-    assert.ok(snapshot.text.includes("Outliner Detail"));
+    assert.ok(snapshot.text.includes("Properties · 0 records"));
+    assert.ok(snapshot.text.includes("⌃Q close"));
     assert.ok(!host.text.includes(quote));
     const capture: RenderedSelectionCapture = {
       quote, capturedAt: new Date().toISOString(), hostBlockId: host.id,
@@ -63,7 +64,7 @@ const result = await runHerdrScenario({
     await session.client.request({ action: "ui.command.send", command: {
       targetClientId: registration.clientId, command: "comment.selection", renderedSelection: capture,
     } });
-    await session.waitVisible(detail, "⌃S save");
+    await session.waitVisible(detail, "Ctrl+S save");
     await session.text(detail, renderedComment);
     await terminal.write("\u0013");
     const saved = await findComment(renderedComment);
@@ -87,7 +88,10 @@ const result = await runHerdrScenario({
     await session.waitVisible(detail, quote);
     await session.checkpoint("02-reveal-host-without-capture-offset");
     await terminal.resize(100, 32);
-    await session.keys(detail, "tab", "enter");
+    await session.waitFor("narrow Detail frame", () => session.visible(detail), frame => frame.split("\n")[0]!.length < 70);
+    await session.keys(detail, "tab");
+    await session.checkpoint("03a-narrow-region-focused");
+    await session.keys(detail, "enter");
     await session.waitVisible(detail, renderedComment);
     await session.checkpoint("03-narrow-reflow-reachable-comment");
     assert.deepEqual((await readAnnotation(saved.block.id)).originalTarget, saved.originalTarget);
@@ -102,7 +106,7 @@ const result = await runHerdrScenario({
     await goto(fileHost.id);
     await session.waitVisible(detail, "ORIGINAL-FILE-QUOTE");
     await session.keys(detail, "c");
-    await session.waitVisible(detail, "⌃S save");
+    await session.waitVisible(detail, "Ctrl+S save");
     await session.text(detail, fileComment);
     await terminal.write("\u0013");
     const fileSaved = await findComment(fileComment);
@@ -110,8 +114,15 @@ const result = await runHerdrScenario({
     // A legacy annotation may physically live under a file reference. Its parent
     // cannot authorize new bytes as the annotation's represented source.
     await session.client.request({ action: "move", blockId: fileSaved.block.id, parentId: fileHost.id, position: 0 });
-    await writeFile(join(session.projectRoot, "evidence.txt"), "DIFFERENT-FILE-CONTENT\nChanged second line");
     await goto(fileSaved.block.id);
+    await session.waitVisible(detail, "Stored resolution: resolved");
+    await writeFile(join(session.projectRoot, "evidence.txt"), "DIFFERENT-FILE-CONTENT\nChanged second line");
+    const beforeRefresh = await session.client.request<Block>({ action: "get", blockId: fileSaved.block.id });
+    await session.client.request({
+      action: "update", blockId: beforeRefresh.id, text: `${beforeRefresh.text}\nAnnotation refreshed`,
+      expectedRevision: beforeRefresh.revision, mutation: { author: "agent", actorId: "e2e-annotation-refresh" },
+    });
+    await session.waitVisible(detail, "Annotation refreshed");
     const annotationFrame = await session.waitVisible(detail, "Stored resolution: resolved");
     assert.ok(annotationFrame.includes("ORIGINAL-FILE-QUOTE"));
     assert.ok(!annotationFrame.includes("DIFFERENT-FILE-CONTENT"));
