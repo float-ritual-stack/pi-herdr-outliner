@@ -1,9 +1,10 @@
 # Data safety, remote performance, and Herdr/Pi implementation plan
 
-Sequence and acceptance criteria, reconciled 2026-09-19 against merged code and
-the live workboard. The Outliner workboard is authoritative for ownership, Work
-IDs, branches, PRs, and task status. This document records design dependencies and required evidence;
-editing it does not implement or complete a package.
+Contracts and acceptance criteria, reconciled 2026-09-20 against the implemented
+seven-story batch and its retained verification. The Outliner workboard owns
+ownership, Work IDs, branches, PRs, and task status. This document does not certify
+that every batch change is on main or deployed to the shared session; those need
+their own integration and application proof.
 
 ## Outcome
 
@@ -41,7 +42,7 @@ views beside agents, and persistent activity displays remain valid Herdr uses.
   and sibling-reorder proof. Position changes do not invalidate text drafts.
 - S4 / PIE-278, [PR #122](https://github.com/float-ritual-stack/pi-herdr-outliner/pull/122):
   content-qualified filesystem revisions, PDF refresh/history checks, and actual
-  stale-file-save proof. PIE-280 retains the separate external-writer race.
+  stale-file-save proof. PIE-280 adds the separate recoverable replacement contract below.
 - S5 / PIE-279, [PR #123](https://github.com/float-ritual-stack/pi-herdr-outliner/pull/123):
   service-owned file previews and completion, passive catalog reads, and actual
   Pi/ANSI proof with separate client/service roots. Controller regressions cover
@@ -54,13 +55,35 @@ views beside agents, and persistent activity displays remain valid Herdr uses.
 - PIE-271, [PR #125](https://github.com/float-ritual-stack/pi-herdr-outliner/pull/125):
   primary Detail paint and input-lane release before optional enrichment, guarded
   deferred presentation, and actual direct/forwarded application proof. Retain
-  the block/file annotation identity guards; PIE-281 owns the older placement defects.
+  the block/file annotation identity guards; PIE-281 repairs the older placement defects.
 
 Preserve these behaviors. PIE-270 does not establish progressive cold loading,
 Tree body caching, Resource caching, or structural conflict protection for all
 mutations. Its old `tree.index` prerequisite and blanket structural-revision
 claim are removed from the completed scope. S3 owns the mutation-contract audit;
 PIE-269 and PIE-271 deliver the Tree read cutover and progressive cold Detail reads.
+
+## Implemented seven-story batch
+
+These are retained contracts, not a duplicate task queue. Preserve their focused
+regressions and application journeys when integrating or changing them.
+
+| Story | Implemented boundary | Application evidence to retain |
+| --- | --- | --- |
+| PIE-235 | One invocation-local virtual-child lookup; ranked filters compute matching block IDs once using existing indexes. | `tree-scale.ts` at 1k/5k plus the separate 24k `profile:tree --check-budget` fixture. |
+| PIE-280 | Durable draft/original recovery and publication only into an absent pathname. | `file-commit.ts`, process-interruption regressions, and the existing file-revision journey. |
+| PIE-281 | Position annotations only against the displayed source representation; captured/stale evidence remains reachable and unpositioned. | `annotation-identity.ts`, including changed files and metadata-only presentation. |
+| PIE-263 | Authored Resource references activate by exact host block/revision/span; repeated uses share one Resource. | Pi and ANSI `resource-occurrences.ts` journeys. |
+| PIE-282 | Immutable per-occurrence evidence in the existing annotation target; Resource passages retain their separate passage/revision anchor. | `reference-annotations.ts`, native-pointer scope checks, and public service/restart regressions. |
+| PIE-265 | In-Detail navigation, reply, resolve/reopen and complete evidence access, preserving target and viewport. | `annotation-threads.ts`: native Pi control activation, Pi/ANSI readers, narrow views and lifecycle refresh. |
+| PIE-283 / A1-A2 | Opt-in fixed Tree/Detail surface with local ordinary navigation and explicit detached views. | `composed-surface.ts`, `composed-boundaries.ts`, and occurrence comments through the composed launch. |
+
+The application retains the existing document editor, annotation repository and
+service operations. PIE-282 introduced protocol 60; the composed role/region
+contract requires the final batch cutover to protocol 61. Deploy the service and
+all clients together.
+See [execution and completion requirements](#execution-and-completion-requirements)
+before treating branch proof as merged delivery or deployment.
 
 ## Delivery order and dependencies
 
@@ -74,26 +97,25 @@ not one large PR.
 | Shipped foundation | S2 / PIE-276: bind capture receipts to submissions | BLOCKER addressed: a retry could discard newly typed text. | S1 before deploying any required receipt migration; attached-client support for popup proof. |
 | Shipped foundation | S3 / PIE-277: enforce block edit revisions | BAD DESIGN addressed: silent stale writes and common false conflicts. | Preserve migration, required-token, stale-write, and sibling-reorder regressions. |
 | Shipped foundation | S4 / PIE-278: identify file contents in revisions | BUG addressed: equal size/time concealed changed bytes. | Preserve byte identity, legacy PDF history, and stale-file-save proof; PIE-280 remains separate. |
-| Separate safety follow-up | PIE-280: preserve external edits during file replacement | BUG: another writer can lose bytes between validation and rename. | Choose a supported commit/recovery contract; hashing alone does not solve it. Consult the workboard for scheduling. |
-| Separate correctness follow-up | PIE-281: annotation representation and coordinate identity | BUG: captured-screen offsets and old file resolutions can be applied to different displayed bytes. | Reuse annotation history and Resource identity; settle the coordinate contract before A2 comment/selection parity claims. |
+| Implemented safety extension | PIE-280: preserve external edits during file replacement | BUG addressed with recoverable replacement, not atomic compare-and-swap. | Preserve retained versions, confinement and interruption recovery; observe the documented filesystem limits. |
+| Implemented identity foundation | PIE-281: annotation representation and coordinate identity | BUG addressed: screen offsets and old file resolutions cannot position against unrelated bytes. | Preserve representation/mapping checks and reachable original evidence for reference comments and composed selection. |
 | Shipped foundation | S5 / PIE-279: make file reads service-owned | BAD DESIGN addressed: preview routes read different hosts' bytes. | Preserve passive-read semantics, exact file evidence, and explicit resource creation. |
-| Alongside safety work | I1: observers are not destinations | BUG: navigator subscriptions advertise a false Detail identity. | Narrow subscription change; attached-client popup proof. |
-| Alongside safety work | I2: chooser destination outcomes | BUG: missing eligible readers do not consistently trigger the offered split action. | Typed routing result and all chooser callers updated. |
-| Alongside safety work | I3: Pi focus-loss handling | BUG: consumed focus loss can leave selection autoscroll active. | Focused terminal test plus attached-client input proof. |
+| Remaining interaction fix | I1: observers are not destinations | BUG: navigator subscriptions advertise a false Detail identity. | Narrow subscription change; attached-client popup proof. |
+| Remaining interaction fix | I2: chooser destination outcomes | BUG: missing eligible readers do not consistently trigger the offered split action. | Typed routing result and all chooser callers updated. |
+| Remaining interaction fix | I3: Pi focus-loss handling | BUG: consumed focus loss can leave selection autoscroll active. | Focused terminal test plus attached-client input proof. |
 | Before host cleanup | I4: authoritative host projection | FRAGILE: event ordering can leave stale pane state. | Verify supported-version event behavior; fix refresh before deleting subscriptions. |
-| Before composed-view targeting | I5: explicit agent source view | FRAGILE: shared focus history cannot identify a particular attached client's intent. | Bounded two-client reproduction and source-view contract. |
+| Remaining cross-client work | I5: explicit agent source view | FRAGILE: shared focus history cannot identify a particular attached client's intent. | Composed region identity is implemented; two-attached-client intent still needs its own reproduction and contract. |
 | Shipped read foundation | PIE-269: compact Tree index | Duplicate full-body Tree transfer removed. | Preserve exact body revisions, reference spans, complete projections, and live journey proof. |
 | Shipped read foundation | PIE-271: progressive Detail loading | Primary content and input no longer wait for optional enrichment. | Preserve S3-S5 contracts, cache/draft behavior, readiness, and source identity. |
 | Measured gate | PIE-272: assess backlink indexing | No reverse-reference index justified in the measured envelope. | Reopen against the recorded workload/budgets when disclosure cost becomes material. |
-| Measured gate | PIE-273: assess server windows | Compact bytes pass; growth revalidation fails in ranked queries. | Fix the measured query path under PIE-235 before reconsidering a cursor protocol. |
-| Measured performance follow-up | PIE-235: virtual-branch loading at scale | Existing task also owns the ranked property-query bottleneck exposed by PIE-273. | Preserve query/order/completeness contracts; distinguish live service cost from the original client-only profile. |
-| After routing contract is clear | A1: primary reader ownership | BAD DESIGN: host geometry decides ordinary navigation destinations. | I1; reuse I2's explicit destination outcomes. |
-| Experiment | A2: one Tree/Detail surface | Test whether coordination can actually disappear. | A1; bounded rendering; explicit internal focus and resource retention. |
-| After experiment passes | A3: remove replaced coordination | Delete demonstrated redundancy while preserving detached behavior. | A2 acceptance evidence and affected callers migrated. |
+| Measured gate | PIE-273: assess server windows | No cursor system justified; PIE-235 now passes the retained 5k growth budgets. | Reopen against new measured workload/budget failures. |
+| Implemented performance fix | PIE-235: virtual-branch loading at scale | Repeated projection construction and ranked-query scans removed. | Preserve both 24k client and 1k/5k service/application acceptance tracks. |
+| Implemented opt-in experiment | A1-A2 / PIE-283: local primary reader in one surface | Ordinary selection/open/focus no longer needs pane discovery or service navigation dispatch. | Preserve separate view state, editor contracts, region identity, retained Resource revision and detached routing. |
+| After opt-in evaluation | A3: remove replaced coordination | Delete demonstrated redundancy while preserving detached behavior. | Default-cutover decision, A2 acceptance evidence and affected callers migrated. |
 
-Safety work and small interaction fixes can proceed independently. A layout
-rewrite is not a dependency of S1-S5. A2 can be prototyped before all fixes land,
-but shipping its editing/capture behavior requires the relevant safety fixes.
+I1-I5 can proceed independently of a default layout change. A2 reuses the safety
+and annotation foundations; its opt-in boundary does not retire standalone or
+detached callers.
 
 S1-S5 are the shipped safety foundation. Reuse their regression and application
 proof; their former queue order does not create technical dependencies between
@@ -103,16 +125,11 @@ independent: connectivity from PIE-268 and cached revisits from PIE-270 did not
 implement either behavior.
 Consult the workboard for current execution status.
 
-PIE-273 uses PIE-269's measurements; PIE-272 uses PIE-271's measurements. Their
-recorded decisions justify no new backlink index or cursor subsystem. PIE-273
-does not establish acceptable growth latency: PIE-235 retains the failing query
-path. I1-I5 remain separate interaction fixes; A1-A3 remain a later
-ownership/layout experiment. A2 does not require either read
-optimization. PIE-280 is an independent unresolved safety follow-up, not a
-performance or layout dependency; retain its explicit external-write limitation.
-PIE-281 records pre-existing annotation placement defects found during PIE-271
-review. It is independent of the read-performance gates and is not an expansion
-of PIE-271 into a new annotation subsystem.
+PIE-272/273 justify no backlink index or cursor subsystem. PIE-235 fixes the
+measured growth bottleneck without either. Its performance work and PIE-280's
+file replacement contract remain independent of layout. PIE-281 supplies the
+identity boundary for PIE-282/265 and composed comments. I1-I5 remain separate
+interaction work; A3 owns any default cutover and deletion of shared machinery.
 
 Hard dependencies:
 
@@ -161,18 +178,27 @@ The runner already provides:
   reference-resolution or annotation-reconciliation response; unrelated replies
   and subscription events continue. The compact-index
   journey also records parse/projection cost and the first observed Tree frame.
-- One owned PTY-attached Herdr client for popup input, with raw ANSI and current-screen checkpoints decoded by test-only `@xterm/headless`.
+- One owned PTY-attached Herdr client with actual keyboard/SGR mouse input,
+  resize, raw ANSI and current-screen checkpoints decoded by test-only
+  `@xterm/headless`; `paneSnapshot` retains exact capture text and revision.
+- A bounded composed launch with one host pane and one logical registration,
+  plus adoption, movement and closure of explicitly owned detached views.
+- Private registry failure/restoration and specifically held composed publication
+  and edit-lock replies, so ordinary local routing and draft ownership are tested
+  while host discovery or an asynchronous boundary is unavailable.
 - A read-only SQLite connection and consistent checkpoint copies.
 - Terminal text/ANSI, topology, registrations, invocation logs, process evidence,
   and cleanup of owned processes on success, failure, and interruption.
 
-Its current limits are material: one canonical service, a bounded startup
-contender, and at most one extra Tree/Detail context; one attached Herdr client
-and capture-popup launch; no second attached client or real mouse/resize journey. A passing
-existing scenario does not cover those paths. Optional Detail response barriers
-exercise delayed, failed, and reordered completions on one host; they do not
-establish two-host SSH behavior. A held goto reply is covered separately by a
-Tree controller regression.
+Its limits remain one canonical service, a bounded startup contender, one extra
+Tree/Detail context, and one attached Herdr client. Native mouse and resize are
+now exercised for the recorded thread/composed paths; this does not prove I3's
+focus-loss/autoscroll path or I5's two-client behavior. Server-wide pane focus
+does not select the attached client's active tab: select that tab through actual
+input before claiming attached interaction. Optional-response and registry faults
+run on one host and do not establish two-host SSH or installed-server event-order
+semantics. A held goto reply has a separate Tree controller regression.
+Recorded batch application runs use Linux; macOS behavior remains unverified.
 
 `startup-interruption.ts` deliberately expects its inner fixture to fail after
 SIGINT and then verifies cleanup. Its outer test reports success. Distinguish
@@ -184,11 +210,11 @@ expected injected failure from failed scenario verification when reading artifac
 | --- | --- | --- |
 | S1 (implemented) | Launch and track one additional service process against the private workspace; hold a real async operation at a deterministic barrier. | Rejected second startup changes no live operation state; cleanup leaves no owned survivor. |
 | S2 (implemented; reusable by I1) | Attach a real Herdr client through an owned PTY; send modal input through that client and retain its output. | Open, operate, and close the actual popup. A popup has no pane ID: sending keys to the underlying pane is not popup proof. |
-| S3 / A1 / I4 | Open, move, resize, and close additional owned views using supported Herdr operations; record returned identities. | Track the moved terminal and current pane ID; actions stay within the private server. |
+| A2 (implemented; reusable by I4) | Adopt, move and close an explicitly owned detached view; retain returned identities. | Track the terminal/current pane ID inside the private server. This does not replace I4's event-order/reconnect check. |
 | S5 (implemented) | Give client and service different fixture roots with the same relative filename. | Both UI routes display service-owned bytes; describe this as simulated remote ownership unless SSH is also exercised. |
-| I3 / A2 | Add attached-client mouse/focus input and PTY resize evidence. | Input reaches the real host/application path; capture resized frames and resulting state. |
+| PIE-265 / A2 (implemented; reusable by I3) | Drive SGR mouse input and PTY resize through the attached client. | Native Reply activation and composed Resource source coordinates survive resize. I3 still needs its specific focus-loss journey. |
 | I5 | Attach two controlled clients to the private Herdr server. | Record both client actions and the context selected for each explicit source. |
-| A2 | Support one narrowly defined composed launch alongside the existing detached launch. | One host pane may contain two logical views; fixtures no longer require distinct Tree and Detail pane IDs for that case. |
+| A2 (implemented) | One composed launch, bounded registry fault, and publication/edit-lock response barriers. | Internal navigation works without discovery; delayed publication cannot change a draft's owner. One host pane contains distinct logical Tree and Detail views. |
 | PIE-269 / PIE-271 | Reuse bounded request-byte/timing capture and narrowly matched optional Detail response barriers. | Keyboard-driven cold/revisit navigation, exact final targets, and bounded reads; hold/reorder optional Detail replies for PIE-271. Report actual two-host evidence separately from a local forwarding fixture. |
 
 Keep process ownership, timeouts, transport, and artifact capture in the runner.
@@ -203,8 +229,8 @@ Record tool/dependency versions where the behavior depends on them.
 
 ## Safety packages
 
-S1-S5 have runnable scenarios identified below. Other new scenario filenames are
-planned files, not commands that exist today.
+S1-S5 and the implemented batch have runnable scenarios identified below.
+The I1-I5 filenames are still proposed journeys, not existing commands.
 Each defect needs a focused regression that fails before its fix, plus evidence
 from the real service or UI path appropriate to the claim.
 
@@ -276,7 +302,7 @@ defects from unspecified policy. The Detail cache provides no structural write
 authority. Define an operation's missing precondition from a concrete failing
 case; do not add a universal structural counter merely to satisfy the old wording.
 
-### S4 — file revision identity and the separate write race (F6; PIE-278)
+### S4 — file revision identity (F6; PIE-278)
 
 Change `src/resources.ts` revision normalization/comparison and
 `src/resource-catalog.ts` filesystem read/write handling. Include the existing
@@ -286,20 +312,28 @@ Scenario: `bun run test:e2e:file-revisions` (`test/e2e/file-revisions.ts`). Open
 the file externally with same-sized bytes and restored modification time, then
 save. Reject the stale save, retain the draft, and preserve the external bytes.
 
-Investigate the separate validation-to-rename gap with a controlled external
-writer. A hash comparison does not close that interval; a service-local lock
-does not constrain an external editor. Record the supported writer/recovery
-contract and the bounded reproduction before choosing a permanent fix. Track it
-separately if the revision change lands first; do not claim all file-write races
-are solved by that change.
+### PIE-280 — recoverable filesystem replacement
 
-The interval is now reproduced with a separate process writing at the final rename
-boundary. PIE-280 (`257e4e40-31c1-45b9-b8ca-7fb853af29fc`) owns the unresolved
-commit/recovery contract. Current saves detect stale content at validation but
-require exclusion of external writes through replacement; they provide no
-recovery copy for that interval. Keep PIE-280 open when S4's revision identity
-lands. Its fix must reject a conflicting commit or retain both versions durably,
-including failure during commit. Do not hide this behind another internal lock.
+`src/filesystem-commit.ts` and `src/resource-catalog.ts` now retain the submitted
+draft and displaced original in a private `.outliner-save-<UUID>/` directory.
+Validate the displaced bytes against the opened revision; publish only into an
+absent pathname. A competing replacement remains in place, the save reports a
+conflict, and Detail keeps its draft. Startup or the next Resource read recovers
+a pending original only into an absent pathname. Recovery rejects non-regular
+originals and rechecks Source confinement.
+
+This closes the silent-loss path with recoverable replacement, not atomic
+compare-and-swap. The normal pathname is briefly absent. Recovery copies remain
+for explicit cleanup because an external editor can keep writing through an old
+descriptor. Local hard links, rename and directory fsync are required; unsupported
+primitives fail the save. Preserve the exact recovery instructions and limitations
+in [filesystem editing](../README.md#detail-edit-and-comment-modes).
+
+`test:e2e:file-commit` drives actual save/conflict/cancel/refresh behavior. Focused
+tests cover conflicting bytes, late descriptor writes, permissions, symlink
+confinement and process death at commit boundaries. Linux process interruption
+is verified; power loss, network filesystems, hostile source-directory replacement
+and concurrent deletion of recovery evidence remain outside the verified contract.
 
 ### S5 — one file-reading authority (F4; PIE-279)
 
@@ -350,7 +384,7 @@ live Herdr session is not a disposable fixture.
 
 Delivered by PR #124. The following are retained contracts and acceptance checks,
 not a second implementation queue. PIE-273 records the scale decision and reopening
-criteria; PIE-235 owns the measured ranked-query follow-up.
+criteria; PIE-235 supplies the measured projection/ranked-query fix.
 
 At baseline `53be3c0`, `src/tree-controller.ts:reload()` consumes complete `visible` and
 `physical` collections from `workspace.snapshot`. Start at that read boundary
@@ -455,10 +489,11 @@ The gates have recorded decisions on the canonical work items. Both private
 measurement, actual direct/forwarded keyboard actions, and retained source/provenance.
 Backlinks met the disclosure budgets, so PIE-272 adds no reverse-reference index.
 Complete Tree responses remained about 91% smaller and met their byte budgets.
-However, the 5,000-block projection and mutation-revalidation budgets failed;
-ranked `tree.query` calls dominated. PIE-273 therefore adds no window/cursor/replay
-system and retains the narrower fix under existing PIE-235. A completed decision
-gate does not mean that growth responsiveness is fixed.
+The initial 5,000-block projection and mutation-revalidation budgets failed;
+ranked `tree.query` calls dominated. PIE-235 now removes those repeated scans and
+the repeated client projection work, passing both retained budgets. Neither gate
+adds a window/cursor/replay system. These results bound the measured workload;
+they are not a claim about arbitrary workspace growth.
 
 Keep the following reopening criteria:
 
@@ -481,65 +516,63 @@ this agent's host-socket access check do not establish two-host SSH behavior.
 
 ### PIE-235 — remove repeated work from virtual-branch loading
 
-Reuse the existing task rather than create another scale project. The original
-24,000-block client-only projection profile and PIE-273's live ranked-query cost
-are distinct measurements. Preserve both acceptance tracks.
+The implementation fixes two independent costs. `projectVirtualBranches()` in
+`src/virtual-branches.ts` builds virtual-child adjacency once per invocation and
+composes only rows with virtual children. `queryRankedBlocksFromCurrentRead()` in
+`src/store.ts` replaces repeated correlated property scans with matching-block-ID
+membership queries through existing indexes. No persistent cache, schema change,
+optimizer hint or cursor protocol is added.
 
-The immediate service boundary is `OutlinerStore.queryRankedBlocksFromCurrentRead()`
-in `src/store.ts`. On the retained 5,000-block fixture, its correlated property
-checks choose `properties_scope_key_value` by scope/key, then test `LOWER(value)`
-and the candidate block ID across that shared key range. Seeded `type=bookmark`
-and `type=project-doc` queries each take roughly half a second. A read-only
-comparison using the existing block-ID primary index returns identical ordered
-rows in roughly 16 ms. This diagnosis supports a query/access-path fix; it does
-not establish a shipped fix or mandate the diagnostic index hint.
+Preserve case-insensitive filters, property scope, deletion/subtree rules,
+authored ranks, canonical fallback order, exact bodies/revisions and explicit
+completeness. Baseline comparisons cover complete, truncated, filtered, ranked
+and collapsed projections, including serialized output and selected occurrences.
 
-Remove the repeated key-range scans while preserving case-insensitive filters,
-property scope, deletion/subtree rules, authored ranks, canonical fallback order,
-exact bodies/revisions, and explicit completeness. Prefer an existing authoritative
-lookup over a new cache or store. No cursor, replay, or leased-view protocol is
-required by this evidence.
+The separate 24,000-block client profile records projection p95 **9.92 ms** and
+initialization p95 **17.83 ms**, down from about 2.14/2.21 seconds. Its existing
+projection/initialization budget remains p50 <25 ms and p95 <50 ms. The private
+5,000-block two-context application fixture records parse/projection p95
+**68.12 ms** (<250 ms) and mutation-to-converged-Tree-and-Detail p95 **669.28 ms**
+(<1 second). The mutation check requires both physical and projected copies to
+converge; it does not hide a briefly mixed-revision frame.
 
-Verify query contracts with focused regressions, then repeat the private
-1,000/5,000-block Tree load and mutation/reorder journey. Retain exact projection
-membership/order, selected-row behavior, and request counts. The predeclared
-5,000-block budgets are parse plus projection below 250 ms and mutation-to-frame
-below one second in the measured two-context workload. Re-run the separate
-24,000-block client profile; a faster SQL query does not prove that cost fixed.
-Detailed samples, query plans, diagnosis scripts, and scheduling stay on PIE-235
-and the completed PIE-272/273 proof records.
+Retain `profile:tree --check-budget` and `test/e2e/tree-scale.ts` at 1k/5k as
+distinct acceptance tracks. The 24k profile is client-only; larger service
+workloads, two-host SSH and atomic snapshot/query coherence remain unproven.
+Detailed samples and reopening criteria stay on PIE-235 and PIE-272/273 proof.
 
 ### PIE-281 — annotation representation and coordinate identity
 
-Two baseline defects need their own bounded fix. Herdr rendered-passage captures
-include terminal chrome, wrapping, and recent history. `renderedSelectionAnnotationTarget()`
-in `src/detail-controller.ts` correctly preserves that quote and snapshot hash,
-but `detailAnnotationGroups()` in `src/detail-pi-preview.ts` interprets its offsets
-in filtered projected Markdown. These are different coordinate systems. Comparing
-their hashes would hide comments, not establish a valid mapping. Separately,
-`buildDetailAnnotationView()` in `src/detail-renderer.ts` can show a stored file
-resolution beside newly read bytes without proving that they still match.
+The conversion of captured-screen offsets to document positions and the
+annotation-mode ancestor-file preview are deleted. The existing representation,
+immutable quote and resolution history own the evidence. Shared placement in
+`src/detail-annotations.ts` requires the actual displayed representation and an
+exact source mapping; merely having UTF-8 bytes available behind a metadata view
+does not establish either.
 
-Preserve immutable quotes and resolution history. Position a comment only when
-the displayed representation and coordinate mapping are established; keep
-unpositioned comments reachable. Reuse the existing annotation and Resource
-contracts. A private attached-client journey must capture real wrapped/projected
-text, then reopen/reflow/refresh it, and exercise a file changed since its stored
-resolution. Verify exact quote/range identity or an explicit unpositioned outcome.
-Resolve this before claiming A2 source-selection parity; coordinate with I5
-source-view identity and PIE-265 thread navigation. PIE-271's readiness and
-source-replacement guards do not claim to repair the pre-existing ready-state
-placement contract. The workboard owns scheduling and detailed reproduction proof.
+Rendered captures, stale file resolutions and unmatched representations remain
+unpositioned and reachable. Source selection and reveal use the same displayed
+source guard. Preserve `test:e2e:annotation-identity`: captured wrapped/projected
+text, reopen/reflow, changed files, metadata-only views and original evidence.
+Its pane-capture handoff is explicit; native pointer paths have additional
+PIE-282/265/283 journeys. PIE-265 supplies full thread/evidence reachability.
 
 ### Reference occurrences and thread controls — PIE-263, PIE-282, PIE-265
 
-PIE-263 supplies one explicit activation path for authored Resource references,
-carrying source block/revision/span and preserving metadata versus inline scope.
-PIE-282 builds occurrence comments on that path and PIE-281's representation
-guards. The same Resource can have independent host-use comments and global
-comments; a contextual Resource passage carries both anchors. Keep the existing
-AnnotationRepository as owner, with immutable occurrence evidence in target JSON.
-Do not introduce a second occurrence store or clone Resources.
+PIE-263 uses one explicit activation path for authored file/web/Jira/application
+references, carrying source block/revision/span and preserving metadata versus
+inline scope. Repeated uses remain separate Properties choices and resolve to one
+Resource. Reading and rendering are passive; stale activation is rejected.
+Legacy file line-range previews remain separate from explicit full Resource opens.
+Generated occurrences without known authored coordinates remain nonactionable
+until their source is opened.
+
+PIE-282 adds occurrence comments through the existing AnnotationRepository and
+target JSON. Properties `c` can annotate one use without opening or interning its
+target. A contextual Resource passage retains both the immutable host occurrence
+and its Resource revision/passage anchor; a Resource-wide comment has no host
+context. Navigation/history and pointer captures preserve this distinction.
+No competing occurrence store or cloned Resource is introduced.
 
 Reconciliation must never transfer a deleted or ambiguous reference's annotation
 to a surviving identical mention. Exact unchanged source or a containing line
@@ -548,84 +581,64 @@ changes remain recoverable and require explicit reattachment. Test creation,
 navigation history, movement, duplication/deletion, reply/lifecycle, service
 restart and unchanged authored text through public contracts and real input.
 
-PIE-265 owns reachable global/contextual/unpositioned threads, reply/resolve/reopen,
-document-order navigation, preserved reader state, and complete evidence scrolling.
-Its UI derives placement from the same source-identity rules. The combined-surface
-experiment depends on all three for final comment/navigation parity, but does not
-own their persistence or make their state models identical.
+PIE-265 exposes `[`/`]` navigation, multiline `Shift+C` replies and `Shift+D`
+resolve/reopen with the same root operations as pointer controls. Resource-wide,
+current-reference, other-reference and unpositioned threads remain distinct and
+reachable. Navigation order derives from the validated displayed anchors,
+including historical Resource representations. Replies and lifecycle refreshes
+preserve the current target, selected root and viewport.
+
+Pi uses existing preview regions. ANSI uses its ordinary reader and one scroll
+offset for complete wrapped threads, quotes and replies, with source rows separate
+from generated evidence. Preserve the actual `resource-occurrences`,
+`reference-annotations` and `annotation-threads` journeys and focused restart,
+stale-pointer, ambiguity/deletion, lifecycle-refresh and historical-order tests.
+The combined surface reuses these operations and identity rules.
 
 ## Application surface experiment and deletion
 
-### A1 — ordinary navigation owns a primary reader
+### A1-A2 / PIE-283 — opt-in primary reader and fixed surface
 
-Change the policy around `src/server.ts`'s `detailPool` and explicit navigation
-destinations. Ordinary opens target the application's designated reader rather
-than whichever unlocked pane sorts first by geometry. Detached readers remain
-explicit destinations with independent history, locks, and drafts. Closing a
-primary reader produces an explicit outcome, not silent adoption of a neighbor.
+The `open-composed` action now uses `src/composed-main.ts` and
+`src/composed-surface.ts` with the existing Tree/Detail controllers, document
+editor and one Pi terminal lifecycle. The application owns a fixed horizontal
+split, allocated dimensions and input/source-coordinate translation. `F6`
+switches regions; `q` returns to Tree. Ordinary selection/open/focus uses local
+controller operations and one designated primary reader, including generated
+Outlinks and Resources while Herdr discovery is unavailable.
 
-Proposed scenario: `test/e2e/primary-detail.ts`. Create two browsing contexts and
-a detached reader, move the detached pane, and verify ordinary opens stay with
-their designated reader. A locked draft survives preview/open attempts. Keep this
-policy change small enough to survive or disappear cleanly in A2.
+Tree selection/history/scroll and Detail target/history/scroll/draft remain
+independent. A locked primary stays locked. One `role: "composed"` registration
+publishes `treeSelection`, `currentTarget` and `focusedRegion`; explicit commands
+and attention reveal/focus name `targetRegion`. Retention uses Detail's exact
+Resource revision regardless of keyboard focus. Existing service operations own
+all reads, saves and validation. Detached readers keep explicit service/Herdr
+routing, independent placement and their own state.
 
-### A2 — one fixed Tree/Detail surface
+Preserve `test:e2e:composed` and its component journeys: real editing, selection,
+undo/redo, save/cancel, dirty keyboard close, Tree scroll, narrow/wide resize,
+registry outage, detached move/close and native Resource pointer coordinates.
+`composed-boundaries.ts` holds publication and edit-lock replies to prove that
+background Tree publication cannot change a draft's owner; generated links still
+open locally during discovery failure. The occurrence journey also runs through
+this launch. Public-protocol tests retain explicit region targeting and Resource
+revision retention as separate invariants.
 
-Use `createTreeController`, `createDetailController`, the existing document
-buffer, and one Pi `ProcessTerminal`/`TuiAltScreen`. Start with one fixed split,
-one local chooser, and one detach action. Available Pi composition includes
-`HStack`, `VStack`, `ScrollView`, and overlays; the application chooses the layout.
+The separate-pane launch remains available. A1's broader standalone destination
+policy is not silently changed by this experiment. `Ctrl+Q` guards active drafts;
+force-closing a host pane or killing its process does not promise draft recovery.
+External Herdr copy-mode selection is refused in composed panes because its pane
+identity cannot prove the internal region. Detail-native pointer selection plus
+`c` is supported. These boundaries and I1-I5 remain explicit follow-ups.
 
-Make `src/tree-renderer.ts` render allocated rows without whole-terminal clear
-commands. Give Detail allocated dimensions and translate input/source coordinates.
-Keep the same service operations for reads, saves, resources, and validation;
-embedded navigation uses local controller calls while detached delivery uses the
-existing explicit client protocol.
-
-Extend the existing registration model narrowly for a composed surface. Internal
-focus is separate from the displayed Detail target and its retained resource
-revision (`src/server.ts` currently derives these roots from Detail registrations).
-Two registrations claiming one pane and competing in a pane-keyed map are not a
-valid substitute. Tree and Detail retain independent history, selection, and scroll.
-
-Proposed scenario: `test/e2e/composed-surface.ts`. Select, open, edit, undo/redo,
-save/cancel, and return to Tree with selection/scroll intact. Open a detached
-reference, move and close it, and verify the primary target and stored data remain
-intact. Verify internal agent targeting, pinned-resource retention, copy/comment
-source positions, narrow/wide resize, and dirty-draft close behavior. Interrupt
-host discovery while the outliner service remains healthy: ordinary internal
-navigation must continue without host discovery or cross-process UI routing.
-
-Go forward only if this removes primary coordination while preserving those
-behaviors. Retain the existing document editor unless an alternative proves its
-selection, undo/redo, grapheme, source-position, scrolling, and save contracts.
-
-
-PIE-283 implements this as an opt-in `open-composed` action; the separate-pane
-launch remains available. The composed path uses one Pi terminal lifecycle,
-existing controllers and editor, one fixed horizontal split, local ordinary
-navigation and explicit detached operations. Its single registration exposes
-independent Tree selection, Detail target/revision and focused region; explicit
-commands and attention reveal/focus name the target region. `test:e2e:composed`
-checks real editing, undo/redo, cancellation, dirty keyboard close, preserved
-Tree scroll, narrow/wide resize, registry outage, detached move/close and native
-Resource pointer coordinates. Its `composed-boundaries.ts` journey holds actual
-Tree publication and edit-lock replies, proving publication can complete while
-Detail's ordered lane is occupied without changing the draft's target. It also
-opens generated Tree Outlinks and Resources in the local primary reader during
-registry failure, with no detached reader. The retained public-protocol regression
-checks collection protects a Resource revision while the composed Detail owns it.
-
-Scope boundary: external Herdr copy-mode selection lacks internal-region
-provenance and is refused in composed panes. Detail-native pointer selection plus
-`c` remains supported. No claim is made that force-closing the host pane saves an
-unsaved draft. A3 default cutover and removal of standalone lifecycle/routing
-remain decisions after the opt-in experience has been evaluated. This experiment
-removes service navigation dispatch, pane discovery and host focus restoration
-from its ordinary interaction path; it does not pretend those shared adapters can
-be deleted while detached and standalone callers still use them.
+The opt-in ordinary path removes pane discovery, cross-process navigation
+dispatch and host focus restoration. A3 owns the later default-cutover decision
+and deletion of shared adapters still required by standalone/detached callers.
 
 ### A3 — deletion after proof
+
+These are conditional deletion candidates, not missing PIE-283 implementation.
+Choose a default cutover and migrate remaining callers before removing shared code.
 
 | Location | Delete for the ordinary composed interaction | Retain for independent views |
 | --- | --- | --- |
