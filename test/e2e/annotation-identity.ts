@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { annotationSourceHash } from "../../src/annotations";
-import type { AnnotationThread, Block, RenderedSelectionCapture, VisibleBlockCollection } from "../../src/types";
+import { annotationSourceHash, createTextQuoteAnchor } from "../../src/annotations";
+import type { AnnotationBatchReceipt, AnnotationThread, Block, InternResourceReceipt, RenderedSelectionCapture, ResourceDescription, VisibleBlockCollection } from "../../src/types";
 import { runHerdrScenario } from "./herdr-runner";
 
 const quote = "CAPTURED-QUOTE";
@@ -12,6 +12,7 @@ const result = await runHerdrScenario({
   name: "annotation-identity",
   async prepare(root) {
     await writeFile(join(root, "evidence.txt"), "ORIGINAL-FILE-QUOTE\nOriginal second line");
+    await writeFile(join(root, "metadata.bin"), "Available source\n\nHIDDEN-QUOTE");
   },
   async run(session) {
     const terminal = await session.attachClient();
@@ -137,6 +138,47 @@ const result = await runHerdrScenario({
     await session.waitVisible(detail, fileComment);
     await session.checkpoint("05-changed-file-unpositioned-comment");
     await session.record("file-identity", { original: fileSaved, after, annotationFrame });
+
+    const { resource } = await session.client.request<InternResourceReceipt>({
+      action: "resources.intern-filesystem", input: { path: "metadata.bin", mediaType: "application/octet-stream" },
+    });
+    const description = await session.client.request<ResourceDescription>({
+      action: "resources.describe", destinationClientId: registration.clientId,
+      target: { kind: "resource", resourceId: resource.id },
+    });
+    assert.equal(description.presentation?.selected?.representation, "metadata");
+    const file = description.filesystem;
+    assert.ok(file && file.revision.revision.kind === "filesystem");
+    const revision = file.revision.revision;
+    const representation = {
+      id: `filesystem:${resource.id}:${revision.mtimeNs}:${revision.size}:${file.contentHash}`,
+      subject: { kind: "resource" as const, resourceId: resource.id },
+      sourceSnapshot: { kind: "resource" as const, resourceId: resource.id, sourceSnapshotId: null, revision: file.revision },
+      adapter: { id: "filesystem.text", version: 1 }, mediaType: resource.mediaType,
+      contentHash: file.contentHash, capturedAt: file.capturedAt,
+    };
+    // An existing API-authored comment may reference available source bytes even
+    // when this destination's chosen presentation only displays metadata.
+    const metadataComment = await session.client.request<AnnotationBatchReceipt>({
+      action: "annotations.create", requestId: crypto.randomUUID(), input: {
+        target: { representation, anchor: createTextQuoteAnchor(file.text, file.text.indexOf("HIDDEN-QUOTE"), file.text.length) },
+        body: "Comment on hidden source", source: "agent",
+      },
+    });
+    await goto(metadataComment.annotations[0]!.block.id);
+    await session.waitVisible(detail, "Stored resolution: resolved");
+    await session.keys(detail, "r");
+    await session.waitVisible(detail, "not displayed in this Resource view");
+    await session.keys(detail, "v");
+    await session.waitVisible(detail, "This view has no source text to annotate");
+    const metadataFrame = await session.visible(detail);
+    assert.ok(!metadataFrame.includes("HIDDEN-QUOTE"));
+    assert.ok(!metadataFrame.split("\n").some(line => line.startsWith("+ ") && line.includes("metadata.bin")));
+    await session.keys(detail, "tab", "enter");
+    await session.waitVisible(detail, "Comment on hidden source");
+    await session.waitVisible(detail, "HIDDEN-QUOTE");
+    await session.checkpoint("06-metadata-only-unpositioned-comment");
+    await session.record("metadata-representation", { description, metadataComment, metadataFrame });
   },
 });
 process.stdout.write(`${JSON.stringify(result)}\n`);

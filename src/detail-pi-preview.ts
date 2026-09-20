@@ -24,6 +24,7 @@ import { linkOutlinerMarkdown, outlinerLinkUri } from "./outliner-links";
 import {
   detailBlockTarget,
   detailResourceDescription,
+  displayedResourceText,
   visibleBacklinkSources,
   type DetailState,
 } from "./detail-controller";
@@ -224,6 +225,7 @@ function previewSelectionSource(
     };
   }
   const description = detailResourceDescription(state);
+  if (displayedResourceText(state) === null) return null;
   const pdf = description?.pdf;
   if (description && pdf) {
     return {
@@ -960,7 +962,7 @@ class DetailAnnotationPreview implements Component {
 
 function displayedResourceRepresentationId(state: Readonly<DetailState>): string | null {
   const description = detailResourceDescription(state);
-  if (!description) return null;
+  if (!description || displayedResourceText(state) === null) return null;
   if (description.pdf) return description.pdf.representation.id;
   if (description.web) return description.web.representation.id;
   const filesystem = description.filesystem;
@@ -1023,9 +1025,8 @@ function detailAnnotationGroups(
       subject.kind === "resource" &&
       subject.resourceId === state.target.resourceId
     ) {
-      const description = detailResourceDescription(state);
-      const content = description?.pdf?.markdown ?? description?.web?.markdown ?? description?.filesystem?.text;
-      if (content === undefined || content.slice(anchor.start, anchor.end) !== anchor.exact) {
+      const content = displayedResourceText(state);
+      if (content === null || content.slice(anchor.start, anchor.end) !== anchor.exact) {
         unpositioned.push(thread);
         continue;
       }

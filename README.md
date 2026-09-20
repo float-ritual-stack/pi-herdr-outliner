@@ -720,6 +720,8 @@ document. Expand it to read the original quote, comment and replies, or open the
 thread. Screen offsets include chrome, wrapping and history, so they never place
 a marker in Markdown or choose a source scroll position after reflow. Positioned
 source and Resource comments retain their inline markers.
+When a Resource opens as metadata, comments on its available source text remain
+unpositioned. Metadata rows cannot be selected or revealed as source passages.
 
 `v` remains the keyboard-first source-comment operation. It freezes the current
 read projection, maps Shift-motion or primary-button drag to UTF-16 source text,
