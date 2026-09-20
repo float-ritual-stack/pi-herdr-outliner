@@ -136,6 +136,7 @@ test("migration preserves supersession, historical prose and idempotence; confli
   expect(migrated).toContain("History: `status=planned` described the old model.");
   expect(migrateRoadmapText({ id: "old", text: migrated })).toBe(migrated);
   expect(migrateRoadmapText({ id: "next", text: "Next [type::roadmap-item] [status::planned] [work-stage::next]" })).toContain("[work-stage::queued]");
+  expect(migrateRoadmapText({ id: "historical", text: "Old [type::roadmap-item] [status::completed] [work-stage::done]" })).toBe("Old [type::roadmap-item]  [work-stage::done]");
   expect(() => migrateRoadmapText({ id: "conflict", text: "Bad [type::roadmap-item] [status::complete] [work-stage::review]" })).toThrow("disagree");
   expect(() => migrateRoadmapText({ id: "unknown", text: "Bad [type::roadmap-item] [status::planned]" })).toThrow("ambiguous");
   const capture = "Note [type::capture] [status::unprocessed]";

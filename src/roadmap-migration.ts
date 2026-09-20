@@ -12,7 +12,7 @@ export function migrateRoadmapText(block: Pick<Block, "id" | "text">): string {
   if (stages.length !== 1 || statuses.length > 1) fail("ambiguous roadmap lifecycle metadata");
   const oldStage = stages[0]!;
   const status = statuses[0]?.value.toLowerCase();
-  if (status && !["planned", "complete", "done", "superseded"].includes(status)) {
+  if (status && !["planned", "complete", "completed", "done", "superseded"].includes(status)) {
     fail(`unrecognized legacy status ${status}`);
   }
   let stage = oldStage.value.toLowerCase();
