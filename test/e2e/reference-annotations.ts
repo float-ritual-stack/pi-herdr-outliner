@@ -26,6 +26,14 @@ const result = await runHerdrScenario({
         await s.waitFor(`internal ${region} focus`, current, c => c.focusedRegion === region);
       }
     };
+    const cancelComment = async () => {
+      await terminal.write("\u001b");
+      if (composed) {
+        await s.waitFor("comment cancelled and Tree focused", async () => ({
+          client: await current(), frame: await s.visible(detail),
+        }), result => result.client.focusedRegion === "tree" && !result.frame.includes("Comment on this reference"));
+      } else await s.waitVisible(detail, "Comment cancelled");
+    };
     const text = "Occurrence annotation fixture\n\nFirst use [file::same.md].\nSecond use [file::same.md].";
     const host = await s.client.request<Block>({ action: "create", parentId: null, text });
     const hostThreads = () => s.client.request<AnnotationThread[]>({
@@ -129,8 +137,7 @@ const result = await runHerdrScenario({
     // channel navigates. Keep the drag and initial key on the same input stream.
     await terminal.write("c");
     await s.waitVisible(detail, "Comment on this reference");
-    await terminal.write("\u001b");
-    await s.waitVisible(detail, "Comment cancelled");
+    await cancelComment();
     await focusView("detail");
     await openOccurrence(second.originalTarget.referenceContext!);
     await s.keys(detail, "c");
@@ -140,8 +147,7 @@ const result = await runHerdrScenario({
     await openOccurrence(first.originalTarget.referenceContext!);
     await s.keys(detail, "c");
     await s.waitVisible(detail, "Comment on this reference");
-    await terminal.write("\u001b");
-    await s.waitVisible(detail, "Comment cancelled");
+    await cancelComment();
     await s.record("pointer-occurrence-evidence", { row, column, quote,
       selectedContext: first.originalTarget.referenceContext, rejectedContext: second.originalTarget.referenceContext });
 
