@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import type { Block, BrowsingContextState, TreeIndexCollection, TreeIndexSnapshot, VisibleBlockCollection, WorkspaceSnapshot } from "../../src/types";
+import type { Block, BrowsingContextState, GotoSearchCollection, TreeIndexCollection, TreeIndexSnapshot, VisibleBlockCollection, WorkspaceSnapshot } from "../../src/types";
 import { projectVirtualBranches } from "../../src/virtual-branches";
 import { runHerdrScenario } from "./herdr-runner";
 
@@ -74,22 +74,20 @@ const result = await runHerdrScenario({
     assert.ok(tree?.contextId);
     const context = () => session.client.request<BrowsingContextState>({ action: "browsing-context.get", contextId: tree.contextId! });
     const selected = (id: string) => session.waitFor("Tree canonical selection", context, value => value.target?.kind === "block" && value.target.blockId === id);
-    const goto = async (query: string, id: string) => {
-      await session.keys(remote.tree, "g");
-      await session.waitVisible(remote.tree, "Goto:");
-      await session.text(remote.tree, query);
-      await session.waitFor("goto matching candidate", () => session.visible(remote.tree), frame => frame.includes("Goto:") && frame.includes(id.slice(0, 8)));
-      await session.keys(remote.tree, "enter");
-      await selected(id);
-    };
-    await goto(reference.id, reference.id);
+    await session.revealTree(remote.tree, reference.id);
     await session.waitVisible(remote.tree, "Literal ((same)) then ((same))");
     await session.checkpoint("02-reference-provenance");
     const previewReferences = byId.get(reference.id)!.previewReferences;
     assert.deepEqual(previewReferences, [{ start: 22, end: 30, target: { blockId: card.id } }]);
     await session.record("compact-reference-provenance", { sourceId: reference.id, hiddenTargetId: long.id, visibleTargetId: card.id,
       previewReferences, limitation: "Herdr pane.read ANSI omits OSC 8 metadata; emitted hyperlink columns are verified by the renderer regression, not these captured frames" });
-    await goto("END-OF-EXACT-EDIT", editable.id);
+    const query = "END-OF-EXACT-EDIT";
+    assert.ok(!byId.get(editable.id)!.preview.includes(query));
+    const fullBodySearch = await session.client.request<GotoSearchCollection>({ action: "tree.search", query });
+    assert.equal(fullBodySearch.matches[0]?.block.id, editable.id);
+    await session.record("full-body-search", { query, targetId: editable.id, result: fullBodySearch,
+      input: "Public tree.search RPC against text beyond the compact preview; RPC Tree reveal setup follows" });
+    await session.revealTree(remote.tree, editable.id);
     await session.keys(remote.tree, "e");
     await session.waitVisible(remote.tree, "END-OF-EXACT-EDIT");
     await session.text(remote.tree, " APPENDED");
@@ -97,7 +95,7 @@ const result = await runHerdrScenario({
     await session.waitFor("exact quick edit persisted", () => session.client.request<Block>({ action: "get", blockId: editable.id }), block => block.text === editText + " APPENDED");
     await session.checkpoint("02-exact-edit-beyond-preview");
 
-    await goto(board.id, board.id);
+    await session.revealTree(remote.tree, board.id);
     await session.keys(remote.tree, "down");
     await selected(long.id);
     const beforeExpand = session.forwardedTreeRequests().length;
@@ -117,7 +115,7 @@ const result = await runHerdrScenario({
     assert.equal((await session.client.request<Block>({ action: "get", blockId: long.id })).revision, updated.revision);
     await session.keys(remote.tree, ".");
     await session.waitVisible(remote.tree, "Block detail collapsed");
-    await goto(board.id, board.id);
+    await session.revealTree(remote.tree, board.id);
     await session.keys(remote.tree, "down");
     await selected(card.id);
     await session.keys(remote.tree, "down");

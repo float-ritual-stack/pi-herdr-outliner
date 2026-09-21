@@ -4,8 +4,7 @@ import {
 } from "./authored-links";
 import { emptyAttentionState } from "./attention";
 import { GotoController } from "./goto-controller";
-import { gotoLayout } from "./goto-renderer";
-import { parseTreePrimaryClick, parseTreeWheelEvent, treeClickActivates } from "./tree-mouse";
+import { handleGotoMouse as routeGotoMouse } from "./goto-renderer";
 import {
   filterCompletionTargetAtCursor,
   parsePropertyFilterExpression,
@@ -156,6 +155,7 @@ export interface TreeControllerEffects {
   request<T>(input: RequestInput): Promise<T>;
   createDetailPane(blockId: string, direction?: "right" | "down"): Promise<void>;
   openCapturePopup(capturedFromBlockId: string): Promise<void>;
+  openGotoPopup?(): void | Promise<void>;
   openVirtualBranchNavigator(viewId: string, adapter?: "bookmark"): void | Promise<void>;
   focusSelf(): void;
   terminalWidth(): number;
@@ -343,20 +343,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
 
   async function handleGotoMouse(sequence: string): Promise<void> {
     if (mode !== "goto") return;
-    const layout = gotoLayout(effects.terminalWidth(), effects.terminalHeight(), goto.index);
-    const wheel = parseTreeWheelEvent(sequence);
-    if (wheel) {
-      const inPreview = layout.wide ? wheel.column > layout.listWidth + 2 : wheel.row >= 5 + layout.listHeight;
-      if (inPreview) goto.scrollPreview(wheel.direction === "up" ? -3 : 3);
-      else goto.move(wheel.direction === "up" ? -1 : 1);
-      return;
-    }
-    const click = parseTreePrimaryClick(sequence);
-    if (!click || click.row < 4 || click.row >= 4 + layout.listHeight || click.column < 2 || click.column >= layout.listWidth + 2) return;
-    const index = layout.start + Math.floor((click.row - 4) / 2);
-    if (index >= layout.start + layout.slots || !goto.matches[index]) return;
-    goto.select(index);
-    if (treeClickActivates(click)) await goto.accept("tree");
+    await routeGotoMouse(goto, sequence, effects.terminalWidth(), effects.terminalHeight());
   }
 
   function filteredActionMenuItems(): OutlinerActionMenuItem[] {
@@ -766,6 +753,10 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   }
 
   async function beginInput(nextMode: TreeInputMode, initial = ""): Promise<void> {
+    if (nextMode === "goto" && effects.openGotoPopup) {
+      await effects.openGotoPopup();
+      return;
+    }
     const selected = rows[selectedIndex];
     if (
       !isBlockTreeRow(selected) &&

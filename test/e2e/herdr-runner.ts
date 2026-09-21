@@ -24,6 +24,7 @@ import { readHerdrPaneSnapshot, type HerdrPaneSnapshot } from "../../src/herdr-c
 import { forwardService, type ForwardedRequest, type OptionalResponseMatch, type ComposedResponseMatch, type ResponseBarrier } from "./service-forwarder";
 import {
   OUTLINER_PROTOCOL_VERSION,
+  type BrowsingContextState,
   type OutlinerClientRegistration,
   type OutlinerServiceStatus,
 } from "../../src/types";
@@ -55,6 +56,7 @@ export interface HerdrScenarioSession {
   enableComposedResponseBarriers(): Promise<void>;
   holdComposedResponse(match: ComposedResponseMatch): ResponseBarrier;
   focus(paneId: string): Promise<void>;
+  revealTree(paneId: string, blockId: string): Promise<void>;
   keys(paneId: string, ...keys: string[]): Promise<void>;
   text(paneId: string, text: string): Promise<void>;
   visible(paneId: string): Promise<string>;
@@ -815,7 +817,7 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
       await new Promise<void>((resolve) => resources.screen!.write("", resolve));
       const screen = resources.screen.buffer.active;
       const lines = Array.from({ length: resources.screen.rows }, (_, row) =>
-        screen.getLine(screen.viewportY + row)?.translateToString(true) ?? "");
+        screen.getLine(screen.viewportY + row)?.translateToString(true, 0, resources.screen!.cols) ?? "");
       await writeFile(join(directory, "attached-client.visible.txt"), `${lines.join("\n")}\n`);
     }
     await artifacts.event("checkpoint", { name, directory });
@@ -829,15 +831,16 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
     const requireOwned = (paneId: string): void => {
       if (!owned.has(paneId)) throw new Error(`Pane ${JSON.stringify(paneId)} is not owned by this scenario`);
     };
+    const client = new OutlinerClient(resolvePaths({
+      OUTLINER_STATE_DIR: outlinerState,
+      OUTLINER_WORKSPACE_ROOT: projectRoot,
+    }).socket);
     return {
       projectRoot,
       artifactDirectory,
       panes: ownedPanes,
       database: readonlyDatabase,
-      client: new OutlinerClient(resolvePaths({
-        OUTLINER_STATE_DIR: outlinerState,
-        OUTLINER_WORKSPACE_ROOT: projectRoot,
-      }).socket),
+      client,
       async setKeybindings(bindings) {
         await writeFile(keymapPath, `${JSON.stringify(bindings, null, 2)}\n`);
         await artifacts.event("keybindings-written", { path: keymapPath, bindings });
@@ -926,7 +929,7 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
             await new Promise<void>((resolve) => screen.write("", resolve));
             const buffer = screen.buffer.active;
             return Array.from({ length: screen.rows }, (_, row) =>
-              buffer.getLine(buffer.viewportY + row)?.translateToString(true) ?? "").join("\n");
+              buffer.getLine(buffer.viewportY + row)?.translateToString(true, 0, screen.cols) ?? "").join("\n");
           },
           async write(input) {
             abort.signal.throwIfAborted();
@@ -1045,6 +1048,28 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
         requireOwned(paneId);
         await runHerdr(["plugin", "pane", "focus", paneId]);
         await artifacts.event("input", { kind: "focus", paneId });
+      },
+      async revealTree(paneId, blockId) {
+        requireOwned(paneId);
+        const sources = (await getRegistrations()).filter(entry =>
+          entry.runtime?.paneId === paneId && (entry.role === "tree" || entry.role === "composed"));
+        const source = sources[0];
+        if (sources.length !== 1 || !source?.contextId) {
+          throw new Error(`Owned pane ${paneId} must have one registered Tree browsing context`);
+        }
+        await artifacts.event("setup", { kind: "rpc_tree_reveal", paneId, clientId: source.clientId, contextId: source.contextId, blockId });
+        await client.request({ action: "ui.command.send", command: {
+          command: "focus", targetClientId: source.clientId, targetRegion: "tree", target: { kind: "block", blockId },
+        } });
+        await poll({
+          label: "RPC Tree reveal setup published", signal: abort.signal, artifacts,
+          read: () => client.request<BrowsingContextState>({ action: "browsing-context.get", contextId: source.contextId! }),
+          accept: state => state.target?.kind === "block" && state.target.blockId === blockId,
+        });
+        if (source.role === "composed") await poll({
+          label: "RPC Tree reveal setup focused", signal: abort.signal, artifacts, read: getRegistrations,
+          accept: entries => entries.some(entry => entry.clientId === source.clientId && entry.focusedRegion === "tree"),
+        });
       },
       async keys(paneId, ...keys) {
         requireOwned(paneId);

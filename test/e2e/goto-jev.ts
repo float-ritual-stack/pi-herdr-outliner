@@ -7,16 +7,18 @@ const result = await runHerdrScenario({
   name: "goto-jev", layout: "composed", allowJev: true,
   async prepare() {},
   async run(session) {
-    await session.attachClient();
+    const terminal = await session.attachClient();
     const river = await session.client.request<Block>({action: "create", parentId: null, text: "Detail river browser experiment\nA browser arranges terminal panes beside their source. Clicking a note opens another split. RIVER-PREVIEW-PROOF"});
     await session.client.request({action: "create", parentId: null, text: "Terminal configuration\nKeyboard preferences and font colors for Herdr."});
     const query = "the browser experiment with terminal panes";
     const pane = session.panes.tree;
-    await session.focus(pane); await session.keys(pane, "g"); await session.text(pane, query);
-    await session.waitVisible(pane, "Jev ranked");
-    await session.waitVisible(pane, "RIVER-PREVIEW-PROOF");
+    await session.focus(pane); await session.keys(pane, "g");
+    await session.waitFor("Goto popup", () => terminal.visible(), text => text.includes("Go to  "));
+    await terminal.write(`\x1b[200~${query}\x1b[201~`);
+    await session.waitFor("ranked popup preview", () => terminal.visible(), text => text.includes("Jev ranked") && text.includes("RIVER-PREVIEW-PROOF"));
     await session.checkpoint("01-real-jev-preview");
-    await session.keys(pane, "enter");
+    await terminal.write("\r");
+    await session.waitFor("popup closed", () => terminal.visible(), text => !text.includes("Go to  "));
     const primary = (await session.registrations())[0]!;
     await session.waitFor("ranked choice reveals canonical note", () => session.client.request<BrowsingContextState>({action: "browsing-context.get", contextId: primary.contextId!}), value => value.target?.kind === "block" && value.target.blockId === river.id);
     const result = await session.client.request<GotoSearchCollection>({action: "tree.search", query, semantic: true});

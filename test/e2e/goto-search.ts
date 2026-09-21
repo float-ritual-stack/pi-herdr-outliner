@@ -22,13 +22,19 @@ const result = await runHerdrScenario({
       const tree = await current();
       return (await session.client.request<BrowsingContextState>({action: "browsing-context.get", contextId: tree.contextId!})).target;
     };
+    const popup = () => terminal.visible();
+    const waitPopup = (text: string) => session.waitFor(`popup: ${text}`, popup, frame => frame.includes(text));
+    const closed = () => session.waitFor("Goto popup closed", popup, frame => !frame.includes("Go to  "));
     const begin = async (query: string) => {
+      await closed();
       await session.focus(pane);
       await session.keys(pane, "g");
-      await session.text(pane, query);
+      await waitPopup("Go to  ");
+      await terminal.write(`\x1b[200~${query}\x1b[201~`);
     };
     await begin(origin.id);
-    await session.keys(pane, "enter");
+    await terminal.write("\r");
+    await closed();
     await session.waitVisible(session.panes.detail, "ORIGINAL-DETAIL-BODY");
     const before = await selection();
     const detailBefore = (await detail()).currentTarget;
@@ -37,41 +43,59 @@ const result = await runHerdrScenario({
     assert.ok(scrollBefore.length > 0);
 
     await begin("saffron");
-    await session.waitVisible(pane, "ALPHA-PREVIEW-BODY");
-    await session.waitVisible(pane, "Jev is not configured");
+    await waitPopup("ALPHA-PREVIEW-BODY");
+    await waitPopup("Jev is not configured");
     assert.deepEqual(await selection(), before);
     assert.deepEqual((await detail()).currentTarget, detailBefore);
-    await session.keys(pane, "down");
-    await session.waitVisible(pane, "BETA-PREVIEW-BODY");
+    await terminal.write("\x1b[B");
+    await waitPopup("BETA-PREVIEW-BODY");
     // Use the real terminal's coordinates rather than an assumed Herdr border offset.
     const frame = (await terminal.visible()).split("\n");
     const row = frame.findIndex(line => line.includes("Saffron reference alpha"));
     assert.ok(row >= 0);
     const column = visibleWidth(frame[row]!.slice(0, frame[row]!.indexOf("Saffron reference alpha")));
     await terminal.write(`\x1b[<0;${column + 1};${row + 1}M\x1b[<0;${column + 1};${row + 1}m`);
-    await session.waitVisible(pane, "ALPHA-PREVIEW-BODY");
+    await waitPopup("ALPHA-PREVIEW-BODY");
     assert.deepEqual(await selection(), before);
     await terminal.write("\x1b[6~");
-    await session.waitFor("preview scrolls", () => session.visible(pane), text => !text.includes("ALPHA-PREVIEW-BODY") && text.includes("Preview paragraph"));
+    await session.waitFor("preview scrolls", popup, text => !text.includes("ALPHA-PREVIEW-BODY") && text.includes("Preview paragraph"));
+    const popupBorder = (await popup()).split("\n").find(line => line.includes("┌──"));
+    assert.ok(popupBorder && (popupBorder.match(/─/g)?.length ?? 0) > 120, "Popup must span more than the narrow Tree pane");
+    assert.equal((await session.registrations()).length, composed ? 1 : 2, "A transient popup must not register as a navigation destination");
     await session.checkpoint("01-query-preview-and-pointer");
-    await session.keys(pane, "escape");
+    await terminal.write("\x1b");
+    await closed();
     await session.waitVisible(pane, "PIE230 original selection");
     assert.deepEqual(await selection(), before);
     assert.deepEqual((await detail()).currentTarget, detailBefore);
     assert.deepEqual(contextLines(await session.visible(pane)), scrollBefore);
+    // Cancellation must return actual keyboard focus, not just restore pixels.
+    await terminal.write("\x1b[A");
+    await session.waitFor("Tree receives keys after cancel", selection, value => JSON.stringify(value) !== JSON.stringify(before));
+    await terminal.write("\x1b[B");
+    await session.waitFor("Tree restored after focus check", selection, value => JSON.stringify(value) === JSON.stringify(before));
     await session.checkpoint("02-cancel-preserves-context");
 
     await begin("saffron beta");
-    await session.waitVisible(pane, "BETA-PREVIEW-BODY");
-    await session.keys(pane, "enter");
+    await waitPopup("BETA-PREVIEW-BODY");
+    await terminal.write("\r");
+    await closed();
     await session.waitFor("Enter reveals result", selection, target => target?.kind === "block" && target.blockId === second.id);
     await session.waitVisible(session.panes.detail, "BETA-PREVIEW-BODY");
     const selected = await selection();
     await begin(first.id);
-    await session.waitVisible(pane, "ALPHA-PREVIEW-BODY");
-    await terminal.write("\x1b\r");
+    await waitPopup("ALPHA-PREVIEW-BODY");
+    // Pi negotiates Kitty: ESC-CR means Shift+Enter there, so use explicit Alt.
+    await terminal.write("\x1b[13;3u");
+    await closed();
     await session.waitFor("Alt Enter opens Detail", detail, entry => entry.currentTarget?.kind === "block" && entry.currentTarget.blockId === first.id);
     assert.deepEqual(await selection(), selected);
+    await session.waitFor("Detail ready for keyboard input", detail,
+      entry => composed ? entry.focusedRegion === "detail" : entry.runtime?.focused === true);
+    await terminal.write("L");
+    await session.waitFor("Detail receives keys after popup open", detail, entry => entry.locked === true);
+    await terminal.write("L");
+    await session.waitFor("Detail unlocked after focus check", detail, entry => entry.locked === false);
     await session.checkpoint("03-independent-detail-open");
     if (composed) {
       await session.keys(pane, "q");
@@ -79,23 +103,30 @@ const result = await runHerdrScenario({
     }
 
     await begin("saffron");
-    await session.waitVisible(pane, "ALPHA-PREVIEW-BODY");
+    await waitPopup("ALPHA-PREVIEW-BODY");
     await terminal.resize(76, 34);
-    await session.waitVisible(pane, "ALPHA-PREVIEW-BODY");
+    await session.waitFor("narrow popup stacks preview below results", popup, frame => {
+      const lines = frame.split("\n");
+      return lines.length === 34 && lines.every(line => visibleWidth(line) <= 76) &&
+        lines.some(line => line.includes("ALPHA-PREVIEW-BODY")) &&
+        lines.some(line => line.includes("│Saffron reference alpha"));
+    });
     await session.checkpoint("04-narrow-stacked");
     await terminal.resize(240, 52);
-    await session.waitVisible(pane, "ALPHA-PREVIEW-BODY");
+    await session.waitFor("wide popup puts preview beside results", popup, frame =>
+      frame.split("\n").some(line => line.includes("› Saffron reference alpha") && line.includes("│Saffron reference alpha")));
     await session.checkpoint("05-wide-preview");
-    await session.keys(pane, "escape");
-    await session.waitFor("resize modal closed", () => session.visible(pane), frame => !frame.includes("Go to  "));
+    await terminal.write("\x1b");
+    await closed();
     const longList = await session.client.request<GotoSearchCollection>({action: "tree.search", query: "PIE230 scroll context"});
     assert.equal(longList.matches.length, 30); assert.equal(longList.completeness.kind, "truncated");
     await begin("PIE230 scroll context");
-    await session.waitVisible(pane, longList.matches[0]!.title);
-    await session.keys(pane, ...Array.from({length: 29}, () => "down"));
-    await session.waitVisible(pane, `› ${longList.matches[29]!.title}`);
+    await waitPopup(longList.matches[0]!.title);
+    await terminal.write("\x1b[B".repeat(29));
+    await waitPopup(`› ${longList.matches[29]!.title}`);
     await session.checkpoint("06-long-results-scroll");
-    await session.keys(pane, "enter");
+    await terminal.write("\r");
+    await closed();
     await session.waitFor("last visible match opens", selection, target => target?.kind === "block" && target.blockId === longList.matches[29]!.block.id);
     const results = await session.client.request<GotoSearchCollection>({action: "tree.search", query: "saffron", semantic: true});
     assert.equal(results.semantic.status, "unavailable");

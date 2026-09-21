@@ -42,15 +42,10 @@ const result = await runHerdrScenario({
         await session.waitFor("Detail unlocked", target, value => value?.locked === false);
       }
     };
-    const goto = async (block: Block, body: string) => {
+    const reveal = async (block: Block, body: string) => {
       await unlock();
-      await session.keys(remote.tree, "g");
-      await session.waitVisible(remote.tree, "Goto:");
-      await session.text(remote.tree, block.id);
-      await session.waitFor("exact goto candidate", () => session.visible(remote.tree), frame =>
-        frame.includes("Goto:") && frame.includes(block.id.slice(0, 8)));
       const started = performance.now();
-      await session.keys(remote.tree, "enter");
+      await session.revealTree(remote.tree, block.id);
       await session.waitVisible(remote.detail, body);
       await session.waitFor("Detail target registration", target, value =>
         value?.currentTarget?.kind === "block" && value.currentTarget.blockId === block.id);
@@ -64,7 +59,7 @@ const result = await runHerdrScenario({
     const read = (id: string) => session.client.request<Block>({ action: "get", blockId: id });
 
     const cold = hold("references.resolve", "A PRIMARY CONTENT");
-    const primaryMs = await goto(a, "A PRIMARY CONTENT");
+    const primaryMs = await reveal(a, "A PRIMARY CONTENT");
     await held(cold);
     if (cold) {
       await session.keys(remote.detail, "o");
@@ -72,7 +67,7 @@ const result = await runHerdrScenario({
       assert.equal(cold.state, "held");
     }
     await session.record("cold-primary", { primaryMs, transport, barrier: cold?.state,
-      timingScope: "Tree goto Enter to observed primary body and exact target registration; includes host/polling overhead",
+      timingScope: "RPC Tree reveal setup to observed primary body and exact target registration; includes client lookup, host, and polling overhead",
       requests: session.forwardedDetailRequests() });
     await session.checkpoint("01-primary-before-optional-reply");
     await session.keys(remote.detail, "e");
@@ -88,9 +83,9 @@ const result = await runHerdrScenario({
     await session.checkpoint("02-draft-saved-after-late-reply");
 
     const old = hold("references.resolve", "OBSOLETE PRIMARY CONTENT");
-    await goto(obsolete, "OBSOLETE PRIMARY CONTENT");
+    await reveal(obsolete, "OBSOLETE PRIMARY CONTENT");
     await held(old);
-    await goto(b, "B PRIMARY CONTENT");
+    await reveal(b, "B PRIMARY CONTENT");
     old?.release();
     // A subsequent real input must operate on B, regardless of late A replies.
     await session.keys(remote.detail, "v");
@@ -102,7 +97,7 @@ const result = await runHerdrScenario({
     await session.checkpoint("03-obsolete-result-rejected");
 
     const failure = hold("references.resolve", "FAILURE PRIMARY CONTENT");
-    await goto(failed, "FAILURE PRIMARY CONTENT");
+    await reveal(failed, "FAILURE PRIMARY CONTENT");
     await held(failure);
     if (failure) {
       failure.release("fixture optional read failure");
@@ -121,7 +116,7 @@ const result = await runHerdrScenario({
     assert.equal((await read(failed.id)).text, failed.text);
     await session.checkpoint("04-failure-retains-readable-editable-content");
 
-    await goto(deferred, "DEFERRED PRIMARY CONTENT");
+    await reveal(deferred, "DEFERRED PRIMARY CONTENT");
     await session.waitVisible(remote.detail, "Progressive B");
     const renamed = hold("references.resolve", "DEFERRED PRIMARY CONTENT");
     await session.client.request({ action: "update", blockId: b.id, expectedRevision: b.revision,
@@ -139,7 +134,7 @@ const result = await runHerdrScenario({
     assert.equal((await read(deferred.id)).text, deferred.text);
     await session.checkpoint("04-deferred-reference-displayed-after-cancel");
 
-    const revisitMs = await goto(saved, "A PRIMARY CONTENT");
+    const revisitMs = await reveal(saved, "A PRIMARY CONTENT");
     await session.waitVisible(remote.detail, "DRAFT-SURVIVES");
     await session.keys(remote.detail, "o");
     await session.waitVisible(remote.detail, "Choose destination");
@@ -147,7 +142,7 @@ const result = await runHerdrScenario({
     await session.record("cached-revisit", { revisitMs, requests: session.forwardedDetailRequests() });
 
     const selection = hold("references.resolve", "SOURCE PRIMARY CONTENT");
-    await goto(source, "SOURCE PRIMARY CONTENT");
+    await reveal(source, "SOURCE PRIMARY CONTENT");
     await held(selection);
     await session.keys(remote.detail, "v");
     await session.waitVisible(remote.detail, "extend the rendered selection");
@@ -185,7 +180,7 @@ const result = await runHerdrScenario({
     await session.checkpoint("05-new-revision-without-old-annotation-ranges");
     changedAnnotations?.release();
 
-    await goto(file, "PROVIDER PRIMARY CONTENT");
+    await reveal(file, "PROVIDER PRIMARY CONTENT");
     const resourceBarrier = hold("annotations.reconcile", receipt.resource.id);
     await session.keys(remote.tree, "?");
     await session.waitVisible(remote.tree, "Find:");

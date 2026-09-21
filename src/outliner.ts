@@ -16,6 +16,7 @@ import {
   currentPaneRuntime,
   focusCurrentPane,
   openDetailPane,
+  openGotoPopup,
   openCapturePopup as openHerdrCapturePopup,
   openVirtualBranchNavigatorPopup,
   outlinerRightClickOwnership,
@@ -107,6 +108,9 @@ const controller = createTreeController({
   browsingContextId,
   workspaceRoot: paths.workspaceRoot,
   actionKeymap,
+  ...(process.env.HERDR_ENV === "1" ? {
+    openGotoPopup: () => openGotoPopup({ workspaceRoot: paths.workspaceRoot, sourceClientId: clientId }),
+  } : {}),
   request<T>(input: RequestInput): Promise<T> {
     return client.request<T>(input);
   },

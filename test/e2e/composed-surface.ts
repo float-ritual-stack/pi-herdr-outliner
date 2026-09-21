@@ -11,6 +11,12 @@ const result = await runHerdrScenario({
   async run(session) {
     const terminal = await session.attachClient();
     const pane = session.panes.tree;
+    const goto = async (id: string) => {
+      await session.keys(pane, "g");
+      await session.waitFor("Goto popup", () => terminal.visible(), text => text.includes("Go to  "));
+      await terminal.write(`\x1b[200~${id}\x1b[201~\r`);
+      await session.waitFor("Goto popup closed", () => terminal.visible(), text => !text.includes("Go to  "));
+    };
     assert.equal(pane, session.panes.detail);
     const registrations = await session.registrations();
     assert.equal(registrations.length, 1);
@@ -20,9 +26,7 @@ const result = await runHerdrScenario({
     for (let index = 0; index < 55; index++) await session.client.request({action: "create", parentId: null, text: `PIE283 scroll row ${index}`});
     const host = await session.client.request<Block>({action: "create", parentId: null, text: `PIE283 editing target\n\n((${reference.id}))\n\nOriginal body`});
     await session.focus(pane);
-    await session.keys(pane, "g");
-    await session.text(pane, host.id);
-    await session.keys(pane, "enter");
+    await goto(host.id);
     await session.waitVisible(pane, "Original body");
     await session.keys(pane, "enter");
     await session.waitFor("primary Detail focus", session.registrations, values => values[0]?.focusedRegion === "detail");
@@ -83,9 +87,8 @@ const result = await runHerdrScenario({
     await session.setRegistryUnavailable(true);
     await session.waitFor("registry unavailable", session.registrations, entries => !entries[0]?.runtime?.paneId);
     assert.equal((await session.client.request<{status: string}>({action: "ping"})).status, "ready");
-    await session.keys(pane, "q", "g");
-    await session.text(pane, reference.id);
-    await session.keys(pane, "enter");
+    await session.keys(pane, "q");
+    await goto(reference.id);
     await session.waitVisible(pane, "Detached canonical bytes");
     await session.keys(pane, "enter", "e");
     await session.waitVisible(pane, "Locked for editing");

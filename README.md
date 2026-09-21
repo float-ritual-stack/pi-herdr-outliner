@@ -617,11 +617,13 @@ unchanged.
 | `p` | Type the work ID/short UUID to permanently purge a Trash root |
 | `Ctrl+Q` | Close the pane |
 
-Goto opens inside the current Outliner surface, including the combined Tree/Detail
-layout. Type a title, description, UUID/prefix, registered page/alias, or Work ID.
+In Herdr, Goto opens a large popup over the workspace so a narrow Tree pane does
+not constrain the search and preview. Outside Herdr it opens inside the current
+Outliner surface, including the combined Tree/Detail layout. Type a title,
+description, UUID/prefix, registered page/alias, or Work ID.
 Text matches arrive immediately; arrows/Tab or a plain click select a result for
 preview. Enter reveals it in Tree; Option/Alt+Enter opens it in Detail. Escape
-keeps the original Tree selection and scroll. PageUp/PageDown or the mouse wheel
+returns to the invoking Tree with its selection and scroll intact. PageUp/PageDown or the mouse wheel
 over the preview scrolls its document. Narrow terminals stack results above the
 preview. Long previews explicitly show that they are shortened; opening the
 result always loads the canonical document.

@@ -27,18 +27,14 @@ const result = await runHerdrScenario({
       }), rows => rows.blocks.length === 1);
       return readAnnotation(found.blocks[0]!.id);
     };
-    const goto = async (blockId: string) => {
+    const reveal = async (blockId: string) => {
       const current = (await session.registrations()).find(client => client.clientId === registration.clientId);
       if (current?.locked) {
         await session.focus(detail);
         await session.keys(detail, "L");
         await session.waitFor("Detail unlocked", session.registrations, entries => entries.some(client => client.clientId === registration.clientId && !client.locked));
       }
-      await session.focus(tree);
-      await session.keys(tree, "g");
-      await session.text(tree, blockId);
-      await session.waitVisible(tree, blockId.slice(0, 8));
-      await session.keys(tree, "enter");
+      await session.revealTree(tree, blockId);
       await session.waitFor("Detail target", session.registrations, entries => entries.some(client => client.clientId === registration.clientId && client.currentTarget?.kind === "block" && client.currentTarget.blockId === blockId));
       await session.focus(detail);
     };
@@ -48,7 +44,7 @@ const result = await runHerdrScenario({
       text: `Generated passage\n\n${quote} followed by a deliberately long line that wraps in the actual terminal and remains separate from the host's authored embed syntax.`,
     });
     const host = await session.client.request<Block>({ action: "create", parentId: null, text: `PIE281 Hub\n\n!((${generated.id}))\n\nUNRELATED-END` });
-    await goto(host.id);
+    await reveal(host.id);
     await session.waitVisible(detail, quote);
     const snapshot = await session.paneSnapshot(detail);
     assert.ok(snapshot.text.includes(quote));
@@ -82,7 +78,7 @@ const result = await runHerdrScenario({
     await session.waitVisible(detail, "Open thread");
     await session.checkpoint("01-real-capture-unpositioned-thread");
 
-    await goto(saved.block.id);
+    await reveal(saved.block.id);
     await session.waitVisible(detail, "Stored resolution: resolved");
     await session.keys(detail, "r");
     await session.waitVisible(detail, "captured pane quote is unpositioned");
@@ -104,7 +100,7 @@ const result = await runHerdrScenario({
     });
 
     const fileHost = await session.client.request<Block>({ action: "create", parentId: null, text: "PIE281 file [file::evidence.txt]" });
-    await goto(fileHost.id);
+    await reveal(fileHost.id);
     await session.waitVisible(detail, "ORIGINAL-FILE-QUOTE");
     await session.keys(detail, "c");
     await session.waitVisible(detail, "Ctrl+S save");
@@ -115,7 +111,7 @@ const result = await runHerdrScenario({
     // A legacy annotation may physically live under a file reference. Its parent
     // cannot authorize new bytes as the annotation's represented source.
     await session.client.request({ action: "move", blockId: fileSaved.block.id, parentId: fileHost.id, position: 0 });
-    await goto(fileSaved.block.id);
+    await reveal(fileSaved.block.id);
     await session.waitVisible(detail, "Stored resolution: resolved");
     await writeFile(join(session.projectRoot, "evidence.txt"), "DIFFERENT-FILE-CONTENT\nChanged second line");
     const beforeRefresh = await session.client.request<Block>({ action: "get", blockId: fileSaved.block.id });
@@ -165,7 +161,7 @@ const result = await runHerdrScenario({
         body: "Comment on hidden source", source: "agent",
       },
     });
-    await goto(metadataComment.annotations[0]!.block.id);
+    await reveal(metadataComment.annotations[0]!.block.id);
     await session.waitVisible(detail, "Stored resolution: resolved");
     await session.keys(detail, "r");
     await session.waitVisible(detail, "not displayed in this Resource view");

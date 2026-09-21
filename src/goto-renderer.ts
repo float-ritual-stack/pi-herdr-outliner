@@ -4,6 +4,7 @@ import { renderDetailReadPreviewLines } from "./detail-pi-preview";
 import type { GotoController } from "./goto-controller";
 import { sanitizeDynamicText } from "./terminal";
 import type { DetailReadPreviewDocument } from "./detail-pi-preview";
+import { parseTreePrimaryClick, parseTreeWheelEvent, treeClickActivates } from "./tree-mouse";
 
 // Rendered rows belong to this preview snapshot. Scrolling must not parse it again.
 const renderedPreviews = new WeakMap<DetailReadPreviewDocument, { width: number; lines: string[] }>();
@@ -26,6 +27,24 @@ export function gotoLayout(width: number, height: number, index: number) {
   const start = Math.max(0, index - slots + 1);
   return { inner, body, wide, listWidth, listHeight, slots, start, previewWidth: wide ? inner - listWidth - 1 : inner,
     previewHeight: wide ? body : Math.max(1, body - listHeight - 1) };
+}
+
+export async function handleGotoMouse(controller: GotoController, sequence: string, width: number, height: number): Promise<void> {
+  if (width < 12 || height < 9) return;
+  const layout = gotoLayout(width, height, controller.index);
+  const wheel = parseTreeWheelEvent(sequence);
+  if (wheel) {
+    const inPreview = layout.wide ? wheel.column > layout.listWidth + 2 : wheel.row >= 5 + layout.listHeight;
+    if (inPreview) controller.scrollPreview(wheel.direction === "up" ? -3 : 3);
+    else controller.move(wheel.direction === "up" ? -1 : 1);
+    return;
+  }
+  const click = parseTreePrimaryClick(sequence);
+  if (!click || click.row < 4 || click.row >= 4 + layout.listHeight || click.column < 2 || click.column >= layout.listWidth + 2) return;
+  const index = layout.start + Math.floor((click.row - 4) / 2);
+  if (index >= layout.start + layout.slots || !controller.matches[index]) return;
+  controller.select(index);
+  if (treeClickActivates(click)) await controller.accept("tree");
 }
 
 export function renderGotoFrame(controller: GotoController, width: number, height: number, help: string): string[] {

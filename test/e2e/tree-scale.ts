@@ -99,16 +99,7 @@ const result = await runHerdrScenario({
     const context = () => s.client.request<BrowsingContextState>({ action: "browsing-context.get", contextId: tree.contextId! });
     const selected = (id: string) => s.waitFor("Tree canonical selection", context,
       state => state.target?.kind === "block" && state.target.blockId === id);
-    const goto = async (id: string) => {
-      await s.keys(remote.tree, "g");
-      await s.waitVisible(remote.tree, "Goto:");
-      await s.text(remote.tree, id);
-      await s.waitFor("exact goto candidate", () => s.visible(remote.tree),
-        frame => frame.includes("Goto:") && frame.includes(id.slice(0, 8)));
-      await s.keys(remote.tree, "enter");
-      await selected(id);
-    };
-    await goto(board.id);
+    await s.revealTree(remote.tree, board.id);
     await s.keys(remote.tree, "down");
     await selected(sources[0]!.id);
     await s.waitVisible(remote.detail, "EXACT SOURCE 0");
@@ -139,7 +130,7 @@ const result = await runHerdrScenario({
       query: { filters: [{ key: "probe", value: "SCALE" }], rankViewId: board.id, limit: 1000 } });
     assert.deepEqual(ranked.blocks.map(block => block.id), rankedIds);
     assert.deepEqual(ranked.completeness, { kind: "complete" });
-    await goto(board.id);
+    await s.revealTree(remote.tree, board.id);
     await s.keys(remote.tree, "down");
     await selected(sources[1]!.id);
     await s.keys(remote.tree, "down");

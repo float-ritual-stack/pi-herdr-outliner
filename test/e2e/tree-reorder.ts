@@ -18,14 +18,6 @@ const result = await runHerdrScenario({
     const context = () => session.client.request<BrowsingContextState>({ action: "browsing-context.get", contextId: tree.contextId! });
     const selected = (id: string) => session.waitFor("selected block", context,
       value => value.target?.kind === "block" && value.target.blockId === id);
-    const goto = async (id: string) => {
-      await session.keys(treePane, "g");
-      await session.waitVisible(treePane, "Goto:");
-      await session.text(treePane, id);
-      await session.waitVisible(treePane, id.slice(0, 8));
-      await session.keys(treePane, "enter");
-      await selected(id);
-    };
     const siblings = async () => (await session.client.request<Block[]>({ action: "children", parentId: parent.id })).map(block => block.id);
     const rankOrder = async () => (await session.client.request<WorkspaceSnapshot>({ action: "workspace.snapshot" }))
       .virtualOccurrenceRanks.filter(rank => rank.viewId === branch.id).sort((a, b) => a.rank - b.rank).map(rank => rank.blockId);
@@ -33,7 +25,7 @@ const result = await runHerdrScenario({
       actual => JSON.stringify(actual) === JSON.stringify(ids));
     const registrationsBefore = (await session.registrations()).map(client => client.clientId).sort();
 
-    await goto(second.id);
+    await session.revealTree(treePane, second.id);
     await session.keys(treePane, "alt+up");
     await session.waitVisible(treePane, "Moved up among siblings");
     assert.deepEqual(await siblings(), [second.id, first.id]);
@@ -44,7 +36,7 @@ const result = await runHerdrScenario({
     assert.deepEqual(await siblings(), [first.id, second.id]);
     await selected(second.id);
 
-    await goto(branch.id);
+    await session.revealTree(treePane, branch.id);
     await session.keys(treePane, "down");
     await selected(first.id);
     await session.keys(treePane, "alt+down");

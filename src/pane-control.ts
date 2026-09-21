@@ -484,6 +484,23 @@ export interface OpenCapturePopupOptions {
   capturedFromBlockId: string;
 }
 
+export function openGotoPopup(
+  options: { workspaceRoot: string; sourceClientId: string },
+  herdr = process.env.HERDR_BIN_PATH ?? "herdr",
+): void {
+  if (process.env.HERDR_ENV !== "1") throw new Error("Goto popup requires Herdr");
+  const args = [
+    "plugin", "pane", "open", "--plugin", OUTLINER_PLUGIN_ID, "--entrypoint", "goto",
+    "--env", `OUTLINER_WORKSPACE_ROOT=${options.workspaceRoot}`,
+    "--env", `OUTLINER_GOTO_SOURCE_CLIENT_ID=${options.sourceClientId}`,
+    "--focus",
+  ];
+  for (const name of ["OUTLINER_STATE_DIR", "OUTLINER_CONFIG_PATH", "OUTLINER_REMOTE", "OUTLINER_SOCKET_PATH", "OUTLINER_KEYBINDINGS_PATH"] as const) {
+    if (process.env[name] !== undefined) args.push("--env", `${name}=${process.env[name]}`);
+  }
+  invokeHerdr(herdr, args);
+}
+
 export function openCapturePopup(
   options: OpenCapturePopupOptions,
   herdr = process.env.HERDR_BIN_PATH ?? "herdr",

@@ -21,14 +21,8 @@ const result = await runHerdrScenario({
     const registration = (await session.registrations()).find(client => client.runtime?.paneId === panes.detail);
     assert.ok(registration);
     const current = async () => (await session.registrations()).find(client => client.clientId === registration.clientId);
-    const goto = async () => {
-      await session.focus(panes.tree);
-      await session.keys(panes.tree, "g");
-      await session.waitVisible(panes.tree, "Goto:");
-      await session.text(panes.tree, source.id);
-      await session.waitFor("exact source candidate", () => session.visible(panes.tree), frame =>
-        frame.includes("Goto:") && frame.includes(source.id.slice(0, 8)));
-      await session.keys(panes.tree, "enter");
+    const revealSource = async () => {
+      await session.revealTree(panes.tree, source.id);
       await session.waitFor("source target published", current, client =>
         client?.currentTarget?.kind === "block" && client.currentTarget.blockId === source.id);
       const frame = await session.waitVisible(panes.detail, "Occurrence choices");
@@ -38,7 +32,7 @@ const result = await runHerdrScenario({
       }
       await session.waitVisible(panes.detail, "First use");
     };
-    await goto();
+    await revealSource();
     assert.equal(resourceCount(), baseline);
     await session.checkpoint("01-passive-duplicate-occurrences");
     await session.keys(panes.detail, "o");
@@ -56,7 +50,7 @@ const result = await runHerdrScenario({
     const resourceTarget = (await current())!.currentTarget;
     await session.checkpoint("03-second-occurrence-opens-resource");
 
-    await goto();
+    await revealSource();
     await session.keys(panes.detail, "o");
     await session.waitVisible(panes.detail, "Choose a reference");
     await session.keys(panes.detail, "o");
@@ -69,7 +63,7 @@ const result = await runHerdrScenario({
     assert.equal((await session.client.request<Block>({ action: "get", blockId: source.id })).text, sourceText);
     await session.record("occurrence-result", { renderer, sourceId: source.id, sourceText,
       baselineResourceCount: baseline, finalResourceCount: resourceCount(), resourceTarget,
-      input: "real Tree goto, Detail o/Tab/o/Enter, repeat first occurrence",
+      input: "RPC Tree reveal setup; real Detail o/Tab/o/Enter, repeat first occurrence",
       limits: "Keyboard activation; native pointer activation has renderer/controller coverage only." });
     await session.checkpoint("04-first-occurrence-reuses-resource");
   },

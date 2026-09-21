@@ -40,15 +40,12 @@ const result = await runHerdrScenario({
       action: "annotations.list", query: { subject: { kind: "block", blockId: host.id }, includeResolved: true },
     });
     const thread = (id: string) => s.client.request<AnnotationRecord>({ action: "annotations.get", annotationId: id });
-    const goto = async () => {
+    const revealSource = async () => {
       if ((await current()).locked) {
         await focusView("detail"); await s.keys(detail, "L");
         await s.waitFor("reader unlocked", current, c => !c.locked);
       }
-      await focusView("tree"); await s.keys(tree, "g"); await s.waitVisible(tree, "Goto:");
-      await s.text(tree, host.id); await s.waitVisible(tree, host.id.slice(0, 8));
-      await s.keys(tree, "enter");
-      await s.waitFor("Goto accepted", () => s.visible(tree), frame => !frame.includes("Goto:"));
+      await s.revealTree(tree, host.id);
       await s.waitFor("source opened", current, c => c.currentTarget?.kind === "block" && c.currentTarget.blockId === host.id);
       await focusView("detail");
       const frame = await s.waitVisible(detail, "Occurrence annotation fixture");
@@ -64,13 +61,13 @@ const result = await runHerdrScenario({
       const rows = await s.waitFor("comment persisted", hostThreads, ts => ts.some(t => t.body === body));
       return rows.find(t => t.body === body)!;
     };
-    await goto();
+    await revealSource();
     await s.keys(detail, "o"); await s.waitVisible(detail, "Choose a reference");
     await s.keys(detail, "c");
     const first = await saveComment("Comment about the first use");
     assert.equal(first.originalTarget.referenceContext?.anchor.start, text.indexOf("[file::"));
     await s.checkpoint("01-first-occurrence-comment");
-    await goto();
+    await revealSource();
     await s.keys(detail, "o"); await s.waitVisible(detail, "Choose a reference");
     await s.keys(detail, "tab", "c");
     const second = await saveComment("Comment about the second use");
@@ -80,7 +77,7 @@ const result = await runHerdrScenario({
     assert.equal((await s.client.request<Block>({ action: "get", blockId: host.id })).text, text);
     await s.checkpoint("02-independent-occurrence-comments");
 
-    await goto();
+    await revealSource();
     await s.keys(detail, "o"); await s.waitVisible(detail, "Choose a reference");
     await s.keys(detail, "tab", "o"); await s.waitVisible(detail, "Choose destination");
     await s.keys(detail, "enter"); await s.waitVisible(detail, "Shared file passage");
@@ -151,7 +148,7 @@ const result = await runHerdrScenario({
     await s.record("pointer-occurrence-evidence", { row, column, quote,
       selectedContext: first.originalTarget.referenceContext, rejectedContext: second.originalTarget.referenceContext });
 
-    await goto(); await s.keys(detail, "e"); await s.waitVisible(detail, "⌃S save");
+    await revealSource(); await s.keys(detail, "e"); await s.waitVisible(detail, "⌃S save");
     await terminal.write("\u001ba");
     await s.text(detail, "Occurrence annotation fixture\n\nFirst use [file::same.md].\nFirst use [file::same.md].");
     await terminal.write("\u0013");
@@ -166,7 +163,7 @@ const result = await runHerdrScenario({
     await s.waitVisible(detail, "Unpositioned comments (1)");
     await s.checkpoint("05b-resource-history-does-not-restore-deleted-occurrence");
     await s.record("reference-annotation-result", { hostId: host.id, first, second, passage, changed,
-      resourceThreads, input: "Real Properties occurrence selection, comment typing/save/reopen, Resource selection, source edit causing duplicate/deleted references",
+      resourceThreads, input: "RPC Tree reveal setup; real Properties occurrence selection, comment typing/save/reopen, Resource selection, source edit causing duplicate/deleted references",
       limits: "File-global and pointer-transition views set up through existing UI commands. Native pointer drag and comment/cancel keys exercised. Restart/replies/lifecycle additionally covered through public protocol tests and PIE-265." });
   },
 });

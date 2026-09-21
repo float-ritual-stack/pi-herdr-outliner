@@ -5,7 +5,7 @@ import { PRIMARY_DETAIL_LOCKED_ERROR, type TreeNavigation } from "./navigation-r
 import type { createDetailController, DetailViewport } from "./detail-controller";
 import type { OutlinerActionKeymap } from "./outliner-actions";
 import { navigateOutlinerLink } from "./outliner-links";
-import { openCapturePopup, openVirtualBranchNavigatorPopup } from "./pane-control";
+import { openCapturePopup, openGotoPopup, openVirtualBranchNavigatorPopup } from "./pane-control";
 import { parsePropertySummaryKeys } from "./property-summary";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { createTreeController } from "./tree-controller";
@@ -120,6 +120,9 @@ export class ComposedTree implements Component {
       clientId: options.clientId, browsingContextId: options.contextId,
       workspaceRoot: options.workspaceRoot, navigation: options.navigation,
       actionKeymap: options.actionKeymap, request: input => options.client.request(input),
+      ...(process.env.HERDR_ENV === "1" ? {
+        openGotoPopup: () => openGotoPopup({ workspaceRoot: options.workspaceRoot, sourceClientId: options.clientId }),
+      } : {}),
       createDetailPane: (blockId, direction = "right") => options.detach({kind: "block", blockId}, direction),
       async openCapturePopup(capturedFromBlockId) { openCapturePopup({workspaceRoot: options.workspaceRoot, capturedFromBlockId}); },
       openVirtualBranchNavigator(viewId, adapter) { openVirtualBranchNavigatorPopup({workspaceRoot: options.workspaceRoot, browsingContextId: options.contextId, sourceClientId: options.clientId, sourceRole: "tree", viewId, ...(adapter ? {adapter} : {})}); },

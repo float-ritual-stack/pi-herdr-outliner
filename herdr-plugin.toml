@@ -33,6 +33,14 @@ placement = "split"
 command = ["/bin/sh", "scripts/run-bun.sh", "run", "src/composed-main.ts"]
 
 [[panes]]
+id = "goto"
+title = "Go to"
+placement = "popup"
+width = "90%"
+height = "88%"
+command = ["/bin/sh", "scripts/run-bun.sh", "run", "src/goto-main.ts"]
+
+[[panes]]
 id = "capture"
 title = "Quick Capture"
 placement = "popup"

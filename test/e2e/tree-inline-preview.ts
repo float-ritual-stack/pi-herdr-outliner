@@ -22,15 +22,6 @@ const result = await runHerdrScenario({
     });
     const selected = (id: string) => session.waitFor("selected canonical block", context,
       (state) => state.target?.kind === "block" && state.target.blockId === id);
-    const goto = async (id: string) => {
-      await session.keys(treePane, "g");
-      await session.waitVisible(treePane, "Goto:");
-      await session.text(treePane, id);
-      await session.waitFor("goto candidate", () => session.visible(treePane),
-        (frame) => frame.includes("Goto:") && frame.includes(id.slice(0, 8)));
-      await session.keys(treePane, "enter");
-      await selected(id);
-    };
     const expand = async (label: string, body: string) => {
       assert.ok(!(await session.visible(treePane)).includes(body), `${label}: initially collapsed`);
       await session.keys(treePane, ".");
@@ -42,7 +33,7 @@ const result = await runHerdrScenario({
     };
 
     // Inline reading must work while the independent Detail stays on another target.
-    await goto(outer.id);
+    await session.revealTree(treePane, outer.id);
     await session.waitVisible(session.panes.detail, "INLINE-OUTER");
     await session.keys(session.panes.detail, "i");
     await session.waitFor("Detail locked to the outer branch", session.registrations, (entries) =>
@@ -50,13 +41,13 @@ const result = await runHerdrScenario({
         entry.currentTarget?.kind === "block" && entry.currentTarget.blockId === outer.id)
     );
 
-    await goto(note.id);
+    await session.revealTree(treePane, note.id);
     await expand("01-physical-source", "INLINE ROOT BODY");
-    await goto(inner.id);
+    await session.revealTree(treePane, inner.id);
     await session.keys(treePane, "down");
     await selected(note.id);
     await expand("02-direct-projection", "INLINE ROOT BODY");
-    await goto(outer.id);
+    await session.revealTree(treePane, outer.id);
     await session.keys(treePane, "down");
     await selected(inner.id);
     await session.keys(treePane, "down");

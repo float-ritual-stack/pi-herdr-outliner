@@ -718,9 +718,16 @@ state. Generation checks discard old searches and previews; typing is coalesced
 and semantic requests debounced. Navigation goes through existing Tree/Detail
 operations only on acceptance. The shared bookmark/Detail read-preview loader
 supplies real projected content; Goto bounds each text representation to 12,000
-characters and caches rendered rows for the current document/width. The composed
-terminal makes Tree its layout root while Goto is active, then restores the split;
-Herdr pane placement and independent Detail state are unaffected.
+characters and caches rendered rows for the current document/width. Herdr hosts
+the same controller and renderer in a 90% × 88% popup. `goto-main.ts` uses Pi's
+`ProcessTerminal` for input and terminal restoration; it is not a registered
+navigation destination. The invoking client ID is passed explicitly: Enter sends
+a Tree-region focus command to that client, and Alt+Enter uses the existing
+navigation operation from that source. Missing sources and locked destinations
+remain errors in the popup. No pane discovery is needed to identify the source.
+Outside Herdr the modal stays in the application surface; the composed terminal
+makes Tree its layout root while it is active, then restores the split. Search
+state is transient and independent Detail state is preserved until acceptance.
 
 Compact-preview references carry exact spans in the preview text. The service recognizes references in authored text and maps their spans through property removal, line presentation, and truncation; labels are presentation, never reference identity. Complete actionable spans carry a canonical target. Unresolved and clipped spans retain a null target, preventing generic UUID detection from turning them into different links. Tree fetches exact bodies through `get` for editing, expanded rows, and reference activation. A quick edit uses the text and revision from that same read; compact previews never authorize a save. Expanded text and reference presentation are revalidated against the service sequence and body revision. `workspace.snapshot` remains available to independent consumers that need its full visible and physical collections; it is no longer Tree's reload operation.
 

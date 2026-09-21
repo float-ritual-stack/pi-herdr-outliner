@@ -11,6 +11,7 @@ import {
   openBacklinkPeekPopup,
   openCapturePopup,
   openDetailPane,
+  openGotoPopup,
   openVirtualBranchNavigatorPopup,
   outlinerRightClickOwnership,
   pluginInvocationPaneId,
@@ -597,6 +598,17 @@ if (args[0] === "plugin" && args[1] === "pane" && args[2] === "open") {
     expect(navigatorOpen).toContain("--focus");
     expect(navigatorOpen).not.toContain("--placement");
     expect(navigatorOpen).not.toContain("--cwd");
+
+    openGotoPopup({ workspaceRoot: "/workspace", sourceClientId: "tree-one" }, herdr);
+    const gotoOpen = JSON.parse(readFileSync(logPath, "utf8").trim().split("\n").at(-1)!) as string[];
+    expect(gotoOpen).toContain("goto");
+    expect(gotoOpen).toContain("OUTLINER_GOTO_SOURCE_CLIENT_ID=tree-one");
+    expect(gotoOpen).toContain("OUTLINER_WORKSPACE_ROOT=/workspace");
+    expect(gotoOpen).toContain("OUTLINER_REMOTE=1");
+    expect(gotoOpen).toContain("OUTLINER_SOCKET_PATH=/tmp/forwarded-outliner.sock");
+    expect(gotoOpen).toContain("--focus");
+    expect(gotoOpen).not.toContain("--placement");
+    expect(gotoOpen).not.toContain("--cwd");
   } finally {
     if (originalHerdrEnv === undefined) delete process.env.HERDR_ENV;
     else process.env.HERDR_ENV = originalHerdrEnv;

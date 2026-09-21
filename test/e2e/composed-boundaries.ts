@@ -16,9 +16,7 @@ const result = await runHerdrScenario({
     const first = await session.client.request<Block>({action: "create", parentId: null, text: "PIE283 draft owner A"});
     const second = await session.client.request<Block>({action: "create", parentId: null, text: "PIE283 publication B"});
     const third = await session.client.request<Block>({action: "create", parentId: null, text: "PIE283 publication C"});
-    await session.keys(pane, "g");
-    await session.text(pane, first.id);
-    await session.keys(pane, "enter");
+    await session.revealTree(pane, first.id);
     await session.waitFor("A preview ready", session.registrations, values => values[0]?.currentTarget?.kind === "block" && values[0].currentTarget.blockId === first.id);
     await session.checkpoint("01-original-owner");
     await session.enableComposedResponseBarriers();
@@ -59,9 +57,8 @@ const result = await runHerdrScenario({
     await session.waitFor("unlocked Tree", session.registrations, values => values[0]?.focusedRegion === "tree" && !values[0]?.locked);
     await session.client.request({action: "resources.intern-filesystem", input: {path: "generated.md"}});
     const host = await session.client.request<Block>({action: "create", parentId: null, text: `PIE283 generated links\n[file::generated.md]\n((${second.id}))`});
-    await session.keys(pane, "g");
-    await session.text(pane, host.id);
-    await session.keys(pane, "enter", "?");
+    await session.revealTree(pane, host.id);
+    await session.keys(pane, "?");
     await session.waitVisible(pane, "Find:");
     await session.text(pane, "Show authored links");
     await session.keys(pane, "enter");

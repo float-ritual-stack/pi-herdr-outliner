@@ -47,14 +47,8 @@ const result = await runHerdrScenario({
     await writeFile(join(s.projectRoot, "threads.md"), changedText);
     const threads = () => s.client.request<AnnotationThread[]>({ action: "annotations.list", query: { subject: { kind: "resource", resourceId: resource.id }, includeResolved: true } });
     const thread = async (id: string) => (await threads()).find(t => t.block.id === id)!;
-    const goto = async (blockId: string, panes = { tree, detail }) => {
-      await s.focus(panes.tree);
-      if (composed && panes.tree === tree && (await current()).focusedRegion !== "tree") {
-        await terminal.write("\u001b[17~");
-        await s.waitFor("Tree region focused", current, c => c.focusedRegion === "tree");
-      }
-      await s.keys(panes.tree, "g"); await s.waitVisible(panes.tree, "Goto:");
-      await s.text(panes.tree, blockId); await s.waitVisible(panes.tree, blockId.slice(0, 8)); await s.keys(panes.tree, "enter");
+    const reveal = async (blockId: string, panes = { tree, detail }) => {
+      await s.revealTree(panes.tree, blockId);
       await s.waitFor("target published", s.registrations, cs => cs.some(c => c.runtime?.paneId === panes.detail && c.currentTarget?.kind === "block" && c.currentTarget.blockId === blockId));
       await s.focus(panes.detail);
       if (composed && panes.detail === detail && (await current()).focusedRegion !== "detail") {
@@ -62,7 +56,7 @@ const result = await runHerdrScenario({
         await s.waitFor("Detail region focused", current, c => c.focusedRegion === "detail");
       }
     };
-    await goto(host.id);
+    await reveal(host.id);
     await s.keys(detail, "o"); await s.waitVisible(detail, "Choose a reference");
     await s.keys(detail, "tab", "o"); await s.waitVisible(detail, "Choose destination");
     await s.keys(detail, "enter"); await s.waitVisible(detail, "GLOBAL PASSAGE");
@@ -146,7 +140,7 @@ const result = await runHerdrScenario({
     await terminal.write(`\u001b[<0;${tabColumn + 1};1M`);
     await terminal.write(`\u001b[<0;${tabColumn + 1};1m`);
     await s.waitFor("attached client displays ANSI tab", () => terminal.visible(), frame => frame.includes("client-project"));
-    await goto(orphan.block.id, ansi);
+    await reveal(orphan.block.id, ansi);
     await s.waitVisible(ansi.detail, "Original target:");
     await s.keys(ansi.detail, "G"); await s.waitVisible(ansi.detail, "Orphan final comment sentinel");
     await s.checkpoint("09-ansi-evidence-bottom-reachable");
@@ -158,7 +152,7 @@ const result = await runHerdrScenario({
       assert.equal((await s.visible(ansi.detail)).split("\n")[3], evidenceRow);
     }
     await s.checkpoint("09a-annotation-lifecycle-keeps-evidence-viewport");
-    await goto(host.id, ansi);
+    await reveal(host.id, ansi);
     await s.keys(ansi.detail, "o"); await s.waitVisible(ansi.detail, "Choose a reference");
     await s.keys(ansi.detail, "tab", "o"); await s.waitVisible(ansi.detail, "Choose destination");
     await s.keys(ansi.detail, "enter"); await s.waitVisible(ansi.detail, "GLOBAL PASSAGE");
@@ -196,7 +190,7 @@ const result = await runHerdrScenario({
     await s.checkpoint("12-ansi-narrow-orphan-body-reachable");
     assert.equal((await s.client.request<Block>({ action: "get", blockId: host.id })).text, host.text);
     await s.record("thread-controls-result", { target, global, selected, other, orphan, threads: await threads(), beforeReply,
-      input: "Real Tree goto and Resource chooser; [/] navigation; native Pi Reply click and cancel; C multiline reply and cancel; D resolve/reopen; narrow resize; ANSI ordinary-thread and evidence navigation",
+      input: "RPC Tree reveal setup; real Resource chooser; [/] navigation; native Pi Reply click and cancel; C multiline reply and cancel; D resolve/reopen; narrow resize; ANSI ordinary-thread and evidence navigation",
       limits: "Initial threads and one agent reply are fixtures through public APIs. Native pointer activation proved through attached Herdr client; two-host SSH behavior not exercised." });
     const original = await s.client.request<AnnotationRecord>({ action: "annotations.get", annotationId: selected.block.id });
     assert.deepEqual(original.originalTarget, selected.originalTarget);

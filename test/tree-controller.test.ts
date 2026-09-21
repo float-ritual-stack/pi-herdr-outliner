@@ -721,6 +721,27 @@ describe("createTreeController", () => {
     expect(lastCall(fake.calls, "browsing-context.publish")).toEqual({ action: "browsing-context.publish", sourceClientId: "tree-test", contextId: "tree-test-context", target: { kind: "block", blockId: target.id } });
   });
 
+  test("hosted Goto keeps the source Tree ready for its exact navigation command", async () => {
+    const first = block("first", { text: "Original" });
+    const target = block("target", { text: "Destination" });
+    const fake = harness(input => input.action === "tree.index" ? snapshot([first, target], first) : undefined);
+    let popups = 0;
+    fake.effects.openGotoPopup = () => { popups++; };
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+    await controller.handleKeypress("g", { name: "g" }, "pass");
+    expect(popups).toBe(1);
+    expect(controller.view().mode).toBe("browse");
+    expect(selectedBlockRow(controller).canonicalId).toBe(first.id);
+    expect(fake.calls.some(input => input.action === "tree.search")).toBe(false);
+    await controller.handleServiceEvent({id: "goto-focus", action: "ui.command.send", domain: "ui", sequence: 2, command: {
+      command: "focus", targetClientId: "tree-test", targetRegion: "tree",
+      target: {kind: "block", blockId: target.id},
+    }});
+    expect(selectedBlockRow(controller).canonicalId).toBe(target.id);
+    expect(fake.focused.at(-1)).toBe("outliner");
+  });
+
   test("Goto ignores pointer activation on blank result rows", async () => {
     for (const count of [2, 10]) {
       const source = Array.from({length: count}, (_, i) => block(`match-${i}`));

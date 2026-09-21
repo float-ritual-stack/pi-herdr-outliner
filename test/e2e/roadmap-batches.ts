@@ -36,13 +36,6 @@ const result = await runHerdrScenario({
       assert.deepEqual(result.blocks.map(block => block.id).sort(), items.map(block => block.id).sort());
       assert.ok(result.blocks.every(block => !block.properties.some(property => property.key === "status")));
     };
-    const goto = async (pane: string, id: string) => {
-      await session.keys(pane, "g");
-      await session.waitVisible(pane, "Goto:");
-      await session.text(pane, id);
-      await session.waitVisible(pane, id.slice(0, 8));
-      await session.keys(pane, "enter");
-    };
     const stage = async (block: Block, value: string) => {
       const current = await session.client.request<Block>({ action: "get", blockId: block.id });
       const property = parsePropertyRecords(current.text).find(property => property.scope === "block" && property.key === "work-stage")!;
@@ -54,7 +47,7 @@ const result = await runHerdrScenario({
       const rows = start < 0 ? "" : frame.slice(start);
       return ["First outcome", "Second outcome", "Third outcome", ...stages].every(text => rows.includes(text));
     });
-    await goto(session.panes.tree, board.id);
+    await session.revealTree(session.panes.tree, board.id);
     await session.waitVisible(session.panes.tree, "batch members [V:3");
     await session.keys(session.panes.tree, "down", "down", "down");
     await batchFrame(session.panes.tree, ["queued"]);
@@ -82,13 +75,13 @@ const result = await runHerdrScenario({
     await batchFrame(session.panes.tree, ["review", "validate", "queued"]);
     await session.checkpoint("02-independent-stage-and-membership");
     const hub = await create(`PIE-289 batch overview\n\n!((${board.id}))`);
-    await goto(session.panes.tree, hub.id);
+    await session.revealTree(session.panes.tree, hub.id);
     await session.keys(session.panes.tree, "enter");
     await session.waitVisible(session.panes.detail, "stage review");
     await session.waitVisible(session.panes.detail, "stage validate");
     await session.waitVisible(session.panes.detail, "stage queued");
     await session.checkpoint("02b-batch-overview-shows-next-actions");
-    await goto(session.panes.tree, items[0]!.id);
+    await session.revealTree(session.panes.tree, items[0]!.id);
     await session.keys(session.panes.tree, "enter");
     await session.waitVisible(session.panes.detail, "stage review");
     await session.checkpoint("03-detail-agrees");
@@ -98,13 +91,13 @@ const result = await runHerdrScenario({
     const proof = await create("PIE-289 fixture acceptance evidence", current.id);
     await session.client.request({ action: "properties.patch", mutation: { author: "agent", actorId: "batch-harness" }, blockId: current.id, expectedRevision: current.revision, operations: [{ op: "append", key: "proof", value: proof.id }] });
     await stage(items[1]!, "done");
-    await goto(session.panes.tree, doneView.id);
+    await session.revealTree(session.panes.tree, doneView.id);
     await session.waitVisible(session.panes.tree, "accepted delivery [V:1");
     assert.equal((await session.client.request<VisibleBlockCollection>({ action: "blocks.query", query: { filters: [{ key: "project", value: "batch-fixture" }, { key: "work-stage", value: "done" }], limit: 10 } })).blocks[0]!.id, items[1]!.id);
     const fresh = new OutlinerClient(session.client.socketPath);
     await verifyMembers(fresh);
     const remote = await session.openRemoteBrowsingContext();
-    await goto(remote.tree, board.id);
+    await session.revealTree(remote.tree, board.id);
     await session.keys(remote.tree, "down", "down", "down", "down", "down", "down");
     await batchFrame(remote.tree, ["review", "done", "queued"]);
     await session.checkpoint("04-fresh-reader-retains-scope");
@@ -112,7 +105,7 @@ const result = await runHerdrScenario({
     await session.client.request({ action: "delete", blockId: board.id });
     await verifyMembers();
     await session.record("batch-contract", { batch: batch.id, members: items.map(item => item.id), followup: followup.id, superseded: retired.id, proof: proof.id, viewRemovalPreservedItems: true,
-      evidence: "Actual Tree keyboard navigation and Detail rendering; real Pi SDK processes start tasks in a different order from authored rank and restore the same persisted binding and report. Stage advancement is production RPC fixture input, not a live PR/merge; third item depends on the second and remains queued. No model request is made. Service restart is covered by a focused regression." });
+      evidence: "RPC Tree reveal setup; actual Tree keyboard navigation and Detail rendering; real Pi SDK processes start tasks in a different order from authored rank and restore the same persisted binding and report. Stage advancement is production RPC fixture input, not a live PR/merge; third item depends on the second and remains queued. No model request is made. Service restart is covered by a focused regression." });
   },
 });
 console.log(JSON.stringify(result));
