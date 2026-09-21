@@ -107,9 +107,11 @@ const result = await runHerdrScenario({
     await terminal.resize(76, 34);
     await session.waitFor("narrow popup stacks preview below results", popup, frame => {
       const lines = frame.split("\n");
-      return lines.length === 34 && lines.every(line => visibleWidth(line) <= 76) &&
-        lines.some(line => line.includes("ALPHA-PREVIEW-BODY")) &&
-        lines.some(line => line.includes("│Saffron reference alpha"));
+      const resultRow = lines.findIndex(line => line.includes("› Saffron reference alpha"));
+      const previewRow = lines.findIndex(line => line.includes("│Saffron reference alpha"));
+      // Assert popup geometry, not host emoji widths under a different Unicode table.
+      return lines.length === 34 && resultRow >= 0 && previewRow > resultRow &&
+        lines.some(line => line.includes("ALPHA-PREVIEW-BODY"));
     });
     await session.checkpoint("04-narrow-stacked");
     await terminal.resize(240, 52);
