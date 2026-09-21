@@ -1896,6 +1896,8 @@ Second paragraph`;
       nextWorkId: "PIE-002",
     });
     expect(reopened.resolvePageAddress("PIE-001").block?.id).toBe(pieOwner.id);
+    expect(reopened.searchTree("PIE-001").matches[0]).toMatchObject({ block: { id: pieOwner.id }, exact: true });
+    expect(reopened.searchTree("PIE-001").matches.find(match => match.block.id === duplicate.id)?.exact).toBe(false);
     expect(reopened.require(duplicate.id).properties).toEqual([
       { key: "work-id", value: "PIE-001" },
       { key: "work-id", value: "todo-later" },

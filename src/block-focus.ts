@@ -14,6 +14,8 @@ export type BlockFocusMatchKind =
   | "text-terms"
   | "title-fuzzy"
   | "text-fuzzy";
+// Search prose often contains words absent from the remembered note's title.
+const QUERY_FILLER = new Set("a an the that this those these it its of on in at to for with and or about where when how i we my our was is are were be been thing things note page block please find show me what did does do would could should can have has had will then again something some any using get got".split(" "));
 
 export interface BlockFocusMatch {
   block: Block;
@@ -51,7 +53,7 @@ export function subsequenceScore(query: string, candidate: string): number {
     previousMatch = index;
     queryIndex += 1;
   }
-  if (queryIndex !== query.length) return 0;
+  if (queryIndex !== query.length || gaps > query.length * 2) return 0;
   return Math.max(1, 1_000 - gaps - Math.max(0, candidate.length - query.length));
 }
 
@@ -81,11 +83,16 @@ function scoreBlock(
   if (normalizedText.includes(normalizedQuery)) {
     return { block, kind: "text-contains", score: 50_000, title };
   }
-  if (terms.every((term) => normalizedTitle.includes(term))) {
-    return { block, kind: "title-terms", score: 40_000 + terms.length, title };
-  }
-  if (terms.every((term) => normalizedText.includes(term))) {
-    return { block, kind: "text-terms", score: 30_000 + terms.length, title };
+  const usefulTerms = terms.filter(term => term.length >= 2 && !QUERY_FILLER.has(term));
+  const searchTerms = usefulTerms.length ? usefulTerms : terms;
+  const titleHits = searchTerms.filter(term => normalizedTitle.includes(term)).length;
+  const textHits = searchTerms.filter(term => normalizedText.includes(term)).length;
+  if (titleHits === searchTerms.length) return { block, kind: "title-terms", score: 40_000 + searchTerms.length, title };
+  if (textHits > 0) {
+    // Word evidence outranks accidental letter subsequences in long documents.
+    // Titles carry more weight; document length breaks otherwise equal matches.
+    const score = 12_000 + (titleHits * 10_000 + textHits * 8_000) / searchTerms.length + 1_000 / (1 + normalizedText.length / 1_000);
+    return { block, kind: "text-terms", score, title };
   }
   if (normalizedQuery.length >= 3) {
     const titleScore = subsequenceScore(normalizedQuery, normalizedTitle);

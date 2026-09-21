@@ -602,7 +602,7 @@ unchanged.
 | `Space` | Toggle collapse |
 | `.` or `Command+.` | Expand/collapse multiline block detail in Tree |
 | `Ctrl+E` or modified Enter | Explicitly edit and lock the selected block in the first unlocked Detail |
-| `g` | Fuzzy goto by UUID, short prefix, title, or content |
+| `g` | Search blocks with a document preview and optional Jev ranking |
 | `o` | Open the first exact `((block-id))` or symbolic `[[address]]` reference in the first unlocked Detail |
 | `R` | Reveal this row's canonical physical source, clearing filters, expanding its ancestors, and focusing this Tree |
 | `Option+Shift+R` | Reveal the first authored reference in this Tree |
@@ -616,6 +616,25 @@ unchanged.
 | `r` | Restore a selected direct Trash root |
 | `p` | Type the work ID/short UUID to permanently purge a Trash root |
 | `Ctrl+Q` | Close the pane |
+
+Goto opens inside the current Outliner surface, including the combined Tree/Detail
+layout. Type a title, description, UUID/prefix, registered page/alias, or Work ID.
+Text matches arrive immediately; arrows/Tab or a plain click select a result for
+preview. Enter reveals it in Tree; Option/Alt+Enter opens it in Detail. Escape
+keeps the original Tree selection and scroll. PageUp/PageDown or the mouse wheel
+over the preview scrolls its document. Narrow terminals stack results above the
+preview. Long previews explicitly show that they are shortened; opening the
+result always loads the canonical document.
+
+Set `TYPESAFE_API_KEY` in the **Outliner service's environment** to enable Jev.
+After a short typing pause, the service sends the query and up to 80 candidates'
+titles, ancestry labels, and bounded text excerpts to TypeSafe for relevance
+scoring. The credential stays in the service. The first 30 results are displayed,
+with omitted matches marked. Jev reranks this candidate pool; it cannot recover
+notes outside it. Missing credentials, provider failure, or a 2.2-second deadline
+leave ordinary search usable. Once you select a result, delayed ranking keeps
+your displayed list and selection stable. Exact identities bypass ranking.
+The actions and displayed shortcuts use the normal keybinding configuration.
 
 Reveal source preserves exact occurrence history: after jumping from a virtual
 occurrence to its canonical physical row, `Option+Left` returns to that

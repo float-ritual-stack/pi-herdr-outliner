@@ -19,6 +19,7 @@
     "test": "bun test",
     "test:e2e:herdr": "bun run test/e2e/startup-interruption.ts && bun run test/e2e/resource-authoring.ts",
     "test:e2e:roadmap": "bun run test/e2e/roadmap-batches.ts",
+    "test:e2e:goto": "bun run test/e2e/goto-search.ts && bun run test/e2e/goto-search.ts --composed",
     "test:e2e:ownership": "bun run test/e2e/workspace-ownership.ts",
     "test:e2e:capture": "bun run test/e2e/capture-retry.ts",
     "test:e2e:edit-conflicts": "bun run test/e2e/edit-conflicts.ts",

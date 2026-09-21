@@ -1,3 +1,4 @@
+import { rankGotoWithJev, visibleGotoResults } from "./goto-search";
 import { existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
 import { hostname as systemHostname } from "node:os";
@@ -97,7 +98,9 @@ function annotationReconcileChanged(value: unknown): boolean {
   return value.changed;
 }
 
+
 export class OutlinerServer {
+  private activeGotoRankings = 0;
   private server: Server | null = null;
   private readonly subscribers = new Map<Socket, OutlinerClientRegistration>();
   private readonly browsingContextTargets = new Map<string, OutlinerNavigationTarget | null>();
@@ -1058,6 +1061,27 @@ export class OutlinerServer {
     request: OutlinerRequest,
     subscribedClient?: OutlinerClientRegistration,
   ): Promise<OutlinerResponse> {
+    if (request.action === "tree.search") {
+      try {
+        if (request.semantic !== undefined && typeof request.semantic !== "boolean") throw new Error("semantic must be a boolean");
+        let result = this.store.searchTree(request.query);
+        if (request.semantic && this.activeGotoRankings < 2) {
+          this.activeGotoRankings++;
+          try { result = await rankGotoWithJev(request.query, result); }
+          finally { this.activeGotoRankings--; }
+          // A model answer cannot resurrect a deleted or edited candidate.
+          result.matches = result.matches.filter(match => {
+            const current = this.store.get(match.block.id);
+            return current && !current.effectiveDeletedRootId && !current.deletedAt && current.revision === match.block.revision;
+          });
+        } else if (request.semantic) {
+          result.semantic = { status: "unavailable", message: "Jev busy; showing text matches" };
+        }
+        return { id: request.id, ok: true, result: visibleGotoResults(result), sequence: this.store.sequence };
+      } catch (error) {
+        return { id: request.id, ok: false, error: error instanceof Error ? error.message : String(error), sequence: this.store.sequence };
+      }
+    }
     if (
       request.action !== "resources.open" &&
       request.action !== "resources.refresh" &&
@@ -1203,6 +1227,10 @@ export class OutlinerServer {
           break;
         case "tree.focus":
           result = this.store.focusTree(request.query);
+          break;
+        case "tree.search":
+          if (request.semantic) throw new Error("Semantic search requires asynchronous dispatch");
+          result = visibleGotoResults(this.store.searchTree(request.query));
           break;
         case "events.subscribe":
           result = { subscribed: true, client: subscribedClient ?? request.client };

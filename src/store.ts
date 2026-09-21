@@ -7,6 +7,7 @@ import { AnnotationRepository } from "./annotation-repository";
 import { authoredTextDigest } from "./authored-links";
 import { resolveBacklinkRelation } from "./backlinks";
 import { rankBlockFocusMatches } from "./block-focus";
+import { gotoCandidates } from "./goto-search";
 import {
   BOOKMARKS_SYSTEM_VIEW,
   BOOKMARK_TYPE,
@@ -2170,6 +2171,14 @@ export class OutlinerStore {
           ? { kind: "truncated" as const, limit: 20 }
           : { kind: "complete" as const },
       };
+    })();
+  }
+
+  searchTree(query: string) {
+    return this.database.transaction(() => {
+      const normalized = typeof query === "string" ? tryNormalizePageAddress(query) : null;
+      const address = normalized ? this.resolvePageAddressFromCurrentRead(normalized) : null;
+      return gotoCandidates([...this.loadGraph().byId.values()], query, address?.status === "resolved" ? address.block?.id : undefined);
     })();
   }
 

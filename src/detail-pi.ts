@@ -690,10 +690,10 @@ const localNavigation = composedTreeNavigation({
   revealBlock: (blockId) => composedTree!.controller.revealBlock(blockId),
   schedulePreview: (task) => serviceEventScheduler.schedulePreview(task),
 });
-const composedTree = composed ? new ComposedTree({
+const composedTree: ComposedTree | null = composed ? new ComposedTree({
   client, clientId, contextId: browsingContextId, workspaceRoot: paths.workspaceRoot,
   navigation: localNavigation, actionKeymap,
-  width: () => composedWidths(processTerminal.columns).tree,
+  width: () => composedTree?.controller.view().mode === "goto" ? processTerminal.columns : composedWidths(processTerminal.columns).tree,
   height: () => processTerminal.rows,
   focused: () => focusedRegion === "tree", focus: () => focusRegion("tree"),
   invalidate: () => { synchronizeLayout?.(); }, stop: requestStop,
@@ -1412,8 +1412,8 @@ synchronizeLayout = () => {
   if (nextRoot !== layoutRoot) {
     layoutRoot = nextRoot;
     if (composedLayout) composedLayout.setDetail(nextRoot);
-    tui.setLayoutRoot(composedLayout ?? nextRoot);
   }
+  tui.setLayoutRoot(composedTree?.controller.view().mode === "goto" ? composedTree : composedLayout ?? nextRoot);
   tui.requestRender();
 };
 synchronizeLayout();
@@ -1426,6 +1426,11 @@ const detailInputListener = createPiDetailInputListener(
 );
 tui.addOutlinerInputListener(data => {
   if (!composedTree) return detailInputListener(data);
+  if (composedTree.controller.view().mode === "goto") {
+    serviceEventScheduler.scheduleWork(() => composedTree.handleInput(data));
+    scheduleInputFlush();
+    return { consume: true };
+  }
   const pointer = composedPointer(data, processTerminal.columns);
   if (!pointer && !actionMenuHandle) {
     // Keys are already split by Pi. Choose their region when they execute, after

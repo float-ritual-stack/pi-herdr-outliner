@@ -65,6 +65,7 @@ export interface DetailDraftProjection {
 }
 
 export interface DetailReadPreviewDocument {
+  truncated?: boolean;
   canonicalText: string;
   resolvedText: string;
   projectedText: string;

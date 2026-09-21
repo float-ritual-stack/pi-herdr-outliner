@@ -30,6 +30,8 @@ import type {
   BacklinkCollection,
   BlockEditActivityPage,
   Block,
+  GotoSearchCollection,
+  SelectionContext,
   BookmarkRemoveReceipt,
   BookmarkToggleReceipt,
   CaptureReceipt,
@@ -68,6 +70,29 @@ import type {
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) await cleanup();
+});
+
+test("Goto searches canonical content and registered aliases without mutating navigation", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-outliner-goto-protocol-"));
+  const store = new OutlinerStore(join(directory, "outliner.sqlite"));
+  const socket = join(directory, "outliner.sock");
+  const server = new OutlinerServer(store, socket);
+  await server.start();
+  cleanups.push(async () => { await server.close(); store.close(); rmSync(directory, {recursive: true, force: true}); });
+  const owner = store.create("Canonical note [page::Original address]\n\n" + "ordinary content ".repeat(500) + "hidden-needle");
+  store.addPageAlias(owner.id, "Remembered name");
+  const deleted = store.create("Deleted hidden-needle"); store.delete(deleted.id);
+  const client = new OutlinerClient(socket);
+  const selectionBefore = await client.request<SelectionContext>({action: "selection.get"});
+  const sequenceBefore = store.sequence;
+  const alias = await client.request<GotoSearchCollection>({action: "tree.search", query: "remembered NAME"});
+  expect(alias.matches[0]).toMatchObject({block: {id: owner.id}, exact: true});
+  const body = await client.request<GotoSearchCollection>({action: "tree.search", query: "hidden-needle"});
+  expect(body.matches[0]!.block.id).toBe(owner.id);
+  expect(body.matches.map(match => match.block.id)).not.toContain(deleted.id);
+  expect(body.matches[0]!.snippet).toContain("hidden-needle");
+  expect(await client.request<SelectionContext>({action: "selection.get"})).toEqual(selectionBefore);
+  expect(store.sequence).toBe(sequenceBefore);
 });
 
 

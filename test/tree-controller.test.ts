@@ -1,3 +1,4 @@
+import { gotoCandidates, visibleGotoResults } from "../src/goto-search";
 import { serviceTreeNavigation } from "../src/navigation-routes";
 import { describe, expect, test } from "bun:test";
 import { setImmediate } from "node:timers/promises";
@@ -34,7 +35,7 @@ import type {
   VirtualOccurrenceRank,
   TreeIndexBlock,
   TreeIndexSnapshot,
-  TreeFocusCollection,
+  GotoSearchCollection,
 } from "../src/types";
 
 type TreeRow = ProjectedTreeRow<TreeIndexBlock>;
@@ -164,6 +165,7 @@ function harness(
         if (response === undefined && input.action === "references.resolve") {
           return resolveBlockReferencesWithStatus(input.text, id => documents.get(id) ?? null) as T;
         }
+        if (response === undefined && input.action === "tree.search") return visibleGotoResults(gotoCandidates([...documents.values()], input.query)) as T;
         if (response === undefined && input.action === "tree.focus") {
           const matches = rankBlockFocusMatches([...documents.values()], input.query, 21);
           return {
@@ -709,9 +711,8 @@ describe("createTreeController", () => {
     await setImmediate();
 
     expect(controller.view().mode).toBe("goto");
-    expect(controller.view().quickCompletion?.items[0]).toMatchObject({
-      blockId: target.id,
-      label: `40bd0864 · Roadmap review after the graveyard walk`,
+    expect(controller.view().goto?.matches[0]).toMatchObject({
+      block: { id: target.id }, title: "Roadmap review after the graveyard walk",
     });
 
     await controller.handleKeypress("", { name: "return" }, "pass");
@@ -720,24 +721,60 @@ describe("createTreeController", () => {
     expect(lastCall(fake.calls, "browsing-context.publish")).toEqual({ action: "browsing-context.publish", sourceClientId: "tree-test", contextId: "tree-test-context", target: { kind: "block", blockId: target.id } });
   });
 
+  test("Goto ignores pointer activation on blank result rows", async () => {
+    for (const count of [2, 10]) {
+      const source = Array.from({length: count}, (_, i) => block(`match-${i}`));
+      const fake = harness(input => input.action === "tree.index" ? snapshot(source, source[0]) : undefined);
+      fake.effects.terminalWidth = () => 120; fake.effects.terminalHeight = () => 26;
+      const controller = createTreeController(fake.effects); await controller.initialize();
+      await controller.handleKeypress("g", {name: "g"}, "pass");
+      await controller.handlePaste("match"); await setImmediate();
+      const selected = controller.view().goto!.selected!.block.id;
+      // 19 body rows display only 9 pairs; the last row and empty pairs are inert.
+      await controller.handleGotoMouse(`\x1b[<8;3;${count === 2 ? 9 : 23}M`);
+      expect(controller.view().mode).toBe("goto");
+      expect(controller.view().goto!.selected!.block.id).toBe(selected);
+      await controller.handleKeypress("", {name: "escape"}, "pass");
+    }
+  });
+
+  test("Goto Detail acceptance flushes deferred content without changing Tree selection", async () => {
+    const selected = block("selected"), target = block("target"), added = block("added");
+    let source = [selected, target];
+    const fake = harness(input => input.action === "tree.index" ? snapshot(source, selected) : undefined);
+    const controller = createTreeController(fake.effects); await controller.initialize();
+    await controller.handleKeypress("g", {name: "g"}, "pass");
+    await controller.handlePaste("target"); await setImmediate();
+    source = [selected, target, added];
+    await controller.handleServiceEvent(event("content", added.id));
+    expect(controller.view().refreshPending).toBe(true);
+    await controller.handleKeypress("", {name: "return", meta: true}, "pass");
+    expect(controller.view().mode).toBe("browse");
+    expect(controller.view().refreshPending).toBe(false);
+    expect(canonicalRowIds(controller.view().rows)).toContain(added.id);
+    expect(selectedBlockRow(controller).canonicalId).toBe(selected.id);
+    expect(lastCall(fake.calls, "navigation.dispatch")).toMatchObject({target: {kind: "block", blockId: target.id}, intent: "open"});
+  });
+
   test("keeps goto typing responsive and coalesces intermediate queries behind a slow read", async () => {
     const first = block("first");
     const target = block("target01", { position: 1, text: "Violet research", displayText: "Violet research" });
     const started = Promise.withResolvers<void>();
-    const held = Promise.withResolvers<TreeFocusCollection>();
+    const held = Promise.withResolvers<GotoSearchCollection>();
     const queries: string[] = [];
     const fake = harness(input => {
       if (input.action === "tree.index") return snapshot([first, target], first);
-      if (input.action === "tree.focus") {
+      if (input.action === "tree.search") {
         queries.push(input.query);
         if (input.query === "v") { started.resolve(); return held.promise; }
-        return { matches: [{ block: { id: target.id }, title: "Violet research" }], completeness: { kind: "complete" } };
+        return gotoCandidates([target], input.query);
       }
       return undefined;
     });
     const controller = createTreeController(fake.effects);
     await controller.initialize();
     await controller.handleKeypress("g", { name: "g" }, "pass");
+    await setImmediate();
     let inputQueue = Promise.resolve();
     for (const text of ["v", "io", "let"]) {
       inputQueue = inputQueue.then(() => controller.handleKeypress(text, { sequence: text }, "pass"));
@@ -745,11 +782,12 @@ describe("createTreeController", () => {
     await started.promise;
     await setImmediate(); // Drain the input lane while its transport remains held.
     const typedBeforeReply = controller.view().quickInput;
-    held.resolve({ matches: [{ block: { id: first.id }, title: "Obsolete result" }], completeness: { kind: "complete" } });
+    held.resolve(gotoCandidates([first], ""));
     await inputQueue;
     await controller.handleKeypress("", { name: "return" }, "pass");
     expect(typedBeforeReply).toBe("violet");
-    expect(queries).toEqual(["v", "violet"]);
+    await setImmediate();
+    expect(queries).toEqual(["", "v", "violet"]);
     expect(selectedBlockRow(controller).canonicalId).toBe(target.id);
   });
   test("separates canonical source reveal from authored reference reveal", async () => {
@@ -1018,11 +1056,11 @@ describe("createTreeController", () => {
     await controller.handleKeypress("roadmap", { sequence: "roadmap" }, "pass");
     await setImmediate();
 
-    expect(controller.view().quickCompletion?.index).toBe(0);
+    expect(controller.view().goto?.index).toBe(0);
     await controller.handleKeypress("", { name: "tab", shift: true }, "pass");
-    expect(controller.view().quickCompletion?.index).toBe(1);
+    expect(controller.view().goto?.index).toBe(1);
     await controller.handleKeypress("", { name: "tab" }, "pass");
-    expect(controller.view().quickCompletion?.index).toBe(0);
+    expect(controller.view().goto?.index).toBe(0);
   });
 
   test("installs a complete 501-block snapshot and selects its last block", async () => {

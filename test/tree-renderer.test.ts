@@ -856,35 +856,6 @@ describe("renderTreeFrame", () => {
     );
 
 
-    const gotoFrame = renderTreeFrame(
-      view([selected], {
-        mode: "goto",
-        quickInput: "road rev",
-        quickColumn: 8,
-        quickCompletion: {
-          start: 0,
-          end: 8,
-          index: 0,
-          truncatedLimit: null,
-          items: [
-            {
-              label: "40bd0864 · Roadmap review after the graveyard walk",
-              insertion: "40bd0864-913a-4537-9535-8f96e1b63ef7",
-              blockId: "40bd0864-913a-4537-9535-8f96e1b63ef7",
-            },
-          ],
-        },
-      }),
-      100,
-      8,
-    ).frame.split("\n");
-    expect(gotoFrame.at(-2)).toContain(
-      "Goto:\x1b[0m road rev▏  1/1 40bd0864 · Roadmap review after the graveyard walk",
-    );
-    expect(gotoFrame.at(-1)).toBe(
-      `\x1b[2m${truncate(DEFAULT_OUTLINER_ACTION_KEYMAP.helpText("tree", "goto"), 100)}\x1b[0m`,
-    );
-
     const deleteFrame = renderTreeFrame(view([selected], { mode: "delete" }), 80, 8).frame.split("\n");
     expect(deleteFrame.at(-2)).toBe("\x1b[33;1mMove this block and its descendants to Trash? y/N\x1b[0m");
 

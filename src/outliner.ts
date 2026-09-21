@@ -1,3 +1,4 @@
+import { initTheme } from "@earendil-works/pi-coding-agent";
 import { serviceTreeNavigation } from "./navigation-routes";
 import { emitKeypressEvents } from "node:readline";
 import { PassThrough } from "node:stream";
@@ -37,6 +38,7 @@ import {
 import { renderTreeFrame } from "./tree-renderer";
 import { OUTLINER_PROTOCOL_VERSION, type OutlinerServiceStatus } from "./types";
 
+initTheme(undefined, false);
 const paths = resolveClientPaths();
 const client = createOutlinerClient(paths);
 const clientId = crypto.randomUUID();
@@ -177,6 +179,7 @@ function handleRawInput(data: string | Buffer): void {
 }
 
 function handleMouseSequence(sequence: string): void {
+  if (controller.view().mode === "goto") { enqueueWork(() => controller.handleGotoMouse(sequence)); return; }
   const secondaryClick = parseTreeSecondaryClick(sequence);
   if (secondaryClick && rightClickOwnership === "outliner") {
     enqueueWork(() => controller.handleAction("tree.menu.open", secondaryClick));

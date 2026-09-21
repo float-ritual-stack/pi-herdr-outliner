@@ -4,8 +4,7 @@ import { getMarkdownTheme, initTheme } from "@earendil-works/pi-coding-agent";
 import { StdinBuffer } from "@earendil-works/pi-tui";
 import { createOutlinerClient } from "./client";
 import { listLiveClients } from "./client-target";
-import { projectDetailRead } from "./detail-embeds";
-import type { DetailReadPreviewDocument } from "./detail-pi-preview";
+import { loadDetailReadPreview } from "./detail-read-preview";
 import { OutlinerActionKeymap } from "./outliner-actions";
 import { currentPaneRuntime, openDetailPane } from "./pane-control";
 import { resolveClientPaths } from "./paths";
@@ -24,7 +23,6 @@ import type {
   BookmarkResolution,
   BookmarkRemoveReceipt,
   OutlinerRegion,
-  ResolvedBlockReferences,
   VisibleBlockCollection,
   WorkspaceSnapshot,
 } from "./types";
@@ -130,21 +128,6 @@ async function loadProjection(presentation: TreePresentationState) {
   return { title: blockDisplayTitle(definition), rows: projectedRows, state: projectedState };
 }
 
-async function loadDetailPreviewDocument(block: Block): Promise<DetailReadPreviewDocument> {
-  const projection = await projectDetailRead(client, block.text, { hostBlockId: block.id });
-  const resolved = await client.request<ResolvedBlockReferences>({
-    action: "references.resolve",
-    text: projection.text,
-  });
-  return {
-    canonicalText: block.text,
-    resolvedText: resolved.text,
-    projectedText: projection.text,
-    embedRanges: projection.embedRanges,
-    workIdPrefix: resolved.workIdPrefix ?? null,
-  };
-}
-
 async function loadPreview(
   row: VirtualBranchOccurrenceRow,
 ): Promise<VirtualBranchNavigatorPreview> {
@@ -169,7 +152,7 @@ async function loadPreview(
       };
     }
     return {
-      document: await loadDetailPreviewDocument(resolution.target),
+      document: await loadDetailReadPreview(client, resolution.target),
       target: {
         target: { kind: "block", blockId: resolution.target.id },
         title: blockDisplayTitle(resolution.target),
@@ -178,7 +161,7 @@ async function loadPreview(
   }
   const block = await client.request<Block>({ action: "get", blockId: row.canonicalId });
   return {
-    document: await loadDetailPreviewDocument(block),
+    document: await loadDetailReadPreview(client, block),
     target: {
       target: { kind: "block", blockId: block.id },
       title: blockDisplayTitle(block),

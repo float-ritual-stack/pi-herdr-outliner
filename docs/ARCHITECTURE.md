@@ -703,6 +703,25 @@ Property filters default to block metadata. Explicit `line`, `inline`, or `all` 
 
 `tree.index.view.query` uses the same model for bounded Tree filtering. The response retains complete physical membership for canonical ancestry and projection construction, with one compact record per block identity and separate visible-row depths. Records contain bounded previews, service-resolved reference metadata, and authored-text digests instead of full document bodies. `tree.query` returns compact matches using the same canonical query engine; `tree.focus` ranks fuzzy goto matches against full canonical text, including text beyond the preview. `rankViewId` is internal projection context and is rejected from index view queries.
 
+Protocol 63 adds read-only `tree.search` for the Goto modal. The store reads live
+canonical blocks and the existing address registry; no search index or copied
+document store is persisted. It reuses the shared lexical matcher, prioritizing
+word overlap over sparse letter subsequences. An optional `semantic` request
+scores at most 80 candidates through one Jev request outside the SQLite read
+transaction; the shared state is the query and each typed Score question contains
+only its candidate's bounded evidence. At most two requests run concurrently,
+with a 2.2-second provider deadline. Model replies are validated and candidate
+revisions rechecked before returning the first 30 matches with completeness.
+
+`GotoController` owns only transient query, result selection, preview, and scroll
+state. Generation checks discard old searches and previews; typing is coalesced
+and semantic requests debounced. Navigation goes through existing Tree/Detail
+operations only on acceptance. The shared bookmark/Detail read-preview loader
+supplies real projected content; Goto bounds each text representation to 12,000
+characters and caches rendered rows for the current document/width. The composed
+terminal makes Tree its layout root while Goto is active, then restores the split;
+Herdr pane placement and independent Detail state are unaffected.
+
 Compact-preview references carry exact spans in the preview text. The service recognizes references in authored text and maps their spans through property removal, line presentation, and truncation; labels are presentation, never reference identity. Complete actionable spans carry a canonical target. Unresolved and clipped spans retain a null target, preventing generic UUID detection from turning them into different links. Tree fetches exact bodies through `get` for editing, expanded rows, and reference activation. A quick edit uses the text and revision from that same read; compact previews never authorize a save. Expanded text and reference presentation are revalidated against the service sequence and body revision. `workspace.snapshot` remains available to independent consumers that need its full visible and physical collections; it is no longer Tree's reload operation.
 
 ### Idempotent capture

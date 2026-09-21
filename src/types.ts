@@ -1102,6 +1102,27 @@ export interface TreeFocusCollection {
   completeness: BlockCollectionCompleteness;
 }
 
+export interface GotoSearchMatch {
+  block: Pick<Block, "id" | "revision">;
+  title: string;
+  path: string;
+  snippet: string;
+  exact: boolean;
+}
+
+export interface GotoSearchCollection {
+  matches: GotoSearchMatch[];
+  completeness: BlockCollectionCompleteness;
+  semantic: {
+    status: "lexical" | "ranked" | "unavailable";
+    message?: string;
+    model?: string;
+    elapsedMs?: number;
+    candidateCount?: number;
+    inputTokens?: number;
+  };
+}
+
 export type BacklinkReferenceKind = "block" | "page" | "work-id" | "property";
 
 interface BacklinkOccurrenceBase {
@@ -1178,7 +1199,7 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 62;
+export const OUTLINER_PROTOCOL_VERSION = 63;
 
 
 export interface OutlinerServiceStatus {
@@ -1207,6 +1228,7 @@ export type OutlinerRequest =
   | { id: string; action: "workspace.snapshot"; view?: WorkspaceSnapshotView }
   | { id: string; action: "tree.index"; view?: WorkspaceSnapshotView }
   | { id: string; action: "tree.query"; query: BlockSearchQuery }
+  | { id: string; action: "tree.search"; query: string; semantic?: boolean }
   | { id: string; action: "tree.focus"; query: string }
   | { id: string; action: "events.subscribe"; client: OutlinerClientRegistration }
   | { id: string; action: "clients.list"; role?: OutlinerClientRole }

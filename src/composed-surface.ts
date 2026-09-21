@@ -141,6 +141,7 @@ export class ComposedTree implements Component {
 
   async handleInput(data: string): Promise<void> {
     if (isTreeMouseSequence(data)) {
+      if (this.controller.view().mode === "goto") return this.controller.handleGotoMouse(data);
       const secondary = parseTreeSecondaryClick(data);
       if (secondary) return this.controller.handleAction("tree.menu.open", secondary);
       const wheel = parseTreeWheel(data);

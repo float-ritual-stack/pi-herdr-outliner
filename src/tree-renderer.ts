@@ -1,3 +1,4 @@
+import { renderGotoFrame } from "./goto-renderer";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { currentAttentionMark } from "./attention";
 import {
@@ -362,6 +363,11 @@ export function renderTreeFrame(
   const output: string[] = [options.clearScreen === false ? "" : `${ESC}H${ESC}2J`];
   const mouseTargets: Array<TreeMouseTarget | null | undefined> = [];
 
+  if (view.mode === "goto" && view.goto) {
+    const lines = renderGotoFrame(view.goto, width, height, view.actionHelpText ?? DEFAULT_OUTLINER_ACTION_KEYMAP.helpText("tree", "goto"));
+    return { frame: `${options.clearScreen === false ? "" : `${ESC}H${ESC}2J`}${lines.join("\n")}`, scrollStartEntryIndex: initialScrollStartEntryIndex, mouseTargets: [] };
+  }
+
   if (view.mode === "viewer") {
     output.push(`\x1b[1m${truncate(view.viewerPath, width)}\x1b[0m`);
     output.push("─".repeat(width));
@@ -705,8 +711,8 @@ export function renderTreeFrame(
           ?? selectedRow.canonicalId.slice(0, 8)
         : "identifier";
     output.push(`\x1b[31;1mPurge ${required}: \x1b[0m${view.quickInput}▏`);
-  } else if (view.mode === "filter" || view.mode === "goto") {
-    const label = view.mode === "goto" ? "Goto" : "Filter";
+  } else if (view.mode === "filter") {
+    const label = "Filter";
     const completion = view.quickCompletion;
     const selectedCompletion = completion?.items[completion.index];
     let completionSuffix = "";
