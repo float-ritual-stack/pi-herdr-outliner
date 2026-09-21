@@ -180,7 +180,12 @@ async function waitForService(): Promise<void> {
 const servicePane = paths.mode === "remote"
   ? null
   : resolveServicePaneId(paths.stateDir, herdr) ??
-    openPane("service", { placement: "tab" });
+    openPane("service", {
+      placement: "tab",
+      env: process.env.TYPESAFE_API_KEY === undefined
+        ? undefined
+        : { TYPESAFE_API_KEY: process.env.TYPESAFE_API_KEY },
+    });
 await waitForService();
 
 function invocationTarget(): {

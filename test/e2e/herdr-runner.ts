@@ -211,8 +211,13 @@ function hash(value: string | Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
+function redactJevKey(value: string): string {
+  const key = process.env.TYPESAFE_API_KEY;
+  return key ? value.replaceAll(key, "<redacted>") : value;
+}
+
 function artifactJson(value: unknown): string {
-  return `${JSON.stringify(value, null, 2)}\n`;
+  return `${redactJevKey(JSON.stringify(value, null, 2))}\n`;
 }
 
 class Artifacts {
@@ -230,14 +235,14 @@ class Artifacts {
   }
 
   async event(kind: string, details: unknown = {}): Promise<void> {
-    const line = `${JSON.stringify({ at: new Date().toISOString(), kind, details })}\n`;
+    const line = `${redactJevKey(JSON.stringify({ at: new Date().toISOString(), kind, details }))}\n`;
     this.timelineWrite = this.timelineWrite.then(() => appendFile(join(this.directory, "timeline.jsonl"), line));
     await this.timelineWrite;
   }
 
   async record(name: string, value: unknown): Promise<void> {
     const entry = { at: new Date().toISOString(), name, value };
-    const line = `${JSON.stringify(entry)}\n`;
+    const line = `${redactJevKey(JSON.stringify(entry))}\n`;
     this.recordWrite = this.recordWrite.then(() => appendFile(join(this.directory, "records.jsonl"), line));
     await Promise.all([this.recordWrite, this.event("assertion", { name, value })]);
   }
@@ -254,7 +259,7 @@ function commandDisplay(args: readonly string[]): string[] {
     const text = displayed[sendText + 2] ?? "";
     displayed[sendText + 2] = `<literal-text bytes=${Buffer.byteLength(text)} sha256=${hash(text)}>`;
   }
-  return displayed;
+  return displayed.map(redactJevKey);
 }
 
 async function runCommand(options: {
@@ -296,7 +301,7 @@ async function runCommand(options: {
     stderr,
   });
   if (exitCode !== (options.expectedExitCode ?? 0)) {
-    throw new Error(`command exited ${exitCode}: ${commandDisplay(options.args).join(" ")}\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+    throw new Error(redactJevKey(`command exited ${exitCode}: ${commandDisplay(options.args).join(" ")}\nstdout:\n${stdout}\nstderr:\n${stderr}`));
   }
   return { stdout, stderr, exitCode };
 }
@@ -1270,6 +1275,7 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
       "OUTLINER_STATE_DIR",
       "OUTLINER_KEYBINDINGS_PATH",
       "OUTLINER_DETAIL_RENDERER",
+      "TYPESAFE_API_KEY",
     ].flatMap((key) => environment[key] === undefined ? [] : ["--env", `${key}=${environment[key]}`]);
     const workspaceOutput = await runHerdr([
       "workspace",
