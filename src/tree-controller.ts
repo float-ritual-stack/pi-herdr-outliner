@@ -26,6 +26,7 @@ import {
 import { blockDisplayTitle } from "./references";
 import {
   DEFAULT_OUTLINER_ACTION_KEYMAP,
+  displayActionChord,
   filterActionMenuItems,
   type OutlinerActionKeymap,
   type OutlinerActionMenuItem,
@@ -386,7 +387,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     if (actionMenuScope !== "browse") return filterActionMenuItems(items
       .filter(item => !inbox.attentionOnly || !["tree.inbox.older", "tree.inbox.newer"].includes(item.id))
       .map(item => item.id === "tree.inbox.attention"
-      ? { ...item, label: inbox.attentionOnly ? "Show recent results" : `Show questions & errors (${inbox.snapshot?.attentionCount ?? 0})` }
+      ? { ...item, label: inbox.attentionOnly ? "Show recent results" : `Show needs attention (${inbox.snapshot?.attentionCount ?? 0})` }
       : item), actionMenuQuery);
     if (isBlockTreeRow(selected)) {
       const hiding = authoredLinksPanel.kind === "open" &&
@@ -428,13 +429,14 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     if (mode !== "inbox") return null;
     if (inbox.steering) return actionKeymap.helpText("tree", "inbox-steer", ["tree.cancel", "tree.inbox.retry.submit"]);
     const main = actionKeymap.helpText("tree", "inbox", [
-      "tree.inbox.attention", "tree.cancel", "tree.inbox.pause", "tree.inbox.tree", "tree.inbox.detail", "tree.inbox.undo", "tree.inbox.reconsider",
+      "tree.cancel", "tree.inbox.pause", "tree.inbox.tree", "tree.inbox.detail", "tree.inbox.undo", "tree.inbox.reconsider",
     ]);
+    const toggle = `${displayActionChord(actionKeymap.primaryBinding("tree.inbox.attention"))} ${inbox.attentionOnly ? "show recent results" : `needs attention (${inbox.snapshot?.attentionCount ?? 0})`}`;
     const navigation = actionKeymap.helpText("tree", "inbox", [
       ...inbox.attentionOnly ? [] : ["tree.inbox.older", "tree.inbox.newer"],
       "tree.inbox.source", "tree.inbox.target", "tree.inbox.up", "tree.inbox.down", "tree.inbox.pageup", "tree.inbox.pagedown",
     ]);
-    return `${main}\n${actionKeymap.helpText("tree", "inbox", ["tree.menu.open"])}  ${navigation}`;
+    return `${toggle}  ${main}\n${actionKeymap.helpText("tree", "inbox", ["tree.menu.open"])}  ${navigation}`;
   }
 
   function view(): TreeView {

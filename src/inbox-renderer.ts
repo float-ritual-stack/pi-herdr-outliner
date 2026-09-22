@@ -23,7 +23,7 @@ function detailLines(controller: InboxController, width: number): string[] {
   if (!result) return controller.loading
     ? ["Loading results…"]
     : (controller.attentionOnly
-      ? ["No questions or errors awaiting attention.", "", "Switch to recent results to inspect completed work."]
+      ? ["Nothing needs attention.", "", "Switch to recent results to inspect completed work."]
       : ["No results yet.", "", "Captures are processed here as work finishes.", "Closing this view leaves the agent running."])
     .flatMap(line => wrapTextWithAnsi(line, width));
   const lines: string[] = [];
@@ -79,7 +79,7 @@ export function renderInboxFrame(controller: InboxController, width: number, hei
     list.push(selected ? `\x1b[48;5;238m\x1b[1m${line}\x1b[0m` : line);
     list.push(fit(`  \x1b[2m${sanitizeDynamicText(result.summary)}\x1b[0m`, listWidth));
   }
-  if (!results.length) list.push(controller.loading ? "Loading results…" : controller.attentionOnly ? "Nothing awaiting attention" : "No recent results");
+  if (!results.length) list.push(controller.loading ? "Loading results…" : controller.attentionOnly ? "Nothing needs attention" : "No recent results");
   const details = detailLines(controller, detailWidth);
   const maxOffset = Math.max(0, details.length - detailHeight);
   controller.detailOffset = Math.min(controller.detailOffset, maxOffset);
@@ -88,13 +88,17 @@ export function renderInboxFrame(controller: InboxController, width: number, hei
     ? controller.attentionOnly ? " · more awaiting attention" : " · older results available"
     : "";
   const recentRange = results.length ? `${controller.resultsOffset + 1}–${controller.resultsOffset + results.length}` : "none";
-  const collection = controller.attentionOnly ? `Questions & errors: ${results.length}${omitted}` : `Recent results: ${recentRange}${omitted}`;
-  const current = `${snapshot?.attentionCount ?? 0} need attention · ${collection}${snapshot?.current ? ` · Current: ${sanitizeDynamicText(snapshot.current.title)}` : ""}`;
+  const attention = snapshot?.attentionCount ?? 0;
+  const collection = controller.attentionOnly ? `Needs attention: ${attention} · Showing ${results.length}${omitted}` : `Recent results: ${recentRange}${omitted} · Needs attention: ${attention}`;
+  const current = `${collection}${snapshot?.current ? ` · Current: ${sanitizeDynamicText(snapshot.current.title)}` : ""}`;
+  const message = controller.error || (state === "idle" && attention
+    ? `${attention} ${attention === 1 ? "item needs" : "items need"} your attention`
+    : snapshot?.message || "Loading Inbox status…");
   const output = [
     ` ┌${"─".repeat(inner)}┐ `,
     bordered(`\x1b[1;36mInbox agent\x1b[0m · ${state}${snapshot ? ` · ${snapshot.pending} pending` : ""}`),
-    bordered(sanitizeDynamicText(controller.error || snapshot?.message || "Loading Inbox status…")),
-    bordered(`\x1b[2m${current}\x1b[0m`),
+    bordered(sanitizeDynamicText(message)),
+    bordered(`\x1b[${attention ? "1;33" : "2"}m${current}\x1b[0m`),
   ];
   for (let row = 0; row < body; row++) {
     output.push(bordered(wide
@@ -105,7 +109,7 @@ export function renderInboxFrame(controller: InboxController, width: number, hei
   const before = instructions.slice(0, controller.column);
   const editor = `Direction: ${sliceByColumn(before, Math.max(0, visibleWidth(before) - Math.max(1, inner - 13)), Math.max(1, inner - 13), true)}▏${instructions.slice(controller.column)}`;
   const detailProgress = maxOffset ? ` · detail ${controller.detailOffset + 1}-${Math.min(details.length, controller.detailOffset + detailHeight)}/${details.length}` : "";
-  const selection = controller.attentionOnly ? `${controller.index + 1}/${results.length} questions & errors` : `Result ${controller.resultsOffset + controller.index + 1} · recent ${recentRange}`;
+  const selection = controller.attentionOnly ? `${controller.index + 1}/${results.length} needing attention` : `Result ${controller.resultsOffset + controller.index + 1} · recent ${recentRange}`;
   const status = controller.notice || (controller.loading ? "Refreshing…" : `${results.length ? selection : "Ready"}${omitted}${detailProgress}`);
   const [mainHelp = "", navigationHelp = ""] = help.split("\n");
   output.push(

@@ -19,7 +19,7 @@ import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { OutlinerClient } from "../../src/client";
-import { resolvePaths } from "../../src/paths";
+import { resolvePaths, type OutlinerPaths } from "../../src/paths";
 import { readHerdrPaneSnapshot, type HerdrPaneSnapshot } from "../../src/herdr-comment-selection";
 import { forwardService, type ForwardedRequest, type OptionalResponseMatch, type ComposedResponseMatch, type ResponseBarrier } from "./service-forwarder";
 import {
@@ -80,7 +80,7 @@ type Scenario = {
   allowInboxAgent?: boolean;
   /** Relative to the isolated fixture; never edits a checkout's active prompt files. */
   promptDirectory?: string;
-  prepare(projectRoot: string): Promise<void>;
+  prepare(projectRoot: string, paths: OutlinerPaths): Promise<void>;
   run(session: HerdrScenarioSession): Promise<void>;
 };
 
@@ -1219,7 +1219,7 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
     });
 
     await setPhase("prepare-fixture");
-    await scenario.prepare(projectRoot);
+    await scenario.prepare(projectRoot, resolvePaths({ OUTLINER_STATE_DIR: outlinerState, OUTLINER_WORKSPACE_ROOT: projectRoot }));
 
     await setPhase("start-herdr");
     const stdoutFd = openSync(join(artifactDirectory, "herdr-server.stdout.log"), "a");

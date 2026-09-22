@@ -162,7 +162,7 @@ const FEATURE_TOUR_SECTIONS = [
       "",
       "When the service's Pi model is configured, the automatic Inbox editor processes eligible captures. It can clean prose, split mixed ideas, consolidate duplicates and link context. Lists, meetings and personal thoughts remain notes. Actual Outliner work uses the allocator and starts in Backlog; cleanup does not commit it to a batch.",
       "",
-      "Press Shift+I in Tree: `p` pauses/resumes, `a` switches questions/errors and recent results, Left/Right pages history, `u` undoes an eligible result, and `r` gives direction for reconsideration. Closing the view leaves processing running. Undo refuses to overwrite later edits or references.",
+      "Press Shift+I in Tree. It opens on Needs attention when questions or errors remain, otherwise on Recent results. `a` switches those views; the footer shows the destination and your configured key. `p` pauses/resumes, Left/Right pages history, `u` undoes an eligible result, and `r` gives direction for reconsideration. Closing the view leaves processing running. Undo refuses to overwrite later edits or references.",
       "",
       "This is an exploratory editorial agent, not a guarantee of correct classification. Results, source/output links, errors and model usage remain inspectable. Without model configuration, capture, history and recovery remain available.",
     ],

@@ -57,10 +57,18 @@ export class InboxController {
 
   async start(): Promise<void> {
     this.active = true;
-    this.session++;
+    const session = ++this.session;
     this.reconsiderSourceId = null;
-    this.notice = "";
-    await this.refresh();
+    this.attentionOnly = true;
+    this.resultsOffset = 0;
+    const epoch = this.epoch + 1;
+    await this.changedCollection();
+    // Pick the opening view once. Refreshes must preserve an explicit history choice.
+    if (this.active && session === this.session && epoch === this.epoch && !this.error
+      && this.snapshot?.attentionOnly && this.snapshot.attentionCount === 0) {
+      this.attentionOnly = false;
+      await this.changedCollection();
+    }
   }
 
   async close(): Promise<void> {

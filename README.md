@@ -1171,9 +1171,11 @@ the editor still works without Jev. Missing Pi configuration is visible in the
 Inbox view. Restart the service after configuring its model.
 
 Press `Shift+I` in Tree (also available in `?`). The view shows progress, results,
-links, and observed model usage. `a` switches between outstanding questions/errors
-and recent results; Left/Right page through older results. The attention count
-includes questions outside the current page. `p` pauses/resumes, `u` undoes the
+links, and observed model usage. It opens on **Needs attention** when any questions
+or errors remain, otherwise on **Recent results**. `a` switches between those
+views; the footer names the destination and follows configured shortcuts. A
+background refresh preserves your choice. Left/Right page through recent results.
+The attention count includes items outside the current page. `p` pauses/resumes, `u` undoes the
 selected cleanup, and `r` reconsiders a held, failed, or undone note with optional
 direction. `Tab` selects an output/source link, `Enter` reveals it in Tree, and
 `Alt+Enter` opens it in Detail. Closing the view leaves the agent running.

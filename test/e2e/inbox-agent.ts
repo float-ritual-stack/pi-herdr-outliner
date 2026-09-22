@@ -87,7 +87,7 @@ const result = await runHerdrScenario({
     assert.equal(reconsidered.results[0]!.state, "held", JSON.stringify(reconsidered.results[0]));
     assert.equal(reconsidered.attentionCount, 1);
     await session.keys(pane, "a");
-    await session.waitVisible(pane, "Questions & errors: 1");
+    await session.waitVisible(pane, "Needs attention: 1");
     await session.waitVisible(pane, "held · Weekend review");
     await session.checkpoint("04-directed-reconsideration");
     await session.keys(pane, "a");

@@ -21,6 +21,7 @@
     "test:e2e:roadmap": "bun run test/e2e/roadmap-batches.ts",
     "test:e2e:goto": "bun run test/e2e/goto-search.ts && bun run test/e2e/goto-search.ts --composed",
     "test:e2e:inbox": "bun run test/e2e/inbox-agent.ts",
+    "test:e2e:inbox-attention": "bun run test/e2e/inbox-attention.ts",
     "test:e2e:prompts": "bun run test/e2e/ai-prompts.ts",
     "test:e2e:documentation": "bun run test/e2e/documentation.ts",
     "test:e2e:ownership": "bun run test/e2e/workspace-ownership.ts",

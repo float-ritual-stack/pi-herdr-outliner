@@ -32,7 +32,7 @@ function harness(respond?: (request: RequestInput) => unknown | Promise<unknown>
       const response = await respond?.(request);
       if (response !== undefined) return response as T;
       switch (request.action) {
-        case "inbox.status": return snapshot as T;
+        case "inbox.status": return { ...snapshot, attentionOnly: request.attentionOnly === true, results: request.attentionOnly ? snapshot.results.filter(value => value.state === "held" || value.state === "failed") : snapshot.results } as T;
         case "inbox.pause": snapshot = { ...snapshot, paused: true, state: "paused" }; return snapshot as T;
         case "inbox.resume": snapshot = { ...snapshot, paused: false, state: "idle" }; return snapshot as T;
         case "inbox.undo": snapshot = { ...snapshot, results: snapshot.results.map(value => value.id === request.resultId ? { ...value, state: "undone" } : value) }; return snapshot as T;
@@ -48,7 +48,61 @@ function harness(respond?: (request: RequestInput) => unknown | Promise<unknown>
   return { controller, requests, opened, get closed() { return closed; }, get invalidations() { return invalidations; } };
 }
 
+async function startRecent(controller: InboxController): Promise<void> {
+  await controller.start();
+  if (controller.attentionOnly) await controller.input("a", { name: "a" });
+}
+
 describe("Inbox controls", () => {
+  test("opening with no outstanding items shows recent results", async () => {
+    const h = harness(request => request.action === "inbox.status" ? status({
+      attentionCount: 0, attentionOnly: request.attentionOnly === true,
+      results: request.attentionOnly ? [] : [result("recent-success")],
+    }) : undefined);
+    await h.controller.start();
+    expect(h.controller.attentionOnly).toBe(false);
+    expect(h.controller.selected?.id).toBe("recent-success");
+  });
+
+  test("closing during the opening read does not start a late history fallback", async () => {
+    const pending = Promise.withResolvers<InboxStatus>();
+    const h = harness(request => request.action === "inbox.status" ? pending.promise : undefined);
+    const opening = h.controller.start();
+    await h.controller.close();
+    pending.resolve(status({ attentionOnly: true, attentionCount: 0, results: [] }));
+    await opening;
+    expect(h.requests).toEqual([{ action: "inbox.status", attentionOnly: true }]);
+    expect(h.closed).toBe(1);
+  });
+
+  test("opening Inbox reveals an outstanding failure before newer successful results", async () => {
+    const failed = result("older-failure", {
+      state: "failed", sourceTitle: "Unfinished capture", outputIds: [],
+      summary: "Cleanup failed; the source is unchanged.", error: "Needs a valid task destination",
+    });
+    const recent = Array.from({ length: 30 }, (_, index) => result("success-" + index));
+    const h = harness(request => request.action === "inbox.status" ? status({
+      message: "Inbox is caught up", attentionCount: 1,
+      attentionOnly: request.attentionOnly === true,
+      results: request.attentionOnly ? [failed] : recent,
+      resultsTruncated: !request.attentionOnly,
+    }) : undefined);
+    await h.controller.start();
+    expect(h.controller.selected?.id).toBe(failed.id);
+    const frame = stripTerminalSequences(renderInboxFrame(h.controller, 80, 26, "a attention/recent").join("\n"));
+    expect(frame).toContain("Needs attention: 1");
+    expect(frame).toContain("Unfinished capture");
+    expect(frame).not.toContain("Inbox is caught up");
+    // Choosing history is deliberate; subsequent status events must not steal it.
+    await h.controller.input("a", { name: "a" });
+    await h.controller.refresh();
+    expect(h.controller.attentionOnly).toBe(false);
+    expect(h.controller.selected?.id).toBe("success-0");
+    await h.controller.close();
+    await h.controller.start();
+    expect(h.controller.selected?.id).toBe(failed.id);
+  });
+
   test("outstanding questions remain reachable beyond 30 newer successes and mutations retain the attention view", async () => {
     const question = result("old-question", { state: "held", summary: "Which project should own this?" });
     const recent = Array.from({ length: 30 }, (_, index) => result(`success-${index}`));
@@ -59,7 +113,7 @@ describe("Inbox controls", () => {
       if (request.action === "inbox.retry") { answered = true; return { ...snapshot, attentionCount: 0 }; }
       if (request.action.startsWith("inbox.")) return snapshot;
     });
-    await h.controller.start();
+    await startRecent(h.controller);
     expect(h.controller.results).toHaveLength(30);
     expect(inboxStatusCue(h.controller.snapshot)).toContain("1 need attention");
     await h.controller.input("a", { name: "a" });
@@ -80,8 +134,7 @@ describe("Inbox controls", () => {
     expect(h.controller.attentionOnly).toBe(true);
     await h.controller.close();
     await h.controller.start();
-    expect(h.requests.at(-1)).toEqual({ action: "inbox.status", attentionOnly: true });
-    await h.controller.input("a", { name: "a" });
+    expect(h.requests.at(-1)).toEqual({ action: "inbox.status" });
     expect(h.controller.results).toHaveLength(30);
     expect(h.controller.attentionOnly).toBe(false);
   });
@@ -96,7 +149,7 @@ describe("Inbox controls", () => {
       if (request.action === "inbox.undo") { expect(request.resultId).toBe(older.id); older = { ...older, state: "undone" }; }
       if (request.action.startsWith("inbox.")) return firstPage;
     });
-    await h.controller.start();
+    await startRecent(h.controller);
     await h.controller.input("", { name: "right" });
     expect(h.controller.selected?.id).toBe("older-applied");
     expect(h.controller.resultsOffset).toBe(30);
@@ -128,7 +181,7 @@ describe("Inbox controls", () => {
       if (request.action === "inbox.status" && request.attentionOnly) return status({ attentionOnly: true, results: [question] });
       if (request.action === "inbox.status" && ++requests > 1) return recent.promise;
     });
-    await h.controller.start();
+    await startRecent(h.controller);
     const refreshing = h.controller.refresh();
     const switching = h.controller.input("a", { name: "a" });
     expect(h.controller.results).toEqual([]);
@@ -146,7 +199,7 @@ describe("Inbox controls", () => {
       if (request.action === "inbox.status" && request.attentionOnly) return afterMutation ? filteredRead.promise : status({ attentionOnly: true, results: [question] });
       if (request.action === "inbox.pause") { afterMutation = true; return status({ paused: true, state: "paused" }); }
     });
-    await h.controller.start();
+    await startRecent(h.controller);
     await h.controller.input("a", { name: "a" });
     const pausing = h.controller.input("p", { name: "p" });
     await setImmediate();
@@ -160,7 +213,7 @@ describe("Inbox controls", () => {
 
   test("pause/resume and undo address the canonical service, and reopening restores results", async () => {
     const h = harness();
-    await h.controller.start();
+    await startRecent(h.controller);
     await h.controller.input("p", { name: "p" });
     expect(h.controller.snapshot?.state).toBe("paused");
     await h.controller.input("p", { name: "p" });
@@ -170,14 +223,14 @@ describe("Inbox controls", () => {
     expect(h.controller.selected?.state).toBe("undone");
     await h.controller.close();
     expect(h.closed).toBe(1);
-    await h.controller.start();
+    await startRecent(h.controller);
     expect(h.controller.selected?.state).toBe("undone");
-    expect(h.requests.map(request => request.action)).toEqual(["inbox.status", "inbox.pause", "inbox.resume", "inbox.undo", "inbox.status"]);
+    expect(h.requests.map(request => request.action)).toEqual(["inbox.status", "inbox.status", "inbox.pause", "inbox.resume", "inbox.undo", "inbox.status", "inbox.status"]);
   });
 
   test("reconsider captures bounded instructions and never treats typed commands as actions", async () => {
     const h = harness();
-    await h.controller.start();
+    await startRecent(h.controller);
     await h.controller.input("r", { name: "r" });
     expect(h.controller.steering).toBe(false);
     expect(h.controller.notice).toContain("Undo");
@@ -202,7 +255,7 @@ describe("Inbox controls", () => {
   test("refresh preserves selected result and target while new results arrive", async () => {
     let snapshot = status();
     const h = harness(request => request.action === "inbox.status" ? snapshot : undefined);
-    await h.controller.start();
+    await startRecent(h.controller);
     await h.controller.input("", { name: "tab" });
     const target = h.controller.targets[h.controller.targetIndex]?.id;
     snapshot = { ...snapshot, results: [result("newest-result"), ...snapshot.results] };
@@ -219,8 +272,8 @@ describe("Inbox controls", () => {
   test("an older status read cannot overwrite a pause response", async () => {
     const pending = Promise.withResolvers<InboxStatus>();
     let reads = 0;
-    const h = harness(request => request.action === "inbox.status" && ++reads > 1 ? pending.promise : undefined);
-    await h.controller.start();
+    const h = harness(request => request.action === "inbox.status" && !request.attentionOnly && ++reads > 1 ? pending.promise : undefined);
+    await startRecent(h.controller);
     const refreshing = h.controller.refresh();
     await h.controller.input("p", { name: "p" });
     pending.resolve(status());
@@ -235,11 +288,12 @@ describe("Inbox controls", () => {
       if (request.action === "inbox.status") return ++reads === 1 ? pending.promise : status();
       if (request.action === "inbox.undo") throw new Error("Source was edited; cannot undo safely");
     });
-    const initial = h.controller.start();
+    const initial = h.controller.refresh();
     const refreshes = [h.controller.refresh(), h.controller.refresh(), h.controller.refresh()];
     pending.resolve(status());
     await Promise.all([initial, ...refreshes]);
     expect(reads).toBe(2);
+    await startRecent(h.controller);
     await h.controller.input("u", { name: "u" });
     expect(h.controller.notice).toContain("Source was edited");
     expect(h.controller.selected?.state).toBe("applied");
@@ -251,16 +305,16 @@ describe("Inbox controls", () => {
 
   test("opens chosen output or source through Tree/Detail and ignores late opens after close", async () => {
     const h = harness();
-    await h.controller.start();
+    await startRecent(h.controller);
     await h.controller.input("", { name: "tab" });
     await h.controller.input("", { name: "return", meta: true });
     expect(h.opened).toEqual([{ id: "second-result-one", destination: "detail" }]);
-    await h.controller.start();
+    await startRecent(h.controller);
     await h.controller.input("s", { name: "s" });
     expect(h.opened.at(-1)).toEqual({ id: "source-result-one", destination: "tree" });
     const pending = Promise.withResolvers<Block | null>();
     const delayed = harness(request => request.action === "get" ? pending.promise : undefined);
-    await delayed.controller.start();
+    await startRecent(delayed.controller);
     const opening = delayed.controller.input("", { name: "return" });
     await delayed.controller.close();
     pending.resolve({ id: "output-result-one" } as Block);
@@ -270,7 +324,7 @@ describe("Inbox controls", () => {
 
   test("deleted results cannot navigate and undo never runs for held results", async () => {
     const h = harness(request => request.action === "get" ? { id: request.blockId, deletedAt: "today" } : undefined);
-    await h.controller.start();
+    await startRecent(h.controller);
     await h.controller.input("", { name: "return" });
     expect(h.controller.notice).toContain("no longer available");
     expect(h.opened).toEqual([]);
@@ -286,9 +340,9 @@ describe("Inbox rendering", () => {
     const h = harness(request => request.action === "inbox.status" ? status({ attentionCount: 41, results: [result("usage-result", {
       usage: { provider: "provider", model: "editor", inputTokens: 10, outputTokens: 20, cost: 0, jevCalls: 3, jevSuccessfulCalls: 1, jevWarning: "Some Jev comparisons unavailable", elapsedMs: 2000 },
     })] }) : undefined);
-    await h.controller.start();
+    await startRecent(h.controller);
     const text = stripTerminalSequences(renderInboxFrame(h.controller, 150, 30, "a questions/recent").join("\n"));
-    expect(text).toContain("41 need attention");
+    expect(text).toContain("Needs attention: 41");
     expect(text).toContain("Jev 3 attempted / 1 successful");
     expect(text).toContain("Some Jev comparisons unavailable");
     expect(inboxStatusCue(h.controller.snapshot)).toContain("41 need attention");
@@ -299,7 +353,7 @@ describe("Inbox rendering", () => {
       state: "working", pending: 3, message: "Looking for related notes\x1b]52;;secret\x07", current: { id: "current-source", title: "New capture" }, resultsTruncated: true,
       results: [result("result-one", { sourceTitle: "Capture 界 😀", summary: "Created a task.", error: "Review project choice.\x1b[2J" })],
     }) : undefined);
-    await h.controller.start();
+    await startRecent(h.controller);
     for (const width of [12, 24, 40, 80, 120, 150]) {
       for (const height of [8, 12, 26]) {
         const lines = renderInboxFrame(h.controller, width, height, "Esc close · p pause · r reconsider\nTab link · ? actions");
@@ -320,7 +374,7 @@ describe("Inbox rendering", () => {
   test("explicitly exposes bounded history, disabled state, and unavailable state", async () => {
     for (const snapshot of [status({ enabled: false }), status({ enabled: false, state: "unavailable", message: "Configure the Inbox model" })]) {
       const h = harness(request => request.action === "inbox.status" ? { ...snapshot, resultsTruncated: true } : undefined);
-      await h.controller.start();
+      await startRecent(h.controller);
       const text = stripTerminalSequences(renderInboxFrame(h.controller, 120, 26, "Esc close").join("\n"));
       expect(text).toContain(snapshot.state === "unavailable" ? "unavailable" : "disabled");
       expect(text).toContain("older results available");
