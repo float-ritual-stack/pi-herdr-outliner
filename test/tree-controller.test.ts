@@ -176,7 +176,7 @@ function harness(
         }
         if (response === undefined && input.action === "files.complete") return [] as T;
         if (response === undefined && input.action === "inbox.status") {
-          return { enabled: false, paused: false, state: "unavailable", message: "Inbox agent is not configured", pending: 0, results: [], resultsTruncated: false, attentionCount: 0, attentionOnly: false, resultsOffset: 0 } as T;
+          return { enabled: false, paused: false, state: "unavailable", message: "Inbox agent is not configured", pending: 0, results: [], resultsTruncated: false, attentionCount: 0, attentionOnly: input.attentionOnly === true, resultsOffset: 0 } as T;
         }
         if (response === undefined && input.action === "clients.list") {
           return [{
@@ -305,11 +305,11 @@ describe("createTreeController", () => {
     expect(selectedBlockRow(controller).canonicalId).toBe(first.id);
     await controller.handleKeypress("?", { name: "?" }, "pass");
     expect(controller.view().actionMenuItems?.some(item => item.id === "tree.inbox.undo")).toBe(true);
-    expect(controller.view().actionMenuItems?.find(item => item.id === "tree.inbox.attention")).toMatchObject({ label: "Show questions & errors (0)", binding: "a" });
+    expect(controller.view().actionMenuItems?.find(item => item.id === "tree.inbox.attention")).toMatchObject({ label: "Show needs attention (0)", binding: "a" });
     expect(controller.view().actionMenuItems?.some(item => item.id === "tree.add.child")).toBe(false);
     await controller.handleKeypress("", { name: "escape" }, "pass");
     expect(controller.view().mode).toBe("inbox");
-    expect(controller.view().actionHelpText).toContain("a questions/recent");
+    expect(controller.view().actionHelpText).toContain("a needs attention (0)");
     await controller.handleKeypress("a", { name: "a" }, "pass");
     expect(controller.view().inbox?.attentionOnly).toBe(true);
     expect(controller.view().actionHelpText).not.toContain("older results");
@@ -350,6 +350,7 @@ describe("createTreeController", () => {
     const inboxStatus: InboxStatus = { enabled: true, paused: false, state: "idle", message: "Ready", pending: 0, resultsTruncated: false, attentionCount: 1, attentionOnly: false, resultsOffset: 0, results: [{ id: "result-id", sourceId: source.id, sourceTitle: "Captured idea", summary: "Filed", state: "held", outputIds: [output.id], createdAt: "2026-09-20" }] };
     const fake = harness(input => {
       if (input.action === "tree.index") return snapshot([source, output], source);
+      if (input.action === "inbox.status") return { ...inboxStatus, attentionOnly: input.attentionOnly === true };
       if (input.action.startsWith("inbox.")) return inboxStatus;
     });
     fake.effects = { ...fake.effects, actionKeymap: new OutlinerActionKeymap("<test>", { "tree.inbox.pause": ["x"] }) };
