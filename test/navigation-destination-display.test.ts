@@ -22,6 +22,18 @@ test("placement choices use local pane anchors and remain separate from Open onc
   expect(navigationPlacementItems(state)[0]!.label).toBe("Local reader");
 });
 
+test("sidebar choices name their edge and area explicitly and never appear in Open once", () => {
+  const state = linked("Reader");
+  const sidebars = navigationDestinationItems(state, true).filter(item => item.id.startsWith("destination:sidebar-"));
+  expect(sidebars.map(({id, label}) => ({id, label}))).toEqual([
+    {id: "destination:sidebar-outliner-left", label: "Sidebar left · Outliner area"},
+    {id: "destination:sidebar-outliner-right", label: "Sidebar right · Outliner area"},
+    {id: "destination:sidebar-tab-left", label: "Sidebar left · Whole Herdr tab"},
+    {id: "destination:sidebar-tab-right", label: "Sidebar right · Whole Herdr tab"},
+  ]);
+  expect(navigationDestinationItems(state, false).some(item => item.id.startsWith("destination:sidebar-"))).toBe(false);
+});
+
 test("destination display follows service link, target and closure events without fetching during reads", async () => {
   let state = linked("Research notes"); let requests = 0; let renders = 0;
   const display = new NavigationDestinationDisplay({request: async () => {requests++; return state as never;}}, source, () => renders++);

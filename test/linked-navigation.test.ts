@@ -138,7 +138,7 @@ test("destination picker names documents and puts nearby panes ahead of unlocate
 
 test("empty destination menus offer explicit creation and do not pretend there is an unlinkable destination", () => {
   const items = navigationDestinationItems({source: {clientId: "source", region: "tree"}, destination: null, destinations: []}, true);
-  expect(items.map(item => item.id)).toEqual(["destination:new-right", "destination:new-below"]);
+  expect(items.map(item => item.id)).toEqual(["destination:new-right", "destination:new-below", "destination:sidebar-outliner-left", "destination:sidebar-outliner-right", "destination:sidebar-tab-left", "destination:sidebar-tab-right"]);
   expect(items[0]?.label).toBe("New Detail right");
 });
 

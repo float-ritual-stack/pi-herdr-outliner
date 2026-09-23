@@ -1,3 +1,4 @@
+import {openOutlinerDetailSidebar} from "./detail-pane-placement";
 import { ComposedLayout, ComposedTree, composedTreeNavigation, composedPointer, composedWidths } from "./composed-surface";
 import { navigationDestinationItems, navigationDestinationStatus, navigationPlacementItems, navigationPlacementStatus, NavigationDestinationDisplay, NavigationDestinationPreview, renderNavigationDestinationPreview } from "./navigation-destination-menu";
 import { getProperty } from "./properties";
@@ -437,12 +438,19 @@ const effects: DetailEffects = {
         if (id === "destination:place-right" || id === "destination:place-below") { placement = id === "destination:place-right" ? "right" : "down"; show(); return; }
         if (id === "placement:back") { placement = null; show(); return; }
         document.clear();
-        if (placement) {
+        if (id.startsWith("destination:sidebar-")) {
+          const [, scope, side] = id.split("-") as [string, "outliner" | "tab", "left" | "right"];
+          try { await invokingReader.dispatch({type: "pane.sidebar", scope, side}, viewport(invokingReader)); }
+          catch (error) { invokingReader.onServiceError(error); }
+          finally { resolve(undefined); }
+        } else if (placement) {
           const targetPaneId = state.destinations[Number(id.slice(10))]?.placementPaneId;
           try { if (targetPaneId) await invokingReader.dispatch({type: "pane.open", direction: placement, targetPaneId}, viewport(invokingReader)); }
+          catch (error) { invokingReader.onServiceError(error); }
           finally { resolve(undefined); }
         } else if (id === "destination:new-right" || id === "destination:new-below") {
           try { await invokingReader.dispatch({type: "pane.open", direction: id === "destination:new-right" ? "right" : "down"}, viewport(invokingReader)); }
+          catch (error) { invokingReader.onServiceError(error); }
           finally { resolve(undefined); }
         } else resolve(id === "destination:unlink" ? null : state.destinations[Number(id.slice(12))]?.view);
       }, undefined, () => { document.clear(); resolve(undefined); }, {
@@ -509,6 +517,9 @@ const effects: DetailEffects = {
     return client.request<Block>({ action: "bookmarks.root" });
   },
   openDetailPane: openTargetInNewDetail,
+  async openDetailSidebar(target, scope, side) {
+    await openOutlinerDetailSidebar(client, clientId, {workspaceRoot: paths.workspaceRoot, initialTarget: target, scope, side});
+  },
   copyText(text) {
     process.stdout.write(osc52ClipboardWrite(text));
   },

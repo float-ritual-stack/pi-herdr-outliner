@@ -392,7 +392,9 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
       return;
     }
     if (!actionKeymap.isAvailable(actionId, "detail", activeScopes())) {
-      await setStatus(`${label} is unavailable here`);
+      await setStatus(actionId === "detail.navigation.link"
+        ? "Finish or cancel the active edit or filter before changing the destination"
+        : `${label} is unavailable here`);
       return;
     }
     if (!await executeAction(actionId)) {
@@ -540,6 +542,12 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
     if (resolved.suppressed) return;
     if (resolved.actionId) {
       await invokeAction(resolved.actionId);
+      return;
+    }
+    // Modified destination shortcuts remain discoverable during editing; plain
+    // uppercase L still belongs to the active editor or filter.
+    if ((key.meta || key.ctrl) && actionKeymap.resolve("detail", "preview", str, key).actionId === "detail.navigation.link") {
+      await invokeAction("detail.navigation.link");
       return;
     }
 

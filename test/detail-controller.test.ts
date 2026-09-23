@@ -598,12 +598,47 @@ describe("detail controller projection and deferred refresh", () => {
     harness.effects.openDetailPane = (...args) => { opened.push(args); };
     const controller = createDetailController(harness.effects);
     await controller.initialize();
-    controller.state.selectionAnchor = 0;
+    await controller.dispatch({type: "file.selection.toggle"}, viewport);
     const target = controller.state.target;
     await controller.dispatch({type: "pane.open", direction: "right", targetPaneId: "w1:p4"}, viewport);
     expect(opened).toEqual([[target, "right", "w1:p4"]]);
     expect(controller.state.target).toEqual(target);
     expect(controller.state.selectionAnchor).toBe(0);
+  });
+  test("creates the requested sidebar with the invoking target and retains its selection", async () => {
+    const harness = createHarness(makeBlock({id: "sidebar-source", text: "Sidebar document"}));
+    const opened: unknown[][] = [];
+    harness.effects.openDetailSidebar = (...args) => { opened.push(args); };
+    const controller = createDetailController(harness.effects);
+    await controller.initialize();
+    await controller.dispatch({type: "file.selection.toggle"}, viewport);
+    const target = controller.state.target;
+    await controller.dispatch({type: "pane.sidebar", scope: "tab", side: "left"}, viewport);
+    expect(opened).toEqual([[target, "tab", "left"]]);
+    expect(controller.state.target).toEqual(target);
+    expect(controller.state.selectionAnchor).toBe(0);
+    expect(controller.state.status).toContain("use Change to link");
+  });
+  test("changing a header destination preserves the invoking reader's edit and selection state", async () => {
+    const harness = createHarness(makeBlock({id: "editing-source", text: "Original document"}));
+    const destination = {clientId: "other-reader", region: "detail" as const};
+    harness.effects.chooseDestination = async () => destination;
+    const linked: unknown[] = [];
+    harness.effects.setDestination = async value => { linked.push(value); return "Other reader"; };
+    const controller = createDetailController(harness.effects);
+    await controller.initialize();
+    await controller.dispatch({type: "edit.begin"}, viewport);
+    controller.state.buffer.replaceText("Unsaved draft");
+    await controller.dispatch({type: "file.selection.toggle"}, viewport);
+    controller.state.propertyInspector.filterDraft = "retained filter";
+    const target = controller.state.target;
+    await controller.dispatch({type: "navigation.link"}, viewport);
+    expect(linked).toEqual([destination]);
+    expect(controller.state.target).toEqual(target);
+    expect(controller.state.mode).toBe("edit");
+    expect(controller.state.buffer.text).toBe("Unsaved draft");
+    expect(controller.state.selectionAnchor).toBe(0);
+    expect(controller.state.propertyInspector.filterDraft).toBe("retained filter");
   });
   test("scrolls past annotation evidence and history to the final comment line", async () => {
     const source = makeBlock({ text: Array.from({ length: 20 }, (_, i) => `Captured evidence ${i}`).join("\n") });

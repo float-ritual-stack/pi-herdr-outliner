@@ -72,13 +72,19 @@ export function navigationDestinationItems(state: NavigationLinkState, unlink: b
     {id: "destination:place-right", label: "New Detail right of another…", description: "Choose a local reader beside which to create the new Detail", binding: "", group: "Pane"},
     {id: "destination:place-below", label: "New Detail below another…", description: "Choose a local reader below which to create the new Detail", binding: "", group: "Pane"},
   );
+  if (unlink) items.push(
+    {id: "destination:sidebar-outliner-left", label: "Sidebar left · Outliner area", description: "Create a Detail along the left edge of the Outliner area; existing links stay unchanged", binding: "", group: "Pane"},
+    {id: "destination:sidebar-outliner-right", label: "Sidebar right · Outliner area", description: "Create a Detail along the right edge of the Outliner area; existing links stay unchanged", binding: "", group: "Pane"},
+    {id: "destination:sidebar-tab-left", label: "Sidebar left · Whole Herdr tab", description: "Create a Detail along the left edge of the whole tab; existing links stay unchanged", binding: "", group: "Pane"},
+    {id: "destination:sidebar-tab-right", label: "Sidebar right · Whole Herdr tab", description: "Create a Detail along the right edge of the whole tab; existing links stay unchanged", binding: "", group: "Pane"},
+  );
   if (unlink && state.destination) items.push({id: "destination:unlink", label: "Unlink destination", description: "Explicit Open will ask for a destination", binding: "", group: "Pane"});
   return items;
 }
 
 export function navigationPlacementItems(state: NavigationLinkState): OutlinerActionMenuItem[] {
   return [
-    ...state.destinations.flatMap((item, index) => item.placementPaneId ? [{
+    ...state.destinations.flatMap<OutlinerActionMenuItem>((item, index) => item.placementPaneId ? [{
       id: `placement:${index}`, label: sanitizeDynamicText(item.label),
       description: sanitizeDynamicText(item.description ?? "Local Detail"), binding: "", group: "Pane",
     }] : []),

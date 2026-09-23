@@ -677,6 +677,20 @@ test("Properties read mode links with Shift+L while editors and property filters
   expect(editor.intents).toEqual([{type: "buffer.insert", text: "L"}]);
 });
 
+test("destination header clicks and Alt+L explain active editors instead of discarding their input", async () => {
+  const detail = state();
+  const editor = harness(detail);
+  const before = detail.buffer.text;
+  await editor.invoke("detail.navigation.link");
+  await editor.press({name: "l", meta: true}, "l");
+  expect(editor.intents).toEqual([
+    {type: "status.set", message: "Finish or cancel the active edit or filter before changing the destination"},
+    {type: "status.set", message: "Finish or cancel the active edit or filter before changing the destination"},
+  ]);
+  expect(detail.buffer.text).toBe(before);
+  expect(detail.mode).toBe("edit");
+});
+
 test("maps property inspector disclosure, pane, grouping, filtering, target, and viewport keys", async () => {
   const previewState = state();
   previewState.mode = "preview";
