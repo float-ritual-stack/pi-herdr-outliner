@@ -57,54 +57,68 @@ export function subsequenceScore(query: string, candidate: string): number {
   return Math.max(1, 1_000 - gaps - Math.max(0, candidate.length - query.length));
 }
 
-function scoreBlock(
-  block: Block,
+export interface SearchDocument { id: string; title: string; text: string }
+export interface TextSearchMatch<T> {document:T;kind:BlockFocusMatchKind;score:number;title:string}
+export function rankTextSearchMatches<T extends SearchDocument>(documents:readonly T[],query:string,limit:number):TextSearchMatch<T>[] {
+  if (!Number.isInteger(limit) || limit <= 0) throw new Error("Search limit must be positive");
+  const normalized=normalize(query);if(!normalized)return [];
+  const terms=normalized.split(" ").filter(Boolean);
+  return documents.map(document=>scoreSearchDocument(document,normalized,terms)).filter((match):match is TextSearchMatch<T>=>match!==null)
+    .sort((a,b)=>b.score-a.score||a.title.localeCompare(b.title)||a.document.id.localeCompare(b.document.id)).slice(0,limit);
+}
+
+function scoreSearchDocument<T extends SearchDocument>(
+  document: T,
   normalizedQuery: string,
   terms: readonly string[],
-): BlockFocusMatch | null {
-  const id = block.id.toLowerCase();
-  const title = blockDisplayTitle(block);
+): TextSearchMatch<T> | null {
+  const id = document.id.toLowerCase();
+  const title = document.title;
   const normalizedTitle = normalize(title);
 
-  if (id === normalizedQuery) return { block, kind: "exact-id", score: 100_000, title };
+  if (id === normalizedQuery) return { document, kind: "exact-id", score: 100_000, title };
   if (normalizedQuery.length >= 4 && id.startsWith(normalizedQuery)) {
-    return { block, kind: "id-prefix", score: 90_000 + normalizedQuery.length, title };
+    return { document, kind: "id-prefix", score: 90_000 + normalizedQuery.length, title };
   }
   if (normalizedTitle === normalizedQuery) {
-    return { block, kind: "exact-title", score: 80_000, title };
+    return { document, kind: "exact-title", score: 80_000, title };
   }
   if (normalizedTitle.startsWith(normalizedQuery)) {
-    return { block, kind: "title-prefix", score: 70_000, title };
+    return { document, kind: "title-prefix", score: 70_000, title };
   }
   if (normalizedTitle.includes(normalizedQuery)) {
-    return { block, kind: "title-contains", score: 60_000, title };
+    return { document, kind: "title-contains", score: 60_000, title };
   }
-  const normalizedText = normalize(block.text);
+  const normalizedText = normalize(document.text);
   if (normalizedText.includes(normalizedQuery)) {
-    return { block, kind: "text-contains", score: 50_000, title };
+    return { document, kind: "text-contains", score: 50_000, title };
   }
   const usefulTerms = terms.filter(term => term.length >= 2 && !QUERY_FILLER.has(term));
   const searchTerms = usefulTerms.length ? usefulTerms : terms;
   const titleHits = searchTerms.filter(term => normalizedTitle.includes(term)).length;
   const textHits = searchTerms.filter(term => normalizedText.includes(term)).length;
-  if (titleHits === searchTerms.length) return { block, kind: "title-terms", score: 40_000 + searchTerms.length, title };
+  if (titleHits === searchTerms.length) return { document, kind: "title-terms", score: 40_000 + searchTerms.length, title };
   if (textHits > 0) {
     // Word evidence outranks accidental letter subsequences in long documents.
     // Titles carry more weight; document length breaks otherwise equal matches.
     const score = 12_000 + (titleHits * 10_000 + textHits * 8_000) / searchTerms.length + 1_000 / (1 + normalizedText.length / 1_000);
-    return { block, kind: "text-terms", score, title };
+    return { document, kind: "text-terms", score, title };
   }
   if (normalizedQuery.length >= 3) {
     const titleScore = subsequenceScore(normalizedQuery, normalizedTitle);
     if (titleScore > 0) {
-      return { block, kind: "title-fuzzy", score: 10_000 + titleScore, title };
+      return { document, kind: "title-fuzzy", score: 10_000 + titleScore, title };
     }
     const textScore = subsequenceScore(normalizedQuery, normalizedText);
     if (textScore > 0) {
-      return { block, kind: "text-fuzzy", score: 5_000 + textScore, title };
+      return { document, kind: "text-fuzzy", score: 5_000 + textScore, title };
     }
   }
   return null;
+}
+function scoreBlock(block:Block,query:string,terms:readonly string[]):BlockFocusMatch|null {
+ const match=scoreSearchDocument({id:block.id,title:blockDisplayTitle(block),text:block.text},query,terms);
+ return match?{block,kind:match.kind,score:match.score,title:match.title}:null;
 }
 
 function rankAllBlockFocusMatches(

@@ -1,3 +1,5 @@
+import {searchInboxHistory,visibleInboxSearch} from './inbox-search';
+import {rankSearchWithJev} from './search-ranking';
 import { blockDisplayTitle } from "./references";
 import { rankGotoWithJev, visibleGotoResults } from "./goto-search";
 import { InboxWorker, assistantActivity } from "./inbox-worker";
@@ -1147,6 +1149,21 @@ export class OutlinerServer {
     request: OutlinerRequest,
     subscribedClient?: OutlinerClientRegistration,
   ): Promise<OutlinerResponse> {
+    if (request.action === "inbox.search") {
+      try {
+        if(request.semantic!==undefined&&typeof request.semantic!=="boolean")throw new Error("semantic must be a boolean");
+        let result=searchInboxHistory(this.store,request.query);
+        if(request.semantic&&this.activeGotoRankings<2){
+          this.activeGotoRankings++;
+          try{result=await rankSearchWithJev(request.query,result,{promptDirectory:this.promptDirectory});}
+          finally{this.activeGotoRankings--;}
+          result.matches=result.matches.filter(match=>match.revisions.every(saved=>{
+            const current=this.store.get(saved.id);return current&&!current.effectiveDeletedRootId&&!current.deletedAt&&current.revision===saved.revision;
+          }));
+        }else if(request.semantic)result.semantic={status:"unavailable",message:"Jev busy; showing text matches"};
+        return {id:request.id,ok:true,result:visibleInboxSearch(result),sequence:this.store.sequence};
+      }catch(error){return {id:request.id,ok:false,error:error instanceof Error?error.message:String(error),sequence:this.store.sequence};}
+    }
     if (request.action === "tree.search") {
       try {
         if (request.semantic !== undefined && typeof request.semantic !== "boolean") throw new Error("semantic must be a boolean");
@@ -1284,6 +1301,7 @@ export class OutlinerServer {
       let result: unknown;
       const action = request.action;
       switch (action) {
+        case "inbox.search": result = visibleInboxSearch(searchInboxHistory(this.store,request.query)); break;
         case "inbox.status": result = this.inboxStatus(request.attentionOnly, request.resultsOffset); break;
         case "inbox.result": result = this.noteRepository.hasResult(request.resultId)
           ? this.noteRepository.getResult(request.resultId) : this.inboxRepository.getResult(request.resultId); break;

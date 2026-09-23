@@ -1247,6 +1247,7 @@ export interface ComputedExecutionResult {
 
 export type OutlinerRequest =
   | { id: string; action: "properties.inventory"; key: string; propertyScope?: PropertyQueryScope; offset?: number; limit?: number }
+  | { id: string; action: "inbox.search"; query: string; semantic?: boolean }
   | { id: string; action: "inbox.status"; attentionOnly?: boolean; resultsOffset?: number }
   | { id: string; action: "inbox.result"; resultId: string }
   | { id: string; action: "inbox.pause" }

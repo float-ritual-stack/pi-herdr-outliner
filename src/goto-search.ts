@@ -1,11 +1,9 @@
-import { loadGotoPrompt, PromptFileError, type PromptRevision } from "./ai-prompts";
 import { rankBlockFocusMatches } from "./block-focus";
 import { blockDisplayTitle } from "./references";
 import type { Block, GotoSearchCollection } from "./types";
 
 export const GOTO_CANDIDATE_LIMIT = 80;
 export const GOTO_RESULT_LIMIT = 30;
-const MODEL = "jev-1.13.0";
 
 /** A disposable projection of canonical blocks, never a second content store. */
 export function gotoCandidates(blocks: readonly Block[], query: string, exactAddressId?: string): GotoSearchCollection {
@@ -58,50 +56,4 @@ export function visibleGotoResults(result: GotoSearchCollection): GotoSearchColl
   };
 }
 
-/** HTTP and model output stay outside the synchronous SQLite read transaction. */
-export async function rankGotoWithJev(
-  query: string,
-  candidates: GotoSearchCollection,
-  options: { apiKey?: string; endpoint?: string; fetch?: (url: string, init: RequestInit) => Promise<Response>; timeoutMs?: number; promptDirectory?: string } = {},
-): Promise<GotoSearchCollection> {
-  const apiKey = options.apiKey ?? process.env.TYPESAFE_API_KEY;
-  if (!apiKey) return { ...candidates, semantic: { status: "unavailable", message: "Jev is not configured; showing text matches" } };
-  if (query.trim().length < 3 || candidates.matches.length === 0 || candidates.matches[0]?.exact) return candidates;
-  const started = performance.now();
-  let promptRevisions: PromptRevision[] | undefined;
-  try {
-    const prompt = await loadGotoPrompt(options.promptDirectory);
-    promptRevisions = prompt.revisions;
-    const questions = Object.fromEntries(candidates.matches.map(({title, path, snippet}, index) => [`candidate_${index}`, {
-      type: "score",
-      instructions: `${prompt.ranking.instructions}\nCandidate: ${JSON.stringify({title, path, text: snippet})}`,
-      criteria: prompt.ranking.criteria,
-    }]));
-    const response = await (options.fetch ?? fetch)(options.endpoint ?? "https://api.typesafe.ai/v1/systemone", {
-      method: "POST", headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      redirect: "error",
-      body: JSON.stringify({ model: MODEL, state: { query }, questions }),
-      signal: AbortSignal.timeout(options.timeoutMs ?? 2200),
-    });
-    if (!response.ok) throw new Error(`Jev HTTP ${response.status}`);
-    const result = await response.json() as { answers?: Record<string, { type?: string; score?: number }>; model?: string; usage?: { input_tokens?: number; output_tokens?: number } };
-    const scored = candidates.matches.map((match, index) => {
-      const answer = result.answers?.[`candidate_${index}`];
-      if (answer?.type !== "score" || typeof answer.score !== "number" || !Number.isFinite(answer.score) || answer.score < 0 || answer.score > 3) throw new Error("Invalid Jev ranking response");
-      return { match, score: answer.score, index };
-    });
-    scored.sort((a, b) => Number(b.match.exact) - Number(a.match.exact) || b.score - a.score || a.index - b.index);
-    return { ...candidates, matches: scored.map(({ match }) => match), semantic: {
-      status: "ranked", model: result.model ?? MODEL, elapsedMs: Math.round(performance.now() - started),
-      candidateCount: scored.length, promptRevisions,
-      ...(Number.isFinite(result.usage?.input_tokens) ? { inputTokens: result.usage!.input_tokens } : {}),
-    } };
-  } catch (error) {
-    // Provider error bodies can echo request content. Keep them out of UI/logs.
-    return { ...candidates, semantic: {
-      status: "unavailable",
-      message: error instanceof PromptFileError ? `${error.message}; showing text matches` : "Jev unavailable; showing text matches",
-      ...(promptRevisions ? { promptRevisions } : {}),
-    } };
-  }
-}
+export {rankSearchWithJev as rankGotoWithJev} from './search-ranking';
