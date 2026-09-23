@@ -247,8 +247,9 @@ Record owner-device verification as pending when it has not been exercised.
 Report implemented, exercised (with the actual journey), merged, deployed and
 owner-accepted separately. Lead with what the user can now do and remaining
 limits; test counts support that claim. A private merged-main run is not evidence
-that the shared session or another device runs that version. Merged scope awaits
-acceptance in Validate; accepted scope closes with linked follow-ups for new ideas.
+that the shared session or another device runs that version. Apply task transitions
+through the live workboard guide referenced by AGENTS.md; link new ideas separately
+from the scope whose acceptance is being recorded.
 Keep exact source revisions, protocol, artifacts and untested paths in the proof.
 
 ## Pull requests
