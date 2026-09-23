@@ -4153,6 +4153,8 @@ export function createDetailController(
       return destinationChooser!.helpText();
     },
     async onServiceEvent(event, viewport) {
+      // Destination headers consume these independently; no document changed.
+      if (event.domain === "view" && ["clients.update", "clients.unregister", "navigation.link.set"].includes(event.action)) return;
       if (event.domain === "attention") {
         if (!event.attention || event.attention.targetClientId !== effects.clientId) return;
         state.attention = event.attention;

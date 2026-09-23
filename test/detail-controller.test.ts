@@ -592,6 +592,44 @@ function event(domain: OutlinerEvent["domain"], command?: OutlinerEvent["command
 }
 
 describe("detail controller projection and deferred refresh", () => {
+  for (const action of ["clients.update", "navigation.link.set", "clients.unregister"]) {
+    test(`${action} updates header state without reloading a selected file`, async () => {
+      const harness = createHarness(makeBlock({text: "File", properties: [{key: "file", value: "src/example.ts"}]}), filePreview({lines: Array.from({length: 60}, (_, i) => `Line ${i}`)}));
+      await harness.controller.initialize();
+      await harness.controller.dispatch({type: "file.selection.toggle"}, viewport);
+      await harness.controller.dispatch({type: "file.navigate", direction: "end"}, viewport);
+      const before = harness.controller.state;
+      const retained = {document: before.document, file: before.referencedFile, cursor: before.fileCursor, offset: before.fileOffset, reads: harness.calls.selections};
+      expect(before.selectionAnchor).toBe(0);
+      expect(retained.offset).toBeGreaterThan(0);
+      let fileReads = 0;
+      const readFile = harness.effects.readFile;
+      harness.effects.readFile = async (...args) => {fileReads++; return readFile(...args);};
+      await harness.controller.onServiceEvent({id: "header-event", domain: "view", action, clientId: "another-reader", sequence: 1}, viewport);
+      expect(harness.controller.state.selectionAnchor).toBe(0);
+      expect(harness.controller.state.fileCursor).toBe(retained.cursor);
+      expect(harness.controller.state.fileOffset).toBe(retained.offset);
+      expect(harness.controller.state.document).toBe(retained.document);
+      expect(harness.controller.state.referencedFile).toBe(retained.file);
+      expect(harness.calls.selections).toBe(retained.reads);
+      expect(fileReads).toBe(0);
+    });
+    test(`${action} leaves Resource content and scroll untouched`, async () => {
+      const harness = createHarness(makeBlock(), null, undefined, undefined, {initialTarget: {kind: "resource", resourceId: "resource-1"}});
+      await harness.controller.initialize();
+      await harness.controller.dispatch({type: "preview.navigate", direction: "bottom"}, viewport);
+      const document = harness.controller.state.document;
+      const offset = harness.controller.state.previewOffset;
+      expect(offset).toBeGreaterThan(0);
+      let reads = 0;
+      const loadTarget = harness.effects.loadTarget;
+      harness.effects.loadTarget = async target => {reads++; return loadTarget(target);};
+      await harness.controller.onServiceEvent({id: "header-event", domain: "view", action, clientId: "another-reader", sequence: 1}, viewport);
+      expect(harness.controller.state.document).toBe(document);
+      expect(harness.controller.state.previewOffset).toBe(offset);
+      expect(reads).toBe(0);
+    });
+  }
   test("creates a reader beside the chosen pane without moving the invoking document or selection", async () => {
     const harness = createHarness(makeBlock({id: "retained-source", text: "Source text"}));
     const opened: unknown[][] = [];
