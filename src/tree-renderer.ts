@@ -407,6 +407,10 @@ export function renderTreeFrame(
     });
     else if(preview.placement==='below') lines=[...treeLines,'─'.repeat(width),...preview.lines];
     else {lines=view.localPreview.focused?preview.lines:treeLines;if(!view.localPreview.focused)lines[height-1]=truncateToWidth('Preview available · '+(view.previewHelp??'Alt+P focus · Esc close'),width);}
+    if (view.recoveryHelp && preview.placement === 'compact') {
+      lines[height-2] = truncateToWidth(view.recoveryStatus ?? '', width);
+      lines[height-1] = truncateToWidth(view.recoveryHelp, width);
+    }
     const mouseTargets=preview.placement==='compact'&&view.localPreview.focused?[]:tree.mouseTargets.map(target=>target?{...target,minColumn:0,maxColumn:preview.treeWidth-1}:target);
     return{...tree,preview,mouseTargets,frame:`${options.clearScreen===false?'':`${ESC}H${ESC}2J`}${lines.slice(0,height).join("\n")}`};
   }

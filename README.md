@@ -33,6 +33,12 @@ normal separate-pane layout remains the default.
 
 Inbox history search: click **Search /** or press `/` in Inbox. Search original capture titles, result summaries and current Source/Output text across the complete stored history. Up/Down selects an attempt while typing; Enter returns to result controls, and Alt+Enter opens its content in Detail. Escape or × restores the previous browsing position. Attempts retain their date and identity. Text results appear first; optional Jev reranking uses the same editable `goto-ranking.json` prompt as Goto. Session transcripts are diagnostics, excluded from this search. The shortlist is bounded and says when matches were omitted; Jev reranks that shortlist rather than searching missing candidates.
 
+When Open has no linked reader (or that reader closed), a recovery bar offers
+**Enter: Open here**, **L: Choose destination**, and **Esc: Cancel**. The first Open
+only shows the choice. Confirming opens that exact target once: in the local
+Preview for Tree/Inbox, or the current Detail with its existing edit protections.
+The clickable controls do the same thing; no saved pane link changes.
+
 ## Why this exists
 
 The project started as a small Friday-night experiment and grew into a durable workspace with a few explicit constraints:
