@@ -7,7 +7,6 @@ const result = await runHerdrScenario({
   name: "tree-preview-click-focus",
   async prepare() {},
   async run(session) {
-    const terminal = await session.attachClient();
     // This helper launches two local processes in a private tab, giving Tree
     // the full tab width while retaining the production input and rendering paths.
     const panes = await session.openRemoteBrowsingContext({name: "pointer-local"});
@@ -17,22 +16,44 @@ const result = await runHerdrScenario({
     for (const title of ["FOCUS FIRST", "FOCUS SECOND"]) docs.push(await session.client.request<Block>({action: "create", parentId: parent.id, text: `${title}\n\n${Array.from({length: 60}, (_, i) => `PREVIEW ROW ${String(i + 1).padStart(2, "0")}`).join("\n\n")}`}));
     const context = () => session.client.request<BrowsingContextState>({action: "browsing-context.get", contextId: tree.contextId!});
     const selected = async () => (await context()).target;
+    // Establish the private tab before attaching the input client. Attaching
+    // first can leave Herdr's client displaying the old tab even after CLI
+    // focus and pane-local reads have moved to this fixture's Tree.
+    await session.focus(panes.tree);
+    await session.revealTree(panes.tree, docs[0]!.id);
+    const terminal = await session.attachClient();
+    await session.waitFor("attached client starts on the fixture Tree", terminal.visible, frame => frame.includes("FOCUS FIRST"));
     const click = async (column: number, row: number) => terminal.write(`\x1b[<0;${column + 1};${row + 1}M\x1b[<0;${column + 1};${row + 1}m`);
     for (const [placement, columns] of [["beside", 140], ["below", 80]] as const) {
       await terminal.resize(columns, 74);
       await session.focus(panes.tree);
       await session.revealTree(panes.tree, docs[0]!.id);
-      await session.waitFor(`${placement} Preview geometry`, () => session.visible(panes.tree), frame => {
+      const paneFrame = await session.waitFor(`${placement} Preview geometry`, () => session.visible(panes.tree), frame => {
         const rows = frame.split("\n");
         const previewRow = rows.findIndex(line => /[●○] Preview · FOCUS FIRST/.test(line));
         const line = rows[previewRow] ?? "";
-        return previewRow >= 0 && frame.includes("PREVIEW ROW 01") && (placement === "beside" ? visibleWidth(line.slice(0, line.indexOf("Preview"))) > 40 : previewRow > 8);
+        return previewRow >= 0 && Math.max(...rows.map(visibleWidth)) < columns && frame.includes("PREVIEW ROW 01") && (placement === "beside" ? visibleWidth(line.slice(0, line.indexOf("Preview"))) > 40 : previewRow > 8);
       });
+      // xterm resizes immediately and can briefly show cropped old-width rows.
+      // Match header offsets with the settled pane frame before using columns.
+      const headerOffset = (frame: string) => {
+        const lines = frame.split("\n");
+        const heading = lines.findIndex(line => /[●○] Preview · FOCUS FIRST/.test(line));
+        const title = lines.findIndex(line => line.includes("Outliner  "));
+        if (heading < 0 || title < 0) return null;
+        return {
+          row: heading - title,
+          column: visibleWidth(lines[heading]!.slice(0, lines[heading]!.indexOf("Preview"))) - visibleWidth(lines[title]!.slice(0, lines[title]!.indexOf("Outliner  "))),
+        };
+      };
+      const expectedOffset = headerOffset(paneFrame);
+      assert.ok(expectedOffset);
       const initial = await session.waitFor("native Preview coordinates", terminal.visible, frame => {
         const lines = frame.split("\n");
         const headingRow = lines.findIndex(line => /[●○] Preview · FOCUS FIRST/.test(line));
         const contentRow = lines.findIndex((line, index) => index > headingRow && line.includes("PREVIEW ROW 01") && !line.includes("↵"));
-        return headingRow >= 0 && contentRow > headingRow && !lines.some(line => visibleWidth(line) > columns);
+        const actualOffset = headerOffset(frame);
+        return headingRow >= 0 && contentRow > headingRow && actualOffset?.row === expectedOffset.row && actualOffset.column === expectedOffset.column;
       });
       const rows = initial.split("\n");
       const row = rows.findIndex(line => line.includes("PREVIEW ROW 01") && !line.includes("↵"));
@@ -41,6 +62,7 @@ const result = await runHerdrScenario({
       const previewHeading = rows.findIndex(line => /[●○] Preview · FOCUS FIRST/.test(line));
       const firstContentRow = (frame: string) => frame.split("\n").findIndex((line, index) => index > previewHeading && line.includes("PREVIEW ROW 01") && visibleWidth(line.slice(0, line.lastIndexOf("PREVIEW ROW 01"))) >= column - 2);
       const before = await context();
+      await session.record(`${placement}-settled-pointer-coordinates`, {paneFrame, initial, expectedOffset, column, row});
       await click(column, row);
       await session.waitVisible(panes.tree, "● Preview");
       await session.keys(panes.tree, "down");
