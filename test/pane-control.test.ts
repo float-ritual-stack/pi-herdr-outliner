@@ -339,6 +339,10 @@ if (args[0] === "pane" && args[1] === "current") {
       explicitTargetOpen.indexOf("--target-pane"),
       explicitTargetOpen.indexOf("--target-pane") + 2,
     )).toEqual(["--target-pane", "w1:explicit-source"]);
+    openDetailPane({workspaceRoot: "/workspace", browsingContextId: "sidebar-context", targetPaneId: "w1:explicit-source", deferFocus: true}, herdr);
+    const deferredCalls=readFileSync(logPath,"utf8").trim().split("\n").map(line=>JSON.parse(line) as string[]);
+    expect(deferredCalls.at(-1)?.slice(0,3)).toEqual(["plugin","pane","open"]);
+    expect(deferredCalls.at(-1)).toContain("--no-focus");
     const root={rowId:"occurrence:Q:root",canonicalId:"root",label:"A rooted view"};
     openTreePane({workspaceRoot:"/workspace",root,direction:"down"},herdr);
     const rootOpen=readFileSync(logPath,"utf8").trim().split("\n").map(line=>JSON.parse(line) as string[]).at(-2)!;

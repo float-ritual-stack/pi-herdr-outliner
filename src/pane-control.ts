@@ -305,6 +305,8 @@ export interface OpenDetailPaneOptions {
   initialTarget?: OutlinerNavigationTarget;
   targetPaneId?: string;
   direction?: "right" | "down";
+  /** Layout orchestration focuses the completed layout after it owns the new pane ID. */
+  deferFocus?: boolean;
 }
 
 export function openDetailPane(
@@ -347,7 +349,7 @@ export function openDetailPane(
       `OUTLINER_DETAIL_TARGET=${encodeURIComponent(JSON.stringify(options.initialTarget))}`,
     );
   }
-  return openPaneSplit(args, sourcePaneId, options.direction ?? "down", herdr);
+  return openPaneSplit(args, sourcePaneId, options.direction ?? "down", herdr, options.deferFocus);
 }
 
 export function openTreePane(options: {
@@ -363,7 +365,7 @@ export function openTreePane(options: {
   return openPaneSplit(args,sourcePaneId,options.direction,herdr);
 }
 
-function openPaneSplit(args: string[], sourcePaneId: string, direction: "right" | "down", herdr: string): string {
+function openPaneSplit(args: string[], sourcePaneId: string, direction: "right" | "down", herdr: string, deferFocus = false): string {
   args.push(
     "--placement",
     "split",
@@ -389,7 +391,7 @@ function openPaneSplit(args: string[], sourcePaneId: string, direction: "right" 
   }
   const output = invokeHerdr(herdr, args);
   const pane = Parse(PluginPaneOpenResponseSchema, JSON.parse(output)).result.plugin_pane.pane;
-  invokeHerdr(herdr, ["plugin", "pane", "focus", pane.pane_id]);
+  if (!deferFocus) invokeHerdr(herdr, ["plugin", "pane", "focus", pane.pane_id]);
   return pane.pane_id;
 }
 

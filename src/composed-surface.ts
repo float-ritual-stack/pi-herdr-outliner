@@ -1,4 +1,5 @@
 import {TreePreviewInput} from './tree-preview-input';
+import {openOutlinerDetailSidebar} from "./detail-pane-placement";
 import {osc52ClipboardWrite} from './terminal';
 import { HStack, type Component } from "@earendil-works/pi-tui";
 import type { OutlinerRequester } from "./client-target";
@@ -115,7 +116,7 @@ export class ComposedTree implements Component {
     navigation: TreeNavigation; actionKeymap: OutlinerActionKeymap;
     width(): number; height(): number; focused(): boolean; focus(): void;
     invalidate(): void; stop(): void;
-    detach(target: OutlinerNavigationTarget, direction: "right" | "down"): Promise<void>;
+    detach(target: OutlinerNavigationTarget, direction: "right" | "down", targetPaneId?: string): Promise<void>;
   }) {
     this.controller = createTreeController({
       clientId: options.clientId, browsingContextId: options.contextId,
@@ -125,7 +126,10 @@ export class ComposedTree implements Component {
         openGotoPopup: () => openGotoPopup({ workspaceRoot: options.workspaceRoot, sourceClientId: options.clientId, sourceRegion: "tree" }),
       } : {}),
       async createTreePane(root,direction) { openTreePane({workspaceRoot:options.workspaceRoot,root,direction}); },
-      createDetailPane: (blockId, direction = "right") => options.detach({kind: "block", blockId}, direction),
+      createDetailPane: (blockId, direction = "right", targetPaneId) => options.detach({kind: "block", blockId}, direction, targetPaneId),
+      async createDetailSidebar(blockId,scope,side) {
+        await openOutlinerDetailSidebar(options.client,options.clientId,{workspaceRoot:options.workspaceRoot,initialTarget:{kind:"block",blockId},scope,side});
+      },
       async openCapturePopup(capturedFromBlockId) { openCapturePopup({workspaceRoot: options.workspaceRoot, capturedFromBlockId}); },
       openVirtualBranchNavigator(viewId, adapter) { openVirtualBranchNavigatorPopup({workspaceRoot: options.workspaceRoot, browsingContextId: options.contextId, sourceClientId: options.clientId, sourceRole: "tree", viewId, ...(adapter ? {adapter} : {})}); },
       focusSelf: options.focus, terminalWidth: options.width, terminalHeight: options.height,

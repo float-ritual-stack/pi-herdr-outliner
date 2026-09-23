@@ -422,8 +422,9 @@ export function renderTreeFrame(
     const preview=renderNavigationDestinationPreview(view.destinationPreview,previewWidth,previewHeight);
     const middle=beside?list.map((line,i)=>line+' '.repeat(Math.max(0,listWidth-visibleWidth(line)))+'│'+(preview[i]??'')):[...list,'─'.repeat(width),...preview];
     const openingOnce = view.destinationPurpose === 'open';
-    const title = openingOnce ? 'Open once in… · Tree' : 'Link destination · Tree';
-    const footer = openingOnce ? '↑↓ choose · Enter open once · Esc cancel · saved link unchanged' : '↑↓ choose · Enter link · Esc cancel · Alt+L link destination';
+    const placing = view.destinationPurpose === 'place';
+    const title = placing ? 'New Detail placement · Tree' : openingOnce ? 'Open once in… · Tree' : 'Link destination · Tree';
+    const footer = placing ? '↑↓ choose anchor · Enter creates · Esc cancel · saved link unchanged' : openingOnce ? '↑↓ choose · Enter open once · Esc cancel · saved link unchanged' : '↑↓ choose · Enter link · Esc cancel · Alt+L link destination';
     const lines=[fit(title,width),fit(view.destinationInstructions??(openingOnce ? 'Choose where this item opens once' : 'Choose where links from Tree open'),width),fit(`Find: ${view.actionMenuQuery??''}▏`,width),'─'.repeat(width),...middle,fit(footer,width)];
     return{frame:(options.clearScreen===false?'':`${ESC}H${ESC}2J`)+lines.slice(0,height).join('\n'),scrollStartEntryIndex:initialScrollStartEntryIndex,mouseTargets:[]};
   }
@@ -483,7 +484,8 @@ export function renderTreeFrame(
     width,
   ));
   if (breadcrumb) output.push(breadcrumb.line);
-  output.push("─".repeat(width));
+  output.push(view.navigationDestinationLabel === undefined ? "─".repeat(width)
+    : outlinerActionLink("tree.navigation.link", truncateToWidth(`Opens in: ${truncateToWidth(sanitizeDynamicText(view.navigationDestinationLabel), Math.max(1, width - 21))} / Change`, width)));
   const headerHeight = output.length;
   const bodyHeight = Math.max(1, height - 6 - (breadcrumb ? 1 : 0));
   if (view.mode === "action-menu") {

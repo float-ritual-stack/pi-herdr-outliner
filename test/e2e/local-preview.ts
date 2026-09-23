@@ -24,6 +24,12 @@ const result = await runHerdrScenario({
     const docs: Block[] = [];
     for (const text of ["RETAINED CURRENT", "INSPECTION ALPHA", "INSPECTION BETA", "INSPECTION GAMMA"]) docs.push(await session.client.request<Block>({action: "create", text: `${text}\n\n${Array.from({length: 70}, (_, i) => `${text} line ${i + 1}`).join("\n")}`}));
     const state = async () => (await session.registrations()).find(c => c.clientId === detail.clientId)!;
+    const inspectDetail = async (blockId: string) => {
+      await session.revealTree(panes.tree, blockId);
+      // Standalone Tree owns selection Preview. Exercise the independent Detail
+      // reader explicitly; composed selection still drives its shared reader.
+      if (!composed) await session.client.request({action:"ui.command.send",command:{command:"preview",targetClientId:detail.clientId,target:{kind:"block",blockId}}});
+    };
     const current = (c: OutlinerClientRegistration, id: string) => c.currentTarget?.kind === "block" && c.currentTarget.blockId === id;
     const preview = (c: OutlinerClientRegistration, id: string) => c.previewTarget?.kind === "block" && c.previewTarget.blockId === id;
     const focusDetail = async () => {
@@ -38,7 +44,7 @@ const result = await runHerdrScenario({
     await focusDetail(); await session.keys(panes.detail, "e"); await session.text(panes.detail, " DRAFT RETAINED ");
     await session.waitVisible(panes.detail, "DRAFT RETAINED");
     for (const doc of docs.slice(1)) {
-      await session.revealTree(panes.tree, doc.id);
+      await inspectDetail(doc.id);
       await session.waitFor("local Preview updates", state, c => preview(c, doc.id));
       assert.ok(current(await state(), docs[0]!.id));
     }
@@ -62,7 +68,7 @@ const result = await runHerdrScenario({
     await session.keys(panes.detail, "escape");
     await session.waitFor("Escape releases only Preview", state, c => !c.previewTarget && !!c.navigationProtection && current(c, docs[0]!.id));
     await session.waitVisible(panes.detail, "DRAFT");
-    await session.revealTree(panes.tree, docs[3]!.id);
+    await inspectDetail(docs[3]!.id);
     await session.waitFor("Preview can reopen after Escape", state, c => preview(c, docs[3]!.id));
     await focusDetail(); await terminal.resize(110, 38);
     await session.keys(panes.detail, "alt+p"); await session.waitFor("Preview visibly focused", () => session.visible(panes.detail), frame => frame.includes(ansi ? "Preview ·" : "● Preview"));
@@ -83,7 +89,7 @@ const result = await runHerdrScenario({
     const base = {kind: "resource" as const, resourceId: interned.resource.id};
     const described = await session.client.request<ResourceDescription>({action: "resources.describe", destinationClientId: detail.clientId, target: base});
     const target = {...base, revision: described.filesystem!.revision};
-    await session.client.request({action: "navigation.dispatch", sourceClientId: tree.clientId, intent: "preview", target});
+    await session.client.request({action: "navigation.dispatch", sourceClientId: detail.clientId, intent: "preview", target});
     await session.waitFor("Resource Preview identity", state, c => c.previewTarget?.kind === "resource");
     assert.deepEqual((await state()).previewTarget, target);
     assert.ok(current(await state(), docs[3]!.id));
@@ -96,8 +102,8 @@ const result = await runHerdrScenario({
       const old = await session.client.request<Block>({action: "create", text: "OBSOLETE HELD PREVIEW"});
       const newest = await session.client.request<Block>({action: "create", text: "NEWEST PREVIEW WINS"});
       const hold = composed ? session.holdComposedResponse({action: "blocks.context", contains: old.id}) : session.holdDetailResponse({action: "blocks.context", contains: old.id});
-      await session.revealTree(panes.tree, old.id); await hold.received;
-      await session.revealTree(panes.tree, newest.id);
+      await inspectDetail(old.id); await hold.received;
+      await inspectDetail(newest.id);
       hold.release();
       await session.waitFor("newer Preview wins held read", state, c => preview(c, newest.id));
       assert.ok(current(await state(), docs[3]!.id));
@@ -116,7 +122,7 @@ const result = await runHerdrScenario({
     const destinationDoc = await session.client.request<Block>({action: "create", text: "HUMAN DESTINATION NOTE\n\nPICKER DOCUMENT PREVIEW PROOF\n\nA readable paragraph identifies this pane."});
     await session.client.request({action: "ui.command.send", command: {targetClientId: destination.clientId, command: "open", target: {kind: "block", blockId: destinationDoc.id}}});
     await session.waitVisible(destinationPane, "PICKER DOCUMENT PREVIEW PROOF");
-    await session.revealTree(panes.tree, docs[2]!.id);
+    await inspectDetail(docs[2]!.id);
     await focusDetail(); await session.keys(panes.detail, "alt+p");
     await session.waitVisible(panes.detail, "INSPECTION BETA");
     await session.keys(panes.detail, "alt+l");
@@ -151,7 +157,7 @@ const result = await runHerdrScenario({
       if (composed) await session.client.request({action: "ui.command.send", command: {command: "focus", targetRegion: "tree", targetClientId: tree.clientId}});
       await session.keys(panes.tree, "ctrl+r");
       await session.waitVisible(panes.tree, "Outliner keymap reloaded");
-      await session.revealTree(panes.tree, docs[2]!.id);
+      await inspectDetail(docs[2]!.id);
       const before = await session.registrations();
       await session.keys(panes.tree, "alt+t");
       const added = await session.waitFor("independent Tree registered", session.registrations, values => values.some(c => c.role === "tree" && !before.some(b => b.clientId === c.clientId)));

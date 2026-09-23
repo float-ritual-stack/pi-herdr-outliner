@@ -1145,18 +1145,19 @@ describe("createTreeController", () => {
     expect(lastCall(fake.calls, "navigation.dispatch")).toEqual({ action: "navigation.dispatch", sourceClientId: "tree-test", target: { kind: "block", blockId: deleted.id }, intent: "open", });
 
   });
-  test("keeps Detail locking out of the Tree command surface", async () => {
+  test("plain L opens link settings without changing a link", async () => {
     const root = block("root", { text: "Root", displayText: "Root" });
     const fake = harness((input) =>
-      input.action === "tree.index" ? snapshot([root], root) : undefined
+      input.action === "tree.index" ? snapshot([root], root) : input.action === "navigation.link.get" ? {source:{clientId:"tree-test",region:"tree"},destination:null,destinations:[]} : undefined
     );
     const controller = createTreeController(fake.effects);
     await controller.initialize();
 
     await controller.handleKeypress("L", { name: "l", shift: true }, "pass");
 
-    expect(controller.view().mode).toBe("browse");
-    expect(controller.view().status).toBe("Lock or unlock from a Detail pane");
+    expect(controller.view().mode).toBe("action-menu");
+    expect(controller.view().status).toContain("Tree has no linked destination");
+    expect(fake.calls.some(({action}) => action === "navigation.link.set")).toBe(false);
     expect(fake.calls.some(({ action }) => action === "navigation.resolve")).toBe(false);
   });
   test("reorders through rebound keys and menu actions without legacy keys moving data or opening panes", async () => {
@@ -1262,7 +1263,7 @@ describe("createTreeController", () => {
 
     await controller.initialize();
 
-    expect(fake.calls[0]).toEqual({
+    expect(fake.calls.find(call => call.action === "tree.index")).toEqual({
       action: "tree.index",
       view: undefined,
     });
@@ -3373,12 +3374,12 @@ test("the file viewer uses service content while retaining the authored line ran
 });
 
 
-test("an unpaired independent Tree inspects locally without creating a Detail", async () => {
+test("an independent Tree inspects locally without creating a Detail", async () => {
   const a = block("local-a", {text: "SOURCE LOCAL ALPHA"});
   const b = block("local-b", {text: "SOURCE LOCAL BETA"});
   const fake = harness(input => {
     if (input.action === "tree.index") return snapshot([a, b], a);
-    if (input.action === "browsing-context.publish") return {contextId: "tree-test-context", target: input.target, unavailable: "No paired reader · Preview stays in this Tree"};
+    if (input.action === "browsing-context.publish") return {contextId: "tree-test-context", target: input.target, preview: {sourceClientId:"tree-test",targetClientId:"tree-test",targetRegion:"tree",intent:"preview",resolution:"self",command:{command:"preview",targetClientId:"tree-test",targetRegion:"tree",target:input.target}}};
   });
   const controller = createTreeController(fake.effects);
   await controller.initialize();
@@ -3518,7 +3519,7 @@ test("Alt+L is available while local Preview owns focus, and Escape closes Previ
  const a=block("preview-keyboard",{text:"Readable source"});
  const fake=harness(input=>{
    if(input.action==="tree.index")return snapshot([a],a);
-   if(input.action==="browsing-context.publish")return{contextId:"tree-test-context",target:input.target,unavailable:"No paired reader · Preview stays in this Tree"};
+   if(input.action==="browsing-context.publish")return{contextId:"tree-test-context",target:input.target,preview:{sourceClientId:"tree-test",targetClientId:"tree-test",targetRegion:"tree",intent:"preview",resolution:"self",command:{command:"preview",targetClientId:"tree-test",targetRegion:"tree",target:input.target}}};
    if(input.action==="navigation.link.get")return{source:{clientId:"tree-test",region:"tree"},destination:null,destinations:[]};
  });
  const controller=createTreeController(fake.effects);await controller.initialize();
@@ -3536,7 +3537,7 @@ test("wheel over Tree does not scroll adjacent focused Preview",async()=>{
  const a=block("preview-review",{text:Array.from({length:100},(_,i)=>`Line ${i}`).join("\n")});
  const fake=harness(input=>{
   if(input.action==="tree.index")return snapshot([a],a);
-  if(input.action==="browsing-context.publish")return{contextId:"tree-test-context",target:input.target,unavailable:"No paired reader · Preview stays in this Tree"};
+  if(input.action==="browsing-context.publish")return{contextId:"tree-test-context",target:input.target,preview:{sourceClientId:"tree-test",targetClientId:"tree-test",targetRegion:"tree",intent:"preview",resolution:"self",command:{command:"preview",targetClientId:"tree-test",targetRegion:"tree",target:input.target}}};
  });
  fake.effects.terminalWidth=()=>120;fake.effects.terminalHeight=()=>30;
  const controller=createTreeController(fake.effects);await controller.initialize();
@@ -3549,4 +3550,58 @@ test("wheel over Tree does not scroll adjacent focused Preview",async()=>{
  const before=controller.view().localPreview!.offset;
  await controller.handleTreeWheel(parseTreeWheel(wheel)!);
  expect(controller.view().localPreview!.offset).toBe(before);
+});
+
+test("a Tree-directed Preview stays local even while linked Details exist", async () => {
+  const note = block("local-linked", {text: "LOCAL DESPITE LINKED DETAIL"});
+  const fake = harness(input => {
+    if (input.action === "tree.index") return snapshot([note], note);
+    if (input.action === "browsing-context.publish") return {contextId:"tree-test-context", target:input.target,
+      preview:{sourceClientId:"tree-test",targetClientId:"tree-test",targetRegion:"tree",intent:"preview",resolution:"self",command:{command:"preview",targetClientId:"tree-test",targetRegion:"tree",target:input.target}}};
+  });
+  const controller=createTreeController(fake.effects); await controller.initialize();
+  await controller.handleRowClick(note.id);
+  for(let i=0;i<30&&!controller.view().localPreview?.document.resolvedText.includes("LOCAL DESPITE LINKED DETAIL");i++) await Promise.resolve();
+  expect(controller.view().localPreview?.document.resolvedText).toContain("LOCAL DESPITE LINKED DETAIL");
+  expect(fake.createdDetails).toEqual([]);
+  expect(fake.calls.some(c=>c.action==='navigation.dispatch')).toBe(false);
+});
+
+test("Tree creates a Detail beside the chosen anchor without changing its saved link", async () => {
+  const note=block('placement-source'); const created: unknown[][]=[];
+  const fake=harness(input=>input.action==='tree.index'?snapshot([note],note):input.action==='navigation.link.get'?{
+    source:{clientId:'tree-test',region:'tree'},destination:null,destinations:[
+      {view:{clientId:'remote',region:'detail'},label:'Remote',otherLocation:true},
+      {view:{clientId:'anchor',region:'detail'},label:'My Reference',placementPaneId:'w1:p9'}
+    ]}:undefined);
+  fake.effects.createDetailPane=async(...args)=>{created.push(args);};
+  const c=createTreeController(fake.effects); await c.initialize();
+  await c.handleAction('tree.navigation.link'); await c.handleAction('destination:place-right');
+  expect(c.view().destinationPurpose).toBe('place');
+  expect(c.view().actionMenuItems?.map(i=>i.id)).toEqual(['placement:1','placement:back']);
+  await c.handleAction('placement:1');
+  expect(created).toEqual([[note.id,'right','w1:p9']]);
+  expect(c.view().mode).toBe('browse');
+  expect(fake.calls.some(i=>i.action==='navigation.link.set')).toBe(false);
+});
+
+test('Tree link controls explain active filters without discarding their text', async () => {
+ const note=block('filter-link'); const fake=harness(input=>input.action==='tree.index'?snapshot([note],note):undefined);
+ const c=createTreeController(fake.effects);await c.initialize();
+ await c.handleKeypress('/',{name:'/'},'pass'); await c.handlePaste('my filter');
+ await c.handleAction('tree.navigation.link');
+ expect(c.view().mode).toBe('filter');expect(c.view().quickInput).toBe('my filter');expect(c.view().status).toContain('Finish or cancel');
+ await c.handleKeypress('',{name:'l',meta:true},'pass');
+ expect(c.view().mode).toBe('filter');expect(c.view().quickInput).toBe('my filter');expect(c.view().status).toContain('Finish or cancel');
+ await c.handleKeypress('L',{name:'l',shift:true},'pass');expect(c.view().quickInput).toBe('my filterL');
+});
+
+test('Tree sidebar actions retain scope and side without changing the saved link',async()=>{
+ for(const scope of ['outliner','tab'] as const) for(const side of ['left','right'] as const){
+ const note=block('sidebar-source');const calls:unknown[][]=[];
+ const fake=harness(input=>input.action==='tree.index'?snapshot([note],note):input.action==='navigation.link.get'?{source:{clientId:'tree-test',region:'tree'},destination:null,destinations:[]}:undefined);
+ fake.effects.createDetailSidebar=async(...args)=>{calls.push(args);};
+ const c=createTreeController(fake.effects);await c.initialize();await c.handleAction('tree.navigation.link');await c.handleAction(`destination:sidebar-${scope}-${side}`);
+ expect(calls).toEqual([[note.id,scope,side]]);expect(c.view().mode).toBe('browse');expect(fake.calls.some(i=>i.action==='navigation.link.set')).toBe(false);
+ }
 });

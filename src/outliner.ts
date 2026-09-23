@@ -1,4 +1,5 @@
 import {TreePreviewInput} from './tree-preview-input';
+import {openOutlinerDetailSidebar} from "./detail-pane-placement";
 import {osc52ClipboardWrite} from './terminal';
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { serviceTreeNavigation } from "./navigation-routes";
@@ -125,7 +126,7 @@ const controller = createTreeController({
   request<T>(input: RequestInput): Promise<T> {
     return client.request<T>(input);
   },
-  async createDetailPane(blockId, direction) {
+  async createDetailPane(blockId, direction, targetPaneId) {
     const detailContextId = crypto.randomUUID();
     await client.request({
       action: "browsing-context.publish",
@@ -137,7 +138,11 @@ const controller = createTreeController({
       workspaceRoot: paths.workspaceRoot,
       browsingContextId: detailContextId,
       direction,
+      targetPaneId,
     });
+  },
+  async createDetailSidebar(blockId, scope, side) {
+    await openOutlinerDetailSidebar(client,clientId,{workspaceRoot:paths.workspaceRoot,initialTarget:{kind:"block",blockId},scope,side});
   },
   async openCapturePopup(capturedFromBlockId) {
     openHerdrCapturePopup({
