@@ -82,9 +82,10 @@ export function renderInboxFrame(controller: InboxController, width: number, hei
   const list: string[] = [];
   for (const [offset, result] of results.slice(start, start + slots).entries()) {
     const selected = start + offset === controller.index;
+    const attempt = controller.searching ? ` · ${result.createdAt.replace("T"," ").slice(0,16)} · ${result.id.slice(0,8)}` : "";
     const line = fit(`${selected ? "›" : " "} ${result.state === "applied" ? result.kind ?? result.state : result.state} · ${sanitizeDynamicText(result.sourceTitle)}`, listWidth);
     list.push(outlinerActionLink(`tree.inbox.select:${start+offset}`, selected ? `\x1b[48;5;238m\x1b[1m${line}\x1b[0m` : line));
-    list.push(outlinerActionLink(`tree.inbox.select:${start+offset}`,fit(`  \x1b[2m${sanitizeDynamicText(result.summary)}\x1b[0m`, listWidth)));
+    list.push(outlinerActionLink(`tree.inbox.select:${start+offset}`,fit(`  \x1b[2m${sanitizeDynamicText(controller.searching ? attempt + " · " + result.summary : result.summary)}\x1b[0m`, listWidth)));
   }
   if (!results.length) list.push(controller.loading ? "Loading results…" : controller.attentionOnly ? "Nothing needs attention" : "No recent results");
   const reading = controller.previewMode === 'content' && controller.reader.state;
@@ -118,8 +119,8 @@ export function renderInboxFrame(controller: InboxController, width: number, hei
   const output = [
     ` ┌${"─".repeat(inner)}┐ `,
     bordered(`\x1b[1;36mInbox agent\x1b[0m · ${state}${snapshot ? ` · ${snapshot.pending} pending` : ""}`),
-    bordered(outlinerActionLink("tree.navigation.link", "[Link destination]")+" "+outlinerActionLink("tree.navigation.once", "[Open once]")+" · "+sanitizeDynamicText(message + (reading && controller.selected?.error ? ` · ${controller.selected.error}` : ""))),
-    bordered(`\x1b[${attention ? "1;33" : "2"}m${current}\x1b[0m`),
+    bordered(outlinerActionLink("tree.inbox.search","[Search /]")+" "+outlinerActionLink("tree.navigation.link", "[Link destination]")+" "+outlinerActionLink("tree.navigation.once", "[Open once]")+" · "+sanitizeDynamicText(message + (reading && controller.selected?.error ? ` · ${controller.selected.error}` : ""))),
+    bordered(controller.searching ? outlinerActionLink("tree.inbox.search",`Search: ${sanitizeDynamicText(controller.searchQuery)}${controller.searchEditing?"▏":""}`)+" "+outlinerActionLink("tree.inbox.search.clear","[×]") : `\x1b[${attention ? "1;33" : "2"}m${current}\x1b[0m`),
     bordered(tabs + (compact ? " · Alt+P List/Preview" : "")),
   ];
   for (let row = 0; row < body; row++) {
@@ -132,7 +133,8 @@ export function renderInboxFrame(controller: InboxController, width: number, hei
   const editor = `Direction: ${sliceByColumn(before, Math.max(0, visibleWidth(before) - Math.max(1, inner - 13)), Math.max(1, inner - 13), true)}▏${instructions.slice(controller.column)}`;
   const detailProgress = maxOffset ? ` · detail ${controller.detailOffset + 1}-${Math.min(details.length, controller.detailOffset + detailHeight)}/${details.length}` : "";
   const selection = controller.attentionOnly ? `${controller.index + 1}/${results.length} needing attention` : `Result ${controller.resultsOffset + controller.index + 1} · recent ${recentRange}`;
-  const status = controller.notice || (controller.loading ? "Refreshing…" : `${results.length ? selection : "Ready"}${omitted}${detailProgress}`);
+  const searchStatus=controller.searching?controller.searchError||`${results.length} results · ${controller.searchLoading?"searching…":controller.searchRanking?"ranking…":controller.searchResults?.semantic.status==="ranked"?"Jev ranked":"text matches"}${controller.searchResults?.completeness.kind==="truncated"?" · more matches omitted":""}${controller.searchResults?.semantic.message?" · "+controller.searchResults.semantic.message:""}`:"";
+  const status = searchStatus || controller.notice || (controller.loading ? "Refreshing…" : `${results.length ? selection : "Ready"}${omitted}${detailProgress}`);
   const [mainHelp = "", navigationHelp = ""] = help.split("\n");
   output.push(
     bordered(controller.steering ? editor : sanitizeDynamicText(status)),

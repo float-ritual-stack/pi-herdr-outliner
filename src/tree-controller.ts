@@ -433,7 +433,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   });
 
   function actionScope(): string {
-    return mode === "inbox" && inbox.steering ? "inbox-steer" : mode;
+    return mode === "inbox" && inbox.searchEditing ? "inbox-search" : mode === "inbox" && inbox.steering ? "inbox-steer" : mode;
   }
 
   async function handleGotoMouse(sequence: string): Promise<void> {
@@ -496,6 +496,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
 
   function inboxHelpText(): string | null {
     if (mode !== "inbox") return null;
+    if(inbox.searchEditing)return "Esc cancel search · Enter browse results · Alt+Enter open Detail\nType to search all history · ↑↓ select";
     if (inbox.steering) return actionKeymap.helpText("tree", "inbox-steer", ["tree.cancel", "tree.inbox.retry.submit"]);
     const main = actionKeymap.helpText("tree", "inbox", [
       "tree.cancel", "tree.inbox.pause", "tree.inbox.tree", "tree.inbox.detail", "tree.inbox.undo", "tree.inbox.reconsider",
@@ -1976,6 +1977,8 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         effects.invalidate();return;
       }
     }
+    if(actionId==="tree.inbox.search"&&(mode==="inbox"||(mode==="action-menu"&&actionMenuReturnMode==="inbox"))){mode="inbox";inbox.startSearch();return;}
+    if(actionId==="tree.inbox.search.clear"&&mode==="inbox"){await inbox.cancelSearch();return;}
     if (actionId.startsWith("tree.inbox.open-target:") && mode === "inbox") {
       const index=Number(actionId.split(":")[1]);
       if (Number.isInteger(index) && inbox.targets[index]?.role !== "diagnostics" && inbox.targets[index]) {

@@ -1,3 +1,4 @@
+import type {InboxSearchCollection} from './inbox-search';
 import type { RequestInput } from "./client";
 import type { OutlinerRequester } from "./client-target";
 import type { InboxResultSummary, InboxStatus } from "./inbox-types";
@@ -42,6 +43,73 @@ export class InboxController {
   error = "";
   notice = "";
 
+  searchEditing = false;
+  searchResults: InboxSearchCollection | null = null;
+  searchLoading = false;
+  searchRanking = false;
+  searchError = "";
+  private searchBuffer: TextBuffer | null = null;
+  private searchGeneration = 0;
+  private searchTimer: ReturnType<typeof setTimeout> | undefined;
+  private searchTouched = false;
+  private beforeSearch: {id?:string;index:number;targetIndex:number;detailOffset:number;previewMode:'content'|'activity';offset:number}|null = null;
+  get searching(): boolean {return this.searchBuffer !== null;}
+  get searchQuery(): string {return this.searchBuffer?.text ?? "";}
+  startSearch(): void {
+    if (!this.searching) {
+      this.beforeSearch={id:this.selected?.id,index:this.index,targetIndex:this.targetIndex,detailOffset:this.detailOffset,previewMode:this.previewMode,offset:this.reader.state?.offset??0};
+      this.searchBuffer=new TextBuffer();this.searchChanged();
+    }
+    this.searchEditing=true;this.reader.focus(false);this.effects.invalidate();
+  }
+  async cancelSearch(): Promise<void> {
+    const saved=this.beforeSearch;
+    this.searchBuffer=null;this.searchEditing=false;this.searchResults=null;this.searchLoading=false;this.searchRanking=false;
+    this.searchGeneration++;clearTimeout(this.searchTimer);this.beforeSearch=null;this.searchError="";
+    if(saved){this.index=Math.max(0,this.results.findIndex(result=>result.id===saved.id));this.targetIndex=saved.targetIndex;this.detailOffset=saved.detailOffset;this.previewMode=saved.previewMode;}
+    this.previewKey="";this.refreshPreview();this.effects.invalidate();
+  }
+  private searchChanged(): void {
+    const generation=++this.searchGeneration;clearTimeout(this.searchTimer);
+    const query=this.searchQuery;this.searchResults=null;this.index=0;this.targetIndex=0;this.previewKey="";this.reader.clear();
+    this.searchTouched=false;this.searchLoading=true;this.searchRanking=false;this.searchError="";
+    const load=async(semantic:boolean)=>{
+      try {
+        const result=await this.effects.request<InboxSearchCollection>({action:'inbox.search',query,semantic});
+        if(!this.active||generation!==this.searchGeneration||!this.searching)return;
+        const selectedId=this.searchTouched?this.selected?.id:undefined;
+        if(!selectedId||result.matches.some(match=>match.result.id===selectedId)){
+          this.searchResults=result;this.index=selectedId?Math.max(0,result.matches.findIndex(match=>match.result.id===selectedId)):0;
+          if(!selectedId)this.targetIndex=0;
+          this.refreshPreview();
+        }
+      }catch(error){if(generation===this.searchGeneration)this.searchError=message(error);}
+      finally{if(generation===this.searchGeneration){if(semantic)this.searchRanking=false;else this.searchLoading=false;this.effects.invalidate();}}
+    };
+    void load(false).then(()=>{
+      if(generation!==this.searchGeneration||!this.searching||query.trim().length<3||this.searchError)return;
+      this.searchTimer=setTimeout(()=>{this.searchRanking=true;this.effects.invalidate();void load(true);},350);
+    });
+    this.effects.invalidate();
+  }
+  private async searchInput(str:string,key:TerminalKey):Promise<boolean>{
+    if(!this.searching)return false;
+    if(key.name==='escape'){await this.cancelSearch();return true;}
+    if(!this.searchEditing)return false;
+    if(key.name==='up'||key.name==='down'){this.move(key.name==='up'?-1:1);return true;}
+    if(key.name==='return'){this.searchEditing=false;if(key.meta)await this.open(this.targets[this.targetIndex]?.id,'detail');this.effects.invalidate();return true;}
+    const before=this.searchQuery;
+    if(key.name==='backspace')this.searchBuffer!.backspace();
+    else if(key.name==='delete')this.searchBuffer!.deleteForward();
+    else if(key.name==='left')this.searchBuffer!.moveLeft();
+    else if(key.name==='right')this.searchBuffer!.moveRight();
+    else if(key.name==='home')this.searchBuffer!.moveHome();
+    else if(key.name==='end')this.searchBuffer!.moveEnd();
+    else if(isPrintableInput(str,key))this.searchBuffer!.insert(boundedInstructions(str,Math.max(0,500-before.length)));
+    if(before!==this.searchQuery)this.searchChanged();else this.effects.invalidate();
+    return true;
+  }
+
   readonly reader: DocumentPreview;
   previewMode: 'content' | 'activity' = 'content';
   previewFrame: DocumentPreviewFrame | undefined;
@@ -58,6 +126,7 @@ export class InboxController {
   }
   selectResult(index: number): void {
     if (!Number.isInteger(index) || !this.results[index]) return;
+    this.searchEditing=false;
     this.reader.focus(false);
     this.move(index - this.index);
   }
@@ -84,6 +153,7 @@ export class InboxController {
   contentChanged(): void { this.refreshPreview(true); }
 
   get results(): InboxResultSummary[] {
+    if(this.searching)return this.searchResults?.matches.map(match=>match.result)??[];
     return this.snapshot?.attentionOnly === this.attentionOnly && this.snapshot.resultsOffset === this.resultsOffset ? this.snapshot.results : [];
   }
   get selected(): InboxResultSummary | undefined { return this.results[this.index]; }
@@ -102,6 +172,7 @@ export class InboxController {
   }
 
   async start(): Promise<void> {
+    this.searchBuffer=null;this.searchResults=null;this.searchEditing=false;this.searchGeneration++;clearTimeout(this.searchTimer);
     this.active = true;
     const session = ++this.session;
     this.reconsiderSourceId = null;
@@ -119,6 +190,7 @@ export class InboxController {
 
   async close(): Promise<void> {
     this.active = false;
+    this.searchGeneration++;clearTimeout(this.searchTimer);
     this.reader.cancelLoad();
     this.session++;
     this.reconsiderSourceId = null;
@@ -166,6 +238,7 @@ export class InboxController {
     const targetId = this.targets[this.targetIndex]?.id;
     this.snapshot = snapshot;
     this.error = "";
+    if(this.searching){this.refreshPreview();return;}
     const nextIndex = selectedId ? snapshot.results.findIndex(result => result.id === selectedId) : -1;
     this.index = nextIndex >= 0 ? nextIndex : Math.min(this.index, Math.max(0, snapshot.results.length - 1));
     this.targetIndex = Math.max(0, this.targets.findIndex(target => target.id === targetId));
@@ -174,6 +247,7 @@ export class InboxController {
   }
 
   move(delta: number): void {
+    if(this.searching)this.searchTouched=true;
     this.index = Math.max(0, Math.min(this.results.length - 1, this.index + delta));
     this.targetIndex = 0;
     this.detailOffset = 0;
@@ -184,6 +258,7 @@ export class InboxController {
   }
 
   paste(text: string): void {
+    if(this.searchEditing&&this.searchBuffer){this.searchBuffer.insert(boundedInstructions(text,Math.max(0,500-this.searchQuery.length)));this.searchChanged();return;}
     if (!this.steering || this.busy) return;
     this.buffer.insert(boundedInstructions(text, Math.max(0, 500 - this.instructions.length)));
     this.effects.invalidate();
@@ -191,6 +266,8 @@ export class InboxController {
 
   async input(str: string, key: TerminalKey): Promise<void> {
     if (!this.active) return;
+    if(await this.searchInput(str,key))return;
+    if(!this.steering&&str==="/"){this.startSearch();return;}
     if (key.name === "escape") {
       if (!this.steering && this.reader.state?.focused) {this.reader.focus(false);return;}
       if (this.steering) { this.reconsiderSourceId = null; this.notice = ""; this.effects.invalidate(); }
@@ -216,11 +293,13 @@ export class InboxController {
       else if (key.name === "end") this.buffer.moveEnd();
       else if (isPrintableInput(str, key)) this.paste(str);
     } else if (str === "a") {
+      if(this.searching){await this.cancelSearch();}
       this.attentionOnly = !this.attentionOnly;
       this.resultsOffset = 0;
       await this.changedCollection();
     } else if (key.name === "left" || key.name === "right") {
-      if (this.attentionOnly) this.notice = "Resolve these questions to reveal the remaining items";
+      if(this.searching){this.notice="Search covers all history; edit the query to narrow results";}
+      else if (this.attentionOnly) this.notice = "Resolve these questions to reveal the remaining items";
       else if (key.name === "left" && this.resultsOffset > 0) {
         this.resultsOffset = Math.max(0, this.resultsOffset - 30);
         await this.changedCollection();
