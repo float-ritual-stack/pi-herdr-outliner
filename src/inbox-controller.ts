@@ -79,12 +79,12 @@ export class InboxController {
     const generation=++this.searchGeneration;clearTimeout(this.searchTimer);
     const query=this.searchQuery;
     if(!preserveSelection){this.searchResults=null;this.index=0;this.targetIndex=0;this.previewKey="";this.reader.clear();}
-    this.searchTouched=preserveSelection;this.searchLoading=true;this.searchRanking=false;this.searchError="";
+    this.searchTouched=preserveSelection;this.notice="";this.searchLoading=true;this.searchRanking=false;this.searchError="";
     const load=async(semantic:boolean)=>{
       try {
         const result=await this.effects.request<InboxSearchCollection>({action:'inbox.search',query,semantic});
         if(!this.active||generation!==this.searchGeneration||!this.searching)return;
-        const selectedId=this.searchTouched?this.selected?.id:undefined;
+        const selectedId=this.searchTouched||this.reader.state?.focused?this.selected?.id:undefined;
         if(!semantic||!selectedId||result.matches.some(match=>match.result.id===selectedId)){
           this.searchResults=result;this.index=selectedId?Math.max(0,result.matches.findIndex(match=>match.result.id===selectedId)):0;
           if(!selectedId)this.targetIndex=0;
@@ -104,7 +104,7 @@ export class InboxController {
     if(key.name==='escape'){await this.cancelSearch();return true;}
     if(!this.searchEditing)return false;
     if(key.name==='up'||key.name==='down'){this.move(key.name==='up'?-1:1);return true;}
-    if(key.name==='return'){this.searchEditing=false;if(key.meta)await this.open(this.targets[this.targetIndex]?.id,'detail');this.effects.invalidate();return true;}
+    if(key.name==='return'){this.searchTouched=true;this.searchEditing=false;if(key.meta)await this.open(this.targets[this.targetIndex]?.id,'detail');this.effects.invalidate();return true;}
     const before=this.searchQuery;
     if(key.name==='backspace')this.searchBuffer!.backspace();
     else if(key.name==='delete')this.searchBuffer!.deleteForward();
@@ -139,6 +139,7 @@ export class InboxController {
   }
   selectTarget(index: number): void {
     if (!Number.isInteger(index) || !this.targets[index]) return;
+    if(this.searching)this.searchTouched=true;
     this.targetIndex = Math.max(0,Math.min(this.targets.length - 1,index));
     this.previewMode = this.targets[this.targetIndex]?.role === 'diagnostics' ? 'activity' : 'content';
     this.refreshPreview(); this.effects.invalidate();
@@ -148,8 +149,9 @@ export class InboxController {
     if (!indices.length) {this.notice="No separate output; preview the current Source";this.effects.invalidate();return;}
     this.selectTarget(indices[(indices.indexOf(this.targetIndex)+1)%indices.length]!);
   }
-  showActivity(): void {this.previewMode = 'activity'; this.reader.focus(false); this.effects.invalidate();}
+  showActivity(): void {if(this.searching)this.searchTouched=true;this.previewMode = 'activity'; this.reader.focus(false); this.effects.invalidate();}
   scrollPreview(delta: number): void {
+    if(this.searching)this.searchTouched=true;
     if (this.previewFrame) this.reader.scroll(delta,this.previewFrame.content.width,this.previewFrame.content.height);
   }
   private async refreshPreview(force = false): Promise<boolean> {
@@ -404,6 +406,7 @@ export class InboxController {
   /** One content resolver for keyboard, mouse and destination creation. */
   async resolveContentTarget(blockId = this.targets[this.targetIndex]?.role === "diagnostics"
     ? this.selected?.sourceId : this.targets[this.targetIndex]?.id): Promise<string> {
+    if(this.searching)this.searchTouched=true;
     if (!blockId) throw new Error("Select an Inbox source or output");
     const session = this.session;
     const selectedId = this.selected?.id;

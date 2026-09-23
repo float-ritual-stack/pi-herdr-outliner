@@ -59,14 +59,14 @@ const result = await runHerdrScenario({
     };
     const query=async(text:string)=>{await terminal.write(`\x1b[200~${text}\x1b[201~`);await session.waitVisible(pane,`Search: ${text}`);};
     await click('[Search /]');await query('what is stopping me');
-    await session.waitVisible(pane,'so what is stopping me from');await session.waitVisible(pane,'Jev is not configured');
+    await session.waitVisible(pane,'so what is stopping');await session.waitVisible(pane,'Jev is not configured');
     await session.checkpoint('01-original-title-beyond-first-page');
     await click('[Source]');await session.waitVisible(pane,'Authored interactive content');
     await session.checkpoint('02-current-rich-source-from-original-title');
     // Escape restores recent history; query changes cannot leak into Tree filtering.
     await session.keys(pane,'esc');await session.waitVisible(pane,'Recent results:');
     await session.keys(pane,'/');await query('Dynamically generated TUI views');
-    await session.waitVisible(pane,'so what is stopping me from');
+    await session.waitVisible(pane,'so what is stopping');
     await session.keys(pane,'enter');await click('[Source]');
     await session.keys(pane,'alt+enter');await session.waitVisible(session.panes.detail,'Authored interactive content');
     await session.checkpoint('03-cleaned-title-and-explicit-linked-open');

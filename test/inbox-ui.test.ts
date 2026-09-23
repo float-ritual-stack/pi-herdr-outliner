@@ -568,3 +568,15 @@ test('undo from search refreshes receipt state without losing search context',as
  expect(h.controller.searching).toBe(true);expect(h.controller.selected?.state).toBe('undone');
  await h.controller.close();
 });
+
+test('choosing Source on the initial match owns that receipt while semantic ranking finishes',async()=>{
+ let finish:((value:unknown)=>void)|undefined;const receipts=[result('first'),result('second')];
+ const h=harness(request=>request.action==='inbox.search'?(request.semantic?new Promise(resolve=>finish=resolve):searchCollection(receipts)):undefined);
+ await startRecent(h.controller);h.controller.startSearch();h.controller.paste('query');await until(()=>!!finish);
+ h.controller.selectTarget(2);await setImmediate();
+ finish!(searchCollection([receipts[1]!,receipts[0]!],'ranked'));await setImmediate();
+ expect(h.controller.selected?.id).toBe('first');expect(h.controller.targets[h.controller.targetIndex]?.id).toBe('source-first');
+ h.controller.notice='Pane startup timed out';
+ expect(stripTerminalSequences(renderInboxFrame(h.controller,120,32,'help').join('\n'))).toContain('Pane startup timed out');
+ await h.controller.close();
+});

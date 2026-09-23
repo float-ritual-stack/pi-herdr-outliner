@@ -139,7 +139,7 @@ export function renderInboxFrame(controller: InboxController, width: number, hei
   const detailProgress = maxOffset ? ` · detail ${controller.detailOffset + 1}-${Math.min(details.length, controller.detailOffset + detailHeight)}/${details.length}` : "";
   const selection = controller.attentionOnly ? `${controller.index + 1}/${results.length} needing attention` : `Result ${controller.resultsOffset + controller.index + 1} · recent ${recentRange}`;
   const searchStatus=controller.searching?controller.searchError||`${results.length} results · ${controller.searchLoading?"searching…":controller.searchRanking?"ranking…":controller.searchResults?.semantic.status==="ranked"?"Jev ranked":"text matches"}${controller.searchResults?.completeness.kind==="truncated"?" · more matches omitted":""}${controller.searchResults?.semantic.message?" · "+controller.searchResults.semantic.message:""}`:"";
-  const status = searchStatus || controller.notice || (controller.loading ? "Refreshing…" : `${results.length ? selection : "Ready"}${omitted}${detailProgress}`);
+  const status = controller.searching ? [controller.notice,searchStatus].filter(Boolean).join(" · ") : controller.notice || (controller.loading ? "Refreshing…" : snapshot?.paused || snapshot?.state === "unavailable" ? message : `${results.length ? selection : "Ready"}${omitted}${detailProgress}`);
   const [mainHelp = "", navigationHelp = ""] = help.split("\n");
   output.push(
     bordered(controller.steering ? editor : sanitizeDynamicText(status)),
