@@ -1,7 +1,8 @@
+import {chooseInboxRoute} from "./inbox-routing";
 import {recordInboxOmission} from "./inbox-observations";
 import { combinedInboxUsage } from "./inbox-usage";
 import { createHash } from "node:crypto";
-import { loadNotePrompts } from "./ai-prompts";
+import { loadNotePrompts,loadInboxRoutingPrompt } from "./ai-prompts";
 import { createInboxModel, type InboxModelOptions } from "./inbox-model";
 import type { InboxUsage } from "./inbox-types";
 import type { NoteCandidate, NotePlan } from "./note-assistance-types";
@@ -10,6 +11,7 @@ import { contentOfText, passageKey, requestPassages } from "./note-content";
 
 export interface NoteModelContext {
   candidate: NoteCandidate;
+  routeInbox?: {hasChildren:boolean};
   tags: string[];
   propertyKeys: string[];
   read: (id: string) => Block | null;
@@ -74,6 +76,7 @@ export function createNoteModel(options: InboxModelOptions = {}): NoteModel {
   return async context => {
     const started = performance.now();
     const prompts = await loadNotePrompts(options.promptDirectory);
+    const routing=context.routeInbox?await loadInboxRoutingPrompt(options.promptDirectory):undefined;
     const apiKey = options.jevApiKey ?? process.env.TYPESAFE_API_KEY;
     if (!apiKey) throw new Error("Note organization needs TypeSafe/Jev configuration");
     const source = context.candidate.source;
@@ -86,6 +89,7 @@ export function createNoteModel(options: InboxModelOptions = {}): NoteModel {
     const keys = [...new Set(["type", "tag", ...context.propertyKeys])].slice(0, 120);
     const mayRequest = context.candidate.requestAllowed && content.length <= 12_000 && paragraphs.length > 0;
     const questions: Record<string, unknown> = {
+      ...(routing?.policy.enabled?{inbox_route:{type:"choice",...routing.policy.route},inbox_disposable:{type:"noul",instructions:routing.policy.disposable}}:{}),
       ...(!context.candidate.typeLocked ? { type: { type: "choice", ...prompts.type } } : {}),
       ...Object.fromEntries(candidates.map((tag, index) => [`tag_${index}`, { type: "noul", instructions: `${prompts.tag.instructions}\nCandidate tag: ${tag}` }])),
       ...(mayRequest ? {
@@ -131,6 +135,11 @@ export function createNoteModel(options: InboxModelOptions = {}): NoteModel {
       cost: tokens(raw.usage?.input_tokens) * 0.042 / 1_000_000, jevCalls: 1, jevSuccessfulCalls: 1, elapsedMs: Math.round(performance.now() - started), promptRevisions: prompts.revisions, notChecked: [] };
     if(content.length>excerpt.length)recordInboxOmission(usage,"classification","Only the first 12,000 characters were classified; requests beyond that bound were not evaluated");
     if(eligiblePassages.length>paragraphs.length)recordInboxOmission(usage,"request passages","Only up to 16 fresh passages shorter than 2,000 characters were considered for requests");
+    if(routing){
+      usage.promptRevisions!.push(routing.revision);
+      plan.inboxRoute=chooseInboxRoute(raw.answers,routing.policy,{complete:content.length<=excerpt.length,hasChildren:context.routeInbox!.hasChildren,steered:!!context.candidate.instructions||context.candidate.explicitReconsideration===true});
+      if(plan.inboxRoute.route==='keep'||plan.inboxRoute.route==='archive'){plan.tags=[...context.candidate.inferredTags];delete plan.type;}
+    }
     const addAnswerUsage = (additional: InboxUsage) => Object.assign(usage, combinedInboxUsage(usage, additional));
     if (mayRequest) {
       const request = choice("request", Object.keys(prompts.request.criteria));

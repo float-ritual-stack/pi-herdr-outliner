@@ -285,3 +285,88 @@ test("attention follows the latest operation when a filed request is reconsidere
   notes.apply("note-organized", notes.pending()[0]!, organized.plan);
   expect(assistantActivity(store, inbox, notes, true).attentionCount).toBe(0);
 });
+
+test('Inbox cheap routes preserve useful content, archive only reversibly, and expose decisions on receipts',async()=>{
+ const value=fixture();const {store}=value;let pi=0;
+ value.worker=new InboxWorker(store,async context=>{pi++;return file(context);},()=>{},{settleMs:1,noteModel:async ({candidate,routeInbox})=>{
+  expect(routeInbox).toEqual({hasChildren:false});
+  const route=candidate.source.text.startsWith('aaaa')?'archive':candidate.source.text.startsWith('Reference')?'metadata':'keep';
+  return {plan:{summary:'Organized note metadata',tags:route==='metadata'?['sqlite']:[],...(route==='metadata'?{type:'reference'}:{}),inboxRoute:{route,reason:`Fixture ${route}`}},usage};
+ }});
+ const sources=['aaaa','Milk and coffee [tag::shopping]','Reference: SQLite transactions'].map((text,index)=>store.capture(`routing-${index}`,text,'cli').block);
+ value.worker.wake();await until(()=>value.worker!.status().pending===0&&!value.worker!.status().current);
+ expect(pi).toBe(0);expect(value.worker.status().results).toHaveLength(3);
+ expect(store.require(sources[1]!.id).text).toContain('Milk and coffee');
+ expect(store.require(sources[1]!.id).properties.filter(p=>p.key==='tag')).toEqual([{key:'tag',value:'shopping'}]);
+ expect(store.require(sources[1]!.id).properties.some(p=>p.key==='type'&&p.value==='note')).toBe(false);
+ expect(store.require(sources[2]!.id).properties).toContainEqual({key:'type',value:'reference'});
+ const archived=value.worker.repository.results().find(result=>result.sourceId===sources[0]!.id)!;
+ expect(archived.routing?.route).toBe('archive');expect(store.require(store.require(sources[0]!.id).parentId!).text).toContain('Processed');
+ value.worker.repository.undo(archived.id,blocks=>value.worker!.notes!.checkpointRestored(blocks));
+ expect(store.require(sources[0]!.id).text).toBe(sources[0]!.text);expect(store.require(sources[0]!.id).parentId).toBe(sources[0]!.parentId);
+ value.worker.wake();await Bun.sleep(20);expect(value.worker.status().pending).toBe(0);
+});
+
+test('editorial routing remains visible when Pi fails and does not silently archive the source',async()=>{
+ const value=fixture();const {store}=value;
+ value.worker=new InboxWorker(store,async()=>{throw Error('provider unavailable');},()=>{},{settleMs:1,noteModel:async()=>({plan:{summary:'Inspect',tags:[],inboxRoute:{route:'editorial',reason:'Ambiguous short note'}},usage})});
+ const source=store.capture('unclear','did a thing','cli').block;value.worker.wake();await until(()=>value.worker!.status().state==='unavailable');
+ expect(value.worker.status().results[0]?.routing).toEqual({route:'editorial',reason:'Ambiguous short note'});expect(store.require(source.id)).toEqual(source);
+});
+
+for(const routed of [true,false])test(`editorial archive rejects arriving children with routing ${routed}`,async()=>{
+ const value=fixture();const {store}=value;const entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>();
+ const target=store.create('Existing reference');
+ value.worker=new InboxWorker(store,async({source,read})=>{
+  read(target.id);entered.resolve();await release.promise;
+  return {plan:{summary:'Archive after extraction',source:{text:source.text,disposition:'archive'},notes:[{text:'Extracted reference'}],tasks:[],updates:[{blockId:target.id,expectedRevision:target.revision,text:'Changed reference'}]},usage};
+ },result=>{if(result)value.worker!.pause();},{settleMs:1,...routed?{noteModel:async()=>({plan:{summary:'Inspect',tags:[],inboxRoute:{route:'editorial' as const,reason:'Needs editorial attention'}},usage})}:{}});
+ const source=store.capture('editorial-child-race','Capture with context','cli').block;value.worker.wake();await entered.promise;
+ const child=store.create('Keep this supporting context.',source.id);
+ try{expect(store.require(source.id).revision).toBe(source.revision);}finally{release.resolve();}
+ await until(()=>!value.worker!.status().current&&value.worker!.repository.results().length===1);
+ const result=value.worker.repository.results()[0]!;
+ expect(result).toMatchObject({state:'failed',failureKind:'conflict',outputIds:[]});expect(result.error).toContain('Child context');
+ expect(store.require(source.id)).toEqual(source);expect(store.require(child.id)).toEqual(child);expect(store.require(target.id)).toEqual(target);
+ expect(store.searchTree('Extracted reference').matches.filter(match=>store.require(match.block.id).text==='Extracted reference')).toHaveLength(0);
+});
+
+for(const disposition of ['archive','file'] as const)test(`editorial ${disposition} handles existing children safely`,async()=>{
+ const value=fixture();const {store}=value;
+ value.worker=new InboxWorker(store,async({source})=>({plan:{summary:'Inspect parent',source:{text:source.text,disposition},notes:[],tasks:[],updates:[]},usage}),result=>{if(result)value.worker!.pause();},{settleMs:1});
+ const source=store.capture('existing-children','Parent capture','cli').block;
+ const child=store.create('Existing supporting context.',source.id);value.worker.wake();
+ await until(()=>!value.worker!.status().current&&value.worker!.repository.results().length===1);
+ const result=value.worker.repository.results()[0]!;
+ expect(store.require(child.id)).toEqual(child);
+ if(disposition==='archive'){
+  expect(result).toMatchObject({state:'failed',failureKind:'conflict'});expect(store.require(source.id)).toEqual(source);
+ }else{
+  expect(result.state).toBe('applied');expect(store.require(source.id).parentId).not.toBe(source.parentId);
+ }
+});
+
+test('new child context invalidates a pending cheap archive even without a parent revision change',async()=>{
+ const value=fixture();const {store}=value;const entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>();let pi=0;
+ value.worker=new InboxWorker(store,async context=>{pi++;return file(context);},result=>{if(result)value.worker!.pause();},{settleMs:1,noteModel:async({routeInbox})=>{
+  expect(routeInbox?.hasChildren).toBe(false);entered.resolve();await release.promise;
+  return {plan:{summary:'Archive noise',tags:[],inboxRoute:{route:'archive',reason:'Fixture archive judgment'}},usage};
+ }});
+ const source=store.capture('child-race','aaaa','cli').block;value.worker.wake();await entered.promise;
+ const child=store.create('aaaa is the parser fixture name; keep this reproduction.',source.id);release.resolve();
+ await until(()=>!value.worker!.status().current&&value.worker!.repository.results().length===1);
+ const result=value.worker.repository.results()[0]!;expect(result.state).toBe('failed');expect(result.failureKind).toBe('conflict');
+ expect(result.error).toContain('Child context');expect(store.require(source.id)).toEqual(source);expect(store.require(child.id)).toEqual(child);expect(pi).toBe(0);
+});
+
+for(const route of ['keep','metadata'] as const)test(`child arrival invalidates pending ${route} routing`,async()=>{
+ const value=fixture();const {store}=value;const entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>();let pi=0;
+ value.worker=new InboxWorker(store,async()=>{pi++;throw Error('unexpected editor');},result=>{if(result)value.worker!.pause();},{settleMs:1,noteModel:async()=>{
+  entered.resolve();await release.promise;return {plan:{summary:'Keep useful note',tags:[],inboxRoute:{route,reason:'Useful as authored'}},usage};
+ }});
+ const source=store.capture(`child-race-${route}`,'Parent capture','cli').block;value.worker.wake();await entered.promise;
+ const child=store.create('Supporting context',source.id);release.resolve();
+ await until(()=>!value.worker!.status().current&&value.worker!.repository.results().length===1);
+ expect(value.worker.repository.results()[0]).toMatchObject({state:'failed',failureKind:'conflict',outputIds:[]});
+ expect(store.require(source.id)).toEqual(source);expect(store.require(child.id)).toEqual(child);expect(pi).toBe(0);
+});

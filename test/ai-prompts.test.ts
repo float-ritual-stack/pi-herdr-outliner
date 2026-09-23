@@ -150,3 +150,12 @@ test('Inbox prompt comparison describes missing guidance without replacing custo
   expect(await readFile(path,'utf8')).toBe('Custom editorial preference.\n');
  }finally{await rm(root,{recursive:true,force:true});}
 });
+
+test('routing policy is seeded once and remains editable without rebuild or silent repair',async()=>{
+ const {loadInboxRoutingPrompt}=await import('../src/ai-prompts');
+ const root=await directory();const path=join(root,'inbox-routing.json');
+ const original=JSON.parse(await readFile(path,'utf8'));original.archiveProbability=0.85;
+ await writeFile(path,JSON.stringify(original));await initializeAiPrompts(root);
+ expect((await loadInboxRoutingPrompt(root)).policy.archiveProbability).toBe(0.85);
+ await rm(path);await initializeAiPrompts(root);await expect(loadInboxRoutingPrompt(root)).rejects.toThrow('inbox-routing.json');
+});
