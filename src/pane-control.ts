@@ -459,7 +459,7 @@ export interface OpenVirtualBranchNavigatorPopupOptions {
   sourceClientId: string;
   sourceRole: OutlinerRegion;
   viewId: string;
-  adapter?: "bookmark";
+  adapter?: "bookmark" | "mentions";
 }
 
 export function openVirtualBranchNavigatorPopup(

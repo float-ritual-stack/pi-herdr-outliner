@@ -1,3 +1,4 @@
+import { MentionRepository } from "./mentions";
 import {searchInboxHistory,visibleInboxSearch} from './inbox-search';
 import {rankSearchWithJev} from './search-ranking';
 import { blockDisplayTitle } from "./references";
@@ -113,6 +114,7 @@ function annotationReconcileChanged(value: unknown): boolean {
 export class OutlinerServer {
   private inbox: InboxWorker | undefined;
   private readonly inboxRepository: InboxRepository;
+  private readonly mentions: MentionRepository;
   private readonly noteRepository: NoteAssistanceRepository;
   private inboxUnavailable = "Automatic Inbox cleanup is not enabled for this service";
   private activeGotoRankings = 0;
@@ -132,6 +134,7 @@ export class OutlinerServer {
     private readonly promptDirectory?: string,
   ) {
     this.workflows = new WorkflowManager(store);
+    this.mentions = new MentionRepository(store,store.workspaceRoot);
     this.inboxRepository = new InboxRepository(store);
     this.noteRepository = new NoteAssistanceRepository(store);
     // Baseline before accepting edits or awaiting provider configuration.
@@ -1715,6 +1718,11 @@ export class OutlinerServer {
             request.provenance,
           );
           break;
+        case "mentions.ingest": result=this.mentions.ingest(request.message); break;
+        case "mentions.list": result=this.mentions.list(request.scope,request.limit); break;
+        case "mentions.message": result=this.mentions.message(request.messageKey); break;
+        case "mentions.clear": result=this.mentions.clear(request.scope); break;
+        case "mentions.save": result=this.mentions.save(request.messageKey); break;
         case "bookmarks.root":
           result = this.store.bookmarksRoot();
           break;
@@ -1980,6 +1988,14 @@ export class OutlinerServer {
     let attention: AttentionClientState | undefined;
     let attentionInstruction: OutlinerEvent["attentionInstruction"];
     switch (request.action) {
+      case "mentions.ingest": {
+        const receipt=response.result as {deduplicated:boolean;references:number};
+        if(receipt.deduplicated||!receipt.references)return null;
+        domain="mentions";break;
+      }
+      case "mentions.clear":
+        if(!(response.result as {removed:number}).removed)return null;
+        domain="mentions";break;
       case "resource-sources.create":
         domain = "resource-catalog";
         sourceId = eventResultId(response.result, "Resource source");
@@ -2104,6 +2120,7 @@ export class OutlinerServer {
         blockId = receipt.delivery.id;
         break;
       }
+      case "mentions.save":
       case "capture.create": {
         const receipt = response.result as CaptureReceipt;
         if (receipt.deduplicated) return null;

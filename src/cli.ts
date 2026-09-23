@@ -32,6 +32,14 @@ let request: RequestInput | null = null;
 let directResult: unknown;
 
 switch (command) {
+  case "mentions": {
+    const operation=rest[0]??"list";
+    if(operation==="ingest") request={action:"mentions.ingest",message:JSON.parse(await Bun.stdin.text())};
+    else if(operation==="list") request={action:"mentions.list"};
+    else if(operation==="clear") request={action:"mentions.clear"};
+    else throw Error("mentions expects ingest (JSON stdin), list, or clear");
+    break;
+  }
   case "list": {
     const { values } = parseArgs({
       args: rest,

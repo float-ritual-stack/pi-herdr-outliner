@@ -548,3 +548,4 @@ test('finish_cleanup repairs invalid ordinary-note metadata inside one persisted
  const log=await readFile(output.usage.piSessions![0]!.path!,'utf8');
  expect(log).toContain('notes[0].text');expect(log).toContain('roadmap allocator');
 });
+

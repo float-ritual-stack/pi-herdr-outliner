@@ -135,6 +135,7 @@ async function readPrompt(directory: string, name: string): Promise<PromptRevisi
   const text = bytes.toString("utf8");
   if (!text.trim()) throw new PromptFileError(path, "file must not be empty");
   const sha256=createHash("sha256").update(bytes).digest("hex");
+  if(name!=="inbox-editor.md")return {path,text,sha256};
   const packaged=resolve(directory)===resolve(DEFAULT_AI_PROMPT_DIRECTORY)?bytes:await readFile(join(DEFAULT_AI_PROMPT_DIRECTORY,name));
   return {path,text,sha256,packagedSha256:createHash("sha256").update(packaged).digest("hex")};
 }

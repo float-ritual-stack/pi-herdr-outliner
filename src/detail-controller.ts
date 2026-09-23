@@ -591,7 +591,7 @@ export interface DetailEffects {
   completeFiles(query: string): Promise<ReferencedPathCandidate[]>;
   focusOutliner(): Promise<void>;
   openPropertyInspectorPane(blockId: string): string | Promise<string>;
-  openVirtualBranchNavigator(viewId: string, adapter?: "bookmark"): void | Promise<void>;
+  openVirtualBranchNavigator(viewId: string, adapter?: "bookmark" | "mentions"): void | Promise<void>;
   bookmarkStatus(targetBlockId: string): Promise<BookmarkStatus>;
   toggleBookmark(targetBlockId: string, expectedRecordId: string | null): Promise<BookmarkToggleReceipt>;
   bookmarksRoot(): Promise<Block>;
@@ -648,6 +648,7 @@ export type DetailIntent =
   | { type: "virtual-branch.open" }
   | { type: "bookmark.toggle" }
   | { type: "bookmarks.open" }
+  | { type: "mentions.open" }
   | { type: "backlinks.move"; delta: -1 | 1 }
   | { type: "backlinks.open" }
   | { type: "backlinks.reveal" }
@@ -3281,6 +3282,15 @@ export function createDetailController(
         }
         break;
       }
+      case "mentions.open": {
+        try {
+          await effects.openVirtualBranchNavigator("recent-mentions", "mentions");
+          state.status = "Opened recent agent mentions";
+        } catch (error) {
+          state.status = errorMessage(error);
+        }
+        break;
+      }
       case "bookmarks.open": {
         const root = await effects.bookmarksRoot();
         await effects.openVirtualBranchNavigator(root.id, "bookmark");
@@ -4162,6 +4172,7 @@ export function createDetailController(
       return destinationChooser!.helpText();
     },
     async onServiceEvent(event, viewport) {
+      if (event.domain === "mentions") return;
       // Destination headers consume these independently; no document changed.
       if (event.domain === "view" && ["clients.update", "clients.unregister", "navigation.link.set"].includes(event.action)) return;
       if (event.domain === "attention") {

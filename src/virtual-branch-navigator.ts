@@ -40,7 +40,7 @@ export interface VirtualBranchNavigatorLaunch {
   sourceRole: OutlinerRegion;
   browsingContextId: string;
   viewId: string;
-  adapter?: "bookmark";
+  adapter?: "bookmark" | "mentions";
 }
 
 export interface VirtualBranchNavigatorProjection {
@@ -62,7 +62,7 @@ export function bookmarkProjectionRows(
   return rows.filter((row) => recordIds.has(row.matchRootCanonicalId));
 }
 
-export type VirtualBranchNavigatorPreview =
+export type VirtualBranchNavigatorPreview = { context?: string } & (
   | {
     document: DetailReadPreviewDocument;
     target: OpenDestinationTarget;
@@ -71,7 +71,7 @@ export type VirtualBranchNavigatorPreview =
     document: DetailReadPreviewDocument;
     target: null;
     unavailableReason: string;
-  };
+  });
 
 export interface VirtualBranchNavigatorEffects {
   loadProjection(
@@ -87,7 +87,13 @@ export interface VirtualBranchNavigatorEffects {
   invalidate(): void;
 }
 
+export interface NavigatorCommand {
+  key: string;
+  label(): string;
+  run(row: VirtualBranchOccurrenceRow | undefined): Promise<string>;
+}
 export interface VirtualBranchNavigatorOptions {
+  commands?: readonly NavigatorCommand[];
   destinationTimeoutMs?: number;
   actionKeymap?: OutlinerActionKeymap;
 }
@@ -102,6 +108,7 @@ export interface VirtualBranchNavigatorRenderResult {
   mouseTargets: readonly (VirtualBranchNavigatorMouseTarget | null)[];
   listWidth: number;
   narrow: boolean;
+  controls?: readonly {start:number;end:number;key:string}[];
 }
 
 const WIDE_MINIMUM_WIDTH = 84;
@@ -144,12 +151,14 @@ export class VirtualBranchNavigatorController {
   private refreshGeneration = 0;
   private previewGeneration = 0;
   private closed = false;
+  readonly commands: readonly NavigatorCommand[];
 
   constructor(
     readonly sourceRole: OutlinerRegion,
     private readonly effects: VirtualBranchNavigatorEffects,
     options: VirtualBranchNavigatorOptions = {},
   ) {
+    this.commands = options.commands ?? [];
     this.actionKeymap = options.actionKeymap ?? DEFAULT_OUTLINER_ACTION_KEYMAP;
     this.destinationChooser = new OpenDestinationChooser({
       replace: (target) => effects.replaceTarget(openDestinationBlockId(target)),
@@ -180,6 +189,8 @@ export class VirtualBranchNavigatorController {
   get preview(): DetailReadPreviewDocument | null {
     return this.loadedPreview?.value.document ?? null;
   }
+
+  get previewContext(): string | undefined { return this.loadedPreview?.value.context; }
 
   get destinationChooserHelpText(): string {
     return this.destinationChooser.helpText();
@@ -247,6 +258,8 @@ export class VirtualBranchNavigatorController {
       return;
     }
 
+    const command = !key.ctrl && !key.meta ? this.commands.find(command => command.key === str) : undefined;
+    if (command) { await this.runCommand(command.key); return; }
     const mapped = this.actionKeymap.canonicalize(
       this.sourceRole,
       this.sourceRole === "tree" ? "browse" : "preview",
@@ -327,6 +340,10 @@ export class VirtualBranchNavigatorController {
     }
     const click = parseTreePrimaryClick(sequence);
     if (!click) return;
+    if (click.row === 2) {
+      const control=rendered.controls?.find(control=>click.column>=control.start&&click.column<control.end);
+      if(control){await this.runCommand(control.key);return;}
+    }
     if (!rendered.narrow && click.column > rendered.listWidth) return;
     const target = rendered.mouseTargets[click.row];
     if (!target) return;
@@ -340,6 +357,13 @@ export class VirtualBranchNavigatorController {
     } else if (treeClickActivates(click)) {
       this.openDestinationChooser();
     }
+  }
+
+  private async runCommand(key:string):Promise<void>{
+    const command=this.commands.find(command=>command.key===key);if(!command)return;
+    try{const status=await command.run(this.selectedRow);await this.refresh();this.status=status;}
+    catch(error){this.status=errorMessage(error);}
+    this.effects.invalidate();
   }
 
   clampOffsets(viewportHeight: number, previewLineCount: number): void {
@@ -617,7 +641,7 @@ export function renderVirtualBranchNavigatorFrame(
     : "No preview available.";
   const preview = controller.preview;
   const previewLines = previewStatus === null && preview
-    ? renderDetailReadPreviewLines(preview, previewWidth, theme)
+    ? [...(controller.previewContext ? new Markdown(sanitizeMarkdownDocument(controller.previewContext),0,0,theme).render(previewWidth).concat([" "]) : []), ...renderDetailReadPreviewLines(preview, previewWidth, theme)]
     : new Markdown(
       sanitizeMarkdownDocument(previewStatus ?? "No preview available."),
       0,
@@ -630,7 +654,15 @@ export function renderVirtualBranchNavigatorFrame(
   const mode = narrow ? ` · ${controller.narrowPane}` : " · split";
   const output = [`\x1b[H\x1b[2J${truncateToWidth(`\x1b[1;36m${title}${mode}\x1b[0m`, safeWidth)}`];
   output.push(truncateToWidth(`\x1b[2m${stripTerminalSequences(controller.notice())}\x1b[0m`, safeWidth));
-  output.push("─".repeat(safeWidth));
+  const controls:Array<{start:number;end:number;key:string}>=[];
+  let toolbar="";
+  for(const command of controller.commands){
+    const label=`[${command.key} ${sanitizeDynamicText(command.label())}] `;
+    const start=visibleWidth(toolbar),end=start+visibleWidth(label);
+    if(end>safeWidth)break;
+    controls.push({start,end,key:command.key});toolbar+=label;
+  }
+  output.push(toolbar || "─".repeat(safeWidth));
   const mouseTargets: Array<VirtualBranchNavigatorMouseTarget | null> = [null, null, null];
 
   const listRows = controller.visibleRows.slice(controller.listOffset, controller.listOffset + bodyHeight);
@@ -671,5 +703,5 @@ export function renderVirtualBranchNavigatorFrame(
     safeWidth,
   ));
   mouseTargets.push(null, null);
-  return { frame: output.join("\n"), mouseTargets, listWidth, narrow };
+  return { frame: output.join("\n"), mouseTargets, listWidth, narrow, controls };
 }

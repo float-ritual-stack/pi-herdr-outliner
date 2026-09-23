@@ -1,3 +1,4 @@
+import type { MentionMessage, MentionScope } from "./mentions-types";
 import type { AuthoredResourceReference } from "./resource-references";
 import type { PromptRevision } from "./ai-prompts";
 import type {
@@ -1227,7 +1228,7 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 70;
+export const OUTLINER_PROTOCOL_VERSION = 71;
 
 
 export interface OutlinerServiceStatus {
@@ -1420,6 +1421,11 @@ export type OutlinerRequest =
       author?: BlockAuthor;
       provenance?: BlockProvenance;
     }
+  | { id:string; action:"mentions.ingest"; message:MentionMessage }
+  | { id:string; action:"mentions.list"; scope?:MentionScope; limit?:number }
+  | { id:string; action:"mentions.message"; messageKey:string }
+  | { id:string; action:"mentions.clear"; scope?:MentionScope }
+  | { id:string; action:"mentions.save"; messageKey:string }
   | { id: string; action: "bookmarks.root" }
   | { id: string; action: "bookmarks.status"; targetBlockId: string }
   | { id: string; action: "bookmarks.resolve"; recordId: string }
@@ -1741,6 +1747,7 @@ export interface OutlinerNavigationDispatch extends OutlinerNavigationResolution
 }
 
 export type OutlinerEventDomain =
+  | "mentions"
   | "inbox"
   | "content"
   | "resource-catalog"
