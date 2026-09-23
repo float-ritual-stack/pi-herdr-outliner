@@ -52,6 +52,25 @@ test("Escape closes only focused Preview and leaves Current draft and selection 
   expect(released).toBe(1);
 });
 
+test("Escape preserves a focused Preview file-line selection outside buffer mode", async () => {
+  const current = reader(); const preview = reader(); let released = 0;
+  const surface = new DetailReadingSurface(current.controller, preview.controller, () => {}, async () => {released++;});
+  surface.previewVisible = true; surface.focused = "preview";
+  preview.state.mode = "file";
+  preview.state.selectionAnchor = 0;
+  expect(preview.controller.isBufferMode()).toBe(false);
+  expect(await surface.escapePreview()).toBe(false);
+  expect(surface.previewVisible).toBe(true);
+  expect(surface.focused).toBe("preview");
+  expect(preview.state.selectionAnchor).toBe(0);
+  expect(preview.releases()).toBe(0);
+  expect(released).toBe(0);
+  preview.state.selectionAnchor = null;
+  expect(await surface.escapePreview()).toBe(true);
+  expect(preview.releases()).toBe(1);
+  expect(released).toBe(1);
+});
+
 test("Escape defers to Preview local editors, filters, chooser and source selection", async () => {
   const current = reader(); const preview = reader();
   const surface = new DetailReadingSurface(current.controller, preview.controller, () => {}, async () => {});
