@@ -1613,7 +1613,7 @@ synchronizeLayout = () => {
     layoutRoot = nextRoot;
     if (composedLayout) composedLayout.setDetail(nextRoot);
   }
-  tui.setLayoutRoot(composedTree?.controller.view().mode === "goto" ? composedTree : composedLayout ?? nextRoot);
+  tui.setLayoutRoot(composedTree && (composedTree.controller.view().mode === "goto" || composedTree.keyInspectorActive) ? composedTree : composedLayout ?? nextRoot);
   tui.requestRender();
 };
 synchronizeLayout();
