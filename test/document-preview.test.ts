@@ -77,6 +77,24 @@ test('Preview follows rendered links without writes, restores history and opens 
  expect(requests.every(action=>action==='get'||action==='references.resolve')).toBe(true);
 });
 
+test('Preview link labels use their own display columns, including wide and combining glyphs',async()=>{
+ const {initTheme}=await import('@earendil-works/pi-coding-agent');initTheme(undefined,false);
+ const {documentPreviewLinks,renderDocumentPreview}=await import('../src/document-preview-renderer');
+ const {stripTerminalSequences}=await import('@earendil-works/pi-tui');
+ const reader=new DocumentPreview({async request<T>():Promise<T>{throw Error('not used');}},()=>{});
+ await reader.loadText({kind:'block',blockId:'source'},'Source',Promise.resolve('See 界 [Read 界 e\u0301](https://example.com/first) then [Other](https://example.com/second) before continuing.'));
+ const links=documentPreviewLinks(reader.state!.document,120);
+ expect(links.map(link=>link.label)).toEqual(['Read 界 e\u0301','Other']);
+ expect(links[0]!.row).toBe(links[1]!.row);
+ reader.focus();
+ for(const label of ['Read 界 e\u0301','Other']){
+  reader.cycleLink(1,120,17);
+  expect(reader.state?.activeLinkLabel).toBe(label);
+  const frame=renderDocumentPreview(reader.state!,{x:0,y:0,width:120,height:20},'help');
+  expect(stripTerminalSequences(frame.lines.at(-1)!).trim()).toBe(`Enter follow · ${label}`);
+ }
+});
+
 test('a late link resolution cannot navigate a newly selected Preview; unresolved pages never create notes',async()=>{
  const resolution=Promise.withResolvers<unknown>();
  const reader=new DocumentPreview({async request<T>(input:RequestInput):Promise<T>{

@@ -419,7 +419,9 @@ export class InboxController {
     if (!this.steering && this.previewMode === 'content' && this.reader.state?.focused && ['up','down','pageup','pagedown'].includes(key.name ?? '')) {
       this.scrollPreview((key.name === 'up' || key.name === 'pageup' ? -1 : 1) * (key.name?.startsWith('page') ? Math.max(1,this.previewFrame?.content.height ?? 5) : 1));return;
     }
-    if(!this.steering&&this.previewMode==='content'&&this.reader.state?.focused&&['tab','return','left','right'].includes(key.name??'')){
+    const state=this.reader.state;
+    if(!this.steering&&this.previewMode==='content'&&state?.focused&&['tab','return','left','right'].includes(key.name??'')
+      &&(key.name!=='return'||key.meta||state.activeLink)){
       const frame=this.reader===this.outputReader?this.outputFrame:this.sourceFrame;
       if(await this.reader.key(key,frame?.content.width??60,frame?.content.height??10,target=>this.openPreview(target)))return;
     }
