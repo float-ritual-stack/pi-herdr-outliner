@@ -42,7 +42,9 @@ const result = await runHerdrScenario({
     // Header clicks use the attached native terminal, including pane offsets.
     const clickLinkHeader = async (pane: string, destinationTitle: string) => {
       await s.focus(pane);
-      const label = `Opens in: ${destinationTitle}`;
+      // Composed Tree headers may truncate the title; a unique visible prefix
+      // identifies the same logical destination without assuming pane width.
+      const label = `Opens in: ${destinationTitle.slice(0, 9)}`;
       const frame = await s.waitFor("persistent link header", terminal.visible, text => text.includes(label));
       const rows = frame.split("\n");
       const row = rows.findIndex(line => line.includes(label));
@@ -109,6 +111,7 @@ const result = await runHerdrScenario({
     const propertiesClients = await s.waitFor("dedicated Properties reader", s.registrations, values => values.some(c => c.role === "detail" && !beforeProperties.some(old => old.clientId === c.clientId)));
     const properties = propertiesClients.find(c => c.role === "detail" && !beforeProperties.some(old => old.clientId === c.clientId))!;
     const propertiesPane = await s.adoptDetached(properties.clientId, "detail");
+    await s.waitVisible(propertiesPane, "Properties");
     await s.focus(propertiesPane); await s.keys(propertiesPane, "shift+l");
     await finishChoice(propertiesPane, "detail", "NEXT TREE INSPECTION", second.clientId, properties.clientId);
     await s.checkpoint("04-properties-link-entry-point");
