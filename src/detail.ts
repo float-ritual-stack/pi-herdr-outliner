@@ -1,5 +1,5 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { DetailReadingSurface } from "./detail-reading-surface";
+import { DetailReadingSurface, detailReaderGeometry } from "./detail-reading-surface";
 import { getProperty } from "./properties";
 import { detailPropertyInspectorRegions } from "./property-inspector";
 import { emitKeypressEvents } from "node:readline";
@@ -103,11 +103,11 @@ let workQueue = Promise.resolve();
 let pendingPaste: string | null = null;
 
 function viewport(reader: DetailController = readingSurface.active): DetailViewport {
-  const totalWidth = process.stdout.columns ?? 100;
-  const width = readingSurface.previewVisible && totalWidth >= 150 ? Math.floor((totalWidth - 1) / 2) : totalWidth;
+  const geometry = detailReaderGeometry(process.stdout.columns ?? 100, process.stdout.rows ?? 30, readingSurface.previewVisible);
+  const {width, height} = reader === inspection ? geometry.preview : geometry.current;
   return {
     width,
-    height: process.stdout.rows ?? 30,
+    height,
     ...(reader.state.mode === "preview" ? { preview: buildDetailAnsiPreview(reader.state, width) } : {}),
   };
 }
@@ -416,17 +416,18 @@ const effects: DetailEffects = {
 };
 
 function draw(): void {
+  const geometry = detailReaderGeometry(process.stdout.columns ?? 100, process.stdout.rows ?? 30, readingSurface.previewVisible);
   const render = (reader: DetailController, label: string) => {
     reader.setPreviewRegions(detailPropertyInspectorRegions(reader.state));
     return renderDetailLines(reader.state, viewport(reader), {
-      header: {surface: label, focused: readingSurface.active === reader},
-      helpPrefix: readingSurface.previewVisible ? "F7 Current/Preview · Alt+Enter Keep · Shift+F7 close" : "",
+      header: {surface: label === "Current" && geometry.arrangement === "switch" ? `Current · Preview ready (${actionKeymap.primaryBinding("detail.reading.focus")})` : label, focused: readingSurface.active === reader},
+      helpPrefix: readingSurface.previewVisible ? `${actionKeymap.primaryBinding("detail.reading.focus")} Current/Preview · Alt+Enter Keep · Esc close Preview` : "",
       helpText: actionKeymap.helpText("detail", detailActionScopes(reader.state, {bufferMode: reader.isBufferMode()})),
       chooserHelpText: reader.destinationChooserHelpText(),
     });
   };
   let lines: string[];
-  if (readingSurface.previewVisible && (process.stdout.columns ?? 100) >= 150) {
+  if (geometry.arrangement === "beside") {
     const left = render(controller, "Current");
     const right = render(inspection, "Preview");
     const width = viewport(controller).width;
@@ -434,6 +435,8 @@ function draw(): void {
       const line = truncateToWidth(left[index] ?? "", width);
       return line + " ".repeat(Math.max(0, width - visibleWidth(line))) + "│" + (right[index] ?? "");
     });
+  } else if (geometry.arrangement === "below") {
+    lines = [...render(controller, "Current"), "─".repeat(geometry.current.width), ...render(inspection, "Preview")];
   } else lines = render(readingSurface.active, readingSurface.active === inspection ? "Preview" : "Current");
   process.stdout.write("\x1b[H\x1b[2J" + lines.join("\n"));
 }
@@ -553,8 +556,8 @@ function stop(): void {
   process.exit(0);
 }
 
-const handleKeypress = createDetailKeyHandler({ controller, viewport, stop, actionKeymap });
-const inspectionKeypress = createDetailKeyHandler({controller: inspection, viewport, stop: () => { void readingSurface.closePreview(); }, actionKeymap});
+const handleKeypress = createDetailKeyHandler({ controller, viewport: () => viewport(controller), stop, actionKeymap });
+const inspectionKeypress = createDetailKeyHandler({controller: inspection, viewport: () => viewport(inspection), stop: () => { void readingSurface.closePreview(); }, actionKeymap});
 
 async function initialize(): Promise<void> {
   await waitForService();
@@ -595,6 +598,7 @@ async function handleInput(str: string, key: TerminalKey): Promise<void> {
     }
     if (active.isBufferMode()) await active.dispatch({ type: "buffer.insert", text }, viewport());
   }
+  if (inputAction !== "suppress" && key.name === "escape" && await readingSurface.escapePreview()) return;
   if (inputAction !== "suppress" && !active.state.destinationChooser.active) {
     const {actionId} = actionKeymap.resolve("detail", detailActionScopes(active.state), str, key);
     if (actionId === "detail.reading.focus") { readingSurface.toggleFocus(); return; }

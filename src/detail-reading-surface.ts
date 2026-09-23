@@ -2,6 +2,27 @@ import type { PreviewRegionAction } from "./detail-preview-regions";
 import type { DetailController, DetailOpenRouting, DetailViewport } from "./detail-controller";
 import type { OutlinerEvent, OutlinerNavigationTarget, OutlinerUiCommand } from "./types";
 
+export interface DetailReaderRectangle { x: number; y: number; width: number; height: number }
+export interface DetailReaderGeometry {
+  arrangement: "single" | "beside" | "below" | "switch";
+  current: DetailReaderRectangle;
+  preview: DetailReaderRectangle;
+}
+
+export function detailReaderGeometry(width: number, height: number, previewVisible: boolean): DetailReaderGeometry {
+  const full = {x: 0, y: 0, width, height};
+  if (!previewVisible) return {arrangement: "single", current: full, preview: full};
+  if (width >= 101) {
+    const left = Math.floor((width - 1) / 2);
+    return {arrangement: "beside", current: {...full, width: left}, preview: {...full, x: left + 1, width: width - left - 1}};
+  }
+  if (height >= 24) {
+    const top = Math.floor((height - 1) / 2);
+    return {arrangement: "below", current: {...full, height: top}, preview: {...full, y: top + 1, height: height - top - 1}};
+  }
+  return {arrangement: "switch", current: full, preview: full};
+}
+
 /** One retained reader and one disposable, read-only inspection surface. */
 export class DetailReadingSurface {
   previewVisible = false;
@@ -26,6 +47,17 @@ export class DetailReadingSurface {
     }
     this.focused = this.focused === "current" ? "preview" : "current";
     this.invalidate();
+  }
+
+  async escapePreview(): Promise<boolean> {
+    if (this.active !== this.preview) return false;
+    const state = this.preview.state;
+    if (this.preview.isBufferMode() || state.mode === "select" ||
+      state.destinationChooser.active || state.propertyInspector.edit ||
+      state.propertyInspector.filterDraft !== null || state.backlinks.filterDraft !== null ||
+      state.completion) return false;
+    await this.closePreview();
+    return true;
   }
 
   async closePreview(): Promise<void> {
