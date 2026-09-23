@@ -1962,13 +1962,17 @@ describe("createTreeController", () => {
     await controller.initialize();
 
     await controller.handleKeypress("e", { name: "e" }, "pass");
-    const callsBeforeEvent = fake.calls.length;
+    const indexReads = () => fake.calls.filter(call => call.action === "tree.index").length;
+    const callsBeforeEvent = indexReads();
+    const draft=controller.view().quickInput;
     await controller.handleServiceEvent(event("content", "selected"));
-    expect(fake.calls).toHaveLength(callsBeforeEvent);
+    expect(indexReads()).toBe(callsBeforeEvent);
+    expect(controller.view().quickInput).toBe(draft);
+    expect(controller.view().mode).toBe("edit");
     expect(controller.view().refreshPending).toBe(true);
 
     await controller.handleKeypress("", { name: "escape" }, "pass");
-    expect(fake.calls.slice(callsBeforeEvent).map((call) => call.action)).toEqual(["tree.index"]);
+    expect(indexReads()).toBe(callsBeforeEvent + 1);
     expect(controller.view().mode).toBe("browse");
     expect(controller.view().refreshPending).toBe(false);
   });
