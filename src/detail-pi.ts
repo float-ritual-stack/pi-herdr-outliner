@@ -1569,7 +1569,7 @@ const detailInputListener = createPiDetailInputListener(
 );
 tui.addOutlinerInputListener(data => {
   const detailPointer = parseTreePrimaryPointer(data);
-  if (!actionMenuHandle && !tui.hasOverlay() && detailPointer?.phase === "down" && readingSurface.previewVisible && ["beside", "below"].includes(readerGeometry().arrangement)) {
+  if (!actionMenuHandle && detailPointer?.phase === "down" && readingSurface.previewVisible && ["beside", "below"].includes(readerGeometry().arrangement)) {
     const detailColumn = detailPointer.column - (composed ? composedWidths(processTerminal.columns).detailX : 0);
     if (detailColumn >= 0) {
       const rect = readerGeometry().preview;
@@ -1595,7 +1595,7 @@ tui.addOutlinerInputListener(data => {
     scheduleInputFlush();
     return {consume: true};
   }
-  if (pointer) serviceEventScheduler.scheduleWork(() => focusRegion(pointer.region));
+  if (pointer && !actionMenuHandle) serviceEventScheduler.scheduleWork(() => focusRegion(pointer.region));
   if ((pointer?.region ?? focusedRegion) === "tree" && !actionMenuHandle && !controller.state.destinationChooser.active) {
     serviceEventScheduler.scheduleWork(() => composedTree.handleInput(pointer?.data ?? data));
     return {consume: true};
