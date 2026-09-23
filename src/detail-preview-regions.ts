@@ -6,6 +6,7 @@ export interface PreviewSourceSpan {
 }
 
 export type PreviewRegionKind =
+  | "body-link"
   | "annotation"
   | "annotation-thread"
   | "callout"
@@ -16,6 +17,7 @@ export type PreviewRegionKind =
   | "property-entry";
 
 export type PreviewRegionAction =
+  | { type: "link.open"; uri: string }
   | { type: "preview.region.focus"; regionId: string }
   | { type: "annotation.disclosure.toggle"; regionId: string }
   | { type: "annotation.thread.select"; annotationId: string }
@@ -57,6 +59,8 @@ const DETAIL_PREVIEW_SCHEME = "pi-outliner-detail:";
 
 export function previewRegionActionUri(action: PreviewRegionAction): string {
   switch (action.type) {
+    case "link.open":
+      return `${DETAIL_PREVIEW_SCHEME}//link-open/${encodeURIComponent(action.uri)}`;
     case "preview.region.focus":
       if (!action.regionId.trim()) throw new Error("Preview region ID cannot be empty");
       return `${DETAIL_PREVIEW_SCHEME}//focus/${encodeURIComponent(action.regionId)}`;
@@ -104,6 +108,9 @@ export function parsePreviewRegionActionUri(uri: string): PreviewRegionAction | 
   }
 
   switch (parsed.hostname) {
+    case "link-open":
+      if (!value) throw new Error("Invalid document link");
+      return {type:"link.open",uri:value};
     case "focus":
       if (!value) throw new Error("Invalid Detail preview region");
       return { type: "preview.region.focus", regionId: value };

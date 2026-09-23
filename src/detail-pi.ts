@@ -1563,7 +1563,7 @@ synchronizeLayout = () => {
     mode === "comment" || split;
   preview.setActive(previewActive);
 
-  let previewWidth = terminal.columns;
+  let previewWidth = readingSurface.previewVisible ? readerGeometry().current.width : terminal.columns;
   if (split) {
     draftSplit.setWidth(terminal.columns);
     previewWidth = detailDraftSplitWidths(terminal.columns).preview;
@@ -1572,8 +1572,7 @@ synchronizeLayout = () => {
     preview.syncState(previewWidth);
     preview.applyPendingFragmentScroll(previewWidth);
     if (!split && mode === "preview") {
-      preview.ensureBacklinkSelectionVisible(previewWidth);
-      preview.ensureAnnotationSelectionVisible(previewWidth);
+      preview.ensureFocusVisible(previewWidth,readerGeometry().current.height);
     }
   }
 
@@ -1606,6 +1605,7 @@ synchronizeLayout = () => {
     const inspectionWidth = geometry.preview.width;
     inspectionLayout.syncState(inspectionWidth);
     inspectionLayout.applyPendingFragmentScroll(inspectionWidth);
+    inspectionLayout.ensureFocusVisible(inspectionWidth,geometry.preview.height);
     if (geometry.arrangement === "beside") {
       readerSplit.setLayout(nextRoot, readerWidth());
       nextRoot = readerSplit;

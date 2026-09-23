@@ -1,3 +1,5 @@
+import {LinkAwareMarkdown,stripLinkMarkers} from './link-aware-markdown';
+import {withInternalLinks, stripRenderedLinks, measureRenderedLinks, type RenderedLink} from './rendered-links';
 import {
   Box,
   Markdown,
@@ -518,6 +520,8 @@ export class SourceSpannedMarkdown implements Component {
   private segments: RenderSegment[] = [];
   private calloutDocument: DetailCalloutDocument | null = null;
   private sourceText = "";
+  renderedLinks: readonly RenderedLink[] = [];
+  private linkCache: {lines:string[]; links:RenderedLink[]} | null = null;
   private ranges: readonly MarkdownLineRange[] = [];
   private decorationEnabled = false;
   private callouts: readonly DetailCalloutRegion[] = [];
@@ -528,6 +532,7 @@ export class SourceSpannedMarkdown implements Component {
     private readonly previewRegions?: Readonly<PreviewRegionState>,
     private readonly linksEnabled = false,
     private readonly calloutTheme: DetailCalloutTheme = DEFAULT_DETAIL_CALLOUT_THEME,
+    private readonly trackLinks = false,
   ) {}
 
   setContent(
@@ -546,11 +551,12 @@ export class SourceSpannedMarkdown implements Component {
         callouts,
         this.theme,
         this.previewRegions,
-        this.linksEnabled,
+        this.linksEnabled || this.trackLinks,
         this.decorationEnabled
           ? { ranges, decorate: this.decorate }
           : undefined,
         this.calloutTheme,
+        this.trackLinks,
       );
       this.segments = [];
       return;
@@ -566,7 +572,7 @@ export class SourceSpannedMarkdown implements Component {
         }]
       : [];
     this.segments = sourceSegments.map((segment) => {
-      const markdown = new Markdown(segment.text, 0, 0, this.theme);
+      const markdown = this.trackLinks ? new LinkAwareMarkdown(segment.text,this.theme) : new Markdown(segment.text, 0, 0, this.theme);
       if (!segment.decorated) return { ...segment, component: markdown };
       const box = new Box(0, 0, this.decorate);
       box.addChild(markdown);
@@ -671,8 +677,17 @@ export class SourceSpannedMarkdown implements Component {
   }
 
   render(width: number): string[] {
-    return this.calloutDocument?.render(width) ??
+    const render = () => this.calloutDocument?.render(width) ??
       this.segments.flatMap((segment) => segment.component.render(width));
+    if (!this.trackLinks) return render();
+    const lines = withInternalLinks(render);
+    if (!this.linkCache || this.linkCache.lines.length !== lines.length ||
+      lines.some((line,index)=>line !== this.linkCache!.lines[index])) {
+      this.linkCache = {lines,links:measureRenderedLinks(lines)};
+    }
+    this.renderedLinks = this.linkCache.links;
+    const output=lines.map(stripLinkMarkers);
+    return this.linksEnabled ? output : output.map(stripRenderedLinks);
   }
 
   invalidate(): void {

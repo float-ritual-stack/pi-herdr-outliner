@@ -5484,3 +5484,15 @@ test("a late missing-destination reply cannot reopen recovery after Detail is re
  gate.reject(Error("No linked destination"));await opening;
  expect(h.controller.state.destinationChooser.active).toBe(false);
 });
+
+test("activating a focused document body link uses canonical destination routing",async()=>{
+ const target='550e8400-e29b-41d4-a716-446655440000';
+ const source=makeBlock({text:`Source\n\n((${target}|Linked body))`});
+ const h=createHarness(source);await h.controller.initialize();
+ h.controller.setPreviewRegions([{id:'body',kind:'body-link',sourceSpan:null,parentId:null,childIds:[],focusable:true,disclosure:null,activation:{type:'link.open',uri:`pi-outliner://block/${target}`}}]);
+ await h.controller.dispatch({type:'preview.focus.move',delta:1},viewport);
+ await h.controller.dispatch({type:'preview.activate'},viewport);
+ await h.controller.handleDestinationChooserKeypress('r',{name:'r'});
+ expect(h.calls.followedReferences).toContainEqual({kind:'block',value:target});
+ expect(h.calls.updates).toEqual([]);
+});

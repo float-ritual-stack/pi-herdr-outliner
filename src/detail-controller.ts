@@ -37,6 +37,7 @@ import {
 import type { ReferencedFile, ReferencedPathCandidate } from "./files";
 import {
   firstOutlinerReference,
+  parseOutlinerLinkUri,
   outlinerLinkUri,
   resourceOccurrenceLink,
   type OutlinerLinkTarget,
@@ -3460,6 +3461,15 @@ export function createDetailController(
       }
       case "preview.action":
         switch (intent.action.type) {
+          case "link.open": {
+            const uri = intent.action.uri;
+            if (uri.startsWith("http://") || uri.startsWith("https://")) {
+              await dispatch({type:"resource.open-url",url:uri},viewport);
+            } else {
+              await dispatch({type:"reference.open",target:parseOutlinerLinkUri(uri),routing:intent.routing??"linked"},viewport);
+            }
+            break;
+          }
           case "preview.region.focus":
             await dispatch({
               type: "preview.focus.set",

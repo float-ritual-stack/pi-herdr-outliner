@@ -1,3 +1,5 @@
+import {renderLayoutFrame} from '@earendil-works/pi-tui/dist/layout.js';
+import { getMarkdownTheme, initTheme } from "@earendil-works/pi-coding-agent";
 import { annotationScopeLabel, detailAnnotationGroups } from "../src/detail-annotations";
 import { detailPropertyInspectorRegions } from "../src/property-inspector";
 import {
@@ -666,6 +668,24 @@ describe("Pi Markdown detail preview", () => {
     expect(rendered).toContain("second    linedonetail");
     expect(rendered).not.toContain("owned");
     expect(rendered).not.toContain("payload");
+  });
+
+  test("includes visible body links in Detail keyboard traversal", () => {
+    const capabilities = getCapabilities();
+    setCapabilities({ ...capabilities, hyperlinks: true });
+    try {
+      const raw = "Document\n\n[[Decision Log|First body link]]\n\n[Second body link](https://example.com)";
+      const detail = state(raw, raw);
+      detail.context.selected!.id = "550e8400-e29b-41d4-a716-446655440000";
+      const layout = new DetailPiPreviewLayout(detail, plainMarkdownTheme, true);
+      layout.render(60);
+      const actions = detail.previewRegions.regions.filter(region => region.focusable)
+        .map(region => JSON.stringify(region.activation)).join("\n");
+      expect(actions).toContain(outlinerLinkUri("page", "Decision Log"));
+      expect(actions).toContain("https://example.com");
+    } finally {
+      setCapabilities(capabilities);
+    }
   });
 
   test("renders clean semantic links while preserving exact authored source", () => {
@@ -2488,6 +2508,83 @@ describe("structured property inspector presentations", () => {
       layout.scrollView.scrollTop + layout.scrollView.viewportHeight,
     );
   });
+  test("keeps themed inline property focus visible during keyboard traversal", () => {
+    const canonical = [
+      "Inline properties",
+      ...Array.from(
+        { length: 20 },
+        (_, index) => `[field-${index}::value-${index}]`,
+      ),
+      "",
+      "Body",
+    ].join("\n");
+    const detail = state(canonical, canonical);
+    detail.propertyInspector = {
+      presentation: "inline",
+      model: createPropertyInspectorModel(
+        detail.context.selected!.id,
+        canonical,
+      ),
+      expanded: true,
+      groupBy: "key",
+      filter: "",
+      filterDraft: null,
+      viewportOffset: 0,
+      edit: null,
+    };
+    initTheme("dark");
+    const layout = new DetailPiPreviewLayout(detail, getMarkdownTheme(), false);
+    const width = 40;
+    layout.syncState(width);
+    renderLayoutFrame(layout,width,11,()=>{});
+    const contentWidth=layout.scrollView.getContentWidth(width);
+    const authored=layout.markdown.render(contentWidth);
+    const lastEntry=detail.propertyInspector.model!.entries.at(-1)!;
+    detail.previewRegions.focusedRegionId=lastEntry.occurrenceId;
+    layout.syncState(width);
+    layout.ensureFocusVisible(width);
+    const frame=renderLayoutFrame(layout,width,11,()=>{});
+    expect(frame.lines.map(stripTerminalSequences).join("\n")).toContain("value-19");
+
+    const titleEnd = authored.findIndex((line) => stripTerminalSequences(line).trim() === "");
+    const selectedLine = layout.inspectorMarkdown.render(contentWidth)
+      .findIndex((line) => stripTerminalSequences(line).includes("▶ "));
+    const selectedRow = titleEnd + 1 + selectedLine;
+    expect(selectedRow).toBeGreaterThanOrEqual(layout.scrollView.scrollTop);
+    expect(selectedRow).toBeLessThan(
+      layout.scrollView.scrollTop + layout.scrollView.viewportHeight,
+    );
+  });
+
+  test("reflows the whole focused property entry into the live viewport after resize", () => {
+    const canonical = ["Properties", ...Array.from({ length: 24 }, (_, i) =>
+      `[field-${i}::value-${i}]`), "", "Body"].join("\n");
+    const detail = state(canonical, canonical);
+    detail.propertyInspector = {
+      ...detail.propertyInspector,
+      presentation: "inline",
+      expanded: true,
+      model: createPropertyInspectorModel(detail.context.selected!.id, canonical),
+    };
+    const layout = new DetailPiPreviewLayout(detail, plainMarkdownTheme, false);
+    layout.syncState(60);
+    layout.ensureFocusVisible(60, 40);
+    renderLayoutFrame(layout, 60, 40, () => {});
+    const entry = detail.propertyInspector.model!.entries.at(-1)!;
+    detail.previewRegions.focusedRegionId = entry.occurrenceId;
+    layout.syncState(60);
+    layout.ensureFocusVisible(60, 40);
+    renderLayoutFrame(layout, 60, 40, () => {});
+
+    layout.syncState(30);
+    layout.ensureFocusVisible(30, 22);
+    const frame = renderLayoutFrame(layout, 30, 22, () => {}).lines
+      .map(stripTerminalSequences).join("\n");
+    expect(detail.previewRegions.focusedRegionId).toBe(entry.occurrenceId);
+    expect(frame).toContain("▶");
+    expect(frame).toContain("#23");
+    expect(frame).toContain("L25:C");
+  });
 });
 
 test("keeps reader selection highlighted without changing preview scroll", () => {
@@ -3041,4 +3138,47 @@ test("historical Resource thread navigation follows the displayed anchors within
   });
   const groups = detailAnnotationGroups(detail, line => line, 1, displayed);
   expect(groups.flatMap(group => group.threads.map(thread => thread.block.id))).toEqual(["thread-0", "thread-1"]);
+});
+
+test("body links scroll and highlight in Pi layout without terminal hyperlink support",()=>{
+ const caps=getCapabilities();setCapabilities({...caps,hyperlinks:false});
+ try{
+  const raw=["Document",...Array.from({length:30},(_,i)=>`Paragraph ${i}\n`),"[Late body target](https://example.com/late)"].join("\n");
+  const detail=state(raw,raw);const layout=new DetailPiPreviewLayout(detail,plainMarkdownTheme,false);
+  layout.syncState(40);renderLayoutFrame(layout,40,12,()=>{});
+  const region=detail.previewRegions.regions.find(r=>r.kind==='body-link')!;
+  expect(region).toBeDefined();detail.previewRegions.focusedRegionId=region.id;
+  layout.syncState(40);layout.ensureFocusVisible(40);
+  const lines=renderLayoutFrame(layout,40,12,()=>{}).lines;
+  expect(lines.map(stripTerminalSequences).join('\n')).toContain('Late body target');
+  expect(lines.some(line=>stripTerminalSequences(line).includes('Late body target')&&line.includes('48;5;24m'))).toBe(true);
+  expect(lines.join('')).not.toContain('https://example.com/late');
+  layout.syncState(24);layout.ensureFocusVisible(24);renderLayoutFrame(layout,24,12,()=>{});
+  expect(detail.previewRegions.focusedRegionId).toBe(region.id);
+ }finally{setCapabilities(caps);}
+});
+
+test("folded callout links are omitted and document focus order includes inline properties",()=>{
+ const raw="Document\n[type::note]\n\n[Before](https://example.com/before)\n\n> [!note]- Folded\n> [Hidden](https://example.com/hidden)\n\n[After](https://example.com/after)";
+ const detail=state(raw,raw);detail.propertyInspector.model=createPropertyInspectorModel(detail.context.selected!.id,raw);
+ const layout=new DetailPiPreviewLayout(detail,plainMarkdownTheme,false);layout.syncState(50);
+ const regions=detail.previewRegions.regions.filter(r=>r.focusable);
+ expect(regions.map(r=>r.activation)).not.toContainEqual({type:'link.open',uri:'https://example.com/hidden'});
+ expect(regions.findIndex(r=>r.id==='property-inspector')).toBeLessThan(regions.findIndex(r=>r.kind==='body-link'));
+ const callout=regions.find(r=>r.kind==='callout')!;
+ detail.previewRegions.disclosureOverrides.set(callout.id,true);layout.syncState(50);
+ expect(detail.previewRegions.regions.map(r=>r.activation)).toContainEqual({type:'link.open',uri:'https://example.com/hidden'});
+});
+
+test("duplicate body links retain occurrence focus through wrap, resize and folding",()=>{
+ const raw="Document\n\n> [!note]+ Earlier\n> [Earlier link](https://example.com)\n\n- [First occurrence](https://example.com)\n- [Second occurrence](https://example.com)";
+ const detail=state(raw,raw);const layout=new DetailPiPreviewLayout(detail,plainMarkdownTheme,false);layout.syncState(60);
+ const links=()=>detail.previewRegions.regions.filter(r=>r.kind==='body-link');
+ expect(links()).toHaveLength(3);
+ const second=links()[2]!.id;detail.previewRegions.focusedRegionId=second;
+ layout.syncState(18);expect(links()).toHaveLength(3);expect(detail.previewRegions.focusedRegionId).toBe(second);
+ const callout=detail.previewRegions.regions.find(r=>r.kind==='callout')!;
+ detail.previewRegions.disclosureOverrides.set(callout.id,false);layout.syncState(18);
+ expect(links()).toHaveLength(2);expect(detail.previewRegions.focusedRegionId).toBe(second);
+ const output=layout.render(18).join('');expect(output).not.toContain('outliner-link=');
 });

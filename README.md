@@ -743,11 +743,11 @@ Projected virtual occurrences deliberately constrain hierarchy and collapse. Bra
 | `b` | Expand/collapse the generated Backlinks section; the first expansion loads results lazily |
 | `/` | Edit a fuzzy backlink-source filter; Enter applies and Esc cancels |
 | `s` | Cycle updated/created timestamp sorting in descending/ascending order |
-| `Tab` / `Shift+Tab` | Select the next / previous backlink source while Backlinks is expanded |
+| `Tab` / `Shift+Tab` | In Pi Detail, traverse Properties, visible document links, callouts, annotations and expanded Backlinks in reading order; scroll follows focus |
 | `.` | Expand/collapse occurrence details for the selected backlink source |
 | Backlink/Property row click | Select and highlight that generated row |
 | `Ctrl`/`Meta`-click | Peek a Backlink source or open a typed Property target |
-| `Enter` | Peek at the focused backlink source without navigating this Detail |
+| `Enter` | Activate the focused control or document link; a focused backlink source opens Peek |
 | Peek: `Left` / `Right` | Preview the previous / next source in the captured filtered/sorted set |
 | Peek: `Esc` | Cancel, restore the exact inline source row, and leave this Detail unchanged |
 | Peek: `Enter` | Open the shared destination chooser |

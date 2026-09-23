@@ -1,3 +1,4 @@
+import {LinkAwareMarkdown} from './link-aware-markdown';
 import {
   Box,
   Markdown,
@@ -234,6 +235,7 @@ function markdownComponents(
   textForLine: (line: SourceLine) => string,
   theme: MarkdownTheme,
   decoration: DetailCalloutDecoration | undefined,
+  trackLinks = false,
 ): Component[] {
   const components: Component[] = [];
   let text = "";
@@ -241,7 +243,7 @@ function markdownComponents(
 
   function flush(): void {
     if (!text) return;
-    const markdown = new Markdown(text, 0, 0, theme);
+    const markdown = trackLinks ? new LinkAwareMarkdown(text,theme) : new Markdown(text, 0, 0, theme);
     if (!decorated || !decoration) {
       components.push(markdown);
     } else {
@@ -319,6 +321,7 @@ class CalloutNode {
     private readonly linksEnabled: boolean,
     private readonly decoration?: DetailCalloutDecoration,
     private readonly calloutTheme: DetailCalloutTheme = DEFAULT_DETAIL_CALLOUT_THEME,
+    private readonly trackLinks = false,
   ) {
     this.pieces = [];
     let cursor = region.headerLine + 1;
@@ -335,6 +338,7 @@ class CalloutNode {
           linksEnabled,
           decoration,
           calloutTheme,
+          trackLinks,
         ),
       });
       cursor = child.sourceSpan!.endLine + 1;
@@ -350,6 +354,7 @@ class CalloutNode {
         `${stripQuoteDepth(line.text, this.region.depth)}${line.raw.endsWith("\n") ? "\n" : ""}`,
       this.theme,
       this.decoration,
+      this.trackLinks,
     );
     this.pieces.push(...components.map((component) => ({ component })));
   }
@@ -388,6 +393,7 @@ export class DetailCalloutDocument implements Component {
     linksEnabled: boolean,
     decoration?: DetailCalloutDecoration,
     calloutTheme: DetailCalloutTheme = DEFAULT_DETAIL_CALLOUT_THEME,
+    trackLinks = false,
   ) {
     const lines = sourceLines(source);
     const roots = regions.filter((region) => region.parentId === null);
@@ -407,6 +413,7 @@ export class DetailCalloutDocument implements Component {
             (line) => line.raw,
             theme,
             decoration,
+            trackLinks,
           ).map((component) => ({ component })));
         }
       }
@@ -421,6 +428,7 @@ export class DetailCalloutDocument implements Component {
           linksEnabled,
           decoration,
           calloutTheme,
+          trackLinks,
         ),
       });
       cursor = root.sourceSpan!.endLine + 1;
@@ -432,6 +440,7 @@ export class DetailCalloutDocument implements Component {
         (line) => line.raw,
         theme,
         decoration,
+        trackLinks,
       ).map((component) => ({ component })));
     }
   }

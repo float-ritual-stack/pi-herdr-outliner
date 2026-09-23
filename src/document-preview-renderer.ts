@@ -1,5 +1,6 @@
+import {withInternalLinks, stripRenderedLinks, measureRenderedLinks, type RenderedLink} from './rendered-links';
 import {getMarkdownTheme} from '@earendil-works/pi-coding-agent';
-import {getCapabilities, setCapabilities, getOsc8LinkAtColumn, sliceByColumn, stripTerminalSequences, truncateToWidth, visibleWidth} from '@earendil-works/pi-tui';
+import {truncateToWidth, visibleWidth} from '@earendil-works/pi-tui';
 import {renderDetailReadPreviewLines, type DetailReadPreviewDocument} from './detail-pi-preview';
 import type {DocumentPreviewState} from './document-preview';
 import {sanitizeDynamicText} from './terminal';
@@ -19,7 +20,7 @@ export interface DocumentPreviewFrame {
   placement?: 'beside'|'below'|'compact';
 }
 const cache=new WeakMap<DetailReadPreviewDocument,{width:number;lines:string[];links:PreviewLink[]}>();
-export interface PreviewLink {row:number;column:number;width:number;uri:string;label:string}
+export type PreviewLink = RenderedLink;
 export function documentPreviewLinks(document:DetailReadPreviewDocument,width:number):PreviewLink[]{documentPreviewLines(document,width);return cache.get(document)!.links;}
 const background='\x1b[48;5;236m';
 function shade(line:string,width:number):string {
@@ -31,28 +32,8 @@ export function documentPreviewLines(document:DetailReadPreviewDocument,width:nu
   if(entry?.width!==width){
     // OSC links are an internal geometry map; they never reach the terminal.
     // Render synchronously with links even when the host does not support OSC 8.
-    const capabilities=getCapabilities();
-    let rendered:string[];
-    try {
-      setCapabilities({...capabilities,hyperlinks:true});
-      rendered=renderDetailReadPreviewLines(document,width,getMarkdownTheme(),undefined,true);
-    } finally {setCapabilities(capabilities);}
-    const links:PreviewLink[]=[];
-    rendered.forEach((line,row)=>{
-      let previous:PreviewLink|undefined;
-      const firstLink=links.length;
-      const columns=visibleWidth(line);
-      for(let column=0;column<columns;column++){
-        const uri=getOsc8LinkAtColumn(line,column);
-        if(!uri){previous=undefined;continue;}
-        if(previous?.uri===uri&&previous.column+previous.width===column)previous.width++;
-        else {previous={row,column,width:1,uri,label:''};links.push(previous);}
-      }
-      for(const link of links.slice(firstLink)){
-        link.label=stripTerminalSequences(sliceByColumn(line,link.column,link.width,true)).trim()||link.uri;
-      }
-    });
-    entry={width,links,lines:rendered.map(line=>line.replace(/\x1b\]8;[^\x07\x1b]*(?:\x07|\x1b\\)/g,''))};
+    const rendered=withInternalLinks(()=>renderDetailReadPreviewLines(document,width,getMarkdownTheme(),undefined,true));
+    entry={width,links:measureRenderedLinks(rendered),lines:rendered.map(stripRenderedLinks)};
     cache.set(document,entry);
   }
   return entry.lines;
