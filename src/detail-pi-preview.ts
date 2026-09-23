@@ -1706,9 +1706,7 @@ export class DetailPiPreviewLayout extends VStack {
       this.syncInspectorDocument(this.scrollView.getContentWidth(width));
       this.syncBodyLinks(width, regions);
       if(this.previousFocusWidth!==width && this.state.previewRegions.focusedRegionId){
-        this.pendingBodyFocusScroll=true;
-        this.pendingPropertySelectionScroll=true;
-        this.pendingAnnotationSelectionScroll=true;
+        this.scheduleFocusedRegionScroll();
       }
       this.previousFocusWidth=width;
     }
@@ -1771,7 +1769,7 @@ export class DetailPiPreviewLayout extends VStack {
     if(height!==undefined){
       const viewportHeight=Math.max(1,height-5);
       if(viewportHeight!==this.scrollView.viewportHeight&&this.state.previewRegions.focusedRegionId){
-        this.pendingBodyFocusScroll=true;this.pendingPropertySelectionScroll=true;this.pendingAnnotationSelectionScroll=true;
+        this.scheduleFocusedRegionScroll();
       }
       this.scrollView.updateLayout(this.body.render(this.scrollView.getContentWidth(width)).length,viewportHeight,()=>{});
     }
@@ -1790,6 +1788,20 @@ export class DetailPiPreviewLayout extends VStack {
     if(row<before)this.scrollView.scrollTo(row);
     else if(row>=before+this.scrollView.viewportHeight)this.scrollView.scrollTo(row-this.scrollView.viewportHeight+1);
     return changed||before!==this.scrollView.scrollTop;
+  }
+
+  private scheduleFocusedRegionScroll(): void {
+    const focused = this.state.previewRegions.regions.find(
+      region => region.id === this.state.previewRegions.focusedRegionId,
+    );
+    switch (focused?.kind) {
+      case "body-link": this.pendingBodyFocusScroll = true; break;
+      case "property-entry":
+      case "property-inspector": this.pendingPropertySelectionScroll = true; break;
+      case "annotation":
+      case "annotation-thread": this.pendingAnnotationSelectionScroll = true; break;
+      case "backlink-source": this.pendingBacklinkSelectionScroll = true; break;
+    }
   }
 
   private syncInspectorDocument(width: number): void {

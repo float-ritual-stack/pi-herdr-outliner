@@ -33,6 +33,7 @@ const result=await runHerdrScenario({name:composed?'detail-tab-composed':'detail
  // Resize returns before the attached terminal's new geometry has propagated.
  // wait-output can match the old frame; await the reflowed, focused entry instead.
  await s.waitFor('reflowed focused property after resize',()=>s.visible(s.panes.detail),text=>
-  text.includes('L25:C') && (composed ? text.includes('│ ▶       │') : text.includes('▶ field-23')));
+  text.includes('L25:C') && (composed ? text.includes('│ ▶       │') :
+   text.includes('● Current') && /│\s*│\s*│ L25:C1/.test(text)));
  await s.checkpoint('05-narrow-focused-property');
 }});console.log(JSON.stringify(result));if(result.status!=='passed')process.exitCode=1;

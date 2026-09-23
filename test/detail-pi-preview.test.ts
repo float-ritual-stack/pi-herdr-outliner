@@ -2136,6 +2136,15 @@ describe("generated backlink preview", () => {
     expect(selectedRow).toBeLessThan(
       layout.scrollView.scrollTop + layout.scrollView.viewportHeight,
     );
+
+    detail.previewRegions.focusedRegionId = "backlink:source-0";
+    layout.syncState(60);
+    layout.ensureFocusVisible(60, 40);
+    renderLayoutFrame(layout, 60, 40, () => {});
+    layout.ensureFocusVisible(60, 12);
+    const resized = renderLayoutFrame(layout, 60, 12, () => {}).lines
+      .map(stripTerminalSequences).join("\n");
+    expect(resized).toContain("ACTIVE Backlink source 0");
   });
 
   test("renders explicit empty, deleted-target, loading, and error states", () => {
