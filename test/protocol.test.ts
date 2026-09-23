@@ -2654,7 +2654,7 @@ test("stopping a connected watcher does not report a disconnect", async () => {
   expect(disconnectCount).toBe(0);
 });
 
-test("routes explicit opens through links while passive preview stays with its paired reader", async () => {
+test("routes explicit opens through links while passive Preview stays on its source", async () => {
   const directory = mkdtempSync(join(tmpdir(), "pi-outliner-routes-"));
   const store = new OutlinerStore(join(directory, "outliner.sqlite"));
   const target = store.create("Navigation target\n\n## Decision ^durable-decision");
@@ -2778,13 +2778,13 @@ test("routes explicit opens through links while passive preview stays with its p
     resolution: "linked",
   });
 
-  const previewReceived = nextCommand("detail-c", "preview");
+  const previewReceived = nextCommand("tree-a", "preview");
   const published = await client.request<BrowsingContextPublication>({ action: "browsing-context.publish", sourceClientId: "tree-a",
   contextId: "context-a", target: { kind: "block", blockId: target.id },  });
   await previewReceived;
   expect(published.preview).toMatchObject({
-    targetClientId: "detail-c",
-    command: { targetClientId: "detail-c", command: "preview", target: { kind: "block", blockId: target.id } },
+    targetClientId: "tree-a", targetRegion: "tree", resolution: "self",
+    command: { targetClientId: "tree-a", targetRegion: "tree", command: "preview", target: { kind: "block", blockId: target.id } },
   });
 
   const otherTabOpenReceived = nextCommand("detail-oi", "open");
@@ -2827,7 +2827,8 @@ test("routes explicit opens through links while passive preview stays with its p
   expect(pendingCommands).toEqual([]);
   expect(received.get("detail-c")?.some((event) => event.command?.command === "open")).toBe(true);
   expect(received.get("detail-d")?.some((event) => event.command?.command === "open")).toBe(true);
-  expect(received.get("detail-c")?.some((event) => event.command?.command === "preview")).toBe(true);
+  expect(received.get("tree-a")?.some((event) => event.command?.command === "preview")).toBe(true);
+  expect(received.get("detail-c")?.some((event) => event.command?.command === "preview")).toBe(false);
   expect(received.get("detail-oi")?.some((event) => event.command?.command === "open")).toBe(true);
 });
 
@@ -2967,7 +2968,7 @@ test("reconciles long-lived clients against live Herdr pane topology", async () 
     action: "navigation.resolve",
     sourceClientId: "tree-live",
     intent: "preview",
-  })).toMatchObject({targetClientId:"detail-a-live",resolution:"context"});
+  })).toMatchObject({targetClientId: "tree-live", targetRegion: "tree", resolution: "self"});
 
   replaceTopology([
     { paneId: "tree-pane-old", terminalId: "term-tree", workspaceId: "ws-old", tabId: "tab-old", x: 0, y: 0 },
@@ -2995,7 +2996,7 @@ test("reconciles long-lived clients against live Herdr pane topology", async () 
     action: "navigation.resolve",
     sourceClientId: "tree-live",
     intent: "preview",
-  })).toMatchObject({ targetClientId: "detail-a-live" });
+  })).toMatchObject({targetClientId: "tree-live", targetRegion: "tree", resolution: "self"});
   expect(await client.request<OutlinerNavigationDispatch>({
     action: "navigation.resolve",
     sourceClientId: "detail-b-live",
@@ -3015,7 +3016,7 @@ test("reconciles long-lived clients against live Herdr pane topology", async () 
     action: "navigation.resolve",
     sourceClientId: "tree-live",
     intent: "preview",
-  })).toMatchObject({targetClientId:"detail-a-live",resolution:"context"});
+  })).toMatchObject({targetClientId: "tree-live", targetRegion: "tree", resolution: "self"});
 
   replaceTopology([
     { paneId: "tree-pane-renamed", terminalId: "term-tree", workspaceId: "ws-new", tabId: "tab-new", x: 0, y: 0 },
@@ -3040,7 +3041,7 @@ test("reconciles long-lived clients against live Herdr pane topology", async () 
     action: "navigation.resolve",
     sourceClientId: "tree-live",
     intent: "preview",
-  })).toMatchObject({ targetClientId: "detail-a-live" });
+  })).toMatchObject({targetClientId: "tree-live", targetRegion: "tree", resolution: "self"});
 
   replaceTopology([
     { paneId: "tree-pane-final", terminalId: "term-tree", workspaceId: "ws-new", tabId: "tab-new" },
@@ -3063,7 +3064,7 @@ test("reconciles long-lived clients against live Herdr pane topology", async () 
     action: "navigation.resolve",
     sourceClientId: "tree-live",
     intent: "preview",
-  })).toMatchObject({ targetClientId: "detail-a-live" });
+  })).toMatchObject({targetClientId: "tree-live", targetRegion: "tree", resolution: "self"});
 
   replaceTopology([
     { paneId: "tree-pane-only", terminalId: "term-tree", workspaceId: "ws-new", tabId: "tab-new", x: 0, y: 0 },
@@ -3079,7 +3080,7 @@ test("reconciles long-lived clients against live Herdr pane topology", async () 
     action: "navigation.resolve",
     sourceClientId: "tree-live",
     intent: "preview",
-  })).toMatchObject({targetClientId:"detail-a-live",resolution:"context"});
+  })).toMatchObject({targetClientId: "tree-live", targetRegion: "tree", resolution: "self"});
   await expect(client.request({
     action: "navigation.resolve",
     sourceClientId: "detail-a-live",
@@ -3122,9 +3123,9 @@ test("keeps unpaired Preview local and requires known hostnames for same-tab Rev
       clientId: "tree",
       runtime: { ...runtime, ...(treeHostname ? { hostname: treeHostname } : {}) },
     });
-    await expect(client.request({
+    expect(await client.request({
       action: "navigation.resolve", sourceClientId: "tree", intent: "preview",
-    })).rejects.toThrow("No paired reader");
+    })).toMatchObject({targetClientId: "tree", targetRegion: "tree", resolution: "self"});
     await expect(client.request({
       action: "navigation.resolve", sourceClientId: "detail", intent: "reveal",
     })).rejects.toThrow("No Tree destination is available");
@@ -3135,9 +3136,9 @@ test("keeps unpaired Preview local and requires known hostnames for same-tab Rev
     clientId: "detail",
     runtime: { ...runtime, hostname: "laptop.invalid" },
   });
-  await expect(client.request({
+  expect(await client.request({
     action: "navigation.resolve", sourceClientId: "tree", intent: "preview",
-  })).rejects.toThrow("No paired reader");
+  })).toMatchObject({targetClientId: "tree", targetRegion: "tree", resolution: "self"});
   expect(await client.request<OutlinerNavigationDispatch>({
     action: "navigation.resolve", sourceClientId: "detail", intent: "reveal",
   })).toMatchObject({ targetClientId: "tree", resolution: "same-tab" });
@@ -3220,8 +3221,9 @@ test("preserves client-owned topology and routes only within its host", async ()
     sourceClientId: "remote-tree",
     intent: "preview",
   })).toMatchObject({
-    targetClientId: "remote-detail",
-    resolution: "context",
+    targetClientId: "remote-tree",
+    targetRegion: "tree",
+    resolution: "self",
   });
   const movedRuntime = {
     ...registrations[1]!.runtime,
@@ -3243,7 +3245,7 @@ test("preserves client-owned topology and routes only within its host", async ()
     action: "navigation.resolve",
     sourceClientId: "remote-tree",
     intent: "preview",
-  })).toMatchObject({targetClientId:"remote-detail",resolution:"context"});
+  })).toMatchObject({targetClientId: "remote-tree", targetRegion: "tree", resolution: "self"});
 });
 
 test("targets ephemeral attention, advances atomically, stales on edits, and expires", async () => {

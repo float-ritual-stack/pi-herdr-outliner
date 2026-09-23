@@ -959,7 +959,7 @@ export interface OutlinerViewAddress {
 export interface NavigationLinkState {
   source: OutlinerViewAddress;
   destination: OutlinerViewAddress | null;
-  destinations: Array<{ view: OutlinerViewAddress; label: string; description?: string; groupLabel?: string; target?: OutlinerNavigationTarget; otherLocation?: boolean; protection?: string }>;
+  destinations: Array<{ view: OutlinerViewAddress; label: string; description?: string; groupLabel?: string; target?: OutlinerNavigationTarget; otherLocation?: boolean; protection?: string; placementPaneId?: string }>;
 }
 
 export interface OutlinerClientRegistration {
@@ -1227,7 +1227,7 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 68;
+export const OUTLINER_PROTOCOL_VERSION = 69;
 
 
 export interface OutlinerServiceStatus {
@@ -1754,6 +1754,7 @@ export interface OutlinerEvent {
   domain: OutlinerEventDomain;
   action: string;
   sequence: number;
+  clientId?: string;
   blockId?: string;
   resourceId?: string;
   sourceId?: string;

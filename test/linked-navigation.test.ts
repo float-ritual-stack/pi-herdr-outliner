@@ -13,7 +13,7 @@ import { OutlinerClient } from "../src/client";
 import { OutlinerServer } from "../src/server";
 import { HerdrRuntimeRegistry } from "../src/herdr-registry";
 import { OutlinerStore } from "../src/store";
-import type { NavigationLinkState, OutlinerClientRegistration, OutlinerEvent, OutlinerNavigationDispatch, OutlinerViewAddress } from "../src/types";
+import type { BrowsingContextPublication, NavigationLinkState, OutlinerClientRegistration, OutlinerEvent, OutlinerNavigationDispatch, OutlinerNavigationResolution, OutlinerViewAddress } from "../src/types";
 
 test("explicit logical links fan in, never forward receipt, preserve one-off choices, and reject protected or closed destinations", async () => {
   const root = mkdtempSync("/tmp/outliner-links-");
@@ -114,6 +114,9 @@ test("destination picker names documents and puts nearby panes ahead of unlocate
     expect(state.destinations[0]?.description).toContain("here");
     expect(state.destinations[0]?.description).toContain("p2");
     expect(state.destinations[0]?.target).toEqual({kind: "block", blockId: document.id});
+    expect(state.destinations[0]?.placementPaneId).toBe("p2");
+    expect(state.destinations.find(item => item.view.clientId === "remote")?.placementPaneId).toBeUndefined();
+    expect(state.destinations.find(item => item.view.clientId === "aaa-unlocated")?.placementPaneId).toBeUndefined();
     const preview = new NavigationDestinationPreview(client, () => {});
     await preview.select(state.destinations[0]);
     expect(preview.document?.resolvedText).toContain("Recognizable destination");
@@ -236,3 +239,103 @@ test("known-pane pickers collapse other connected views without removing their d
   expect(state.destinations).toHaveLength(2);
   expect(navigationDestinationStatus(state)).toContain("Remote notes");
 });
+
+test("Preview remains on its invoking logical surface regardless of launch pairing or Open links", async () => {
+  const root = mkdtempSync("/tmp/outliner-preview-owner-");
+  const store = new OutlinerStore(join(root, "db.sqlite"));
+  const server = new OutlinerServer(store, join(root, "app.sock"));
+  await server.start();
+  const client = new OutlinerClient(join(root, "app.sock"));
+  const watchers = [];
+  const events: OutlinerEvent[] = [];
+  let delivered: {clientId: string; resolve(): void} | undefined;
+  const registrations: OutlinerClientRegistration[] = [
+    {clientId: "tree", role: "tree", contextId: "paired"},
+    {clientId: "detail", role: "detail", contextId: "paired"},
+    {clientId: "composed", role: "composed", contextId: "composed"},
+  ];
+  try {
+    for (const registration of registrations) {
+      const ready = Promise.withResolvers<void>();
+      watchers.push(client.watch({client: registration, onConnect: ready.resolve, onError: ready.reject, onEvent: event => {
+        events.push(event);
+        if (event.domain === "ui" && event.command?.targetClientId === delivered?.clientId) delivered?.resolve();
+      }}));
+      await ready.promise;
+    }
+    await client.request({action: "navigation.link.set", source: {clientId: "tree", region: "tree"}, destination: {clientId: "detail", region: "detail"}});
+    const target = {kind: "block" as const, blockId: store.create("Inspect locally").id};
+    for (const source of registrations) {
+      const expected: OutlinerNavigationResolution = {sourceClientId: source.clientId, targetClientId: source.clientId,
+        targetRegion: source.role === "tree" ? "tree" : "detail", intent: "preview", resolution: "self"};
+      expect(await client.request<OutlinerNavigationResolution>({action: "navigation.resolve", sourceClientId: source.clientId, intent: "preview"})).toEqual(expected);
+      const received = new Promise<void>(resolve => {delivered = {clientId: source.clientId, resolve};});
+      const publication = await client.request<BrowsingContextPublication>({action: "browsing-context.publish", sourceClientId: source.clientId, contextId: source.contextId, target});
+      await received;
+      expect(publication.preview).toEqual({...expected, command: {targetClientId: source.clientId, targetRegion: expected.targetRegion, command: "preview", target}});
+      expect(publication.unavailable).toBeUndefined();
+    }
+    expect((await client.request<NavigationLinkState>({action: "navigation.link.get", source: {clientId: "tree", region: "tree"}})).destination?.clientId).toBe("detail");
+    expect(events.filter(event => event.domain === "ui").map(event => [event.command?.targetClientId, event.command?.command])).toEqual([["tree", "preview"], ["detail", "preview"], ["composed", "preview"]]);
+  } finally {
+    for (const watcher of watchers) await watcher.stop();
+    await server.close(); store.close(); rmSync(root, {recursive: true, force: true});
+  }
+});
+
+test("navigation header events report changed links, Current targets and disconnects without Preview feedback", async () => {
+  const root = mkdtempSync("/tmp/outliner-navigation-events-");
+  const store = new OutlinerStore(join(root, "db.sqlite"));
+  const server = new OutlinerServer(store, join(root, "app.sock"));
+  await server.start();
+  const client = new OutlinerClient(join(root, "app.sock"));
+  const events: OutlinerEvent[] = [];
+  let pending: {action: string; clientId: string; resolve(): void} | undefined;
+  const next = (action: string, clientId: string) => new Promise<void>(resolve => {pending = {action, clientId, resolve};});
+  const watchers = [];
+  try {
+    for (const registration of [
+      {clientId: "source", role: "tree", contextId: "source"},
+      {clientId: "reader", role: "detail", contextId: "reader"},
+    ] as OutlinerClientRegistration[]) {
+      const ready = Promise.withResolvers<void>();
+      watchers.push(client.watch({client: registration, onConnect: ready.resolve, onError: ready.reject, onEvent: event => {
+        if (registration.clientId !== "source" || event.domain !== "view") return;
+        events.push(event);
+        if (pending?.action === event.action && pending.clientId === event.clientId) { const done = pending; pending = undefined; done.resolve(); }
+      }}));
+      await ready.promise;
+    }
+    const source = {clientId: "source", region: "tree" as const};
+    const destination = {clientId: "reader", region: "detail" as const};
+    const target = {kind: "block" as const, blockId: store.create("Current document").id};
+    const sequence = store.sequence;
+    let arrived = next("navigation.link.set", "source");
+    await client.request({action: "navigation.link.set", source, destination}); await arrived;
+    await client.request({action: "navigation.link.set", source, destination});
+    arrived = next("navigation.link.set", "source");
+    await client.request({action: "navigation.link.set", source, destination: null}); await arrived;
+    await client.request({action: "navigation.link.set", source, destination: null});
+    arrived = next("navigation.link.set", "source");
+    await client.request({action: "navigation.link.set", source, destination}); await arrived;
+    await client.request({action: "clients.update", clientId: "reader", previewTarget: target});
+    await client.request({action: "clients.update", clientId: "reader", runtime: {focused: true}});
+    await client.request({action: "clients.update", clientId: "reader", navigationProtection: "draft"});
+    arrived = next("clients.update", "reader");
+    await client.request({action: "clients.update", clientId: "reader", currentTarget: target}); await arrived;
+    await client.request({action: "clients.update", clientId: "reader", currentTarget: target});
+    arrived = next("clients.update", "reader");
+    await client.request({action: "clients.update", clientId: "reader", currentTarget: null}); await arrived;
+    await client.request({action: "clients.update", clientId: "reader", currentTarget: null});
+    arrived = next("clients.unregister", "reader");
+    await watchers[1]!.stop(); await arrived;
+    expect(events.map(event => [event.action, event.clientId])).toEqual([
+      ["navigation.link.set", "source"], ["navigation.link.set", "source"], ["navigation.link.set", "source"], ["clients.update", "reader"], ["clients.update", "reader"], ["clients.unregister", "reader"],
+    ]);
+    expect(events.every(event => event.sequence === sequence)).toBe(true);
+    expect((await client.request<NavigationLinkState>({action: "navigation.link.get", source})).destination).toBeNull();
+  } finally {
+    for (const watcher of watchers) await watcher.stop();
+    await server.close(); store.close(); rmSync(root, {recursive: true, force: true});
+  }
+}, 2000);

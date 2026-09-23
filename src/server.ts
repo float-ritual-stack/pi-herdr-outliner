@@ -327,6 +327,11 @@ export class OutlinerServer {
     ) {
       this.browsingContextTargets.delete(removed.contextId);
     }
+    if (removed) this.emitClientView("clients.unregister", removed.clientId);
+  }
+
+  private emitClientView(action: string, clientId: string): void {
+    this.broadcast({id: crypto.randomUUID(), domain: "view", action, clientId, sequence: this.store.sequence});
   }
 
   private normalizeClientRuntime(
@@ -631,6 +636,9 @@ export class OutlinerServer {
         else updated.runtime = runtime;
       }
       this.subscribers.set(socket, updated);
+      if (JSON.stringify(client.currentTarget) !== JSON.stringify(updated.currentTarget)) {
+        this.emitClientView("clients.update", clientId);
+      }
       return this.reconcileClientRuntime(updated);
     }
     throw new Error(`Client is not registered: ${clientId}`);
@@ -1057,6 +1065,7 @@ export class OutlinerServer {
         : `Location unavailable${runtime?.hostname ? ` · ${runtime.hostname}` : ""} · client ${client.clientId.slice(0, 8)}`;
       return {view: {clientId: client.clientId, region: "detail" as const}, label,
         groupLabel, description: `${client.role === "composed" ? "Composed Detail" : "Detail"} · ${location}${!client.currentTarget && client.previewTarget ? " · inspecting Preview" : ""}`,
+        ...(runtime?.paneId && runtime.hostname && runtime.hostname === sourceClient.runtime?.hostname ? {placementPaneId: runtime.paneId} : {}),
         ...(sourceClient.runtime?.paneId && (!runtime?.paneId || runtime.hostname !== sourceClient.runtime.hostname) ? {otherLocation: true} : {}),
         ...(target ? {target} : {}), ...(client.navigationProtection ? {protection: client.navigationProtection} : {})};
     })};
@@ -1087,10 +1096,7 @@ export class OutlinerServer {
     if (source.role === "observer") throw new Error("Observers cannot initiate navigation");
     if (intent === "open") return this.resolveExplicitOpen(source, sourceRegion, destination, preserveSource);
     if (intent === "preview") {
-      const candidates = source.role === "detail" || source.role === "composed" ? [source]
-        : this.listClients("detail").filter(client => client.contextId === source.contextId && (!source.runtime?.hostname || !client.runtime?.hostname || client.runtime.hostname === source.runtime.hostname));
-      if (candidates.length !== 1) throw new Error("No paired reader · Preview stays in this Tree");
-      return {sourceClientId, targetClientId: candidates[0]!.clientId, targetRegion: "detail", intent, resolution: "context"};
+      return {sourceClientId, targetClientId: sourceClientId, targetRegion: source.role === "tree" ? "tree" : "detail", intent, resolution: "self"};
     }
     const primary = this.listClients("composed").find(client => client.contextId === source.contextId);
     if (primary && !preserveSource) {
@@ -1552,9 +1558,12 @@ export class OutlinerServer {
         case "navigation.link.set": {
           this.navigationView(request.source);
           const key = JSON.stringify([request.source.clientId, request.source.region]);
+          const before = this.navigationLinks.get(key);
           if (request.destination === null) this.navigationLinks.delete(key);
           else { this.navigationView(request.destination, true); this.navigationLinks.set(key, {...request.destination}); }
           result = this.navigationLinkState(request.source);
+          const after = this.navigationLinks.get(key);
+          if (before?.clientId !== after?.clientId || before?.region !== after?.region) this.emitClientView("navigation.link.set", request.source.clientId);
           break;
         }
         case "navigation.resolve":
@@ -2240,6 +2249,7 @@ export class OutlinerServer {
       ? `${JSON.stringify({ event: { ...event, command: undefined } } satisfies OutlinerEventEnvelope)}\n`
       : line;
     for (const [subscriber, client] of this.subscribers) {
+      if (subscriber.destroyed || subscriber.readableEnded || subscriber.writableEnded) continue;
       if (event.domain === "ui" && event.command?.targetClientId !== client.clientId) {
         continue;
       }
