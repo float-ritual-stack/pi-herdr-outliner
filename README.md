@@ -1312,6 +1312,8 @@ To opt an older note in, select it in Tree and choose **Assist this note** from
 part while keeping Inbox filing, or `OUTLINER_INBOX_AGENT=0` to disable both.
 `bun run test:e2e:notes` exercises real Jev and Pi inside a private Herdr instance.
 
+Inbox effort routing (PIE-331) keeps coherent captures on Jev-only keep/metadata paths, archives clear test noise reversibly, and sends ambiguity, mixed work and explicit reconsideration to Pi. Activity shows the route and reason. The editable `inbox-routing.json` is read per job; set `enabled` to `false` there to disable routing. [The trial report](experiments/inbox-routing/REPORT.md) documents the measured tradeoffs and limits.
+
 ### Editing AI prompts
 
 The service keeps editable prompt files in its workspace state directory:
@@ -1890,5 +1892,3 @@ Other hosts can post the same `{workspaceRoot, agent, sessionId, messageId, text
 contract using `mentions.ingest`, or JSON stdin to `bun src/cli.ts mentions ingest`.
 Repeated message identity with identical text is idempotent; different text under
 the same identity is rejected. No Pi or Claude adapter is installed automatically.
-
-Inbox effort routing (PIE-331) keeps coherent captures on Jev-only keep/metadata paths, archives clear test noise reversibly, and sends ambiguity, mixed work and explicit reconsideration to Pi. Activity shows the route and reason. The editable `inbox-routing.json` is read per job; [the trial report](experiments/inbox-routing/REPORT.md) documents the measured tradeoffs and limits.

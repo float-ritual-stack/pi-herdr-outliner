@@ -15,7 +15,7 @@ The existing Jev classification request now includes two questions: the useful a
 - **Archive:** move clear noise intact into the existing reversible Processed captures folder. Never delete it.
 - **Editorial:** use the existing bounded Pi cleanup for mixed work, ambiguous meaning, requests or explicit steering.
 
-An incomplete routing window, malformed distribution, close alternatives, or explicit Reconsider goes to the editor. A note with children cannot take the cheap archive route. Commit rechecks child context after inference; new child context produces a visible conflict without moving anything. Request fulfillment retains its established path and cannot be bypassed by a keep/archive judgment. The route and reason appear on activity receipts, including failed Pi attempts.
+An incomplete routing window, malformed distribution, close alternatives, or explicit Reconsider goes to the editor. A note with children takes the editorial route. Commit rechecks child context for every archive plan, including editorial proposals; child context produces a visible conflict without moving anything. Request fulfillment retains its established path and cannot be bypassed by a keep/archive judgment. The route and reason appear on activity receipts, including failed Pi attempts.
 
 ## Paired comparison
 
@@ -40,13 +40,15 @@ The trial kept the shopping items, date, insurance fact, historical accepted/rej
 
 Initial policy used a 0.30 choice margin and 0.95 disposable probability. `aaaa` had archive margin 0.92 but disposable 0.80, so it unnecessarily reached Pi; `did a thing` had disposable 0.60 and appropriately escalated. We lowered this **local trial's** disposable threshold to 0.75 while retaining the margin gate. This is a policy choice about reversible filing, not treating probability as permission to delete.
 
-A separate eight-case holdout then archived long repeated `a`s and an explicit capture test. It retained a dated vague marker, `buy milk`, an AAA-battery reminder, an uncertain thought, a rejected historical proposal, and a note explaining that `aaaa` names a parser fixture. **0/6 useful holdout notes archived; 2/2 declared noise notes archived.** Holdout used live Jev; editorial routes were observed without paying for Pi, so it does not measure editorial quality or end-to-end cost.
+A separate eight-case holdout recorded archives for long repeated `a`s and an explicit capture test. It retained a dated vague marker, `buy milk`, an AAA-battery reminder, an uncertain thought, a rejected historical proposal, and a note explaining that `aaaa` names a parser fixture. **Historical observations only: 0/6 useful holdout notes archived; 2/2 declared noise notes archived.** These rows lack prompt revisions, so they cannot establish results for either the paired-trial or shipped prompt. No hash has been backfilled without evidence. A new live holdout is required to establish revision-linked results; it has not been run for this review fix. The recorder now rejects rows without the routing prompt revision captured by the job. Holdout used live Jev; editorial routes were observed without paying for Pi, so it does not measure editorial quality or end-to-end cost.
+
+The paired trial records routing SHA-256 `2348fba855e09ae90f87563dc16ffe0fddef2827907854c6b5ae628e4cb3d44a`; the shipped prompt has SHA-256 `d438e69cd617c1f5e82028e5d4c7c59ff78371fe0003272b2216f70dce67c8d5`. Neither hash can be assigned to the historical holdout from the retained evidence.
 
 Do not generalize accuracy from sixteen deliberately selected examples. The policy may keep some noise, and Pi can still make a poor editorial decision. Review concrete outcomes and add counterexamples before changing thresholds again. Children force editorial inspection rather than assuming the short parent is the entire note.
 
 ## Recovery and operation
 
-`prompts/inbox-routing.json` is seeded once into the editable workspace prompt directory. Changes are read per job without rebuild. Active custom files are retained; deliberate removal produces an explicit prompt error. Results retain the routing prompt hash.
+`prompts/inbox-routing.json` is seeded once into the editable workspace prompt directory. Changes are read per job without rebuild. Active custom files are retained; deliberate removal produces an explicit prompt error. New results retain the routing prompt hash; the historical holdout rows above lack that provenance.
 
 Undo restores the source's text and location using the existing revision-aware recovery. Undo suppresses automatic reprocessing. Reconsider with guidance explicitly asks for another attempt; on an undone Inbox capture it goes to Pi. Filed ordinary notes retain the existing note-assistance Reconsider behavior.
 
@@ -62,7 +64,7 @@ bun experiments/inbox-routing/holdout.ts --live
 bun test/e2e/inbox-routing.ts
 ```
 
-Set `ROUTING_CASE=<id>` to run one paired case or `ROUTING_EVIDENCE_DIR` to choose the evidence directory. Stores and session logs stay in that directory, outside the repo. Preserve failed runs too: the initial comparison had one baseline TypeSafe availability failure; the final full paired run succeeded. The first Herdr fixture had note assistance disabled and exercised the old path; correcting that fixture is not a product fix.
+Set `ROUTING_CASE=<id>` to run one paired case or `ROUTING_EVIDENCE_DIR` to choose the evidence parent directory. Each invocation creates a unique run directory beneath it, containing fresh stores, session logs and `results.json`, outside the repo. Preserve failed runs too: the initial comparison had one baseline TypeSafe availability failure; the final full paired run succeeded. The first Herdr fixture had note assistance disabled and exercised the old path; correcting that fixture is not a product fix.
 
 ## Sources and scope
 

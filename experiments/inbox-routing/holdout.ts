@@ -12,8 +12,13 @@ for(const item of cases){
  const worker=new InboxWorker(store,async({source})=>{escalated=true;return {plan:{summary:'Holdout: Pi route observed, no Pi invocation',source:{text:source.text,disposition:'file'},notes:[],tasks:[],updates:[]},usage:{provider:'fixture',model:'no-Pi-holdout',inputTokens:0,outputTokens:0,jevCalls:0,elapsedMs:0,cost:0}};},()=>{},{settleMs:1,noteModel:createNoteModel({workspaceRoot:root,stream:()=>{throw Error('Unexpected executable request in synthetic holdout');}})});
  const source=store.capture(item.id,item.text,'cli').block;
  try{
-  worker.wake();for(let i=0;i<200;i++){if(worker.repository.results().length&&!worker.status().current)break;await Bun.sleep(100);}
-  const result=worker.repository.results()[0];const row={...item,escalated,state:result?.state,error:result?.error,routing:result?.routing,usage:result?.usage?{...result.usage,promptRevisions:result.usage.promptRevisions?.map(({text,...p})=>p)}:null};rows.push(row);console.log(JSON.stringify({id:item.id,state:row.state,route:row.routing?.route}));
+  worker.wake();let settled=false;
+  for(let i=0;i<200;i++){if(worker.repository.results().some(result=>result.sourceId===source.id)&&!worker.status().current){settled=true;break;}await Bun.sleep(100);}
+  if(!settled)throw Error(`Holdout case ${item.id} did not settle within 20s`);
+  const result=worker.repository.results().find(result=>result.sourceId===source.id)!;
+  const promptRevisions=result.usage?.promptRevisions;
+  if(!promptRevisions?.some(revision=>revision.path.endsWith('/inbox-routing.json')&&revision.sha256))throw Error(`Holdout case ${item.id} did not retain its routing prompt revision`);
+  const row={...item,escalated,state:result.state,error:result.error,routing:result.routing,usage:{...result.usage,promptRevisions:promptRevisions.map(({text,...p})=>p)}};rows.push(row);console.log(JSON.stringify({id:item.id,state:row.state,route:row.routing?.route}));
  }finally{await worker.stop();store.close();}
  await writeFile(join(root,'results.json'),JSON.stringify(rows,null,2));
 }

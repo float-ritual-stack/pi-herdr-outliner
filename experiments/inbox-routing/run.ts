@@ -10,8 +10,9 @@ import type {InboxResult} from '../../src/inbox-types';
 
 if(!process.argv.includes('--live'))throw Error('Pass --live to spend configured Jev/Pi tokens on the synthetic cases');
 const cases=JSON.parse(await readFile(new URL('./cases.json',import.meta.url),'utf8')) as Array<{id:string;text:string;expected:string[];useful:boolean}>;
-const directory=process.env.ROUTING_EVIDENCE_DIR?resolve(process.env.ROUTING_EVIDENCE_DIR):await mkdtemp(join(tmpdir(),'inbox-routing-live-'));
-await mkdir(directory,{recursive:true});console.log(directory);
+const evidenceDirectory=process.env.ROUTING_EVIDENCE_DIR?resolve(process.env.ROUTING_EVIDENCE_DIR):tmpdir();
+await mkdir(evidenceDirectory,{recursive:true});
+const directory=await mkdtemp(join(evidenceDirectory,'inbox-routing-live-'));console.log(directory);
 const results:unknown[]=[];
 for(const item of cases.filter(item=>!process.env.ROUTING_CASE||item.id===process.env.ROUTING_CASE)){
  await Promise.all(['baseline','trial'].map(async variant=>{
@@ -37,8 +38,8 @@ for(const item of cases.filter(item=>!process.env.ROUTING_CASE||item.id===proces
    const usage=receipt.usage?{...receipt.usage,promptRevisions:receipt.usage.promptRevisions?.map(({text,...revision})=>revision)}:undefined;
    const row={id:item.id,variant,expected:item.expected,useful:item.useful,pi,elapsedMs:Math.round(performance.now()-started),state:receipt.state,error:receipt.error,summary:receipt.summary,routing:receipt.routing,usage,finalText:final.text,destination,output};
    results.push(row);await writeFile(join(root,'judgments.json'),JSON.stringify(requests,null,2));
-   await writeFile(join(directory,'results.json'),JSON.stringify(results,null,2));
    console.log(JSON.stringify({id:item.id,variant,state:receipt.state,route:receipt.routing?.route,pi,ms:row.elapsedMs,cost:usage?.cost}));
   }finally{await worker.stop();store.close();}
  }));
+ await writeFile(join(directory,'results.json'),JSON.stringify(results,null,2));
 }

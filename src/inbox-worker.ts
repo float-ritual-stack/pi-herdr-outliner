@@ -272,8 +272,8 @@ export class InboxWorker {
             usage = assistance ? combinedInboxUsage(assistance.usage, editorial.usage) : editorial.usage;
           }
           return { usage, apply: () => this.store.database.transaction(() => {
-            if(routing?.route === "archive" && this.store.children(source.id).length) {
-              throw new InboxConflictError("Child context was added during classification; archive was not applied");
+            if(plan.source.disposition === "archive" && this.store.children(source.id).length) {
+              throw new InboxConflictError("Child context is present; archive was not applied");
             }
             for (const update of plan.updates) {
               const before = observed.get(update.blockId);

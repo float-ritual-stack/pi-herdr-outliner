@@ -43,7 +43,7 @@ export function chooseInboxRoute(
   if (margin < policy.minimumMargin) {
     return { ...evidence, route: "editorial", reason: "Routing alternatives are close; Pi handles the ambiguity" };
   }
-  if (judged === "archive" && (context.hasChildren || disposable.noul < policy.archiveProbability)) {
+  if (context.hasChildren || (judged === "archive" && disposable.noul < policy.archiveProbability)) {
     return { ...evidence, route: "editorial", reason: context.hasChildren
       ? "Note has child context; retain it for Pi" : "Disposal judgment is uncertain; retain it for Pi" };
   }
