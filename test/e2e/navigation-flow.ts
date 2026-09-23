@@ -217,6 +217,7 @@ const result = await runHerdrScenario({
           if (placement.scope === "outliner") assert.deepEqual(rect(after, s.panes.launcher), rect(before, s.panes.launcher), "Unrelated launcher geometry is untouched by Outliner-only placement");
         }
         await s.waitFor("new reader retains invoking target", () => registration(created.clientId), c => isCurrent(c, placement.source === "tree" ? nextInspection.id : current.id));
+        await s.waitVisible(pane, placement.source === "tree" ? "SECOND PASSIVE PREVIEW BODY" : "First reader retained body.");
         const sourceAfter = await registration(sourceClient.clientId);
         assert.deepEqual(sourceAfter.currentTarget, sourceBefore.currentTarget);
         assert.deepEqual(sourceAfter.previewTarget, sourceBefore.previewTarget);
