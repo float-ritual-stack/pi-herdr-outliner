@@ -51,7 +51,7 @@ test('saved excerpts keep properties, hashtags and nested fences literal',()=>{
  expect(saved.block.properties.map(property=>property.key).sort()).toEqual(['capture-source','captured-at','status','type']);
  expect(saved.block.properties.find(property=>property.key==='type')?.value).toBe('capture');
  expect(f.store.resolvePageAddress('PIE-001').block?.id).toBe(target.id);
- for(const address of ['excerpt-only','escaped-fence','session-page'])expect(f.store.resolvePageAddress(address).block).toBeNull();
+ for(const address of ['excerpt-only','escaped-fence','session-page'])expect(f.store.resolvePageAddress(address).block).toBeUndefined();
  expect(f.repo.save(receipt.messageKey).deduplicated).toBe(true);
 });
 test('empty answers are not retained; missing, deleted and truncated results stay visible',()=>{
