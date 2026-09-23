@@ -1875,7 +1875,7 @@ bun scripts/install-codex-mentions.ts /absolute/workspace
 This installs Codex's user-level `notify` command and backs up `config.toml`.
 Restart Codex to load it. An existing different notification command is preserved;
 compose adapters explicitly instead of overwriting it. Only the configured exact
-workspace is ingested. A reachable updated Outliner service is required; delivery
+workspace is ingested. Protocol 71 requires updating the service and clients together. A reachable service is required; delivery
 failures are reported by the adapter, without blocking the agent. There is no
 background retry queue or import of earlier conversations. The adapter also
 accepts Codex Stop hook payloads, but installation uses completion notifications.

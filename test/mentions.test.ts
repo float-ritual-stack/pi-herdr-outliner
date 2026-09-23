@@ -82,3 +82,9 @@ test('bare unrelated UUIDs are ignored and unresolved page mentions resolve afte
  const target=f.store.create('Later [page::later-page]');
  expect(f.repo.list().entries[0]?.block?.id).toBe(target.id);
 });
+
+test('Markdown Outliner page URIs resolve canonically, including missing pages',()=>{
+ const f=setup(),a=f.store.create('URI [page::URI example]');
+ f.repo.ingest(f.message('See [URI](pi-outliner://page/URI%20example) and [missing](pi-outliner://page/missing).'));
+ expect(f.repo.list().entries.map(e=>e.block?.id??e.address)).toEqual([a.id,'missing']);
+});
