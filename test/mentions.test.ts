@@ -3,6 +3,7 @@ import {mkdtempSync,rmSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {OutlinerStore} from '../src/store';
+import {outlinerLinkUri} from '../src/outliner-links';
 import {MentionRepository,MENTION_MESSAGE_LIMIT} from '../src/mentions';
 import {codexMentionMessage} from '../src/mentions-codex';
 import {MentionsNavigator} from '../src/mentions-navigator';
@@ -87,4 +88,11 @@ test('Markdown Outliner page URIs resolve canonically, including missing pages',
  const f=setup(),a=f.store.create('URI [page::URI example]');
  f.repo.ingest(f.message('See [URI](pi-outliner://page/URI%20example) and [missing](pi-outliner://page/missing).'));
  expect(f.repo.list().entries.map(e=>e.block?.id??e.address)).toEqual([a.id,'missing']);
+});
+
+test('canonical URI page names retain apostrophes and balanced parentheses',()=>{
+ const f=setup();f.store.create('Wrong [page::Bob]');
+ const apostrophe=f.store.create("Correct [page::Bob's notes]"),parentheses=f.store.create('Draft [page::Plan (draft)]');
+ f.repo.ingest(f.message(`[Author](${outlinerLinkUri('page',"Bob's notes")}) and [Draft](${outlinerLinkUri('page','Plan (draft)')})`));
+ expect(f.repo.list().entries.map(e=>e.block?.id)).toEqual([apostrophe.id,parentheses.id]);
 });

@@ -3,6 +3,7 @@ import {resolve} from 'node:path';
 import {blockReferenceOccurrences} from './references';
 import {pageAddressReferences} from './page-addresses';
 import {workIdReferences} from './work-ids';
+import {marked} from 'marked';
 import {parseOutlinerLinkUri} from './outliner-links';
 import type {OutlinerStore} from './store';
 import type {MentionCollection,MentionEntry,MentionMessage,MentionReceipt,MentionScope} from './mentions-types';
@@ -23,12 +24,13 @@ export function extractMentionReferences(text:string,prefix?:string):Reference[]
   ...pageAddressReferences(text).map(r=>({kind:'address' as const,value:r.displayAddress,start:r.start,end:r.end})),
   ...(prefix?workIdReferences(text,prefix).map(r=>({kind:'address' as const,value:r.workId,start:r.start,end:r.end})):[]),
  ];
- for(const match of text.matchAll(/pi-outliner:\/\/[^\s<>"')]+/g)){
+ marked.walkTokens(marked.lexer(text),token=>{
+  if(token.type!=='link'||!token.href.startsWith('pi-outliner:'))return;
   try {
-   const target=parseOutlinerLinkUri(match[0]);
-   if(target.kind==='block'||target.kind==='page'||target.kind==='work')refs.push({kind:target.kind==='block'?'block':'address',value:target.value,start:match.index,end:match.index+match[0].length});
-  } catch { /* Malformed text is not a valid navigable URI. Other references still resolve. */ }
- }
+   const target=parseOutlinerLinkUri(token.href),start=text.indexOf(token.raw);
+   if(target.kind==='block'||target.kind==='page'||target.kind==='work')refs.push({kind:target.kind==='block'?'block':'address',value:target.value,start,end:start+token.raw.length});
+  } catch { /* Malformed destinations are not navigable references. */ }
+ });
  for(const match of text.matchAll(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi)){
   if(!refs.some(r=>match.index>=r.start&&match.index<r.end))refs.push({bare:true,kind:'block',value:match[0].toLowerCase(),start:match.index,end:match.index+match[0].length});
  }
