@@ -13,6 +13,14 @@ if [ -n "${HOME:-}" ] && [ -x "$HOME/.bun/bin/bun" ]; then
   exec "$HOME/.bun/bin/bun" "$@"
 fi
 
+# A GUI/launchd-started Herdr may have only the system PATH. Homebrew's
+# standard Apple Silicon and Intel prefixes are still valid Bun installs.
+for bun_candidate in /opt/homebrew/bin/bun /usr/local/bin/bun; do
+  if [ -x "$bun_candidate" ]; then
+    exec "$bun_candidate" "$@"
+  fi
+done
+
 printf '%s\n' \
-  'Pi Outliner requires Bun 1.3 or newer. Install it from https://bun.sh and retry.' >&2
+  'Pi Outliner could not find Bun. Install Bun 1.3 or newer from https://bun.sh, or set BUN_INSTALL to its installation directory.' >&2
 exit 127
