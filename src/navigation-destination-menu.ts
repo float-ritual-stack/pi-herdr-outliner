@@ -47,7 +47,10 @@ export class NavigationDestinationDisplay {
     const entry = this.state?.destinations.find(item => item.view.clientId === destination?.clientId && item.view.region === destination.region);
     if ((event.domain === "view" && (
       (event.action === "navigation.link.set" && event.clientId === this.source.clientId) ||
-      (["clients.update", "clients.unregister"].includes(event.action) && !!destination && event.clientId === destination.clientId)
+      // Until the pending snapshot settles, the cached destination may be absent
+      // or may still name the reader from before a relink.
+      (["clients.update", "clients.unregister"].includes(event.action) &&
+        (this.pending !== undefined || this.state === undefined || (!!destination && event.clientId === destination.clientId)))
     )) || (event.domain === "content" && entry?.target?.kind === "block" && (!event.blockId || event.blockId === entry.target.blockId))) return this.refresh();
     return Promise.resolve();
   }

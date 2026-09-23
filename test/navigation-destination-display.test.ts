@@ -73,3 +73,29 @@ test("pending refresh cannot publish an obsolete destination after a newer event
   expect(shown).toEqual(["Latest"]);
   expect(requests).toBe(2);
 });
+
+test("a destination closing during the first read invalidates the unknown linked reader", async () => {
+  const first = Promise.withResolvers<NavigationLinkState>();
+  let requests = 0; const shown: string[] = [];
+  const display = new NavigationDestinationDisplay({request: async () => (++requests === 1 ? await first.promise : {source, destination: null, destinations: []}) as never}, source, () => shown.push(display.text));
+  const pending = display.refresh();
+  const closed = display.onEvent(event("clients.unregister", "reader"));
+  first.resolve(linked("Closed reader"));
+  await Promise.all([pending, closed]);
+  expect(requests).toBe(2);
+  expect(shown).toEqual(["Not linked"]);
+});
+
+test("a newly linked reader changing while relink resolves cannot leave its old title cached", async () => {
+  const relink = Promise.withResolvers<NavigationLinkState>();
+  const replacement = (label: string): NavigationLinkState => ({source, destination: {clientId: "replacement", region: "detail"}, destinations: [{view: {clientId: "replacement", region: "detail"}, label}]});
+  let requests = 0; const shown: string[] = [];
+  const display = new NavigationDestinationDisplay({request: async () => (++requests === 1 ? linked("Original") : requests === 2 ? await relink.promise : replacement("Newest document")) as never}, source, () => shown.push(display.text));
+  await display.refresh();
+  const changed = display.onEvent(event("navigation.link.set", "source"));
+  const updated = display.onEvent(event("clients.update", "replacement"));
+  relink.resolve(replacement("Old document"));
+  await Promise.all([changed, updated]);
+  expect(requests).toBe(3);
+  expect(shown).toEqual(["Original", "Newest document"]);
+});
