@@ -3825,3 +3825,23 @@ test('compact recovery controls retain valid OSC links and dispatch mouse action
   }
  }
 });
+
+
+test('authored Open cannot adopt a changed selection after delayed successful preflight',async()=>{
+ const source=block('authored-pending'),target=block('authored-target'),next=block('new-selection');
+ const gate=Promise.withResolvers<unknown>();
+ const group={completeness:{kind:'complete'},invalidCount:0,diagnostics:[],entries:[]};
+ const fake=harness(input=>{
+  if(input.action==='tree.index')return snapshot([source,target,next],source);
+  if(input.action==='blocks.authored-links')return{kind:'ready',ownerId:source.id,ownerTextDigest:authoredTextDigest(source.text),resources:group,outlinks:{...group,entries:[{kind:'outlink',key:'target',label:'Target',firstSpan:{start:0,end:1},occurrenceCount:1,referenceKind:'block',resolution:{kind:'ready',target:{kind:'block',blockId:target.id},title:'Target'}}]}};
+  if(input.action==='navigation.resolve')return gate.promise;
+  if(input.action==='navigation.dispatch')throw Error('No linked destination');
+ });
+ const c=createTreeController(fake.effects);await c.initialize();await c.handleAction('tree.authored-links.toggle');
+ const row=c.view().rows.find(row=>row.kind==='authored-link')!;
+ await c.handleRowClick(row.rowId);
+ const opening=c.handleKeypress('',{name:'return'},'pass');await setImmediate();
+ await c.handleRowClick(next.id);gate.resolve({sourceClientId:'tree-test',targetClientId:'reader',intent:'open',resolution:'linked'});await opening;
+ expect(c.view().recoveryHelp).toBeUndefined();
+ expect(fake.calls.some(input=>input.action==='navigation.dispatch')).toBe(false);
+});

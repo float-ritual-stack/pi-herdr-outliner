@@ -870,7 +870,7 @@ export function renderTreeFrame(
   }
   const help = view.recoveryHelp ?? view.actionHelpText ??
     DEFAULT_OUTLINER_ACTION_KEYMAP.helpText("tree", view.mode);
-  output.push(`\x1b[2m${truncateToWidth(options.focused === undefined ? help : `F6 Detail  ${help}`, width)}\x1b[0m`);
+  output.push(`\x1b[2m${(view.recoveryHelp ? truncateToWidth : truncate)(options.focused === undefined ? help : `F6 Detail  ${help}`, width)}\x1b[0m`);
   return { frame: output.join("\n"), scrollStartEntryIndex, mouseTargets, breadcrumbStart:breadcrumb?.start,
     expandedPage: selectedInfo && isBlockTreeRow(selectedRow) && selectedRow.multilineExpanded
       ? {rowId:selectedRow.rowId,pageSize:bodyHeight,totalRows:selectedInfo.total,offset:selectedInfo.offset} : null,

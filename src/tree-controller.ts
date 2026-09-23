@@ -1379,7 +1379,10 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       };
       try {
         await effects.navigation.resolve("open", routeOptions);
-        if (await dispatchRecoverable(await resolveTarget(), "open", {...routeOptions, preserveSource:true})) {
+        if(closed || generation!==navigationGeneration || origin!==originKey())return;
+        const target=await resolveTarget();
+        if(closed || generation!==navigationGeneration || origin!==originKey())return;
+        if (await dispatchRecoverable(target, "open", {...routeOptions, preserveSource:true})) {
           status = `Authored target opened in ${effects.navigation.readerLabel}`;
         }
       } catch (error) {
