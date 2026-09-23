@@ -1973,7 +1973,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       if (actionId === 'tree.inbox.preview.activity') {inbox.showActivity();return;}
       if (actionId === 'tree.inbox.preview.before') {inbox.setSourceVersion('before');return;}
       if (actionId === 'tree.inbox.preview.current') {inbox.setSourceVersion('current');return;}
-      if (actionId === 'tree.inbox.preview.technical') {inbox.technicalDetails = !inbox.technicalDetails;return;}
+      if (actionId === 'tree.inbox.preview.technical') {inbox.toggleTechnicalDetails();return;}
       if (actionId === 'tree.inbox.preview.focus') {inbox.focusReader(!inbox.reader.state?.focused);return;}
       if (actionId === 'tree.inbox.preview.source' || actionId === 'tree.inbox.preview.output') {
         const role=actionId.endsWith('source')?'source':'output';

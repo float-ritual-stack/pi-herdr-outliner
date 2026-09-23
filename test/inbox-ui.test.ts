@@ -627,3 +627,37 @@ test('source-only comparison spans bottom; missing historical source is explicit
  }
  await h.controller.close();
 });
+
+test('comparison cancel restores both offsets, output choice and source version; historical scrolling survives live events',async()=>{
+ const receipts=[result('match')];
+ const h=harness(request=>{
+  if(request.action==='get')return {id:request.blockId,text:request.blockId+'\n\n'+Array.from({length:100},(_,i)=>`Paragraph ${i}`).join('\n\n'),revision:2};
+  if(request.action==='inbox.search')return searchCollection(receipts);
+  if(request.action==='inbox.result')return {...result(request.resultId),beforeSource:{id:'before',revision:1,text:Array.from({length:100},(_,i)=>`Old paragraph ${i}`).join('\n\n')}};
+ });
+ await startRecent(h.controller);await setImmediate();h.controller.selectTarget(1);await setImmediate();
+ renderInboxFrame(h.controller,160,55,'help');
+ h.controller.sourceReader.scroll(5,77,24);h.controller.outputReader.scroll(8,78,24);
+ h.controller.selectTarget(2);h.controller.focusReader(true);h.controller.startSearch();h.controller.paste('match');await setImmediate();
+ h.controller.setSourceVersion('before');await setImmediate();await h.controller.cancelSearch();
+ expect(h.controller.sourceVersion).toBe('current');expect(h.controller.outputTarget?.id).toBe('second-result-one');
+ expect(h.controller.sourceReader.state?.offset).toBe(5);expect(h.controller.outputReader.state?.offset).toBe(8);expect(h.controller.sourceReader.state?.focused).toBe(true);
+ h.controller.setSourceVersion('before');await setImmediate();renderInboxFrame(h.controller,160,55,'help');h.controller.scrollPreview(15);
+ const document=h.controller.sourceReader.state!.document;h.controller.contentChanged();await setImmediate();
+ expect(h.controller.sourceReader.state?.offset).toBe(15);expect(h.controller.sourceReader.state?.document).toBe(document);
+ await h.controller.close();
+});
+
+test('copy retains the originating reader across the other reader and source toolbar',async()=>{
+ const h=harness(request=>request.action==='get'?{id:request.blockId,text:request.blockId+'\n\nDistinct content words',revision:1}:undefined);
+ await startRecent(h.controller);await setImmediate();renderInboxFrame(h.controller,160,55,'help');
+ const source=h.controller.sourceFrame!,output=h.controller.outputFrame!;const copies:string[]=[];
+ const mouse=(phase:string,x:number,y:number)=>h.controller.handlePreviewMouse(`\x1b[<${phase==='move'?32:0};${x+1};${y+1}${phase==='up'?'m':'M'}`,text=>copies.push(text));
+ mouse('down',output.content.x+8,output.content.y);mouse('move',source.content.x+5,source.content.y);mouse('up',source.content.x+5,source.content.y);
+ expect(copies).toHaveLength(1);expect(copies[0]).not.toContain('source-');expect(h.controller.outputReader.state?.focused).toBe(true);
+ renderInboxFrame(h.controller,160,55,'help');
+ mouse('down',source.content.x+8,source.content.y);mouse('move',source.rect.x+2,source.rect.y+1);mouse('up',source.rect.x+2,source.rect.y+1);
+ expect(copies).toHaveLength(2);expect(h.controller.sourceVersion).toBe('current');
+ const count=h.invalidations;h.controller.toggleTechnicalDetails();expect(h.invalidations).toBeGreaterThan(count);
+ await h.controller.close();
+});

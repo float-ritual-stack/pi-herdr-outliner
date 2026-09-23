@@ -71,10 +71,14 @@ const result = await runHerdrScenario({
     const sourceRow=layoutRows.findIndex(line=>line.includes('Source · current'));
     const outputRow=layoutRows.findIndex(line=>line.includes('Output 1 · current'));
     if(sourceRow!==outputRow||sourceRow<10)throw Error('Expected side-by-side documents beneath activity');
+    await clickLabel('▸ Technical details');await session.waitVisible(pane,'fixture · fixture');
+    await clickLabel('▾ Technical details');
+    await session.waitFor('technical details collapse immediately',()=>session.visible(pane),text=>!text.includes('fixture · fixture'));
     await session.checkpoint('combined-activity-source-output');
     const dividerRow=layoutRows.findIndex(line=>line.includes('drag─to─resize'));
     if(dividerRow<0)throw Error('No draggable activity divider');
-    await terminal.write(`\x1b[<0;10;${dividerRow+1}M\x1b[<32;10;${dividerRow+5}M\x1b[<0;10;${dividerRow+5}m`);
+    const dividerCol=layoutRows[dividerRow]!.indexOf("drag─to─resize")+3;
+    await terminal.write(`\x1b[<0;${dividerCol};${dividerRow+1}M\x1b[<32;${dividerCol};${dividerRow+5}M\x1b[<0;${dividerCol};${dividerRow+5}m`);
     await session.waitFor('activity divider changes reader height',terminal.visible,text=>text.split('\n').findIndex(line=>line.includes('Source · current'))>sourceRow);
     await session.checkpoint('resized-activity-height');
     await session.waitVisible(pane,'Output callout');
@@ -92,7 +96,7 @@ const result = await runHerdrScenario({
 
     // Native content click must focus the rich reader, then Escape returns to the list.
     await session.keys(pane,'1');await session.keys(pane,'2');
-    await clickLabel('Output callout');await session.waitVisible(pane,'● Preview');
+    await clickLabel('Paragraph 0');await session.waitVisible(pane,'● Preview');
     await session.keys(pane,'down');await session.keys(pane,'esc');await session.waitVisible(pane,'○ Preview');
     await session.keys(pane,'down');await session.waitVisible(pane,'filed note');
     await session.checkpoint('03-reader-focus-list-navigation');

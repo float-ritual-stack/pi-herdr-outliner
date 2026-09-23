@@ -54,6 +54,8 @@ export class PreviewSelection {
   private claimed = false;
   private selection: Selection | null = null;
 
+  get ownsPointer(): boolean { return this.claimed; }
+
   // Keep ownership until mouseup, even when a redraw cancels the selected content.
   clear(): void {
     this.selection = null;

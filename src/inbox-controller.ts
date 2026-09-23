@@ -56,12 +56,12 @@ export class InboxController {
   private searchGeneration = 0;
   private searchTimer: ReturnType<typeof setTimeout> | undefined;
   private searchTouched = false;
-  private beforeSearch: {id?:string;index:number;targetIndex:number;detailOffset:number;previewMode:'content'|'activity';offset:number;focused:boolean}|null = null;
+  private beforeSearch: {id?:string;index:number;targetIndex:number;detailOffset:number;previewMode:'content'|'activity';sourceOffset:number;outputOffset:number;outputIndex:number;sourceVersion:'before'|'current';focused:boolean}|null = null;
   get searching(): boolean {return this.searchBuffer !== null;}
   get searchQuery(): string {return this.searchBuffer?.text ?? "";}
   startSearch(): void {
     if (!this.searching) {
-      this.beforeSearch={id:this.selected?.id,index:this.index,targetIndex:this.targetIndex,detailOffset:this.detailOffset,previewMode:this.previewMode,offset:this.reader.state?.offset??0,focused:this.reader.state?.focused??false};
+      this.beforeSearch={id:this.selected?.id,index:this.index,targetIndex:this.targetIndex,detailOffset:this.detailOffset,previewMode:this.previewMode,sourceOffset:this.sourceReader.state?.offset??0,outputOffset:this.outputReader.state?.offset??0,outputIndex:this.outputIndex,sourceVersion:this.sourceVersion,focused:this.reader.state?.focused??false};
       this.searchBuffer=new TextBuffer();this.searchChanged();
     }
     this.searchEditing=true;this.focusReader(false);this.effects.invalidate();
@@ -70,11 +70,12 @@ export class InboxController {
     const saved=this.beforeSearch;
     this.searchBuffer=null;this.searchEditing=false;this.searchResults=null;this.searchLoading=false;this.searchRanking=false;
     this.searchGeneration++;clearTimeout(this.searchTimer);this.beforeSearch=null;this.searchError="";
-    if(saved){this.index=Math.max(0,this.results.findIndex(result=>result.id===saved.id));this.targetIndex=saved.targetIndex;this.outputIndex=Math.max(0,this.targets.filter(t=>t.role==='output').findIndex(t=>t.id===this.targets[this.targetIndex]?.id));this.detailOffset=saved.detailOffset;this.previewMode=saved.previewMode;}
+    if(saved){this.index=Math.max(0,this.results.findIndex(result=>result.id===saved.id));this.targetIndex=saved.targetIndex;this.outputIndex=saved.outputIndex;this.sourceVersion=saved.sourceVersion;this.detailOffset=saved.detailOffset;this.previewMode=saved.previewMode;}
     this.previewKey="";
     const restored = await this.refreshPreview();
     if(restored && saved && !this.searching){
-      this.scrollPreview(saved.offset);
+      this.sourceReader.scroll(saved.sourceOffset, this.sourceFrame?.content.width ?? 80, this.sourceFrame?.content.height ?? 10);
+      this.outputReader.scroll(saved.outputOffset, this.outputFrame?.content.width ?? 80, this.outputFrame?.content.height ?? 10);
       this.focusReader(saved.focused);
     }
     this.effects.invalidate();
@@ -155,6 +156,7 @@ export class InboxController {
   }
   setSourceVersion(version: 'before' | 'current'): void {
     this.sourceVersion = version;
+    this.sourceKey = "";
     const index = this.targets.findIndex(target => target.role === 'source');
     if (index >= 0) this.selectTarget(index);
   }
@@ -164,6 +166,21 @@ export class InboxController {
   }
   handlePreviewMouse(sequence: string, copy: (text: string) => void): boolean {
     const pointer = parseTreePrimaryPointer(sequence);
+    const readers = [
+      ['source', this.sourceInput, this.sourceReader, this.sourceFrame],
+      ['output', this.outputInput, this.outputReader, this.outputFrame],
+    ] as const;
+    const handle = ([role, input, reader, frame]: typeof readers[number]) => input.handle(sequence, {
+        focus: (focused = true) => { if (focused) this.focusReader(true, role); else reader.focus(false); },
+        scroll: delta => {if (this.searching) this.searchTouched = true; if (frame) reader.scroll(delta, frame.content.width, frame.content.height);},
+        resize: () => {}, invoke: async () => {},
+      }, copy, () => this.effects.invalidate());
+    // A drag belongs to the reader where it began, even across another reader or toolbar.
+    if (pointer && pointer.phase !== 'down') {
+      const owner = readers.find(([, input]) => input.ownsPointer);
+      if (owner && handle(owner)) return true;
+    }
+
     if (pointer) {
       const toolbar = this.sourceFrame && pointer.row === this.sourceFrame.rect.y + 1 && pointInPreview(this.sourceFrame.rect, pointer.column, pointer.row);
       if (toolbar) {
@@ -185,16 +202,7 @@ export class InboxController {
         this.effects.invalidate(); return true;
       }
     }
-    for (const [role, input, reader, frame] of [
-      ['source', this.sourceInput, this.sourceReader, this.sourceFrame],
-      ['output', this.outputInput, this.outputReader, this.outputFrame],
-    ] as const) {
-      if (input.handle(sequence, {
-        focus: (focused = true) => { if (focused) this.focusReader(true, role); else reader.focus(false); },
-        scroll: delta => {if (this.searching) this.searchTouched = true; if (frame) reader.scroll(delta, frame.content.width, frame.content.height);},
-        resize: () => {}, invoke: async () => {},
-      }, copy, () => this.effects.invalidate())) return true;
-    }
+    for (const entry of readers) if (handle(entry)) return true;
     return this.handleActivityMouse(sequence);
   }
   previewMode: 'content' | 'activity' = 'content';
@@ -232,6 +240,7 @@ export class InboxController {
     if (!indices.length) {this.notice="No separate output; preview the current Source";this.effects.invalidate();return;}
     this.selectTarget(indices[(indices.indexOf(this.targetIndex)+1)%indices.length]!);
   }
+  toggleTechnicalDetails(): void {this.technicalDetails = !this.technicalDetails; this.effects.invalidate();}
   showActivity(): void {if(this.searching)this.searchTouched=true;this.previewMode = 'activity'; this.focusReader(false); this.effects.invalidate();}
   scrollPreview(delta: number): void {
     if(this.searching)this.searchTouched=true;
@@ -246,7 +255,7 @@ export class InboxController {
     this.previewKey = result.id;
     const jobs: Promise<boolean>[] = [];
     const sourceKey = `${result.id}/${result.sourceId}/${this.sourceVersion}`;
-    if (force || reset || sourceKey !== this.sourceKey) {
+    if ((this.sourceVersion === 'current' && (force || reset)) || sourceKey !== this.sourceKey || !this.sourceReader.state) {
       this.sourceKey = sourceKey;
       const target = {kind: 'block' as const, blockId: result.sourceId};
       jobs.push(this.sourceVersion === 'current'

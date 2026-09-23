@@ -17,6 +17,7 @@ export class DocumentPreviewInput {
   private document:DocumentPreviewState['document']|undefined;
   private geometry='';
   private resizing: DocumentPreviewFrame | undefined;
+  get ownsPointer(): boolean { return this.selection.ownsPointer || !!this.resizing; }
   render(lines:string[],frame:DocumentPreviewFrame|undefined,preview:DocumentPreviewState|null|undefined):string[]{
     const visible=frame && (frame.placement!=='compact'||preview?.focused)?frame:undefined;
     const geometry=visible?JSON.stringify([visible.content,visible.offset]):'';
