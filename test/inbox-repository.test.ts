@@ -782,3 +782,13 @@ test('before source survives edits, restart and undo without creating a canonica
  restarted.store.update(source.id,'A later edit',current.revision,{author:'user'});
  expect(restarted.repository.beforeSource(saved.id)?.text).toBe(source.text);
 });
+
+test('plan preflight checks allocator metadata without reserving IDs or writing',()=>{
+ const {store,repository}=fixture();const source=capture(store);
+ const before=store.sequence;
+ const invalid=plan({tasks:[{...task,tracks:[]}]});
+ expect(()=>repository.validate(invalid,source)).toThrow('tasks[0]');
+ repository.validate(plan({tasks:[task]}),source);repository.validate(plan({tasks:[task]}),source);
+ expect(store.sequence).toBe(before);
+ const created=store.createRoadmapItem(task);expect(created.workId).toBe('PIE-001');
+});

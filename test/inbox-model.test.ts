@@ -262,7 +262,7 @@ describe("Inbox editorial model", () => {
     expect(instructions[0]).toBe(instructions[1]);
     expect(instructions[2]).toContain("Use the revised relationship judgment.");
     for (const [result, texts] of [[a, [firstEditor, firstQuestions]], [b, [secondEditor, secondQuestions]]] as const) {
-      expect(result.usage.promptRevisions).toEqual(texts.map((text, i) => ({
+      expect(result.usage.promptRevisions?.map(({packagedSha256,...revision})=>revision)).toEqual(texts.map((text, i) => ({
         path: i === 0 ? editor : relationships, text, sha256: createHash("sha256").update(text).digest("hex"),
       })));
     }
@@ -533,4 +533,18 @@ test("partial Pi reads and bounded Jev input expose distinct limits",async()=>{
  expect(output.usage.notChecked?.filter(v=>v.area==='Jev input')).toHaveLength(2);
  expect(output.usage.notChecked?.some(v=>v.area==='note reads')).toBe(true);
  expect(output.usage.notChecked?.some(v=>v.area==='Pi candidate reads')).toBe(false);
+});
+
+test('finish_cleanup repairs invalid ordinary-note metadata inside one persisted Pi session',async()=>{
+ const bad={...filed,notes:[{text:'Wrong [type::field-note] [captured-at::copied]'}]};
+ const good={...filed,notes:[{text:'Useful design [type::note]'}]};
+ const f=await fixture({stream:scripted([
+ [call('search_notes',{query:'design'})],
+ [call('finish_cleanup',bad as unknown as Record<string,unknown>)],
+ context=>{expect(context.messages.at(-1)).toMatchObject({role:"toolResult",isError:true});return [call('finish_cleanup',good as unknown as Record<string,unknown>)];}
+ ])});
+ const output=await f.run();expect(output.plan).toEqual(good);
+ expect(output.usage.piSessions).toHaveLength(1);
+ const log=await readFile(output.usage.piSessions![0]!.path!,'utf8');
+ expect(log).toContain('notes[0].text');expect(log).toContain('roadmap allocator');
 });

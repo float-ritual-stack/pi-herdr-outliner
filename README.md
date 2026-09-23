@@ -1853,3 +1853,9 @@ and the store commit; it is not Jev latency. `notChecked` records observed searc
 read and judge limits. Those omissions remain visible with technical details
 collapsed. Historical attempts without this field say coverage was not recorded;
 an empty omissions list is not an exhaustive search guarantee.
+
+### Repairing Inbox proposals
+
+`finish_cleanup` validates ordinary note metadata and the existing roadmap allocator without reserving a Work-ID. Field errors return to Pi inside the same session and budget; the service repeats revision checks and commits atomically. Reconsider and Resume remain explicit retry paths. Unchanged failed revisions are suppressed instead of automatically looping.
+
+New activity receipts show the retry trigger, prior attempt and observed cost, plus a failure category. Prompt evidence compares active and packaged hashes; differences are informational and never overwrite your editable files. Historical receipts retain unknown trigger/coverage information.

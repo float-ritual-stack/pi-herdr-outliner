@@ -1,3 +1,4 @@
+import {InboxAttempts,InboxConflictError,inboxFailureKind} from "./inbox-attempts";
 import { combinedInboxUsage } from "./inbox-usage";
 import { InboxRepository, summarizeInboxResult } from "./inbox-repository";
 import type { InboxModel, InboxPlan, InboxResult, InboxStatus, InboxUsage } from "./inbox-types";
@@ -79,6 +80,7 @@ export class InboxWorker {
   private unavailable: string | undefined;
   private message = "Automatic cleanup is ready";
   private readonly settleMs: number;
+  private readonly attempts:InboxAttempts;
 
   constructor(
     private readonly store: OutlinerStore,
@@ -90,6 +92,7 @@ export class InboxWorker {
     this.noteModel = options.noteModel;
     this.notes = options.notes ?? (this.noteModel ? new NoteAssistanceRepository(store) : undefined);
     this.notes?.initialize();
+    this.attempts=new InboxAttempts(store,!!this.notes);
     this.settleMs = options.settleMs ?? 750;
   }
 
@@ -134,6 +137,7 @@ export class InboxWorker {
     if (latest?.state === "failed") {
       this.repository.reconsider(latest.sourceId, this.repository.instructions(latest.sourceId));
       this.notes?.reconsider(latest.sourceId);
+      this.attempts.request(latest.sourceId,"resume");
     }
     this.unavailable = undefined;
     this.repository.setPaused(false);
@@ -151,6 +155,7 @@ export class InboxWorker {
     const editorial = this.repository.reconsider(sourceId, instructions?.trim());
     const note = this.noteModel && this.notes?.reconsider(sourceId, instructions?.trim());
     if (!editorial && !note) throw new Error("This block is not an eligible note");
+    this.attempts.request(sourceId,"reconsider");
     if (this.current?.id === sourceId) this.active?.abort();
     this.unavailable = undefined;
     this.message = "Note ready for reconsideration";
@@ -182,6 +187,7 @@ export class InboxWorker {
       const candidate = !inbox.length && this.noteModel ? this.notes!.pending(this.repository.sourceIds())[0] : undefined;
       const source = inbox[0] ?? candidate?.source;
       if (!source) { this.message = this.noteModel ? "Inbox and notes are caught up" : "Inbox is caught up"; this.changed(); return; }
+      const attempt=this.attempts.start(source);
       this.current = source;
       this.message = candidate ? "Organizing note and checking for a request" : "Reading and finding related notes";
       this.changed();
@@ -253,6 +259,7 @@ export class InboxWorker {
             const editorial = await this.model({ source, read, search, progress, signal: abort.signal,
               reportUsage: usage => { reportedUsage = usage; },
               instructions: this.repository.instructions(source.id),
+              validatePlan: plan=>this.repository.validate(plan,source),
             });
             plan = editorial.plan;
             usage = assistance ? combinedInboxUsage(assistance.usage, editorial.usage) : editorial.usage;
@@ -260,7 +267,7 @@ export class InboxWorker {
           return { usage, apply: () => this.store.database.transaction(() => {
             for (const update of plan.updates) {
               const before = observed.get(update.blockId);
-              if (!before || before.revision !== update.expectedRevision) throw new Error("A target changed or was not read; cleanup was not applied");
+              if (!before || before.revision !== update.expectedRevision) throw new InboxConflictError("A target changed or was not read; cleanup was not applied");
             }
             const result = this.repository.apply(operationId, source, plan, usage,
               assistance && noteCandidate ? { candidate: noteCandidate, plan: assistance.plan } : undefined);
@@ -273,15 +280,15 @@ export class InboxWorker {
         returnedUsage = answer.usage;
         applying = true;
         if (inventorySequence !== undefined && this.store.sequence !== inventorySequence) {
-          throw new Error("The property inventory changed while answering; assistance was not applied");
+          throw new InboxConflictError("The property inventory changed while answering; assistance was not applied");
         }
         for (const before of observed.values()) {
           const current = this.store.get(before.id);
           if (!current || current.effectiveDeletedRootId || current.revision !== before.revision || current.parentId !== before.parentId) {
-            throw new Error("A note used by this answer changed; assistance was not applied");
+            throw new InboxConflictError("A note used by this answer changed; assistance was not applied");
           }
         }
-        this.changed(answer.apply());
+        this.changed(this.store.database.transaction(()=>this.attempts.finish(answer.apply(),attempt,!!candidate))());
       } catch (error) {
         const canceled = abort.signal.aborted || this.stopped;
         const detail = canceled ? "Assistant work canceled; the source is unchanged" : error instanceof Error ? error.message : "Assistant work failed";
@@ -290,10 +297,11 @@ export class InboxWorker {
         // reportUsage is a snapshot of that attempt, not another model call.
         const failureUsage = applying ? returnedUsage
           : returnedUsage && errorUsage ? combinedInboxUsage(returnedUsage, errorUsage) : errorUsage ?? returnedUsage;
-        this.changed(candidate
+        const failureKind=inboxFailureKind(error,canceled);
+        this.changed(this.store.database.transaction(()=>this.attempts.finish(candidate
           ? this.notes!.fail(operationId, candidate, detail.slice(0, 500), failureUsage, canceled ? "canceled" : "failed")
-          : this.repository.fail(operationId, source, detail.slice(0, 500), failureUsage, canceled ? "canceled" : "failed"));
-        if (!canceled && !applying && !(error instanceof Error && error.name === "InboxNoteError")) {
+          : this.repository.fail(operationId, source, detail.slice(0, 500), failureUsage, canceled ? "canceled" : "failed"),attempt,!!candidate,failureKind))());
+        if (!canceled && !applying && failureKind!=="validation" && !(error instanceof Error && error.name === "InboxNoteError")) {
           this.unavailable = detail.slice(0, 500);
           this.repository.setPaused(true);
         }

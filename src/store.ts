@@ -859,11 +859,11 @@ export class OutlinerStore {
   ): AnnotationRecord {
     return this.annotations.setLifecycle(input, mutation);
   }
-  createRoadmapItem(
-    input: RoadmapItemCreateInput,
-    author: BlockAuthor = "user",
-    provenance?: BlockProvenance,
-  ): RoadmapItemCreateReceipt {
+  validateRoadmapItem(input:RoadmapItemCreateInput):void {
+    this.database.transaction(()=>{this.prepareRoadmapItem(input);})();
+  }
+
+  private prepareRoadmapItem(input:RoadmapItemCreateInput) {
     if (!input || typeof input !== "object") {
       throw new Error("Roadmap item input must be an object");
     }
@@ -894,31 +894,40 @@ export class OutlinerStore {
     const sourceBlockId = input.sourceBlockId === undefined
       ? undefined
       : normalizeRoadmapRelationshipId(input.sourceBlockId, "sourceBlockId");
-    const creator = normalizeCreatorProvenance(author, provenance);
     assertNoReservedRoadmapProperties(title, body);
 
-    return this.database.transaction(() => {
-      const workQueues = this.database.query(
-        "SELECT DISTINCT block.id FROM blocks block JOIN block_properties type_property ON type_property.block_id = block.id AND type_property.scope = 'block' AND type_property.key = 'type' AND type_property.value = 'work-queue' JOIN block_properties project_property ON project_property.block_id = block.id AND project_property.scope = 'block' AND project_property.key = 'project' AND project_property.value = ? WHERE block.effective_deleted_root_id IS NULL ORDER BY block.id",
-      ).all(project) as Array<{ id: string }>;
-      if (workQueues.length !== 1) {
-        throw new Error(
-          `Expected exactly one active work queue for project ${project}; found ${workQueues.length}`,
-        );
+    const workQueues = this.database.query(
+      "SELECT DISTINCT block.id FROM blocks block JOIN block_properties type_property ON type_property.block_id = block.id AND type_property.scope = 'block' AND type_property.key = 'type' AND type_property.value = 'work-queue' JOIN block_properties project_property ON project_property.block_id = block.id AND project_property.scope = 'block' AND project_property.key = 'project' AND project_property.value = ? WHERE block.effective_deleted_root_id IS NULL ORDER BY block.id",
+    ).all(project) as Array<{ id: string }>;
+    if (workQueues.length !== 1) {
+      throw new Error(
+        `Expected exactly one active work queue for project ${project}; found ${workQueues.length}`,
+      );
+    }
+    const workQueueId = workQueues[0]!.id;
+    const allocator = this.workIdAllocatorFromCurrentRead();
+    if (!allocator) {
+      throw new Error("Configure the project Work-ID prefix before creating roadmap items");
+    }
+    for (const blockId of [...dependsOn, ...relatedTo, ...(sourceBlockId ? [sourceBlockId] : [])]) {
+      const target = this.getFromCurrentRead(blockId);
+      if (!target) throw new Error(`Relationship target not found: ${blockId}`);
+      if (target.effectiveDeletedRootId) {
+        throw new Error(`Relationship target is in Trash: ${blockId}`);
       }
-      const workQueueId = workQueues[0]!.id;
-      const allocator = this.workIdAllocatorFromCurrentRead();
-      if (!allocator) {
-        throw new Error("Configure the project Work-ID prefix before creating roadmap items");
-      }
-      for (const blockId of [...dependsOn, ...relatedTo, ...(sourceBlockId ? [sourceBlockId] : [])]) {
-        const target = this.getFromCurrentRead(blockId);
-        if (!target) throw new Error(`Relationship target not found: ${blockId}`);
-        if (target.effectiveDeletedRootId) {
-          throw new Error(`Relationship target is in Trash: ${blockId}`);
-        }
-      }
+    }
 
+    return {title,body,priority,workBatchId,workStage,project,arc,tracks,dependsOn,relatedTo,sourceBlockId,workQueueId,allocator};
+  }
+
+  createRoadmapItem(
+    input: RoadmapItemCreateInput,
+    author: BlockAuthor = "user",
+    provenance?: BlockProvenance,
+  ): RoadmapItemCreateReceipt {
+    const creator = normalizeCreatorProvenance(author, provenance);
+    return this.database.transaction(() => {
+      const {title,body,priority,workBatchId,workStage,project,arc,tracks,dependsOn,relatedTo,sourceBlockId,workQueueId,allocator}=this.prepareRoadmapItem(input);
       let nextNumber = allocator.next_number;
       let workId = formatWorkId(allocator.prefix, nextNumber);
       while (this.reservedWorkIdOwnerFromCurrentRead(workId) !== undefined) {

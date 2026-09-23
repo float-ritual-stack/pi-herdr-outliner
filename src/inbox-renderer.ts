@@ -28,6 +28,12 @@ function detailLines(controller: InboxController, width: number): string[] {
   plain(result.sourceTitle);
   lines.push("");
   plain(result.summary);
+  if(result.attempt){
+    plain(`Trigger: ${result.attempt.trigger} · source revision ${result.attempt.sourceRevision}`);
+    const prior=result.attempt.prior;
+    if(prior)plain(`Prior attempt: ${prior.id} · ${prior.state}${prior.cost===undefined?' · cost not recorded':` · $${prior.cost.toFixed(4)}`}`);
+  }
+  if(result.failureKind)plain(`Failure: ${result.failureKind}`);
   if (result.error) { lines.push(""); plain(`${result.state === "canceled" ? "Canceled" : "Needs attention"}: ${result.error}`); }
   if (result.state === "held") plain("Reconsider to answer or give direction.");
   lines.push("");
@@ -45,6 +51,7 @@ function detailLines(controller: InboxController, width: number): string[] {
   }
   lines.push(outlinerActionLink('tree.inbox.preview.technical', controller.technicalDetails ? '▾ Technical details' : '▸ Technical details'));
   if (usage && controller.technicalDetails) {
+    if(!result.attempt)plain("Trigger: not recorded for this attempt");
     lines.push("");
     for (const session of usage.piSessions ?? []) {
       plain(`Pi ${session.outcome} · ${session.phase}`);
@@ -53,6 +60,9 @@ function detailLines(controller: InboxController, width: number): string[] {
     }
     plain(`${usage.provider} · ${usage.model}`);
     if (usage.promptRevisions?.length) plain(`Prompts: ${usage.promptRevisions.map(prompt => `${basename(prompt.path)} @ ${prompt.sha256.slice(0, 12)}`).join(" · ")}`);
+    for(const prompt of usage.promptRevisions??[])if(prompt.packagedSha256&&prompt.packagedSha256!==prompt.sha256){
+      plain(`${basename(prompt.path)} differs from packaged ${prompt.packagedSha256.slice(0,12)} · active file retained: ${prompt.path}`);
+    }
     plain(`${usage.inputTokens.toLocaleString("en-US")} in / ${usage.outputTokens.toLocaleString("en-US")} out · estimated $${usage.cost.toFixed(4)}`);
     plain(`${usage.jevSuccessfulCalls === undefined ? `Jev ${usage.jevCalls} calls` : `Jev ${usage.jevCalls} attempted / ${usage.jevSuccessfulCalls} successful`} · model work ${(usage.elapsedMs / 1000).toFixed(1)}s`);
 

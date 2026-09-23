@@ -1,3 +1,4 @@
+import { InboxPlanValidationError } from "./inbox-attempts";
 import { createHash } from "node:crypto";
 import { prepareNoteEdit } from "./note-assistance-repository";
 import type { NoteCandidate, NotePlan } from "./note-assistance-types";
@@ -88,7 +89,7 @@ function validateNote(value: string): void {
   }
 }
 
-function validatePlan(plan: InboxPlan): void {
+export function validateInboxPlan(plan: InboxPlan): void {
   if (!plan || typeof plan !== "object") throw new Error("Inbox plan must be an object");
   text(plan.summary, "Inbox summary");
   if (!plan.source || !["file", "archive", "hold"].includes(plan.source.disposition)) throw new Error("Invalid Inbox source disposition");
@@ -102,9 +103,10 @@ function validatePlan(plan: InboxPlan): void {
   if (plan.source.disposition === "hold" && (plan.notes.length || plan.tasks.length || plan.updates.length)) {
     throw new Error("A held Inbox source cannot produce content changes");
   }
-  for (const note of plan.notes) {
+  for (const [index,note] of plan.notes.entries()) {
     if (!note || typeof note !== "object") throw new Error("Inbox note must be an object");
-    validateNote(text(note.text, "Inbox note text"));
+    try {validateNote(text(note.text, "Inbox note text"));}
+    catch(error){throw new InboxPlanValidationError(`notes[${index}].text`,error instanceof Error?error.message:String(error));}
     if (note.parentId !== undefined) text(note.parentId, "Inbox note parent ID");
   }
   for (const update of plan.updates) {
@@ -152,7 +154,7 @@ export function summarizeInboxResult(result: InboxResult): InboxResultSummary {
     ...result,
     usage: {
       ...result.usage,
-      promptRevisions: result.usage.promptRevisions.map(({ path, sha256 }) => ({ path, sha256 })),
+      promptRevisions: result.usage.promptRevisions.map(({ path, sha256, packagedSha256 }) => ({ path, sha256, ...(packagedSha256?{packagedSha256}:{}) })),
     },
   };
 }
@@ -267,7 +269,7 @@ export class InboxRepository {
   apply(id: string, source: Block, plan: InboxPlan, usage?: InboxUsage, assistance?: { candidate: NoteCandidate; plan: NotePlan }): InboxResult {
     text(id, "Inbox operation ID");
     revision(source.revision);
-    validatePlan(plan);
+    validateInboxPlan(plan);
     validateUsage(usage);
     if (assistance && (assistance.candidate.source.id !== source.id || assistance.candidate.source.revision !== source.revision ||
       assistance.candidate.source.text !== source.text || assistance.candidate.source.parentId !== source.parentId)) {
@@ -353,6 +355,18 @@ export class InboxRepository {
       this.consumeInstructions(current.id);
       return result;
     })();
+  }
+
+  /** Read-only preflight; apply repeats authoritative checks in its write transaction. */
+  validate(plan:InboxPlan,source:Block):void {
+    validateInboxPlan(plan);
+    for(const [index,note] of plan.notes.entries())if(note.parentId){
+      const parent=this.store.get(note.parentId);
+      if(!parent||parent.effectiveDeletedRootId||parent.id===source.id)throw new InboxPlanValidationError(`notes[${index}].parentId`,"Choose an active existing container other than the source");
+    }
+    for(const [index,task] of plan.tasks.entries())try {
+      this.store.validateRoadmapItem({...task,sourceBlockId:source.id});
+    } catch(error){throw new InboxPlanValidationError(`tasks[${index}]`,error instanceof Error?error.message:String(error));}
   }
 
   fail(id: string, source: Block, error: string, usage?: InboxUsage, outcome: "failed" | "canceled" = "failed"): InboxResult {

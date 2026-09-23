@@ -85,6 +85,7 @@ test("an intervening target edit rejects the whole cleanup and preserves the sou
   await until(() => worker.status().results.length === 1);
   const failed = worker.status().results[0]!;
   expect(failed.state).toBe("failed");
+  expect(failed.failureKind).toBe("conflict");
   expect(store.require(source.id)).toEqual(source);
   expect(store.require(targetId)).toEqual(editedTarget);
   expect(failed.usage?.promptRevisions).toEqual([{ path: prompt.path, sha256: prompt.sha256 }]);
@@ -217,4 +218,20 @@ test("service capture returns durable text before the automatic processor finish
   finish.resolve({ plan: plan("Too late"), usage });
   await Bun.sleep(10);
   expect(store.get(receipt.block.id)?.text).toBe(receipt.block.text);
+});
+
+test('failed revision is suppressed and explicit retries retain trigger and prior cost',async()=>{
+ let calls=0;
+ const {store,worker}=fixture(async()=>{calls++;const error=new Error('Inbox cleanup timed out after 5 ms');error.name='InboxNoteError';Object.assign(error,{usage:{...usage,cost:0.12}});throw error;});
+ const source=store.capture('retry','Retry source','tree').block;worker.wake();
+ await until(()=>worker.status().results.length===1&&!worker.status().current);
+ worker.wake();await Bun.sleep(25);expect(calls).toBe(1);
+ const first=worker.status().results[0]!;expect(first.failureKind).toBe('timeout');
+ worker.reconsider(source.id);await until(()=>worker.status().results.length===2&&!worker.status().current);
+ expect(worker.status().results[0]!.attempt).toMatchObject({trigger:'reconsider',prior:{id:first.id,cost:0.12}});
+ worker.resume();await until(()=>worker.status().results.length===3&&!worker.status().current);
+ expect(worker.status().results[0]!.attempt?.trigger).toBe('resume');
+ const original=store.require(source.id);store.update(source.id,original.text+'\nFresh human addition',original.revision,{author:'user'});worker.wake();
+ await until(()=>worker.status().results.length===4&&!worker.status().current);
+ expect(worker.status().results[0]!.attempt?.trigger).toBe('source-changed');
 });

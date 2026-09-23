@@ -46,6 +46,8 @@ export interface InboxResult {
   outputIds: string[];
   createdAt: string;
   error?: string;
+  failureKind?: "validation"|"timeout"|"provider"|"conflict"|"canceled"|"other";
+  attempt?: {trigger:string;sourceRevision:number;prior?:{id:string;state:InboxResult["state"];cost?:number}};
   usage?: InboxUsage;
 }
 
@@ -80,6 +82,7 @@ export interface InboxModelContext {
   answerPrompt?: { text: string; revision: PromptRevision };
   inventory?: (key: string) => PropertyInventory;
   instructions?: string;
+  validatePlan?: (plan:InboxPlan)=>void;
   signal: AbortSignal;
   progress: (message: string) => void;
   /** Retain available attempt evidence even when the worker's cancellation wins. */

@@ -1,3 +1,5 @@
+import {InboxPlanValidationError} from "./inbox-attempts";
+import { validateInboxPlan } from "./inbox-repository";
 import {recordInboxOmission} from "./inbox-observations";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -210,6 +212,7 @@ export function createInboxModel(options: InboxModelOptions = {}): InboxModel {
     const reads = new Map<string, { block: Block; ranges: Array<[number, number]> }>();
     const source = structuredClone(context.source);
     let plan: InboxPlan | undefined;
+    let rejectedPlan:Error|undefined;
     let session: AgentSession | undefined;
     let trace: AssistantSession | undefined;
     let retainAbort: (() => void) | undefined;
@@ -344,6 +347,14 @@ export function createInboxModel(options: InboxModelOptions = {}): InboxModel {
             }
             for (const note of proposed.notes) if (note.parentId && (!fullyRead(note.parentId) || note.parentId === source.id)) throw new Error("Read a suitable existing container before filing under it");
             for (const task of proposed.tasks) if (task.relatedTo?.some(blockId => !fullyRead(blockId))) throw new Error("Read related work before linking a task");
+            try {
+              validateInboxPlan(proposed);
+              context.validatePlan?.(proposed);
+            } catch(error){
+              rejectedPlan=error instanceof Error?error:new Error(String(error));
+              throw rejectedPlan;
+            }
+            rejectedPlan=undefined;
             plan = structuredClone(proposed);
             return { ...result({ accepted: true }), terminate: true };
           },
@@ -407,6 +418,10 @@ export function createInboxModel(options: InboxModelOptions = {}): InboxModel {
       session.subscribe(event => {
         if (event.type === "message_end" && event.message.role === "assistant" && event.message.stopReason === "error") providerFailed = true;
         if (event.type === "tool_execution_start") trace!.progress(`Tool: ${event.toolName}`);
+        if(event.type === "message_end"&&event.message.role==="toolResult"&&event.message.toolName==="finish_cleanup"&&event.message.isError){
+          const message=event.message.content.filter(part=>part.type==="text").map(part=>part.text).join("\n");
+          rejectedPlan=new InboxPlanValidationError("finish_cleanup",message.slice(0,1600));
+        }
       });
       let rejectAbort: (() => void) | undefined;
       const aborted = new Promise<never>((_resolve, reject) => {
@@ -426,7 +441,7 @@ export function createInboxModel(options: InboxModelOptions = {}): InboxModel {
       if (signal.aborted) throw interruption();
       if (stopped) throw stopped;
       if (providerFailed) throw new InboxModelUnavailableError();
-      if (!plan) throw new Error("Inbox editor did not return a cleanup plan");
+      if (!plan) throw rejectedPlan??new Error("Inbox editor did not return a cleanup plan");
       const measured = snapshotUsage();
       if (measured.inputTokens + measured.outputTokens > maxTokens) budget("Inbox editor token budget exhausted");
       retain("completed");
@@ -434,7 +449,8 @@ export function createInboxModel(options: InboxModelOptions = {}): InboxModel {
     } catch (error) {
       let failure: Error;
       if (signal.aborted) failure = interruption();
-      else if (stopped) failure = new InboxNoteError(stopped.message);
+      else if (stopped) failure = rejectedPlan?new InboxPlanValidationError("finish_cleanup",`${stopped.message}; last rejected proposal: ${rejectedPlan.message}`):new InboxNoteError(stopped.message);
+      else if (error instanceof InboxPlanValidationError) failure = error;
       else if (error instanceof PromptFileError) failure = error;
       else if (error instanceof InboxModelUnavailableError) failure = error;
       // Known local validation failures are useful; provider/auth error bodies are not safe UI text.

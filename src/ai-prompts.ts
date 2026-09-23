@@ -16,6 +16,7 @@ export interface PromptRevision {
   path: string;
   sha256: string;
   text: string;
+  packagedSha256?: string;
 }
 
 export class PromptFileError extends Error {
@@ -133,7 +134,9 @@ async function readPrompt(directory: string, name: string): Promise<PromptRevisi
   if (bytes.length > MAX_PROMPT_BYTES) throw new PromptFileError(path, "file exceeds 64 KiB");
   const text = bytes.toString("utf8");
   if (!text.trim()) throw new PromptFileError(path, "file must not be empty");
-  return { path, text, sha256: createHash("sha256").update(bytes).digest("hex") };
+  const sha256=createHash("sha256").update(bytes).digest("hex");
+  const packaged=resolve(directory)===resolve(DEFAULT_AI_PROMPT_DIRECTORY)?bytes:await readFile(join(DEFAULT_AI_PROMPT_DIRECTORY,name));
+  return {path,text,sha256,packagedSha256:createHash("sha256").update(packaged).digest("hex")};
 }
 
 function object(value: unknown, path: string, keys: string[], label: string): Record<string, unknown> {
