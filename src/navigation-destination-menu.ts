@@ -5,9 +5,55 @@ import { loadDetailReadPreview } from "./detail-read-preview";
 import { renderDetailReadPreviewLines, type DetailReadPreviewDocument } from "./detail-pi-preview";
 import { sanitizeDynamicText } from "./terminal";
 import type { OutlinerActionMenuItem } from "./outliner-actions";
-import type { Block, NavigationLinkState, ResourceDescription } from "./types";
+import type { Block, NavigationLinkState, OutlinerEvent, OutlinerViewAddress, ResourceDescription } from "./types";
 
 type Destination = NavigationLinkState["destinations"][number];
+
+/** A cached header projection of the service-owned link, never a routing authority. */
+export class NavigationDestinationDisplay {
+  text = "Loading destination…";
+  private state: NavigationLinkState | undefined;
+  private pending: Promise<void> | undefined;
+  private requested = false;
+  private disposed = false;
+
+  constructor(private readonly client: OutlinerRequester, private readonly source: OutlinerViewAddress, private readonly invalidate: () => void) {}
+
+  refresh(): Promise<void> {
+    if (this.disposed) return Promise.resolve();
+    this.requested = true;
+    return this.pending ??= this.load().finally(() => { this.pending = undefined; });
+  }
+
+  private async load(): Promise<void> {
+    while (this.requested && !this.disposed) {
+      this.requested = false;
+      try {
+        const state = await this.client.request<NavigationLinkState>({action: "navigation.link.get", source: this.source});
+        if (this.disposed || this.requested) continue;
+        this.state = state;
+        const destination = state.destinations.find(item => item.view.clientId === state.destination?.clientId && item.view.region === state.destination.region);
+        this.text = sanitizeDynamicText(destination?.label || (state.destination ? "Destination unavailable" : "Not linked"));
+      } catch {
+        if (this.disposed || this.requested) continue;
+        this.text = "Destination unavailable";
+      }
+      this.invalidate();
+    }
+  }
+
+  onEvent(event: OutlinerEvent): Promise<void> {
+    const destination = this.state?.destination;
+    const entry = this.state?.destinations.find(item => item.view.clientId === destination?.clientId && item.view.region === destination.region);
+    if ((event.domain === "view" && (
+      (event.action === "navigation.link.set" && event.clientId === this.source.clientId) ||
+      (["clients.update", "clients.unregister"].includes(event.action) && !!destination && event.clientId === destination.clientId)
+    )) || (event.domain === "content" && entry?.target?.kind === "block" && (!event.blockId || event.blockId === entry.target.blockId))) return this.refresh();
+    return Promise.resolve();
+  }
+
+  dispose(): void { this.disposed = true; }
+}
 
 /** Lists existing logical Details without resolving targets or touching Resources. */
 export function navigationDestinationItems(state: NavigationLinkState, unlink: boolean, showOther = false): OutlinerActionMenuItem[] {

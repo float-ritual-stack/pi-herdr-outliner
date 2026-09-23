@@ -1,5 +1,5 @@
 import { ComposedLayout, ComposedTree, composedTreeNavigation, composedPointer, composedWidths } from "./composed-surface";
-import { navigationDestinationItems, navigationDestinationStatus, NavigationDestinationPreview, renderNavigationDestinationPreview } from "./navigation-destination-menu";
+import { navigationDestinationItems, navigationDestinationStatus, NavigationDestinationDisplay, NavigationDestinationPreview, renderNavigationDestinationPreview } from "./navigation-destination-menu";
 import { getProperty } from "./properties";
 import { setTimeout as sleep } from "node:timers/promises";
 import { getMarkdownTheme, initTheme } from "@earendil-works/pi-coding-agent";
@@ -189,6 +189,7 @@ const paths = resolveClientPaths();
 reportCurrentPaneWorkspace(paths.workspaceRoot);
 const client = createOutlinerClient(paths);
 const clientId = crypto.randomUUID();
+const destinationDisplay = new NavigationDestinationDisplay(client, {clientId, region: "detail"}, () => tui.requestRender());
 const browsingContextId = process.env.OUTLINER_BROWSING_CONTEXT_ID?.trim() || clientId;
 const actionKeymap = OutlinerActionKeymap.load();
 const rightClickOwnership = outlinerRightClickOwnership();
@@ -444,6 +445,7 @@ const effects: DetailEffects = {
   },
   async setDestination(destination) {
     const state = await client.request<NavigationLinkState>({action: "navigation.link.set", source: {clientId, region: "detail"}, destination});
+    await destinationDisplay.refresh();
     return state.destinations.find(item => item.view.clientId === destination?.clientId && item.view.region === destination.region)?.label;
   },
   isSourceSelectionActive: () => directSelectionOwner === "current" && (latestDirectSelection !== null || pendingDirectSelection !== null),
@@ -828,6 +830,7 @@ function startWatcher(): void {
       resourcePresentation: TUI_RESOURCE_PRESENTATION_CONTEXT,
     },
     onConnect: async () => {
+      void destinationDisplay.refresh();
       await runtimeSync?.synchronize();
       firstWatcherConnection.resolve();
       if (runtimeInitialized) {
@@ -847,11 +850,12 @@ function startWatcher(): void {
       if (!runtimeInitialized) firstWatcherConnection.reject(error);
       else serviceEventScheduler.scheduleWork(() => controller.onServiceError(error));
     },
-    onEvent: (event) => serviceEventScheduler.schedule(event),
+    onEvent: (event) => { destinationDisplay.onEvent(event); serviceEventScheduler.schedule(event); },
   });
 }
 
 async function stop(exitCode = 0): Promise<void> {
+  destinationDisplay.dispose();
   if (stopping) return;
   if (rightClickOwnership === "outliner") {
     try {
@@ -1401,13 +1405,15 @@ const customFrame = new DetailPiComponent({
   height: () => terminal.rows,
   header: () => {
     const propertyKeys = detailHeaderPropertyKeys;
-    if (!draftSplitActive()) return { surface: currentLabel(), propertyKeys, ...(composed ? {focused: focusedRegion === "detail"} : {}) };
+    const destinationLabel = destinationDisplay.text;
+    if (!draftSplitActive()) return { surface: currentLabel(), propertyKeys, destinationLabel, ...(composed ? {focused: focusedRegion === "detail"} : {}) };
     const focused = (!composed || focusedRegion === "detail") && draftSplitFocus === "editor";
     const linked = controller.state.draftPreviewLinked ? "↔ " : "";
     return {
       surface: `${linked}${focused ? "●" : "○"} Edit${inspectionVisible && readerGeometry().arrangement === "switch" ? ` · Preview ready (${actionKeymap.primaryBinding("detail.reading.focus")})` : ""}`,
       focused,
       propertyKeys,
+      destinationLabel,
     };
   },
   helpText: () => `${readingHelp()}${composed ? "F6 Tree  " : ""}${actionKeymap.helpText("detail", activeDetailActionScopes())}`,
@@ -1420,6 +1426,7 @@ const preview = new DetailPiPreviewLayout(
   {
     calloutTheme: calloutThemeResolution.theme,
     headerPropertyKeys: detailHeaderPropertyKeys,
+    destinationLabel: () => destinationDisplay.text,
     draftText: () => draftSplitActive() ? controller.state.buffer.text : null,
     async projectDraft(text) {
       const projection = await effects.projectRead(
@@ -1446,6 +1453,7 @@ const preview = new DetailPiPreviewLayout(
 const draftSplit = new DetailPiDraftSplitLayout(customFrame, preview);
 const inspectionLayout = new DetailPiPreviewLayout(inspection.state, getMarkdownTheme(), hyperlinksEnabled, () => tui.requestRender(), {
   calloutTheme: calloutThemeResolution.theme,
+  destinationLabel: () => destinationDisplay.text,
   surfaceLabel: () => `${readingSurface.focused === "preview" ? "●" : "○"} Preview`,
   helpText: () => `${readingHelp()}${actionKeymap.helpText("detail", detailActionScopes(inspection.state))}`,
   chooserHelpText: () => inspection.destinationChooserHelpText(),

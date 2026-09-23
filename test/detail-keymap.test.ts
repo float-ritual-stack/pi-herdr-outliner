@@ -658,7 +658,23 @@ test("maps Shift+R to current-block reveal without a destination picker", async 
   expect(preview.intents.filter(intent=>intent.type !== "redraw")).toEqual([
     { type: "current.reveal" },
     { type: "navigation.link" },
+    { type: "navigation.link" },
   ]);
+});
+
+test("Properties read mode links with Shift+L while editors and property filters retain uppercase input", async () => {
+  const properties = state();
+  properties.mode = "preview";
+  properties.propertyInspector.presentation = "dedicated";
+  const reader = harness(properties, false);
+  await reader.press({name: "l", shift: true}, "L");
+  expect(reader.intents).toEqual([{type: "navigation.link"}]);
+  properties.propertyInspector.filterDraft = "";
+  await reader.press({name: "l", shift: true}, "L");
+  expect(reader.intents.at(-1)).toEqual({type: "property-inspector.filter.input", text: "L"});
+  const editor = harness();
+  await editor.press({name: "l", shift: true}, "L");
+  expect(editor.intents).toEqual([{type: "buffer.insert", text: "L"}]);
 });
 
 test("maps property inspector disclosure, pane, grouping, filtering, target, and viewport keys", async () => {

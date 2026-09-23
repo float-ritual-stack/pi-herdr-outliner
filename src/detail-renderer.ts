@@ -195,6 +195,7 @@ export interface DetailHeaderOptions {
   surface?: string;
   focused?: boolean;
   propertyKeys?: readonly string[];
+  destinationLabel?: string;
 }
 
 function renderHeaderControls(): string {
@@ -230,7 +231,8 @@ export function renderDetailHeader(
   return [
     alignHeaderControls(left, renderHeaderControls(), width),
     attention ?? renderDetailMetadata(state, width, options),
-    `\x1b[2m${"─".repeat(width)}\x1b[0m`,
+    options.destinationLabel === undefined ? `\x1b[2m${"─".repeat(width)}\x1b[0m`
+      : outlinerActionLink("detail.navigation.link", alignHeaderControls(`Opens in: ${fitDynamicText(options.destinationLabel, width)}`, "/ Change", width)),
   ];
 }
 

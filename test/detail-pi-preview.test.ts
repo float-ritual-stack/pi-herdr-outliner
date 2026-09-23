@@ -458,6 +458,23 @@ function renderedDocument(layout: DetailPiPreviewLayout, width: number): string[
 }
 
 describe("Pi Markdown detail preview", () => {
+  test("Current, Preview and dedicated Properties retain a live destination header action", () => {
+    let label = "Reading notes";
+    for (const surface of ["Current", "Preview", "Properties"]) {
+      const detail = state("Document body");
+      if (surface === "Properties") detail.propertyInspector.presentation = "dedicated";
+      const layout = new DetailPiPreviewLayout(detail, plainMarkdownTheme, false, () => {}, {
+        surfaceLabel: () => surface,
+        destinationLabel: () => label,
+      });
+      const header = () => layout.render(60).find(line => stripTerminalSequences(line).startsWith("Opens in:"))!;
+      label = "Reading notes";
+      expect(stripTerminalSequences(header())).toContain("Reading notes");
+      expect(getOsc8LinkAtColumn(header(), 0)).toBe("pi-outliner-action:detail.navigation.link");
+      label = "Not linked";
+      expect(stripTerminalSequences(header())).toContain("Not linked");
+    }
+  });
   test("renders distinct Resource occurrence links and renews them after metadata-only edits", () => {
     const capabilities = getCapabilities();
     setCapabilities({ ...capabilities, hyperlinks: true });

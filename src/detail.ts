@@ -2,7 +2,7 @@ import { initTheme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { DetailReadingSurface, detailReaderGeometry } from "./detail-reading-surface";
 import { renderDetailDestinationPicker } from "./detail-pi-renderer";
-import { navigationDestinationItems, navigationDestinationStatus, NavigationDestinationPreview, renderNavigationDestinationPreview } from "./navigation-destination-menu";
+import { navigationDestinationItems, navigationDestinationStatus, NavigationDestinationDisplay, NavigationDestinationPreview, renderNavigationDestinationPreview } from "./navigation-destination-menu";
 import { getProperty } from "./properties";
 import { detailPropertyInspectorRegions } from "./property-inspector";
 import { emitKeypressEvents } from "node:readline";
@@ -86,6 +86,7 @@ const paths = resolveClientPaths();
 reportCurrentPaneWorkspace(paths.workspaceRoot);
 const client = createOutlinerClient(paths);
 const clientId = crypto.randomUUID();
+const destinationDisplay = new NavigationDestinationDisplay(client, {clientId, region: "detail"}, draw);
 const browsingContextId = process.env.OUTLINER_BROWSING_CONTEXT_ID?.trim() || clientId;
 const actionKeymap = OutlinerActionKeymap.load();
 const destinationTimeoutMs = openDestinationTimeoutFromEnvironment(
@@ -240,6 +241,7 @@ const effects: DetailEffects = {
   },
   async setDestination(destination) {
     const state = await client.request<NavigationLinkState>({action: "navigation.link.set", source: {clientId, region: "detail"}, destination});
+    await destinationDisplay.refresh();
     return state.destinations.find(item => item.view.clientId === destination?.clientId && item.view.region === destination.region)?.label;
   },
   async setNavigationProtection(navigationProtection) {
@@ -501,7 +503,7 @@ function draw(): void {
   const render = (reader: DetailController, label: string) => {
     reader.setPreviewRegions(detailPropertyInspectorRegions(reader.state));
     return renderDetailLines(reader.state, viewport(reader), {
-      header: {surface: label === "Current" && geometry.arrangement === "switch" ? `Current · Preview ready (${actionKeymap.primaryBinding("detail.reading.focus")})` : label, focused: readingSurface.active === reader},
+      header: {destinationLabel: destinationDisplay.text, surface: label === "Current" && geometry.arrangement === "switch" ? `Current · Preview ready (${actionKeymap.primaryBinding("detail.reading.focus")})` : label, focused: readingSurface.active === reader},
       helpPrefix: readingSurface.previewVisible ? `${actionKeymap.primaryBinding("detail.reading.focus")} Current/Preview · Alt+Enter Keep · Esc close Preview` : "",
       helpText: actionKeymap.helpText("detail", detailActionScopes(reader.state, {bufferMode: reader.isBufferMode()})),
       chooserHelpText: reader.destinationChooserHelpText(),
@@ -609,6 +611,7 @@ function startWatcher(): void {
       resourcePresentation: TUI_RESOURCE_PRESENTATION_CONTEXT,
     },
     onConnect: async () => {
+      void destinationDisplay.refresh();
       await runtimeSync?.synchronize();
       firstWatcherConnection.resolve();
       if (runtimeInitialized) {
@@ -623,11 +626,12 @@ function startWatcher(): void {
       if (!runtimeInitialized) firstWatcherConnection.reject(error);
       else serviceEventScheduler.scheduleWork(() => controller.onServiceError(error));
     },
-    onEvent: (event) => serviceEventScheduler.schedule(event),
+    onEvent: (event) => { destinationDisplay.onEvent(event); serviceEventScheduler.schedule(event); },
   });
 }
 
 function stop(): void {
+  destinationDisplay.dispose();
   if (stopping) return;
   stopping = true;
   watcher?.stop();

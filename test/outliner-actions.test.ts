@@ -16,6 +16,19 @@ import {
 
 const temporaryDirectories: string[] = [];
 
+test("Shift+L opens destination controls in Tree and Detail read modes without consuming editor text", () => {
+  const map = new OutlinerActionKeymap();
+  expect(map.resolve("tree", "browse", "L", {name: "l", shift: true}).actionId).toBe("tree.navigation.link");
+  for (const mode of ["preview", "annotation", "file", "property"]) {
+    expect(map.resolve("detail", mode, "L", {name: "l", shift: true}).actionId).toBe("detail.navigation.link");
+    expect(map.resolve("detail", mode, "", {name: "l", meta: true}).actionId).toBe("detail.navigation.link");
+  }
+  for (const mode of ["edit", "comment", "property-edit", "property-filter", "backlinks-filter"]) {
+    expect(map.resolve("detail", mode, "L", {name: "l", shift: true}).actionId).toBeNull();
+  }
+  expect(map.resolve("tree", "edit", "L", {name: "l", shift: true}).actionId).toBeNull();
+});
+
 test("actual readline bare Escape matches Esc without conflating Alt+Escape", async () => {
   const input = new PassThrough();
   emitKeypressEvents(input);
@@ -126,7 +139,7 @@ describe("Outliner action keymap", () => {
     expect(reveal.available({ surface: "detail", mode: "edit" })).toBe(false);
     for (const [surface, mode] of [["tree", "browse"], ["detail", "preview"]] as const) {
       expect(keymap.resolve(surface, mode, "l", {name: "l", meta: true}).actionId).toBe(`${surface}.navigation.link`);
-      expect(keymap.menuItems(surface, mode)).toContainEqual(expect.objectContaining({id: `${surface}.navigation.link`, binding: "⌥L"}));
+      expect(keymap.menuItems(surface, mode)).toContainEqual(expect.objectContaining({id: `${surface}.navigation.link`, binding: "⌥L, ⇧L"}));
     }
     expect(keymap.action("tree.current.reveal").defaultChords).toEqual(["Shift+R"]);
     expect(keymap.action("detail.current.reveal").defaultChords).toEqual(["Shift+R"]);

@@ -11,6 +11,7 @@ import { DEFAULT_OUTLINER_ACTION_KEYMAP } from "../src/outliner-actions";
 import type { DetailState } from "../src/detail-controller";
 import {
   renderDetailAnsi,
+  renderDetailHeader,
   renderDetailLines,
 } from "../src/detail-renderer";
 import { createOpenDestinationChooserState } from "../src/open-destination-chooser";
@@ -20,6 +21,19 @@ import { deriveResourceCapabilityReport } from "../src/resources";
 import type { Block } from "../src/types";
 import { createPropertyInspectorModel, detailPropertyInspectorRegions } from "../src/property-inspector";
 const ACTION_MENU = "\x1b]8;;pi-outliner-action:detail.menu.open\x1b\\\x1b[2;36m[⋯]\x1b[0m\x1b]8;;\x1b\\";
+
+test("Current, Preview and Properties headers expose the same clickable destination without moving content", () => {
+  for (const surface of ["Current", "Preview", "Properties"]) {
+    for (const width of [35, 80]) {
+      const lines = renderDetailHeader(state(), width, {surface, destinationLabel: "Research notes"});
+      expect(lines).toHaveLength(3);
+      expect(stripTerminalSequences(lines[2]!)).toContain("Opens in:");
+      expect(stripTerminalSequences(lines[2]!)).toContain("Change");
+      expect(getOsc8LinkAtColumn(lines[2]!, 0)).toBe("pi-outliner-action:detail.navigation.link");
+      expect(lines.every(line => visibleWidth(line) <= width)).toBe(true);
+    }
+  }
+});
 const detailHeader = (title: string, width: number): string[] => {
   const controls = ACTION_MENU;
   return [

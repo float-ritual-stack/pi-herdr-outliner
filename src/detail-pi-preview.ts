@@ -174,6 +174,7 @@ interface CachedDetailDraftProjection extends DetailDraftProjection {
 }
 
 export interface DetailPiPreviewOptions {
+  destinationLabel?(): string;
   surfaceLabel?(): string;
   primaryFocused?(): boolean;
   draftText?(): string | null;
@@ -1027,6 +1028,7 @@ class DetailPreviewHeader implements Component {
     const header: DetailHeaderOptions = {
       linkBreadcrumbs: this.linksEnabled,
       propertyKeys: this.options.headerPropertyKeys,
+      destinationLabel: this.options.destinationLabel?.(),
     };
     const split = this.options.splitActive?.() ?? false;
     if (this.state.propertyInspector.presentation === "dedicated") {
