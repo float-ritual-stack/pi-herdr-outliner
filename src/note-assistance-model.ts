@@ -81,8 +81,8 @@ export function createNoteModel(options: InboxModelOptions = {}): NoteModel {
     const excerpt = content.slice(0, 12_000);
     const candidates = noteTagCandidates(excerpt, context.tags, context.candidate.rejectedTags);
     const seen = new Set(context.candidate.seenRequestPassages ?? []);
-    const paragraphs = requestPassages(excerpt).filter(text => text.length < 2000 &&
-      (context.candidate.explicitReconsideration || !seen.has(passageKey(text)))).slice(0, 16);
+    const eligiblePassages = requestPassages(excerpt).filter(text => context.candidate.explicitReconsideration || !seen.has(passageKey(text)));
+    const paragraphs = eligiblePassages.filter(text => text.length < 2000).slice(0, 16);
     const keys = [...new Set(["type", "tag", ...context.propertyKeys])].slice(0, 120);
     const mayRequest = context.candidate.requestAllowed && content.length <= 12_000 && paragraphs.length > 0;
     const questions: Record<string, unknown> = {
@@ -130,6 +130,7 @@ export function createNoteModel(options: InboxModelOptions = {}): NoteModel {
     const usage: InboxUsage = { provider: "typesafe", model: MODEL, inputTokens: tokens(raw.usage?.input_tokens), outputTokens: tokens(raw.usage?.output_tokens),
       cost: tokens(raw.usage?.input_tokens) * 0.042 / 1_000_000, jevCalls: 1, jevSuccessfulCalls: 1, elapsedMs: Math.round(performance.now() - started), promptRevisions: prompts.revisions, notChecked: [] };
     if(content.length>excerpt.length)recordInboxOmission(usage,"classification","Only the first 12,000 characters were classified; requests beyond that bound were not evaluated");
+    if(eligiblePassages.length>paragraphs.length)recordInboxOmission(usage,"request passages","Only up to 16 fresh passages shorter than 2,000 characters were considered for requests");
     const addAnswerUsage = (additional: InboxUsage) => Object.assign(usage, combinedInboxUsage(usage, additional));
     if (mayRequest) {
       const request = choice("request", Object.keys(prompts.request.criteria));
@@ -151,6 +152,7 @@ export function createNoteModel(options: InboxModelOptions = {}): NoteModel {
                 text: `${source.text.trim()}\n\n${inventoryAnswer(inventory, new Date().toISOString())}` };
             } else {
               plan.unfulfilledRequest = { key: requestKey, reason: "The property inventory is incomplete; a partial list cannot fulfill this request" };
+              recordInboxOmission(usage,"inventory","Property inventory was incomplete");
             }
           } else if (request.value === "answer") {
             context.progress("Reading Outliner evidence and writing the requested answer");

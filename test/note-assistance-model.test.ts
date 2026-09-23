@@ -386,6 +386,7 @@ test("unsupported, unresolved-key, and incomplete inventory requests explicitly 
   const result = await createNoteModel(f.options)(f.context);
   expect(result.plan.fulfillment).toBeUndefined();
   expect(result.plan.unfulfilledRequest?.reason).toContain("incomplete");
+  expect(result.usage.notChecked?.some(v=>v.area==="inventory")).toBe(true);
   expect(() => inventoryAnswer(inventory("type", { complete: false }), "today")).toThrow("truncated");
 });
 
@@ -488,4 +489,10 @@ test('Jev-only classification records the truncated input window',async()=>{
  const f=await fixture('Long note\n\n'+'architecture '.repeat(1500));
  const result=await createNoteModel(f.options)(f.context);
  expect(result.usage.notChecked).toContainEqual({area:'classification',reason:'Only the first 12,000 characters were classified; requests beyond that bound were not evaluated'});
+});
+
+test("request passage selection exposes omitted paragraphs",async()=>{
+ const f=await fixture(Array.from({length:20},(_,i)=>`Paragraph ${i}: useful remembered idea.`).join('\n\n'));
+ const result=await createNoteModel(f.options)(f.context);
+ expect(result.usage.notChecked?.some(v=>v.area==='request passages')).toBe(true);
 });

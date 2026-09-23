@@ -516,3 +516,21 @@ describe("Inbox editorial model", () => {
     }
   });
 });
+
+test("partial Pi reads and bounded Jev input expose distinct limits",async()=>{
+ const candidate=block('long','Detail '.repeat(2000));
+ const f=await fixture({jevApiKey:'fixture',maxTotalTokens:100000,fetch:async(_url,init)=>{
+  const body=JSON.parse(init!.body as string);
+  expect(body.state.source.text.length).toBe(18000);
+  expect(body.state.candidates[0].text.length).toBe(6000);
+  return Response.json({answers:{relationship_0:{type:'choice',choice:'related',confidence:0.9,probabilities:{related:0.9,duplicate:0.05,unrelated:0.05}},covered_0:{type:'noul',noul:0.1}},usage:{input_tokens:100,output_tokens:10}});
+ },stream:scripted([
+ [call('search_notes',{query:'detail'})],
+ [call('read_note',{blockId:'long'})],
+ [call('finish_cleanup',filed as unknown as Record<string,unknown>)]
+ ])},{source:block('capture','Source '.repeat(3000)),search:()=>[candidate],read:()=>candidate});
+ const output=await f.run();
+ expect(output.usage.notChecked?.filter(v=>v.area==='Jev input')).toHaveLength(2);
+ expect(output.usage.notChecked?.some(v=>v.area==='note reads')).toBe(true);
+ expect(output.usage.notChecked?.some(v=>v.area==='Pi candidate reads')).toBe(false);
+});

@@ -337,7 +337,9 @@ export class InboxRepository {
       let finalText = preserveProperties(current, sourceText, true);
       if (assistance) {
         finalText = preserveTags(current, finalText);
-        finalText = prepareNoteEdit(assistance.candidate, assistance.plan, finalText).text;
+        const applied = prepareNoteEdit(assistance.candidate, assistance.plan, finalText);
+        finalText = applied.text;
+        if(applied.kind === "organized")result.summary = `${applied.summary}${plan.summary === "Organized note metadata" ? "" : ` · ${plan.summary}`}`;
       }
       this.store.update(current.id, finalText, current.revision, mutation);
       this.store.move(current.id, destination.id);

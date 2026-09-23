@@ -215,6 +215,8 @@ describe("InboxRepository", () => {
       const result = repository.apply("retry-tags", current, plan({ source: {
         disposition: "file", text: "A cleaned note on #Authored [tag::navigation] [tag::editor-only]\n\nUseful explanation.",
       } }), undefined, { candidate, plan: retry });
+      expect(result.summary).toContain("editor-only");
+      expect(result.summary).not.toContain("No metadata changes");
       notes.checkpointEditorial(result, candidate, retry);
     })();
     current = store.require(source.id);

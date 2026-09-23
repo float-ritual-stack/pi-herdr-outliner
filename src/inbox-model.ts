@@ -224,7 +224,7 @@ export function createInboxModel(options: InboxModelOptions = {}): InboxModel {
       usage.outputTokens = (stats?.tokens.output ?? 0) + jevOutput;
       usage.cost = (stats?.cost ?? 0) + jevInput * JEV_INPUT_PRICE;
       usage.elapsedMs = Math.round(performance.now() - started);
-      const partial=[...excerpts].filter(([id,length])=>length>900&&!fullyRead(id)).length;
+      const partial=[...excerpts].filter(([id,length])=>length>900&&!reads.has(id)).length;
       const incomplete=[...reads.keys()].filter(id=>!fullyRead(id)).length;
       const notChecked=[...usage.notChecked??[]];
       if(partial)notChecked.push({area:"Pi candidate reads",reason:`${partial} retrieved note${partial===1?' was':'s were'} only shown to Pi as search excerpts`});
@@ -299,6 +299,8 @@ export function createInboxModel(options: InboxModelOptions = {}): InboxModel {
                 const hints = await relationships(source, missing, prompts.relationships, options, signal, maxTokens - (stats?.tokens.total ?? 0) - jevInput - jevOutput);
                 if (hints) {
                   usage.jevSuccessfulCalls!++;
+                  if(source.text.length>18000)recordInboxOmission(usage,"Jev input","Relationship checks saw only the first 18,000 source characters");
+                  if(missing.some(block=>block.text.length>6000))recordInboxOmission(usage,"Jev input","Some relationship candidates were limited to their first 6,000 characters");
                   jevInput += hints.inputTokens; jevOutput += hints.outputTokens;
                   missing.forEach((b, i) => relationshipCache.set(`${b.id}:${b.revision}`, hints.judged[i]!));
                 } else { usage.jevCalls--; status = "budget"; usage.jevWarning = "Some Jev comparisons were skipped to stay within this note's budget"; recordInboxOmission(usage,"relationships",usage.jevWarning); }
@@ -350,7 +352,9 @@ export function createInboxModel(options: InboxModelOptions = {}): InboxModel {
       if (context.inventory) customTools.push(defineTool({
         name: "property_inventory", label: "Property inventory", description: "Read exact property values and block counts from the service. Completeness is explicit; a truncated page is not a complete inventory.",
         parameters: Type.Object({ key: text(100) }, { additionalProperties: false }),
-        async execute(_call, params) { assertActive(); return result(context.inventory!(params.key)); },
+        async execute(_call, params) { assertActive(); const inventory=context.inventory!(params.key);
+          if(!inventory.complete)recordInboxOmission(usage,"inventory","Property inventory was incomplete");
+          return result(inventory); },
       }) as typeof customTools[number]);
       const workspaceRoot = options.workspaceRoot ?? process.cwd();
       trace = new AssistantSession(workspaceRoot, options.sessionDirectory ?? join(
