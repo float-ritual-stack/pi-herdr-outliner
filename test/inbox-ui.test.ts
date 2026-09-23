@@ -663,7 +663,7 @@ test('copy retains the originating reader across the other reader and source too
 });
 
 test.each([{outputIds:[]},{outputIds:['output-result-one','second-result-one']}])('cancel restores absolute historical offset for reused receipt %j',async({outputIds})=>{
- const receipt=result('result-one',{outputIds});
+ const receipt=result('result-one',{outputIds:[...outputIds]});
  const h=harness(request=>{
   if(request.action==='inbox.status')return status({attentionCount:0,attentionOnly:request.attentionOnly===true,results:request.attentionOnly?[]:[receipt]});
   if(request.action==='inbox.search')return searchCollection([receipt]);
