@@ -31,6 +31,8 @@ The [combined Tree/Detail surface](#combined-tree-and-detail-experiment) and
 [automatic Inbox editor](#automatic-inbox-agent) are shipped experiments. The
 normal separate-pane layout remains the default.
 
+Inbox history search: click **Search /** or press `/` in Inbox. Search original capture titles, result summaries and current Source/Output text across the complete stored history. Up/Down selects an attempt while typing; Enter returns to result controls, and Alt+Enter opens its content in Detail. Escape or × restores the previous browsing position. Attempts retain their date and identity. Text results appear first; optional Jev reranking uses the same editable `goto-ranking.json` prompt as Goto. Session transcripts are diagnostics, excluded from this search. The shortlist is bounded and says when matches were omitted; Jev reranks that shortlist rather than searching missing candidates.
+
 ## Why this exists
 
 The project started as a small Friday-night experiment and grew into a durable workspace with a few explicit constraints:

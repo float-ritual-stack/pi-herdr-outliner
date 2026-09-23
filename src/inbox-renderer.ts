@@ -87,7 +87,7 @@ export function renderInboxFrame(controller: InboxController, width: number, hei
     list.push(outlinerActionLink(`tree.inbox.select:${start+offset}`, selected ? `\x1b[48;5;238m\x1b[1m${line}\x1b[0m` : line));
     list.push(outlinerActionLink(`tree.inbox.select:${start+offset}`,fit(`  \x1b[2m${sanitizeDynamicText(controller.searching ? attempt + " · " + result.summary : result.summary)}\x1b[0m`, listWidth)));
   }
-  if (!results.length) list.push(controller.loading ? "Loading results…" : controller.attentionOnly ? "Nothing needs attention" : "No recent results");
+  if (!results.length) list.push(controller.searching ? (controller.searchLoading ? "Searching history…" : "No matching results") : controller.loading ? "Loading results…" : controller.attentionOnly ? "Nothing needs attention" : "No recent results");
   const reading = controller.previewMode === 'content' && controller.reader.state;
   const details = reading ? [] : detailLines(controller, detailWidth);
   let previewLines: string[] | undefined;
@@ -125,7 +125,7 @@ export function renderInboxFrame(controller: InboxController, width: number, hei
     ` ┌${"─".repeat(inner)}┐ `,
     bordered(`\x1b[1;36mInbox agent\x1b[0m · ${state}${snapshot ? ` · ${snapshot.pending} pending` : ""}`),
     bordered(outlinerActionLink("tree.inbox.search","[Search /]")+" "+outlinerActionLink("tree.navigation.link", "[Link destination]")+" "+outlinerActionLink("tree.navigation.once", "[Open once]")+" · "+sanitizeDynamicText(message + (reading && controller.selected?.error ? ` · ${controller.selected.error}` : ""))),
-    bordered(controller.searching ? outlinerActionLink("tree.inbox.search",`Search: ${sanitizeDynamicText(controller.searchQuery)}${controller.searchEditing?"▏":""}`)+" "+outlinerActionLink("tree.inbox.search.clear","[×]") : `\x1b[${attention ? "1;33" : "2"}m${current}\x1b[0m`),
+    bordered(controller.searching ? outlinerActionLink("tree.inbox.search",fit(`Search: ${sliceByColumn(sanitizeDynamicText(controller.searchQuery),Math.max(0,visibleWidth(controller.searchQuery)-Math.max(1,inner-13)),Math.max(1,inner-13),true)}${controller.searchEditing?"▏":""}`,inner-4))+" "+outlinerActionLink("tree.inbox.search.clear","[×]") : `\x1b[${attention ? "1;33" : "2"}m${current}\x1b[0m`),
     bordered(tabs + (compact ? " · Alt+P List/Preview" : "")),
   ];
   for (let row = 0; row < body; row++) {

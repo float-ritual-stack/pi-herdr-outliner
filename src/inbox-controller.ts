@@ -52,12 +52,12 @@ export class InboxController {
   private searchGeneration = 0;
   private searchTimer: ReturnType<typeof setTimeout> | undefined;
   private searchTouched = false;
-  private beforeSearch: {id?:string;index:number;targetIndex:number;detailOffset:number;previewMode:'content'|'activity';offset:number}|null = null;
+  private beforeSearch: {id?:string;index:number;targetIndex:number;detailOffset:number;previewMode:'content'|'activity';offset:number;focused:boolean}|null = null;
   get searching(): boolean {return this.searchBuffer !== null;}
   get searchQuery(): string {return this.searchBuffer?.text ?? "";}
   startSearch(): void {
     if (!this.searching) {
-      this.beforeSearch={id:this.selected?.id,index:this.index,targetIndex:this.targetIndex,detailOffset:this.detailOffset,previewMode:this.previewMode,offset:this.reader.state?.offset??0};
+      this.beforeSearch={id:this.selected?.id,index:this.index,targetIndex:this.targetIndex,detailOffset:this.detailOffset,previewMode:this.previewMode,offset:this.reader.state?.offset??0,focused:this.reader.state?.focused??false};
       this.searchBuffer=new TextBuffer();this.searchChanged();
     }
     this.searchEditing=true;this.reader.focus(false);this.effects.invalidate();
@@ -67,18 +67,25 @@ export class InboxController {
     this.searchBuffer=null;this.searchEditing=false;this.searchResults=null;this.searchLoading=false;this.searchRanking=false;
     this.searchGeneration++;clearTimeout(this.searchTimer);this.beforeSearch=null;this.searchError="";
     if(saved){this.index=Math.max(0,this.results.findIndex(result=>result.id===saved.id));this.targetIndex=saved.targetIndex;this.detailOffset=saved.detailOffset;this.previewMode=saved.previewMode;}
-    this.previewKey="";this.refreshPreview();this.effects.invalidate();
+    this.previewKey="";
+    const restored = await this.refreshPreview();
+    if(restored && saved && !this.searching){
+      this.scrollPreview(saved.offset);
+      this.reader.focus(saved.focused);
+    }
+    this.effects.invalidate();
   }
-  private searchChanged(): void {
+  private searchChanged(preserveSelection = false): void {
     const generation=++this.searchGeneration;clearTimeout(this.searchTimer);
-    const query=this.searchQuery;this.searchResults=null;this.index=0;this.targetIndex=0;this.previewKey="";this.reader.clear();
-    this.searchTouched=false;this.searchLoading=true;this.searchRanking=false;this.searchError="";
+    const query=this.searchQuery;
+    if(!preserveSelection){this.searchResults=null;this.index=0;this.targetIndex=0;this.previewKey="";this.reader.clear();}
+    this.searchTouched=preserveSelection;this.searchLoading=true;this.searchRanking=false;this.searchError="";
     const load=async(semantic:boolean)=>{
       try {
         const result=await this.effects.request<InboxSearchCollection>({action:'inbox.search',query,semantic});
         if(!this.active||generation!==this.searchGeneration||!this.searching)return;
         const selectedId=this.searchTouched?this.selected?.id:undefined;
-        if(!selectedId||result.matches.some(match=>match.result.id===selectedId)){
+        if(!semantic||!selectedId||result.matches.some(match=>match.result.id===selectedId)){
           this.searchResults=result;this.index=selectedId?Math.max(0,result.matches.findIndex(match=>match.result.id===selectedId)):0;
           if(!selectedId)this.targetIndex=0;
           this.refreshPreview();
@@ -145,14 +152,14 @@ export class InboxController {
   scrollPreview(delta: number): void {
     if (this.previewFrame) this.reader.scroll(delta,this.previewFrame.content.width,this.previewFrame.content.height);
   }
-  private refreshPreview(force = false): void {
-    if (!this.active || this.previewMode !== 'content') return;
+  private async refreshPreview(force = false): Promise<boolean> {
+    if (!this.active || this.previewMode !== 'content') return false;
     const target = this.targets[this.targetIndex];
-    if (!target || target.role === 'diagnostics') {this.previewKey='';this.reader.clear();return;}
+    if (!target || target.role === 'diagnostics') {this.previewKey='';this.reader.clear();return false;}
     const key = `${this.selected?.id}/${target.id}`;
-    if (!force && key === this.previewKey) return;
+    if (!force && key === this.previewKey) return false;
     this.previewKey=key;
-    void this.reader.load({kind:'block',blockId:target.id}, force);
+    return this.reader.load({kind:'block',blockId:target.id}, force);
   }
 
   contentChanged(): void { this.previewKey = ""; this.refreshPreview(true); }
@@ -271,7 +278,7 @@ export class InboxController {
 
   async input(str: string, key: TerminalKey): Promise<void> {
     if (!this.active) return;
-    if(await this.searchInput(str,key))return;
+    if(this.searching && await this.searchInput(str,key))return;
     if(!this.steering&&str==="/"){this.startSearch();return;}
     if (key.name === "escape") {
       if (!this.steering && this.reader.state?.focused) {this.reader.focus(false);return;}
@@ -382,6 +389,7 @@ export class InboxController {
       this.epoch++;
       if (this.attentionOnly || this.resultsOffset) await this.refresh();
       else this.receive(snapshot);
+      if(this.searching)this.searchChanged(true);
       this.notice = notice;
       return true;
     } catch (error) {

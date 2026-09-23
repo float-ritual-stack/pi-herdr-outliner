@@ -507,3 +507,64 @@ test('Activity preserves invalidation and reloads current Source on return',asyn
  for(let i=0;i<outputs.length;i++){h.controller.nextOutput();visited.add(h.controller.targets[h.controller.targetIndex]!.id);}
  expect([...visited].sort()).toEqual([...outputs].sort());
  });
+
+function searchCollection(receipts: InboxResult[], semantic: 'lexical'|'ranked'|'unavailable' = 'lexical') {
+ return {matches:receipts.map(result=>({result,revisions:[],title:result.sourceTitle,path:'',snippet:result.summary,exact:false})),completeness:{kind:'complete'},semantic:{status:semantic}};
+}
+async function until(check:()=>boolean):Promise<void>{const end=Date.now()+2000;while(!check()){if(Date.now()>end)throw new Error('Condition did not settle');await new Promise(resolve=>setTimeout(resolve,2));}}
+
+test('history search ignores obsolete queries and restores the previous browse target and scroll',async()=>{
+ const pending=new Map<string,(value:unknown)=>void>();
+ const h=harness(request=>{
+  if(request.action==='inbox.search')return new Promise(resolve=>pending.set(request.query,resolve));
+  if(request.action==='get')return{id:request.blockId,text:'Title\n\n'+Array.from({length:100},(_,i)=>`Paragraph ${i}.`).join('\n\n'),revision:1};
+ });
+ await startRecent(h.controller);await setImmediate();h.controller.selectTarget(1);await setImmediate();
+ renderInboxFrame(h.controller,130,32,'help');h.controller.scrollPreview(20);
+ const offset=h.controller.reader.state!.offset;expect(offset).toBeGreaterThan(0);
+ h.controller.startSearch();h.controller.paste('old');h.controller.paste('new');
+ pending.get('oldnew')!(searchCollection([result('new-match')]));await setImmediate();
+ pending.get('old')!(searchCollection([result('obsolete-match')]));pending.get('')!(searchCollection([]));await setImmediate();
+ expect(h.controller.selected?.id).toBe('new-match');
+ await h.controller.cancelSearch();
+ expect(h.controller.selected?.id).toBe('result-one');expect(h.controller.targetIndex).toBe(1);
+ expect(h.controller.reader.state?.offset).toBe(offset);
+ await h.controller.close();
+});
+
+test('semantic ranking retains an explicitly selected attempt, current target and query',async()=>{
+ let completeRank:((value:unknown)=>void)|undefined;
+ const receipts=[result('first'),result('second')];
+ const h=harness(request=>request.action==='inbox.search'?(request.semantic?new Promise(resolve=>completeRank=resolve):searchCollection(receipts)):undefined);
+ await startRecent(h.controller);h.controller.startSearch();h.controller.paste('typed query');
+ await until(()=>!!completeRank);
+ await h.controller.input('',{name:'down'});h.controller.selectTarget(1);
+ completeRank!(searchCollection([receipts[1]!,receipts[0]!],'ranked'));await setImmediate();
+ expect(h.controller.selected?.id).toBe('second');expect(h.controller.targetIndex).toBe(1);expect(h.controller.searchQuery).toBe('typed query');
+ await h.controller.close();
+});
+
+test('search UI has mouse entry and clear even for long queries; keyboard choosing opens content',async()=>{
+ const receipt=result('found',{sourceTitle:'Original capture title'});
+ const h=harness(request=>request.action==='inbox.search'?searchCollection([receipt],'unavailable'):undefined);
+ await startRecent(h.controller);h.controller.startSearch();h.controller.paste('x'.repeat(200));await setImmediate();
+ const lines=renderInboxFrame(h.controller,80,32,'help');
+ const links=lines.flatMap(line=>Array.from({length:80},(_,col)=>getOsc8LinkAtColumn(line,col)));
+ expect(links).toContain('pi-outliner-action:tree.inbox.search.clear');
+ expect(stripTerminalSequences(lines.join('\n'))).toContain('found');
+ await h.controller.input('',{name:'return',meta:true});
+ expect(h.opened).toEqual([{id:'output-found',destination:'detail'}]);
+ await h.controller.cancelSearch();expect(h.controller.searching).toBe(false);await h.controller.close();
+});
+
+test('undo from search refreshes receipt state without losing search context',async()=>{
+ let undone=false;
+ const h=harness(request=>{
+  if(request.action==='inbox.search')return searchCollection([result('found',{state:undone?'undone':'applied'})]);
+  if(request.action==='inbox.undo'){undone=true;return status();}
+ });
+ await startRecent(h.controller);h.controller.startSearch();h.controller.paste('query');await setImmediate();
+ await h.controller.input('',{name:'return'});await h.controller.input('u',{name:'u'});await setImmediate();
+ expect(h.controller.searching).toBe(true);expect(h.controller.selected?.state).toBe('undone');
+ await h.controller.close();
+});
