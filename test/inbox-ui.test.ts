@@ -495,3 +495,15 @@ test('Activity preserves invalidation and reloads current Source on return',asyn
   if(width<65)expect(actions).toContain('pi-outliner-action:tree.inbox.preview.next-output');
  }
 });
+
+ test('output tabs switch to cycling whenever all individual choices would overflow',async()=>{
+ const outputs=Array.from({length:6},(_,index)=>`output-${index}`);
+ const h=harness(request=>request.action==='inbox.status'?status({attentionCount:0,attentionOnly:request.attentionOnly===true,results:request.attentionOnly?[]:[result('many',{outputIds:outputs})]}):undefined);
+ await startRecent(h.controller);await setImmediate();
+ const lines=renderInboxFrame(h.controller,80,30,'help');
+ const actions=lines.flatMap(line=>Array.from({length:80},(_,col)=>getOsc8LinkAtColumn(line,col))).filter(Boolean);
+ expect(actions).toContain('pi-outliner-action:tree.inbox.preview.next-output');
+ const visited=new Set<string>();
+ for(let i=0;i<outputs.length;i++){h.controller.nextOutput();visited.add(h.controller.targets[h.controller.targetIndex]!.id);}
+ expect([...visited].sort()).toEqual([...outputs].sort());
+ });
