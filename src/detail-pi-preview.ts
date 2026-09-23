@@ -483,6 +483,7 @@ export function renderDetailReadPreviewLines(
   width: number,
   markdownTheme: MarkdownTheme,
   calloutTheme?: DetailCalloutTheme,
+  linksEnabled = false,
 ): string[] {
   const sourceText = propertyInspectorAuthoredText(input.resolvedText);
   const projectedText = propertyInspectorAuthoredText(input.projectedText);
@@ -499,7 +500,7 @@ export function renderDetailReadPreviewLines(
   const document = renderPreviewDocument(
     sourceText,
     projectedText,
-    false,
+    linksEnabled,
     input.workIdPrefix,
   );
   const callouts = renderedAuthoredCallouts(
@@ -517,7 +518,7 @@ export function renderDetailReadPreviewLines(
     markdownTheme,
     applyEmbedBackground,
     previewRegions,
-    false,
+    linksEnabled,
     calloutTheme,
   );
   markdown.setContent(document, embedRanges, true, callouts);

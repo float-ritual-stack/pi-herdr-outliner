@@ -171,6 +171,7 @@ export interface TreeView {
 }
 
 export interface TreeControllerEffects {
+  openExternal?(url:string):void|Promise<void>;
   readonly initialRoot?: TreeRoot;
   createTreePane?(root: TreeRoot | null, direction: "right" | "down"): Promise<void>;
   readonly workspaceRoot: string;
@@ -358,7 +359,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   let quickBuffer = new TextBuffer();
   let quickCompletion: MutableQuickCompletion | null = null;
 
-  const localReader = new DocumentPreview(effects, () => effects.invalidate(), effects.clientId);
+  const localReader = new DocumentPreview(effects, () => effects.invalidate(), effects.clientId,effects.openExternal);
   let previewPreferences = defaultPreviewPreferences();
   let viewerLines: string[] = [];
   let viewerPath = "";
@@ -399,6 +400,9 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   });
 
   const inbox = new InboxController({
+    clientId: effects.clientId,
+    openPreview: openPreviewTarget,
+    openExternal: effects.openExternal,
     request: input => effects.request(input),
     async openResource(resourceId) {
       await effects.navigation.dispatch({ kind: "resource", resourceId }, "open");
@@ -442,7 +446,17 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   }
 
   let placementDirection: "right" | "down" | null = null;
-  let destinationMenu: {state: NavigationLinkState; purpose: "link" | "open"} | null = null;
+  let destinationMenu: {state: NavigationLinkState; purpose: "link" | "open"; target?:OutlinerNavigationTarget} | null = null;
+
+  async function openPreviewTarget(target:OutlinerNavigationTarget):Promise<void>{
+    const state=await effects.request<NavigationLinkState>({action:'navigation.link.get',source:{clientId:effects.clientId,region:'tree'}});
+    if(state.destination&&state.destinations.some(d=>d.view.clientId===state.destination!.clientId&&d.view.region===state.destination!.region)){
+      await effects.navigation.dispatch(target,'open');
+    }else{
+      await handleAction('tree.navigation.once');
+      if(destinationMenu)destinationMenu.target=target;
+    }
+  }
 
   function filteredActionMenuItems(): OutlinerActionMenuItem[] {
     if (destinationMenu) return filterActionMenuItems(placementDirection ? navigationPlacementItems(destinationMenu.state) : navigationDestinationItems(destinationMenu.state, destinationMenu.purpose === "link",showOtherDestinations), actionMenuQuery);
@@ -1326,17 +1340,19 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   async function createLinkedDetail(placement: DetailDestinationPlacement): Promise<void> {
     const selected = rows[selectedIndex];
     const purpose = destinationMenu?.purpose ?? "link";
+    const target=destinationMenu?.target;
     const callerMode = destinationMenu ? actionMenuReturnMode : mode;
     const selectedBlockId = isBlockTreeRow(selected) ? selected.canonicalId : undefined;
     destinationMenu = null; placementDirection = null; destinationPreview.clear(); mode = callerMode;
     try {
-      const blockId = callerMode === "inbox" ? await inbox.resolveContentTarget() : selectedBlockId;
+      const blockId = target?.kind==="block"?target.blockId:callerMode === "inbox" ? await inbox.resolveContentTarget() : selectedBlockId;
       if (!blockId) throw new Error("Select a block to create a Detail destination");
       if (!effects.createDetailDestination) throw new Error("Creating a destination is unavailable in this host");
       status = "Creating Detail · waiting for the new reader to connect…";
       if (callerMode === "inbox") inbox.notice = status;
       effects.invalidate();
       const destination = await effects.createDetailDestination(blockId, placement);
+      if(target)await effects.navigation.dispatch(target,"open",{destination});
       if (purpose === "link") await effects.request({action: "navigation.link.set", source: {clientId: effects.clientId, region: "tree"}, destination});
       void navigationDisplay.refresh();
       status = purpose === "link" ? "Linked: Tree → new Detail" : "Opened once in new Detail";
@@ -1940,6 +1956,11 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     actionId: string,
     origin?: { column: number; row: number },
   ): Promise<void> {
+    if(actionId.startsWith('preview.')){
+      if(mode==='inbox')await inbox.previewAction(actionId);
+      else await localReader.action(actionId,openPreviewTarget);
+      return;
+    }
     if (actionId === "tree.preview.close" || actionId === "tree.preview.toggle") {
       const enabled = actionId === "tree.preview.toggle" && !previewPreferences.enabled;
       previewPreferences = {...previewPreferences, enabled};
@@ -2043,7 +2064,8 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         void navigationDisplay.refresh();
         status = destination ? `Linked: Tree → ${menu.state.destinations.find(entry=>entry.view.clientId===destination.clientId)?.label ?? "Detail"}` : "Open unlinked · choose once or new split";
       } else if (destination) {
-        if (mode === "inbox") {
+        if(menu.target)await effects.navigation.dispatch(menu.target,"open",{destination});
+        else if (mode === "inbox") {
           const blockId = await inbox.resolveContentTarget();
           await effects.navigation.dispatch({kind:"block",blockId},"open",{destination});
         } else await focusDetailReader({destination});
@@ -2346,10 +2368,12 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       }
     }
     if (!treePointer && inputAction !== "suppress" && mode === "browse" && localReader.state?.focused) {
+      if(key.name==="escape"){localReader.focus(false);return;}
       const action=actionKeymap.canonicalize("tree","browse",str,key);
       if(action.suppressed)return;
       if(action.actionId && (action.actionId.startsWith("tree.preview.") || ["tree.preview.focus","tree.preview.close","tree.pane.new","tree.navigation.link","tree.navigation.once","tree.menu.open"].includes(action.actionId))) return handleAction(action.actionId);
       const frame=treePreviewFrame(localReader.state,effects.terminalWidth(),effects.terminalHeight(),"",previewPreferences);
+      if(await localReader.key(key,frame.content.width,frame.content.height,openPreviewTarget))return;
       const delta=key.name==="up"?-1:key.name==="down"?1:key.name==="pageup"?-frame.content.height:key.name==="pagedown"?frame.content.height:0;
       if(delta) scrollLocalPreview(delta);
       else if(key.name==="return") { try {await effects.navigation.dispatch(localReader.state.target,"open");} catch(error){status=errorMessage(error);} }

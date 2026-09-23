@@ -11,10 +11,13 @@ import {pointInPreview,type DocumentPreviewFrame,type PreviewRect} from "./docum
 import {parseTreeWheelEvent} from "./tree-mouse";
 import { TextBuffer } from "./text-buffer";
 import { isPrintableInput, sanitizeDynamicText, type TerminalKey } from "./terminal";
-import type { Block } from "./types";
+import type { OutlinerNavigationTarget, Block } from "./types";
 import type { InternResourceReceipt } from "./resources";
 
 interface InboxEffects extends OutlinerRequester {
+  clientId?: string;
+  openExternal?(url:string):void|Promise<void>;
+  openPreview?(target:OutlinerNavigationTarget):Promise<void>;
   invalidate(): void;
   open(blockId: string, destination: "tree" | "detail"): Promise<void>;
   openResource(resourceId: string): Promise<void>;
@@ -174,7 +177,7 @@ export class InboxController {
     const handle = ([role, input, reader, frame]: typeof readers[number]) => input.handle(sequence, {
         focus: (focused = true) => { if (focused) this.focusReader(true, role); else reader.focus(false); },
         scroll: delta => {if (this.searching) this.searchTouched = true; if (frame) reader.scroll(delta, frame.content.width, frame.content.height);},
-        resize: () => {}, invoke: async () => {},
+        resize: () => {}, invoke: action => this.previewAction(action,reader),
       }, copy, () => this.effects.invalidate());
     if (!this.reviewBody) this.resizeAxis = undefined;
     // A drag belongs to the reader where it began, even across another reader or toolbar.
@@ -218,9 +221,16 @@ export class InboxController {
   }
   private previewKey = '';
   constructor(private readonly effects: InboxEffects) {
-    this.sourceReader = new DocumentPreview(effects, () => effects.invalidate());
-    this.outputReader = new DocumentPreview(effects, () => effects.invalidate());
+    this.sourceReader = new DocumentPreview(effects, () => effects.invalidate(),effects.clientId,effects.openExternal);
+    this.outputReader = new DocumentPreview(effects, () => effects.invalidate(),effects.clientId,effects.openExternal);
   }
+  private async openPreview(target:OutlinerNavigationTarget):Promise<void>{
+    if(this.effects.openPreview)return this.effects.openPreview(target);
+    if(target.kind==='resource')return this.effects.openResource(target.resourceId);
+    if(target.fragmentId)throw Error('This host cannot open a fragment in Detail');
+    return this.effects.open(target.blockId,'detail');
+  }
+  async previewAction(action:string,reader=this.reader):Promise<void>{await reader.action(action,target=>this.openPreview(target));}
   selectResult(index: number): void {
     if (!Number.isInteger(index) || !this.results[index]) return;
     this.searchEditing=false;
@@ -405,6 +415,10 @@ export class InboxController {
     if (!this.steering && key.meta && key.name === 'p') {this.focusReader(!this.reader.state?.focused);return;}
     if (!this.steering && this.previewMode === 'content' && this.reader.state?.focused && ['up','down','pageup','pagedown'].includes(key.name ?? '')) {
       this.scrollPreview((key.name === 'up' || key.name === 'pageup' ? -1 : 1) * (key.name?.startsWith('page') ? Math.max(1,this.previewFrame?.content.height ?? 5) : 1));return;
+    }
+    if(!this.steering&&this.previewMode==='content'&&this.reader.state?.focused&&['tab','return','left','right'].includes(key.name??'')){
+      const frame=this.reader===this.outputReader?this.outputFrame:this.sourceFrame;
+      if(await this.reader.key(key,frame?.content.width??60,frame?.content.height??10,target=>this.openPreview(target)))return;
     }
     if (this.steering) {
       if (key.name === "return") {

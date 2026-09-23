@@ -1,3 +1,4 @@
+import {openExternalUrl} from "./open-external";
 import {DocumentPreviewInput} from './document-preview-input';
 import {KeyInspector} from "./key-inspector";
 import {createDetailDestination} from "./detail-pane-placement";
@@ -123,6 +124,7 @@ export class ComposedTree implements Component {
   }) {
     this.keyInspector=new KeyInspector({actionKeymap:options.actionKeymap,invalidate:options.invalidate});
     this.controller = createTreeController({
+      openExternal: openExternalUrl,
       openKeyInspector: () => this.keyInspector.open(),
       clientId: options.clientId, browsingContextId: options.contextId,
       workspaceRoot: options.workspaceRoot, navigation: options.navigation,

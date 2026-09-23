@@ -55,3 +55,19 @@ test('releasing a content selection over a toolbar completes copy instead of inv
  expect(copies.length).toBe(1);expect(actions).toEqual([]);
  expect(send(pointer(2,3))).toBe(false);
 });
+
+test('links follow on click release, while dragging links copies and never navigates',()=>{
+ const h=fixture('below');const actions:string[]=[];const copies:string[]=[];
+ h.controller.invoke=async action=>{actions.push(action);};
+ h.frame.links=[{rect:{x:1,y:12,width:8,height:1},uri:'pi-outliner://block/abcdefgh'}];
+ const send=(s:string)=>h.input.handle(s,h.controller,text=>copies.push(text),()=>{});
+ send(pointer(2,12));expect(actions).toEqual([]);send(pointer(2,12,'up'));
+ expect(actions).toEqual(['preview.link:pi-outliner%3A%2F%2Fblock%2Fabcdefgh']);
+ actions.length=0;
+ send(pointer(2,12));send(pointer(6,12,'drag'));send(pointer(6,12,'up'));
+ expect(actions).toEqual([]);expect(copies.length).toBe(1);
+ // Returning to the initial cell after a drag is still not a click.
+ send(pointer(2,12));send(pointer(6,12,'drag'));send(pointer(2,12,'up'));expect(actions).toEqual([]);
+ // A redraw with a different document invalidates a pending link.
+ send(pointer(2,12));h.input.render([],undefined,undefined);send(pointer(2,12,'up'));expect(actions).toEqual([]);
+});

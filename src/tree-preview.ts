@@ -34,5 +34,5 @@ export function treePreviewFrame(preview:DocumentPreviewState,width:number,heigh
   }
   const divider = placement === 'beside' ? {x: treeWidth, y: 0, width: 1, height} : placement === 'below' ? {x: 0, y: treeHeight, width, height: 1} : undefined;
   const rendered=renderDocumentPreview({...preview,title:`${preview.title} · ${preferences.dock === 'auto'?'Auto':preferences.dock==='right'?'Dock right':'Dock below'}`},rect,`→ right · ↓ below · Auto fit · drag divider · ${help}`,toolbar);
-  return {...rendered,treeWidth,treeHeight,placement,controls,divider};
+  return {...rendered,treeWidth,treeHeight,placement,controls:[...controls,...rendered.controls??[]],divider};
 }
