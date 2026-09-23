@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import {execFile} from "node:child_process";
-import {readFile} from "node:fs/promises";
+import {readFile, writeFile} from "node:fs/promises";
 import {join} from "node:path";
 import {promisify} from "node:util";
 import {openDetailSidebar} from "../../src/sidebar-placement";
@@ -17,7 +17,9 @@ const composed = process.argv.includes("--composed");
 const result = await runHerdrScenario({
   name: `navigation-flow${composed ? "-composed" : ""}`,
   layout: composed ? "composed" : "separate",
-  async prepare() {},
+  async prepare(root) {
+    await writeFile(join(root, "view-events.txt"), Array.from({length: 60}, (_, index) => `VIEW EVENT LINE ${index + 1}`).join("\n"));
+  },
   async run(s) {
     const terminal = await s.attachClient();
     await terminal.resize(composed ? 600 : 360, 62);
@@ -245,6 +247,27 @@ const result = await runHerdrScenario({
       await assertLinks();
       await s.record("sidebar-recovery", {before: beforeRecovery, after: recovered});
       await s.checkpoint("06-sidebar-recovery");
+
+      // A link/header event must not reload the file beneath an active selection.
+      const selectionDoc = await create("VIEW EVENT FILE [file::view-events.txt]");
+      await s.client.request({action: "ui.command.send", command: {command: "open", targetClientId: detail.clientId, target: {kind: "block", blockId: selectionDoc.id}}});
+      await s.waitFor("file source opened", () => registration(detail.clientId), c => isCurrent(c, selectionDoc.id));
+      await focus("detail"); await s.keys(s.panes.detail, "f");
+      await s.waitVisible(s.panes.detail, "VIEW EVENT LINE 1");
+      await s.keys(s.panes.detail, "v", "shift+g");
+      const selectedEnd = (frame: string) => />\s*60\s+│\s+VIEW EVENT LINE 60/.test(frame);
+      const selectionBefore = await s.waitFor("file selection scrolled to line60", () => s.visible(s.panes.detail), selectedEnd);
+      await s.keys(s.panes.detail, "shift+l");
+      await finishChoice(s.panes.detail, "detail", "VIEW EVENT FILE", detail.clientId);
+      await s.waitVisible(s.panes.detail, "Opens in: VIEW EVENT FILE");
+      const selectionAfter = await s.waitFor("selection retained after link event", () => s.visible(s.panes.detail), selectedEnd);
+      await s.keys(s.panes.detail, "c");
+      await s.waitVisible(s.panes.detail, "view-events.txt:1-60");
+      await s.record("file-selection-survives-link-event", {selectionBefore, selectionAfter, source: selectionDoc.id});
+      await s.checkpoint("07-link-event-preserves-file-selection");
+      await s.keys(s.panes.detail, "escape");
+      assert.equal((await s.client.request<Block>({action: "get", blockId: selectionDoc.id})).text, selectionDoc.text);
+
     }
     await s.closeDetached(secondPane);
   },
