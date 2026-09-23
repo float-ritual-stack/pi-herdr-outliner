@@ -1,6 +1,9 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {emitKeypressEvents} from "node:readline";
+import {PassThrough} from "node:stream";
+import {once} from "node:events";
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import {
   actionChordForInput,
@@ -12,6 +15,18 @@ import {
 } from "../src/outliner-actions";
 
 const temporaryDirectories: string[] = [];
+
+test("actual readline bare Escape matches Esc without conflating Alt+Escape", async () => {
+  const input = new PassThrough();
+  emitKeypressEvents(input);
+  const event = once(input, "keypress");
+  input.write("\x1b");
+  const [text, key] = await event;
+  input.destroy();
+  const map = new OutlinerActionKeymap();
+  expect(map.canonicalize("tree", "browse", text, key).actionId).toBe("tree.preview.close");
+  expect(actionChordForInput(undefined, {name: "escape", meta: true, sequence: "\x1b\x1b"})).toBe("Alt+Esc");
+});
 
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) {

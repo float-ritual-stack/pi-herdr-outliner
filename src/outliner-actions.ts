@@ -310,6 +310,9 @@ export function normalizeActionChord(input: string): string {
 }
 
 export function actionChordForInput(str: string | undefined, key: TerminalKey): string | null {
+  // Bun's readline marks a lone ESC byte as meta=true. Its wire sequence is
+  // plain Escape; a real Alt+Escape has two ESC bytes or explicit modifiers.
+  if (key.sequence === "\x1b") return "Esc";
   const text = str ?? "";
   const uppercasePrintable = /^[A-Z]$/.test(text);
   const bareQuestionMark = text === "?";
