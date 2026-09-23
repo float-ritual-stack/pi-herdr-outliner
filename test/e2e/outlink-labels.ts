@@ -15,7 +15,7 @@ const result=await runHerdrScenario({
   await session.waitVisible(session.panes.tree,'Authored links shown');
   await session.keys(session.panes.tree,'down','down','down');
   const frame=await session.waitVisible(session.panes.tree,'Why this matters → PIE-181');
-  const rows=frame.split('\n').filter(line=>line.includes('↗'));
+  const rows=frame.split('\n').filter(line=>line.includes('▸'));
   assert.ok(rows.some(line=>line.includes('PIE-181 — Recon map · block')));
   assert.ok(rows.some(line=>line.includes('Why this matters → PIE-181 — Recon map · ^section')));
   assert.ok(!rows.some(line=>line.includes('PIE-181 → PIE-181')));

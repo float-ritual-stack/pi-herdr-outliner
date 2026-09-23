@@ -1,7 +1,7 @@
+import {createHash} from "node:crypto";
 import type {
   AuthoredLinkDiagnostic,
   AuthoredLinkGroup,
-  AuthoredLinkGroupName,
   AuthoredLinksSnapshot,
   AuthoredOutlink,
   AuthoredResourceLink,
@@ -9,31 +9,28 @@ import type {
 import type { AuthoredResourceReference, OutlinerNavigationTarget, VisibleBlock } from "./types";
 import type { ProjectionBlock, TreeRow } from "./virtual-branches";
 
+export type TreeLinkGroupName = "outlinks" | "resources" | "backlinks";
+
 export interface AuthoredLinksOwnerOccurrence {
   readonly rowId: string;
   readonly blockId: string;
 }
 
 export interface AuthoredLinkGroupProvider {
-  readonly group: AuthoredLinkGroupName;
+  readonly group: TreeLinkGroupName;
   readonly label: string;
-  select(
-    snapshot: Extract<AuthoredLinksSnapshot, { readonly kind: "ready" }>,
-  ): AuthoredLinkGroup<AuthoredOutlink | AuthoredResourceLink>;
 }
 
-export const AUTHORED_LINK_GROUP_PROVIDERS = [
-  {
-    group: "outlinks",
-    label: "Outlinks",
-    select: (snapshot) => snapshot.outlinks,
-  },
-  {
-    group: "resources",
-    label: "Resources",
-    select: (snapshot) => snapshot.resources,
-  },
-] satisfies readonly AuthoredLinkGroupProvider[];
+export const AUTHORED_LINK_GROUP_PROVIDERS: readonly AuthoredLinkGroupProvider[] = [
+  {group:"outlinks",label:"Outlinks"},
+  {group:"resources",label:"Resources"},
+  {group:"backlinks",label:"Backlinks"},
+];
+
+export type BacklinksPanelLoad =
+  | {readonly kind:"loading"}
+  | {readonly kind:"error"; readonly message:string}
+  | {readonly kind:"ready"; readonly group:AuthoredLinkGroup<AuthoredOutlink>};
 
 export type AuthoredLinksPanelLoad =
   | { readonly kind: "loading" }
@@ -44,11 +41,11 @@ export interface OpenAuthoredLinksPanel {
   readonly kind: "open";
   readonly owner: AuthoredLinksOwnerOccurrence;
   readonly generation: number;
-  readonly collapsedGroups: Readonly<Record<AuthoredLinkGroupName, boolean>>;
+  readonly collapsedGroups: Readonly<Record<TreeLinkGroupName, boolean>>;
   readonly load: AuthoredLinksPanelLoad;
+  readonly backlinks: BacklinksPanelLoad;
 }
 
-export type AuthoredLinksPanel = { readonly kind: "closed" } | OpenAuthoredLinksPanel;
 
 export type AuthoredLinkHeaderState =
   | {
@@ -76,7 +73,7 @@ export interface AuthoredLinkHeaderRow {
   readonly rowId: string;
   readonly parentRowId: string;
   readonly owner: AuthoredLinksOwnerOccurrence;
-  readonly group: AuthoredLinkGroupName;
+  readonly group: TreeLinkGroupName;
   readonly label: string;
   readonly depth: number;
   readonly collapsed: boolean;
@@ -88,9 +85,10 @@ export interface AuthoredLinkRow {
   readonly rowId: string;
   readonly parentRowId: string;
   readonly owner: AuthoredLinksOwnerOccurrence;
-  readonly group: AuthoredLinkGroupName;
+  readonly group: TreeLinkGroupName;
   readonly depth: number;
   readonly link: AuthoredOutlink | AuthoredResourceLink;
+  readonly connectionsOpen?: boolean;
 }
 
 export type TreeDisplayRow<T extends ProjectionBlock = VisibleBlock> = TreeRow<T> | AuthoredLinkHeaderRow | AuthoredLinkRow;
@@ -101,23 +99,29 @@ export function isBlockTreeRow<T extends ProjectionBlock>(row: TreeDisplayRow<T>
 
 export function authoredLinkHeaderRowId(
   ownerRowId: string,
-  group: AuthoredLinkGroupName,
+  group: TreeLinkGroupName,
 ): string {
-  return JSON.stringify(["authored-links", ownerRowId, group]);
+  return "connections:"+createHash("sha256").update(JSON.stringify([ownerRowId,group])).digest("hex");
 }
 
 export function authoredLinkRowId(
   ownerRowId: string,
-  group: AuthoredLinkGroupName,
+  group: TreeLinkGroupName,
   destinationKey: string,
 ): string {
-  return JSON.stringify(["authored-links", ownerRowId, group, destinationKey]);
+  return "connection:"+createHash("sha256").update(JSON.stringify([ownerRowId,group,destinationKey])).digest("hex");
 }
 
 function headerState(
   panel: OpenAuthoredLinksPanel,
   provider: AuthoredLinkGroupProvider,
 ): AuthoredLinkHeaderState {
+  if(provider.group === "backlinks") {
+    if(panel.backlinks.kind === "loading")return{kind:"loading",message:"Loading backlinks"};
+    if(panel.backlinks.kind === "error")return{kind:"error",message:panel.backlinks.message};
+    const group=panel.backlinks.group;
+    return{kind:"ready",entryCount:group.entries.length,invalidCount:0,limited:group.completeness.kind==='limited',diagnostics:[]};
+  }
   if (panel.load.kind === "loading") {
     return { kind: "loading", message: "Loading authored links" };
   }
@@ -137,7 +141,7 @@ function headerState(
       message: `Owner text exceeds ${snapshot.maximumUtf16Units} UTF-16 units`,
     };
   }
-  const linkGroup = provider.select(snapshot);
+  const linkGroup = snapshot[provider.group];
   return {
     kind: "ready",
     entryCount: linkGroup.entries.length,
@@ -148,7 +152,7 @@ function headerState(
 }
 
 function headerRow<T extends ProjectionBlock>(
-  ownerRow: TreeRow<T>,
+  ownerRow: TreeDisplayRow<T>,
   panel: OpenAuthoredLinksPanel,
   provider: AuthoredLinkGroupProvider,
 ): AuthoredLinkHeaderRow {
@@ -169,59 +173,54 @@ function groupEntries(
   panel: OpenAuthoredLinksPanel,
   provider: AuthoredLinkGroupProvider,
 ): readonly (AuthoredOutlink | AuthoredResourceLink)[] {
+  if(provider.group === "backlinks")return panel.backlinks.kind==='ready'?panel.backlinks.group.entries:[];
   if (panel.load.kind !== "ready" || panel.load.snapshot.kind !== "ready") return [];
-  return provider.select(panel.load.snapshot).entries;
+  return panel.load.snapshot[provider.group].entries;
 }
 
 function groupVisible(
   panel: OpenAuthoredLinksPanel,
   provider: AuthoredLinkGroupProvider,
 ): boolean {
+  if(provider.group === "backlinks")return true;
   if (panel.load.kind !== "ready" || panel.load.snapshot.kind !== "ready") return true;
-  const group = provider.select(panel.load.snapshot);
+  const group = panel.load.snapshot[provider.group];
   return group.entries.length > 0 ||
     group.invalidCount > 0 ||
     group.diagnostics.length > 0 ||
     group.completeness.kind === "limited";
 }
 
+export function connectionOwner<T extends ProjectionBlock>(row: TreeDisplayRow<T> | undefined): AuthoredLinksOwnerOccurrence | null {
+  if(isBlockTreeRow(row))return{rowId:row.rowId,blockId:row.canonicalId};
+  if(row?.kind==='authored-link' && row.link.resolution.kind==='ready' && row.link.resolution.target.kind==='block')return{rowId:row.rowId,blockId:row.link.resolution.target.blockId};
+  return null;
+}
+
+/** Compose only explicitly disclosed paths. Cycles need another distinct user-owned occurrence. */
 export function composeAuthoredLinkRows<T extends ProjectionBlock>(
   blockRows: readonly TreeRow<T>[],
-  panel: AuthoredLinksPanel,
-  ownerCollapsed?: boolean,
+  panels: ReadonlyMap<string,OpenAuthoredLinksPanel>,
+  ownerCollapsed: (row: TreeRow<T>) => boolean = row=>!!row.collapsed,
 ): TreeDisplayRow<T>[] {
-  if (panel.kind === "closed") return [...blockRows];
-  const composed: TreeDisplayRow<T>[] = [];
-  for (const projectedRow of blockRows) {
-    const ownsPanel =
-      projectedRow.rowId === panel.owner.rowId &&
-      projectedRow.canonicalId === panel.owner.blockId;
-    const row: TreeRow<T> = ownsPanel
-      ? {
-          ...projectedRow,
-          hasChildren: true,
-          collapsed: ownerCollapsed ?? projectedRow.collapsed,
-        }
-      : projectedRow;
+  const composed:TreeDisplayRow<T>[]=[];
+  const stack:TreeDisplayRow<T>[]=[...blockRows].reverse();
+  while(stack.length){
+    let row=stack.pop()!;
+    const owner=connectionOwner(row),panel=owner?panels.get(owner.rowId):undefined;
+    const owns=panel && panel.owner.blockId===owner?.blockId;
+    if(isBlockTreeRow(row)&&owns)row={...row,hasChildren:true,collapsed:ownerCollapsed(row)};
+    if(row.kind==='authored-link')row={...row,connectionsOpen:!!owns};
     composed.push(row);
-    if (!ownsPanel || row.collapsed) continue;
-    for (const provider of AUTHORED_LINK_GROUP_PROVIDERS) {
-      if (!groupVisible(panel, provider)) continue;
-      const header = headerRow(row, panel, provider);
-      composed.push(header);
-      if (header.collapsed) continue;
-      for (const link of groupEntries(panel, provider)) {
-        composed.push({
-          kind: "authored-link",
-          rowId: authoredLinkRowId(row.rowId, provider.group, link.key),
-          parentRowId: header.rowId,
-          owner: panel.owner,
-          group: provider.group,
-          depth: row.depth + 2,
-          link,
-        });
-      }
+    if(!owns || (isBlockTreeRow(row)&&row.collapsed))continue;
+    const children:TreeDisplayRow<T>[]=[];
+    for(const provider of AUTHORED_LINK_GROUP_PROVIDERS){
+      if(!groupVisible(panel,provider))continue;
+      const header=headerRow(row,panel,provider);children.push(header);
+      if(header.collapsed)continue;
+      for(const link of groupEntries(panel,provider))children.push({kind:'authored-link',rowId:authoredLinkRowId(row.rowId,provider.group,link.key),parentRowId:header.rowId,owner:panel.owner,group:provider.group,depth:row.depth+2,link});
     }
+    stack.push(...children.reverse());
   }
   return composed;
 }

@@ -165,6 +165,7 @@ function harness(
           for (const source of collection.blocks) documents.set(source.id, source);
           return { ...collection, blocks: collection.blocks.map(source => treeIndexFixture(source, id => documents.get(id) ?? null)) } as T;
         }
+        if (response === undefined && input.action === "references.backlinks") return {targetBlockId:input.query.targetBlockId,sources:[],completeness:{kind:"complete"}} as T;
         if (response === undefined && input.action === "get") return (documents.get(input.blockId) ?? null) as T;
         if (response === undefined && input.action === "references.resolve") {
           return resolveBlockReferencesWithStatus(input.text, id => documents.get(id) ?? null) as T;
@@ -630,6 +631,7 @@ describe("createTreeController", () => {
       "authored-link",
       "authored-link-header",
       "authored-link",
+      "authored-link-header",
     ]);
     const headers = displayed.filter((row) => row.kind === "authored-link-header");
     expect(headers.map((row) => ({
@@ -639,6 +641,7 @@ describe("createTreeController", () => {
     }))).toEqual([
       { ownerRowId: ownerOccurrenceRowId, group: "outlinks", collapsed: false },
       { ownerRowId: ownerOccurrenceRowId, group: "resources", collapsed: false },
+      { ownerRowId: ownerOccurrenceRowId, group: "backlinks", collapsed: false },
     ]);
     const resourceRow = displayed.find(
       (row) => row.kind === "authored-link" && row.group === "resources",
@@ -735,7 +738,7 @@ describe("createTreeController", () => {
       controller.view().rows
         .filter((row) => row.kind === "authored-link-header")
         .map((row) => row.group),
-    ).toEqual(["outlinks"]);
+    ).toEqual(["outlinks", "backlinks"]);
     const pageRow = controller.view().rows.find((row) => row.kind === "authored-link");
     if (!pageRow || pageRow.kind !== "authored-link") {
       throw new Error("Expected generated page Outlink");
@@ -823,7 +826,7 @@ describe("createTreeController", () => {
       controller.view().rows
         .filter((row) => row.kind === "authored-link-header")
         .map((row) => row.group),
-    ).toEqual(["resources"]);
+    ).toEqual(["resources", "backlinks"]);
     const resourceRow = controller.view().rows.find((row) =>
       row.kind === "authored-link" && row.group === "resources"
     );
@@ -2015,7 +2018,7 @@ describe("createTreeController", () => {
     const fake = harness((input) => {
       if (input.action === "tree.index") {
         snapshotCount += 1;
-        snapshotIsCurrent = contentChanged && snapshotCount >= 3;
+        snapshotIsCurrent = contentChanged && snapshotCount >= 2;
         const owner = snapshotIsCurrent ? currentOwner : previousOwner;
         return snapshot([owner], owner);
       }
@@ -2043,7 +2046,7 @@ describe("createTreeController", () => {
     expect(controller.view().refreshPending).toBe(true);
 
     await controller.handleKeypress("", { name: "escape" }, "pass");
-    expect(snapshotCount).toBe(3);
+    expect(snapshotCount).toBe(2);
     expect(authoredRequestCount).toBe(3);
     expect(controller.view().refreshPending).toBe(false);
   });
@@ -3844,4 +3847,28 @@ test('authored Open cannot adopt a changed selection after delayed successful pr
  await c.handleRowClick(next.id);gate.resolve({sourceClientId:'tree-test',targetClientId:'reader',intent:'open',resolution:'linked'});await opening;
  expect(c.view().recoveryHelp).toBeUndefined();
  expect(fake.calls.some(input=>input.action==='navigation.dispatch')).toBe(false);
+});
+
+test('nested connection disclosure supports mouse, keyboard, independent siblings and typed Preview/Open',async()=>{
+ const a=block('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'),b=block('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb');
+ const fake=harness(input=>{
+  if(input.action==='tree.index')return snapshot([a,b],a);
+  if(input.action==='blocks.authored-links'){
+   const owner=input.ownerBlockId===a.id?a:b,target=owner===a?b:a;
+   return{kind:'ready',ownerId:owner.id,ownerTextDigest:authoredTextDigest(owner.text),outlinks:{entries:[{kind:'outlink',key:target.id,label:target.id,referenceKind:'block',occurrenceCount:1,firstSpan:{start:0,end:1},resolution:{kind:'ready',target:{kind:'block',blockId:target.id},title:target.id}}],completeness:{kind:'complete'},invalidCount:0,diagnostics:[]},resources:{entries:[],completeness:{kind:'complete'},invalidCount:0,diagnostics:[]}};
+  }
+ });
+ const c=createTreeController(fake.effects);await c.initialize();await c.handleAction('tree.authored-links.toggle');
+ const child=(owner:string)=>{const r=c.view().rows.find(r=>r.kind==='authored-link'&&r.owner.rowId===owner);if(!r)throw Error('missing child');return r;};
+ const first=child(a.id);await c.handleRowClick(first.rowId);
+ await c.handleKeypress('',{name:'right'},'pass');const second=child(first.rowId);
+ await c.handleRowClick(second.rowId);await c.handleAction('tree.authored-links.toggle');
+ expect(child(second.rowId)).toBeDefined();
+ expect(lastCall(fake.calls,'browsing-context.publish')).toMatchObject({target:{kind:'block',blockId:a.id}});
+ await c.handleAction('tree.read');expect(lastCall(fake.calls,'navigation.dispatch')).toMatchObject({target:{kind:'block',blockId:a.id}});
+ await c.handleDisclosure(first.rowId);expect(c.view().rows.some(r=>r.rowId===second.rowId)).toBe(false);
+ await c.handleDisclosure(first.rowId);expect(child(second.rowId)).toBeDefined();
+ await c.handleRowClick(second.rowId);await c.handleKeypress('',{name:'left'},'pass');
+ expect(c.view().rows.some(r=>r.kind==='authored-link'&&r.owner.rowId===second.rowId)).toBe(false);
+ expect(fake.calls.some(c=>['create','update','resources.follow-authored'].includes(c.action))).toBe(false);
 });

@@ -1040,11 +1040,12 @@ describe("renderTreeFrame", () => {
   test("sanitizes generated authored-link headers, labels, and titles", () => {
     const owner = block("owner-render", { text: "Owner", displayText: "Owner" });
     const ownerRow = physical(owner);
-    const rows = composeAuthoredLinkRows([ownerRow], {
+    const rows = composeAuthoredLinkRows([ownerRow], new Map([[ownerRow.rowId, {
       kind: "open",
       owner: { rowId: ownerRow.rowId, blockId: owner.id },
       generation: 1,
-      collapsedGroups: { outlinks: false, resources: false },
+      collapsedGroups: { outlinks: false, resources: false, backlinks:false },
+      backlinks:{kind:"ready",group:{entries:[],completeness:{kind:"complete"},invalidCount:0,diagnostics:[]}},
       load: {
         kind: "ready",
         snapshot: {
@@ -1077,7 +1078,7 @@ describe("renderTreeFrame", () => {
           },
         },
       },
-    });
+    }]]));
 
     const rowsWithUnsafeHeader = rows.map((row) =>
       row.kind === "authored-link-header" && row.group === "outlinks"

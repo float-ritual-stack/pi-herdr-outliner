@@ -1,12 +1,10 @@
+import {TreeConnections} from "./tree-connections";
 import {OpenDestinationChooser, destinationRecoveryKey, missingNavigationDestination, type OpenDestinationTarget} from "./open-destination-chooser";
 import type {DetailDestinationPlacement} from "./detail-pane-placement";
 import type {OutlinerViewAddress} from "./types";
 import {DocumentPreview, type DocumentPreviewState} from './document-preview';
 import {treePreviewFrame, defaultPreviewPreferences, type PreviewPreferences} from './tree-preview';
 import type { RequestInput } from "./client";
-import {
-  decodeAuthoredLinksSnapshot,
-} from "./authored-links";
 import { emptyAttentionState } from "./attention";
 import { GotoController } from "./goto-controller";
 import { handleGotoMouse as routeGotoMouse } from "./goto-renderer";
@@ -55,9 +53,8 @@ import {
   authoredLinkHeaderRowId,
   authoredLinkTarget,
   authoredLinkUnavailableReason,
-  composeAuthoredLinkRows,
+  connectionOwner,
   isBlockTreeRow,
-  type AuthoredLinksPanel,
   type AuthoredLinkHeaderRow,
   type TreeDisplayRow as ProjectedDisplayRow,
 } from "./tree-rows";
@@ -257,7 +254,6 @@ function errorMessage(error: unknown): string {
 }
 
 const GENERATED_ROW_DISABLED_ACTIONS: Record<string, true> = {
-  "tree.authored-links.toggle": true,
   "tree.bookmark.toggle": true,
   "tree.capture": true,
   "tree.add.child": true,
@@ -349,10 +345,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   let visibleCompleteness: BlockCollectionCompleteness = { kind: "complete" };
   let branchStates = new Map<string, VirtualBranchState>();
   const collapsedBlockIds = new Set<string>();
-  let authoredLinksPanel: AuthoredLinksPanel = { kind: "closed" };
-  let authoredLinksGeneration = 0;
-  let authoredLinksDirty = false;
-  let authoredLinksRefresh: Promise<void> | null = null;
+  const connections=new TreeConnections(effects,()=>{recomposeAuthoredRows();effects.invalidate();});
   const collapsedOccurrenceRowIds = new Set<string>();
   const multilineExpandedRowIds = new Set<string>();
   const uncollapsedPresentationIds = new Set<string>();
@@ -542,26 +535,27 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       .map(item => item.id === "tree.inbox.attention"
       ? { ...item, label: inbox.attentionOnly ? "Show recent results" : `Show needs attention (${inbox.snapshot?.attentionCount ?? 0})` }
       : item), actionMenuQuery);
-    if (isBlockTreeRow(selected)) {
-      const hiding = authoredLinksPanel.kind === "open" &&
-        authoredLinksPanel.owner.rowId === selected.rowId;
+    if (connectionOwner(selected)) {
+      const hiding = connections.isOpen(selected!.rowId);
       items = items.map((item) =>
         item.id === "tree.authored-links.toggle"
           ? { ...item, label: hiding ? "Hide authored links" : "Show authored links" }
           : item
       );
-      if (isVirtualBranchOccurrence(selected) &&
+      if (isBlockTreeRow(selected) && isVirtualBranchOccurrence(selected) &&
         (!isVirtualBranchRootOccurrence(selected) || branchStates.get(selected.viewId)?.config?.sort)) {
         items = items.filter(item => item.id !== "tree.reorder.up" && item.id !== "tree.reorder.down");
       }
-    } else {
+    }
+    if (!isBlockTreeRow(selected)) {
       items = items.filter((item) => {
+        if (item.id === "tree.authored-links.toggle") return !!connectionOwner(selected);
         if (GENERATED_ROW_DISABLED_ACTIONS[item.id]) return false;
         if (item.id === "tree.read") {
           return selected?.kind === "authored-link" && authoredLinkCanOpen(selected);
         }
         if (item.id === "tree.disclosure.toggle") {
-          return selected?.kind === "authored-link-header";
+          return selected?.kind === "authored-link-header" || !!connectionOwner(selected);
         }
         return true;
       });
@@ -657,33 +651,12 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     };
   }
 
-  function panelOwnerBlock(): TreeIndexBlock | null {
-    if (authoredLinksPanel.kind === "closed") return null;
-    return physicalBlocksById.get(authoredLinksPanel.owner.blockId) ?? null;
-  }
-  function authoredLinksOwnerCollapsed(): boolean {
-    const panel = authoredLinksPanel;
-    if (panel.kind === "closed") return false;
-    const owner = baseRows.find((row) => row.rowId === panel.owner.rowId);
-    if (!owner) return false;
-    return owner.kind === "occurrence"
-      ? collapsedOccurrenceRowIds.has(owner.rowId)
-      : collapsedBlockIds.has(owner.canonicalId);
-  }
-
-  function authoredLinksPanelVisible(): boolean {
-    const panel = authoredLinksPanel;
-    if (panel.kind === "closed") return false;
-    const ownerExists = baseRows.some((row) => row.rowId === panel.owner.rowId);
-    return ownerExists && !authoredLinksOwnerCollapsed();
+  function connectionCollapsed(row:TreeRow):boolean {
+    return row.kind==='occurrence'?collapsedOccurrenceRowIds.has(row.rowId):collapsedBlockIds.has(row.canonicalId);
   }
   function recomposeAuthoredRows(preferredRowId?: string): void {
     const previous = rows[selectedIndex];
-    rows = composeAuthoredLinkRows(
-      baseRows,
-      authoredLinksPanel,
-      authoredLinksOwnerCollapsed(),
-    );
+    rows = connections.compose(baseRows,connectionCollapsed);
     let nextIndex = preferredRowId === undefined
       ? previous ? rows.findIndex((row) => row.rowId === previous.rowId) : -1
       : rows.findIndex((row) => row.rowId === preferredRowId);
@@ -699,75 +672,9 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     );
   }
 
-  async function runAuthoredLinksRefresh(): Promise<void> {
-    while (
-      authoredLinksDirty &&
-      authoredLinksPanel.kind === "open" &&
-      authoredLinksPanelVisible()
-    ) {
-      authoredLinksDirty = false;
-      const owner = authoredLinksPanel.owner;
-      const generation = authoredLinksPanel.generation;
-      try {
-        const decoded = decodeAuthoredLinksSnapshot(await effects.request<unknown>({
-          action: "blocks.authored-links",
-          ownerBlockId: owner.blockId,
-        }));
-        if (decoded.ownerId !== owner.blockId) {
-          throw new Error("Authored-links response owner does not match the requested block");
-        }
-        if (
-          authoredLinksPanel.kind !== "open" ||
-          authoredLinksPanel.generation !== generation ||
-          authoredLinksPanel.owner.rowId !== owner.rowId ||
-          authoredLinksDirty
-        ) continue;
-        const currentOwner = panelOwnerBlock();
-        if (
-          decoded.kind === "ready" &&
-          currentOwner &&
-          decoded.ownerTextDigest !== currentOwner.textDigest
-        ) {
-          authoredLinksDirty = true;
-          authoredLinksPanel = {
-            ...authoredLinksPanel,
-            load: { kind: "loading" },
-          };
-          recomposeAuthoredRows();
-          effects.invalidate();
-          break;
-        }
-        authoredLinksPanel = {
-          ...authoredLinksPanel,
-          load: { kind: "ready", snapshot: decoded },
-        };
-      } catch (error) {
-        if (
-          authoredLinksPanel.kind === "open" &&
-          authoredLinksPanel.generation === generation &&
-          authoredLinksPanel.owner.rowId === owner.rowId
-        ) {
-          authoredLinksPanel = {
-            ...authoredLinksPanel,
-            load: { kind: "error", message: errorMessage(error) },
-          };
-        }
-      }
-      recomposeAuthoredRows();
-      effects.invalidate();
-    }
-  }
-
-  function refreshAuthoredLinks(markDirty = true): Promise<void> {
-    if (authoredLinksPanel.kind === "closed") return Promise.resolve();
-    if (markDirty) authoredLinksDirty = true;
-    if (!authoredLinksDirty || !authoredLinksPanelVisible()) return Promise.resolve();
-    if (!authoredLinksRefresh) {
-      authoredLinksRefresh = runAuthoredLinksRefresh().finally(() => {
-        authoredLinksRefresh = null;
-      });
-    }
-    return authoredLinksRefresh;
+  function refreshAuthoredLinks(markDirty=true):Promise<void>{
+    if(markDirty)connections.invalidate();
+    return connections.refresh(()=>rows,()=>physicalBlocksById);
   }
 
   async function reload(
@@ -839,26 +746,8 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     indexSequence = snapshot.sequence;
     baseRows = scope;
     physicalBlocksById = new Map(physical.map((block) => [block.id, block]));
-    if (authoredLinksPanel.kind === "open" && authoredLinksPanel.load.kind === "ready") {
-      const loaded = authoredLinksPanel.load.snapshot;
-      const owner = panelOwnerBlock();
-      if (
-        loaded.kind === "ready" &&
-        owner &&
-        loaded.ownerTextDigest !== owner.textDigest
-      ) {
-        authoredLinksPanel = {
-          ...authoredLinksPanel,
-          load: { kind: "loading" },
-        };
-        authoredLinksDirty = true;
-      }
-    }
-    const nextRows = composeAuthoredLinkRows(
-      baseRows,
-      authoredLinksPanel,
-      authoredLinksOwnerCollapsed(),
-    );
+    connections.reconcile(physicalBlocksById);
+    const nextRows=connections.compose(baseRows,connectionCollapsed);
     const serviceSelectedId = snapshot.selectedBlockId;
     let nextIndex = -1;
     if (preferredRowId !== undefined) {
@@ -912,7 +801,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     initialWorkspaceSelectionApplied = true;
     if (lastVisibleCanonicalId) workspaceContextBlockId = lastVisibleCanonicalId;
     refreshPending = false;
-    if (authoredLinksDirty) await refreshAuthoredLinks(false);
+    if (connections.needsRefresh) await refreshAuthoredLinks(false);
     return rows.length > 0;
   }
 
@@ -1808,13 +1697,13 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       return;
     }
     if (event.domain === "resource-catalog") {
-      if (authoredLinksPanel.kind === "open") await refreshAuthoredLinks();
+      if (connections.active) await refreshAuthoredLinks();
       effects.invalidate();
       return;
     }
     if (event.domain === "selection") return;
     inbox.contentChanged();
-    if (authoredLinksPanel.kind === "open") authoredLinksDirty = true;
+    if (connections.active) connections.invalidate();
     if (mode !== "browse") {
       refreshPending = true;
       return;
@@ -1872,13 +1761,13 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     });
     await inbox.refresh();
     if (mode === "browse") {
-      if (authoredLinksPanel.kind === "open") authoredLinksDirty = true;
+      if (connections.active) connections.invalidate();
       await reload();
       await publishDisplayRowSelection(rows[selectedIndex]);
     } else {
       refreshPending = true;
       inbox.contentChanged();
-      if (authoredLinksPanel.kind === "open") authoredLinksDirty = true;
+      if (connections.active) connections.invalidate();
     }
     effects.invalidate();
   }
@@ -1967,18 +1856,15 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     if (!row) return;
     selectedIndex = rowIndex;
     if (row.kind === "authored-link-header") {
-      if (authoredLinksPanel.kind !== "open") return;
-      authoredLinksPanel = {
-        ...authoredLinksPanel,
-        collapsedGroups: {
-          ...authoredLinksPanel.collapsedGroups,
-          [row.group]: !authoredLinksPanel.collapsedGroups[row.group],
-        },
-      };
+      connections.toggleGroup(row);
       recomposeAuthoredRows(row.rowId);
       await publishDisplayRowSelection(rows[selectedIndex]);
       effects.invalidate();
       return;
+    }
+    if(row.kind==='authored-link' && connectionOwner(row)) {
+      connections.toggle(row);recomposeAuthoredRows(row.rowId);effects.invalidate();
+      await refreshAuthoredLinks(false);return;
     }
     if (!isBlockTreeRow(row) || !row.hasChildren) return;
     if (isVirtualBranchOccurrence(row)) {
@@ -2293,39 +2179,16 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       return;
     }
     if (actionId === "tree.authored-links.toggle") {
-      if (!isBlockTreeRow(selected)) {
-        status = "Select an ordinary block occurrence to show authored links";
-        effects.invalidate();
-        return;
+      if(!selected || !connectionOwner(selected)){status="Select a resolved block target to show connections";effects.invalidate();return;}
+      const opened=connections.toggle(selected);
+      if(isBlockTreeRow(selected)){
+        if(selected.kind==='occurrence')collapsedOccurrenceRowIds.delete(selected.rowId);
+        else collapsedBlockIds.delete(selected.canonicalId);
       }
-      if (
-        authoredLinksPanel.kind === "open" &&
-        authoredLinksPanel.owner.rowId === selected.rowId
-      ) {
-        authoredLinksGeneration += 1;
-        authoredLinksDirty = false;
-        authoredLinksPanel = { kind: "closed" };
-        recomposeAuthoredRows(selected.rowId);
-        status = "Authored links hidden";
-        effects.invalidate();
-        return;
-      }
-      authoredLinksGeneration += 1;
-      if (selected.kind === "occurrence") collapsedOccurrenceRowIds.delete(selected.rowId);
-      else collapsedBlockIds.delete(selected.canonicalId);
-      authoredLinksPanel = {
-        kind: "open",
-        owner: { rowId: selected.rowId, blockId: selected.canonicalId },
-        generation: authoredLinksGeneration,
-        collapsedGroups: { outlinks: false, resources: false },
-        load: { kind: "loading" },
-      };
-      await reload(selected.rowId, { exactRowIdOnly: true });
-      effects.invalidate();
-      await refreshAuthoredLinks();
-      status = "Authored links shown";
-      effects.invalidate();
-      return;
+      recomposeAuthoredRows(selected.rowId);effects.invalidate();
+      await refreshAuthoredLinks(false);
+      status=opened?"Authored links shown · Outlinks, Resources and Backlinks":"Authored links hidden";
+      effects.invalidate();return;
     }
     if (actionId === "tree.virtual-branch.open") {
       if (!isBlockTreeRow(selected)) {
@@ -2604,7 +2467,11 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         selectedIndex = Math.max(0, Math.min(rows.length - 1, selectedIndex + delta));
         resetExpandedBlockPaging();
         queueDisplayRowSelection(rows[selectedIndex]);
+      } else if (key.name === "right" && selected.kind==='authored-link' && connectionOwner(selected)) {
+        if(!connections.isOpen(selected.rowId))await handleDisclosure(selected.rowId);
+        else {selectedIndex=Math.min(rows.length-1,selectedIndex+1);await publishDisplayRowSelection(rows[selectedIndex]);}
       } else if (key.name === "left") {
+        if(selected.kind==='authored-link' && connections.isOpen(selected.rowId)){await handleDisclosure(selected.rowId);return;}
         if (selected.kind === "authored-link-header" && !selected.collapsed) {
           await handleDisclosure(selected.rowId);
           return;

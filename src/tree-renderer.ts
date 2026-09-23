@@ -335,7 +335,7 @@ function authoredHeaderStateText(row: AuthoredLinkHeaderRow): string {
 }
 
 function renderAuthoredLinkDisplay(row: AuthoredLinkRow, width: number, clippedLeft = false): string {
-  const prefix = `${"  ".repeat(row.depth)}${clippedLeft ? "‹" : row.link.resolution.kind === "ready" ? "↗" : "!"} `;
+  const prefix = `${"  ".repeat(row.depth)}${clippedLeft ? "‹" : row.link.resolution.kind === "ready" ? row.link.resolution.target.kind==="block" ? row.connectionsOpen ? "▾" : "▸" : "↗" : "!"} `;
   const duplicateLabel = row.link.occurrenceCount > 1
     ? ` · ${row.link.occurrenceCount} occurrences`
     : "";
@@ -789,6 +789,7 @@ export function renderTreeFrame(
           rowId: row.rowId,
           disclosureColumn:
             row.depth >= indentOffset && (row.kind === "authored-link-header" ||
+              (row.kind === "authored-link" && row.link.resolution.kind === "ready" && row.link.resolution.target.kind === "block") ||
               (isBlockTreeRow(row) && row.hasChildren && disclosureMarkerVisible))
               ? displayDepth(row.depth) * 2
               : -1,

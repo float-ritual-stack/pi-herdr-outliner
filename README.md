@@ -108,7 +108,7 @@ No shared user host is used.
 - Workspace-scoped monotonic Work-ID allocation adopts a clean existing prefix or requires explicit configuration, optimistically assigns the next immutable ID, and never reuses reserved or purged identifiers.
 - Atomic canonical roadmap-item creation discovers the single project work queue, validates UUID relationships and complete routing metadata, allocates the immutable Work ID, and returns matching virtual-branch memberships in one transaction.
 - Plain-clickable Work IDs, canonical UUIDs, exact references, and `[[address]]` links inside Tree/Detail, with OSC 8 `pi-outliner://` links retained for external terminal interoperability.
-- Tree can project a selected block's authored Outlinks and Resources as read-only generated branches. Enumeration never creates pages, Resources, Sources, or provider traffic. Explicit activation follows or creates unresolved ordinary `[[page]]` links and human-authored `[file::…]`, `[web::…]`, `[jira::…]`, and `[app::…]` Resources; unresolved Work IDs stay unavailable.
+- Tree can project a selected block's Outlinks, Resources and Backlinks as read-only generated branches. Enumeration never creates pages, Resources, Sources, or provider traffic. Explicit activation follows or creates unresolved ordinary `[[page]]` links and human-authored `[file::…]`, `[web::…]`, `[jira::…]`, and `[app::…]` Resources; unresolved Work IDs stay unavailable.
 - Property-driven virtual branches with ranked or timestamp-sorted canonical roots, read-only contextual descendants through relative depth 2, independent occurrence disclosure, a 1,000-row branch budget, property-aware creation, and persisted manual root ordering.
 - Fresh databases seed version 5 of the Documentation hub: an addressable feature tour, the agent documentation guide, native transclusions, a working virtual branch, and authored block, page, file, web, SSH-application, and Jira reference examples. Existing workspaces keep their customized content.
 - Agent-created blocks retain immutable creator provenance. Every later text or property mutation records its own `user`, `agent`, or `system` identity plus available actor, session, and task IDs, so edit attribution never depends on the creator.
@@ -434,7 +434,9 @@ Block-fragment targets retain their exact anchor across every destination.
 #### Inspect authored links
 
 Select a block in Tree, press `?`, and invoke **View · Show authored links**.
-Tree inserts two generated branches under that exact occurrence:
+Tree inserts connection groups under that exact occurrence. **Backlinks** lists bounded incoming sources, alongside **Outlinks** and **Resources** below.
+
+Click a resolved block row's disclosure triangle or press Right to inspect its own connections one level deeper. Left collapses it. Each occurrence retains its own state, so siblings remain open and you can explicitly follow A → B → A without automatic recursion. Reopening a parent restores its disclosed descendants; browsing does not write to the notes. Truncated reads and failed groups stay visible.
 
 - **Outlinks** contains authored block references, `[[page]]` addresses, and Work
   IDs. Resolved rows open through the Tree's saved Detail link. Merely showing or
