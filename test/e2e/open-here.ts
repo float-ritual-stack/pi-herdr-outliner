@@ -37,9 +37,17 @@ const result=await runHerdrScenario({
   const terminal=await session.attachClient();await terminal.resize(190,70);
   const click=async(pane:string,label:string)=>{
    await session.focus(pane);await session.waitVisible(pane,label);
-   const frame=await session.waitFor('native '+label,terminal.visible,text=>text.includes(label));
-   const lines=frame.split('\n');const row=lines.findIndex(line=>line.includes(label));
-   const column=visibleWidth(lines[row]!.slice(0,lines[row]!.indexOf(label)))+2;
+   const point=(text:string)=>{
+     const lines=text.split('\n'), row=lines.findIndex(line=>line.includes(label));
+     const anchorText=pane===panes.detail?'● Current':text.includes('Inbox agent')?'Inbox agent':'Outliner  ';
+     const anchor=lines.findIndex(line=>line.includes(anchorText));
+     if(row<0||anchor<0)return null;
+     const column=visibleWidth(lines[row]!.slice(0,lines[row]!.indexOf(label)));
+     const left=visibleWidth(lines[anchor]!.slice(0,lines[anchor]!.indexOf(anchorText)));
+     return{row,column,relativeRow:row-anchor,relativeColumn:column-left};
+   };
+   const ready=await session.waitFor('native '+label,async()=>({native:point(await terminal.visible()),pane:point(await session.visible(pane))}),v=>!!v.native&&!!v.pane&&v.native.relativeRow===v.pane.relativeRow&&v.native.relativeColumn===v.pane.relativeColumn);
+   const {row}=ready.native!, column=ready.native!.column+2;
    await session.record('click '+label,{row,column});
    await terminal.write(`\x1b[<0;${column+1};${row+1}M\x1b[<0;${column+1};${row+1}m`);
   };
@@ -65,7 +73,8 @@ const result=await runHerdrScenario({
   await session.client.request({action:'navigation.dispatch',sourceClientId:tree.clientId,intent:'open',target:{kind:'block',blockId:sourceId},destination:{clientId:detail.clientId,region:'detail'}});
   await session.waitVisible(panes.detail,'Follow destination');
   // Close Preview so the native authored link label is unique to Detail.
-  await session.focus(panes.tree);await session.keys(panes.tree,'alt+p','esc');
+  await click(panes.tree,'[Hide Preview]');
+  await session.waitFor('Tree Preview hidden',()=>session.visible(panes.tree),text=>!text.includes('Preview ·'));
   await session.focus(panes.detail);
   await click(panes.detail,'Follow destination');await session.waitVisible(panes.detail,'Enter: Open here');
   assert.deepEqual((await session.registrations()).find(c=>c.clientId===detail.clientId)!.currentTarget,{kind:'block',blockId:sourceId});
