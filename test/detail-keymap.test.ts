@@ -856,3 +856,48 @@ test("key inspector action does not interrupt an active Detail draft", async () 
   expect(detail.intents).toEqual([{type: "status.set", message: "Inspect received keys is unavailable here"}]);
   expect(detail.stops.count).toBe(0);
 });
+
+test("custom destination chords do not preempt source editor commands", async () => {
+  for (const [chord, key, intent] of [
+    ["Ctrl+A", {name: "a", ctrl: true}, {type: "buffer.move", direction: "home", extend: undefined}],
+    ["Ctrl+Shift+A", {name: "a", ctrl: true, shift: true}, {type: "buffer.select-all"}],
+    ["Alt+A", {name: "a", meta: true}, {type: "buffer.select-all"}],
+    ["Alt+Z", {name: "z", meta: true}, {type: "buffer.undo"}],
+  ] as const) {
+    const keymap = new OutlinerActionKeymap("<test>", {"detail.navigation.link": [chord]});
+    const editor = harness(state(), true, {actionKeymap: keymap});
+    await editor.press(key);
+    expect(editor.intents).toEqual([intent]);
+    const reading = state(); reading.mode = "preview";
+    const reader = harness(reading, false, {actionKeymap: keymap});
+    await reader.press(key);
+    expect(reader.intents).toEqual([{type: "navigation.link"}]);
+  }
+});
+
+test("custom destination chords do not preempt property value editing", async () => {
+  const editing = state(); editing.mode = "preview";
+  editing.propertyInspector.edit = {occurrenceId: "property:note:status", ordinal: 0, blockId: "note", expectedRevision: 1, buffer: new TextBuffer("planned")};
+  const keymap = new OutlinerActionKeymap("<test>", {"detail.navigation.link": ["Alt+A", "Ctrl+A", "Alt+Home", "Alt+Backspace"]});
+  const editor = harness(editing, false, {actionKeymap: keymap});
+  await editor.press({name: "a", meta: true});
+  await editor.press({name: "a", ctrl: true});
+  await editor.press({name: "home", meta: true});
+  await editor.press({name: "backspace", meta: true});
+  expect(editor.intents).toEqual([
+    {type: "property-inspector.edit.select-all"}, {type: "property-inspector.edit.select-all"},
+    {type: "property-inspector.edit.move", direction: "home"}, {type: "property-inspector.edit.backspace"},
+  ]);
+});
+
+test("custom destination chords leave modified Backspace with active filters", async () => {
+  const keymap = new OutlinerActionKeymap("<test>", {"detail.navigation.link": ["Alt+Backspace"]});
+  for (const property of [true, false]) {
+    const editing = state(); editing.mode = "preview";
+    if (property) editing.propertyInspector.filterDraft = "status";
+    else editing.backlinks.filterDraft = "source";
+    const editor = harness(editing, false, {actionKeymap: keymap});
+    await editor.press({name: "backspace", meta: true});
+    expect(editor.intents).toEqual([{type: property ? "property-inspector.filter.backspace" : "backlinks.filter.backspace"}]);
+  }
+});

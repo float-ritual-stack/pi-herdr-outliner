@@ -552,8 +552,20 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
     // Modified destination shortcuts remain discoverable during editing; plain
     // uppercase L still belongs to the active editor or filter.
     if ((key.meta || key.ctrl) && actionKeymap.resolve("detail", "preview", str, key).actionId === "detail.navigation.link") {
-      await invokeAction("detail.navigation.link");
-      return;
+      // Editor commands are also handled outside the action registry. A
+      // preview-only remap must not take ownership from those local handlers.
+      const name = key.name ?? "";
+      const editorOwnsChord = controller.state.propertyInspector.edit
+        ? name === "a" || (key.ctrl && name === "c") ||
+          ["return", "escape", "backspace", "delete", "left", "right", "home", "end"].includes(name)
+        : controller.state.propertyInspector.filterDraft !== null || controller.state.backlinks.filterDraft !== null
+          ? ["return", "escape", "backspace"].includes(name)
+          : controller.isBufferMode() && !previewFocused() &&
+            textBufferEditorCommand(str, key, inputAction === "modified-enter").type !== "redraw";
+      if (!editorOwnsChord) {
+        await invokeAction("detail.navigation.link");
+        return;
+      }
     }
 
     if (controller.state.propertyInspector.edit) {
