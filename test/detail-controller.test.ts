@@ -592,6 +592,19 @@ function event(domain: OutlinerEvent["domain"], command?: OutlinerEvent["command
 }
 
 describe("detail controller projection and deferred refresh", () => {
+  test("creates a reader beside the chosen pane without moving the invoking document or selection", async () => {
+    const harness = createHarness(makeBlock({id: "retained-source", text: "Source text"}));
+    const opened: unknown[][] = [];
+    harness.effects.openDetailPane = (...args) => { opened.push(args); };
+    const controller = createDetailController(harness.effects);
+    await controller.initialize();
+    controller.state.selectionAnchor = 0;
+    const target = controller.state.target;
+    await controller.dispatch({type: "pane.open", direction: "right", targetPaneId: "w1:p4"}, viewport);
+    expect(opened).toEqual([[target, "right", "w1:p4"]]);
+    expect(controller.state.target).toEqual(target);
+    expect(controller.state.selectionAnchor).toBe(0);
+  });
   test("scrolls past annotation evidence and history to the final comment line", async () => {
     const source = makeBlock({ text: Array.from({ length: 20 }, (_, i) => `Captured evidence ${i}`).join("\n") });
     const target = renderedSelectionAnnotationTarget({

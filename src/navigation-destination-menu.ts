@@ -68,8 +68,26 @@ export function navigationDestinationItems(state: NavigationLinkState, unlink: b
     {id: "destination:new-right", label: "New Detail right", description: "Open a new reader to the right; choose Link destination again to link it", binding: "", group: "Pane"},
     {id: "destination:new-below", label: "New Detail below", description: "Open a new reader below; choose Link destination again to link it", binding: "", group: "Pane"},
   );
+  if (unlink && state.destinations.some(item => item.placementPaneId)) items.push(
+    {id: "destination:place-right", label: "New Detail right of another…", description: "Choose a local reader beside which to create the new Detail", binding: "", group: "Pane"},
+    {id: "destination:place-below", label: "New Detail below another…", description: "Choose a local reader below which to create the new Detail", binding: "", group: "Pane"},
+  );
   if (unlink && state.destination) items.push({id: "destination:unlink", label: "Unlink destination", description: "Explicit Open will ask for a destination", binding: "", group: "Pane"});
   return items;
+}
+
+export function navigationPlacementItems(state: NavigationLinkState): OutlinerActionMenuItem[] {
+  return [
+    ...state.destinations.flatMap((item, index) => item.placementPaneId ? [{
+      id: `placement:${index}`, label: sanitizeDynamicText(item.label),
+      description: sanitizeDynamicText(item.description ?? "Local Detail"), binding: "", group: "Pane",
+    }] : []),
+    {id: "placement:back", label: "Back to destinations", description: "Return without creating a pane", binding: "", group: "Pane"},
+  ];
+}
+
+export function navigationPlacementStatus(direction: "right" | "down"): string {
+  return `Create ${direction === "right" ? "to the right of" : "below"} the selected reader · Enter creates · Esc cancels`;
 }
 
 export function navigationDestinationStatus(state: NavigationLinkState, purpose: "link" | "open" = "link", showOther = false): string {

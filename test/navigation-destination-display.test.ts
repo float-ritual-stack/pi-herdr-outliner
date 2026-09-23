@@ -1,5 +1,5 @@
 import {expect, test} from "bun:test";
-import {NavigationDestinationDisplay} from "../src/navigation-destination-menu";
+import {NavigationDestinationDisplay, navigationDestinationItems, navigationPlacementItems} from "../src/navigation-destination-menu";
 import type {NavigationLinkState, OutlinerEvent} from "../src/types";
 
 const source = {clientId: "source", region: "detail" as const};
@@ -10,6 +10,17 @@ function linked(label: string): NavigationLinkState {
 function event(action: string, clientId?: string): OutlinerEvent {
   return {id: "event", sequence: 1, domain: "view", action, clientId};
 }
+
+test("placement choices use local pane anchors and remain separate from Open once", () => {
+  const state = linked("Local reader");
+  state.destinations.unshift({view: {clientId: "remote", region: "detail"}, label: "Remote reader"});
+  state.destinations[1]!.placementPaneId = "w1:p4";
+  const links = navigationDestinationItems(state, true);
+  expect(links.filter(item => item.id.startsWith("destination:place-")).map(item => item.id)).toEqual(["destination:place-right", "destination:place-below"]);
+  expect(navigationDestinationItems(state, false).some(item => item.id.startsWith("destination:place-"))).toBe(false);
+  expect(navigationPlacementItems(state).map(item => item.id)).toEqual(["placement:1", "placement:back"]);
+  expect(navigationPlacementItems(state)[0]!.label).toBe("Local reader");
+});
 
 test("destination display follows service link, target and closure events without fetching during reads", async () => {
   let state = linked("Research notes"); let requests = 0; let renders = 0;

@@ -68,6 +68,18 @@ test("destination picker keeps purpose, choices and document preview visible bes
   }
 });
 
+test("placement picker describes creation beside a reader without claiming to link", () => {
+  const lines = renderDetailDestinationPicker({
+    width: 80, height: 24, purpose: "place", status: "Create below the selected reader", query: "",
+    list: () => ["Research reader", "Back to destinations"], preview: () => ["Research document body"],
+  });
+  const text = lines.join("\n");
+  expect(text).toContain("New Detail placement");
+  expect(text).toContain("Research document body");
+  expect(text).toContain("Enter creates");
+  expect(text).not.toContain("Enter links");
+});
+
 test("below layout keeps both documents visible within the resized terminal height", () => {
   const current = {render: (width: number) => Array.from({length: 100}, (_, i) => `Current ${i}`.padEnd(width)), invalidate() {}};
   const preview = {render: (width: number) => Array.from({length: 100}, (_, i) => `Preview ${i}`.padEnd(width)), invalidate() {}};

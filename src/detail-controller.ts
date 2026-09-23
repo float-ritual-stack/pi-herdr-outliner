@@ -528,6 +528,7 @@ export interface DetailEffects {
   openDetailPane(
     target: OutlinerNavigationTarget,
     direction: "right" | "down",
+    targetPaneId?: string,
   ): void | Promise<void>;
   copyText(text: string): void;
   editExternalDraft(
@@ -665,7 +666,7 @@ export type DetailIntent =
   | { type: "preview.action"; action: PreviewRegionAction; routing?: DetailOpenRouting }
   | { type: "property-inspector.disclosure.toggle" }
   | { type: "property-inspector.pane.open" }
-  | { type: "pane.open"; direction: "right" | "down" }
+  | { type: "pane.open"; direction: "right" | "down"; targetPaneId?: string }
   | { type: "property-inspector.target.open"; occurrenceId: string; intent: "open" | "reveal"; routing?: DetailOpenRouting }
   | { type: "property-inspector.group.cycle" }
   | { type: "property-inspector.filter.begin" }
@@ -3379,13 +3380,14 @@ export function createDetailController(
           state.status = "No target selected";
           break;
         }
-        await effects.openDetailPane(target, intent.direction);
+        await effects.openDetailPane(target, intent.direction, intent.targetPaneId);
         const title = state.resource
           ? resourceAddressLabel(state.resource.address)
           : (state.context.selected ? blockDisplayTitle(state.context.selected) : "target");
         state.status = intent.direction === "right"
           ? `Opened ${title} to the right`
           : `Opened ${title} below`;
+        state.status += " · New Detail created; use Change to link it";
         break;
       }
       case "preview.focus.set": {

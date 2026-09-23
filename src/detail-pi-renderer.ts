@@ -38,7 +38,7 @@ export function detailDraftSplitWidths(width: number): {
 }
 
 export function renderDetailDestinationPicker(options: {
-  width: number; height: number; status: string; query: string; purpose: "link" | "open";
+  width: number; height: number; status: string; query: string; purpose: "link" | "open" | "place";
   list(width: number, height: number): string[];
   preview(width: number, height: number): string[];
 }): string[] {
@@ -57,11 +57,11 @@ export function renderDetailDestinationPicker(options: {
     body = [...fit(options.list(width, listHeight), listHeight, width), "─".repeat(width), ...fit(options.preview(width, previewHeight), previewHeight, width)];
   }
   return [
-    options.purpose === "link" ? "Link destination · preview the selected reader" : "Open once · preview the selected reader",
+    options.purpose === "place" ? "New Detail placement · preview the selected reader" : options.purpose === "link" ? "Link destination · preview the selected reader" : "Open once · preview the selected reader",
     options.status,
     `Find: ${options.query}▏`,
     ...body,
-    `↑↓ select · Enter ${options.purpose === "link" ? "links" : "opens once"} · Esc cancels`,
+    `↑↓ select · Enter ${options.purpose === "place" ? "creates" : options.purpose === "link" ? "links" : "opens once"} · Esc cancels`,
   ].slice(0, height).map(line => truncateToWidth(line, width));
 }
 

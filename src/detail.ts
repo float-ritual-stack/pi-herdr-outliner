@@ -2,7 +2,7 @@ import { initTheme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { DetailReadingSurface, detailReaderGeometry } from "./detail-reading-surface";
 import { renderDetailDestinationPicker } from "./detail-pi-renderer";
-import { navigationDestinationItems, navigationDestinationStatus, NavigationDestinationDisplay, NavigationDestinationPreview, renderNavigationDestinationPreview } from "./navigation-destination-menu";
+import { navigationDestinationItems, navigationDestinationStatus, navigationPlacementItems, navigationPlacementStatus, NavigationDestinationDisplay, NavigationDestinationPreview, renderNavigationDestinationPreview } from "./navigation-destination-menu";
 import { getProperty } from "./properties";
 import { detailPropertyInspectorRegions } from "./property-inspector";
 import { emitKeypressEvents } from "node:readline";
@@ -111,12 +111,13 @@ let pendingPaste: string | null = null;
 
 interface DetailDestinationPicker {
   state: NavigationLinkState; purpose: "link" | "open"; showOther: boolean;
+  placement: "right" | "down" | null;
   query: string; index: number; preview: NavigationDestinationPreview; reader: DetailController;
   resolve(value: OutlinerViewAddress | null | undefined): void;
 }
 let destinationPicker: DetailDestinationPicker | null = null;
 function destinationItems(picker: DetailDestinationPicker): OutlinerActionMenuItem[] {
-  return filterActionMenuItems(navigationDestinationItems(picker.state, picker.purpose === "link", picker.showOther), picker.query);
+  return filterActionMenuItems(picker.placement ? navigationPlacementItems(picker.state) : navigationDestinationItems(picker.state, picker.purpose === "link", picker.showOther), picker.query);
 }
 function refreshDestinationPreview(): void {
   const picker = destinationPicker;
@@ -124,7 +125,7 @@ function refreshDestinationPreview(): void {
   const items = destinationItems(picker);
   picker.index = Math.max(0, Math.min(picker.index, items.length - 1));
   const item = items[picker.index];
-  void picker.preview.select(item ? picker.state.destinations[Number(item.id.slice(12))] : undefined);
+  void picker.preview.select(item ? picker.state.destinations[Number(item.id.split(":")[1])] : undefined);
   draw();
 }
 async function handleDestinationInput(str: string, key: TerminalKey): Promise<void> {
@@ -139,8 +140,16 @@ async function handleDestinationInput(str: string, key: TerminalKey): Promise<vo
     if (item.id === "destination:other") {
       picker.showOther = !picker.showOther; picker.query = ""; picker.index = 0; refreshDestinationPreview(); return;
     }
+    if (item.id === "destination:place-right" || item.id === "destination:place-below" || item.id === "placement:back") {
+      picker.placement = item.id === "placement:back" ? null : item.id === "destination:place-right" ? "right" : "down";
+      picker.query = ""; picker.index = 0; refreshDestinationPreview(); return;
+    }
     picker.preview.clear(); destinationPicker = null;
-    if (item.id === "destination:new-right" || item.id === "destination:new-below") {
+    if (picker.placement) {
+      const targetPaneId = picker.state.destinations[Number(item.id.slice(10))]?.placementPaneId;
+      try { if (targetPaneId) await picker.reader.dispatch({type: "pane.open", direction: picker.placement, targetPaneId}, viewport(picker.reader)); }
+      finally { picker.resolve(undefined); }
+    } else if (item.id === "destination:new-right" || item.id === "destination:new-below") {
       try { await picker.reader.dispatch({type: "pane.open", direction: item.id === "destination:new-right" ? "right" : "down"}, viewport(picker.reader)); }
       finally { picker.resolve(undefined); }
     } else picker.resolve(item.id === "destination:unlink" ? null : picker.state.destinations[Number(item.id.slice(12))]?.view);
@@ -172,6 +181,7 @@ function errorMessage(error: unknown): string {
 async function openTargetInNewDetail(
   target: OutlinerNavigationTarget,
   direction: "right" | "down",
+  targetPaneId?: string,
 ): Promise<void> {
   const contextId = crypto.randomUUID();
   await client.request({
@@ -185,6 +195,7 @@ async function openTargetInNewDetail(
     workspaceRoot: paths.workspaceRoot,
     browsingContextId: contextId,
     direction,
+    targetPaneId,
     initialTarget: target,
   });
 }
@@ -235,7 +246,7 @@ const effects: DetailEffects = {
     const reader = readingSurface.active;
     const state = await client.request<NavigationLinkState>({action: "navigation.link.get", source: {clientId, region: "detail"}});
     return new Promise<OutlinerViewAddress | null | undefined>(resolve => {
-      destinationPicker = {state, purpose, reader, query: "", index: 0, showOther: false, preview: new NavigationDestinationPreview(client, draw), resolve};
+      destinationPicker = {state, purpose, reader, placement: null, query: "", index: 0, showOther: false, preview: new NavigationDestinationPreview(client, draw), resolve};
       refreshDestinationPreview();
     });
   },
@@ -485,7 +496,7 @@ function draw(): void {
     const items = destinationItems(picker);
     const lines = renderDetailDestinationPicker({
       width: process.stdout.columns ?? 100, height: process.stdout.rows ?? 30,
-      purpose: picker.purpose, query: picker.query, status: navigationDestinationStatus(picker.state, picker.purpose, picker.showOther),
+      purpose: picker.placement ? "place" : picker.purpose, query: picker.query, status: picker.placement ? navigationPlacementStatus(picker.placement) : navigationDestinationStatus(picker.state, picker.purpose, picker.showOther),
       list: (width, height) => {
         const visibleItems = Math.max(1, Math.floor(height / 2));
         const start = Math.max(0, picker.index - visibleItems + 1);

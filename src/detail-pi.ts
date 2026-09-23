@@ -1,5 +1,5 @@
 import { ComposedLayout, ComposedTree, composedTreeNavigation, composedPointer, composedWidths } from "./composed-surface";
-import { navigationDestinationItems, navigationDestinationStatus, NavigationDestinationDisplay, NavigationDestinationPreview, renderNavigationDestinationPreview } from "./navigation-destination-menu";
+import { navigationDestinationItems, navigationDestinationStatus, navigationPlacementItems, navigationPlacementStatus, NavigationDestinationDisplay, NavigationDestinationPreview, renderNavigationDestinationPreview } from "./navigation-destination-menu";
 import { getProperty } from "./properties";
 import { setTimeout as sleep } from "node:timers/promises";
 import { getMarkdownTheme, initTheme } from "@earendil-works/pi-coding-agent";
@@ -363,6 +363,7 @@ function errorMessage(error: unknown): string {
 async function openTargetInNewDetail(
   target: OutlinerNavigationTarget,
   direction: "right" | "down",
+  targetPaneId?: string,
 ): Promise<void> {
   const contextId = crypto.randomUUID();
   await client.request({
@@ -376,6 +377,7 @@ async function openTargetInNewDetail(
     workspaceRoot: paths.workspaceRoot,
     browsingContextId: contextId,
     direction,
+    targetPaneId,
     initialTarget: target,
   });
 }
@@ -428,17 +430,24 @@ const effects: DetailEffects = {
     const state = await client.request<NavigationLinkState>({action: "navigation.link.get", source: {clientId, region: "detail"}});
     const document = new NavigationDestinationPreview(client, () => tui.requestRender());
     let showOther = false;
+    let placement: "right" | "down" | null = null;
     return new Promise<OutlinerViewAddress | null | undefined>(resolve => {
-      const show = () => showActionMenu(navigationDestinationItems(state, purpose === "link", showOther), async id => {
+      const show = () => showActionMenu(placement ? navigationPlacementItems(state) : navigationDestinationItems(state, purpose === "link", showOther), async id => {
         if (id === "destination:other") { showOther = !showOther; show(); return; }
+        if (id === "destination:place-right" || id === "destination:place-below") { placement = id === "destination:place-right" ? "right" : "down"; show(); return; }
+        if (id === "placement:back") { placement = null; show(); return; }
         document.clear();
-        if (id === "destination:new-right" || id === "destination:new-below") {
+        if (placement) {
+          const targetPaneId = state.destinations[Number(id.slice(10))]?.placementPaneId;
+          try { if (targetPaneId) await invokingReader.dispatch({type: "pane.open", direction: placement, targetPaneId}, viewport(invokingReader)); }
+          finally { resolve(undefined); }
+        } else if (id === "destination:new-right" || id === "destination:new-below") {
           try { await invokingReader.dispatch({type: "pane.open", direction: id === "destination:new-right" ? "right" : "down"}, viewport(invokingReader)); }
           finally { resolve(undefined); }
         } else resolve(id === "destination:unlink" ? null : state.destinations[Number(id.slice(12))]?.view);
       }, undefined, () => { document.clear(); resolve(undefined); }, {
-        purpose, status: () => navigationDestinationStatus(state, purpose, showOther), preview: document,
-        select: id => { void document.select(id ? state.destinations[Number(id.slice(12))] : undefined); },
+        purpose: placement ? "place" : purpose, status: () => placement ? navigationPlacementStatus(placement) : navigationDestinationStatus(state, purpose, showOther), preview: document,
+        select: id => { void document.select(id ? state.destinations[Number(id.split(":")[1])] : undefined); },
       });
       show();
     });
@@ -897,7 +906,7 @@ const actionMenuTheme: SelectListTheme = {
 };
 
 interface DetailDestinationMenuOptions {
-  purpose: "link" | "open"; status(): string; preview: NavigationDestinationPreview; select(id: string | undefined): void;
+  purpose: "link" | "open" | "place"; status(): string; preview: NavigationDestinationPreview; select(id: string | undefined): void;
 }
 
 class FuzzyActionMenu implements Component {
