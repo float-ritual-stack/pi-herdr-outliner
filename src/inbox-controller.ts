@@ -233,8 +233,8 @@ export class InboxController {
   async openHere(target:OutlinerNavigationTarget):Promise<void>{
     const reader = this.reader, receiptId = this.selected?.id, targetIndex = this.targetIndex;
     this.previewMode='content';
-    await reader.load(target);
-    if (this.selected?.id === receiptId && this.targetIndex === targetIndex && this.reader === reader) this.focusReader(true);
+    const visited=await reader.visit(target);
+    if (visited && this.selected?.id === receiptId && this.targetIndex === targetIndex && this.reader === reader) this.focusReader(true);
   }
   async previewAction(action:string,reader=this.reader):Promise<void>{await reader.action(action,target=>this.openPreview(target));}
   selectResult(index: number): void {

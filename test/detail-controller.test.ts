@@ -5430,3 +5430,25 @@ test("link confirmation names the chosen document and cancel leaves the existing
   expect(linked).toHaveLength(1);
   expect(harness.controller.state.status).toBe(status);
 });
+
+
+test("keyboard reference Open offers local recovery immediately and protects unsaved edits", async()=>{
+ const source=makeBlock({id:"keyboard-source",text:"See ((target01))"});
+ const h=createHarness(source);await h.controller.initialize();
+ h.effects.resolveNavigation=async()=>{throw Error("No linked destination");};
+ await h.controller.dispatch({type:"reference.follow"},viewport);
+ expect(h.controller.state.destinationChooser.openHereOnEnter).toBe(true);
+ expect(h.controller.state.context.selected?.id).toBe(source.id);
+ await h.controller.handleDestinationChooserKeypress("",{name:"return"});
+ expect(h.controller.state.context.selected?.id).toBe("target01");
+ expect(h.calls.navigationDispatches).toEqual([]);
+});
+
+test("a late missing-destination reply cannot reopen recovery after Detail is released",async()=>{
+ const h=createHarness(makeBlock({id:"pending-source",text:"Source"}));await h.controller.initialize();
+ const gate=Promise.withResolvers<never>();h.effects.dispatchNavigation=()=>gate.promise;
+ const opening=h.controller.dispatch({type:"reference.open",target:{kind:"block",value:"target01"},routing:"linked"},viewport);
+ await new Promise(resolve=>setTimeout(resolve,0));h.controller.releaseDocument();
+ gate.reject(Error("No linked destination"));await opening;
+ expect(h.controller.state.destinationChooser.active).toBe(false);
+});

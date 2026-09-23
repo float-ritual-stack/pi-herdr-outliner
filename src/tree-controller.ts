@@ -456,7 +456,9 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
 
   const recoveryResolvers=new WeakMap<OpenDestinationTarget,()=>Promise<OutlinerNavigationTarget>>();
   let recoveryOrigin='';
-  const originKey=()=>JSON.stringify([mode,rows[selectedIndex]?.rowId,mode==='inbox'?inbox.selected?.id:null,mode==='inbox'?inbox.targetIndex:null]);
+  let navigationGeneration=0;
+  let closed=false;
+  const originKey=()=>JSON.stringify([mode,rows[selectedIndex]?.rowId,mode==='inbox'?inbox.selected?.id:null,mode==='inbox'?inbox.targetIndex:null,mode==='inbox'?inbox.reader.state?.target:localReader.state?.target]);
   async function materializeRecovery(target:OpenDestinationTarget):Promise<OutlinerNavigationTarget>{
     const resolve=recoveryResolvers.get(target);
     if(resolve){target.target=await resolve();recoveryResolvers.delete(target);}
@@ -469,7 +471,15 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     },
     replace:async target=>{
       if(mode==='inbox')await inbox.openHere(target.target);
-      else {previewPreferences={...previewPreferences,enabled:true};await inspectLocally(target.target);localReader.focus();}
+      else {
+        previewPreferences={...previewPreferences,enabled:true};
+        const generation=navigationGeneration;
+        const visited=await localReader.visit(target.target);
+        if(visited && !closed && generation===navigationGeneration){
+          localReader.focus();
+          await effects.request({action:'clients.update',clientId:effects.clientId,previewTarget:target.target});
+        }
+      }
       status='Opened here in Preview';
     },
     openChosen:async target=>{
@@ -493,24 +503,25 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     recoveryOrigin=originKey();status='';openRecovery.recover(request);
   }
   async function dispatchRecoverable(target:OutlinerNavigationTarget,intent:OutlinerNavigationIntent,options?:NavigationRouteOptions){
-    const origin=originKey();
+    const origin=originKey(), generation=++navigationGeneration;
     try{return await effects.navigation.dispatch(target,intent,options);}
     catch(error){
       if(intent!=='open'||options?.destination||!missingNavigationDestination(error))throw error;
-      if(origin===originKey())offerRecovery(target,target.kind==='block'?target.blockId:target.resourceId);
+      if(!closed&&generation===navigationGeneration&&origin===originKey())offerRecovery(target,target.kind==='block'?target.blockId:target.resourceId);
       return undefined;
     }
   }
   async function openPreviewTarget(target:OutlinerNavigationTarget):Promise<void>{await dispatchRecoverable(target,'open');}
   async function handleLink(uri:string):Promise<void>{
-    const origin=originKey();
+    const origin=originKey(), generation=++navigationGeneration;
+    openRecovery.dismiss();
     try {
       const opened = await navigateOutlinerLink(effects,uri,{sourceClientId:effects.clientId,navigation:effects.navigation,intent:'open'});
       status = `${opened.created ? 'Created and opened' : 'Opened'} ${opened.title} in ${effects.navigation.readerLabel}`;
     }
     catch(error){
       if(!missingNavigationDestination(error))throw error;
-      if(origin!==originKey())return;
+      if(closed||generation!==navigationGeneration||origin!==originKey())return;
       const reference=parseOutlinerLinkUri(uri);
       const placeholder:OutlinerNavigationTarget=reference.kind==='resource'?{kind:'resource',resourceId:reference.value}:{kind:'block',blockId:reference.value};
       offerRecovery(placeholder,reference.value,async()=>{
@@ -1354,7 +1365,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         effects.invalidate();
         return;
       }
-      const origin = originKey();
+      const origin = originKey(), generation = ++navigationGeneration;
       const resolveTarget = async (): Promise<OutlinerNavigationTarget> => {
         if (activation.kind === "follow-page") {
           const resolved = await resolveOutlinerLinkTarget(effects, {kind: "page", value: activation.address});
@@ -1373,7 +1384,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         }
       } catch (error) {
         if (missingNavigationDestination(error) && !routeOptions.destination) {
-          if (origin === originKey()) offerRecovery({kind:"block", blockId:selected.owner.blockId}, "Selected authored link", resolveTarget);
+          if (!closed && generation === navigationGeneration && origin === originKey()) offerRecovery({kind:"block", blockId:selected.owner.blockId}, "Selected authored link", resolveTarget);
         } else status = errorMessage(error);
       }
       effects.invalidate();
@@ -1981,6 +1992,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
 
   async function handleRowClick(rowId: string, activate = false): Promise<void> {
     if (mode !== "browse") return;
+    navigationGeneration++;
     const rowIndex = rows.findIndex((row) => row.rowId === rowId);
     if (rowIndex < 0) return;
     if (rows[selectedIndex]?.rowId !== rowId) resetExpandedBlockPaging();
@@ -2010,6 +2022,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   ): Promise<void> {
     const recovery=destinationRecoveryKey(actionId);
     if(recovery){if(openRecovery.state.active&&recoveryOrigin===originKey())await openRecovery.handleKeypress(recovery.str,recovery.key);return;}
+    navigationGeneration++;
     if(openRecovery.state.active)openRecovery.dismiss();
     if(actionId.startsWith('preview.')){
       if(mode==='inbox')await inbox.previewAction(actionId);
@@ -2427,6 +2440,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         await openRecovery.handleKeypress(str,key);return;
       }else openRecovery.dismiss();
     }
+    if(inputAction!=='suppress')navigationGeneration++;
     if(resolveAction && inputAction !== "suppress" && mode !== "browse" && mode !== "action-menu" && (key.meta || key.ctrl)) {
       const browseAction=actionKeymap.canonicalize("tree","browse",str,key);
       if(browseAction.actionId === "tree.navigation.link" || browseAction.actionId === "tree.navigation.once") {
@@ -2458,6 +2472,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     }
     if (inputAction === "suppress") return;
     if (key.ctrl && key.name === "q") {
+      closed=true;navigationGeneration++;openRecovery.dispose();
       effects.stop();
       return;
     }

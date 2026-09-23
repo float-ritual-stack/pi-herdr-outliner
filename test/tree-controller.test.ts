@@ -3784,5 +3784,44 @@ test('Inbox missing destination opens browsed Preview target locally and preserv
  await c.handleAction('destination.here');
  expect(c.view().mode).toBe('inbox');expect(c.view().inbox?.selected?.id).toBe('receipt');
  expect(c.view().inbox?.reader.state?.target).toEqual({kind:'block',blockId:target.id});
+ expect(c.view().inbox?.reader.state?.canBack).toBe(true);
  expect(fake.calls.some(input=>input.action==='navigation.link.set')).toBe(false);
+});
+
+
+test('late missing-destination replies cannot restore cancelled Preview recovery',async()=>{
+ const source=block('late-origin'),target=block('late-followed');const gate=Promise.withResolvers<never>();
+ const fake=harness(input=>{
+  if(input.action==='tree.index')return snapshot([source,target],source);
+  if(input.action==='navigation.dispatch')return gate.promise;
+ });
+ const c=createTreeController(fake.effects);await c.initialize();
+ const opening=c.handleLink('pi-outliner://block/late-followed');await setImmediate();
+ await c.handleKeypress('',{name:'escape'},'pass');gate.reject(Error('No linked destination'));await opening;
+ expect(c.view().recoveryHelp).toBeUndefined();
+});
+
+test('compact recovery controls retain valid OSC links and dispatch mouse actions',async()=>{
+ const {DocumentPreviewInput}=await import('../src/document-preview-input');
+ const {stripTerminalSequences,getOsc8LinkAtColumn}=await import('@earendil-works/pi-tui');
+ const source=block('compact-source');
+ const fake=harness(input=>{
+  if(input.action==='tree.index')return snapshot([source],source);
+  if(input.action==='navigation.dispatch')throw Error('No linked destination');
+ });
+ const c=createTreeController(fake.effects);await c.initialize();
+ await c.handleLink('pi-outliner://block/compact-source');await c.handleAction('destination.here');
+ await c.handleAction('preview.open');
+ for(const [width,height] of [[80,8],[80,40]]){
+  const rendered=renderTreeFrame(c.view(),width!,height!,0,{clearScreen:false});
+  const lines=rendered.frame.split('\n');const footer=lines.find(line=>line.includes('destination.here'))!;
+  expect(stripTerminalSequences(footer)).toContain('[Esc: Cancel]');
+  expect(getOsc8LinkAtColumn(footer,2)).toBe('pi-outliner-action:destination.here');
+  if(rendered.preview?.placement==='compact'){
+   const input=new DocumentPreviewInput();input.render(lines,rendered.preview,c.view().localPreview);
+   const button=rendered.preview.controls!.find(control=>control.action==='destination.here')!;
+   let invoked='';input.handle(`\x1b[<0;${button.rect.x+1};${button.rect.y+1}M`,{focus(){},scroll(){},resize(){},async invoke(action){invoked=action;}},()=>{},()=>{});
+   expect(invoked).toBe('destination.here');
+  }
+ }
 });

@@ -111,6 +111,13 @@ export class DocumentPreview {
     this.history.push(before);if(this.history.length>50)this.history.shift();this.future=[];
     await this.load(target,false,true);
   }
+  /** Explicit local Open keeps this reader's browsing trail and current scroll. */
+  async visit(target: OutlinerNavigationTarget): Promise<boolean> {
+    if (this.value && JSON.stringify(this.value.target) === JSON.stringify(target)) return true;
+    if (this.value) { this.history.push(this.value); if(this.history.length>50)this.history.shift(); }
+    this.future=[];
+    return this.load(target,false,true);
+  }
   /** Historical text is rendered as saved: do not resolve live embeds into a before-image. */
   async loadText(target: OutlinerNavigationTarget, title: string, content: Promise<string>): Promise<boolean> {
     this.history=[];this.future=[];

@@ -304,7 +304,7 @@ describe("backlink peek controller", () => {
     expect(state.calls.restored).toEqual(["two"]);
     expect(state.calls.openedFirst).toEqual(["two"]);
     expect(state.controller.status).toBe(
-      "No linked destination · choose once, replace here, or a split direction",
+      "No linked destination · Source two",
     );
     expect(state.calls.closes).toBe(0);
 

@@ -52,6 +52,8 @@ const result=await runHerdrScenario({
   await click(panes.tree,'Enter: Open here');
   await session.waitFor('recovery dismissed',()=>session.visible(panes.tree),text=>!text.includes('Enter: Open here')&&text.includes('Preview · PREVIEW DESTINATION'));
   assert.deepEqual((await session.registrations()).find(c=>c.clientId===detail.clientId)!.currentTarget,unchanged);
+  await session.keys(panes.tree,'alt+left');await session.waitVisible(panes.tree,'Preview · PREVIEW ORIGIN');
+  await session.keys(panes.tree,'alt+right');await session.waitVisible(panes.tree,'Preview · PREVIEW DESTINATION');
   await session.keys(panes.tree,'alt+p');
   await session.waitFor('Tree focus restored',()=>session.visible(panes.tree),text=>text.includes('○ Preview'));
   await session.keys(panes.tree,'I');await session.waitVisible(panes.tree,'Inbox agent');

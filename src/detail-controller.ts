@@ -1099,6 +1099,7 @@ export function createDetailController(
   let destinationChooser: OpenDestinationChooser | undefined;
   const destinationReferences = new WeakMap<OpenDestinationTarget, OutlinerLinkTarget>();
   let loadGeneration = 0;
+  let openGeneration = 0;
   let fileReadGeneration = 0;
   const blockCache = new Map<string, DetailBlockCacheEntry>();
 
@@ -3029,6 +3030,7 @@ export function createDetailController(
   };
 
   const dispatch = async (intent: DetailIntent, viewport: DetailViewport): Promise<void> => {
+    const requestGeneration = ++openGeneration;
     switch (intent.type) {
       case "edit.begin":
         await beginEdit(viewport);
@@ -3342,13 +3344,24 @@ export function createDetailController(
             : "chooser";
           if (routing === "chooser") {
             destinationReferences.set(target, reference);
-            destinationChooser!.open(target);
+            const documentGeneration=loadGeneration;
+            if(intent.type === "reference.follow") {
+              try { await effects.resolveNavigation("open"); }
+              catch(error) {
+                if(!missingNavigationDestination(error))throw error;
+                if(documentGeneration===loadGeneration && requestGeneration===openGeneration)destinationChooser!.recover(target);
+                break;
+              }
+            }
+            if(documentGeneration===loadGeneration && requestGeneration===openGeneration)destinationChooser!.open(target);
           } else {
+            const documentGeneration = loadGeneration;
             await resolveDestinationTarget(target, reference);
+            if(documentGeneration!==loadGeneration || requestGeneration!==openGeneration)break;
             try { await openLinked(target, reference.preserveSource === true); }
             catch(error){
               if(!missingNavigationDestination(error))throw error;
-              destinationChooser!.recover(target);
+              if(documentGeneration===loadGeneration && requestGeneration===openGeneration)destinationChooser!.recover(target);
             }
           }
           break;
@@ -4128,6 +4141,7 @@ export function createDetailController(
       reconcilePreviewRegions(state.previewRegions, regions);
     },
     releaseDocument() {
+      openGeneration++;destinationChooser!.dispose();
       loadGeneration += 1;
       clearDocumentPresentation();
       state.document = {kind: "empty"};
@@ -4141,6 +4155,7 @@ export function createDetailController(
       loadGeneration += 1;
     },
     handleDestinationChooserKeypress(str, key) {
+      if(key.name==="escape")openGeneration++;
       return destinationChooser!.handleKeypress(str, key);
     },
     destinationChooserHelpText() {
