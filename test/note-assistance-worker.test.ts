@@ -93,6 +93,7 @@ test("Pause prevents late answers; an explicit retry of an old note uses the sam
   expect(store.require(old.id)).toEqual(old);
   value.worker.resume();
   await until(() => value.worker!.status().results.some(result => result.kind === "fulfilled"));
+  expect(value.worker.status().results[0]?.attempt?.trigger).toBe("resume");
   expect(store.require(old.id).text).toContain("The supported answer");
   expect(store.require(old.id).properties).toContainEqual({ key: "request-status", value: "fulfilled" });
 });

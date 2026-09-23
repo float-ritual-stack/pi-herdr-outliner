@@ -136,7 +136,7 @@ export class InboxWorker {
     const latest = assistantActivity(this.store, this.repository, this.notes).results[0];
     if (latest?.state === "failed" || latest?.state === "canceled") {
       this.repository.reconsider(latest.sourceId, this.repository.instructions(latest.sourceId));
-      this.notes?.reconsider(latest.sourceId);
+      this.notes?.reconsider(latest.sourceId, this.notes.candidateFor(latest.sourceId)?.instructions);
       this.attempts.request(latest.sourceId,"resume");
     }
     this.unavailable = undefined;
