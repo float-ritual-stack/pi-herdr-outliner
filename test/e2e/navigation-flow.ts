@@ -1,8 +1,18 @@
 import assert from "node:assert/strict";
+import {execFile} from "node:child_process";
+import {readFile} from "node:fs/promises";
+import {join} from "node:path";
+import {promisify} from "node:util";
+import {openDetailSidebar} from "../../src/sidebar-placement";
 import {visibleWidth} from "@earendil-works/pi-tui";
 import type {Block, NavigationLinkState, OutlinerClientRegistration} from "../../src/types";
 import {runHerdrScenario} from "./herdr-runner";
 
+type Rect = {x: number; y: number; width: number; height: number};
+type NativeSnapshot = {
+  panes: Array<{pane_id: string; terminal_id: string; tab_id: string}>;
+  layouts: Array<{tab_id: string; area: Rect; panes: Array<{pane_id: string; rect: Rect}>}>;
+};
 const composed = process.argv.includes("--composed");
 const result = await runHerdrScenario({
   name: `navigation-flow${composed ? "-composed" : ""}`,
@@ -120,7 +130,122 @@ const result = await runHerdrScenario({
       assert.equal(after.text, doc.text); assert.equal(after.revision, doc.revision);
     }
     await s.record("navigation-flow-evidence", {composed, tree: tree.clientId, detail: detail.clientId, second: second.clientId, properties: properties.clientId, canonicalUnchanged: true});
-    await s.closeDetached(propertiesPane); await s.closeDetached(secondPane);
+    await s.closeDetached(propertiesPane);
+    if (!composed) {
+      // This bounded native oracle is pinned to the fixture's private socket/session.
+      const isolation = JSON.parse(await readFile(join(s.artifactDirectory, "isolation.json"), "utf8")) as {runRoot: string; sessionName: string; effectiveEnvironment: Record<string, string>};
+      const readiness = JSON.parse(await readFile(join(s.artifactDirectory, "herdr-readiness.json"), "utf8")) as {status: {session: string; socket: string}};
+      assert.equal(readiness.status.session, isolation.sessionName);
+      assert.ok(readiness.status.socket.startsWith(`${isolation.runRoot}/`));
+      const execute = promisify(execFile);
+      const native = async (args: string[]): Promise<unknown> => {
+        const {stdout} = await execute(isolation.effectiveEnvironment.HERDR_BIN_PATH!, ["--session", isolation.sessionName, ...args], {
+          env: {...process.env, ...isolation.effectiveEnvironment}, timeout: 5000, maxBuffer: 1024 * 1024,
+        });
+        return stdout.trim() ? JSON.parse(stdout) : undefined;
+      };
+      const status = await native(["status", "server", "--json"]) as {session: string; socket: string};
+      assert.equal(status.session, readiness.status.session);
+      assert.equal(status.socket, readiness.status.socket);
+      await s.record("placement-native-provenance", status);
+      const snapshot = async () => (await native(["api", "snapshot"]) as {result: {snapshot: NativeSnapshot}}).result.snapshot;
+      const layout = (state: NativeSnapshot) => state.layouts.find(item => item.panes.some(p => p.pane_id === s.panes.tree))!;
+      const rect = (state: NativeSnapshot, pane: string) => layout(state).panes.find(p => p.pane_id === pane)!.rect;
+      const identities = (state: NativeSnapshot) => state.panes.map(p => [p.pane_id, p.terminal_id]).sort();
+      const sameOldTerminals = (before: NativeSnapshot, after: NativeSnapshot) => {
+        for (const pane of before.panes) assert.equal(after.panes.find(p => p.pane_id === pane.pane_id)?.terminal_id, pane.terminal_id, `Existing PTY ${pane.pane_id} survives placement`);
+      };
+      const chooseAction = async (source: "tree" | "detail", query: string) => {
+        const pane = source === "tree" ? s.panes.tree : s.panes.detail;
+        await focus(source); await s.keys(pane, "shift+l"); await s.waitVisible(pane, "Link destination");
+        await s.text(pane, query); await s.waitVisible(pane, `Find: ${query}`); await s.keys(pane, "enter");
+      };
+      // Use a real saved link for both sources so create-only actions cannot pass
+      // this assertion merely by keeping an already-unlinked state.
+      await focus("detail"); await s.keys(s.panes.detail, "shift+l");
+      await finishChoice(s.panes.detail, "detail", "NEXT TREE INSPECTION", second.clientId);
+      const unchangedLinks = {tree: (await link("tree")).destination, detail: (await link("detail")).destination};
+      const assertLinks = async () => {
+        assert.deepEqual((await link("tree")).destination, unchangedLinks.tree);
+        assert.deepEqual((await link("detail")).destination, unchangedLinks.detail);
+      };
+      const placementCases = [
+        {source: "tree", label: "New Detail right of another", direction: "right"},
+        {source: "detail", label: "New Detail below another", direction: "down"},
+        {source: "tree", label: "Sidebar left · Outliner area", side: "left", scope: "outliner"},
+        {source: "detail", label: "Sidebar right · Outliner area", side: "right", scope: "outliner"},
+        {source: "tree", label: "Sidebar left · Whole Herdr tab", side: "left", scope: "tab"},
+        {source: "detail", label: "Sidebar right · Whole Herdr tab", side: "right", scope: "tab"},
+      ] as const;
+      for (const [index, placement] of placementCases.entries()) {
+        const before = await snapshot();
+        const beforeClients = await s.registrations();
+        const sourceClient = placement.source === "tree" ? tree : detail;
+        const sourceBefore = await registration(sourceClient.clientId);
+        await chooseAction(placement.source, placement.label);
+        if ("direction" in placement) {
+          const pane = placement.source === "tree" ? s.panes.tree : s.panes.detail;
+          await s.waitVisible(pane, "New Detail placement");
+          await s.text(pane, "NEXT TREE INSPECTION");
+          await s.waitVisible(pane, "Find: NEXT TREE INSPECTION");
+          await s.keys(pane, "enter");
+        }
+        const withNew = await s.waitFor("placed Detail has native pane identity", s.registrations, values => {
+          const primary = values.find(c => c.clientId === tree.clientId);
+          return !!primary?.runtime?.workspaceId && values.some(c => c.role === "detail" && !!c.runtime?.paneId && c.runtime.workspaceId === primary.runtime?.workspaceId && !beforeClients.some(old => old.clientId === c.clientId));
+        });
+        const created = withNew.find(c => c.role === "detail" && !beforeClients.some(old => old.clientId === c.clientId))!;
+        const pane = await s.adoptDetached(created.clientId, "detail");
+        const after = await s.waitFor("native placement completed", snapshot, value => value.panes.length === before.panes.length + 1 && layout(value).panes.length === layout(before).panes.length + 1);
+        sameOldTerminals(before, after);
+        const placed = rect(after, pane);
+        if ("direction" in placement) {
+          const oldAnchor = rect(before, secondPane), anchor = rect(after, secondPane);
+          assert.equal(placement.direction === "right" ? placed.x : placed.y, placement.direction === "right" ? anchor.x + anchor.width : anchor.y + anchor.height);
+          assert.equal(placed.x + placed.width, oldAnchor.x + oldAnchor.width);
+          assert.equal(placed.y + placed.height, oldAnchor.y + oldAnchor.height);
+          for (const old of layout(before).panes.filter(p => p.pane_id !== secondPane)) assert.deepEqual(rect(after, old.pane_id), old.rect);
+        } else {
+          const area = placement.scope === "tab" ? layout(before).area : {
+            x: Math.min(...layout(before).panes.filter(p => p.pane_id !== s.panes.launcher).map(p => p.rect.x)),
+            y: layout(before).area.y,
+            width: layout(before).area.width - rect(before, s.panes.launcher).width,
+            height: layout(before).area.height,
+          };
+          assert.equal(placed.y, area.y); assert.equal(placed.height, area.height);
+          assert.equal(placement.side === "left" ? placed.x : placed.x + placed.width, placement.side === "left" ? area.x : area.x + area.width);
+          if (placement.scope === "outliner") assert.deepEqual(rect(after, s.panes.launcher), rect(before, s.panes.launcher), "Unrelated launcher geometry is untouched by Outliner-only placement");
+        }
+        await s.waitFor("new reader retains invoking target", () => registration(created.clientId), c => isCurrent(c, placement.source === "tree" ? nextInspection.id : current.id));
+        const sourceAfter = await registration(sourceClient.clientId);
+        assert.deepEqual(sourceAfter.currentTarget, sourceBefore.currentTarget);
+        assert.deepEqual(sourceAfter.previewTarget, sourceBefore.previewTarget);
+        await assertLinks();
+        await s.record(`placement-${index}`, {placement, before, after, created: created.clientId, pane, sourceBefore, sourceAfter});
+        await s.checkpoint(`05-placement-${index}`);
+        await s.closeDetached(pane);
+        await s.waitFor("created reader unregistered", s.registrations, values => !values.some(c => c.clientId === created.clientId));
+        const restored = await s.waitFor("placement removal restores pane set", snapshot, value => value.panes.length === before.panes.length);
+        assert.deepEqual(identities(restored), identities(before));
+        for (const old of layout(before).panes) assert.deepEqual(rect(restored, old.pane_id), old.rect);
+      }
+      // Exercise real host rollback after the existing Outliner leaves are parked.
+      // Only the create callback fails; no user pane or global server is involved.
+      const beforeRecovery = await snapshot();
+      let rejectedCreation = false;
+      await assert.rejects(openDetailSidebar({sourcePaneId: s.panes.tree,
+        outlinerPaneIds: [s.panes.tree, s.panes.detail, secondPane], scope: "outliner", side: "left",
+        async createDetail() { rejectedCreation = true; throw new Error("Injected private fixture creation failure"); },
+      }, native), /original layout restored/);
+      assert.ok(rejectedCreation, "Failure occurs after native layout parking, not during preflight");
+      const recovered = await snapshot();
+      assert.deepEqual(identities(recovered), identities(beforeRecovery));
+      for (const old of layout(beforeRecovery).panes) assert.deepEqual(rect(recovered, old.pane_id), old.rect);
+      await assertLinks();
+      await s.record("sidebar-recovery", {before: beforeRecovery, after: recovered});
+      await s.checkpoint("06-sidebar-recovery");
+    }
+    await s.closeDetached(secondPane);
   },
 });
 console.log(JSON.stringify(result, null, 2));
