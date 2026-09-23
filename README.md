@@ -1797,3 +1797,17 @@ are `Alt+Shift+P` (toggle), `Alt+=` (grow), and `Alt+-` (shrink); all are config
 Dock and size preferences survive hide/show and terminal resizing within that Tree;
 they do not change Herdr panes or persist after closing the Tree. Small windows use
 a compact reader; `Alt+P` switches focus between Tree and Preview.
+
+### Read Inbox source and output in place
+
+Inbox results have **Source / Output / Activity** choices. Source and numbered
+Outputs show current rich note content using the same reader as Tree Preview.
+Activity retains processing summaries, errors, usage and explicit session access.
+Click a result to preview it; explicit Open still follows the linked destination.
+
+Use **1** for Source, **2** for the first Output, **Tab** for other targets,
+**Shift+A** for Activity, and **Alt+P** for List/Preview focus. Clicking the list
+or reader also changes focus. Wheel over the reader scrolls the document; drag
+inside it to copy. Escape first leaves reader focus, then returns to Tree.
+Narrow panes stack the reader below results; very short panes show one at a time.
+These previews show current content, not the cleanup's original before-image.

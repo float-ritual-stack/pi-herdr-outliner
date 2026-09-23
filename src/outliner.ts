@@ -1,4 +1,4 @@
-import {TreePreviewInput} from './tree-preview-input';
+import {DocumentPreviewInput} from './document-preview-input';
 import {KeyInspector} from "./key-inspector";
 import {createDetailDestination} from "./detail-pane-placement";
 import {osc52ClipboardWrite} from './terminal';
@@ -68,7 +68,7 @@ let runtimeSync: ClientRuntimeSync | null = null;
 let stopping = false;
 let workQueue = Promise.resolve();
 let renderedFrameLines: string[] = [];
-const previewInput = new TreePreviewInput();
+const previewInput = new DocumentPreviewInput();
 let renderedMouseTargets: readonly (TreeMouseTarget | null | undefined)[] = [];
 
 function errorMessage(error: unknown): string {
@@ -87,7 +87,7 @@ function draw(): void {
     controller.view().scrollStartEntryIndex ?? 0,
     { propertyKeys: propertySummaryKeys },
   );
-  renderedFrameLines = previewInput.render(result.frame.split("\n"),result.preview,controller.view().localPreview);
+  renderedFrameLines = previewInput.render(result.frame.split("\n"),result.preview,controller.view().mode === "inbox" ? controller.view().inbox?.reader.state : controller.view().localPreview);
   renderedMouseTargets = result.mouseTargets;
   controller.setViewportStart(result.scrollStartEntryIndex, result.expandedPage);
   if(result.breadcrumbStart !== undefined) controller.setBreadcrumbStart(result.breadcrumbStart);
@@ -207,7 +207,8 @@ function handleRawInput(data: string | Buffer): void {
 }
 
 function handleMouseSequence(sequence: string): void {
-  if(previewInput.handle(sequence,controller,text=>process.stdout.write(osc52ClipboardWrite(text)),draw))return;
+  if(previewInput.handle(sequence,{focus:v=>controller.focusLocalPreview(v),scroll:d=>controller.scrollLocalPreview(d),resize:f=>controller.resizeLocalPreview(f),invoke:id=>controller.handleAction(id)},text=>process.stdout.write(osc52ClipboardWrite(text)),draw))return;
+  if (controller.view().mode === "inbox" && controller.view().inbox?.handleActivityMouse(sequence)) return;
   if (controller.view().mode === "goto") { enqueueWork(() => controller.handleGotoMouse(sequence)); return; }
   const secondaryClick = parseTreeSecondaryClick(sequence);
   if (secondaryClick && rightClickOwnership === "outliner") {

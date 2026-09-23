@@ -1,5 +1,6 @@
+import type {DocumentPreviewFrame} from "./document-preview-renderer";
 import {renderNavigationDestinationPreview} from './navigation-destination-menu';
-import {treePreviewFrame, type TreePreviewFrame} from './tree-preview';
+import {treePreviewFrame} from './tree-preview';
 import { renderGotoFrame } from "./goto-renderer";
 import { renderInboxFrame } from "./inbox-renderer";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
@@ -171,7 +172,7 @@ type TreeRenderEntry =
   | { kind: "quick"; depth: number };
 
 export interface TreeRenderResult {
-  readonly preview?: TreePreviewFrame;
+  readonly preview?: DocumentPreviewFrame;
   readonly frame: string;
   readonly scrollStartEntryIndex: number;
   readonly breadcrumbStart?: number;
@@ -433,7 +434,7 @@ export function renderTreeFrame(
 
   if (view.mode === "inbox" && view.inbox) {
     const lines = renderInboxFrame(view.inbox, width, height, view.actionHelpText ?? DEFAULT_OUTLINER_ACTION_KEYMAP.helpText("tree", "inbox"));
-    return { frame: `${options.clearScreen === false ? "" : `${ESC}H${ESC}2J`}${lines.join("\n")}`, scrollStartEntryIndex: initialScrollStartEntryIndex, mouseTargets: [] };
+    return { frame: `${options.clearScreen === false ? "" : `${ESC}H${ESC}2J`}${lines.join("\n")}`, scrollStartEntryIndex: initialScrollStartEntryIndex, mouseTargets: [], preview:view.inbox.previewFrame };
   }
 
   if (view.mode === "goto" && view.goto) {

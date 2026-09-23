@@ -3,6 +3,7 @@ import type { InboxController } from "./inbox-controller";
 import type { InboxStatus } from "./inbox-types";
 import { outlinerActionLink } from "./outliner-actions";
 import { sanitizeDynamicText } from "./terminal";
+import {renderDocumentPreview} from "./document-preview-renderer";
 import { basename } from "node:path";
 
 export function inboxStatusCue(snapshot: InboxStatus | null | undefined, error = ""): string {
@@ -53,16 +54,21 @@ function detailLines(controller: InboxController, width: number): string[] {
 }
 
 export function renderInboxFrame(controller: InboxController, width: number, height: number, help: string): string[] {
+  controller.previewFrame = undefined;
+  controller.activityRect = undefined;
   width = Math.max(1, width);
   height = Math.max(1, height);
   if (width < 20 || height < 12) return Array.from({ length: height }, (_, index) => truncateToWidth(index === 0 ? "Inbox · enlarge terminal" : index === height - 1 ? "Esc close" : "", width));
   const inner = width - 4;
-  const body = height - 8;
-  const wide = inner >= 86;
+  const body = height - 9;
+  const wide = inner >= 86 && body >= 5;
+  const compact = !wide && body < 12;
+  const compactReader = compact && (controller.reader.state?.focused || controller.previewMode === "activity");
   const listWidth = wide ? Math.floor(inner * 0.4) : inner;
-  const listHeight = wide ? body : Math.max(2, Math.floor(body * 0.35));
+  const listHeight = compact ? (compactReader ? 0 : body) : wide ? body : Math.max(2, Math.floor(body * 0.35));
   const detailWidth = wide ? inner - listWidth - 1 : inner;
-  const detailHeight = wide ? body : Math.max(1, body - listHeight - 1);
+  const detailHeight = compact ? body : wide ? body : Math.max(1, body - listHeight - 1);
+  const detailRect = {x:wide?2+listWidth+1:2,y:wide||compact?5:5+listHeight+1,width:detailWidth,height:detailHeight};
   const slots = Math.max(1, Math.floor(listHeight / 2));
   const start = Math.max(0, controller.index - slots + 1);
   const fit = (text: string, columns: number) => {
@@ -77,14 +83,24 @@ export function renderInboxFrame(controller: InboxController, width: number, hei
   for (const [offset, result] of results.slice(start, start + slots).entries()) {
     const selected = start + offset === controller.index;
     const line = fit(`${selected ? "›" : " "} ${result.state === "applied" ? result.kind ?? result.state : result.state} · ${sanitizeDynamicText(result.sourceTitle)}`, listWidth);
-    list.push(selected ? `\x1b[48;5;238m\x1b[1m${line}\x1b[0m` : line);
-    list.push(fit(`  \x1b[2m${sanitizeDynamicText(result.summary)}\x1b[0m`, listWidth));
+    list.push(outlinerActionLink(`tree.inbox.select:${start+offset}`, selected ? `\x1b[48;5;238m\x1b[1m${line}\x1b[0m` : line));
+    list.push(outlinerActionLink(`tree.inbox.select:${start+offset}`,fit(`  \x1b[2m${sanitizeDynamicText(result.summary)}\x1b[0m`, listWidth)));
   }
   if (!results.length) list.push(controller.loading ? "Loading results…" : controller.attentionOnly ? "Nothing needs attention" : "No recent results");
-  const details = detailLines(controller, detailWidth);
+  const reading = controller.previewMode === 'content' && controller.reader.state;
+  const details = reading ? [] : detailLines(controller, detailWidth);
+  let previewLines: string[] | undefined;
+  controller.previewFrame = undefined;
+  if (reading && (!compact || compactReader) && detailHeight >= 4) {
+    const role = controller.targets[controller.targetIndex]?.label ?? 'Source';
+    const frame = renderDocumentPreview({...reading,title:`${role} · current · ${reading.title}`}, detailRect,'Alt+P focus · Esc list · drag to copy');
+    previewLines = frame.lines;
+    controller.previewFrame = frame;
+  }
+  if (!reading && (!compact || compactReader)) controller.activityRect = detailRect;
   const maxOffset = Math.max(0, details.length - detailHeight);
   controller.detailOffset = Math.min(controller.detailOffset, maxOffset);
-  const detail = details.slice(controller.detailOffset, controller.detailOffset + detailHeight);
+  const detail = reading && !previewLines ? ["Preview needs more height · Open in Detail"] : previewLines ?? details.slice(controller.detailOffset, controller.detailOffset + detailHeight);
   const omitted = snapshot?.attentionOnly === controller.attentionOnly && snapshot.resultsOffset === controller.resultsOffset && snapshot.resultsTruncated
     ? controller.attentionOnly ? " · more awaiting attention" : " · older results available"
     : "";
@@ -95,14 +111,19 @@ export function renderInboxFrame(controller: InboxController, width: number, hei
   const message = controller.error || (state === "idle" && attention
     ? `${attention} ${attention === 1 ? "item needs" : "items need"} your attention`
     : snapshot?.message || "Loading Inbox status…");
+  const tabs = [
+    ...controller.targets.flatMap((target,index)=>target.role === 'diagnostics'?[]:[outlinerActionLink(`tree.inbox.preview-target:${index}`,`[${target.label}${controller.previewMode==='content'&&controller.targetIndex===index?' ●':''}]`)]),
+    outlinerActionLink('tree.inbox.preview.activity',`[Activity${controller.previewMode==='activity'?' ●':''}]`),
+  ].join(' ');
   const output = [
     ` ┌${"─".repeat(inner)}┐ `,
     bordered(`\x1b[1;36mInbox agent\x1b[0m · ${state}${snapshot ? ` · ${snapshot.pending} pending` : ""}`),
-    bordered(outlinerActionLink("tree.navigation.link", "[Link destination]")+" "+outlinerActionLink("tree.navigation.once", "[Open once]")+" · "+sanitizeDynamicText(message)),
+    bordered(outlinerActionLink("tree.navigation.link", "[Link destination]")+" "+outlinerActionLink("tree.navigation.once", "[Open once]")+" · "+sanitizeDynamicText(message + (reading && controller.selected?.error ? ` · ${controller.selected.error}` : ""))),
     bordered(`\x1b[${attention ? "1;33" : "2"}m${current}\x1b[0m`),
+    bordered(tabs + (compact ? " · Alt+P List/Preview" : "")),
   ];
   for (let row = 0; row < body; row++) {
-    output.push(bordered(wide
+    output.push(bordered(compact ? (compactReader ? detail[row] ?? "" : list[row] ?? "") : wide
       ? `${fit(list[row] ?? "", listWidth)}│${fit(detail[row] ?? "", detailWidth)}`
       : row < listHeight ? list[row] ?? "" : row === listHeight ? "─".repeat(inner) : detail[row - listHeight - 1] ?? ""));
   }

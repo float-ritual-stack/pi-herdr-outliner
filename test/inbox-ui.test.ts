@@ -1,3 +1,5 @@
+import {initTheme} from "@earendil-works/pi-coding-agent";
+initTheme(undefined,false);
 import { describe, expect, test } from "bun:test";
 import { setImmediate } from "node:timers/promises";
 import { getOsc8LinkAtColumn, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
@@ -37,6 +39,7 @@ function harness(respond?: (request: RequestInput) => unknown | Promise<unknown>
         case "inbox.resume": snapshot = { ...snapshot, paused: false, state: "idle" }; return snapshot as T;
         case "inbox.undo": snapshot = { ...snapshot, results: snapshot.results.map(value => value.id === request.resultId ? { ...value, state: "undone" } : value) }; return snapshot as T;
         case "inbox.retry": return { ...snapshot, pending: 1 } as T;
+        case "references.resolve": return {text:request.text,workIdPrefix:null} as T;
         case "get": return { id: request.blockId, text: "Available block", revision: 1 } as T;
         default: throw new Error(`Unexpected ${request.action}`);
       }
@@ -137,7 +140,7 @@ describe("Inbox controls", () => {
     expect(h.controller.results).toHaveLength(30);
     expect(inboxStatusCue(h.controller.snapshot)).toContain("1 need attention");
     await h.controller.input("a", { name: "a" });
-    expect(h.requests.at(-1)).toEqual({ action: "inbox.status", attentionOnly: true });
+    expect(h.requests.filter(request=>request.action.startsWith("inbox.")).at(-1)).toEqual({ action: "inbox.status", attentionOnly: true });
     expect(h.controller.selected?.id).toBe(question.id);
     await h.controller.input("", { name: "tab" });
     const target = h.controller.targets[h.controller.targetIndex]?.id;
@@ -145,7 +148,7 @@ describe("Inbox controls", () => {
     expect(h.controller.attentionOnly).toBe(true);
     expect(h.controller.selected?.id).toBe(question.id);
     expect(h.controller.targets[h.controller.targetIndex]?.id).toBe(target);
-    expect(h.requests.at(-1)).toEqual({ action: "inbox.status", attentionOnly: true });
+    expect(h.requests.filter(request=>request.action.startsWith("inbox.")).at(-1)).toEqual({ action: "inbox.status", attentionOnly: true });
     await h.controller.input("r", { name: "r" });
     h.controller.paste("Use project alpha");
     await h.controller.input("", { name: "return" });
@@ -154,7 +157,7 @@ describe("Inbox controls", () => {
     expect(h.controller.attentionOnly).toBe(true);
     await h.controller.close();
     await h.controller.start();
-    expect(h.requests.at(-1)).toEqual({ action: "inbox.status" });
+    expect(h.requests.filter(request=>request.action.startsWith("inbox.")).at(-1)).toEqual({ action: "inbox.status" });
     expect(h.controller.results).toHaveLength(30);
     expect(h.controller.attentionOnly).toBe(false);
   });
@@ -179,7 +182,7 @@ describe("Inbox controls", () => {
     await h.controller.input("u", { name: "u" });
     expect(h.controller.selected?.state).toBe("undone");
     expect(h.controller.selected?.id).toBe("older-applied");
-    expect(h.requests.at(-1)).toEqual({ action: "inbox.status", resultsOffset: 30 });
+    expect(h.requests.filter(request=>request.action.startsWith("inbox.")).at(-1)).toEqual({ action: "inbox.status", resultsOffset: 30 });
     expect(stripTerminalSequences(renderInboxFrame(h.controller, 120, 26, "a questions/recent").join("\n"))).toContain("Recent results: 31–31");
     await h.controller.input("", { name: "left" });
     expect(h.controller.resultsOffset).toBe(0);
@@ -239,13 +242,13 @@ describe("Inbox controls", () => {
     await h.controller.input("p", { name: "p" });
     expect(h.controller.snapshot?.state).toBe("idle");
     await h.controller.input("u", { name: "u" });
-    expect(h.requests.at(-1)).toEqual({ action: "inbox.undo", resultId: "result-one" });
+    expect(h.requests.filter(request=>request.action.startsWith("inbox.")).at(-1)).toEqual({ action: "inbox.undo", resultId: "result-one" });
     expect(h.controller.selected?.state).toBe("undone");
     await h.controller.close();
     expect(h.closed).toBe(1);
     await startRecent(h.controller);
     expect(h.controller.selected?.state).toBe("undone");
-    expect(h.requests.map(request => request.action)).toEqual(["inbox.status", "inbox.status", "inbox.pause", "inbox.resume", "inbox.undo", "inbox.status", "inbox.status"]);
+    expect(h.requests.filter(request=>request.action.startsWith("inbox.")).map(request => request.action)).toEqual(["inbox.status", "inbox.status", "inbox.pause", "inbox.resume", "inbox.undo", "inbox.status", "inbox.status"]);
   });
 
   test("reconsider captures bounded instructions and never treats typed commands as actions", async () => {
@@ -260,7 +263,7 @@ describe("Inbox controls", () => {
     await h.controller.input("p", { name: "p" });
     h.controller.paste("ut in project alpha\nKeep the original.\x1b]52;;malicious\x07");
     await h.controller.input("", { name: "return" });
-    expect(h.requests.at(-1)).toEqual({ action: "inbox.retry", sourceId: "source-result-two", instructions: "put in project alpha Keep the original." });
+    expect(h.requests.filter(request=>request.action.startsWith("inbox.")).at(-1)).toEqual({ action: "inbox.retry", sourceId: "source-result-two", instructions: "put in project alpha Keep the original." });
     expect(h.controller.steering).toBe(false);
     expect(h.controller.snapshot?.pending).toBe(1);
     expect(h.requests.some(request => request.action === "inbox.pause")).toBe(false);
@@ -361,6 +364,7 @@ describe("Inbox rendering", () => {
       usage: { provider: "provider", model: "editor", inputTokens: 10, outputTokens: 20, cost: 0, jevCalls: 3, jevSuccessfulCalls: 1, jevWarning: "Some Jev comparisons unavailable", elapsedMs: 2000 },
     })] }) : undefined);
     await startRecent(h.controller);
+    h.controller.showActivity();
     const text = stripTerminalSequences(renderInboxFrame(h.controller, 150, 30, "a questions/recent").join("\n"));
     expect(text).toContain("Needs attention: 41");
     expect(text).toContain("Jev 3 attempted / 1 successful");
@@ -383,10 +387,11 @@ describe("Inbox rendering", () => {
         expect(lines.join("\n")).not.toContain("\x1b[2J");
       }
     }
+    h.controller.showActivity();
     const lines = renderInboxFrame(h.controller, 150, 26, "Esc close · p pause · r reconsider\nTab link · ? actions");
     const text = stripTerminalSequences(lines.join("\n"));
     for (const content of ["working", "3 pending", "Looking for related notes", "Current: New capture", "Review project choice", "Output 1", "Source", "provider", "editor-model", "estimated $0.0123", "Jev 2 calls"]) expect(text).toContain(content);
-    const output = lines.find(line => stripTerminalSequences(line).includes("Output 1"))!;
+    const output = lines.find(line => stripTerminalSequences(line).includes("Output 1 ·"))!;
     const column = stripTerminalSequences(output).indexOf("Output 1");
     expect(getOsc8LinkAtColumn(output, column)).toBe("pi-outliner-action:tree.inbox.open-target:0");
   });
@@ -427,4 +432,52 @@ test("default open skips missing and trashed outputs, but preserves transport er
   await h.controller.input("", {name: "return", meta: true});
   expect(h.opened).toHaveLength(1);
   expect(h.controller.notice).toBe("Workspace disconnected");
+});
+
+describe("shared Inbox document preview", () => {
+  test("Source and separate Outputs render rich current content without opening or mutating", async () => {
+    const h = harness(request => request.action === "get" ? {id:request.blockId,revision:1,text:`# ${request.blockId}\n\n> [!summary] Readable callout\n> Current note body\n\n${Array.from({length:40},(_,i)=>`line ${i}`).join('\n')}`} : undefined);
+    await startRecent(h.controller); await setImmediate();
+    expect(h.controller.reader.state?.target).toEqual({kind:"block",blockId:"output-result-one"});
+    let frame=renderInboxFrame(h.controller,140,32,"help");
+    expect(stripTerminalSequences(frame.join('\n'))).toContain('Output 1 · current');
+    expect(stripTerminalSequences(frame.join('\n'))).toContain('Readable callout');
+    h.controller.reader.focus(true); h.controller.scrollPreview(8);
+    await h.controller.refresh(); await setImmediate();
+    expect(h.controller.reader.state?.offset).toBe(8);
+    h.controller.selectTarget(2); await setImmediate();
+    frame=renderInboxFrame(h.controller,140,32,"help");
+    expect(stripTerminalSequences(frame.join('\n'))).toContain('Source · current');
+    expect(h.controller.reader.state?.target).toEqual({kind:"block",blockId:"source-result-one"});
+    h.controller.selectResult(1); await setImmediate();
+    expect(h.controller.reader.state?.focused).toBe(false);
+    expect(h.controller.reader.state?.target).toEqual({kind:"block",blockId:"source-result-two"});
+    expect(h.opened).toHaveLength(0);
+    expect(h.requests.every(request=>['get','inbox.status','references.resolve'].includes(request.action))).toBe(true);
+  });
+
+  test("compact reading is explicit and all rendered hit regions remain inside the frame", async () => {
+    const h=harness();await startRecent(h.controller);await setImmediate();
+    for (const [width,height] of [[22,12],[40,17],[80,25],[140,32]]) {
+      h.controller.reader.focus(false);
+      let frame=renderInboxFrame(h.controller,width!,height!,"help");
+      expect(frame).toHaveLength(height!);
+      expect(frame.every(line=>visibleWidth(line)<=width!)).toBe(true);
+      h.controller.reader.focus(true);frame=renderInboxFrame(h.controller,width!,height!,"help");
+      expect(frame).toHaveLength(height!);
+      const geometry=h.controller.previewFrame;
+      if(geometry){expect(geometry.content.y+geometry.content.height).toBeLessThanOrEqual(height!);expect(geometry.content.x+geometry.content.width).toBeLessThanOrEqual(width!);}
+    }
+  });
+
+  test("Activity wheel scrolls its own receipt; Escape exits preview focus before closing", async()=>{
+    const h=harness();await startRecent(h.controller);await setImmediate();
+    h.controller.showActivity();renderInboxFrame(h.controller,130,32,"help");
+    const rect=h.controller.activityRect!;
+    expect(h.controller.handleActivityMouse(`\x1b[<65;${rect.x+2};${rect.y+2}M`)).toBe(true);
+    expect(h.controller.detailOffset).toBe(3);expect(h.controller.index).toBe(0);
+    h.controller.selectTarget(0);await setImmediate();h.controller.reader.focus(true);
+    await h.controller.input('',{name:'escape'});expect(h.closed).toBe(0);expect(h.controller.reader.state?.focused).toBe(false);
+    await h.controller.input('',{name:'escape'});expect(h.closed).toBe(1);
+  });
 });

@@ -1,6 +1,6 @@
 import {expect, test} from "bun:test";
-import {TreePreviewInput} from "../src/tree-preview-input";
-import type {TreeController} from "../src/tree-controller";
+import {DocumentPreviewInput} from "../src/document-preview-input";
+import type {PreviewInputActions} from "../src/document-preview-input";
 import type {TreePreviewFrame} from "../src/tree-preview";
 
 const pointer = (column: number, row: number, phase: "down" | "drag" | "up" = "down") => `\x1b[<${phase === "drag" ? 32 : 0};${column + 1};${row + 1}${phase === "up" ? "m" : "M"}`;
@@ -9,8 +9,8 @@ function fixture(placement: "beside" | "below") {
   const frame: TreePreviewFrame = {rect, content: {...rect, y: rect.y + 2, height: rect.height - 3}, lines: [], totalRows: 50, offset: 0, treeWidth: rect.x || rect.width, treeHeight: rect.y || rect.height, placement};
   let focused = false;
   const focusCalls: boolean[] = [];
-  const controller = {focusLocalPreview(value = true) {focused = value; focusCalls.push(value);}, scrollLocalPreview() {}} as unknown as TreeController;
-  const input = new TreePreviewInput();
+  const controller = {focus(value = true) {focused = value; focusCalls.push(value);}, scroll() {}} as unknown as PreviewInputActions;
+  const input = new DocumentPreviewInput();
   input.render(Array.from({length: 20}, () => "tree text preview text"), frame, undefined);
   return {input, controller, frame, focusCalls, focused: () => focused, send: (sequence: string) => input.handle(sequence, controller, () => {}, () => {})};
 }
@@ -39,7 +39,7 @@ for (const placement of ["beside", "below"] as const) {
 
 test('Preview toolbar and divider consume pointer input before selection',()=>{
  const h=fixture('beside');const actions:string[]=[];const sizes:number[]=[];
- h.controller.handleAction=async id=>{actions.push(id);};h.controller.resizeLocalPreview=f=>sizes.push(f);
+ h.controller.invoke=async id=>{actions.push(id);};h.controller.resize=f=>sizes.push(f);
  h.frame.controls=[{rect:{x:10,y:1,width:3,height:1},action:'tree.preview.bottom'}];
  h.frame.divider={x:9,y:0,width:1,height:10};
  expect(h.send(pointer(11,1))).toBe(true);expect(actions).toEqual(['tree.preview.bottom']);

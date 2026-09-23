@@ -1,9 +1,7 @@
 import type {DetailDestinationPlacement} from "./detail-pane-placement";
 import type {OutlinerViewAddress} from "./types";
-import {resourceAddressLabel} from './resources';
-import {loadDetailReadPreview} from './detail-read-preview';
-import type {DetailReadPreviewDocument} from './detail-pi-preview';
-import {treePreviewFrame, defaultPreviewPreferences, type PreviewPreferences, type TreeLocalPreview} from './tree-preview';
+import {DocumentPreview, type DocumentPreviewState} from './document-preview';
+import {treePreviewFrame, defaultPreviewPreferences, type PreviewPreferences} from './tree-preview';
 import type { RequestInput } from "./client";
 import {
   decodeAuthoredLinksSnapshot,
@@ -78,7 +76,6 @@ import type {
   TreeIndexCollection,
   TreeIndexSnapshot,
   ResolvedBlockReferences,
-  ResourceDescription,
 } from "./types";
 import {
   buildVirtualBranchCreationText,
@@ -152,7 +149,7 @@ export interface TreeView {
   readonly goto?: GotoController | null;
   readonly inbox?: InboxController | null;
   readonly inboxCue?: string;
-  readonly localPreview?: TreeLocalPreview | null;
+  readonly localPreview?: DocumentPreviewState | null;
   readonly previewHelp?: string;
   readonly previewPreferences?: PreviewPreferences;
   readonly viewerLines: readonly string[];
@@ -361,8 +358,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   let quickBuffer = new TextBuffer();
   let quickCompletion: MutableQuickCompletion | null = null;
 
-  let localPreview: TreeView["localPreview"] = null;
-  let localPreviewGeneration = 0;
+  const localReader = new DocumentPreview(effects, () => effects.invalidate(), effects.clientId);
   let previewPreferences = defaultPreviewPreferences();
   let viewerLines: string[] = [];
   let viewerPath = "";
@@ -507,7 +503,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     const toggle = `${displayActionChord(actionKeymap.primaryBinding("tree.inbox.attention"))} ${inbox.attentionOnly ? "show recent results" : `needs attention (${inbox.snapshot?.attentionCount ?? 0})`}`;
     const navigation = actionKeymap.helpText("tree", "inbox", [
       ...inbox.attentionOnly ? [] : ["tree.inbox.older", "tree.inbox.newer"],
-      "tree.inbox.source", "tree.inbox.target", "tree.inbox.up", "tree.inbox.down", "tree.inbox.pageup", "tree.inbox.pagedown",
+      "tree.inbox.preview.focus", "tree.inbox.preview.source", "tree.inbox.preview.output", "tree.inbox.preview.activity", "tree.inbox.source", "tree.inbox.target", "tree.inbox.up", "tree.inbox.down", "tree.inbox.pageup", "tree.inbox.pagedown",
     ]);
     return `${toggle}  ${main}\n${actionKeymap.helpText("tree", "inbox", ["tree.menu.open"])}  ${navigation}`;
   }
@@ -550,7 +546,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       goto: mode === "goto" ? goto : null,
       inbox: mode === "inbox" ? inbox : null,
       inboxCue: inboxStatusCue(inbox.snapshot, inbox.error),
-      localPreview,
+      localPreview: localReader.state,
       previewPreferences,
       navigationDestinationLabel: navigationDisplay.text,
       previewHelp: `${actionKeymap.helpText("tree", "browse", ["tree.preview.focus", "tree.preview.close"])} · drag to copy`,
@@ -1035,30 +1031,10 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
 
   async function inspectLocally(target: OutlinerNavigationTarget): Promise<void> {
     if (!previewPreferences.enabled) return;
-    const generation = ++localPreviewGeneration;
-    let title = target.kind === "block" ? target.blockId : target.resourceId;
-    const plainDocument=(text:string):DetailReadPreviewDocument=>({canonicalText:text,resolvedText:text,projectedText:text,embedRanges:[],workIdPrefix});
-    localPreview = {target, title, document: plainDocument("Loading Preview…"), offset: 0, focused: localPreview?.focused ?? false};
-    effects.invalidate();
-    try {
-      let document: DetailReadPreviewDocument;
-      if (target.kind === "block") {
-        const block = await effects.request<Block>({action: "get", blockId: target.blockId});
-        title = blockDisplayTitle(block);
-        document = await loadDetailReadPreview(effects, block);
-      } else {
-        const resource = await effects.request<ResourceDescription>({action: "resources.describe", destinationClientId: effects.clientId, target});
-        title = resourceAddressLabel(resource.resource.address);
-        document = plainDocument(resource.filesystem?.text ?? resource.web?.markdown ?? resource.remoteEntity?.markdown ?? resource.pdf?.markdown ?? resource.computed?.markdown ?? "No cached readable representation · Open explicitly to inspect this Resource");
-      }
-      if (generation !== localPreviewGeneration) return;
-      localPreview = {target, title, document, offset: 0, focused: localPreview?.focused ?? false};
-      await effects.request({action: "clients.update", clientId: effects.clientId, previewTarget: target});
-    } catch (error) {
-      if (generation !== localPreviewGeneration) return;
-      localPreview = {target, title, document: plainDocument(errorMessage(error)), offset: 0, focused: localPreview?.focused ?? false};
+    if (await localReader.load(target)) {
+      try { await effects.request({action:"clients.update",clientId:effects.clientId,previewTarget:target}); }
+      catch (error) { status = errorMessage(error); effects.invalidate(); }
     }
-    effects.invalidate();
   }
 
   async function drainBrowsingPublications(): Promise<void> {
@@ -1076,9 +1052,8 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         } else {
           if (desired.dispatchPreview && desired.target && publication.preview?.targetClientId === effects.clientId && publication.preview.targetRegion === "tree") {
             void inspectLocally(desired.target);
-          } else if (localPreview && publication.preview) {
-            localPreviewGeneration += 1;
-            localPreview = null;
+          } else if (localReader.state && publication.preview) {
+            localReader.clear();
             await effects.request({action: "clients.update", clientId: effects.clientId, previewTarget: null});
           }
           if (status === browsingPublicationStatus) {
@@ -1124,7 +1099,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     target: OutlinerNavigationTarget | null,
     dispatchPreview = true,
   ): Promise<void> {
-    localPreviewGeneration += 1;
+    localReader.cancelLoad();
     pendingBrowsingPublication = { target, dispatchPreview, rowId: rows[selectedIndex]?.rowId ?? null };
     await startBrowsingPublicationPump();
   }
@@ -1751,6 +1726,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       return;
     }
     if (event.domain === "selection") return;
+    if (mode === "inbox") inbox.contentChanged();
     if (authoredLinksPanel.kind === "open") authoredLinksDirty = true;
     if (mode !== "browse") {
       refreshPending = true;
@@ -1814,6 +1790,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       await publishDisplayRowSelection(rows[selectedIndex]);
     } else {
       refreshPending = true;
+      if (mode === "inbox") inbox.contentChanged();
       if (authoredLinksPanel.kind === "open") authoredLinksDirty = true;
     }
     effects.invalidate();
@@ -1944,15 +1921,16 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     if (activate) await focusDetailReader();
   }
 
-  function focusLocalPreview(focused = true):void {if(localPreview && localPreview.focused !== focused){localPreview={...localPreview,focused};effects.invalidate();}}
+  function focusLocalPreview(focused = true):void {if(mode === "inbox") inbox.reader.focus(focused); else localReader.focus(focused);}
   function scrollLocalPreview(delta:number):void {
-    if(!localPreview)return;
-    const frame=treePreviewFrame(localPreview,effects.terminalWidth(),effects.terminalHeight(),"",previewPreferences);
-    localPreview={...localPreview,offset:Math.max(0,Math.min(frame.offset+delta,Math.max(0,frame.totalRows-frame.content.height)))};effects.invalidate();
+    if(mode === "inbox") { inbox.scrollPreview(delta); return; }
+    if(!localReader.state)return;
+    const frame=treePreviewFrame(localReader.state,effects.terminalWidth(),effects.terminalHeight(),"",previewPreferences);
+    localReader.scroll(delta,frame.content.width,frame.content.height);
   }
   function resizeLocalPreview(fraction: number): void {
-    if (!localPreview || !Number.isFinite(fraction)) return;
-    const frame = treePreviewFrame(localPreview,effects.terminalWidth(),effects.terminalHeight(),"",previewPreferences);
+    if (!localReader.state || !Number.isFinite(fraction)) return;
+    const frame = treePreviewFrame(localReader.state,effects.terminalWidth(),effects.terminalHeight(),"",previewPreferences);
     const key = frame.placement === 'beside' ? 'sideFraction' : 'bottomFraction';
     previewPreferences = {...previewPreferences, [key]: Math.max(.2, Math.min(.8, fraction))};
     effects.invalidate();
@@ -1965,13 +1943,14 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       const enabled = actionId === "tree.preview.toggle" && !previewPreferences.enabled;
       previewPreferences = {...previewPreferences, enabled};
       if (!enabled) {
-        const hadPreview = !!localPreview;
-        localPreviewGeneration++; localPreview = null;
+        const hadPreview = !!localReader.state;
+        localReader.clear();
         try { if (hadPreview) await effects.request({action:"clients.update",clientId:effects.clientId,previewTarget:null}); }
         catch (error) { status = errorMessage(error); }
       } else {
         const selected = rows[selectedIndex];
         if (isBlockTreeRow(selected)) await inspectLocally({kind:"block",blockId:selected.canonicalId});
+        else await publishDisplayRowSelection(selected);
       }
       effects.invalidate(); return;
     }
@@ -1980,11 +1959,23 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       effects.invalidate(); return;
     }
     if (actionId === "tree.preview.grow" || actionId === "tree.preview.shrink") {
-      const frame = localPreview && treePreviewFrame(localPreview,effects.terminalWidth(),effects.terminalHeight(),"",previewPreferences);
+      const frame = localReader.state && treePreviewFrame(localReader.state,effects.terminalWidth(),effects.terminalHeight(),"",previewPreferences);
       const fraction = frame?.placement === 'beside' ? previewPreferences.sideFraction : previewPreferences.bottomFraction;
       resizeLocalPreview(fraction + (actionId.endsWith('grow') ? .05 : -.05)); return;
     }
-    if(actionId==="tree.preview.focus") {if(localPreview)localPreview={...localPreview,focused:!localPreview.focused};else status="Select an item to preview it here";effects.invalidate();return;}
+    if(actionId==="tree.preview.focus") {if(localReader.state)localReader.focus(!localReader.state.focused);else status="Select an item to preview it here";effects.invalidate();return;}
+    if (mode === "inbox") {
+      if (actionId.startsWith('tree.inbox.select:')) {inbox.selectResult(Number(actionId.split(':')[1]));return;}
+      if (actionId.startsWith('tree.inbox.preview-target:')) {inbox.selectTarget(Number(actionId.split(':')[1]));return;}
+      if (actionId === 'tree.inbox.preview.activity') {inbox.showActivity();return;}
+      if (actionId === 'tree.inbox.preview.focus') {inbox.reader.focus(!inbox.reader.state?.focused);return;}
+      if (actionId === 'tree.inbox.preview.source' || actionId === 'tree.inbox.preview.output') {
+        const role=actionId.endsWith('source')?'source':'output';
+        const index=inbox.targets.findIndex(target=>target.role===role);
+        if(index>=0)inbox.selectTarget(index);else inbox.notice='No separate output; preview the current Source';
+        effects.invalidate();return;
+      }
+    }
     if (actionId.startsWith("tree.inbox.open-target:") && mode === "inbox") {
       const index=Number(actionId.split(":")[1]);
       if (Number.isInteger(index) && inbox.targets[index]?.role !== "diagnostics" && inbox.targets[index]) {
@@ -2340,14 +2331,14 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         await handleAction(browseAction.actionId);return;
       }
     }
-    if (!treePointer && inputAction !== "suppress" && mode === "browse" && localPreview?.focused) {
+    if (!treePointer && inputAction !== "suppress" && mode === "browse" && localReader.state?.focused) {
       const action=actionKeymap.canonicalize("tree","browse",str,key);
       if(action.suppressed)return;
       if(action.actionId && (action.actionId.startsWith("tree.preview.") || ["tree.preview.focus","tree.preview.close","tree.navigation.link","tree.navigation.once","tree.menu.open"].includes(action.actionId))) return handleAction(action.actionId);
-      const frame=treePreviewFrame(localPreview,effects.terminalWidth(),effects.terminalHeight(),"",previewPreferences);
+      const frame=treePreviewFrame(localReader.state,effects.terminalWidth(),effects.terminalHeight(),"",previewPreferences);
       const delta=key.name==="up"?-1:key.name==="down"?1:key.name==="pageup"?-frame.content.height:key.name==="pagedown"?frame.content.height:0;
       if(delta) scrollLocalPreview(delta);
-      else if(key.name==="return") { try {await effects.navigation.dispatch(localPreview.target,"open");} catch(error){status=errorMessage(error);} }
+      else if(key.name==="return") { try {await effects.navigation.dispatch(localReader.state.target,"open");} catch(error){status=errorMessage(error);} }
       else if(!(key.ctrl&&key.name==="q")) return;
       if(!(key.ctrl&&key.name==="q")){effects.invalidate();return;}
     }
@@ -2722,7 +2713,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     },
     initialize,
     handleKeypress,
-    handleTreeWheel: direction => handleKeypress("", {name: direction}, "pass", false, true),
+    handleTreeWheel: async direction => {if(mode === "inbox") {inbox.reader.focus(false);inbox.move(direction === "up"?-1:1);}else await handleKeypress("", {name: direction}, "pass", false, true);},
     handlePaste,
     handleGotoMouse,
     handleDisclosure,

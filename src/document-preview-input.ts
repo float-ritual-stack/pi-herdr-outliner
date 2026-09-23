@@ -1,27 +1,33 @@
 import {PreviewSelection} from './preview-selection';
 import {parseTreePrimaryPointer,parseTreeWheelEvent,parseTreeSecondaryClick} from './tree-mouse';
-import {pointInPreview,type TreePreviewFrame,type TreeLocalPreview} from './tree-preview';
-import type {TreeController} from './tree-controller';
+import {pointInPreview,type DocumentPreviewFrame} from './document-preview-renderer';
+import type {DocumentPreviewState} from './document-preview';
 
 /** Input is owned by the rendered Preview rectangle, never by rows underneath it. */
-export class TreePreviewInput {
+export interface PreviewInputActions {
+  focus(focused?: boolean): void;
+  scroll(delta: number): void;
+  resize(fraction: number): void;
+  invoke(action: string): Promise<void>;
+}
+export class DocumentPreviewInput {
   private selection=new PreviewSelection();
-  private frame:TreePreviewFrame|undefined;
+  private frame:DocumentPreviewFrame|undefined;
   private lines:string[]=[];
-  private document:TreeLocalPreview['document']|undefined;
+  private document:DocumentPreviewState['document']|undefined;
   private geometry='';
-  private resizing: TreePreviewFrame | undefined;
-  render(lines:string[],frame:TreePreviewFrame|undefined,preview:TreeLocalPreview|null|undefined):string[]{
+  private resizing: DocumentPreviewFrame | undefined;
+  render(lines:string[],frame:DocumentPreviewFrame|undefined,preview:DocumentPreviewState|null|undefined):string[]{
     const visible=frame && (frame.placement!=='compact'||preview?.focused)?frame:undefined;
     const geometry=visible?JSON.stringify([visible.content,visible.offset]):'';
     if(preview?.document!==this.document||geometry!==this.geometry)this.selection.clear();
     this.document=preview?.document;this.geometry=geometry;this.frame=visible;this.lines=lines;
     return visible?this.selection.highlight(lines,visible.content):lines;
   }
-  handle(sequence:string,controller:TreeController,copy:(text:string)=>void,redraw:()=>void):boolean{
+  handle(sequence:string,controller:PreviewInputActions,copy:(text:string)=>void,redraw:()=>void):boolean{
     const frame=this.frame;
     const wheel=parseTreeWheelEvent(sequence);
-    if(wheel&&frame&&pointInPreview(frame.rect,wheel.column,wheel.row)){controller.scrollLocalPreview(wheel.direction==='up'?-3:3);return true;}
+    if(wheel&&frame&&pointInPreview(frame.rect,wheel.column,wheel.row)){controller.scroll(wheel.direction==='up'?-3:3);return true;}
     const pointer=parseTreePrimaryPointer(sequence);
     if(pointer){
       if (this.resizing || (pointer.phase === 'down' && frame?.divider && pointInPreview(frame.divider,pointer.column,pointer.row))) {
@@ -29,20 +35,24 @@ export class TreePreviewInput {
         const original = this.resizing!;
         const total = original.placement === 'beside' ? original.rect.x + original.rect.width : original.rect.y + original.rect.height;
         const position = original.placement === 'beside' ? pointer.column : pointer.row;
-        controller.resizeLocalPreview(1 - position / Math.max(1,total - 1));
+        controller.resize(1 - position / Math.max(1,total - 1));
         if (pointer.phase === 'up') this.resizing = undefined;
         this.selection.clear(); return true;
       }
+      if (pointer.phase !== 'down') {
+        const result = this.selection.pointer(pointer,frame?.content??{x:0,y:0,width:0,height:0},this.lines);
+        if (result.consumed) {if(result.copy)copy(result.copy);redraw();return true;}
+      }
       const button = frame?.controls?.find(control=>pointInPreview(control.rect,pointer.column,pointer.row));
       if (button) {
-        if (pointer.phase === 'down') void controller.handleAction(button.action);
+        if (pointer.phase === 'down') void controller.invoke(button.action);
         return true;
       }
 
       const result=this.selection.pointer(pointer,frame?.content??{x:0,y:0,width:0,height:0},this.lines);
-      if(result.consumed){controller.focusLocalPreview();if(result.copy)copy(result.copy);redraw();return true;}
-      if(frame&&pointInPreview(frame.rect,pointer.column,pointer.row)){controller.focusLocalPreview();return true;}
-      if(frame&&pointer.phase==='down')controller.focusLocalPreview(false);
+      if(result.consumed){controller.focus();if(result.copy)copy(result.copy);redraw();return true;}
+      if(frame&&pointInPreview(frame.rect,pointer.column,pointer.row)){controller.focus();return true;}
+      if(frame&&pointer.phase==='down')controller.focus(false);
     }
     const secondary=parseTreeSecondaryClick(sequence);
     return !!(secondary&&frame&&pointInPreview(frame.rect,secondary.column,secondary.row));

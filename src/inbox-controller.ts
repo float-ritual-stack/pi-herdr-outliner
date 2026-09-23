@@ -1,6 +1,9 @@
 import type { RequestInput } from "./client";
 import type { OutlinerRequester } from "./client-target";
 import type { InboxResultSummary, InboxStatus } from "./inbox-types";
+import {DocumentPreview} from "./document-preview";
+import {pointInPreview,type DocumentPreviewFrame,type PreviewRect} from "./document-preview-renderer";
+import {parseTreeWheelEvent} from "./tree-mouse";
 import { TextBuffer } from "./text-buffer";
 import { isPrintableInput, sanitizeDynamicText, type TerminalKey } from "./terminal";
 import type { Block } from "./types";
@@ -39,7 +42,46 @@ export class InboxController {
   error = "";
   notice = "";
 
-  constructor(private readonly effects: InboxEffects) {}
+  readonly reader: DocumentPreview;
+  previewMode: 'content' | 'activity' = 'content';
+  previewFrame: DocumentPreviewFrame | undefined;
+  activityRect: PreviewRect | undefined;
+  handleActivityMouse(sequence: string): boolean {
+    const wheel = parseTreeWheelEvent(sequence);
+    if (!wheel || !this.activityRect || !pointInPreview(this.activityRect,wheel.column,wheel.row)) return false;
+    this.detailOffset = Math.max(0,this.detailOffset + (wheel.direction === "up" ? -3 : 3));
+    this.effects.invalidate(); return true;
+  }
+  private previewKey = '';
+  constructor(private readonly effects: InboxEffects) {
+    this.reader = new DocumentPreview(effects, () => effects.invalidate());
+  }
+  selectResult(index: number): void {
+    if (!Number.isInteger(index) || !this.results[index]) return;
+    this.reader.focus(false);
+    this.move(index - this.index);
+  }
+  selectTarget(index: number): void {
+    if (!Number.isInteger(index) || !this.targets[index]) return;
+    this.targetIndex = Math.max(0,Math.min(this.targets.length - 1,index));
+    this.previewMode = this.targets[this.targetIndex]?.role === 'diagnostics' ? 'activity' : 'content';
+    this.refreshPreview(); this.effects.invalidate();
+  }
+  showActivity(): void {this.previewMode = 'activity'; this.reader.focus(false); this.effects.invalidate();}
+  scrollPreview(delta: number): void {
+    if (this.previewFrame) this.reader.scroll(delta,this.previewFrame.content.width,this.previewFrame.content.height);
+  }
+  private refreshPreview(force = false): void {
+    if (!this.active || this.previewMode !== 'content') return;
+    const target = this.targets[this.targetIndex];
+    if (!target || target.role === 'diagnostics') {this.previewKey='';this.reader.clear();return;}
+    const key = `${this.selected?.id}/${target.id}`;
+    if (!force && key === this.previewKey) return;
+    this.previewKey=key;
+    void this.reader.load({kind:'block',blockId:target.id}, force);
+  }
+
+  contentChanged(): void { this.refreshPreview(true); }
 
   get results(): InboxResultSummary[] {
     return this.snapshot?.attentionOnly === this.attentionOnly && this.snapshot.resultsOffset === this.resultsOffset ? this.snapshot.results : [];
@@ -77,6 +119,7 @@ export class InboxController {
 
   async close(): Promise<void> {
     this.active = false;
+    this.reader.cancelLoad();
     this.session++;
     this.reconsiderSourceId = null;
     await this.effects.close();
@@ -127,6 +170,7 @@ export class InboxController {
     this.index = nextIndex >= 0 ? nextIndex : Math.min(this.index, Math.max(0, snapshot.results.length - 1));
     this.targetIndex = Math.max(0, this.targets.findIndex(target => target.id === targetId));
     if (selectedId !== this.selected?.id) this.detailOffset = 0;
+    this.refreshPreview();
   }
 
   move(delta: number): void {
@@ -134,6 +178,8 @@ export class InboxController {
     this.targetIndex = 0;
     this.detailOffset = 0;
     this.notice = "";
+    this.previewMode = "content";
+    this.refreshPreview();
     this.effects.invalidate();
   }
 
@@ -146,11 +192,16 @@ export class InboxController {
   async input(str: string, key: TerminalKey): Promise<void> {
     if (!this.active) return;
     if (key.name === "escape") {
+      if (!this.steering && this.reader.state?.focused) {this.reader.focus(false);return;}
       if (this.steering) { this.reconsiderSourceId = null; this.notice = ""; this.effects.invalidate(); }
       else await this.close();
       return;
     }
     if (this.busy) return;
+    if (!this.steering && key.meta && key.name === 'p') {this.reader.focus(!this.reader.state?.focused);return;}
+    if (!this.steering && this.previewMode === 'content' && this.reader.state?.focused && ['up','down','pageup','pagedown'].includes(key.name ?? '')) {
+      this.scrollPreview((key.name === 'up' || key.name === 'pageup' ? -1 : 1) * (key.name?.startsWith('page') ? Math.max(1,this.previewFrame?.content.height ?? 5) : 1));return;
+    }
     if (this.steering) {
       if (key.name === "return") {
         const sourceId = this.reconsiderSourceId!;
@@ -180,9 +231,11 @@ export class InboxController {
     } else if (key.name === "up" || key.name === "down") this.move(key.name === "up" ? -1 : 1);
     else if (key.name === "tab") {
       const count = this.targets.length;
-      if (count) this.targetIndex = (this.targetIndex + (key.shift ? -1 : 1) + count) % count;
-    } else if (key.name === "pageup" || key.name === "pagedown") {
-      this.detailOffset = Math.max(0, this.detailOffset + (key.name === "pageup" ? -5 : 5));
+      if (count) this.selectTarget((this.targetIndex + (key.shift ? -1 : 1) + count) % count);
+    } else if (str === "A") this.showActivity();
+    else if (key.name === "pageup" || key.name === "pagedown") {
+      if (this.previewMode === "content") this.scrollPreview(key.name === "pageup" ? -5 : 5);
+      else this.detailOffset = Math.max(0, this.detailOffset + (key.name === "pageup" ? -5 : 5));
     } else if (key.name === "return") {
       const target = this.targets[this.targetIndex];
       if (target?.sessionPath) await this.openSession(target.sessionPath);
@@ -225,6 +278,9 @@ export class InboxController {
 
   private async changedCollection(): Promise<void> {
     this.epoch++;
+    this.previewKey = "";
+    this.reader.clear();
+    this.previewMode = "content";
     this.index = 0;
     this.targetIndex = 0;
     this.detailOffset = 0;
@@ -284,7 +340,7 @@ export class InboxController {
     try {
       const id = await this.resolveContentTarget(blockId);
       await this.effects.open(id, destination);
-      if (destination === "tree") { this.active = false; this.session++; }
+      if (destination === "tree") { this.active = false; this.reader.cancelLoad(); this.session++; }
     } catch (error) {
       if (this.active && session === this.session) this.notice = message(error);
     }
