@@ -82,6 +82,7 @@ function harness(
   bufferMode = true,
   options: {
     actionKeymap?: OutlinerActionKeymap;
+    openKeyInspector?(): void;
     openActionMenu?: (
       items: readonly OutlinerActionMenuItem[],
       invoke: (actionId: string) => Promise<void>,
@@ -830,4 +831,28 @@ test("an absent Properties inspector cannot steal Resource evidence scrolling", 
   const h = harness(detail, false);
   await h.press({ name: "g", shift: true }, "G");
   expect(h.intents).toEqual([{ type: "preview.navigate", direction: "bottom" }]);
+});
+
+
+test("key inspector action is unbound, discoverable and opens without touching the reader", async () => {
+  const reading = state(); reading.mode = "preview"; reading.selectionAnchor = 0;
+  let opened = 0;
+  const detail = harness(reading, false, {openKeyInspector: () => {opened++;}});
+  const menu = new OutlinerActionKeymap("<test>").menuItems("detail", "preview");
+  expect(menu).toContainEqual(expect.objectContaining({id: "detail.debug.keys", label: "Inspect received keys", binding: "unbound", group: "System"}));
+  await detail.invoke("detail.debug.keys");
+  expect(opened).toBe(1);
+  expect(detail.intents).toEqual([]);
+  expect(detail.stops.count).toBe(0);
+  expect(reading.selectionAnchor).toBe(0);
+  expect(reading.buffer.text).toBe("alpha beta");
+});
+
+test("key inspector action does not interrupt an active Detail draft", async () => {
+  let opened = 0;
+  const detail = harness(state(), true, {openKeyInspector: () => {opened++;}});
+  await detail.invoke("detail.debug.keys");
+  expect(opened).toBe(0);
+  expect(detail.intents).toEqual([{type: "status.set", message: "Inspect received keys is unavailable here"}]);
+  expect(detail.stops.count).toBe(0);
 });

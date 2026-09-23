@@ -1,3 +1,5 @@
+import {KeyInspector} from "./key-inspector";
+import {PassThrough} from "node:stream";
 import {openOutlinerDetailSidebar} from "./detail-pane-placement";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
@@ -90,6 +92,7 @@ const clientId = crypto.randomUUID();
 const destinationDisplay = new NavigationDestinationDisplay(client, {clientId, region: "detail"}, draw);
 const browsingContextId = process.env.OUTLINER_BROWSING_CONTEXT_ID?.trim() || clientId;
 const actionKeymap = OutlinerActionKeymap.load();
+const keyInspector = new KeyInspector({actionKeymap, invalidate: draw});
 const destinationTimeoutMs = openDestinationTimeoutFromEnvironment(
   process.env.OUTLINER_OPEN_DESTINATION_TIMEOUT_MS,
 );
@@ -502,6 +505,10 @@ const effects: DetailEffects = {
 };
 
 function draw(): void {
+  if (keyInspector.active) {
+    process.stdout.write("\x1b[H\x1b[2J" + keyInspector.render(process.stdout.columns ?? 100, process.stdout.rows ?? 30).join("\n"));
+    return;
+  }
   if (destinationPicker) {
     const picker = destinationPicker;
     const items = destinationItems(picker);
@@ -656,6 +663,8 @@ function stop(): void {
   destinationDisplay.dispose();
   if (stopping) return;
   stopping = true;
+  keyInspector.dispose();
+  keyInput.destroy();
   watcher?.stop();
   void runtimeSync?.stop();
   if (process.stdin.isTTY) process.stdin.setRawMode(false);
@@ -663,8 +672,8 @@ function stop(): void {
   process.exit(0);
 }
 
-const handleKeypress = createDetailKeyHandler({ controller, viewport: () => viewport(controller), stop, actionKeymap });
-const inspectionKeypress = createDetailKeyHandler({controller: inspection, viewport: () => viewport(inspection), stop: () => { void readingSurface.closePreview(); }, actionKeymap});
+const handleKeypress = createDetailKeyHandler({ controller, viewport: () => viewport(controller), stop, actionKeymap, openKeyInspector: () => keyInspector.open() });
+const inspectionKeypress = createDetailKeyHandler({controller: inspection, viewport: () => viewport(inspection), stop: () => { void readingSurface.closePreview(); }, actionKeymap, openKeyInspector: () => keyInspector.open()});
 
 async function initialize(): Promise<void> {
   await waitForService();
@@ -683,7 +692,12 @@ try {
   process.exit(1);
 }
 
-emitKeypressEvents(process.stdin);
+// Keep inspected bytes out of readline without changing the terminal protocol.
+const keyInput = new PassThrough();
+emitKeypressEvents(keyInput);
+process.stdin.on("data", (data: string | Buffer) => {
+  if (!keyInspector.handle(data)) keyInput.write(data);
+});
 if (process.stdin.isTTY) process.stdin.setRawMode(true);
 process.stdout.write(`\x1b[?1049h\x1b[?25l${BRACKETED_PASTE_ENABLE}`);
 
@@ -725,7 +739,8 @@ async function handleInput(str: string, key: TerminalKey): Promise<void> {
   await (active === inspection ? inspectionKeypress : handleKeypress)(str, key, inputAction);
 }
 
-process.stdin.on("keypress", (str: string, key: TerminalKey) => {
+keyInput.on("keypress", (str: string, key: TerminalKey) => {
+  if (keyInspector.active) return;
   if (destinationPicker) { void handleDestinationInput(str, key).catch(error => controller.onServiceError(error)); return; }
   serviceEventScheduler.scheduleWork(() => handleInput(str, key));
 });
@@ -735,4 +750,5 @@ process.stdout.on("resize", () => {
     controller.dispatch({ type: "viewport.changed" }, viewport())
   );
 });
+if (process.env.OUTLINER_DEBUG_KEYS === "1") keyInspector.open();
 draw();

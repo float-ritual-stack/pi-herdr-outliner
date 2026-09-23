@@ -22,6 +22,7 @@ export interface DetailKeymapOptions {
   viewport(): DetailViewport;
   stop(): void;
   actionKeymap?: OutlinerActionKeymap;
+  openKeyInspector?(): void;
   openActionMenu?(
     items: readonly OutlinerActionMenuItem[],
     invoke: (actionId: string) => Promise<void>,
@@ -197,6 +198,10 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
     }
 
     switch (actionId) {
+      case "detail.debug.keys":
+        if (!options.openKeyInspector) return false;
+        options.openKeyInspector();
+        return true;
       case "detail.close":
       case "detail.property.close":
         stop();

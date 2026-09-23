@@ -1,3 +1,4 @@
+import {KeyInspector} from "./key-inspector";
 import {openOutlinerDetailSidebar} from "./detail-pane-placement";
 import { ComposedLayout, ComposedTree, composedTreeNavigation, composedPointer, composedWidths } from "./composed-surface";
 import { navigationDestinationItems, navigationDestinationStatus, navigationPlacementItems, navigationPlacementStatus, NavigationDestinationDisplay, NavigationDestinationPreview, renderNavigationDestinationPreview } from "./navigation-destination-menu";
@@ -885,6 +886,9 @@ async function stop(exitCode = 0): Promise<void> {
     }
   }
   stopping = true;
+  keyInspector.dispose();
+  keyInspectorHandle?.hide();
+  composedTree?.dispose();
   if (inputFlushTimer) clearTimeout(inputFlushTimer);
   await runtimeSync?.stop();
   await watcher?.stop();
@@ -901,6 +905,29 @@ async function stop(exitCode = 0): Promise<void> {
 let actionMenuHandle: OverlayHandle | null = null;
 let actionMenuInvoke: ((id: string) => void) | null = null;
 let composerHandle: OverlayHandle | null = null;
+let keyInspectorHandle: OverlayHandle | null = null;
+let keyInspectorGeometry = "";
+const keyInspector = new KeyInspector({actionKeymap, invalidate: refreshKeyInspectorOverlay});
+function refreshKeyInspectorOverlay(): void {
+  const width = readerWidth(), height = processTerminal.rows;
+  const column = composed ? composedWidths(processTerminal.columns).detailX : 0;
+  const geometry = `${width}/${height}/${column}`;
+  if (!keyInspector.active || geometry !== keyInspectorGeometry) {
+    keyInspectorHandle?.hide(); keyInspectorHandle = null;
+  }
+  if (keyInspector.active && !keyInspectorHandle) {
+    keyInspectorGeometry = geometry;
+    keyInspectorHandle = tui.showOverlay({render: columns => keyInspector.render(columns, height), invalidate() {}},
+      {width, maxHeight: height, row: 0, col: column, anchor: "top-left", margin: 0});
+  }
+  tui.requestRender();
+}
+function openKeyInspector(): void {
+  closeActionMenu();
+  inputGeneration++;
+  if (inputFlushTimer) {clearTimeout(inputFlushTimer); inputFlushTimer = undefined;}
+  keyInspector.open();
+}
 
 function closeActionMenu(): void {
   actionMenuHandle?.hide();
@@ -1301,6 +1328,7 @@ const handleKeypress = createDetailKeyHandler({
   stop: requestStop,
   actionKeymap,
   openActionMenu: items => showActionMenu(items, invokeDetailAction),
+  openKeyInspector,
   focusDraftSplit,
   navigatePreview,
   previewFocused: () => draftSplitActive() && draftSplitFocus === "preview",
@@ -1325,6 +1353,7 @@ const handleKeypress = createDetailKeyHandler({
 
 const inspectionKeypress = createDetailKeyHandler({controller: inspection, viewport: () => viewport(inspection), stop: () => { void readingSurface.closePreview(); }, actionKeymap,
   openActionMenu: items => showActionMenu(items, invokeDetailAction),
+  openKeyInspector,
   navigatePreview: direction => inspectionLayout.navigate(direction),
 });
 async function readerAction(actionId: string): Promise<boolean> {
@@ -1415,7 +1444,7 @@ function scheduleInputFlush(): void {
   inputFlushTimer = setTimeout(() => {
     inputFlushTimer = undefined;
     serviceEventScheduler.scheduleWork(() => {
-      if (generation === inputGeneration && !stopping) return composedTree && focusedRegion === "tree" ? composedTree.flushInput() : flushInput();
+      if (generation === inputGeneration && !stopping && !keyInspector.active && !composedTree?.keyInspectorActive) return composedTree && focusedRegion === "tree" ? composedTree.flushInput() : flushInput();
     });
   }, INPUT_IDLE_FLUSH_MS);
 }
@@ -1596,6 +1625,12 @@ const detailInputListener = createPiDetailInputListener(
   data => shouldPassDetailInputToTui(data),
 );
 tui.addOutlinerInputListener(data => {
+  // Inspect delivered bytes before focus routing, native overlays, or our decoders.
+  if (keyInspector.handle(data)) return {consume: true};
+  if (composedTree?.keyInspectorActive) {
+    serviceEventScheduler.scheduleWork(() => composedTree.handleInput(data));
+    return {consume: true};
+  }
   const detailPointer = parseTreePrimaryPointer(data);
   if (!actionMenuHandle && detailPointer?.phase === "down" && readingSurface.previewVisible && ["beside", "below"].includes(readerGeometry().arrangement)) {
     const detailColumn = detailPointer.column - (composed ? composedWidths(processTerminal.columns).detailX : 0);
@@ -1634,6 +1669,7 @@ tui.addOutlinerInputListener(data => {
 });
 
 function handleResize(): void {
+  if (keyInspector.active) refreshKeyInspectorOverlay();
   serviceEventScheduler.scheduleWork(() =>
     controller.dispatch({ type: "viewport.changed" }, viewport())
   );
