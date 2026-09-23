@@ -3283,8 +3283,13 @@ export function createDetailController(
         break;
       }
       case "mentions.open": {
-        await effects.openVirtualBranchNavigator("recent-mentions","mentions");
-        state.status="Opened recent agent mentions";break;
+        try {
+          await effects.openVirtualBranchNavigator("recent-mentions", "mentions");
+          state.status = "Opened recent agent mentions";
+        } catch (error) {
+          state.status = errorMessage(error);
+        }
+        break;
       }
       case "bookmarks.open": {
         const root = await effects.bookmarksRoot();
@@ -4167,6 +4172,7 @@ export function createDetailController(
       return destinationChooser!.helpText();
     },
     async onServiceEvent(event, viewport) {
+      if (event.domain === "mentions") return;
       // Destination headers consume these independently; no document changed.
       if (event.domain === "view" && ["clients.update", "clients.unregister", "navigation.link.set"].includes(event.action)) return;
       if (event.domain === "attention") {

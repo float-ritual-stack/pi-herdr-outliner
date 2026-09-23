@@ -321,6 +321,44 @@ describe("createTreeController", () => {
     expect(controller.view().rows.map(row=>row.rowId)).toEqual(["x","a","a1","b","b1","b11"]);
   });
 
+  test("recent mentions reports launch success and failure and invalidates the view", async () => {
+    const first = block("first");
+    const fake = harness(input => input.action === "tree.index" ? snapshot([first], first) : undefined);
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+    await controller.handleAction("tree.mentions.open");
+    expect(fake.openedVirtualNavigators).toEqual(["recent-mentions"]);
+    expect(fake.openedVirtualNavigatorAdapters).toEqual(["mentions"]);
+    expect(controller.view().status).toBe("Opened recent agent mentions");
+    fake.effects.openVirtualBranchNavigator = async () => { throw new Error("Virtual branch navigator popup requires Herdr"); };
+    const invalidations = fake.invalidations;
+    await controller.handleAction("tree.mentions.open");
+    expect(controller.view().status).toBe("Virtual branch navigator popup requires Herdr");
+    expect(fake.invalidations).toBeGreaterThan(invalidations);
+  });
+
+  test("mention events do not reload the Tree or defer refresh during editing", async () => {
+    const first = block("first");
+    const fake = harness(input => input.action === "tree.index" ? snapshot([first], first) : undefined);
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+    const reads = fake.calls.filter(input => input.action === "tree.index").length;
+    for (const action of ["mentions.ingest", "mentions.clear"]) {
+      await controller.handleServiceEvent({ ...event("mentions"), action });
+    }
+    expect(fake.calls.filter(input => input.action === "tree.index")).toHaveLength(reads);
+    await controller.handleKeypress("e", { name: "e" }, "pass");
+    await controller.handlePaste("keep this draft");
+    const draft = controller.view().quickInput;
+    for (const action of ["mentions.ingest", "mentions.clear"]) {
+      await controller.handleServiceEvent({ ...event("mentions"), action });
+    }
+    expect(controller.view().quickInput).toBe(draft);
+    expect(controller.view().refreshPending).toBe(false);
+    await controller.handleServiceEvent(event("content"));
+    expect(controller.view().refreshPending).toBe(true);
+  });
+
   test("Inbox progress reads do not hold the serial event and keyboard lane", async () => {
     const first = block("first");
     const second = block("second", { position: 1 });

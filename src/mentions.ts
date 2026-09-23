@@ -115,7 +115,9 @@ export class MentionRepository {
  }
  save(key:string){
   const message=this.message(key);
-  const content=`Conversation excerpt — ${message.agent}\n\n${message.text}\n\nFrom ${message.agent}, session ${message.sessionId}, message ${message.messageId}, ${message.receivedAt}.`;
+   const body=`${message.text}\n\nFrom ${message.agent}, session ${message.sessionId}, message ${message.messageId}, ${message.receivedAt}.`;
+   const fence='`'.repeat(Math.max(3,...Array.from(body.matchAll(/`+/g),match=>match[0].length+1)));
+   const content=`Conversation excerpt\n\n${fence}text\n${body}\n${fence}`;
   return this.store.capture(`mention-save:${key}`,content,'cli',undefined,'agent',{actorId:'mention-shelf',sessionId:message.sessionId});
  }
 }

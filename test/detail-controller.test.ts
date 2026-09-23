@@ -592,6 +592,38 @@ function event(domain: OutlinerEvent["domain"], command?: OutlinerEvent["command
 }
 
 describe("detail controller projection and deferred refresh", () => {
+  test("recent mentions reports launch success and failure as status", async () => {
+    const harness = createHarness(makeBlock());
+    await harness.controller.initialize();
+    await harness.controller.dispatch({ type: "mentions.open" }, viewport);
+    expect(harness.controller.state.status).toBe("Opened recent agent mentions");
+    harness.effects.openVirtualBranchNavigator = async () => { throw new Error("Virtual branch navigator popup requires Herdr"); };
+    await harness.controller.dispatch({ type: "mentions.open" }, viewport);
+    expect(harness.controller.state.status).toBe("Virtual branch navigator popup requires Herdr");
+  });
+
+  test("mention events do not reload a document or defer refresh during editing", async () => {
+    const harness = createHarness(makeBlock());
+    await harness.controller.initialize();
+    const document = harness.controller.state.document;
+    const reads = harness.calls.selections;
+    for (const action of ["mentions.ingest", "mentions.clear"]) {
+      await harness.controller.onServiceEvent({ ...event("mentions"), action }, viewport);
+    }
+    expect(harness.controller.state.document).toBe(document);
+    expect(harness.calls.selections).toBe(reads);
+    await harness.controller.dispatch({ type: "edit.begin" }, viewport);
+    await harness.controller.dispatch({ type: "buffer.insert", text: "keep this draft" }, viewport);
+    const draft = harness.controller.state.buffer.text;
+    for (const action of ["mentions.ingest", "mentions.clear"]) {
+      await harness.controller.onServiceEvent({ ...event("mentions"), action }, viewport);
+    }
+    expect(harness.controller.state.buffer.text).toBe(draft);
+    expect(harness.controller.state.refreshPending).toBe(false);
+    await harness.controller.onServiceEvent(event("content"), viewport);
+    expect(harness.controller.state.refreshPending).toBe(true);
+  });
+
   for (const action of ["clients.update", "navigation.link.set", "clients.unregister"]) {
     test(`${action} updates header state without reloading a selected file`, async () => {
       const harness = createHarness(makeBlock({text: "File", properties: [{key: "file", value: "src/example.ts"}]}), filePreview({lines: Array.from({length: 60}, (_, i) => `Line ${i}`)}));

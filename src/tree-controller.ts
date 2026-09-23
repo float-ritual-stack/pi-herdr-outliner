@@ -1701,7 +1701,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       effects.invalidate();
       return;
     }
-    if (event.domain === "selection") return;
+    if (event.domain === "selection" || event.domain === "mentions") return;
     inbox.contentChanged();
     if (connections.active) connections.invalidate();
     if (mode !== "browse") {
@@ -2211,9 +2211,15 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       effects.invalidate();
       return;
     }
-    if(actionId === "tree.mentions.open") {
-      await effects.openVirtualBranchNavigator("recent-mentions","mentions");
-      status="Opened recent agent mentions"; effects.invalidate(); return;
+    if (actionId === "tree.mentions.open") {
+      try {
+        await effects.openVirtualBranchNavigator("recent-mentions", "mentions");
+        status = "Opened recent agent mentions";
+      } catch (error) {
+        status = errorMessage(error);
+      }
+      effects.invalidate();
+      return;
     }
     if (actionId === "tree.bookmarks.open") {
       try {

@@ -41,6 +41,19 @@ test('workspace and conversation scope, retention, restart, clear and explicit s
  expect(f.repo.clear({agent:'codex',sessionId:'newer'}).removed).toBe(MENTION_MESSAGE_LIMIT);
  expect(f.repo.list().entries).toHaveLength(0);expect(f.store.get(a.id)).not.toBeNull();
 });
+test('saved excerpts keep properties, hashtags and nested fences literal',()=>{
+ const f=setup();f.store.configureWorkIdPrefix('PIE');
+ const target=f.store.create('Target [page::original]');f.store.allocateWorkId(target.id,target.revision);
+ const text=`[work-id::PIE-001]\n[page::excerpt-only]\n[type::roadmap-item]\n#quoted-tag\n\nSee ((${target.id}))\n\`\`\`\n#after-fence\n\`\`\`\`\`\n[page::escaped-fence]`;
+ const receipt=f.repo.ingest({...f.message(text),agent:'codex #agent-tag',sessionId:'[page::session-page]',messageId:'[type::roadmap-item]'});
+ const saved=f.repo.save(receipt.messageKey);
+ expect(saved.block.text).toContain(text);
+ expect(saved.block.properties.map(property=>property.key).sort()).toEqual(['capture-source','captured-at','status','type']);
+ expect(saved.block.properties.find(property=>property.key==='type')?.value).toBe('capture');
+ expect(f.store.resolvePageAddress('PIE-001').block?.id).toBe(target.id);
+ for(const address of ['excerpt-only','escaped-fence','session-page'])expect(f.store.resolvePageAddress(address).block).toBeNull();
+ expect(f.repo.save(receipt.messageKey).deduplicated).toBe(true);
+});
 test('empty answers are not retained; missing, deleted and truncated results stay visible',()=>{
  const f=setup();f.repo.ingest(f.message('No references here'));expect(f.repo.list().retention.messages).toBe(0);
  const a=f.store.create('Alpha');f.repo.ingest(f.message(a.id,'target'));f.store.delete(a.id);

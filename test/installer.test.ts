@@ -1,7 +1,45 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+for (const source of [undefined, "", 'model = "example"\n']) {
+  test(`mentions installer handles ${source === undefined ? "missing" : source === "" ? "empty" : "existing"} config`, async () => {
+    const directory = await mkdtemp(join(tmpdir(), "mentions-installer-"));
+    const home = join(directory, "codex");
+    const config = join(home, "config.toml");
+    try {
+      if (source !== undefined) {
+        await mkdir(home);
+        await writeFile(config, source);
+      }
+      const run = async () => {
+        const child = Bun.spawn([process.execPath, join(import.meta.dir, "../scripts/install-codex-mentions.ts"), directory], {
+          env: { ...process.env, CODEX_HOME: home }, stdout: "pipe", stderr: "pipe",
+        });
+        const [exitCode, stdout, stderr] = await Promise.all([
+          child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
+        ]);
+        return { exitCode, stdout, stderr };
+      };
+      const result = await run();
+      expect(result.exitCode).toBe(0);
+      const installed = await readFile(config, "utf8");
+      expect((Bun.TOML.parse(installed) as { notify: string[] }).notify).toEqual([
+        process.execPath, join(import.meta.dir, "../src/mentions-codex.ts"), "--workspace", directory,
+      ]);
+      expect(installed.endsWith(source ?? "")).toBe(true);
+      const backups = (await readdir(home)).filter(name => name.startsWith("config.toml.before-mentions-"));
+      expect(backups).toHaveLength(source === undefined ? 0 : 1);
+      if (source !== undefined) expect(await readFile(join(home, backups[0]!), "utf8")).toBe(source);
+      else expect(result.stdout).not.toContain("Backup:");
+      expect((await run()).exitCode).toBe(0);
+      expect(await readFile(config, "utf8")).toBe(installed);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+}
 
 test("installer migrates the old comment default for capture and preserves custom bindings on rerun", async () => {
   const directory = await mkdtemp(join(tmpdir(), "outliner-installer-"));
