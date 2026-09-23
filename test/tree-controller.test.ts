@@ -3633,3 +3633,16 @@ test('ordinary Tree split does not change its linked destination',async()=>{
  expect(fake.createdDetails).toEqual([note.id]);
  expect(fake.calls.some(i=>i.action==='navigation.link.set')).toBe(false);
 });
+
+test('late publication preview events cannot reload or replace the latest local Preview',async()=>{
+ const a=block('preview-a',{text:'Older preview'}),b=block('preview-b',{text:'Newest preview'});
+ const fake=harness(input=>input.action==='tree.index'?snapshot([a,b],a):input.action==='browsing-context.publish'?{contextId:'tree-test-context',target:input.target,preview:{sourceClientId:'tree-test',targetClientId:'tree-test',targetRegion:'tree',intent:'preview',resolution:'self',command:{command:'preview',targetClientId:'tree-test',targetRegion:'tree',target:input.target}}}:undefined);
+ const c=createTreeController(fake.effects);await c.initialize();await c.handleRowClick(b.id);await setImmediate();
+ expect(c.view().localPreview?.target).toEqual({kind:'block',blockId:b.id});
+ const reads=fake.calls.filter(i=>i.action==='get').length;
+ await c.handleServiceEvent({id:'stale-publication',sequence:20,domain:'ui',action:'browsing-context.publish',command:{command:'preview',targetClientId:'tree-test',targetRegion:'tree',target:{kind:'block',blockId:a.id}}});await setImmediate();
+ expect(c.view().localPreview?.target).toEqual({kind:'block',blockId:b.id});
+ expect(fake.calls.filter(i=>i.action==='get').length).toBe(reads);
+ await c.handleServiceEvent({id:'explicit-preview',sequence:21,domain:'ui',action:'navigation.dispatch',command:{command:'preview',targetClientId:'tree-test',targetRegion:'tree',target:{kind:'block',blockId:a.id}}});await setImmediate();
+ expect(c.view().localPreview?.target).toEqual({kind:'block',blockId:a.id});
+});

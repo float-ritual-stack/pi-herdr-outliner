@@ -4,6 +4,8 @@ This file records notable user-facing changes. The project remains active dogfoo
 
 ## [Unreleased]
 
+- Clicking Tree returns keyboard focus from local Preview in beside/below layouts. Delayed selection-publication echoes cannot replace a newer Preview.
+
 - Creating a Detail from Link destination now links the original view to it, including sidebar placements. Ordinary split commands keep their existing links.
 
 - Tree now keeps an interactive projection-aware breadcrumb and reclaims offscreen ancestor indentation (PIE-304).

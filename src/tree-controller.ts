@@ -1700,6 +1700,9 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     if (event.domain === "ui") {
       const command = event.command;
       if (!command || command.targetClientId !== effects.clientId) return;
+      // The publication pump owns these previews and rejects obsolete selections.
+      // Its echoed UI event must not restart the read or restore an older target.
+      if (command.command === "preview" && event.action === "browsing-context.publish") return;
       if (mode !== "browse") {
         refreshPending = true;
         return;
