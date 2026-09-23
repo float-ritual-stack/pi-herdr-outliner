@@ -1,4 +1,6 @@
 import { MentionRepository } from "./mentions";
+import { EditRecoveryRepository } from "./edit-recovery";
+import { proposeEditMerge } from "./edit-merge-model";
 import {searchInboxHistory,visibleInboxSearch} from './inbox-search';
 import {rankSearchWithJev} from './search-ranking';
 import { blockDisplayTitle } from "./references";
@@ -115,6 +117,8 @@ export class OutlinerServer {
   private inbox: InboxWorker | undefined;
   private readonly inboxRepository: InboxRepository;
   private readonly mentions: MentionRepository;
+  private readonly editRecovery: EditRecoveryRepository;
+  private readonly editMergeJobs = new Map<string, AbortController>();
   private readonly noteRepository: NoteAssistanceRepository;
   private inboxUnavailable = "Automatic Inbox cleanup is not enabled for this service";
   private activeGotoRankings = 0;
@@ -135,6 +139,7 @@ export class OutlinerServer {
   ) {
     this.workflows = new WorkflowManager(store);
     this.mentions = new MentionRepository(store,store.workspaceRoot);
+    this.editRecovery = new EditRecoveryRepository(store);
     this.inboxRepository = new InboxRepository(store);
     this.noteRepository = new NoteAssistanceRepository(store);
     // Baseline before accepting edits or awaiting provider configuration.
@@ -164,6 +169,7 @@ export class OutlinerServer {
   }
 
   async close(): Promise<void> {
+    for (const job of this.editMergeJobs.values()) job.abort();
     await this.inbox?.stop();
     const server = this.server;
     if (!server) return;
@@ -1152,6 +1158,24 @@ export class OutlinerServer {
     request: OutlinerRequest,
     subscribedClient?: OutlinerClientRegistration,
   ): Promise<OutlinerResponse> {
+    if (request.action === "edit-recovery.assist") {
+      let cancel: AbortController | undefined;
+      try {
+        const record = this.editRecovery.get(request.recoveryId);
+        if (record.revision !== request.expectedRevision || record.state !== "retained") throw Error("Recovery changed; reopen it before asking for a merge");
+        if (this.editMergeJobs.has(record.id)) throw Error("A merge is already running for this draft");
+        cancel = new AbortController();
+        this.editMergeJobs.set(record.id, cancel);
+        const proposal = await proposeEditMerge(record, {workspaceRoot:this.store.workspaceRoot,stateDirectory:dirname(this.socketPath),promptDirectory:this.promptDirectory}, cancel.signal);
+        cancel.signal.throwIfAborted();
+        const result = this.editRecovery.propose(record.id, record.revision, proposal);
+        return {id:request.id,ok:true,result,sequence:this.store.sequence};
+      } catch (error) {
+        return {id:request.id,ok:false,error:error instanceof Error ? error.message : String(error),sequence:this.store.sequence};
+      } finally {
+        if (cancel && this.editMergeJobs.get(request.recoveryId) === cancel) this.editMergeJobs.delete(request.recoveryId);
+      }
+    }
     if (request.action === "inbox.search") {
       try {
         if(request.semantic!==undefined&&typeof request.semantic!=="boolean")throw new Error("semantic must be a boolean");
@@ -1839,6 +1863,37 @@ export class OutlinerServer {
         case "capture.draft.get":
           result = this.store.quickCaptureDraft();
           break;
+        case "edit-recovery.assist":
+          throw Error("Merge proposals require asynchronous dispatch");
+        case "edit-recovery.start":
+          result = this.editRecovery.start(request.input);
+          break;
+        case "edit-recovery.get":
+          result = this.editRecovery.get(request.recoveryId);
+          break;
+        case "edit-recovery.list":
+          result = this.editRecovery.list(request.blockId);
+          break;
+        case "edit-recovery.refresh":
+          result = this.editRecovery.refresh(request.recoveryId,request.expectedRevision);
+          break;
+        case "edit-recovery.propose":
+          if (request.proposal.source !== "manual") throw Error("Agent proposals use the service merge operation");
+          result = this.editRecovery.propose(request.recoveryId,request.expectedRevision,request.proposal);
+          break;
+        case "edit-recovery.cancel":
+          this.editMergeJobs.get(request.recoveryId)?.abort();
+          result = {retained:true};
+          break;
+        case "edit-recovery.commit":
+          result = this.editRecovery.commit(request.recoveryId,request.expectedRevision,request.text,request.basedOnRevision,request.mutation);
+          break;
+        case "edit-recovery.discard":
+          result = this.editRecovery.discard(request.recoveryId,request.expectedRevision);
+          break;
+        case "edit-recovery.separate":
+          result = this.editRecovery.separate(request.recoveryId,request.expectedRevision,request.mutation);
+          break;
         case "capture.draft.save":
           result = this.store.saveQuickCaptureDraft(request.input);
           break;
@@ -2091,6 +2146,8 @@ export class OutlinerServer {
         break;
       }
       case "create":
+      case "edit-recovery.commit":
+      case "edit-recovery.separate":
         domain = "content";
         blockId = (response.result as Block).id;
         break;

@@ -1,5 +1,8 @@
 import { buildDetailAnnotationView, displayedResourceText, detailAnnotationGroups, selectedAnnotationThread } from "./detail-annotations";
 import type { BacklinkPeekLaunch } from "./backlink-peek";
+import type { EditRecovery, EditRecoveryStart } from "./edit-recovery";
+import type { EditRecoveryClient } from "./edit-recovery-client";
+import type { RecoveryChoice } from "./edit-recovery-review";
 import {
   DEFAULT_OUTLINER_ACTION_KEYMAP,
   type OutlinerActionKeymap,
@@ -449,6 +452,9 @@ export function detailResourceDescription(
 }
 
 export interface DetailState {
+  recovery?: EditRecovery;
+  recoveryAccepted?: boolean;
+  recoveryCount?: number;
   document: DetailDocumentState;
   readonly context: SelectionContext;
   readonly target: OutlinerNavigationTarget | null;
@@ -503,6 +509,8 @@ export function detailResourceTarget(
 }
 
 export interface DetailEffects {
+  recovery?: Pick<EditRecoveryClient,"retain"|"list"|"commit"|"separate"> & Partial<Pick<EditRecoveryClient,"checkpoint">>;
+  reviewRecovery?(records:EditRecovery[]):Promise<RecoveryChoice>;
   readonly clientId: string;
   readonly browsingContextId: string;
   enqueueViewUpdate(update: () => void): void;
@@ -538,6 +546,7 @@ export interface DetailEffects {
       | {
           kind: "block";
           blockId: string;
+          baseText: string;
           text: string;
           expectedRevision: number;
         }
@@ -551,6 +560,7 @@ export interface DetailEffects {
     text: string;
     changed: boolean;
     recoveryPath: string;
+    recoveryInput?: EditRecoveryStart;
     cleanup(): void;
   }>;
   writeFilesystemResource(input: {
@@ -627,6 +637,7 @@ export type DetailDirectSelectionCapture =
 export type DetailIntent =
   | { type: "edit.begin" }
   | { type: "edit.external" }
+  | { type: "edit.recover" }
   | { type: "annotation.selection.begin"; sourceLine?: number; sourceColumn?: number }
   | { type: "annotation.comment.direct"; capture: DetailDirectSelectionCapture | null }
   | { type: "annotation.thread.move"; delta: -1 | 1 }
@@ -720,6 +731,7 @@ export interface DetailController {
   readonly state: Readonly<DetailState>;
   initialize(): Promise<void>;
   isBufferMode(): boolean;
+  checkpointRecovery(): void;
   dispatch(intent: DetailIntent, viewport: DetailViewport): Promise<void>;
   captureResourcePointerSelection(
     anchor: TextBufferPoint,
@@ -1415,6 +1427,7 @@ export function createDetailController(
         context: { ...document.context, selected },
       },
     };
+    syncPropertyInspector(selected,false);
   };
 
   const cacheCurrentBlockRead = (read: DetailBlockRead): void => {
@@ -1428,6 +1441,9 @@ export function createDetailController(
   };
 
   const clearDocumentPresentation = (): void => {
+    state.recovery = undefined;
+    state.recoveryAccepted = false;
+    state.recoveryCount = 0;
     state.resolvedSelectedText = "";
     state.projectedSelectedText = "";
     state.readStatus = "pending";
@@ -1925,6 +1941,16 @@ export function createDetailController(
       writeBlockCache({ document, projection: cachedRead?.projection ?? null,
         resolved: cachedRead?.resolved ?? null, stale: false });
       const selected = document.context.selected;
+      if (selected && effects.recovery) {
+        void effects.recovery.list(selected.id).then(records => effects.enqueueViewUpdate(() => {
+          if (!isCurrent()) return;
+          state.recoveryCount = records.length;
+          emit();
+        })).catch(error => effects.enqueueViewUpdate(() => {
+          if (isCurrent()) { state.status = `Could not inspect retained drafts · ${errorMessage(error)}`; emit(); }
+        }));
+      }
+
       if (selected && (force || changed || !cachedRead)) {
         // Only completed state updates enter the existing input/event lane.
         // Waiting for optional reads here would stall every later keypress.
@@ -2292,6 +2318,8 @@ export function createDetailController(
       status = "Editing filesystem Resource";
     }
     state.buffer = new TextBuffer(text);
+    state.recovery = undefined;
+    state.recoveryAccepted = false;
     state.buffer.row = state.buffer.lines.length - 1;
     state.buffer.moveEnd();
     state.editorVisualOffset = 0;
@@ -2348,6 +2376,7 @@ export function createDetailController(
       const result = await effects.editExternalDraft({
         kind: "block",
         blockId: selected.id,
+        baseText: selected.text,
         text: state.buffer.text,
         expectedRevision: selected.revision,
       });
@@ -2370,7 +2399,17 @@ export function createDetailController(
         state.status = "$EDITOR returned an unchanged draft";
         return;
       }
-      result.cleanup();
+      if (effects.recovery && result.recoveryInput) {
+        state.recovery = await effects.recovery.retain(result.recoveryInput);
+        state.recoveryAccepted = state.recovery.latest.revision === selected.revision;
+        state.recoveryCount = Math.max(1,state.recoveryCount ?? 0);
+        result.cleanup();
+        if (state.recovery.latest.revision !== selected.revision) {
+          state.status = "Your writing is retained. The note also changed; review both versions.";
+          await recoverWriting(viewport,[state.recovery]);
+          return;
+        }
+      } else result.cleanup();
       const layout = editorLayout(viewport);
       const maximumOffset = Math.max(
         0,
@@ -2384,6 +2423,48 @@ export function createDetailController(
     } finally {
       state.busy = false;
     }
+  };
+
+  const recoveryInput = (): EditRecoveryStart => {
+    const selected=state.context.selected;
+    if (!selected) throw Error("Recovery requires an ordinary note");
+    return {id:crypto.randomUUID(),blockId:selected.id,baseText:selected.text,baseRevision:selected.revision,
+      prelaunchText:state.buffer.text,draftText:state.buffer.text,source:"save-conflict"};
+  };
+
+  const recoverWriting = async (viewport:DetailViewport, records?:EditRecovery[]):Promise<void> => {
+    const selected=state.context.selected;
+    if (!selected || !effects.recovery || !effects.reviewRecovery) {state.status="No block recovery is available in this view";return;}
+    if (!records && state.mode === "edit" && state.buffer.text !== selected.text && state.recovery?.draftText !== state.buffer.text) {
+      state.recovery=await effects.recovery.retain(recoveryInput());
+      state.recoveryAccepted=false;
+    }
+    records ??= await effects.recovery.list(selected.id);
+    if (!records.length) {state.recovery=undefined;state.recoveryCount=0;state.status="No retained drafts for this note";return;}
+    emit();
+    const choice=await effects.reviewRecovery(records);
+    if(choice.action==="later") {
+      if(choice.record.state==="discarded"&&state.recovery?.id===choice.record.id)state.recovery=undefined;
+      state.recoveryCount=(await effects.recovery.list(selected.id)).length;
+      state.status=state.recoveryCount ? "Writing retained · Recover writing in the header or actions menu" : "Recovery closed; canonical note unchanged";
+      return;
+    }
+    if(choice.action==="separate") {
+      const block=await effects.recovery.separate(choice.record);
+      state.mode="preview";
+      await loadNavigationTarget({kind:"block",blockId:block.id},true,true);
+      state.status="Saved a separate note containing the exact draft as quoted text; original note unchanged";
+      return;
+    }
+    state.recovery=choice.record;
+    state.recoveryAccepted=true;
+    replaceSelectedBlock(choice.record.latest);
+    state.buffer=new TextBuffer(choice.action==="proposal" ? choice.record.proposal!.text : choice.record.draftText);
+    state.mode="edit";state.completion=null;state.editorVisualOffset=0;
+    state.status=choice.record.proposal?.unresolved.length
+      ? "Review unresolved choices against Latest before Ctrl+S · original draft retained"
+      : "Review recovered draft · Ctrl+S saves against the displayed latest revision · Esc retains recovery";
+    ensureEditorCursorVisible(viewport);
   };
 
   const beginPropertyEdit = async (): Promise<void> => {
@@ -2756,6 +2837,10 @@ export function createDetailController(
   };
 
   const cancelBuffer = async (): Promise<void> => {
+    if (state.mode === "edit" && state.recovery && effects.recovery && state.buffer.text !== state.recovery.draftText) {
+      state.recovery=await effects.recovery.retain(recoveryInput());
+      state.recoveryAccepted=false;
+    }
     if (state.annotationReplyDraft) {
       state.mode = state.annotationReplyDraft.returnMode;
       state.annotationReplyDraft = undefined;
@@ -2766,21 +2851,29 @@ export function createDetailController(
     state.mode = detailDisplayMode(state.context.selected);
     state.annotationDraft = undefined;
     state.status = cancelledMode === "comment" ? "Comment cancelled" : "Edit cancelled";
+    if(cancelledMode==="edit"&&state.recovery)state.status="Writing retained · Recover writing in the header or actions menu";
     await focusOutliner(false);
   };
 
-  const saveBuffer = async (): Promise<void> => {
+  const saveBuffer = async (viewport:DetailViewport): Promise<void> => {
     if (state.busy) return;
+    if (state.mode === "edit" && state.recovery && !state.recoveryAccepted) {
+      state.status="Review the retained writing against Latest before saving";
+      await recoverWriting(viewport,[state.recovery]);
+      return;
+    }
     state.busy = true;
     try {
       if (state.mode === "edit") {
         const selected = state.context.selected;
         if (selected) {
-          const updated = await effects.updateBlock({
+          const updated = state.recovery && effects.recovery ? await effects.recovery.commit(state.recovery,state.buffer.text) : await effects.updateBlock({
             blockId: selected.id,
             text: state.buffer.text,
             expectedRevision: selected.revision,
           });
+          state.recovery=undefined;
+          state.status="Saved";
           replaceSelectedBlock(updated);
           const read = await applyReadProjection(updated.text, updated.id);
           cacheCurrentBlockRead(read);
@@ -2854,6 +2947,16 @@ export function createDetailController(
       if (!isBufferMode() && state.refreshPending) await refreshPendingTarget();
     } catch (error) {
       state.status = errorMessage(error);
+      if (state.mode === "edit" && state.context.selected && effects.recovery) {
+        try {
+          state.recovery=await effects.recovery.retain(recoveryInput());
+          state.recoveryAccepted=false;
+          state.recoveryCount=Math.max(1,state.recoveryCount??0);
+          state.status=`Save did not apply · ${errorMessage(error)} · writing retained`;
+        } catch (retentionError) {
+          state.status=`Save did not apply · draft remains in this editor and local recovery · ${errorMessage(retentionError)}`;
+        }
+      }
     } finally {
       state.busy = false;
       emit();
@@ -3036,6 +3139,9 @@ export function createDetailController(
     switch (intent.type) {
       case "edit.begin":
         await beginEdit(viewport);
+        break;
+      case "edit.recover":
+        await recoverWriting(viewport);
         break;
       case "edit.external":
         await editExternalDraft(viewport);
@@ -4012,7 +4118,7 @@ export function createDetailController(
         ensureEditorCursorVisible(viewport);
         break;
       case "buffer.save":
-        await saveBuffer();
+        await saveBuffer(viewport);
         return;
       case "buffer.cancel":
         await cancelBuffer();
@@ -4154,6 +4260,9 @@ export function createDetailController(
       }
     },
     isBufferMode,
+    checkpointRecovery() {
+      if (state.mode === "edit" && state.recovery && state.context.selected) effects.recovery?.checkpoint?.(recoveryInput());
+    },
     handleUiCommand,
     dispatch,
     captureResourcePointerSelection,

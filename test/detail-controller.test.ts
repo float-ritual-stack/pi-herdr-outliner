@@ -3376,6 +3376,51 @@ describe("detail controller projection and deferred refresh", () => {
 });
 
 describe("detail controller saves and annotations", () => {
+  test("returned editor writing is retained and Later cannot silently overwrite concurrent metadata",async()=>{
+    const {OutlinerStore}=await import("../src/store");
+    const {EditRecoveryRepository}=await import("../src/edit-recovery");
+    const store=new OutlinerStore(":memory:"),repository=new EditRecoveryRepository(store);
+    try {
+      const base=store.create("Note\n\nOriginal body"),harness=createHarness(base);
+      harness.effects.recovery={retain:async input=>repository.start(input),list:async id=>repository.list(id),commit:async(record,text)=>repository.commit(record.id,record.revision,text,record.latest.revision,{author:"user",actorId:"detail"}),separate:async record=>repository.separate(record.id,record.revision,{author:"user",actorId:"detail"})};
+      let choice:"later"|"proposal"="later",reviews=0;
+      harness.effects.reviewRecovery=async records=>{reviews++;return {action:choice,record:records[0]!};};
+      const returned=base.text+"\n\nLong new writing 日本語";
+      harness.setExternalEdit(async()=>{
+        store.update(base.id,"Note [type::note]\n\nOriginal body",base.revision,{author:"agent",actorId:"assistance"});
+        return {text:returned,changed:true,recoveryPath:"durable/draft.md",cleanup(){},recoveryInput:{id:crypto.randomUUID(),blockId:base.id,baseRevision:base.revision,baseText:base.text,prelaunchText:base.text,draftText:returned,source:"external-editor"}};
+      });
+      await harness.controller.initialize();await harness.controller.dispatch({type:"edit.external"},viewport);
+      expect(harness.controller.state.buffer.text).toBe(returned);
+      expect(reviews).toBe(1);expect(harness.controller.state.recoveryAccepted).toBe(false);
+      await harness.controller.dispatch({type:"buffer.save"},viewport);
+      expect(reviews).toBe(2);expect(store.get(base.id)?.text).toBe("Note [type::note]\n\nOriginal body");
+      choice="proposal";await harness.controller.dispatch({type:"edit.recover"},viewport);
+      expect(harness.controller.state.buffer.text).toContain("[type::note]");
+      await harness.controller.dispatch({type:"buffer.save"},viewport);
+      expect(store.get(base.id)?.text).toBe("Note [type::note]\n\nOriginal body\n\nLong new writing 日本語");
+      expect(repository.list(base.id)).toHaveLength(0);
+    }finally{store.close();}
+  });
+
+  test("ordinary Detail save conflicts retain the draft and require explicit review before retry",async()=>{
+    const {OutlinerStore}=await import("../src/store");
+    const {EditRecoveryRepository}=await import("../src/edit-recovery");
+    const store=new OutlinerStore(":memory:"),repository=new EditRecoveryRepository(store);
+    try {
+      const base=store.create("Ordinary editor"),harness=createHarness(base);
+      harness.effects.recovery={retain:async input=>repository.start(input),list:async id=>repository.list(id),commit:async(record,text)=>repository.commit(record.id,record.revision,text,record.latest.revision,{author:"user",actorId:"detail"}),separate:async record=>repository.separate(record.id,record.revision,{author:"user",actorId:"detail"})};
+      harness.effects.updateBlock=async input=>store.update(input.blockId,input.text,input.expectedRevision,{author:"user",actorId:"detail"});
+      await harness.controller.initialize();await harness.controller.dispatch({type:"edit.begin"},viewport);
+      harness.controller.state.buffer.replaceText("My unsaved long text");
+      store.update(base.id,"Other writer",base.revision,{author:"agent",actorId:"other"});
+      await harness.controller.dispatch({type:"buffer.save"},viewport);
+      expect(harness.controller.state.mode).toBe("edit");expect(harness.controller.state.buffer.text).toBe("My unsaved long text");
+      expect(repository.list(base.id)[0]?.originalDraft).toBe("My unsaved long text");
+      expect(store.get(base.id)?.text).toBe("Other writer");
+    }finally{store.close();}
+  });
+
   test("sends the raw buffer with the selected optimistic version", async () => {
     const harness = createHarness(makeBlock({ text: "raw", updatedAt: "original-version" }));
     await harness.controller.initialize();
@@ -3400,6 +3445,7 @@ describe("detail controller saves and annotations", () => {
       expect(input).toEqual({
         kind: "block",
         blockId: "block-1",
+        baseText: "canonical",
         text: "canonical",
         expectedRevision: 1,
       });

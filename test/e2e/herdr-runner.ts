@@ -77,6 +77,7 @@ export interface HerdrScenarioSession {
 type Scenario = {
   name: string;
   detailRenderer?: "pi-tui" | "ansi";
+  editor?: string;
   commandKeys?: ReadonlyArray<{ key: string; command: string }>;
   layout?: "separate" | "composed";
   allowJev?: boolean;
@@ -1204,6 +1205,7 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
       herdrBinary,
     });
     environment.OUTLINER_DETAIL_RENDERER = scenario.detailRenderer ?? "pi-tui";
+    if (scenario.editor) environment.EDITOR = environment.VISUAL = scenario.editor;
     if (scenario.allowJev) {
       if (!process.env.TYPESAFE_API_KEY) throw new Error("The live Jev journey requires TYPESAFE_API_KEY");
       environment.TYPESAFE_API_KEY = process.env.TYPESAFE_API_KEY;

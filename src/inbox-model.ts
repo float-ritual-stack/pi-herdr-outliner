@@ -2,11 +2,11 @@ import {InboxPlanValidationError} from "./inbox-attempts";
 import { validateInboxPlan } from "./inbox-repository";
 
 import {recordInboxOmission} from "./inbox-observations";
-import { readFile } from "node:fs/promises";
+import { configuredPiAssistant, isolatedAssistantResources, AssistantConfigurationError } from "./pi-assistant-config";
 import { join } from "node:path";
 import {
-  createAgentSession, createExtensionRuntime, defineTool, estimateTokens, getAgentDir, ModelRuntime,
-  SettingsManager, type AgentSession, type ResourceLoader,
+  createAgentSession, defineTool, estimateTokens,
+  SettingsManager, type AgentSession,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { loadInboxPrompts, loadNotePrompts, PromptFileError, type InboxPrompts } from "./ai-prompts";
@@ -53,25 +53,19 @@ export class InboxNoteError extends Error {
 }
 
 async function configuration(options: InboxModelOptions, signal?: AbortSignal) {
-  const agentDir = options.agentDir ?? getAgentDir();
-  let settings: { defaultProvider?: string; defaultModel?: string; defaultThinkingLevel?: string };
-  try { settings = JSON.parse(await readFile(join(agentDir, "settings.json"), "utf8")); }
-  catch { throw new InboxModelUnavailableError("Inbox needs a configured model in Pi settings"); }
-  const provider = settings.defaultProvider;
-  const modelId = settings.defaultModel;
-  if (!provider || !modelId) throw new InboxModelUnavailableError("Inbox needs a default provider and model in Pi settings");
-  const runtime = await ModelRuntime.create({
-    authPath: join(agentDir, "auth.json"), modelsPath: join(agentDir, "models.json"),
-    allowModelNetwork: false, signal,
-  });
-  const model = runtime.getModel(provider, modelId);
-  if (!model || !runtime.hasConfiguredAuth(provider)) {
-    throw new InboxModelUnavailableError("Inbox needs an available authenticated model in Pi");
+  try { return await configuredPiAssistant(options.agentDir, signal); }
+  catch (error) {
+    if (error instanceof AssistantConfigurationError) {
+      const message = {
+        settings: "Inbox needs a configured model in Pi settings",
+        default: "Inbox needs a default provider and model in Pi settings",
+        auth: "Inbox needs an available authenticated model in Pi",
+        runtime: "Inbox model configuration could not be loaded",
+      }[error.code];
+      throw new InboxModelUnavailableError(message);
+    }
+    throw error;
   }
-  const thinking = settings.defaultThinkingLevel;
-  const thinkingLevel = thinking === "off" || thinking === "minimal" || thinking === "low" || thinking === "high" || thinking === "xhigh"
-    ? thinking : "medium";
-  return { runtime, model, thinkingLevel, agentDir } as const;
 }
 
 export async function checkInboxModelConfiguration(options: InboxModelOptions = {}): Promise<{
@@ -110,16 +104,6 @@ const planSchema = Type.Object({
   }, { additionalProperties: false }), { maxItems: 4 }),
 }, { additionalProperties: false });
 
-function isolatedResources(editorPrompt: string): ResourceLoader {
-  return {
-    getExtensions: () => ({ extensions: [], errors: [], runtime: createExtensionRuntime() }),
-    getSkills: () => ({ skills: [], diagnostics: [] }), getPrompts: () => ({ prompts: [], diagnostics: [] }),
-    getThemes: () => ({ themes: [], diagnostics: [] }), getAgentsFiles: () => ({ agentsFiles: [] }),
-    getSystemPrompt: () => editorPrompt, getSystemPromptSource: () => undefined,
-    getAppendSystemPrompt: () => [], getAppendSystemPromptSources: () => [],
-    extendResources: () => {}, reload: async () => {},
-  };
-}
 
 function live(block: Block | null): block is Block {
   return !!block && !block.deletedAt && !block.effectiveDeletedRootId;
@@ -382,7 +366,7 @@ export function createInboxModel(options: InboxModelOptions = {}): InboxModel {
       const created = await createAgentSession({
         cwd: options.workspaceRoot ?? process.cwd(), agentDir: config.agentDir, model: config.model,
         modelRuntime: config.runtime, thinkingLevel: config.thinkingLevel,
-        tools: [...TOOL_NAMES, ...(context.inventory ? ["property_inventory"] : [])], noTools: "builtin", customTools, resourceLoader: isolatedResources(answerPrompt?.text ?? prompts!.editor),
+        tools: [...TOOL_NAMES, ...(context.inventory ? ["property_inventory"] : [])], noTools: "builtin", customTools, resourceLoader: isolatedAssistantResources(answerPrompt?.text ?? prompts!.editor),
         sessionManager: trace.manager,
         settingsManager: SettingsManager.inMemory({
           compaction: { enabled: false }, retry: { enabled: false, provider: { maxRetries: 0, timeoutMs: timeoutMs } },

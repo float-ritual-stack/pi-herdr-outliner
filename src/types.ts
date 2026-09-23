@@ -1228,7 +1228,7 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 71;
+export const OUTLINER_PROTOCOL_VERSION = 72;
 
 
 export interface OutlinerServiceStatus {
@@ -1483,6 +1483,16 @@ export type OutlinerRequest =
       mutation: MutationProvenance;
     }
   | { id: string; action: "capture.draft.get" }
+  | { id: string; action: "edit-recovery.start"; input: import("./edit-recovery").EditRecoveryStart }
+  | { id: string; action: "edit-recovery.get"; recoveryId: string }
+  | { id: string; action: "edit-recovery.list"; blockId: string }
+  | { id: string; action: "edit-recovery.refresh"; recoveryId: string; expectedRevision: number }
+  | { id: string; action: "edit-recovery.propose"; recoveryId: string; expectedRevision: number; proposal: import("./edit-recovery").EditRecoveryProposal }
+  | { id: string; action: "edit-recovery.assist"; recoveryId: string; expectedRevision: number }
+  | { id: string; action: "edit-recovery.cancel"; recoveryId: string }
+  | { id: string; action: "edit-recovery.commit"; recoveryId: string; expectedRevision: number; text: string; basedOnRevision: number; mutation: MutationProvenance }
+  | { id: string; action: "edit-recovery.discard"; recoveryId: string; expectedRevision: number }
+  | { id: string; action: "edit-recovery.separate"; recoveryId: string; expectedRevision: number; mutation: MutationProvenance }
   | {
       id: string;
       action: "capture.draft.save";

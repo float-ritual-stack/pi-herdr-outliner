@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 export type ExternalEditorErrorCode =
   | "editor-unset"
@@ -131,6 +131,10 @@ export interface ExternalEditorOptions {
   readonly cwd: string;
   readonly environment?: NodeJS.ProcessEnv;
   readonly temporaryRoot?: string;
+  /** A caller-owned journal may supply an already prepared, exact draft file. */
+  readonly preparedFile?: string;
+  /** Block editors defer the revision decision to visible draft reconciliation. */
+  readonly verifyRevision?: boolean;
   readonly suspendTerminal: () => void | Promise<void>;
   readonly restoreTerminal: () => void | Promise<void>;
   readonly currentRevision: () => Promise<string>;
@@ -257,7 +261,9 @@ export async function editTextInExternalEditor(
 
   let directory: string;
   try {
-    directory = mkdtempSync(join(options.temporaryRoot ?? tmpdir(), "pi-outliner-editor-"));
+    directory = options.preparedFile
+      ? dirname(options.preparedFile)
+      : mkdtempSync(join(options.temporaryRoot ?? tmpdir(), "pi-outliner-editor-"));
   } catch (error) {
     throw failure(
       "temporary-file-failed",
@@ -266,15 +272,17 @@ export async function editTextInExternalEditor(
       error,
     );
   }
-  const filePath = join(directory, "draft.md");
+  const filePath = options.preparedFile ?? join(directory, "draft.md");
   try {
-    writeFileSync(filePath, input.text, { encoding: "utf8", flag: "wx", mode: 0o600 });
+    if (options.preparedFile) {
+      if (readUtf8(filePath) !== input.text) throw Error("Prepared editor draft differs from the supplied text");
+    } else writeFileSync(filePath, input.text, { encoding: "utf8", flag: "wx", mode: 0o600 });
   } catch (error) {
-    rmSync(directory, { recursive: true, force: true });
+    if (!options.preparedFile) rmSync(directory, { recursive: true, force: true });
     throw failure(
       "temporary-file-failed",
       `Could not prepare the external editor draft: ${reason(error)}`,
-      null,
+      options.preparedFile ?? null,
       error,
     );
   }
@@ -346,9 +354,9 @@ export async function editTextInExternalEditor(
     throw failure("read-failed", "The external editor returned no readable text", filePath);
   }
 
-  let currentRevision: string;
+  let currentRevision: string = input.expectedRevision;
   try {
-    currentRevision = await options.currentRevision();
+    if (options.verifyRevision !== false) currentRevision = await options.currentRevision();
   } catch (error) {
     throw failure(
       "conflict-check-failed",

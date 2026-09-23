@@ -1,3 +1,7 @@
+import {EditRecoveryClient} from "./edit-recovery-client";
+import {EditRecoveryReview,type RecoveryChoice} from "./edit-recovery-review";
+import type {EditRecovery} from "./edit-recovery";
+import type {ExternalEditorOptions} from "./external-editor";
 import {destinationRecoveryKey} from "./open-destination-chooser";
 import {KeyInspector} from "./key-inspector";
 import {createDetailDestination, type DetailDestinationPlacement} from "./detail-pane-placement";
@@ -54,6 +58,7 @@ import { detailCalloutThemeFromEnvironment } from "./detail-callout-theme";
 import { projectDetailRead } from "./detail-embeds";
 import { createDetailKeyHandler, detailActionScopes } from "./detail-keymap";
 import {
+  decodePiDetailInput,
   createPiDetailInputListener,
   detailChooserOwnsPiInput,
   piDetailChooserInput,
@@ -192,6 +197,7 @@ const WEB_RESOURCE_REQUEST_TIMEOUT_MS = 17_000;
 const paths = resolveClientPaths();
 reportCurrentPaneWorkspace(paths.workspaceRoot);
 const client = createOutlinerClient(paths);
+const editRecovery = new EditRecoveryClient(client,paths.stateDir);
 const clientId = crypto.randomUUID();
 const destinationDisplay = new NavigationDestinationDisplay(client, {clientId, region: "detail"}, () => tui.requestRender());
 const browsingContextId = process.env.OUTLINER_BROWSING_CONTEXT_ID?.trim() || clientId;
@@ -287,6 +293,10 @@ const tui = new DetailTuiAltScreen(processTerminal, false, undefined, {
     return true;
   },
   openUrl(url) {
+    if (recoveryReview) {
+      if (url.startsWith("pi-outliner-action:recovery.")) void recoveryReview.action(url.slice("pi-outliner-action:recovery.".length));
+      return;
+    }
     const pointer = pendingLinkClick;
     pendingLinkClick = { activate: false, routing: "linked", suppress: false };
     if (pointer.suppress || stopping) return;
@@ -530,15 +540,14 @@ const effects: DetailEffects = {
   copyText(text) {
     process.stdout.write(osc52ClipboardWrite(text));
   },
+  recovery: editRecovery,
+  reviewRecovery: showRecoveryReview,
   editExternalDraft(input) {
     const configuration = resolveExternalEditorConfiguration();
     const expectedRevision = input.kind === "block"
       ? String(input.expectedRevision)
       : JSON.stringify(input.expectedRevision);
-    return editTextInExternalEditor({
-      text: input.text,
-      expectedRevision,
-    }, {
+    const options: ExternalEditorOptions = {
       editor: configuration.editor,
       environment: configuration.environment,
       cwd: paths.workspaceRoot,
@@ -578,7 +587,8 @@ const effects: DetailEffects = {
         }
         return JSON.stringify(description.filesystem.revision);
       },
-    });
+    };
+    return input.kind === "block" ? editRecovery.files.edit(input,options) : editTextInExternalEditor({text:input.text,expectedRevision},options);
   },
   writeFilesystemResource(input) {
     return client.request<ResourceDescription>({
@@ -882,8 +892,10 @@ function startWatcher(): void {
 }
 
 async function stop(exitCode = 0): Promise<void> {
-  destinationDisplay.dispose();
   if (stopping) return;
+  try {controller.checkpointRecovery();inspection.checkpointRecovery();}
+  catch(error){controller.onServiceError(error);return;}
+  destinationDisplay.dispose();
   if (rightClickOwnership === "outliner") {
     try {
       configureCurrentPaneRightClick("herdr");
@@ -1031,6 +1043,20 @@ class FuzzyActionMenu implements Component {
     this.destination?.select(list.getSelectedItem()?.value);
     return list;
   }
+}
+
+let recoveryReview: EditRecoveryReview | null = null;
+function showRecoveryReview(records:EditRecovery[]):Promise<RecoveryChoice> {
+  closeActionMenu();
+  return new Promise(resolve=>{
+    recoveryReview = new EditRecoveryReview(records,editRecovery,()=>tui.requestRender(),choice=>{
+      recoveryReview=null;closeActionMenu();tui.requestRender();resolve(choice);
+    });
+    actionMenuHandle=tui.showOverlay({
+      render:width=>recoveryReview?.render(width,Math.max(8,processTerminal.rows))??[],
+      invalidate() {},
+    },{width:"100%",maxHeight:"100%",anchor:"center",margin:0});
+  });
 }
 
 function showActionMenu(
@@ -1631,6 +1657,14 @@ const detailInputListener = createPiDetailInputListener(
   data => shouldPassDetailInputToTui(data),
 );
 tui.addOutlinerInputListener(data => {
+  if (recoveryReview) {
+    const wheel=parseTreeWheelEvent(data);
+    if(wheel){recoveryReview.key("",{name:wheel.direction==="up"?"up":"down"});return {consume:true};}
+    if(isTreeMouseSequence(data))return;
+    const decoded=piDetailChooserInput(decodePiDetailInput(data));
+    recoveryReview.key(decoded.str,decoded.key);return {consume:true};
+  }
+
   // Inspect delivered bytes before focus routing, native overlays, or our decoders.
   if (keyInspector.handle(data)) return {consume: true};
   if (composedTree?.keyInspectorActive) {

@@ -12,6 +12,7 @@ const PROMPT_FILENAMES = ["inbox-editor.md", "inbox-relationships.json", "goto-r
 const NOTE_PROMPT_FILENAMES = ["note-assistance.json", "note-answer.md"];
 const NOTE_PROMPT_UPGRADE = ".note-assistance-v1";
 const ROUTING_PROMPT_UPGRADE=".inbox-routing-v1";
+const MERGE_PROMPT_UPGRADE=".edit-merge-v1";
 
 /** Evidence of the bytes used by a job, not an editable second prompt authority. */
 export interface PromptRevision {
@@ -86,6 +87,10 @@ export function aiPromptDirectory(directory?: string): string {
   return resolve(directory ?? process.env.OUTLINER_PROMPT_DIR ?? DEFAULT_AI_PROMPT_DIRECTORY);
 }
 
+export function loadEditMergePrompt(directory?: string): Promise<PromptRevision> {
+  return readPrompt(aiPromptDirectory(directory), "edit-merge.md");
+}
+
 /** Initialize a new workspace's editable files. Existing files, even invalid ones, belong to the user. */
 export async function initializeAiPrompts(directory: string): Promise<void> {
   directory = resolve(directory);
@@ -97,6 +102,12 @@ export async function initializeAiPrompts(directory: string): Promise<void> {
     }
   }
   if (await exists()) {
+    if (!(await exists(join(directory, MERGE_PROMPT_UPGRADE))) &&
+      (await Promise.all(PROMPT_FILENAMES.map(name => exists(join(directory, name))))).every(Boolean)) {
+      try { await copyFile(join(DEFAULT_AI_PROMPT_DIRECTORY, "edit-merge.md"), join(directory, "edit-merge.md"), constants.COPYFILE_EXCL); }
+      catch (error) { if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error; }
+      await writeFile(join(directory, MERGE_PROMPT_UPGRADE), "1\n", {flag: "wx"}).catch(error => { if (error?.code !== "EEXIST") throw error; });
+    }
     if(!(await exists(join(directory,ROUTING_PROMPT_UPGRADE)))&&
       (await Promise.all(PROMPT_FILENAMES.map(name=>exists(join(directory,name))))).every(Boolean)){
       try{await copyFile(join(DEFAULT_AI_PROMPT_DIRECTORY,"inbox-routing.json"),join(directory,"inbox-routing.json"),constants.COPYFILE_EXCL);}
@@ -119,10 +130,11 @@ export async function initializeAiPrompts(directory: string): Promise<void> {
   const staging = await mkdtemp(join(dirname(directory), `.${basename(directory)}-seed-`));
   try {
     // Finish each copy before cleanup can run on failure.
-    for (const name of [...PROMPT_FILENAMES, ...NOTE_PROMPT_FILENAMES,"inbox-routing.json"]) {
+    for (const name of [...PROMPT_FILENAMES, ...NOTE_PROMPT_FILENAMES,"inbox-routing.json","edit-merge.md"]) {
       await copyFile(join(DEFAULT_AI_PROMPT_DIRECTORY, name), join(staging, name), constants.COPYFILE_EXCL);
     }
     await writeFile(join(staging,ROUTING_PROMPT_UPGRADE),"1\n",{flag:"wx"});
+    await writeFile(join(staging,MERGE_PROMPT_UPGRADE),"1\n",{flag:"wx"});
     await writeFile(join(staging, NOTE_PROMPT_UPGRADE), "1\n", { flag: "wx" });
     if (await exists()) return;
     try { await rename(staging, directory); }
