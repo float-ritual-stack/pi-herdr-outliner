@@ -708,3 +708,14 @@ test.each([{outputIds:[]},{outputIds:['output-result-one','second-result-one']}]
  h.controller.startSearch();h.controller.paste('same receipt');await setImmediate();h.controller.selectTarget(outputIds.length);await setImmediate();renderInboxFrame(h.controller,160,55,'help');h.controller.scrollPreview(3);
  await h.controller.cancelSearch();expect(h.controller.sourceReader.state?.offset).toBe(5);await h.controller.close();
 });
+
+test('content notifications refresh the browsed Inbox target without returning to the source',async()=>{
+ const h=harness();await startRecent(h.controller);await new Promise(resolve=>setTimeout(resolve,0));
+ const original=h.controller.reader.state?.target;
+ await h.controller.previewAction('preview.link:'+encodeURIComponent('pi-outliner://block/browsed-target'));
+ expect(h.controller.reader.state?.target).toEqual({kind:'block',blockId:'browsed-target'});
+ h.controller.contentChanged();await new Promise(resolve=>setTimeout(resolve,0));
+ expect(h.controller.reader.state?.target).toEqual({kind:'block',blockId:'browsed-target'});
+ await h.controller.previewAction('preview.back');
+ expect(h.controller.reader.state?.target).toEqual(original);
+});

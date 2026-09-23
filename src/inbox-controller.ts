@@ -268,10 +268,11 @@ export class InboxController {
     const jobs: Promise<boolean>[] = [];
     const sourceKey = `${result.id}/${result.sourceId}/${this.sourceVersion}`;
     if ((this.sourceVersion === 'current' && (force || reset)) || sourceKey !== this.sourceKey || !this.sourceReader.state) {
+      const refreshing=force&&sourceKey===this.sourceKey&&!reset;
+      const target=refreshing&&this.sourceReader.state?this.sourceReader.state.target:{kind:'block' as const,blockId:result.sourceId};
       this.sourceKey = sourceKey;
-      const target = {kind: 'block' as const, blockId: result.sourceId};
-      jobs.push(this.sourceVersion === 'current'
-        ? this.sourceReader.load(target, force)
+      jobs.push(this.sourceVersion === 'current'||(refreshing&&this.sourceReader.state?.canBack)
+        ? this.sourceReader.load(target, refreshing)
         : this.sourceReader.loadText(target, result.sourceTitle, this.effects.request<InboxResultDetail>({action: 'inbox.result', resultId: result.id}).then(detail =>
           detail.beforeSource?.text ?? 'No saved source before this attempt. Current source is available separately.')));
     }
@@ -279,13 +280,15 @@ export class InboxController {
     const outputKey = output ? `${result.id}/${output.id}` : '';
     if (!output) {this.outputKey = ''; this.outputReader.clear();}
     else if (force || reset || outputKey !== this.outputKey) {
+      const refreshing=force&&outputKey===this.outputKey&&!reset;
+      const target=refreshing&&this.outputReader.state?this.outputReader.state.target:{kind:'block' as const,blockId:output.id};
       this.outputKey = outputKey;
-      jobs.push(this.outputReader.load({kind: 'block', blockId: output.id}, force));
+      jobs.push(this.outputReader.load(target,refreshing));
     }
     return (await Promise.all(jobs)).some(Boolean);
   }
 
-  contentChanged(): void { this.previewKey = ""; this.refreshPreview(true); }
+  contentChanged(): void { void this.refreshPreview(true); }
 
   get results(): InboxResultSummary[] {
     if(this.searching)return this.searchResults?.matches.map(match=>match.result)??[];

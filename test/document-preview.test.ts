@@ -93,3 +93,40 @@ test('a late link resolution cannot navigate a newly selected Preview; unresolve
  await reader.action(`preview.link:${encodeURIComponent('https://example.com')}`,async()=>{});
  expect(reader.state?.notice).toContain('Unsupported link');
 });
+
+test('newest link intent wins regardless of page-resolution response order',async()=>{
+ const first=Promise.withResolvers<unknown>(),second=Promise.withResolvers<unknown>();
+ const reader=new DocumentPreview({async request<T>(input:RequestInput):Promise<T>{
+  if(input.action==='pages.resolve')return await (input.address==='First'?first:second).promise as T;
+  if(input.action==='get')return block(input.blockId,input.blockId) as T;
+  if(input.action==='references.resolve')return {text:input.text,workIdPrefix:null} as T;
+  throw Error('unexpected '+input.action);
+ }},()=>{});
+ await reader.load({kind:'block',blockId:'origin'});
+ const a=reader.action('preview.link:'+encodeURIComponent('pi-outliner://page/First'),async()=>{});
+ const b=reader.action('preview.link:'+encodeURIComponent('pi-outliner://page/Second'),async()=>{});
+ first.resolve({block:block('first','First')});await a;
+ second.resolve({block:block('second','Second')});await b;
+ expect(reader.state?.target).toEqual({kind:'block',blockId:'second'});
+ await reader.action('preview.back',async()=>{});expect(reader.state?.target).toEqual({kind:'block',blockId:'origin'});
+});
+
+test('Forward reloads a visit interrupted by Back instead of restoring a loading placeholder',async()=>{
+ const pending=Promise.withResolvers<Block>();let reads=0;
+ const reader=new DocumentPreview({async request<T>(input:RequestInput):Promise<T>{
+  if(input.action==='get'){
+   if(input.blockId==='bbbbbbbb'&&++reads===1)return await pending.promise as T;
+   return block(input.blockId,'Resolved '+input.blockId) as T;
+  }
+  if(input.action==='references.resolve')return {text:input.text,workIdPrefix:null} as T;
+  throw Error('unexpected '+input.action);
+ }},()=>{});
+ await reader.load({kind:'block',blockId:'aaaaaaaa'});
+ const following=reader.action('preview.link:'+encodeURIComponent('pi-outliner://block/bbbbbbbb'),async()=>{});
+ await reader.action('preview.back',async()=>{});
+ expect(reader.state?.target).toEqual({kind:'block',blockId:'aaaaaaaa'});
+ await reader.action('preview.forward',async()=>{});
+ expect(reader.state?.document.projectedText).toBe('Resolved bbbbbbbb');
+ pending.resolve(block('bbbbbbbb','Stale'));await following;
+ expect(reader.state?.document.projectedText).toBe('Resolved bbbbbbbb');
+});

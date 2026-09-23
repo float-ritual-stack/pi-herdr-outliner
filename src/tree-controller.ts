@@ -2074,7 +2074,10 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         const failure = errorMessage(error);
         if (mode === "inbox") {
           inbox.notice = failure;
-          try { await handleAction(menu.purpose === "link" ? "tree.navigation.link" : "tree.navigation.once"); }
+          try {
+            await handleAction(menu.purpose === "link" ? "tree.navigation.link" : "tree.navigation.once");
+            if(destinationMenu) (destinationMenu as {target?:OutlinerNavigationTarget}).target=menu.target;
+          }
           catch { /* Keep the original failure visible even if discovery is unavailable. */ }
         }
         status = failure;

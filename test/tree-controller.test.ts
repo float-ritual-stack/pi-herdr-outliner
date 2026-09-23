@@ -3710,3 +3710,19 @@ test('Preview hides persistently while browsing and keeps independent docking pr
  expect(c.view().previewPreferences?.bottomFraction).toBe(.7);
  const other=createTreeController(fake.effects);expect(other.view().previewPreferences).toMatchObject({enabled:true,dock:'auto',bottomFraction:.55});
 });
+
+test('Inbox Preview chooser retries the browsed target after a protected destination rejects Open',async()=>{
+ const source=block('inbox-original'),target=block('preview-target');let reject=true;
+ const fake=harness(input=>{
+  if(input.action==='tree.index')return snapshot([source,target],source);
+  if(input.action==='inbox.status')return{enabled:true,paused:false,state:'idle',pending:0,message:'ready',attentionCount:0,attentionOnly:!!input.attentionOnly,resultsOffset:0,resultsTruncated:false,results:input.attentionOnly?[]:[{id:'receipt',sourceId:source.id,sourceTitle:'Source',outputIds:[],state:'applied',summary:'Filed',createdAt:'2026-09-23'}]};
+  if(input.action==='navigation.link.get')return{source:{clientId:'tree-test',region:'tree'},destination:null,destinations:[{view:{clientId:'reader',region:'detail'},label:'Reader'}]};
+  if(input.action==='navigation.dispatch'&&reject)throw Error('Reader has a draft');
+ });
+ const c=createTreeController(fake.effects);await c.initialize();await c.handleAction('tree.inbox.open');await setImmediate();
+ await c.handleAction('preview.link:'+encodeURIComponent('pi-outliner://block/preview-target'));
+ await c.handleAction('preview.open');expect(c.view().mode).toBe('action-menu');
+ await c.handleAction('destination:0');expect(c.view().mode).toBe('action-menu');
+ reject=false;await c.handleAction('destination:0');
+ expect(lastCall(fake.calls,'navigation.dispatch')).toMatchObject({target:{kind:'block',blockId:target.id}});
+});

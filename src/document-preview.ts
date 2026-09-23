@@ -19,6 +19,7 @@ export interface DocumentPreviewState {
   readonly activeLink?: string;
   readonly activeLinkLabel?: string;
   readonly notice?: string;
+  readonly loading?: boolean;
   readonly canBack?: boolean;
   readonly canForward?: boolean;
 }
@@ -68,23 +69,27 @@ export class DocumentPreview {
     return false;
   }
   async action(action:string,open:(target:OutlinerNavigationTarget)=>Promise<void>):Promise<void>{
-    const generation=this.generation;
+    const following=action==='preview.follow'||action.startsWith('preview.link:');
+    const generation=following?++this.generation:this.generation;
     try {
       if(action==='preview.back'||action==='preview.forward'){
         const from=action==='preview.back'?this.history:this.future;
         const to=action==='preview.back'?this.future:this.history;
         const next=from.pop();
-        if(next&&this.value){to.push(this.value);this.generation++;this.value={...next,focused:this.value.focused,notice:undefined};this.changed();}
+        if(next&&this.value){
+          to.push(this.value);this.generation++;this.value={...next,focused:this.value.focused,notice:undefined};this.changed();
+          // An unfinished visit is an address, not a cached successful document.
+          if(next.loading)await this.load(next.target,false,true);
+        }
       } else if(action==='preview.open'&&this.value) await open(this.value.target);
-      else if(action==='preview.follow'&&this.value?.activeLink) await this.follow(this.value.activeLink);
-      else if(action.startsWith('preview.link:')) await this.follow(decodeURIComponent(action.slice('preview.link:'.length)));
+      else if(action==='preview.follow'&&this.value?.activeLink) await this.follow(this.value.activeLink,generation);
+      else if(action.startsWith('preview.link:')) await this.follow(decodeURIComponent(action.slice('preview.link:'.length)),generation);
     } catch(error){
       if(generation===this.generation&&this.value){this.value={...this.value,notice:error instanceof Error?error.message:String(error)};this.changed();}
     }
   }
-  private async follow(uri:string):Promise<void>{
+  private async follow(uri:string,generation:number):Promise<void>{
     if(!this.value)return;
-    const generation=this.generation;
     if(!uri.startsWith('pi-outliner:')){
       if(!/^https?:\/\//i.test(uri)||!this.openExternal)throw Error(`Unsupported link: ${uri}`);
       await this.openExternal(uri);
@@ -129,7 +134,7 @@ export class DocumentPreview {
     if(!refresh&&!navigating){this.history=[];this.future=[];}
     let title = target.kind === 'block' ? target.blockId : target.resourceId;
     const offset = refresh ? this.value?.offset ?? 0 : 0;
-    if (!refresh) this.value = {target, title, document: plain('Loading Preview…'), offset:0, focused:this.value?.focused ?? false};
+    if (!refresh) this.value = {target, title, document: plain('Loading Preview…'), loading:true, offset:0, focused:this.value?.focused ?? false};
     this.changed();
     try {
       let document: DetailReadPreviewDocument;
