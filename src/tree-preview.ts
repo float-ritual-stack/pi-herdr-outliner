@@ -1,5 +1,5 @@
 import {outlinerActionLink} from './outliner-actions';
-import {renderDocumentPreview,type DocumentPreviewFrame} from './document-preview-renderer';
+import {PREVIEW_NAVIGATION_WIDTH,renderDocumentPreview,type DocumentPreviewFrame} from './document-preview-renderer';
 
 import type {DocumentPreviewState} from './document-preview';
 export interface PreviewPreferences {
@@ -27,7 +27,7 @@ export function treePreviewFrame(preview:DocumentPreviewState,width:number,heigh
   let toolbar = '', column = 0;
   for (const [label, action] of [['→','right'],['↓','bottom'],['Auto','auto'],['−','shrink'],['+','grow'],['×','close']]) {
     const text = `[${label}]`;
-    if (column + text.length > rect.width) break;
+    if (column + text.length > rect.width-PREVIEW_NAVIGATION_WIDTH) break;
     controls.push({rect: {x: rect.x + column, y: rect.y + 1, width: text.length, height: 1}, action: `tree.preview.${action}`});
     toolbar += outlinerActionLink(`tree.preview.${action}`, action === preferences.dock ? `\x1b[7m${text}\x1b[27m` : text);
     column += text.length;

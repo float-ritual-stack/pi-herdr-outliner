@@ -130,3 +130,15 @@ test('Forward reloads a visit interrupted by Back instead of restoring a loading
  pending.resolve(block('bbbbbbbb','Stale'));await following;
  expect(reader.state?.document.projectedText).toBe('Resolved bbbbbbbb');
 });
+
+test('narrow Preview preserves clickable navigation ahead of optional layout controls',async()=>{
+ const {initTheme}=await import('@earendil-works/pi-coding-agent');initTheme(undefined,false);
+ const {treePreviewFrame}=await import('../src/tree-preview');
+ const reader=new DocumentPreview({async request<T>():Promise<T>{throw Error('not used');}},()=>{});
+ await reader.loadText({kind:'block',blockId:'source'},'Source',Promise.resolve('Body'));
+ for(const sideFraction of [.55,.8]){
+  const frame=treePreviewFrame({...reader.state!,canBack:true,canForward:true},60,40,'',{enabled:true,dock:'right',sideFraction,bottomFraction:.5});
+  expect(frame.controls?.map(control=>control.action)).toEqual(expect.arrayContaining(['preview.back','preview.forward','preview.open']));
+  expect(frame.controls?.every(control=>control.rect.x+control.rect.width<=frame.rect.x+frame.rect.width)).toBe(true);
+ }
+});

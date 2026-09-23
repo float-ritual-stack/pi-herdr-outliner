@@ -4,6 +4,8 @@ import {renderDetailReadPreviewLines, type DetailReadPreviewDocument} from './de
 import type {DocumentPreviewState} from './document-preview';
 import {sanitizeDynamicText} from './terminal';
 
+// [‹][›][Open] must remain reachable even in a narrow reader.
+export const PREVIEW_NAVIGATION_WIDTH=12;
 export interface PreviewRect {x:number;y:number;width:number;height:number}
 export interface DocumentPreviewFrame {
   rect: PreviewRect;
@@ -57,7 +59,7 @@ export function renderDocumentPreview(preview:DocumentPreviewState,rect:PreviewR
   const rendered=documentPreviewLines(preview.document,content.width);
   const offset=Math.max(0,Math.min(preview.offset,Math.max(0,rendered.length-content.height)));
   const controls:NonNullable<DocumentPreviewFrame['controls']>=[];
-  let navigation=toolbar??'';
+  let navigation=toolbar&&visibleWidth(toolbar)<=rect.width-PREVIEW_NAVIGATION_WIDTH?toolbar:'';
   let column=visibleWidth(navigation);
   for(const [label,action] of [['‹','back'],['›','forward'],['Open','open']]){
     const text=`[${label}]`;
