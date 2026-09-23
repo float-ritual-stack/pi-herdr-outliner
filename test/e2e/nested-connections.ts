@@ -4,6 +4,8 @@ import type {Block} from '../../src/types';
 import {runHerdrScenario} from './herdr-runner';
 const result=await runHerdrScenario({
  name:'nested-connections',async prepare(){},async run(session){
+  const terminal=await session.attachClient();await terminal.resize(260,80);
+  await session.waitFor('attached resize complete',terminal.visible,text=>text.split('\n').some(line=>visibleWidth(line)>=259));
   const a=await session.client.request<Block>({action:'create',text:'CONNECTION ALPHA'});
   const b=await session.client.request<Block>({action:'create',text:`CONNECTION BETA\n\n((${a.id}|Return to Alpha))`});
   const updated=await session.client.request<Block>({action:'update',blockId:a.id,text:`CONNECTION ALPHA\n\n((${b.id}|Go to Beta))`,expectedRevision:a.revision,mutation:{author:'agent',actorId:'nested-connections-fixture'}});
@@ -12,7 +14,7 @@ const result=await runHerdrScenario({
   await session.keys(session.panes.tree,'ctrl+r');await session.waitVisible(session.panes.tree,'Outliner keymap reloaded');
   await session.keys(session.panes.tree,'alt+f');await session.waitVisible(session.panes.tree,'Focused branch:');
   await session.keys(session.panes.tree,'alt+j');await session.waitVisible(session.panes.tree,'Backlinks');
-  const terminal=await session.attachClient();await terminal.resize(260,80);await session.focus(session.panes.tree);
+  await session.focus(session.panes.tree);
   const clickArrow=async(label:string)=>{
    const coordinate=(text:string)=>{
     const lines=text.split('\n'), row=lines.findIndex(l=>l.includes(label)&&l.includes('▸'));
