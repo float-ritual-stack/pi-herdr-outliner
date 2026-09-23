@@ -433,7 +433,7 @@ export function renderTreeFrame(
   const mouseTargets: Array<TreeMouseTarget | null | undefined> = [];
 
   if (view.mode === "inbox" && view.inbox) {
-    const lines = renderInboxFrame(view.inbox, width, height, view.actionHelpText ?? DEFAULT_OUTLINER_ACTION_KEYMAP.helpText("tree", "inbox"));
+    const lines = renderInboxFrame(view.inbox, width, height, view.recoveryHelp ? `${view.recoveryHelp}\n${view.recoveryStatus}` : view.actionHelpText ?? DEFAULT_OUTLINER_ACTION_KEYMAP.helpText("tree", "inbox"));
     return { frame: `${options.clearScreen === false ? "" : `${ESC}H${ESC}2J`}${lines.join("\n")}`, scrollStartEntryIndex: initialScrollStartEntryIndex, mouseTargets: [], preview:undefined };
   }
 
@@ -847,12 +847,12 @@ export function renderTreeFrame(
     }
   } else {
     const contextualStatus =
-      view.status ||
+      view.recoveryStatus || view.status ||
       expandedStatus ||
       (selectedBranchState ? branchStatusText(selectedBranchState) : "");
     output.push(truncate(contextualStatus, width));
   }
-  const help = view.actionHelpText ??
+  const help = view.recoveryHelp ?? view.actionHelpText ??
     DEFAULT_OUTLINER_ACTION_KEYMAP.helpText("tree", view.mode);
   output.push(`\x1b[2m${truncate(options.focused === undefined ? help : `F6 Detail  ${help}`, width)}\x1b[0m`);
   return { frame: output.join("\n"), scrollStartEntryIndex, mouseTargets, breadcrumbStart:breadcrumb?.start,

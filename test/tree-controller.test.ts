@@ -3665,12 +3665,14 @@ test('Inbox destination chooser retains selection, cancel returns to Inbox and o
  const fake=harness(input=>{
   if(input.action==='tree.index')return snapshot([note,output],note);
   if(input.action==='inbox.status')return{enabled:true,paused:false,state:'idle',pending:0,message:'ready',attentionCount:0,attentionOnly:!!input.attentionOnly,resultsOffset:0,resultsTruncated:false,results:input.attentionOnly?[]:[{id:'receipt',sourceId:note.id,sourceTitle:'Source',outputIds:[output.id],state:'applied',summary:'Filed',createdAt:'2026-09-23'}]};
+  if(input.action==='navigation.dispatch' && !input.destination)throw Error('No linked destination');
   if(input.action==='navigation.link.get')return{source:{clientId:'tree-test',region:'tree'},destination:null,destinations:[{view:{clientId:'detail-test',region:'detail'},label:'Reader'}]};
  });
  const c=createTreeController(fake.effects);await c.initialize();await c.handleAction('tree.inbox.open');
  await c.handleAction('tree.menu.open');await c.handleAction('tree.inbox.preview.source');expect(c.view().inbox?.targets[c.view().inbox!.targetIndex]?.id).toBe(note.id);
  await c.handleAction('tree.menu.open');await c.handleAction('tree.inbox.preview.output');expect(c.view().inbox?.targets[c.view().inbox!.targetIndex]?.id).toBe(output.id);
- await c.handleKeypress('',{name:'return',meta:true},'pass');expect(c.view().mode).toBe('action-menu');
+ await c.handleKeypress('',{name:'return',meta:true},'pass');expect(c.view().recoveryHelp).toContain('Open here');
+ await c.handleKeypress('l',{name:'l'},'pass');expect(c.view().mode).toBe('action-menu');
  await c.handleKeypress('',{name:'escape'},'pass');expect(c.view().mode).toBe('inbox');expect(c.view().inbox?.selected?.id).toBe('receipt');
  await c.handleAction('tree.navigation.once');await c.handleAction('destination:0');
  expect(c.view().mode).toBe('inbox');expect(lastCall(fake.calls,'navigation.dispatch')).toMatchObject({target:{kind:'block',blockId:output.id},destination:{clientId:'detail-test',region:'detail'}});
@@ -3717,12 +3719,70 @@ test('Inbox Preview chooser retries the browsed target after a protected destina
   if(input.action==='tree.index')return snapshot([source,target],source);
   if(input.action==='inbox.status')return{enabled:true,paused:false,state:'idle',pending:0,message:'ready',attentionCount:0,attentionOnly:!!input.attentionOnly,resultsOffset:0,resultsTruncated:false,results:input.attentionOnly?[]:[{id:'receipt',sourceId:source.id,sourceTitle:'Source',outputIds:[],state:'applied',summary:'Filed',createdAt:'2026-09-23'}]};
   if(input.action==='navigation.link.get')return{source:{clientId:'tree-test',region:'tree'},destination:null,destinations:[{view:{clientId:'reader',region:'detail'},label:'Reader'}]};
+  if(input.action==='navigation.dispatch'&&!input.destination)throw Error('No linked destination');
   if(input.action==='navigation.dispatch'&&reject)throw Error('Reader has a draft');
  });
  const c=createTreeController(fake.effects);await c.initialize();await c.handleAction('tree.inbox.open');await setImmediate();
  await c.handleAction('preview.link:'+encodeURIComponent('pi-outliner://block/preview-target'));
- await c.handleAction('preview.open');expect(c.view().mode).toBe('action-menu');
+ await c.handleAction('preview.open');expect(c.view().recoveryHelp).toContain('Open here');
+ await c.handleAction('destination.choose');expect(c.view().mode).toBe('action-menu');
  await c.handleAction('destination:0');expect(c.view().mode).toBe('action-menu');
  reject=false;await c.handleAction('destination:0');
  expect(lastCall(fake.calls,'navigation.dispatch')).toMatchObject({target:{kind:'block',blockId:target.id}});
+});
+
+
+test('missing Tree destination offers exact-target Open here by keyboard or mouse without linking',async()=>{
+ const source=block('recovery-source'),target=block('recovery-target');
+ const fake=harness(input=>{
+  if(input.action==='tree.index')return snapshot([source,target],source);
+  if(input.action==='navigation.dispatch'||input.action==='navigation.resolve')throw Error('No linked destination');
+ });
+ const c=createTreeController(fake.effects);await c.initialize();
+ await c.handleLink('pi-outliner://block/recovery-target');
+ expect(c.view().recoveryHelp).toContain('Open here');
+ expect(c.view().localPreview?.target).not.toEqual({kind:'block',blockId:target.id});
+ await c.handleKeypress('',{name:'return'},'pass');
+ expect(c.view().localPreview?.target).toEqual({kind:'block',blockId:target.id});
+ expect(selectedBlockRow(c).canonicalId).toBe(source.id);
+ expect(c.view().recoveryHelp).toBeUndefined();
+ expect(fake.calls.some(input=>input.action==='navigation.link.set')).toBe(false);
+ await c.handleLink('pi-outliner://block/recovery-source');
+ await c.handleAction('destination.here');
+ expect(c.view().localPreview?.target).toEqual({kind:'block',blockId:source.id});
+ await c.handleLink('pi-outliner://block/recovery-target');
+ await c.handleRowClick(target.id);
+ expect(c.view().recoveryHelp).toBeUndefined();
+ await c.handleAction('destination.here');
+ expect(fake.calls.some(input=>input.action==='navigation.link.set')).toBe(false);
+});
+
+test('cancelled Tree recovery never creates an unresolved page',async()=>{
+ const source=block('page-source');
+ const fake=harness(input=>{
+  if(input.action==='tree.index')return snapshot([source],source);
+  if(input.action==='navigation.resolve')throw Error('No linked destination');
+ });
+ const c=createTreeController(fake.effects);await c.initialize();
+ await c.handleLink('pi-outliner://page/Future%20Page');
+ expect(c.view().recoveryHelp).toContain('Open here');
+ await c.handleKeypress('',{name:'escape'},'pass');
+ expect(fake.calls.some(input=>input.action==='pages.follow')).toBe(false);
+ expect(fake.stops).toBe(0);
+});
+
+test('Inbox missing destination opens browsed Preview target locally and preserves receipt',async()=>{
+ const source=block('inbox-origin'),target=block('inbox-followed');
+ const fake=harness(input=>{
+  if(input.action==='tree.index')return snapshot([source,target],source);
+  if(input.action==='inbox.status')return{enabled:true,paused:false,state:'idle',pending:0,message:'ready',attentionCount:0,attentionOnly:!!input.attentionOnly,resultsOffset:0,resultsTruncated:false,results:input.attentionOnly?[]:[{id:'receipt',sourceId:source.id,sourceTitle:'Source',outputIds:[],state:'applied',summary:'Filed',createdAt:'2026-09-23'}]};
+  if(input.action==='navigation.dispatch')throw Error('Linked destination closed');
+ });
+ const c=createTreeController(fake.effects);await c.initialize();await c.handleAction('tree.inbox.open');await setImmediate();
+ await c.handleAction('preview.link:'+encodeURIComponent('pi-outliner://block/inbox-followed'));
+ await c.handleAction('preview.open');expect(c.view().recoveryHelp).toContain('Open here');
+ await c.handleAction('destination.here');
+ expect(c.view().mode).toBe('inbox');expect(c.view().inbox?.selected?.id).toBe('receipt');
+ expect(c.view().inbox?.reader.state?.target).toEqual({kind:'block',blockId:target.id});
+ expect(fake.calls.some(input=>input.action==='navigation.link.set')).toBe(false);
 });

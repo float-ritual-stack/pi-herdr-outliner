@@ -46,6 +46,7 @@ import {
 import {
   createOpenDestinationChooserState,
   OpenDestinationChooser,
+  missingNavigationDestination,
   type OpenDestinationChooserState,
   type OpenDestinationScheduler,
   type OpenDestinationTarget,
@@ -3344,8 +3345,10 @@ export function createDetailController(
             destinationChooser!.open(target);
           } else {
             await resolveDestinationTarget(target, reference);
-            if (!await openLinked(target, reference.preserveSource === true)) {
-              destinationChooser!.open(target);
+            try { await openLinked(target, reference.preserveSource === true); }
+            catch(error){
+              if(!missingNavigationDestination(error))throw error;
+              destinationChooser!.recover(target);
             }
           }
           break;

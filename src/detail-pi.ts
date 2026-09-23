@@ -1,3 +1,4 @@
+import {destinationRecoveryKey} from "./open-destination-chooser";
 import {KeyInspector} from "./key-inspector";
 import {createDetailDestination, type DetailDestinationPlacement} from "./detail-pane-placement";
 import { ComposedLayout, ComposedTree, composedTreeNavigation, composedPointer, composedWidths } from "./composed-surface";
@@ -292,7 +293,8 @@ const tui = new DetailTuiAltScreen(processTerminal, false, undefined, {
     if (actionMenuInvoke && url.startsWith("pi-outliner-action:")) { actionMenuInvoke(url.slice("pi-outliner-action:".length)); return; }
     serviceEventScheduler.scheduleWork(async () => {
       if (focusedReader().state.destinationChooser.active) {
-        await focusedReader().handleDestinationChooserKeypress("", { name: "pointer" });
+        const recovery=url.startsWith('pi-outliner-action:')?destinationRecoveryKey(url.slice('pi-outliner-action:'.length)):null;
+        await focusedReader().handleDestinationChooserKeypress(recovery?.str??"",recovery?.key??{name:"pointer"});
         return;
       }
       if (url.startsWith("pi-outliner-action:")) {

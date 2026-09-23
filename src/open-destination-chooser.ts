@@ -1,5 +1,6 @@
 import {
   DEFAULT_OUTLINER_ACTION_KEYMAP,
+  outlinerActionLink,
   displayActionChord,
   type OutlinerActionKeymap,
 } from "./outliner-actions";
@@ -30,6 +31,7 @@ export function openDestinationBlockId(target: OpenDestinationTarget): string {
 }
 
 export interface OpenDestinationChooserState {
+  openHereOnEnter?: boolean;
   active: boolean;
   loading: boolean;
   target: OpenDestinationTarget | null;
@@ -90,6 +92,17 @@ export function openDestinationChooserHelp(
   return `⇧R replace here  c choose once  f ${readerLabel}  ${right}/r split right  ${down}/d split down  Esc close  Enter default`;
 }
 
+export function missingNavigationDestination(error:unknown):boolean {
+  return error instanceof Error && /^(?:No linked destination|Linked destination closed)/.test(error.message);
+}
+
+export function destinationRecoveryKey(action:string):{str:string;key:TerminalKey}|null {
+  if(action==='destination.here')return{str:'R',key:{name:'r',shift:true}};
+  if(action==='destination.choose')return{str:'l',key:{name:'l'}};
+  if(action==='destination.cancel')return{str:'',key:{name:'escape'}};
+  return null;
+}
+
 export class OpenDestinationChooser {
   readonly state: OpenDestinationChooserState;
   private readonly timeoutMs: number;
@@ -112,6 +125,7 @@ export class OpenDestinationChooser {
   }
 
   open(target: OpenDestinationTarget): void {
+    this.state.openHereOnEnter=false;
     this.clearTimer();
     this.targetGeneration += 1;
     this.state.active = true;
@@ -121,7 +135,18 @@ export class OpenDestinationChooser {
     this.scheduleDismissal();
     this.effects.invalidate();
   }
+  recover(target:OpenDestinationTarget):void {
+    this.open(target);
+    this.state.openHereOnEnter=true;
+    this.state.status=`No linked destination · ${target.title}`;
+    this.effects.invalidate();
+  }
   helpText(): string {
+    if(this.state.openHereOnEnter)return [
+      outlinerActionLink('destination.here','[Enter: Open here]'),
+      outlinerActionLink('destination.choose','[L: Choose destination]'),
+      outlinerActionLink('destination.cancel','[Esc: Cancel]'),
+    ].join(' ');
     return openDestinationChooserHelp(this.actionKeymap, this.readerLabel);
   }
 
@@ -134,7 +159,7 @@ export class OpenDestinationChooser {
     if (this.state.loading) return true;
     this.scheduleDismissal();
     if (key.name === "return") {
-      await this.openDestination("default");
+      await this.openDestination(this.state.openHereOnEnter?"replace":"default");
       return true;
     }
     const mapped = this.actionKeymap.canonicalize("detail", "destination", str, key);
@@ -142,7 +167,7 @@ export class OpenDestinationChooser {
       ? "split-right"
       : mapped.actionId === "detail.pane.below"
       ? "split-down"
-      : str.toLowerCase() === "c"
+      : (str.toLowerCase() === "c" || str.toLowerCase() === "l")
       ? "chosen"
       : str === "R"
       ? "replace"
@@ -188,7 +213,7 @@ export class OpenDestinationChooser {
       this.state.target === target;
     this.state.loading = true;
     this.state.status = destination === "replace"
-      ? `Replacing this Detail with ${target.title}…`
+      ? `Opening ${target.title} here…`
       : destination === "linked"
       ? `Opening ${target.title} in ${this.readerLabel}…`
       : destination === "split-down"
@@ -215,7 +240,8 @@ export class OpenDestinationChooser {
         }
         if (!opened) {
           this.state.loading = false;
-          this.state.status = "No linked destination · choose once, replace here, or a split direction";
+          this.state.openHereOnEnter = true;
+          this.state.status = `No linked destination · ${target.title}`;
           this.scheduleDismissal();
           this.effects.invalidate();
           return;
@@ -244,7 +270,10 @@ export class OpenDestinationChooser {
         return;
       }
       this.state.loading = false;
-      this.state.status = `Open failed: ${error instanceof Error ? error.message : String(error)}`;
+      if(missingNavigationDestination(error)){
+        this.state.openHereOnEnter=true;
+        this.state.status=`No linked destination · ${target.title}`;
+      }else this.state.status = `Open failed: ${error instanceof Error ? error.message : String(error)}`;
       this.scheduleDismissal();
       this.effects.invalidate();
     }

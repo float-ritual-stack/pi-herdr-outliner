@@ -9,7 +9,6 @@ import { PiDetailInputStreamDecoder } from "./detail-pi-input";
 import { dispatchNavigation, resolveNavigationDestination, type TreeNavigation } from "./navigation-routes";
 import type { createDetailController, DetailViewport } from "./detail-controller";
 import type { OutlinerActionKeymap } from "./outliner-actions";
-import { navigateOutlinerLink } from "./outliner-links";
 import { openCapturePopup, openGotoPopup, openTreePane, openVirtualBranchNavigatorPopup } from "./pane-control";
 import { parsePropertySummaryKeys } from "./property-summary";
 import { truncateToWidth } from "@earendil-works/pi-tui";
@@ -176,7 +175,7 @@ export class ComposedTree implements Component {
       if (link?.startsWith("pi-outliner-action:")) return this.controller.handleAction(link.slice("pi-outliner-action:".length));
       if (link && treeClickActivates(click)) {
         if (row) await this.controller.handleRowClick(row);
-        await navigateOutlinerLink(this.options.client, link, {sourceClientId: this.options.clientId, navigation: this.options.navigation});
+        await this.controller.handleLink(link);
       } else if (row) await this.controller.handleRowClick(row, treeClickActivates(click));
       return;
     }

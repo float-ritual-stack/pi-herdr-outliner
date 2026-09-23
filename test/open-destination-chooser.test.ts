@@ -286,3 +286,25 @@ describe("open destination chooser", () => {
     );
   });
 });
+
+
+test("missing destination requires a distinct Enter; cancel and timeout never replace", async () => {
+  const fallback = harness({linkedAvailable:false});
+  fallback.chooser.open(target);
+  await fallback.chooser.handleKeypress("", {name:"return"});
+  expect(fallback.calls.filter(call=>call.startsWith("replace:"))).toEqual([]);
+  expect(fallback.chooser.helpText()).toContain("Enter: Open here");
+  await fallback.chooser.handleKeypress("", {name:"return"});
+  expect(fallback.calls.filter(call=>call.startsWith("replace:"))).toEqual(["replace:target-1"]);
+  expect(fallback.chooser.state.active).toBe(false);
+  const scheduler = new FakeScheduler();
+  const cancelled = harness({scheduler});
+  cancelled.chooser.recover(target);
+  await cancelled.chooser.handleKeypress("", {name:"escape"});
+  await cancelled.chooser.handleKeypress("", {name:"return"});
+  expect(cancelled.calls.filter(call=>call.startsWith("replace:"))).toEqual([]);
+  cancelled.chooser.recover(target);
+  scheduler.fire(scheduler.timers.length-1);
+  await cancelled.chooser.handleKeypress("", {name:"return"});
+  expect(cancelled.calls.filter(call=>call.startsWith("replace:"))).toEqual([]);
+});

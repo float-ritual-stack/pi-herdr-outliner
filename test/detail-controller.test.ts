@@ -2707,15 +2707,19 @@ describe("detail controller projection and deferred refresh", () => {
       );
     };
 
-    await expect(harness.controller.dispatch({
+    await harness.controller.dispatch({
       type: "reference.open",
       target: { kind: "block", value: "locked-target" },
       routing: "linked",
-    }, viewport)).rejects.toThrow("No linked destination");
+    }, viewport);
+    expect(harness.controller.state.destinationChooser.openHereOnEnter).toBe(true);
 
-    expect(harness.controller.state.destinationChooser.active).toBe(false);
+    expect(harness.controller.state.destinationChooser.active).toBe(true);
     expect(harness.controller.state.context.selected?.id).toBe(source.id);
     expect(harness.calls.openedDetails).toEqual([]);
+    await harness.controller.handleDestinationChooserKeypress("", {name:"return"});
+    expect(harness.controller.state.context.selected?.id).toBe("locked-target");
+    expect(harness.controller.state.destinationChooser.active).toBe(false);
   });
   test("defers chooser routing without navigating an available Detail", async () => {
     const source = makeBlock({ id: "modified-source", text: "See ((modified-target))" });

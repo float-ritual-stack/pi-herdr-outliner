@@ -230,6 +230,12 @@ export class InboxController {
     if(target.fragmentId)throw Error('This host cannot open a fragment in Detail');
     return this.effects.open(target.blockId,'detail');
   }
+  async openHere(target:OutlinerNavigationTarget):Promise<void>{
+    const reader = this.reader, receiptId = this.selected?.id, targetIndex = this.targetIndex;
+    this.previewMode='content';
+    await reader.load(target);
+    if (this.selected?.id === receiptId && this.targetIndex === targetIndex && this.reader === reader) this.focusReader(true);
+  }
   async previewAction(action:string,reader=this.reader):Promise<void>{await reader.action(action,target=>this.openPreview(target));}
   selectResult(index: number): void {
     if (!Number.isInteger(index) || !this.results[index]) return;

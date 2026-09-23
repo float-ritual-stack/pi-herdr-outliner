@@ -15,7 +15,6 @@ import {
   type ClientRuntimeSync,
 } from "./client-runtime-sync";
 import { OutlinerActionKeymap } from "./outliner-actions";
-import { navigateOutlinerLink } from "./outliner-links";
 import { reportCurrentPaneWorkspace,
   configureCurrentPaneRightClick,
   currentPaneRuntime,
@@ -249,7 +248,7 @@ function handleMouseSequence(sequence: string): void {
   if (link) {
     enqueueWork(async () => {
       if (rowId) await controller.handleRowClick(rowId);
-      await navigateOutlinerLink(client, link, { sourceClientId: clientId, intent: "open" });
+      await controller.handleLink(link);
     });
     return;
   }

@@ -1,3 +1,4 @@
+import {OpenDestinationChooser, destinationRecoveryKey, missingNavigationDestination, type OpenDestinationTarget} from "./open-destination-chooser";
 import type {DetailDestinationPlacement} from "./detail-pane-placement";
 import type {OutlinerViewAddress} from "./types";
 import {DocumentPreview, type DocumentPreviewState} from './document-preview';
@@ -25,6 +26,9 @@ import { referencedFilePreview, type FileContents, type ReferencedPathCandidate 
 import { getProperty } from "./properties";
 import {
   firstOutlinerReference,
+  outlinerLinkUri, parseOutlinerLinkUri,
+  followResourceOccurrence,
+  navigateOutlinerLink,
   resolveOutlinerLinkTarget,
 } from "./outliner-links";
 import { blockDisplayTitle } from "./references";
@@ -168,6 +172,8 @@ export interface TreeView {
   readonly destinationInstructions?: string;
   readonly destinationPurpose?: "link" | "open" | "place";
   readonly navigationDestinationLabel?: string;
+  readonly recoveryHelp?:string;
+  readonly recoveryStatus?:string;
 }
 
 export interface TreeControllerEffects {
@@ -208,6 +214,7 @@ export interface TreeController {
   initialize(): Promise<void>;
   handleKeypress(str: string, key: TerminalKey, inputAction: TerminalInputAction): Promise<void>;
   handleTreeWheel(direction: "up" | "down"): Promise<void>;
+  handleLink(uri:string):Promise<void>;
   handlePaste(text: string): Promise<void>;
   handleGotoMouse(sequence: string): Promise<void>;
   focusLocalPreview(focused?: boolean): void;
@@ -392,7 +399,10 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       effects.invalidate();
     },
     async open(blockId, destination) {
-      if (destination === "detail") await effects.navigation.dispatch({ kind: "block", blockId }, "open");
+      if (destination === "detail") {
+        mode = "browse";
+        if (!await dispatchRecoverable({ kind: "block", blockId }, "open")) return;
+      }
       else await selectVisibleBlock(blockId, { recordNavigation: true });
       mode = "browse"; status = destination === "detail" ? "Opened in Detail" : "Focused selected result";
       if (refreshPending) await reload();
@@ -405,7 +415,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     openExternal: effects.openExternal,
     request: input => effects.request(input),
     async openResource(resourceId) {
-      await effects.navigation.dispatch({ kind: "resource", resourceId }, "open");
+      if (!await dispatchRecoverable({ kind: "resource", resourceId }, "open")) return;
       mode = "browse";
       status = "Pi session opened in Detail";
       if (refreshPending) await reload();
@@ -424,11 +434,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     },
     async open(blockId, destination) {
       if (destination === "detail") {
-        const state = await effects.request<NavigationLinkState>({action:"navigation.link.get", source:{clientId:effects.clientId,region:"tree"}});
-        if (!state.destination || !state.destinations.some(d=>d.view.clientId===state.destination!.clientId && d.view.region===state.destination!.region)) {
-          await handleAction("tree.navigation.once"); return;
-        }
-        await effects.navigation.dispatch({kind:"block",blockId},"open");
+        if (!await dispatchRecoverable({kind:"block",blockId},"open")) return;
       } else { await selectVisibleBlock(blockId, { recordNavigation: true, physicalSource: true }); mode = "browse"; }
       status = destination === "detail" ? "Inbox result opened in Detail" : "Inbox block revealed in Tree";
       if (refreshPending) await reload();
@@ -446,15 +452,73 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   }
 
   let placementDirection: "right" | "down" | null = null;
-  let destinationMenu: {state: NavigationLinkState; purpose: "link" | "open"; target?:OutlinerNavigationTarget} | null = null;
+  let destinationMenu: {state: NavigationLinkState; purpose: "link" | "open"; target?:OutlinerNavigationTarget; recoveryTarget?:OpenDestinationTarget} | null = null;
 
-  async function openPreviewTarget(target:OutlinerNavigationTarget):Promise<void>{
-    const state=await effects.request<NavigationLinkState>({action:'navigation.link.get',source:{clientId:effects.clientId,region:'tree'}});
-    if(state.destination&&state.destinations.some(d=>d.view.clientId===state.destination!.clientId&&d.view.region===state.destination!.region)){
-      await effects.navigation.dispatch(target,'open');
-    }else{
+  const recoveryResolvers=new WeakMap<OpenDestinationTarget,()=>Promise<OutlinerNavigationTarget>>();
+  let recoveryOrigin='';
+  const originKey=()=>JSON.stringify([mode,rows[selectedIndex]?.rowId,mode==='inbox'?inbox.selected?.id:null,mode==='inbox'?inbox.targetIndex:null]);
+  async function materializeRecovery(target:OpenDestinationTarget):Promise<OutlinerNavigationTarget>{
+    const resolve=recoveryResolvers.get(target);
+    if(resolve){target.target=await resolve();recoveryResolvers.delete(target);}
+    return target.target;
+  }
+  const openRecovery=new OpenDestinationChooser({
+    beforeOpen:async target=>{
+      await materializeRecovery(target);
+      if (recoveryOrigin !== originKey()) openRecovery.dismiss();
+    },
+    replace:async target=>{
+      if(mode==='inbox')await inbox.openHere(target.target);
+      else {previewPreferences={...previewPreferences,enabled:true};await inspectLocally(target.target);localReader.focus();}
+      status='Opened here in Preview';
+    },
+    openChosen:async target=>{
       await handleAction('tree.navigation.once');
-      if(destinationMenu)destinationMenu.target=target;
+      if(destinationMenu)destinationMenu.recoveryTarget=target;
+      return false;
+    },
+    openLinked:async target=>{await effects.navigation.dispatch(target.target,'open');return true;},
+    openNewDetail: async (target, direction) => {
+      if (!effects.createDetailDestination) throw Error("Creating a destination is unavailable in this host");
+      const row = rows[selectedIndex];
+      const blockId = target.target.kind === "block" ? target.target.blockId : (isBlockTreeRow(row) ? row.canonicalId : undefined);
+      if (!blockId) throw Error("Select a block to create a Detail destination");
+      const destination = await effects.createDetailDestination(blockId, {kind:"split", direction});
+      await effects.navigation.dispatch(target.target, "open", {destination});
+    },
+    invalidate:()=>effects.invalidate(),
+  });
+  function offerRecovery(target:OutlinerNavigationTarget,title:string,resolve?:()=>Promise<OutlinerNavigationTarget>):void{
+    const request={target,title};if(resolve)recoveryResolvers.set(request,resolve);
+    recoveryOrigin=originKey();status='';openRecovery.recover(request);
+  }
+  async function dispatchRecoverable(target:OutlinerNavigationTarget,intent:OutlinerNavigationIntent,options?:NavigationRouteOptions){
+    const origin=originKey();
+    try{return await effects.navigation.dispatch(target,intent,options);}
+    catch(error){
+      if(intent!=='open'||options?.destination||!missingNavigationDestination(error))throw error;
+      if(origin===originKey())offerRecovery(target,target.kind==='block'?target.blockId:target.resourceId);
+      return undefined;
+    }
+  }
+  async function openPreviewTarget(target:OutlinerNavigationTarget):Promise<void>{await dispatchRecoverable(target,'open');}
+  async function handleLink(uri:string):Promise<void>{
+    const origin=originKey();
+    try {
+      const opened = await navigateOutlinerLink(effects,uri,{sourceClientId:effects.clientId,navigation:effects.navigation,intent:'open'});
+      status = `${opened.created ? 'Created and opened' : 'Opened'} ${opened.title} in ${effects.navigation.readerLabel}`;
+    }
+    catch(error){
+      if(!missingNavigationDestination(error))throw error;
+      if(origin!==originKey())return;
+      const reference=parseOutlinerLinkUri(uri);
+      const placeholder:OutlinerNavigationTarget=reference.kind==='resource'?{kind:'resource',resourceId:reference.value}:{kind:'block',blockId:reference.value};
+      offerRecovery(placeholder,reference.value,async()=>{
+        if(reference.kind==='resource')return{kind:'resource',resourceId:reference.value};
+        if(reference.kind==='reference'){const followed=await followResourceOccurrence(effects,reference);return{kind:'resource',resourceId:followed.resource.id,referenceContext:followed.referenceContext};}
+        const resolved=await resolveOutlinerLinkTarget(effects,reference);
+        return{kind:'block',blockId:resolved.block.id,...resolved.fragmentId?{fragmentId:resolved.fragmentId}:{}};
+      });
     }
   }
 
@@ -539,6 +603,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   function view(): TreeView {
     return {
       workspaceRoot: effects.workspaceRoot,
+      ...(openRecovery.state.active&&recoveryOrigin===originKey()?{recoveryHelp:openRecovery.helpText(),recoveryStatus:openRecovery.state.status}:{}),
       root, scrollStartEntryIndex,
       breadcrumbs:breadcrumbs(),
       indentationMode,
@@ -880,6 +945,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     quickEditSource = null;
     quickCompletion = null;
     goto.dispose();
+    openRecovery.dispose();
   }
 
 
@@ -1133,6 +1199,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   }
 
   async function publishDisplayRowSelection(row: TreeDisplayRow | undefined): Promise<void> {
+    if (openRecovery.state.active && recoveryOrigin !== originKey()) openRecovery.dismiss();
     if (isBlockTreeRow(row)) {
       lastVisibleCanonicalId = row.canonicalId;
       await publishBrowsingContext(row.canonicalId);
@@ -1287,49 +1354,36 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         effects.invalidate();
         return;
       }
+      const origin = originKey();
+      const resolveTarget = async (): Promise<OutlinerNavigationTarget> => {
+        if (activation.kind === "follow-page") {
+          const resolved = await resolveOutlinerLinkTarget(effects, {kind: "page", value: activation.address});
+          return {kind: "block", blockId: resolved.block.id};
+        }
+        if (activation.kind === "follow-resource") {
+          const receipt = await effects.request<InternResourceReceipt>({action:"resources.follow-authored", reference:activation.reference});
+          return {kind:"resource", resourceId:receipt.resource.id};
+        }
+        return activation.target;
+      };
       try {
         await effects.navigation.resolve("open", routeOptions);
-        let target: OutlinerNavigationTarget;
-        let createdPage = false;
-        let createdResource = false;
-        if (activation.kind === "follow-page") {
-          const resolved = await resolveOutlinerLinkTarget(effects, {
-            kind: "page",
-            value: activation.address,
-          });
-          target = { kind: "block", blockId: resolved.block.id };
-          createdPage = resolved.created === true;
-        } else if (activation.kind === "follow-resource") {
-          const receipt = await effects.request<InternResourceReceipt>({
-            action: "resources.follow-authored",
-            reference: activation.reference,
-          });
-          target = { kind: "resource", resourceId: receipt.resource.id };
-          createdResource = receipt.created;
-        } else {
-          target = activation.target;
+        if (await dispatchRecoverable(await resolveTarget(), "open", {...routeOptions, preserveSource:true})) {
+          status = `Authored target opened in ${effects.navigation.readerLabel}`;
         }
-        await effects.navigation.dispatch(
-          target,
-          "open",
-          { ...routeOptions, preserveSource: true },
-        );
-        status = createdPage
-          ? `Page created and opened in ${effects.navigation.readerLabel}`
-          : createdResource
-          ? `Resource created and opened in ${effects.navigation.readerLabel}`
-          : `Authored target opened in ${effects.navigation.readerLabel}`;
       } catch (error) {
-        status = errorMessage(error);
+        if (missingNavigationDestination(error) && !routeOptions.destination) {
+          if (origin === originKey()) offerRecovery({kind:"block", blockId:selected.owner.blockId}, "Selected authored link", resolveTarget);
+        } else status = errorMessage(error);
       }
       effects.invalidate();
       return;
     }
     try {
-      await effects.navigation.dispatch({
+      if (!await dispatchRecoverable({
         kind: "block",
         blockId: selected.canonicalId,
-      }, "open", routeOptions);
+      }, "open", routeOptions)) return;
       status = `Reader opened in ${effects.navigation.readerLabel}`;
     } catch (error) {
       status = errorMessage(error);
@@ -1340,11 +1394,13 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   async function createLinkedDetail(placement: DetailDestinationPlacement): Promise<void> {
     const selected = rows[selectedIndex];
     const purpose = destinationMenu?.purpose ?? "link";
-    const target=destinationMenu?.target;
+    const recoveryTarget=destinationMenu?.recoveryTarget;
+    let target=destinationMenu?.target;
     const callerMode = destinationMenu ? actionMenuReturnMode : mode;
     const selectedBlockId = isBlockTreeRow(selected) ? selected.canonicalId : undefined;
     destinationMenu = null; placementDirection = null; destinationPreview.clear(); mode = callerMode;
     try {
+      if(recoveryTarget)target=await materializeRecovery(recoveryTarget);
       const blockId = target?.kind==="block"?target.blockId:callerMode === "inbox" ? await inbox.resolveContentTarget() : selectedBlockId;
       if (!blockId) throw new Error("Select a block to create a Detail destination");
       if (!effects.createDetailDestination) throw new Error("Creating a destination is unavailable in this host");
@@ -1352,7 +1408,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       if (callerMode === "inbox") inbox.notice = status;
       effects.invalidate();
       const destination = await effects.createDetailDestination(blockId, placement);
-      if(target)await effects.navigation.dispatch(target,"open",{destination});
+      if(target)await dispatchRecoverable(target,"open",{destination});
       if (purpose === "link") await effects.request({action: "navigation.link.set", source: {clientId: effects.clientId, region: "tree"}, destination});
       void navigationDisplay.refresh();
       status = purpose === "link" ? "Linked: Tree → new Detail" : "Opened once in new Detail";
@@ -1778,7 +1834,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     navigationIndex = targetIndex;
     if (canonical.effectiveDeletedRootId) {
       await flushBrowsingPublications();
-      await effects.navigation.dispatch({kind: "block", blockId: canonical.id}, "open");
+      await dispatchRecoverable({kind: "block", blockId: canonical.id}, "open");
       status = `Navigation history opened deleted block read-only in ${effects.navigation.readerLabel}`;
       return;
     }
@@ -1835,21 +1891,17 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       status = "Selected block has no block or page references";
       return;
     }
-    if (reference.kind === "page") {
-      await effects.navigation.resolve(intent);
+    if (intent === "open") {
+      await handleLink(outlinerLinkUri(reference.kind, reference.value, reference));
+      return;
     }
     const resolved = await resolveOutlinerLinkTarget(effects, reference);
-    const dispatched = await effects.navigation.dispatch({
+    const dispatched = await dispatchRecoverable({
         kind: "block",
         blockId: resolved.block.id,
         ...(resolved.fragmentId ? { fragmentId: resolved.fragmentId } : {}),
       }, intent, {focusTarget: intent === "reveal"});
-    const verb = intent === "open"
-      ? resolved.created ? "Created and opened" : "Opened"
-      : "Revealed";
-    status = intent === "open"
-      ? `${verb} ${blockDisplayTitle(resolved.block)} in ${effects.navigation.readerLabel}`
-      : `${verb} ${blockDisplayTitle(resolved.block)} · ${dispatched.resolution}`;
+    status = `Revealed ${blockDisplayTitle(resolved.block)} · ${dispatched?.resolution ?? "unavailable"}`;
   }
 
   function setCollapsed(row: TreeRow, collapsed: boolean): void {
@@ -1956,6 +2008,9 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     actionId: string,
     origin?: { column: number; row: number },
   ): Promise<void> {
+    const recovery=destinationRecoveryKey(actionId);
+    if(recovery){if(openRecovery.state.active&&recoveryOrigin===originKey())await openRecovery.handleKeypress(recovery.str,recovery.key);return;}
+    if(openRecovery.state.active)openRecovery.dismiss();
     if(actionId.startsWith('preview.')){
       if(mode==='inbox')await inbox.previewAction(actionId);
       else await localReader.action(actionId,openPreviewTarget);
@@ -2064,10 +2119,11 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         void navigationDisplay.refresh();
         status = destination ? `Linked: Tree → ${menu.state.destinations.find(entry=>entry.view.clientId===destination.clientId)?.label ?? "Detail"}` : "Open unlinked · choose once or new split";
       } else if (destination) {
-        if(menu.target)await effects.navigation.dispatch(menu.target,"open",{destination});
+        if(menu.recoveryTarget)await dispatchRecoverable(await materializeRecovery(menu.recoveryTarget),"open",{destination});
+        else if(menu.target)await dispatchRecoverable(menu.target,"open",{destination});
         else if (mode === "inbox") {
           const blockId = await inbox.resolveContentTarget();
-          await effects.navigation.dispatch({kind:"block",blockId},"open",{destination});
+          await dispatchRecoverable({kind:"block",blockId},"open",{destination});
         } else await focusDetailReader({destination});
       }
       } catch (error) {
@@ -2076,7 +2132,8 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
           inbox.notice = failure;
           try {
             await handleAction(menu.purpose === "link" ? "tree.navigation.link" : "tree.navigation.once");
-            if(destinationMenu) (destinationMenu as {target?:OutlinerNavigationTarget}).target=menu.target;
+            if(destinationMenu) (destinationMenu as {target?:OutlinerNavigationTarget;recoveryTarget?:OpenDestinationTarget}).target=menu.target;
+            if(destinationMenu)(destinationMenu as {recoveryTarget?:OpenDestinationTarget}).recoveryTarget=menu.recoveryTarget;
           }
           catch { /* Keep the original failure visible even if discovery is unavailable. */ }
         }
@@ -2364,6 +2421,12 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     resolveAction = true,
     treePointer = false,
   ): Promise<void> {
+    if(openRecovery.state.active&&inputAction!=='suppress'){
+      if(recoveryOrigin!==originKey()){openRecovery.dismiss();}
+      else if(key.name==='return'||key.name==='escape'||str.toLowerCase()==='l'){
+        await openRecovery.handleKeypress(str,key);return;
+      }else openRecovery.dismiss();
+    }
     if(resolveAction && inputAction !== "suppress" && mode !== "browse" && mode !== "action-menu" && (key.meta || key.ctrl)) {
       const browseAction=actionKeymap.canonicalize("tree","browse",str,key);
       if(browseAction.actionId === "tree.navigation.link" || browseAction.actionId === "tree.navigation.once") {
@@ -2379,7 +2442,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       if(await localReader.key(key,frame.content.width,frame.content.height,openPreviewTarget))return;
       const delta=key.name==="up"?-1:key.name==="down"?1:key.name==="pageup"?-frame.content.height:key.name==="pagedown"?frame.content.height:0;
       if(delta) scrollLocalPreview(delta);
-      else if(key.name==="return") { try {await effects.navigation.dispatch(localReader.state.target,"open");} catch(error){status=errorMessage(error);} }
+      else if(key.name==="return") { try {await dispatchRecoverable(localReader.state.target,"open");} catch(error){status=errorMessage(error);} }
       else if(!(key.ctrl&&key.name==="q")) return;
       if(!(key.ctrl&&key.name==="q")){effects.invalidate();return;}
     }
@@ -2755,6 +2818,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     initialize,
     handleKeypress,
     handleTreeWheel: async direction => {if(mode === "inbox") {inbox.reader.focus(false);inbox.move(direction === "up"?-1:1);}else await handleKeypress("", {name: direction}, "pass", false, true);},
+    handleLink,
     handlePaste,
     handleGotoMouse,
     handleDisclosure,
