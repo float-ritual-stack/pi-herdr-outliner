@@ -2184,7 +2184,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       if(!selected || !connectionOwner(selected)){status="Select a resolved block target to show connections";effects.invalidate();return;}
       const wasCollapsed=isBlockTreeRow(selected) && connectionCollapsed(selected);
       const opened=connections.toggle(selected);
-      if(isBlockTreeRow(selected)){
+      if(opened && isBlockTreeRow(selected)){
         if(selected.kind==='occurrence')collapsedOccurrenceRowIds.delete(selected.rowId);
         else collapsedBlockIds.delete(selected.canonicalId);
       }

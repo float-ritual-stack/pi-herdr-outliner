@@ -3881,6 +3881,9 @@ test('connection disclosure on a collapsed parent restores physical children',as
  expect(c.view().rows.some(r=>isBlockTreeRow(r)&&r.canonicalId===kid.id)).toBe(false);
  await c.handleAction('tree.authored-links.toggle');
  expect(c.view().rows.some(r=>isBlockTreeRow(r)&&r.canonicalId===kid.id)).toBe(true);
+ await c.handleDisclosure(parent.id);await c.handleAction('tree.authored-links.toggle');
+ await c.handleServiceEvent(event('content',parent.id));
+ expect(c.view().rows.some(r=>isBlockTreeRow(r)&&r.canonicalId===kid.id)).toBe(false);
 });
 
 test('refresh preserves a surviving generated selection and refreshes hidden descendants on group reopen',async()=>{
