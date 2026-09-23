@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {visibleWidth} from '@earendil-works/pi-tui';
 import type {Block} from '../../src/types';
 import {runHerdrScenario} from './herdr-runner';
 const composed=process.argv.includes('--composed');
@@ -25,6 +26,17 @@ const result=await runHerdrScenario({name:composed?'detail-tab-composed':'detail
  await s.waitFor('canonical body destination',s.registrations,cs=>cs.some(c=>c.clientId===detail.clientId&&c.currentTarget?.kind==='block'&&c.currentTarget.blockId===destination.id));
  assert.equal((await s.client.request<Block>({action:'get',blockId:source.id})).text,raw);
  await s.checkpoint('03-body-link-open');
+ await open(source);
+ await s.keys(s.panes.detail,'tab','tab');
+ const mouseFrame=await s.waitFor('attached body link',terminal.visible,text=>text.includes('Late body link'));
+ const mouseRows=mouseFrame.split('\n'),row=mouseRows.findIndex(line=>line.includes('Late body link'));
+ const column=visibleWidth(mouseRows[row]!.slice(0,mouseRows[row]!.indexOf('Late body link')))+2;
+ await terminal.write(`\x1b[<0;${column+1};${row+1}M\x1b[<0;${column+1};${row+1}m`);
+ await s.waitVisible(s.panes.detail,'Enter: Open here');
+ await s.keys(s.panes.detail,'escape');
+ await s.waitFor('cancel returns to source',()=>s.visible(s.panes.detail),text=>text.includes('Late body link')&&!text.includes('Enter: Open here'));
+ assert.ok((await s.registrations()).some(c=>c.clientId===detail.clientId&&c.currentTarget?.kind==='block'&&c.currentTarget.blockId===source.id));
+ await s.checkpoint('03b-mouse-link-and-cancel');
  const properties=await s.client.request<Block>({action:'create',text:['PROPERTY FOCUS',...Array.from({length:24},(_,i)=>`[field-${i}::value-${i}]`),'','Body remains after the table.'].join('\n')});
  await open(properties);await s.keys(s.panes.detail,'tab','enter');await s.waitVisible(s.panes.detail,'field-0');
  for(let i=0;i<24;i++)await s.keys(s.panes.detail,'tab');
