@@ -3868,7 +3868,35 @@ test('nested connection disclosure supports mouse, keyboard, independent sibling
  await c.handleAction('tree.read');expect(lastCall(fake.calls,'navigation.dispatch')).toMatchObject({target:{kind:'block',blockId:a.id}});
  await c.handleDisclosure(first.rowId);expect(c.view().rows.some(r=>r.rowId===second.rowId)).toBe(false);
  await c.handleDisclosure(first.rowId);expect(child(second.rowId)).toBeDefined();
+ expect(lastCall(fake.calls,'browsing-context.publish')).toMatchObject({target:{kind:'block',blockId:b.id}});
  await c.handleRowClick(second.rowId);await c.handleKeypress('',{name:'left'},'pass');
  expect(c.view().rows.some(r=>r.kind==='authored-link'&&r.owner.rowId===second.rowId)).toBe(false);
  expect(fake.calls.some(c=>['create','update','resources.follow-authored'].includes(c.action))).toBe(false);
+});
+
+test('connection disclosure on a collapsed parent restores physical children',async()=>{
+ const parent=block('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',{hasChildren:true}),kid=block('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',{parentId:parent.id,depth:1});
+ const fake=harness(input=>input.action==='tree.index'?snapshot([parent,kid],parent):input.action==='blocks.authored-links'?{kind:'owner-unavailable',ownerId:parent.id,reason:'missing'}:undefined);
+ const c=createTreeController(fake.effects);await c.initialize();await c.handleDisclosure(parent.id);
+ expect(c.view().rows.some(r=>isBlockTreeRow(r)&&r.canonicalId===kid.id)).toBe(false);
+ await c.handleAction('tree.authored-links.toggle');
+ expect(c.view().rows.some(r=>isBlockTreeRow(r)&&r.canonicalId===kid.id)).toBe(true);
+});
+
+test('refresh preserves a surviving generated selection and refreshes hidden descendants on group reopen',async()=>{
+ let a=block('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'),b=block('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb');let readsB=0;
+ const fake=harness(input=>{
+  if(input.action==='tree.index')return snapshot([a,b],a);
+  if(input.action==='blocks.authored-links'){
+   const owner=input.ownerBlockId===a.id?a:b,target=owner===a?b:a;if(owner===b)readsB++;
+   return{kind:'ready',ownerId:owner.id,ownerTextDigest:authoredTextDigest(owner.text),outlinks:{entries:[{kind:'outlink',key:target.id,label:target.id,referenceKind:'block',occurrenceCount:1,firstSpan:{start:0,end:1},resolution:{kind:'ready',target:{kind:'block',blockId:target.id},title:target.id}}],completeness:{kind:'complete'},invalidCount:0,diagnostics:[]},resources:{entries:[],completeness:{kind:'complete'},invalidCount:0,diagnostics:[]}};
+  }
+ });
+ const c=createTreeController(fake.effects);await c.initialize();await c.handleAction('tree.authored-links.toggle');
+ const link=c.view().rows.find(r=>r.kind==='authored-link')!;await c.handleDisclosure(link.rowId);
+ a={...a,text:'Changed heading',displayText:'Changed heading',revision:2};await c.handleServiceEvent(event('content',a.id));
+ expect(c.view().rows[c.view().selectedIndex]?.rowId).toBe(link.rowId);
+ const group=c.view().rows.find(r=>r.kind==='authored-link-header'&&r.owner.rowId===a.id&&r.group==='outlinks')!;
+ await c.handleDisclosure(group.rowId);const before=readsB;await c.handleServiceEvent(event('content',b.id));
+ expect(readsB).toBe(before);await c.handleDisclosure(group.rowId);expect(readsB).toBe(before+1);
 });

@@ -41,6 +41,7 @@ export interface OpenAuthoredLinksPanel {
   readonly kind: "open";
   readonly owner: AuthoredLinksOwnerOccurrence;
   readonly generation: number;
+  readonly refreshing?: boolean;
   readonly collapsedGroups: Readonly<Record<TreeLinkGroupName, boolean>>;
   readonly load: AuthoredLinksPanelLoad;
   readonly backlinks: BacklinksPanelLoad;
@@ -116,6 +117,7 @@ function headerState(
   panel: OpenAuthoredLinksPanel,
   provider: AuthoredLinkGroupProvider,
 ): AuthoredLinkHeaderState {
+  if (panel.refreshing) return {kind:"loading",message:"Refreshing connections"};
   if(provider.group === "backlinks") {
     if(panel.backlinks.kind === "loading")return{kind:"loading",message:"Loading backlinks"};
     if(panel.backlinks.kind === "error")return{kind:"error",message:panel.backlinks.message};

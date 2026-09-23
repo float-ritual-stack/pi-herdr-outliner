@@ -74,3 +74,12 @@ test('hiding during a pending read cannot restore a closed disclosure',async()=>
  f.connections.toggle(f.roots[0]!);const pending=f.refresh();f.connections.toggle(f.roots[0]!);release();await pending;
  expect(f.rows()).toHaveLength(2);
 });
+
+test('reopening a parent refreshes retained dirty descendants revealed by its load',async()=>{
+ const f=fixture();f.connections.toggle(f.roots[0]!);await f.refresh();
+ const b=child(f.rows(),A);f.connections.toggle(b);await f.refresh();
+ f.connections.toggle(f.roots[0]!);f.connections.invalidate();await f.refresh();
+ f.calls.length=0;f.connections.toggle(f.roots[0]!);await f.refresh();
+ expect(f.calls.filter(c=>c.action==='blocks.authored-links').map(c=>c.ownerBlockId)).toEqual([A,B]);
+ expect(child(f.rows(),b.rowId)).toBeDefined();expect(f.connections.needsRefresh).toBe(false);
+});

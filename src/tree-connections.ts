@@ -49,7 +49,10 @@ export class TreeConnections {
   }
 
   invalidate(): void {
-    for (const id of this.panels.keys()) this.dirty.add(id);
+    for (const [id, panel] of this.panels) {
+      this.dirty.add(id);
+      this.panels.set(id, {...panel, refreshing: true});
+    }
     this.revision++;
   }
 
@@ -57,7 +60,7 @@ export class TreeConnections {
     for (const [id, panel] of this.panels) {
       const owner = index.get(panel.owner.blockId);
       if (panel.load.kind === "ready" && panel.load.snapshot.kind === "ready" && owner && panel.load.snapshot.ownerTextDigest !== owner.textDigest) {
-        this.panels.set(id, { ...panel, load: { kind: "loading" } });
+        this.panels.set(id, { ...panel, refreshing: true });
         this.dirty.add(id);
       }
     }
@@ -70,13 +73,19 @@ export class TreeConnections {
   }
 
   private async run(rows: () => readonly TreeDisplayRow<TreeIndexBlock>[], index: () => ReadonlyMap<string, TreeIndexBlock>): Promise<void> {
-    let passRevision: number;
-    do {
-      passRevision = this.revision;
+    let passRevision = this.revision;
+    const attempted = new Set<string>();
+    while (true) {
+      if (passRevision !== this.revision) {
+        passRevision = this.revision;
+        attempted.clear();
+      }
       const visible = new Set(rows().filter(row => !("collapsed" in row && row.collapsed)).map(row => row.rowId));
-      for (const id of [...this.dirty]) {
-        const panel = this.panels.get(id);
-        if (!panel || !visible.has(id)) continue;
+      const id = [...this.dirty].find(id => visible.has(id) && this.panels.has(id) && !attempted.has(id));
+      if (!id) break;
+      attempted.add(id);
+      {
+        const panel = this.panels.get(id)!;
         this.dirty.delete(id);
         const revision = this.revision;
         const results = await Promise.allSettled([
@@ -98,7 +107,7 @@ export class TreeConnections {
           if (snapshot.ownerId !== panel.owner.blockId) throw Error("Authored-links response owner does not match the requested block");
           const owner = index().get(panel.owner.blockId);
           if (snapshot.kind === "ready" && owner && snapshot.ownerTextDigest !== owner.textDigest) {
-            load = { kind: "loading" };
+            load = panel.load;
             this.dirty.add(id);
           } else load = { kind: "ready", snapshot };
         } catch (reason) { load = { kind: "error", message: error(reason) }; }
@@ -120,11 +129,12 @@ export class TreeConnections {
           };
         } catch (reason) { backlinks = { kind: "error", message: error(reason) }; }
         const latest = this.panels.get(id)!;
-        this.panels.set(id, { ...latest, load, backlinks });
+        this.panels.set(id, { ...latest, load, backlinks, refreshing: this.dirty.has(id) });
         this.changed();
       }
-      // A newer disclosure/event during the reads needs a new pass. Digest disagreement
-      // alone waits for a fresh Tree index instead of hammering the service in a loop.
-    } while (this.revision !== passRevision);
+      // Recompute visibility after every read: loading a parent can reveal retained
+      // dirty descendants. Attempt each row once per revision so digest disagreement
+      // waits for a fresh Tree index instead of hammering the service.
+    }
   }
 }

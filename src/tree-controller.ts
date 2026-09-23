@@ -1858,13 +1858,15 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     if (row.kind === "authored-link-header") {
       connections.toggleGroup(row);
       recomposeAuthoredRows(row.rowId);
+      await refreshAuthoredLinks(false);
       await publishDisplayRowSelection(rows[selectedIndex]);
       effects.invalidate();
       return;
     }
     if(row.kind==='authored-link' && connectionOwner(row)) {
       connections.toggle(row);recomposeAuthoredRows(row.rowId);effects.invalidate();
-      await refreshAuthoredLinks(false);return;
+      await refreshAuthoredLinks(false);
+      await publishDisplayRowSelection(rows[selectedIndex]);return;
     }
     if (!isBlockTreeRow(row) || !row.hasChildren) return;
     if (isVirtualBranchOccurrence(row)) {
@@ -2180,12 +2182,15 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     }
     if (actionId === "tree.authored-links.toggle") {
       if(!selected || !connectionOwner(selected)){status="Select a resolved block target to show connections";effects.invalidate();return;}
+      const wasCollapsed=isBlockTreeRow(selected) && connectionCollapsed(selected);
       const opened=connections.toggle(selected);
       if(isBlockTreeRow(selected)){
         if(selected.kind==='occurrence')collapsedOccurrenceRowIds.delete(selected.rowId);
         else collapsedBlockIds.delete(selected.canonicalId);
       }
-      recomposeAuthoredRows(selected.rowId);effects.invalidate();
+      if(opened && wasCollapsed) await reload(selected.rowId,{exactRowIdOnly:true});
+      else recomposeAuthoredRows(selected.rowId);
+      effects.invalidate();
       await refreshAuthoredLinks(false);
       status=opened?"Authored links shown · Outlinks, Resources and Backlinks":"Authored links hidden";
       effects.invalidate();return;
