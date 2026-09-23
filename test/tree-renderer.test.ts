@@ -1202,3 +1202,18 @@ test("local Preview uses rich Detail wrapping and appears beside or below Tree",
     for(const line of rendered.frame.split("\n"))expect(visibleWidth(line)).toBeLessThanOrEqual(width!);
   }
 });
+
+test.each([
+ ['PIE-181','PIE-181 — Recon','PIE-181 — Recon'],
+ ['Identical title','Identical title','Identical title'],
+ ['PIE-18','PIE-181 — Recon','PIE-18 → PIE-181 — Recon'],
+ ['Why this matters','PIE-181 — Recon','Why this matters → PIE-181 — Recon'],
+ ['Plan','Planning work','Plan → Planning work'],
+])('Outlink label %s remains concise without losing authored meaning', (label,title,expected)=>{
+ const owner=block('label-owner',{text:'Owner',displayText:'Owner'});
+ const row:import('../src/tree-rows').AuthoredLinkRow={kind:'authored-link',rowId:'link-row',parentRowId:owner.id,owner:{rowId:owner.id,blockId:owner.id},group:'outlinks',depth:1,
+  link:{kind:'outlink',key:'target',label,referenceKind:'work-id',occurrenceCount:2,firstSpan:{start:0,end:7},resolution:{kind:'ready',title,target:{kind:'block',blockId:'label-target',fragmentId:'section'}}}};
+ const visible=stripTerminalSequences(renderTreeFrame(view([owner],{rows:[physical(owner),row]}),140,12).frame);
+ expect(visible).toContain(expected+' · ^section · work-id · 2 occurrences');
+ expect(row.link.label).toBe(label);
+});

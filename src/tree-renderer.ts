@@ -343,7 +343,13 @@ function renderAuthoredLinkDisplay(row: AuthoredLinkRow, width: number, clippedL
   if (row.link.kind === "outlink") {
     const resolution = row.link.resolution;
     if (resolution.kind === "ready") {
-      content = `${row.link.label} → ${resolution.title} · ${row.link.referenceKind}${duplicateLabel}`;
+      const label=sanitizeDynamicText(row.link.label).trim();
+      const title=sanitizeDynamicText(resolution.title).trim();
+      // Work IDs need a token boundary: PIE-18 is not a prefix of PIE-181.
+      const redundant=label===title || (/^[A-Z][A-Z0-9]*-\d+$/i.test(label) && title.startsWith(label) && /^(?:\s|[—–:])/u.test(title.slice(label.length)));
+      const targetLabel=redundant?title:`${label} → ${title}`;
+      const fragment=resolution.target.fragmentId?` · ^${resolution.target.fragmentId}`:'';
+      content = `${targetLabel}${fragment} · ${row.link.referenceKind}${duplicateLabel}`;
     } else if (resolution.kind === "unregistered-page") {
       content = `${row.link.label} · page not registered · Enter creates${duplicateLabel}`;
     } else {
