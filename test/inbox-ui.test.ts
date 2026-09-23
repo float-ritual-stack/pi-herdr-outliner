@@ -481,3 +481,17 @@ describe("shared Inbox document preview", () => {
     await h.controller.input('',{name:'escape'});expect(h.closed).toBe(1);
   });
 });
+
+test('Activity preserves invalidation and reloads current Source on return',async()=>{
+ let body='Old source';const h=harness(request=>request.action==='get'?{id:request.blockId,text:body,revision:1}:undefined);
+ await startRecent(h.controller);await setImmediate();h.controller.selectTarget(2);await setImmediate();
+ h.controller.showActivity();body='Updated source';h.controller.contentChanged();h.controller.selectTarget(2);await setImmediate();
+ expect(h.controller.reader.state?.document.projectedText).toBe('Updated source');
+ for(const width of [20,40,80]){
+  const lines=renderInboxFrame(h.controller,width,25,'help');
+  const actions=lines.flatMap(line=>Array.from({length:width},(_,col)=>getOsc8LinkAtColumn(line,col))).filter(Boolean);
+  expect(actions).toContain('pi-outliner-action:tree.inbox.preview.source');
+  expect(actions).toContain('pi-outliner-action:tree.inbox.preview.activity');
+  if(width<65)expect(actions).toContain('pi-outliner-action:tree.inbox.preview.next-output');
+ }
+});

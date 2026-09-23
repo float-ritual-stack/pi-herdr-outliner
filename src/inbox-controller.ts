@@ -136,6 +136,11 @@ export class InboxController {
     this.previewMode = this.targets[this.targetIndex]?.role === 'diagnostics' ? 'activity' : 'content';
     this.refreshPreview(); this.effects.invalidate();
   }
+  nextOutput(): void {
+    const indices = this.targets.flatMap((target,index)=>target.role === "output" ? [index] : []);
+    if (!indices.length) {this.notice="No separate output; preview the current Source";this.effects.invalidate();return;}
+    this.selectTarget(indices[(indices.indexOf(this.targetIndex)+1)%indices.length]!);
+  }
   showActivity(): void {this.previewMode = 'activity'; this.reader.focus(false); this.effects.invalidate();}
   scrollPreview(delta: number): void {
     if (this.previewFrame) this.reader.scroll(delta,this.previewFrame.content.width,this.previewFrame.content.height);
@@ -150,7 +155,7 @@ export class InboxController {
     void this.reader.load({kind:'block',blockId:target.id}, force);
   }
 
-  contentChanged(): void { this.refreshPreview(true); }
+  contentChanged(): void { this.previewKey = ""; this.refreshPreview(true); }
 
   get results(): InboxResultSummary[] {
     if(this.searching)return this.searchResults?.matches.map(match=>match.result)??[];

@@ -112,10 +112,14 @@ export function renderInboxFrame(controller: InboxController, width: number, hei
   const message = controller.error || (state === "idle" && attention
     ? `${attention} ${attention === 1 ? "item needs" : "items need"} your attention`
     : snapshot?.message || "Loading Inbox status…");
-  const tabs = [
-    ...controller.targets.flatMap((target,index)=>target.role === 'diagnostics'?[]:[outlinerActionLink(`tree.inbox.preview-target:${index}`,`[${target.label}${controller.previewMode==='content'&&controller.targetIndex===index?' ●':''}]`)]),
-    outlinerActionLink('tree.inbox.preview.activity',`[Activity${controller.previewMode==='activity'?' ●':''}]`),
-  ].join(' ');
+  const compactTabs = inner < 65;
+  const tinyTabs = inner < 30;
+  const source = outlinerActionLink('tree.inbox.preview.source',tinyTabs?'[S]':'[Source]');
+  const activity = outlinerActionLink('tree.inbox.preview.activity',tinyTabs?'[A]':'[Activity]');
+  const tabs = compactTabs
+    ? source + outlinerActionLink('tree.inbox.preview.next-output',tinyTabs?'[O]':'[Output ›]') + activity
+    : [source,activity,...controller.targets.flatMap((target,index)=>target.role !== 'output'?[]:[outlinerActionLink(`tree.inbox.preview-target:${index}`,`[${target.label}${controller.previewMode==='content'&&controller.targetIndex===index?' ●':''}]`)])].join(' ');
+
   const output = [
     ` ┌${"─".repeat(inner)}┐ `,
     bordered(`\x1b[1;36mInbox agent\x1b[0m · ${state}${snapshot ? ` · ${snapshot.pending} pending` : ""}`),

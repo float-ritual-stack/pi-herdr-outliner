@@ -25,3 +25,17 @@ test('closing invalidates an in-flight preview; current failures remain readable
   await reader.load({kind:'block',blockId:'b'});
   expect(reader.state?.document.projectedText).toContain('failed after close');
 });
+
+test('scrolling starts from the visible clamped offset after enlargement',async()=>{
+ const {initTheme}=await import('@earendil-works/pi-coding-agent');initTheme(undefined,false);
+ const {renderDocumentPreview}=await import('../src/document-preview-renderer');
+ const reader=new DocumentPreview({async request<T>(input:RequestInput):Promise<T>{
+  if(input.action==='get')return block('long',Array.from({length:100},(_,i)=>`Paragraph ${i}\n`).join('\n')) as T;
+  if(input.action==='references.resolve')return {text:input.text,workIdPrefix:null} as T;
+  throw new Error('unexpected');
+ }},()=>{});
+ await reader.load({kind:'block',blockId:'long'});reader.scroll(10000,60,5);
+ const frame=renderDocumentPreview(reader.state!,{x:0,y:0,width:60,height:33},'help');
+ reader.scroll(-1,frame.content.width,frame.content.height);
+ expect(reader.state?.offset).toBe(frame.offset-1);
+});

@@ -33,7 +33,7 @@ export class DocumentPreview {
   scroll(delta: number, width: number, height: number): void {
     if (!this.value) return;
     const rows = renderDetailReadPreviewLines(this.value.document, Math.max(1,width), getMarkdownTheme()).length;
-    this.value = {...this.value, offset: Math.max(0, Math.min(this.value.offset + delta, rows - Math.max(1,height)))};
+    this.value = {...this.value, offset: Math.max(0, Math.min(Math.min(this.value.offset, Math.max(0, rows - Math.max(1,height))) + delta, rows - Math.max(1,height)))};
     this.changed();
   }
   async load(target: OutlinerNavigationTarget, refresh = false): Promise<boolean> {
