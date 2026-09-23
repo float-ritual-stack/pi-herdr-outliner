@@ -792,3 +792,10 @@ test('plan preflight checks allocator metadata without reserving IDs or writing'
  expect(store.sequence).toBe(before);
  const created=store.createRoadmapItem(task);expect(created.workId).toBe('PIE-001');
 });
+
+test('preflight rejects managed update targets before the editor terminates',()=>{
+ const {store,repository}=fixture(),source=capture(store);
+ const target=store.create('Managed guide [system-doc::guide]');
+ expect(()=>repository.validate(plan({updates:[{blockId:target.id,expectedRevision:target.revision,text:'replacement'}]}),source)).toThrow('updates[0]: Inbox cannot rewrite managed');
+ expect(store.require(target.id)).toEqual(target);
+});

@@ -134,7 +134,7 @@ export class InboxWorker {
   resume(): InboxStatus {
     if (this.stopped) throw new Error("Inbox processor is stopping");
     const latest = assistantActivity(this.store, this.repository, this.notes).results[0];
-    if (latest?.state === "failed") {
+    if (latest?.state === "failed" || latest?.state === "canceled") {
       this.repository.reconsider(latest.sourceId, this.repository.instructions(latest.sourceId));
       this.notes?.reconsider(latest.sourceId);
       this.attempts.request(latest.sourceId,"resume");

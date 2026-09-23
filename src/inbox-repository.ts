@@ -154,7 +154,7 @@ export function summarizeInboxResult(result: InboxResult): InboxResultSummary {
     ...result,
     usage: {
       ...result.usage,
-      promptRevisions: result.usage.promptRevisions.map(({ path, sha256, packagedSha256 }) => ({ path, sha256, ...(packagedSha256?{packagedSha256}:{}) })),
+      promptRevisions: result.usage.promptRevisions.map(({ text, ...revision }) => revision),
     },
   };
 }
@@ -364,6 +364,14 @@ export class InboxRepository {
       const parent=this.store.get(note.parentId);
       if(!parent||parent.effectiveDeletedRootId||parent.id===source.id)throw new InboxPlanValidationError(`notes[${index}].parentId`,"Choose an active existing container other than the source");
     }
+    const seen=new Set([source.id]);
+    for(const [index,update] of plan.updates.entries())try {
+      if(seen.has(update.blockId))throw new Error("Use source.text for the source and update each target once");
+      seen.add(update.blockId);
+      const target=this.store.requireActive(update.blockId);
+      this.requireEditable(target);
+      if(target.revision!==update.expectedRevision)throw new Error("Target revision changed; read it again");
+    }catch(error){throw new InboxPlanValidationError(`updates[${index}]`,error instanceof Error?error.message:String(error));}
     for(const [index,task] of plan.tasks.entries())try {
       this.store.validateRoadmapItem({...task,sourceBlockId:source.id});
     } catch(error){throw new InboxPlanValidationError(`tasks[${index}]`,error instanceof Error?error.message:String(error));}

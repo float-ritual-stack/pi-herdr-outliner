@@ -61,6 +61,7 @@ test("Pause acknowledges before an uncooperative late model can commit, and Resu
   worker.resume();
   await until(() => worker.status().results.some(result => result.state === "applied"));
   expect(store.get(source.id)?.text).toContain("The resumed result");
+  expect(worker.status().results[0]!.attempt?.trigger).toBe("resume");
 });
 
 test("an intervening target edit rejects the whole cleanup and preserves the source and attempted prompt evidence", async () => {

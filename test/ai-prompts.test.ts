@@ -137,3 +137,16 @@ test("existing prompt installations gain note assistance once without replacing 
   await initializeAiPrompts(root);
   await expect(loadNotePrompts(root)).rejects.toThrow("cannot read file");
 });
+
+test('Inbox prompt comparison describes missing guidance without replacing customization',async()=>{
+ const root=await mkdtemp(join(tmpdir(),'prompt-comparison-'));
+ try {
+  await initializeAiPrompts(join(root,'prompts'));
+  const path=join(root,'prompts','inbox-editor.md');await writeFile(path,'Custom editorial preference.\n');
+  const loaded=await loadInboxPrompts(join(root,'prompts'));
+  const evidence=loaded.revisions[0]!;
+  expect(evidence.packagedDifferences?.added.length).toBeGreaterThan(0);
+  expect(evidence.packagedDifferences?.removed).toContain('Custom editorial preference.');
+  expect(await readFile(path,'utf8')).toBe('Custom editorial preference.\n');
+ }finally{await rm(root,{recursive:true,force:true});}
+});

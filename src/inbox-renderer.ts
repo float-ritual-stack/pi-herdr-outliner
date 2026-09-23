@@ -62,6 +62,9 @@ function detailLines(controller: InboxController, width: number): string[] {
     if (usage.promptRevisions?.length) plain(`Prompts: ${usage.promptRevisions.map(prompt => `${basename(prompt.path)} @ ${prompt.sha256.slice(0, 12)}`).join(" · ")}`);
     for(const prompt of usage.promptRevisions??[])if(prompt.packagedSha256&&prompt.packagedSha256!==prompt.sha256){
       plain(`${basename(prompt.path)} differs from packaged ${prompt.packagedSha256.slice(0,12)} · active file retained: ${prompt.path}`);
+      for(const line of prompt.packagedDifferences?.added??[])plain(`Packaged only: ${line}`);
+      for(const line of prompt.packagedDifferences?.removed??[])plain(`Active only: ${line}`);
+      if(prompt.packagedDifferences?.truncated)plain("Comparison truncated: first four differing lines per file, 300 characters each; inspect the files for the full difference");
     }
     plain(`${usage.inputTokens.toLocaleString("en-US")} in / ${usage.outputTokens.toLocaleString("en-US")} out · estimated $${usage.cost.toFixed(4)}`);
     plain(`${usage.jevSuccessfulCalls === undefined ? `Jev ${usage.jevCalls} calls` : `Jev ${usage.jevCalls} attempted / ${usage.jevSuccessfulCalls} successful`} · model work ${(usage.elapsedMs / 1000).toFixed(1)}s`);
