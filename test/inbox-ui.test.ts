@@ -615,6 +615,41 @@ test('combined review shows activity and independent source/output readers with 
  await h.controller.close();
 });
 
+test.each(['horizontal','vertical'] as const)('cancels %s divider resizing when comparison disappears',async(axis)=>{
+ const h=harness();await startRecent(h.controller);await setImmediate();
+ const mouse=(phase:string,x:number,y:number)=>h.controller.handlePreviewMouse(`\x1b[<${phase==='move'?32:0};${x+1};${y+1}${phase==='up'?'m':'M'}`,()=>{});
+ for(const phase of ['move','up']){
+  renderInboxFrame(h.controller,160,55,'help');
+  const divider=axis==='horizontal'?h.controller.horizontalDivider!:h.controller.verticalDivider!;
+  mouse('down',divider.x,divider.y);
+  const fractions=[h.controller.reviewFraction,h.controller.sourceFraction];
+  renderInboxFrame(h.controller,90,34,'help');expect(h.controller.reviewBody).toBeUndefined();
+  mouse(phase,4,6);
+  renderInboxFrame(h.controller,160,55,'help');
+  expect(mouse('down',4,6)).toBe(false);
+  expect([h.controller.reviewFraction,h.controller.sourceFraction]).toEqual(fractions);
+  mouse('up',4,6);
+ }
+ await h.controller.close();
+});
+
+test('releasing a divider over the source toolbar ends resizing',async()=>{
+ const h=harness();await startRecent(h.controller);await setImmediate();
+ const lines=renderInboxFrame(h.controller,160,55,'help');
+ const source=h.controller.sourceFrame!,divider=h.controller.verticalDivider!;
+ const row=source.rect.y+1;
+ let column=source.rect.x;
+ while(column<source.rect.x+source.rect.width&&getOsc8LinkAtColumn(lines[row]!,column)!=='pi-outliner-action:tree.inbox.preview.before')column++;
+ expect(column).toBeLessThan(source.rect.x+source.rect.width);
+ h.controller.handlePreviewMouse(`\x1b[<0;${divider.x+1};${divider.y+1}M`,()=>{});
+ h.controller.handlePreviewMouse(`\x1b[<0;${column+1};${row+1}m`,()=>{});
+ const fraction=h.controller.sourceFraction;
+ expect(h.controller.handlePreviewMouse('\x1b[<0;5;7M',()=>{})).toBe(false);
+ expect(h.controller.sourceFraction).toBe(fraction);
+ expect(h.controller.sourceVersion).toBe('current');
+ await h.controller.close();
+});
+
 test('source-only comparison spans bottom; missing historical source is explicit and stale notices clear',async()=>{
  const h=harness(request=>request.action==='inbox.result'?result(request.resultId):undefined);
  await h.controller.start();await setImmediate();

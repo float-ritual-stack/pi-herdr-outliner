@@ -176,6 +176,7 @@ export class InboxController {
         scroll: delta => {if (this.searching) this.searchTouched = true; if (frame) reader.scroll(delta, frame.content.width, frame.content.height);},
         resize: () => {}, invoke: async () => {},
       }, copy, () => this.effects.invalidate());
+    if (!this.reviewBody) this.resizeAxis = undefined;
     // A drag belongs to the reader where it began, even across another reader or toolbar.
     if (pointer && pointer.phase !== 'down') {
       const owner = readers.find(([, input]) => input.ownsPointer);
@@ -183,14 +184,6 @@ export class InboxController {
     }
 
     if (pointer) {
-      const toolbar = this.sourceFrame && pointer.row === this.sourceFrame.rect.y + 1 && pointInPreview(this.sourceFrame.rect, pointer.column, pointer.row);
-      if (toolbar) {
-        const link = getOsc8LinkAtColumn(this.renderedLines[pointer.row] ?? '', pointer.column);
-        if (link === 'pi-outliner-action:tree.inbox.preview.before' || link === 'pi-outliner-action:tree.inbox.preview.current') {
-          if (pointer.phase === 'down') this.setSourceVersion(link.endsWith('.before') ? 'before' : 'current');
-          return true;
-        }
-      }
       if (pointer.phase === 'down') {
         if (this.horizontalDivider && pointInPreview(this.horizontalDivider, pointer.column, pointer.row)) this.resizeAxis = 'horizontal';
         else if (this.verticalDivider && pointInPreview(this.verticalDivider, pointer.column, pointer.row)) this.resizeAxis = 'vertical';
@@ -201,6 +194,14 @@ export class InboxController {
         else this.sourceFraction = Math.max(0.25, Math.min(0.75, (pointer.column - body.x) / body.width));
         if (pointer.phase === 'up') this.resizeAxis = undefined;
         this.effects.invalidate(); return true;
+      }
+      const toolbar = this.sourceFrame && pointer.row === this.sourceFrame.rect.y + 1 && pointInPreview(this.sourceFrame.rect, pointer.column, pointer.row);
+      if (toolbar) {
+        const link = getOsc8LinkAtColumn(this.renderedLines[pointer.row] ?? '', pointer.column);
+        if (link === 'pi-outliner-action:tree.inbox.preview.before' || link === 'pi-outliner-action:tree.inbox.preview.current') {
+          if (pointer.phase === 'down') this.setSourceVersion(link.endsWith('.before') ? 'before' : 'current');
+          return true;
+        }
       }
     }
     for (const entry of readers) if (handle(entry)) return true;
