@@ -1,5 +1,6 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { existsSync, readFileSync, rmSync } from "node:fs";
+import * as fsPromises from "node:fs/promises";
 import { openDetailSidebar, SidebarPlacementError } from "../src/sidebar-placement";
 
 type Node = string | {direction: "right" | "down"; ratio: number; first: Node; second: Node};
@@ -204,3 +205,30 @@ test("a creation callback using the wrong split direction is detected and rolled
     async createDetail(anchor) {f.tabs.set("original", insert(f.tabs.get("original")!, anchor, "new-detail", "down", 0.5)); return "new-detail";}}, f.run)).rejects.toThrow("original layout restored");
   expect(f.tabs.get("original")).toEqual(split("tree", "detail", "down", 0.3));
 });
+
+for (const failure of ["placeholder", "journal"] as const) {
+  test(`successful placement survives ${failure} cleanup failure with an actionable journal`, async () => {
+    const original = split("tree", "detail", "down", 0.3);
+    const f = fixture(original);
+    const warnings = spyOn(console, "warn").mockImplementation(() => {});
+    const unlink = failure === "journal" ? spyOn(fsPromises, "unlink").mockRejectedValue(new Error("injected unlink failure")) : undefined;
+    let path: string | undefined;
+    if (failure === "placeholder") f.fail(args => args[1] === "close" && args[2] === "placeholder");
+    try {
+      expect(await openDetailSidebar({sourcePaneId: "tree", outlinerPaneIds: ["tree", "detail"], scope: "outliner", side: "left", createDetail: f.createDetail}, f.run)).toBe("new-detail");
+      expect(f.tabs.get("original")).toEqual(split("new-detail", original));
+      expect(f.operations.some(args => args[1] === "close" && args[2] === "new-detail")).toBe(false);
+      expect(warnings).toHaveBeenCalledTimes(1);
+      path = String(warnings.mock.calls[0]?.[0]).match(/\/\S+\.json/)?.[0];
+      expect(path).toBeDefined();
+      const journal = JSON.parse(readFileSync(path!, "utf8"));
+      expect(journal.placementVerified).toBe(true);
+      expect(journal.sidebar).toBe("new-detail");
+      expect(journal.cleanupError).toContain("injected");
+      expect(f.tabs.has("parking")).toBe(failure === "placeholder");
+    } finally {
+      warnings.mockRestore(); unlink?.mockRestore();
+      if (path) rmSync(path, {force: true});
+    }
+  });
+}

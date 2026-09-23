@@ -115,7 +115,7 @@ export async function openDetailSidebar(options: OpenDetailSidebarOptions, run: 
   const rebuild = rebuildMoves(branch);
   if (layoutFingerprint(originalLayout) !== layoutFingerprint(await readLayout(options.sourcePaneId))) throw new Error("Herdr layout changed during planning; retry sidebar placement");
   const journalPath = join(tmpdir(), `outliner-sidebar-${crypto.randomUUID()}.json`);
-  const journal: {originalLayout: Layout; anchor: string; rebuild: Move[]; scope: string; side: string; parkingTab?: string; placeholder?: string; sidebar?: string; operation?: string[]; recoveryError?: string} = {
+  const journal: {originalLayout: Layout; anchor: string; rebuild: Move[]; scope: string; side: string; parkingTab?: string; placeholder?: string; sidebar?: string; operation?: string[]; recoveryError?: string; placementVerified?: boolean; cleanupError?: string} = {
     originalLayout, anchor, rebuild, scope: options.scope, side: options.side,
   };
   const save = async () => {
@@ -153,9 +153,6 @@ export async function openDetailSidebar(options: OpenDetailSidebarOptions, run: 
     if (placed.tab_id !== originalLayout.tab_id || JSON.stringify(treeShape(treeFromLayout(placed))) !== JSON.stringify(expectedShape)) {
       throw new Error("Herdr did not preserve the requested sidebar subtree");
     }
-    if (journal.placeholder) await close(journal.placeholder);
-    await cleanup();
-    return journal.sidebar;
   } catch (failure) {
     try {
       // Normalize a partial rebuild by parking the old leaves again, then replay
@@ -180,4 +177,17 @@ export async function openDetailSidebar(options: OpenDetailSidebarOptions, run: 
     }
     throw new SidebarPlacementError(`Sidebar placement failed; original layout restored: ${String(failure)}`);
   }
+  // The verified reader is now usable. Housekeeping failure must not close it
+  // or move the original panes again; retain the journal for manual cleanup.
+  journal.placementVerified = true;
+  try {
+    await save();
+    if (journal.placeholder) await close(journal.placeholder);
+    await cleanup();
+  } catch (cleanupFailure) {
+    journal.cleanupError = String(cleanupFailure);
+    await save().catch(() => {}); // The last durable journal still describes the placement.
+    console.warn(`Sidebar placed successfully; cleanup incomplete. Inspect retained journal: ${journalPath}`);
+  }
+  return journal.sidebar!;
 }
