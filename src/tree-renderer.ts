@@ -1,5 +1,6 @@
+import type {DocumentPreviewFrame} from "./document-preview-renderer";
 import {renderNavigationDestinationPreview} from './navigation-destination-menu';
-import {treePreviewFrame, type TreePreviewFrame} from './tree-preview';
+import {treePreviewFrame} from './tree-preview';
 import { renderGotoFrame } from "./goto-renderer";
 import { renderInboxFrame } from "./inbox-renderer";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
@@ -171,7 +172,7 @@ type TreeRenderEntry =
   | { kind: "quick"; depth: number };
 
 export interface TreeRenderResult {
-  readonly preview?: TreePreviewFrame;
+  readonly preview?: DocumentPreviewFrame;
   readonly frame: string;
   readonly scrollStartEntryIndex: number;
   readonly breadcrumbStart?: number;
@@ -390,7 +391,7 @@ export function renderTreeFrame(
   options: TreeRenderOptions = {},
 ): TreeRenderResult {
   if (view.localPreview && view.mode === "browse") {
-    const preview=treePreviewFrame(view.localPreview,width,height,view.previewHelp ?? "Alt+P Tree/Preview · Esc close · drag to copy");
+    const preview=treePreviewFrame(view.localPreview,width,height,view.previewHelp ?? "Alt+P Tree/Preview · Esc close · drag to copy",view.previewPreferences);
     const tree=renderTreeFrame({...view,localPreview:null},preview.treeWidth,preview.treeHeight,initialScrollStartEntryIndex,{...options,clearScreen:false});
     const treeLines=tree.frame.split("\n");
     let lines:string[];
@@ -433,7 +434,7 @@ export function renderTreeFrame(
 
   if (view.mode === "inbox" && view.inbox) {
     const lines = renderInboxFrame(view.inbox, width, height, view.actionHelpText ?? DEFAULT_OUTLINER_ACTION_KEYMAP.helpText("tree", "inbox"));
-    return { frame: `${options.clearScreen === false ? "" : `${ESC}H${ESC}2J`}${lines.join("\n")}`, scrollStartEntryIndex: initialScrollStartEntryIndex, mouseTargets: [] };
+    return { frame: `${options.clearScreen === false ? "" : `${ESC}H${ESC}2J`}${lines.join("\n")}`, scrollStartEntryIndex: initialScrollStartEntryIndex, mouseTargets: [], preview:view.inbox.previewFrame };
   }
 
   if (view.mode === "goto" && view.goto) {
@@ -464,9 +465,10 @@ export function renderTreeFrame(
 
   const breadcrumb=renderTreeBreadcrumbs(view,width);
   const paneMenu = outlinerActionLink("tree.menu.open", "[⋯]");
+  const previewToggle = outlinerActionLink("tree.preview.toggle", view.previewPreferences?.enabled === false ? "[Show Preview]" : "[Hide Preview]");
   const indentationBadge = outlinerActionLink("tree.indentation.toggle", `[Indent: ${view.indentationMode ?? "viewport"}]`);
   output.push(
-    `\x1b[1;36m${options.focused === undefined ? "Outliner" : `${options.focused ? "●" : "○"} Tree`}\x1b[0m  \x1b[2m${truncate(view.workspaceRoot, Math.max(1, width - 47))}\x1b[0m  ${paneMenu} ${indentationBadge}`,
+    truncateToWidth(`\x1b[1;36m${options.focused === undefined ? "Outliner" : `${options.focused ? "●" : "○"} Tree`}\x1b[0m  \x1b[2m${truncate(view.workspaceRoot, Math.max(1, width - 65))}\x1b[0m  ${paneMenu} ${previewToggle} ${indentationBadge}`, width),
   );
   const filterLabel = view.activeFilter ? `  \x1b[33mfilter: ${view.activeFilter}\x1b[0m` : "";
   const truncationLabel =

@@ -124,6 +124,11 @@ export function outlinerActionLink(actionId: string, label: string): string {
 
 const ACTION_SPECS = [
   { id: "tree.close", surface: "tree", modes: ["*"], label: "close", description: "Close this Tree pane", defaultChords: ["Ctrl+Q"], helpPriority: 100, menuGroup: "System" },
+  ...([
+    ['toggle', 'Show / hide Preview', ['Alt+Shift+P']],
+    ['right', 'Dock Preview right', []], ['bottom', 'Dock Preview below', []],
+    ['auto', 'Auto Preview docking', []], ['grow', 'Grow Preview', ['Alt+=']], ['shrink', 'Shrink Preview', ['Alt+-']],
+  ] as const).map(([name, label, chords]) => ({id: `tree.preview.${name}`, surface: 'tree' as const, modes: ['browse'], label, description: label, defaultChords: [...chords], helpPriority: 0, menuGroup: 'View' as const})),
   { id: "tree.preview.focus", surface: "tree", modes: ["browse"], label: "Tree / Preview", description: "Focus Preview to scroll or copy, or return to Tree", defaultChords: ["Alt+P", "F7"], helpPriority: 30, menuGroup: "View" },
   { id: "tree.preview.close", surface: "tree", modes: ["browse"], label: "close Preview", description: "Close local Preview and return to Tree", defaultChords: ["Esc", "Shift+F7"], helpPriority: 29, menuGroup: "View" },
   { id: "tree.cancel", surface: "tree", modes: ["delete", "viewer", "edit", "add-child", "add-sibling", "filter", "goto", "purge", "action-menu", "inbox", "inbox-steer"], label: "cancel", description: "Cancel the current transient mode", defaultChords: ["Esc"], helpPriority: 100, menuGroup: "System" },
@@ -156,6 +161,10 @@ const ACTION_SPECS = [
   { id: "tree.inbox.newer", surface: "tree", modes: ["inbox"], label: "newer results", description: "Show the previous 30 recent Inbox results", defaultChords: ["ArrowLeft"], helpPriority: 80, menuGroup: "Navigate" },
   { id: "tree.inbox.pause", surface: "tree", modes: ["inbox"], label: "pause/resume", description: "Pause or resume the background Inbox agent", defaultChords: ["p"], helpPriority: 99, menuGroup: "System" },
   { id: "tree.inbox.tree", surface: "tree", modes: ["inbox"], label: "Tree", description: "Reveal the chosen output or source in Tree", defaultChords: ["Enter"], helpPriority: 98, menuGroup: "Navigate" },
+  {id:'tree.inbox.preview.source',surface:'tree',modes:['inbox'],label:'Preview Source',description:'Read current source content',defaultChords:['1'],helpPriority:10,menuGroup:'View'},
+  {id:'tree.inbox.preview.output',surface:'tree',modes:['inbox'],label:'Preview Output',description:'Read first output; Tab cycles all targets',defaultChords:['2'],helpPriority:11,menuGroup:'View'},
+  {id:'tree.inbox.preview.activity',surface:'tree',modes:['inbox'],label:'Activity',description:'Show summary, errors, usage and diagnostics',defaultChords:['Shift+A'],helpPriority:12,menuGroup:'View'},
+  {id:'tree.inbox.preview.focus',surface:'tree',modes:['inbox'],label:'List / Preview',description:'Switch keyboard focus between results and document',defaultChords:['Alt+P'],helpPriority:13,menuGroup:'View'},
   { id: "tree.inbox.detail", surface: "tree", modes: ["inbox"], label: "Detail", description: "Open the chosen output or source in Detail", defaultChords: ["Alt+Enter"], helpPriority: 97, menuGroup: "Navigate" },
   { id: "tree.inbox.undo", surface: "tree", modes: ["inbox"], label: "undo", description: "Undo the selected applied result when its blocks are unchanged", defaultChords: ["u"], helpPriority: 96, menuGroup: "Edit" },
   { id: "tree.inbox.reconsider", surface: "tree", modes: ["inbox"], label: "reconsider", description: "Reconsider a held, failed, or undone source with optional instructions", defaultChords: ["r"], helpPriority: 95, menuGroup: "Edit" },

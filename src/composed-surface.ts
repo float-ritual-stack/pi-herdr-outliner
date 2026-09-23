@@ -1,4 +1,4 @@
-import {TreePreviewInput} from './tree-preview-input';
+import {DocumentPreviewInput} from './document-preview-input';
 import {KeyInspector} from "./key-inspector";
 import {createDetailDestination} from "./detail-pane-placement";
 import {osc52ClipboardWrite} from './terminal';
@@ -109,7 +109,7 @@ export class ComposedTree implements Component {
   private readonly keyInspector: KeyInspector;
   get keyInspectorActive(): boolean {return this.keyInspector.active;}
   private frameLines: string[] = [];
-  private previewInput = new TreePreviewInput();
+  private previewInput = new DocumentPreviewInput();
   private mouseTargets: readonly (TreeMouseTarget | null | undefined)[] = [];
   private readonly input = new PiDetailInputStreamDecoder();
   private readonly propertyKeys = parsePropertySummaryKeys(process.env.OUTLINER_PROPERTY_SUMMARY_KEYS);
@@ -147,7 +147,7 @@ export class ComposedTree implements Component {
     });
     this.controller.setViewportStart(rendered.scrollStartEntryIndex, rendered.expandedPage);
     if(rendered.breadcrumbStart !== undefined) this.controller.setBreadcrumbStart(rendered.breadcrumbStart);
-    this.frameLines = this.previewInput.render(rendered.frame.split("\n").slice(0,this.options.height()).map(line=>truncateToWidth(line,width)),rendered.preview,this.controller.view().localPreview);
+    this.frameLines = this.previewInput.render(rendered.frame.split("\n").slice(0,this.options.height()).map(line=>truncateToWidth(line,width)),rendered.preview,this.controller.view().mode === "inbox" ? this.controller.view().inbox?.reader.state : this.controller.view().localPreview);
     this.mouseTargets = rendered.mouseTargets;
     return this.frameLines;
   }
@@ -157,7 +157,8 @@ export class ComposedTree implements Component {
   async handleInput(data: string): Promise<void> {
     if(this.keyInspector.handle(data))return;
     if (isTreeMouseSequence(data)) {
-      if(this.previewInput.handle(data,this.controller,text=>process.stdout.write(osc52ClipboardWrite(text)),this.options.invalidate))return;
+      if(this.previewInput.handle(data,{focus:v=>this.controller.focusLocalPreview(v),scroll:d=>this.controller.scrollLocalPreview(d),resize:f=>this.controller.resizeLocalPreview(f),invoke:id=>this.controller.handleAction(id)},text=>process.stdout.write(osc52ClipboardWrite(text)),this.options.invalidate))return;
+      if (this.controller.view().mode === "inbox" && this.controller.view().inbox?.handleActivityMouse(data)) return;
       if (this.controller.view().mode === "goto") return this.controller.handleGotoMouse(data);
       const secondary = parseTreeSecondaryClick(data);
       if (secondary) return this.controller.handleAction("tree.menu.open", secondary);

@@ -1,3 +1,4 @@
+import {outlinerActionLink} from "../src/outliner-actions";
 import {initTheme} from "@earendil-works/pi-coding-agent";
 initTheme(undefined,false);
 import { getOsc8LinkAtColumn, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
@@ -160,7 +161,7 @@ function view(
 const HELP = DEFAULT_OUTLINER_ACTION_KEYMAP.helpText("tree", "browse");
 const NARROW_HELP = truncate(HELP, 80);
 const PANE_MENU = "\x1b]8;;pi-outliner-action:tree.menu.open\x1b\\[⋯]\x1b]8;;\x1b\\";
-const HEADER = `\x1b[1;36mOutliner\x1b[0m  \x1b[2m/w\x1b[0m  ${PANE_MENU} \x1b]8;;pi-outliner-action:tree.indentation.toggle\x1b\\[Indent: viewport]\x1b]8;;\x1b\\`;
+const HEADER = `\x1b[1;36mOutliner\x1b[0m  \x1b[2m/w\x1b[0m  ${PANE_MENU} ${outlinerActionLink("tree.preview.toggle", "[Hide Preview]")} \x1b]8;;pi-outliner-action:tree.indentation.toggle\x1b\\[Indent: viewport]\x1b]8;;\x1b\\`;
 
 describe("renderTreeFrame", () => {
   test("bounds and sanitizes the focused root header", () => {

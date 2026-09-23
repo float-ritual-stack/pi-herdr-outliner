@@ -1793,3 +1793,28 @@ The installer assigns **prefix, Shift+U** to `float.pi-outliner.open-tree`.
 Use `--tree-key CHORD` to customize it. **? → New Tree** in Tree or Detail
 opens an independent Tree at the workspace root. Existing **Tree right/below**
 actions instead use the selected branch. Prefix+U retains Tree+Detail launch.
+
+### Local Tree Preview controls
+
+Each Tree has its own **Show/Hide Preview** control and `?` menu actions.
+Hiding persists while browsing until you show it again. In Preview's header,
+**→** docks right, **↓** docks below, **Auto** follows available space, **−/+**
+resize, and **×** hides. Drag the divider to resize directly. Keyboard equivalents
+are `Alt+Shift+P` (toggle), `Alt+=` (grow), and `Alt+-` (shrink); all are configurable.
+Dock and size preferences survive hide/show and terminal resizing within that Tree;
+they do not change Herdr panes or persist after closing the Tree. Small windows use
+a compact reader; `Alt+P` switches focus between Tree and Preview.
+
+### Read Inbox source and output in place
+
+Inbox results have **Source / Output / Activity** choices. Source and numbered
+Outputs show current rich note content using the same reader as Tree Preview.
+Activity retains processing summaries, errors, usage and explicit session access.
+Click a result to preview it; explicit Open still follows the linked destination.
+
+Use **1** for Source, **2** for the first Output, **Tab** for other targets,
+**Shift+A** for Activity, and **Alt+P** for List/Preview focus. Clicking the list
+or reader also changes focus. Wheel over the reader scrolls the document; drag
+inside it to copy. Escape first leaves reader focus, then returns to Tree.
+Narrow panes stack the reader below results; very short panes show one at a time.
+These previews show current content, not the cleanup's original before-image.
