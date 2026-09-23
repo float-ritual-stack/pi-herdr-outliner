@@ -1,3 +1,4 @@
+import {openExternalUrl} from "./open-external";
 import {DocumentPreviewInput} from './document-preview-input';
 import {KeyInspector} from "./key-inspector";
 import {createDetailDestination} from "./detail-pane-placement";
@@ -120,6 +121,7 @@ if(initialRoot && ![initialRoot.rowId,initialRoot.canonicalId,initialRoot.label]
   throw new Error("OUTLINER_TREE_ROOT must identify a Tree occurrence");
 }
 const controller = createTreeController({
+      openExternal: openExternalUrl,
   openKeyInspector: () => keyInspector.open(),
   initialRoot,
   async createTreePane(root,direction) { openTreePane({workspaceRoot:paths.workspaceRoot,root,direction}); },

@@ -16,12 +16,13 @@ export class DocumentPreviewInput {
   private lines:string[]=[];
   private document:DocumentPreviewState['document']|undefined;
   private geometry='';
+  private pressedLink: {uri:string;column:number;row:number}|undefined;
   private resizing: DocumentPreviewFrame | undefined;
   get ownsPointer(): boolean { return this.selection.ownsPointer || !!this.resizing; }
   render(lines:string[],frame:DocumentPreviewFrame|undefined,preview:DocumentPreviewState|null|undefined):string[]{
     const visible=frame && (frame.placement!=='compact'||preview?.focused)?frame:undefined;
     const geometry=visible?JSON.stringify([visible.content,visible.offset]):'';
-    if(preview?.document!==this.document||geometry!==this.geometry)this.selection.clear();
+    if(preview?.document!==this.document||geometry!==this.geometry){this.selection.clear();this.pressedLink=undefined;}
     this.document=preview?.document;this.geometry=geometry;this.frame=visible;this.lines=lines;
     return visible?this.selection.highlight(lines,visible.content):lines;
   }
@@ -31,6 +32,7 @@ export class DocumentPreviewInput {
     if(wheel&&frame&&pointInPreview(frame.rect,wheel.column,wheel.row)){controller.scroll(wheel.direction==='up'?-3:3);return true;}
     const pointer=parseTreePrimaryPointer(sequence);
     if(pointer){
+      if(this.pressedLink&&(pointer.column!==this.pressedLink.column||pointer.row!==this.pressedLink.row))this.pressedLink=undefined;
       if (this.resizing || (pointer.phase === 'down' && frame?.divider && pointInPreview(frame.divider,pointer.column,pointer.row))) {
         this.resizing ??= frame;
         const original = this.resizing!;
@@ -43,7 +45,13 @@ export class DocumentPreviewInput {
       // A drag begun in content owns its release even above the toolbar.
       if (pointer.phase !== 'down') {
         const result = this.selection.pointer(pointer,frame?.content??{x:0,y:0,width:0,height:0},this.lines);
-        if (result.consumed) { if(result.copy)copy(result.copy); redraw(); return true; }
+        if (result.consumed) {
+          const link=this.pressedLink;
+          if(pointer.phase==='up')this.pressedLink=undefined;
+          if(result.copy)copy(result.copy);
+          else if(pointer.phase==='up'&&link)void controller.invoke(`preview.link:${encodeURIComponent(link.uri)}`);
+          redraw(); return true;
+        }
       }
       const button = frame?.controls?.find(control=>pointInPreview(control.rect,pointer.column,pointer.row));
       if (button) {
@@ -51,6 +59,10 @@ export class DocumentPreviewInput {
         return true;
       }
 
+      if(pointer.phase==='down'){
+        const link=frame?.links?.find(link=>pointInPreview(link.rect,pointer.column,pointer.row));
+        this.pressedLink=link?{uri:link.uri,column:pointer.column,row:pointer.row}:undefined;
+      }
       const result=this.selection.pointer(pointer,frame?.content??{x:0,y:0,width:0,height:0},this.lines);
       if(result.consumed){controller.focus();if(result.copy)copy(result.copy);redraw();return true;}
       if(frame&&pointInPreview(frame.rect,pointer.column,pointer.row)){controller.focus();return true;}

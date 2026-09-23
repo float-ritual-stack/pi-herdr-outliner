@@ -345,6 +345,32 @@ describe("Inbox controls", () => {
     expect(delayed.opened).toEqual([]);
   });
 
+  test.each([false,true])("focused Preview without an active link preserves Inbox Enter routing (meta=%s)", async (meta) => {
+    const h = harness();
+    await startRecent(h.controller); await setImmediate();
+    h.controller.focusReader(true);
+    await h.controller.previewAction('preview.link:'+encodeURIComponent('pi-outliner://block/browsed-target'));
+    expect(h.controller.reader.state?.focused).toBe(true);
+    expect(h.controller.reader.state?.activeLink).toBeUndefined();
+    await h.controller.input('', {name:'return',meta});
+    expect(h.opened).toEqual([{id:meta?'browsed-target':'output-result-one',destination:meta?'detail':'tree'}]);
+    await h.controller.close();
+  });
+
+  test("focused Preview follows an active link with Enter without opening Tree or Detail", async () => {
+    const target='bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+    const h = harness(request => request.action==='get' ? {id:request.blockId,revision:1,text:`See [Read target](pi-outliner://block/${target})`} : undefined);
+    await startRecent(h.controller); await setImmediate();
+    h.controller.focusReader(true);
+    await h.controller.input('', {name:'tab'});
+    expect(h.controller.reader.state?.activeLink).toBe(`pi-outliner://block/${target}`);
+    await h.controller.input('', {name:'return'});
+    expect(h.controller.reader.state?.target).toEqual({kind:'block',blockId:target});
+    expect(h.opened).toEqual([]);
+    expect(h.controller.targets[h.controller.targetIndex]?.id).toBe('output-result-one');
+    await h.controller.close();
+  });
+
   test("deleted results cannot navigate and undo never runs for held results", async () => {
     const h = harness(request => request.action === "get" ? { id: request.blockId, deletedAt: "today" } : undefined);
     await startRecent(h.controller);
@@ -707,4 +733,15 @@ test.each([{outputIds:[]},{outputIds:['output-result-one','second-result-one']}]
  await startRecent(h.controller);h.controller.setSourceVersion('before');await setImmediate();renderInboxFrame(h.controller,160,55,'help');h.controller.scrollPreview(5);
  h.controller.startSearch();h.controller.paste('same receipt');await setImmediate();h.controller.selectTarget(outputIds.length);await setImmediate();renderInboxFrame(h.controller,160,55,'help');h.controller.scrollPreview(3);
  await h.controller.cancelSearch();expect(h.controller.sourceReader.state?.offset).toBe(5);await h.controller.close();
+});
+
+test('content notifications refresh the browsed Inbox target without returning to the source',async()=>{
+ const h=harness();await startRecent(h.controller);await new Promise(resolve=>setTimeout(resolve,0));
+ const original=h.controller.reader.state?.target;
+ await h.controller.previewAction('preview.link:'+encodeURIComponent('pi-outliner://block/browsed-target'));
+ expect(h.controller.reader.state?.target).toEqual({kind:'block',blockId:'browsed-target'});
+ h.controller.contentChanged();await new Promise(resolve=>setTimeout(resolve,0));
+ expect(h.controller.reader.state?.target).toEqual({kind:'block',blockId:'browsed-target'});
+ await h.controller.previewAction('preview.back');
+ expect(h.controller.reader.state?.target).toEqual(original);
 });

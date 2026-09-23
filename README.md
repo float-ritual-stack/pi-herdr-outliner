@@ -397,6 +397,14 @@ keeps Preview as Current. Current retains its history, scroll, and draft while
 another target is inspected. Keeping Preview or opening another target is
 refused while Current has a draft or an active source selection.
 
+Tree and Inbox Preview links can be clicked to browse in place. Dragging still
+copies text. Focus Preview and use `Tab`/`Shift+Tab`, then `Enter` to follow a
+link; `Esc` returns focus to the list. `Alt+Left`/`Alt+Right` or the **‹ / ›** buttons revisit local history.
+**Open** or `Alt+Enter` opens the currently previewed target in Detail, offering
+a destination picker when needed. A new list selection starts a new Preview
+trail. Missing pages are reported without creating notes; unsupported links
+remain visible as such. Tree and Detail selection stay unchanged while browsing.
+
 Tree `Enter` explicitly opens the selected target through that Tree's saved
 Detail destination link. **Alt+L**, **Shift+L**, or the clickable **Opens in / Change** header sets or changes the link; **Open once
 in…** chooses a destination for one action. Several sources can share a reader,

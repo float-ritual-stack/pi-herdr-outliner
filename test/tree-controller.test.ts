@@ -3386,6 +3386,7 @@ test("an independent Tree inspects locally without creating a Detail", async () 
   const a = block("local-a", {text: "SOURCE LOCAL ALPHA"});
   const b = block("local-b", {text: "SOURCE LOCAL BETA"});
   const fake = harness(input => {
+    if (input.action === "navigation.link.get") return {source:{clientId:"tree-test",region:"tree"},destination:{clientId:"detail-test",region:"detail"},destinations:[{view:{clientId:"detail-test",region:"detail"},label:"Reader"}]};
     if (input.action === "tree.index") return snapshot([a, b], a);
     if (input.action === "browsing-context.publish") return {contextId: "tree-test-context", target: input.target, preview: {sourceClientId:"tree-test",targetClientId:"tree-test",targetRegion:"tree",intent:"preview",resolution:"self",command:{command:"preview",targetClientId:"tree-test",targetRegion:"tree",target:input.target}}};
   });
@@ -3523,7 +3524,7 @@ test("Tree destination picker labels distinguish linking from opening once", asy
   expect(fake.calls.some(input => input.action === "navigation.link.set")).toBe(false);
 });
 
-test("Alt+L is available while local Preview owns focus, and Escape closes Preview",async()=>{
+test("Alt+L is available while local Preview owns focus, and Escape returns to Tree",async()=>{
  const a=block("preview-keyboard",{text:"Readable source"});
  const fake=harness(input=>{
    if(input.action==="tree.index")return snapshot([a],a);
@@ -3535,7 +3536,7 @@ test("Alt+L is available while local Preview owns focus, and Escape closes Previ
  await controller.handleKeypress("",{name:"p",meta:true},"pass");expect(controller.view().localPreview?.focused).toBe(true);
  await controller.handleKeypress("",{name:"l",meta:true},"pass");expect(controller.view().mode).toBe("action-menu");expect(controller.view().destinationInstructions).toContain("create a Detail");
  await controller.handleKeypress("",{name:"escape"},"pass");expect(controller.view().mode).toBe("browse");
- await controller.handleKeypress("",{name:"escape"},"pass");expect(controller.view().localPreview).toBeNull();
+ await controller.handleKeypress("",{name:"escape"},"pass");expect(controller.view().localPreview?.focused).toBe(false);
 });
 
 
@@ -3708,4 +3709,20 @@ test('Preview hides persistently while browsing and keeps independent docking pr
  await c.handleAction('tree.preview.toggle');expect(c.view().localPreview?.target).toEqual({kind:'block',blockId:b.id});
  expect(c.view().previewPreferences?.bottomFraction).toBe(.7);
  const other=createTreeController(fake.effects);expect(other.view().previewPreferences).toMatchObject({enabled:true,dock:'auto',bottomFraction:.55});
+});
+
+test('Inbox Preview chooser retries the browsed target after a protected destination rejects Open',async()=>{
+ const source=block('inbox-original'),target=block('preview-target');let reject=true;
+ const fake=harness(input=>{
+  if(input.action==='tree.index')return snapshot([source,target],source);
+  if(input.action==='inbox.status')return{enabled:true,paused:false,state:'idle',pending:0,message:'ready',attentionCount:0,attentionOnly:!!input.attentionOnly,resultsOffset:0,resultsTruncated:false,results:input.attentionOnly?[]:[{id:'receipt',sourceId:source.id,sourceTitle:'Source',outputIds:[],state:'applied',summary:'Filed',createdAt:'2026-09-23'}]};
+  if(input.action==='navigation.link.get')return{source:{clientId:'tree-test',region:'tree'},destination:null,destinations:[{view:{clientId:'reader',region:'detail'},label:'Reader'}]};
+  if(input.action==='navigation.dispatch'&&reject)throw Error('Reader has a draft');
+ });
+ const c=createTreeController(fake.effects);await c.initialize();await c.handleAction('tree.inbox.open');await setImmediate();
+ await c.handleAction('preview.link:'+encodeURIComponent('pi-outliner://block/preview-target'));
+ await c.handleAction('preview.open');expect(c.view().mode).toBe('action-menu');
+ await c.handleAction('destination:0');expect(c.view().mode).toBe('action-menu');
+ reject=false;await c.handleAction('destination:0');
+ expect(lastCall(fake.calls,'navigation.dispatch')).toMatchObject({target:{kind:'block',blockId:target.id}});
 });

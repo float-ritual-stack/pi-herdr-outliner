@@ -11,10 +11,13 @@ import {pointInPreview,type DocumentPreviewFrame,type PreviewRect} from "./docum
 import {parseTreeWheelEvent} from "./tree-mouse";
 import { TextBuffer } from "./text-buffer";
 import { isPrintableInput, sanitizeDynamicText, type TerminalKey } from "./terminal";
-import type { Block } from "./types";
+import type { OutlinerNavigationTarget, Block } from "./types";
 import type { InternResourceReceipt } from "./resources";
 
 interface InboxEffects extends OutlinerRequester {
+  clientId?: string;
+  openExternal?(url:string):void|Promise<void>;
+  openPreview?(target:OutlinerNavigationTarget):Promise<void>;
   invalidate(): void;
   open(blockId: string, destination: "tree" | "detail"): Promise<void>;
   openResource(resourceId: string): Promise<void>;
@@ -174,7 +177,7 @@ export class InboxController {
     const handle = ([role, input, reader, frame]: typeof readers[number]) => input.handle(sequence, {
         focus: (focused = true) => { if (focused) this.focusReader(true, role); else reader.focus(false); },
         scroll: delta => {if (this.searching) this.searchTouched = true; if (frame) reader.scroll(delta, frame.content.width, frame.content.height);},
-        resize: () => {}, invoke: async () => {},
+        resize: () => {}, invoke: action => this.previewAction(action,reader),
       }, copy, () => this.effects.invalidate());
     if (!this.reviewBody) this.resizeAxis = undefined;
     // A drag belongs to the reader where it began, even across another reader or toolbar.
@@ -218,9 +221,16 @@ export class InboxController {
   }
   private previewKey = '';
   constructor(private readonly effects: InboxEffects) {
-    this.sourceReader = new DocumentPreview(effects, () => effects.invalidate());
-    this.outputReader = new DocumentPreview(effects, () => effects.invalidate());
+    this.sourceReader = new DocumentPreview(effects, () => effects.invalidate(),effects.clientId,effects.openExternal);
+    this.outputReader = new DocumentPreview(effects, () => effects.invalidate(),effects.clientId,effects.openExternal);
   }
+  private async openPreview(target:OutlinerNavigationTarget):Promise<void>{
+    if(this.effects.openPreview)return this.effects.openPreview(target);
+    if(target.kind==='resource')return this.effects.openResource(target.resourceId);
+    if(target.fragmentId)throw Error('This host cannot open a fragment in Detail');
+    return this.effects.open(target.blockId,'detail');
+  }
+  async previewAction(action:string,reader=this.reader):Promise<void>{await reader.action(action,target=>this.openPreview(target));}
   selectResult(index: number): void {
     if (!Number.isInteger(index) || !this.results[index]) return;
     this.searchEditing=false;
@@ -258,10 +268,11 @@ export class InboxController {
     const jobs: Promise<boolean>[] = [];
     const sourceKey = `${result.id}/${result.sourceId}/${this.sourceVersion}`;
     if ((this.sourceVersion === 'current' && (force || reset)) || sourceKey !== this.sourceKey || !this.sourceReader.state) {
+      const refreshing=force&&sourceKey===this.sourceKey&&!reset;
+      const target=refreshing&&this.sourceReader.state?this.sourceReader.state.target:{kind:'block' as const,blockId:result.sourceId};
       this.sourceKey = sourceKey;
-      const target = {kind: 'block' as const, blockId: result.sourceId};
-      jobs.push(this.sourceVersion === 'current'
-        ? this.sourceReader.load(target, force)
+      jobs.push(this.sourceVersion === 'current'||(refreshing&&this.sourceReader.state?.canBack)
+        ? this.sourceReader.load(target, refreshing)
         : this.sourceReader.loadText(target, result.sourceTitle, this.effects.request<InboxResultDetail>({action: 'inbox.result', resultId: result.id}).then(detail =>
           detail.beforeSource?.text ?? 'No saved source before this attempt. Current source is available separately.')));
     }
@@ -269,13 +280,15 @@ export class InboxController {
     const outputKey = output ? `${result.id}/${output.id}` : '';
     if (!output) {this.outputKey = ''; this.outputReader.clear();}
     else if (force || reset || outputKey !== this.outputKey) {
+      const refreshing=force&&outputKey===this.outputKey&&!reset;
+      const target=refreshing&&this.outputReader.state?this.outputReader.state.target:{kind:'block' as const,blockId:output.id};
       this.outputKey = outputKey;
-      jobs.push(this.outputReader.load({kind: 'block', blockId: output.id}, force));
+      jobs.push(this.outputReader.load(target,refreshing));
     }
     return (await Promise.all(jobs)).some(Boolean);
   }
 
-  contentChanged(): void { this.previewKey = ""; this.refreshPreview(true); }
+  contentChanged(): void { void this.refreshPreview(true); }
 
   get results(): InboxResultSummary[] {
     if(this.searching)return this.searchResults?.matches.map(match=>match.result)??[];
@@ -405,6 +418,12 @@ export class InboxController {
     if (!this.steering && key.meta && key.name === 'p') {this.focusReader(!this.reader.state?.focused);return;}
     if (!this.steering && this.previewMode === 'content' && this.reader.state?.focused && ['up','down','pageup','pagedown'].includes(key.name ?? '')) {
       this.scrollPreview((key.name === 'up' || key.name === 'pageup' ? -1 : 1) * (key.name?.startsWith('page') ? Math.max(1,this.previewFrame?.content.height ?? 5) : 1));return;
+    }
+    const state=this.reader.state;
+    if(!this.steering&&this.previewMode==='content'&&state?.focused&&['tab','return','left','right'].includes(key.name??'')
+      &&(key.name!=='return'||key.meta||state.activeLink)){
+      const frame=this.reader===this.outputReader?this.outputFrame:this.sourceFrame;
+      if(await this.reader.key(key,frame?.content.width??60,frame?.content.height??10,target=>this.openPreview(target)))return;
     }
     if (this.steering) {
       if (key.name === "return") {

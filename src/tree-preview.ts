@@ -1,5 +1,5 @@
 import {outlinerActionLink} from './outliner-actions';
-import {renderDocumentPreview,type DocumentPreviewFrame} from './document-preview-renderer';
+import {PREVIEW_NAVIGATION_WIDTH,renderDocumentPreview,type DocumentPreviewFrame} from './document-preview-renderer';
 
 import type {DocumentPreviewState} from './document-preview';
 export interface PreviewPreferences {
@@ -27,12 +27,12 @@ export function treePreviewFrame(preview:DocumentPreviewState,width:number,heigh
   let toolbar = '', column = 0;
   for (const [label, action] of [['→','right'],['↓','bottom'],['Auto','auto'],['−','shrink'],['+','grow'],['×','close']]) {
     const text = `[${label}]`;
-    if (column + text.length > rect.width) break;
+    if (column + text.length > rect.width-PREVIEW_NAVIGATION_WIDTH) break;
     controls.push({rect: {x: rect.x + column, y: rect.y + 1, width: text.length, height: 1}, action: `tree.preview.${action}`});
     toolbar += outlinerActionLink(`tree.preview.${action}`, action === preferences.dock ? `\x1b[7m${text}\x1b[27m` : text);
     column += text.length;
   }
   const divider = placement === 'beside' ? {x: treeWidth, y: 0, width: 1, height} : placement === 'below' ? {x: 0, y: treeHeight, width, height: 1} : undefined;
   const rendered=renderDocumentPreview({...preview,title:`${preview.title} · ${preferences.dock === 'auto'?'Auto':preferences.dock==='right'?'Dock right':'Dock below'}`},rect,`→ right · ↓ below · Auto fit · drag divider · ${help}`,toolbar);
-  return {...rendered,treeWidth,treeHeight,placement,controls,divider};
+  return {...rendered,treeWidth,treeHeight,placement,controls:[...controls,...rendered.controls??[]],divider};
 }
