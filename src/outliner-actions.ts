@@ -124,6 +124,11 @@ export function outlinerActionLink(actionId: string, label: string): string {
 
 const ACTION_SPECS = [
   { id: "tree.close", surface: "tree", modes: ["*"], label: "close", description: "Close this Tree pane", defaultChords: ["Ctrl+Q"], helpPriority: 100, menuGroup: "System" },
+  ...([
+    ['toggle', 'Show / hide Preview', ['Alt+Shift+P']],
+    ['right', 'Dock Preview right', []], ['bottom', 'Dock Preview below', []],
+    ['auto', 'Auto Preview docking', []], ['grow', 'Grow Preview', ['Alt+=']], ['shrink', 'Shrink Preview', ['Alt+-']],
+  ] as const).map(([name, label, chords]) => ({id: `tree.preview.${name}`, surface: 'tree' as const, modes: ['browse'], label, description: label, defaultChords: [...chords], helpPriority: 0, menuGroup: 'View' as const})),
   { id: "tree.preview.focus", surface: "tree", modes: ["browse"], label: "Tree / Preview", description: "Focus Preview to scroll or copy, or return to Tree", defaultChords: ["Alt+P", "F7"], helpPriority: 30, menuGroup: "View" },
   { id: "tree.preview.close", surface: "tree", modes: ["browse"], label: "close Preview", description: "Close local Preview and return to Tree", defaultChords: ["Esc", "Shift+F7"], helpPriority: 29, menuGroup: "View" },
   { id: "tree.cancel", surface: "tree", modes: ["delete", "viewer", "edit", "add-child", "add-sibling", "filter", "goto", "purge", "action-menu", "inbox", "inbox-steer"], label: "cancel", description: "Cancel the current transient mode", defaultChords: ["Esc"], helpPriority: 100, menuGroup: "System" },

@@ -1786,3 +1786,14 @@ The **Indent** badge, **Alt+I**, or **? → Toggle indentation follow** switches
 - **Selection**: follow the selected occurrence’s depth even while shallow rows remain visible. A `‹` marks a row whose indentation extends off the left edge; select it to bring its ancestry back into view. Its hidden disclosure control is not clickable.
 
 The choice lasts for the Tree process. It changes presentation only: root, selection, order and canonical hierarchy stay unchanged. Breadcrumbs follow the selected occurrence in both modes.
+
+### Local Tree Preview controls
+
+Each Tree has its own **Show/Hide Preview** control and `?` menu actions.
+Hiding persists while browsing until you show it again. In Preview's header,
+**→** docks right, **↓** docks below, **Auto** follows available space, **−/+**
+resize, and **×** hides. Drag the divider to resize directly. Keyboard equivalents
+are `Alt+Shift+P` (toggle), `Alt+=` (grow), and `Alt+-` (shrink); all are configurable.
+Dock and size preferences survive hide/show and terminal resizing within that Tree;
+they do not change Herdr panes or persist after closing the Tree. Small windows use
+a compact reader; `Alt+P` switches focus between Tree and Preview.

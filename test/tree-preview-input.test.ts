@@ -36,3 +36,13 @@ for (const placement of ["beside", "below"] as const) {
     expect(h.focusCalls).not.toContain(false);
   });
 }
+
+test('Preview toolbar and divider consume pointer input before selection',()=>{
+ const h=fixture('beside');const actions:string[]=[];const sizes:number[]=[];
+ h.controller.handleAction=async id=>{actions.push(id);};h.controller.resizeLocalPreview=f=>sizes.push(f);
+ h.frame.controls=[{rect:{x:10,y:1,width:3,height:1},action:'tree.preview.bottom'}];
+ h.frame.divider={x:9,y:0,width:1,height:10};
+ expect(h.send(pointer(11,1))).toBe(true);expect(actions).toEqual(['tree.preview.bottom']);
+ expect(h.send(pointer(9,4))).toBe(true);expect(h.send(pointer(5,4,'drag'))).toBe(true);expect(h.send(pointer(5,4,'up'))).toBe(true);
+ expect(sizes.at(-1)).toBeCloseTo(1-5/19);expect(h.focusCalls).toEqual([]);
+});

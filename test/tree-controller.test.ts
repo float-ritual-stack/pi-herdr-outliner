@@ -3687,3 +3687,15 @@ test('all Inbox chooser paths resolve live content and expose creation and stale
  expect(c.view().mode).toBe('action-menu');expect(c.view().status).toBe('Reader disconnected');
  await c.handleKeypress('',{name:'escape'},'pass');expect(c.view().mode).toBe('inbox');expect(c.view().inbox?.notice).toBe('Reader disconnected');
 });
+
+test('Preview hides persistently while browsing and keeps independent docking preferences',async()=>{
+ const a=block('pref-a'),b=block('pref-b');
+ const fake=harness(input=>input.action==='tree.index'?snapshot([a,b],a):input.action==='browsing-context.publish'?{contextId:'tree-test-context',target:input.target,preview:{targetClientId:'tree-test',targetRegion:'tree'}}:undefined);
+ const c=createTreeController(fake.effects);await c.initialize();await c.handleRowClick(a.id);await setImmediate();
+ await c.handleAction('tree.preview.bottom');c.resizeLocalPreview(.7);
+ await c.handleAction('tree.preview.close');await c.handleRowClick(b.id);await setImmediate();
+ expect(c.view().localPreview).toBeNull();expect(c.view().previewPreferences).toMatchObject({enabled:false,dock:'bottom',bottomFraction:.7});
+ await c.handleAction('tree.preview.toggle');expect(c.view().localPreview?.target).toEqual({kind:'block',blockId:b.id});
+ expect(c.view().previewPreferences?.bottomFraction).toBe(.7);
+ const other=createTreeController(fake.effects);expect(other.view().previewPreferences).toMatchObject({enabled:true,dock:'auto',bottomFraction:.55});
+});

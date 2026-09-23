@@ -3,7 +3,7 @@ import type {OutlinerViewAddress} from "./types";
 import {resourceAddressLabel} from './resources';
 import {loadDetailReadPreview} from './detail-read-preview';
 import type {DetailReadPreviewDocument} from './detail-pi-preview';
-import {treePreviewFrame, type TreeLocalPreview} from './tree-preview';
+import {treePreviewFrame, defaultPreviewPreferences, type PreviewPreferences, type TreeLocalPreview} from './tree-preview';
 import type { RequestInput } from "./client";
 import {
   decodeAuthoredLinksSnapshot,
@@ -154,6 +154,7 @@ export interface TreeView {
   readonly inboxCue?: string;
   readonly localPreview?: TreeLocalPreview | null;
   readonly previewHelp?: string;
+  readonly previewPreferences?: PreviewPreferences;
   readonly viewerLines: readonly string[];
   readonly viewerPath: string;
   readonly viewerOffset: number;
@@ -213,6 +214,7 @@ export interface TreeController {
   handleGotoMouse(sequence: string): Promise<void>;
   focusLocalPreview(focused?: boolean): void;
   scrollLocalPreview(delta:number): void;
+  resizeLocalPreview(fraction:number): void;
   handleDisclosure(rowId: string): Promise<void>;
   handleRowClick(rowId: string, activate?: boolean): Promise<void>;
   handleAction(actionId: string, origin?: { column: number; row: number }): Promise<void>;
@@ -361,6 +363,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
 
   let localPreview: TreeView["localPreview"] = null;
   let localPreviewGeneration = 0;
+  let previewPreferences = defaultPreviewPreferences();
   let viewerLines: string[] = [];
   let viewerPath = "";
   let viewerOffset = 0;
@@ -548,6 +551,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       inbox: mode === "inbox" ? inbox : null,
       inboxCue: inboxStatusCue(inbox.snapshot, inbox.error),
       localPreview,
+      previewPreferences,
       navigationDestinationLabel: navigationDisplay.text,
       previewHelp: `${actionKeymap.helpText("tree", "browse", ["tree.preview.focus", "tree.preview.close"])} · drag to copy`,
       viewerLines,
@@ -1030,6 +1034,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   }
 
   async function inspectLocally(target: OutlinerNavigationTarget): Promise<void> {
+    if (!previewPreferences.enabled) return;
     const generation = ++localPreviewGeneration;
     let title = target.kind === "block" ? target.blockId : target.resourceId;
     const plainDocument=(text:string):DetailReadPreviewDocument=>({canonicalText:text,resolvedText:text,projectedText:text,embedRanges:[],workIdPrefix});
@@ -1942,16 +1947,42 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   function focusLocalPreview(focused = true):void {if(localPreview && localPreview.focused !== focused){localPreview={...localPreview,focused};effects.invalidate();}}
   function scrollLocalPreview(delta:number):void {
     if(!localPreview)return;
-    const frame=treePreviewFrame(localPreview,effects.terminalWidth(),effects.terminalHeight(),"");
+    const frame=treePreviewFrame(localPreview,effects.terminalWidth(),effects.terminalHeight(),"",previewPreferences);
     localPreview={...localPreview,offset:Math.max(0,Math.min(frame.offset+delta,Math.max(0,frame.totalRows-frame.content.height)))};effects.invalidate();
+  }
+  function resizeLocalPreview(fraction: number): void {
+    if (!localPreview || !Number.isFinite(fraction)) return;
+    const frame = treePreviewFrame(localPreview,effects.terminalWidth(),effects.terminalHeight(),"",previewPreferences);
+    const key = frame.placement === 'beside' ? 'sideFraction' : 'bottomFraction';
+    previewPreferences = {...previewPreferences, [key]: Math.max(.2, Math.min(.8, fraction))};
+    effects.invalidate();
   }
   async function handleAction(
     actionId: string,
     origin?: { column: number; row: number },
   ): Promise<void> {
-    if(actionId==="tree.preview.close") {
-      if(localPreview){localPreviewGeneration++;localPreview=null;await effects.request({action:"clients.update",clientId:effects.clientId,previewTarget:null});}
-      effects.invalidate();return;
+    if (actionId === "tree.preview.close" || actionId === "tree.preview.toggle") {
+      const enabled = actionId === "tree.preview.toggle" && !previewPreferences.enabled;
+      previewPreferences = {...previewPreferences, enabled};
+      if (!enabled) {
+        const hadPreview = !!localPreview;
+        localPreviewGeneration++; localPreview = null;
+        try { if (hadPreview) await effects.request({action:"clients.update",clientId:effects.clientId,previewTarget:null}); }
+        catch (error) { status = errorMessage(error); }
+      } else {
+        const selected = rows[selectedIndex];
+        if (isBlockTreeRow(selected)) await inspectLocally({kind:"block",blockId:selected.canonicalId});
+      }
+      effects.invalidate(); return;
+    }
+    if (["tree.preview.right", "tree.preview.bottom", "tree.preview.auto"].includes(actionId)) {
+      previewPreferences = {...previewPreferences, dock: actionId.split('.').at(-1) as PreviewPreferences['dock']};
+      effects.invalidate(); return;
+    }
+    if (actionId === "tree.preview.grow" || actionId === "tree.preview.shrink") {
+      const frame = localPreview && treePreviewFrame(localPreview,effects.terminalWidth(),effects.terminalHeight(),"",previewPreferences);
+      const fraction = frame?.placement === 'beside' ? previewPreferences.sideFraction : previewPreferences.bottomFraction;
+      resizeLocalPreview(fraction + (actionId.endsWith('grow') ? .05 : -.05)); return;
     }
     if(actionId==="tree.preview.focus") {if(localPreview)localPreview={...localPreview,focused:!localPreview.focused};else status="Select an item to preview it here";effects.invalidate();return;}
     if (actionId.startsWith("tree.inbox.open-target:") && mode === "inbox") {
@@ -2312,8 +2343,8 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     if (!treePointer && inputAction !== "suppress" && mode === "browse" && localPreview?.focused) {
       const action=actionKeymap.canonicalize("tree","browse",str,key);
       if(action.suppressed)return;
-      if(action.actionId && ["tree.preview.focus","tree.preview.close","tree.navigation.link","tree.navigation.once","tree.menu.open"].includes(action.actionId)) return handleAction(action.actionId);
-      const frame=treePreviewFrame(localPreview,effects.terminalWidth(),effects.terminalHeight(),"");
+      if(action.actionId && (action.actionId.startsWith("tree.preview.") || ["tree.preview.focus","tree.preview.close","tree.navigation.link","tree.navigation.once","tree.menu.open"].includes(action.actionId))) return handleAction(action.actionId);
+      const frame=treePreviewFrame(localPreview,effects.terminalWidth(),effects.terminalHeight(),"",previewPreferences);
       const delta=key.name==="up"?-1:key.name==="down"?1:key.name==="pageup"?-frame.content.height:key.name==="pagedown"?frame.content.height:0;
       if(delta) scrollLocalPreview(delta);
       else if(key.name==="return") { try {await effects.navigation.dispatch(localPreview.target,"open");} catch(error){status=errorMessage(error);} }
@@ -2675,6 +2706,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   return {
     focusLocalPreview,
     scrollLocalPreview,
+    resizeLocalPreview,
     setViewportStart(index, page) {
       scrollStartEntryIndex = index;
       expandedPage = page ?? null;
