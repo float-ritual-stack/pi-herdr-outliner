@@ -195,7 +195,10 @@ Changes to Tree, Detail, pane orchestration, or the service require a live Herdr
 
 For Detail-only feature work, restart Detail on the feature branch and exercise the changed path. Cancel any destructive editing smoke without saving.
 
-For a merged change, restart all plugin panes in this order:
+Verify integrated main in a fresh private fixture after merge. For an authorized
+batch, group shared-session deployment into one coordinated cutover unless an
+urgent field repair requires an earlier one. At that cutover, restart all plugin
+panes in this order:
 
 1. Detail
 2. Tree
@@ -211,6 +214,43 @@ Read returned pane IDs from the plugin log. Wait for the service output `herdr_r
 
 Do not reuse remembered pane IDs after closing panes.
 
+### User-workflow walkthrough
+
+For interaction changes, exercise a short ordinary-work journey after the
+mechanical checks. Start from the user's relevant layout and record:
+
+1. **Discover:** can the visible control/menu explain how to begin?
+2. **Understand:** can the user identify focus, Current/Preview, the target and
+   destination without knowing registry IDs or launch history?
+3. **Act:** use both pointer and keyboard paths for the changed operation. Verify
+   the same target and application action, including focus and scroll following.
+4. **Recover:** cancel, retry or return; preserve the draft, selection and browsing
+   position that the operation promises to retain. For asynchronous work, exercise
+   a newer intent arriving before the older operation completes.
+5. **Change context:** repeat the relevant part after resize, reopen or a different
+   pane arrangement. Inspect final geometry and visible state, not clipped text
+   or remembered coordinates.
+
+Keep the journey bounded to the change. Retain initial, action, recovery and final
+frames with semantic target/state assertions. Treat confusion as evidence about
+the interaction model; record any resulting follow-up rather than attributing it
+to the user. Reuse a shared action or reader when a second concrete caller exposes
+duplication; larger architectural work belongs in a separately scoped item.
+
+Label input coverage precisely: injected terminal keys, attached-terminal input,
+and physical host keyboard delivery prove different portions of the path. A
+successful injected Alt chord does not establish macOS/terminal/SSH delivery.
+Record owner-device verification as pending when it has not been exercised.
+
+### Delivery claims
+
+Report implemented, exercised (with the actual journey), merged, deployed and
+owner-accepted separately. Lead with what the user can now do and remaining
+limits; test counts support that claim. A private merged-main run is not evidence
+that the shared session or another device runs that version. Merged scope awaits
+acceptance in Validate; accepted scope closes with linked follow-ups for new ideas.
+Keep exact source revisions, protocol, artifacts and untested paths in the proof.
+
 ## Pull requests
 
 A PR should state:
@@ -222,6 +262,12 @@ A PR should state:
 - live pane proof when applicable.
 
 Address actionable review comments with minimal fixes. Reply with the validating evidence and resolve the review thread. Re-run affected checks after the fix and wait for follow-up review before merging.
+
+Before patching a finding, fetch and inspect the current remote head and any bot
+patch already in flight. Assign one active writer for that finding; defer
+overlapping automation where supported. If automation cannot be paused, reconcile
+its result before another patch. After a remote change, verify the combined source
+and update the PR's evidence and description to the exact revision being reviewed.
 
 CodeRabbit’s generic docstring warning is advisory in this repository. Add comments only when they explain a non-obvious invariant; do not add weightless comments to satisfy a percentage.
 
