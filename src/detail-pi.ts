@@ -423,6 +423,7 @@ const effects: DetailEffects = {
     };
   },
   async chooseDestination(purpose) {
+    const invokingReader = focusedReader();
     const state = await client.request<NavigationLinkState>({action: "navigation.link.get", source: {clientId, region: "detail"}});
     const document = new NavigationDestinationPreview(client, () => tui.requestRender());
     let showOther = false;
@@ -431,7 +432,7 @@ const effects: DetailEffects = {
         if (id === "destination:other") { showOther = !showOther; show(); return; }
         document.clear();
         if (id === "destination:new-right" || id === "destination:new-below") {
-          try { await focusedReader().dispatch({type: "pane.open", direction: id === "destination:new-right" ? "right" : "down"}, viewport(focusedReader())); }
+          try { await invokingReader.dispatch({type: "pane.open", direction: id === "destination:new-right" ? "right" : "down"}, viewport(invokingReader)); }
           finally { resolve(undefined); }
         } else resolve(id === "destination:unlink" ? null : state.destinations[Number(id.slice(12))]?.view);
       }, undefined, () => { document.clear(); resolve(undefined); }, {
@@ -1568,7 +1569,7 @@ const detailInputListener = createPiDetailInputListener(
 );
 tui.addOutlinerInputListener(data => {
   const detailPointer = parseTreePrimaryPointer(data);
-  if (detailPointer?.phase === "down" && readingSurface.previewVisible && ["beside", "below"].includes(readerGeometry().arrangement)) {
+  if (!actionMenuHandle && !tui.hasOverlay() && detailPointer?.phase === "down" && readingSurface.previewVisible && ["beside", "below"].includes(readerGeometry().arrangement)) {
     const detailColumn = detailPointer.column - (composed ? composedWidths(processTerminal.columns).detailX : 0);
     if (detailColumn >= 0) {
       const rect = readerGeometry().preview;

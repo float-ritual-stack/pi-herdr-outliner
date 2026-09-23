@@ -110,7 +110,7 @@ let pendingPaste: string | null = null;
 
 interface DetailDestinationPicker {
   state: NavigationLinkState; purpose: "link" | "open"; showOther: boolean;
-  query: string; index: number; preview: NavigationDestinationPreview;
+  query: string; index: number; preview: NavigationDestinationPreview; reader: DetailController;
   resolve(value: OutlinerViewAddress | null | undefined): void;
 }
 let destinationPicker: DetailDestinationPicker | null = null;
@@ -140,7 +140,7 @@ async function handleDestinationInput(str: string, key: TerminalKey): Promise<vo
     }
     picker.preview.clear(); destinationPicker = null;
     if (item.id === "destination:new-right" || item.id === "destination:new-below") {
-      try { await readingSurface.active.dispatch({type: "pane.open", direction: item.id === "destination:new-right" ? "right" : "down"}, viewport()); }
+      try { await picker.reader.dispatch({type: "pane.open", direction: item.id === "destination:new-right" ? "right" : "down"}, viewport(picker.reader)); }
       finally { picker.resolve(undefined); }
     } else picker.resolve(item.id === "destination:unlink" ? null : picker.state.destinations[Number(item.id.slice(12))]?.view);
     draw(); return;
@@ -231,9 +231,10 @@ const effects: DetailEffects = {
     };
   },
   async chooseDestination(purpose) {
+    const reader = readingSurface.active;
     const state = await client.request<NavigationLinkState>({action: "navigation.link.get", source: {clientId, region: "detail"}});
     return new Promise<OutlinerViewAddress | null | undefined>(resolve => {
-      destinationPicker = {state, purpose, query: "", index: 0, showOther: false, preview: new NavigationDestinationPreview(client, draw), resolve};
+      destinationPicker = {state, purpose, reader, query: "", index: 0, showOther: false, preview: new NavigationDestinationPreview(client, draw), resolve};
       refreshDestinationPreview();
     });
   },
