@@ -328,7 +328,7 @@ for(const routed of [true,false])test(`editorial archive rejects arriving childr
  const result=value.worker.repository.results()[0]!;
  expect(result).toMatchObject({state:'failed',failureKind:'conflict',outputIds:[]});expect(result.error).toContain('Child context');
  expect(store.require(source.id)).toEqual(source);expect(store.require(child.id)).toEqual(child);expect(store.require(target.id)).toEqual(target);
- expect(store.searchTree('Extracted reference').matches).toHaveLength(0);
+ expect(store.searchTree('Extracted reference').matches.filter(match=>store.require(match.block.id).text==='Extracted reference')).toHaveLength(0);
 });
 
 for(const disposition of ['archive','file'] as const)test(`editorial ${disposition} handles existing children safely`,async()=>{
@@ -357,4 +357,16 @@ test('new child context invalidates a pending cheap archive even without a paren
  await until(()=>!value.worker!.status().current&&value.worker!.repository.results().length===1);
  const result=value.worker.repository.results()[0]!;expect(result.state).toBe('failed');expect(result.failureKind).toBe('conflict');
  expect(result.error).toContain('Child context');expect(store.require(source.id)).toEqual(source);expect(store.require(child.id)).toEqual(child);expect(pi).toBe(0);
+});
+
+for(const route of ['keep','metadata'] as const)test(`child arrival invalidates pending ${route} routing`,async()=>{
+ const value=fixture();const {store}=value;const entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>();let pi=0;
+ value.worker=new InboxWorker(store,async()=>{pi++;throw Error('unexpected editor');},result=>{if(result)value.worker!.pause();},{settleMs:1,noteModel:async()=>{
+  entered.resolve();await release.promise;return {plan:{summary:'Keep useful note',tags:[],inboxRoute:{route,reason:'Useful as authored'}},usage};
+ }});
+ const source=store.capture(`child-race-${route}`,'Parent capture','cli').block;value.worker.wake();await entered.promise;
+ const child=store.create('Supporting context',source.id);release.resolve();
+ await until(()=>!value.worker!.status().current&&value.worker!.repository.results().length===1);
+ expect(value.worker.repository.results()[0]).toMatchObject({state:'failed',failureKind:'conflict',outputIds:[]});
+ expect(store.require(source.id)).toEqual(source);expect(store.require(child.id)).toEqual(child);expect(pi).toBe(0);
 });

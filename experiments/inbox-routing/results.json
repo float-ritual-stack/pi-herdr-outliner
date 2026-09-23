@@ -1032,6 +1032,360 @@
         "cost": 9.853200000000001e-05,
         "jevCalls": 1,
         "jevSuccessfulCalls": 1,
+        "elapsedMs": 580,
+        "promptRevisions": [
+          {
+            "sha256": "e2a5ca3585138f4d23604801e8e8dad69307f89645308b93583fc9fea6441dce",
+            "file": "note-assistance.json"
+          },
+          {
+            "sha256": "99d6214b43f3db60d076a9cb4974c15e03d1e01c409547b151d748ae1db7e421",
+            "file": "note-answer.md"
+          },
+          {
+            "sha256": "d438e69cd617c1f5e82028e5d4c7c59ff78371fe0003272b2216f70dce67c8d5",
+            "file": "inbox-routing.json"
+          }
+        ],
+        "notChecked": []
+      }
+    },
+    {
+      "id": "explicit-test",
+      "text": "test test \u2014 ignore this, testing capture",
+      "expected": [
+        "archive"
+      ],
+      "useful": false,
+      "escalated": false,
+      "state": "applied",
+      "routing": {
+        "judged": "archive",
+        "margin": 0.98,
+        "disposable": 0.93,
+        "route": "archive",
+        "reason": "Clear test noise; archive intact with Undo"
+      },
+      "usage": {
+        "provider": "typesafe",
+        "model": "jev-1.13.0",
+        "inputTokens": 3015,
+        "outputTokens": 490,
+        "cost": 0.00012663,
+        "jevCalls": 1,
+        "jevSuccessfulCalls": 1,
+        "elapsedMs": 259,
+        "promptRevisions": [
+          {
+            "sha256": "e2a5ca3585138f4d23604801e8e8dad69307f89645308b93583fc9fea6441dce",
+            "file": "note-assistance.json"
+          },
+          {
+            "sha256": "99d6214b43f3db60d076a9cb4974c15e03d1e01c409547b151d748ae1db7e421",
+            "file": "note-answer.md"
+          },
+          {
+            "sha256": "d438e69cd617c1f5e82028e5d4c7c59ff78371fe0003272b2216f70dce67c8d5",
+            "file": "inbox-routing.json"
+          }
+        ],
+        "notChecked": []
+      }
+    },
+    {
+      "id": "dated-vague",
+      "text": "2026-09-23 \u2014 did a thing",
+      "expected": [
+        "keep",
+        "editorial",
+        "metadata"
+      ],
+      "useful": true,
+      "escalated": true,
+      "state": "applied",
+      "routing": {
+        "judged": "archive",
+        "margin": 0.04999999999999999,
+        "disposable": 0.25,
+        "route": "editorial",
+        "reason": "Routing alternatives are close; Pi handles the ambiguity"
+      },
+      "usage": {
+        "provider": "typesafe + fixture",
+        "model": "jev-1.13.0 + no-Pi-holdout",
+        "inputTokens": 2374,
+        "outputTokens": 436,
+        "cost": 9.970800000000002e-05,
+        "elapsedMs": 271,
+        "jevCalls": 1,
+        "jevSuccessfulCalls": 1,
+        "piSessions": [],
+        "notChecked": [
+          {
+            "area": "coverage",
+            "reason": "Later model phase did not record omissions"
+          }
+        ],
+        "promptRevisions": [
+          {
+            "sha256": "e2a5ca3585138f4d23604801e8e8dad69307f89645308b93583fc9fea6441dce",
+            "file": "note-assistance.json"
+          },
+          {
+            "sha256": "99d6214b43f3db60d076a9cb4974c15e03d1e01c409547b151d748ae1db7e421",
+            "file": "note-answer.md"
+          },
+          {
+            "sha256": "d438e69cd617c1f5e82028e5d4c7c59ff78371fe0003272b2216f70dce67c8d5",
+            "file": "inbox-routing.json"
+          }
+        ]
+      }
+    },
+    {
+      "id": "one-item",
+      "text": "buy milk",
+      "expected": [
+        "keep",
+        "metadata",
+        "editorial"
+      ],
+      "useful": true,
+      "escalated": false,
+      "state": "applied",
+      "routing": {
+        "judged": "keep",
+        "margin": 0.47,
+        "disposable": 0.13,
+        "route": "keep",
+        "reason": "Useful as authored; file intact without inferred metadata"
+      },
+      "usage": {
+        "provider": "typesafe",
+        "model": "jev-1.13.0",
+        "inputTokens": 2328,
+        "outputTokens": 437,
+        "cost": 9.777600000000001e-05,
+        "jevCalls": 1,
+        "jevSuccessfulCalls": 1,
+        "elapsedMs": 246,
+        "promptRevisions": [
+          {
+            "sha256": "e2a5ca3585138f4d23604801e8e8dad69307f89645308b93583fc9fea6441dce",
+            "file": "note-assistance.json"
+          },
+          {
+            "sha256": "99d6214b43f3db60d076a9cb4974c15e03d1e01c409547b151d748ae1db7e421",
+            "file": "note-answer.md"
+          },
+          {
+            "sha256": "d438e69cd617c1f5e82028e5d4c7c59ff78371fe0003272b2216f70dce67c8d5",
+            "file": "inbox-routing.json"
+          }
+        ],
+        "notChecked": []
+      }
+    },
+    {
+      "id": "short-meaningful",
+      "text": "aaa battery for the remote",
+      "expected": [
+        "keep",
+        "metadata",
+        "editorial"
+      ],
+      "useful": true,
+      "escalated": false,
+      "state": "applied",
+      "routing": {
+        "judged": "keep",
+        "margin": 0.81,
+        "disposable": 0.12,
+        "route": "keep",
+        "reason": "Useful as authored; file intact without inferred metadata"
+      },
+      "usage": {
+        "provider": "typesafe",
+        "model": "jev-1.13.0",
+        "inputTokens": 2560,
+        "outputTokens": 454,
+        "cost": 0.00010752000000000001,
+        "jevCalls": 1,
+        "jevSuccessfulCalls": 1,
+        "elapsedMs": 323,
+        "promptRevisions": [
+          {
+            "sha256": "e2a5ca3585138f4d23604801e8e8dad69307f89645308b93583fc9fea6441dce",
+            "file": "note-assistance.json"
+          },
+          {
+            "sha256": "99d6214b43f3db60d076a9cb4974c15e03d1e01c409547b151d748ae1db7e421",
+            "file": "note-answer.md"
+          },
+          {
+            "sha256": "d438e69cd617c1f5e82028e5d4c7c59ff78371fe0003272b2216f70dce67c8d5",
+            "file": "inbox-routing.json"
+          }
+        ],
+        "notChecked": []
+      }
+    },
+    {
+      "id": "uncertain-thought",
+      "text": "hmm maybe that thing from yesterday?",
+      "expected": [
+        "editorial",
+        "keep"
+      ],
+      "useful": true,
+      "escalated": false,
+      "state": "applied",
+      "routing": {
+        "judged": "keep",
+        "margin": 0.5399999999999999,
+        "disposable": 0.29,
+        "route": "keep",
+        "reason": "Useful as authored; file intact without inferred metadata"
+      },
+      "usage": {
+        "provider": "typesafe",
+        "model": "jev-1.13.0",
+        "inputTokens": 2569,
+        "outputTokens": 454,
+        "cost": 0.00010789800000000002,
+        "jevCalls": 1,
+        "jevSuccessfulCalls": 1,
+        "elapsedMs": 246,
+        "promptRevisions": [
+          {
+            "sha256": "e2a5ca3585138f4d23604801e8e8dad69307f89645308b93583fc9fea6441dce",
+            "file": "note-assistance.json"
+          },
+          {
+            "sha256": "99d6214b43f3db60d076a9cb4974c15e03d1e01c409547b151d748ae1db7e421",
+            "file": "note-answer.md"
+          },
+          {
+            "sha256": "d438e69cd617c1f5e82028e5d4c7c59ff78371fe0003272b2216f70dce67c8d5",
+            "file": "inbox-routing.json"
+          }
+        ],
+        "notChecked": []
+      }
+    },
+    {
+      "id": "historical-quote",
+      "text": "Design decision from August: 'delete every old draft' was proposed and explicitly rejected. We retained source history so extracted notes keep provenance.",
+      "expected": [
+        "metadata",
+        "keep"
+      ],
+      "useful": true,
+      "escalated": false,
+      "state": "applied",
+      "routing": {
+        "judged": "metadata",
+        "margin": 0.6799999999999999,
+        "disposable": 0.04,
+        "route": "metadata",
+        "reason": "Coherent useful content; organize metadata only"
+      },
+      "usage": {
+        "provider": "typesafe",
+        "model": "jev-1.13.0",
+        "inputTokens": 5321,
+        "outputTokens": 682,
+        "cost": 0.00022348200000000003,
+        "jevCalls": 1,
+        "jevSuccessfulCalls": 1,
+        "elapsedMs": 497,
+        "promptRevisions": [
+          {
+            "sha256": "e2a5ca3585138f4d23604801e8e8dad69307f89645308b93583fc9fea6441dce",
+            "file": "note-assistance.json"
+          },
+          {
+            "sha256": "99d6214b43f3db60d076a9cb4974c15e03d1e01c409547b151d748ae1db7e421",
+            "file": "note-answer.md"
+          },
+          {
+            "sha256": "d438e69cd617c1f5e82028e5d4c7c59ff78371fe0003272b2216f70dce67c8d5",
+            "file": "inbox-routing.json"
+          }
+        ],
+        "notChecked": []
+      }
+    },
+    {
+      "id": "referenced-filler",
+      "text": "aaaa is the test fixture name in our parser. Keep that spelling when reproducing the bug.",
+      "expected": [
+        "keep",
+        "metadata",
+        "editorial"
+      ],
+      "useful": true,
+      "escalated": false,
+      "state": "applied",
+      "routing": {
+        "judged": "keep",
+        "margin": 0.59,
+        "disposable": 0.11,
+        "route": "keep",
+        "reason": "Useful as authored; file intact without inferred metadata"
+      },
+      "usage": {
+        "provider": "typesafe",
+        "model": "jev-1.13.0",
+        "inputTokens": 3961,
+        "outputTokens": 571,
+        "cost": 0.00016636200000000003,
+        "jevCalls": 1,
+        "jevSuccessfulCalls": 1,
+        "elapsedMs": 280,
+        "promptRevisions": [
+          {
+            "sha256": "e2a5ca3585138f4d23604801e8e8dad69307f89645308b93583fc9fea6441dce",
+            "file": "note-assistance.json"
+          },
+          {
+            "sha256": "99d6214b43f3db60d076a9cb4974c15e03d1e01c409547b151d748ae1db7e421",
+            "file": "note-answer.md"
+          },
+          {
+            "sha256": "d438e69cd617c1f5e82028e5d4c7c59ff78371fe0003272b2216f70dce67c8d5",
+            "file": "inbox-routing.json"
+          }
+        ],
+        "notChecked": []
+      }
+    }
+  ],
+  "historicalHoldout": [
+    {
+      "id": "long-filler",
+      "text": "aaaaaaaaaaaaaaaaaaaaaa",
+      "expected": [
+        "archive"
+      ],
+      "useful": false,
+      "escalated": false,
+      "state": "applied",
+      "routing": {
+        "judged": "archive",
+        "margin": 0.98,
+        "disposable": 0.88,
+        "route": "archive",
+        "reason": "Clear test noise; archive intact with Undo"
+      },
+      "usage": {
+        "provider": "typesafe",
+        "model": "jev-1.13.0",
+        "inputTokens": 2346,
+        "outputTokens": 436,
+        "cost": 9.853200000000001e-05,
+        "jevCalls": 1,
+        "jevSuccessfulCalls": 1,
         "elapsedMs": 275,
         "notChecked": []
       }
