@@ -5,6 +5,7 @@ import {join} from "node:path";
 import {promisify} from "node:util";
 import {openDetailSidebar} from "../../src/sidebar-placement";
 import {visibleWidth} from "@earendil-works/pi-tui";
+import {outlinerLinkUri} from "../../src/outliner-links";
 import type {Block, NavigationLinkState, OutlinerClientRegistration} from "../../src/types";
 import {runHerdrScenario} from "./herdr-runner";
 
@@ -28,7 +29,8 @@ const result = await runHerdrScenario({
     const detail = original.find(c => c.runtime?.paneId === s.panes.detail && c.role === (composed ? "composed" : "detail"))!;
     assert.ok(tree && detail);
     const create = (text: string) => s.client.request<Block>({action: "create", text});
-    const current = await create("FIRST CURRENT NOTE\n\nFirst reader retained body.\n\n[status::open]");
+    const followed = await create("FOLLOWED THROUGH NEW SIDEBAR\n\nNEW SIDEBAR LINK ACTIVATION PROOF");
+    const current = await create(`FIRST CURRENT NOTE\n\nFirst reader retained body.\n\n[Open linked proof](${outlinerLinkUri("block", followed.id)})\n\n[status::open]`);
     const secondDoc = await create("SECOND CURRENT NOTE\n\nSecond reader retained body.");
     const inspection = await create("TREE INSPECTION NOTE\n\n# Rich local heading\n\nPASSIVE TREE PREVIEW BODY\n\n- A rich list item");
     const nextInspection = await create("NEXT TREE INSPECTION\n\nSECOND PASSIVE PREVIEW BODY");
@@ -74,6 +76,7 @@ const result = await runHerdrScenario({
     const added = await s.waitFor("second smaller Detail", s.registrations, values => values.some(c => c.role === "detail" && !original.some(old => old.clientId === c.clientId)));
     const second = added.find(c => c.role === "detail" && !original.some(old => old.clientId === c.clientId))!;
     const secondPane = await s.adoptDetached(second.clientId, "detail");
+    assert.equal((await link("detail")).destination, null, "Ordinary split commands keep the invoking Detail unlinked");
     await s.client.request({action: "ui.command.send", command: {command: "open", targetClientId: second.clientId, target: {kind: "block", blockId: secondDoc.id}}});
     await s.waitVisible(secondPane, "Second reader retained body.");
     const beforePassive = {first: await registration(detail.clientId), second: await registration(second.clientId)};
@@ -133,6 +136,27 @@ const result = await runHerdrScenario({
     }
     await s.record("navigation-flow-evidence", {composed, tree: tree.clientId, detail: detail.clientId, second: second.clientId, properties: properties.clientId, canonicalUnchanged: true});
     await s.closeDetached(propertiesPane);
+    if (composed) {
+      const before = await s.registrations();
+      const treeLink = (await link("tree")).destination;
+      await focus("detail"); await s.keys(s.panes.detail, "shift+l");
+      await s.waitVisible(s.panes.detail, "Link destination");
+      await s.text(s.panes.detail, "New Detail right");
+      await s.waitVisible(s.panes.detail, "Find: New Detail right");
+      await s.keys(s.panes.detail, "enter");
+      const withCreated = await s.waitFor("composed Detail creates linked reader", s.registrations, values => values.some(c => c.role === "detail" && !!c.runtime?.paneId && !before.some(old => old.clientId === c.clientId)));
+      const created = withCreated.find(c => c.role === "detail" && !before.some(old => old.clientId === c.clientId))!;
+      const pane = await s.adoptDetached(created.clientId, "detail");
+      await s.waitFor("composed Detail source linked", () => link("detail"), state => state.destination?.clientId === created.clientId);
+      assert.deepEqual((await link("tree")).destination, treeLink, "Composed Tree has a separate saved link");
+      assert.equal((await link("detail", created.clientId)).destination, null);
+      await s.waitFor("created reader retained invoking Current", () => registration(created.clientId), c => isCurrent(c, current.id));
+      await focus("tree"); await s.keys(s.panes.tree, "enter");
+      await s.waitFor("Tree still opens into composed Detail", () => registration(detail.clientId), c => isCurrent(c, nextInspection.id));
+      assert.ok(isCurrent(await registration(created.clientId), current.id), "Receiving a Tree open must not forward it through Detail's new link");
+      await s.checkpoint("05-composed-source-specific-created-link");
+      await s.closeDetached(pane);
+    }
     if (!composed) {
       // This bounded native oracle is pinned to the fixture's private socket/session.
       const isolation = JSON.parse(await readFile(join(s.artifactDirectory, "isolation.json"), "utf8")) as {runRoot: string; sessionName: string; effectiveEnvironment: Record<string, string>};
@@ -162,20 +186,55 @@ const result = await runHerdrScenario({
         await focus(source); await s.keys(pane, "shift+l"); await s.waitVisible(pane, "Link destination");
         await s.text(pane, query); await s.waitVisible(pane, `Find: ${query}`); await s.keys(pane, "enter");
       };
-      // Use a real saved link for both sources so create-only actions cannot pass
-      // this assertion merely by keeping an already-unlinked state.
+      // Seed live previous destinations so creation must replace only its source
+      // link, while cancellation and failed creation must preserve the old link.
       await focus("detail"); await s.keys(s.panes.detail, "shift+l");
       await finishChoice(s.panes.detail, "detail", "NEXT TREE INSPECTION", second.clientId);
-      const unchangedLinks = {tree: (await link("tree")).destination, detail: (await link("detail")).destination};
+      const baselineLinks = {tree: (await link("tree")).destination, detail: (await link("detail")).destination};
       const assertLinks = async () => {
-        assert.deepEqual((await link("tree")).destination, unchangedLinks.tree);
-        assert.deepEqual((await link("detail")).destination, unchangedLinks.detail);
+        assert.deepEqual((await link("tree")).destination, baselineLinks.tree);
+        assert.deepEqual((await link("detail")).destination, baselineLinks.detail);
       };
+      for (const source of ["tree", "detail"] as const) {
+        const beforeCancel = await snapshot();
+        await chooseAction(source, "New Detail right of another");
+        const pane = source === "tree" ? s.panes.tree : s.panes.detail;
+        await s.waitVisible(pane, "New Detail placement");
+        await s.keys(pane, "escape");
+        await s.waitFor("placement cancelled", () => s.visible(pane), frame => !frame.includes("New Detail placement"));
+        await assertLinks();
+        assert.deepEqual(identities(await snapshot()), identities(beforeCancel));
+      }
+      await s.checkpoint("05-cancel-keeps-existing-links");
+      const beforeFailure = await snapshot();
+      const failureClients = await s.registrations();
+      const vanishedAnchor = await create("TEMP PLACEMENT ANCHOR");
+      await focus("detail"); await s.keys(s.panes.detail, "alt+shift+right");
+      const anchorClients = await s.waitFor("temporary placement anchor", s.registrations, values => values.some(c => c.role === "detail" && !!c.runtime?.paneId && !failureClients.some(old => old.clientId === c.clientId)));
+      const anchorClient = anchorClients.find(c => c.role === "detail" && !failureClients.some(old => old.clientId === c.clientId))!;
+      const anchorPane = await s.adoptDetached(anchorClient.clientId, "detail");
+      await s.client.request({action: "ui.command.send", command: {command: "open", targetClientId: anchorClient.clientId, target: {kind: "block", blockId: vanishedAnchor.id}}});
+      await s.waitVisible(anchorPane, "TEMP PLACEMENT ANCHOR");
+      await assertLinks();
+      await chooseAction("tree", "New Detail right of another");
+      await s.waitVisible(s.panes.tree, "New Detail placement");
+      await s.text(s.panes.tree, "TEMP PLACEMENT ANCHOR");
+      await s.waitVisible(s.panes.tree, "Find: TEMP PLACEMENT ANCHOR");
+      await s.closeDetached(anchorPane);
+      await s.waitFor("chosen anchor gone", s.registrations, values => !values.some(c => c.clientId === anchorClient.clientId));
+      await s.keys(s.panes.tree, "enter");
+      const failedFrame = await s.waitFor("unavailable anchor failure reported", () => s.visible(s.panes.tree), frame => !frame.includes("New Detail placement") && !frame.includes("Creating Detail") && frame.split("\n").some(line => !line.includes("Inbox unavailable") && /not found|not exist|failed|unavailable|not.*live/i.test(line)));
+      await assertLinks();
+      assert.deepEqual(identities(await snapshot()), identities(beforeFailure), "Failed creation leaves the original panes intact");
+      await s.record("failed-creation-keeps-link", {frame: failedFrame, previousLinks: baselineLinks});
+      await s.checkpoint("05-failed-creation-keeps-existing-link");
       const placementCases = [
-        {source: "tree", label: "New Detail right of another", direction: "right"},
-        {source: "detail", label: "New Detail below another", direction: "down"},
-        {source: "tree", label: "Sidebar left · Outliner area", side: "left", scope: "outliner"},
-        {source: "detail", label: "Sidebar right · Outliner area", side: "right", scope: "outliner"},
+        {source: "tree", label: "New Detail right", direction: "right", anchor: "source"},
+        {source: "detail", label: "New Detail below", direction: "down", anchor: "source"},
+        {source: "tree", label: "New Detail right of another", direction: "right", anchor: "other"},
+        {source: "detail", label: "New Detail below another", direction: "down", anchor: "other"},
+        {source: "detail", label: "Sidebar left · Outliner area", side: "left", scope: "outliner"},
+        {source: "tree", label: "Sidebar right · Outliner area", side: "right", scope: "outliner"},
         {source: "tree", label: "Sidebar left · Whole Herdr tab", side: "left", scope: "tab"},
         {source: "detail", label: "Sidebar right · Whole Herdr tab", side: "right", scope: "tab"},
       ] as const;
@@ -185,7 +244,7 @@ const result = await runHerdrScenario({
         const sourceClient = placement.source === "tree" ? tree : detail;
         const sourceBefore = await registration(sourceClient.clientId);
         await chooseAction(placement.source, placement.label);
-        if ("direction" in placement) {
+        if ("direction" in placement && placement.anchor === "other") {
           const pane = placement.source === "tree" ? s.panes.tree : s.panes.detail;
           await s.waitVisible(pane, "New Detail placement");
           await s.text(pane, "NEXT TREE INSPECTION");
@@ -202,11 +261,12 @@ const result = await runHerdrScenario({
         sameOldTerminals(before, after);
         const placed = rect(after, pane);
         if ("direction" in placement) {
-          const oldAnchor = rect(before, secondPane), anchor = rect(after, secondPane);
+          const anchorPane = placement.anchor === "other" ? secondPane : placement.source === "tree" ? s.panes.tree : s.panes.detail;
+          const oldAnchor = rect(before, anchorPane), anchor = rect(after, anchorPane);
           assert.equal(placement.direction === "right" ? placed.x : placed.y, placement.direction === "right" ? anchor.x + anchor.width : anchor.y + anchor.height);
           assert.equal(placed.x + placed.width, oldAnchor.x + oldAnchor.width);
           assert.equal(placed.y + placed.height, oldAnchor.y + oldAnchor.height);
-          for (const old of layout(before).panes.filter(p => p.pane_id !== secondPane)) assert.deepEqual(rect(after, old.pane_id), old.rect);
+          for (const old of layout(before).panes.filter(p => p.pane_id !== anchorPane)) assert.deepEqual(rect(after, old.pane_id), old.rect);
         } else {
           const area = placement.scope === "tab" ? layout(before).area : {
             x: Math.min(...layout(before).panes.filter(p => p.pane_id !== s.panes.launcher).map(p => p.rect.x)),
@@ -223,7 +283,28 @@ const result = await runHerdrScenario({
         const sourceAfter = await registration(sourceClient.clientId);
         assert.deepEqual(sourceAfter.currentTarget, sourceBefore.currentTarget);
         assert.deepEqual(sourceAfter.previewTarget, sourceBefore.previewTarget);
-        await assertLinks();
+        await s.waitFor("creation links its invoking source", () => link(placement.source), state => state.destination?.clientId === created.clientId);
+        const otherSource = placement.source === "tree" ? "detail" : "tree";
+        assert.deepEqual((await link(otherSource)).destination, baselineLinks[otherSource], "Other saved links stay unchanged");
+        assert.equal((await link("detail", second.clientId)).destination, null);
+        assert.equal((await link("detail", created.clientId)).destination, null, "Creation must not install a reverse link");
+        if (placement.source === "detail" && "scope" in placement && placement.scope === "outliner" && placement.side === "left") {
+          // Both panes initially display this source. The original reader is the
+          // lower pane beneath Tree; click its authored link, not the sidebar copy.
+          await focus("detail");
+          await s.waitVisible(s.panes.detail, "Open linked proof");
+          const frame = await s.waitFor("original Detail authored link visible", terminal.visible, text => text.split("\n").filter(line => line.includes("Open linked proof")).length >= 2);
+          const rows = frame.split("\n");
+          const row = rows.reduce((last, line, index) => line.includes("Open linked proof") ? index : last, -1);
+          assert.ok(row >= rect(after, s.panes.detail).y);
+          const column = visibleWidth(rows[row]!.slice(0, rows[row]!.indexOf("Open linked proof"))) + 3;
+          await terminal.write(`\x1b[<0;${column + 1};${row + 1}M\x1b[<0;${column + 1};${row + 1}m`);
+          await s.waitFor("original Detail link opens new sidebar", () => registration(created.clientId), c => isCurrent(c, followed.id));
+          await s.waitVisible(pane, "NEW SIDEBAR LINK ACTIVATION PROOF");
+          assert.ok(isCurrent(await registration(detail.clientId), current.id), "Original Detail retains its document");
+          assert.ok(isCurrent(await registration(second.clientId), nextInspection.id), "Prior destination receives no open");
+          await s.record("original-detail-link-opens-new-sidebar", {source: detail.clientId, destination: created.clientId, target: followed.id, row, column, frame});
+        }
         await s.record(`placement-${index}`, {placement, before, after, created: created.clientId, pane, sourceBefore, sourceAfter});
         await s.checkpoint(`05-placement-${index}`);
         await s.closeDetached(pane);
@@ -231,6 +312,9 @@ const result = await runHerdrScenario({
         const restored = await s.waitFor("placement removal restores pane set", snapshot, value => value.panes.length === before.panes.length);
         assert.deepEqual(identities(restored), identities(before));
         for (const old of layout(before).panes) assert.deepEqual(rect(restored, old.pane_id), old.rect);
+        // Reset only after the creation/link/activation assertions and close, so
+        // the next isolated case starts from the same live previous destination.
+        await s.client.request({action: "navigation.link.set", source: {clientId: sourceClient.clientId, region: placement.source}, destination: baselineLinks[placement.source]});
       }
       // Exercise real host rollback after the existing Outliner leaves are parked.
       // Only the create callback fails; no user pane or global server is involved.
