@@ -51,7 +51,8 @@ export class NavigationDestinationDisplay {
       // or may still name the reader from before a relink.
       (["clients.update", "clients.unregister"].includes(event.action) &&
         (this.pending !== undefined || this.state === undefined || (!!destination && event.clientId === destination.clientId)))
-    )) || (event.domain === "content" && entry?.target?.kind === "block" && (!event.blockId || event.blockId === entry.target.blockId))) return this.refresh();
+    )) || (event.domain === "content" && (this.pending !== undefined || this.state === undefined ||
+      (entry?.target?.kind === "block" && (!event.blockId || event.blockId === entry.target.blockId))))) return this.refresh();
     return Promise.resolve();
   }
 

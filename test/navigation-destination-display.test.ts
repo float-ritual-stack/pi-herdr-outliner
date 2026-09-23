@@ -99,3 +99,23 @@ test("a newly linked reader changing while relink resolves cannot leave its old 
   expect(requests).toBe(3);
   expect(shown).toEqual(["Original", "Newest document"]);
 });
+
+for (const existing of [false, true]) {
+  test(`a title change during ${existing ? "relink" : "initial resolution"} invalidates a pending destination snapshot`, async () => {
+    const snapshot = Promise.withResolvers<NavigationLinkState>();
+    const renamed = (label: string): NavigationLinkState => ({source, destination, destinations: [{view: destination, label, target: {kind: "block", blockId: "new-document"}}]});
+    let requests = 0; const shown: string[] = [];
+    const display = new NavigationDestinationDisplay({request: async () => {
+      requests++;
+      if (existing && requests === 1) return linked("Original") as never;
+      return (requests === (existing ? 2 : 1) ? await snapshot.promise : renamed("Renamed document")) as never;
+    }}, source, () => shown.push(display.text));
+    if (existing) await display.refresh();
+    const pending = existing ? display.onEvent(event("navigation.link.set", "source")) : display.refresh();
+    const renamedEvent = display.onEvent({...event("update"), domain: "content", blockId: "new-document"});
+    snapshot.resolve(renamed("Old title"));
+    await Promise.all([pending, renamedEvent]);
+    expect(requests).toBe(existing ? 3 : 2);
+    expect(shown).toEqual(existing ? ["Original", "Renamed document"] : ["Renamed document"]);
+  });
+}
