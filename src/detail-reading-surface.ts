@@ -52,7 +52,7 @@ export class DetailReadingSurface {
   async escapePreview(): Promise<boolean> {
     if (this.active !== this.preview) return false;
     const state = this.preview.state;
-    if (this.preview.isBufferMode() || state.mode === "select" ||
+    if (this.preview.isBufferMode() || state.mode === "select" || state.selectionAnchor !== null ||
       state.destinationChooser.active || state.propertyInspector.edit ||
       state.propertyInspector.filterDraft !== null || state.backlinks.filterDraft !== null ||
       state.completion) return false;

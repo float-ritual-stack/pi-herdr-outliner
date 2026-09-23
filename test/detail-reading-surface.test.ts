@@ -72,3 +72,25 @@ test("Escape defers to Preview local editors, filters, chooser and source select
   expect(surface.previewVisible).toBe(true);
   expect(preview.releases()).toBe(0);
 });
+
+test("Escape defers to file-line selection without releasing Preview", async () => {
+  const current = reader(); const preview = reader(); let released = 0;
+  const surface = new DetailReadingSurface(current.controller, preview.controller, () => {}, async () => {released++;});
+  surface.previewVisible = true; surface.focused = "preview";
+  preview.state.mode = "file";
+  preview.state.selectionAnchor = 0;
+  const before = JSON.stringify(preview.state);
+
+  expect(await surface.escapePreview()).toBe(false);
+  expect(surface.previewVisible).toBe(true);
+  expect(surface.focused).toBe("preview");
+  expect(JSON.stringify(preview.state)).toBe(before);
+  expect(preview.releases()).toBe(0);
+  expect(released).toBe(0);
+
+  // Once the file reader has cleared its selection, the next Escape can close it.
+  preview.state.selectionAnchor = null;
+  expect(await surface.escapePreview()).toBe(true);
+  expect(preview.releases()).toBe(1);
+  expect(released).toBe(1);
+});
