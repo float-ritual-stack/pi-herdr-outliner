@@ -1303,8 +1303,11 @@ export class OutlinerServer {
       switch (action) {
         case "inbox.search": result = visibleInboxSearch(searchInboxHistory(this.store,request.query)); break;
         case "inbox.status": result = this.inboxStatus(request.attentionOnly, request.resultsOffset); break;
-        case "inbox.result": result = this.noteRepository.hasResult(request.resultId)
-          ? this.noteRepository.getResult(request.resultId) : this.inboxRepository.getResult(request.resultId); break;
+        case "inbox.result": {
+          const repository = this.noteRepository.hasResult(request.resultId) ? this.noteRepository : this.inboxRepository;
+          result = {...repository.getResult(request.resultId), beforeSource: repository.beforeSource(request.resultId)};
+          break;
+        }
         case "inbox.pause": result = this.requireInbox().pause(); break;
         case "inbox.resume": result = this.requireInbox().resume(); break;
         case "inbox.retry": result = this.requireInbox().reconsider(request.sourceId, request.instructions); break;

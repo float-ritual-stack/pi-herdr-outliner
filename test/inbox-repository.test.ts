@@ -767,3 +767,16 @@ describe("InboxRepository", () => {
     expect(repository.pending().map(block => block.id)).toEqual([active.id]);
   });
 });
+
+test('before source survives edits, restart and undo without creating a canonical copy',()=>{
+ const {store,repository}=fixture();const source=capture(store);
+ const saved=repository.apply('history-before',source,plan());
+ expect(repository.beforeSource(saved.id)).toEqual({id:source.id,text:source.text,revision:source.revision});
+ const restarted=restart(store);
+ expect(restarted.repository.beforeSource(saved.id)?.text).toBe(source.text);
+ restarted.repository.undo(saved.id);
+ expect(restarted.repository.beforeSource(saved.id)?.text).toBe(source.text);
+ const current=restarted.store.require(source.id);
+ restarted.store.update(source.id,'A later edit',current.revision,{author:'user'});
+ expect(restarted.repository.beforeSource(saved.id)?.text).toBe(source.text);
+});

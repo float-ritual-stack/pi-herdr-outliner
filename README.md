@@ -1809,14 +1809,22 @@ a compact reader; `Alt+P` switches focus between Tree and Preview.
 
 ### Read Inbox source and output in place
 
-Inbox results have **Source / Output / Activity** choices. Source and numbered
-Outputs show current rich note content using the same reader as Tree Preview.
-Activity retains processing summaries, errors, usage and explicit session access.
-Click a result to preview it; explicit Open still follows the linked destination.
+On larger panes, Inbox places results and Activity above side-by-side Source and
+Output readers. Drag the horizontal divider to give documents more room; drag the
+vertical divider to change their relative widths. Without a separate output,
+Source takes the full bottom width. Numbered tabs select among multiple outputs.
+Technical details expands session, prompt and usage information; errors remain visible.
+
+**Before** / **3** reads the source saved before the selected attempt. **Current** /
+**4** reads its current canonical content. A before-image may already contain edits
+from earlier attempts; it is not necessarily the original capture. Missing snapshots
+are labelled explicitly, and inspecting one never performs Undo. Historical text
+renders as saved, without resolving today's live queries or embeds into it.
 
 Use **1** for Source, **2** for the first Output, **Tab** for other targets,
 **Shift+A** for Activity, and **Alt+P** for List/Preview focus. Clicking the list
-or reader also changes focus. Wheel over the reader scrolls the document; drag
+or either reader changes focus. Wheel over a reader scrolls that document; drag
 inside it to copy. Escape first leaves reader focus, then returns to Tree.
-Narrow panes stack the reader below results; very short panes show one at a time.
-These previews show current content, not the cleanup's original before-image.
+Narrow panes retain a single reader with Source/Output/Activity choices. Before and
+Current remain available in the Source toolbar and action menu. Explicit Open follows
+the linked destination and opens the current canonical note, never the saved snapshot.

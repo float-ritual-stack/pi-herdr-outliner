@@ -1922,7 +1922,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     if (activate) await focusDetailReader();
   }
 
-  function focusLocalPreview(focused = true):void {if(mode === "inbox") inbox.reader.focus(focused); else localReader.focus(focused);}
+  function focusLocalPreview(focused = true):void {if(mode === "inbox") inbox.focusReader(focused); else localReader.focus(focused);}
   function scrollLocalPreview(delta:number):void {
     if(mode === "inbox") { inbox.scrollPreview(delta); return; }
     if(!localReader.state)return;
@@ -1971,7 +1971,10 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       if (actionId.startsWith('tree.inbox.select:')) {inbox.selectResult(Number(actionId.split(':')[1]));return;}
       if (actionId.startsWith('tree.inbox.preview-target:')) {inbox.selectTarget(Number(actionId.split(':')[1]));return;}
       if (actionId === 'tree.inbox.preview.activity') {inbox.showActivity();return;}
-      if (actionId === 'tree.inbox.preview.focus') {inbox.reader.focus(!inbox.reader.state?.focused);return;}
+      if (actionId === 'tree.inbox.preview.before') {inbox.setSourceVersion('before');return;}
+      if (actionId === 'tree.inbox.preview.current') {inbox.setSourceVersion('current');return;}
+      if (actionId === 'tree.inbox.preview.technical') {inbox.technicalDetails = !inbox.technicalDetails;return;}
+      if (actionId === 'tree.inbox.preview.focus') {inbox.focusReader(!inbox.reader.state?.focused);return;}
       if (actionId === 'tree.inbox.preview.source' || actionId === 'tree.inbox.preview.output') {
         const role=actionId.endsWith('source')?'source':'output';
         const index=inbox.targets.findIndex(target=>target.role===role);

@@ -434,7 +434,7 @@ export function renderTreeFrame(
 
   if (view.mode === "inbox" && view.inbox) {
     const lines = renderInboxFrame(view.inbox, width, height, view.actionHelpText ?? DEFAULT_OUTLINER_ACTION_KEYMAP.helpText("tree", "inbox"));
-    return { frame: `${options.clearScreen === false ? "" : `${ESC}H${ESC}2J`}${lines.join("\n")}`, scrollStartEntryIndex: initialScrollStartEntryIndex, mouseTargets: [], preview:view.inbox.previewFrame };
+    return { frame: `${options.clearScreen === false ? "" : `${ESC}H${ESC}2J`}${lines.join("\n")}`, scrollStartEntryIndex: initialScrollStartEntryIndex, mouseTargets: [], preview:undefined };
   }
 
   if (view.mode === "goto" && view.goto) {

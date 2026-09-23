@@ -37,7 +37,7 @@ function detailLines(controller: InboxController, width: number): string[] {
     lines.push(truncateToWidth(target.sessionPath ? sanitizeDynamicText(label) : outlinerActionLink(`tree.inbox.open-target:${index}`, label), width));
   });
   const usage = result.usage;
-  if (usage) {
+  if (usage && controller.technicalDetails) {
     lines.push("");
     for (const session of usage.piSessions ?? []) {
       plain(`Pi ${session.outcome} · ${session.phase}`);
@@ -48,26 +48,33 @@ function detailLines(controller: InboxController, width: number): string[] {
     if (usage.promptRevisions?.length) plain(`Prompts: ${usage.promptRevisions.map(prompt => `${basename(prompt.path)} @ ${prompt.sha256.slice(0, 12)}`).join(" · ")}`);
     plain(`${usage.inputTokens.toLocaleString("en-US")} in / ${usage.outputTokens.toLocaleString("en-US")} out · estimated $${usage.cost.toFixed(4)}`);
     plain(`${usage.jevSuccessfulCalls === undefined ? `Jev ${usage.jevCalls} calls` : `Jev ${usage.jevCalls} attempted / ${usage.jevSuccessfulCalls} successful`} · ${(usage.elapsedMs / 1000).toFixed(1)}s`);
-    if (usage.jevWarning) plain(usage.jevWarning);
+
   }
+  if (usage?.jevWarning) plain(usage.jevWarning);
+  lines.push(outlinerActionLink('tree.inbox.preview.technical', controller.technicalDetails ? '▾ Technical details' : '▸ Technical details'));
   return lines;
 }
 
 export function renderInboxFrame(controller: InboxController, width: number, height: number, help: string): string[] {
   controller.previewFrame = undefined;
+  controller.sourceFrame = controller.outputFrame = undefined;
+  controller.horizontalDivider = controller.verticalDivider = controller.reviewBody = undefined;
   controller.activityRect = undefined;
   width = Math.max(1, width);
   height = Math.max(1, height);
   if (width < 20 || height < 12) return Array.from({ length: height }, (_, index) => truncateToWidth(index === 0 ? "Inbox · enlarge terminal" : index === height - 1 ? "Esc close" : "", width));
   const inner = width - 4;
   const body = height - 9;
+  const comparison = inner >= 100 && body >= 22;
+  controller.comparison = comparison;
+  const topHeight = comparison ? Math.max(7, Math.min(body - 10, Math.floor(body * controller.reviewFraction))) : body;
   const wide = inner >= 86 && body >= 5;
   const compact = !wide && body < 12;
   const compactReader = compact && (controller.reader.state?.focused || controller.previewMode === "activity");
   const listWidth = wide ? Math.floor(inner * 0.4) : inner;
-  const listHeight = compact ? (compactReader ? 0 : body) : wide ? body : Math.max(2, Math.floor(body * 0.35));
+  const listHeight = compact ? (compactReader ? 0 : body) : wide ? topHeight : Math.max(2, Math.floor(body * 0.35));
   const detailWidth = wide ? inner - listWidth - 1 : inner;
-  const detailHeight = compact ? body : wide ? body : Math.max(1, body - listHeight - 1);
+  const detailHeight = compact ? body : wide ? topHeight : Math.max(1, body - listHeight - 1);
   const detailRect = {x:wide?2+listWidth+1:2,y:wide||compact?5:5+listHeight+1,width:detailWidth,height:detailHeight};
   const slots = Math.max(1, Math.floor(listHeight / 2));
   const start = Math.max(0, controller.index - slots + 1);
@@ -88,15 +95,17 @@ export function renderInboxFrame(controller: InboxController, width: number, hei
     list.push(outlinerActionLink(`tree.inbox.select:${start+offset}`,fit(`  \x1b[2m${sanitizeDynamicText(controller.searching ? attempt + " · " + result.summary : result.summary)}\x1b[0m`, listWidth)));
   }
   if (!results.length) list.push(controller.searching ? (controller.searchLoading ? "Searching history…" : "No matching results") : controller.loading ? "Loading results…" : controller.attentionOnly ? "Nothing needs attention" : "No recent results");
-  const reading = controller.previewMode === 'content' && controller.reader.state;
+  const reading = !comparison && controller.previewMode === 'content' && controller.reader.state;
   const details = reading ? [] : detailLines(controller, detailWidth);
   let previewLines: string[] | undefined;
   controller.previewFrame = undefined;
   if (reading && (!compact || compactReader) && detailHeight >= 4) {
     const role = controller.targets[controller.targetIndex]?.label ?? 'Source';
-    const frame = renderDocumentPreview({...reading,title:`${role} · current · ${reading.title}`}, detailRect,'Alt+P focus · Esc list · drag to copy');
+    const frame = renderDocumentPreview({...reading,title:`${role} · ${controller.reader === controller.sourceReader && controller.sourceVersion === 'before' ? 'before this attempt' : 'current'} · ${reading.title}`}, detailRect,'Alt+P focus · Esc list · drag to copy', controller.reader === controller.sourceReader ? outlinerActionLink('tree.inbox.preview.before','[Before]') + ' ' + outlinerActionLink('tree.inbox.preview.current','[Current]') : undefined);
     previewLines = frame.lines;
     controller.previewFrame = frame;
+    if (controller.reader === controller.sourceReader) controller.sourceFrame = frame;
+    else controller.outputFrame = frame;
   }
   if (!reading && (!compact || compactReader)) controller.activityRect = detailRect;
   const maxOffset = Math.max(0, details.length - detailHeight);
@@ -115,6 +124,7 @@ export function renderInboxFrame(controller: InboxController, width: number, hei
 
   const tinyTabs = inner < 30;
   const source = outlinerActionLink('tree.inbox.preview.source',tinyTabs?'[S]':'[Source]');
+  const versions = outlinerActionLink('tree.inbox.preview.before', controller.sourceVersion === 'before' ? '[Before ●]' : '[Before]') + ' ' + outlinerActionLink('tree.inbox.preview.current', controller.sourceVersion === 'current' ? '[Current ●]' : '[Current]');
   const activity = outlinerActionLink('tree.inbox.preview.activity',tinyTabs?'[A]':'[Activity]');
   const expandedTabs = [source,activity,...controller.targets.flatMap((target,index)=>target.role !== 'output'?[]:[outlinerActionLink(`tree.inbox.preview-target:${index}`,`[${target.label}${controller.previewMode==='content'&&controller.targetIndex===index?' ●':''}]`)])].join(' ');
   const tabs = inner < 65 || visibleWidth(expandedTabs) > inner
@@ -126,7 +136,7 @@ export function renderInboxFrame(controller: InboxController, width: number, hei
     bordered(`\x1b[1;36mInbox agent\x1b[0m · ${state}${snapshot ? ` · ${snapshot.pending} pending` : ""}`),
     bordered(outlinerActionLink("tree.inbox.search","[Search /]")+" "+outlinerActionLink("tree.navigation.link", "[Link destination]")+" "+outlinerActionLink("tree.navigation.once", "[Open once]")+" · "+sanitizeDynamicText(message + (reading && controller.selected?.error ? ` · ${controller.selected.error}` : ""))),
     bordered(controller.searching ? outlinerActionLink("tree.inbox.search",fit(`Search: ${sliceByColumn(sanitizeDynamicText(controller.searchQuery),Math.max(0,visibleWidth(controller.searchQuery)-Math.max(1,inner-13)),Math.max(1,inner-13),true)}${controller.searchEditing?"▏":""}`,inner-4))+" "+outlinerActionLink("tree.inbox.search.clear","[×]") : `\x1b[${attention ? "1;33" : "2"}m${current}\x1b[0m`),
-    bordered(tabs + (compact ? " · Alt+P List/Preview" : "")),
+    bordered(tabs + (inner >= 80 ? " · " + versions : "") + (compact ? " · Alt+P List/Preview" : "")),
   ];
   for (let row = 0; row < body; row++) {
     output.push(bordered(compact ? (compactReader ? detail[row] ?? "" : list[row] ?? "") : wide
@@ -147,5 +157,23 @@ export function renderInboxFrame(controller: InboxController, width: number, hei
     bordered(`\x1b[2m${mainHelp}\x1b[0m`),
     ` └${"─".repeat(inner)}┘ `,
   );
-  return output;
+  if (comparison) {
+    const bottomY = 5 + topHeight + 1;
+    const bottomHeight = body - topHeight - 1;
+    const hasOutput = !!controller.outputTarget;
+    const sourceWidth = hasOutput ? Math.max(24, Math.min(inner - 25, Math.floor(inner * controller.sourceFraction))) : inner;
+    controller.reviewBody = {x: 2, y: 5, width: inner, height: body};
+    controller.horizontalDivider = {x: 2, y: bottomY - 1, width: inner, height: 1};
+    output[bottomY - 1] = bordered(fit('─ drag to resize activity / documents ', inner).replace(/ /g, '─'));
+    if (hasOutput) controller.verticalDivider = {x: 2 + sourceWidth, y: bottomY, width: 1, height: bottomHeight};
+    const source = controller.sourceReader.state;
+    const destination = controller.outputReader.state;
+    if (source) controller.sourceFrame = renderDocumentPreview({...source, title: `Source · ${controller.sourceVersion === 'before' ? 'before this attempt' : 'current'} · ${source.title}`}, {x: 2, y: bottomY, width: sourceWidth, height: bottomHeight}, 'Alt+P focus · Esc list · drag to copy', versions);
+    if (hasOutput && destination) controller.outputFrame = renderDocumentPreview({...destination, title: `${controller.outputTarget!.label} · current · ${destination.title}`}, {x: 3 + sourceWidth, y: bottomY, width: inner - sourceWidth - 1, height: bottomHeight}, 'Alt+P focus · Esc list · drag to copy');
+    for (let row = 0; row < bottomHeight; row++) output[bottomY + row] = bordered(
+      fit(controller.sourceFrame?.lines[row] ?? '', sourceWidth) +
+      (hasOutput ? '│' + fit(controller.outputFrame?.lines[row] ?? '', inner - sourceWidth - 1) : ''));
+    controller.previewFrame = controller.reader === controller.outputReader ? controller.outputFrame : controller.sourceFrame;
+  }
+  return controller.renderInputs(output);
 }

@@ -365,6 +365,7 @@ describe("Inbox rendering", () => {
     })] }) : undefined);
     await startRecent(h.controller);
     h.controller.showActivity();
+    h.controller.technicalDetails = true;
     const text = stripTerminalSequences(renderInboxFrame(h.controller, 150, 30, "a questions/recent").join("\n"));
     expect(text).toContain("Needs attention: 41");
     expect(text).toContain("Jev 3 attempted / 1 successful");
@@ -388,6 +389,7 @@ describe("Inbox rendering", () => {
       }
     }
     h.controller.showActivity();
+    h.controller.technicalDetails = true;
     const lines = renderInboxFrame(h.controller, 150, 26, "Esc close · p pause · r reconsider\nTab link · ? actions");
     const text = stripTerminalSequences(lines.join("\n"));
     for (const content of ["working", "3 pending", "Looking for related notes", "Current: New capture", "Review project choice", "Output 1", "Source", "provider", "editor-model", "estimated $0.0123", "Jev 2 calls"]) expect(text).toContain(content);
@@ -472,7 +474,8 @@ describe("shared Inbox document preview", () => {
 
   test("Activity wheel scrolls its own receipt; Escape exits preview focus before closing", async()=>{
     const h=harness();await startRecent(h.controller);await setImmediate();
-    h.controller.showActivity();renderInboxFrame(h.controller,130,32,"help");
+    h.controller.showActivity();
+    h.controller.technicalDetails = true;renderInboxFrame(h.controller,130,32,"help");
     const rect=h.controller.activityRect!;
     expect(h.controller.handleActivityMouse(`\x1b[<65;${rect.x+2};${rect.y+2}M`)).toBe(true);
     expect(h.controller.detailOffset).toBe(3);expect(h.controller.index).toBe(0);
@@ -578,5 +581,49 @@ test('choosing Source on the initial match owns that receipt while semantic rank
  expect(h.controller.selected?.id).toBe('first');expect(h.controller.targets[h.controller.targetIndex]?.id).toBe('source-first');
  h.controller.notice='Pane startup timed out';
  expect(stripTerminalSequences(renderInboxFrame(h.controller,120,32,'help').join('\n'))).toContain('Pane startup timed out');
+ await h.controller.close();
+});
+
+test('combined review shows activity and independent source/output readers with mouse resizing and focus',async()=>{
+ const h=harness(request=>{
+  if(request.action==='get')return {id:request.blockId,text:request.blockId+'\n\n'+Array.from({length:70},(_,i)=>`Paragraph ${i}`).join('\n\n'),revision:2};
+  if(request.action==='inbox.result')return {...result(request.resultId),beforeSource:{id:'source-result-one',revision:1,text:'Original rough capture\n\n> [!note] Saved words\n> Before cleanup'}};
+ });
+ await startRecent(h.controller);await setImmediate();
+ let lines=renderInboxFrame(h.controller,160,55,'help');
+ expect(h.controller.comparison).toBe(true);
+ expect(stripTerminalSequences(lines.join('\n'))).toContain('Created a task and filed');
+ expect(h.controller.sourceFrame!.rect.y).toBe(h.controller.outputFrame!.rect.y);
+ expect(h.controller.sourceFrame!.rect.y).toBeGreaterThan(h.controller.activityRect!.y+h.controller.activityRect!.height);
+ const click=(x:number,y:number)=>h.controller.handlePreviewMouse(`\x1b[<0;${x+1};${y+1}M`,()=>{});
+ const source=h.controller.sourceFrame!,output=h.controller.outputFrame!;
+ click(source.content.x+2,source.content.y+2);expect(h.controller.sourceReader.state?.focused).toBe(true);expect(h.controller.outputReader.state?.focused).toBe(false);
+ await h.controller.input('',{name:'down'});expect(h.controller.sourceReader.state!.offset).toBe(1);expect(h.controller.outputReader.state!.offset).toBe(0);
+ click(output.content.x+2,output.content.y+2);expect(h.controller.outputReader.state?.focused).toBe(true);expect(h.controller.sourceReader.state?.focused).toBe(false);
+ await h.controller.input('',{name:'down'});expect(h.controller.outputReader.state!.offset).toBe(1);
+ click(4,6);expect(h.controller.outputReader.state?.focused).toBe(false);
+ const divider=h.controller.horizontalDivider!;click(divider.x,divider.y);
+ h.controller.handlePreviewMouse(`\x1b[<32;10;30M`,()=>{});h.controller.handlePreviewMouse(`\x1b[<0;10;30m`,()=>{});
+ renderInboxFrame(h.controller,160,55,'help');expect(h.controller.sourceFrame!.rect.y).toBeGreaterThan(source.rect.y);
+ const split=h.controller.verticalDivider!;click(split.x,split.y+3);
+ h.controller.handlePreviewMouse(`\x1b[<32;105;40M`,()=>{});h.controller.handlePreviewMouse(`\x1b[<0;105;40m`,()=>{});
+ renderInboxFrame(h.controller,160,55,'help');expect(h.controller.sourceFrame!.rect.width).toBeGreaterThan(source.rect.width);
+ h.controller.setSourceVersion('before');await setImmediate();
+ lines=renderInboxFrame(h.controller,160,55,'help');expect(stripTerminalSequences(lines.join('\n'))).toContain('before this attempt');expect(stripTerminalSequences(lines.join('\n'))).toContain('Saved words');
+ expect(h.controller.sourceReader.state!.document.projectedText).toContain('Original rough capture');
+ h.controller.setSourceVersion('current');await setImmediate();expect(h.controller.sourceReader.state!.document.projectedText).toContain('source-result-one');
+ await h.controller.close();
+});
+
+test('source-only comparison spans bottom; missing historical source is explicit and stale notices clear',async()=>{
+ const h=harness(request=>request.action==='inbox.result'?result(request.resultId):undefined);
+ await h.controller.start();await setImmediate();
+ h.controller.nextOutput();expect(h.controller.notice).toContain('No separate output');
+ h.controller.selectTarget(0);expect(h.controller.notice).toBe('');
+ renderInboxFrame(h.controller,150,50,'help');expect(h.controller.outputFrame).toBeUndefined();expect(h.controller.sourceFrame!.rect.width).toBe(146);
+ h.controller.setSourceVersion('before');await setImmediate();expect(h.controller.sourceReader.state!.document.projectedText).toContain('No saved source before this attempt');
+ for(const [width,height] of [[40,20],[90,34],[120,20]]){
+  const lines=renderInboxFrame(h.controller,width!,height!,'help');expect(lines.length).toBe(height!);expect(lines.every(line=>visibleWidth(line)<=width!)).toBe(true);expect(h.controller.comparison).toBe(false);
+ }
  await h.controller.close();
 });

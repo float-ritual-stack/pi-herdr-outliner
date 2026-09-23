@@ -207,6 +207,7 @@ function handleRawInput(data: string | Buffer): void {
 }
 
 function handleMouseSequence(sequence: string): void {
+  if (controller.view().mode === "inbox" && controller.view().inbox?.handlePreviewMouse(sequence,text=>process.stdout.write(osc52ClipboardWrite(text)))) return;
   if(previewInput.handle(sequence,{focus:v=>controller.focusLocalPreview(v),scroll:d=>controller.scrollLocalPreview(d),resize:f=>controller.resizeLocalPreview(f),invoke:id=>controller.handleAction(id)},text=>process.stdout.write(osc52ClipboardWrite(text)),draw))return;
   if (controller.view().mode === "inbox" && controller.view().inbox?.handleActivityMouse(sequence)) return;
   if (controller.view().mode === "goto") { enqueueWork(() => controller.handleGotoMouse(sequence)); return; }

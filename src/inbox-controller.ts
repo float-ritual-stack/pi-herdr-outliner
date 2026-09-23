@@ -1,3 +1,7 @@
+import {getOsc8LinkAtColumn} from '@earendil-works/pi-tui';
+import {DocumentPreviewInput} from './document-preview-input';
+import {parseTreePrimaryPointer} from './tree-mouse';
+import type {InboxResultDetail} from './inbox-types';
 import type {InboxSearchCollection} from './inbox-search';
 import type { RequestInput } from "./client";
 import type { OutlinerRequester } from "./client-target";
@@ -60,25 +64,25 @@ export class InboxController {
       this.beforeSearch={id:this.selected?.id,index:this.index,targetIndex:this.targetIndex,detailOffset:this.detailOffset,previewMode:this.previewMode,offset:this.reader.state?.offset??0,focused:this.reader.state?.focused??false};
       this.searchBuffer=new TextBuffer();this.searchChanged();
     }
-    this.searchEditing=true;this.reader.focus(false);this.effects.invalidate();
+    this.searchEditing=true;this.focusReader(false);this.effects.invalidate();
   }
   async cancelSearch(): Promise<void> {
     const saved=this.beforeSearch;
     this.searchBuffer=null;this.searchEditing=false;this.searchResults=null;this.searchLoading=false;this.searchRanking=false;
     this.searchGeneration++;clearTimeout(this.searchTimer);this.beforeSearch=null;this.searchError="";
-    if(saved){this.index=Math.max(0,this.results.findIndex(result=>result.id===saved.id));this.targetIndex=saved.targetIndex;this.detailOffset=saved.detailOffset;this.previewMode=saved.previewMode;}
+    if(saved){this.index=Math.max(0,this.results.findIndex(result=>result.id===saved.id));this.targetIndex=saved.targetIndex;this.outputIndex=Math.max(0,this.targets.filter(t=>t.role==='output').findIndex(t=>t.id===this.targets[this.targetIndex]?.id));this.detailOffset=saved.detailOffset;this.previewMode=saved.previewMode;}
     this.previewKey="";
     const restored = await this.refreshPreview();
     if(restored && saved && !this.searching){
       this.scrollPreview(saved.offset);
-      this.reader.focus(saved.focused);
+      this.focusReader(saved.focused);
     }
     this.effects.invalidate();
   }
   private searchChanged(preserveSelection = false): void {
     const generation=++this.searchGeneration;clearTimeout(this.searchTimer);
     const query=this.searchQuery;
-    if(!preserveSelection){this.searchResults=null;this.index=0;this.targetIndex=0;this.previewKey="";this.reader.clear();}
+    if(!preserveSelection){this.searchResults=null;this.index=0;this.targetIndex=0;this.previewKey="";this.sourceReader.clear();this.outputReader.clear();this.outputIndex=0;}
     this.searchTouched=preserveSelection;this.notice="";this.searchLoading=true;this.searchRanking=false;this.searchError="";
     const load=async(semantic:boolean)=>{
       try {
@@ -117,7 +121,82 @@ export class InboxController {
     return true;
   }
 
-  readonly reader: DocumentPreview;
+  readonly sourceReader: DocumentPreview;
+  readonly outputReader: DocumentPreview;
+  get reader(): DocumentPreview { return this.targets[this.targetIndex]?.role === 'output' ? this.outputReader : this.sourceReader; }
+  sourceVersion: 'before' | 'current' = 'current';
+  technicalDetails = false;
+  reviewFraction = 0.35;
+  sourceFraction = 0.5;
+  comparison = false;
+  sourceFrame: DocumentPreviewFrame | undefined;
+  outputFrame: DocumentPreviewFrame | undefined;
+  horizontalDivider: PreviewRect | undefined;
+  verticalDivider: PreviewRect | undefined;
+  reviewBody: PreviewRect | undefined;
+  private renderedLines: string[] = [];
+  private resizeAxis: 'horizontal' | 'vertical' | undefined;
+  private sourceInput = new DocumentPreviewInput();
+  private outputInput = new DocumentPreviewInput();
+  private sourceKey = '';
+  private outputKey = '';
+  private outputIndex = 0;
+  get outputTarget() { return this.targets.filter(target => target.role === 'output')[this.outputIndex]; }
+  focusReader(focused = true, role: 'source' | 'output' = this.reader === this.outputReader ? 'output' : 'source'): void {
+    if (focused) {
+      if (this.searching) this.searchTouched = true;
+      this.searchEditing = false;
+      this.previewMode = 'content';
+      const index = this.targets.findIndex(target => role === 'source' ? target.role === 'source' : target.id === this.outputTarget?.id);
+      if (index >= 0) this.targetIndex = index;
+    }
+    this.sourceReader.focus(focused && role === 'source');
+    this.outputReader.focus(focused && role === 'output');
+  }
+  setSourceVersion(version: 'before' | 'current'): void {
+    this.sourceVersion = version;
+    const index = this.targets.findIndex(target => target.role === 'source');
+    if (index >= 0) this.selectTarget(index);
+  }
+  renderInputs(lines: string[]): string[] {
+    this.renderedLines = lines;
+    return this.outputInput.render(this.sourceInput.render(lines, this.sourceFrame, this.sourceReader.state), this.outputFrame, this.outputReader.state);
+  }
+  handlePreviewMouse(sequence: string, copy: (text: string) => void): boolean {
+    const pointer = parseTreePrimaryPointer(sequence);
+    if (pointer) {
+      const toolbar = this.sourceFrame && pointer.row === this.sourceFrame.rect.y + 1 && pointInPreview(this.sourceFrame.rect, pointer.column, pointer.row);
+      if (toolbar) {
+        const link = getOsc8LinkAtColumn(this.renderedLines[pointer.row] ?? '', pointer.column);
+        if (link === 'pi-outliner-action:tree.inbox.preview.before' || link === 'pi-outliner-action:tree.inbox.preview.current') {
+          if (pointer.phase === 'down') this.setSourceVersion(link.endsWith('.before') ? 'before' : 'current');
+          return true;
+        }
+      }
+      if (pointer.phase === 'down') {
+        if (this.horizontalDivider && pointInPreview(this.horizontalDivider, pointer.column, pointer.row)) this.resizeAxis = 'horizontal';
+        else if (this.verticalDivider && pointInPreview(this.verticalDivider, pointer.column, pointer.row)) this.resizeAxis = 'vertical';
+      }
+      if (this.resizeAxis && this.reviewBody) {
+        const body = this.reviewBody;
+        if (this.resizeAxis === 'horizontal') this.reviewFraction = Math.max(0.2, Math.min(0.65, (pointer.row - body.y) / body.height));
+        else this.sourceFraction = Math.max(0.25, Math.min(0.75, (pointer.column - body.x) / body.width));
+        if (pointer.phase === 'up') this.resizeAxis = undefined;
+        this.effects.invalidate(); return true;
+      }
+    }
+    for (const [role, input, reader, frame] of [
+      ['source', this.sourceInput, this.sourceReader, this.sourceFrame],
+      ['output', this.outputInput, this.outputReader, this.outputFrame],
+    ] as const) {
+      if (input.handle(sequence, {
+        focus: (focused = true) => { if (focused) this.focusReader(true, role); else reader.focus(false); },
+        scroll: delta => {if (this.searching) this.searchTouched = true; if (frame) reader.scroll(delta, frame.content.width, frame.content.height);},
+        resize: () => {}, invoke: async () => {},
+      }, copy, () => this.effects.invalidate())) return true;
+    }
+    return this.handleActivityMouse(sequence);
+  }
   previewMode: 'content' | 'activity' = 'content';
   previewFrame: DocumentPreviewFrame | undefined;
   activityRect: PreviewRect | undefined;
@@ -129,18 +208,22 @@ export class InboxController {
   }
   private previewKey = '';
   constructor(private readonly effects: InboxEffects) {
-    this.reader = new DocumentPreview(effects, () => effects.invalidate());
+    this.sourceReader = new DocumentPreview(effects, () => effects.invalidate());
+    this.outputReader = new DocumentPreview(effects, () => effects.invalidate());
   }
   selectResult(index: number): void {
     if (!Number.isInteger(index) || !this.results[index]) return;
     this.searchEditing=false;
-    this.reader.focus(false);
+    this.focusReader(false);
     this.move(index - this.index);
   }
   selectTarget(index: number): void {
     if (!Number.isInteger(index) || !this.targets[index]) return;
     if(this.searching)this.searchTouched=true;
+    this.focusReader(false);
+    this.notice = '';
     this.targetIndex = Math.max(0,Math.min(this.targets.length - 1,index));
+    if (this.targets[index]?.role === 'output') this.outputIndex = this.targets.filter(target => target.role === 'output').findIndex(target => target.id === this.targets[index]?.id);
     this.previewMode = this.targets[this.targetIndex]?.role === 'diagnostics' ? 'activity' : 'content';
     this.refreshPreview(); this.effects.invalidate();
   }
@@ -149,19 +232,36 @@ export class InboxController {
     if (!indices.length) {this.notice="No separate output; preview the current Source";this.effects.invalidate();return;}
     this.selectTarget(indices[(indices.indexOf(this.targetIndex)+1)%indices.length]!);
   }
-  showActivity(): void {if(this.searching)this.searchTouched=true;this.previewMode = 'activity'; this.reader.focus(false); this.effects.invalidate();}
+  showActivity(): void {if(this.searching)this.searchTouched=true;this.previewMode = 'activity'; this.focusReader(false); this.effects.invalidate();}
   scrollPreview(delta: number): void {
     if(this.searching)this.searchTouched=true;
-    if (this.previewFrame) this.reader.scroll(delta,this.previewFrame.content.width,this.previewFrame.content.height);
+    const frame = this.reader === this.outputReader ? this.outputFrame : this.sourceFrame;
+    if (frame) this.reader.scroll(delta,frame.content.width,frame.content.height);
   }
   private async refreshPreview(force = false): Promise<boolean> {
-    if (!this.active || this.previewMode !== 'content') return false;
-    const target = this.targets[this.targetIndex];
-    if (!target || target.role === 'diagnostics') {this.previewKey='';this.reader.clear();return false;}
-    const key = `${this.selected?.id}/${target.id}`;
-    if (!force && key === this.previewKey) return false;
-    this.previewKey=key;
-    return this.reader.load({kind:'block',blockId:target.id}, force);
+    if (!this.active) return false;
+    const result = this.selected;
+    if (!result) {this.sourceReader.clear(); this.outputReader.clear(); this.sourceKey = this.outputKey = ''; return false;}
+    const reset = !this.previewKey;
+    this.previewKey = result.id;
+    const jobs: Promise<boolean>[] = [];
+    const sourceKey = `${result.id}/${result.sourceId}/${this.sourceVersion}`;
+    if (force || reset || sourceKey !== this.sourceKey) {
+      this.sourceKey = sourceKey;
+      const target = {kind: 'block' as const, blockId: result.sourceId};
+      jobs.push(this.sourceVersion === 'current'
+        ? this.sourceReader.load(target, force)
+        : this.sourceReader.loadText(target, result.sourceTitle, this.effects.request<InboxResultDetail>({action: 'inbox.result', resultId: result.id}).then(detail =>
+          detail.beforeSource?.text ?? 'No saved source before this attempt. Current source is available separately.')));
+    }
+    const output = this.outputTarget;
+    const outputKey = output ? `${result.id}/${output.id}` : '';
+    if (!output) {this.outputKey = ''; this.outputReader.clear();}
+    else if (force || reset || outputKey !== this.outputKey) {
+      this.outputKey = outputKey;
+      jobs.push(this.outputReader.load({kind: 'block', blockId: output.id}, force));
+    }
+    return (await Promise.all(jobs)).some(Boolean);
   }
 
   contentChanged(): void { this.previewKey = ""; this.refreshPreview(true); }
@@ -205,7 +305,7 @@ export class InboxController {
   async close(): Promise<void> {
     this.active = false;
     this.searchGeneration++;clearTimeout(this.searchTimer);
-    this.reader.cancelLoad();
+    this.sourceReader.cancelLoad(); this.outputReader.cancelLoad();
     this.session++;
     this.reconsiderSourceId = null;
     await this.effects.close();
@@ -256,13 +356,15 @@ export class InboxController {
     const nextIndex = selectedId ? snapshot.results.findIndex(result => result.id === selectedId) : -1;
     this.index = nextIndex >= 0 ? nextIndex : Math.min(this.index, Math.max(0, snapshot.results.length - 1));
     this.targetIndex = Math.max(0, this.targets.findIndex(target => target.id === targetId));
-    if (selectedId !== this.selected?.id) this.detailOffset = 0;
+    if (selectedId !== this.selected?.id) {this.detailOffset = 0; this.outputIndex = 0;}
     this.refreshPreview();
   }
 
   move(delta: number): void {
     if(this.searching)this.searchTouched=true;
+    this.focusReader(false);
     this.index = Math.max(0, Math.min(this.results.length - 1, this.index + delta));
+    this.outputIndex = 0;
     this.targetIndex = 0;
     this.detailOffset = 0;
     this.notice = "";
@@ -283,13 +385,13 @@ export class InboxController {
     if(this.searching && await this.searchInput(str,key))return;
     if(!this.steering&&str==="/"){this.startSearch();return;}
     if (key.name === "escape") {
-      if (!this.steering && this.reader.state?.focused) {this.reader.focus(false);return;}
+      if (!this.steering && this.reader.state?.focused) {this.focusReader(false);return;}
       if (this.steering) { this.reconsiderSourceId = null; this.notice = ""; this.effects.invalidate(); }
       else await this.close();
       return;
     }
     if (this.busy) return;
-    if (!this.steering && key.meta && key.name === 'p') {this.reader.focus(!this.reader.state?.focused);return;}
+    if (!this.steering && key.meta && key.name === 'p') {this.focusReader(!this.reader.state?.focused);return;}
     if (!this.steering && this.previewMode === 'content' && this.reader.state?.focused && ['up','down','pageup','pagedown'].includes(key.name ?? '')) {
       this.scrollPreview((key.name === 'up' || key.name === 'pageup' ? -1 : 1) * (key.name?.startsWith('page') ? Math.max(1,this.previewFrame?.content.height ?? 5) : 1));return;
     }
@@ -372,7 +474,7 @@ export class InboxController {
   private async changedCollection(): Promise<void> {
     this.epoch++;
     this.previewKey = "";
-    this.reader.clear();
+    this.sourceReader.clear(); this.outputReader.clear(); this.outputIndex = 0;
     this.previewMode = "content";
     this.index = 0;
     this.targetIndex = 0;

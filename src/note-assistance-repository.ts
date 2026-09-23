@@ -352,6 +352,15 @@ export class NoteAssistanceRepository {
     return rows.map(row => JSON.parse(row.result_json) as InboxResult);
   }
 
+  beforeSource(id: string): Pick<Block, "id" | "text" | "revision"> | undefined {
+    const result = this.getResult(id);
+    const row = this.row(id);
+    if (!row?.recovery_json) return undefined;
+    const before = (JSON.parse(row.recovery_json) as Recovery).before;
+    return before && before.id === result.sourceId
+      ? { id: before.id, text: before.text, revision: before.revision } : undefined;
+  }
+
   getResult(id: string): InboxResult {
     const row = this.row(id);
     if (!row) throw new Error(`Note assistance result not found: ${id}`);

@@ -39,3 +39,13 @@ test('scrolling starts from the visible clamped offset after enlargement',async(
  reader.scroll(-1,frame.content.width,frame.content.height);
  expect(reader.state?.offset).toBe(frame.offset-1);
 });
+
+test('saved text never resolves live projections and cannot replace a later current selection',async()=>{
+ const pending=Promise.withResolvers<string>();let requests=0;
+ const reader=new DocumentPreview({async request<T>(input:RequestInput):Promise<T>{requests++;throw Error('unexpected '+input.action);}},()=>{});
+ const old=reader.loadText({kind:'block',blockId:'old'},'Before',pending.promise);
+ await reader.loadText({kind:'block',blockId:'new'},'New before',Promise.resolve('Saved ((reference))\n```query\nold\n```'));
+ pending.resolve('late before');await old;
+ expect(requests).toBe(0);expect(reader.state!.document.projectedText).toContain('Saved ((reference))');
+ expect(reader.state!.target).toEqual({kind:'block',blockId:'new'});
+});

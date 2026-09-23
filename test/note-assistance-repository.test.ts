@@ -572,3 +572,15 @@ describe("NoteAssistanceRepository", () => {
     expect(() => repository.apply("managed", { source: managed, inferredTags: [], rejectedTags: [], typeLocked: false, requestAllowed: true }, plan())).toThrow("eligible");
   });
 });
+
+test('note assistance exposes the selected attempt before-text across restart and later edits',()=>{
+ const {store,repository}=fixture();const source=store.create('Remember this thought');
+ repository.apply('before-organizing',candidate(repository,source),plan());
+ const reopened=restart(store);
+ const current=reopened.store.require(source.id);
+ reopened.store.update(source.id,'A later human rewrite',current.revision,user);
+ expect(reopened.repository.beforeSource('before-organizing')).toEqual({id:source.id,text:source.text,revision:source.revision});
+ const next=candidate(reopened.repository,reopened.store.require(source.id));
+ reopened.repository.fail('failed-without-snapshot',next,'Unavailable model');
+ expect(reopened.repository.beforeSource('failed-without-snapshot')).toBeUndefined();
+});
