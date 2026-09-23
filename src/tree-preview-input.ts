@@ -26,6 +26,7 @@ export class TreePreviewInput {
       const result=this.selection.pointer(pointer,frame?.content??{x:0,y:0,width:0,height:0},this.lines);
       if(result.consumed){controller.focusLocalPreview();if(result.copy)copy(result.copy);redraw();return true;}
       if(frame&&pointInPreview(frame.rect,pointer.column,pointer.row)){controller.focusLocalPreview();return true;}
+      if(frame&&pointer.phase==='down')controller.focusLocalPreview(false);
     }
     const secondary=parseTreeSecondaryClick(sequence);
     return !!(secondary&&frame&&pointInPreview(frame.rect,secondary.column,secondary.row));
