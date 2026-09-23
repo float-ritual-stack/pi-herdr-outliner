@@ -262,7 +262,7 @@ describe("Inbox editorial model", () => {
     expect(instructions[0]).toBe(instructions[1]);
     expect(instructions[2]).toContain("Use the revised relationship judgment.");
     for (const [result, texts] of [[a, [firstEditor, firstQuestions]], [b, [secondEditor, secondQuestions]]] as const) {
-      expect(result.usage.promptRevisions?.map(({packagedSha256,...revision})=>revision)).toEqual(texts.map((text, i) => ({
+      expect(result.usage.promptRevisions?.map(({packagedSha256,packagedDifferences,...revision})=>revision)).toEqual(texts.map((text, i) => ({
         path: i === 0 ? editor : relationships, text, sha256: createHash("sha256").update(text).digest("hex"),
       })));
     }

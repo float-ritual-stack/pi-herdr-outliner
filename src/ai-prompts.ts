@@ -19,6 +19,7 @@ export interface PromptRevision {
   sha256: string;
   text: string;
   packagedSha256?: string;
+  packagedDifferences?: {added:string[];removed:string[];truncated:boolean};
 }
 
 export class PromptFileError extends Error {
@@ -146,7 +147,15 @@ async function readPrompt(directory: string, name: string): Promise<PromptRevisi
   const sha256=createHash("sha256").update(bytes).digest("hex");
   if(name!=="inbox-editor.md")return {path,text,sha256};
   const packaged=resolve(directory)===resolve(DEFAULT_AI_PROMPT_DIRECTORY)?bytes:await readFile(join(DEFAULT_AI_PROMPT_DIRECTORY,name));
-  return {path,text,sha256,packagedSha256:createHash("sha256").update(packaged).digest("hex")};
+  const packagedSha256=createHash("sha256").update(packaged).digest("hex");
+  const lines=(value:string)=>value.split(/\r?\n/).map(line=>line.trim()).filter(Boolean);
+  const activeLines=lines(text),packagedLines=lines(packaged.toString("utf8"));
+  const added=packagedLines.filter(line=>!activeLines.includes(line));
+  const removed=activeLines.filter(line=>!packagedLines.includes(line));
+  return {path,text,sha256,packagedSha256,...sha256!==packagedSha256?{packagedDifferences:{
+    added:added.slice(0,4).map(line=>line.slice(0,300)),removed:removed.slice(0,4).map(line=>line.slice(0,300)),
+    truncated:added.length>4||removed.length>4||[...added,...removed].some(line=>line.length>300),
+  }}:{}};
 }
 
 function object(value: unknown, path: string, keys: string[], label: string): Record<string, unknown> {
