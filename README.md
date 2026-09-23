@@ -387,8 +387,9 @@ draft, and navigation history.
 Tree cursor movement updates **Preview** in its paired browsing context without
 replacing **Current** or taking focus. An independent Tree without a paired
 reader shows a local read-only Preview. Selection never creates a pane. Wide
-readers show Current and Preview beside each other; `F7` switches focus (or the
-visible reader at narrow widths), `Shift+F7` closes Preview, and `Alt+Enter`
+readers show Current and Preview beside each other; taller narrow readers stack them.
+`Alt+P` (also `F7`) switches focus, or the visible reader when neither layout fits.
+`Esc` closes a focused Preview, `Shift+F7` also closes it, and `Alt+Enter`
 keeps Preview as Current. Current retains its history, scroll, and draft while
 another target is inspected. Keeping Preview or opening another target is
 refused while Current has a draft or an active source selection.
@@ -744,7 +745,7 @@ Projected virtual occurrences deliberately constrain hierarchy and collapse. Bra
 | `Option+Shift+R` | Reveal the first authored reference in the paired or unique same-tab Tree |
 | `Shift+V` | Open the current virtual branch in the generic split navigator |
 | `m` / `Shift+M` | Toggle a bookmark for the current block / open Bookmarks |
-| `F7` / `Shift+F7` / `Alt+Enter` | Switch Current/Preview focus, close Preview, or keep Preview as Current |
+| `Alt+P` (also `F7`) / `Shift+F7` / `Alt+Enter` | Switch Current/Preview focus, close Preview, or keep Preview as Current |
 | `Option+Shift+Right` / `Option+Shift+Down` | Open the current target in a new independent Detail to the right / below |
 | `Option+Left` / `Option+Right` | Move backward / forward through Current's local history |
 | `r` | Restore the selected block when it is a direct Trash root |
@@ -1711,7 +1712,7 @@ Existing threads and an agent reply are seeded through public APIs.
 
 ### Linked explicit opens
 
-Each live Tree or Detail region can link to one Detail destination. Several sources may share a destination; receiving a document does not follow the receiver's own link. Moving panes leaves these links unchanged. New Tree/Detail pairs start linked; independent Trees use **Alt+L** (or **? → Link destination**). Detail uses the same shortcut. The menu marks the current link.
+Each live Tree or Detail region can link to one Detail destination. Several sources may share a destination; receiving a document does not follow the receiver's own link. Moving panes leaves these links unchanged. New Tree/Detail pairs start linked; independent Trees use **Alt+L** (or **? → Link destination**). Detail uses the same shortcut. The menu marks the current link and previews the selected reader’s document. Destinations show document titles and Herdr workspace/tab locations; nearby readers come first. Readers on other hosts or without a known pane location are behind **Show other connected views**. Local panes proven absent by a ready Herdr snapshot are excluded. Connected readers without location evidence are retained, not assumed dead.
 
 Tree **? → Open once in…** and Detail's reference destination chooser (**c**) choose an existing Detail for one action without changing its link. The chooser also offers **R** to replace here and **r/d** to create a right/down split. Cancelling never resolves an authored Resource or refreshes its provider. An unlinked or closed destination produces an explicit recovery message, with no automatic destination or split. Drafts and active source selections reject replacement.
 
@@ -1726,14 +1727,13 @@ Collapsed source folders no longer empty a query displayed through another proje
 
 Each reader retains **Current** while passive Tree selection updates one local
 **Preview**. At wide widths they sit beside each other; at narrower widths,
-`F7` switches between them. `Alt+Enter` keeps Preview as Current and
-`Shift+F7` closes Preview. Keeping or editing Preview first protects any Current
+`Alt+P` (also `F7`) switches between them. Taller narrow readers stack them instead. `Alt+Enter` keeps Preview as Current; `Esc` closes a focused Preview and `Shift+F7` closes it from either reader. Keeping or editing Preview first protects any Current
 draft or source selection. Current keeps its own history, scroll, editor undo,
 and document identity while another item is inspected.
 
 Passive inspection stays with the Tree's paired browsing context. An independent
-Tree without a paired reader shows its own read-only Preview (`F7` to focus it,
-`Shift+F7` to close); selection never creates a pane. Explicit Open continues to
+Tree without a paired reader shows its own read-only Preview (`Alt+P` or `F7` to focus it,
+`Esc` when focused or `Shift+F7` to close); selection never creates a pane. It uses the shared rich Markdown reader with wrapping and callouts. Dragging in this Tree-local Preview selects and copies only its displayed text through OSC 52; clipboard delivery depends on the terminal. Pointer input stays inside its owning region. Explicit Open continues to
 use the source's saved destination link. Resource Preview reads an existing
 representation and retains its revision; it does not intern or refresh a Resource.
 
@@ -1741,4 +1741,9 @@ representation and retains its revision; it does not intern or refresh a Resourc
 
 The sticky path follows the selected occurrence, including the query through which you reached it. A `◇` marks a projected path segment. Click an ancestor to focus that branch; **Back** restores your former root, selection and vertical viewport. `⌂` returns to the workspace. The `<` / `>` controls scroll only the path, with configurable `Alt+[` / `Alt+]` equivalents. **? → Focus parent branch** provides keyboard ancestor navigation.
 
-As ancestors leave the vertical viewport, Tree reclaims their common indentation. Rows keep their relative depth; moving selection within that viewport does not shift the content sideways. This is presentation, not a change to the stored hierarchy.
+The **Indent** badge, **Alt+I**, or **? → Toggle indentation follow** switches between two behaviors, independently for each Tree:
+
+- **Viewport** (default): reclaim indentation shared by all visible rows. Moving selection within that viewport keeps the content stable.
+- **Selection**: follow the selected occurrence’s depth even while shallow rows remain visible. A `‹` marks a row whose indentation extends off the left edge; select it to bring its ancestry back into view. Its hidden disclosure control is not clickable.
+
+The choice lasts for the Tree process. It changes presentation only: root, selection, order and canonical hierarchy stay unchanged. Breadcrumbs follow the selected occurrence in both modes.

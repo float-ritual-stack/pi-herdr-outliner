@@ -1,3 +1,5 @@
+import {initTheme} from "@earendil-works/pi-coding-agent";
+initTheme(undefined,false);
 import { getOsc8LinkAtColumn, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "bun:test";
 import {
@@ -158,7 +160,7 @@ function view(
 const HELP = DEFAULT_OUTLINER_ACTION_KEYMAP.helpText("tree", "browse");
 const NARROW_HELP = truncate(HELP, 80);
 const PANE_MENU = "\x1b]8;;pi-outliner-action:tree.menu.open\x1b\\[⋯]\x1b]8;;\x1b\\";
-const HEADER = `\x1b[1;36mOutliner\x1b[0m  \x1b[2m/w\x1b[0m  ${PANE_MENU}`;
+const HEADER = `\x1b[1;36mOutliner\x1b[0m  \x1b[2m/w\x1b[0m  ${PANE_MENU} \x1b]8;;pi-outliner-action:tree.indentation.toggle\x1b\\[Indent: viewport]\x1b]8;;\x1b\\`;
 
 describe("renderTreeFrame", () => {
   test("bounds and sanitizes the focused root header", () => {
@@ -1121,7 +1123,7 @@ test("renders a targeted Tree block mark and coalesced return cue", () => {
 
 test("wide local Preview keeps Tree row hit targets aligned with rendered text", () => {
   const rows = [block("FIRST TARGET"), block("SECOND TARGET")];
-  const rendered = renderTreeFrame({...view(rows), localPreview: {target: {kind: "block", blockId: rows[1]!.id}, title: "Preview", lines: ["Inspection"], offset: 0, focused: false}}, 180, 16, 0, {clearScreen: false});
+  const rendered = renderTreeFrame({...view(rows), localPreview: {target: {kind: "block", blockId: rows[1]!.id}, title: "Preview", document: {canonicalText:"Inspection",resolvedText:"Inspection",projectedText:"Inspection",embedRanges:[],workIdPrefix:null}, offset: 0, focused: false}}, 180, 16, 0, {clearScreen: false});
   const lines = rendered.frame.split("\n").map(stripTerminalSequences);
   for (const row of rows) {
     const index = lines.findIndex(line => line.includes(row.id));
@@ -1170,4 +1172,32 @@ test("expanded-row reflow cannot flatten newly exposed shallower ancestry", () =
   // If reflow exposes ancestry, it must retain its hierarchy.
   if (child) { expect(parent).toBeDefined(); expect(child.disclosureColumn-parent.disclosureColumn).toBe(2); }
   else expect(targets.every(target=>target!.rowId === "deep")).toBe(true);
+});
+
+test("selection indentation follows occurrence depth with shallow rows still visible", () => {
+  const rows = [physical(block("shallow", {depth: 0, hasChildren: true})),
+    occurrence("query", block("deep", {depth: 1}), 8),
+    physical(block("other-root", {depth: 0, hasChildren: true}))];
+  const visible = renderTreeFrame(view(rows, {selectedIndex: 1}), 80, 12);
+  const following = renderTreeFrame(view(rows, {selectedIndex: 1, indentationMode: "selection"}), 80, 12);
+  expect(stripTerminalSequences(visible.frame)).toContain("                ◇ deep");
+  expect(stripTerminalSequences(following.frame)).toContain("  ◇ deep");
+  expect(stripTerminalSequences(following.frame)).toContain("‹ shallow");
+  expect(following.mouseTargets.find(target => target?.rowId === "shallow")?.disclosureColumn).toBe(-1);
+  expect(following.scrollStartEntryIndex).toBe(visible.scrollStartEntryIndex);
+  expect(following.mouseTargets.filter(Boolean).map(target => target!.rowId))
+    .toEqual(visible.mouseTargets.filter(Boolean).map(target => target!.rowId));
+});
+
+
+test("local Preview uses rich Detail wrapping and appears beside or below Tree",()=>{
+  const text="Readable Preview\n\n> [!note] Useful callout\n> CALLOUT BODY\n\n"+"long ".repeat(45)+"WRAPPED TAIL";
+  const localPreview={target:{kind:"block" as const,blockId:"a"},title:"Readable Preview",document:{canonicalText:text,resolvedText:text,projectedText:text,embedRanges:[],workIdPrefix:null},offset:0,focused:false};
+  for(const [width,height] of [[120,40],[80,40]]){
+    const rendered=renderTreeFrame(view([block("a")],{localPreview}),width!,height!);
+    const plain=stripTerminalSequences(rendered.frame);
+    expect(plain).toContain("CALLOUT BODY");expect(plain).toContain("WRAPPED TAIL");expect(plain).not.toContain("> [!note]");
+    expect(rendered.frame.split("\n")).toHaveLength(height!);
+    for(const line of rendered.frame.split("\n"))expect(visibleWidth(line)).toBeLessThanOrEqual(width!);
+  }
 });

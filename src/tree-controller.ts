@@ -1,3 +1,7 @@
+import {resourceAddressLabel} from './resources';
+import {loadDetailReadPreview} from './detail-read-preview';
+import type {DetailReadPreviewDocument} from './detail-pi-preview';
+import {treePreviewFrame, type TreeLocalPreview} from './tree-preview';
 import type { RequestInput } from "./client";
 import {
   decodeAuthoredLinksSnapshot,
@@ -31,7 +35,7 @@ import {
   type OutlinerActionKeymap,
   type OutlinerActionMenuItem,
 } from "./outliner-actions";
-import { navigationDestinationItems } from "./navigation-destination-menu";
+import { navigationDestinationItems, navigationDestinationStatus, NavigationDestinationPreview } from "./navigation-destination-menu";
 import type { TreeNavigation, NavigationRouteOptions } from "./navigation-routes";
 import {
   historyNavigationDirection,
@@ -125,6 +129,7 @@ export interface TreeView {
   readonly root?: TreeRoot | null;
   readonly breadcrumbs?: readonly (TreeRoot & {kind:"physical"|"occurrence"})[];
   readonly breadcrumbStart?: number | null;
+  readonly indentationMode?: "viewport" | "selection";
   readonly scrollStartEntryIndex?: number;
   readonly workspaceRoot: string;
   readonly rows: readonly TreeDisplayRow[];
@@ -145,7 +150,8 @@ export interface TreeView {
   readonly goto?: GotoController | null;
   readonly inbox?: InboxController | null;
   readonly inboxCue?: string;
-  readonly localPreview?: {readonly target: OutlinerNavigationTarget; readonly title: string; readonly lines: readonly string[]; readonly offset: number; readonly focused: boolean} | null;
+  readonly localPreview?: TreeLocalPreview | null;
+  readonly previewHelp?: string;
   readonly viewerLines: readonly string[];
   readonly viewerPath: string;
   readonly viewerOffset: number;
@@ -158,6 +164,8 @@ export interface TreeView {
   readonly actionMenuOrigin?: { column: number; row: number } | null;
   readonly attention: AttentionClientState;
   readonly actionMenuQuery?: string;
+  readonly destinationPreview?: NavigationDestinationPreview;
+  readonly destinationInstructions?: string;
 }
 
 export interface TreeControllerEffects {
@@ -194,8 +202,11 @@ export interface TreeController {
   revealBlock(blockId: string): Promise<void>;
   initialize(): Promise<void>;
   handleKeypress(str: string, key: TerminalKey, inputAction: TerminalInputAction): Promise<void>;
+  handleTreeWheel(direction: "up" | "down"): Promise<void>;
   handlePaste(text: string): Promise<void>;
   handleGotoMouse(sequence: string): Promise<void>;
+  focusLocalPreview(): void;
+  scrollLocalPreview(delta:number): void;
   handleDisclosure(rowId: string): Promise<void>;
   handleRowClick(rowId: string, activate?: boolean): Promise<void>;
   handleAction(actionId: string, origin?: { column: number; row: number }): Promise<void>;
@@ -313,6 +324,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   let fullRowsById = new Map<string,TreeRow>();
   let breadcrumbRowId: string | undefined;
   let breadcrumbStart: number | null = null;
+  let indentationMode: "viewport" | "selection" = "viewport";
   let scrollStartEntryIndex = 0;
   let physicalBlocksById = new Map<string, TreeIndexBlock>();
   let expandedDocuments = new Map<string, ExpandedTreeDocument>();
@@ -355,6 +367,8 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   const actionKeymap = effects.actionKeymap ?? DEFAULT_OUTLINER_ACTION_KEYMAP;
   let actionMenuOrigin: { column: number; row: number } | null = null;
   let actionMenuIndex = 0;
+  const destinationPreview=new NavigationDestinationPreview(effects,effects.invalidate);
+  let showOtherDestinations=false;
   let actionMenuQuery = "";
   let actionMenuReturnMode: TreeMode = "browse";
   let actionMenuScope = "browse";
@@ -420,7 +434,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   let destinationMenu: {state: NavigationLinkState; purpose: "link" | "open"} | null = null;
 
   function filteredActionMenuItems(): OutlinerActionMenuItem[] {
-    if (destinationMenu) return filterActionMenuItems(navigationDestinationItems(destinationMenu.state, destinationMenu.purpose === "link"), actionMenuQuery);
+    if (destinationMenu) return filterActionMenuItems(navigationDestinationItems(destinationMenu.state, destinationMenu.purpose === "link",showOtherDestinations), actionMenuQuery);
     const selected = rows[selectedIndex];
     let items = actionKeymap.menuItems("tree", actionMenuScope);
     if (actionMenuScope !== "browse") return filterActionMenuItems(items
@@ -455,9 +469,14 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     return filterActionMenuItems(items, actionMenuQuery);
   }
 
+  function updateDestinationPreview():void {
+    const item=filteredActionMenuItems()[actionMenuIndex];
+    void destinationPreview.select(destinationMenu?.state.destinations[Number(item?.id.slice(12))]);
+  }
   function updateActionMenuQuery(query: string): void {
     actionMenuQuery = query;
     actionMenuIndex = 0;
+    if(destinationMenu)updateDestinationPreview();
   }
 
   function quickInputText(): string {
@@ -496,6 +515,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       workspaceRoot: effects.workspaceRoot,
       root, scrollStartEntryIndex,
       breadcrumbs:breadcrumbs(),
+      indentationMode,
       breadcrumbStart:breadcrumbRowId === rows[selectedIndex]?.rowId ? breadcrumbStart : null,
       rows,
       physicalBlocksById,
@@ -516,6 +536,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       inbox: mode === "inbox" ? inbox : null,
       inboxCue: inboxStatusCue(inbox.snapshot, inbox.error),
       localPreview,
+      previewHelp: `${actionKeymap.helpText("tree", "browse", ["tree.preview.focus", "tree.preview.close"])} · drag to copy`,
       viewerLines,
       viewerPath,
       viewerOffset,
@@ -528,6 +549,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       actionMenuOrigin,
       actionMenuIndex,
       actionMenuQuery,
+      ...(destinationMenu && mode === "action-menu" ? {destinationPreview,destinationInstructions:navigationDestinationStatus(destinationMenu.state,destinationMenu.purpose,showOtherDestinations)}:{}),
     };
   }
 
@@ -996,25 +1018,27 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
 
   async function inspectLocally(target: OutlinerNavigationTarget): Promise<void> {
     const generation = ++localPreviewGeneration;
-    const title = target.kind === "block" ? target.blockId : target.resourceId;
-    localPreview = {target, title, lines: ["Loading Preview…"], offset: 0, focused: localPreview?.focused ?? false};
+    let title = target.kind === "block" ? target.blockId : target.resourceId;
+    const plainDocument=(text:string):DetailReadPreviewDocument=>({canonicalText:text,resolvedText:text,projectedText:text,embedRanges:[],workIdPrefix});
+    localPreview = {target, title, document: plainDocument("Loading Preview…"), offset: 0, focused: localPreview?.focused ?? false};
     effects.invalidate();
     try {
-      let text: string;
+      let document: DetailReadPreviewDocument;
       if (target.kind === "block") {
         const block = await effects.request<Block>({action: "get", blockId: target.blockId});
-        const resolved = await effects.request<ResolvedBlockReferences>({action: "references.resolve", text: block.text});
-        text = resolved.text;
+        title = blockDisplayTitle(block);
+        document = await loadDetailReadPreview(effects, block);
       } else {
         const resource = await effects.request<ResourceDescription>({action: "resources.describe", destinationClientId: effects.clientId, target});
-        text = resource.filesystem?.text ?? resource.web?.markdown ?? resource.remoteEntity?.markdown ?? resource.pdf?.markdown ?? resource.computed?.markdown ?? "No cached readable representation · Open explicitly to inspect this Resource";
+        title = resourceAddressLabel(resource.resource.address);
+        document = plainDocument(resource.filesystem?.text ?? resource.web?.markdown ?? resource.remoteEntity?.markdown ?? resource.pdf?.markdown ?? resource.computed?.markdown ?? "No cached readable representation · Open explicitly to inspect this Resource");
       }
       if (generation !== localPreviewGeneration) return;
-      localPreview = {target, title, lines: text.split(/\r?\n/), offset: 0, focused: localPreview?.focused ?? false};
+      localPreview = {target, title, document, offset: 0, focused: localPreview?.focused ?? false};
       await effects.request({action: "clients.update", clientId: effects.clientId, previewTarget: target});
     } catch (error) {
       if (generation !== localPreviewGeneration) return;
-      localPreview = {target, title, lines: [errorMessage(error)], offset: 0, focused: localPreview?.focused ?? false};
+      localPreview = {target, title, document: plainDocument(errorMessage(error)), offset: 0, focused: localPreview?.focused ?? false};
     }
     effects.invalidate();
   }
@@ -1865,36 +1889,53 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     if (activate) await focusDetailReader();
   }
 
+  function focusLocalPreview():void {if(localPreview){localPreview={...localPreview,focused:true};effects.invalidate();}}
+  function scrollLocalPreview(delta:number):void {
+    if(!localPreview)return;
+    const frame=treePreviewFrame(localPreview,effects.terminalWidth(),effects.terminalHeight(),"");
+    localPreview={...localPreview,offset:Math.max(0,Math.min(frame.offset+delta,Math.max(0,frame.totalRows-frame.content.height)))};effects.invalidate();
+  }
   async function handleAction(
     actionId: string,
     origin?: { column: number; row: number },
   ): Promise<void> {
+    if(actionId==="tree.preview.close") {
+      if(localPreview){localPreviewGeneration++;localPreview=null;await effects.request({action:"clients.update",clientId:effects.clientId,previewTarget:null});}
+      effects.invalidate();return;
+    }
+    if(actionId==="tree.preview.focus") {if(localPreview)localPreview={...localPreview,focused:!localPreview.focused};else status="Select an item without a paired reader to preview it here";effects.invalidate();return;}
     if (mode === "goto" && actionId === "tree.goto.detail") { await goto.accept("detail"); return; }
     if (actionId === "tree.navigation.link" || actionId === "tree.navigation.once") {
       const state = await effects.request<NavigationLinkState>({action: "navigation.link.get", source: {clientId: effects.clientId, region: "tree"}});
+      showOtherDestinations=false;
       destinationMenu = {state, purpose: actionId === "tree.navigation.link" ? "link" : "open"};
       actionMenuReturnMode = "browse";
       mode = "action-menu";
       updateActionMenuQuery("");
-      status = `${state.destination ? `Open → ${state.destination.clientId} / detail` : "Open unlinked"} · choose ${destinationMenu.purpose === "link" ? "permanent destination" : "once"}`;
+      status = navigationDestinationStatus(state,destinationMenu.purpose);
       effects.invalidate();
       return;
     }
     if (actionId.startsWith("destination:") && destinationMenu) {
+      if(actionId==='destination:other'){showOtherDestinations=!showOtherDestinations;updateActionMenuQuery("");effects.invalidate();return;}
+      if(actionId==='destination:new-right'||actionId==='destination:new-below'){
+        destinationMenu=null;destinationPreview.clear();mode='browse';
+        await handleAction(actionId.endsWith('right')?'tree.detail.right':'tree.detail.below');return;
+      }
       const menu = destinationMenu;
       const destination = actionId === "destination:unlink" ? null : menu.state.destinations[Number(actionId.slice(12))]?.view;
       if (destination === undefined) return;
-      destinationMenu = null;
+      destinationMenu = null;destinationPreview.clear();
       mode = "browse";
       if (menu.purpose === "link") {
         await effects.request({action: "navigation.link.set", source: menu.state.source, destination});
-        status = destination ? `Open → ${destination.clientId} / detail` : "Open unlinked · choose once or new split";
+        status = destination ? `Linked: Tree → ${menu.state.destinations.find(entry=>entry.view.clientId===destination.clientId)?.label ?? "Detail"}` : "Open unlinked · choose once or new split";
       } else if (destination) await focusDetailReader({destination});
       effects.invalidate();
       return;
     }
     if (actionId === "tree.menu.open") {
-      destinationMenu = null;
+      destinationMenu = null;destinationPreview.clear();
       if (mode !== "action-menu") {
         actionMenuReturnMode = mode;
         actionMenuScope = actionScope();
@@ -1907,7 +1948,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       return;
     }
     if (mode === "action-menu" && actionId === "tree.cancel") {
-      destinationMenu = null;
+      destinationMenu = null;destinationPreview.clear();
       mode = actionMenuReturnMode;
       status = "";
       effects.invalidate();
@@ -1934,6 +1975,14 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
           status = "Note queued for assistance; open Inbox activity to inspect the result";
         } catch (error) { status = error instanceof Error ? error.message : "Note assistance unavailable"; }
       }
+      effects.invalidate();
+      return;
+    }
+    if (actionId === "tree.indentation.toggle") {
+      indentationMode = indentationMode === "viewport" ? "selection" : "viewport";
+      status = indentationMode === "selection"
+        ? "Indentation follows selection · ‹ marks rows extending left of this view"
+        : "Indentation fits the whole viewport";
       effects.invalidate();
       return;
     }
@@ -2151,28 +2200,18 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     key: TerminalKey,
     inputAction: TerminalInputAction,
     resolveAction = true,
+    treePointer = false,
   ): Promise<void> {
-    if (inputAction !== "suppress" && mode === "browse" && key.name === "f7") {
-      if (key.shift) {
-        if (localPreview) {
-          localPreviewGeneration += 1;
-          localPreview = null;
-          await effects.request({action: "clients.update", clientId: effects.clientId, previewTarget: null});
-        }
-      } else if (localPreview) localPreview = {...localPreview, focused: !localPreview.focused};
-      effects.invalidate();
-      return;
-    }
-    if (inputAction !== "suppress" && mode === "browse" && localPreview?.focused) {
-      const page = Math.max(1, effects.terminalHeight() - 4);
-      const delta = key.name === "up" ? -1 : key.name === "down" ? 1 : key.name === "pageup" ? -page : key.name === "pagedown" ? page : 0;
-      if (delta) localPreview = {...localPreview, offset: Math.max(0, Math.min(localPreview.lines.length - 1, localPreview.offset + delta))};
-      else if (key.name === "escape") localPreview = {...localPreview, focused: false};
-      else if (key.name === "return") {
-        try { await effects.navigation.dispatch(localPreview.target, "open"); }
-        catch (error) { status = errorMessage(error); }
-      } else if (!(key.ctrl && key.name === "q")) return;
-      if (!(key.ctrl && key.name === "q")) { effects.invalidate(); return; }
+    if (!treePointer && inputAction !== "suppress" && mode === "browse" && localPreview?.focused) {
+      const action=actionKeymap.canonicalize("tree","browse",str,key);
+      if(action.suppressed)return;
+      if(action.actionId && ["tree.preview.focus","tree.preview.close","tree.navigation.link","tree.navigation.once","tree.menu.open"].includes(action.actionId)) return handleAction(action.actionId);
+      const frame=treePreviewFrame(localPreview,effects.terminalWidth(),effects.terminalHeight(),"");
+      const delta=key.name==="up"?-1:key.name==="down"?1:key.name==="pageup"?-frame.content.height:key.name==="pagedown"?frame.content.height:0;
+      if(delta) scrollLocalPreview(delta);
+      else if(key.name==="return") { try {await effects.navigation.dispatch(localPreview.target,"open");} catch(error){status=errorMessage(error);} }
+      else if(!(key.ctrl&&key.name==="q")) return;
+      if(!(key.ctrl&&key.name==="q")){effects.invalidate();return;}
     }
     if (resolveAction) {
       const mapped = actionKeymap.canonicalize("tree", actionScope(), str, key);
@@ -2223,6 +2262,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       if (key.name === "escape") {
         mode = actionMenuReturnMode;
         status = "";
+        destinationMenu=null;destinationPreview.clear();
       } else if (key.name === "up") {
         actionMenuIndex = Math.max(0, actionMenuIndex - 1);
       } else if (key.name === "down") {
@@ -2238,6 +2278,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       } else if (isPrintableInput(str, key)) {
         updateActionMenuQuery(actionMenuQuery + str);
       }
+      if(destinationMenu)updateDestinationPreview();
       effects.invalidate();
       return;
     }
@@ -2529,6 +2570,8 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     await inbox.refresh();
   }
   return {
+    focusLocalPreview,
+    scrollLocalPreview,
     setViewportStart(index, page) {
       scrollStartEntryIndex = index;
       expandedPage = page ?? null;
@@ -2544,6 +2587,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     },
     initialize,
     handleKeypress,
+    handleTreeWheel: direction => handleKeypress("", {name: direction}, "pass", false, true),
     handlePaste,
     handleGotoMouse,
     handleDisclosure,

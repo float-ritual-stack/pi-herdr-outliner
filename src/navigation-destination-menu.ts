@@ -18,7 +18,7 @@ export function navigationDestinationItems(state: NavigationLinkState, unlink: b
   }]);
   const otherCount = state.destinations.filter(item => item.otherLocation).length;
   if (otherCount) items.push({id: "destination:other", label: `${showOther ? "Hide" : "Show"} other connected views (${otherCount})`, description: "Other hosts and readers whose pane location is unavailable", binding: "", group: "Pane"});
-  items.push(
+  if (unlink) items.push(
     {id: "destination:new-right", label: "New Detail right", description: "Open a new reader to the right; choose Link destination again to link it", binding: "", group: "Pane"},
     {id: "destination:new-below", label: "New Detail below", description: "Open a new reader below; choose Link destination again to link it", binding: "", group: "Pane"},
   );
@@ -30,7 +30,7 @@ export function navigationDestinationStatus(state: NavigationLinkState, purpose:
   const linked = state.destinations.find(item => item.view.clientId === state.destination?.clientId && item.view.region === state.destination.region);
   const source = state.source.region === "tree" ? "Tree" : "Detail";
   const current = linked ? `${source} → ${linked.label}` : state.destination ? `${source} → destination unavailable` : `${source} has no linked destination`;
-  return sanitizeDynamicText(`${current} · ${state.destinations.some(item => showOther || !item.otherLocation) ? `Select a reader · Enter to ${purpose === "link" ? "link" : "open once"}` : (state.destinations.some(item => item.otherLocation) ? "No nearby readers · create a Detail or show other connected views" : "No available readers · create a Detail right or below")} · Esc cancels`);
+  return sanitizeDynamicText(`${current} · ${state.destinations.some(item => showOther || !item.otherLocation) ? `Select a reader · Enter to ${purpose === "link" ? "link" : "open once"}` : (state.destinations.some(item => item.otherLocation) ? (purpose === "link" ? "No nearby readers · create a Detail or show other connected views" : "No nearby readers · show other connected views") : (purpose === "link" ? "No available readers · create a Detail right or below" : "No available readers · cancel and open a Detail first"))} · Esc cancels`);
 }
 
 /** Disposable, read-only document inspection for either destination picker. */

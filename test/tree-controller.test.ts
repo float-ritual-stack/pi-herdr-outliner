@@ -1,3 +1,5 @@
+import {initTheme} from "@earendil-works/pi-coding-agent";
+initTheme(undefined,false);
 import {renderTreeFrame} from "../src/tree-renderer";
 import { gotoCandidates, visibleGotoResults } from "../src/goto-search";
 import { serviceTreeNavigation } from "../src/navigation-routes";
@@ -3381,8 +3383,8 @@ test("an unpaired independent Tree inspects locally without creating a Detail", 
   const controller = createTreeController(fake.effects);
   await controller.initialize();
   await controller.handleRowClick("local-b");
-  for (let n = 0; n < 20 && !controller.view().localPreview?.lines.includes("SOURCE LOCAL BETA"); n++) await Promise.resolve();
-  expect(controller.view().localPreview?.lines).toContain("SOURCE LOCAL BETA");
+  for (let n = 0; n < 20 && !controller.view().localPreview?.document.resolvedText.includes("SOURCE LOCAL BETA"); n++) await Promise.resolve();
+  expect(controller.view().localPreview?.document.resolvedText).toContain("SOURCE LOCAL BETA");
   expect(fake.createdDetails).toEqual([]);
   expect(fake.calls.some(call => call.action === "navigation.dispatch")).toBe(false);
   await controller.handleKeypress("", {name: "f7"}, "pass");
@@ -3429,6 +3431,27 @@ test("breadcrumbs follow the projected occurrence instead of the canonical stora
   expect(selectedBlockRow(controller).rowId).toBe("occurrence:hub:note");
 });
 
+test("indentation toggle is reversible, local to each Tree, and does not change navigation", async () => {
+  const root = block("root", {hasChildren: true});
+  const child = block("child", {parentId: "root", depth: 1});
+  const fake = harness(input => input.action === "tree.index" ? snapshot([root, child], child) : undefined);
+  const first = createTreeController(fake.effects);
+  const second = createTreeController(fake.effects);
+  await first.initialize(); await second.initialize();
+  first.setViewportStart(1);
+  const before = first.view();
+  const callCount = fake.calls.length;
+  await first.handleKeypress("", {name: "i", meta: true}, "pass");
+  expect(first.view().indentationMode).toBe("selection");
+  expect(second.view().indentationMode).toBe("viewport");
+  expect(first.view().root).toEqual(before.root);
+  expect(first.view().selectedIndex).toBe(before.selectedIndex);
+  expect(first.view().scrollStartEntryIndex).toBe(1);
+  expect(fake.calls.length).toBe(callCount);
+  await first.handleAction("tree.indentation.toggle");
+  expect(first.view().indentationMode).toBe("viewport");
+});
+
 test("paging uses the reflowed breadcrumb viewport without skipping numbered lines", async () => {
   const parents=Array.from({length:12},(_,i)=>block(`parent${i}`,{parentId:i ? `parent${i-1}` : null,depth:i,hasChildren:true}));
   const text=Array.from({length:25},(_,i)=>`line${i+1} body`).join("\n");
@@ -3457,4 +3480,42 @@ test("Tree close Preview leaves the composed Detail retention alone when no loca
   fake.calls.length = 0;
   await controller.handleKeypress("", {name: "f7", shift: true}, "pass");
   expect(fake.calls.filter(call => call.action === "clients.update")).toEqual([]);
+});
+
+
+test("Alt+L is available while local Preview owns focus, and Escape closes Preview",async()=>{
+ const a=block("preview-keyboard",{text:"Readable source"});
+ const fake=harness(input=>{
+   if(input.action==="tree.index")return snapshot([a],a);
+   if(input.action==="browsing-context.publish")return{contextId:"tree-test-context",target:input.target,unavailable:"No paired reader · Preview stays in this Tree"};
+   if(input.action==="navigation.link.get")return{source:{clientId:"tree-test",region:"tree"},destination:null,destinations:[]};
+ });
+ const controller=createTreeController(fake.effects);await controller.initialize();
+ for(let i=0;i<30&&!controller.view().localPreview;i++)await Promise.resolve();
+ await controller.handleKeypress("",{name:"p",meta:true},"pass");expect(controller.view().localPreview?.focused).toBe(true);
+ await controller.handleKeypress("",{name:"l",meta:true},"pass");expect(controller.view().mode).toBe("action-menu");expect(controller.view().destinationInstructions).toContain("create a Detail");
+ await controller.handleKeypress("",{name:"escape"},"pass");expect(controller.view().mode).toBe("browse");
+ await controller.handleKeypress("",{name:"escape"},"pass");expect(controller.view().localPreview).toBeNull();
+});
+
+
+import {TreePreviewInput} from "../src/tree-preview-input";
+import {parseTreeWheel} from "../src/tree-mouse";
+test("wheel over Tree does not scroll adjacent focused Preview",async()=>{
+ const a=block("preview-review",{text:Array.from({length:100},(_,i)=>`Line ${i}`).join("\n")});
+ const fake=harness(input=>{
+  if(input.action==="tree.index")return snapshot([a],a);
+  if(input.action==="browsing-context.publish")return{contextId:"tree-test-context",target:input.target,unavailable:"No paired reader · Preview stays in this Tree"};
+ });
+ fake.effects.terminalWidth=()=>120;fake.effects.terminalHeight=()=>30;
+ const controller=createTreeController(fake.effects);await controller.initialize();
+ for(let i=0;i<50&&controller.view().localPreview?.document.canonicalText.startsWith("Loading");i++)await Promise.resolve();
+ await controller.handleKeypress("",{name:"p",meta:true},"pass");
+ const view=controller.view(),rendered=renderTreeFrame(view,120,30);
+ const input=new TreePreviewInput();input.render(rendered.frame.split("\n"),rendered.preview,view.localPreview);
+ const wheel="\x1b[<65;5;5M";
+ expect(input.handle(wheel,controller,()=>{},()=>{})).toBe(false);
+ const before=controller.view().localPreview!.offset;
+ await controller.handleTreeWheel(parseTreeWheel(wheel)!);
+ expect(controller.view().localPreview!.offset).toBe(before);
 });

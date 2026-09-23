@@ -20,6 +20,8 @@ export interface TreePrimaryPointer extends TreePrimaryClick {
 export interface TreeMouseTarget {
   readonly rowId: string;
   readonly disclosureColumn: number;
+  readonly minColumn?: number;
+  readonly maxColumn?: number;
 }
 
 export type TreeWheelDirection = "up" | "down";
@@ -111,7 +113,9 @@ export function treeRowAtClick(
   sequence: string,
 ): string | null {
   const click = parseTreePrimaryClick(sequence);
-  return click ? targets[click.row]?.rowId ?? null : null;
+  if(!click)return null;
+  const target=targets[click.row];
+  return target && click.column >= (target.minColumn ?? 0) && click.column <= (target.maxColumn ?? Infinity) ? target.rowId : null;
 }
 
 export function treeLinkAtClick(

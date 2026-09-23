@@ -1,3 +1,5 @@
+import {renderNavigationDestinationPreview} from './navigation-destination-menu';
+import {treePreviewFrame, type TreePreviewFrame} from './tree-preview';
 import { renderGotoFrame } from "./goto-renderer";
 import { renderInboxFrame } from "./inbox-renderer";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
@@ -169,6 +171,7 @@ type TreeRenderEntry =
   | { kind: "quick"; depth: number };
 
 export interface TreeRenderResult {
+  readonly preview?: TreePreviewFrame;
   readonly frame: string;
   readonly scrollStartEntryIndex: number;
   readonly breadcrumbStart?: number;
@@ -330,8 +333,8 @@ function authoredHeaderStateText(row: AuthoredLinkHeaderRow): string {
   return sanitizeDynamicText(text);
 }
 
-function renderAuthoredLinkDisplay(row: AuthoredLinkRow, width: number): string {
-  const prefix = `${"  ".repeat(row.depth)}${row.link.resolution.kind === "ready" ? "↗" : "!"} `;
+function renderAuthoredLinkDisplay(row: AuthoredLinkRow, width: number, clippedLeft = false): string {
+  const prefix = `${"  ".repeat(row.depth)}${clippedLeft ? "‹" : row.link.resolution.kind === "ready" ? "↗" : "!"} `;
   const duplicateLabel = row.link.occurrenceCount > 1
     ? ` · ${row.link.occurrenceCount} occurrences`
     : "";
@@ -387,26 +390,39 @@ export function renderTreeFrame(
   options: TreeRenderOptions = {},
 ): TreeRenderResult {
   if (view.localPreview && view.mode === "browse") {
-    const preview = view.localPreview;
-    const wide = width >= 140;
-    const treeWidth = wide ? Math.floor((width - 1) / 2) : width;
-    const tree = renderTreeFrame({...view, localPreview: null}, treeWidth, height, initialScrollStartEntryIndex, {...options, clearScreen: false});
-    const previewWidth = wide ? width - treeWidth - 1 : width;
-    const lines = [
-      truncateToWidth(`${preview.focused ? "●" : "○"} Preview · ${sanitizeDynamicText(preview.title)}`, previewWidth),
-      ...preview.lines.slice(preview.offset, preview.offset + Math.max(1, height - 3)).map(line => renderMarkdownLine(truncate(sanitizeDynamicText(line), previewWidth))),
-    ];
-    while (lines.length < height - 1) lines.push("");
-    lines.push(truncateToWidth("F7 Tree/Preview · Enter Open linked · Shift+F7 close", previewWidth));
-    let frame: string;
-    if (wide) {
-      const treeLines = tree.frame.split("\n");
-      frame = lines.map((line, index) => {
-        const left = truncateToWidth(treeLines[index] ?? "", treeWidth);
-        return left + " ".repeat(Math.max(0, treeWidth - visibleWidth(left))) + "│" + line;
-      }).join("\n");
-    } else frame = preview.focused ? lines.join("\n") : tree.frame;
-    return {...tree, frame: `${options.clearScreen === false ? "" : `${ESC}H${ESC}2J`}${frame}`, mouseTargets: preview.focused && !wide ? [] : tree.mouseTargets};
+    const preview=treePreviewFrame(view.localPreview,width,height,view.previewHelp ?? "Alt+P Tree/Preview · Esc close · drag to copy");
+    const tree=renderTreeFrame({...view,localPreview:null},preview.treeWidth,preview.treeHeight,initialScrollStartEntryIndex,{...options,clearScreen:false});
+    const treeLines=tree.frame.split("\n");
+    let lines:string[];
+    if(preview.placement==='beside') lines=preview.lines.map((line,index)=>{
+      const left=truncateToWidth(treeLines[index]??'',preview.treeWidth);
+      return left+' '.repeat(Math.max(0,preview.treeWidth-visibleWidth(left)))+'│'+line;
+    });
+    else if(preview.placement==='below') lines=[...treeLines,'─'.repeat(width),...preview.lines];
+    else {lines=view.localPreview.focused?preview.lines:treeLines;if(!view.localPreview.focused)lines[height-1]=truncateToWidth('Preview available · '+(view.previewHelp??'Alt+P focus · Esc close'),width);}
+    const mouseTargets=preview.placement==='compact'&&view.localPreview.focused?[]:tree.mouseTargets.map(target=>target?{...target,minColumn:0,maxColumn:preview.treeWidth-1}:target);
+    return{...tree,preview,mouseTargets,frame:`${options.clearScreen===false?'':`${ESC}H${ESC}2J`}${lines.slice(0,height).join("\n")}`};
+  }
+  if(view.mode==='action-menu' && view.destinationPreview) {
+    const fit=(text:string,w:number)=>truncateToWidth(text,w);
+    const body=Math.max(1,height-5),beside=width>=90;
+    const listWidth=beside?Math.floor((width-1)*.48):width;
+    const listHeight=beside?body:Math.max(2,Math.floor((body-1)*.5));
+    const slots=Math.max(1,Math.floor(listHeight/2));
+    const items=view.actionMenuItems??[],index=view.actionMenuIndex??0;
+    const start=Math.max(0,index-slots+1), list:string[]=[];
+    for(const [i,item] of items.slice(start,start+slots).entries()) {
+      const label=fit(`${i+start===index?'›':' '} ${item.label}`,Math.max(1,listWidth));
+      list.push(outlinerActionLink(item.id,i+start===index?`\x1b[7m${label}\x1b[0m`:label));
+      list.push(fit(`  ${item.description}`,listWidth));
+    }
+    if(!items.length)list.push('No matching destinations');
+    while(list.length<listHeight)list.push('');
+    const previewWidth=beside?width-listWidth-1:width,previewHeight=beside?body:Math.max(1,body-listHeight-1);
+    const preview=renderNavigationDestinationPreview(view.destinationPreview,previewWidth,previewHeight);
+    const middle=beside?list.map((line,i)=>line+' '.repeat(Math.max(0,listWidth-visibleWidth(line)))+'│'+(preview[i]??'')):[...list,'─'.repeat(width),...preview];
+    const lines=[fit('Link destination · Tree',width),fit(view.destinationInstructions??'Choose where links from Tree open',width),fit(`Find: ${view.actionMenuQuery??''}▏`,width),'─'.repeat(width),...middle,fit('↑↓ choose · Enter link/open · Esc cancel · Alt+L link destination',width)];
+    return{frame:(options.clearScreen===false?'':`${ESC}H${ESC}2J`)+lines.slice(0,height).join('\n'),scrollStartEntryIndex:initialScrollStartEntryIndex,mouseTargets:[]};
   }
   const output: string[] = [options.clearScreen === false ? "" : `${ESC}H${ESC}2J`];
   const mouseTargets: Array<TreeMouseTarget | null | undefined> = [];
@@ -444,8 +460,9 @@ export function renderTreeFrame(
 
   const breadcrumb=renderTreeBreadcrumbs(view,width);
   const paneMenu = outlinerActionLink("tree.menu.open", "[⋯]");
+  const indentationBadge = outlinerActionLink("tree.indentation.toggle", `[Indent: ${view.indentationMode ?? "viewport"}]`);
   output.push(
-    `\x1b[1;36m${options.focused === undefined ? "Outliner" : `${options.focused ? "●" : "○"} Tree`}\x1b[0m  \x1b[2m${truncate(view.workspaceRoot, Math.max(1, width - 25))}\x1b[0m  ${paneMenu}`,
+    `\x1b[1;36m${options.focused === undefined ? "Outliner" : `${options.focused ? "●" : "○"} Tree`}\x1b[0m  \x1b[2m${truncate(view.workspaceRoot, Math.max(1, width - 47))}\x1b[0m  ${paneMenu} ${indentationBadge}`,
   );
   const filterLabel = view.activeFilter ? `  \x1b[33mfilter: ${view.activeFilter}\x1b[0m` : "";
   const truncationLabel =
@@ -542,23 +559,25 @@ export function renderTreeFrame(
 
     const sourceRow = view.rows[index]!;
     const row = {...sourceRow,depth:displayDepth(sourceRow.depth)};
+    const clippedLeft = sourceRow.depth < indentOffset;
     if (!isBlockTreeRow(row)) {
       const result = row.kind === "authored-link-header"
         ? [
             truncateToWidth(
-              `${"  ".repeat(row.depth)}${row.collapsed ? "▸" : "▾"} ${
+              `${"  ".repeat(row.depth)}${clippedLeft ? "‹" : row.collapsed ? "▸" : "▾"} ${
                 sanitizeDynamicText(row.label)
               }  \x1b[2m${authoredHeaderStateText(row)}\x1b[0m`,
               width,
             ),
           ]
-        : [renderAuthoredLinkDisplay(row, width)];
+        : [renderAuthoredLinkDisplay(row, width, clippedLeft)];
       renderedRows[index] = result;
       return result;
     }
     const block = row.block;
     let marker = row.kind === "occurrence" ? "◇" : "•";
     if (row.hasChildren) marker = row.collapsed ? "▸" : "▾";
+    if (clippedLeft) marker = "‹";
     const author = AUTHOR_MARKERS[block.author];
     const editingInline = view.mode === "edit" && index === view.selectedIndex;
     if (editingInline) {
@@ -717,9 +736,11 @@ export function renderTreeFrame(
     }
     return Number.isFinite(commonDepth) ? Math.max(0, commonDepth - 1) : 0;
   }
-  indentOffset = commonViewportDepth();
+  indentOffset = view.indentationMode === "selection"
+    ? Math.max(0, (insertionPoint?.depth ?? view.rows[view.selectedIndex]?.depth ?? 0) - 1)
+    : commonViewportDepth();
   if (indentOffset) renderedRows.length = 0;
-  while (indentOffset > 0) {
+  while (view.indentationMode !== "selection" && indentOffset > 0) {
     const nextOffset = commonViewportDepth();
     if (nextOffset >= indentOffset) break;
     indentOffset = nextOffset;
@@ -744,8 +765,8 @@ export function renderTreeFrame(
         mouseTargets[output.length] = {
           rowId: row.rowId,
           disclosureColumn:
-            row.kind === "authored-link-header" ||
-              (isBlockTreeRow(row) && row.hasChildren && disclosureMarkerVisible)
+            row.depth >= indentOffset && (row.kind === "authored-link-header" ||
+              (isBlockTreeRow(row) && row.hasChildren && disclosureMarkerVisible))
               ? displayDepth(row.depth) * 2
               : -1,
         };

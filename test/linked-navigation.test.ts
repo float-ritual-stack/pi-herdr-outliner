@@ -3,6 +3,12 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { navigationDestinationItems, navigationDestinationStatus, NavigationDestinationPreview, renderNavigationDestinationPreview } from "../src/navigation-destination-menu";
+
+test("Open once cannot offer a create-only action that loses the pending target", () => {
+  const state = {source: {clientId: "source", region: "tree" as const}, destination: null, destinations: []};
+  expect(navigationDestinationItems(state, false)).toEqual([]);
+  expect(navigationDestinationStatus(state, "open")).toContain("cancel and open a Detail first");
+});
 import { OutlinerClient } from "../src/client";
 import { OutlinerServer } from "../src/server";
 import { HerdrRuntimeRegistry } from "../src/herdr-registry";

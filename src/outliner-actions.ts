@@ -124,6 +124,8 @@ export function outlinerActionLink(actionId: string, label: string): string {
 
 const ACTION_SPECS = [
   { id: "tree.close", surface: "tree", modes: ["*"], label: "close", description: "Close this Tree pane", defaultChords: ["Ctrl+Q"], helpPriority: 100, menuGroup: "System" },
+  { id: "tree.preview.focus", surface: "tree", modes: ["browse"], label: "Tree / Preview", description: "Focus Preview to scroll or copy, or return to Tree", defaultChords: ["Alt+P", "F7"], helpPriority: 30, menuGroup: "View" },
+  { id: "tree.preview.close", surface: "tree", modes: ["browse"], label: "close Preview", description: "Close local Preview and return to Tree", defaultChords: ["Esc", "Shift+F7"], helpPriority: 29, menuGroup: "View" },
   { id: "tree.cancel", surface: "tree", modes: ["delete", "viewer", "edit", "add-child", "add-sibling", "filter", "goto", "purge", "action-menu", "inbox", "inbox-steer"], label: "cancel", description: "Cancel the current transient mode", defaultChords: ["Esc"], helpPriority: 100, menuGroup: "System" },
   { id: "tree.menu.open", surface: "tree", modes: ["browse", "inbox"], label: "actions", description: "Open contextual actions and effective bindings", defaultChords: ["?"], helpPriority: 20, menuGroup: "System" },
   { id: "tree.attention.acknowledge", surface: "tree", modes: ["browse"], label: "ack attention", description: "Acknowledge return cues while leaving active marks visible", defaultChords: ["Ctrl+X"], helpPriority: 74, menuGroup: "Navigate" },
@@ -177,6 +179,7 @@ const ACTION_SPECS = [
   { id: "tree.file.open", surface: "tree", modes: ["browse"], label: "open file", description: "Open the selected file reference", defaultChords: ["f"], helpPriority: 30, menuGroup: "Navigate" },
   { id: "tree.depth.expand", surface:"tree", modes:["browse"], label:"expand one layer", description:"Reveal one additional layer below the selected occurrence", defaultChords:["Shift+ArrowRight"], helpPriority:39, menuGroup:"View" },
   { id: "tree.depth.collapse", surface:"tree", modes:["browse"], label:"collapse one layer", description:"Fold the deepest expanded layer below the selected occurrence", defaultChords:["Shift+ArrowLeft"], helpPriority:38, menuGroup:"View" },
+  { id: "tree.indentation.toggle", surface: "tree", modes: ["browse"], label: "toggle indentation follow", description: "Compare fitting all visible rows with following the selected row; local to this Tree", defaultChords: ["Alt+I"], helpPriority: 0, menuGroup: "Navigate" },
   { id:"tree.breadcrumb.left",surface:"tree",modes:["browse"],label:"path left",description:"Scroll the breadcrumb path left without moving selection",defaultChords:["Alt+["],helpPriority:0,menuGroup:"Navigate" },
   { id:"tree.breadcrumb.right",surface:"tree",modes:["browse"],label:"path right",description:"Scroll the breadcrumb path right without moving selection",defaultChords:["Alt+]"],helpPriority:0,menuGroup:"Navigate" },
   { id:"tree.root.parent",surface:"tree",modes:["browse"],label:"focus parent branch",description:"Focus the displayed occurrence's parent as root",defaultChords:[],helpPriority:0,menuGroup:"Navigate" },
@@ -200,7 +203,7 @@ const ACTION_SPECS = [
   { id: "tree.delete.confirm", surface: "tree", modes: ["delete"], label: "confirm Trash", description: "Confirm moving the selected subtree to Trash", defaultChords: ["y"], helpPriority: 95, menuGroup: "Edit" },
   { id: "detail.close", surface: "detail", modes: ["*"], label: "close", description: "Close this Detail pane", defaultChords: ["Ctrl+Q"], helpPriority: 100, menuGroup: "System" },
   { id: "detail.cancel", surface: "detail", modes: ["edit", "select", "comment"], label: "cancel", description: "Cancel the current editor, rendered selection, or contextual buffer without saving", defaultChords: ["Esc"], helpPriority: 100, menuGroup: "System" },
-  { id: "detail.reading.focus", surface: "detail", modes: ["*"], label: "Current / Preview", description: "Switch focus between the retained reader and local Preview", defaultChords: ["F7"], helpPriority: 20, menuGroup: "View" },
+  { id: "detail.reading.focus", surface: "detail", modes: ["*"], label: "Current / Preview", description: "Switch focus between the retained reader and local Preview", defaultChords: ["Alt+P", "F7"], helpPriority: 20, menuGroup: "View" },
   { id: "detail.reading.keep", surface: "detail", modes: ["*"], label: "Keep Preview here", description: "Promote Preview into Current while protecting its draft", defaultChords: ["Alt+Enter"], helpPriority: 20, menuGroup: "View" },
   { id: "detail.reading.close", surface: "detail", modes: ["*"], label: "Close Preview", description: "Release the local Preview while preserving Current", defaultChords: ["Shift+F7"], helpPriority: 20, menuGroup: "View" },
   { id: "detail.menu.open", surface: "detail", modes: ["preview", "annotation", "file", "property"], label: "actions", description: "Open contextual actions and effective bindings", defaultChords: ["?"], helpPriority: 25, menuGroup: "System" },

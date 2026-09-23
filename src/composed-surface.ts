@@ -1,3 +1,5 @@
+import {TreePreviewInput} from './tree-preview-input';
+import {osc52ClipboardWrite} from './terminal';
 import { HStack, type Component } from "@earendil-works/pi-tui";
 import type { OutlinerRequester } from "./client-target";
 import { PiDetailInputStreamDecoder } from "./detail-pi-input";
@@ -103,6 +105,7 @@ export class ComposedLayout extends HStack {
 export class ComposedTree implements Component {
   readonly controller;
   private frameLines: string[] = [];
+  private previewInput = new TreePreviewInput();
   private mouseTargets: readonly (TreeMouseTarget | null | undefined)[] = [];
   private readonly input = new PiDetailInputStreamDecoder();
   private readonly propertyKeys = parsePropertySummaryKeys(process.env.OUTLINER_PROPERTY_SUMMARY_KEYS);
@@ -136,7 +139,7 @@ export class ComposedTree implements Component {
     });
     this.controller.setViewportStart(rendered.scrollStartEntryIndex, rendered.expandedPage);
     if(rendered.breadcrumbStart !== undefined) this.controller.setBreadcrumbStart(rendered.breadcrumbStart);
-    this.frameLines = rendered.frame.split("\n").slice(0, this.options.height()).map(line => truncateToWidth(line, width));
+    this.frameLines = this.previewInput.render(rendered.frame.split("\n").slice(0,this.options.height()).map(line=>truncateToWidth(line,width)),rendered.preview,this.controller.view().localPreview);
     this.mouseTargets = rendered.mouseTargets;
     return this.frameLines;
   }
@@ -144,11 +147,12 @@ export class ComposedTree implements Component {
 
   async handleInput(data: string): Promise<void> {
     if (isTreeMouseSequence(data)) {
+      if(this.previewInput.handle(data,this.controller,text=>process.stdout.write(osc52ClipboardWrite(text)),this.options.invalidate))return;
       if (this.controller.view().mode === "goto") return this.controller.handleGotoMouse(data);
       const secondary = parseTreeSecondaryClick(data);
       if (secondary) return this.controller.handleAction("tree.menu.open", secondary);
       const wheel = parseTreeWheel(data);
-      if (wheel) return this.controller.handleKeypress("", {name: wheel, sequence: data}, "pass");
+      if (wheel) return this.controller.handleTreeWheel(wheel);
       const click = parseTreePrimaryClick(data);
       if (!click) return;
       const disclosure = treeDisclosureAtClick(this.mouseTargets, data);
