@@ -1,0 +1,1191 @@
+{
+  "recordedAt": "2026-09-23T15:47:27.639Z",
+  "bun": "1.3.14",
+  "platform": "linux",
+  "arch": "x64",
+  "versions": {
+    "turso-stable": "0.7.2",
+    "turso-preview": "0.8.0-pre.12"
+  },
+  "results": [
+    {
+      "engine": "sqlite",
+      "name": "startup-pragmas",
+      "status": "pass",
+      "ms": 1.43,
+      "result": {
+        "foreign_keys": 1,
+        "journal_mode": "wal",
+        "busy_timeout": 5000
+      }
+    },
+    {
+      "engine": "sqlite",
+      "name": "copied-read",
+      "status": "pass",
+      "ms": 180.25,
+      "result": {
+        "tables": [
+          {
+            "table": "annotation_agent_requests",
+            "rows": 0,
+            "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "table": "annotation_migration_quarantine",
+            "rows": 0,
+            "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "table": "annotation_requests",
+            "rows": 56,
+            "digest": "554256e55eed842e63b549698cd47b39fa2fd7e6a95411e1815e2d315b434ecd"
+          },
+          {
+            "table": "annotation_resolution_events",
+            "rows": 99,
+            "digest": "07e68c90b6c092e8a89a0bb3a475256f7e93cb1a63f5fd5de502e58aec72d3f3"
+          },
+          {
+            "table": "annotation_resource_evidence_refs",
+            "rows": 4,
+            "digest": "3a3b18b73ee032f5cf60a0feb81dbd4d2e4c613a2e394a56cafb8cb3062437f3"
+          },
+          {
+            "table": "annotation_targets",
+            "rows": 49,
+            "digest": "1f8aefa9eececeb2c2fba4ffb46eb76276b0c0b74e689fa091ca72d018cbce25"
+          },
+          {
+            "table": "block_edit_activity",
+            "rows": 1531,
+            "digest": "f0dbe88490b9da2e8be14c14f53898026d2dc7fb5c5968ab14b408c34a68ee6c"
+          },
+          {
+            "table": "block_properties",
+            "rows": 6796,
+            "digest": "393d2a41814157f51a22f6f6f68aecc66b46f47bdc0379e232166e7617a51fed"
+          },
+          {
+            "table": "blocks",
+            "rows": 1363,
+            "digest": "28aca45ea0718f062cf46cf912e0cc348e8d39c6ea92f72d4b893c54ddc91f3d"
+          },
+          {
+            "table": "capture_requests",
+            "rows": 103,
+            "digest": "f87a97d0047f5b3c2b3f0d97ae6ea0597e3c1ce9546ee9f1e698d9d20b7f2c59"
+          },
+          {
+            "table": "computed_executions",
+            "rows": 4,
+            "digest": "3bf14aeec000534740aaaa070222931b68bc46860de939ac924a708c984f22c7"
+          },
+          {
+            "table": "computed_invocations",
+            "rows": 1,
+            "digest": "9aadeae63edc8cd5b71c265d6d41f6e51f47e37283ffc38033891f8974b96541"
+          },
+          {
+            "table": "computed_representations",
+            "rows": 1,
+            "digest": "b31664cfbfb5d3166f766901ab2c65ef287688c393ef751dafaab4a7def3147f"
+          },
+          {
+            "table": "computed_resource_state",
+            "rows": 1,
+            "digest": "83257fe3bf84258b0f6f71ad377a2048583bede3af73ae253e6f45466239063c"
+          },
+          {
+            "table": "inbox_agent_instructions",
+            "rows": 0,
+            "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "table": "inbox_agent_results",
+            "rows": 48,
+            "digest": "3d865d89f0085d001454b06ba45315be9450028fabcfc990037f5997706d06c2"
+          },
+          {
+            "table": "inbox_agent_settings",
+            "rows": 1,
+            "digest": "13f4a33bf7205e6dfcfcf74d0316a6b261ef1fcc40edeec7fa07c27de8f70ab3"
+          },
+          {
+            "table": "metadata",
+            "rows": 8,
+            "digest": "b2aeff505bbb140e8022627b40e615c463396cd30725c45c86bfb09ca0376970"
+          },
+          {
+            "table": "navigation_history",
+            "rows": 200,
+            "digest": "8fd0d5a1d44a694abcb479df2040a8f77c3eb503ab0667cf7522477048e2e187"
+          },
+          {
+            "table": "note_assistance_results",
+            "rows": 60,
+            "digest": "67c4aa061c716216ff0f3511f728e3933b7259d97009e9ad9cbad8ecbb607fb8"
+          },
+          {
+            "table": "note_assistance_state",
+            "rows": 1363,
+            "digest": "eb74ffdd0a10bc6eb795e12fb3957a2b84143e002743a655da6dbeed2b9d0383"
+          },
+          {
+            "table": "page_addresses",
+            "rows": 216,
+            "digest": "17f7b21bd47e61bd064260d938d36b35a481a57301b2dde59a86a396a7a356f6"
+          },
+          {
+            "table": "pdf_representations",
+            "rows": 4,
+            "digest": "6d597bdbc8c569322e7e8d70ef9551f9d3b70c245a7f0458dc308ca5f584928d"
+          },
+          {
+            "table": "pdf_resource_state",
+            "rows": 1,
+            "digest": "c3af701f1e0e2f0f097d80a42dbe23db7839bc3d5756afe1c9e39f411578fdfe"
+          },
+          {
+            "table": "pdf_source_snapshots",
+            "rows": 2,
+            "digest": "5f2694f56f291c8a77ebabf573fb3477babf45183dc1b7a146861a7cf42dd67a"
+          },
+          {
+            "table": "quick_capture_draft",
+            "rows": 1,
+            "digest": "9710f5290dd214952f486103f9d42eca45801d447aca3aef4c5a89b99ee70517"
+          },
+          {
+            "table": "remote_entity_representations",
+            "rows": 0,
+            "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "table": "remote_entity_resource_state",
+            "rows": 1,
+            "digest": "fc2a9a193ba6c2bd59986c951c9f2ddcbadec380e66cce785cd1c47d029a060c"
+          },
+          {
+            "table": "remote_entity_source_snapshots",
+            "rows": 0,
+            "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "table": "reserved_work_ids",
+            "rows": 199,
+            "digest": "ee857d1d04c7bb0971bfc94ab2419342bb60ef154ff71e267729326b87af7f93"
+          },
+          {
+            "table": "resource_retention_events",
+            "rows": 0,
+            "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "table": "resource_retention_pins",
+            "rows": 0,
+            "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "table": "resource_retention_policy",
+            "rows": 1,
+            "digest": "f9e884f3010611310a65b2fc997ba6c32d395bd9bac839d518e66a1c1f0a824c"
+          },
+          {
+            "table": "resource_retention_references",
+            "rows": 0,
+            "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "table": "resource_sources",
+            "rows": 12,
+            "digest": "7ee96d425890dc41738424b49e49ea08e5226f63b821a7d3c25e778064b3118c"
+          },
+          {
+            "table": "resources",
+            "rows": 14,
+            "digest": "bbe3faeb256f99519357ab33ca0ccbd508b9830354e4b570e3470d1c1c384951"
+          },
+          {
+            "table": "selection",
+            "rows": 1,
+            "digest": "f600fc992e83c97a8935a41b97e98b6063536b9f843196a071b8fb5bb3e2c3ba"
+          },
+          {
+            "table": "virtual_occurrence_ranks",
+            "rows": 194,
+            "digest": "beda95e8ce77a1c026acb9768d263de9df6f51ecda5fc09cfb08777d5e615b66"
+          },
+          {
+            "table": "web_representations",
+            "rows": 2,
+            "digest": "c4811ccb56f4c2a1f8ac13cb851c8575b5f18146755d0a02dace21f132c253b0"
+          },
+          {
+            "table": "web_resource_state",
+            "rows": 2,
+            "digest": "70e171ca19ca642871d242bd229be775d1c86ae4bfad676f70c36c4d2d6df9e0"
+          },
+          {
+            "table": "web_source_snapshots",
+            "rows": 2,
+            "digest": "abf1385d21b34020172af1e34e38ffbc07472a60e46be69181a30213dd8a768f"
+          },
+          {
+            "table": "work_id_allocator",
+            "rows": 1,
+            "digest": "d75dabc034ee1383af95ddbfcbce47b31c249cb65f29bea4651b9b92f75d6543"
+          },
+          {
+            "table": "workflow_promotions",
+            "rows": 0,
+            "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "table": "workflow_runs",
+            "rows": 2,
+            "digest": "0a7d6811f1b84acc50a4afdad6cebe685580e4b37e8fc7211b25fe7975ea0a85"
+          }
+        ]
+      }
+    },
+    {
+      "engine": "sqlite",
+      "name": "schema-replay",
+      "status": "pass",
+      "ms": 66.48,
+      "result": {
+        "applied": 88
+      }
+    },
+    {
+      "engine": "sqlite",
+      "name": "copied-write",
+      "status": "pass",
+      "ms": 6.49,
+      "result": {
+        "commit": true,
+        "staleWriteRejected": true,
+        "rollback": true,
+        "reopen": true,
+        "sqliteReadback": true
+      }
+    },
+    {
+      "engine": "sqlite",
+      "name": "recursive",
+      "status": "pass",
+      "ms": 1.72,
+      "result": {
+        "descendants": 4
+      }
+    },
+    {
+      "engine": "sqlite",
+      "name": "nested-transaction",
+      "status": "pass",
+      "ms": 2.09,
+      "result": {
+        "outerPreserved": true,
+        "innerRolledBack": true
+      }
+    },
+    {
+      "engine": "sqlite",
+      "name": "savepoint",
+      "status": "pass",
+      "ms": 1.86,
+      "result": {
+        "outerPreserved": true,
+        "innerRolledBack": true
+      }
+    },
+    {
+      "engine": "sqlite",
+      "name": "foreign-key-check",
+      "status": "pass",
+      "ms": 2.02,
+      "result": {
+        "detectedInvalidRows": 1
+      }
+    },
+    {
+      "engine": "sqlite",
+      "name": "foreign-key-actions",
+      "status": "pass",
+      "ms": 4.74,
+      "result": {
+        "rejectedInvalidInsert": "FOREIGN KEY constraint failed",
+        "cascade": true,
+        "setNull": true,
+        "restrict": true
+      }
+    },
+    {
+      "engine": "sqlite",
+      "name": "legacy-alter",
+      "status": "pass",
+      "ms": 2.16,
+      "result": {
+        "retainedReference": "p"
+      }
+    },
+    {
+      "engine": "sqlite",
+      "name": "trigger",
+      "status": "pass",
+      "ms": 1.91,
+      "result": {
+        "protected": true
+      }
+    },
+    {
+      "engine": "sqlite",
+      "name": "json-window-index",
+      "status": "pass",
+      "ms": 2.72,
+      "result": {
+        "window": true,
+        "json": true,
+        "partialExpressionUniqueIndex": true
+      }
+    },
+    {
+      "engine": "turso-stable",
+      "name": "startup-pragmas",
+      "status": "pass",
+      "ms": 0.86,
+      "result": {
+        "foreign_keys": 1,
+        "journal_mode": "wal",
+        "busy_timeout": 5000
+      }
+    },
+    {
+      "engine": "turso-stable",
+      "name": "copied-read",
+      "status": "pass",
+      "ms": 235.08,
+      "result": {
+        "tables": [
+          {
+            "table": "annotation_agent_requests",
+            "rows": 0,
+            "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "table": "annotation_migration_quarantine",
+            "rows": 0,
+            "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "table": "annotation_requests",
+            "rows": 56,
+            "digest": "554256e55eed842e63b549698cd47b39fa2fd7e6a95411e1815e2d315b434ecd"
+          },
+          {
+            "table": "annotation_resolution_events",
+            "rows": 99,
+            "digest": "07e68c90b6c092e8a89a0bb3a475256f7e93cb1a63f5fd5de502e58aec72d3f3"
+          },
+          {
+            "table": "annotation_resource_evidence_refs",
+            "rows": 4,
+            "digest": "3a3b18b73ee032f5cf60a0feb81dbd4d2e4c613a2e394a56cafb8cb3062437f3"
+          },
+          {
+            "table": "annotation_targets",
+            "rows": 49,
+            "digest": "1f8aefa9eececeb2c2fba4ffb46eb76276b0c0b74e689fa091ca72d018cbce25"
+          },
+          {
+            "table": "block_edit_activity",
+            "rows": 1531,
+            "digest": "f0dbe88490b9da2e8be14c14f53898026d2dc7fb5c5968ab14b408c34a68ee6c"
+          },
+          {
+            "table": "block_properties",
+            "rows": 6796,
+            "digest": "393d2a41814157f51a22f6f6f68aecc66b46f47bdc0379e232166e7617a51fed"
+          },
+          {
+            "table": "blocks",
+            "rows": 1363,
+            "digest": "28aca45ea0718f062cf46cf912e0cc348e8d39c6ea92f72d4b893c54ddc91f3d"
+          },
+          {
+            "table": "capture_requests",
+            "rows": 103,
+            "digest": "f87a97d0047f5b3c2b3f0d97ae6ea0597e3c1ce9546ee9f1e698d9d20b7f2c59"
+          },
+          {
+            "table": "computed_executions",
+            "rows": 4,
+            "digest": "3bf14aeec000534740aaaa070222931b68bc46860de939ac924a708c984f22c7"
+          },
+          {
+            "table": "computed_invocations",
+            "rows": 1,
+            "digest": "9aadeae63edc8cd5b71c265d6d41f6e51f47e37283ffc38033891f8974b96541"
+          },
+          {
+            "table": "computed_representations",
+            "rows": 1,
+            "digest": "b31664cfbfb5d3166f766901ab2c65ef287688c393ef751dafaab4a7def3147f"
+          },
+          {
+            "table": "computed_resource_state",
+            "rows": 1,
+            "digest": "83257fe3bf84258b0f6f71ad377a2048583bede3af73ae253e6f45466239063c"
+          },
+          {
+            "table": "inbox_agent_instructions",
+            "rows": 0,
+            "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "table": "inbox_agent_results",
+            "rows": 48,
+            "digest": "3d865d89f0085d001454b06ba45315be9450028fabcfc990037f5997706d06c2"
+          },
+          {
+            "table": "inbox_agent_settings",
+            "rows": 1,
+            "digest": "13f4a33bf7205e6dfcfcf74d0316a6b261ef1fcc40edeec7fa07c27de8f70ab3"
+          },
+          {
+            "table": "metadata",
+            "rows": 8,
+            "digest": "b2aeff505bbb140e8022627b40e615c463396cd30725c45c86bfb09ca0376970"
+          },
+          {
+            "table": "navigation_history",
+            "rows": 200,
+            "digest": "8fd0d5a1d44a694abcb479df2040a8f77c3eb503ab0667cf7522477048e2e187"
+          },
+          {
+            "table": "note_assistance_results",
+            "rows": 60,
+            "digest": "67c4aa061c716216ff0f3511f728e3933b7259d97009e9ad9cbad8ecbb607fb8"
+          },
+          {
+            "table": "note_assistance_state",
+            "rows": 1363,
+            "digest": "eb74ffdd0a10bc6eb795e12fb3957a2b84143e002743a655da6dbeed2b9d0383"
+          },
+          {
+            "table": "page_addresses",
+            "rows": 216,
+            "digest": "17f7b21bd47e61bd064260d938d36b35a481a57301b2dde59a86a396a7a356f6"
+          },
+          {
+            "table": "pdf_representations",
+            "rows": 4,
+            "digest": "6d597bdbc8c569322e7e8d70ef9551f9d3b70c245a7f0458dc308ca5f584928d"
+          },
+          {
+            "table": "pdf_resource_state",
+            "rows": 1,
+            "digest": "c3af701f1e0e2f0f097d80a42dbe23db7839bc3d5756afe1c9e39f411578fdfe"
+          },
+          {
+            "table": "pdf_source_snapshots",
+            "rows": 2,
+            "digest": "5f2694f56f291c8a77ebabf573fb3477babf45183dc1b7a146861a7cf42dd67a"
+          },
+          {
+            "table": "quick_capture_draft",
+            "rows": 1,
+            "digest": "9710f5290dd214952f486103f9d42eca45801d447aca3aef4c5a89b99ee70517"
+          },
+          {
+            "table": "remote_entity_representations",
+            "rows": 0,
+            "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "table": "remote_entity_resource_state",
+            "rows": 1,
+            "digest": "fc2a9a193ba6c2bd59986c951c9f2ddcbadec380e66cce785cd1c47d029a060c"
+          },
+          {
+            "table": "remote_entity_source_snapshots",
+            "rows": 0,
+            "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "table": "reserved_work_ids",
+            "rows": 199,
+            "digest": "ee857d1d04c7bb0971bfc94ab2419342bb60ef154ff71e267729326b87af7f93"
+          },
+          {
+            "table": "resource_retention_events",
+            "rows": 0,
+            "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "table": "resource_retention_pins",
+            "rows": 0,
+            "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "table": "resource_retention_policy",
+            "rows": 1,
+            "digest": "f9e884f3010611310a65b2fc997ba6c32d395bd9bac839d518e66a1c1f0a824c"
+          },
+          {
+            "table": "resource_retention_references",
+            "rows": 0,
+            "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "table": "resource_sources",
+            "rows": 12,
+            "digest": "7ee96d425890dc41738424b49e49ea08e5226f63b821a7d3c25e778064b3118c"
+          },
+          {
+            "table": "resources",
+            "rows": 14,
+            "digest": "bbe3faeb256f99519357ab33ca0ccbd508b9830354e4b570e3470d1c1c384951"
+          },
+          {
+            "table": "selection",
+            "rows": 1,
+            "digest": "f600fc992e83c97a8935a41b97e98b6063536b9f843196a071b8fb5bb3e2c3ba"
+          },
+          {
+            "table": "virtual_occurrence_ranks",
+            "rows": 194,
+            "digest": "beda95e8ce77a1c026acb9768d263de9df6f51ecda5fc09cfb08777d5e615b66"
+          },
+          {
+            "table": "web_representations",
+            "rows": 2,
+            "digest": "c4811ccb56f4c2a1f8ac13cb851c8575b5f18146755d0a02dace21f132c253b0"
+          },
+          {
+            "table": "web_resource_state",
+            "rows": 2,
+            "digest": "70e171ca19ca642871d242bd229be775d1c86ae4bfad676f70c36c4d2d6df9e0"
+          },
+          {
+            "table": "web_source_snapshots",
+            "rows": 2,
+            "digest": "abf1385d21b34020172af1e34e38ffbc07472a60e46be69181a30213dd8a768f"
+          },
+          {
+            "table": "work_id_allocator",
+            "rows": 1,
+            "digest": "d75dabc034ee1383af95ddbfcbce47b31c249cb65f29bea4651b9b92f75d6543"
+          },
+          {
+            "table": "workflow_promotions",
+            "rows": 0,
+            "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "table": "workflow_runs",
+            "rows": 2,
+            "digest": "0a7d6811f1b84acc50a4afdad6cebe685580e4b37e8fc7211b25fe7975ea0a85"
+          }
+        ]
+      }
+    },
+    {
+      "engine": "turso-stable",
+      "name": "schema-replay",
+      "status": "pass",
+      "ms": 50.28,
+      "result": {
+        "applied": 88
+      }
+    },
+    {
+      "engine": "turso-stable",
+      "name": "copied-write",
+      "status": "pass",
+      "ms": 13,
+      "result": {
+        "commit": true,
+        "staleWriteRejected": true,
+        "rollback": true,
+        "reopen": true,
+        "sqliteReadback": true
+      }
+    },
+    {
+      "engine": "turso-stable",
+      "name": "recursive",
+      "status": "fail",
+      "phase": "recursive",
+      "ms": 1.92,
+      "error": "prepare failed: Parse error: Recursive CTEs are not yet supported"
+    },
+    {
+      "engine": "turso-stable",
+      "name": "nested-transaction",
+      "status": "fail",
+      "phase": "nested-transaction",
+      "ms": 2.45,
+      "error": "Expected values to be strictly equal:\n+ actual - expected\n\n+ 'step failed: Transaction error: cannot start a transaction within a transaction'\n- 'inner injected failure'\n"
+    },
+    {
+      "engine": "turso-stable",
+      "name": "savepoint",
+      "status": "pass",
+      "ms": 2.48,
+      "result": {
+        "outerPreserved": true,
+        "innerRolledBack": true
+      }
+    },
+    {
+      "engine": "turso-stable",
+      "name": "foreign-key-check",
+      "status": "fail",
+      "phase": "foreign-key-check",
+      "ms": 2.78,
+      "error": "foreign_key_check must expose deliberately invalid row\n\n0 !== 1\n"
+    },
+    {
+      "engine": "turso-stable",
+      "name": "foreign-key-actions",
+      "status": "pass",
+      "ms": 3.8,
+      "result": {
+        "rejectedInvalidInsert": "step failed: Runtime error: FOREIGN KEY constraint failed",
+        "cascade": true,
+        "setNull": true,
+        "restrict": true
+      }
+    },
+    {
+      "engine": "turso-stable",
+      "name": "legacy-alter",
+      "status": "fail",
+      "phase": "legacy-alter",
+      "ms": 3.21,
+      "error": "legacy mode must not rewrite reference to old_p\n\n'old_p' !== 'p'\n"
+    },
+    {
+      "engine": "turso-stable",
+      "name": "trigger",
+      "status": "pass",
+      "ms": 2.14,
+      "result": {
+        "protected": true
+      }
+    },
+    {
+      "engine": "turso-stable",
+      "name": "trigger-enabled",
+      "status": "pass",
+      "ms": 2.18,
+      "result": {
+        "protected": true
+      }
+    },
+    {
+      "engine": "turso-stable",
+      "name": "json-window-index",
+      "status": "pass",
+      "ms": 3.31,
+      "result": {
+        "window": true,
+        "json": true,
+        "partialExpressionUniqueIndex": true
+      }
+    },
+    {
+      "engine": "turso-stable",
+      "name": "vector",
+      "status": "pass",
+      "ms": 2.37,
+      "result": {
+        "exactScan": [
+          {
+            "id": 1,
+            "distance": 1.7879937441863872e-07
+          },
+          {
+            "id": 3,
+            "distance": 0.006116351788964674
+          },
+          {
+            "id": 2,
+            "distance": 1
+          }
+        ]
+      }
+    },
+    {
+      "engine": "turso-stable",
+      "name": "fts",
+      "status": "pass",
+      "ms": 18.42,
+      "result": {
+        "insert": true,
+        "update": true,
+        "rollback": true,
+        "reopen": true,
+        "delete": true
+      }
+    },
+    {
+      "engine": "turso-stable",
+      "name": "cdc",
+      "status": "pass",
+      "ms": 3.3,
+      "result": {
+        "columns": [
+          "change_id",
+          "change_time",
+          "change_txn_id",
+          "change_type",
+          "table_name",
+          "id",
+          "before",
+          "after",
+          "updates"
+        ],
+        "events": [
+          {
+            "change_type": 0,
+            "n": 1
+          },
+          {
+            "change_type": 1,
+            "n": 1
+          },
+          {
+            "change_type": 2,
+            "n": 1
+          }
+        ],
+        "transactionGrouped": true,
+        "beforeAfterPresent": true,
+        "rollback": true,
+        "reopenRequiresOptIn": true
+      }
+    },
+    {
+      "engine": "turso-preview",
+      "name": "startup-pragmas",
+      "status": "pass",
+      "ms": 0.89,
+      "result": {
+        "foreign_keys": 1,
+        "journal_mode": "wal",
+        "busy_timeout": 5000
+      }
+    },
+    {
+      "engine": "turso-preview",
+      "name": "copied-read",
+      "status": "pass",
+      "ms": 198.37,
+      "result": {
+        "tables": [
+          {
+            "table": "annotation_agent_requests",
+            "rows": 0,
+            "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "table": "annotation_migration_quarantine",
+            "rows": 0,
+            "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "table": "annotation_requests",
+            "rows": 56,
+            "digest": "554256e55eed842e63b549698cd47b39fa2fd7e6a95411e1815e2d315b434ecd"
+          },
+          {
+            "table": "annotation_resolution_events",
+            "rows": 99,
+            "digest": "07e68c90b6c092e8a89a0bb3a475256f7e93cb1a63f5fd5de502e58aec72d3f3"
+          },
+          {
+            "table": "annotation_resource_evidence_refs",
+            "rows": 4,
+            "digest": "3a3b18b73ee032f5cf60a0feb81dbd4d2e4c613a2e394a56cafb8cb3062437f3"
+          },
+          {
+            "table": "annotation_targets",
+            "rows": 49,
+            "digest": "1f8aefa9eececeb2c2fba4ffb46eb76276b0c0b74e689fa091ca72d018cbce25"
+          },
+          {
+            "table": "block_edit_activity",
+            "rows": 1531,
+            "digest": "f0dbe88490b9da2e8be14c14f53898026d2dc7fb5c5968ab14b408c34a68ee6c"
+          },
+          {
+            "table": "block_properties",
+            "rows": 6796,
+            "digest": "393d2a41814157f51a22f6f6f68aecc66b46f47bdc0379e232166e7617a51fed"
+          },
+          {
+            "table": "blocks",
+            "rows": 1363,
+            "digest": "28aca45ea0718f062cf46cf912e0cc348e8d39c6ea92f72d4b893c54ddc91f3d"
+          },
+          {
+            "table": "capture_requests",
+            "rows": 103,
+            "digest": "f87a97d0047f5b3c2b3f0d97ae6ea0597e3c1ce9546ee9f1e698d9d20b7f2c59"
+          },
+          {
+            "table": "computed_executions",
+            "rows": 4,
+            "digest": "3bf14aeec000534740aaaa070222931b68bc46860de939ac924a708c984f22c7"
+          },
+          {
+            "table": "computed_invocations",
+            "rows": 1,
+            "digest": "9aadeae63edc8cd5b71c265d6d41f6e51f47e37283ffc38033891f8974b96541"
+          },
+          {
+            "table": "computed_representations",
+            "rows": 1,
+            "digest": "b31664cfbfb5d3166f766901ab2c65ef287688c393ef751dafaab4a7def3147f"
+          },
+          {
+            "table": "computed_resource_state",
+            "rows": 1,
+            "digest": "83257fe3bf84258b0f6f71ad377a2048583bede3af73ae253e6f45466239063c"
+          },
+          {
+            "table": "inbox_agent_instructions",
+            "rows": 0,
+            "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "table": "inbox_agent_results",
+            "rows": 48,
+            "digest": "3d865d89f0085d001454b06ba45315be9450028fabcfc990037f5997706d06c2"
+          },
+          {
+            "table": "inbox_agent_settings",
+            "rows": 1,
+            "digest": "13f4a33bf7205e6dfcfcf74d0316a6b261ef1fcc40edeec7fa07c27de8f70ab3"
+          },
+          {
+            "table": "metadata",
+            "rows": 8,
+            "digest": "b2aeff505bbb140e8022627b40e615c463396cd30725c45c86bfb09ca0376970"
+          },
+          {
+            "table": "navigation_history",
+            "rows": 200,
+            "digest": "8fd0d5a1d44a694abcb479df2040a8f77c3eb503ab0667cf7522477048e2e187"
+          },
+          {
+            "table": "note_assistance_results",
+            "rows": 60,
+            "digest": "67c4aa061c716216ff0f3511f728e3933b7259d97009e9ad9cbad8ecbb607fb8"
+          },
+          {
+            "table": "note_assistance_state",
+            "rows": 1363,
+            "digest": "eb74ffdd0a10bc6eb795e12fb3957a2b84143e002743a655da6dbeed2b9d0383"
+          },
+          {
+            "table": "page_addresses",
+            "rows": 216,
+            "digest": "17f7b21bd47e61bd064260d938d36b35a481a57301b2dde59a86a396a7a356f6"
+          },
+          {
+            "table": "pdf_representations",
+            "rows": 4,
+            "digest": "6d597bdbc8c569322e7e8d70ef9551f9d3b70c245a7f0458dc308ca5f584928d"
+          },
+          {
+            "table": "pdf_resource_state",
+            "rows": 1,
+            "digest": "c3af701f1e0e2f0f097d80a42dbe23db7839bc3d5756afe1c9e39f411578fdfe"
+          },
+          {
+            "table": "pdf_source_snapshots",
+            "rows": 2,
+            "digest": "5f2694f56f291c8a77ebabf573fb3477babf45183dc1b7a146861a7cf42dd67a"
+          },
+          {
+            "table": "quick_capture_draft",
+            "rows": 1,
+            "digest": "9710f5290dd214952f486103f9d42eca45801d447aca3aef4c5a89b99ee70517"
+          },
+          {
+            "table": "remote_entity_representations",
+            "rows": 0,
+            "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "table": "remote_entity_resource_state",
+            "rows": 1,
+            "digest": "fc2a9a193ba6c2bd59986c951c9f2ddcbadec380e66cce785cd1c47d029a060c"
+          },
+          {
+            "table": "remote_entity_source_snapshots",
+            "rows": 0,
+            "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "table": "reserved_work_ids",
+            "rows": 199,
+            "digest": "ee857d1d04c7bb0971bfc94ab2419342bb60ef154ff71e267729326b87af7f93"
+          },
+          {
+            "table": "resource_retention_events",
+            "rows": 0,
+            "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "table": "resource_retention_pins",
+            "rows": 0,
+            "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "table": "resource_retention_policy",
+            "rows": 1,
+            "digest": "f9e884f3010611310a65b2fc997ba6c32d395bd9bac839d518e66a1c1f0a824c"
+          },
+          {
+            "table": "resource_retention_references",
+            "rows": 0,
+            "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "table": "resource_sources",
+            "rows": 12,
+            "digest": "7ee96d425890dc41738424b49e49ea08e5226f63b821a7d3c25e778064b3118c"
+          },
+          {
+            "table": "resources",
+            "rows": 14,
+            "digest": "bbe3faeb256f99519357ab33ca0ccbd508b9830354e4b570e3470d1c1c384951"
+          },
+          {
+            "table": "selection",
+            "rows": 1,
+            "digest": "f600fc992e83c97a8935a41b97e98b6063536b9f843196a071b8fb5bb3e2c3ba"
+          },
+          {
+            "table": "virtual_occurrence_ranks",
+            "rows": 194,
+            "digest": "beda95e8ce77a1c026acb9768d263de9df6f51ecda5fc09cfb08777d5e615b66"
+          },
+          {
+            "table": "web_representations",
+            "rows": 2,
+            "digest": "c4811ccb56f4c2a1f8ac13cb851c8575b5f18146755d0a02dace21f132c253b0"
+          },
+          {
+            "table": "web_resource_state",
+            "rows": 2,
+            "digest": "70e171ca19ca642871d242bd229be775d1c86ae4bfad676f70c36c4d2d6df9e0"
+          },
+          {
+            "table": "web_source_snapshots",
+            "rows": 2,
+            "digest": "abf1385d21b34020172af1e34e38ffbc07472a60e46be69181a30213dd8a768f"
+          },
+          {
+            "table": "work_id_allocator",
+            "rows": 1,
+            "digest": "d75dabc034ee1383af95ddbfcbce47b31c249cb65f29bea4651b9b92f75d6543"
+          },
+          {
+            "table": "workflow_promotions",
+            "rows": 0,
+            "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "table": "workflow_runs",
+            "rows": 2,
+            "digest": "0a7d6811f1b84acc50a4afdad6cebe685580e4b37e8fc7211b25fe7975ea0a85"
+          }
+        ]
+      }
+    },
+    {
+      "engine": "turso-preview",
+      "name": "schema-replay",
+      "status": "pass",
+      "ms": 52.46,
+      "result": {
+        "applied": 88
+      }
+    },
+    {
+      "engine": "turso-preview",
+      "name": "copied-write",
+      "status": "pass",
+      "ms": 11.03,
+      "result": {
+        "commit": true,
+        "staleWriteRejected": true,
+        "rollback": true,
+        "reopen": true,
+        "sqliteReadback": true
+      }
+    },
+    {
+      "engine": "turso-preview",
+      "name": "recursive",
+      "status": "pass",
+      "ms": 2.43,
+      "result": {
+        "descendants": 4
+      }
+    },
+    {
+      "engine": "turso-preview",
+      "name": "nested-transaction",
+      "status": "fail",
+      "phase": "nested-transaction",
+      "ms": 2.94,
+      "error": "Expected values to be strictly equal:\n+ actual - expected\n\n+ 'step failed: Transaction error: cannot start a transaction within a transaction'\n- 'inner injected failure'\n"
+    },
+    {
+      "engine": "turso-preview",
+      "name": "savepoint",
+      "status": "pass",
+      "ms": 2.36,
+      "result": {
+        "outerPreserved": true,
+        "innerRolledBack": true
+      }
+    },
+    {
+      "engine": "turso-preview",
+      "name": "foreign-key-check",
+      "status": "fail",
+      "phase": "foreign-key-check",
+      "ms": 3.18,
+      "error": "foreign_key_check must expose deliberately invalid row\n\n0 !== 1\n"
+    },
+    {
+      "engine": "turso-preview",
+      "name": "foreign-key-actions",
+      "status": "pass",
+      "ms": 5.66,
+      "result": {
+        "rejectedInvalidInsert": "step failed: FOREIGN KEY constraint failed",
+        "cascade": true,
+        "setNull": true,
+        "restrict": true
+      }
+    },
+    {
+      "engine": "turso-preview",
+      "name": "legacy-alter",
+      "status": "fail",
+      "phase": "legacy-alter",
+      "ms": 4.01,
+      "error": "legacy mode must not rewrite reference to old_p\n\n'old_p' !== 'p'\n"
+    },
+    {
+      "engine": "turso-preview",
+      "name": "trigger",
+      "status": "pass",
+      "ms": 2.73,
+      "result": {
+        "protected": true
+      }
+    },
+    {
+      "engine": "turso-preview",
+      "name": "trigger-enabled",
+      "status": "pass",
+      "ms": 2.67,
+      "result": {
+        "protected": true
+      }
+    },
+    {
+      "engine": "turso-preview",
+      "name": "json-window-index",
+      "status": "pass",
+      "ms": 3.5,
+      "result": {
+        "window": true,
+        "json": true,
+        "partialExpressionUniqueIndex": true
+      }
+    },
+    {
+      "engine": "turso-preview",
+      "name": "vector",
+      "status": "pass",
+      "ms": 2.84,
+      "result": {
+        "exactScan": [
+          {
+            "id": 1,
+            "distance": 1.7879937441863872e-07
+          },
+          {
+            "id": 3,
+            "distance": 0.006116351788964674
+          },
+          {
+            "id": 2,
+            "distance": 1
+          }
+        ]
+      }
+    },
+    {
+      "engine": "turso-preview",
+      "name": "fts",
+      "status": "pass",
+      "ms": 13.5,
+      "result": {
+        "insert": true,
+        "update": true,
+        "rollback": true,
+        "reopen": true,
+        "delete": true
+      }
+    },
+    {
+      "engine": "turso-preview",
+      "name": "cdc",
+      "status": "pass",
+      "ms": 3.98,
+      "result": {
+        "columns": [
+          "change_id",
+          "change_time",
+          "change_txn_id",
+          "change_type",
+          "table_name",
+          "id",
+          "before",
+          "after",
+          "updates"
+        ],
+        "events": [
+          {
+            "change_type": 0,
+            "n": 1
+          },
+          {
+            "change_type": 1,
+            "n": 1
+          },
+          {
+            "change_type": 2,
+            "n": 1
+          }
+        ],
+        "transactionGrouped": true,
+        "beforeAfterPresent": true,
+        "rollback": true,
+        "reopenRequiresOptIn": true
+      }
+    }
+  ]
+}

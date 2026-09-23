@@ -1,0 +1,1 @@
+{"name":"outliner-turso-spike","private":true,"type":"module","dependencies":{"turso-stable":"npm:@tursodatabase/database@0.7.2","turso-preview":"npm:@tursodatabase/database@0.8.0-pre.12"}}

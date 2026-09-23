@@ -1,0 +1,224 @@
+{
+  "recordedAt": "2026-09-23T15:46:17.852Z",
+  "bun": "1.3.14",
+  "results": [
+    {
+      "engine": "sqlite",
+      "mode": "fresh",
+      "adapt": "basic",
+      "status": "pass",
+      "steps": [
+        "boot",
+        "create parent and child",
+        "read and property filter",
+        "update and stale revision rejection",
+        "outer rollback preserves text and revision",
+        "subtree filter",
+        "reopen persisted note and hierarchy",
+        "delete subtree"
+      ],
+      "adaptations": {
+        "queryToPrepare": 0,
+        "missingRowToNull": 0,
+        "savepoints": 0,
+        "ownershipSQLite": true
+      },
+      "ms": 140
+    },
+    {
+      "engine": "sqlite",
+      "mode": "copy",
+      "adapt": "basic",
+      "status": "pass",
+      "steps": [
+        "boot",
+        "create parent and child",
+        "read and property filter",
+        "update and stale revision rejection",
+        "outer rollback preserves text and revision",
+        "subtree filter",
+        "reopen persisted note and hierarchy",
+        "delete subtree"
+      ],
+      "adaptations": {
+        "queryToPrepare": 0,
+        "missingRowToNull": 0,
+        "savepoints": 0,
+        "ownershipSQLite": true
+      },
+      "ms": 224
+    },
+    {
+      "engine": "turso-stable",
+      "mode": "fresh",
+      "adapt": "basic",
+      "status": "fail",
+      "phase": "boot",
+      "steps": [],
+      "adaptations": {
+        "queryToPrepare": 51,
+        "missingRowToNull": 8,
+        "savepoints": 0,
+        "ownershipSQLite": true
+      },
+      "sql": "ROLLBACK",
+      "error": "step failed: Transaction error: cannot start a transaction within a transaction",
+      "ms": 129
+    },
+    {
+      "engine": "turso-stable",
+      "mode": "fresh",
+      "adapt": "savepoints",
+      "status": "fail",
+      "phase": "delete subtree",
+      "steps": [
+        "boot",
+        "create parent and child",
+        "read and property filter",
+        "update and stale revision rejection",
+        "outer rollback preserves text and revision",
+        "subtree filter",
+        "reopen persisted note and hierarchy"
+      ],
+      "adaptations": {
+        "queryToPrepare": 641,
+        "missingRowToNull": 168,
+        "savepoints": 96,
+        "ownershipSQLite": true
+      },
+      "sql": "ROLLBACK",
+      "error": "prepare failed: Parse error: Recursive CTEs are not yet supported",
+      "ms": 177
+    },
+    {
+      "engine": "turso-stable",
+      "mode": "copy",
+      "adapt": "basic",
+      "status": "fail",
+      "phase": "update",
+      "steps": [
+        "boot",
+        "create parent and child",
+        "read and property filter"
+      ],
+      "adaptations": {
+        "queryToPrepare": 2528,
+        "missingRowToNull": 402,
+        "savepoints": 0,
+        "ownershipSQLite": true
+      },
+      "sql": "ROLLBACK",
+      "error": "step failed: Transaction error: cannot start a transaction within a transaction",
+      "ms": 319
+    },
+    {
+      "engine": "turso-stable",
+      "mode": "copy",
+      "adapt": "savepoints",
+      "status": "fail",
+      "phase": "delete subtree",
+      "steps": [
+        "boot",
+        "create parent and child",
+        "read and property filter",
+        "update and stale revision rejection",
+        "outer rollback preserves text and revision",
+        "subtree filter",
+        "reopen persisted note and hierarchy"
+      ],
+      "adaptations": {
+        "queryToPrepare": 5073,
+        "missingRowToNull": 804,
+        "savepoints": 6,
+        "ownershipSQLite": true
+      },
+      "sql": "ROLLBACK",
+      "error": "prepare failed: Parse error: Recursive CTEs are not yet supported",
+      "ms": 494
+    },
+    {
+      "engine": "turso-preview",
+      "mode": "fresh",
+      "adapt": "basic",
+      "status": "fail",
+      "phase": "boot",
+      "steps": [],
+      "adaptations": {
+        "queryToPrepare": 51,
+        "missingRowToNull": 8,
+        "savepoints": 0,
+        "ownershipSQLite": true
+      },
+      "sql": "ROLLBACK",
+      "error": "step failed: Transaction error: cannot start a transaction within a transaction",
+      "ms": 129
+    },
+    {
+      "engine": "turso-preview",
+      "mode": "fresh",
+      "adapt": "savepoints",
+      "status": "pass",
+      "steps": [
+        "boot",
+        "create parent and child",
+        "read and property filter",
+        "update and stale revision rejection",
+        "outer rollback preserves text and revision",
+        "subtree filter",
+        "reopen persisted note and hierarchy",
+        "delete subtree"
+      ],
+      "adaptations": {
+        "queryToPrepare": 650,
+        "missingRowToNull": 168,
+        "savepoints": 96,
+        "ownershipSQLite": true
+      },
+      "ms": 180
+    },
+    {
+      "engine": "turso-preview",
+      "mode": "copy",
+      "adapt": "basic",
+      "status": "fail",
+      "phase": "update",
+      "steps": [
+        "boot",
+        "create parent and child",
+        "read and property filter"
+      ],
+      "adaptations": {
+        "queryToPrepare": 2528,
+        "missingRowToNull": 402,
+        "savepoints": 0,
+        "ownershipSQLite": true
+      },
+      "sql": "ROLLBACK",
+      "error": "step failed: Transaction error: cannot start a transaction within a transaction",
+      "ms": 253
+    },
+    {
+      "engine": "turso-preview",
+      "mode": "copy",
+      "adapt": "savepoints",
+      "status": "pass",
+      "steps": [
+        "boot",
+        "create parent and child",
+        "read and property filter",
+        "update and stale revision rejection",
+        "outer rollback preserves text and revision",
+        "subtree filter",
+        "reopen persisted note and hierarchy",
+        "delete subtree"
+      ],
+      "adaptations": {
+        "queryToPrepare": 5082,
+        "missingRowToNull": 804,
+        "savepoints": 6,
+        "ownershipSQLite": true
+      },
+      "ms": 392
+    }
+  ]
+}

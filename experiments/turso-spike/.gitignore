@@ -1,0 +1,4 @@
+node_modules/
+*.sqlite*
+results.local.json
+store-results.local.json
