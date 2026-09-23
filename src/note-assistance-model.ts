@@ -89,7 +89,7 @@ export function createNoteModel(options: InboxModelOptions = {}): NoteModel {
     const keys = [...new Set(["type", "tag", ...context.propertyKeys])].slice(0, 120);
     const mayRequest = context.candidate.requestAllowed && content.length <= 12_000 && paragraphs.length > 0;
     const questions: Record<string, unknown> = {
-      ...(routing?{inbox_route:{type:"choice",...routing.policy.route},inbox_disposable:{type:"noul",instructions:routing.policy.disposable}}:{}),
+      ...(routing?.policy.enabled?{inbox_route:{type:"choice",...routing.policy.route},inbox_disposable:{type:"noul",instructions:routing.policy.disposable}}:{}),
       ...(!context.candidate.typeLocked ? { type: { type: "choice", ...prompts.type } } : {}),
       ...Object.fromEntries(candidates.map((tag, index) => [`tag_${index}`, { type: "noul", instructions: `${prompts.tag.instructions}\nCandidate tag: ${tag}` }])),
       ...(mayRequest ? {

@@ -1328,6 +1328,7 @@ upgrade; later removal or edits are preserved.
 | `inbox-editor.md` | Pi's Inbox editing instructions |
 | `inbox-relationships.json` | Jev's duplicate/related and coverage questions |
 | `goto-ranking.json` | Jev's Goto scoring instructions and four score levels |
+| `inbox-routing.json` | Jev Inbox effort selection and reversible-archive trial thresholds |
 | `note-assistance.json` | Jev's ordinary types, tag relevance, request classification and confidence thresholds |
 | `note-answer.md` | Pi's bounded read-only answer instructions |
 
@@ -1889,3 +1890,5 @@ Other hosts can post the same `{workspaceRoot, agent, sessionId, messageId, text
 contract using `mentions.ingest`, or JSON stdin to `bun src/cli.ts mentions ingest`.
 Repeated message identity with identical text is idempotent; different text under
 the same identity is rejected. No Pi or Claude adapter is installed automatically.
+
+Inbox effort routing (PIE-331) keeps coherent captures on Jev-only keep/metadata paths, archives clear test noise reversibly, and sends ambiguity, mixed work and explicit reconsideration to Pi. Activity shows the route and reason. The editable `inbox-routing.json` is read per job; [the trial report](experiments/inbox-routing/REPORT.md) documents the measured tradeoffs and limits.

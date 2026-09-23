@@ -219,8 +219,9 @@ export async function loadGotoPrompt(directory?: string): Promise<{ ranking: Que
 
 export async function loadInboxRoutingPrompt(directory?:string):Promise<{policy:InboxRoutingPolicy;revision:PromptRevision}>{
  const revision=await readPrompt(aiPromptDirectory(directory),'inbox-routing.json');
- const data=object(json(revision),revision.path,['route','disposable','minimumMargin','archiveProbability'],'document');
+ const data=object(json(revision),revision.path,['enabled','route','disposable','minimumMargin','archiveProbability'],'document');
  const route=question(data.route,revision.path,'route',['keep','metadata','archive','editorial']);
  for(const key of ['minimumMargin','archiveProbability'])if(typeof data[key]!=='number'||!Number.isFinite(data[key])||data[key]<0||data[key]>1)throw new PromptFileError(revision.path,`${key} must be between zero and one`);
- return {revision,policy:{route,disposable:nonempty(data.disposable,revision.path,'disposable'),minimumMargin:data.minimumMargin as number,archiveProbability:data.archiveProbability as number}};
+ if(typeof data.enabled!=="boolean")throw new PromptFileError(revision.path,"enabled must be boolean");
+ return {revision,policy:{enabled:data.enabled,route,disposable:nonempty(data.disposable,revision.path,'disposable'),minimumMargin:data.minimumMargin as number,archiveProbability:data.archiveProbability as number}};
 }

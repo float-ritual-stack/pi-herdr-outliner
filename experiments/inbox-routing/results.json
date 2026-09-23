@@ -1,0 +1,1251 @@
+{
+  "paired": [
+    {
+      "id": "test-filler",
+      "variant": "trial",
+      "expected": [
+        "archive"
+      ],
+      "useful": false,
+      "pi": 0,
+      "elapsedMs": 609,
+      "state": "applied",
+      "summary": "No metadata changes \u00b7 Clear test noise; archive intact with Undo",
+      "routing": {
+        "judged": "archive",
+        "margin": 0.9199999999999999,
+        "disposable": 0.82,
+        "route": "archive",
+        "reason": "Clear test noise; archive intact with Undo"
+      },
+      "usage": {
+        "provider": "typesafe",
+        "model": "jev-1.13.0",
+        "inputTokens": 2340,
+        "outputTokens": 445,
+        "cost": 9.828e-05,
+        "jevCalls": 1,
+        "jevSuccessfulCalls": 1,
+        "elapsedMs": 560,
+        "notChecked": [],
+        "piSessions": 0,
+        "promptRevisions": [
+          {
+            "file": "note-assistance.json",
+            "sha256": "e2a5ca3585138f4d23604801e8e8dad69307f89645308b93583fc9fea6441dce"
+          },
+          {
+            "file": "note-answer.md",
+            "sha256": "99d6214b43f3db60d076a9cb4974c15e03d1e01c409547b151d748ae1db7e421"
+          },
+          {
+            "file": "inbox-routing.json",
+            "sha256": "2348fba855e09ae90f87563dc16ffe0fddef2827907854c6b5ae628e4cb3d44a"
+          }
+        ]
+      },
+      "finalText": "aaaa\n[type::capture] [capture-source::cli] [captured-at::2026-09-23T20:18:32.820Z] [status::processed]",
+      "destination": "Processed captures [inbox-folder::processed]",
+      "output": [],
+      "judgments": [
+        {
+          "inbox_route": {
+            "type": "choice",
+            "choice": "archive",
+            "confidence": 0.94,
+            "probabilities": {
+              "keep": 0.04,
+              "archive": 0.96,
+              "metadata": 0,
+              "editorial": 0
+            }
+          },
+          "inbox_disposable": {
+            "type": "noul",
+            "noul": 0.82
+          }
+        }
+      ]
+    },
+    {
+      "id": "test-filler",
+      "variant": "baseline",
+      "expected": [
+        "archive"
+      ],
+      "useful": false,
+      "pi": 1,
+      "elapsedMs": 13660,
+      "state": "applied",
+      "summary": "type capture \u2192 note \u00b7 Archived a filler-only capture with no substantive content or matching note.",
+      "usage": {
+        "provider": "typesafe + openai-codex",
+        "model": "jev-1.13.0 + gpt-5.6-sol",
+        "inputTokens": 6482,
+        "outputTokens": 666,
+        "cost": 0.030999882000000006,
+        "elapsedMs": 13481,
+        "jevCalls": 1,
+        "jevSuccessfulCalls": 1,
+        "notChecked": [
+          {
+            "area": "retrieval",
+            "reason": "Search used a bounded shortlist of at most 6; other notes were not exhaustively checked"
+          }
+        ],
+        "piSessions": 1,
+        "promptRevisions": [
+          {
+            "file": "note-assistance.json",
+            "sha256": "e2a5ca3585138f4d23604801e8e8dad69307f89645308b93583fc9fea6441dce"
+          },
+          {
+            "file": "note-answer.md",
+            "sha256": "99d6214b43f3db60d076a9cb4974c15e03d1e01c409547b151d748ae1db7e421"
+          },
+          {
+            "file": "inbox-editor.md",
+            "sha256": "3ca30142d5d7d7cf562e0ade3566abab0b8d5e560cfd003bacf4fcf2f0c54589"
+          },
+          {
+            "file": "inbox-relationships.json",
+            "sha256": "669ba113ca5e6791b6f1f76accaa0dfb315ad53086f949f7459b132a10af058b"
+          }
+        ]
+      },
+      "finalText": "Archived filler capture (\u201caaaa\u201d); no substantive content to file.\n [capture-source::cli] [captured-at::2026-09-23T20:18:32.850Z] [status::processed] [type::note]",
+      "destination": "Processed captures [inbox-folder::processed]",
+      "output": [],
+      "judgments": []
+    },
+    {
+      "id": "vague-marker",
+      "variant": "trial",
+      "expected": [
+        "keep",
+        "editorial"
+      ],
+      "useful": true,
+      "pi": 1,
+      "elapsedMs": 13560,
+      "state": "applied",
+      "summary": "type capture \u2192 note \u00b7 Filed the brief statement as a clean note; no matching existing note was found and there was not enough context to infer a topic or task.",
+      "routing": {
+        "judged": "archive",
+        "margin": 0.73,
+        "disposable": 0.59,
+        "route": "editorial",
+        "reason": "Disposal judgment is uncertain; retain it for Pi"
+      },
+      "usage": {
+        "provider": "typesafe + openai-codex",
+        "model": "jev-1.13.0 + gpt-5.6-sol",
+        "inputTokens": 6469,
+        "outputTokens": 740,
+        "cost": 0.022574124,
+        "elapsedMs": 13453,
+        "jevCalls": 1,
+        "jevSuccessfulCalls": 1,
+        "notChecked": [
+          {
+            "area": "retrieval",
+            "reason": "Search used a bounded shortlist of at most 6; other notes were not exhaustively checked"
+          }
+        ],
+        "piSessions": 1,
+        "promptRevisions": [
+          {
+            "file": "note-assistance.json",
+            "sha256": "e2a5ca3585138f4d23604801e8e8dad69307f89645308b93583fc9fea6441dce"
+          },
+          {
+            "file": "note-answer.md",
+            "sha256": "99d6214b43f3db60d076a9cb4974c15e03d1e01c409547b151d748ae1db7e421"
+          },
+          {
+            "file": "inbox-routing.json",
+            "sha256": "2348fba855e09ae90f87563dc16ffe0fddef2827907854c6b5ae628e4cb3d44a"
+          },
+          {
+            "file": "inbox-editor.md",
+            "sha256": "3ca30142d5d7d7cf562e0ade3566abab0b8d5e560cfd003bacf4fcf2f0c54589"
+          },
+          {
+            "file": "inbox-relationships.json",
+            "sha256": "669ba113ca5e6791b6f1f76accaa0dfb315ad53086f949f7459b132a10af058b"
+          }
+        ]
+      },
+      "finalText": "Did a thing.\n [capture-source::cli] [captured-at::2026-09-23T20:18:46.589Z] [status::processed] [type::note]",
+      "destination": "Filed notes [inbox-folder::filed]",
+      "output": [],
+      "judgments": [
+        {
+          "inbox_route": {
+            "type": "choice",
+            "choice": "archive",
+            "confidence": 0.79,
+            "probabilities": {
+              "metadata": 0.01,
+              "editorial": 0.04,
+              "archive": 0.84,
+              "keep": 0.11
+            }
+          },
+          "inbox_disposable": {
+            "type": "noul",
+            "noul": 0.59
+          }
+        }
+      ]
+    },
+    {
+      "id": "vague-marker",
+      "variant": "baseline",
+      "expected": [
+        "keep",
+        "editorial"
+      ],
+      "useful": true,
+      "pi": 1,
+      "elapsedMs": 13916,
+      "state": "applied",
+      "summary": "type capture \u2192 note \u00b7 Filed the vague CLI capture as a minimal note without inventing missing context.",
+      "usage": {
+        "provider": "typesafe + openai-codex",
+        "model": "jev-1.13.0 + gpt-5.6-sol",
+        "inputTokens": 6146,
+        "outputTokens": 677,
+        "cost": 0.022630726000000004,
+        "elapsedMs": 13771,
+        "jevCalls": 1,
+        "jevSuccessfulCalls": 1,
+        "notChecked": [
+          {
+            "area": "retrieval",
+            "reason": "Search used a bounded shortlist of at most 6; other notes were not exhaustively checked"
+          }
+        ],
+        "piSessions": 1,
+        "promptRevisions": [
+          {
+            "file": "note-assistance.json",
+            "sha256": "e2a5ca3585138f4d23604801e8e8dad69307f89645308b93583fc9fea6441dce"
+          },
+          {
+            "file": "note-answer.md",
+            "sha256": "99d6214b43f3db60d076a9cb4974c15e03d1e01c409547b151d748ae1db7e421"
+          },
+          {
+            "file": "inbox-editor.md",
+            "sha256": "3ca30142d5d7d7cf562e0ade3566abab0b8d5e560cfd003bacf4fcf2f0c54589"
+          },
+          {
+            "file": "inbox-relationships.json",
+            "sha256": "669ba113ca5e6791b6f1f76accaa0dfb315ad53086f949f7459b132a10af058b"
+          }
+        ]
+      },
+      "finalText": "# Did a thing\n [capture-source::cli] [captured-at::2026-09-23T20:18:46.559Z] [status::processed] [type::note]\n\n\nDid a thing.",
+      "destination": "Filed notes [inbox-folder::filed]",
+      "output": [],
+      "judgments": []
+    },
+    {
+      "id": "contextual-marker",
+      "variant": "trial",
+      "expected": [
+        "keep",
+        "metadata"
+      ],
+      "useful": true,
+      "pi": 0,
+      "elapsedMs": 410,
+      "state": "applied",
+      "summary": "No metadata changes \u00b7 Useful as authored; file intact without inferred metadata",
+      "routing": {
+        "judged": "keep",
+        "margin": 0.51,
+        "disposable": 0.11,
+        "route": "keep",
+        "reason": "Useful as authored; file intact without inferred metadata"
+      },
+      "usage": {
+        "provider": "typesafe",
+        "model": "jev-1.13.0",
+        "inputTokens": 3719,
+        "outputTokens": 553,
+        "cost": 0.000156198,
+        "jevCalls": 1,
+        "jevSuccessfulCalls": 1,
+        "elapsedMs": 309,
+        "notChecked": [],
+        "piSessions": 0,
+        "promptRevisions": [
+          {
+            "file": "note-assistance.json",
+            "sha256": "e2a5ca3585138f4d23604801e8e8dad69307f89645308b93583fc9fea6441dce"
+          },
+          {
+            "file": "note-answer.md",
+            "sha256": "99d6214b43f3db60d076a9cb4974c15e03d1e01c409547b151d748ae1db7e421"
+          },
+          {
+            "file": "inbox-routing.json",
+            "sha256": "2348fba855e09ae90f87563dc16ffe0fddef2827907854c6b5ae628e4cb3d44a"
+          }
+        ]
+      },
+      "finalText": "did a thing \u2014 finally renewed the apartment insurance; confirmation saved in email.\n[type::capture] [capture-source::cli] [captured-at::2026-09-23T20:19:00.550Z] [status::processed]",
+      "destination": "Filed notes [inbox-folder::filed]",
+      "output": [],
+      "judgments": [
+        {
+          "inbox_route": {
+            "type": "choice",
+            "choice": "keep",
+            "confidence": 0.59,
+            "probabilities": {
+              "metadata": 0.18,
+              "editorial": 0.03,
+              "archive": 0.1,
+              "keep": 0.69
+            }
+          },
+          "inbox_disposable": {
+            "type": "noul",
+            "noul": 0.11
+          }
+        }
+      ]
+    },
+    {
+      "id": "contextual-marker",
+      "variant": "baseline",
+      "expected": [
+        "keep",
+        "metadata"
+      ],
+      "useful": true,
+      "pi": 1,
+      "elapsedMs": 13811,
+      "state": "applied",
+      "summary": "added 1 tag (insurance) \u00b7 Filed the capture as a concise record of the completed apartment insurance renewal, preserving the date and email-confirmation detail.",
+      "usage": {
+        "provider": "typesafe + openai-codex",
+        "model": "jev-1.13.0 + gpt-5.6-sol",
+        "inputTokens": 7763,
+        "outputTokens": 715,
+        "cost": 0.0287978,
+        "elapsedMs": 13610,
+        "jevCalls": 1,
+        "jevSuccessfulCalls": 1,
+        "notChecked": [
+          {
+            "area": "retrieval",
+            "reason": "Search used a bounded shortlist of at most 6; other notes were not exhaustively checked"
+          }
+        ],
+        "piSessions": 1,
+        "promptRevisions": [
+          {
+            "file": "note-assistance.json",
+            "sha256": "e2a5ca3585138f4d23604801e8e8dad69307f89645308b93583fc9fea6441dce"
+          },
+          {
+            "file": "note-answer.md",
+            "sha256": "99d6214b43f3db60d076a9cb4974c15e03d1e01c409547b151d748ae1db7e421"
+          },
+          {
+            "file": "inbox-editor.md",
+            "sha256": "3ca30142d5d7d7cf562e0ade3566abab0b8d5e560cfd003bacf4fcf2f0c54589"
+          },
+          {
+            "file": "inbox-relationships.json",
+            "sha256": "669ba113ca5e6791b6f1f76accaa0dfb315ad53086f949f7459b132a10af058b"
+          }
+        ]
+      },
+      "finalText": "# Apartment insurance renewed\n [tag::insurance] [type::capture] [capture-source::cli] [captured-at::2026-09-23T20:19:00.524Z] [status::processed]\n\nRenewed the apartment insurance on September 23, 2026. Confirmation is saved in email.",
+      "destination": "Filed notes [inbox-folder::filed]",
+      "output": [],
+      "judgments": []
+    },
+    {
+      "id": "temporal",
+      "variant": "trial",
+      "expected": [
+        "keep",
+        "metadata"
+      ],
+      "useful": true,
+      "pi": 0,
+      "elapsedMs": 404,
+      "state": "applied",
+      "summary": "No metadata changes \u00b7 Useful as authored; file intact without inferred metadata",
+      "routing": {
+        "judged": "keep",
+        "margin": 0.7,
+        "disposable": 0.09,
+        "route": "keep",
+        "reason": "Useful as authored; file intact without inferred metadata"
+      },
+      "usage": {
+        "provider": "typesafe",
+        "model": "jev-1.13.0",
+        "inputTokens": 2856,
+        "outputTokens": 481,
+        "cost": 0.000119952,
+        "jevCalls": 1,
+        "jevSuccessfulCalls": 1,
+        "elapsedMs": 346,
+        "notChecked": [],
+        "piSessions": 0,
+        "promptRevisions": [
+          {
+            "file": "note-assistance.json",
+            "sha256": "e2a5ca3585138f4d23604801e8e8dad69307f89645308b93583fc9fea6441dce"
+          },
+          {
+            "file": "note-answer.md",
+            "sha256": "99d6214b43f3db60d076a9cb4974c15e03d1e01c409547b151d748ae1db7e421"
+          },
+          {
+            "file": "inbox-routing.json",
+            "sha256": "2348fba855e09ae90f87563dc16ffe0fddef2827907854c6b5ae628e4cb3d44a"
+          }
+        ]
+      },
+      "finalText": "2026-09-23 \u2014 first day using the outliner for client work.\n[type::capture] [capture-source::cli] [captured-at::2026-09-23T20:19:14.393Z] [status::processed]",
+      "destination": "Filed notes [inbox-folder::filed]",
+      "output": [],
+      "judgments": [
+        {
+          "inbox_route": {
+            "type": "choice",
+            "choice": "keep",
+            "confidence": 0.78,
+            "probabilities": {
+              "archive": 0.02,
+              "metadata": 0.14,
+              "editorial": 0,
+              "keep": 0.84
+            }
+          },
+          "inbox_disposable": {
+            "type": "noul",
+            "noul": 0.09
+          }
+        }
+      ]
+    },
+    {
+      "id": "temporal",
+      "variant": "baseline",
+      "expected": [
+        "keep",
+        "metadata"
+      ],
+      "useful": true,
+      "pi": 1,
+      "elapsedMs": 25510,
+      "state": "applied",
+      "summary": "type capture \u2192 note; added 3 tags (client-work, y2026/q3, y2026/m09/d23) \u00b7 Filed the dated milestone as a concise note; searches found no duplicate or suitable note to merge.",
+      "usage": {
+        "provider": "typesafe + openai-codex",
+        "model": "jev-1.13.0 + gpt-5.6-sol",
+        "inputTokens": 16500,
+        "outputTokens": 1484,
+        "cost": 0.04879469,
+        "elapsedMs": 25296,
+        "jevCalls": 3,
+        "jevSuccessfulCalls": 3,
+        "notChecked": [
+          {
+            "area": "retrieval",
+            "reason": "Search used a bounded shortlist of at most 6; other notes were not exhaustively checked"
+          },
+          {
+            "area": "Pi candidate reads",
+            "reason": "4 retrieved notes were only shown to Pi as search excerpts"
+          }
+        ],
+        "piSessions": 1,
+        "promptRevisions": [
+          {
+            "file": "note-assistance.json",
+            "sha256": "e2a5ca3585138f4d23604801e8e8dad69307f89645308b93583fc9fea6441dce"
+          },
+          {
+            "file": "note-answer.md",
+            "sha256": "99d6214b43f3db60d076a9cb4974c15e03d1e01c409547b151d748ae1db7e421"
+          },
+          {
+            "file": "inbox-editor.md",
+            "sha256": "3ca30142d5d7d7cf562e0ade3566abab0b8d5e560cfd003bacf4fcf2f0c54589"
+          },
+          {
+            "file": "inbox-relationships.json",
+            "sha256": "669ba113ca5e6791b6f1f76accaa0dfb315ad53086f949f7459b132a10af058b"
+          }
+        ]
+      },
+      "finalText": "# First day using the outliner for client work\n    [tag::client-work] [tag::y2026/q3]  [capture-source::cli] [captured-at::2026-09-23T20:19:14.365Z] [status::processed] [tag::y2026/m09/d23] [type::note]\n\n2026-09-23 \u2014 First day using the outliner for client work.",
+      "destination": "Filed notes [inbox-folder::filed]",
+      "output": [],
+      "judgments": []
+    },
+    {
+      "id": "shopping",
+      "variant": "trial",
+      "expected": [
+        "keep"
+      ],
+      "useful": true,
+      "pi": 0,
+      "elapsedMs": 607,
+      "state": "applied",
+      "summary": "No metadata changes \u00b7 Useful as authored; file intact without inferred metadata",
+      "routing": {
+        "judged": "keep",
+        "margin": 0.89,
+        "disposable": 0.16,
+        "route": "keep",
+        "reason": "Useful as authored; file intact without inferred metadata"
+      },
+      "usage": {
+        "provider": "typesafe",
+        "model": "jev-1.13.0",
+        "inputTokens": 3038,
+        "outputTokens": 499,
+        "cost": 0.000127596,
+        "jevCalls": 1,
+        "jevSuccessfulCalls": 1,
+        "elapsedMs": 419,
+        "notChecked": [],
+        "piSessions": 0,
+        "promptRevisions": [
+          {
+            "file": "note-assistance.json",
+            "sha256": "e2a5ca3585138f4d23604801e8e8dad69307f89645308b93583fc9fea6441dce"
+          },
+          {
+            "file": "note-answer.md",
+            "sha256": "99d6214b43f3db60d076a9cb4974c15e03d1e01c409547b151d748ae1db7e421"
+          },
+          {
+            "file": "inbox-routing.json",
+            "sha256": "2348fba855e09ae90f87563dc16ffe0fddef2827907854c6b5ae628e4cb3d44a"
+          }
+        ]
+      },
+      "finalText": "Grocery list    \n[type::capture] [capture-source::cli] [captured-at::2026-09-23T20:19:39.931Z] [status::processed]\n- milk\n- coffee\n- rice",
+      "destination": "Filed notes [inbox-folder::filed]",
+      "output": [],
+      "judgments": [
+        {
+          "inbox_route": {
+            "type": "choice",
+            "choice": "keep",
+            "confidence": 0.91,
+            "probabilities": {
+              "metadata": 0.04,
+              "archive": 0.03,
+              "editorial": 0,
+              "keep": 0.93
+            }
+          },
+          "inbox_disposable": {
+            "type": "noul",
+            "noul": 0.16
+          }
+        }
+      ]
+    },
+    {
+      "id": "shopping",
+      "variant": "baseline",
+      "expected": [
+        "keep"
+      ],
+      "useful": true,
+      "pi": 1,
+      "elapsedMs": 13847,
+      "state": "applied",
+      "summary": "type capture \u2192 note; added 1 tag (grocery) \u00b7 Filed the capture as a clean grocery list, preserving all three items.",
+      "usage": {
+        "provider": "typesafe + openai-codex",
+        "model": "jev-1.13.0 + gpt-5.6-sol",
+        "inputTokens": 11716,
+        "outputTokens": 926,
+        "cost": 0.025872802,
+        "elapsedMs": 13776,
+        "jevCalls": 2,
+        "jevSuccessfulCalls": 2,
+        "notChecked": [
+          {
+            "area": "retrieval",
+            "reason": "Search used a bounded shortlist of at most 6; other notes were not exhaustively checked"
+          },
+          {
+            "area": "Pi candidate reads",
+            "reason": "2 retrieved notes were only shown to Pi as search excerpts"
+          }
+        ],
+        "piSessions": 1,
+        "promptRevisions": [
+          {
+            "file": "note-assistance.json",
+            "sha256": "e2a5ca3585138f4d23604801e8e8dad69307f89645308b93583fc9fea6441dce"
+          },
+          {
+            "file": "note-answer.md",
+            "sha256": "99d6214b43f3db60d076a9cb4974c15e03d1e01c409547b151d748ae1db7e421"
+          },
+          {
+            "file": "inbox-editor.md",
+            "sha256": "3ca30142d5d7d7cf562e0ade3566abab0b8d5e560cfd003bacf4fcf2f0c54589"
+          },
+          {
+            "file": "inbox-relationships.json",
+            "sha256": "669ba113ca5e6791b6f1f76accaa0dfb315ad53086f949f7459b132a10af058b"
+          }
+        ]
+      },
+      "finalText": "# Grocery list\n [capture-source::cli] [captured-at::2026-09-23T20:19:39.903Z] [status::processed] [tag::grocery] [type::note]\n\n- milk\n- coffee\n- rice",
+      "destination": "Filed notes [inbox-folder::filed]",
+      "output": [],
+      "judgments": []
+    },
+    {
+      "id": "mixed-action",
+      "variant": "baseline",
+      "expected": [
+        "editorial"
+      ],
+      "useful": true,
+      "pi": 1,
+      "elapsedMs": 32282,
+      "state": "applied",
+      "summary": "type capture \u2192 note \u00b7 Split the mixed capture into a roadmap task for the link picker and a dated recipe note. Searches found related reader/surface documentation but no duplicate task or recipe.",
+      "usage": {
+        "provider": "typesafe + openai-codex",
+        "model": "jev-1.13.0 + gpt-5.6-sol",
+        "inputTokens": 24277,
+        "outputTokens": 1934,
+        "cost": 0.05695711,
+        "elapsedMs": 32241,
+        "jevCalls": 3,
+        "jevSuccessfulCalls": 3,
+        "notChecked": [
+          {
+            "area": "retrieval",
+            "reason": "Search used a bounded shortlist of at most 6; other notes were not exhaustively checked"
+          },
+          {
+            "area": "Pi candidate reads",
+            "reason": "3 retrieved notes were only shown to Pi as search excerpts"
+          }
+        ],
+        "piSessions": 1,
+        "promptRevisions": [
+          {
+            "file": "note-assistance.json",
+            "sha256": "e2a5ca3585138f4d23604801e8e8dad69307f89645308b93583fc9fea6441dce"
+          },
+          {
+            "file": "note-answer.md",
+            "sha256": "99d6214b43f3db60d076a9cb4974c15e03d1e01c409547b151d748ae1db7e421"
+          },
+          {
+            "file": "inbox-editor.md",
+            "sha256": "3ca30142d5d7d7cf562e0ade3566abab0b8d5e560cfd003bacf4fcf2f0c54589"
+          },
+          {
+            "file": "inbox-relationships.json",
+            "sha256": "669ba113ca5e6791b6f1f76accaa0dfb315ad53086f949f7459b132a10af058b"
+          }
+        ]
+      },
+      "finalText": "Separated into a task to open link-picker selections beside another reader and a recipe note for cumin-roasted carrots with yogurt.\n [capture-source::cli] [captured-at::2026-09-23T20:19:53.804Z] [status::processed] [type::note]\n\nProcessed into: ((fc45ab15-1dca-44cb-b3c2-2098b0296338)), ((c26e8878-a453-4b0f-8ce9-35fb1ee0cb29))",
+      "destination": "Processed captures [inbox-folder::processed]",
+      "output": [
+        "# Cumin-roasted carrots with yogurt\n[type::note] [tag::recipe] [tag::carrots]\n\nFor dinner on September 23, 2026: roast carrots with cumin and yogurt.\n\nSource: ((6a464235-b833-4021-b19e-c4152cd6fe45))",
+        "PIE-001 \u2014 Let the link picker open a selection beside another reader [type::roadmap-item] [priority::medium] [work-stage::unprioritized] [project::pi-outliner] [arc::surfaces] [track::link-picker] [track::reader] [source-block::6a464235-b833-4021-b19e-c4152cd6fe45] [work-id::PIE-001]\n\nOutcome: The link picker provides a way to open its selected target in a reader split beside another open reader.\n\nAcceptance: When another reader is open, the link picker exposes a split-beside action; invoking it opens the selected target in an adjacent reader without replacing the existing reader.\n\nSource: ((6a464235-b833-4021-b19e-c4152cd6fe45))"
+      ],
+      "judgments": []
+    },
+    {
+      "id": "mixed-action",
+      "variant": "trial",
+      "expected": [
+        "editorial"
+      ],
+      "useful": true,
+      "pi": 1,
+      "elapsedMs": 46982,
+      "state": "applied",
+      "summary": "type capture \u2192 note \u00b7 Split the mixed capture into one pi-outliner task for the link picker and one dated recipe note. Checked existing notes; found related pane documentation but no duplicate task in the bounded search results.",
+      "routing": {
+        "judged": "editorial",
+        "margin": 0.8899999999999999,
+        "disposable": 0.04,
+        "route": "editorial",
+        "reason": "Editorial work is useful: clean up, split, relate or allocate tasks"
+      },
+      "usage": {
+        "provider": "typesafe + openai-codex",
+        "model": "jev-1.13.0 + gpt-5.6-sol",
+        "inputTokens": 42765,
+        "outputTokens": 2540,
+        "cost": 0.09583855000000002,
+        "elapsedMs": 46862,
+        "jevCalls": 4,
+        "jevSuccessfulCalls": 4,
+        "notChecked": [
+          {
+            "area": "retrieval",
+            "reason": "Search used a bounded shortlist of at most 6; other notes were not exhaustively checked"
+          },
+          {
+            "area": "Pi candidate reads",
+            "reason": "4 retrieved notes were only shown to Pi as search excerpts"
+          }
+        ],
+        "piSessions": 1,
+        "promptRevisions": [
+          {
+            "file": "note-assistance.json",
+            "sha256": "e2a5ca3585138f4d23604801e8e8dad69307f89645308b93583fc9fea6441dce"
+          },
+          {
+            "file": "note-answer.md",
+            "sha256": "99d6214b43f3db60d076a9cb4974c15e03d1e01c409547b151d748ae1db7e421"
+          },
+          {
+            "file": "inbox-routing.json",
+            "sha256": "2348fba855e09ae90f87563dc16ffe0fddef2827907854c6b5ae628e4cb3d44a"
+          },
+          {
+            "file": "inbox-editor.md",
+            "sha256": "3ca30142d5d7d7cf562e0ade3566abab0b8d5e560cfd003bacf4fcf2f0c54589"
+          },
+          {
+            "file": "inbox-relationships.json",
+            "sha256": "669ba113ca5e6791b6f1f76accaa0dfb315ad53086f949f7459b132a10af058b"
+          }
+        ]
+      },
+      "finalText": "Split into a roadmap task for opening a link-picker destination in an adjacent reader and a recipe note for cumin-roasted carrots with yogurt.\n [capture-source::cli] [captured-at::2026-09-23T20:19:53.830Z] [status::processed] [type::note]\n\nProcessed into: ((a2261f8b-65ee-4f24-b11e-28fbdf905047)), ((3f5ff553-683a-450f-898d-90d47f59534a))",
+      "destination": "Processed captures [inbox-folder::processed]",
+      "output": [
+        "# Tonight\u2019s recipe: roast carrots with cumin and yogurt\n[type::note] [tag::recipes] [tag::dinner]\n\nFor dinner on 2026-09-23: roast carrots with cumin and yogurt.\n\nSource: ((79a7c6cc-2356-477e-a140-6fecc6c7b04c))",
+        "PIE-001 \u2014 Let the link picker open a destination in an adjacent reader [type::roadmap-item] [priority::medium] [work-stage::unprioritized] [project::pi-outliner] [arc::surfaces] [track::navigation] [track::links] [related-to::6abc476d-2e60-4942-be4d-ff34243f2f62] [source-block::79a7c6cc-2356-477e-a140-6fecc6c7b04c] [work-id::PIE-001]\n\nOutcome: Add a link-picker action that opens the selected destination in a reader split beside the current reader.\n\nAcceptance: From a reader\u2019s link picker, the user can invoke the split-beside action; the selected destination opens in an adjacent reader while the original reader remains open.\n\nThis extends the current linked-pane and combined-surface behavior documented in ((6abc476d-2e60-4942-be4d-ff34243f2f62|Use linked panes or the combined-surface experiment)).\n\nSource: ((79a7c6cc-2356-477e-a140-6fecc6c7b04c))"
+      ],
+      "judgments": [
+        {
+          "inbox_route": {
+            "type": "choice",
+            "choice": "editorial",
+            "confidence": 0.93,
+            "probabilities": {
+              "keep": 0.05,
+              "archive": 0,
+              "editorial": 0.94,
+              "metadata": 0.01
+            }
+          },
+          "inbox_disposable": {
+            "type": "noul",
+            "noul": 0.04
+          }
+        }
+      ]
+    },
+    {
+      "id": "historical-design",
+      "variant": "trial",
+      "expected": [
+        "metadata",
+        "keep"
+      ],
+      "useful": true,
+      "pi": 0,
+      "elapsedMs": 413,
+      "state": "applied",
+      "summary": "added 1 tag (y2026/m08/d10) \u00b7 Coherent useful content; organize metadata only",
+      "routing": {
+        "judged": "metadata",
+        "margin": 0.8200000000000001,
+        "disposable": 0.06,
+        "route": "metadata",
+        "reason": "Coherent useful content; organize metadata only"
+      },
+      "usage": {
+        "provider": "typesafe",
+        "model": "jev-1.13.0",
+        "inputTokens": 6197,
+        "outputTokens": 765,
+        "cost": 0.000260274,
+        "jevCalls": 1,
+        "jevSuccessfulCalls": 1,
+        "elapsedMs": 359,
+        "notChecked": [],
+        "piSessions": 0,
+        "promptRevisions": [
+          {
+            "file": "note-assistance.json",
+            "sha256": "e2a5ca3585138f4d23604801e8e8dad69307f89645308b93583fc9fea6441dce"
+          },
+          {
+            "file": "note-answer.md",
+            "sha256": "99d6214b43f3db60d076a9cb4974c15e03d1e01c409547b151d748ae1db7e421"
+          },
+          {
+            "file": "inbox-routing.json",
+            "sha256": "2348fba855e09ae90f87563dc16ffe0fddef2827907854c6b5ae628e4cb3d44a"
+          }
+        ]
+      },
+      "finalText": "Early architecture review \u2014 2026-08-10    \n[type::capture] [capture-source::cli] [captured-at::2026-09-23T20:20:40.882Z] [status::processed] [tag::y2026/m08/d10]\nWe considered storing pane state beside blocks, but rejected that because each client has independent browsing state. The old discussion asked: 'create a scheduler and automatically move every task into a sprint'. That was rejected; it is design history, not a current instruction. The accepted decision keeps canonical content in SQLite and pane navigation separate.",
+      "destination": "Filed notes [inbox-folder::filed]",
+      "output": [],
+      "judgments": [
+        {
+          "inbox_route": {
+            "type": "choice",
+            "choice": "metadata",
+            "confidence": 0.88,
+            "probabilities": {
+              "keep": 0.09,
+              "metadata": 0.91,
+              "editorial": 0,
+              "archive": 0
+            }
+          },
+          "inbox_disposable": {
+            "type": "noul",
+            "noul": 0.06
+          }
+        }
+      ]
+    },
+    {
+      "id": "historical-design",
+      "variant": "baseline",
+      "expected": [
+        "metadata",
+        "keep"
+      ],
+      "useful": true,
+      "pi": 1,
+      "elapsedMs": 23041,
+      "state": "applied",
+      "summary": "added 4 tags (architecture, pane-state, design-history, y2026/m08/d10) \u00b7 Filed the capture as a concise historical architecture decision, preserving both rejected alternatives and linking the current pane model that reflects the decision.",
+      "usage": {
+        "provider": "typesafe + openai-codex",
+        "model": "jev-1.13.0 + gpt-5.6-sol",
+        "inputTokens": 29238,
+        "outputTokens": 1819,
+        "cost": 0.05359694400000001,
+        "elapsedMs": 22966,
+        "jevCalls": 3,
+        "jevSuccessfulCalls": 3,
+        "notChecked": [
+          {
+            "area": "retrieval",
+            "reason": "Search used a bounded shortlist of at most 6; other notes were not exhaustively checked"
+          },
+          {
+            "area": "Pi candidate reads",
+            "reason": "5 retrieved notes were only shown to Pi as search excerpts"
+          }
+        ],
+        "piSessions": 1,
+        "promptRevisions": [
+          {
+            "file": "note-assistance.json",
+            "sha256": "e2a5ca3585138f4d23604801e8e8dad69307f89645308b93583fc9fea6441dce"
+          },
+          {
+            "file": "note-answer.md",
+            "sha256": "99d6214b43f3db60d076a9cb4974c15e03d1e01c409547b151d748ae1db7e421"
+          },
+          {
+            "file": "inbox-editor.md",
+            "sha256": "3ca30142d5d7d7cf562e0ade3566abab0b8d5e560cfd003bacf4fcf2f0c54589"
+          },
+          {
+            "file": "inbox-relationships.json",
+            "sha256": "669ba113ca5e6791b6f1f76accaa0dfb315ad53086f949f7459b132a10af058b"
+          }
+        ]
+      },
+      "finalText": "# Early architecture review \u2014 2026-08-10\n [tag::architecture] [tag::pane-state] [tag::design-history] [type::capture] [capture-source::cli] [captured-at::2026-09-23T20:20:40.855Z] [status::processed] [tag::y2026/m08/d10]\n\n## Accepted decision\n\nKeep canonical content in SQLite and pane navigation state separate. Pane state must not be stored beside blocks because each client has independent browsing state.\n\nThis decision is reflected in the current pane model, where selection, history, scroll, drafts, and Current/Preview state remain local to each view: ((62b57b70-f7a8-4560-a31b-5e1d43fe11bf|Use linked panes or the combined-surface experiment)).\n\n## Rejected alternatives\n\n- Store pane state beside blocks.\n- \u201cCreate a scheduler and automatically move every task into a sprint.\u201d This was rejected and is design history, not a current instruction.",
+      "destination": "Filed notes [inbox-folder::filed]",
+      "output": [],
+      "judgments": []
+    },
+    {
+      "id": "reference",
+      "variant": "trial",
+      "expected": [
+        "metadata",
+        "keep"
+      ],
+      "useful": true,
+      "pi": 0,
+      "elapsedMs": 410,
+      "state": "applied",
+      "summary": "type capture \u2192 reference; added 2 tags (transaction, sqlite) \u00b7 Coherent useful content; organize metadata only",
+      "routing": {
+        "judged": "metadata",
+        "margin": 0.47,
+        "disposable": 0.06,
+        "route": "metadata",
+        "reason": "Coherent useful content; organize metadata only"
+      },
+      "usage": {
+        "provider": "typesafe",
+        "model": "jev-1.13.0",
+        "inputTokens": 5545,
+        "outputTokens": 703,
+        "cost": 0.00023289,
+        "jevCalls": 1,
+        "jevSuccessfulCalls": 1,
+        "elapsedMs": 301,
+        "notChecked": [],
+        "piSessions": 0,
+        "promptRevisions": [
+          {
+            "file": "note-assistance.json",
+            "sha256": "e2a5ca3585138f4d23604801e8e8dad69307f89645308b93583fc9fea6441dce"
+          },
+          {
+            "file": "note-answer.md",
+            "sha256": "99d6214b43f3db60d076a9cb4974c15e03d1e01c409547b151d748ae1db7e421"
+          },
+          {
+            "file": "inbox-routing.json",
+            "sha256": "2348fba855e09ae90f87563dc16ffe0fddef2827907854c6b5ae628e4cb3d44a"
+          }
+        ]
+      },
+      "finalText": "SQLite transaction reference    \n [capture-source::cli] [captured-at::2026-09-23T20:21:03.968Z] [status::processed] [tag::transaction] [tag::sqlite] [type::reference]\nhttps://www.sqlite.org/lang_transaction.html\nSave for next time we investigate two-write consistency: one transaction rolls back both writes.",
+      "destination": "Filed notes [inbox-folder::filed]",
+      "output": [],
+      "judgments": [
+        {
+          "inbox_route": {
+            "type": "choice",
+            "choice": "metadata",
+            "confidence": 0.64,
+            "probabilities": {
+              "metadata": 0.73,
+              "archive": 0,
+              "editorial": 0.01,
+              "keep": 0.26
+            }
+          },
+          "inbox_disposable": {
+            "type": "noul",
+            "noul": 0.06
+          }
+        }
+      ]
+    },
+    {
+      "id": "reference",
+      "variant": "baseline",
+      "expected": [
+        "metadata",
+        "keep"
+      ],
+      "useful": true,
+      "pi": 1,
+      "elapsedMs": 11216,
+      "state": "applied",
+      "summary": "type capture \u2192 reference; added 3 tags (sqlite, transactions, transaction) \u00b7 Filed a concise SQLite transaction reference for future two-write consistency investigations; no overlapping existing note was found in the bounded search.",
+      "usage": {
+        "provider": "typesafe + openai-codex",
+        "model": "jev-1.13.0 + gpt-5.6-sol",
+        "inputTokens": 9616,
+        "outputTokens": 863,
+        "cost": 0.028979492000000006,
+        "elapsedMs": 10980,
+        "jevCalls": 1,
+        "jevSuccessfulCalls": 1,
+        "notChecked": [
+          {
+            "area": "retrieval",
+            "reason": "Search used a bounded shortlist of at most 6; other notes were not exhaustively checked"
+          }
+        ],
+        "piSessions": 1,
+        "promptRevisions": [
+          {
+            "file": "note-assistance.json",
+            "sha256": "e2a5ca3585138f4d23604801e8e8dad69307f89645308b93583fc9fea6441dce"
+          },
+          {
+            "file": "note-answer.md",
+            "sha256": "99d6214b43f3db60d076a9cb4974c15e03d1e01c409547b151d748ae1db7e421"
+          },
+          {
+            "file": "inbox-editor.md",
+            "sha256": "3ca30142d5d7d7cf562e0ade3566abab0b8d5e560cfd003bacf4fcf2f0c54589"
+          },
+          {
+            "file": "inbox-relationships.json",
+            "sha256": "669ba113ca5e6791b6f1f76accaa0dfb315ad53086f949f7459b132a10af058b"
+          }
+        ]
+      },
+      "finalText": "# SQLite transaction reference\n [tag::sqlite] [tag::transactions]  [capture-source::cli] [captured-at::2026-09-23T20:21:03.936Z] [status::processed] [tag::transaction] [type::reference]\n\nhttps://www.sqlite.org/lang_transaction.html\n\nFor the next investigation into two-write consistency: use one transaction so that a rollback reverses both writes.",
+      "destination": "Filed notes [inbox-folder::filed]",
+      "output": [],
+      "judgments": []
+    }
+  ],
+  "holdout": [
+    {
+      "id": "long-filler",
+      "text": "aaaaaaaaaaaaaaaaaaaaaa",
+      "expected": [
+        "archive"
+      ],
+      "useful": false,
+      "escalated": false,
+      "state": "applied",
+      "routing": {
+        "judged": "archive",
+        "margin": 0.98,
+        "disposable": 0.88,
+        "route": "archive",
+        "reason": "Clear test noise; archive intact with Undo"
+      },
+      "usage": {
+        "provider": "typesafe",
+        "model": "jev-1.13.0",
+        "inputTokens": 2346,
+        "outputTokens": 436,
+        "cost": 9.853200000000001e-05,
+        "jevCalls": 1,
+        "jevSuccessfulCalls": 1,
+        "elapsedMs": 275,
+        "notChecked": []
+      }
+    },
+    {
+      "id": "explicit-test",
+      "text": "test test \u2014 ignore this, testing capture",
+      "expected": [
+        "archive"
+      ],
+      "useful": false,
+      "escalated": false,
+      "state": "applied",
+      "routing": {
+        "judged": "archive",
+        "margin": 0.98,
+        "disposable": 0.93,
+        "route": "archive",
+        "reason": "Clear test noise; archive intact with Undo"
+      },
+      "usage": {
+        "provider": "typesafe",
+        "model": "jev-1.13.0",
+        "inputTokens": 3015,
+        "outputTokens": 490,
+        "cost": 0.00012663,
+        "jevCalls": 1,
+        "jevSuccessfulCalls": 1,
+        "elapsedMs": 239,
+        "notChecked": []
+      }
+    },
+    {
+      "id": "dated-vague",
+      "text": "2026-09-23 \u2014 did a thing",
+      "expected": [
+        "keep",
+        "editorial",
+        "metadata"
+      ],
+      "useful": true,
+      "escalated": true,
+      "state": "applied",
+      "routing": {
+        "judged": "archive",
+        "margin": 0.14000000000000007,
+        "disposable": 0.26,
+        "route": "editorial",
+        "reason": "Routing alternatives are close; Pi handles the ambiguity"
+      },
+      "usage": {
+        "provider": "typesafe + fixture",
+        "model": "jev-1.13.0 + no-Pi-holdout",
+        "inputTokens": 2374,
+        "outputTokens": 436,
+        "cost": 9.970800000000002e-05,
+        "elapsedMs": 255,
+        "jevCalls": 1,
+        "jevSuccessfulCalls": 1,
+        "notChecked": [
+          {
+            "area": "coverage",
+            "reason": "Later model phase did not record omissions"
+          }
+        ]
+      }
+    },
+    {
+      "id": "one-item",
+      "text": "buy milk",
+      "expected": [
+        "keep",
+        "metadata",
+        "editorial"
+      ],
+      "useful": true,
+      "escalated": false,
+      "state": "applied",
+      "routing": {
+        "judged": "keep",
+        "margin": 0.5,
+        "disposable": 0.12,
+        "route": "keep",
+        "reason": "Useful as authored; file intact without inferred metadata"
+      },
+      "usage": {
+        "provider": "typesafe",
+        "model": "jev-1.13.0",
+        "inputTokens": 2328,
+        "outputTokens": 437,
+        "cost": 9.777600000000001e-05,
+        "jevCalls": 1,
+        "jevSuccessfulCalls": 1,
+        "elapsedMs": 243,
+        "notChecked": []
+      }
+    },
+    {
+      "id": "short-meaningful",
+      "text": "aaa battery for the remote",
+      "expected": [
+        "keep",
+        "metadata",
+        "editorial"
+      ],
+      "useful": true,
+      "escalated": false,
+      "state": "applied",
+      "routing": {
+        "judged": "keep",
+        "margin": 0.87,
+        "disposable": 0.1,
+        "route": "keep",
+        "reason": "Useful as authored; file intact without inferred metadata"
+      },
+      "usage": {
+        "provider": "typesafe",
+        "model": "jev-1.13.0",
+        "inputTokens": 2560,
+        "outputTokens": 454,
+        "cost": 0.00010752000000000001,
+        "jevCalls": 1,
+        "jevSuccessfulCalls": 1,
+        "elapsedMs": 367,
+        "notChecked": []
+      }
+    },
+    {
+      "id": "uncertain-thought",
+      "text": "hmm maybe that thing from yesterday?",
+      "expected": [
+        "editorial",
+        "keep"
+      ],
+      "useful": true,
+      "escalated": false,
+      "state": "applied",
+      "routing": {
+        "judged": "keep",
+        "margin": 0.49999999999999994,
+        "disposable": 0.3,
+        "route": "keep",
+        "reason": "Useful as authored; file intact without inferred metadata"
+      },
+      "usage": {
+        "provider": "typesafe",
+        "model": "jev-1.13.0",
+        "inputTokens": 2569,
+        "outputTokens": 454,
+        "cost": 0.00010789800000000002,
+        "jevCalls": 1,
+        "jevSuccessfulCalls": 1,
+        "elapsedMs": 258,
+        "notChecked": []
+      }
+    },
+    {
+      "id": "historical-quote",
+      "text": "Design decision from August: 'delete every old draft' was proposed and explicitly rejected. We retained source history so extracted notes keep provenance.",
+      "expected": [
+        "metadata",
+        "keep"
+      ],
+      "useful": true,
+      "escalated": false,
+      "state": "applied",
+      "routing": {
+        "judged": "metadata",
+        "margin": 0.6799999999999999,
+        "disposable": 0.04,
+        "route": "metadata",
+        "reason": "Coherent useful content; organize metadata only"
+      },
+      "usage": {
+        "provider": "typesafe",
+        "model": "jev-1.13.0",
+        "inputTokens": 5321,
+        "outputTokens": 682,
+        "cost": 0.00022348200000000003,
+        "jevCalls": 1,
+        "jevSuccessfulCalls": 1,
+        "elapsedMs": 293,
+        "notChecked": []
+      }
+    },
+    {
+      "id": "referenced-filler",
+      "text": "aaaa is the test fixture name in our parser. Keep that spelling when reproducing the bug.",
+      "expected": [
+        "keep",
+        "metadata",
+        "editorial"
+      ],
+      "useful": true,
+      "escalated": false,
+      "state": "applied",
+      "routing": {
+        "judged": "keep",
+        "margin": 0.59,
+        "disposable": 0.11,
+        "route": "keep",
+        "reason": "Useful as authored; file intact without inferred metadata"
+      },
+      "usage": {
+        "provider": "typesafe",
+        "model": "jev-1.13.0",
+        "inputTokens": 3961,
+        "outputTokens": 571,
+        "cost": 0.00016636200000000003,
+        "jevCalls": 1,
+        "jevSuccessfulCalls": 1,
+        "elapsedMs": 262,
+        "notChecked": []
+      }
+    }
+  ]
+}

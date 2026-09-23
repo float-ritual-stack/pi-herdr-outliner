@@ -7,6 +7,8 @@ function answers(route:InboxRoute,top=0.94,disposable=0.99){return {inbox_route:
 test('routing accepts decisive cheap paths and retains the evidence',()=>{
  for(const route of ['keep','metadata','archive','editorial'] as InboxRoute[])expect(chooseInboxRoute(answers(route),policy,context)).toMatchObject({route,judged:route,disposable:0.99});
 });
+test('policy can disable routing without any model routing answers',()=>{expect(chooseInboxRoute(undefined,{...policy,enabled:false},context).route).toBe('editorial');});
+
 test('ambiguity and incomplete evidence escalate without treating a score as archive permission',()=>{
  expect(chooseInboxRoute(answers('archive',0.4),policy,context).route).toBe('editorial');
  expect(chooseInboxRoute(answers('archive',0.95,0.6),policy,context).route).toBe('editorial');
