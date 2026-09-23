@@ -1,3 +1,4 @@
+import {visibleWidth} from "@earendil-works/pi-tui";
 import {readFile} from "node:fs/promises";
 import {join} from "node:path";
 import { mkdir } from "node:fs/promises";
@@ -108,7 +109,7 @@ const result = await runHerdrScenario({
     await session.keys(pane,'down');await session.waitVisible(pane,'filed note');
     await session.checkpoint('03-reader-focus-list-navigation');
     await terminal.resize(90,34);
-    await session.waitVisible(pane,'Inbox agent');
+    await session.waitFor('compact layout settles',()=>session.visible(pane),text=>text.includes('Inbox agent') && Math.max(...text.split('\n').map(visibleWidth))<80);
     await session.keys(pane,'alt+p');
     await session.checkpoint('04-narrow-preview');
     await session.keys(pane,'esc');
