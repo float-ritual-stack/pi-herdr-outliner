@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, resolve } from "node:path";
 import { acquireWorkspaceOwnership } from "./workspace-ownership";
 import { AnnotationRepository } from "./annotation-repository";
 import { authoredTextDigest } from "./authored-links";
@@ -530,10 +530,12 @@ function compactTreeBlock(
 export class OutlinerStore {
   private readonly releaseOwnership: () => void;
   readonly database: Database;
+  readonly workspaceRoot: string;
   readonly resources: ResourceCatalog;
   readonly annotations: AnnotationRepository;
 
   constructor(path: string, resourceOptions: ResourceCatalogOptions = {}) {
+    this.workspaceRoot = resolve(resourceOptions.workspaceRoot ?? dirname(path));
     mkdirSync(dirname(path), { recursive: true });
     this.releaseOwnership = acquireWorkspaceOwnership(path);
     let database: Database | undefined;

@@ -125,7 +125,7 @@ interface Harness {
   readonly createdDetailDirections: Array<"right" | "down">;
   readonly openedCaptures: string[];
   readonly openedVirtualNavigators: string[];
-  readonly openedVirtualNavigatorAdapters: Array<"bookmark" | undefined>;
+  readonly openedVirtualNavigatorAdapters: Array<"bookmark" | "mentions" | undefined>;
   invalidations: number;
   stops: number;
 }

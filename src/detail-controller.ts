@@ -591,7 +591,7 @@ export interface DetailEffects {
   completeFiles(query: string): Promise<ReferencedPathCandidate[]>;
   focusOutliner(): Promise<void>;
   openPropertyInspectorPane(blockId: string): string | Promise<string>;
-  openVirtualBranchNavigator(viewId: string, adapter?: "bookmark"): void | Promise<void>;
+  openVirtualBranchNavigator(viewId: string, adapter?: "bookmark" | "mentions"): void | Promise<void>;
   bookmarkStatus(targetBlockId: string): Promise<BookmarkStatus>;
   toggleBookmark(targetBlockId: string, expectedRecordId: string | null): Promise<BookmarkToggleReceipt>;
   bookmarksRoot(): Promise<Block>;
@@ -648,6 +648,7 @@ export type DetailIntent =
   | { type: "virtual-branch.open" }
   | { type: "bookmark.toggle" }
   | { type: "bookmarks.open" }
+  | { type: "mentions.open" }
   | { type: "backlinks.move"; delta: -1 | 1 }
   | { type: "backlinks.open" }
   | { type: "backlinks.reveal" }
@@ -3280,6 +3281,10 @@ export function createDetailController(
           state.status = errorMessage(error);
         }
         break;
+      }
+      case "mentions.open": {
+        await effects.openVirtualBranchNavigator("recent-mentions","mentions");
+        state.status="Opened recent agent mentions";break;
       }
       case "bookmarks.open": {
         const root = await effects.bookmarksRoot();

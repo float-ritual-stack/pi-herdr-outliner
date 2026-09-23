@@ -1,3 +1,4 @@
+import {MentionsNavigator} from "./mentions-navigator";
 import { emitKeypressEvents } from "node:readline";
 import { PassThrough } from "node:stream";
 import { getMarkdownTheme, initTheme } from "@earendil-works/pi-coding-agent";
@@ -56,15 +57,15 @@ function parseLaunch(): VirtualBranchNavigatorLaunch {
     throw new Error("OUTLINER_NAVIGATOR_SOURCE_ROLE must be tree or detail");
   }
   const adapter = process.env.OUTLINER_NAVIGATOR_ADAPTER?.trim();
-  if (adapter && adapter !== "bookmark") {
-    throw new Error("OUTLINER_NAVIGATOR_ADAPTER must be bookmark when provided");
+  if (adapter && adapter !== "bookmark" && adapter !== "mentions") {
+    throw new Error("OUTLINER_NAVIGATOR_ADAPTER must be bookmark or mentions when provided");
   }
   return {
     sourceClientId: requiredEnvironment("OUTLINER_NAVIGATOR_SOURCE_CLIENT_ID"),
     sourceRole: sourceRole satisfies OutlinerRegion,
     browsingContextId: requiredEnvironment("OUTLINER_BROWSING_CONTEXT_ID"),
     viewId: requiredEnvironment("OUTLINER_NAVIGATOR_VIEW_ID"),
-    ...(adapter === "bookmark" ? { adapter } : {}),
+    ...(adapter === "bookmark" || adapter === "mentions" ? { adapter } : {}),
   };
 }
 
@@ -72,6 +73,7 @@ const launch = parseLaunch();
 const paths = resolveClientPaths();
 reportCurrentPaneWorkspace(paths.workspaceRoot);
 const client = createOutlinerClient(paths);
+const mentions = launch.adapter === "mentions" ? new MentionsNavigator(client) : null;
 const actionKeymap = OutlinerActionKeymap.load();
 const destinationTimeoutMs = openDestinationTimeoutFromEnvironment(
   process.env.OUTLINER_OPEN_DESTINATION_TIMEOUT_MS,
@@ -82,6 +84,7 @@ let rendered: VirtualBranchNavigatorRenderResult | null = null;
 let stopWatcher: (() => Promise<void>) | null = null;
 
 async function loadProjection(presentation: TreePresentationState) {
+  if (mentions) return mentions.projection();
   const snapshot = await client.request<WorkspaceSnapshot>({ action: "workspace.snapshot" });
   const definition = snapshot.physical.blocks.find((block) => block.id === launch.viewId);
   if (!definition) throw new Error(`Virtual branch not found: ${launch.viewId}`);
@@ -131,6 +134,7 @@ async function loadProjection(presentation: TreePresentationState) {
 async function loadPreview(
   row: VirtualBranchOccurrenceRow,
 ): Promise<VirtualBranchNavigatorPreview> {
+  if (mentions) return mentions.preview(row);
   if (launch.adapter === "bookmark" && row.relativeDepth === 0) {
     const resolution = await client.request<BookmarkResolution>({
       action: "bookmarks.resolve",
@@ -254,7 +258,7 @@ const controller = new VirtualBranchNavigatorController(launch.sourceRole, {
   invalidate() {
     draw();
   },
-}, { destinationTimeoutMs, actionKeymap });
+}, { destinationTimeoutMs, actionKeymap, ...(mentions ? {commands:mentions.commands} : {}) });
 
 function draw(): void {
   rendered = renderVirtualBranchNavigatorFrame(
@@ -341,7 +345,7 @@ try {
       });
     },
     onEvent: (event) => {
-      if (event.domain === "content" || event.domain === "view") {
+      if (event.domain === "content" || event.domain === "view" || (mentions && event.domain === "mentions")) {
         enqueueWork(() => controller.refresh());
       }
     },

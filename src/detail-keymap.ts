@@ -249,6 +249,8 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
       case "detail.bookmark.toggle":
         await dispatch({ type: "bookmark.toggle" });
         return true;
+      case "detail.mentions.open":
+        await dispatch({type:"mentions.open"});return true;
       case "detail.bookmarks.open":
         await dispatch({ type: "bookmarks.open" });
         return true;

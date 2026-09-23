@@ -167,7 +167,7 @@ interface Harness {
     propertyInspectorPanes: string[];
     backlinkPeeks: Array<Parameters<DetailEffects["openBacklinkPeek"]>[0]>;
     virtualNavigators: string[];
-    virtualNavigatorAdapters: Array<"bookmark" | undefined>;
+    virtualNavigatorAdapters: Array<"bookmark" | "mentions" | undefined>;
     bookmarkToggles: string[];
     openedDetails: Array<{
       blockId: string;

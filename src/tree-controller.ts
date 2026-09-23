@@ -187,7 +187,7 @@ export interface TreeControllerEffects {
   openKeyInspector?(): void;
   openCapturePopup(capturedFromBlockId: string): Promise<void>;
   openGotoPopup?(): void | Promise<void>;
-  openVirtualBranchNavigator(viewId: string, adapter?: "bookmark"): void | Promise<void>;
+  openVirtualBranchNavigator(viewId: string, adapter?: "bookmark" | "mentions"): void | Promise<void>;
   focusSelf(): void;
   terminalWidth(): number;
   terminalHeight(): number;
@@ -2210,6 +2210,10 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       }
       effects.invalidate();
       return;
+    }
+    if(actionId === "tree.mentions.open") {
+      await effects.openVirtualBranchNavigator("recent-mentions","mentions");
+      status="Opened recent agent mentions"; effects.invalidate(); return;
     }
     if (actionId === "tree.bookmarks.open") {
       try {

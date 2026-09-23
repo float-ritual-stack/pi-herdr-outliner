@@ -1853,3 +1853,33 @@ and the store commit; it is not Jev latency. `notChecked` records observed searc
 read and judge limits. Those omissions remain visible with technical details
 collapsed. Historical attempts without this field say coverage was not recorded;
 an empty omissions list is not an exhaustive search guarantee.
+
+### Recent agent mentions
+
+Tree and Detail's `?` menu includes **recent mentions**, a split navigator of notes
+referenced by completed agent responses. It resolves `[[page]]`, `((block-id))`,
+Work IDs and existing bare UUIDs against the explicit workspace. Selecting previews
+the canonical note; Enter chooses where to open it. The toolbar supports mouse and
+keyboard: conversation/workspace scope, surrounding Message/Note, Clear, Save
+message to Inbox, and Bookmark. This is a navigation history, separate from note
+metadata: at most 200 referenced responses and 100 distinct targets per view are
+retained. Oversized input is rejected; omitted references and missing targets are
+visible. Clear removes history, not notes or explicitly saved messages.
+
+To enable completed Codex responses for a workspace:
+
+```sh
+bun scripts/install-codex-mentions.ts /absolute/workspace
+```
+
+This installs Codex's user-level `notify` command and backs up `config.toml`.
+Restart Codex to load it. An existing different notification command is preserved;
+compose adapters explicitly instead of overwriting it. Only the configured exact
+workspace is ingested. A reachable updated Outliner service is required; delivery
+failures are reported by the adapter, without blocking the agent. There is no
+background retry queue or import of earlier conversations. The adapter also
+accepts Codex Stop hook payloads, but installation uses completion notifications.
+Other hosts can post the same `{workspaceRoot, agent, sessionId, messageId, text}`
+contract using `mentions.ingest`, or JSON stdin to `bun src/cli.ts mentions ingest`.
+Repeated message identity with identical text is idempotent; different text under
+the same identity is rejected. No Pi or Claude adapter is installed automatically.
