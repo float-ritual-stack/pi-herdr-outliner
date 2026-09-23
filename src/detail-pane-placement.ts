@@ -1,3 +1,5 @@
+import {execFile} from "node:child_process";
+import {promisify} from "node:util";
 import type {OutlinerRequester} from "./client-target";
 import {openDetailPane} from "./pane-control";
 import {openDetailSidebar} from "./sidebar-placement";
@@ -18,10 +20,14 @@ export async function openOutlinerDetailSidebar(
     ["tree", "detail", "composed"].includes(item.role) && item.runtime?.hostname === runtime.hostname &&
     item.runtime?.workspaceId === runtime.workspaceId && item.runtime?.tabId === runtime.tabId,
   ).flatMap(item => item.runtime?.paneId ? [item.runtime.paneId] : []))];
-  return openDetailSidebar({
+  const paneId = await openDetailSidebar({
     sourcePaneId: runtime.paneId, outlinerPaneIds, scope: options.scope, side: options.side,
     async createDetail(anchorPaneId) {
       return openDetailPane({workspaceRoot: options.workspaceRoot, browsingContextId: crypto.randomUUID(), initialTarget: options.initialTarget, targetPaneId: anchorPaneId, direction: "right", deferFocus: true});
     },
   });
+  // The layout already owns a successfully created pane. A focus miss must not
+  // turn that success into a creation failure or trigger another pane.
+  await promisify(execFile)(process.env.HERDR_BIN_PATH ?? "herdr", ["plugin", "pane", "focus", paneId], {timeout: 5000}).catch(() => {});
+  return paneId;
 }
