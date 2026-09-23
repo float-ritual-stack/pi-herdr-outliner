@@ -3519,3 +3519,23 @@ test("wheel over Tree does not scroll adjacent focused Preview",async()=>{
  await controller.handleTreeWheel(parseTreeWheel(wheel)!);
  expect(controller.view().localPreview!.offset).toBe(before);
 });
+
+test("Tree destination menu distinguishes one-off Open from persistent Link", async () => {
+  const note = block("open-once-source");
+  const fake = harness(input => {
+    if (input.action === "tree.index") return snapshot([note], note);
+    if (input.action === "navigation.link.get") return {source: {clientId: "tree-test", region: "tree"}, destination: null, destinations: []};
+  });
+  const controller = createTreeController(fake.effects); await controller.initialize();
+  await controller.handleAction("tree.navigation.once");
+  const once = renderTreeFrame(controller.view(), 120, 30).frame;
+  expect(once).toContain("Open once in… · Tree");
+  expect(once).toContain("Enter open once");
+  expect(once).not.toContain("Alt+L link destination");
+  await controller.handleAction("tree.cancel");
+  await controller.handleAction("tree.navigation.link");
+  const linked = renderTreeFrame(controller.view(), 120, 30).frame;
+  expect(linked).toContain("Link destination · Tree");
+  expect(linked).toContain("Enter link");
+  expect(fake.calls.some(input => input.action === "navigation.link.set")).toBe(false);
+});

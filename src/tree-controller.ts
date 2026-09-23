@@ -166,6 +166,7 @@ export interface TreeView {
   readonly actionMenuQuery?: string;
   readonly destinationPreview?: NavigationDestinationPreview;
   readonly destinationInstructions?: string;
+  readonly destinationPurpose?: "link" | "open";
 }
 
 export interface TreeControllerEffects {
@@ -549,7 +550,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       actionMenuOrigin,
       actionMenuIndex,
       actionMenuQuery,
-      ...(destinationMenu && mode === "action-menu" ? {destinationPreview,destinationInstructions:navigationDestinationStatus(destinationMenu.state,destinationMenu.purpose,showOtherDestinations)}:{}),
+      ...(destinationMenu && mode === "action-menu" ? {destinationPreview,destinationPurpose:destinationMenu.purpose,destinationInstructions:navigationDestinationStatus(destinationMenu.state,destinationMenu.purpose,showOtherDestinations)}:{}),
     };
   }
 

@@ -421,7 +421,10 @@ export function renderTreeFrame(
     const previewWidth=beside?width-listWidth-1:width,previewHeight=beside?body:Math.max(1,body-listHeight-1);
     const preview=renderNavigationDestinationPreview(view.destinationPreview,previewWidth,previewHeight);
     const middle=beside?list.map((line,i)=>line+' '.repeat(Math.max(0,listWidth-visibleWidth(line)))+'│'+(preview[i]??'')):[...list,'─'.repeat(width),...preview];
-    const lines=[fit('Link destination · Tree',width),fit(view.destinationInstructions??'Choose where links from Tree open',width),fit(`Find: ${view.actionMenuQuery??''}▏`,width),'─'.repeat(width),...middle,fit('↑↓ choose · Enter link/open · Esc cancel · Alt+L link destination',width)];
+    const openingOnce = view.destinationPurpose === 'open';
+    const title = openingOnce ? 'Open once in… · Tree' : 'Link destination · Tree';
+    const footer = openingOnce ? '↑↓ choose · Enter open once · Esc cancel · saved link unchanged' : '↑↓ choose · Enter link · Esc cancel · Alt+L link destination';
+    const lines=[fit(title,width),fit(view.destinationInstructions??(openingOnce ? 'Choose where this item opens once' : 'Choose where links from Tree open'),width),fit(`Find: ${view.actionMenuQuery??''}▏`,width),'─'.repeat(width),...middle,fit(footer,width)];
     return{frame:(options.clearScreen===false?'':`${ESC}H${ESC}2J`)+lines.slice(0,height).join('\n'),scrollStartEntryIndex:initialScrollStartEntryIndex,mouseTargets:[]};
   }
   const output: string[] = [options.clearScreen === false ? "" : `${ESC}H${ESC}2J`];
