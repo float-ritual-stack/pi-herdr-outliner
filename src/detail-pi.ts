@@ -1,5 +1,5 @@
 import { ComposedLayout, ComposedTree, composedTreeNavigation, composedPointer, composedWidths } from "./composed-surface";
-import { navigationDestinationItems } from "./navigation-destination-menu";
+import { navigationDestinationItems, navigationDestinationStatus, NavigationDestinationPreview, renderNavigationDestinationPreview } from "./navigation-destination-menu";
 import { getProperty } from "./properties";
 import { setTimeout as sleep } from "node:timers/promises";
 import { getMarkdownTheme, initTheme } from "@earendil-works/pi-coding-agent";
@@ -71,6 +71,7 @@ import {
   DetailReaderSplitLayout,
   DetailReaderVerticalLayout,
   detailDraftSplitWidths,
+  renderDetailDestinationPicker,
 } from "./detail-pi-renderer";
 import { parsePropertySummaryKeys } from "./property-summary";
 import { referencedFilePreview, type FileContents, type ReferencedPathCandidate } from "./files";
@@ -284,6 +285,7 @@ const tui = new DetailTuiAltScreen(processTerminal, false, undefined, {
     const pointer = pendingLinkClick;
     pendingLinkClick = { activate: false, routing: "linked", suppress: false };
     if (pointer.suppress || stopping) return;
+    if (actionMenuInvoke && url.startsWith("pi-outliner-action:")) { actionMenuInvoke(url.slice("pi-outliner-action:".length)); return; }
     serviceEventScheduler.scheduleWork(async () => {
       if (focusedReader().state.destinationChooser.active) {
         await focusedReader().handleDestinationChooserKeypress("", { name: "pointer" });
@@ -422,14 +424,26 @@ const effects: DetailEffects = {
   },
   async chooseDestination(purpose) {
     const state = await client.request<NavigationLinkState>({action: "navigation.link.get", source: {clientId, region: "detail"}});
+    const document = new NavigationDestinationPreview(client, () => tui.requestRender());
+    let showOther = false;
     return new Promise<OutlinerViewAddress | null | undefined>(resolve => {
-      showActionMenu(navigationDestinationItems(state, purpose === "link"), async id => {
-        resolve(id === "destination:unlink" ? null : state.destinations[Number(id.slice(12))]?.view);
-      }, undefined, () => resolve(undefined));
+      const show = () => showActionMenu(navigationDestinationItems(state, purpose === "link", showOther), async id => {
+        if (id === "destination:other") { showOther = !showOther; show(); return; }
+        document.clear();
+        if (id === "destination:new-right" || id === "destination:new-below") {
+          try { await focusedReader().dispatch({type: "pane.open", direction: id === "destination:new-right" ? "right" : "down"}, viewport(focusedReader())); }
+          finally { resolve(undefined); }
+        } else resolve(id === "destination:unlink" ? null : state.destinations[Number(id.slice(12))]?.view);
+      }, undefined, () => { document.clear(); resolve(undefined); }, {
+        purpose, status: () => navigationDestinationStatus(state, purpose, showOther), preview: document,
+        select: id => { void document.select(id ? state.destinations[Number(id.slice(12))] : undefined); },
+      });
+      show();
     });
   },
   async setDestination(destination) {
-    await client.request({action: "navigation.link.set", source: {clientId, region: "detail"}, destination});
+    const state = await client.request<NavigationLinkState>({action: "navigation.link.set", source: {clientId, region: "detail"}, destination});
+    return state.destinations.find(item => item.view.clientId === destination?.clientId && item.view.region === destination.region)?.label;
   },
   isSourceSelectionActive: () => directSelectionOwner === "current" && (latestDirectSelection !== null || pendingDirectSelection !== null),
   async setNavigationProtection(navigationProtection) {
@@ -860,11 +874,13 @@ async function stop(exitCode = 0): Promise<void> {
 }
 
 let actionMenuHandle: OverlayHandle | null = null;
+let actionMenuInvoke: ((id: string) => void) | null = null;
 let composerHandle: OverlayHandle | null = null;
 
 function closeActionMenu(): void {
   actionMenuHandle?.hide();
   actionMenuHandle = null;
+  actionMenuInvoke = null;
 }
 
 const actionMenuTheme: SelectListTheme = {
@@ -875,20 +891,40 @@ const actionMenuTheme: SelectListTheme = {
   noMatch: (text) => `\x1b[2m${text}\x1b[0m`,
 };
 
+interface DetailDestinationMenuOptions {
+  purpose: "link" | "open"; status(): string; preview: NavigationDestinationPreview; select(id: string | undefined): void;
+}
+
 class FuzzyActionMenu implements Component {
   private query = "";
   private list: SelectList;
+  private visibleRows: number | undefined;
   onSelect?: (actionId: string) => void;
   onCancel?: () => void;
 
   constructor(
     private readonly items: readonly OutlinerActionMenuItem[],
     private readonly maxVisible: number,
+    private readonly destination?: DetailDestinationMenuOptions,
   ) {
     this.list = this.createList();
   }
 
   render(width: number): string[] {
+    if (this.destination) return renderDetailDestinationPicker({
+      width, height: Math.max(10, Math.floor(processTerminal.rows * 0.9)), purpose: this.destination.purpose,
+      status: this.destination.status(), query: this.query,
+      list: (columns, rows) => {
+        const count = Math.max(1, rows - 1);
+        if (this.visibleRows !== count) {
+          const selected = this.list.getSelectedItem()?.value;
+          this.visibleRows = count;
+          this.list = this.createList(selected);
+        }
+        return this.list.render(columns).slice(0, rows);
+      },
+      preview: (columns, rows) => renderNavigationDestinationPreview(this.destination!.preview, columns, rows),
+    });
     return [
       `\x1b[2mFind: ${this.query}▏\x1b[0m`,
       ...this.list.render(width),
@@ -919,19 +955,22 @@ class FuzzyActionMenu implements Component {
     tui.requestRender();
   }
 
-  private createList(): SelectList {
+  private createList(selected?: string): SelectList {
     const filtered = filterActionMenuItems(this.items, this.query);
     const list = new SelectList(
       filtered.map((item) => ({
         value: item.id,
-        label: outlinerActionLink(item.id, actionMenuItemText(item)),
+        label: outlinerActionLink(item.id, this.destination ? item.label : actionMenuItemText(item)),
         description: item.description,
       })),
-      Math.min(this.maxVisible, Math.max(1, filtered.length)),
+      Math.min(this.visibleRows ?? this.maxVisible, Math.max(1, filtered.length)),
       actionMenuTheme,
     );
+    if (selected) list.setSelectedIndex(Math.max(0, filtered.findIndex(item => item.id === selected)));
     list.onSelect = (item) => this.onSelect?.(item.value);
     list.onCancel = () => this.onCancel?.();
+    list.onSelectionChange = item => this.destination?.select(item.value);
+    this.destination?.select(list.getSelectedItem()?.value);
     return list;
   }
 }
@@ -941,22 +980,24 @@ function showActionMenu(
   invoke: (actionId: string) => Promise<void>,
   origin?: TreeMouseClick,
   cancelled?: () => void,
+  destination?: DetailDestinationMenuOptions,
 ): void {
   closeActionMenu();
-  const menu = new FuzzyActionMenu(items, 13);
+  const menu = new FuzzyActionMenu(items, destination ? 7 : 13, destination);
   menu.onSelect = (actionId) => {
     closeActionMenu();
     if (cancelled) void invoke(actionId);
     else serviceEventScheduler.scheduleWork(() => invoke(actionId));
   };
+  actionMenuInvoke = menu.onSelect;
   menu.onCancel = () => {
     cancelled?.();
     closeActionMenu();
     tui.requestRender();
   };
   actionMenuHandle = tui.showOverlay(menu, {
-    width: "70%",
-    maxHeight: "70%",
+    width: destination ? "95%" : "70%",
+    maxHeight: destination ? "90%" : "70%",
     minWidth: 32,
     anchor: "top-right",
     ...(origin ? { row: origin.row, col: origin.column } : {}),

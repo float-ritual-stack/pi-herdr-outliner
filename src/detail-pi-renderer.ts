@@ -2,6 +2,7 @@ import {
   HStack,
   VStack,
   truncateToWidth,
+  visibleWidth,
   type Component,
 } from "@earendil-works/pi-tui";
 import {
@@ -34,6 +35,34 @@ export function detailDraftSplitWidths(width: number): {
   );
   const editor = Math.ceil(availableWidth / 2);
   return { editor, preview: availableWidth - editor };
+}
+
+export function renderDetailDestinationPicker(options: {
+  width: number; height: number; status: string; query: string; purpose: "link" | "open";
+  list(width: number, height: number): string[];
+  preview(width: number, height: number): string[];
+}): string[] {
+  const {width, height} = options;
+  const bodyHeight = Math.max(1, height - 4);
+  const fit = (lines: string[], count: number, columns: number) => Array.from({length: count}, (_, i) => truncateToWidth(lines[i] ?? "", columns));
+  let body: string[];
+  if (width >= 100) {
+    const left = Math.min(48, Math.floor((width - 1) * 0.45));
+    const list = fit(options.list(left, bodyHeight), bodyHeight, left);
+    const preview = fit(options.preview(width - left - 1, bodyHeight), bodyHeight, width - left - 1);
+    body = list.map((line, index) => line + " ".repeat(Math.max(0, left - visibleWidth(line))) + "│" + preview[index]);
+  } else {
+    const listHeight = Math.min(7, Math.max(2, Math.floor(bodyHeight / 3)));
+    const previewHeight = Math.max(1, bodyHeight - listHeight - 1);
+    body = [...fit(options.list(width, listHeight), listHeight, width), "─".repeat(width), ...fit(options.preview(width, previewHeight), previewHeight, width)];
+  }
+  return [
+    options.purpose === "link" ? "Link destination · preview the selected reader" : "Open once · preview the selected reader",
+    options.status,
+    `Find: ${options.query}▏`,
+    ...body,
+    `↑↓ select · Enter ${options.purpose === "link" ? "links" : "opens once"} · Esc cancels`,
+  ].slice(0, height).map(line => truncateToWidth(line, width));
 }
 
 function escapeInspectorMarkdown(value: string): string {
