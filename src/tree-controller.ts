@@ -1726,7 +1726,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       return;
     }
     if (event.domain === "selection") return;
-    if (mode === "inbox") inbox.contentChanged();
+    inbox.contentChanged();
     if (authoredLinksPanel.kind === "open") authoredLinksDirty = true;
     if (mode !== "browse") {
       refreshPending = true;
@@ -1790,7 +1790,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       await publishDisplayRowSelection(rows[selectedIndex]);
     } else {
       refreshPending = true;
-      if (mode === "inbox") inbox.contentChanged();
+      inbox.contentChanged();
       if (authoredLinksPanel.kind === "open") authoredLinksDirty = true;
     }
     effects.invalidate();
@@ -1964,7 +1964,9 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       resizeLocalPreview(fraction + (actionId.endsWith('grow') ? .05 : -.05)); return;
     }
     if(actionId==="tree.preview.focus") {if(localReader.state)localReader.focus(!localReader.state.focused);else status="Select an item to preview it here";effects.invalidate();return;}
+    if (mode === "action-menu" && actionMenuReturnMode === "inbox" && actionId.startsWith("tree.inbox.preview.")) {mode="inbox";}
     if (mode === "inbox") {
+      if (actionId === "tree.inbox.preview.next-output") {inbox.nextOutput();return;}
       if (actionId.startsWith('tree.inbox.select:')) {inbox.selectResult(Number(actionId.split(':')[1]));return;}
       if (actionId.startsWith('tree.inbox.preview-target:')) {inbox.selectTarget(Number(actionId.split(':')[1]));return;}
       if (actionId === 'tree.inbox.preview.activity') {inbox.showActivity();return;}

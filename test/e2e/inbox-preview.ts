@@ -1,3 +1,5 @@
+import {readFile} from "node:fs/promises";
+import {join} from "node:path";
 import { mkdir } from "node:fs/promises";
 import { OutlinerClient } from "../../src/client";
 import { OutlinerServer } from "../../src/server";
@@ -66,7 +68,16 @@ const result = await runHerdrScenario({
     await clickLabel('[Source');await session.waitVisible(pane,'Source · current');
     await session.keys(pane,'2');await session.waitVisible(pane,'Output 1 · current');
     await session.checkpoint('02-role-switching');
+    const copyFrame=await session.waitFor('native copy text',terminal.visible,text=>text.includes('Output callout'));
+    const copyLines=copyFrame.split('\n');const copyRow=copyLines.findIndex(line=>line.includes('Output callout'));const copyCol=copyLines[copyRow]!.indexOf('Output callout');
+    await terminal.write(`\x1b[<0;${copyCol+1};${copyRow+1}M\x1b[<32;${copyCol+15};${copyRow+1}M\x1b[<0;${copyCol+15};${copyRow+1}m`);
+    await session.waitFor('native clipboard contains selected Preview text',()=>readFile(join(session.artifactDirectory,'attached-client.ansi'),'utf8'),text=>[...text.matchAll(/\x1b\]52;[^;]*;([A-Za-z0-9+/=]+)/g)].some(match=>Buffer.from(match[1]!,'base64').toString().includes('Output callout')));
+    // Wheel inside the reader scrolls content without selecting another result.
+    await terminal.write(`\x1b[<65;${copyCol+1};${copyRow+1}M`);
+    await session.checkpoint('native-preview-copy-and-wheel');
+
     // Native content click must focus the rich reader, then Escape returns to the list.
+    await session.keys(pane,'1');await session.keys(pane,'2');
     await clickLabel('Output callout');await session.waitVisible(pane,'● Preview');
     await session.keys(pane,'down');await session.keys(pane,'esc');await session.waitVisible(pane,'○ Preview');
     await session.keys(pane,'down');await session.waitVisible(pane,'filed note 29');

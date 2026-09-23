@@ -3667,6 +3667,8 @@ test('Inbox destination chooser retains selection, cancel returns to Inbox and o
   if(input.action==='navigation.link.get')return{source:{clientId:'tree-test',region:'tree'},destination:null,destinations:[{view:{clientId:'detail-test',region:'detail'},label:'Reader'}]};
  });
  const c=createTreeController(fake.effects);await c.initialize();await c.handleAction('tree.inbox.open');
+ await c.handleAction('tree.menu.open');await c.handleAction('tree.inbox.preview.source');expect(c.view().inbox?.targets[c.view().inbox!.targetIndex]?.id).toBe(note.id);
+ await c.handleAction('tree.menu.open');await c.handleAction('tree.inbox.preview.output');expect(c.view().inbox?.targets[c.view().inbox!.targetIndex]?.id).toBe(output.id);
  await c.handleKeypress('',{name:'return',meta:true},'pass');expect(c.view().mode).toBe('action-menu');
  await c.handleKeypress('',{name:'escape'},'pass');expect(c.view().mode).toBe('inbox');expect(c.view().inbox?.selected?.id).toBe('receipt');
  await c.handleAction('tree.navigation.once');await c.handleAction('destination:0');
