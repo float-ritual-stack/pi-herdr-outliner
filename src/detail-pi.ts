@@ -1,5 +1,5 @@
 import {KeyInspector} from "./key-inspector";
-import {openOutlinerDetailSidebar} from "./detail-pane-placement";
+import {createDetailDestination, type DetailDestinationPlacement} from "./detail-pane-placement";
 import { ComposedLayout, ComposedTree, composedTreeNavigation, composedPointer, composedWidths } from "./composed-surface";
 import { navigationDestinationItems, navigationDestinationStatus, navigationPlacementItems, navigationPlacementStatus, NavigationDestinationDisplay, NavigationDestinationPreview, renderNavigationDestinationPreview } from "./navigation-destination-menu";
 import { getProperty } from "./properties";
@@ -434,6 +434,17 @@ const effects: DetailEffects = {
     let showOther = false;
     let placement: "right" | "down" | null = null;
     return new Promise<OutlinerViewAddress | null | undefined>(resolve => {
+      const createDestination = async (placement: DetailDestinationPlacement) => {
+        try {
+          const initialTarget = invokingReader.state.target;
+          if (!initialTarget) throw new Error("No target selected");
+          await invokingReader.dispatch({type: "status.set", message: "Creating Detail · waiting for the new reader to connect…"}, viewport(invokingReader));
+          resolve(await createDetailDestination(client, clientId, {workspaceRoot: paths.workspaceRoot, initialTarget, placement, timeoutMs: destinationTimeoutMs}));
+        } catch (error) {
+          invokingReader.onServiceError(error);
+          resolve(undefined);
+        }
+      };
       const show = () => showActionMenu(placement ? navigationPlacementItems(state) : navigationDestinationItems(state, purpose === "link", showOther), async id => {
         if (id === "destination:other") { showOther = !showOther; show(); return; }
         if (id === "destination:place-right" || id === "destination:place-below") { placement = id === "destination:place-right" ? "right" : "down"; show(); return; }
@@ -441,18 +452,13 @@ const effects: DetailEffects = {
         document.clear();
         if (id.startsWith("destination:sidebar-")) {
           const [, scope, side] = id.split("-") as [string, "outliner" | "tab", "left" | "right"];
-          try { await invokingReader.dispatch({type: "pane.sidebar", scope, side}, viewport(invokingReader)); }
-          catch (error) { invokingReader.onServiceError(error); }
-          finally { resolve(undefined); }
+          await createDestination({kind: "sidebar", scope, side});
         } else if (placement) {
           const targetPaneId = state.destinations[Number(id.slice(10))]?.placementPaneId;
-          try { if (targetPaneId) await invokingReader.dispatch({type: "pane.open", direction: placement, targetPaneId}, viewport(invokingReader)); }
-          catch (error) { invokingReader.onServiceError(error); }
-          finally { resolve(undefined); }
+          if (targetPaneId) await createDestination({kind: "split", direction: placement, targetPaneId});
+          else { invokingReader.onServiceError(new Error("Selected placement pane is unavailable")); resolve(undefined); }
         } else if (id === "destination:new-right" || id === "destination:new-below") {
-          try { await invokingReader.dispatch({type: "pane.open", direction: id === "destination:new-right" ? "right" : "down"}, viewport(invokingReader)); }
-          catch (error) { invokingReader.onServiceError(error); }
-          finally { resolve(undefined); }
+          await createDestination({kind: "split", direction: id === "destination:new-right" ? "right" : "down"});
         } else resolve(id === "destination:unlink" ? null : state.destinations[Number(id.slice(12))]?.view);
       }, undefined, () => { document.clear(); resolve(undefined); }, {
         purpose: placement ? "place" : purpose, status: () => placement ? navigationPlacementStatus(placement) : navigationDestinationStatus(state, purpose, showOther), preview: document,
@@ -518,9 +524,6 @@ const effects: DetailEffects = {
     return client.request<Block>({ action: "bookmarks.root" });
   },
   openDetailPane: openTargetInNewDetail,
-  async openDetailSidebar(target, scope, side) {
-    await openOutlinerDetailSidebar(client, clientId, {workspaceRoot: paths.workspaceRoot, initialTarget: target, scope, side});
-  },
   copyText(text) {
     process.stdout.write(osc52ClipboardWrite(text));
   },

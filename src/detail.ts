@@ -1,6 +1,6 @@
 import {KeyInspector} from "./key-inspector";
 import {PassThrough} from "node:stream";
-import {openOutlinerDetailSidebar} from "./detail-pane-placement";
+import {createDetailDestination, type DetailDestinationPlacement} from "./detail-pane-placement";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { DetailReadingSurface, detailReaderGeometry } from "./detail-reading-surface";
@@ -132,6 +132,17 @@ function refreshDestinationPreview(): void {
   void picker.preview.select(item ? picker.state.destinations[Number(item.id.split(":")[1])] : undefined);
   draw();
 }
+async function createPickedDetail(picker: DetailDestinationPicker, placement: DetailDestinationPlacement): Promise<void> {
+  try {
+    const initialTarget = picker.reader.state.target;
+    if (!initialTarget) throw new Error("No target selected");
+    await picker.reader.dispatch({type: "status.set", message: "Creating Detail · waiting for the new reader to connect…"}, viewport(picker.reader));
+    picker.resolve(await createDetailDestination(client, clientId, {workspaceRoot: paths.workspaceRoot, initialTarget, placement, timeoutMs: destinationTimeoutMs}));
+  } catch (error) {
+    picker.reader.onServiceError(error);
+    picker.resolve(undefined);
+  }
+}
 async function handleDestinationInput(str: string, key: TerminalKey): Promise<void> {
   const picker = destinationPicker;
   if (!picker) return;
@@ -151,18 +162,13 @@ async function handleDestinationInput(str: string, key: TerminalKey): Promise<vo
     picker.preview.clear(); destinationPicker = null;
     if (item.id.startsWith("destination:sidebar-")) {
       const [, scope, side] = item.id.split("-") as [string, "outliner" | "tab", "left" | "right"];
-      try { await picker.reader.dispatch({type: "pane.sidebar", scope, side}, viewport(picker.reader)); }
-      catch (error) { picker.reader.onServiceError(error); }
-      finally { picker.resolve(undefined); }
+      await createPickedDetail(picker, {kind: "sidebar", scope, side});
     } else if (picker.placement) {
       const targetPaneId = picker.state.destinations[Number(item.id.slice(10))]?.placementPaneId;
-      try { if (targetPaneId) await picker.reader.dispatch({type: "pane.open", direction: picker.placement, targetPaneId}, viewport(picker.reader)); }
-      catch (error) { picker.reader.onServiceError(error); }
-      finally { picker.resolve(undefined); }
+      if (targetPaneId) await createPickedDetail(picker, {kind: "split", direction: picker.placement, targetPaneId});
+      else { picker.reader.onServiceError(new Error("Selected placement pane is unavailable")); picker.resolve(undefined); }
     } else if (item.id === "destination:new-right" || item.id === "destination:new-below") {
-      try { await picker.reader.dispatch({type: "pane.open", direction: item.id === "destination:new-right" ? "right" : "down"}, viewport(picker.reader)); }
-      catch (error) { picker.reader.onServiceError(error); }
-      finally { picker.resolve(undefined); }
+      await createPickedDetail(picker, {kind: "split", direction: item.id === "destination:new-right" ? "right" : "down"});
     } else picker.resolve(item.id === "destination:unlink" ? null : picker.state.destinations[Number(item.id.slice(12))]?.view);
     draw(); return;
   }
@@ -317,9 +323,6 @@ const effects: DetailEffects = {
     return client.request<Block>({ action: "bookmarks.root" });
   },
   openDetailPane: openTargetInNewDetail,
-  async openDetailSidebar(target, scope, side) {
-    await openOutlinerDetailSidebar(client, clientId, {workspaceRoot: paths.workspaceRoot, initialTarget: target, scope, side});
-  },
   copyText(text) {
     process.stdout.write(osc52ClipboardWrite(text));
   },
