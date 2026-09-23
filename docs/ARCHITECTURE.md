@@ -1273,4 +1273,7 @@ Sidebar placement reads Herdr's native split tree, moves existing panes through
 a temporary parking tab, and rebuilds the scoped subtree around one new Detail.
 `sidebar-placement.ts` owns this bounded operation and rollback; Herdr remains
 the layout authority. `detail-pane-placement.ts` supplies the live Outliner pane
-set and creates the reader. No canonical content or saved destination link changes.
+set and creates the reader. Link-picker creation waits for the exact fresh browsing
+context and pane registration, then passes the resulting view through the existing
+link operation. Failure leaves the previous link intact; no reverse link or second
+routing owner is created. Ordinary split commands do not change links.

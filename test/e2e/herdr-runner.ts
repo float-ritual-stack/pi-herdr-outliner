@@ -1519,7 +1519,9 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
     };
     await Promise.all([
       waitOwnedVisible(action.treePane, "Workspace"),
-      waitOwnedVisible(action.detailPane, "Workspace"),
+      // Current can legitimately start empty when Tree publication follows registration.
+      // Scenario setup performs its own explicit Open and asserts the resulting document.
+      waitOwnedVisible(action.detailPane, "Current"),
     ]);
 
     processEvidence = await Promise.all([

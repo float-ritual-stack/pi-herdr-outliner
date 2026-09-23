@@ -530,7 +530,6 @@ export interface DetailEffects {
     direction: "right" | "down",
     targetPaneId?: string,
   ): void | Promise<void>;
-  openDetailSidebar?(target: OutlinerNavigationTarget, scope: "outliner" | "tab", side: "left" | "right"): void | Promise<void>;
   copyText(text: string): void;
   editExternalDraft(
     input:
@@ -668,7 +667,6 @@ export type DetailIntent =
   | { type: "property-inspector.disclosure.toggle" }
   | { type: "property-inspector.pane.open" }
   | { type: "pane.open"; direction: "right" | "down"; targetPaneId?: string }
-  | { type: "pane.sidebar"; scope: "outliner" | "tab"; side: "left" | "right" }
   | { type: "property-inspector.target.open"; occurrenceId: string; intent: "open" | "reveal"; routing?: DetailOpenRouting }
   | { type: "property-inspector.group.cycle" }
   | { type: "property-inspector.filter.begin" }
@@ -3374,13 +3372,6 @@ export function createDetailController(
           ...(resolved.fragmentId ? { fragmentId: resolved.fragmentId } : {}),
         }, "reveal", { focusTarget: true });
         state.status = `Revealed ${blockDisplayTitle(resolved.block)}`;
-        break;
-      }
-      case "pane.sidebar": {
-        if (!state.target) { state.status = "No target selected"; break; }
-        if (!effects.openDetailSidebar) throw new Error("Sidebar placement is unavailable in this reader");
-        await effects.openDetailSidebar(state.target, intent.scope, intent.side);
-        state.status = `New ${intent.side} sidebar created · use Change to link it`;
         break;
       }
       case "pane.open": {

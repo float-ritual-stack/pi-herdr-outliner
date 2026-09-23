@@ -1,3 +1,5 @@
+import type {DetailDestinationPlacement} from "./detail-pane-placement";
+import type {OutlinerViewAddress} from "./types";
 import {resourceAddressLabel} from './resources';
 import {loadDetailReadPreview} from './detail-read-preview';
 import type {DetailReadPreviewDocument} from './detail-pi-preview';
@@ -179,7 +181,7 @@ export interface TreeControllerEffects {
   readonly browsingContextId: string;
   request<T>(input: RequestInput): Promise<T>;
   createDetailPane(blockId: string, direction?: "right" | "down", targetPaneId?: string): Promise<void>;
-  createDetailSidebar?(blockId: string, scope: "outliner" | "tab", side: "left" | "right"): Promise<void>;
+  createDetailDestination?(blockId: string, placement: DetailDestinationPlacement): Promise<OutlinerViewAddress>;
   openKeyInspector?(): void;
   openCapturePopup(capturedFromBlockId: string): Promise<void>;
   openGotoPopup?(): void | Promise<void>;
@@ -209,7 +211,7 @@ export interface TreeController {
   handleTreeWheel(direction: "up" | "down"): Promise<void>;
   handlePaste(text: string): Promise<void>;
   handleGotoMouse(sequence: string): Promise<void>;
-  focusLocalPreview(): void;
+  focusLocalPreview(focused?: boolean): void;
   scrollLocalPreview(delta:number): void;
   handleDisclosure(rowId: string): Promise<void>;
   handleRowClick(rowId: string, activate?: boolean): Promise<void>;
@@ -1336,6 +1338,22 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     effects.invalidate();
   }
 
+  async function createLinkedDetail(placement: DetailDestinationPlacement): Promise<void> {
+    const selected = rows[selectedIndex];
+    destinationMenu = null; placementDirection = null; destinationPreview.clear(); mode = "browse";
+    try {
+      if (!isBlockTreeRow(selected)) throw new Error("Select a block to create a Detail destination");
+      if (!effects.createDetailDestination) throw new Error("Creating a destination is unavailable in this host");
+      status = "Creating Detail · waiting for the new reader to connect…";
+      effects.invalidate();
+      const destination = await effects.createDetailDestination(selected.canonicalId, placement);
+      await effects.request({action: "navigation.link.set", source: {clientId: effects.clientId, region: "tree"}, destination});
+      void navigationDisplay.refresh();
+      status = "Linked: Tree → new Detail";
+    } catch (error) { status = errorMessage(error); }
+    effects.invalidate();
+  }
+
   async function createDetailPane(direction: "right" | "down" = "down", targetPaneId?: string): Promise<void> {
     const selected = rows[selectedIndex];
     if (!isBlockTreeRow(selected)) {
@@ -1905,7 +1923,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     if (activate) await focusDetailReader();
   }
 
-  function focusLocalPreview():void {if(localPreview){localPreview={...localPreview,focused:true};effects.invalidate();}}
+  function focusLocalPreview(focused = true):void {if(localPreview && localPreview.focused !== focused){localPreview={...localPreview,focused};effects.invalidate();}}
   function scrollLocalPreview(delta:number):void {
     if(!localPreview)return;
     const frame=treePreviewFrame(localPreview,effects.terminalWidth(),effects.terminalHeight(),"");
@@ -1946,20 +1964,12 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       if (!anchor?.placementPaneId) return;
       const direction=placementDirection;
       placementDirection=null;destinationMenu=null;destinationPreview.clear();mode="browse";
-      await createDetailPane(direction,anchor.placementPaneId);return;
+      await createLinkedDetail({kind:"split",direction,targetPaneId:anchor.placementPaneId});return;
     }
     if (actionId.startsWith("destination:") && destinationMenu) {
       if (/^destination:sidebar-(outliner|tab)-(left|right)$/.test(actionId)) {
         const [,scope,side]=actionId.match(/^destination:sidebar-(outliner|tab)-(left|right)$/)!;
-        destinationMenu=null;destinationPreview.clear();mode="browse";
-        const selected=rows[selectedIndex];
-        try {
-          if(!isBlockTreeRow(selected)) throw new Error("Select a block to open a sidebar");
-          if(!effects.createDetailSidebar) throw new Error("Sidebar placement is unavailable in this host");
-          await effects.createDetailSidebar(selected.canonicalId,scope as "outliner"|"tab",side as "left"|"right");
-          status=`Created ${side} sidebar · saved link unchanged; use Change to link`;
-        } catch(error) {status=errorMessage(error);}
-        effects.invalidate();return;
+        await createLinkedDetail({kind:"sidebar",scope:scope as "outliner"|"tab",side:side as "left"|"right"});return;
       }
       if(actionId==='destination:place-right'||actionId==='destination:place-below') {
         placementDirection=actionId.endsWith('right')?'right':'down';updateActionMenuQuery("");effects.invalidate();return;
@@ -1967,7 +1977,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       if(actionId==='destination:other'){showOtherDestinations=!showOtherDestinations;updateActionMenuQuery("");effects.invalidate();return;}
       if(actionId==='destination:new-right'||actionId==='destination:new-below'){
         destinationMenu=null;destinationPreview.clear();mode='browse';
-        await handleAction(actionId.endsWith('right')?'tree.detail.right':'tree.detail.below');return;
+        await createLinkedDetail({kind:'split',direction:actionId.endsWith('right')?'right':'down'});return;
       }
       const menu = destinationMenu;
       const destination = actionId === "destination:unlink" ? null : menu.state.destinations[Number(actionId.slice(12))]?.view;

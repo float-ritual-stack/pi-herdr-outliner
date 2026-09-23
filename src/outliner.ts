@@ -1,6 +1,6 @@
 import {TreePreviewInput} from './tree-preview-input';
 import {KeyInspector} from "./key-inspector";
-import {openOutlinerDetailSidebar} from "./detail-pane-placement";
+import {createDetailDestination} from "./detail-pane-placement";
 import {osc52ClipboardWrite} from './terminal';
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { serviceTreeNavigation } from "./navigation-routes";
@@ -149,9 +149,7 @@ const controller = createTreeController({
       targetPaneId,
     });
   },
-  async createDetailSidebar(blockId, scope, side) {
-    await openOutlinerDetailSidebar(client,clientId,{workspaceRoot:paths.workspaceRoot,initialTarget:{kind:"block",blockId},scope,side});
-  },
+  createDetailDestination: (blockId, placement) => createDetailDestination(client,clientId,{workspaceRoot:paths.workspaceRoot,initialTarget:{kind:"block",blockId},placement,timeoutMs:paths.mode === "remote" ? 60_000 : 5_000}),
   async openCapturePopup(capturedFromBlockId) {
     openHerdrCapturePopup({
       workspaceRoot: paths.workspaceRoot,

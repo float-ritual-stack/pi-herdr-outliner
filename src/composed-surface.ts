@@ -1,6 +1,6 @@
 import {TreePreviewInput} from './tree-preview-input';
 import {KeyInspector} from "./key-inspector";
-import {openOutlinerDetailSidebar} from "./detail-pane-placement";
+import {createDetailDestination} from "./detail-pane-placement";
 import {osc52ClipboardWrite} from './terminal';
 import { HStack, type Component } from "@earendil-works/pi-tui";
 import type { OutlinerRequester } from "./client-target";
@@ -132,9 +132,7 @@ export class ComposedTree implements Component {
       } : {}),
       async createTreePane(root,direction) { openTreePane({workspaceRoot:options.workspaceRoot,root,direction}); },
       createDetailPane: (blockId, direction = "right", targetPaneId) => options.detach({kind: "block", blockId}, direction, targetPaneId),
-      async createDetailSidebar(blockId,scope,side) {
-        await openOutlinerDetailSidebar(options.client,options.clientId,{workspaceRoot:options.workspaceRoot,initialTarget:{kind:"block",blockId},scope,side});
-      },
+      createDetailDestination: (blockId,placement) => createDetailDestination(options.client,options.clientId,{workspaceRoot:options.workspaceRoot,initialTarget:{kind:"block",blockId},placement,timeoutMs:60_000}),
       async openCapturePopup(capturedFromBlockId) { openCapturePopup({workspaceRoot: options.workspaceRoot, capturedFromBlockId}); },
       openVirtualBranchNavigator(viewId, adapter) { openVirtualBranchNavigatorPopup({workspaceRoot: options.workspaceRoot, browsingContextId: options.contextId, sourceClientId: options.clientId, sourceRole: "tree", viewId, ...(adapter ? {adapter} : {})}); },
       focusSelf: options.focus, terminalWidth: options.width, terminalHeight: options.height,

@@ -69,18 +69,18 @@ export function navigationDestinationItems(state: NavigationLinkState, unlink: b
   const otherCount = state.destinations.filter(item => item.otherLocation).length;
   if (otherCount) items.push({id: "destination:other", label: `${showOther ? "Hide" : "Show"} other connected views (${otherCount})`, description: "Other hosts and readers whose pane location is unavailable", binding: "", group: "Pane"});
   if (unlink) items.push(
-    {id: "destination:new-right", label: "New Detail right", description: "Open a new reader to the right; choose Link destination again to link it", binding: "", group: "Pane"},
-    {id: "destination:new-below", label: "New Detail below", description: "Open a new reader below; choose Link destination again to link it", binding: "", group: "Pane"},
+    {id: "destination:new-right", label: "New Detail right", description: "Create a reader to the right and link this view to it", binding: "", group: "Pane"},
+    {id: "destination:new-below", label: "New Detail below", description: "Create a reader below and link this view to it", binding: "", group: "Pane"},
   );
   if (unlink && state.destinations.some(item => item.placementPaneId)) items.push(
-    {id: "destination:place-right", label: "New Detail right of another…", description: "Choose a local reader beside which to create the new Detail", binding: "", group: "Pane"},
-    {id: "destination:place-below", label: "New Detail below another…", description: "Choose a local reader below which to create the new Detail", binding: "", group: "Pane"},
+    {id: "destination:place-right", label: "New Detail right of another…", description: "Choose a local reader beside which to create and link the new Detail", binding: "", group: "Pane"},
+    {id: "destination:place-below", label: "New Detail below another…", description: "Choose a local reader below which to create and link the new Detail", binding: "", group: "Pane"},
   );
   if (unlink) items.push(
-    {id: "destination:sidebar-outliner-left", label: "Sidebar left · Outliner area", description: "Create a Detail along the left edge of the Outliner area; existing links stay unchanged", binding: "", group: "Pane"},
-    {id: "destination:sidebar-outliner-right", label: "Sidebar right · Outliner area", description: "Create a Detail along the right edge of the Outliner area; existing links stay unchanged", binding: "", group: "Pane"},
-    {id: "destination:sidebar-tab-left", label: "Sidebar left · Whole Herdr tab", description: "Create a Detail along the left edge of the whole tab; existing links stay unchanged", binding: "", group: "Pane"},
-    {id: "destination:sidebar-tab-right", label: "Sidebar right · Whole Herdr tab", description: "Create a Detail along the right edge of the whole tab; existing links stay unchanged", binding: "", group: "Pane"},
+    {id: "destination:sidebar-outliner-left", label: "Sidebar left · Outliner area", description: "Create a Detail along the left edge of the Outliner area and link this view to it", binding: "", group: "Pane"},
+    {id: "destination:sidebar-outliner-right", label: "Sidebar right · Outliner area", description: "Create a Detail along the right edge of the Outliner area and link this view to it", binding: "", group: "Pane"},
+    {id: "destination:sidebar-tab-left", label: "Sidebar left · Whole Herdr tab", description: "Create a Detail along the left edge of the whole tab and link this view to it", binding: "", group: "Pane"},
+    {id: "destination:sidebar-tab-right", label: "Sidebar right · Whole Herdr tab", description: "Create a Detail along the right edge of the whole tab and link this view to it", binding: "", group: "Pane"},
   );
   if (unlink && state.destination) items.push({id: "destination:unlink", label: "Unlink destination", description: "Explicit Open will ask for a destination", binding: "", group: "Pane"});
   return items;
@@ -97,7 +97,7 @@ export function navigationPlacementItems(state: NavigationLinkState): OutlinerAc
 }
 
 export function navigationPlacementStatus(direction: "right" | "down"): string {
-  return `Create ${direction === "right" ? "to the right of" : "below"} the selected reader · Enter creates · Esc cancels`;
+  return `Create ${direction === "right" ? "to the right of" : "below"} the selected reader · Enter creates and links · Esc cancels`;
 }
 
 export function navigationDestinationStatus(state: NavigationLinkState, purpose: "link" | "open" = "link", showOther = false): string {

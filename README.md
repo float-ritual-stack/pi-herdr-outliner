@@ -1723,8 +1723,10 @@ Choose the existing local reader that should anchor the split. **Sidebar left/ri
 Outliner area** wraps the smallest existing layout subtree containing this tab's
 Outliner panes; unrelated panes stay untouched. **Sidebar left/right · Whole Herdr
 tab** places the reader at the tab's outer edge, including beside chat/terminals.
-These are explicit creation actions; the saved link remains unchanged. Use **Change**
-to link to the new reader. Placement keeps existing terminal sessions alive.
+Creation from **Link destination** also links the invoking Tree or Detail to the
+new reader once it registers. Other views keep their links; no reverse link is added.
+Failed creation keeps the previous destination. Ordinary split shortcuts remain
+create-only. Placement keeps existing terminal sessions alive.
 If Outliner panes are interleaved with unrelated panes, Outliner-area placement
 refuses and offers whole-tab scope instead. Failed placement attempts to restore
 the original layout; incomplete restoration reports a retained recovery-record path.

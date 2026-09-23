@@ -643,20 +643,6 @@ describe("detail controller projection and deferred refresh", () => {
     expect(controller.state.target).toEqual(target);
     expect(controller.state.selectionAnchor).toBe(0);
   });
-  test("creates the requested sidebar with the invoking target and retains its selection", async () => {
-    const harness = createHarness(makeBlock({id: "sidebar-source", text: "Sidebar document"}));
-    const opened: unknown[][] = [];
-    harness.effects.openDetailSidebar = (...args) => { opened.push(args); };
-    const controller = createDetailController(harness.effects);
-    await controller.initialize();
-    await controller.dispatch({type: "file.selection.toggle"}, viewport);
-    const target = controller.state.target;
-    await controller.dispatch({type: "pane.sidebar", scope: "tab", side: "left"}, viewport);
-    expect(opened).toEqual([[target, "tab", "left"]]);
-    expect(controller.state.target).toEqual(target);
-    expect(controller.state.selectionAnchor).toBe(0);
-    expect(controller.state.status).toContain("use Change to link");
-  });
   test("changing a header destination preserves the invoking reader's edit and selection state", async () => {
     const harness = createHarness(makeBlock({id: "editing-source", text: "Original document"}));
     const destination = {clientId: "other-reader", region: "detail" as const};
