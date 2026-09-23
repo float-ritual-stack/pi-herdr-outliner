@@ -662,13 +662,14 @@ test('copy retains the originating reader across the other reader and source too
  await h.controller.close();
 });
 
-test('cancel restores an absolute historical offset when search reuses the same receipt',async()=>{
- const receipt=result('result-one');
+test.each([[],['output-result-one','second-result-one']])('cancel restores absolute historical offset for reused receipt with outputs %j',async(outputIds)=>{
+ const receipt=result('result-one',{outputIds});
  const h=harness(request=>{
+  if(request.action==='inbox.status')return status({attentionCount:0,attentionOnly:request.attentionOnly===true,results:request.attentionOnly?[]:[receipt]});
   if(request.action==='inbox.search')return searchCollection([receipt]);
   if(request.action==='inbox.result')return {...receipt,beforeSource:{id:receipt.sourceId,revision:1,text:Array.from({length:100},(_,i)=>`Old paragraph ${i}`).join('\n\n')}};
  });
  await startRecent(h.controller);h.controller.setSourceVersion('before');await setImmediate();renderInboxFrame(h.controller,160,55,'help');h.controller.scrollPreview(5);
- h.controller.startSearch();h.controller.paste('same receipt');await setImmediate();h.controller.selectTarget(2);await setImmediate();renderInboxFrame(h.controller,160,55,'help');h.controller.scrollPreview(3);
+ h.controller.startSearch();h.controller.paste('same receipt');await setImmediate();h.controller.selectTarget(outputIds.length);await setImmediate();renderInboxFrame(h.controller,160,55,'help');h.controller.scrollPreview(3);
  await h.controller.cancelSearch();expect(h.controller.sourceReader.state?.offset).toBe(5);await h.controller.close();
 });

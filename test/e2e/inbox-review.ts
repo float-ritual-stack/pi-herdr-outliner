@@ -81,6 +81,13 @@ const result = await runHerdrScenario({
     await terminal.write(`\x1b[<0;${dividerCol};${dividerRow+1}M\x1b[<32;${dividerCol};${dividerRow+5}M\x1b[<0;${dividerCol};${dividerRow+5}m`);
     await session.waitFor('activity divider changes reader height',terminal.visible,text=>text.split('\n').findIndex(line=>line.includes('Source · current'))>sourceRow);
     await session.checkpoint('resized-activity-height');
+    const resized=await terminal.visible();const resizedRows=resized.split('\n');
+    const readerRow=resizedRows.findIndex(line=>line.includes('Preview · Output'));
+    const outputColumn=resizedRows[readerRow]!.indexOf('Preview · Output');
+    const splitColumn=outputColumn-3;
+    await terminal.write(`\x1b[<0;${splitColumn+1};${readerRow+4}M\x1b[<32;${splitColumn+10};${readerRow+4}M\x1b[<0;${splitColumn+10};${readerRow+4}m`);
+    await session.waitFor('source/output divider changes reader widths',terminal.visible,text=>text.split('\n').some(line=>line.indexOf('Preview · Output')>outputColumn));
+    await session.checkpoint('resized-document-widths');
     await session.waitVisible(pane,'Output callout');
     await clickLabel('[Output 2');await session.waitVisible(pane,'Output 2 · current');await session.waitVisible(pane,'Second output body');
     await clickLabel('[Source');await session.waitVisible(pane,'Source · current');

@@ -72,8 +72,9 @@ export class InboxController {
     this.searchGeneration++;clearTimeout(this.searchTimer);this.beforeSearch=null;this.searchError="";
     if(saved){this.index=Math.max(0,this.results.findIndex(result=>result.id===saved.id));this.targetIndex=saved.targetIndex;this.outputIndex=saved.outputIndex;this.sourceVersion=saved.sourceVersion;this.detailOffset=saved.detailOffset;this.previewMode=saved.previewMode;}
     this.previewKey="";
-    const restored = await this.refreshPreview();
-    if(restored && saved && !this.searching){
+    const generation = this.searchGeneration;
+    await this.refreshPreview();
+    if(saved && this.active && generation === this.searchGeneration && !this.searching && this.selected?.id === saved.id && this.targetIndex === saved.targetIndex && this.sourceVersion === saved.sourceVersion){
       this.sourceReader.restoreOffset(saved.sourceOffset);
       this.outputReader.restoreOffset(saved.outputOffset);
       this.focusReader(saved.focused);
