@@ -313,3 +313,16 @@ test('editorial routing remains visible when Pi fails and does not silently arch
  const source=store.capture('unclear','did a thing','cli').block;value.worker.wake();await until(()=>value.worker!.status().state==='unavailable');
  expect(value.worker.status().results[0]?.routing).toEqual({route:'editorial',reason:'Ambiguous short note'});expect(store.require(source.id)).toEqual(source);
 });
+
+test('new child context invalidates a pending cheap archive even without a parent revision change',async()=>{
+ const value=fixture();const {store}=value;const entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>();let pi=0;
+ value.worker=new InboxWorker(store,async context=>{pi++;return file(context);},result=>{if(result)value.worker!.pause();},{settleMs:1,noteModel:async({routeInbox})=>{
+  expect(routeInbox?.hasChildren).toBe(false);entered.resolve();await release.promise;
+  return {plan:{summary:'Archive noise',tags:[],inboxRoute:{route:'archive',reason:'Fixture archive judgment'}},usage};
+ }});
+ const source=store.capture('child-race','aaaa','cli').block;value.worker.wake();await entered.promise;
+ const child=store.create('aaaa is the parser fixture name; keep this reproduction.',source.id);release.resolve();
+ await until(()=>!value.worker!.status().current&&value.worker!.repository.results().length===1);
+ const result=value.worker.repository.results()[0]!;expect(result.state).toBe('failed');expect(result.failureKind).toBe('conflict');
+ expect(result.error).toContain('Child context');expect(store.require(source.id)).toEqual(source);expect(store.require(child.id)).toEqual(child);expect(pi).toBe(0);
+});

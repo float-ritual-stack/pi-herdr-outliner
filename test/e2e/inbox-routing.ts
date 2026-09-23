@@ -28,7 +28,7 @@ const result=await runHerdrScenario({name:'inbox-routing',allowInboxAgent:true,a
  await session.waitFor('useful short note',state,value=>!value.current&&value.results.some(item=>item.sourceId===shopping.block.id),120000);
  const kept=(await state()).results.find(item=>item.sourceId===shopping.block.id)!;assert.equal(kept.routing?.route,'keep');assert.equal(kept.usage?.piSessions?.length??0,0);
  const final=await session.client.request<Block>({action:'get',blockId:shopping.block.id});assert.ok(final.text.includes('- milk\n- coffee\n- rice'));assert.equal(final.properties.filter(p=>p.key==='tag').length,0);
- // New receipts preserve the selection; reopen to inspect the newest result.
- await session.keys(pane,'esc');await session.keys(pane,'I');await session.keys(pane,'A');await session.waitVisible(pane,'Route: keep');await session.keys(pane,'1');await session.waitVisible(pane,'Grocery list');
+ // New receipts preserve the selected retry; move to the new receipt above it.
+ await session.keys(pane,'up');await session.keys(pane,'A');await session.waitVisible(pane,'Route: keep');await session.keys(pane,'1');await session.waitVisible(pane,'Grocery list');
  await session.checkpoint('04-useful-list-kept-without-tags');await session.record('routing-results',await state());
 }});console.log(JSON.stringify(result));if(result.status!=='passed')process.exitCode=1;

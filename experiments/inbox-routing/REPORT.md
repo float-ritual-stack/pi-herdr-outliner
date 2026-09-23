@@ -15,7 +15,7 @@ The existing Jev classification request now includes two questions: the useful a
 - **Archive:** move clear noise intact into the existing reversible Processed captures folder. Never delete it.
 - **Editorial:** use the existing bounded Pi cleanup for mixed work, ambiguous meaning, requests or explicit steering.
 
-An incomplete routing window, malformed distribution, close alternatives, or explicit Reconsider goes to the editor. A note with children cannot take the cheap archive route. Request fulfillment retains its established path and cannot be bypassed by a keep/archive judgment. The route and reason appear on activity receipts, including failed Pi attempts.
+An incomplete routing window, malformed distribution, close alternatives, or explicit Reconsider goes to the editor. A note with children cannot take the cheap archive route. Commit rechecks child context after inference; new child context produces a visible conflict without moving anything. Request fulfillment retains its established path and cannot be bypassed by a keep/archive judgment. The route and reason appear on activity receipts, including failed Pi attempts.
 
 ## Paired comparison
 
@@ -67,3 +67,7 @@ Set `ROUTING_CASE=<id>` to run one paired case or `ROUTING_EVIDENCE_DIR` to choo
 ## Sources and scope
 
 Design follows TypeSafe's [Choice contract](https://docs.typesafe.ai/primitives/choice), [confidence guidance](https://docs.typesafe.ai/confidence), [routing pattern](https://docs.typesafe.ai/patterns/intent-routing), and [HTTP API](https://docs.typesafe.ai/api), read on 2026-09-23. Independent questions share one request; code owns execution and uncertainty policy. No model change, permanent deletion, semantic index or automated routine promotion is included.
+
+## Verification evidence
+
+Private Herdr with live Jev/Pi: `/tmp/p267-vN0mxa/artifacts`. Keyboard archive inspection, Undo restoring exact source text/location, guided Reconsider taking the editor path, and a grocery list kept without extra tags all passed. Independent review found the child-arrival race; a focused regression now proves conflict without moving parent or child. Earlier UI harness failures used the Tree-reveal key instead of Preview and assumed new results stole selection; the application correctly retained selection. Those artifacts remain available as failed harness attempts.
