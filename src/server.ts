@@ -1,3 +1,4 @@
+import { blockDisplayTitle } from "./references";
 import { rankGotoWithJev, visibleGotoResults } from "./goto-search";
 import { InboxWorker, assistantActivity } from "./inbox-worker";
 import { InboxRepository, summarizeInboxResult } from "./inbox-repository";
@@ -21,6 +22,7 @@ import type { HerdrRuntimeRegistry } from "./herdr-registry";
 import { isFragmentId, resolveFragment } from "./fragments";
 import { OutlinerStore } from "./store";
 import {
+  resourceAddressLabel,
   normalizeResourceId,
   normalizeRetainedResourceRevisionRef,
   normalizeResourceProviderCommandInput,
@@ -1019,11 +1021,45 @@ export class OutlinerServer {
   }
 
   private navigationLinkState(source: OutlinerViewAddress): NavigationLinkState {
-    this.navigationView(source);
-    return {source, destination: this.navigationLinks.get(JSON.stringify([source.clientId, source.region])) ?? null,
-      destinations: this.listClients("detail").map(client => ({view: {clientId: client.clientId, region: "detail"},
-        label: `${client.role === "composed" ? "Composed Detail" : "Detail"} ${client.runtime?.paneId ?? client.clientId}`,
-        ...(client.navigationProtection ? {protection: client.navigationProtection} : {})}))};
+    const sourceClient = this.navigationView(source);
+    const destination = this.navigationLinks.get(JSON.stringify([source.clientId, source.region])) ?? null;
+    const nearby = (client: OutlinerClientRegistration): number => {
+      if (client.clientId === destination?.clientId) return 0;
+      if (client.clientId === source.clientId) return 1;
+      if (client.runtime?.hostname && client.runtime.hostname === sourceClient.runtime?.hostname) {
+        return client.runtime.tabId && client.runtime.tabId === sourceClient.runtime?.tabId ? 2 : 3;
+      }
+      return client.runtime?.paneId ? 4 : 5;
+    };
+    const clients = this.listClients("detail").filter(client => {
+      // A ready local registry can disprove a claimed Herdr terminal. Missing
+      // topology alone says nothing about remote or non-Herdr readers.
+      return !(this.herdrRegistry?.phase === "ready" && !this.clientOwnsTopology(client) &&
+        client.runtime?.terminalId && !this.herdrRegistry.paneIdForTerminal(client.runtime.terminalId));
+    });
+    const groupKey = (client: OutlinerClientRegistration) => [client.runtime?.hostname, client.runtime?.workspaceId, client.runtime?.tabId].join("/");
+    return {source, destination, destinations: clients.sort((a, b) => nearby(a) - nearby(b) || groupKey(a).localeCompare(groupKey(b))).map(client => {
+      const target = client.currentTarget ?? client.previewTarget;
+      const block = target?.kind === "block" ? this.store.get(target.blockId) : null;
+      const resource = target?.kind === "resource" ? this.store.resources.get(target.resourceId) : null;
+      const label = block ? (blockDisplayTitle(block) === block.id ? "Untitled block" : blockDisplayTitle(block)) : resource ? resourceAddressLabel(resource.address)
+        : target ? "Unavailable document" : "Empty Detail";
+      const runtime = client.runtime;
+      const registry = !this.clientOwnsTopology(client) && this.herdrRegistry?.phase === "ready" ? this.herdrRegistry : undefined;
+      const workspace = runtime?.workspaceId ? registry?.workspaces.get(runtime.workspaceId) : undefined;
+      const tab = runtime?.tabId ? registry?.tabs.get(runtime.tabId) : undefined;
+      const named = (record: Record<string, unknown> | undefined, fallback: string | undefined) => typeof record?.label === "string" && record.label.trim() ? record.label : fallback;
+      const groupLabel = runtime?.paneId
+        ? [named(workspace, runtime.workspaceId), named(tab, runtime.tabId)].filter(Boolean).join(" › ")
+        : "Other connected views";
+      const location = runtime?.paneId
+        ? [groupLabel, runtime.hostname, `pane ${runtime.paneId}`].filter(Boolean).join(" · ")
+        : `Location unavailable${runtime?.hostname ? ` · ${runtime.hostname}` : ""} · client ${client.clientId.slice(0, 8)}`;
+      return {view: {clientId: client.clientId, region: "detail" as const}, label,
+        groupLabel, description: `${client.role === "composed" ? "Composed Detail" : "Detail"} · ${location}${!client.currentTarget && client.previewTarget ? " · inspecting Preview" : ""}`,
+        ...(sourceClient.runtime?.paneId && (!runtime?.paneId || runtime.hostname !== sourceClient.runtime.hostname) ? {otherLocation: true} : {}),
+        ...(target ? {target} : {}), ...(client.navigationProtection ? {protection: client.navigationProtection} : {})};
+    })};
   }
 
   private resolveExplicitOpen(source: OutlinerClientRegistration, sourceRegion?: OutlinerViewAddress["region"], destination?: OutlinerViewAddress, preserveSource = false): OutlinerNavigationResolution {

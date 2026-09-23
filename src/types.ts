@@ -959,7 +959,7 @@ export interface OutlinerViewAddress {
 export interface NavigationLinkState {
   source: OutlinerViewAddress;
   destination: OutlinerViewAddress | null;
-  destinations: Array<{ view: OutlinerViewAddress; label: string; protection?: string }>;
+  destinations: Array<{ view: OutlinerViewAddress; label: string; description?: string; groupLabel?: string; target?: OutlinerNavigationTarget; otherLocation?: boolean; protection?: string }>;
 }
 
 export interface OutlinerClientRegistration {

@@ -79,7 +79,7 @@ import {
   resourceAddressLabel,
 } from "./resources";
 import { TextBuffer, type TextBufferPoint, type TextBufferRange } from "./text-buffer";
-import type { TerminalKey } from "./terminal";
+import { sanitizeDynamicText, type TerminalKey } from "./terminal";
 import type {
   AnnotationBatchReceipt,
   AnnotationReplyInput,
@@ -510,7 +510,7 @@ export interface DetailEffects {
   isSourceSelectionActive?(): boolean;
   setNavigationProtection?(reason: string | null): Promise<void>;
   chooseDestination?(purpose: "link" | "open"): Promise<OutlinerViewAddress | null | undefined>;
-  setDestination?(destination: OutlinerViewAddress | null): Promise<void>;
+  setDestination?(destination: OutlinerViewAddress | null): Promise<string | void>;
   setCurrentTarget(target: OutlinerNavigationTarget | null): Promise<void>;
   dispatchNavigation(
     target: OutlinerNavigationTarget,
@@ -3211,8 +3211,8 @@ export function createDetailController(
       case "navigation.link": {
         const destination = await effects.chooseDestination?.("link");
         if (destination !== undefined) {
-          await effects.setDestination?.(destination);
-          state.status = destination ? `Open → ${destination.clientId} / ${destination.region}` : "Open unlinked · choose a destination or new split";
+          const label = await effects.setDestination?.(destination);
+          state.status = destination ? `Open → ${sanitizeDynamicText(label || "selected Detail")} · Alt+L changes destination` : "Open unlinked · choose a destination or new split";
         }
         break;
       }

@@ -5336,3 +5336,21 @@ test("targeted focus navigates while protected focus preserves the Current draft
   expect(harness.calls.selfFocuses).toBe(focuses + 1);
   expect(harness.controller.state.buffer.text).toBe(draft);
 });
+
+
+test("link confirmation names the chosen document and cancel leaves the existing link alone", async () => {
+  const harness = createHarness(makeBlock());
+  await harness.controller.initialize();
+  const destination = {clientId: "opaque-client-id", region: "detail" as const};
+  const linked: unknown[] = [];
+  harness.effects.chooseDestination = async () => destination;
+  harness.effects.setDestination = async value => {linked.push(value); return "Project notes · Research › Writing\x1b[2J";};
+  await harness.controller.dispatch({type: "navigation.link"}, viewport);
+  expect(linked).toEqual([destination]);
+  expect(harness.controller.state.status).toBe("Open → Project notes · Research › Writing · Alt+L changes destination");
+  const status = harness.controller.state.status;
+  harness.effects.chooseDestination = async () => undefined;
+  await harness.controller.dispatch({type: "navigation.link"}, viewport);
+  expect(linked).toHaveLength(1);
+  expect(harness.controller.state.status).toBe(status);
+});
