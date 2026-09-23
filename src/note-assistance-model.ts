@@ -1,3 +1,4 @@
+import {recordInboxOmission} from "./inbox-observations";
 import { combinedInboxUsage } from "./inbox-usage";
 import { createHash } from "node:crypto";
 import { loadNotePrompts } from "./ai-prompts";
@@ -127,7 +128,8 @@ export function createNoteModel(options: InboxModelOptions = {}): NoteModel {
       ...(type && type.confidence >= prompts.thresholds.type ? { type: type.value } : {}) };
     const tokens = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
     const usage: InboxUsage = { provider: "typesafe", model: MODEL, inputTokens: tokens(raw.usage?.input_tokens), outputTokens: tokens(raw.usage?.output_tokens),
-      cost: tokens(raw.usage?.input_tokens) * 0.042 / 1_000_000, jevCalls: 1, jevSuccessfulCalls: 1, elapsedMs: Math.round(performance.now() - started), promptRevisions: prompts.revisions };
+      cost: tokens(raw.usage?.input_tokens) * 0.042 / 1_000_000, jevCalls: 1, jevSuccessfulCalls: 1, elapsedMs: Math.round(performance.now() - started), promptRevisions: prompts.revisions, notChecked: [] };
+    if(content.length>excerpt.length)recordInboxOmission(usage,"classification","Only the first 12,000 characters were classified; requests beyond that bound were not evaluated");
     const addAnswerUsage = (additional: InboxUsage) => Object.assign(usage, combinedInboxUsage(usage, additional));
     if (mayRequest) {
       const request = choice("request", Object.keys(prompts.request.criteria));

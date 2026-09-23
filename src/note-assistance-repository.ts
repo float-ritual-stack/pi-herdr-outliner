@@ -1,3 +1,4 @@
+import {noteMetadataSummary} from "./inbox-observations";
 import { createHash } from "node:crypto";
 import { isManagedNote, NOTE_TYPES } from "./note-kinds";
 import { passageKey, requestPassages } from "./note-content";
@@ -160,13 +161,14 @@ export function prepareNoteEdit(candidate: NoteCandidate, plan: NotePlan, draftT
   }
   if (replaceType) operations.push({ op: "append", key: "type", value: nextType! });
   if (requestStatus) operations.push({ op: "append", key: "request-status", value: requestStatus });
+  const finalText=patchPropertyText(text, operations);
   return {
-    text: patchPropertyText(text, operations),
+    text: finalText,
     inferredType: nextType ?? candidate.inferredType,
     inferredTags,
     lastRequestKey: fulfillment?.key ?? candidate.lastRequestKey,
     kind: fulfillment ? "fulfilled" : unfulfilled ? "unfulfilled" : "organized",
-    summary: fulfillment ? `Fulfilled: ${fulfillment.summary}` : unfulfilled ? `Unfulfilled: ${unfulfilled.reason}` : `Organized: ${plan.summary}`,
+    summary: fulfillment ? `Fulfilled: ${fulfillment.summary}` : unfulfilled ? `Unfulfilled: ${unfulfilled.reason}` : noteMetadataSummary(source.text,finalText),
   };
 }
 

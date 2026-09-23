@@ -1844,3 +1844,12 @@ inside it to copy. Escape first leaves reader focus, then returns to Tree.
 Narrow panes retain a single reader with Source/Output/Activity choices. Before and
 Current remain available in the Source toolbar and action menu. Explicit Open follows
 the linked destination and opens the current canonical note, never the saved snapshot.
+
+Inbox activity summaries describe the metadata actually applied, including no-op
+organization, alongside the editor's explanation of prose changes. Technical
+usage labels **model work** as wall time from entry to return/failure of model
+work, summed for sequential organization/edit phases. It excludes queue waiting
+and the store commit; it is not Jev latency. `notChecked` records observed search,
+read and judge limits. Those omissions remain visible with technical details
+collapsed. Historical attempts without this field say coverage was not recorded;
+an empty omissions list is not an exhaustive search guarantee.

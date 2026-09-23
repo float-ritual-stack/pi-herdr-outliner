@@ -395,6 +395,8 @@ describe("Inbox rendering", () => {
     const text = stripTerminalSequences(renderInboxFrame(h.controller, 150, 30, "a questions/recent").join("\n"));
     expect(text).toContain("Needs attention: 41");
     expect(text).toContain("Jev 3 attempted / 1 successful");
+    expect(text).toContain("model work 2.0s");
+    expect(text).toContain("Coverage: not recorded");
     expect(text).toContain("Some Jev comparisons unavailable");
     expect(inboxStatusCue(h.controller.snapshot)).toContain("41 need attention");
   });
@@ -744,4 +746,17 @@ test('content notifications refresh the browsed Inbox target without returning t
  expect(h.controller.reader.state?.target).toEqual({kind:'block',blockId:'browsed-target'});
  await h.controller.previewAction('preview.back');
  expect(h.controller.reader.state?.target).toEqual(original);
+});
+
+test('observed omissions remain visible outside technical details on wide and narrow frames',async()=>{
+ const h=harness(request=>request.action==='inbox.status'?status({attentionCount:0,results:[result('limits',{
+  summary:'No metadata changes',usage:{provider:'typesafe',model:'jev',inputTokens:20,outputTokens:5,cost:0,jevCalls:1,elapsedMs:900,
+   notChecked:[{area:'relationships',reason:'Skipped by budget'}]}
+ })]}):undefined);
+ await startRecent(h.controller);h.controller.showActivity();
+ for(const width of [80,150]) {
+  const text=stripTerminalSequences(renderInboxFrame(h.controller,width,40,'help').join('\n'));
+  expect(text).toContain('No metadata changes');expect(text).toContain('Not checked:');expect(text).toContain('Skipped by budget');
+  expect(text).not.toContain('Coverage: not recorded');
+ }
 });

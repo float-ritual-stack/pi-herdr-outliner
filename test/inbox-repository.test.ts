@@ -150,7 +150,7 @@ describe("InboxRepository", () => {
     expect(filed.properties).toContainEqual({ key: "tag", value: "navigation" });
     expect(store.require(originalChild.id)).toEqual(originalChild);
     expect(result.kind).toBe("organized");
-    expect(result.summary).toBe("Organized: Filed a clearer note.");
+    expect(result.summary).toBe("type capture → idea; added 1 tag (navigation) · Filed a clearer note.");
     expect(repository.results()).toHaveLength(1);
     expect(notes.results()).toEqual([]);
     expect(notes.pending(repository.sourceIds()).map(value => value.source.id)).not.toContain(source.id);

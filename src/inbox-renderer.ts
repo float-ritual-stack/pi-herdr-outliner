@@ -37,6 +37,13 @@ function detailLines(controller: InboxController, width: number): string[] {
     lines.push(truncateToWidth(target.sessionPath ? sanitizeDynamicText(label) : outlinerActionLink(`tree.inbox.open-target:${index}`, label), width));
   });
   const usage = result.usage;
+  if (usage?.jevWarning) plain(usage.jevWarning);
+  if (usage?.notChecked === undefined) plain("Coverage: not recorded for this attempt");
+  else if (usage.notChecked.length) {
+    plain("Not checked:");
+    for(const omitted of usage.notChecked)plain(`• ${omitted.area}: ${omitted.reason}`);
+  }
+  lines.push(outlinerActionLink('tree.inbox.preview.technical', controller.technicalDetails ? '▾ Technical details' : '▸ Technical details'));
   if (usage && controller.technicalDetails) {
     lines.push("");
     for (const session of usage.piSessions ?? []) {
@@ -47,11 +54,9 @@ function detailLines(controller: InboxController, width: number): string[] {
     plain(`${usage.provider} · ${usage.model}`);
     if (usage.promptRevisions?.length) plain(`Prompts: ${usage.promptRevisions.map(prompt => `${basename(prompt.path)} @ ${prompt.sha256.slice(0, 12)}`).join(" · ")}`);
     plain(`${usage.inputTokens.toLocaleString("en-US")} in / ${usage.outputTokens.toLocaleString("en-US")} out · estimated $${usage.cost.toFixed(4)}`);
-    plain(`${usage.jevSuccessfulCalls === undefined ? `Jev ${usage.jevCalls} calls` : `Jev ${usage.jevCalls} attempted / ${usage.jevSuccessfulCalls} successful`} · ${(usage.elapsedMs / 1000).toFixed(1)}s`);
+    plain(`${usage.jevSuccessfulCalls === undefined ? `Jev ${usage.jevCalls} calls` : `Jev ${usage.jevCalls} attempted / ${usage.jevSuccessfulCalls} successful`} · model work ${(usage.elapsedMs / 1000).toFixed(1)}s`);
 
   }
-  if (usage?.jevWarning) plain(usage.jevWarning);
-  lines.push(outlinerActionLink('tree.inbox.preview.technical', controller.technicalDetails ? '▾ Technical details' : '▸ Technical details'));
   return lines;
 }
 

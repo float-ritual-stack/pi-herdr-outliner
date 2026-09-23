@@ -23,7 +23,10 @@ export interface InboxUsage {
   jevCalls: number;
   jevSuccessfulCalls?: number;
   jevWarning?: string;
+  /** Wall time inside model work (summed sequential phases), excluding queue wait and commit. */
   elapsedMs: number;
+  /** Absent on legacy attempts: coverage was not recorded. */
+  notChecked?: Array<{area:string;reason:string}>;
   promptRevisions?: PromptRevision[];
   piSessions?: AssistantSessionEvidence[];
 }

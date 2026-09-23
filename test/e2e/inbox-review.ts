@@ -29,7 +29,7 @@ const result = await runHerdrScenario({
         return { plan: {
           summary: "Filed fixture note", source: { text: "Cleaned source after editorial pass\n\nCurrent wording.", disposition: "file" },
           notes: [{text:"Output one\n\n> [!summary] Output callout\n> This is rich output with wrapping.\n\n"+Array.from({length:50},(_,i)=>`Paragraph ${i} of the long note.`).join("\n\n")},{text:"Output two\n\nSecond output body"}], tasks: [], updates: [],
-        }, usage: { provider: "fixture", model: "fixture", inputTokens: 0, outputTokens: 0, cost: 0, jevCalls: 0, elapsedMs: 0 } };
+        }, usage: { provider: "fixture", model: "fixture", inputTokens: 0, outputTokens: 0, cost: 0, jevCalls: 3, jevSuccessfulCalls: 2, elapsedMs: 135000, notChecked:[{area:"relationships",reason:"Some comparisons were skipped for budget"}] } };
       });
       const waitCount = async (count: number) => {
         for (let attempt = 0; attempt < 200; attempt++) {
@@ -73,8 +73,14 @@ const result = await runHerdrScenario({
     const outputRow=layoutRows.findIndex(line=>line.includes('Output 1 · current'));
     if(sourceRow!==outputRow||sourceRow<10)throw Error('Expected side-by-side documents beneath activity');
     await clickLabel('▸ Technical details');await session.waitVisible(pane,'fixture · fixture');
+    await clickLabel('[Activity');await terminal.write('\x1b[6~');
+    await session.waitVisible(pane,'model work 135.0s');
+    await terminal.write('\x1b[5~');
+    await session.waitFor('native activity scroll restored',terminal.visible,text=>text.includes('│APPLIED ·'));
     await clickLabel('▾ Technical details');
     await session.waitFor('technical details collapse immediately',()=>session.visible(pane),text=>!text.includes('fixture · fixture'));
+    await session.waitVisible(pane,'Not checked:');
+    await session.waitVisible(pane,'Some comparisons were skipped for budget');
     await session.checkpoint('combined-activity-source-output');
     const dividerRow=layoutRows.findIndex(line=>line.includes('drag─to─resize'));
     if(dividerRow<0)throw Error('No draggable activity divider');

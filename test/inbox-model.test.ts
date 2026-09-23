@@ -370,6 +370,8 @@ describe("Inbox editorial model", () => {
     expect(requests).toBe(1);
     expect(output.usage).toMatchObject({ inputTokens: 1220, outputTokens: 140, jevCalls: 1 });
     expect(output.usage.cost).toBeCloseTo(0.006042, 8);
+    expect(output.usage.notChecked?.some(value=>value.area === "retrieval")).toBe(true);
+    expect(output.usage.notChecked?.some(value=>value.area === "Pi candidate reads")).toBe(true);
   });
 
   test("Jev failures remain an explicit unavailable hint without leaking provider errors", async () => {
@@ -388,7 +390,16 @@ describe("Inbox editorial model", () => {
     expect(output.usage.jevCalls).toBe(1);
     expect(output.usage.jevSuccessfulCalls).toBe(0);
     expect(output.usage.jevWarning).toContain("failed");
+    expect(output.usage.notChecked).toContainEqual({area:"relationships",reason:output.usage.jevWarning!});
     expect(JSON.stringify(output)).not.toContain("SECRET");
+  });
+
+  test("relationship comparisons skipped before a provider call retain the budget omission",async()=>{
+    const f=await fixture({jevApiKey:'fixture',maxTotalTokens:12000,fetch:async()=>{throw Error('Should not call the judge');}},
+      {search:()=>Array.from({length:6},(_,i)=>block(`budget-note-${i}`,'Long note '+ 'body '.repeat(1500)))});
+    const result=await f.run();
+    expect(result.usage.jevCalls).toBe(0);
+    expect(result.usage.notChecked?.some(value=>value.reason.includes("budget"))).toBe(true);
   });
 
   test("holds require a precise reason, unchanged source, and no side effects", async () => {

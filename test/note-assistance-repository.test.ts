@@ -153,7 +153,7 @@ describe("NoteAssistanceRepository", () => {
     expect(after.parentId).toBe(parent.id);
     expect(after.author).toBe(source.author);
     expect(store.require(child.id)).toEqual(child);
-    expect(result.summary).toStartWith("Organized:");
+    expect(result.summary).toBe("added 1 tag (y2026/q1)");
     expect(result.kind).toBe("organized");
     expect(result.outputIds).toEqual([]);
     expect(store.database.query("SELECT COUNT(*) AS n FROM blocks").get()).toEqual(originalCount);
@@ -313,7 +313,7 @@ describe("NoteAssistanceRepository", () => {
     const edited = store.update(after.id, `${after.text}\n\nAdditional context.`, after.revision, user);
     expect(candidate(repository, edited).lastRequestKey).toBe("types/block");
     const duplicate = repository.apply("not-again", candidate(repository, edited), plan({ fulfillment }));
-    expect(duplicate.summary).toStartWith("Organized:");
+    expect(duplicate.summary).toBe("No metadata changes");
     expect(store.require(source.id).text).toContain("Additional context.");
   });
 

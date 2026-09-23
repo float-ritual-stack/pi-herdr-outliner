@@ -483,3 +483,9 @@ test("failed Pi setup or inference preserves the successful Jev usage", async ()
     expect(failure!.usage!.promptRevisions?.some(revision => revision.path.endsWith("note-assistance.json"))).toBe(true);
   }
 });
+
+test('Jev-only classification records the truncated input window',async()=>{
+ const f=await fixture('Long note\n\n'+'architecture '.repeat(1500));
+ const result=await createNoteModel(f.options)(f.context);
+ expect(result.usage.notChecked).toContainEqual({area:'classification',reason:'Only the first 12,000 characters were classified; requests beyond that bound were not evaluated'});
+});
