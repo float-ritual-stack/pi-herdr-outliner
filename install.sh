@@ -7,9 +7,11 @@ INSTALLER_SCHEMA="1"
 MIN_BUN_VERSION="1.3.0"
 MIN_HERDR_VERSION="0.9.0"
 DEFAULT_OPEN_KEY="prefix+u"
+DEFAULT_TREE_KEY="prefix+shift+u"
 DEFAULT_COMMENT_KEY="prefix+shift+a"
 DEFAULT_CAPTURE_KEY="prefix+shift+c"
 OPEN_ACTION="$PLUGIN_ID.open-here"
+TREE_ACTION="$PLUGIN_ID.open-tree"
 COMMENT_ACTION="$PLUGIN_ID.comment-selection"
 CAPTURE_ACTION="$PLUGIN_ID.capture"
 SUPPORTED_EXTRA_OPEN_ACTION="$PLUGIN_ID.open"
@@ -18,6 +20,7 @@ SUPPORTED_COMPOSED_OPEN_ACTION="$PLUGIN_ID.open-composed"
 CONFIG_PATH="${HERDR_CONFIG_PATH:-${XDG_CONFIG_HOME:-${HOME:-}/.config}/herdr/config.toml}"
 PLUGIN_REF="main"
 OPEN_KEY=""
+TREE_KEY=""
 COMMENT_KEY=""
 CAPTURE_KEY=""
 ASSUME_YES=0
@@ -110,6 +113,7 @@ usage() {
 Usage: install.sh [options]
 
 Options:
+  --tree-key CHORD       Herdr key for a new Tree only (default: prefix+shift+u)
   --open-key CHORD       Herdr key for a new Tree + Detail (default: prefix+u)
   --comment-key CHORD    Herdr key for commenting on retained selection
                          (default: prefix+shift+a)
@@ -140,6 +144,14 @@ while [ "$#" -gt 0 ]; do
     --open-key)
       [ "$#" -ge 2 ] || fail "--open-key requires a chord"
       OPEN_KEY=$2
+      shift 2
+      ;;
+    --tree-key)
+      [ "$#" -ge 2 ] || fail "--tree-key requires a chord"
+      case "$2" in
+        -*) fail "--tree-key requires a chord" ;;
+      esac
+      TREE_KEY=$2
       shift 2
       ;;
     --comment-key)
@@ -467,6 +479,7 @@ rewrite_config() {
   awk \
     -v begin="# BEGIN pi-herdr-outliner installer" \
     -v end="# END pi-herdr-outliner installer" \
+    -v tree_action="$TREE_ACTION" \
     -v open_action="$OPEN_ACTION" \
     -v comment_action="$COMMENT_ACTION" \
     -v capture_action="$CAPTURE_ACTION" \
@@ -488,9 +501,9 @@ rewrite_config() {
     }
     function flush_command() {
       if (!in_command) return;
-      drop = command == open_action || command == comment_action || command == capture_action;
+      drop = command == tree_action || command == open_action || command == comment_action || command == capture_action;
       obsolete = index(command, "float.pi-outliner.") == 1 &&
-        command != open_action && command != comment_action && command != capture_action &&
+        command != tree_action && command != open_action && command != comment_action && command != capture_action &&
         command != supported_open && command != supported_detail && command != supported_composed;
       if (!drop && !obsolete) printf "%s", block;
       block = ""; command = ""; in_command = 0;
@@ -520,6 +533,8 @@ ensure_git
 
 if [ "$CONFIGURE_KEYS" -eq 1 ]; then
 
+  existing_tree_key=$(config_key_for_action "$CONFIG_PATH" "$TREE_ACTION")
+  tree_default=${existing_tree_key:-$DEFAULT_TREE_KEY}
   existing_open_key=$(config_key_for_action "$CONFIG_PATH" "$OPEN_ACTION")
   existing_comment_key=$(config_key_for_action "$CONFIG_PATH" "$COMMENT_ACTION")
   existing_capture_key=$(config_key_for_action "$CONFIG_PATH" "$CAPTURE_ACTION")
@@ -540,9 +555,12 @@ if [ "$CONFIGURE_KEYS" -eq 1 ]; then
     fi
     COMMENT_KEY=$(prompt_key "Comment on retained selection key" "$comment_default")
   fi
+  if [ -z "$TREE_KEY" ]; then TREE_KEY=$(prompt_key "New Tree only key" "$tree_default"); fi
+  TREE_KEY=$(choose_available_key "Tree key" "$TREE_KEY")
   OPEN_KEY=$(choose_available_key "Open key" "$OPEN_KEY")
   COMMENT_KEY=$(choose_available_key "Comment key" "$COMMENT_KEY")
   CAPTURE_KEY=$(choose_available_key "Capture key" "$CAPTURE_KEY")
+  [ "$TREE_KEY" != "$OPEN_KEY" ] && [ "$TREE_KEY" != "$COMMENT_KEY" ] && [ "$TREE_KEY" != "$CAPTURE_KEY" ] || fail "tree, capture, open, and comment keys must be different"
   [ "$OPEN_KEY" != "$COMMENT_KEY" ] || fail "open and comment keys must be different"
   [ "$CAPTURE_KEY" != "$OPEN_KEY" ] && [ "$CAPTURE_KEY" != "$COMMENT_KEY" ] ||
     fail "capture, open, and comment keys must be different"
@@ -593,6 +611,12 @@ key = "$CAPTURE_KEY"
 type = "plugin_action"
 command = "$CAPTURE_ACTION"
 description = "Quick Capture to the Outliner Inbox"
+
+[[keys.command]]
+key = "$TREE_KEY"
+type = "plugin_action"
+command = "$TREE_ACTION"
+description = "Open a new Outliner Tree only"
 # END pi-herdr-outliner installer
 EOF
 
@@ -618,6 +642,7 @@ EOF
     say "Open Tree + Detail: $OPEN_KEY"
     say "Comment on retained selection: $COMMENT_KEY"
     say "Quick Capture: $CAPTURE_KEY"
+    say "New Tree only: $TREE_KEY"
   fi
 fi
 

@@ -23,6 +23,7 @@ export interface DetailKeymapOptions {
   stop(): void;
   actionKeymap?: OutlinerActionKeymap;
   openKeyInspector?(): void;
+  openNewTree?(): void | Promise<void>;
   openActionMenu?(
     items: readonly OutlinerActionMenuItem[],
     invoke: (actionId: string) => Promise<void>,
@@ -369,6 +370,10 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
         return true;
       case "detail.buffer.redo":
         await dispatch({ type: "buffer.redo" });
+        return true;
+      case "detail.tree.new":
+        if (options.openNewTree) await options.openNewTree();
+        else await setStatus("Creating a Tree pane is unavailable in this host");
         return true;
       case "detail.pane.right":
       case "detail.pane.below":

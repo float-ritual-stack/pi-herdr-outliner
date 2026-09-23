@@ -116,11 +116,16 @@ const result = await runHerdrScenario({
     await terminal.resize(170, 74);
     await session.revealTree(panes.tree, docs[0]!.id);
     const clickLabel = async (label: string) => {
-      const frame = await session.waitFor(`native button ${label}`, terminal.visible, text => text.includes(label));
-      const lines = frame.split("\n");
-      const row = lines.findIndex(line => line.includes(label));
-      const column = visibleWidth(lines[row]!.slice(0, lines[row]!.indexOf(label))) + 1;
-      await click(column, row);
+      const position = (frame:string) => {
+        const lines=frame.split('\n'), row=lines.findIndex(line=>line.includes(label));
+        const origin=lines.findIndex(line=>line.includes('Outliner  '));
+        if(row<0||origin<0)return null;
+        const column=visibleWidth(lines[row]!.slice(0,lines[row]!.indexOf(label)));
+        const left=visibleWidth(lines[origin]!.slice(0,lines[origin]!.indexOf('Outliner  ')));
+        return {row,column,relativeRow:row-origin,relativeColumn:column-left};
+      };
+      const ready=await session.waitFor(`native button ${label}`,async()=>({native:position(await terminal.visible()),pane:position(await session.visible(panes.tree))}),value=>!!value.native&&!!value.pane&&value.native.relativeRow===value.pane.relativeRow&&value.native.relativeColumn===value.pane.relativeColumn);
+      await click(ready.native!.column+1,ready.native!.row);
     };
     await clickLabel('[↓]');
     await session.waitFor('explicit bottom', () => session.visible(panes.tree), frame => frame.split('\n').findIndex(line=>line.includes('Preview ·')) > 8);
@@ -130,10 +135,10 @@ const result = await runHerdrScenario({
     await clickLabel('[+]');
     const grown = await session.waitFor('grow changes divider', () => session.visible(panes.tree), frame => frame.indexOf('Preview ·') !== beforeResize.indexOf('Preview ·'));
     // Drag the native divider; coordinate offsets come from the attached screen.
-    const native = await terminal.visible();
+    const native = await session.waitFor('settled native toolbar',terminal.visible,text=>/[●○] Preview · FOCUS FIRST/.test(text));
     const rows = native.split('\n');
-    const header = rows.findIndex(line => line.includes('○ Preview ·'));
-    const dividerColumn = visibleWidth(rows[header]!.slice(0, rows[header]!.indexOf('○ Preview ·'))) - 1;
+    const header = rows.findIndex(line => /[●○] Preview ·/.test(line));
+    const dividerColumn = visibleWidth(rows[header]!.slice(0, rows[header]!.search(/[●○] Preview ·/))) - 1;
     await terminal.write(`\x1b[<0;${dividerColumn+1};${header+5}M\x1b[<32;${dividerColumn+7};${header+5}M\x1b[<0;${dividerColumn+7};${header+5}m`);
     await session.waitFor('drag changes divider', () => session.visible(panes.tree), frame => frame.indexOf('Preview ·') !== grown.indexOf('Preview ·'));
     await session.checkpoint('mouse-dock-grow-drag');

@@ -172,7 +172,7 @@ export interface TreeView {
 
 export interface TreeControllerEffects {
   readonly initialRoot?: TreeRoot;
-  createTreePane?(root: TreeRoot, direction: "right" | "down"): Promise<void>;
+  createTreePane?(root: TreeRoot | null, direction: "right" | "down"): Promise<void>;
   readonly workspaceRoot: string;
   readonly navigation: TreeNavigation;
   readonly clientId: string;
@@ -2123,6 +2123,12 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       breadcrumbRowId=rows[selectedIndex]?.rowId;
       effects.invalidate();return;
     }
+    if (actionId === "tree.pane.new") {
+      try { if (!effects.createTreePane) throw new Error("Creating a Tree pane is unavailable in this host");
+        await effects.createTreePane(null, "right"); status = "Opened new workspace Tree";
+      } catch (error) { status = errorMessage(error); }
+      effects.invalidate(); return;
+    }
     if(actionId === "tree.root.parent") {
       const path=breadcrumbs();
       if(path.length>1) await focusRoot(path[path.length-2]!);
@@ -2334,7 +2340,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     if (!treePointer && inputAction !== "suppress" && mode === "browse" && localReader.state?.focused) {
       const action=actionKeymap.canonicalize("tree","browse",str,key);
       if(action.suppressed)return;
-      if(action.actionId && (action.actionId.startsWith("tree.preview.") || ["tree.preview.focus","tree.preview.close","tree.navigation.link","tree.navigation.once","tree.menu.open"].includes(action.actionId))) return handleAction(action.actionId);
+      if(action.actionId && (action.actionId.startsWith("tree.preview.") || ["tree.preview.focus","tree.preview.close","tree.pane.new","tree.navigation.link","tree.navigation.once","tree.menu.open"].includes(action.actionId))) return handleAction(action.actionId);
       const frame=treePreviewFrame(localReader.state,effects.terminalWidth(),effects.terminalHeight(),"",previewPreferences);
       const delta=key.name==="up"?-1:key.name==="down"?1:key.name==="pageup"?-frame.content.height:key.name==="pagedown"?frame.content.height:0;
       if(delta) scrollLocalPreview(delta);

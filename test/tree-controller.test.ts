@@ -3651,6 +3651,14 @@ test('late publication preview events cannot reload or replace the latest local 
  expect(c.view().localPreview?.target).toEqual({kind:'block',blockId:a.id});
 });
 
+test('a configured New Tree action remains available while Preview owns focus',async()=>{
+ const note=block('new-tree-preview');const fake=harness(input=>input.action==='tree.index'?snapshot([note],note):input.action==='browsing-context.publish'?{contextId:'tree-test-context',target:input.target,preview:{targetClientId:'tree-test',targetRegion:'tree'}}:undefined);
+ fake.effects={...fake.effects,actionKeymap:new OutlinerActionKeymap('<test>',{'tree.pane.new':['Alt+N']})};
+ const roots:unknown[]=[];fake.effects.createTreePane=async root=>{roots.push(root);};
+ const c=createTreeController(fake.effects);await c.initialize();await c.handleRowClick(note.id);await setImmediate();c.focusLocalPreview();
+ await c.handleKeypress('n',{name:'n',meta:true},'pass');expect(roots).toEqual([null]);
+});
+
 test('Inbox destination chooser retains selection, cancel returns to Inbox and one-off opens its output',async()=>{
  const note=block('inbox-source'),output=block('inbox-output');
  const fake=harness(input=>{

@@ -1787,6 +1787,13 @@ The **Indent** badge, **Alt+I**, or **? → Toggle indentation follow** switches
 
 The choice lasts for the Tree process. It changes presentation only: root, selection, order and canonical hierarchy stay unchanged. Breadcrumbs follow the selected occurrence in both modes.
 
+### New Tree without a Detail
+
+The installer assigns **prefix, Shift+U** to `float.pi-outliner.open-tree`.
+Use `--tree-key CHORD` to customize it. **? → New Tree** in Tree or Detail
+opens an independent Tree at the workspace root. Existing **Tree right/below**
+actions instead use the selected branch. Prefix+U retains Tree+Detail launch.
+
 ### Local Tree Preview controls
 
 Each Tree has its own **Show/Hide Preview** control and `?` menu actions.

@@ -57,6 +57,7 @@ await reportStartupErrors("open", async () => {
     mode !== "focus-or-open" &&
     mode !== "ensure-detail" &&
     mode !== "open-here" &&
+    mode !== "open-tree" &&
     mode !== "open-composed" &&
     mode !== "focus-existing" &&
     mode !== "service-only"
@@ -71,7 +72,7 @@ await reportStartupErrors("open", async () => {
   }
   if (
     requestedClientId &&
-    (mode === "open-here" || mode === "open-composed" || mode === "service-only")
+    (mode === "open-tree" || mode === "open-here" || mode === "open-composed" || mode === "service-only")
   ) {
     throw new Error(`--client cannot be used with --mode ${mode}`);
   }
@@ -85,7 +86,11 @@ await reportStartupErrors("open", async () => {
       timeout: HERDR_SYNC_TIMEOUT_MS,
     });
     invocationPane = (JSON.parse(paneOutput) as PaneDetailsResponse).result?.pane;
-    workspaceRoot = invocationPane?.foreground_cwd ?? invocationPane?.cwd ?? workspaceRoot;
+    // Outliner panes report their project through OSC 7; their running process
+    // remains in the plugin checkout. A new Tree must inherit the project.
+    workspaceRoot = mode === "open-tree"
+      ? invocationPane?.cwd ?? invocationPane?.foreground_cwd ?? workspaceRoot
+      : invocationPane?.foreground_cwd ?? invocationPane?.cwd ?? workspaceRoot;
   }
 
   const paths = resolveClientPaths({ ...process.env, OUTLINER_WORKSPACE_ROOT: workspaceRoot });
@@ -247,6 +252,18 @@ await reportStartupErrors("open", async () => {
     throw new Error(`Outliner ${role} did not become ready in pane ${paneId}`);
   }
 
+  async function openTreeOnly() {
+    if (!currentPaneId) throw new Error("open-tree requires Herdr invocation pane context");
+    const browsingContextId = crypto.randomUUID();
+    const outlinerPane = openPane("outliner", {
+      placement: "split", targetPane: currentPaneId, direction: "right",
+      env: { OUTLINER_BROWSING_CONTEXT_ID: browsingContextId },
+    });
+    await waitForClientPane(outlinerPane, "tree");
+    execFileSync(herdr, ["plugin", "pane", "focus", outlinerPane], {stdio: "ignore", timeout: HERDR_SYNC_TIMEOUT_MS});
+    return {servicePane, outlinerPane, browsingContextId, workspaceRoot};
+  }
+
   async function openHere(): Promise<{
     servicePane: string | null;
     outlinerPane: string;
@@ -366,6 +383,8 @@ await reportStartupErrors("open", async () => {
     result = { servicePane, workspaceRoot };
   } else if (mode === "open-composed") {
     result = await openComposed();
+  } else if (mode === "open-tree") {
+    result = await openTreeOnly();
   } else if (mode === "open-here") {
     result = await openHere();
   } else if (mode === "ensure-detail") {

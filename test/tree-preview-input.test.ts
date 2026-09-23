@@ -46,3 +46,12 @@ test('Preview toolbar and divider consume pointer input before selection',()=>{
  expect(h.send(pointer(9,4))).toBe(true);expect(h.send(pointer(5,4,'drag'))).toBe(true);expect(h.send(pointer(5,4,'up'))).toBe(true);
  expect(sizes.at(-1)).toBeCloseTo(1-5/19);expect(h.focusCalls).toEqual([]);
 });
+
+test('releasing a content selection over a toolbar completes copy instead of invoking a button',()=>{
+ const h=fixture('beside');h.frame.controls=[{rect:{x:10,y:1,width:3,height:1},action:'tree.preview.bottom'}];
+ const copies:string[]=[];const actions:string[]=[];h.controller.handleAction=async id=>{actions.push(id);};
+ const send=(s:string)=>h.input.handle(s,h.controller,text=>copies.push(text),()=>{});
+ send(pointer(14,4));send(pointer(11,1,'drag'));send(pointer(11,1,'up'));
+ expect(copies.length).toBe(1);expect(actions).toEqual([]);
+ expect(send(pointer(2,3))).toBe(false);
+});

@@ -192,6 +192,8 @@ const ACTION_SPECS = [
   { id: "tree.indentation.toggle", surface: "tree", modes: ["browse"], label: "toggle indentation follow", description: "Compare fitting all visible rows with following the selected row; local to this Tree", defaultChords: ["Alt+I"], helpPriority: 0, menuGroup: "Navigate" },
   { id:"tree.breadcrumb.left",surface:"tree",modes:["browse"],label:"path left",description:"Scroll the breadcrumb path left without moving selection",defaultChords:["Alt+["],helpPriority:0,menuGroup:"Navigate" },
   { id:"tree.breadcrumb.right",surface:"tree",modes:["browse"],label:"path right",description:"Scroll the breadcrumb path right without moving selection",defaultChords:["Alt+]"],helpPriority:0,menuGroup:"Navigate" },
+  { id:"tree.pane.new", surface:"tree", modes:["browse"], label:"New Tree", description:"Open a new workspace Tree without a Detail", defaultChords:[], helpPriority:0, menuGroup:"Pane" },
+  { id:"detail.tree.new", surface:"detail", modes:["preview"], label:"New Tree", description:"Open a new workspace Tree without a Detail", defaultChords:[], helpPriority:0, menuGroup:"Pane" },
   { id:"tree.root.parent",surface:"tree",modes:["browse"],label:"focus parent branch",description:"Focus the displayed occurrence's parent as root",defaultChords:[],helpPriority:0,menuGroup:"Navigate" },
   { id: "tree.root.focus", surface:"tree", modes:["browse"], label:"focus branch", description:"Use this occurrence as this Tree's root", defaultChords:[], helpPriority:0, menuGroup:"Navigate" },
   { id: "tree.root.workspace", surface:"tree", modes:["browse"], label:"return to workspace", description:"Leave this Tree's focused branch", defaultChords:[], helpPriority:0, menuGroup:"Navigate" },

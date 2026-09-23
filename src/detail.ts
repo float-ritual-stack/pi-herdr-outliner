@@ -45,6 +45,7 @@ import { reportCurrentPaneWorkspace,
   focusCurrentPane,
   openBacklinkPeekPopup,
   openDetailPane,
+  openTreePane,
   openVirtualBranchNavigatorPopup,
 } from "./pane-control";
 import { resolveClientPaths } from "./paths";
@@ -53,6 +54,7 @@ import {
   BRACKETED_PASTE_DISABLE,
   BRACKETED_PASTE_ENABLE,
   osc52ClipboardWrite,
+  sanitizeDynamicText,
   TerminalInputDecoder,
   type TerminalKey,
 } from "./terminal";
@@ -507,7 +509,36 @@ const effects: DetailEffects = {
   },
 };
 
+let actionMenu: {
+  items: readonly OutlinerActionMenuItem[];
+  invoke: (id: string) => Promise<void>;
+  query: string;
+  index: number;
+} | null = null;
+
+function openActionMenu(items: readonly OutlinerActionMenuItem[], invoke: (id: string) => Promise<void>): void {
+  actionMenu = {items, invoke, query: "", index: 0};
+  draw();
+}
+
 function draw(): void {
+  if (actionMenu) {
+    const width = process.stdout.columns ?? 100;
+    const height = process.stdout.rows ?? 30;
+    const items = filterActionMenuItems(actionMenu.items, actionMenu.query);
+    const count = Math.max(1, height - 3);
+    const start = Math.max(0, actionMenu.index - count + 1);
+    const lines = [
+      `Actions · ${actionMenu.query}`,
+      ...items.slice(start, start + count).map((item, index) =>
+        `${start + index === actionMenu!.index ? "▶" : " "} ${item.label} · ${item.binding}`),
+    ];
+    while (lines.length < height - 1) lines.push("");
+    lines.push("Type to filter · ↑↓ select · Enter invoke · Esc cancel");
+    process.stdout.write("\x1b[H\x1b[2J" + lines.slice(0, height).map(line => truncateToWidth(sanitizeDynamicText(line), width)).join("\n"));
+    return;
+  }
+
   if (keyInspector.active) {
     process.stdout.write("\x1b[H\x1b[2J" + keyInspector.render(process.stdout.columns ?? 100, process.stdout.rows ?? 30).join("\n"));
     return;
@@ -675,8 +706,8 @@ function stop(): void {
   process.exit(0);
 }
 
-const handleKeypress = createDetailKeyHandler({ controller, viewport: () => viewport(controller), stop, actionKeymap, openKeyInspector: () => keyInspector.open() });
-const inspectionKeypress = createDetailKeyHandler({controller: inspection, viewport: () => viewport(inspection), stop: () => { void readingSurface.closePreview(); }, actionKeymap, openKeyInspector: () => keyInspector.open()});
+const handleKeypress = createDetailKeyHandler({openActionMenu,openNewTree: () => { openTreePane({workspaceRoot: paths.workspaceRoot, root: null, direction: "right"}); }, controller, viewport: () => viewport(controller), stop, actionKeymap, openKeyInspector: () => keyInspector.open() });
+const inspectionKeypress = createDetailKeyHandler({openActionMenu,openNewTree: () => { openTreePane({workspaceRoot: paths.workspaceRoot, root: null, direction: "right"}); },controller: inspection, viewport: () => viewport(inspection), stop: () => { void readingSurface.closePreview(); }, actionKeymap, openKeyInspector: () => keyInspector.open()});
 
 async function initialize(): Promise<void> {
   await waitForService();
@@ -712,6 +743,24 @@ process.on("SIGHUP", stop);
 
 async function handleInput(str: string, key: TerminalKey): Promise<void> {
   const inputAction = inputDecoder.consume(str, key);
+  if (actionMenu && inputAction !== "suppress") {
+    const menu = actionMenu;
+    const items = filterActionMenuItems(menu.items, menu.query);
+    if (key.name === "escape") actionMenu = null;
+    else if (key.name === "return") {
+      const selected = items[menu.index];
+      if (selected) { actionMenu = null; await menu.invoke(selected.id); }
+    } else if (key.name === "up" || key.name === "down") {
+      menu.index = Math.max(0, Math.min(items.length - 1, menu.index + (key.name === "up" ? -1 : 1)));
+    } else if (key.name === "backspace") {
+      menu.query = menu.query.slice(0, -1); menu.index = 0;
+    } else if (!key.ctrl && !key.meta && str && !/[\x00-\x1f\x7f]/.test(str)) {
+      menu.query = (menu.query + str).slice(0, 200); menu.index = 0;
+    }
+    pendingPaste = null;
+    draw();
+    return;
+  }
   const active = readingSurface.active;
   if (pendingPaste !== null) {
     const text = pendingPaste;

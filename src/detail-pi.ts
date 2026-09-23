@@ -88,6 +88,7 @@ import { reportCurrentPaneWorkspace,
   focusCurrentPane,
   openBacklinkPeekPopup,
   openDetailPane,
+  openTreePane,
   openVirtualBranchNavigatorPopup,
   outlinerRightClickOwnership,
 } from "./pane-control";
@@ -1325,7 +1326,7 @@ function shouldPassDetailInputToTui(data: string): boolean {
   return true;
 }
 
-const handleKeypress = createDetailKeyHandler({
+const handleKeypress = createDetailKeyHandler({openNewTree: () => { openTreePane({workspaceRoot: paths.workspaceRoot, root: null, direction: "right"}); },
   controller,
   viewport,
   stop: requestStop,
@@ -1354,7 +1355,7 @@ const handleKeypress = createDetailKeyHandler({
   },
 });
 
-const inspectionKeypress = createDetailKeyHandler({controller: inspection, viewport: () => viewport(inspection), stop: () => { void readingSurface.closePreview(); }, actionKeymap,
+const inspectionKeypress = createDetailKeyHandler({openNewTree: () => { openTreePane({workspaceRoot: paths.workspaceRoot, root: null, direction: "right"}); },controller: inspection, viewport: () => viewport(inspection), stop: () => { void readingSurface.closePreview(); }, actionKeymap,
   openActionMenu: items => showActionMenu(items, invokeDetailAction),
   openKeyInspector,
   navigatePreview: direction => inspectionLayout.navigate(direction),

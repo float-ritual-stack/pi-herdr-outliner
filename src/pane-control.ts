@@ -353,15 +353,15 @@ export function openDetailPane(
 }
 
 export function openTreePane(options: {
-  workspaceRoot: string; root: {rowId:string;canonicalId:string;label:string}; direction: "right" | "down";
+  workspaceRoot: string; root: {rowId:string;canonicalId:string;label:string} | null; direction: "right" | "down";
 }, herdr = process.env.HERDR_BIN_PATH ?? "herdr"): string {
   if(process.env.HERDR_ENV !== "1") throw new Error("Creating a Tree pane requires Herdr");
   const sourcePaneId = currentPaneIdentity(herdr)?.paneId;
   if(!sourcePaneId) throw new Error("Target Herdr pane identity is unavailable");
   const args = ["plugin","pane","open","--entrypoint","outliner","--plugin",OUTLINER_PLUGIN_ID,
     "--env",`OUTLINER_WORKSPACE_ROOT=${options.workspaceRoot}`,
-    "--env",`OUTLINER_BROWSING_CONTEXT_ID=${crypto.randomUUID()}`,
-    "--env",`OUTLINER_TREE_ROOT=${encodeURIComponent(JSON.stringify(options.root))}`];
+    "--env",`OUTLINER_BROWSING_CONTEXT_ID=${crypto.randomUUID()}`];
+  if (options.root) args.push("--env", `OUTLINER_TREE_ROOT=${encodeURIComponent(JSON.stringify(options.root))}`);
   return openPaneSplit(args,sourcePaneId,options.direction,herdr);
 }
 

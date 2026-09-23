@@ -113,3 +113,10 @@ id = "outliner-navigation"
 title = "Navigate Outliner"
 pattern = "^pi-outliner://(block|goto|page|resource|work)/[^[:space:]]+$"
 action = "open"
+
+[[actions]]
+id = "open-tree"
+title = "Outliner: new Tree only"
+description = "Open an independent workspace-rooted Tree without a companion Detail."
+contexts = ["workspace", "tab", "pane"]
+command = ["/bin/sh", "scripts/run-bun.sh", "run", "src/herdr-open.ts", "--mode", "open-tree"]
