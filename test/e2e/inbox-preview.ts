@@ -78,21 +78,22 @@ const result = await runHerdrScenario({
 
     // Native content click must focus the rich reader, then Escape returns to the list.
     await session.keys(pane,'1');await session.keys(pane,'2');
-    await clickLabel('Output callout');await session.waitVisible(pane,'● Preview');
-    await session.keys(pane,'down');await session.keys(pane,'esc');await session.waitVisible(pane,'○ Preview');
+    await clickLabel('Paragraph 0');await session.waitFor('Output owns keyboard focus',terminal.visible,text=>text.includes('● Preview · Output'));
+    await session.keys(pane,'down');await session.keys(pane,'esc');await session.waitFor('reader returned focus to list',()=>session.visible(pane),text=>text.includes('○ Preview') && !text.includes('● Preview'));
     await session.keys(pane,'down');await session.waitVisible(pane,'filed note 29');
     await session.checkpoint('03-reader-focus-list-navigation');
-    await terminal.resize(90,34);
-    await session.waitVisible(pane,'Inbox agent');
+    await terminal.resize(160,60);
+    await session.waitFor('compact geometry settled',()=>session.visible(pane),text=>text.includes('Inbox agent') && Math.max(...text.split('\n').map(line=>line.length))<80);
     await session.keys(pane,'alt+p');
+    await session.waitFor('compact Preview focused',()=>session.visible(pane),text=>text.includes('● Preview'));
     await session.checkpoint('04-narrow-preview');
     await session.keys(pane,'esc');
     await session.keys(pane,'alt+enter');
     await session.waitVisible(session.panes.detail,'Output callout');
     await session.checkpoint('05-explicit-open');
     await session.focus(pane);await terminal.resize(240,74);
-    await session.waitVisible(pane,'Preview');
-    if ((await session.visible(pane)).includes('● Preview')) {await session.keys(pane,'esc');await session.waitVisible(pane,'○ Preview');}
+    await session.waitFor('wide geometry settled',()=>session.visible(pane),text=>text.includes('Preview') && Math.max(...text.split('\n').map(line=>line.length))>100);
+    if ((await session.visible(pane)).includes('● Preview')) {await session.keys(pane,'esc');await session.waitFor('Preview focus released',()=>session.visible(pane),text=>text.includes('○ Preview') && !text.includes('● Preview'));}
     await session.keys(pane,'esc');await session.waitVisible(pane,'[Indent:');
     await session.record('preview-contract',{richSource:true,multipleOutputs:true,nativeRoleClicks:true,previewFocus:true,explicitOpen:true,fixtureModel:true});
   },

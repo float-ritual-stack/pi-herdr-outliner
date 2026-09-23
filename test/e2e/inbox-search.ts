@@ -68,6 +68,7 @@ const result = await runHerdrScenario({
     await session.keys(pane,'/');await query('Dynamically generated TUI views');
     await session.waitVisible(pane,'so what is stopping');
     await session.keys(pane,'enter');await click('[Source]');
+    await session.waitFor('Source selected before explicit open',terminal.visible,text=>text.includes('Preview · Source · current') && text.includes('Authored interactive content') && !text.includes('[Output 1 ●]'));
     await session.keys(pane,'alt+enter');await session.waitVisible(session.panes.detail,'Authored interactive content');
     await session.checkpoint('03-cleaned-title-and-explicit-linked-open');
     await session.focus(pane);await session.keys(pane,'esc');await session.waitVisible(pane,'Recent results:');

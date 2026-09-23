@@ -166,6 +166,7 @@ export class InboxController {
     return this.outputInput.render(this.sourceInput.render(lines, this.sourceFrame, this.sourceReader.state), this.outputFrame, this.outputReader.state);
   }
   handlePreviewMouse(sequence: string, copy: (text: string) => void): boolean {
+    if (!this.reviewBody) this.resizeAxis = undefined;
     const pointer = parseTreePrimaryPointer(sequence);
     const readers = [
       ['source', this.sourceInput, this.sourceReader, this.sourceFrame],

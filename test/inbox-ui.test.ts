@@ -673,3 +673,17 @@ test.each([{outputIds:[]},{outputIds:['output-result-one','second-result-one']}]
  h.controller.startSearch();h.controller.paste('same receipt');await setImmediate();h.controller.selectTarget(outputIds.length);await setImmediate();renderInboxFrame(h.controller,160,55,'help');h.controller.scrollPreview(3);
  await h.controller.cancelSearch();expect(h.controller.sourceReader.state?.offset).toBe(5);await h.controller.close();
 });
+
+test('divider drag ends when comparison disappears before pointer release', async()=>{
+ const h=harness();await startRecent(h.controller);await setImmediate();
+ renderInboxFrame(h.controller,160,55,'help');
+ const divider=h.controller.horizontalDivider!;
+ h.controller.handlePreviewMouse(`\x1b[<0;${divider.x+1};${divider.y+1}M`,()=>{});
+ renderInboxFrame(h.controller,65,25,'help');
+ h.controller.handlePreviewMouse('\x1b[<0;10;10m',()=>{});
+ renderInboxFrame(h.controller,160,55,'help');
+ const before=h.controller.reviewFraction;
+ expect(h.controller.handlePreviewMouse('\x1b[<0;5;7M',()=>{})).toBe(false);
+ expect(h.controller.reviewFraction).toBe(before);
+ await h.controller.close();
+});
