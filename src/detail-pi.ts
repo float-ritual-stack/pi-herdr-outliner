@@ -1400,16 +1400,16 @@ const customFrame = new DetailPiComponent({
   height: () => terminal.rows,
   header: () => {
     const propertyKeys = detailHeaderPropertyKeys;
-    if (!draftSplitActive()) return { surface: "Current", propertyKeys, ...(composed ? {surface: `${focusedRegion === "detail" ? "●" : "○"} Detail`, focused: focusedRegion === "detail"} : {}) };
+    if (!draftSplitActive()) return { surface: currentLabel(), propertyKeys, ...(composed ? {focused: focusedRegion === "detail"} : {}) };
     const focused = (!composed || focusedRegion === "detail") && draftSplitFocus === "editor";
     const linked = controller.state.draftPreviewLinked ? "↔ " : "";
     return {
-      surface: `${linked}${focused ? "●" : "○"} Edit`,
+      surface: `${linked}${focused ? "●" : "○"} Edit${inspectionVisible && readerGeometry().arrangement === "switch" ? ` · Preview ready (${actionKeymap.primaryBinding("detail.reading.focus")})` : ""}`,
       focused,
       propertyKeys,
     };
   },
-  helpText: () => `${composed ? "F6 Tree  " : ""}${actionKeymap.helpText("detail", activeDetailActionScopes())}`,
+  helpText: () => `${readingHelp()}${composed ? "F6 Tree  " : ""}${actionKeymap.helpText("detail", activeDetailActionScopes())}`,
 });
 const preview = new DetailPiPreviewLayout(
   controller.state,
