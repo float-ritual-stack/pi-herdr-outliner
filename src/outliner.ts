@@ -1,4 +1,5 @@
 import {TreePreviewInput} from './tree-preview-input';
+import {KeyInspector} from "./key-inspector";
 import {openOutlinerDetailSidebar} from "./detail-pane-placement";
 import {osc52ClipboardWrite} from './terminal';
 import { initTheme } from "@earendil-works/pi-coding-agent";
@@ -57,8 +58,9 @@ const propertySummaryKeys = parsePropertySummaryKeys(
 const rightClickOwnership = outlinerRightClickOwnership();
 const mouseEnabled = process.env.HERDR_ENV === "1";
 const mouseInput = mouseEnabled ? new StdinBuffer() : null;
-const keyboardInput = mouseEnabled ? new PassThrough() : null;
-const keypressInput = keyboardInput ?? process.stdin;
+const keyboardInput = new PassThrough();
+const keypressInput = keyboardInput;
+const keyInspector = new KeyInspector({actionKeymap,invalidate:draw});
 const enableMouse = "\x1b[?1000h\x1b[?1002h\x1b[?1006h";
 const disableMouse = "\x1b[?1006l\x1b[?1002l\x1b[?1000l";
 let watcher: OutlinerWatcher | null = null;
@@ -74,6 +76,10 @@ function errorMessage(error: unknown): string {
 }
 
 function draw(): void {
+  if(keyInspector.active) {
+    process.stdout.write(`\x1b[H\x1b[2J${keyInspector.render(process.stdout.columns ?? 100,process.stdout.rows ?? 30).join("\n")}`);
+    return;
+  }
   const result = renderTreeFrame(
     controller.view(),
     process.stdout.columns ?? 100,
@@ -98,6 +104,7 @@ function stop(): void {
     }
   }
   stopping = true;
+  keyInspector.dispose();
   watcher?.stop();
   void runtimeSync?.stop();
   if (process.stdin.isTTY) process.stdin.setRawMode(false);
@@ -113,6 +120,7 @@ if(initialRoot && ![initialRoot.rowId,initialRoot.canonicalId,initialRoot.label]
   throw new Error("OUTLINER_TREE_ROOT must identify a Tree occurrence");
 }
 const controller = createTreeController({
+  openKeyInspector: () => keyInspector.open(),
   initialRoot,
   async createTreePane(root,direction) { openTreePane({workspaceRoot:paths.workspaceRoot,root,direction}); },
   navigation: serviceTreeNavigation(client, clientId, browsingContextId),
@@ -195,7 +203,9 @@ function enqueueWork(task: () => void | Promise<void>): void {
 }
 
 function handleRawInput(data: string | Buffer): void {
-  mouseInput?.process(data);
+  if(keyInspector.handle(data))return;
+  if(mouseInput)mouseInput.process(data);
+  else keyboardInput.write(data);
 }
 
 function handleMouseSequence(sequence: string): void {
@@ -304,7 +314,7 @@ try {
 emitKeypressEvents(keypressInput);
 if (process.stdin.isTTY) process.stdin.setRawMode(true);
 process.stdout.write(`\x1b[?1049h\x1b[?25l${mouseEnabled ? enableMouse : ""}`);
-if (mouseInput) process.stdin.on("data", handleRawInput);
+process.stdin.on("data", handleRawInput);
 
 process.on("SIGINT", stop);
 process.on("SIGTERM", stop);

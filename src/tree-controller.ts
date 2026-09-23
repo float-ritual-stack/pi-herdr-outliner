@@ -180,6 +180,7 @@ export interface TreeControllerEffects {
   request<T>(input: RequestInput): Promise<T>;
   createDetailPane(blockId: string, direction?: "right" | "down", targetPaneId?: string): Promise<void>;
   createDetailSidebar?(blockId: string, scope: "outliner" | "tab", side: "left" | "right"): Promise<void>;
+  openKeyInspector?(): void;
   openCapturePopup(capturedFromBlockId: string): Promise<void>;
   openGotoPopup?(): void | Promise<void>;
   openVirtualBranchNavigator(viewId: string, adapter?: "bookmark"): void | Promise<void>;
@@ -2002,6 +2003,11 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       return;
     }
     if (mode === "action-menu") mode = actionMenuReturnMode;
+    if (actionId === "tree.debug.keys") {
+      if(effects.openKeyInspector) effects.openKeyInspector();
+      else status="Key inspector is unavailable in this host";
+      effects.invalidate();return;
+    }
     if (actionId === "tree.inbox.open") {
       if (mode !== "browse") {
         status = "Finish or cancel the Tree editor before opening Inbox activity";

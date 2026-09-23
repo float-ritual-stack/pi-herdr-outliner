@@ -1,4 +1,5 @@
 import {TreePreviewInput} from './tree-preview-input';
+import {KeyInspector} from "./key-inspector";
 import {openOutlinerDetailSidebar} from "./detail-pane-placement";
 import {osc52ClipboardWrite} from './terminal';
 import { HStack, type Component } from "@earendil-works/pi-tui";
@@ -105,6 +106,8 @@ export class ComposedLayout extends HStack {
 
 export class ComposedTree implements Component {
   readonly controller;
+  private readonly keyInspector: KeyInspector;
+  get keyInspectorActive(): boolean {return this.keyInspector.active;}
   private frameLines: string[] = [];
   private previewInput = new TreePreviewInput();
   private mouseTargets: readonly (TreeMouseTarget | null | undefined)[] = [];
@@ -118,7 +121,9 @@ export class ComposedTree implements Component {
     invalidate(): void; stop(): void;
     detach(target: OutlinerNavigationTarget, direction: "right" | "down", targetPaneId?: string): Promise<void>;
   }) {
+    this.keyInspector=new KeyInspector({actionKeymap:options.actionKeymap,invalidate:options.invalidate});
     this.controller = createTreeController({
+      openKeyInspector: () => this.keyInspector.open(),
       clientId: options.clientId, browsingContextId: options.contextId,
       workspaceRoot: options.workspaceRoot, navigation: options.navigation,
       actionKeymap: options.actionKeymap, request: input => options.client.request(input),
@@ -138,6 +143,7 @@ export class ComposedTree implements Component {
   }
 
   render(width: number): string[] {
+    if(this.keyInspector.active)return this.keyInspector.render(width,this.options.height());
     const rendered = renderTreeFrame(this.controller.view(), width, this.options.height(), this.controller.view().scrollStartEntryIndex ?? 0, {
       clearScreen: false, focused: this.options.focused(), propertyKeys: this.propertyKeys,
     });
@@ -148,8 +154,10 @@ export class ComposedTree implements Component {
     return this.frameLines;
   }
   invalidate(): void {}
+  dispose(): void {this.keyInspector.dispose();}
 
   async handleInput(data: string): Promise<void> {
+    if(this.keyInspector.handle(data))return;
     if (isTreeMouseSequence(data)) {
       if(this.previewInput.handle(data,this.controller,text=>process.stdout.write(osc52ClipboardWrite(text)),this.options.invalidate))return;
       if (this.controller.view().mode === "goto") return this.controller.handleGotoMouse(data);

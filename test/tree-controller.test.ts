@@ -3609,3 +3609,11 @@ test('Tree sidebar actions retain scope and side without changing the saved link
  expect(calls).toEqual([[note.id,scope,side]]);expect(c.view().mode).toBe('browse');expect(fake.calls.some(i=>i.action==='navigation.link.set')).toBe(false);
  }
 });
+
+test('Tree key inspector opens from the menu without changing the selected document',async()=>{
+ const note=block('inspect-input');const fake=harness(input=>input.action==='tree.index'?snapshot([note],note):undefined);
+ let opened=0;fake.effects.openKeyInspector=()=>{opened++;};const c=createTreeController(fake.effects);await c.initialize();
+ await c.handleAction('tree.menu.open');await c.handleAction('tree.debug.keys');
+ expect(opened).toBe(1);expect(c.view().mode).toBe('browse');const row=c.view().rows[c.view().selectedIndex];expect(isBlockTreeRow(row) && row.canonicalId).toBe(note.id);
+ expect(fake.calls.some(i=>['update','navigation.link.set','ui.command.send'].includes(i.action))).toBe(false);
+});
