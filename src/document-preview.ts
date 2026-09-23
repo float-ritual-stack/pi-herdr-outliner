@@ -1,7 +1,7 @@
-import {getMarkdownTheme} from '@earendil-works/pi-coding-agent';
+import {documentPreviewLines} from './document-preview-renderer';
 import type {OutlinerRequester} from './client-target';
 import {loadDetailReadPreview} from './detail-read-preview';
-import {renderDetailReadPreviewLines, type DetailReadPreviewDocument} from './detail-pi-preview';
+import type {DetailReadPreviewDocument} from './detail-pi-preview';
 import {blockDisplayTitle} from './references';
 import type {Block, OutlinerNavigationTarget} from './types';
 import type {ResourceDescription} from './resources';
@@ -32,7 +32,7 @@ export class DocumentPreview {
   }
   scroll(delta: number, width: number, height: number): void {
     if (!this.value) return;
-    const rows = renderDetailReadPreviewLines(this.value.document, Math.max(1,width), getMarkdownTheme()).length;
+    const rows = documentPreviewLines(this.value.document, Math.max(1,width)).length;
     this.value = {...this.value, offset: Math.max(0, Math.min(Math.min(this.value.offset, Math.max(0, rows - Math.max(1,height))) + delta, rows - Math.max(1,height)))};
     this.changed();
   }
