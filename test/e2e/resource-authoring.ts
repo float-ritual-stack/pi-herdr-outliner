@@ -191,6 +191,9 @@ export const resourceAuthoringScenario = {
     await writeFile(join(projectRoot, "README.md"), README_CONTENT, "utf8");
   },
   async run(session: HerdrScenarioSession): Promise<void> {
+    // Keep the full authored-Resource status visible beside the local Tree Preview.
+    const terminal = await session.attachClient();
+    await terminal.resize(420, 60);
     await session.record("scenario-fixture", {
       authoredTitle: AUTHORED_TITLE,
       authoredText: AUTHORED_TEXT,
