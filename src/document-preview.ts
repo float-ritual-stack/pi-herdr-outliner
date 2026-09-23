@@ -30,6 +30,11 @@ export class DocumentPreview {
   focus(focused = true): void {
     if (this.value && this.value.focused !== focused) { this.value = {...this.value, focused}; this.changed(); }
   }
+  restoreOffset(offset: number): void {
+    if (!this.value || !Number.isSafeInteger(offset) || offset < 0) return;
+    this.value = {...this.value, offset};
+    this.changed();
+  }
   scroll(delta: number, width: number, height: number): void {
     if (!this.value) return;
     const rows = documentPreviewLines(this.value.document, Math.max(1,width)).length;

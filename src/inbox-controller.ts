@@ -74,8 +74,8 @@ export class InboxController {
     this.previewKey="";
     const restored = await this.refreshPreview();
     if(restored && saved && !this.searching){
-      this.sourceReader.scroll(saved.sourceOffset, this.sourceFrame?.content.width ?? 80, this.sourceFrame?.content.height ?? 10);
-      this.outputReader.scroll(saved.outputOffset, this.outputFrame?.content.width ?? 80, this.outputFrame?.content.height ?? 10);
+      this.sourceReader.restoreOffset(saved.sourceOffset);
+      this.outputReader.restoreOffset(saved.outputOffset);
       this.focusReader(saved.focused);
     }
     this.effects.invalidate();
