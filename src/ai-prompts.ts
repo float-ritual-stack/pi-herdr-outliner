@@ -1,3 +1,4 @@
+import type {InboxRoutingPolicy} from "./inbox-routing";
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { copyFile, lstat, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
@@ -10,6 +11,7 @@ const MAX_PROMPT_BYTES = 64 * 1024;
 const PROMPT_FILENAMES = ["inbox-editor.md", "inbox-relationships.json", "goto-ranking.json"];
 const NOTE_PROMPT_FILENAMES = ["note-assistance.json", "note-answer.md"];
 const NOTE_PROMPT_UPGRADE = ".note-assistance-v1";
+const ROUTING_PROMPT_UPGRADE=".inbox-routing-v1";
 
 /** Evidence of the bytes used by a job, not an editable second prompt authority. */
 export interface PromptRevision {
@@ -94,6 +96,12 @@ export async function initializeAiPrompts(directory: string): Promise<void> {
     }
   }
   if (await exists()) {
+    if(!(await exists(join(directory,ROUTING_PROMPT_UPGRADE)))&&
+      (await Promise.all(PROMPT_FILENAMES.map(name=>exists(join(directory,name))))).every(Boolean)){
+      try{await copyFile(join(DEFAULT_AI_PROMPT_DIRECTORY,"inbox-routing.json"),join(directory,"inbox-routing.json"),constants.COPYFILE_EXCL);}
+      catch(error){if(!(error instanceof Error&&"code" in error&&error.code==="EEXIST"))throw error;}
+      await writeFile(join(directory,ROUTING_PROMPT_UPGRADE),"1\n",{flag:"wx"}).catch(error=>{if(error?.code!=="EEXIST")throw error;});
+    }
     // Upgrade a recognized installation once. Empty/custom directories and deliberate
     // deletions after this upgrade stay owned by the user.
     if (await exists(join(directory, NOTE_PROMPT_UPGRADE)) ||
@@ -110,9 +118,10 @@ export async function initializeAiPrompts(directory: string): Promise<void> {
   const staging = await mkdtemp(join(dirname(directory), `.${basename(directory)}-seed-`));
   try {
     // Finish each copy before cleanup can run on failure.
-    for (const name of [...PROMPT_FILENAMES, ...NOTE_PROMPT_FILENAMES]) {
+    for (const name of [...PROMPT_FILENAMES, ...NOTE_PROMPT_FILENAMES,"inbox-routing.json"]) {
       await copyFile(join(DEFAULT_AI_PROMPT_DIRECTORY, name), join(staging, name), constants.COPYFILE_EXCL);
     }
+    await writeFile(join(staging,ROUTING_PROMPT_UPGRADE),"1\n",{flag:"wx"});
     await writeFile(join(staging, NOTE_PROMPT_UPGRADE), "1\n", { flag: "wx" });
     if (await exists()) return;
     try { await rename(staging, directory); }
@@ -197,4 +206,12 @@ export async function loadGotoPrompt(directory?: string): Promise<{ ranking: Que
     },
     revisions: [revision],
   };
+}
+
+export async function loadInboxRoutingPrompt(directory?:string):Promise<{policy:InboxRoutingPolicy;revision:PromptRevision}>{
+ const revision=await readPrompt(aiPromptDirectory(directory),'inbox-routing.json');
+ const data=object(json(revision),revision.path,['route','disposable','minimumMargin','archiveProbability'],'document');
+ const route=question(data.route,revision.path,'route',['keep','metadata','archive','editorial']);
+ for(const key of ['minimumMargin','archiveProbability'])if(typeof data[key]!=='number'||!Number.isFinite(data[key])||data[key]<0||data[key]>1)throw new PromptFileError(revision.path,`${key} must be between zero and one`);
+ return {revision,policy:{route,disposable:nonempty(data.disposable,revision.path,'disposable'),minimumMargin:data.minimumMargin as number,archiveProbability:data.archiveProbability as number}};
 }

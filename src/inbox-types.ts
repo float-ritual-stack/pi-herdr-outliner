@@ -46,6 +46,7 @@ export interface InboxResult {
   outputIds: string[];
   createdAt: string;
   error?: string;
+  routing?: import("./inbox-routing").InboxRoutingDecision;
   failureKind?: "validation"|"timeout"|"provider"|"conflict"|"canceled"|"other";
   attempt?: {trigger:string;sourceRevision:number;prior?:{id:string;state:InboxResult["state"];cost?:number}};
   usage?: InboxUsage;

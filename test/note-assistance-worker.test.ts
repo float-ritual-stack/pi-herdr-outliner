@@ -284,3 +284,31 @@ test("attention follows the latest operation when a filed request is reconsidere
   notes.apply("note-organized", notes.pending()[0]!, organized.plan);
   expect(assistantActivity(store, inbox, notes, true).attentionCount).toBe(0);
 });
+
+test('Inbox cheap routes preserve useful content, archive only reversibly, and expose decisions on receipts',async()=>{
+ const value=fixture();const {store}=value;let pi=0;
+ value.worker=new InboxWorker(store,async context=>{pi++;return file(context);},()=>{},{settleMs:1,noteModel:async ({candidate,routeInbox})=>{
+  expect(routeInbox).toEqual({hasChildren:false});
+  const route=candidate.source.text.startsWith('aaaa')?'archive':candidate.source.text.startsWith('Reference')?'metadata':'keep';
+  return {plan:{summary:'Organized note metadata',tags:route==='metadata'?['sqlite']:[],...(route==='metadata'?{type:'reference'}:{}),inboxRoute:{route,reason:`Fixture ${route}`}},usage};
+ }});
+ const sources=['aaaa','Milk and coffee [tag::shopping]','Reference: SQLite transactions'].map((text,index)=>store.capture(`routing-${index}`,text,'cli').block);
+ value.worker.wake();await until(()=>value.worker!.status().pending===0&&!value.worker!.status().current);
+ expect(pi).toBe(0);expect(value.worker.status().results).toHaveLength(3);
+ expect(store.require(sources[1]!.id).text).toContain('Milk and coffee');
+ expect(store.require(sources[1]!.id).properties.filter(p=>p.key==='tag')).toEqual([{key:'tag',value:'shopping'}]);
+ expect(store.require(sources[1]!.id).properties.some(p=>p.key==='type'&&p.value==='note')).toBe(false);
+ expect(store.require(sources[2]!.id).properties).toContainEqual({key:'type',value:'reference'});
+ const archived=value.worker.repository.results().find(result=>result.sourceId===sources[0]!.id)!;
+ expect(archived.routing?.route).toBe('archive');expect(store.require(store.require(sources[0]!.id).parentId!).text).toContain('Processed');
+ value.worker.repository.undo(archived.id,blocks=>value.worker!.notes!.checkpointRestored(blocks));
+ expect(store.require(sources[0]!.id).text).toBe(sources[0]!.text);expect(store.require(sources[0]!.id).parentId).toBe(sources[0]!.parentId);
+ value.worker.wake();await Bun.sleep(20);expect(value.worker.status().pending).toBe(0);
+});
+
+test('editorial routing remains visible when Pi fails and does not silently archive the source',async()=>{
+ const value=fixture();const {store}=value;
+ value.worker=new InboxWorker(store,async()=>{throw Error('provider unavailable');},()=>{},{settleMs:1,noteModel:async()=>({plan:{summary:'Inspect',tags:[],inboxRoute:{route:'editorial',reason:'Ambiguous short note'}},usage})});
+ const source=store.capture('unclear','did a thing','cli').block;value.worker.wake();await until(()=>value.worker!.status().state==='unavailable');
+ expect(value.worker.status().results[0]?.routing).toEqual({route:'editorial',reason:'Ambiguous short note'});expect(store.require(source.id)).toEqual(source);
+});

@@ -28,6 +28,7 @@ function detailLines(controller: InboxController, width: number): string[] {
   plain(result.sourceTitle);
   lines.push("");
   plain(result.summary);
+  if(result.routing)plain(`Route: ${result.routing.route} · ${result.routing.reason}`);
   if(result.attempt){
     plain(`Trigger: ${result.attempt.trigger} · source revision ${result.attempt.sourceRevision}`);
     const prior=result.attempt.prior;

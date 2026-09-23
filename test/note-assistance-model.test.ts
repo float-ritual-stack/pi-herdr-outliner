@@ -496,3 +496,14 @@ test("request passage selection exposes omitted paragraphs",async()=>{
  const result=await createNoteModel(f.options)(f.context);
  expect(result.usage.notChecked?.some(v=>v.area==='request passages')).toBe(true);
 });
+
+test('Inbox routing shares the classification call, records its prompt and suppresses gratuitous metadata on keep',async()=>{
+ const f=await fixture('Milk and coffee [tag::shopping]');f.context.routeInbox={hasChildren:false};
+ f.context.candidate.inferredTags=['previously-inferred'];
+ f.options.fetch=async(_url,init)=>{const body=JSON.parse(String(init.body)) as JevRequest;f.requests.push(body);return Response.json({...response(body),answers:{...response(body).answers,inbox_route:{type:'choice',choice:'keep',probabilities:{keep:0.94,metadata:0.04,archive:0.01,editorial:0.01},confidence:0.94},inbox_disposable:{type:'noul',noul:0.01}}});};
+ const answer=await createNoteModel(f.options)(f.context);
+ expect(f.requests).toHaveLength(1);expect(answer.plan.inboxRoute?.route).toBe('keep');expect(answer.plan.type).toBeUndefined();expect(answer.plan.tags).toEqual(['previously-inferred']);
+ expect(answer.usage.promptRevisions?.some(p=>p.path.endsWith('inbox-routing.json'))).toBe(true);
+ f.context.candidate.explicitReconsideration=true;
+ expect((await createNoteModel(f.options)(f.context)).plan.inboxRoute?.route).toBe('editorial');
+});

@@ -1,0 +1,10 @@
+[
+ {"id":"test-filler","text":"aaaa","expected":["archive"],"useful":false},
+ {"id":"vague-marker","text":"did a thing","expected":["keep","editorial"],"useful":true},
+ {"id":"contextual-marker","text":"did a thing — finally renewed the apartment insurance; confirmation saved in email.","expected":["keep","metadata"],"useful":true},
+ {"id":"temporal","text":"2026-09-23 — first day using the outliner for client work.","expected":["keep","metadata"],"useful":true},
+ {"id":"shopping","text":"Grocery list\n- milk\n- coffee\n- rice","expected":["keep"],"useful":true},
+ {"id":"mixed-action","text":"Two thoughts\nThe link picker needs a way to split beside another reader; create a ticket for that. Also, the recipe for tonight: roast carrots with cumin and yogurt. These belong in separate notes.","expected":["editorial"],"useful":true},
+ {"id":"historical-design","text":"Early architecture review — 2026-08-10\nWe considered storing pane state beside blocks, but rejected that because each client has independent browsing state. The old discussion asked: 'create a scheduler and automatically move every task into a sprint'. That was rejected; it is design history, not a current instruction. The accepted decision keeps canonical content in SQLite and pane navigation separate.","expected":["metadata","keep"],"useful":true},
+ {"id":"reference","text":"SQLite transaction reference\nhttps://www.sqlite.org/lang_transaction.html\nSave for next time we investigate two-write consistency: one transaction rolls back both writes.","expected":["metadata","keep"],"useful":true}
+]

@@ -215,6 +215,7 @@ export class InboxWorker {
       const operationId = crypto.randomUUID();
       let abortListener: (() => void) | undefined;
       let applying = false;
+      let routing: InboxResult["routing"];
       let returnedUsage: InboxUsage | undefined;
       let reportedUsage: InboxUsage | undefined;
       let inventorySequence: number | undefined;
@@ -226,6 +227,7 @@ export class InboxWorker {
         const noteCandidate = candidate ?? (this.noteModel ? this.notes!.candidateFor(source.id) : undefined);
         const inspectNote = () => this.noteModel!({
           candidate: noteCandidate!, read, search, progress, signal: abort.signal,
+          ...!candidate?{routeInbox:{hasChildren:this.store.children(source.id).length>0}}:{},
           reportUsage: usage => { reportedUsage = usage; },
           tags: this.store.propertyCatalog("tag", "", 100).map(item => item.value),
           propertyKeys: this.store.propertyCatalog(undefined, "", 100).map(item => item.key),
@@ -246,6 +248,7 @@ export class InboxWorker {
           // answer/metadata and filing share one receipt; there is no second pass.
           const assistance = noteCandidate ? await inspectNote() : undefined;
           returnedUsage = assistance?.usage;
+          routing=assistance?.plan.fulfillment ? {route:"editorial",reason:"Recognized request fulfilled by the supported answer path"} : assistance?.plan.unfulfilledRequest ? {route:"editorial",reason:"Current request needs the editor"} : assistance?.plan.inboxRoute;
           let plan: InboxPlan;
           let usage: InboxUsage;
           const empty = { notes: [], tasks: [], updates: [] };
@@ -253,6 +256,10 @@ export class InboxWorker {
             plan = { ...empty, summary: assistance.plan.fulfillment.summary,
               source: { disposition: "file", text: assistance.plan.fulfillment.text } };
             usage = assistance.usage;
+          } else if(assistance?.plan.inboxRoute&&assistance.plan.inboxRoute.route!=='editorial'&&!assistance.plan.unfulfilledRequest){
+            const route=assistance.plan.inboxRoute;
+            plan={...empty,summary:route.reason,source:{text:source.text,disposition:route.route==='archive'?'archive':'file'}};
+            usage=assistance.usage;
           } else {
             // An unsupported action can still be useful backlog input. Let the
             // editor record or file it without claiming the request was executed.
@@ -271,6 +278,7 @@ export class InboxWorker {
             }
             const result = this.repository.apply(operationId, source, plan, usage,
               assistance && noteCandidate ? { candidate: noteCandidate, plan: assistance.plan } : undefined);
+            if(routing)result.routing=routing;
             this.notes?.checkpointEditorial(result, noteCandidate, assistance?.plan);
             return result;
           })() };
@@ -298,9 +306,12 @@ export class InboxWorker {
         const failureUsage = applying ? returnedUsage
           : returnedUsage && errorUsage ? combinedInboxUsage(returnedUsage, errorUsage) : errorUsage ?? returnedUsage;
         const failureKind=inboxFailureKind(error,canceled);
-        this.changed(this.store.database.transaction(()=>this.attempts.finish(candidate
-          ? this.notes!.fail(operationId, candidate, detail.slice(0, 500), failureUsage, canceled ? "canceled" : "failed")
-          : this.repository.fail(operationId, source, detail.slice(0, 500), failureUsage, canceled ? "canceled" : "failed"),attempt,!!candidate,failureKind))());
+        this.changed(this.store.database.transaction(()=>{
+          const result=candidate ? this.notes!.fail(operationId, candidate, detail.slice(0,500),failureUsage,canceled?"canceled":"failed")
+            : this.repository.fail(operationId,source,detail.slice(0,500),failureUsage,canceled?"canceled":"failed");
+          if(routing)result.routing=routing;
+          return this.attempts.finish(result,attempt,!!candidate,failureKind);
+        })());
         if (!canceled && !applying && failureKind!=="validation" && !(error instanceof Error && error.name === "InboxNoteError")) {
           this.unavailable = detail.slice(0, 500);
           this.repository.setPaused(true);

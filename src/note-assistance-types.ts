@@ -19,6 +19,7 @@ export interface NoteCandidate {
 /** The service owns metadata and commits a bounded result; the model never writes. */
 export interface NotePlan {
   summary: string;
+  inboxRoute?: import("./inbox-routing").InboxRoutingDecision;
   type?: string;
   tags: string[];
   fulfillment?: {
