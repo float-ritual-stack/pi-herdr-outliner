@@ -3483,6 +3483,37 @@ test("Tree close Preview leaves the composed Detail retention alone when no loca
 });
 
 
+test("Tree destination picker labels distinguish linking from opening once", async () => {
+  const a = block("destination-labels");
+  const fake = harness(input => {
+    if (input.action === "tree.index") return snapshot([a], a);
+    if (input.action === "navigation.link.get") return {source: {clientId: "tree-test", region: "tree"}, destination: null, destinations: []};
+  });
+  const controller = createTreeController(fake.effects);
+  await controller.initialize();
+  for (const purpose of ["link", "open"] as const) {
+    await controller.handleAction(purpose === "link" ? "tree.navigation.link" : "tree.navigation.once");
+    expect(controller.view().destinationPurpose).toBe(purpose);
+    for (const width of [80, 120]) {
+      const frame = renderTreeFrame(controller.view(), width, 24).frame;
+      if (purpose === "open") {
+        expect(frame).toContain("Open once in… · Tree");
+        expect(frame).toContain("Enter open once");
+        expect(frame).not.toContain("Link destination · Tree");
+        expect(frame).not.toContain("Alt+L link destination");
+      } else {
+        expect(frame).toContain("Link destination · Tree");
+        expect(frame).toContain("Enter link");
+        expect(frame).toContain("Alt+L link destination");
+        expect(frame).not.toContain("Open once in… · Tree");
+      }
+    }
+    await controller.handleAction("tree.cancel");
+    expect(controller.view().destinationPurpose).toBeUndefined();
+  }
+  expect(fake.calls.some(input => input.action === "navigation.link.set")).toBe(false);
+});
+
 test("Alt+L is available while local Preview owns focus, and Escape closes Preview",async()=>{
  const a=block("preview-keyboard",{text:"Readable source"});
  const fake=harness(input=>{
@@ -3518,24 +3549,4 @@ test("wheel over Tree does not scroll adjacent focused Preview",async()=>{
  const before=controller.view().localPreview!.offset;
  await controller.handleTreeWheel(parseTreeWheel(wheel)!);
  expect(controller.view().localPreview!.offset).toBe(before);
-});
-
-test("Tree destination menu distinguishes one-off Open from persistent Link", async () => {
-  const note = block("open-once-source");
-  const fake = harness(input => {
-    if (input.action === "tree.index") return snapshot([note], note);
-    if (input.action === "navigation.link.get") return {source: {clientId: "tree-test", region: "tree"}, destination: null, destinations: []};
-  });
-  const controller = createTreeController(fake.effects); await controller.initialize();
-  await controller.handleAction("tree.navigation.once");
-  const once = renderTreeFrame(controller.view(), 120, 30).frame;
-  expect(once).toContain("Open once in… · Tree");
-  expect(once).toContain("Enter open once");
-  expect(once).not.toContain("Alt+L link destination");
-  await controller.handleAction("tree.cancel");
-  await controller.handleAction("tree.navigation.link");
-  const linked = renderTreeFrame(controller.view(), 120, 30).frame;
-  expect(linked).toContain("Link destination · Tree");
-  expect(linked).toContain("Enter link");
-  expect(fake.calls.some(input => input.action === "navigation.link.set")).toBe(false);
 });
