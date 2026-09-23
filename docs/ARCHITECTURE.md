@@ -639,8 +639,9 @@ source region's saved link or an explicit one-off destination. Receipt does
 not forward through the receiver's link. Pane moves and resizes do not change
 links; disconnect removes them. Missing or protected destinations produce clear
 recovery errors without choosing another reader or creating a pane. Passive
-`preview` stays within the source's paired browsing context on the same host,
-or appears locally in an unpaired Tree; it does not follow Open links.
+`preview` stays in its source process: standalone Tree owns a local reader,
+Detail owns its reference Preview, and composed Tree drives embedded Detail.
+It never follows Open links or moves because a detached Detail is present.
 `reveal` targets the source Tree, then one same-context Tree, then one
 unambiguous same-tab Tree.
 
@@ -842,8 +843,8 @@ Store startup creates one canonical `Inbox [type::inbox] [system-view::inbox]` w
 2. It registers a fresh process identity, role, browsing-context identity,
    Current/Preview targets, and operation protection.
 3. Tree publishes its local cursor with its source client identity.
-4. The service retains the context target and sends the paired reader a
-   `preview` UI command; an unpaired Tree displays its own Preview.
+4. The service retains the context target and directs standalone Tree Preview
+   back to Tree. Composed Tree dispatches to its embedded Detail locally.
 5. Canonical mutations broadcast `content` events to every client under the
    workspace root; receiving content refreshes data but never transfers browsing
    authority.
@@ -1259,3 +1260,17 @@ pi-extension/index.ts         Pi/OMP commands, tools, context hook
 The durable roadmap lives in the outliner workboard. The current accepted design not yet implemented is projected-child creation.
 
 Do not describe it as shipped behavior until its roadmap item is Complete on main.
+
+### Destination display and sidebar placement
+
+The service owns navigation links. `NavigationDestinationDisplay` derives the
+header label from those links and refreshes on targeted view-domain link/client
+events; it does not persist another routing decision. View events do not trigger
+Tree structural reloads. Protocol 69 separates standalone Tree Preview from
+launch-time pairing and exposes same-host placement anchors.
+
+Sidebar placement reads Herdr's native split tree, moves existing panes through
+a temporary parking tab, and rebuilds the scoped subtree around one new Detail.
+`sidebar-placement.ts` owns this bounded operation and rollback; Herdr remains
+the layout authority. `detail-pane-placement.ts` supplies the live Outliner pane
+set and creates the reader. No canonical content or saved destination link changes.

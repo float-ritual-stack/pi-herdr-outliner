@@ -93,7 +93,7 @@ No shared user host is used.
 - Versioned JSON-lines RPC over a Unix socket. Clients and service must use matching [`OUTLINER_PROTOCOL_VERSION`](src/types.ts) values.
 - Reactive canonical content/view broadcasts, per-process Tree/Detail/observer registration with operation protection, exact-client UI commands, and source-aware `preview | open | reveal` navigation.
 - Durable resources have UUID identities independent of blocks and mutable locators. Provider-qualified Sources bind filesystem roots or remote namespaces; overlapping Sources remain distinct, relocations preserve Resource IDs, provider revisions remain explicit, and capability resolution reports blockers across provider, credentials, workspace policy, host, and connectivity. Registered Detail hosts declare Surface, Placement, renderer, capability, credential, and connectivity facts; open/describe/refresh deterministically negotiate cached Markdown, embedded-browser, native-document, metadata, or external-link representations without changing Resource identity. PDF is a media type reachable through filesystem and web Sources: one captured binary snapshot can produce both native PDF and page-aware Markdown representations through versioned replaceable extractors.
-- Each Tree owns its cursor, occurrence selection, filter, viewport, collapsed rows, multiline expansion, explicit-navigation history, and browsing context; moving a Tree updates Preview in its paired reader, or its own local Preview when unpaired, while Current stays in place.
+- Each Tree owns its cursor, occurrence selection, filter, viewport, collapsed rows, multiline expansion, explicit-navigation history, and browsing context; moving a standalone Tree updates its own local Preview; composed Tree updates its embedded Detail Preview, while Current stays in place.
 - Indexed `[property::value]` metadata with optimistic property patching and catalog queries.
 - Exact block and fragment references using `((block-id))` and `((block-id^fragment-id))`, resolved to display titles in read mode while raw text remains editable.
 - Unique normalized symbolic addresses from explicit `[page::address]` declarations and Work IDs, with aliases, explicit removal, bounded completion, dangling links, and transactional create-on-follow.
@@ -384,10 +384,11 @@ Trees and Details under the same filesystem root share canonical blocks and
 content updates. Each view keeps its own cursor, target, filter, viewport,
 draft, and navigation history.
 
-Tree cursor movement updates **Preview** in its paired browsing context without
-replacing **Current** or taking focus. An independent Tree without a paired
-reader shows a local read-only Preview. Selection never creates a pane. Wide
-readers show Current and Preview beside each other; taller narrow readers stack them.
+Standalone Tree cursor movement updates its own read-only **Preview**, even when
+detached Details exist. The composed application shows Tree selection in its
+embedded Detail Preview. Neither replaces **Current**, takes focus, or creates a
+pane. Within Detail, wide readers show Current and Preview beside each other;
+taller narrow readers stack them.
 `Alt+P` (also `F7`) switches focus, or the visible reader when neither layout fits.
 `Esc` closes a focused Preview, `Shift+F7` also closes it, and `Alt+Enter`
 keeps Preview as Current. Current retains its history, scroll, and draft while
@@ -395,7 +396,7 @@ another target is inspected. Keeping Preview or opening another target is
 refused while Current has a draft or an active source selection.
 
 Tree `Enter` explicitly opens the selected target through that Tree's saved
-Detail destination link. **Alt+L** (or **? → Link destination**) sets the link; **Open once
+Detail destination link. **Alt+L**, **Shift+L**, or the clickable **Opens in / Change** header sets or changes the link; **Open once
 in…** chooses a destination for one action. Several sources can share a reader,
 and receiving a target never forwards it through the receiver's own link.
 Moving or resizing panes does not change links. An absent destination reports
@@ -688,7 +689,7 @@ occurrence to its canonical physical row, `Option+Left` returns to that
 occurrence. User-triggered reveals focus the target Tree; programmatic reveal
 commands only focus it when they explicitly request focus.
 
-Plain-clicking a Tree row selects it and updates its paired or local Preview.
+Plain-clicking a Tree row selects it and updates its local Preview (the embedded Detail Preview in composed mode).
 `Ctrl`/`Meta`-clicking a Tree row selects and opens it; when the clicked cell is
 an authored `PIE-NNN`, canonical UUID, exact reference, or `[[address]]`, the
 referenced target opens instead. Authored links in Detail retain direct
@@ -1712,11 +1713,25 @@ Existing threads and an agent reply are seeded through public APIs.
 
 ### Linked explicit opens
 
-Each live Tree or Detail region can link to one Detail destination. Several sources may share a destination; receiving a document does not follow the receiver's own link. Moving panes leaves these links unchanged. New Tree/Detail pairs start linked; independent Trees use **Alt+L** (or **? → Link destination**). Detail uses the same shortcut. The menu marks the current link and previews the selected reader’s document. Destinations show document titles and Herdr workspace/tab locations; nearby readers come first. Readers on other hosts or without a known pane location are behind **Show other connected views**. Local panes proven absent by a ready Herdr snapshot are excluded. Connected readers without location evidence are retained, not assumed dead.
+Each live Tree or Detail region can link to one Detail destination. Several sources may share a destination; receiving a document does not follow the receiver's own link. Moving panes leaves these links unchanged. New Tree/Detail pairs start linked; independent Trees use **Alt+L**, **Shift+L**, or the clickable **Opens in / Change** header. Detail uses the same shortcut. The menu marks the current link and previews the selected reader’s document. Destinations show document titles and Herdr workspace/tab locations; nearby readers come first. Readers on other hosts or without a known pane location are behind **Show other connected views**. Local panes proven absent by a ready Herdr snapshot are excluded. Connected readers without location evidence are retained, not assumed dead.
 
 Tree **? → Open once in…** and Detail's reference destination chooser (**c**) choose an existing Detail for one action without changing its link. The chooser also offers **R** to replace here and **r/d** to create a right/down split. Cancelling never resolves an authored Resource or refreshes its provider. An unlinked or closed destination produces an explicit recovery message, with no automatic destination or split. Drafts and active source selections reject replacement.
 
 Agent RPCs use `navigation.link.get` / `navigation.link.set` with `{source: {clientId, region}, destination: {clientId, region: "detail"} | null}`. `navigation.resolve` and `navigation.dispatch` accept `sourceRegion` (required for composed clients) and a one-off `destination`. Runtime links are cleared when either client disconnects; they are not saved pane IDs. Passive preview remains a separate operation.
+The Link destination picker also offers **New Detail right/below another reader**.
+Choose the existing local reader that should anchor the split. **Sidebar left/right ·
+Outliner area** wraps the smallest existing layout subtree containing this tab's
+Outliner panes; unrelated panes stay untouched. **Sidebar left/right · Whole Herdr
+tab** places the reader at the tab's outer edge, including beside chat/terminals.
+These are explicit creation actions; the saved link remains unchanged. Use **Change**
+to link to the new reader. Placement keeps existing terminal sessions alive.
+If Outliner panes are interleaved with unrelated panes, Outliner-area placement
+refuses and offers whole-tab scope instead. Failed placement attempts to restore
+the original layout; incomplete restoration reports a retained recovery-record path.
+Finish or cancel active edits/filters before changing destinations. Plain uppercase
+`L` remains text inside editors; on terminals that send a printable character for
+Option+L, use Shift+L in reading mode or click **Change**.
+
 ### Focused Tree views
 
 Use the Tree actions menu (`?`) to **focus branch**, **return to workspace**, or open **Tree right/below**. A focused Tree shows that exact occurrence as its root, including nested queries. New Tree splits have their own root, selection, disclosure, scroll and navigation history, and do not create another Detail automatically. Closing a view never deletes its blocks.
@@ -1725,14 +1740,13 @@ Use the Tree actions menu (`?`) to **focus branch**, **return to workspace**, or
 
 Collapsed source folders no longer empty a query displayed through another projection. Missing or no-longer-visible roots retain a **return to workspace** action. This is local navigation state, not another database or a smaller network payload.
 
-Each reader retains **Current** while passive Tree selection updates one local
-**Preview**. At wide widths they sit beside each other; at narrower widths,
+Each Detail reader retains **Current** alongside its own local **Preview** for
+references and backlinks. Composed Tree selection also updates that embedded Preview. At wide widths they sit beside each other; at narrower widths,
 `Alt+P` (also `F7`) switches between them. Taller narrow readers stack them instead. `Alt+Enter` keeps Preview as Current; `Esc` closes a focused Preview and `Shift+F7` closes it from either reader. Keeping or editing Preview first protects any Current
 draft or source selection. Current keeps its own history, scroll, editor undo,
 and document identity while another item is inspected.
 
-Passive inspection stays with the Tree's paired browsing context. An independent
-Tree without a paired reader shows its own read-only Preview (`Alt+P` or `F7` to focus it,
+Standalone Tree always owns its read-only Preview (`Alt+P` or `F7` to focus it,
 `Esc` when focused or `Shift+F7` to close); selection never creates a pane. It uses the shared rich Markdown reader with wrapping and callouts. Dragging in this Tree-local Preview selects and copies only its displayed text through OSC 52; clipboard delivery depends on the terminal. Pointer input stays inside its owning region. Explicit Open continues to
 use the source's saved destination link. Resource Preview reads an existing
 representation and retains its revision; it does not intern or refresh a Resource.
