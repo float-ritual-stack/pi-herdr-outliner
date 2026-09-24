@@ -4510,6 +4510,10 @@ describe("detail controller completion, navigation, and focus", () => {
       blocks: [{ ...target, depth: 0, hasChildren: false, displayText: target.text }],
       completeness: { kind: "complete" },
     }]);
+    const originalLoad = harness.effects.loadTarget;
+    harness.effects.loadTarget = async requested => requested.kind === "block" && requested.blockId === target.id
+      ? {kind:"block",target:requested,context:{selected:target,ancestors:[],children:[]}}
+      : originalLoad(requested);
     await harness.controller.initialize();
     await harness.controller.dispatch({ type: "edit.begin" }, viewport);
     await harness.controller.dispatch({ type: "completion.open" }, viewport);

@@ -298,10 +298,11 @@ function renderQuickCompletionRows(
   completion: TreeQuickCompletion | null,
   depth: number,
   width: number,
+  help?: string,
 ): string[] {
   if (!completion) return [];
   const indent=Math.min(depth*2+2,Math.max(0,Math.floor(width/5)));
-  return renderReferenceCompletion({...completion,items:[...completion.items]},width-indent).map(line=>" ".repeat(indent)+line);
+  return renderReferenceCompletion({...completion,items:[...completion.items]},width-indent,8,"completion.choose",help).map(line=>" ".repeat(indent)+line);
 }
 function authoredHeaderStateText(row: AuthoredLinkHeaderRow): string {
   const { state } = row;
@@ -593,7 +594,7 @@ export function renderTreeFrame(
     if (editingInline) {
       const result = [
         renderQuickInputRow(view.quickInput, view.quickColumn, row.depth, marker, author, width),
-        ...renderQuickCompletionRows(view.quickCompletion, row.depth + 1, width),
+        ...renderQuickCompletionRows(view.quickCompletion, row.depth + 1, width, view.actionHelpText),
       ];
       renderedRows[index] = result;
       return result;
@@ -686,7 +687,7 @@ export function renderTreeFrame(
     if (entry.kind === "block") return getBlockRows(entry.blockIndex);
     return [
       renderQuickInputRow(view.quickInput, view.quickColumn, displayDepth(entry.depth), "•", AUTHOR_MARKERS.user, width),
-      ...renderQuickCompletionRows(view.quickCompletion, displayDepth(entry.depth) + 1, width),
+      ...renderQuickCompletionRows(view.quickCompletion, displayDepth(entry.depth) + 1, width, view.actionHelpText),
     ];
   }
 

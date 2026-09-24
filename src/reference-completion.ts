@@ -72,7 +72,7 @@ export async function lookupReferenceCompletion(provider:ReferenceCompletionProv
     }
     message=fragment?'No matching block fragments':'No matching blocks';
   }
-  return {start:target.start,end:target.end,index:0,items,truncatedLimit,incompleteness,message:items.length?(incompleteness||(truncatedLimit?`Showing first ${truncatedLimit} matches`:'')):[message,incompleteness].filter(Boolean).join(' · ')};
+  return {start:target.start,end:target.end,index:0,items,truncatedLimit,incompleteness,message:items.length?(incompleteness||(truncatedLimit?`Showing first ${truncatedLimit} matches`:'')):[incompleteness?`Partial search: ${incompleteness}`:'',message].filter(Boolean).join(' · ')};
 }
 
 /** One editor-local lookup lane. No canonical text or anchor writes until acceptance. */

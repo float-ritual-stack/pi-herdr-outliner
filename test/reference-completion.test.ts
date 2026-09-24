@@ -1,5 +1,6 @@
 import {expect,test} from 'bun:test';
 import {ReferenceCompletionSession,type ReferenceCompletionProvider} from '../src/reference-completion';
+import {renderReferenceCompletion} from '../src/reference-completion-renderer';
 import {TextBuffer} from '../src/text-buffer';
 import {pageAddressCompletion} from '../src/completion';
 import type {Block,PageAddressCollection} from '../src/types';
@@ -60,5 +61,10 @@ test('existing fragment identity is rechecked against fresh text before insertio
 });
 test('empty fragment search exposes bounded scanned scope rather than claiming absence',async()=>{
  const h=setup('((Target^missing');h.provider.queryBlocks=async()=>({blocks:[visible('target','Target')],completeness:{kind:'truncated',limit:500}});
- await h.session.refresh();expect(h.session.state?.message).toContain('more blocks were not checked');expect(h.session.state?.items).toEqual([]);
+ await h.session.refresh();expect(h.session.state?.message).toContain('more blocks were not checked');expect(h.session.state?.items).toEqual([]);expect(renderReferenceCompletion(h.session.state!,28)[0]).toStartWith('Partial search');
+});
+
+test('shared list accepts effective host bindings rather than advertising stale defaults',()=>{
+ const output=renderReferenceCompletion({start:0,end:4,index:0,items:[{label:'Home',insertion:'[[home]]'}]},100,8,'completion.choose','Alt+J next · Alt+I insert');
+ expect(output.at(-1)).toBe('Alt+J next · Alt+I insert');
 });
