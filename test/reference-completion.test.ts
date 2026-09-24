@@ -26,6 +26,28 @@ test('accept replaces a whole existing token, retains suffix and is one undo ste
  await h.session.refresh();expect(await h.session.accept()).toBe(true);expect(h.buffer.text).toBe('Before [[home]] after');
  expect(h.buffer.undo()).toBe(true);expect(h.buffer.text).toBe('Before [[ho]] after');
 });
+test('file acceptance preserves unrelated references after the cursor',async()=>{
+ const h=setup('See [file::sr and ((blk)) [[page]]');h.buffer.placeCursor(0,'See [file::sr'.length);
+ h.provider.completeFiles=async()=>[{sourcePath:'src/main.ts',isDirectory:false}];
+ await h.session.refresh();expect(await h.session.accept()).toBe(true);
+ expect(h.buffer.text).toBe('See [file::src/main.ts] and ((blk)) [[page]]');
+});
+test('page and block acceptance stop before intervening reference delimiters',async()=>{
+ for(const [prefix,suffix,insertion] of [
+  ['[[ho',' see ((x)) text ]]','[[home]]'],
+  ['((ho',' see [[x]] text ))','((home))'],
+ ] as const){
+  const h=setup(prefix+suffix);h.buffer.placeCursor(0,prefix.length);
+  h.provider.queryPageAddresses=async()=>pages('home');
+  h.provider.queryBlocks=async()=>({blocks:[visible('home','Home')],completeness:{kind:'complete'}});
+  await h.session.refresh();expect(await h.session.accept()).toBe(true);expect(h.buffer.text).toBe(insertion+suffix);
+ }
+});
+test('whole-token replacement still includes an existing page label',async()=>{
+ const h=setup('Before [[ho|my label]] after');h.buffer.placeCursor(0,'Before [[ho'.length);
+ h.provider.queryPageAddresses=async()=>pages('home');
+ await h.session.refresh();expect(await h.session.accept()).toBe(true);expect(h.buffer.text).toBe('Before [[home]] after');
+});
 test('deleted or reassigned targets cannot insert an obsolete suggestion',async()=>{
  const h=setup('[[home');await h.session.refresh();h.provider.readContext=async()=>({selected:null,ancestors:[],children:[]});
  expect(await h.session.accept()).toBe(false);expect(h.buffer.text).toBe('[[home');expect(h.session.state?.message).toContain('no longer available');
