@@ -1,26 +1,30 @@
 import type { EngineInterface, On, PluginOptions } from 'claude-code'
 
-import { isIngestible, type MentionMessage, mentionMessageOf, workspacesOf } from './mention-message'
+import { effectiveWorkspaces, isIngestible, type MentionMessage, mentionMessageOf } from './mention-message'
 
 /**
  * Registers Recent Mentions: each completed main-loop answer in a configured
  * workspace goes to the Outliner, as the Codex Stop hook sends Codex's.
  *
- * Workspaces come from the `workspaces` option, or, when unset, from
+ * Workspaces come from the `workspaces` option, or, left empty, from
  * `PI_OUTLINER_MENTIONS_WORKSPACES` (for a `CLAUDE_CODE_PLUGIN_DIRS` setup,
  * whose settings `env` block can carry it). Neither set: nothing is ingested.
+ * The engine hands an unset string option over as '', so empty and unset are
+ * one case: an empty option cannot override the environment.
  *
  * The answer passes on untouched. Delivery runs off the turn's dispatch, so a
  * slow or absent service never delays the prompt; a failure is one toast.
  */
 export function register(on: On, options: PluginOptions): void {
-  const configured = options.workspaces === undefined ? undefined : workspacesOf(options.workspaces)
+  const option = options.workspaces
 
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
     if (!isIngestible(e)) return result
-    const workspaces = configured
-      ?? workspacesOf(await $.env.get('PI_OUTLINER_MENTIONS_WORKSPACES'))
+    const workspaces = effectiveWorkspaces(
+      option,
+      await $.env.get('PI_OUTLINER_MENTIONS_WORKSPACES'),
+    )
     if (workspaces.length === 0) return result
     const [id, cwd] = await Promise.all([$.session.id(), $.session.cwd()])
     const message = mentionMessageOf(e, { id, cwd }, workspaces)

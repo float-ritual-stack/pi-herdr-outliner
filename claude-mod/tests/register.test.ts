@@ -1,7 +1,5 @@
-import type { EngineInterface, On, ProcessRunInit, ProcessRunResult, TurnCompleteInput } from 'claude-code'
+import type { On, ProcessRunInit, ProcessRunResult, TurnCompleteInput } from 'claude-code'
 import { describe, expect, mock, test, tier } from 'claude-code/testing'
-
-import { register } from '../hooks/register'
 
 tier('user')
 
@@ -75,29 +73,6 @@ describe('register', () => {
       messageId: 'turn-1',
       text: ANSWER.answer,
     })
-    expect(session.toasts).toEqual([])
-  })
-
-  test('an explicit empty workspace option overrides the environment', async ($, on) => {
-    const session = sessionIn(on, WORKSPACE, succeeding)
-    type TurnHandler = (
-      engine: EngineInterface,
-      event: TurnCompleteInput,
-      next: (event: TurnCompleteInput) => Promise<{ text: string }>,
-    ) => Promise<{ text: string }>
-    let handler: TurnHandler | undefined
-    // Capture this registration to exercise its options without the default hook.
-    const capture = ((event: string, callback: TurnHandler) => {
-      expect(event).toBe('turn.complete')
-      handler = callback
-    }) as On
-    register(capture, { workspaces: '' })
-
-    const result = await handler!($, ANSWER, async event => ({ text: event.answer }))
-    await session.clock.settle()
-
-    expect(result.text).toBe(ANSWER.answer)
-    expect(session.runs).toEqual([])
     expect(session.toasts).toEqual([])
   })
 

@@ -28,6 +28,16 @@ export function workspacesOf(value: unknown): string[] {
 }
 
 /**
+ * The workspaces in force: the option when it names any, else the environment
+ * variable. Claude Code passes an unset string option as '', so an empty
+ * option cannot be told from an unset one and never overrides the environment.
+ */
+export function effectiveWorkspaces(option: unknown, environment: string | undefined): string[] {
+  const configured = workspacesOf(option)
+  return configured.length > 0 ? configured : workspacesOf(environment)
+}
+
+/**
  * Which completed turns reach Recent Mentions: the main loop's own answers,
  * never a subagent's run, an interruption, a refusal or an error.
  */

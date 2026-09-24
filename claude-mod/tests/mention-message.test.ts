@@ -1,6 +1,6 @@
 import { describe, expect, test, tier } from 'claude-code/testing'
 
-import { workspacesOf } from '../hooks/mention-message'
+import { effectiveWorkspaces, workspacesOf } from '../hooks/mention-message'
 
 tier('user')
 
@@ -10,5 +10,13 @@ describe('mention-message', () => {
     expect(workspacesOf(['/a', 3, 'x'])).toEqual(['/a'])
     expect(workspacesOf('')).toEqual([])
     expect(workspacesOf('/')).toEqual(['/'])
+  })
+
+  test('a configured option wins; an empty or unset one falls back to the environment', async () => {
+    expect(effectiveWorkspaces('/option', '/env')).toEqual(['/option'])
+    expect(effectiveWorkspaces('', '/env')).toEqual(['/env'])
+    expect(effectiveWorkspaces(undefined, '/env')).toEqual(['/env'])
+    expect(effectiveWorkspaces(' , ', '/env')).toEqual(['/env'])
+    expect(effectiveWorkspaces('', undefined)).toEqual([])
   })
 })
