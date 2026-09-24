@@ -13,7 +13,7 @@ import type { InboxModel, InboxResult, InboxStatus } from "./inbox-types";
 import { existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
 import { hostname as systemHostname } from "node:os";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import {
   ATTENTION_MAX_SUPPORTING_MARKS,
   attentionClientState,
@@ -1357,7 +1357,7 @@ export class OutlinerServer {
           break;
         }
         case "ping":
-          result = { status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION };
+          result = { status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION, location:{hostname:this.hostname,workspaceRoot:this.store.workspaceRoot,database:this.store.database.filename,backups:join(dirname(this.store.database.filename),"backups")} };
           break;
         case "blocks.query":
           result = this.store.queryBlocks(request.query);

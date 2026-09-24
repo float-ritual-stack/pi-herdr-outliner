@@ -123,6 +123,7 @@ export function outlinerActionLink(actionId: string, label: string): string {
 }
 
 const ACTION_SPECS = [
+  {id:'tree.workspace.inspect',surface:'tree',modes:['browse'],label:'Workspace and connection',description:'Inspect workspace, storage paths and connection without changing data',defaultChords:[],helpPriority:0,menuGroup:'System'},
   { id: "tree.close", surface: "tree", modes: ["*"], label: "close", description: "Close this Tree pane", defaultChords: ["Ctrl+Q"], helpPriority: 100, menuGroup: "System" },
   ...([
     ['toggle', 'Show / hide Preview', ['Alt+Shift+P']],

@@ -1,3 +1,5 @@
+import {wrapTextWithAnsi} from '@earendil-works/pi-tui';
+import {inspectWorkspaceConnection} from './workspace-diagnostics';
 import { ReferenceCompletionSession, referenceCompletionProvider, type ReferenceCompletionItem } from "./reference-completion";
 import {TreeConnections} from "./tree-connections";
 import {OpenDestinationChooser, destinationRecoveryKey, missingNavigationDestination, type OpenDestinationTarget} from "./open-destination-chooser";
@@ -365,6 +367,8 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   let viewerLines: string[] = [];
   let viewerPath = "";
   let viewerOffset = 0;
+  let viewerWrap=false;
+  const displayedViewerLines=()=>viewerWrap?viewerLines.flatMap(line=>wrapTextWithAnsi(line,Math.max(1,effects.terminalWidth()))):viewerLines;
   let expandedBlockOffset = 0;
   let lastVisibleCanonicalId: string | null = null;
   let status = "";
@@ -636,9 +640,9 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       previewPreferences,
       navigationDestinationLabel: navigationDisplay.text,
       previewHelp: `${actionKeymap.helpText("tree", "browse", ["tree.preview.focus", "tree.preview.close"])} · drag to copy`,
-      viewerLines,
+      viewerLines:displayedViewerLines(),
       viewerPath,
-      viewerOffset,
+      viewerOffset:Math.min(viewerOffset,Math.max(0,displayedViewerLines().length-1)),
       expandedBlockOffset,
       status,
       refreshPending,
@@ -1441,6 +1445,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     mode = "viewer";
     viewerLines = [];
     viewerPath = path;
+    viewerWrap=false;
     viewerOffset = 0;
     status = "Loading file…";
     effects.invalidate();
@@ -1853,6 +1858,13 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     actionId: string,
     origin?: { column: number; row: number },
   ): Promise<void> {
+    if(actionId==='tree.workspace.inspect'){
+      const generation=++navigationGeneration;
+      mode='viewer';viewerWrap=true;viewerPath='Workspace and connection';viewerOffset=0;viewerLines=['Checking workspace and connection…'];effects.invalidate();
+      const report=await inspectWorkspaceConnection();
+      if(mode==='viewer'&&generation===navigationGeneration){viewerLines=report.lines;effects.invalidate();}
+      return;
+    }
     if(actionId.startsWith("completion.choose:")){
       const [index,generation]=actionId.slice("completion.choose:".length).split(":").map(Number);
       if(index===undefined||!Number.isSafeInteger(index)||index<0)return;
@@ -2324,7 +2336,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
 
     if (mode === "viewer") {
       const page = Math.max(1, effects.terminalHeight() - 4);
-      const maxOffset = Math.max(0, viewerLines.length - 1);
+      const maxOffset = Math.max(0, displayedViewerLines().length - 1);
       if (key.name === "escape" || key.name === "q") {
         mode = "browse";
         if (refreshPending) await reload();

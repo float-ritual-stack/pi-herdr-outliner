@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { resolvePaths } from "./paths";
+import { resolvePaths, resolveClientPaths, resolveClientConfigPath } from "./paths";
 import { pluginInvocationWorkspaceRoot } from "./pane-control";
 import { sanitizeDynamicText } from "./terminal";
 
@@ -31,7 +31,13 @@ export async function reportStartupErrors(
       } : process.env);
       mkdirSync(stateDir, { recursive: true });
       const logPath = join(stateDir, `${operation}-startup-error.log`);
-      writeFileSync(logPath, `${new Date().toISOString()} ${title}\nWorkspace: ${workspaceRoot}\n${details}\n`, { mode: 0o600 });
+      let connection = '';
+      try {
+        const env={...process.env,OUTLINER_WORKSPACE_ROOT:workspaceRoot};
+        const paths=resolveClientPaths(env);
+        connection=`Config: ${resolveClientConfigPath(env)}\nConnection: ${paths.mode}\nEndpoint: ${paths.socket}\n${paths.mode==='local'?`Database: ${paths.database}`:'Database: on the remote service host'}\nRead-only diagnosis: bun src/cli.ts doctor (from the plugin checkout with OUTLINER_WORKSPACE_ROOT set to this workspace)\n`;
+      } catch { /* The original configuration failure remains the primary error. */ }
+      writeFileSync(logPath, `${new Date().toISOString()} ${title}\nWorkspace: ${workspaceRoot}\n${connection}${details}\n`, { mode: 0o600 });
       location = `Details: ${logPath}`;
     } catch {
       // Failure to save diagnostics must not hide the original error.

@@ -1,3 +1,4 @@
+import {inspectWorkspaceConnection} from './workspace-diagnostics';
 import { parseArgs } from "node:util";
 import { normalizePropertyQueryScope, parsePropertyFilterClause } from "./block-query";
 import {
@@ -10,6 +11,11 @@ import { resolveClientPaths } from "./paths";
 import { navigateOutlinerLink, parseOutlinerLinkUri } from "./outliner-links";
 import type { BlockSearchQuery, CaptureReceipt } from "./types";
 
+if(process.argv[2]==='doctor'){
+ const report=await inspectWorkspaceConnection();
+ console.log(process.argv.includes('--json')?JSON.stringify(report,null,2):report.lines.join('\n'));
+ process.exit(report.ok?0:1);
+}
 const paths = resolveClientPaths();
 function parseRevision(value: string | undefined): number {
   const revision = Number(value);

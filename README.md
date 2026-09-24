@@ -1182,6 +1182,12 @@ while ordinary virtual-occurrence ranks provide optional manual order.
 
 ## Capture and Inbox
 
+### Workspace and connection diagnosis
+
+In Tree, open `?` and choose **Workspace and connection** for a read-only report of the invoking workspace, project config, endpoint, protocol and storage paths. Or run `bun src/cli.ts doctor` from the plugin checkout with `OUTLINER_WORKSPACE_ROOT` set to the workspace to inspect (`--json` for structured output). The command works when startup fails and exits nonzero for configuration, transport or protocol errors.
+
+For local connections the report gives the exact state, database and backup directory. For remote connections it distinguishes the forwarded client socket from the service host and canonical storage reported by that service. Older services may not report storage identity. A missing local database can mean either a new workspace or moved storage: diagnosis does not initialize it, restore backups, migrate data, or start a service. A failed remote connection names the socket and suggests checking its SSH tunnel and canonical service.
+
 ### Quick capture Inbox
 
 Tree `c` opens the manifest-owned Herdr popup without navigating away from the selected row. The popup reuses the Detail multiline editor’s `TextBuffer`, command mapping, wrapping, cursor, selection, and row renderer. Enter adds a line and Ctrl+S explicitly saves. Text, cursor, stable request identity, and the original captured-from context are retained in one workspace-owned draft after a short debounce; Esc/Ctrl+C flush and close, while Ctrl+D requires a second press before discarding. Reopening from any pane in the same workspace resumes that draft. A failed save or stale concurrent writer leaves the full draft visible for a safe retry.
