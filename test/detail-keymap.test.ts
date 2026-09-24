@@ -902,3 +902,12 @@ test("custom destination chords leave modified Backspace with active filters", a
     expect(editor.intents).toEqual([{type: property ? "property-inspector.filter.backspace" : "backlinks.filter.backspace"}]);
   }
 });
+
+test('completion keeps configured editor actions and configurable selection controls',async()=>{
+ const current=state();current.completion={start:0,end:4,index:0,items:[{label:'Home',insertion:'[[home]]'}]};
+ const actionKeymap=new OutlinerActionKeymap('<test>',{'detail.buffer.save':['Alt+S'],'detail.completion.next':['Alt+J'],'detail.completion.accept':['Alt+I']});
+ const editor=harness(current,true,{actionKeymap});
+ await editor.press({name:'s',meta:true});await editor.press({name:'j',meta:true});await editor.press({name:'i',meta:true});
+ await editor.press({name:'down'});await editor.press({name:'tab'});await editor.press({name:'escape'});
+ expect(editor.intents).toEqual([{type:'buffer.save'},{type:'completion.move',delta:1},{type:'completion.accept'},{type:'completion.dismiss'}]);
+});

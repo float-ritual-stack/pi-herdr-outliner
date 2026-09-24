@@ -1,7 +1,7 @@
 import type {OutlinerRequester} from "./client-target";
 import {completionTargetAtCursor, pageAddressCompletion, pageCompletionLookupQuery, type CompletionTarget} from './completion';
 import {rankBlockFocusMatches} from './block-focus';
-import {ensureHeadingFragment, fragmentCandidates, parseFragmentCompletionQuery} from './fragments';
+import {ensureHeadingFragment, fragmentCandidates, parseFragmentCompletionQuery, resolveFragment} from './fragments';
 import {blockDisplayTitle} from './references';
 import {propertyInspectorAuthoredText} from './property-inspector';
 import type {ReferencedPathCandidate} from './files';
@@ -13,6 +13,7 @@ export interface ReferenceCompletionItem {
   insertion:string;
   blockId?:string;
   address?:string;
+  fragmentId?:string;
   kind?:string;
   context?:string;
   anchor?:{blockId:string;fragmentId:string;lineIndex:number;text:string;expectedRevision:number};
@@ -20,6 +21,7 @@ export interface ReferenceCompletionItem {
 export interface ReferenceCompletionState {
   start:number;end:number;index:number;items:ReferenceCompletionItem[];
   truncatedLimit?:number|null;
+  incompleteness?:string;
   message?:string;
   loading?:boolean;
   generation?:number;
@@ -37,7 +39,7 @@ function snippet(text:string):string {
   return propertyInspectorAuthoredText(text).split(/\r?\n/).slice(1).join(' ').replace(/\s+/g,' ').trim().slice(0,240);
 }
 export async function lookupReferenceCompletion(provider:ReferenceCompletionProvider,target:CompletionTarget,prefix:string|null,draft?:CompletionDraft):Promise<ReferenceCompletionState> {
-  let items:ReferenceCompletionItem[]=[],truncatedLimit:number|null=null,message='';
+  let items:ReferenceCompletionItem[]=[],truncatedLimit:number|null=null,message='',incompleteness='';
   if(target.kind==='file') {
     const files=await provider.completeFiles(target.query);
     items=files.slice(0,LIMIT).map(file=>({label:file.sourcePath,kind:file.isDirectory?'folder':'file',insertion:`[file::${file.sourcePath}${file.isDirectory?'':']'}`}));
@@ -51,10 +53,11 @@ export async function lookupReferenceCompletion(provider:ReferenceCompletionProv
   } else {
     const fragment=parseFragmentCompletionQuery(target.query);
     const result=await provider.queryBlocks(fragment?{limit:500}:{text:target.query||undefined,limit:LIMIT});
-    if(result.completeness.kind==='truncated')truncatedLimit=result.completeness.limit;
+    if(result.completeness.kind==='truncated'){truncatedLimit=result.completeness.limit;incompleteness=fragment?`Searched only ${result.blocks.length} blocks; more blocks were not checked`:'';}
     if(!fragment)items=result.blocks.map(block=>({label:blockDisplayTitle(block),blockId:block.id,kind:'block',context:snippet(block.text),insertion:`((${block.id}))`}));
     else {
       const blocks=fragment.blockQuery?rankBlockFocusMatches(result.blocks,fragment.blockQuery,50).map(match=>match.block):result.blocks;
+      if(fragment.blockQuery&&result.blocks.length>blocks.length)incompleteness=[incompleteness,`Checked fragments in ${blocks.length} ranked blocks; other blocks were not checked`].filter(Boolean).join(' · ');
       let candidates=0;
       outer: for(const block of blocks){
         const source=block.id===draft?.blockId?draft.text:block.text;
@@ -62,14 +65,14 @@ export async function lookupReferenceCompletion(provider:ReferenceCompletionProv
           candidates++;
           if(items.length>=LIMIT)break outer;
           const anchor=candidate.fragmentId?{text:source,fragmentId:candidate.fragmentId,created:false}:ensureHeadingFragment(source,candidate.lineIndex);
-          items.push({label:`${blockDisplayTitle(block)} › ${candidate.kind==='heading'?'#':'¶'} ${candidate.label}${candidate.fragmentId?` · ^${candidate.fragmentId}`:' · create anchor'}`,blockId:block.id,kind:'fragment',context:snippet(source),insertion:`((${block.id}^${anchor.fragmentId}))`,...(anchor.created?{anchor:{blockId:block.id,fragmentId:anchor.fragmentId,lineIndex:candidate.lineIndex,text:anchor.text,expectedRevision:block.revision}}:{})});
+          items.push({label:`${blockDisplayTitle(block)} › ${candidate.kind==='heading'?'#':'¶'} ${candidate.label}${candidate.fragmentId?` · ^${candidate.fragmentId}`:' · create anchor'}`,blockId:block.id,fragmentId:anchor.fragmentId,kind:'fragment',context:snippet(source),insertion:`((${block.id}^${anchor.fragmentId}))`,...(anchor.created?{anchor:{blockId:block.id,fragmentId:anchor.fragmentId,lineIndex:candidate.lineIndex,text:anchor.text,expectedRevision:block.revision}}:{})});
         }
       }
-      if(candidates>LIMIT)truncatedLimit=LIMIT;
+      if(candidates>LIMIT){truncatedLimit=LIMIT;incompleteness=[incompleteness,`Showing first ${LIMIT} fragments`].filter(Boolean).join(' · ');}
     }
     message=fragment?'No matching block fragments':'No matching blocks';
   }
-  return {start:target.start,end:target.end,index:0,items,truncatedLimit,message:items.length?(truncatedLimit?`Showing first ${truncatedLimit} matches`:''):message};
+  return {start:target.start,end:target.end,index:0,items,truncatedLimit,incompleteness,message:items.length?(incompleteness||(truncatedLimit?`Showing first ${truncatedLimit} matches`:'')):[message,incompleteness].filter(Boolean).join(' · ')};
 }
 
 /** One editor-local lookup lane. No canonical text or anchor writes until acceptance. */
@@ -122,6 +125,11 @@ export class ReferenceCompletionSession {
         const context=await this.provider.readContext(item.blockId);
         if(!this.current(generation))return false;
         if(!context.selected||context.selected.id!==item.blockId||context.selected.deletedAt||context.selected.effectiveDeletedRootId)throw Error('Target is no longer available; search again');
+        if(item.fragmentId&&!item.anchor){
+          const draft=this.draft();
+          const source=draft?.blockId===item.blockId?draft.text:context.selected.text;
+          if(resolveFragment(source,item.fragmentId).status!=='resolved')throw Error('Fragment changed or is ambiguous; search again');
+        }
         if(item.anchor&&item.blockId!==this.draft()?.blockId){
           await this.provider.updateBlock({blockId:item.anchor.blockId,text:item.anchor.text,expectedRevision:item.anchor.expectedRevision});
           if(!this.current(generation))return false;

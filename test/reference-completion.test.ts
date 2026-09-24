@@ -4,6 +4,7 @@ import {TextBuffer} from '../src/text-buffer';
 import {pageAddressCompletion} from '../src/completion';
 import type {Block,PageAddressCollection} from '../src/types';
 const block=(id:string,text=id):Block=>({id,text,revision:1,parentId:null,position:0,author:'user',createdAt:'2026-09-23T00:00:00Z',updatedAt:'2026-09-23T00:00:00Z',properties:[]});
+const visible=(id:string,text:string)=>({...block(id,text),depth:0,hasChildren:false,displayText:text});
 const pages=(address:string):PageAddressCollection=>({addresses:[{address,normalizedAddress:address,blockId:address,kind:'page',title:address}],completeness:{kind:'complete'}});
 function setup(text:string){
  const buffer=new TextBuffer(text);buffer.moveEnd();let active=true;
@@ -46,4 +47,18 @@ test('bounded/empty/failed lookups stay visible and no result creates a target',
  const h=setup('((none');let writes=0;h.provider.updateBlock=async input=>{writes++;return block(input.blockId);};
  await h.session.refresh();expect(h.session.state?.message).toBe('No matching blocks');expect(await h.session.accept()).toBe(false);
  h.provider.queryBlocks=async()=>{throw Error('offline');};await h.session.refresh();expect(h.session.state?.message).toContain('offline');expect(writes).toBe(0);
+});
+
+test('existing fragment identity is rechecked against fresh text before insertion',async()=>{
+ for(const changed of ['Target\n\n## Renamed ^other','Target\n\n## First ^keep\n\n## Second ^keep']){
+  const h=setup('((Target^keep');
+  h.provider.queryBlocks=async()=>({blocks:[visible('target','Target\n\n## Heading ^keep')],completeness:{kind:'complete'}});
+  await h.session.refresh();expect(h.session.state?.items[0]?.fragmentId).toBe('keep');
+  h.provider.readContext=async()=>({selected:block('target',changed),ancestors:[],children:[]});
+  expect(await h.session.accept()).toBe(false);expect(h.buffer.text).toBe('((Target^keep');expect(h.session.state?.message).toContain('Fragment changed');
+ }
+});
+test('empty fragment search exposes bounded scanned scope rather than claiming absence',async()=>{
+ const h=setup('((Target^missing');h.provider.queryBlocks=async()=>({blocks:[visible('target','Target')],completeness:{kind:'truncated',limit:500}});
+ await h.session.refresh();expect(h.session.state?.message).toContain('more blocks were not checked');expect(h.session.state?.items).toEqual([]);
 });

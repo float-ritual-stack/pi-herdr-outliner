@@ -73,7 +73,7 @@ export function detailActionScopes(
   if (state.propertyInspector.edit) return ["property-edit"];
   if (state.propertyInspector.filterDraft !== null) return ["property-filter"];
   if (state.backlinks.filterDraft !== null) return ["backlinks-filter"];
-  if (state.completion) return ["completion"];
+  if (state.completion) return ["completion", state.mode];
   if (options.previewFocused) return ["draft-preview", state.mode];
   if (options.bufferMode ?? (state.mode === "edit" || state.mode === "comment")) {
     return [state.mode];
@@ -367,6 +367,16 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
       case "detail.buffer.copy":
         await dispatch({ type: "buffer.copy" });
         return true;
+      case "detail.completion.previous":
+      case "detail.completion.next":
+        await dispatch({type:"completion.move",delta:actionId.endsWith("previous")?-1:1});
+        return true;
+      case "detail.completion.accept":
+        await dispatch({type:"completion.accept"});
+        return true;
+      case "detail.completion.dismiss":
+        await dispatch({type:"completion.dismiss"});
+        return true;
       case "detail.completion.open":
         await dispatch({ type: "completion.open" });
         return true;
@@ -417,15 +427,6 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
     }
   }
 
-  async function handleCompletionKey(key: TerminalKey): Promise<void> {
-    if (key.name === "up") await dispatch({ type: "completion.move", delta: -1 });
-    else if (key.name === "down") await dispatch({ type: "completion.move", delta: 1 });
-    else if (key.name === "return" || key.name === "tab") {
-      await dispatch({ type: "completion.accept" });
-    } else if (key.name === "escape") await dispatch({ type: "completion.dismiss" });
-    else await dispatch({ type: "redraw" });
-  }
-
   async function handleBufferKey(
     str: string,
     key: TerminalKey,
@@ -434,10 +435,6 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
     const command = textBufferEditorCommand(str, key, modifiedEnter);
     if (command.type === "undo" || command.type === "redo") {
       await executeAction(command.type === "undo" ? "detail.buffer.undo" : "detail.buffer.redo");
-      return;
-    }
-    if (controller.state.completion && ["up","down","return","tab","escape"].includes(key.name ?? "")) {
-      await handleCompletionKey(key);
       return;
     }
     if (command.type === "save") {

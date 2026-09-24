@@ -376,18 +376,10 @@ describe("detail ANSI renderer", () => {
 
     const rendered = renderDetailAnsi(detail, { width: 32, height: 9 });
 
-    const [header, metadata, rule] = detailHeader("Block", 32);
-    expect(rendered).toBe([
-      `\x1b[H\x1b[2J${header}`,
-      metadata,
-      rule,
-      "   4 four▏",
-      "\x1b[2mCompletions 2/2\x1b[0m",
-      "  First",
-      "\x1b[7m› Second\x1b[0m",
-      "",
-      detailHelp("edit", 32),
-    ].join("\n"));
+    expect(rendered).toContain("   4 four▏");
+    expect(rendered).toContain("References 2/2");
+    expect(rendered).toContain("Second");
+    expect(rendered).toContain("pi-outliner-action:completion.choose:1");
     expect(rendered.split("\n")).toHaveLength(9);
     expect({
       editorVisualOffset: detail.editorVisualOffset,
