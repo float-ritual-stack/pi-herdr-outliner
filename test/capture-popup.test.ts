@@ -1,3 +1,5 @@
+import type {ReferenceCompletionProvider} from '../src/reference-completion';
+import type {Block} from '../src/types';
 import { describe, expect, test } from "bun:test";
 import {
   CapturePopupController,
@@ -11,6 +13,7 @@ import type {
 } from "../src/types";
 
 function popup(options: {
+  completionProvider?: ReferenceCompletionProvider;
   save?: (input: CapturePopupSaveInput) => Promise<void>;
   persistDraft?: (input: QuickCaptureDraftSaveInput) => Promise<QuickCaptureDraft>;
   clearDraft?: (expectedRevision: number | null) => Promise<void>;
@@ -26,6 +29,7 @@ function popup(options: {
   let closes = 0;
   let invalidations = 0;
   const controller = new CapturePopupController({
+    completionProvider:options.completionProvider,
     async save(input) {
       saves.push(input);
       await options.save?.(input);
@@ -222,4 +226,23 @@ describe("CapturePopupController", () => {
     expect(state.persists).toHaveLength(1);
     expect(state.persists[0]?.text).toBe("First second");
   });
+});
+
+function completionProvider():ReferenceCompletionProvider{
+ const target:Block={id:'target',text:'Home\nUseful context',revision:1,parentId:null,position:0,author:'user',createdAt:'now',updatedAt:'now',properties:[]};
+ return {queryBlocks:async()=>({blocks:[{...target,depth:0,hasChildren:false,displayText:target.text}],completeness:{kind:'complete'}}),queryPageAddresses:async()=>({addresses:[{address:'home',normalizedAddress:'home',blockId:target.id,title:'Home',kind:'page'}],completeness:{kind:'complete'}}),completeFiles:async()=>[],readContext:async()=>({selected:target,ancestors:[],children:[]}),updateBlock:async()=>{throw Error('unexpected write');}};
+}
+test('capture completion inserts at a multiline cursor with one undo and preserves save receipt',async()=>{
+ const h=popup({completionProvider:completionProvider()});h.controller.handlePaste('First line\nSee [[ho trailing');h.controller.buffer.placeCursor(1,8);await h.controller.completions!.refresh();
+ const generation=h.controller.completions!.state!.generation!;
+ await h.controller.chooseCompletion(0,generation-1);expect(h.controller.buffer.text).toBe('First line\nSee [[ho trailing');
+ await h.controller.chooseCompletion(0,generation);expect(h.controller.buffer.text).toBe('First line\nSee [[home]] trailing');
+ expect(h.controller.buffer.undo()).toBe(true);expect(h.controller.buffer.text).toBe('First line\nSee [[ho trailing');expect(h.controller.buffer.redo()).toBe(true);
+ await h.controller.handleKeypress('',{name:'s',ctrl:true},'pass');expect(h.saves[0]?.text).toBe('First line\nSee [[home]] trailing');expect(h.saves[0]?.requestId).toBe('capture-request');
+});
+test('Escape dismisses completion first; later retention keeps complete draft and cursor',async()=>{
+ const h=popup({completionProvider:completionProvider()});h.controller.handlePaste('Capture ((Home');await h.controller.completions!.refresh();
+ expect(renderCapturePopupFrame(h.controller,35,12)).toContain('Home');
+ await h.controller.handleKeypress('',{name:'escape'},'pass');expect(h.closes()).toBe(0);expect(h.controller.completions!.state).toBeNull();
+ await h.controller.handleKeypress('',{name:'escape'},'pass');expect(h.closes()).toBe(1);expect(h.persists.at(-1)?.text).toBe('Capture ((Home');
 });

@@ -1,3 +1,5 @@
+import {ReferenceCompletionSession,type ReferenceCompletionProvider} from './reference-completion';
+import {COMPLETION_ROWS,renderReferenceCompletion} from './reference-completion-renderer';
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { layoutDetailEditor } from "./detail-editor-layout";
 import { TextBuffer } from "./text-buffer";
@@ -16,6 +18,7 @@ export interface CapturePopupSaveInput {
 }
 
 export interface CapturePopupEffects {
+  completionProvider?: ReferenceCompletionProvider;
   save(input: CapturePopupSaveInput): Promise<void>;
   persistDraft(input: QuickCaptureDraftSaveInput): Promise<QuickCaptureDraft>;
   clearDraft(expectedRevision: number | null): Promise<void>;
@@ -30,6 +33,7 @@ export interface CapturePopupScheduler {
 
 export interface CapturePopupOptions {
   requestId: string;
+  workIdPrefix?: string|null;
   capturedFromBlockId?: string;
   draft?: QuickCaptureDraft;
   persistDelayMs?: number;
@@ -43,6 +47,7 @@ const defaultScheduler: CapturePopupScheduler = {
 
 export class CapturePopupController {
   readonly buffer: TextBuffer;
+  readonly completions: ReferenceCompletionSession|null;
   status: string;
   saving = false;
   private closed = false;
@@ -70,12 +75,14 @@ export class CapturePopupController {
     this.buffer = new TextBuffer(draft?.text ?? "");
     if (draft) this.buffer.placeCursor(draft.cursorRow, draft.cursorColumn);
     this.status = draft ? "Resumed retained draft" : "";
+    this.completions=effects.completionProvider?new ReferenceCompletionSession(effects.completionProvider,()=>this.buffer,()=>options.workIdPrefix??null,()=>effects.invalidate(),()=>!this.closed&&!this.saving):null;
   }
 
   handlePaste(text: string): void {
     if (this.closed || this.saving) return;
     this.discardArmed = false;
     this.buffer.insert(text);
+    void this.completions?.refresh();
     this.scheduleDraftPersistence();
     this.effects.invalidate();
   }
@@ -95,6 +102,12 @@ export class CapturePopupController {
       return;
     }
     this.discardArmed = false;
+    if(this.completions?.state&&!key.ctrl&&!key.meta&&!key.shift){
+      if(key.name==='up'||key.name==='down'){this.completions.move(key.name==='up'?-1:1);return;}
+      if(key.name==='return'||key.name==='tab'){await this.chooseCompletion();return;}
+      if(key.name==='escape'){this.completions.dismiss();return;}
+    }
+    if(this.completions&&(key.name==='tab'||(key.ctrl&&key.name==='space'))){void this.completions.refresh();return;}
     const command = textBufferEditorCommand(
       str,
       key,
@@ -110,7 +123,12 @@ export class CapturePopupController {
       return;
     }
     if (result === "changed") this.scheduleDraftPersistence();
+    void this.completions?.refresh();
     this.effects.invalidate();
+  }
+
+  async chooseCompletion(index?:number,generation?:number):Promise<void>{
+    if(await this.completions?.accept(index,generation))this.scheduleDraftPersistence();
   }
 
   async retainDraft(): Promise<void> {
@@ -267,7 +285,10 @@ export function renderCapturePopupFrame(
 ): string {
   const frameWidth = Math.max(1, Math.floor(width));
   const frameHeight = Math.max(1, Math.floor(height));
-  const bodyHeight = Math.max(1, frameHeight - 4);
+  const available=Math.max(1,frameHeight-4);
+  const completion=controller.completions?.state;
+  const completionHeight=completion?Math.min(COMPLETION_ROWS,Math.max(0,available-1)):0;
+  const bodyHeight = Math.max(1, available-completionHeight);
   const layout = layoutDetailEditor(
     controller.buffer.lines,
     controller.buffer.row,
@@ -289,7 +310,8 @@ export function renderCapturePopupFrame(
     )}\x1b[0m`,
     "─".repeat(frameWidth),
   ];
-  for (let offset = 0; offset < bodyHeight; offset += 1) {
+  const editorRows=completion?Math.min(bodyHeight,layout.cursorRow-firstVisibleRow+1):bodyHeight;
+  for (let offset = 0; offset < editorRows; offset += 1) {
     const visualRow = firstVisibleRow + offset;
     const row = layout.rows[visualRow];
     output.push(
@@ -298,6 +320,8 @@ export function renderCapturePopupFrame(
         : "",
     );
   }
+  if(completion)output.push(...renderReferenceCompletion(completion,frameWidth,completionHeight));
+  while(output.length<frameHeight-2)output.push("");
   const status = controller.status || "Draft retained automatically";
   output.push(truncateToWidth(status, frameWidth, "…"));
   output.push(
