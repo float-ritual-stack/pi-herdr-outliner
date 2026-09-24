@@ -1,3 +1,4 @@
+import {captureHistoryResource} from "./capture-history";
 import { InboxPlanValidationError } from "./inbox-attempts";
 import { createHash } from "node:crypto";
 import { prepareNoteEdit } from "./note-assistance-repository";
@@ -35,7 +36,7 @@ const mutation = { author: "agent" as const, actorId: "inbox-agent" };
 const ordinaryTypes = new Set<string>([...NOTE_TYPES, "capture", "learning", "question"]);
 const protectedKeys = new Set([
   "type", "status", "system-view", "system-doc", "page", "alias", "source-block",
-  "parent-annotation", "promoted-block", "superseded-by",
+  "parent-annotation", "promoted-block", "superseded-by", "raw-capture", "before-rewrite",
 ]);
 const taskKeys = new Set(["priority", "project", "arc", "track", "depends-on", "related-to"]);
 
@@ -311,16 +312,23 @@ export class InboxRepository {
         this.requireEditable(target);
         before.push(target);
       }
+      const sourceOriginals=this.originalCaptures(current,id);
+      const sourceBefore=captureHistoryResource(this.store.database,this.store.resources,id,current.id);
+      const connected=(value:string,originals:readonly string[],before?:string)=>patchPropertyText(value,[
+        ...parsePropertyRecords(value).filter(p=>p.scope==="block"&&(p.key==="raw-capture"||p.key==="before-rewrite")).map(p=>({op:"remove" as const,ordinal:p.ordinal})),
+        ...[...new Set(originals)].map(value=>({op:"append" as const,key:"raw-capture",value})),
+        ...(before?[{op:"append" as const,key:"before-rewrite",value:before}]:[]),
+      ]);
       const createdIds: string[] = [];
       const roots: Block[] = [];
       for (const note of plan.notes) {
         const parent = note.parentId ? this.store.requireActive(note.parentId) : this.folder("filed", roots);
-        const block = this.store.create(this.linkSource(note.text, source.id), parent.id, "agent", mutation);
+        const block = this.store.create(connected(this.linkSource(note.text, source.id),sourceOriginals), parent.id, "agent", mutation);
         createdIds.push(block.id);
       }
       for (const task of plan.tasks) {
         const block = this.store.createRoadmapItem({
-          title: task.title, body: this.linkSource(task.body, source.id), priority: task.priority,
+          title: task.title, body: connected(this.linkSource(task.body, source.id),sourceOriginals), priority: task.priority,
           project: task.project, arc: task.arc, tracks: task.tracks, relatedTo: task.relatedTo,
           sourceBlockId: source.id, workStage: "unprioritized",
         }, "agent", mutation).block;
@@ -328,7 +336,7 @@ export class InboxRepository {
       }
       for (const update of plan.updates) {
         const target = before.find(block => block.id === update.blockId)!;
-        this.store.update(target.id, preserveProperties(target, this.linkSource(update.text, source.id)), update.expectedRevision, mutation);
+        this.store.update(target.id, connected(preserveProperties(target, this.linkSource(update.text, source.id)),[...this.originalCaptures(target,id),...sourceOriginals],captureHistoryResource(this.store.database,this.store.resources,id,target.id)), update.expectedRevision, mutation);
       }
 
       result.outputIds = [...createdIds, ...plan.updates.map(update => update.blockId)];
@@ -343,6 +351,7 @@ export class InboxRepository {
         finalText = applied.text;
         if(applied.kind === "organized")result.summary = `${applied.summary}${plan.summary === "Organized note metadata" ? "" : ` · ${plan.summary}`}`;
       }
+      finalText=connected(finalText,sourceOriginals,sourceBefore);
       this.store.update(current.id, finalText, current.revision, mutation);
       this.store.move(current.id, destination.id);
       const recovery: Recovery = {
@@ -502,6 +511,13 @@ export class InboxRepository {
     const root = this.store.create(`${kind === "filed" ? "Filed notes" : "Processed captures"} [inbox-folder::${kind}]`, null, "system");
     created.push(root);
     return root;
+  }
+
+  private originalCaptures(block:Block,currentAttemptId:string):string[] {
+    const existing=block.properties.filter(property=>property.key==="raw-capture").map(property=>property.value);
+    if(existing.length)return existing;
+    const oldest=this.store.database.query("SELECT id FROM inbox_agent_results WHERE source_id=? AND recovery_json IS NOT NULL ORDER BY created_at,rowid LIMIT 1").get(block.id) as {id:string}|null;
+    return [captureHistoryResource(this.store.database,this.store.resources,oldest?.id??currentAttemptId,block.id)];
   }
 
   private linkSource(value: string, sourceId: string): string {

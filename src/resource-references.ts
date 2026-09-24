@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { parsePropertyRecords } from "./properties";
 
 export type AuthoredResourceReference =
+  | { readonly kind: "resource"; readonly resourceId: string }
   | { readonly kind: "filesystem"; readonly path: string }
   | { readonly kind: "web"; readonly url: string }
   | { readonly kind: "jira"; readonly key: string }
@@ -63,6 +64,7 @@ function boundedLocator(
 export function authoredResourceReferenceKey(reference: AuthoredResourceReference): string {
   let locator: string;
   switch (reference.kind) {
+    case "resource": locator=reference.resourceId;break;
     case "filesystem":
       locator = reference.path;
       break;
@@ -87,7 +89,7 @@ export function authoredResourceReferenceOccurrences(
   for (const property of parsePropertyRecords(text)) {
     if (
       property.key !== "file" && property.key !== "web" &&
-      property.key !== "jira" && property.key !== "app"
+      property.key !== "jira" && property.key !== "app" && property.key !== "raw-capture" && property.key !== "before-rewrite"
     ) continue;
     const value = property.value.trim();
     const range = { start: property.start, end: property.end };
@@ -100,6 +102,10 @@ export function authoredResourceReferenceOccurrences(
       continue;
     }
     try {
+      if(property.key==="raw-capture"||property.key==="before-rewrite"){
+        if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value))throw Error("Preserved capture Resource ID is invalid or unavailable");
+        occurrences.push({kind:"authored-resource",reference:{kind:"resource",resourceId:value.toLowerCase()},label:property.key==="raw-capture"?"Original capture":"Before this rewrite",...range});continue;
+      }
       if (property.key === "file") {
         const remote = REMOTE_FILE_PATTERN.exec(value);
         if (remote) {

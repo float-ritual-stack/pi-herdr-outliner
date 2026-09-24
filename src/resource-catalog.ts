@@ -1,3 +1,4 @@
+import {captureHistoryProducer,CAPTURE_HISTORY_PRODUCER} from "./capture-history";
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import {
@@ -973,6 +974,7 @@ export class ResourceCatalog {
       });
     this.computedProducerRegistry = options.computedProducerRegistry ??
       createDefaultComputedProducerRegistry();
+    if(!options.computedProducerRegistry)this.computedProducerRegistry.register(captureHistoryProducer(database));
     this.maximumWebBytes = options.maximumWebBytes ?? DEFAULT_MAXIMUM_WEB_BYTES;
     this.maximumPdfBytes = options.maximumPdfBytes ?? DEFAULT_MAXIMUM_PDF_BYTES;
     this.webStaleAfterMs = options.webStaleAfterMs ?? DEFAULT_WEB_STALE_AFTER_MS;
@@ -1114,6 +1116,7 @@ export class ResourceCatalog {
     const invocationId = normalizeResourceId(input.invocationId, "Computed invocation ID");
     return this.database.transaction(() => {
       const current = this.requireComputedInvocationFromCurrentRead(invocationId);
+      if(current.producerId===CAPTURE_HISTORY_PRODUCER)throw new ResourceCatalogError("invalid-input","Capture history addresses are immutable");
       if (current.version !== input.expectedVersion) {
         throw new ResourceCatalogError(
           "version-conflict",
@@ -1217,6 +1220,11 @@ export class ResourceCatalog {
         executions: executions.map(computedExecutionRecordFromRow),
       };
     })();
+  }
+
+  isCaptureHistory(resourceId:string):boolean {
+    const resource=this.get(resourceId);
+    return !!resource&&resource.provider==="computed"&&this.requireComputedInvocationFromCurrentRead(resource.address.invocationId).producerId===CAPTURE_HISTORY_PRODUCER;
   }
 
   executeComputedResource(
@@ -1399,6 +1407,9 @@ export class ResourceCatalog {
   resolveAuthoredReference(
     reference: AuthoredResourceReference,
   ): AuthoredResourceReferenceLookup {
+    if (reference.kind === "resource") {
+      return this.get(reference.resourceId)?{kind:"ready",resourceId:reference.resourceId}:{kind:"unavailable",reason:"Preserved Resource is unavailable"};
+    }
     if (reference.kind === "filesystem") {
       const absolutePath = resolveReferencedPath(reference.path, this.workspaceRoot);
       const candidates = this.filesystemSourceCandidates(absolutePath);
@@ -1497,6 +1508,7 @@ export class ResourceCatalog {
     if (resolution.kind === "unavailable") {
       throw new ResourceCatalogError("invalid-input", resolution.reason);
     }
+    if(reference.kind==="resource")throw new ResourceCatalogError("invalid-input","Preserved Resource is unavailable");
     if (reference.kind === "filesystem") {
       return this.internFilesystem({
         path: resolveReferencedPath(reference.path, this.workspaceRoot),

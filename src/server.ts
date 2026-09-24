@@ -1176,6 +1176,17 @@ export class OutlinerServer {
         if (cancel && this.editMergeJobs.get(request.recoveryId) === cancel) this.editMergeJobs.delete(request.recoveryId);
       }
     }
+    if(request.action==="resources.describe"){
+      try {
+        // This built-in only reads an immutable Inbox before-image. It cannot
+        // execute arbitrary producers, tools, or external requests on preview.
+        const checked=this.handle(request,subscribedClient);
+        if(!checked.ok||!this.store.resources.isCaptureHistory(request.target.resourceId))return checked;
+        const description=this.store.resources.describe(request.target.resourceId,true,request.target.revision);
+        if(!description.computed&&!description.source.policy.deniedCapabilities.includes("read"))await this.store.resources.executeComputedResource(request.target.resourceId,true);
+        return this.handle(request,subscribedClient);
+      } catch(error){return {id:request.id,ok:false,error:error instanceof Error?error.message:String(error),sequence:this.store.sequence};}
+    }
     if (request.action === "inbox.search") {
       try {
         if(request.semantic!==undefined&&typeof request.semantic!=="boolean")throw new Error("semantic must be a boolean");

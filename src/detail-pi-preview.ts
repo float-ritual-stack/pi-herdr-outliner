@@ -1,3 +1,4 @@
+import {authoredResourceReferenceOccurrences} from "./resource-references";
 import type {RenderedLink} from './rendered-links';
 import { displayedResourceText, detailAnnotationGroups, sourceLineStarts, sourceLineAt, selectedAnnotationThread, annotationScopeLabel, type DetailAnnotationGroup } from "./detail-annotations";
 import { detailPropertyInspectorRegions } from "./property-inspector";
@@ -67,6 +68,7 @@ export interface DetailDraftProjection {
 }
 
 export interface DetailReadPreviewDocument {
+  preserveMetadata?: boolean;
   truncated?: boolean;
   canonicalText: string;
   resolvedText: string;
@@ -487,8 +489,8 @@ export function renderDetailReadPreviewLines(
   calloutTheme?: DetailCalloutTheme,
   linksEnabled = false,
 ): string[] {
-  const sourceText = propertyInspectorAuthoredText(input.resolvedText);
-  const projectedText = propertyInspectorAuthoredText(input.projectedText);
+  const sourceText = input.preserveMetadata?input.resolvedText:propertyInspectorAuthoredText(input.resolvedText);
+  const projectedText = input.preserveMetadata?input.projectedText:propertyInspectorAuthoredText(input.projectedText);
   const metadataRemoved = projectedText !== input.projectedText;
   const embedRanges = metadataRemoved
     ? remapEmbedRangesAfterMetadataRemoval(input.projectedText, input.embedRanges)
@@ -524,7 +526,9 @@ export function renderDetailReadPreviewLines(
     calloutTheme,
   );
   markdown.setContent(document, embedRanges, true, callouts);
-  return markdown.render(Math.max(1, width));
+  const historyLinks=input.preserveMetadata?[]:authoredResourceReferenceOccurrences(input.canonicalText)
+    .flatMap(link=>link.kind==="authored-resource"&&link.reference.kind==="resource"?[`[${link.label}](${outlinerLinkUri("resource",link.reference.resourceId)})`]:[]);
+  return [...(historyLinks.length?new Markdown(historyLinks.join(" · "),0,0,markdownTheme).render(Math.max(1,width)):[]),...markdown.render(Math.max(1, width))];
 }
 
 const PREVIEW_HELP = DEFAULT_OUTLINER_ACTION_KEYMAP.helpText("detail", "preview");
