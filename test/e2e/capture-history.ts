@@ -51,8 +51,9 @@ const result=await runHerdrScenario({name:'capture-history',async prepare(projec
  const description=await s.client.request<{computed:{markdown:string}}>({action:'resources.describe',destinationClientId:detail.clientId,target:{kind:'resource',resourceId:rawId}});
  assert.equal(description.computed.markdown,original);
  await s.checkpoint('detail-original');
- await s.focus(panes.tree);await s.keys(panes.tree,'escape');
+ await s.focus(panes.tree);
  await s.revealTree(panes.tree,sourceId);
+ await s.waitVisible(panes.tree,'● Preview');await s.keys(panes.tree,'alt+p');await s.waitVisible(panes.tree,'○ Preview');
  await s.setKeybindings({'tree.authored-links.toggle':['Alt+J']});
  await s.keys(panes.tree,'ctrl+r');await s.waitVisible(panes.tree,'Outliner keymap reloaded');
  await s.keys(panes.tree,'alt+j');await s.waitVisible(panes.tree,'Resources');

@@ -115,3 +115,16 @@ test('legacy applied attempts without a before-image never relabel current text 
  expect(store.resources.describe(id,true).computedFailure?.message).toContain('No preserved capture');
  expect(await original(store,refs(cleaned,'before-rewrite')[0]!)).toBe(current.text);
 });
+
+
+test('legacy split and later merge recover the raw source through saved output lineage',async()=>{
+ const {store}=fixture(),repository=new InboxRepository(store);
+ const source=store.capture('a','RAW ORIGINAL','cli').block;
+ const first=repository.apply('old-split',source,plan({notes:[{text:'SPLIT OUTPUT'}]}));
+ let target=store.require(first.outputIds[0]!);
+ target=store.update(target.id,target.text.replace(/\s*\[(?:raw-capture|before-rewrite)::[^\]]+\]/g,''),target.revision);
+ const incoming=store.capture('b','SECOND RAW SOURCE','cli').block;
+ repository.apply('new-merge',incoming,plan({updates:[{blockId:target.id,expectedRevision:target.revision,text:'Combined useful result'}]}));
+ const originals=await Promise.all(refs(store.require(target.id)).map(id=>original(store,id)));
+ expect(originals).toEqual([source.text,incoming.text]);
+});

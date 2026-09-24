@@ -1,4 +1,4 @@
-import {captureHistoryResource} from "./capture-history";
+import {captureHistoryResource,captureOriginalResources} from "./capture-history";
 import { InboxPlanValidationError } from "./inbox-attempts";
 import { createHash } from "node:crypto";
 import { prepareNoteEdit } from "./note-assistance-repository";
@@ -514,10 +514,7 @@ export class InboxRepository {
   }
 
   private originalCaptures(block:Block,currentAttemptId:string):string[] {
-    const existing=block.properties.filter(property=>property.key==="raw-capture").map(property=>property.value);
-    if(existing.length)return existing;
-    const oldest=this.store.database.query("SELECT id FROM inbox_agent_results WHERE source_id=? AND json_extract(result_json,'$.state') IN ('applied','undone') ORDER BY created_at,rowid LIMIT 1").get(block.id) as {id:string}|null;
-    return [captureHistoryResource(this.store.database,this.store.resources,oldest?.id??currentAttemptId,block.id)];
+    return captureOriginalResources(this.store.database,this.store.resources,block,currentAttemptId);
   }
 
   private linkSource(value: string, sourceId: string): string {
