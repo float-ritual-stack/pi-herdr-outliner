@@ -917,3 +917,9 @@ test('empty completion leaves Enter as newline and Escape dismisses before edito
  await editor.press({name:'return'});await editor.press({name:'escape'});
  expect(editor.intents).toEqual([{type:'buffer.newline'},{type:'completion.dismiss'}]);
 });
+
+test('empty lookup respects configured dismissal while preserving newline',async()=>{
+ const current=state();current.completion={start:0,end:4,index:0,items:[]};const editor=harness(current,true,{actionKeymap:new OutlinerActionKeymap('<test>',{'detail.completion.dismiss':['Alt+D']})});
+ await editor.press({name:'escape'});await editor.press({name:'return'});await editor.press({name:'d',meta:true});
+ expect(editor.intents).toEqual([{type:'buffer.newline'},{type:'completion.dismiss'}]);
+});

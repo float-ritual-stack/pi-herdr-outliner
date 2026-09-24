@@ -73,7 +73,7 @@ export function detailActionScopes(
   if (state.propertyInspector.edit) return ["property-edit"];
   if (state.propertyInspector.filterDraft !== null) return ["property-filter"];
   if (state.backlinks.filterDraft !== null) return ["backlinks-filter"];
-  if (state.completion?.items.length) return ["completion", state.mode];
+  if (state.completion) return [state.completion.items.length?"completion":"completion-empty", state.mode];
   if (options.previewFocused) return ["draft-preview", state.mode];
   if (options.bufferMode ?? (state.mode === "edit" || state.mode === "comment")) {
     return [state.mode];
@@ -550,9 +550,6 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
     }
     if (inputAction === "suppress") return;
 
-    if(controller.state.completion&&!controller.state.completion.items.length&&key.name==="escape"){
-      await dispatch({type:"completion.dismiss"});return;
-    }
     const resolved = actionKeymap.resolve("detail", activeScopes(), str, key);
     if (resolved.suppressed) return;
     if (resolved.actionId) {
