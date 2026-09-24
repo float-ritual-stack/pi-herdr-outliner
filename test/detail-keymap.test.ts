@@ -911,3 +911,9 @@ test('completion keeps configured editor actions and configurable selection cont
  await editor.press({name:'down'});await editor.press({name:'tab'});await editor.press({name:'escape'});
  expect(editor.intents).toEqual([{type:'buffer.save'},{type:'completion.move',delta:1},{type:'completion.accept'},{type:'completion.dismiss'}]);
 });
+
+test('empty completion leaves Enter as newline and Escape dismisses before editor cancellation',async()=>{
+ const current=state();current.completion={start:0,end:4,index:0,items:[],message:'No matches'};const editor=harness(current,true);
+ await editor.press({name:'return'});await editor.press({name:'escape'});
+ expect(editor.intents).toEqual([{type:'buffer.newline'},{type:'completion.dismiss'}]);
+});

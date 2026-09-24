@@ -106,8 +106,8 @@ export function completionTargetAtCursor(
     if (start < 0) continue;
     if (!target || start > target.start) {
       const closing = line.indexOf(syntax.closing, end);
-      const nextOpening = line.indexOf(syntax.opening, end);
-      const replacementEnd = closing >= 0 && (nextOpening < 0 || closing < nextOpening)
+      const intervening = closing >= 0 ? line.slice(end, closing) : "";
+      const replacementEnd = closing >= 0 && !/[\[\]\r\n]|\(\(|\)\)/.test(intervening)
         ? closing + syntax.closing.length : end;
       target = {
         kind: syntax.kind,

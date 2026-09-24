@@ -2389,6 +2389,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       if (quickCompletion && ["up","down","return","tab","escape"].includes(key.name??"")) {
         if (key.name === "up") moveQuickCompletion(-1);
         else if (key.name === "down") moveQuickCompletion(1);
+        else if (key.name === "return" && !quickCompletion.items.length) {await finishInput();return;}
         else if (key.name === "return" || key.name === "tab") await applyQuickCompletion();
         else if (key.name === "escape") {if(mode==="filter")quickCompletion=null;else completions.dismiss();}
         effects.invalidate();

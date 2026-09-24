@@ -68,3 +68,9 @@ test('shared list accepts effective host bindings rather than advertising stale 
  const output=renderReferenceCompletion({start:0,end:4,index:0,items:[{label:'Home',insertion:'[[home]]'}]},100,8,'completion.choose','Alt+J next · Alt+I insert');
  expect(output.at(-1)).toBe('Alt+J next · Alt+I insert');
 });
+
+test('file completion never consumes a following different reference',async()=>{
+ const h=setup('See [file::READ and [[home]] after');h.buffer.placeCursor(0,15);
+ h.provider.completeFiles=async()=>[{sourcePath:'README.md',isDirectory:false}];
+ await h.session.refresh();expect(await h.session.accept()).toBe(true);expect(h.buffer.text).toBe('See [file::README.md] and [[home]] after');
+});
