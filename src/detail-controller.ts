@@ -1,7 +1,7 @@
 import { buildDetailAnnotationView, displayedResourceText, detailAnnotationGroups, selectedAnnotationThread } from "./detail-annotations";
 import type { BacklinkPeekLaunch } from "./backlink-peek";
 import type { EditRecovery, EditRecoveryStart } from "./edit-recovery";
-import type { EditRecoveryClient } from "./edit-recovery-client";
+import { EditRecoveryRetainedLocallyError, type EditRecoveryClient } from "./edit-recovery-client";
 import type { RecoveryChoice } from "./edit-recovery-review";
 import {
   DEFAULT_OUTLINER_ACTION_KEYMAP,
@@ -2841,8 +2841,14 @@ export function createDetailController(
   };
 
   const cancelBuffer = async (): Promise<void> => {
+    let retentionNotice: string | undefined;
     if (state.mode === "edit" && state.recovery && effects.recovery && state.buffer.text !== state.recovery.draftText) {
-      state.recovery=await effects.recovery.retain(recoveryInput());
+      try {
+        state.recovery=await effects.recovery.retain(recoveryInput());
+      } catch (error) {
+        if (!(error instanceof EditRecoveryRetainedLocallyError)) throw error;
+        retentionNotice=`Writing retained locally; the service did not acknowledge it · ${errorMessage(error)}`;
+      }
       state.recoveryAccepted=false;
     }
     if (state.annotationReplyDraft) {
@@ -2856,7 +2862,9 @@ export function createDetailController(
     state.annotationDraft = undefined;
     state.status = cancelledMode === "comment" ? "Comment cancelled" : "Edit cancelled";
     if(cancelledMode==="edit"&&state.recovery)state.status="Writing retained · Recover writing in the header or actions menu";
+    const cancelStatus = state.status;
     await focusOutliner(false);
+    if (retentionNotice) state.status = state.status === cancelStatus ? retentionNotice : `${retentionNotice} · ${state.status}`;
   };
 
   const saveBuffer = async (viewport:DetailViewport): Promise<void> => {
@@ -2866,6 +2874,7 @@ export function createDetailController(
       await recoverWriting(viewport,[state.recovery]);
       return;
     }
+    let written = false;
     state.busy = true;
     try {
       if (state.mode === "edit") {
@@ -2876,6 +2885,7 @@ export function createDetailController(
             text: state.buffer.text,
             expectedRevision: selected.revision,
           });
+          written = true;
           state.recovery=undefined;
           state.status="Saved";
           replaceSelectedBlock(updated);
@@ -2950,15 +2960,16 @@ export function createDetailController(
       }
       if (!isBufferMode() && state.refreshPending) await refreshPendingTarget();
     } catch (error) {
-      state.status = errorMessage(error);
-      if (state.mode === "edit" && state.context.selected && effects.recovery) {
+      state.status = written ? `Saved; display refresh failed · ${errorMessage(error)}` : errorMessage(error);
+      if (!written && state.mode === "edit" && state.context.selected && effects.recovery) {
         try {
           state.recovery=await effects.recovery.retain(recoveryInput());
           state.recoveryAccepted=false;
           state.recoveryCount=Math.max(1,state.recoveryCount??0);
           state.status=`Save did not apply · ${errorMessage(error)} · writing retained`;
         } catch (retentionError) {
-          state.status=`Save did not apply · draft remains in this editor and local recovery · ${errorMessage(retentionError)}`;
+          const retained = retentionError instanceof EditRecoveryRetainedLocallyError ? "this editor and local recovery" : "this editor";
+          state.status=`Save did not apply · draft remains in ${retained} · ${errorMessage(retentionError)}`;
         }
       }
     } finally {

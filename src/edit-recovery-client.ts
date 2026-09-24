@@ -3,6 +3,9 @@ import type { Block } from "./types";
 import type { EditRecovery, EditRecoveryStart } from "./edit-recovery";
 import { EditRecoveryFiles } from "./edit-recovery-files";
 
+/** The local journal succeeded, but the service did not acknowledge retention. */
+export class EditRecoveryRetainedLocallyError extends Error {}
+
 /** Transfers client-local writing only after the canonical service acknowledges it. */
 export class EditRecoveryClient {
   warnings:string[]=[];
@@ -12,7 +15,12 @@ export class EditRecoveryClient {
   }
   async retain(input: EditRecoveryStart): Promise<EditRecovery> {
     const cleanup = this.files.retain(input);
-    const record = await this.client.request<EditRecovery>({action:"edit-recovery.start",input});
+    let record: EditRecovery;
+    try {
+      record = await this.client.request<EditRecovery>({action:"edit-recovery.start",input});
+    } catch (error) {
+      throw new EditRecoveryRetainedLocallyError(error instanceof Error ? error.message : String(error), {cause:error});
+    }
     cleanup();
     return record;
   }

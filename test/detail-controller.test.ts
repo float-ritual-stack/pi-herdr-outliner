@@ -3438,6 +3438,64 @@ describe("detail controller saves and annotations", () => {
     }finally{store.close();}
   });
 
+  for (const recovered of [false,true]) for (const failure of ["projectRead","resolveReferences"] as const) {
+    test(`successful ${recovered ? "recovery" : "ordinary"} save does not retain a false conflict after ${failure} fails`,async()=>{
+      const {OutlinerStore}=await import("../src/store");
+      const {EditRecoveryRepository}=await import("../src/edit-recovery");
+      const store=new OutlinerStore(":memory:"),repository=new EditRecoveryRepository(store);
+      try {
+        const base=store.create("Original"),harness=createHarness(base);
+        let retained=0;
+        harness.effects.recovery={retain:async input=>{retained++;return repository.start(input);},list:async id=>repository.list(id),commit:async(record,text)=>repository.commit(record.id,record.revision,text,record.latest.revision,{author:"user",actorId:"detail"}),separate:async record=>repository.separate(record.id,record.revision,{author:"user",actorId:"detail"})};
+        harness.effects.updateBlock=async input=>store.update(input.blockId,input.text,input.expectedRevision,{author:"user",actorId:"detail"});
+        await harness.controller.initialize();await harness.controller.dispatch({type:"edit.begin"},viewport);
+        harness.controller.state.buffer.replaceText("Saved writing");
+        if(recovered){
+          harness.controller.state.recovery=repository.start({id:crypto.randomUUID(),blockId:base.id,baseRevision:base.revision,baseText:base.text,prelaunchText:base.text,draftText:"Saved writing",source:"save-conflict"});
+          harness.controller.state.recoveryAccepted=true;
+        }
+        harness.effects[failure]=async()=>{throw Error("Read unavailable");};
+        await harness.controller.dispatch({type:"buffer.save"},viewport);
+        expect(store.get(base.id)?.text).toBe("Saved writing");
+        expect(harness.controller.state.context.selected?.revision).toBe(store.get(base.id)?.revision);
+        expect(retained).toBe(0);expect(repository.list(base.id)).toEqual([]);
+        expect(harness.controller.state.recovery).toBeUndefined();
+        expect(harness.controller.state.status).toBe("Saved; display refresh failed · Read unavailable");
+      }finally{store.close();}
+    });
+  }
+
+  for (const localFailure of [false,true]) for (const focusFailure of [false,true]) {
+    test(`cancel ${localFailure ? "keeps an unjournaled edit open" : "closes a locally retained edit"} with focus failure ${focusFailure}`,async()=>{
+      const {OutlinerStore}=await import("../src/store");
+      const {EditRecoveryRepository}=await import("../src/edit-recovery");
+      const {EditRecoveryRetainedLocallyError}=await import("../src/edit-recovery-client");
+      const store=new OutlinerStore(":memory:"),repository=new EditRecoveryRepository(store);
+      try {
+        const base=store.create("Original"),harness=createHarness(base);
+        let retained=0;
+        harness.effects.recovery={retain:async()=>{retained++;throw localFailure ? Error("Disk full") : new EditRecoveryRetainedLocallyError("Disconnected");},list:async id=>repository.list(id),commit:async(record,text)=>repository.commit(record.id,record.revision,text,record.latest.revision,{author:"user",actorId:"detail"}),separate:async record=>repository.separate(record.id,record.revision,{author:"user",actorId:"detail"})};
+        await harness.controller.initialize();await harness.controller.dispatch({type:"edit.begin"},viewport);
+        harness.controller.state.recovery=repository.start({id:crypto.randomUUID(),blockId:base.id,baseRevision:base.revision,baseText:base.text,prelaunchText:base.text,draftText:"Retained draft",source:"save-conflict"});
+        harness.controller.state.recoveryAccepted=true;
+        harness.controller.state.buffer.replaceText("More writing");
+        if(focusFailure)harness.setFocusError(Error("Focus unavailable"));
+        if(localFailure){
+          await expect(harness.controller.dispatch({type:"buffer.cancel"},viewport)).rejects.toThrow("Disk full");
+          expect(harness.controller.state.mode).toBe("edit");
+        }else{
+          await harness.controller.dispatch({type:"buffer.cancel"},viewport);
+          expect(harness.controller.state.mode).toBe("preview");
+          expect(harness.controller.state.status).toContain("Writing retained locally; the service did not acknowledge it · Disconnected");
+          if(focusFailure)expect(harness.controller.state.status).toContain("Focus unavailable");
+          expect(harness.controller.state.recoveryAccepted).toBe(false);
+        }
+        expect(harness.controller.state.buffer.text).toBe("More writing");
+        expect(store.get(base.id)?.text).toBe("Original");expect(retained).toBe(1);
+      }finally{store.close();}
+    });
+  }
+
   test("sends the raw buffer with the selected optimistic version", async () => {
     const harness = createHarness(makeBlock({ text: "raw", updatedAt: "original-version" }));
     await harness.controller.initialize();
