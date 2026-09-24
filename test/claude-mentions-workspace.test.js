@@ -51,7 +51,9 @@ test('registered completion hook delivers a subfolder reply through CLI into the
  const background=[];
  const runs=[];
  const toasts=[];
- register((name,callback)=>{expect(name).toBe('turn.complete');handler=callback;},{workspaces:root});
+ const hooks=new Map();
+ register((name,matcherOrCallback,callback)=>{hooks.set(name,callback??matcherOrCallback);},{workspaces:root});
+ handler=hooks.get('turn.complete');
  const engine={
   env:{get:async()=>undefined},
   session:{id:async()=>'session-1',cwd:async()=>join(root,'projects','mod')},
@@ -76,9 +78,10 @@ test('registered completion hook delivers a subfolder reply through CLI into the
    await Bun.sleep(25);
   }
   expect(toasts).toEqual([]);
-  expect(runs[1]?.init.cwd).toBe(root);
-  expect(runs[1]?.init.env.OUTLINER_WORKSPACE_ROOT).toBe(root);
-  expect(JSON.parse(runs[1]?.init.stdin).workspaceRoot).toBe(root);
+  const ingest=runs.find(run=>run.argv.includes('ingest'));
+  expect(ingest?.init.cwd).toBe(root);
+  expect(ingest?.init.env.OUTLINER_WORKSPACE_ROOT).toBe(root);
+  expect(JSON.parse(ingest?.init.stdin).workspaceRoot).toBe(root);
   expect(result.entries.map(entry=>entry.block?.id)).toEqual([target.id]);
  }finally{await server.close();store.close();rmSync(temp,{recursive:true,force:true});}
 },10000);
