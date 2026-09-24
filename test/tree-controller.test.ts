@@ -2105,6 +2105,7 @@ describe("createTreeController", () => {
           completeness: { kind: "truncated", limit: 20 },
         };
       }
+      if(input.action === "blocks.context")return {selected:block(input.blockId),ancestors:[],children:[]};
       return undefined;
     });
     const controller = createTreeController(fake.effects);
@@ -2118,7 +2119,7 @@ describe("createTreeController", () => {
       limit: 20,
     }]);
     expect(fake.calls.some((call) => call.action === "tree.query")).toBe(false);
-    expect(controller.view().quickCompletion?.items[0]).toEqual({
+    expect(controller.view().quickCompletion?.items[0]).toMatchObject({
       label: "home — Home",
       insertion: "[[home]]",
       blockId: "home-id",
@@ -2149,6 +2150,7 @@ describe("createTreeController", () => {
           completeness: { kind: "complete" },
         };
       }
+      if(input.action === "blocks.context")return {selected:block(input.blockId),ancestors:[],children:[]};
       return undefined;
     });
     const controller = createTreeController(fake.effects);

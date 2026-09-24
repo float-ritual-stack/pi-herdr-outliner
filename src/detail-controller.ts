@@ -1,3 +1,5 @@
+import { COMPLETION_ROWS } from "./reference-completion-renderer";
+import { ReferenceCompletionSession, type ReferenceCompletionItem, type ReferenceCompletionState } from "./reference-completion";
 import { buildDetailAnnotationView, displayedResourceText, detailAnnotationGroups, selectedAnnotationThread } from "./detail-annotations";
 import type { BacklinkPeekLaunch } from "./backlink-peek";
 import type { EditRecovery, EditRecoveryStart } from "./edit-recovery";
@@ -19,12 +21,7 @@ import {
   attentionSourceLine,
   emptyAttentionState,
 } from "./attention";
-import {
-  completionTargetAtCursor,
-  pageAddressCompletion,
-  pageCompletionLookupQuery,
-} from "./completion";
-import { rankBlockFocusMatches, subsequenceScore } from "./block-focus";
+import { subsequenceScore } from "./block-focus";
 import {
   detailEditorPositionAtVisualPoint,
   detailEditorVisualRowForSourceLine,
@@ -32,9 +29,6 @@ import {
 } from "./detail-editor-layout";
 import type { DetailEmbedRange, DetailEmbedState, DetailReadProjection } from "./detail-embeds";
 import {
-  ensureHeadingFragment,
-  fragmentCandidates,
-  parseFragmentCompletionQuery,
   resolveFragment,
 } from "./fragments";
 import type { ReferencedFile, ReferencedPathCandidate } from "./files";
@@ -149,24 +143,8 @@ export interface DetailViewport {
   }>;
 }
 
-export interface DetailCompletionItem {
-  label: string;
-  insertion: string;
-  anchor?: {
-    blockId: string;
-    fragmentId: string;
-    lineIndex: number;
-    text: string;
-    expectedRevision: number;
-  };
-}
-
-export interface DetailCompletionState {
-  start: number;
-  end: number;
-  index: number;
-  items: DetailCompletionItem[];
-}
+export type DetailCompletionItem = ReferenceCompletionItem;
+export type DetailCompletionState = ReferenceCompletionState;
 
 export interface DetailLineRange {
   startLine: number;
@@ -719,6 +697,7 @@ export type DetailIntent =
   | { type: "completion.open" }
   | { type: "completion.move"; delta: -1 | 1 }
   | { type: "completion.accept" }
+  | { type: "completion.choose"; index:number; generation?:number }
   | { type: "completion.dismiss" }
   | { type: "preview.navigate"; direction: "up" | "down" | "pageup" | "pagedown" | "top" | "bottom" }
   | { type: "file.navigate"; direction: "up" | "down" | "pageup" | "pagedown" | "home" | "end" }
@@ -1021,7 +1000,7 @@ export function detailVisibleEditorHeight(
 ): number {
   if (viewport.editorBody) return viewport.editorBody.height;
   const completionRows = state.completion
-    ? 1 + Math.min(6, state.completion.items.length)
+    ? COMPLETION_ROWS
     : 0;
   return Math.max(1, viewport.height - 5 - completionRows);
 }
@@ -2980,139 +2959,23 @@ export function createDetailController(
     }
   };
 
-  const openCompletion = async (): Promise<void> => {
-    const line = state.buffer.lines[state.buffer.row];
-    const target = completionTargetAtCursor(line, state.buffer.column);
-    if (!target) {
-      state.status = "Type [[address]], ((block)), or [file::path] for Resource path completion";
-      return;
-    }
-
-    let items: DetailCompletionItem[];
-    let emptyStatus = "";
-    let completionStatus = "";
-    if (target.kind === "file") {
-      items = (await effects.completeFiles(target.query)).map((candidate) => ({
-        label: candidate.sourcePath,
-        insertion: `[file::${candidate.sourcePath}${candidate.isDirectory ? "" : "]"}`,
-      }));
-    } else if (target.kind === "page") {
-      const collection = await effects.queryPageAddresses(
-        pageCompletionLookupQuery(target.query, state.workIdPrefix) || undefined,
-        20,
-      );
-      items = collection.addresses.map((address) =>
-        pageAddressCompletion(address, target.query, state.workIdPrefix)
-      );
-      if (collection.completeness.kind === "truncated") {
-        completionStatus = `Showing first ${collection.completeness.limit} matches`;
-      }
-    } else {
-      const fragmentQuery = parseFragmentCompletionQuery(target.query);
-      if (!fragmentQuery) {
-        const collection = await effects.queryBlocks({
-          text: target.query || undefined,
-          limit: 20,
-        });
-        items = collection.blocks.map((block) => ({
-          label: blockDisplayTitle(block),
-          insertion: `((${block.id}))`,
-        }));
-        if (collection.completeness.kind === "truncated") {
-          completionStatus = `Showing first ${collection.completeness.limit} matches`;
-        }
-      } else {
-        const collection = await effects.queryBlocks({ limit: 500 });
-        const blocks = fragmentQuery.blockQuery
-          ? rankBlockFocusMatches(collection.blocks, fragmentQuery.blockQuery, 50)
-            .map((match) => match.block)
-          : collection.blocks;
-        items = [];
-        outer:
-        for (const block of blocks) {
-          const sourceText = block.id === state.context.selected?.id
-            ? state.buffer.text
-            : block.text;
-          for (
-            const candidate of fragmentCandidates(
-              sourceText,
-              fragmentQuery.fragmentQuery,
-              fragmentQuery.mode,
-            )
-          ) {
-            const ensured = candidate.fragmentId
-              ? { text: sourceText, fragmentId: candidate.fragmentId, created: false }
-              : ensureHeadingFragment(sourceText, candidate.lineIndex);
-            items.push({
-              label: `${blockDisplayTitle(block)} › ${
-                candidate.kind === "heading" ? "#" : "¶"
-              } ${candidate.label}${
-                candidate.fragmentId ? ` · ^${candidate.fragmentId}` : " · create anchor"
-              }`,
-              insertion: `((${block.id}^${ensured.fragmentId}))`,
-              ...(ensured.created
-                ? {
-                    anchor: {
-                      blockId: block.id,
-                      fragmentId: ensured.fragmentId,
-                      lineIndex: candidate.lineIndex,
-                      text: ensured.text,
-                      expectedRevision: block.revision,
-                    },
-                  }
-                : {}),
-            });
-            if (items.length >= 20) break outer;
-          }
-        }
-        emptyStatus = "No matching block fragments";
-        if (collection.completeness.kind === "truncated") {
-          completionStatus = `Searched first ${collection.completeness.limit} blocks`;
-        }
-      }
-    }
-
-    if (items.length === 0) {
-      state.completion = null;
-      switch (target.kind) {
-        case "file":
-          state.status = "No matching files";
-          break;
-        case "page":
-          state.status =
-            "No matching named addresses; [[target|label]] labels a target, ((...)) searches blocks";
-          break;
-        case "block":
-          state.status = emptyStatus || "No matching blocks";
-          break;
-      }
-      return;
-    }
-    state.completion = { start: target.start, end: target.end, index: 0, items };
-    state.status = completionStatus;
-  };
-  const applyCompletion = async (): Promise<void> => {
-    const completion = state.completion;
-    if (!completion || completion.items.length === 0) return;
-    const item = completion.items[completion.index]!;
-    if (item.anchor) {
-      if (item.anchor.blockId === state.context.selected?.id) {
-        const anchoredLine = item.anchor.text.split(/\r?\n/)[item.anchor.lineIndex];
-        if (anchoredLine === undefined) {
-          throw new Error(`Fragment heading line is unavailable: ${item.anchor.lineIndex + 1}`);
-        }
-        state.buffer.replaceLine(item.anchor.lineIndex, anchoredLine);
-      } else {
-        await effects.updateBlock({
-          blockId: item.anchor.blockId,
-          text: item.anchor.text,
-          expectedRevision: item.anchor.expectedRevision,
-        });
-      }
-    }
-    state.buffer.replaceCurrentLine(completion.start, completion.end, item.insertion);
-    state.completion = null;
-    state.status = item.anchor ? `Created fragment · ^${item.anchor.fragmentId}` : "";
+  let completionViewport:DetailViewport={width:80,height:24};
+  const completions = new ReferenceCompletionSession({
+    queryBlocks: query => effects.queryBlocks(query),
+    queryPageAddresses: (query, limit) => effects.queryPageAddresses(query, limit),
+    completeFiles: query => effects.completeFiles(query),
+    readContext: async blockId => {
+      const document = await effects.loadTarget({kind:"block",blockId});
+      if(document.kind!=="block")throw Error("Expected a block completion target");
+      return document.context;
+    },
+    updateBlock: input => effects.updateBlock(input),
+  }, () => state.buffer, () => state.workIdPrefix, () => {state.completion=completions.state;if(completions.state)state.status=completions.state.message??"";ensureEditorCursorVisible(completionViewport);emit();},
+  () => state.mode === "edit", () => state.context.selected ? {blockId:state.context.selected.id,text:state.buffer.text}:undefined);
+  const openCompletion = () => completions.refresh();
+  const applyCompletion = async () => {
+    const item=completions.state?.items[completions.state.index];
+    if(await completions.accept())state.status=item?.anchor?`Created fragment · ^${item.anchor.fragmentId}`:"";
   };
 
   const navigatePreview = (
@@ -3152,6 +3015,7 @@ export function createDetailController(
   };
 
   const dispatch = async (intent: DetailIntent, viewport: DetailViewport): Promise<void> => {
+    completionViewport=viewport;
     const requestGeneration = ++openGeneration;
     switch (intent.type) {
       case "edit.begin":
@@ -4160,12 +4024,11 @@ export function createDetailController(
         }
         break;
       case "completion.move":
-        if (state.completion) {
-          state.completion.index = Math.max(
-            0,
-            Math.min(state.completion.items.length - 1, state.completion.index + intent.delta),
-          );
-        }
+        completions.move(intent.delta);
+        break;
+      case "completion.choose":
+        await completions.accept(intent.index,intent.generation);
+        ensureEditorCursorVisible(viewport);
         break;
       case "completion.accept":
         try {
@@ -4177,7 +4040,7 @@ export function createDetailController(
         break;
       case "completion.dismiss":
         if (state.completion) state.status = "";
-        state.completion = null;
+        completions.dismiss();
         ensureEditorCursorVisible(viewport);
         break;
       case "embed-background.toggle":
@@ -4222,6 +4085,8 @@ export function createDetailController(
       case "redraw":
         break;
     }
+    if (["buffer.insert","buffer.backspace","buffer.delete","buffer.newline","buffer.move","editor.cursor.place"].includes(intent.type)) void completions.refresh();
+    else if (["buffer.undo","buffer.redo","buffer.cancel","buffer.save"].includes(intent.type)) completions.dismiss();
     emit();
   };
 

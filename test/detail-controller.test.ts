@@ -509,7 +509,7 @@ function createHarness(
     },
     async queryPageAddresses(query, limit) {
       calls.pageQueries.push({ query, limit });
-      return pageQueryResults.shift() ?? { addresses: [], completeness: { kind: "complete" } };
+      return (pageQueryResults.length>1?pageQueryResults.shift():pageQueryResults[0]) ?? { addresses: [], completeness: { kind: "complete" } };
     },
     async readFile() {
       if (!referencedFile) throw new Error("file unavailable");
@@ -4496,7 +4496,7 @@ describe("detail controller completion, navigation, and focus", () => {
     );
     expect(harness.controller.state.buffer.undo()).toBe(true);
     expect(harness.controller.state.buffer.text).toBe(
-      "## Local heading ^local-heading\n\nSee ((current-block#local",
+      "## Local heading\n\nSee ((current-block#local",
     );
   });
 

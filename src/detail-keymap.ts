@@ -436,7 +436,7 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
       await executeAction(command.type === "undo" ? "detail.buffer.undo" : "detail.buffer.redo");
       return;
     }
-    if (controller.state.completion) {
+    if (controller.state.completion && ["up","down","return","tab","escape"].includes(key.name ?? "")) {
       await handleCompletionKey(key);
       return;
     }

@@ -91,6 +91,7 @@ export class TextBuffer {
   readonly #undoHistory: TextBufferSnapshot[] = [];
   readonly #redoHistory: TextBufferSnapshot[] = [];
   #historyGroup: HistoryGroup = null;
+  #groupedEdit = false;
 
   constructor(text = "") {
     this.lines = text.split(/\r?\n/);
@@ -379,7 +380,16 @@ export class TextBuffer {
     this.#selectionAnchor = snapshot.selectionAnchor ? { ...snapshot.selectionAnchor } : null;
   }
 
+  /** Multiple synchronous transformations form one user undo step. */
+  editTogether(edit: () => void): void {
+    if(this.#groupedEdit){edit();return;}
+    this.recordEdit(null);
+    this.#groupedEdit=true;
+    try{edit();}finally{this.#groupedEdit=false;this.breakHistoryGroup();}
+  }
+
   private recordEdit(group: HistoryGroup): void {
+    if(this.#groupedEdit)return;
     const coalesced = group !== null && group === this.#historyGroup && this.#redoHistory.length === 0;
     if (!coalesced) this.pushHistory(this.#undoHistory, this.snapshot());
     this.#redoHistory.length = 0;

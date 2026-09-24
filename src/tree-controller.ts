@@ -1,3 +1,4 @@
+import { ReferenceCompletionSession, referenceCompletionProvider, type ReferenceCompletionItem } from "./reference-completion";
 import {TreeConnections} from "./tree-connections";
 import {OpenDestinationChooser, destinationRecoveryKey, missingNavigationDestination, type OpenDestinationTarget} from "./open-destination-chooser";
 import type {DetailDestinationPlacement} from "./detail-pane-placement";
@@ -15,12 +16,7 @@ import {
   parsePropertyFilterExpression,
   serializePropertyFilterValue,
 } from "./block-query";
-import {
-  completionTargetAtCursor,
-  pageAddressCompletion,
-  pageCompletionLookupQuery,
-} from "./completion";
-import { referencedFilePreview, type FileContents, type ReferencedPathCandidate } from "./files";
+import { referencedFilePreview, type FileContents } from "./files";
 import { getProperty } from "./properties";
 import {
   firstOutlinerReference,
@@ -71,7 +67,6 @@ import type {
   OutlinerNavigationIntent,
   NavigationLinkState,
   OutlinerNavigationTarget,
-  PageAddressCollection,
   PropertyCatalogItem,
   TreeIndexBlock,
   TreeIndexCollection,
@@ -109,17 +104,16 @@ export type TreeInputMode =
   | "purge";
 export type TreeMode = "browse" | "delete" | "viewer" | "action-menu" | "inbox" | TreeInputMode;
 
-export interface TreeQuickCompletionItem {
-  readonly label: string;
-  readonly insertion: string;
-  readonly blockId?: string;
-}
+export type TreeQuickCompletionItem = ReferenceCompletionItem;
 
 export interface TreeQuickCompletion {
   readonly start: number;
   readonly end: number;
   readonly index: number;
   readonly truncatedLimit: number | null;
+  readonly message?:string;
+  readonly loading?:boolean;
+  readonly generation?:number;
   readonly items: readonly TreeQuickCompletionItem[];
 }
 
@@ -232,6 +226,9 @@ interface MutableQuickCompletion {
   index: number;
   items: TreeQuickCompletionItem[];
   truncatedLimit: number | null;
+  message?:string;
+  loading?:boolean;
+  generation?:number;
 }
 
 interface TreeNavigationEntry {
@@ -358,6 +355,10 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   let mode: TreeMode = "browse";
   let quickBuffer = new TextBuffer();
   let quickCompletion: MutableQuickCompletion | null = null;
+  const completions=new ReferenceCompletionSession(referenceCompletionProvider(effects,"tree"),()=>quickBuffer,()=>workIdPrefix,
+    ()=>{quickCompletion=completions.state?{...completions.state,truncatedLimit:completions.state.truncatedLimit??null}:null;effects.invalidate();},
+    ()=>["edit","add-child","add-sibling"].includes(mode),()=>quickEditSource?{blockId:quickEditSource.id,text:quickBuffer.text}:undefined);
+
 
   const localReader = new DocumentPreview(effects, () => effects.invalidate(), effects.clientId,effects.openExternal);
   let previewPreferences = defaultPreviewPreferences();
@@ -850,6 +851,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
 
 
   function moveQuickCompletion(delta: number, wrap = false): void {
+    if(mode!=="filter"){completions.move(delta);return;}
     if (!quickCompletion) return;
     const itemCount = quickCompletion.items.length;
     quickCompletion.index = wrap
@@ -858,6 +860,9 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   }
 
   function updateQuickBuffer(str: string, key: TerminalKey): boolean {
+    if((key.ctrl||key.meta)&&key.name==="z")return key.shift?quickBuffer.redo():quickBuffer.undo();
+    if(key.ctrl&&key.name==="y")return quickBuffer.redo();
+    if(key.meta&&key.name==="a"){quickBuffer.selectAll();return false;}
     switch (key.name) {
       case "backspace":
         quickBuffer.backspace();
@@ -1414,77 +1419,14 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       status = "";
       return;
     }
-    const line = quickInputText();
-    const target = completionTargetAtCursor(line, quickBuffer.column);
-    if (!target) {
-      status = "Type [[address]], ((block)), or [file::path] for Resource path completion";
-      return;
-    }
-    let items: MutableQuickCompletion["items"];
-    let truncatedLimit: number | null = null;
-    if (target.kind === "file") {
-      const candidates = await effects.request<ReferencedPathCandidate[]>({ action: "files.complete", prefix: target.query });
-      items = candidates.map((candidate) => ({
-        label: candidate.sourcePath,
-        insertion: `[file::${candidate.sourcePath}${candidate.isDirectory ? "" : "]"}`,
-      }));
-    } else if (target.kind === "page") {
-      const collection = await effects.request<PageAddressCollection>({
-        action: "pages.complete",
-        query: pageCompletionLookupQuery(target.query, workIdPrefix) || undefined,
-        limit: 20,
-      });
-      if (collection.completeness.kind === "truncated") {
-        truncatedLimit = collection.completeness.limit;
-      }
-      items = collection.addresses.map((address) => ({
-        ...pageAddressCompletion(address, target.query, workIdPrefix),
-        blockId: address.blockId,
-      }));
-    } else {
-      const collection = await effects.request<TreeIndexCollection>({
-        action: "tree.query",
-        query: { text: target.query || undefined, limit: 20 },
-      });
-      if (collection.completeness.kind === "truncated") {
-        truncatedLimit = collection.completeness.limit;
-      }
-      items = collection.blocks.map((block) => ({
-        label: block.preview,
-        insertion: `((${block.id}))`,
-        blockId: block.id,
-      }));
-    }
-
-    if (items.length === 0) {
-      quickCompletion = null;
-      switch (target.kind) {
-        case "file":
-          status = "No matching files";
-          break;
-        case "page":
-          status =
-            "No matching named addresses; [[target|label]] labels a target, ((...)) searches blocks";
-          break;
-        case "block":
-          status = "No matching blocks";
-          break;
-      }
-      return;
-    }
-    quickCompletion = {
-      start: target.start,
-      end: target.end,
-      index: 0,
-      items,
-      truncatedLimit,
-    };
-    status = "";
+    await completions.refresh();
   }
 
-  function applyQuickCompletion(): void {
+  async function applyQuickCompletion(): Promise<void> {
+    if(mode!=="filter"){await completions.accept();return;}
     if (!quickCompletion) return;
     const item = quickCompletion.items[quickCompletion.index];
+    if(!item)return;
     quickBuffer.replaceCurrentLine(quickCompletion.start, quickCompletion.end, item.insertion);
     quickCompletion = null;
   }
@@ -1911,6 +1853,14 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     actionId: string,
     origin?: { column: number; row: number },
   ): Promise<void> {
+    if(actionId.startsWith("completion.choose:")){
+      const [index,generation]=actionId.slice("completion.choose:".length).split(":").map(Number);
+      if(index===undefined||!Number.isSafeInteger(index)||index<0)return;
+      if(mode!=="filter")await completions.accept(index,generation);
+      else if(quickCompletion?.items[index]){quickCompletion.index=index;await applyQuickCompletion();effects.invalidate();}
+      return;
+    }
+
     const recovery=destinationRecoveryKey(actionId);
     if(recovery){if(openRecovery.state.active&&recoveryOrigin===originKey())await openRecovery.handleKeypress(recovery.str,recovery.key);return;}
     navigationGeneration++;
@@ -2304,6 +2254,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       updateActionMenuQuery(actionMenuQuery + text);
     } else if (mode !== "browse" && mode !== "delete" && mode !== "viewer") {
       quickBuffer.insert(text);
+      if(mode!=="filter"&&mode!=="purge")void completions.refresh();
     }
     effects.invalidate();
   }
@@ -2435,11 +2386,11 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     if (mode === "inbox") { await inbox.input(str, key); return; }
 
     if (mode !== "browse") {
-      if (quickCompletion) {
+      if (quickCompletion && ["up","down","return","tab","escape"].includes(key.name??"")) {
         if (key.name === "up") moveQuickCompletion(-1);
         else if (key.name === "down") moveQuickCompletion(1);
-        else if (key.name === "return" || key.name === "tab") applyQuickCompletion();
-        else if (key.name === "escape") quickCompletion = null;
+        else if (key.name === "return" || key.name === "tab") await applyQuickCompletion();
+        else if (key.name === "escape") {if(mode==="filter")quickCompletion=null;else completions.dismiss();}
         effects.invalidate();
         return;
       }
@@ -2459,6 +2410,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         await openQuickCompletion();
       } else {
         updateQuickBuffer(str, key);
+        if(mode!=="filter"&&mode!=="purge")void completions.refresh();
       }
       effects.invalidate();
       return;

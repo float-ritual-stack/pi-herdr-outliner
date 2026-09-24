@@ -1,3 +1,5 @@
+import { renderDetailLines } from "./detail-renderer";
+import { treeLinkAtClick } from "./tree-mouse";
 import {EditRecoveryInput} from "./edit-recovery-input";
 import {EditRecoveryClient} from "./edit-recovery-client";
 import {EditRecoveryReview,type RecoveryChoice} from "./edit-recovery-review";
@@ -1220,6 +1222,11 @@ async function handleDetailMouse(data: string): Promise<boolean> {
     editorWidth: split ? widths.editor : terminal.columns,
     split,
   };
+  if(controller.state.completion){
+    const uri=treeLinkAtClick(renderDetailLines(controller.state,{width:mouseLayout.editorWidth,height:mouseLayout.height}),data);
+    const choice=uri?.match(/^pi-outliner-action:completion\.choose:(\d+):(\d+)$/);
+    if(choice){editorDragActive=false;await controller.dispatch({type:"completion.choose",index:Number(choice[1]),generation:Number(choice[2])},viewport());return true;}
+  }
   const wheel = parseTreeWheelEvent(data);
   if (wheel) {
     editorDragActive = false;

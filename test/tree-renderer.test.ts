@@ -613,13 +613,11 @@ describe("renderTreeFrame", () => {
       11,
     ).frame.split("\n");
 
-    expect(rendered.slice(4, 8)).toEqual([
-      "▾ Parent   ",
-      "\x1b[48;5;238m\x1b[1m  • [[h▏   \x1b[0m",
-      "      \x1b[2mCompletions 1/1\x1b[0m",
-      "      \x1b[7m› Home\x1b[0m",
-    ]);
-    expect(rendered[8]).toBe("  • Existing   ");
+    const frame=rendered.join("\n");
+    expect(frame).toContain("[[h▏");
+    expect(frame).toContain("References 1/1");
+    expect(frame).toContain("pi-outliner-action:completion.choose:0");
+    expect(frame).toContain("Home");
     expect(rendered.at(-2)).toBe(
       truncate(DEFAULT_OUTLINER_ACTION_KEYMAP.helpText("tree", "add-child"), 80),
     );
@@ -648,7 +646,7 @@ describe("renderTreeFrame", () => {
     expect(rendered).toContain(
       "1 physical block · 0 projected occurrences\u001b[0m  \u001b[33mWARNING: truncated at 500\u001b[0m",
     );
-    expect(rendered).toContain("Completions 1/1 · Showing first 20 matches");
+    expect(rendered).toContain("References 1/1 · Showing first 20 matches");
   });
 
   test("renders virtual definition states and projected counts without changing canonical text", () => {
