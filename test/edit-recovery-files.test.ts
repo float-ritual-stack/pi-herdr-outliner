@@ -58,7 +58,7 @@ for (const failure of ["editor-unset","editor-invalid","terminal-yield-failed","
     try {
       const files=new EditRecoveryFiles(root);
       for (let attempt=0;attempt<2;attempt++) {
-        await expect(files.edit({blockId:"note",baseText:"Base",expectedRevision:1,text:"Unsaved draft"},{
+        await expect(files.edit({blockId:"note",baseText:"Base",expectedRevision:1,text:"Base"},{
           editor:failure==="editor-unset" ? undefined : failure==="editor-invalid" ? "'" : "fixture",cwd:root,
           suspendTerminal(){if(failure==="terminal-yield-failed")throw Error("Cannot yield");},restoreTerminal(){},
           async currentRevision(){return "1";},async run(){if(failure==="launch-failed")throw Error("Cannot launch");return 1;},
@@ -105,4 +105,13 @@ test("a damaged journal stays visible without blocking other retained drafts",()
     expect(issues[0]).toContain(broken);expect(issues[0]).toContain("Files retained");
     expect(readFileSync(join(broken,"draft.md"),"utf8")).toBe("Valuable writing");
   } finally {rmSync(root,{recursive:true,force:true});}
+});
+
+ test("a failed unchanged editor still retains unsaved pre-launch writing",async()=>{
+  const root=mkdtempSync(join(tmpdir(),"recovery-journal-"));
+  try{
+    const files=new EditRecoveryFiles(root);
+    await expect(files.edit({blockId:"note",baseText:"Canonical",expectedRevision:1,text:"Unsaved prelaunch"},{editor:"fixture",cwd:root,suspendTerminal(){},restoreTerminal(){},async currentRevision(){return "1";},async run(){throw Error("Cannot launch");}})).rejects.toThrow();
+    expect(files.pending("note")[0]?.input.draftText).toBe("Unsaved prelaunch");
+  }finally{rmSync(root,{recursive:true,force:true});}
 });

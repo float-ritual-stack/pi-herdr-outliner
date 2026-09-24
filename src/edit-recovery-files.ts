@@ -28,7 +28,7 @@ export class EditRecoveryFiles {
     } catch (error) {
       let unchanged=false;
       try { unchanged=readFileSync(join(directory,"draft.md")).equals(Buffer.from(input.text,"utf8")); } catch {}
-      if (unchanged) rmSync(directory,{recursive:true,force:true});
+      if (unchanged && input.text===input.baseText) rmSync(directory,{recursive:true,force:true});
       else this.write(directory,{...journal,returned:true});
       throw error;
     }
