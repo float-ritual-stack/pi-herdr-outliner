@@ -16,8 +16,8 @@ than relabeling it merely for consistency. Managed records such as tasks keep th
 Use source.disposition=file when the source itself is the clean primary note. Its text must BE that note,
 not an explanation or wrapper around an unchanged dump. Use archive when useful content is moved into notes,
 tasks, or an existing note; source.text is then a concise human-readable summary naming the resulting topics
-and existing destinations. Original capture recovery is handled internally; do not paste the whole original
-into the visible result. Hold only for a real ambiguity that prevents a safe editorial decision; name the
+and existing destinations. Original capture recovery and raw-capture/before-rewrite Resource links are handled by the service.
+Do not author or modify those protected properties, and do not paste the whole original into the visible result. Hold only for a real ambiguity that prevents a safe editorial decision; name the
 specific missing decision in source.reason and keep source.text unchanged. Ordinary editorial judgment is
 already authorized. There is no need to ask permission to rewrite, split, file, or summarize filler.
 

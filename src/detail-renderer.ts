@@ -84,7 +84,7 @@ function detailTitle(state: Readonly<DetailState>): string {
     ?.trim();
   const title = selected
     ? breadcrumbTitle || blockDisplayTitle(selected)
-    : (state.resource ? resourceAddressLabel(state.resource.address) : state.resolvedBreadcrumb) ||
+    : (state.resolvedBreadcrumb || (state.resource ? resourceAddressLabel(state.resource.address) : "")) ||
       "No block selected";
   const fragmentId = detailBlockTarget(state)?.fragmentId;
   return fragmentId ? `${title} · ^${fragmentId}` : title;

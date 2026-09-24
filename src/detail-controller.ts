@@ -82,6 +82,7 @@ import {
   RESOURCE_CAPABILITY_FACTORS,
   resourceRevisionRefEquals,
   resourceAddressLabel,
+  resourceDescriptionLabel,
 } from "./resources";
 import { TextBuffer, type TextBufferPoint, type TextBufferRange } from "./text-buffer";
 import { sanitizeDynamicText, type TerminalKey } from "./terminal";
@@ -1924,7 +1925,7 @@ export function createDetailController(
       state.resolvedSelectedText = resourceDocumentText(document.description);
       state.projectedSelectedText = state.resolvedSelectedText;
       state.readStatus = "ready";
-      state.resolvedBreadcrumb = resourceAddressLabel(document.description.resource.address);
+      state.resolvedBreadcrumb = resourceDescriptionLabel(document.description);
       state.mode = "preview";
       if (record) recordNavigation(document.target);
       else syncNavigationState();

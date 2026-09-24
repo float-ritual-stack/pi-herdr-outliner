@@ -1264,8 +1264,17 @@ General notes, lists, and meetings stay notes. Concrete Outliner tasks use the
 existing PIE allocator and enter Backlog; cleanup never commits or executes them.
 The original source keeps its identity and children. Clean primary notes move to
 **Filed notes**; sources whose content moved elsewhere become concise linked
-summaries in **Processed captures**. Original text is retained in internal recovery
-records, without another raw-copy block in the outline.
+summaries in **Processed captures**. Cleaned notes and split outputs expose **Original capture** through protected
+`raw-capture` Resource properties. **Before this rewrite** names the immediate
+before-image on an edited source or merge target. Tree Authored links, Detail
+Properties and Preview reach these read-only snapshots directly; Preview Back
+returns to the cleaned note. Split outputs share one original; merges keep each
+source. The content reuses Inbox recovery records, without another raw-copy note
+or background processing of historical requests. Missing historical evidence is
+shown as unavailable. This applies to new cleanups; existing notes gain the
+connection when rewritten, using their earliest preserved applied attempt.
+No automatic expiry is introduced. These Resource-reference semantics require
+protocol 73 and a coordinated client/service restart.
 
 Each cleanup and its recovery record commit together. Apply and Undo reject stale
 edits; Undo refuses to overwrite later changes to affected blocks or their children,

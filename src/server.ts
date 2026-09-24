@@ -1183,7 +1183,7 @@ export class OutlinerServer {
         const checked=this.handle(request,subscribedClient);
         if(!checked.ok||!this.store.resources.isCaptureHistory(request.target.resourceId))return checked;
         const description=this.store.resources.describe(request.target.resourceId,true,request.target.revision);
-        if(!description.computed&&!description.source.policy.deniedCapabilities.includes("read"))await this.store.resources.executeComputedResource(request.target.resourceId,true);
+        if(request.target.revision===undefined&&!description.computed&&!description.source.policy.deniedCapabilities.includes("read"))await this.store.resources.executeComputedResource(request.target.resourceId,true);
         return this.handle(request,subscribedClient);
       } catch(error){return {id:request.id,ok:false,error:error instanceof Error?error.message:String(error),sequence:this.store.sequence};}
     }

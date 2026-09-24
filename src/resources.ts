@@ -1,3 +1,4 @@
+import {firstLineWithoutPropertyTokens} from "./properties";
 import { Type, type Static } from "typebox";
 import { Parse } from "typebox/value";
 
@@ -1666,6 +1667,13 @@ export function resourceRevisionRefEquals(
       left.revision.dependencyFingerprint === right.revision.dependencyFingerprint;
   }
   return false;
+}
+
+export function resourceDescriptionLabel(description:ResourceDescription):string {
+  if(description.source.provider==="computed"&&description.source.boundary.registry==="outliner.capture-history") {
+    return "Preserved capture · "+(description.computed?firstLineWithoutPropertyTokens(description.computed.markdown)??"Original text":"Unavailable");
+  }
+  return resourceAddressLabel(description.resource.address);
 }
 
 export function resourceAddressLabel(address: ResourceAddress): string {

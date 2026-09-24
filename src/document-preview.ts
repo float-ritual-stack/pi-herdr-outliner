@@ -8,7 +8,7 @@ import {resolveFragmentSlice} from './fragments';
 import type {TerminalKey} from './terminal';
 import type {Block, PageAddressResolution, OutlinerNavigationTarget} from './types';
 import type {ResourceDescription} from './resources';
-import {resourceAddressLabel} from './resources';
+import {resourceDescriptionLabel} from './resources';
 
 export interface DocumentPreviewState {
   readonly target: OutlinerNavigationTarget;
@@ -157,9 +157,11 @@ export class DocumentPreview {
       } else {
         if (!this.clientId) throw new Error('Resource preview requires a registered reader');
         const resource = await this.client.request<ResourceDescription>({action:'resources.describe',destinationClientId:this.clientId,target});
-        title = resourceAddressLabel(resource.resource.address);
+        title = resourceDescriptionLabel(resource);
         document = plain(resource.filesystem?.text ?? resource.web?.markdown ?? resource.remoteEntity?.markdown ?? resource.pdf?.markdown ?? resource.computed?.markdown ?? resource.computedFailure?.message ?? 'No cached readable representation · Open explicitly to inspect this Resource');
-        if(resource.source.provider==='computed'&&resource.source.boundary.registry==='outliner.capture-history')document={...document,preserveMetadata:true};
+        if(resource.source.provider==='computed'&&resource.source.boundary.registry==='outliner.capture-history'){
+          document={...document,preserveMetadata:true};
+        }
       }
       if (generation !== this.generation) return false;
       this.value = {target,title,document,offset,focused:this.value?.focused ?? false};

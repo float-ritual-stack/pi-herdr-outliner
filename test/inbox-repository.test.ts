@@ -566,7 +566,7 @@ describe("InboxRepository", () => {
     }] }));
     const updated = store.require(target.id);
     expect(updated.text).toContain("Clarified acceptance");
-    expect(updated.properties).toEqual(target.properties);
+    expect(updated.properties.filter(p=>p.key!=="raw-capture"&&p.key!=="before-rewrite")).toEqual(target.properties);
     expect(store.getAnnotation(annotation.block.id).originalTarget).toEqual(annotation.originalTarget);
     expect(store.require(annotation.block.id)).toEqual(annotation.block);
     expect(store.workIdAllocatorStatus().nextWorkId).toBe("PIE-002");
@@ -594,7 +594,7 @@ describe("InboxRepository", () => {
     expect(updated.text).toContain(examples);
     expect(filed.properties).toContainEqual({ key: "status", value: "processed" });
     expect(filed.properties).not.toContainEqual({ key: "status", value: "done" });
-    expect(updated.properties).toEqual(target.properties);
+    expect(updated.properties.filter(p=>p.key!=="raw-capture"&&p.key!=="before-rewrite")).toEqual(target.properties);
     const lineExamples = store.queryBlocks({ filters: [{ key: "work-stage", value: "done" }], propertyScope: "line", limit: 10 });
     expect(lineExamples.blocks.map(block => block.id).sort()).toEqual([source.id, target.id].sort());
     const inlineExamples = store.queryBlocks({ filters: [{ key: "status", value: "done" }], propertyScope: "inline", limit: 10 });
@@ -611,7 +611,7 @@ describe("InboxRepository", () => {
     }));
     const note = store.require(result.outputIds[0]!);
     expect(note.text).toContain(examples);
-    expect(note.properties).toEqual([{ key: "type", value: "note" }]);
+    expect(note.properties.filter(p=>p.key!=="raw-capture")).toEqual([{ key: "type", value: "note" }]);
     expect(store.queryBlocks({ filters: [{ key: "work-id", value: "PIE-999" }], propertyScope: "line", limit: 10 }).blocks.map(block => block.id)).toEqual([note.id]);
     expect(store.queryBlocks({ filters: [{ key: "work-id", value: "PIE-999" }], propertyScope: "block", limit: 10 }).blocks).toEqual([]);
     expect(store.workIdAllocatorStatus().nextWorkId).toBe("PIE-001");
