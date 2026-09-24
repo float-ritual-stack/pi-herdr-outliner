@@ -6,7 +6,7 @@ import { isIngestible, type MentionMessage, mentionMessageOf, workspacesOf } fro
  * Registers Recent Mentions: each completed main-loop answer in a configured
  * workspace goes to the Outliner, as the Codex Stop hook sends Codex's.
  *
- * Workspaces come from the `workspaces` option, or, left empty, from
+ * Workspaces come from the `workspaces` option, or, when unset, from
  * `PI_OUTLINER_MENTIONS_WORKSPACES` (for a `CLAUDE_CODE_PLUGIN_DIRS` setup,
  * whose settings `env` block can carry it). Neither set: nothing is ingested.
  *
@@ -14,14 +14,13 @@ import { isIngestible, type MentionMessage, mentionMessageOf, workspacesOf } fro
  * slow or absent service never delays the prompt; a failure is one toast.
  */
 export function register(on: On, options: PluginOptions): void {
-  const configured = workspacesOf(options.workspaces)
+  const configured = options.workspaces === undefined ? undefined : workspacesOf(options.workspaces)
 
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
     if (!isIngestible(e)) return result
-    const workspaces = configured.length > 0
-      ? configured
-      : workspacesOf(await $.env.get('PI_OUTLINER_MENTIONS_WORKSPACES'))
+    const workspaces = configured
+      ?? workspacesOf(await $.env.get('PI_OUTLINER_MENTIONS_WORKSPACES'))
     if (workspaces.length === 0) return result
     const [id, cwd] = await Promise.all([$.session.id(), $.session.cwd()])
     const message = mentionMessageOf(e, { id, cwd }, workspaces)

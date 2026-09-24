@@ -8,8 +8,7 @@
       "type": "string",
       "title": "Outliner workspaces",
       "description": "Absolute project directories whose sessions feed Recent Mentions, separated by ':' or ','. A session ingests only when its working directory is exactly one of them. Empty: nothing is ingested.",
-      "required": false,
-      "default": ""
+      "required": false
     }
   }
 }

@@ -24,8 +24,9 @@ PI_OUTLINER_MENTIONS_WORKSPACES=/home/evan/test \
 To load it in every session, set both variables and
 `CLAUDE_CODE_PLUGIN_DIRS=/path/to/checkout/claude-mod` in the `env` block of
 `~/.claude/settings.json`. The `workspaces` option (`pluginConfigs["pi-outliner"]`,
-or `/config`) takes precedence over the environment variable. Separate
-several paths with `:` or `,`.
+or `/config`) takes precedence over the environment variable, including an
+explicit empty value, which disables ingestion. Only an unset option uses the
+environment variable. Separate several paths with `:` or `,`.
 
 ## Develop
 
