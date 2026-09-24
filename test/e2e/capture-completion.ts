@@ -20,7 +20,7 @@ const result=await runHerdrScenario({name:'capture-completion',commandKeys:[{key
  const column=visibleWidth(lines[row]!.slice(0,lines[row]!.indexOf('Block destination for capture')))+2;
  await terminal.write(`\x1b[<0;${column+1};${row+1}M\x1b[<0;${column+1};${row+1}m`);
  await screen(`((${target.id}))`);await s.checkpoint('01-capture-keyboard-and-pointer');
- await terminal.write('\x1a');await screen('Block ((Block destination');await terminal.write('\x19');await screen(`((${target.id}))`);
+ await terminal.write('\x1a');await s.waitFor('capture undo removes canonical reference',terminal.visible,t=>t.includes('Block ((Block destination')&&!t.includes(`((${target.id}))`));await terminal.write('\x19');await screen(`((${target.id}))`);
  await paste('\nKeep [[missing');await screen('No matching');await terminal.write('\x1b');await screen('Keep [[missing');
  assert.ok((await terminal.visible()).includes('Quick capture'),'Escape dismisses list, retains editor');
  await terminal.write('\x1b');await closed();

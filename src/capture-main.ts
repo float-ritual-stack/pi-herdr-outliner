@@ -1,9 +1,7 @@
-import {StdinBuffer} from '@earendil-works/pi-tui';
-import {PassThrough} from 'node:stream';
+import {attachCaptureInput} from './capture-input';
 import {referenceCompletionProvider} from './reference-completion';
-import {parseTreePlainClick,treeLinkAtClick,isTreeMouseSequence} from './tree-mouse';
+import {parseTreePlainClick,treeLinkAtClick} from './tree-mouse';
 import { reportCurrentPaneWorkspace } from "./pane-control";
-import { emitKeypressEvents } from "node:readline";
 import { createOutlinerClient } from "./client";
 import {
   CapturePopupController,
@@ -13,8 +11,6 @@ import { resolveClientPaths } from "./paths";
 import {
   BRACKETED_PASTE_DISABLE,
   BRACKETED_PASTE_ENABLE,
-  TerminalInputDecoder,
-  type TerminalKey,
 } from "./terminal";
 import type { QuickCaptureDraft, WorkIdAllocatorStatus } from "./types";
 
@@ -30,8 +26,7 @@ const requestId = process.env.OUTLINER_CAPTURE_REQUEST_ID?.trim() || crypto.rand
 const capturedFromBlockId = process.env.OUTLINER_CAPTURE_FROM_BLOCK_ID?.trim() || undefined;
 const draft = await client.request<QuickCaptureDraft | null>({ action: "capture.draft.get" });
 const workIds=await client.request<WorkIdAllocatorStatus>({action:'work-ids.status'});
-const mouseInput=new StdinBuffer();
-const keyboardInput=new PassThrough();
+let detachInput:(()=>void)|undefined;
 let renderedLines:string[]=[];
 let stopping = false;
 let workQueue = Promise.resolve();
@@ -41,8 +36,7 @@ function stop(exitCode = 0): void {
   stopping = true;
   if (process.stdin.isTTY) process.stdin.setRawMode(false);
   process.stdout.off("resize", draw);
-  mouseInput.destroy();
-  keyboardInput.destroy();
+  detachInput?.();
   process.stdout.write(`${BRACKETED_PASTE_DISABLE}\x1b[?1006l\x1b[?1000l\x1b[?25h\x1b[?1049l`);
   process.exit(exitCode);
 }
@@ -110,26 +104,18 @@ function enqueueWork(task: () => void | Promise<void>): void {
   });
 }
 
-const inputDecoder = new TerminalInputDecoder((text) => controller.handlePaste(text));
-emitKeypressEvents(keyboardInput);
 if (process.stdin.isTTY) process.stdin.setRawMode(true);
 process.stdout.write(`\x1b[?1049h\x1b[?25l${BRACKETED_PASTE_ENABLE}\x1b[?1000h\x1b[?1006h`);
-keyboardInput.on("keypress", (str: string | undefined, key: TerminalKey) => {
-  const text = str ?? "";
-  const sequence = key.sequence ?? text;
-  if (!sequence && !key.name) return;
-  const inputAction = inputDecoder.consume(text, key);
-  enqueueWork(() => controller.handleKeypress(text, key, inputAction));
+detachInput=attachCaptureInput(process.stdin,{
+ keypress:(text,key,action)=>enqueueWork(()=>controller.handleKeypress(text,key,action)),
+ paste:text=>enqueueWork(()=>controller.handlePaste(text)),
+ mouse:sequence=>{
+  if(!parseTreePlainClick(sequence))return;
+  const uri=treeLinkAtClick(renderedLines,sequence);
+  const match=uri?.match(/^pi-outliner-action:completion.choose:(\d+):(\d+)$/);
+  if(match)enqueueWork(()=>controller.chooseCompletion(Number(match[1]),Number(match[2])));
+ },
 });
-mouseInput.on('data',sequence=>{
- if(!isTreeMouseSequence(sequence)){keyboardInput.write(sequence);return;}
- const click=parseTreePlainClick(sequence);if(!click)return;
- const uri=treeLinkAtClick(renderedLines,sequence);
- const match=uri?.match(/^pi-outliner-action:completion.choose:(\d+):(\d+)$/);
- if(match)enqueueWork(()=>controller.chooseCompletion(Number(match[1]),Number(match[2])));
-});
-mouseInput.on('paste',text=>enqueueWork(()=>controller.handlePaste(text)));
-process.stdin.on('data',data=>mouseInput.process(data));
 process.stdout.on("resize", draw);
 process.on("SIGINT", () => stopAfterRetainingDraft(130));
 process.on("SIGTERM", () => stopAfterRetainingDraft(143));
