@@ -50,6 +50,18 @@ function succeeding(run: Run): ProcessRunResult {
 }
 
 describe('register', () => {
+  test('an answer from a subdirectory ingests into its configured parent workspace', async ($, on) => {
+    const session = sessionIn(on, `${WORKSPACE}/projects/mod`, succeeding)
+    const { text } = await $.turn.complete(ANSWER)
+    await session.clock.settle()
+    expect(text).toBe(ANSWER.answer)
+    expect(session.runs.map(run => run.argv[0])).toEqual(['herdr', '/bin/sh'])
+    const ingest = session.runs[1]!
+    expect(ingest.init?.cwd).toBe(WORKSPACE)
+    expect(ingest.init?.env).toEqual({ OUTLINER_WORKSPACE_ROOT: WORKSPACE })
+    expect(JSON.parse(ingest.init?.stdin ?? '').workspaceRoot).toBe(WORKSPACE)
+  })
+
   test('an answer in a configured workspace is ingested after the turn', async ($, on) => {
     const session = sessionIn(on, WORKSPACE, succeeding)
 
@@ -88,7 +100,7 @@ describe('register', () => {
   })
 
   test('a session outside the configured workspaces ingests nothing', async ($, on) => {
-    const session = sessionIn(on, `${WORKSPACE}/src`, succeeding)
+    const session = sessionIn(on, `${WORKSPACE}-other/src`, succeeding)
 
     await $.turn.complete(ANSWER)
     await session.clock.settle()

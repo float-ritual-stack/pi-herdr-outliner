@@ -45,6 +45,31 @@ export function isIngestible(e: TurnCompleteInput): boolean {
   return e.agentId === undefined && e.reason === 'answer' && e.answer.trim() !== ''
 }
 
+// Lexical POSIX paths: no host filesystem access or Git-root assumptions.
+function absolutePath(path: string): string | null {
+  if (!path.startsWith('/')) return null
+  const parts: string[] = []
+  for (const part of path.split('/')) {
+    if (part === '..') parts.pop()
+    else if (part !== '' && part !== '.') parts.push(part)
+  }
+  return '/' + parts.join('/')
+}
+
+/** Nested configured roots own their descendants; siblings never match a prefix. */
+export function workspaceForCwd(cwd: string, workspaces: readonly string[]): string | null {
+  const path = absolutePath(cwd)
+  if (path === null) return null
+  let nearest: string | null = null
+  for (const workspace of workspaces) {
+    const root = absolutePath(workspace)
+    if (root === null) continue
+    if ((path === root || path.startsWith(root === '/' ? '/' : root + '/')) &&
+        (nearest === null || root.length > nearest.length)) nearest = root
+  }
+  return nearest
+}
+
 /**
  * The message for one completed turn, or null when the turn or its workspace
  * is not ingested. The turn id is the message identity, so a repeated delivery
@@ -56,10 +81,10 @@ export function mentionMessageOf(
   workspaces: readonly string[],
 ): MentionMessage | null {
   if (!isIngestible(e)) return null
-  const cwd = session.cwd.replace(/(?<=.)\/+$/, '')
-  if (!workspaces.includes(cwd)) return null
+  const workspaceRoot = workspaceForCwd(session.cwd, workspaces)
+  if (workspaceRoot === null) return null
   return {
-    workspaceRoot: cwd,
+    workspaceRoot,
     agent: 'claude',
     sessionId: session.id,
     messageId: e.turnId,

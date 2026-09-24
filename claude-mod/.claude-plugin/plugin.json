@@ -7,7 +7,7 @@
     "workspaces": {
       "type": "string",
       "title": "Outliner workspaces",
-      "description": "Absolute project directories whose sessions feed Recent Mentions, separated by ':' or ','. A session ingests only when its working directory is exactly one of them. Empty: PI_OUTLINER_MENTIONS_WORKSPACES applies; neither set, nothing is ingested.",
+      "description": "Absolute project directories whose sessions and subdirectories feed Recent Mentions, separated by ':' or ','. The nearest configured ancestor selects the workspace. Empty: PI_OUTLINER_MENTIONS_WORKSPACES applies; neither set, nothing is ingested.",
       "required": false,
       "default": ""
     }

@@ -7,7 +7,10 @@ the Outliner's `mentions.ingest` contract. It works the same way as the Codex St
 UUIDs in the answer then show up in Tree/Detail `?` → **Recent mentions**.
 
 - Only main-loop answers are sent. Subagent runs, interruptions, refusals and errors are skipped.
-- A session is ingested only when its cwd is exactly one of the configured workspaces.
+- A session in a configured workspace or its subdirectories feeds that workspace.
+  The nearest configured ancestor wins, so a separately configured nested project
+  retains its own database. Similar path prefixes do not match. Paths are normalized
+  lexically; symlink aliases and sibling Git worktrees need explicit configuration.
 - Herdr discovers the Outliner (`herdr plugin list --plugin float.pi-outliner`),
   and the mod calls the installed CLI's `mentions ingest`. It never starts a service.
   Failures show as one toast and leave the answer untouched.
