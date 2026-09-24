@@ -26,7 +26,7 @@ export async function inspectWorkspaceConnection(env:NodeJS.ProcessEnv=process.e
  lines.push(`Client startup logs: ${join(paths.stateDir,'open-startup-error.log')} (check timestamp)`);
  try{
   const service=await createOutlinerClient(paths).request<OutlinerServiceStatus>({action:'ping'},1500);
-  lines.push(`Service: ${service.status}; protocol ${service.protocolVersion}`);
+  lines.unshift(`Service: ${service.status}; protocol ${service.protocolVersion}`);
   if(service.location){
    lines.push(`Service host: ${service.location.hostname}`,`Service workspace: ${service.location.workspaceRoot}`,`Service database: ${service.location.database}`,`Service backups: ${service.location.backups}`);
   }else lines.push('Service storage identity: not reported by this service version.');
