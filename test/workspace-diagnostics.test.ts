@@ -25,7 +25,7 @@ test('remote unavailable and invalid config are reported without creating local 
  try{
   const path=resolveClientConfigPath(env);mkdirSync(dirname(path),{recursive:true});writeFileSync(path,JSON.stringify({mode:'remote',socketPath:join(root,'forward.sock')}));
   const report=await inspectWorkspaceConnection(env);const text=report.lines.join('\n');expect(report.ok).toBe(false);expect(text).toContain('SSH socket tunnel');expect(text).not.toContain('Local database:');expect(text).toContain('Storage belongs to the remote service');expect(existsSync(env.OUTLINER_STATE_DIR)).toBe(false);
-  writeFileSync(path,'{broken');const broken=await inspectWorkspaceConnection(env);expect(broken.lines.join('\n')).toContain(`Invalid JSON in Outliner client config at ${path}`);expect(existsSync(env.OUTLINER_STATE_DIR)).toBe(false);
+  writeFileSync(path,'{broken');const broken=await inspectWorkspaceConnection(env);expect(broken.lines.join('\n')).toContain(`Workspace: ${root}`);expect(broken.lines.join('\n')).toContain(`Invalid JSON in Outliner client config at ${path}`);expect(existsSync(env.OUTLINER_STATE_DIR)).toBe(false);
  }finally{rmSync(root,{recursive:true,force:true});}
 });
 test('doctor CLI reports failed connection with paths and nonzero status without initializing a database',async()=>{

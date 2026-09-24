@@ -1186,7 +1186,7 @@ while ordinary virtual-occurrence ranks provide optional manual order.
 
 In Tree, open `?` and choose **Workspace and connection** for a read-only report of the invoking workspace, project config, endpoint, protocol and storage paths. Or run `bun src/cli.ts doctor` from the plugin checkout with `OUTLINER_WORKSPACE_ROOT` set to the workspace to inspect (`--json` for structured output). The command works when startup fails and exits nonzero for configuration, transport or protocol errors.
 
-For local connections the report gives the exact state, database and backup directory. For remote connections it distinguishes the forwarded client socket from the service host and canonical storage reported by that service. Older services may not report storage identity. A missing local database can mean either a new workspace or moved storage: diagnosis does not initialize it, restore backups, migrate data, or start a service. A failed remote connection names the socket and suggests checking its SSH tunnel and canonical service.
+For local connections the report gives the exact state/database paths and the presence of a conventional backup directory. Manual backup locations are not registered and may be elsewhere. For remote connections it distinguishes the forwarded client socket from the service host and canonical storage reported by that service. Older services may not report storage identity. A missing local database can mean either a new workspace or moved storage: diagnosis does not initialize it, restore backups, migrate data, or start a service. A failed remote connection names the socket and suggests checking its SSH tunnel and canonical service.
 
 ### Quick capture Inbox
 

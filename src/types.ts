@@ -1234,7 +1234,7 @@ export const OUTLINER_PROTOCOL_VERSION = 73;
 export interface OutlinerServiceStatus {
   status: "ready";
   protocolVersion: typeof OUTLINER_PROTOCOL_VERSION;
-  location?: {hostname:string;workspaceRoot:string;database:string;backups:string};
+  location?: {hostname:string;workspaceRoot:string;database:string;stateDirectory:string};
 }
 
 export interface ResourceProviderCommandResult {

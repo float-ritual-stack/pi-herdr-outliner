@@ -2345,7 +2345,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       else if (key.name === "pageup") viewerOffset = Math.max(0, viewerOffset - page);
       else if (key.name === "pagedown") viewerOffset = Math.min(maxOffset, viewerOffset + page);
       else if (str === "g") viewerOffset = 0;
-      else if (str === "G") viewerOffset = Math.max(0, viewerLines.length - page);
+      else if (str === "G") viewerOffset = Math.max(0, displayedViewerLines().length - page);
       effects.invalidate();
       return;
     }
