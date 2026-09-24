@@ -2089,6 +2089,38 @@ describe("createTreeController", () => {
     expect(controller.view().refreshPending).toBe(false);
   });
 
+  test("Return saves the draft when completion is loading, empty, or failed", async () => {
+    for (const lookup of ["loading", "empty", "failed"]) {
+      const selected = block("selected", { text: "[[draft", displayText: "[[draft" });
+      const pending = Promise.withResolvers<unknown>();
+      const started = Promise.withResolvers<void>();
+      const fake = harness((input) => {
+        if (input.action === "tree.index") return snapshot([selected], selected);
+        if (input.action === "pages.complete") {
+          started.resolve();
+          if (lookup === "loading") return pending.promise;
+          if (lookup === "failed") throw new Error("offline");
+          return { addresses: [], completeness: { kind: "complete" } };
+        }
+        if (input.action === "update") return block(input.blockId, { text: input.text });
+        return undefined;
+      });
+      const controller = createTreeController(fake.effects);
+      await controller.initialize();
+      await controller.handleKeypress("e", { name: "e" }, "pass");
+      const opening = controller.handleKeypress("", { name: "tab" }, "pass");
+      await started.promise;
+      if (lookup !== "loading") await opening;
+      expect(controller.view().quickCompletion?.items).toEqual([]);
+      await controller.handleKeypress("", { name: "return" }, "pass");
+      expect(fake.calls).toContainEqual(expect.objectContaining({ action: "update", blockId: selected.id, text: "[[draft" }));
+      expect(controller.view().mode).toBe("browse");
+      pending.resolve({ addresses: [], completeness: { kind: "complete" } });
+      await opening;
+      expect(controller.view().quickCompletion).toBeNull();
+    }
+  });
+
   test("applies registered symbolic-address completion without generic block fallback", async () => {
     const selected = block("selected", { text: "[[ho", displayText: "[[ho" });
     const fake = harness((input) => {

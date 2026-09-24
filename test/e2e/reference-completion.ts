@@ -16,7 +16,9 @@ const result=await runHerdrScenario({name:'reference-completion',async prepare()
  const frame=await s.waitFor('attached context candidate',terminal.visible,t=>t.includes('alpha-context — Project Alpha'));
  const lines=frame.split('\n'),row=lines.findIndex(l=>l.includes('alpha-context — Project Alpha')),col=visibleWidth(lines[row]!.slice(0,lines[row]!.indexOf('alpha-context — Project Alpha')))+2;
  await terminal.write(`\x1b[<0;${col+1};${row+1}M\x1b[<0;${col+1};${row+1}m`);
- await s.waitVisible(s.panes.detail,'[[alpha-context]]');await s.keys(s.panes.detail,'ctrl+z');await s.waitVisible(s.panes.detail,'Mouse [[alpha-context');await s.keys(s.panes.detail,'ctrl+y');await s.keys(s.panes.detail,'ctrl+s');await s.waitFor('canonical pointer insertion',()=>s.client.request<Block>({action:'get',blockId:source.id}),b=>b.text==='WRITING HOME\n\nMouse [[alpha-context]]');
+ await s.waitVisible(s.panes.detail,'[[alpha-context]]');await s.keys(s.panes.detail,'ctrl+z');
+ await s.waitFor('undo removes insertion',()=>s.visible(s.panes.detail),t=>t.includes('Mouse [[alpha-context')&&!t.includes('[[alpha-context]]'));
+ await s.keys(s.panes.detail,'ctrl+y');await s.waitVisible(s.panes.detail,'[[alpha-context]]');await s.keys(s.panes.detail,'ctrl+s');await s.waitFor('canonical pointer insertion',()=>s.client.request<Block>({action:'get',blockId:source.id}),b=>b.text==='WRITING HOME\n\nMouse [[alpha-context]]');
  await s.checkpoint('02-pointer-insert');
  await s.keys(s.panes.detail,'e','alt+a');await s.text(s.panes.detail,'WRITING HOME\n\nKeep this [[alpha');await s.waitVisible(s.panes.detail,'References');await s.keys(s.panes.detail,'escape');await s.text(s.panes.detail,' remains');
  await s.keys(s.panes.detail,'ctrl+s');const saved=await s.waitFor('dismiss preserves draft',()=>s.client.request<Block>({action:'get',blockId:source.id}),b=>b.text.includes(' remains'));assert.ok(saved.text.includes('Keep this [[alpha remains'));
