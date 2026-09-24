@@ -2,7 +2,7 @@ import {createHash} from 'node:crypto';
 import {resolve} from 'node:path';
 import {blockReferenceOccurrences} from './references';
 import {pageAddressReferences} from './page-addresses';
-import {workIdReferences} from './work-ids';
+import {outlinerReferenceOccurrences} from './reference-occurrences';
 import {marked} from 'marked';
 import {parseOutlinerLinkUri} from './outliner-links';
 import type {OutlinerStore} from './store';
@@ -22,7 +22,7 @@ export function extractMentionReferences(text:string,prefix?:string):Reference[]
  const refs:Reference[]=[
   ...blockReferenceOccurrences(text).map(r=>({kind:'block' as const,value:r.blockId,start:r.start,end:r.end})),
   ...pageAddressReferences(text).map(r=>({kind:'address' as const,value:r.displayAddress,start:r.start,end:r.end})),
-  ...(prefix?workIdReferences(text,prefix).map(r=>({kind:'address' as const,value:r.workId,start:r.start,end:r.end})):[]),
+  ...outlinerReferenceOccurrences(text,prefix).filter(r=>r.kind==='work-id').map(r=>({kind:'address' as const,value:r.address,start:r.start,end:r.end})),
  ];
  marked.walkTokens(marked.lexer(text),token=>{
   if(token.type!=='link'||!token.href.startsWith('pi-outliner:'))return;

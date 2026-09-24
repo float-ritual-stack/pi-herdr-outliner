@@ -1338,7 +1338,7 @@ describe("Pi Markdown detail preview", () => {
     }
   });
 
-  test("renders only the configured Work-ID prefix", () => {
+  test("renders external ticket keys alongside the configured Work-ID prefix", () => {
     const capabilities = getCapabilities();
     setCapabilities({ ...capabilities, hyperlinks: true });
     try {
@@ -1353,7 +1353,7 @@ describe("Pi Markdown detail preview", () => {
       expect(getOsc8LinkAtColumn(line, visible.indexOf("ABC-001") + 2)).toBe(
         "pi-outliner://work/ABC-001",
       );
-      expect(getOsc8LinkAtColumn(line, visible.indexOf("PIE-001") + 2)).toBeUndefined();
+      expect(getOsc8LinkAtColumn(line, visible.indexOf("PIE-001") + 2)).toBe("pi-outliner://work/PIE-001");
     } finally {
       setCapabilities(capabilities);
     }

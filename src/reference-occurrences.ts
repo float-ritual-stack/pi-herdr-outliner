@@ -3,7 +3,7 @@ import { pageAddressReferences } from "./page-addresses";
 import { parsePropertyRecords } from "./properties";
 import type { PropertyRecord } from "./types";
 import { blockReferenceEnvelopeRanges, blockReferenceOccurrences } from "./references";
-import { workIdReferences } from "./work-ids";
+import { ticketKeyReferences } from "./work-ids";
 
 export interface TextRange {
   start: number;
@@ -96,7 +96,7 @@ export function outlinerReferenceOccurrences(
   }
 
   const pageRanges = pageSyntaxRanges(text);
-  for (const reference of workIdPrefix ? workIdReferences(text, workIdPrefix) : []) {
+  for (const reference of ticketKeyReferences(text, workIdPrefix)) {
     const range = { start: reference.start, end: reference.end };
     if (pageRanges.some((pageRange) => rangesOverlap(range, pageRange))) continue;
     candidates.push({

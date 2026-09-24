@@ -521,7 +521,7 @@ describe("renderTreeFrame", () => {
       expect(getOsc8LinkAtColumn(line, stripTerminalSequences(line).indexOf(aliasId))).toBeUndefined();
     }
   });
-  test("links only Work IDs for the configured project prefix", () => {
+  test("links external ticket keys alongside the configured project prefix", () => {
     const linked = block("custom-work", {
       text: "ABC-001 and PIE-001",
       displayText: "ABC-001 and PIE-001",
@@ -538,7 +538,7 @@ describe("renderTreeFrame", () => {
     expect(getOsc8LinkAtColumn(line, visible.indexOf("ABC-001") + 2)).toBe(
       "pi-outliner://work/ABC-001",
     );
-    expect(getOsc8LinkAtColumn(line, visible.indexOf("PIE-001") + 2)).toBeUndefined();
+    expect(getOsc8LinkAtColumn(line, visible.indexOf("PIE-001") + 2)).toBe("pi-outliner://work/PIE-001");
   });
 
 

@@ -56,6 +56,21 @@ export function isCanonicalWorkId(input: string): boolean {
   return parsed !== null && parsed.workId === input.trim();
 }
 
+/** External keys keep their provider's spelling; recognition grants no allocator ownership. */
+export function isTicketKey(input: string): boolean {
+  return /^[A-Z][A-Z0-9]{0,15}-\d+$/.test(input) &&
+    Number.isSafeInteger(Number(input.slice(input.lastIndexOf("-") + 1))) &&
+    Number(input.slice(input.lastIndexOf("-") + 1)) > 0;
+}
+
+export function ticketKeyReferences(text: string, configuredPrefix: string | null = null): WorkIdReference[] {
+  const prefix = configuredPrefix ? normalizeWorkIdPrefix(configuredPrefix) : null;
+  return [...text.matchAll(/(?<![\p{L}\p{N}_-])[A-Z][A-Z0-9]{0,15}-\d+(?![\p{L}\p{N}_-])/gu)]
+    .filter(match => isTicketKey(match[0]) &&
+      (!prefix || !match[0].startsWith(`${prefix}-`) || isCanonicalWorkId(match[0])))
+    .map(match => ({ workId: match[0], start: match.index, end: match.index + match[0].length }));
+}
+
 export function isConfiguredWorkIdPlaceholder(
   input: string,
   configuredPrefix: string,

@@ -439,7 +439,13 @@ Tree inserts connection groups under that exact occurrence. **Backlinks** lists 
 Click a resolved block row's disclosure triangle or press Right to inspect its own connections one level deeper. Left collapses it. Each occurrence retains its own state, so siblings remain open and you can explicitly follow A → B → A without automatic recursion. Reopening a parent restores its disclosed descendants; browsing does not write to the notes. Truncated reads and failed groups stay visible.
 
 - **Outlinks** contains authored block references, `[[page]]` addresses, and Work
-  IDs. Resolved rows open through the Tree's saved Detail link. Merely showing or
+  IDs. Bare uppercase ticket keys such as `PC-7` and `PC-515` also link through
+  registered page addresses, even when this workspace allocates `HUB-001`.
+  Give an issue's local notes a `[page::PC-515]` address; recognition preserves
+  the external key's spelling and does not allocate it. The same references
+  participate in Backlinks and Recent Mentions. Unknown bare keys remain
+  unresolved, and explicit `[jira::PC-515]` selects the provider Resource path.
+  Resolved rows open through the Tree's saved Detail link. Merely showing or
   selecting an unresolved page is read-only; pressing `Enter` follows the
   address and transactionally creates its registered page only when necessary.
   An unresolved Work ID is never created implicitly.

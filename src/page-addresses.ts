@@ -1,6 +1,6 @@
 import { PROPERTY_PARSER_VERSION } from "./properties";
 
-import { isCanonicalWorkId } from "./work-ids";
+import { isTicketKey } from "./work-ids";
 
 const CONTROL_PATTERN = /[\u0000-\u001f\u007f]/;
 const PAGE_ADDRESS_PATTERN = /\[\[([^\]\r\n]+)\]\]/g;
@@ -19,7 +19,7 @@ export interface PageAddressReference extends NormalizedPageAddress {
   end: number;
 }
 export function isWorkIdAddress(address: string): boolean {
-  return isCanonicalWorkId(address);
+  return isTicketKey(address);
 }
 
 export function normalizePageAddress(input: string): NormalizedPageAddress {
