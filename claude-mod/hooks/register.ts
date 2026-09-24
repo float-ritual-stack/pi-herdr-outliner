@@ -1,6 +1,22 @@
 import type { EngineInterface, On, PluginOptions } from 'claude-code'
 
-import { effectiveWorkspaces, isIngestible, type MentionMessage, mentionMessageOf } from './mention-message'
+import {
+  effectiveWorkspaces,
+  isIngestible,
+  type MentionMessage,
+  mentionMessageOf,
+  workspaceForCwd,
+} from './mention-message'
+import { destinationOf, linkifyReferences, type OutlinerClient, outlinerUriOf } from './references'
+
+/**
+ * What drawing a reply needs, read once per session: the Outliner workspace the
+ * session belongs to (null: none configured, nothing is linked) and its Work-ID
+ * prefixes. A render hook only reads, so this is loaded beside it, not in it.
+ */
+type ReferenceContext = { workspace: string | null; prefixes: string[] }
+let references: ReferenceContext | undefined
+let isLoadingReferences = false
 
 /**
  * Registers Recent Mentions: each completed main-loop answer in a configured
@@ -14,12 +30,48 @@ import { effectiveWorkspaces, isIngestible, type MentionMessage, mentionMessageO
  *
  * The answer passes on untouched. Delivery runs off the turn's dispatch, so a
  * slow or absent service never delays the prompt; a failure is one toast.
+ *
+ * In the same workspaces, Work IDs, `[[pages]]` and `((block references))` in
+ * Claude's replies are drawn as links; a click opens the target through the
+ * Outliner Tree in this Herdr tab, as a click inside the Tree would.
  */
 export function register(on: On, options: PluginOptions): void {
   const option = options.workspaces
 
+  on('session.start', async ($, e, next) => {
+    const result = await next(e)
+    $.clock.after(0, () => void loadReferences($, option))
+    return result
+  })
+
+  on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
+    const workspace = references?.workspace
+    if (!workspace) return next(e)
+    const { text, hrefs } = linkifyReferences(e.props.text, references!.prefixes)
+    if (hrefs.length === 0 || text.length > 10_000) return next(e)
+    const { Box, Text, Markdown } = await $.ui.resolve(e)
+    return Box({
+      flexDirection: 'row',
+      children: [
+        Box({ width: 2, flexShrink: 0, children: Text({ children: e.props.isFirstOfReply ? '⏺' : '' }) }),
+        Box({
+          flexGrow: 1,
+          flexShrink: 1,
+          children: Markdown({
+            key: 'outliner-references',
+            text,
+            pressableLinks: hrefs.slice(0, 256),
+            onLinkPress: link => void openReference($, workspace, link.href),
+          }),
+        }),
+      ],
+    })
+  })
+
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
+    // A module reloaded mid-session never sees its session.start.
+    if (!references) $.clock.after(0, () => void loadReferences($, option))
     if (!isIngestible(e)) return result
     const workspaces = effectiveWorkspaces(
       option,
@@ -86,4 +138,92 @@ async function deliver($: EngineInterface, message: MentionMessage): Promise<voi
     const reason = ingested.stderr.trim().split('\n').at(-1) ?? ''
     throw Error(`mentions ingest failed${reason ? `: ${reason}` : ''}`)
   }
+}
+
+/**
+ * Reads the session's workspace and Work-ID prefixes into `references`. A
+ * session outside the configured workspaces links nothing; a service that
+ * cannot answer leaves pages and block references linked, bare IDs not.
+ */
+async function loadReferences($: EngineInterface, option: unknown): Promise<void> {
+  if (isLoadingReferences) return
+  isLoadingReferences = true
+  try {
+    const workspaces = effectiveWorkspaces(option, await $.env.get('PI_OUTLINER_MENTIONS_WORKSPACES'))
+    const workspace = workspaceForCwd(await $.session.cwd(), workspaces)
+    if (!workspace) {
+      references = { workspace: null, prefixes: [] }
+      return
+    }
+    references = { workspace, prefixes: [] }
+    const root = await outlinerRootOf($)
+    if (!root) return
+    const status = await $.process.run(
+      ['/bin/sh', `${root}/scripts/run-bun.sh`, `${root}/src/cli.ts`, 'work-id-status'],
+      { cwd: workspace, env: { OUTLINER_WORKSPACE_ROOT: workspace }, timeoutMs: 30_000 },
+    )
+    if (status.exitCode !== 0) return
+    const { prefix, observedPrefixes } = JSON.parse(status.stdout) as { prefix?: unknown; observedPrefixes?: unknown }
+    const prefixes = [prefix, ...(Array.isArray(observedPrefixes) ? observedPrefixes : [])]
+      .filter((value): value is string => typeof value === 'string')
+    references = { workspace, prefixes: [...new Set(prefixes)] }
+  } catch {
+    // Linking is a convenience: the reply is drawn as before.
+  } finally {
+    isLoadingReferences = false
+  }
+}
+
+/**
+ * Opens a clicked reference in the Outliner: through the live Tree in this
+ * Herdr tab, else one in this workspace, with the Outliner's own link
+ * navigation (the Tree's linked Detail shows it). Every failure is a toast.
+ */
+async function openReference($: EngineInterface, workspace: string, href: string): Promise<void> {
+  const uri = outlinerUriOf(href)
+  if (!uri) return
+  const target = decodeURIComponent(uri.slice(uri.indexOf('/', 'pi-outliner://'.length) + 1))
+  try {
+    const root = await outlinerRootOf($)
+    if (!root) throw Error('the Outliner plugin is disabled')
+    const [tabId, herdrWorkspace] = await Promise.all([
+      $.env.get('HERDR_TAB_ID'),
+      $.env.get('HERDR_WORKSPACE_ID'),
+    ])
+    if (!herdrWorkspace) throw Error('this session is not running inside Herdr')
+    const outliner = (args: string[]) => $.process.run(
+      ['/bin/sh', `${root}/scripts/run-bun.sh`, `${root}/src/cli.ts`, ...args],
+      { cwd: workspace, env: { OUTLINER_WORKSPACE_ROOT: workspace }, timeoutMs: 30_000 },
+    )
+    const [listedClients, listedPanes] = await Promise.all([
+      outliner(['clients']),
+      $.process.run(['herdr', 'pane', 'list', '--workspace', herdrWorkspace], { timeoutMs: 5000 }),
+    ])
+    if (listedClients.exitCode !== 0) throw Error(lastLine(listedClients.stderr) || 'the Outliner service did not answer')
+    if (listedPanes.exitCode !== 0) throw Error('Herdr could not list panes')
+    const registered: unknown = JSON.parse(listedClients.stdout)
+    const clients: OutlinerClient[] = (Array.isArray(registered) ? registered : (registered as { clients?: unknown[] })?.clients ?? [])
+      .flatMap((client: any) => typeof client?.runtime?.paneId === 'string'
+        ? [{ clientId: String(client.clientId), role: String(client.role), paneId: client.runtime.paneId }]
+        : [])
+    const panes: unknown = JSON.parse(listedPanes.stdout)?.result?.panes
+    const paneTabs = new Map((Array.isArray(panes) ? panes : []).map((pane: any) => [String(pane.pane_id), String(pane.tab_id)]))
+    const destination = destinationOf(clients, paneTabs, tabId)
+    if (!destination) {
+      $.ui.toast(`No Outliner Tree is open in this Herdr workspace to show ${target}`, { timeoutMs: 6000 })
+      return
+    }
+    const navigated = await outliner([
+      'link', uri, '--source-client', destination.clientId,
+      ...(destination.role === 'composed' ? ['--source-region', 'tree'] : []),
+    ])
+    if (navigated.exitCode !== 0) throw Error(lastLine(navigated.stderr) || 'navigation failed')
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    $.ui.toast(`Could not open ${target} in the Outliner: ${reason}`, { timeoutMs: 6000 })
+  }
+}
+
+function lastLine(text: string): string {
+  return text.trim().split('\n').at(-1) ?? ''
 }

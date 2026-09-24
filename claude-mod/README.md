@@ -15,6 +15,21 @@ UUIDs in the answer then show up in Tree/Detail `?` → **Recent mentions**.
   and the mod calls the installed CLI's `mentions ingest`. It never starts a service.
   Failures show as one toast and leave the answer untouched.
 
+## Clickable references
+
+In the same workspaces, Work IDs (the workspace's prefixes), `[[pages]]` and
+`((block references))` in Claude's replies are drawn as links. A plain click
+opens the target through the Outliner Tree in the same Herdr tab (else one in
+the same Herdr workspace), in that Tree's linked Detail, as a click inside the
+Tree would. References in code and existing links are left alone.
+
+- Clicks reach the mod in the fullscreen terminal (`"tui": "fullscreen"`).
+- Links carry `https://pi-outliner.invalid/...` stand-ins, because Claude Code only
+  draws https, http and file links as links. Where it does not detect terminal
+  hyperlink support (a Herdr pane), it prints each URL beside its text; set
+  `FORCE_HYPERLINK=1` in the settings `env` block to draw the text alone.
+- With no Tree open, or a target the Outliner cannot resolve, a toast says so.
+
 ## Use
 
 Function hooks are early access and need `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`.
