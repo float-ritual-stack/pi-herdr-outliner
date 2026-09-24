@@ -3451,8 +3451,10 @@ describe("detail controller saves and annotations", () => {
         await harness.controller.initialize();await harness.controller.dispatch({type:"edit.begin"},viewport);
         harness.controller.state.buffer.replaceText("Saved writing");
         if(recovered){
-          harness.controller.state.recovery=repository.start({id:crypto.randomUUID(),blockId:base.id,baseRevision:base.revision,baseText:base.text,prelaunchText:base.text,draftText:"Saved writing",source:"save-conflict"});
-          harness.controller.state.recoveryAccepted=true;
+          repository.start({id:crypto.randomUUID(),blockId:base.id,baseRevision:base.revision,baseText:base.text,prelaunchText:base.text,draftText:"Saved writing",source:"save-conflict"});
+          harness.controller.state.buffer.replaceText(base.text);
+          harness.effects.reviewRecovery=async records=>({action:"manual",record:records[0]!});
+          await harness.controller.dispatch({type:"edit.recover"},viewport);
         }
         harness.effects[failure]=async()=>{throw Error("Read unavailable");};
         await harness.controller.dispatch({type:"buffer.save"},viewport);
@@ -3476,8 +3478,9 @@ describe("detail controller saves and annotations", () => {
         let retained=0;
         harness.effects.recovery={retain:async()=>{retained++;throw localFailure ? Error("Disk full") : new EditRecoveryRetainedLocallyError("Disconnected");},list:async id=>repository.list(id),commit:async(record,text)=>repository.commit(record.id,record.revision,text,record.latest.revision,{author:"user",actorId:"detail"}),separate:async record=>repository.separate(record.id,record.revision,{author:"user",actorId:"detail"})};
         await harness.controller.initialize();await harness.controller.dispatch({type:"edit.begin"},viewport);
-        harness.controller.state.recovery=repository.start({id:crypto.randomUUID(),blockId:base.id,baseRevision:base.revision,baseText:base.text,prelaunchText:base.text,draftText:"Retained draft",source:"save-conflict"});
-        harness.controller.state.recoveryAccepted=true;
+        repository.start({id:crypto.randomUUID(),blockId:base.id,baseRevision:base.revision,baseText:base.text,prelaunchText:base.text,draftText:"Retained draft",source:"save-conflict"});
+        harness.effects.reviewRecovery=async records=>({action:"manual",record:records[0]!});
+        await harness.controller.dispatch({type:"edit.recover"},viewport);
         harness.controller.state.buffer.replaceText("More writing");
         if(focusFailure)harness.setFocusError(Error("Focus unavailable"));
         if(localFailure){
