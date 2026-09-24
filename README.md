@@ -1919,4 +1919,5 @@ accepts Codex Stop hook payloads, but installation uses completion notifications
 Other hosts can post the same `{workspaceRoot, agent, sessionId, messageId, text}`
 contract using `mentions.ingest`, or JSON stdin to `bun src/cli.ts mentions ingest`.
 Repeated message identity with identical text is idempotent; different text under
-the same identity is rejected. No Pi or Claude adapter is installed automatically.
+the same identity is rejected. No Pi or Claude adapter is installed automatically;
+for Claude Code, load the mod in [`claude-mod/`](claude-mod/README.md).

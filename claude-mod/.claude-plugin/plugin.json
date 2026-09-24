@@ -1,0 +1,15 @@
+{
+  "name": "pi-outliner",
+  "version": "0.1.0",
+  "description": "Pi Outliner integration for Claude Code: completed responses that mention [[pages]], ((block ids)), Work IDs or block UUIDs appear in the Outliner's Recent Mentions navigator.",
+  "author": { "name": "evan" },
+  "userConfig": {
+    "workspaces": {
+      "type": "string",
+      "title": "Outliner workspaces",
+      "description": "Absolute project directories whose sessions feed Recent Mentions, separated by ':' or ','. A session ingests only when its working directory is exactly one of them. Empty: nothing is ingested.",
+      "required": false,
+      "default": ""
+    }
+  }
+}
