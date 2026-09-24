@@ -10,7 +10,7 @@ export function attachCaptureInput(input:Readable,handlers:{
  paste(text:string):void;
  mouse(sequence:string):void;
 }):()=>void {
- const frames=new StdinBuffer(),keys=new PassThrough();
+ const frames=new StdinBuffer(),keys=new PassThrough({objectMode:true});
  const decoder=new TerminalInputDecoder(handlers.paste);
  input.setEncoding('utf8');
  emitKeypressEvents(keys);
