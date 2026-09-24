@@ -16,7 +16,12 @@ const result=await runHerdrScenario({name:composed?'local-markdown-composed':'lo
  const click=async(label:string)=>{
   const frame=await s.waitFor('native '+label,terminal.visible,t=>t.includes(label)),lines=frame.split('\n');
   // Choose the Detail occurrence to the right of a same-named Tree row.
-  const match=lines.flatMap((line,row)=>line.includes(label)?[{row,col:visibleWidth(line.slice(0,line.lastIndexOf(label)))+2}]:[]).sort((a,b)=>b.col-a.col||b.row-a.row)[0]!;
+  const currentRow=lines.findIndex(line=>line.includes('Current · DAILY NOTE'));
+  assert.ok(currentRow>=0);
+  const currentCol=visibleWidth(lines[currentRow]!.slice(0,lines[currentRow]!.indexOf('Current · DAILY NOTE')))-2;
+  const match=lines.flatMap((line,row)=>line.includes(label)?[{row,col:visibleWidth(line.slice(0,line.lastIndexOf(label)))+2}]:[])
+   .filter(point=>composed?point.col>=currentCol:point.row>=currentRow)
+   .sort((a,b)=>b.col-a.col||b.row-a.row)[0]!;
   const {row,col}=match;
   await terminal.write(`\x1b[<0;${col+1};${row+1}M\x1b[<0;${col+1};${row+1}m`);
  };

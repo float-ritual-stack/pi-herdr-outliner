@@ -35,5 +35,11 @@ test('Preview activates a file once, follows a page from its Markdown and return
   expect(preview.state?.notice).toMatch(/unavailable|not found|ENOENT|does not exist/i);
   expect(preview.state?.target).toEqual({kind:"block",blockId:note.id});
   expect(store.require(note.id)).toEqual(note);
+  const metadata=store.create('Metadata note\n\n[file::project.md]');
+  await preview.load({kind:'block',blockId:metadata.id});
+  const metadataLink=documentPreviewLinks(preview.state!.document,100).find(l=>l.label.includes('project.md'))!;
+  expect(metadataLink).toBeDefined();
+  await preview.action('preview.link:'+metadataLink.uri,async()=>{});
+  expect(preview.state?.document.canonicalText).toContain('File body');
  }finally{watcher.stop();await server.close();store.close();rmSync(root,{recursive:true,force:true});}
 });
