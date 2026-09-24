@@ -1,14 +1,12 @@
 import {expect,test} from "bun:test";
 import {EditRecoveryInput} from "../src/edit-recovery-input";
 
-test("review ignores Kitty releases and commands inside fragmented bracketed paste",()=>{
-  const input=new EditRecoveryInput();
-  expect(input.push("\x1b[13;1:3u")).toEqual([]);
-  expect(input.push("\x1b[20")).toEqual([]);
-  expect(input.push("0~\t\r")).toEqual([]);
-  expect(input.push("discard\r\x1b[201")).toEqual([]);
-  expect(input.push("~")).toEqual([]);
-  expect(input.push("\r")[0]?.key.name).toBe("return");
+test("review ignores releases and fragmented paste while splitting combined keys",()=>{
+  const input=new EditRecoveryInput(),keys:string[]=[];
+  const emit=(value:{key:{name?:string}})=>keys.push(value.key.name??"");
+  for(const chunk of ["\x1b[13;1:3u","\x1b[20","0~\t\r","discard\r\x1b[201","~"])input.accept(chunk,emit);
+  expect(keys).toEqual([]);
+  input.accept("\t\r",emit);expect(keys).toEqual(["tab","return"]);input.dispose();
 });
 
 test("bare Escape flushes while fragmented paste remains inert",async()=>{

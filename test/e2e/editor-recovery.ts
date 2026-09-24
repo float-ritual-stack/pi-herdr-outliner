@@ -37,7 +37,7 @@ const result=await runHerdrScenario({name:`editor-recovery-${composed?"composed"
   const undo=await s.client.request<EditRecovery[]>({action:"edit-recovery.list",blockId:base.id});
   assert.equal(undo[0]!.draftText,latest.text);
   await s.checkpoint("03b-history-undo-review");
-  await s.keys(s.panes.detail,"escape");
+  await s.keys(s.panes.detail,"escape");await s.waitVisible(s.panes.detail,"Writing retained");
   assert.ok((await s.client.request<Block>({action:"get",blockId:base.id})).text.includes("Long returned writing 日本語"));
   // A normal Detail draft collides on the same passage. A newly launched client
   // must discover that retained writing without the original client's memory.
