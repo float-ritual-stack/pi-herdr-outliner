@@ -131,3 +131,114 @@ command = "float.pi-outliner.obsolete"
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+async function runClaudeModInstaller(configDir: string, ...workspaces: string[]) {
+  const child = Bun.spawn([process.execPath, join(import.meta.dir, "../scripts/install-claude-mod.ts"), ...workspaces], {
+    env: { ...process.env, CLAUDE_CONFIG_DIR: configDir }, stdout: "pipe", stderr: "pipe",
+  });
+  const [exitCode, stdout, stderr] = await Promise.all([
+    child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
+  ]);
+  return { exitCode, stdout, stderr };
+}
+
+test("Claude mod installer replaces other copies of the mod and keeps unrelated settings", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "claude-mod-installer-"));
+  const settingsPath = join(directory, "settings.json");
+  const worktreeCopy = join(directory, "old-worktree/claude-mod");
+  const unrelated = join(directory, "other-plugin");
+  const modDir = join(import.meta.dir, "../claude-mod");
+  try {
+    await mkdir(join(worktreeCopy, ".claude-plugin"), { recursive: true });
+    await writeFile(join(worktreeCopy, ".claude-plugin/plugin.json"), '{"name":"pi-outliner"}');
+    await mkdir(join(unrelated, ".claude-plugin"), { recursive: true });
+    await writeFile(join(unrelated, ".claude-plugin/plugin.json"), '{"name":"other"}');
+    const original = { theme: "dark", env: { KEEP: "1", CLAUDE_CODE_PLUGIN_DIRS: `${unrelated}:${worktreeCopy}`, PI_OUTLINER_MENTIONS_WORKSPACES: "/a" } };
+    await writeFile(settingsPath, JSON.stringify(original));
+
+    const first = await runClaudeModInstaller(directory, "/b", "/a");
+    expect(first.exitCode).toBe(0);
+    const installed = JSON.parse(await readFile(settingsPath, "utf8"));
+    expect(installed.theme).toBe("dark");
+    expect(installed.env).toEqual({
+      KEEP: "1",
+      CLAUDE_CODE_PLUGIN_DIRS: `${unrelated}:${modDir}`,
+      CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: "1",
+      PI_OUTLINER_MENTIONS_WORKSPACES: "/a:/b",
+    });
+    const backups = (await readdir(directory)).filter(name => name.startsWith("settings.json.before-claude-mod-"));
+    expect(backups).toHaveLength(1);
+    expect(JSON.parse(await readFile(join(directory, backups[0]!), "utf8"))).toEqual(original);
+
+    const text = await readFile(settingsPath, "utf8");
+    const again = await runClaudeModInstaller(directory, "/b");
+    expect(again.stdout).toContain("already installed");
+    expect(await readFile(settingsPath, "utf8")).toBe(text);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Claude mod installer creates settings and refuses relative workspaces", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "claude-mod-installer-"));
+  const configDir = join(directory, "claude");
+  try {
+    const relative = await runClaudeModInstaller(configDir, "work");
+    expect(relative.exitCode).not.toBe(0);
+    expect(relative.stderr).toContain("must be absolute");
+    expect((await runClaudeModInstaller(configDir, "/w")).exitCode).toBe(0);
+    const env = JSON.parse(await readFile(join(configDir, "settings.json"), "utf8")).env;
+    expect(env.PI_OUTLINER_MENTIONS_WORKSPACES).toBe("/w");
+    expect(env.CLAUDE_CODE_PLUGIN_DIRS).toBe(join(import.meta.dir, "../claude-mod"));
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("install.sh installs the Claude mod from the managed plugin root only when asked", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "outliner-installer-claude-"));
+  const shellSetup = join(directory, "herdr-stub.sh");
+  const root = join(import.meta.dir, "..");
+  await writeFile(shellSetup, `herdr() {
+    case "$*" in
+      --version) printf 'herdr 0.9.1\\n' ;;
+      'plugin list '*) printf '{"result":{"plugins":[{"plugin_id":"float.pi-outliner","plugin_root":"${root}","version":"0.1.1"}]}}\\n' ;;
+      'plugin install '*|'plugin action list '*) return 0 ;;
+      *) printf 'Unexpected Herdr call: %s\\n' "$*" >&2; return 99 ;;
+    esac
+  }
+`);
+  const run = async (...args: string[]) => {
+    const child = Bun.spawn(["bash", join(import.meta.dir, "../install.sh"), "--yes", "--plain", "--no-config", ...args], {
+      env: { ...process.env, BASH_ENV: shellSetup, CLAUDE_CONFIG_DIR: directory }, stdout: "pipe", stderr: "pipe",
+    });
+    const [exitCode, stdout, stderr] = await Promise.all([
+      child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
+    ]);
+    return { exitCode, stdout, stderr };
+  };
+  const settingsPath = join(directory, "settings.json");
+  try {
+    expect((await run()).exitCode).toBe(0);
+    expect(await Bun.file(settingsPath).exists()).toBe(false);
+
+    const required = await run("--claude-mod");
+    expect(required.exitCode).not.toBe(0);
+    expect(required.stderr).toContain("--claude-workspace");
+
+    expect((await run("--claude-workspace", "relative")).exitCode).not.toBe(0);
+    expect(await Bun.file(settingsPath).exists()).toBe(false);
+
+    const installed = await run("--claude-workspace", "/work/one", "--claude-workspace", "/work/two words");
+    expect(installed.exitCode).toBe(0);
+    const env = JSON.parse(await readFile(settingsPath, "utf8")).env;
+    expect(env.PI_OUTLINER_MENTIONS_WORKSPACES).toBe("/work/one:/work/two words");
+    expect(env.CLAUDE_CODE_PLUGIN_DIRS).toBe(join(root, "claude-mod"));
+
+    const text = await readFile(settingsPath, "utf8");
+    expect((await run("--claude-workspace", "/work/three", "--no-claude-mod")).exitCode).toBe(0);
+    expect(await readFile(settingsPath, "utf8")).toBe(text);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

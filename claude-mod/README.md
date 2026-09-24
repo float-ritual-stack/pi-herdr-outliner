@@ -16,6 +16,9 @@ UUIDs in the answer then show up in Tree/Detail `?` → **Recent mentions**.
 
 Function hooks are early access and need `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`.
 
+The installer sets up everything below: `install.sh --claude-workspace /absolute/project`,
+or, from a checkout, `bun scripts/install-claude-mod.ts /absolute/project`.
+
 ```sh
 PI_OUTLINER_MENTIONS_WORKSPACES=/home/evan/test \
   claude --plugin-dir /path/to/checkout/claude-mod

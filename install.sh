@@ -27,6 +27,8 @@ ASSUME_YES=0
 CONFIGURE_KEYS=1
 PLAIN_UI=0
 GUM_ENABLED=0
+CLAUDE_MOD="auto"
+CLAUDE_WORKSPACES=""
 TEMP_CONFIG=""
 
 say() {
@@ -122,6 +124,11 @@ Options:
   --ref REF              Git ref to install (default: main)
   --config PATH          Herdr config.toml path
   --no-config            Install the plugin without changing Herdr keys
+  --claude-workspace PATH
+                         Load the Claude Code mod and feed Recent Mentions
+                         from Claude sessions in PATH (repeatable)
+  --claude-mod           Require the Claude Code mod step
+  --no-claude-mod        Skip the Claude Code mod step
   --plain               Disable Gum styling and interactive widgets
   -y, --yes              Install missing dependencies and accept defaults
   -h, --help             Show this help
@@ -176,6 +183,25 @@ while [ "$#" -gt 0 ]; do
       ;;
     --no-config)
       CONFIGURE_KEYS=0
+      shift
+      ;;
+    --claude-workspace)
+      [ "$#" -ge 2 ] || fail "--claude-workspace requires an absolute path"
+      case "$2" in
+        /*) ;;
+        *) fail "--claude-workspace requires an absolute path" ;;
+      esac
+      CLAUDE_WORKSPACES="$CLAUDE_WORKSPACES
+$2"
+      [ "$CLAUDE_MOD" = "no" ] || CLAUDE_MOD="yes"
+      shift 2
+      ;;
+    --claude-mod)
+      CLAUDE_MOD="yes"
+      shift
+      ;;
+    --no-claude-mod)
+      CLAUDE_MOD="no"
       shift
       ;;
     --plain)
@@ -527,6 +553,50 @@ rewrite_config() {
   ' "$source_file" > "$destination_file"
 }
 
+plugin_root() {
+  herdr plugin list --plugin "$PLUGIN_ID" --json 2>/dev/null |
+    bun -e 'const {result} = JSON.parse(await Bun.stdin.text());
+      const roots = (result?.plugins ?? []).filter(p => p.plugin_id === process.argv[1]).map(p => p.plugin_root);
+      if (roots.length === 1 && typeof roots[0] === "string") console.log(roots[0]);' "$PLUGIN_ID" 2>/dev/null
+}
+
+# Claude Code loads claude-mod/ from the installed plugin root and feeds Recent
+# Mentions from the named workspaces. Offered only where Claude Code exists.
+install_claude_mod() {
+  [ "$CLAUDE_MOD" != "no" ] || return 0
+  if [ "$CLAUDE_MOD" = "auto" ]; then
+    command -v claude >/dev/null 2>&1 || return 0
+    can_prompt || return 0
+    confirm "Install the Claude Code mod so Claude replies feed Recent Mentions?" || return 0
+  fi
+  if [ -z "$CLAUDE_WORKSPACES" ]; then
+    can_prompt || fail "--claude-mod needs --claude-workspace PATH when it cannot prompt"
+    CLAUDE_WORKSPACES=$(prompt_key "Outliner workspace for Claude Recent Mentions" "$PWD")
+    case "$CLAUDE_WORKSPACES" in
+      /*) ;;
+      *) fail "Claude workspace must be an absolute path: $CLAUDE_WORKSPACES" ;;
+    esac
+  fi
+  root=$(plugin_root)
+  [ -n "$root" ] || fail "could not locate the installed $PLUGIN_ID plugin root"
+  if [ ! -f "$root/scripts/install-claude-mod.ts" ]; then
+    warn "$PLUGIN_ID@$PLUGIN_REF has no Claude Code mod; skipped"
+    return 0
+  fi
+  set --
+  old_ifs=$IFS
+  IFS='
+'
+  set -f
+  for workspace in $CLAUDE_WORKSPACES; do
+    set -- "$@" "$workspace"
+  done
+  set +f
+  IFS=$old_ifs
+  bun "$root/scripts/install-claude-mod.ts" "$@" || fail "Claude Code mod installation failed"
+  succeed "Claude Code mod enabled; restart Claude Code sessions to load it"
+}
+
 ensure_command "Bun" bun "$MIN_BUN_VERSION" install_bun
 ensure_command "Herdr" herdr "$MIN_HERDR_VERSION" install_herdr
 ensure_git
@@ -646,4 +716,5 @@ EOF
   fi
 fi
 
+install_claude_mod
 show_summary

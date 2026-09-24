@@ -296,6 +296,15 @@ Use `--yes` for a non-interactive install with existing or default shortcuts,
 `--ref <tag-or-commit>` for a reproducible plugin revision. Run
 `sh install.sh --help` for all options.
 
+When Claude Code is installed, an interactive run also offers the
+[Claude Code mod](claude-mod/README.md), which sends completed Claude replies to
+Recent Mentions. It asks for the Outliner workspace (default: the current
+directory), then updates the `env` block of `~/.claude/settings.json`: function
+hooks on, the installed `claude-mod/` in `CLAUDE_CODE_PLUGIN_DIRS` in place of
+any other copy, and the workspace added to `PI_OUTLINER_MENTIONS_WORKSPACES`.
+The file is backed up first. Pass `--claude-workspace /absolute/project`
+(repeatable) to install it without prompting, or `--no-claude-mod` to skip it.
+
 ### Install manually from GitHub
 
 ```sh
