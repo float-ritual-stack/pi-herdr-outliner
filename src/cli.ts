@@ -8,7 +8,8 @@ import {
 import { createOutlinerClient, type RequestInput } from "./client";
 import { requireClientIdForRole } from "./client-target";
 import { resolveClientPaths } from "./paths";
-import { navigateOutlinerLink, parseOutlinerLinkUri } from "./outliner-links";
+import { navigateOutlinerLink, parseOutlinerLinkUri, resolveOutlinerLinkTarget } from "./outliner-links";
+import { blockDisplayTitle } from "./references";
 import type { BlockSearchQuery, CaptureReceipt } from "./types";
 
 if(process.argv[2]==='doctor'){
@@ -223,6 +224,19 @@ switch (command) {
       id: focused.resolution.match.block.id,
       title: focused.resolution.match.title,
       kind: focused.resolution.match.kind,
+    };
+    break;
+  }
+  case "resolve": {
+    // Read-only: an unresolved page address is an error, never a new page.
+    const [url, ...extra] = rest;
+    if (!url || extra.length) throw new Error("resolve requires one pi-outliner URL");
+    const resolved = await resolveOutlinerLinkTarget(client, parseOutlinerLinkUri(url), { followMissingPages: false });
+    directResult = {
+      id: resolved.block.id,
+      title: blockDisplayTitle(resolved.block),
+      ...(resolved.fragmentId ? { fragmentId: resolved.fragmentId } : {}),
+      ...(resolved.block.effectiveDeletedRootId ? { deleted: true } : {}),
     };
     break;
   }

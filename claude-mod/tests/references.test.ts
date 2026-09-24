@@ -1,6 +1,6 @@
 import { describe, expect, test, tier } from 'claude-code/testing'
 
-import { destinationOf, linkifyReferences, outlinerUriOf } from '../hooks/references'
+import { destinationOf, detailSplitArgv, isProtectedDestination, linkifyReferences, outlinerUriOf } from '../hooks/references'
 
 tier('user')
 
@@ -61,6 +61,20 @@ describe('references', () => {
     expect(outlinerUriOf(`${STAND_IN}resource/x`)).toBeNull()
     expect(outlinerUriOf(`${STAND_IN}work/PIE-1/extra`)).toBeNull()
     expect(outlinerUriOf('https://example.com/work/PIE-1')).toBeNull()
+  })
+
+  test('only a protected destination triggers the Detail split', async () => {
+    expect(isProtectedDestination('Destination is protected: active edit or source selection · finish or cancel it there')).toBe(true)
+    expect(isProtectedDestination('Page address did not resolve: x')).toBe(false)
+  })
+
+  test('the Detail split opens below the Claude pane, unfocused, on the target', async () => {
+    const argv = detailSplitArgv({ paneId: 'w:p9', workspace: '/work/a b', blockId: UUID, fragmentId: 'f1' })
+    expect(argv.slice(0, 4)).toEqual(['herdr', 'plugin', 'pane', 'open'])
+    expect(argv).toContain('--no-focus')
+    const env = argv.filter((_, index) => argv[index - 1] === '--env')
+    expect(env[0]).toBe('OUTLINER_WORKSPACE_ROOT=/work/a b')
+    expect(JSON.parse(decodeURIComponent(env[1]!.split('=')[1]!))).toEqual({ kind: 'block', blockId: UUID, fragmentId: 'f1' })
   })
 
   test('the destination is a live Tree in the caller\'s tab, else one in the workspace', async () => {

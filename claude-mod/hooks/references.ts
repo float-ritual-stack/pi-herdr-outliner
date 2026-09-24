@@ -90,3 +90,38 @@ export function destinationOf(
     (client.role === 'tree' || client.role === 'composed') && paneTabs.has(client.paneId))
   return live.find(client => paneTabs.get(client.paneId) === tabId) ?? live[0] ?? null
 }
+
+/**
+ * Whether a navigation failed only because its destination is mid-edit (or
+ * holding a source selection): the Outliner protects it, and a new Detail is
+ * the way round, never overriding the protection.
+ */
+export function isProtectedDestination(reason: string): boolean {
+  return reason.startsWith('Destination is protected')
+}
+
+/**
+ * The Herdr command that splits a new Outliner Detail below `paneId` (the
+ * Claude pane), unfocused, already showing the block: somewhere visible that
+ * the person can move afterwards.
+ */
+export function detailSplitArgv(split: {
+  paneId: string
+  workspace: string
+  blockId: string
+  fragmentId?: string
+}): string[] {
+  const target = { kind: 'block', blockId: split.blockId, ...(split.fragmentId ? { fragmentId: split.fragmentId } : {}) }
+  return [
+    'herdr', 'plugin', 'pane', 'open',
+    '--plugin', 'float.pi-outliner',
+    '--entrypoint', 'detail',
+    '--placement', 'split',
+    '--target-pane', split.paneId,
+    '--direction', 'down',
+    '--no-focus',
+    '--cwd', split.workspace,
+    '--env', `OUTLINER_WORKSPACE_ROOT=${split.workspace}`,
+    '--env', `OUTLINER_DETAIL_TARGET=${encodeURIComponent(JSON.stringify(target))}`,
+  ]
+}

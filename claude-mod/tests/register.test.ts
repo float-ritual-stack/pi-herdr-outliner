@@ -30,6 +30,7 @@ function sessionIn(on: On, cwd: string, answer: (run: Run) => ProcessRunResult) 
   const clock = mock.clock(on)
   mock.env(on, {
     PI_OUTLINER_MENTIONS_WORKSPACES: `${WORKSPACE}/`,
+    HERDR_PANE_ID: 'w:p9',
     HERDR_TAB_ID: 'w:t1',
     HERDR_WORKSPACE_ID: 'w',
   })
@@ -69,6 +70,13 @@ const PANES = JSON.stringify({
   result: { panes: [{ pane_id: 'w:p1', tab_id: 'w:t1' }, { pane_id: 'w:p2', tab_id: 'w:t1' }, { pane_id: 'w:p3', tab_id: 'w:t2' }] },
 })
 
+const BLOCK = '11111111-2222-4333-8444-555555555555'
+
+/** The Detail split the fallback asked Herdr for, if any. */
+function splitOf(runs: readonly Run[]) {
+  return runs.find(run => run.argv[0] === 'herdr' && run.argv[2] === 'pane' && run.argv[3] === 'open')
+}
+
 const CLIENTS = JSON.stringify([
   { clientId: 'tree-elsewhere', role: 'tree', runtime: { paneId: 'w:p3' } },
   { clientId: 'detail-here', role: 'detail', runtime: { paneId: 'w:p2' } },
@@ -77,7 +85,11 @@ const CLIENTS = JSON.stringify([
 
 function succeeding(run: Run): ProcessRunResult {
   const ok = (stdout: string) => ({ exitCode: 0, stdout, stderr: '' })
-  if (run.argv[0] === 'herdr') return ok(run.argv[1] === 'pane' ? PANES : HERDR_LISTING)
+  if (run.argv[0] === 'herdr') {
+    if (run.argv[1] === 'pane') return ok(PANES)
+    return ok(run.argv[2] === 'pane' ? '{"result":{"pane":{"pane_id":"w:p10"}}}' : HERDR_LISTING)
+  }
+  if (run.argv.includes('resolve')) return ok(`{"id":"${BLOCK}","title":"Daily notes"}`)
   if (run.argv.includes('work-id-status')) return ok('{"prefix":"PIE","observedPrefixes":["PIE","OLD"]}')
   if (run.argv.includes('clients')) return ok(CLIENTS)
   return ok('{"references":2}')
@@ -227,7 +239,7 @@ describe('register', () => {
     expect(session.toasts).toEqual([])
   })
 
-  test('with no Outliner Tree open, a click says so', async ($, on) => {
+  test('with no Outliner Tree open, a click splits a Detail below the Claude pane', async ($, on) => {
     const session = sessionIn(on, WORKSPACE, run =>
       run.argv.includes('clients') ? { exitCode: 0, stdout: '[]', stderr: '' } : succeeding(run))
     await session.begin(() => $.session.start(START))
@@ -242,7 +254,39 @@ describe('register', () => {
     await session.clock.settle()
 
     expect(session.runs.some(run => run.argv.includes('link'))).toBe(false)
-    expect(session.toasts).toEqual(['No Outliner Tree is open in this Herdr workspace to show PIE-7'])
+    expect(session.runs.find(run => run.argv.includes('resolve'))?.argv.at(-1)).toBe('pi-outliner://work/PIE-7')
+    const split = splitOf(session.runs)?.argv ?? []
+    expect(split.slice(split.indexOf('--target-pane'), split.indexOf('--target-pane') + 4)).toEqual(['--target-pane', 'w:p9', '--direction', 'down'])
+    expect(split).toContain(`OUTLINER_DETAIL_TARGET=${encodeURIComponent(JSON.stringify({ kind: 'block', blockId: BLOCK }))}`)
+    expect(session.toasts).toEqual([])
+  })
+
+  test('a Tree whose Detail is mid-edit falls back to a split; other failures do not', async ($, on) => {
+    const protectedStderr = 'error: Destination is protected: active edit or source selection · finish or cancel it there\nBun v1.3.14 (Linux x64)'
+    let linkStderr = protectedStderr
+    const session = sessionIn(on, WORKSPACE, run =>
+      run.argv.includes('link') ? { exitCode: 1, stdout: '', stderr: linkStderr } : succeeding(run))
+    await session.begin(() => $.session.start(START))
+    const drawn = await $.ui.mount({
+      plugin: 'pi-outliner',
+      surface: 'terminal',
+      component: 'AssistantMessage',
+      props: { text: 'See [[Daily notes]].', isFirstOfReply: true },
+    })
+    const press = () => drawn.press({ key: 'outliner-references', link: { href: 'https://pi-outliner.invalid/page/Daily%20notes' } })
+
+    await press()
+    await session.clock.settle()
+    expect(session.runs.find(run => run.argv.includes('link'))?.argv).toContain('tree-here')
+    expect(splitOf(session.runs)).toBeDefined()
+    expect(session.toasts).toEqual([])
+
+    session.runs.length = 0
+    linkStderr = 'error: Page address did not resolve: Daily notes\nBun v1.3.14 (Linux x64)'
+    await press()
+    await session.clock.settle()
+    expect(splitOf(session.runs)).toBeUndefined()
+    expect(session.toasts).toEqual(['Could not open Daily notes in the Outliner: Page address did not resolve: Daily notes'])
   })
 
   test('outside the configured workspaces, replies are not linked', async ($, on) => {

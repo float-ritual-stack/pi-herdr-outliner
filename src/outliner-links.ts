@@ -283,6 +283,7 @@ export interface ResolvedOutlinerLinkTarget {
 export async function resolveOutlinerLinkTarget(
   requester: BlockFocusRequester,
   target: OutlinerLinkTarget,
+  options: { followMissingPages?: boolean } = {},
 ): Promise<ResolvedOutlinerLinkTarget> {
   if (target.kind === "goto") {
     throw new Error("Fuzzy goto links require a Tree destination");
@@ -309,6 +310,9 @@ export async function resolveOutlinerLinkTarget(
   if (resolution.block) return { block: resolution.block };
   if (target.kind === "work") {
     throw new Error(`Work ID address is unresolved: ${target.value}`);
+  }
+  if (options.followMissingPages === false) {
+    throw new Error(`Page address did not resolve: ${target.value}`);
   }
   const followed = await requester.request<PageAddressFollowResult>({
     action: "pages.follow",

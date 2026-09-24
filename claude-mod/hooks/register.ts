@@ -8,7 +8,14 @@ import {
   mentionMessageOf,
   workspaceForCwd,
 } from './mention-message'
-import { destinationOf, linkifyReferences, type OutlinerClient, outlinerUriOf } from './references'
+import {
+  destinationOf,
+  detailSplitArgv,
+  isProtectedDestination,
+  linkifyReferences,
+  type OutlinerClient,
+  outlinerUriOf,
+} from './references'
 
 /**
  * What drawing a reply needs, read once per session: the Outliner workspace the
@@ -178,7 +185,9 @@ async function loadReferences($: EngineInterface, option: unknown): Promise<void
 /**
  * Opens a clicked reference in the Outliner: through the live Tree in this
  * Herdr tab, else one in this workspace, with the Outliner's own link
- * navigation (the Tree's linked Detail shows it). Every failure is a toast.
+ * navigation (the Tree's linked Detail shows it). With no Tree, or one whose
+ * Detail is protected mid-edit, a new Detail splits below the Claude pane,
+ * showing the target. Every failure is a toast.
  */
 async function openReference($: EngineInterface, workspace: string, href: string): Promise<void> {
   const uri = outlinerUriOf(href)
@@ -187,7 +196,8 @@ async function openReference($: EngineInterface, workspace: string, href: string
   try {
     const root = await outlinerRootOf($)
     if (!root) throw Error('the Outliner plugin is disabled')
-    const [tabId, herdrWorkspace] = await Promise.all([
+    const [paneId, tabId, herdrWorkspace] = await Promise.all([
+      $.env.get('HERDR_PANE_ID'),
       $.env.get('HERDR_TAB_ID'),
       $.env.get('HERDR_WORKSPACE_ID'),
     ])
@@ -210,15 +220,24 @@ async function openReference($: EngineInterface, workspace: string, href: string
     const panes: unknown = JSON.parse(listedPanes.stdout)?.result?.panes
     const paneTabs = new Map((Array.isArray(panes) ? panes : []).map((pane: any) => [String(pane.pane_id), String(pane.tab_id)]))
     const destination = destinationOf(clients, paneTabs, tabId)
-    if (!destination) {
-      $.ui.toast(`No Outliner Tree is open in this Herdr workspace to show ${target}`, { timeoutMs: 6000 })
-      return
+    if (destination) {
+      const navigated = await outliner([
+        'link', uri, '--source-client', destination.clientId,
+        ...(destination.role === 'composed' ? ['--source-region', 'tree'] : []),
+      ])
+      if (navigated.exitCode === 0) return
+      const reason = failureReasonOf(navigated.stderr)
+      if (!isProtectedDestination(reason)) throw Error(reason || 'navigation failed')
     }
-    const navigated = await outliner([
-      'link', uri, '--source-client', destination.clientId,
-      ...(destination.role === 'composed' ? ['--source-region', 'tree'] : []),
-    ])
-    if (navigated.exitCode !== 0) throw Error(failureReasonOf(navigated.stderr) || 'navigation failed')
+    if (!paneId) throw Error('this session has no Herdr pane to open a Detail beside')
+    const resolved = await outliner(['resolve', uri])
+    if (resolved.exitCode !== 0) throw Error(failureReasonOf(resolved.stderr) || 'the target did not resolve')
+    const { id, fragmentId } = JSON.parse(resolved.stdout) as { id: string; fragmentId?: string }
+    const opened = await $.process.run(
+      detailSplitArgv({ paneId, workspace, blockId: id, ...(fragmentId ? { fragmentId } : {}) }),
+      { timeoutMs: 15_000 },
+    )
+    if (opened.exitCode !== 0) throw Error(failureReasonOf(opened.stderr) || 'Herdr could not open a Detail')
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error)
     $.ui.toast(`Could not open ${target} in the Outliner: ${reason}`, { timeoutMs: 6000 })

@@ -28,7 +28,9 @@ Tree would. References in code and existing links are left alone.
   draws https, http and file links as links. Where it does not detect terminal
   hyperlink support (a Herdr pane), it prints each URL beside its text; set
   `FORCE_HYPERLINK=1` in the settings `env` block to draw the text alone.
-- With no Tree open, or a target the Outliner cannot resolve, a toast says so.
+- With no Tree open, or one whose Detail is mid-edit (the Outliner protects it),
+  a new Detail splits below the Claude pane, unfocused, showing the target; move
+  it as you like. A target the Outliner cannot resolve is a toast, never a new page.
 
 ## Use
 

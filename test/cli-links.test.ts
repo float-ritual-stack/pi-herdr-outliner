@@ -149,3 +149,31 @@ test("CLI Tree targeting is exact and unsupported flag combinations fail explici
   }
   expect(h.commands).toHaveLength(1);
 });
+
+test("resolve answers a link's block without navigating or creating a page", async () => {
+  const { store } = await setup();
+  const ticket = store.create("Ticket [page::HUB-001]");
+  const page = store.create("Daily notes [page::Daily notes]");
+  const other = store.create("Plain block");
+  const env = { ...process.env, OUTLINER_STATE_DIR: join(store.workspaceRoot!, "state"), OUTLINER_WORKSPACE_ROOT: store.workspaceRoot! };
+  const resolve = async (url: string) => {
+    const child = Bun.spawn(["bun", "src/cli.ts", "resolve", url], {
+      cwd: join(import.meta.dir, ".."), env, stdin: "ignore", stdout: "pipe", stderr: "pipe",
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
+    ]);
+    return { stdout, stderr, exitCode };
+  };
+  const blocks = () => store.database.query("SELECT count(*) AS count FROM blocks").get() as { count: number };
+
+  expect(JSON.parse((await resolve("pi-outliner://page/HUB-001")).stdout).id).toBe(ticket.id);
+  expect(JSON.parse((await resolve("pi-outliner://page/Daily%20notes")).stdout)).toEqual({ id: page.id, title: "Daily notes" });
+  expect(JSON.parse((await resolve(`pi-outliner://block/${other.id}`)).stdout).id).toBe(other.id);
+
+  const before = blocks().count;
+  const missing = await resolve("pi-outliner://page/Never%20written");
+  expect(missing.exitCode).not.toBe(0);
+  expect(missing.stderr).toContain("Page address did not resolve: Never written");
+  expect(blocks().count).toBe(before);
+});
