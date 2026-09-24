@@ -4,7 +4,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {OutlinerStore} from '../src/store';
 import {InboxRepository} from '../src/inbox-repository';
-import {captureHistoryResource} from '../src/capture-history';
+import {captureHistoryResource,captureOriginalResources} from '../src/capture-history';
 import {OutlinerServer} from '../src/server';
 import {OutlinerClient} from '../src/client';
 import {TUI_RESOURCE_PRESENTATION_CONTEXT} from '../src/resource-presentation';
@@ -127,4 +127,25 @@ test('legacy split and later merge recover the raw source through saved output l
  repository.apply('new-merge',incoming,plan({updates:[{blockId:target.id,expectedRevision:target.revision,text:'Combined useful result'}]}));
  const originals=await Promise.all(refs(store.require(target.id)).map(id=>original(store,id)));
  expect(originals).toEqual([source.text,incoming.text]);
+});
+
+test('branching legacy lineage reports incomplete evidence before reaching the depth limit',async()=>{
+ const {store}=fixture();new InboxRepository(store);
+ let previous=[store.create('First original'),store.create('Second original')];
+ // Each historical split and merge shares both older ancestors. Eight levels
+ // remain below the depth limit but exceed the total receipt inspection budget.
+ for(let level=1;level<=8;level++){
+  const next=[store.create(`Left ${level}`),store.create(`Right ${level}`)];
+  for(const [index,source] of previous.entries()){
+   store.database.query('INSERT INTO inbox_agent_results (id,source_id,payload_hash,result_json,recovery_json,created_at) VALUES (?,?,?,?,?,?)')
+    .run(`legacy-${level}-${index}`,source.id,'fixture',JSON.stringify({state:'applied',outputIds:next.map(block=>block.id)}),
+     JSON.stringify({before:[source,...next],createdIds:index===0?next.map(block=>block.id):[]}),String(level));
+  }
+  previous=next;
+ }
+ const originals=captureOriginalResources(store.database,store.resources,previous[0]!,'current');
+ const descriptions=await Promise.all(originals.map(async id=>{await original(store,id);return store.resources.describe(id,true);}));
+ expect(descriptions.some(description=>description.computedFailure?.code==='lineage-limit')).toBe(true);
+ expect(descriptions.find(description=>description.computedFailure?.code==='lineage-limit')?.computedFailure?.message).toContain('not fully identified');
+ expect(store.require(previous[0]!.id).text).toBe('Left 8');
 });
