@@ -2,6 +2,7 @@ import type { EngineInterface, On, PluginOptions } from 'claude-code'
 
 import {
   effectiveWorkspaces,
+  failureReasonOf,
   isIngestible,
   type MentionMessage,
   mentionMessageOf,
@@ -135,7 +136,7 @@ async function deliver($: EngineInterface, message: MentionMessage): Promise<voi
     },
   )
   if (ingested.exitCode !== 0) {
-    const reason = ingested.stderr.trim().split('\n').at(-1) ?? ''
+    const reason = failureReasonOf(ingested.stderr)
     throw Error(`mentions ingest failed${reason ? `: ${reason}` : ''}`)
   }
 }
@@ -199,7 +200,7 @@ async function openReference($: EngineInterface, workspace: string, href: string
       outliner(['clients']),
       $.process.run(['herdr', 'pane', 'list', '--workspace', herdrWorkspace], { timeoutMs: 5000 }),
     ])
-    if (listedClients.exitCode !== 0) throw Error(lastLine(listedClients.stderr) || 'the Outliner service did not answer')
+    if (listedClients.exitCode !== 0) throw Error(failureReasonOf(listedClients.stderr) || 'the Outliner service did not answer')
     if (listedPanes.exitCode !== 0) throw Error('Herdr could not list panes')
     const registered: unknown = JSON.parse(listedClients.stdout)
     const clients: OutlinerClient[] = (Array.isArray(registered) ? registered : (registered as { clients?: unknown[] })?.clients ?? [])
@@ -217,13 +218,9 @@ async function openReference($: EngineInterface, workspace: string, href: string
       'link', uri, '--source-client', destination.clientId,
       ...(destination.role === 'composed' ? ['--source-region', 'tree'] : []),
     ])
-    if (navigated.exitCode !== 0) throw Error(lastLine(navigated.stderr) || 'navigation failed')
+    if (navigated.exitCode !== 0) throw Error(failureReasonOf(navigated.stderr) || 'navigation failed')
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error)
     $.ui.toast(`Could not open ${target} in the Outliner: ${reason}`, { timeoutMs: 6000 })
   }
-}
-
-function lastLine(text: string): string {
-  return text.trim().split('\n').at(-1) ?? ''
 }

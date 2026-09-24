@@ -1,6 +1,6 @@
 import { describe, expect, test, tier } from 'claude-code/testing'
 
-import { effectiveWorkspaces, workspacesOf } from '../hooks/mention-message'
+import { effectiveWorkspaces, failureReasonOf, workspacesOf } from '../hooks/mention-message'
 
 tier('user')
 
@@ -10,6 +10,22 @@ describe('mention-message', () => {
     expect(workspacesOf(['/a', 3, 'x'])).toEqual(['/a'])
     expect(workspacesOf('')).toEqual([])
     expect(workspacesOf('/')).toEqual(['/'])
+  })
+
+  test('a CLI failure reports its error line, not the Bun trailer', async () => {
+    const stderr = [
+      '187 |         const response = JSON.parse(buffer.slice(0, newline)) as OutlinerResponse;',
+      '188 |         if (!response.ok) responseReceived.reject(new Error(response.error));',
+      '                                                            ^',
+      'error: Destination is protected: active edit or source selection · finish or cancel it there',
+      '      at data (node:net:281:72)',
+      '',
+      'Bun v1.3.14 (Linux x64)',
+      '',
+    ].join('\n')
+    expect(failureReasonOf(stderr)).toBe('Destination is protected: active edit or source selection · finish or cancel it there')
+    expect(failureReasonOf('plain failure\n    at x (y:1:2)\nBun v1.3.14 (Linux x64)')).toBe('plain failure')
+    expect(failureReasonOf('')).toBe('')
   })
 
   test('a configured option wins; an empty or unset one falls back to the environment', async () => {

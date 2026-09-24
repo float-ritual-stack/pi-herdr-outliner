@@ -174,7 +174,7 @@ describe('register', () => {
 
     expect(text).toBe(ANSWER.answer)
     expect(session.toasts).toEqual([
-      'Outliner recent mentions unavailable: mentions ingest failed: error: connect ENOENT outliner.sock',
+      'Outliner recent mentions unavailable: mentions ingest failed: connect ENOENT outliner.sock',
     ])
   })
 

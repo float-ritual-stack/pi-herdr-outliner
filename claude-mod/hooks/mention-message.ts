@@ -38,6 +38,19 @@ export function effectiveWorkspaces(option: unknown, environment: string | undef
 }
 
 /**
+ * The reason in an Outliner CLI failure's stderr: Bun prints the thrown
+ * error's source excerpt, then `error: <message>`, its stack and a `Bun v…`
+ * trailer, so the last line never says why. Falls back to the last line that
+ * is not stack or trailer; '' when nothing is left.
+ */
+export function failureReasonOf(stderr: string): string {
+  const lines = stderr.split('\n').map(line => line.trim()).filter(Boolean)
+  const error = lines.findLast(line => line.startsWith('error: '))
+  if (error) return error.slice('error: '.length)
+  return lines.findLast(line => !/^at\s|^Bun v\d/.test(line)) ?? ''
+}
+
+/**
  * Which completed turns reach Recent Mentions: the main loop's own answers,
  * never a subagent's run, an interruption, a refusal or an error.
  */
