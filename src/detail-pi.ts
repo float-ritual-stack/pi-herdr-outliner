@@ -1048,11 +1048,11 @@ class FuzzyActionMenu implements Component {
 let recoveryReview: EditRecoveryReview | null = null;
 let recoveryInputDecoder = new EditRecoveryInput();
 function showRecoveryReview(records:EditRecovery[]):Promise<RecoveryChoice> {
-  recoveryInputDecoder=new EditRecoveryInput();
+  recoveryInputDecoder.dispose();recoveryInputDecoder=new EditRecoveryInput();
   closeActionMenu();
   return new Promise(resolve=>{
     recoveryReview = new EditRecoveryReview(records,editRecovery,()=>tui.requestRender(),choice=>{
-      recoveryReview=null;closeActionMenu();tui.requestRender();resolve(choice);
+      recoveryInputDecoder.dispose();recoveryReview=null;closeActionMenu();tui.requestRender();resolve(choice);
     },editRecovery.warnings);
     actionMenuHandle=tui.showOverlay({
       render:width=>recoveryReview?.render(width,Math.max(8,processTerminal.rows))??[],
@@ -1663,7 +1663,7 @@ tui.addOutlinerInputListener(data => {
     const wheel=parseTreeWheelEvent(data);
     if(wheel){recoveryReview.key("",{name:wheel.direction==="up"?"up":"down"});return {consume:true};}
     if(isTreeMouseSequence(data))return;
-    for(const decoded of recoveryInputDecoder.push(data))recoveryReview?.key(decoded.str,decoded.key);
+    recoveryInputDecoder.accept(data,decoded=>recoveryReview?.key(decoded.str,decoded.key));
     return {consume:true};
   }
 

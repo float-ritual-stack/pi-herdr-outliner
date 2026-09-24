@@ -10,3 +10,14 @@ test("review ignores Kitty releases and commands inside fragmented bracketed pas
   expect(input.push("~")).toEqual([]);
   expect(input.push("\r")[0]?.key.name).toBe("return");
 });
+
+test("bare Escape flushes while fragmented paste remains inert",async()=>{
+  const input=new EditRecoveryInput(),keys:string[]=[];
+  const emit=(value:{key:{name?:string}})=>keys.push(value.key.name??"");
+  input.accept("\x1b",emit);
+  await Bun.sleep(60);expect(keys).toEqual(["escape"]);
+  input.accept("\x1b[20",emit);input.accept("0~\r",emit);
+  await Bun.sleep(60);expect(keys).toEqual(["escape"]);
+  input.accept("\x1b[201~",emit);input.accept("\t",emit);
+  expect(keys).toEqual(["escape","tab"]);input.dispose();
+});

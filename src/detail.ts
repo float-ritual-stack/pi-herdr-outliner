@@ -519,9 +519,9 @@ const effects: DetailEffects = {
 let recoveryReview:EditRecoveryReview|null=null;
 let recoveryInputDecoder = new EditRecoveryInput();
 function showRecoveryReview(records:EditRecovery[]):Promise<RecoveryChoice> {
-  recoveryInputDecoder=new EditRecoveryInput();
+  recoveryInputDecoder.dispose();recoveryInputDecoder=new EditRecoveryInput();
   return new Promise(resolve=>{
-    recoveryReview=new EditRecoveryReview(records,editRecovery,draw,choice=>{recoveryReview=null;draw();resolve(choice);},editRecovery.warnings);
+    recoveryReview=new EditRecoveryReview(records,editRecovery,draw,choice=>{recoveryInputDecoder.dispose();recoveryReview=null;draw();resolve(choice);},editRecovery.warnings);
     draw();
   });
 }
@@ -754,7 +754,7 @@ try {
 const keyInput = new PassThrough();
 emitKeypressEvents(keyInput);
 process.stdin.on("data", (data: string | Buffer) => {
-  if(recoveryReview){for(const decoded of recoveryInputDecoder.push(typeof data==="string"?data:data.toString()))recoveryReview?.key(decoded.str,decoded.key);return;}
+  if(recoveryReview){recoveryInputDecoder.accept(typeof data==="string"?data:data.toString(),decoded=>recoveryReview?.key(decoded.str,decoded.key));return;}
   if (!keyInspector.handle(data)) keyInput.write(data);
 });
 if (process.stdin.isTTY) process.stdin.setRawMode(true);
