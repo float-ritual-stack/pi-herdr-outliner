@@ -734,6 +734,7 @@ const controller = createDetailController(
       : "inline",
     destinationTimeoutMs,
     readerLabel: "linked Detail",
+    previewHere: target => readingSurface.previewHere(target, viewport()),
     initialTarget,
     actionKeymap,
   },
@@ -749,7 +750,7 @@ const inspection = createDetailController({
   setCurrentTarget: async previewTarget => { await client.request({action: "clients.update", clientId, previewTarget}); },
   setNavigationProtection: async () => {},
   isSourceSelectionActive: () => false,
-}, () => synchronizeLayout?.(), {readerLabel: "linked Detail", actionKeymap, openHere: target => readingSurface.openHere(target, viewport())});
+}, () => synchronizeLayout?.(), {readerLabel: "linked Detail", actionKeymap, previewHere: target => readingSurface.previewHere(target, viewport()), openHere: target => readingSurface.openHere(target, viewport())});
 const readingSurface = new DetailReadingSurface(controller, inspection, () => synchronizeLayout?.(), async () => {
   await client.request({action: "clients.update", clientId, previewTarget: null});
 }, () => effects.isSourceSelectionActive?.() ?? false);

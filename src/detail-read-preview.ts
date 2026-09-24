@@ -20,6 +20,6 @@ export async function loadDetailReadPreview(
   const projectedText = clip(projection.text);
   const resolved = await client.request<ResolvedBlockReferences>({ action: "references.resolve", text: projectedText });
   const resolvedText = clip(resolved.text);
-  return { canonicalText, resolvedText, projectedText, truncated,
+  return { sourceBlock:{id:block.id,revision:block.revision,text:canonicalText}, canonicalText, resolvedText, projectedText, truncated,
     embedRanges: projection.embedRanges, workIdPrefix: resolved.workIdPrefix ?? null };
 }

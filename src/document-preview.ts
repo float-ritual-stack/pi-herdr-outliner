@@ -3,7 +3,8 @@ import type {OutlinerRequester} from './client-target';
 import {loadDetailReadPreview} from './detail-read-preview';
 import type {DetailReadPreviewDocument} from './detail-pi-preview';
 import {blockDisplayTitle} from './references';
-import {parseOutlinerLinkUri} from './outliner-links';
+import {parseOutlinerLinkUri,followResourceOccurrence} from './outliner-links';
+import {isAuthoredFileOccurrence} from './resource-references';
 import {resolveFragmentSlice} from './fragments';
 import type {TerminalKey} from './terminal';
 import type {Block, PageAddressResolution, OutlinerNavigationTarget} from './types';
@@ -100,6 +101,12 @@ export class DocumentPreview {
     let target:OutlinerNavigationTarget;
     if(link.kind==='block')target={kind:'block',blockId:link.value,...link.fragmentId?{fragmentId:link.fragmentId}:{}};
     else if(link.kind==='resource')target={kind:'resource',resourceId:link.value};
+    else if(link.kind==='reference'&&link.occurrence&&this.value.target.kind==='block'&&link.value===this.value.target.blockId&&
+      isAuthoredFileOccurrence(this.value.document.canonicalText,link.occurrence.start,link.occurrence.end)){
+      const receipt=await followResourceOccurrence(this.client,link);
+      if(generation!==this.generation)return;
+      target={kind:'resource',resourceId:receipt.resource.id,referenceContext:receipt.referenceContext};
+    }
     else if(link.kind==='page'||link.kind==='work'){
       const resolved=await this.client.request<PageAddressResolution>({action:'pages.resolve',address:link.value});
       if(generation!==this.generation)return;
@@ -152,7 +159,7 @@ export class DocumentPreview {
         if(target.fragmentId){
           const fragment=resolveFragmentSlice(block.text,target.fragmentId);
           if(fragment.status!=='resolved')throw Error(`Fragment ${fragment.status}: ${target.fragmentId}`);
-          document=await loadDetailReadPreview(this.client,{...block,text:fragment.slice.text});
+          document={...await loadDetailReadPreview(this.client,{...block,text:fragment.slice.text}),sourceBlock:undefined};
         }else document = await loadDetailReadPreview(this.client,block);
       } else {
         if (!this.clientId) throw new Error('Resource preview requires a registered reader');

@@ -68,6 +68,12 @@ export class DetailReadingSurface {
     this.invalidate();
   }
 
+  async previewHere(target:OutlinerNavigationTarget,viewport:DetailViewport):Promise<void> {
+    this.previewVisible=true;this.focused="preview";
+    await this.preview.handleUiCommand({command:"preview",targetClientId:"local-preview",target},viewport);
+    this.invalidate();
+  }
+
   async receive(command: OutlinerUiCommand, viewport: DetailViewport): Promise<void> {
     if (command.command === "preview") {
       this.previewVisible = true;

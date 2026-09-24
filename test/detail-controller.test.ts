@@ -1,3 +1,4 @@
+import type {OutlinerNavigationTarget} from "../src/types";
 import { DetailReadingSurface } from "../src/detail-reading-surface";
 import { CURSOR_MARKER, stripTerminalSequences } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "bun:test";
@@ -5619,4 +5620,33 @@ test("activating a focused document body link uses canonical destination routing
  await h.controller.handleDestinationChooserKeypress('r',{name:'r'});
  expect(h.calls.followedReferences).toContainEqual({kind:'block',value:target});
  expect(h.calls.updates).toEqual([]);
+});
+
+for(const editing of [false,true])test(`authored file activation previews locally and retains ${editing?'an unsaved draft':'Current note'}`,async()=>{
+ const source=makeBlock({id:'file-note',updatedAt:'2026-09-23T00:00:00.000Z',text:'Daily project note\n\n[file::same.md]'});
+ const previewed:OutlinerNavigationTarget[]=[];
+ const h=createHarness(source,null,undefined,undefined,{previewHere:async target=>{previewed.push(target);}});
+ await h.controller.initialize();
+ if(editing){await h.controller.dispatch({type:'edit.begin'},viewport);h.controller.state.buffer.replaceText(source.text+'\nUnsaved thoughts');}
+ const before=h.controller.state.buffer.text;
+ const start=source.text.indexOf('[file::'),end=start+'[file::same.md]'.length;
+ await h.controller.dispatch({type:'reference.open',target:{kind:'reference',value:source.id,occurrence:{revision:source.revision,start,end}},routing:'linked'},viewport);
+ expect(previewed).toHaveLength(1);expect(previewed[0]?.kind).toBe('resource');
+ expect(h.controller.state.context.selected?.id).toBe(source.id);expect(h.controller.state.buffer.text).toBe(before);
+ expect(h.calls.navigationDispatches).toEqual([]);expect(h.calls.followedReferences).toHaveLength(1);
+ expect(h.controller.state.destinationChooser.active).toBe(false);
+});
+
+test('an older authored file resolution cannot replace the newer Preview intent',async()=>{
+ const source=makeBlock({id:'file-note',updatedAt:'2026-09-23T00:00:00.000Z',text:'Daily note\n\n[file::first.md] [file::second.md]'}),previewed:OutlinerNavigationTarget[]=[];
+ const h=createHarness(source,null,undefined,undefined,{previewHere:async target=>{previewed.push(target);}});
+ await h.controller.initialize();
+ const follow=h.effects.followResourceOccurrence,slow=Promise.withResolvers<Awaited<ReturnType<typeof follow>>>();
+ let count=0;h.effects.followResourceOccurrence=async target=>++count===1?slow.promise:follow(target);
+ const target=(file:string)=>{const token=`[file::${file}]`,start=source.text.indexOf(token);return {kind:'reference' as const,value:source.id,occurrence:{revision:source.revision,start,end:start+token.length}};};
+ const first=h.controller.dispatch({type:'reference.open',target:target('first.md'),routing:'linked'},viewport);
+ await h.controller.dispatch({type:'reference.open',target:target('second.md'),routing:'linked'},viewport);
+ slow.resolve(await follow(target('first.md')));await first;
+ expect(previewed).toHaveLength(1);
+ expect(previewed[0]?.kind==='resource'&&previewed[0].referenceContext?.anchor.kind==='text-quote'&&previewed[0].referenceContext.anchor.exact).toContain('second.md');
 });

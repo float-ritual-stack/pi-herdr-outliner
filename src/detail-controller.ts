@@ -76,7 +76,7 @@ import {
 import { isTextualMediaType } from "./resource-presentation";
 import { isVirtualBranchDefinition } from "./virtual-branches";
 import { blockDisplayTitle } from "./references";
-import { authoredResourceReferenceOccurrences } from "./resource-references";
+import { authoredResourceReferenceOccurrences, isAuthoredFileOccurrence } from "./resource-references";
 import {
   RESOURCE_CAPABILITIES,
   RESOURCE_CAPABILITY_FACTORS,
@@ -212,6 +212,7 @@ export interface DetailPropertyInspectorState {
 
 export interface DetailControllerOptions {
   openHere?(target: OutlinerNavigationTarget): Promise<boolean>;
+  previewHere?(target: OutlinerNavigationTarget): Promise<void>;
   propertyInspectorPresentation?: DetailPropertyInspectorPresentation;
   destinationTimeoutMs?: number;
   readerLabel?: string;
@@ -3456,6 +3457,17 @@ export function createDetailController(
             (intent.type === "reference.open" && intent.target.intent === "reveal")
             ? "reveal"
             : "open";
+        const selected=state.context.selected;
+        if(navigationIntent==="open"&&options.previewHere&&reference.kind==="reference"&&reference.occurrence&&selected&&
+          reference.value===selected.id&&reference.occurrence.revision===selected.revision&&
+          isAuthoredFileOccurrence(selected.text,reference.occurrence.start,reference.occurrence.end)){
+          const documentGeneration=loadGeneration;
+          const receipt=await effects.followResourceOccurrence(reference);
+          if(documentGeneration!==loadGeneration||requestGeneration!==openGeneration)break;
+          await options.previewHere({kind:"resource",resourceId:receipt.resource.id,referenceContext:receipt.referenceContext});
+          state.status="File opened in Preview · Current note retained";
+          break;
+        }
         if (navigationIntent === "open" && isBufferMode()) {
           state.status = "Finish or cancel the active edit before opening another target";
           break;

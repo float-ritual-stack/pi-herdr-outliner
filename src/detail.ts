@@ -617,6 +617,7 @@ const controller = createDetailController(
       ? "dedicated"
       : "inline",
     destinationTimeoutMs,
+    previewHere: target => readingSurface.previewHere(target, viewport(controller)),
     initialTarget,
     actionKeymap,
   },
@@ -632,7 +633,7 @@ const inspection = createDetailController({
   setCurrentTarget: async previewTarget => { await client.request({action: "clients.update", clientId, previewTarget}); },
   setNavigationProtection: async () => {},
   isSourceSelectionActive: () => false,
-}, draw, {actionKeymap, openHere: target => readingSurface.openHere(target, viewport(controller))});
+}, draw, {actionKeymap, previewHere: target => readingSurface.previewHere(target, viewport(controller)), openHere: target => readingSurface.openHere(target, viewport(controller))});
 const readingSurface = new DetailReadingSurface(controller, inspection, draw, async () => {
   await client.request({action: "clients.update", clientId, previewTarget: null});
 });

@@ -597,7 +597,12 @@ Pi Detail links the authored `[file::…]`, `[web::…]`, `[jira::…]`, and `[a
 tokens without changing source text. Properties exposes every occurrence,
 including repeated mentions of one Resource, in both Detail renderers. Press
 `o` on a document with several Resource references to choose one in Properties;
-`Tab` selects an occurrence and `o` opens the destination chooser. Displaying or
+`Tab` selects an occurrence. Activating a `[file::…]` occurrence opens the file
+in local Preview beside Current, retaining the note, scroll and draft; Escape
+closes Preview. Paths resolve on the service host within its configured Resource
+policy, including when the reader is remote. Recognized outline links in rendered
+Markdown use the existing link navigation. Other Resource kinds retain their
+destination chooser. Displaying or
 copying a reference never creates a Resource. Activation verifies the source
 revision and span before using the service's existing follow/create operation.
 After a source edit, stale links require reopening the block.

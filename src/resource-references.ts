@@ -181,3 +181,9 @@ export function authoredResourceReferenceOccurrences(
   }
   return occurrences;
 }
+
+
+/** Only a precise, authored file occurrence qualifies for automatic local Preview. */
+export function isAuthoredFileOccurrence(text:string,start:number,end:number):boolean {
+  return authoredResourceReferenceOccurrences(text).some(occurrence=>occurrence.kind==="authored-resource"&&occurrence.reference.kind==="filesystem"&&occurrence.start===start&&occurrence.end===end);
+}

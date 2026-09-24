@@ -1,3 +1,4 @@
+import type {Block} from "./types";
 import {authoredResourceReferenceOccurrences} from "./resource-references";
 import type {RenderedLink} from './rendered-links';
 import { displayedResourceText, detailAnnotationGroups, sourceLineStarts, sourceLineAt, selectedAnnotationThread, annotationScopeLabel, type DetailAnnotationGroup } from "./detail-annotations";
@@ -68,6 +69,7 @@ export interface DetailDraftProjection {
 }
 
 export interface DetailReadPreviewDocument {
+  sourceBlock?: Pick<Block,"id"|"revision"|"text">;
   preserveMetadata?: boolean;
   truncated?: boolean;
   canonicalText: string;
@@ -506,6 +508,7 @@ export function renderDetailReadPreviewLines(
     projectedText,
     linksEnabled,
     input.workIdPrefix,
+    input.sourceBlock?resourceOccurrenceLinks(input.sourceBlock,projectedText,renderedLineForAuthoredLine):new Map(),
   );
   const callouts = renderedAuthoredCallouts(
     parseDetailCallouts(input.canonicalText, calloutTheme),
@@ -1590,7 +1593,7 @@ export class DetailPiPreviewLayout extends VStack {
       this.renderedEmbedPresentation = embedPresentation;
       this.renderedDraftProjectionError = this.draftProjectionError;
       const document = !selected
-        ? sourceText
+        ? renderPreviewDocument(sourceText, sourceText, true, workIdPrefix)
         : referencesReady
         ? renderPreviewDocument(
             sourceText,
