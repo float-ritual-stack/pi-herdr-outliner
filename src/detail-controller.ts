@@ -455,6 +455,7 @@ export interface DetailState {
   recovery?: EditRecovery;
   recoveryAccepted?: boolean;
   recoveryCount?: number;
+  recoveryNotice?: string;
   document: DetailDocumentState;
   readonly context: SelectionContext;
   readonly target: OutlinerNavigationTarget | null;
@@ -509,7 +510,7 @@ export function detailResourceTarget(
 }
 
 export interface DetailEffects {
-  recovery?: Pick<EditRecoveryClient,"retain"|"list"|"commit"|"separate"> & Partial<Pick<EditRecoveryClient,"checkpoint">>;
+  recovery?: Pick<EditRecoveryClient,"retain"|"list"|"commit"|"separate"> & Partial<Pick<EditRecoveryClient,"checkpoint"|"warnings">>;
   reviewRecovery?(records:EditRecovery[]):Promise<RecoveryChoice>;
   readonly clientId: string;
   readonly browsingContextId: string;
@@ -1444,6 +1445,7 @@ export function createDetailController(
     state.recovery = undefined;
     state.recoveryAccepted = false;
     state.recoveryCount = 0;
+    state.recoveryNotice = undefined;
     state.resolvedSelectedText = "";
     state.projectedSelectedText = "";
     state.readStatus = "pending";
@@ -1945,6 +1947,7 @@ export function createDetailController(
         void effects.recovery.list(selected.id).then(records => effects.enqueueViewUpdate(() => {
           if (!isCurrent()) return;
           state.recoveryCount = records.length;
+          state.recoveryNotice = effects.recovery?.warnings?.join(" · ") || undefined;
           emit();
         })).catch(error => effects.enqueueViewUpdate(() => {
           if (isCurrent()) { state.status = `Could not inspect retained drafts · ${errorMessage(error)}`; emit(); }
@@ -2380,7 +2383,7 @@ export function createDetailController(
         text: state.buffer.text,
         expectedRevision: selected.revision,
       });
-      if (!result.changed) {
+      if (!result.changed && (!result.recoveryInput || result.text === selected.text)) {
         result.cleanup();
         state.status = "$EDITOR returned an unchanged draft";
         return;
@@ -2394,7 +2397,7 @@ export function createDetailController(
           { cause: error },
         );
       }
-      if (!replaced) {
+      if (!replaced && !result.recoveryInput) {
         result.cleanup();
         state.status = "$EDITOR returned an unchanged draft";
         return;
@@ -2439,8 +2442,9 @@ export function createDetailController(
       state.recovery=await effects.recovery.retain(recoveryInput());
       state.recoveryAccepted=false;
     }
-    records ??= await effects.recovery.list(selected.id);
-    if (!records.length) {state.recovery=undefined;state.recoveryCount=0;state.status="No retained drafts for this note";return;}
+    records ??= await effects.recovery.list(selected.id,true);
+    state.recoveryNotice=effects.recovery.warnings?.join(" · ") || undefined;
+    if (!records.length) {state.recovery=undefined;state.recoveryCount=0;state.status=state.recoveryNotice??"No retained drafts or saved recovery history for this note";return;}
     emit();
     const choice=await effects.reviewRecovery(records);
     if(choice.action==="later") {

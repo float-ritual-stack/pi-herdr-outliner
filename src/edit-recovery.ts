@@ -44,7 +44,7 @@ function identifier(value: unknown): asserts value is string {
 }
 function prepared(input: EditRecoveryStart, latest: Block): Pick<EditRecovery,"merge"|"proposal"|"latest"> {
   const merge = mergeEdits(input.baseText,input.draftText,latest.text);
-  return {latest,merge,proposal:merge.incomplete || merge.conflicts.length ? null : {
+  return {latest,merge,proposal:merge.incomplete || merge.conflicts.length || merge.propertyConflicts?.length ? null : {
     text:merge.text,basedOnRevision:latest.revision,source:"mechanical",unresolved:[],
     explanation:latest.revision === input.baseRevision ? "Retained local draft" : "Combined independent edits; review before saving",
   }};
@@ -67,9 +67,9 @@ export class EditRecoveryRepository {
     return JSON.parse(row.payload) as EditRecovery;
   }
 
-  list(blockId: string): EditRecovery[] {
+  list(blockId: string, includeHistory=false): EditRecovery[] {
     identifier(blockId);
-    const rows = this.store.database.query("SELECT payload FROM edit_recovery WHERE block_id=? AND state='retained' ORDER BY updated_at DESC, id").all(blockId) as Array<{payload:string}>;
+    const rows = this.store.database.query(`SELECT payload FROM edit_recovery WHERE block_id=? ${includeHistory?"":"AND state='retained'"} ORDER BY (state='retained') DESC, updated_at DESC, id`).all(blockId) as Array<{payload:string}>;
     return rows.map(row=>JSON.parse(row.payload) as EditRecovery);
   }
 
@@ -89,6 +89,19 @@ export class EditRecoveryRepository {
       this.store.database.query("INSERT INTO edit_recovery VALUES(?,?,?,?,?,?,?)").run(record.id,record.blockId,record.revision,record.state,hash,JSON.stringify(record),now);
       return record;
     })();
+  }
+
+  /** History restoration creates a fresh review; it never writes canonical text. */
+  restore(id:string, requestId:string, version:"draft"|"before-save"):EditRecovery {
+    if(version!=="draft"&&version!=="before-save")throw Error("Unknown recovery version");
+    const previous=this.get(id);
+    if(version==="before-save"&&(previous.state!=="applied"||previous.appliedBlockId!==previous.blockId))throw Error("This recovery did not replace the original note");
+    const draftText=version==="draft"?previous.originalDraft:previous.latest.text;
+    identifier(requestId);
+    const existing=this.store.database.query("SELECT payload FROM edit_recovery WHERE id=?").get(requestId) as {payload:string}|null;
+    if(existing){const record=JSON.parse(existing.payload) as EditRecovery;if(record.blockId!==previous.blockId||record.draftText!==draftText)throw Error("Recovery request ID was already used for different writing");return record;}
+    const latest=this.live(previous.blockId);
+    return this.start({id:requestId,blockId:latest.id,baseText:latest.text,baseRevision:latest.revision,prelaunchText:latest.text,draftText,source:"save-conflict"});
   }
 
   /** Refresh the comparison without replacing the original returned writing. */

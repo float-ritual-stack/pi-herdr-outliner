@@ -28,3 +28,20 @@ test("nonzero editor exit keeps its returned writing discoverable in the same pr
     expect(manifest.returned).toBe(true);
   } finally {rmSync(root,{recursive:true,force:true});}
 });
+
+test("a damaged journal stays visible without blocking other retained drafts",()=>{
+  const root=mkdtempSync(join(tmpdir(),"recovery-journal-"));
+  try {
+    const files=new EditRecoveryFiles(root);
+    const input={id:crypto.randomUUID(),blockId:"note",baseText:"Base",baseRevision:1,prelaunchText:"Before",draftText:"Valuable writing",source:"save-conflict" as const};
+    files.retain(input);
+    const broken=join(root,"editor-drafts",readdirSync(join(root,"editor-drafts"))[0]!);
+    writeFileSync(join(broken,"context.json"),"{partial");
+    files.retain({...input,id:crypto.randomUUID()});
+    const issues:string[]=[];
+    const pending=files.pending("note",message=>issues.push(message));
+    expect(pending).toHaveLength(1);expect(pending[0]?.input.draftText).toBe("Valuable writing");
+    expect(issues[0]).toContain(broken);expect(issues[0]).toContain("Files retained");
+    expect(readFileSync(join(broken,"draft.md"),"utf8")).toBe("Valuable writing");
+  } finally {rmSync(root,{recursive:true,force:true});}
+});

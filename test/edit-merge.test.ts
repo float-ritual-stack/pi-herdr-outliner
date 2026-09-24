@@ -25,3 +25,10 @@ test("deduplicates identical edits and preserves CRLF, deletion and missing fina
 test("same-position insertions cannot silently pick an order", () => {
   expect(mergeEdits("A\n","A\none\n","A\ntwo\n").conflicts).toHaveLength(1);
 });
+
+test("concurrent property edits on separate lines still require review",()=>{
+  const base="Note\n[tag::work]\n\nBody\n";
+  const result=mergeEdits(base,base.replace("Note","Note [type::progress]"),base.replace("[tag::work]","[tag::work] [type::note]"));
+  expect(result.propertyConflicts).toContain("type");
+  expect(result.text).toBe(base.replace("Note","Note [type::progress]"));
+});

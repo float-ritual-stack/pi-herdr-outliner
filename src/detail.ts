@@ -1,3 +1,4 @@
+import {EditRecoveryInput} from "./edit-recovery-input";
 import {EditRecoveryClient} from "./edit-recovery-client";
 import {EditRecoveryReview,type RecoveryChoice} from "./edit-recovery-review";
 import type {EditRecovery} from "./edit-recovery";
@@ -516,9 +517,11 @@ const effects: DetailEffects = {
 };
 
 let recoveryReview:EditRecoveryReview|null=null;
+let recoveryInputDecoder = new EditRecoveryInput();
 function showRecoveryReview(records:EditRecovery[]):Promise<RecoveryChoice> {
+  recoveryInputDecoder=new EditRecoveryInput();
   return new Promise(resolve=>{
-    recoveryReview=new EditRecoveryReview(records,editRecovery,draw,choice=>{recoveryReview=null;draw();resolve(choice);});
+    recoveryReview=new EditRecoveryReview(records,editRecovery,draw,choice=>{recoveryReview=null;draw();resolve(choice);},editRecovery.warnings);
     draw();
   });
 }
@@ -751,6 +754,7 @@ try {
 const keyInput = new PassThrough();
 emitKeypressEvents(keyInput);
 process.stdin.on("data", (data: string | Buffer) => {
+  if(recoveryReview){for(const decoded of recoveryInputDecoder.push(typeof data==="string"?data:data.toString()))recoveryReview?.key(decoded.str,decoded.key);return;}
   if (!keyInspector.handle(data)) keyInput.write(data);
 });
 if (process.stdin.isTTY) process.stdin.setRawMode(true);
@@ -763,7 +767,7 @@ process.on("SIGTERM", stop);
 process.on("SIGHUP", stop);
 
 async function handleInput(str: string, key: TerminalKey): Promise<void> {
-  if(recoveryReview){recoveryReview.key(str,key);return;}
+  if(recoveryReview)return;
   const inputAction = inputDecoder.consume(str, key);
   if (actionMenu && inputAction !== "suppress") {
     const menu = actionMenu;
@@ -814,7 +818,7 @@ async function handleInput(str: string, key: TerminalKey): Promise<void> {
 }
 
 keyInput.on("keypress", (str: string, key: TerminalKey) => {
-  if (recoveryReview) {recoveryReview.key(str,key);return;}
+  if (recoveryReview) {inputDecoder.consume(str,key);pendingPaste=null;return;}
   if (keyInspector.active) return;
   if (destinationPicker) { void handleDestinationInput(str, key).catch(error => controller.onServiceError(error)); return; }
   serviceEventScheduler.scheduleWork(() => handleInput(str, key));

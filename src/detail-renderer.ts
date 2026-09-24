@@ -230,7 +230,7 @@ export function renderDetailHeader(
   const attention = attentionBanner(state.attention, detailBlockTarget(state)?.blockId ?? null, width);
   return [
     alignHeaderControls(left, renderHeaderControls(), width),
-    (state.recoveryCount ?? 0) > 0 ? outlinerActionLink("detail.edit.recover",`Recover writing · ${state.recoveryCount} retained draft${state.recoveryCount===1?"":"s"} · Alt+R`) : attention ?? renderDetailMetadata(state, width, options),
+    state.recoveryNotice ? fitToWidth(outlinerActionLink("detail.edit.recover",`Recovery needs attention · ${state.recoveryNotice}`),width) : (state.recoveryCount ?? 0) > 0 ? fitToWidth(outlinerActionLink("detail.edit.recover",`Recover writing · ${state.recoveryCount} retained draft${state.recoveryCount===1?"":"s"} · Alt+R`),width) : attention ?? renderDetailMetadata(state, width, options),
     options.destinationLabel === undefined ? `\x1b[2m${"─".repeat(width)}\x1b[0m`
       : outlinerActionLink("detail.navigation.link", alignHeaderControls(`Opens in: ${fitDynamicText(options.destinationLabel, width)}`, "/ Change", width)),
   ];

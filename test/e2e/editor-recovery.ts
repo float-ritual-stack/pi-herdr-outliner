@@ -31,4 +31,34 @@ const result=await runHerdrScenario({name:`editor-recovery-${composed?"composed"
   await s.waitFor("both writers survive",()=>s.client.request<Block>({action:"get",blockId:base.id}),b=>b.text.includes("[type::note]")&&b.text.includes("Long returned writing 日本語"));
   await s.checkpoint("03-reviewed-merged-save");
   assert.equal((await s.client.request<EditRecovery[]>({action:"edit-recovery.list",blockId:base.id})).length,0);
+  await s.keys(s.panes.detail,"alt+r");await s.waitVisible(s.panes.detail,"Undo save");
+  await s.keys(s.panes.detail,"tab","tab","enter");
+  await s.waitVisible(s.panes.detail,"Current note unchanged");
+  const undo=await s.client.request<EditRecovery[]>({action:"edit-recovery.list",blockId:base.id});
+  assert.equal(undo[0]!.draftText,latest.text);
+  await s.checkpoint("03b-history-undo-review");
+  await s.keys(s.panes.detail,"escape");
+  assert.ok((await s.client.request<Block>({action:"get",blockId:base.id})).text.includes("Long returned writing 日本語"));
+  // A normal Detail draft collides on the same passage. A newly launched client
+  // must discover that retained writing without the original client's memory.
+  await s.keys(s.panes.detail,"e");await s.text(s.panes.detail," LOCAL ENDING");
+  const before=await s.client.request<Block>({action:"get",blockId:base.id});
+  const newer=await s.client.request<Block>({action:"update",blockId:base.id,text:before.text.replace("preserved.","LATEST ENDING"),expectedRevision:before.revision,mutation:{author:"agent",actorId:"other-writer"}});
+  await s.keys(s.panes.detail,"ctrl+s");await s.waitVisible(s.panes.detail,"Save did not apply");
+  assert.equal((await s.client.request<Block>({action:"get",blockId:base.id})).text,newer.text);
+  const retained=await s.client.request<EditRecovery[]>({action:"edit-recovery.list",blockId:base.id});
+  assert.ok(retained[0]!.draftText.includes("LOCAL ENDING"));assert.equal(retained[0]!.proposal,null);
+  await s.keys(s.panes.detail,"escape");
+  const reopened=await s.openRemoteBrowsingContext({name:"recovery-reopen",renderer:ansi?"ansi":"pi-tui"});
+  await s.revealTree(reopened.tree,base.id);await s.keys(reopened.tree,"enter");await s.waitVisible(reopened.detail,"Recover writing");
+  await s.focus(reopened.detail);await s.keys(reopened.detail,"alt+r");await s.waitVisible(reopened.detail,"Recoverable writing");
+  await s.keys(reopened.detail,"2");await s.waitVisible(reopened.detail,"LOCAL ENDING");
+  await s.keys(reopened.detail,"6");await s.waitVisible(reopened.detail,"other-writer");
+  await s.checkpoint("04-new-client-recovers-conflict");
+  await terminal.resize(120,42);
+  await s.keys(reopened.detail,"3");await s.waitVisible(reopened.detail,"LATEST ENDING");
+  await s.keys(reopened.detail,"escape");
+  await s.closeDetached(reopened.detail);await s.closeDetached(reopened.tree);
+  assert.equal((await s.client.request<Block>({action:"get",blockId:base.id})).text,newer.text);
+  await s.checkpoint("05-cancel-reopen-keeps-writing");
 }});console.log(JSON.stringify(result));if(result.status!=="passed")process.exitCode=1;

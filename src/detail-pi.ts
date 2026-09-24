@@ -1,3 +1,4 @@
+import {EditRecoveryInput} from "./edit-recovery-input";
 import {EditRecoveryClient} from "./edit-recovery-client";
 import {EditRecoveryReview,type RecoveryChoice} from "./edit-recovery-review";
 import type {EditRecovery} from "./edit-recovery";
@@ -58,7 +59,6 @@ import { detailCalloutThemeFromEnvironment } from "./detail-callout-theme";
 import { projectDetailRead } from "./detail-embeds";
 import { createDetailKeyHandler, detailActionScopes } from "./detail-keymap";
 import {
-  decodePiDetailInput,
   createPiDetailInputListener,
   detailChooserOwnsPiInput,
   piDetailChooserInput,
@@ -1046,12 +1046,14 @@ class FuzzyActionMenu implements Component {
 }
 
 let recoveryReview: EditRecoveryReview | null = null;
+let recoveryInputDecoder = new EditRecoveryInput();
 function showRecoveryReview(records:EditRecovery[]):Promise<RecoveryChoice> {
+  recoveryInputDecoder=new EditRecoveryInput();
   closeActionMenu();
   return new Promise(resolve=>{
     recoveryReview = new EditRecoveryReview(records,editRecovery,()=>tui.requestRender(),choice=>{
       recoveryReview=null;closeActionMenu();tui.requestRender();resolve(choice);
-    });
+    },editRecovery.warnings);
     actionMenuHandle=tui.showOverlay({
       render:width=>recoveryReview?.render(width,Math.max(8,processTerminal.rows))??[],
       invalidate() {},
@@ -1661,8 +1663,8 @@ tui.addOutlinerInputListener(data => {
     const wheel=parseTreeWheelEvent(data);
     if(wheel){recoveryReview.key("",{name:wheel.direction==="up"?"up":"down"});return {consume:true};}
     if(isTreeMouseSequence(data))return;
-    const decoded=piDetailChooserInput(decodePiDetailInput(data));
-    recoveryReview.key(decoded.str,decoded.key);return {consume:true};
+    for(const decoded of recoveryInputDecoder.push(data))recoveryReview?.key(decoded.str,decoded.key);
+    return {consume:true};
   }
 
   // Inspect delivered bytes before focus routing, native overlays, or our decoders.

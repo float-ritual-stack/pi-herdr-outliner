@@ -58,3 +58,21 @@ test("request retries are payload-bound and a second recovery view cannot discar
   repository.refresh(record.id,record.revision);
   expect(()=>repository.discard(record.id,record.revision)).toThrow("another view");
 });
+
+test("saved history can restore original writing or undo a save without overwriting later edits",()=>{
+  const{store,repository}=fixture(),base=store.create("Base");
+  const record=repository.start({id:crypto.randomUUID(),blockId:base.id,baseText:base.text,baseRevision:base.revision,prelaunchText:"Prelaunch",draftText:"Original draft",source:"external-editor"});
+  const saved=repository.commit(record.id,record.revision,"Reviewed merge",base.revision,mutation);
+  const newer=store.update(base.id,"Later writing",saved.revision,mutation);
+  expect(repository.list(base.id,true)[0]?.state).toBe("applied");
+  const requestId=crypto.randomUUID();
+  const undo=repository.restore(record.id,requestId,"before-save");
+  expect(undo.draftText).toBe("Base");expect(undo.latest.revision).toBe(newer.revision);
+  expect(store.get(base.id)?.text).toBe("Later writing");
+  const draft=repository.restore(record.id,crypto.randomUUID(),"draft");
+  expect(draft.draftText).toBe("Original draft");
+  store.update(base.id,"Even later",newer.revision,mutation);
+  expect(repository.restore(record.id,requestId,"before-save")).toEqual(undo);
+  expect(()=>repository.commit(undo.id,undo.revision,undo.draftText,undo.latest.revision,mutation)).toThrow();
+  expect(repository.get(record.id).originalDraft).toBe("Original draft");
+});

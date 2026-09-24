@@ -1872,7 +1872,10 @@ export class OutlinerServer {
           result = this.editRecovery.get(request.recoveryId);
           break;
         case "edit-recovery.list":
-          result = this.editRecovery.list(request.blockId);
+          result = this.editRecovery.list(request.blockId,request.includeHistory);
+          break;
+        case "edit-recovery.restore":
+          result = this.editRecovery.restore(request.recoveryId,request.requestId,request.version);
           break;
         case "edit-recovery.refresh":
           result = this.editRecovery.refresh(request.recoveryId,request.expectedRevision);

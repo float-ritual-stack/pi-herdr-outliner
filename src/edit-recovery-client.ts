@@ -5,6 +5,7 @@ import { EditRecoveryFiles } from "./edit-recovery-files";
 
 /** Transfers client-local writing only after the canonical service acknowledges it. */
 export class EditRecoveryClient {
+  warnings:string[]=[];
   readonly files: EditRecoveryFiles;
   constructor(private readonly client: OutlinerClient, stateDirectory: string) {
     this.files = new EditRecoveryFiles(stateDirectory);
@@ -18,12 +19,18 @@ export class EditRecoveryClient {
   checkpoint(input:EditRecoveryStart):void {
     this.files.retain(input);
   }
-  async list(blockId: string): Promise<EditRecovery[]> {
-    for (const pending of this.files.pending(blockId)) {
-      await this.client.request({action:"edit-recovery.start",input:pending.input});
-      pending.cleanup();
+  async list(blockId: string, includeHistory=false): Promise<EditRecovery[]> {
+    this.warnings=[];
+    for (const pending of this.files.pending(blockId,message=>this.warnings.push(message))) {
+      try {
+        await this.client.request({action:"edit-recovery.start",input:pending.input});
+        pending.cleanup();
+      } catch(error) {this.warnings.push(`Draft ${pending.input.id} retained locally: ${error instanceof Error?error.message:String(error)}`);}
     }
-    return this.client.request({action:"edit-recovery.list",blockId});
+    return this.client.request({action:"edit-recovery.list",blockId,includeHistory});
+  }
+  restore(record:EditRecovery,version:"draft"|"before-save"):Promise<EditRecovery> {
+    return this.client.request({action:"edit-recovery.restore",recoveryId:record.id,requestId:crypto.randomUUID(),version});
   }
   refresh(record:EditRecovery):Promise<EditRecovery> {
     return this.client.request({action:"edit-recovery.refresh",recoveryId:record.id,expectedRevision:record.revision});

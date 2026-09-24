@@ -749,3 +749,13 @@ test("renders exact Detail attention with a non-color rail and return summary", 
   expect(selected.text).toBe(original);
   expect(lines.every((line) => visibleWidth(line) <= 48)).toBe(true);
 });
+
+test("recovery headers fit narrow panes without cutting link controls",()=>{
+  for(const width of [20,35,80]){
+    for(const extra of [{recoveryCount:12},{recoveryNotice:"Unreadable recovery: /a/long/path/context.json"}]){
+      const lines=renderDetailHeader(state({...extra,context:{selected:block("Title"),ancestors:[],children:[]}}),width);
+      expect(lines.every(line=>visibleWidth(line)<=width)).toBe(true);
+      expect(getOsc8LinkAtColumn(lines[1]!,0)).toBe("pi-outliner-action:detail.edit.recover");
+    }
+  }
+});

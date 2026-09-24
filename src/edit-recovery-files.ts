@@ -39,14 +39,20 @@ export class EditRecoveryFiles {
     return ()=>rmSync(directory,{recursive:true,force:true});
   }
 
-  pending(blockId:string):Array<{input:EditRecoveryStart;cleanup:()=>void}> {
+  pending(blockId:string,onIssue:(message:string)=>void=()=>{}):Array<{input:EditRecoveryStart;cleanup:()=>void}> {
     let names:string[];
     try { names=readdirSync(this.directory); }
     catch(error){if(error instanceof Error&&"code" in error&&error.code==="ENOENT")return [];throw error;}
     return names.flatMap(name=>{
       if(!/^draft-[a-zA-Z0-9]+$/.test(name))return [];
       const directory=join(this.directory,name);
+      try {
       const journal=JSON.parse(readFileSync(join(directory,"context.json"),"utf8")) as Journal;
+      if(!journal||!journal.input||typeof journal.input.blockId!=="string"||typeof journal.input.id!=="string"||
+        !Number.isSafeInteger(journal.input.baseRevision)||journal.input.baseRevision<1||
+        typeof journal.input.baseText!=="string"||typeof journal.input.prelaunchText!=="string"||
+        !["external-editor","save-conflict"].includes(journal.input.source)||
+        !Number.isSafeInteger(journal.ownerPid)||journal.ownerPid<1||typeof journal.returned!=="boolean")throw Error("Invalid draft journal");
       if(journal.input.blockId!==blockId)return [];
       if(!journal.returned){
         try{process.kill(journal.ownerPid,0);return [];}
@@ -55,6 +61,7 @@ export class EditRecoveryFiles {
       const bytes=readFileSync(join(directory,"draft.md"));
       const draftText=new TextDecoder("utf-8",{fatal:true,ignoreBOM:true}).decode(bytes);
       return [{input:{...journal.input,draftText},cleanup:()=>rmSync(directory,{recursive:true,force:true})}];
+      } catch(error){onIssue(`Unreadable recovery at ${directory}: ${error instanceof Error?error.message:String(error)}. Files retained.`);return [];}
     });
   }
 

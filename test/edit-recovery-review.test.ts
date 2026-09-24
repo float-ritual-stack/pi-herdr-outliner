@@ -22,3 +22,13 @@ test("discard requires confirmation; later returns even at narrow widths",async(
   const view=new EditRecoveryReview([record],{refresh:async r=>r,assist:async r=>r,cancel:async()=>{},discard:async r=>{discarded++;return {...r,state:"discarded"};}},()=>{},c=>choice=c);
   await view.action("discard");expect(discarded).toBe(0);view.render(42,16);view.key("",{name:"escape"});expect(choice?.action).toBe("later");
 });
+
+test("saved history offers restore and undo as new reviews with no immediate save",async()=>{
+  const applied={...record,state:"applied" as const,appliedBlockId:record.blockId};
+  let restored="",finished=false;
+  const view=new EditRecoveryReview([applied],{refresh:async r=>r,assist:async r=>r,cancel:async()=>{},discard:async r=>r,restore:async(_r,version)=>{restored=version;return {...record,id:"new-review"};}},()=>{},()=>{finished=true;});
+  expect(view.render(100,24).join("\n")).toContain("Undo save");
+  await view.action("proposal");expect(finished).toBe(false);
+  await view.action("undo");expect(restored).toBe("before-save");expect(view.record.id).toBe("new-review");expect(finished).toBe(false);
+  expect(view.render(100,24).join("\n")).toContain("Current note unchanged");
+});

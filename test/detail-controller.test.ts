@@ -3403,6 +3403,23 @@ describe("detail controller saves and annotations", () => {
     }finally{store.close();}
   });
 
+  test("unchanged external editor return preserves an existing unsaved Detail draft",async()=>{
+    const {OutlinerStore}=await import("../src/store");
+    const {EditRecoveryRepository}=await import("../src/edit-recovery");
+    const store=new OutlinerStore(":memory:"),repository=new EditRecoveryRepository(store);
+    try {
+      const base=store.create("Canonical"),harness=createHarness(base);
+      harness.effects.recovery={retain:async input=>repository.start(input),list:async(id,history)=>repository.list(id,history),commit:async(record,text)=>repository.commit(record.id,record.revision,text,record.latest.revision,{author:"user",actorId:"detail"}),separate:async record=>repository.separate(record.id,record.revision,{author:"user",actorId:"detail"})};
+      await harness.controller.initialize();await harness.controller.dispatch({type:"edit.begin"},viewport);
+      const draft="Existing unsaved writing";harness.controller.state.buffer.replaceText(draft);
+      let cleaned=false;
+      harness.setExternalEdit(async()=>({text:draft,changed:false,recoveryPath:"draft.md",cleanup(){cleaned=true;},recoveryInput:{id:crypto.randomUUID(),blockId:base.id,baseRevision:base.revision,baseText:base.text,prelaunchText:draft,draftText:draft,source:"external-editor"}}));
+      await harness.controller.dispatch({type:"edit.external"},viewport);
+      expect(repository.list(base.id)[0]?.originalDraft).toBe(draft);expect(cleaned).toBe(true);
+      expect(harness.controller.state.buffer.text).toBe(draft);expect(store.get(base.id)?.text).toBe("Canonical");
+    }finally{store.close();}
+  });
+
   test("ordinary Detail save conflicts retain the draft and require explicit review before retry",async()=>{
     const {OutlinerStore}=await import("../src/store");
     const {EditRecoveryRepository}=await import("../src/edit-recovery");

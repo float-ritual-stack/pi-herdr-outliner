@@ -1,10 +1,12 @@
 import {diffLines} from "diff";
+import {parsePropertyRecords} from "./properties";
 
 export interface EditHunk { start: number; end: number; text: string }
 export interface EditMerge {
   text: string;
   conflicts: Array<{ local: EditHunk; latest: EditHunk }>;
   incomplete: boolean;
+  propertyConflicts?: string[];
 }
 
 function changes(base: string, changed: string): EditHunk[] | null {
@@ -40,6 +42,14 @@ function overlaps(a: EditHunk, b: EditHunk): boolean {
 export function mergeEdits(base: string, local: string, latest: string): EditMerge {
   if (local === latest || latest === base) return {text: local, conflicts: [], incomplete: false};
   if (local === base) return {text: latest, conflicts: [], incomplete: false};
+  const properties=(text:string)=>{
+    const values=new Map<string,string[]>();
+    for(const record of parsePropertyRecords(text))if(record.scope==="block")values.set(record.key,[...(values.get(record.key)??[]),record.value]);
+    return new Map([...values].map(([key,value])=>[key,JSON.stringify(value.sort())]));
+  };
+  const baseProperties=properties(base),localProperties=properties(local),latestProperties=properties(latest);
+  const propertyConflicts=[...new Set([...baseProperties.keys(),...localProperties.keys(),...latestProperties.keys()])].filter(key=>
+    localProperties.get(key)!==baseProperties.get(key)&&latestProperties.get(key)!==baseProperties.get(key)&&localProperties.get(key)!==latestProperties.get(key));
   const ours = changes(base, local), theirs = changes(base, latest);
   if (!ours || !theirs) return {text: local, conflicts: [], incomplete: true};
   const conflicts: EditMerge["conflicts"] = [];
@@ -49,7 +59,7 @@ export function mergeEdits(base: string, local: string, latest: string): EditMer
     for (const h of ours) if (overlaps(h, other)) conflicts.push({local: h, latest: other});
     combined.push(other);
   }
-  if (conflicts.length) return {text: local, conflicts, incomplete: false};
+  if (conflicts.length || propertyConflicts.length) return {text: local, conflicts, ...(propertyConflicts.length?{propertyConflicts}:{}), incomplete: false};
   let text = base;
   for (const h of combined.sort((a,b) => b.start - a.start)) text = text.slice(0,h.start) + h.text + text.slice(h.end);
   return {text, conflicts, incomplete: false};

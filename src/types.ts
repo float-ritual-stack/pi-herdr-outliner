@@ -1485,7 +1485,8 @@ export type OutlinerRequest =
   | { id: string; action: "capture.draft.get" }
   | { id: string; action: "edit-recovery.start"; input: import("./edit-recovery").EditRecoveryStart }
   | { id: string; action: "edit-recovery.get"; recoveryId: string }
-  | { id: string; action: "edit-recovery.list"; blockId: string }
+  | { id: string; action: "edit-recovery.list"; blockId: string; includeHistory?: boolean }
+  | { id: string; action: "edit-recovery.restore"; recoveryId: string; requestId: string; version: "draft"|"before-save" }
   | { id: string; action: "edit-recovery.refresh"; recoveryId: string; expectedRevision: number }
   | { id: string; action: "edit-recovery.propose"; recoveryId: string; expectedRevision: number; proposal: import("./edit-recovery").EditRecoveryProposal }
   | { id: string; action: "edit-recovery.assist"; recoveryId: string; expectedRevision: number }

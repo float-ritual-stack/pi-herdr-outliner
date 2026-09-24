@@ -27,3 +27,22 @@ test("proposal-only Pi session has no editing tools, preserves unresolved choice
     expect(proposal.evidence?.session).toBeDefined();
   } finally {store.close();rmSync(root,{recursive:true,force:true});}
 });
+
+for(const failure of ["deadline","cancel","unavailable"] as const)test(`merge ${failure} preserves writing and reports an explicit failure`,async()=>{
+  const root=mkdtempSync(join(tmpdir(),"merge-model-")),store=new OutlinerStore(join(root,"db.sqlite"));
+  try {
+    const agentDir=join(root,"agent");mkdirSync(agentDir);
+    writeFileSync(join(agentDir,"settings.json"),JSON.stringify({defaultProvider:"openai",defaultModel:"gpt-4.1",defaultThinkingLevel:"off"}));
+    writeFileSync(join(agentDir,"auth.json"),JSON.stringify({openai:{type:"api_key",key:"test-not-a-real-key"}}));
+    const base=store.create("Original"),repo=new EditRecoveryRepository(store);
+    const record=repo.start({id:crypto.randomUUID(),blockId:base.id,baseText:base.text,baseRevision:base.revision,prelaunchText:base.text,draftText:"Precious writing",source:"external-editor"});
+    const controller=new AbortController();
+    const stream:NonNullable<EditMergeModelOptions["stream"]>=()=>{
+      if(failure==="unavailable")throw Error("Provider unavailable");
+      if(failure==="cancel")queueMicrotask(()=>controller.abort());
+      return createAssistantMessageEventStream();
+    };
+    await expect(proposeEditMerge(record,{workspaceRoot:root,stateDirectory:root,agentDir,stream,timeoutMs:failure==="deadline"?100:1000},controller.signal)).rejects.toThrow(failure==="deadline"?"deadline":failure==="cancel"?"canceled":"unavailable");
+    expect(repo.get(record.id).originalDraft).toBe("Precious writing");expect(store.get(base.id)?.text).toBe("Original");
+  }finally{store.close();rmSync(root,{recursive:true,force:true});}
+});
