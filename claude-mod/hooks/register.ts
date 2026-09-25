@@ -28,6 +28,8 @@ let references: ReferenceContext | undefined
 let isLoadingReferences = false
 /** The pane id Herdr gave the last Detail this session split, until it registers. */
 let splitScratchPane: string | undefined
+/** Shows run one at a time, so concurrent clicks and tool calls split one pane. */
+let showQueue: Promise<unknown> = Promise.resolve()
 
 /**
  * Registers Recent Mentions: each completed main-loop answer in a configured
@@ -225,7 +227,13 @@ async function loadReferences($: EngineInterface, option: unknown): Promise<void
  * navigates the person's Trees or Details, and never takes focus. Resolves to
  * the shown block's title; throws with the reason otherwise.
  */
-async function showInScratchPane($: EngineInterface, workspace: string, uri: string): Promise<string> {
+function showInScratchPane($: EngineInterface, workspace: string, uri: string): Promise<string> {
+  const shown = showQueue.then(() => showNow($, workspace, uri))
+  showQueue = shown.catch(() => {})
+  return shown
+}
+
+async function showNow($: EngineInterface, workspace: string, uri: string): Promise<string> {
   const root = await outlinerRootOf($)
   if (!root) throw Error('the Outliner plugin is disabled')
   const [sessionId, paneId, herdrWorkspace] = await Promise.all([

@@ -402,6 +402,7 @@ export async function navigateOutlinerLink(
     await sendClientCommand(requester, detailClientId, {
       command: "open", targetRegion: "detail",
       target: navigationTarget,
+      ...(targets.focus === false ? { focus: false } : {}),
     });
     return {
       kind: "resource",
