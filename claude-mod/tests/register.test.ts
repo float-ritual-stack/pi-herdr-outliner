@@ -78,20 +78,24 @@ function splitOf(runs: readonly Run[]) {
 }
 
 const CLIENTS = JSON.stringify([
-  { clientId: 'tree-elsewhere', role: 'tree', runtime: { paneId: 'w:p3' } },
-  { clientId: 'detail-here', role: 'detail', runtime: { paneId: 'w:p2' } },
-  { clientId: 'tree-here', role: 'tree', runtime: { paneId: 'w:p1' } },
+  { clientId: 'tree-here', role: 'tree', contextId: 'session-1', runtime: { paneId: 'w:p1' } },
+  { clientId: 'someone-elses', role: 'detail', contextId: 'theirs', runtime: { paneId: 'w:p2' } },
+  { clientId: 'claude-pane', role: 'detail', contextId: 'session-1', runtime: { paneId: 'w:p3' } },
 ])
+
+/** The registry before Claude has a pane of its own. */
+const CLIENTS_WITHOUT_SCRATCH = JSON.stringify(JSON.parse(CLIENTS).slice(0, 2))
 
 function succeeding(run: Run): ProcessRunResult {
   const ok = (stdout: string) => ({ exitCode: 0, stdout, stderr: '' })
   if (run.argv[0] === 'herdr') {
     if (run.argv[1] === 'pane') return ok(PANES)
-    return ok(run.argv[2] === 'pane' ? '{"result":{"pane":{"pane_id":"w:p10"}}}' : HERDR_LISTING)
+    return ok(run.argv[2] === 'pane' ? '{"result":{"plugin_pane":{"pane":{"pane_id":"w:p10"}}}}' : HERDR_LISTING)
   }
   if (run.argv.includes('resolve')) return ok(`{"id":"${BLOCK}","title":"Daily notes"}`)
   if (run.argv.includes('work-id-status')) return ok('{"prefix":"PIE","observedPrefixes":["PIE","OLD"]}')
   if (run.argv.includes('clients')) return ok(CLIENTS)
+  if (run.argv.includes('link')) return ok('{"kind":"page","title":"Daily notes"}')
   return ok('{"references":2}')
 }
 
@@ -220,7 +224,7 @@ describe('register', () => {
     expect((await plain.find({ key: 'engine' }))?.text).toBe('Nothing to link here.')
   })
 
-  test('clicking a reference opens it through the Tree in this Herdr tab', async ($, on) => {
+  test("clicking a reference shows it in Claude's own pane, without focus", async ($, on) => {
     const session = sessionIn(on, WORKSPACE, succeeding)
     await session.begin(() => $.session.start(START))
     const drawn = await $.ui.mount({
@@ -234,14 +238,15 @@ describe('register', () => {
     await session.clock.settle()
 
     const link = session.runs.find(run => run.argv.includes('link'))
-    expect(link?.argv.slice(3)).toEqual(['link', 'pi-outliner://page/Daily%20notes', '--source-client', 'tree-here'])
+    expect(link?.argv.slice(3)).toEqual(['link', 'pi-outliner://page/Daily%20notes', '--detail-client', 'claude-pane', '--no-focus'])
     expect(link?.init?.cwd).toBe(WORKSPACE)
+    expect(splitOf(session.runs)).toBeUndefined()
     expect(session.toasts).toEqual([])
   })
 
-  test('with no Outliner Tree open, a click splits a Detail below the Claude pane', async ($, on) => {
+  test("with no pane of its own, a click splits one below the Claude pane for this session", async ($, on) => {
     const session = sessionIn(on, WORKSPACE, run =>
-      run.argv.includes('clients') ? { exitCode: 0, stdout: '[]', stderr: '' } : succeeding(run))
+      run.argv.includes('clients') ? { exitCode: 0, stdout: CLIENTS_WITHOUT_SCRATCH, stderr: '' } : succeeding(run))
     await session.begin(() => $.session.start(START))
     const drawn = await $.ui.mount({
       plugin: 'pi-outliner',
@@ -257,36 +262,47 @@ describe('register', () => {
     expect(session.runs.find(run => run.argv.includes('resolve'))?.argv.at(-1)).toBe('pi-outliner://work/PIE-7')
     const split = splitOf(session.runs)?.argv ?? []
     expect(split.slice(split.indexOf('--target-pane'), split.indexOf('--target-pane') + 4)).toEqual(['--target-pane', 'w:p9', '--direction', 'down'])
+    expect(split).toContain('OUTLINER_BROWSING_CONTEXT_ID=session-1')
     expect(split).toContain(`OUTLINER_DETAIL_TARGET=${encodeURIComponent(JSON.stringify({ kind: 'block', blockId: BLOCK }))}`)
     expect(session.toasts).toEqual([])
   })
 
-  test('a Tree whose Detail is mid-edit falls back to a split; other failures do not', async ($, on) => {
-    const protectedStderr = 'error: Destination is protected: active edit or source selection · finish or cancel it there\nBun v1.3.14 (Linux x64)'
-    let linkStderr = protectedStderr
+  test("a mid-edit Claude pane is a toast, never a second split", async ($, on) => {
     const session = sessionIn(on, WORKSPACE, run =>
-      run.argv.includes('link') ? { exitCode: 1, stdout: '', stderr: linkStderr } : succeeding(run))
+      run.argv.includes('link')
+        ? { exitCode: 1, stdout: '', stderr: 'error: Destination is protected: active edit\nBun v1.3.14 (Linux x64)' }
+        : succeeding(run))
     await session.begin(() => $.session.start(START))
     const drawn = await $.ui.mount({
       plugin: 'pi-outliner',
       surface: 'terminal',
       component: 'AssistantMessage',
-      props: { text: 'See [[Daily notes]].', isFirstOfReply: true },
+      props: { text: 'See PIE-7.', isFirstOfReply: true },
     })
-    const press = () => drawn.press({ key: 'outliner-references', link: { href: 'https://pi-outliner.invalid/page/Daily%20notes' } })
 
-    await press()
+    await drawn.press({ key: 'outliner-references', link: { href: 'https://pi-outliner.invalid/work/PIE-7' } })
     await session.clock.settle()
-    expect(session.runs.find(run => run.argv.includes('link'))?.argv).toContain('tree-here')
-    expect(splitOf(session.runs)).toBeDefined()
-    expect(session.toasts).toEqual([])
 
-    session.runs.length = 0
-    linkStderr = 'error: Page address did not resolve: Daily notes\nBun v1.3.14 (Linux x64)'
-    await press()
-    await session.clock.settle()
     expect(splitOf(session.runs)).toBeUndefined()
-    expect(session.toasts).toEqual(['Could not open Daily notes in the Outliner: Page address did not resolve: Daily notes'])
+    expect(session.toasts).toEqual(["Could not open PIE-7 in the Outliner: Claude's Outliner pane is mid-edit; finish or cancel it there"])
+  })
+
+  test("the show tool puts a reference in Claude's pane and reports it", async ($, on) => {
+    const session = sessionIn(on, WORKSPACE, succeeding)
+    const registered: string[] = []
+    on('tool.register', ($, e) => {
+      registered.push(e.name)
+      return { value: { tool: `mcp__pi-outliner__${e.name}` } }
+    })
+    await session.begin(() => $.session.start(START))
+    expect(registered).toEqual(['show'])
+
+    const shown = await $.tool.call({ tool: 'mcp__pi-outliner__show', input: { reference: '[[Daily notes]]' } })
+    expect(shown).toMatchObject({ result: "Showing Daily notes in Claude's Outliner pane." })
+    expect(session.runs.find(run => run.argv.includes('link'))?.argv).toContain('claude-pane')
+
+    const empty = await $.tool.call({ tool: 'mcp__pi-outliner__show', input: { reference: ' ' } })
+    expect(empty.deny).toContain('Give a Work ID')
   })
 
   test('outside the configured workspaces, replies are not linked', async ($, on) => {

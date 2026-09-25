@@ -9,12 +9,13 @@ import {
   workspaceForCwd,
 } from './mention-message'
 import {
-  destinationOf,
   detailSplitArgv,
   isProtectedDestination,
   linkifyReferences,
   type OutlinerClient,
+  outlinerUriFor,
   outlinerUriOf,
+  scratchPaneOf,
 } from './references'
 
 /**
@@ -25,6 +26,8 @@ import {
 type ReferenceContext = { workspace: string | null; prefixes: string[] }
 let references: ReferenceContext | undefined
 let isLoadingReferences = false
+/** The pane id Herdr gave the last Detail this session split, until it registers. */
+let splitScratchPane: string | undefined
 
 /**
  * Registers Recent Mentions: each completed main-loop answer in a configured
@@ -49,7 +52,41 @@ export function register(on: On, options: PluginOptions): void {
   on('session.start', async ($, e, next) => {
     const result = await next(e)
     $.clock.after(0, () => void loadReferences($, option))
+    await $.tool.register({
+      name: 'show',
+      description:
+        "Show an Outliner note in Claude's own Outliner Detail pane, split below this conversation " +
+        'in Herdr and reused for every call, so the person can read it beside the chat. It never ' +
+        'moves their Trees, Details or focus. Use it when pointing the person at a note matters; ' +
+        'references in replies are already clickable.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          reference: {
+            type: 'string',
+            description: 'A Work ID (PIE-123), [[page]], ((block-uuid)), bare block UUID, or pi-outliner:// URI.',
+          },
+        },
+        required: ['reference'],
+        additionalProperties: false,
+      },
+    })
     return result
+  })
+
+  on('tool.call', { tool: 'mcp__pi-outliner__show' }, async ($, e) => {
+    const reference = (e.input as { reference?: unknown } | undefined)?.reference
+    const uri = typeof reference === 'string' ? outlinerUriFor(reference) : null
+    if (!uri) return { deny: 'Give a Work ID, [[page]], ((block-uuid)) or pi-outliner:// URI to show.' }
+    if (!references) await loadReferences($, option)
+    const workspace = references?.workspace
+    if (!workspace) return { deny: 'This session is not in a configured Outliner workspace.' }
+    try {
+      const title = await showInScratchPane($, workspace, uri)
+      return { result: `Showing ${title || reference} in Claude's Outliner pane.` }
+    } catch (error) {
+      return { deny: `Could not show ${reference}: ${error instanceof Error ? error.message : String(error)}` }
+    }
   })
 
   on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
@@ -183,29 +220,25 @@ async function loadReferences($: EngineInterface, option: unknown): Promise<void
 }
 
 /**
- * Opens a clicked reference in the Outliner: through the live Tree in this
- * Herdr tab, else one in this workspace, with the Outliner's own link
- * navigation (the Tree's linked Detail shows it). With no Tree, or one whose
- * Detail is protected mid-edit, a new Detail splits below the Claude pane,
- * showing the target. Every failure is a toast.
+ * Shows an Outliner link in Claude's own Detail: the pane this session split
+ * below the Claude pane, reused while it lives, else split anew. It never
+ * navigates the person's Trees or Details, and never takes focus. Resolves to
+ * the shown block's title; throws with the reason otherwise.
  */
-async function openReference($: EngineInterface, workspace: string, href: string): Promise<void> {
-  const uri = outlinerUriOf(href)
-  if (!uri) return
-  const target = decodeURIComponent(uri.slice(uri.indexOf('/', 'pi-outliner://'.length) + 1))
-  try {
-    const root = await outlinerRootOf($)
-    if (!root) throw Error('the Outliner plugin is disabled')
-    const [paneId, tabId, herdrWorkspace] = await Promise.all([
-      $.env.get('HERDR_PANE_ID'),
-      $.env.get('HERDR_TAB_ID'),
-      $.env.get('HERDR_WORKSPACE_ID'),
-    ])
-    if (!herdrWorkspace) throw Error('this session is not running inside Herdr')
-    const outliner = (args: string[]) => $.process.run(
-      ['/bin/sh', `${root}/scripts/run-bun.sh`, `${root}/src/cli.ts`, ...args],
-      { cwd: workspace, env: { OUTLINER_WORKSPACE_ROOT: workspace }, timeoutMs: 30_000 },
-    )
+async function showInScratchPane($: EngineInterface, workspace: string, uri: string): Promise<string> {
+  const root = await outlinerRootOf($)
+  if (!root) throw Error('the Outliner plugin is disabled')
+  const [sessionId, paneId, herdrWorkspace] = await Promise.all([
+    $.session.id(),
+    $.env.get('HERDR_PANE_ID'),
+    $.env.get('HERDR_WORKSPACE_ID'),
+  ])
+  if (!paneId || !herdrWorkspace) throw Error('this session is not running inside Herdr')
+  const outliner = (args: string[]) => $.process.run(
+    ['/bin/sh', `${root}/scripts/run-bun.sh`, `${root}/src/cli.ts`, ...args],
+    { cwd: workspace, env: { OUTLINER_WORKSPACE_ROOT: workspace }, timeoutMs: 30_000 },
+  )
+  const findScratchPane = async () => {
     const [listedClients, listedPanes] = await Promise.all([
       outliner(['clients']),
       $.process.run(['herdr', 'pane', 'list', '--workspace', herdrWorkspace], { timeoutMs: 5000 }),
@@ -215,30 +248,52 @@ async function openReference($: EngineInterface, workspace: string, href: string
     const registered: unknown = JSON.parse(listedClients.stdout)
     const clients: OutlinerClient[] = (Array.isArray(registered) ? registered : (registered as { clients?: unknown[] })?.clients ?? [])
       .flatMap((client: any) => typeof client?.runtime?.paneId === 'string'
-        ? [{ clientId: String(client.clientId), role: String(client.role), paneId: client.runtime.paneId }]
+        ? [{ clientId: String(client.clientId), role: String(client.role), paneId: client.runtime.paneId, contextId: client.contextId }]
         : [])
     const panes: unknown = JSON.parse(listedPanes.stdout)?.result?.panes
     const paneTabs = new Map((Array.isArray(panes) ? panes : []).map((pane: any) => [String(pane.pane_id), String(pane.tab_id)]))
-    const destination = destinationOf(clients, paneTabs, tabId)
-    if (destination) {
-      const navigated = await outliner([
-        'link', uri, '--source-client', destination.clientId,
-        ...(destination.role === 'composed' ? ['--source-region', 'tree'] : []),
-      ])
-      if (navigated.exitCode === 0) return
-      const reason = failureReasonOf(navigated.stderr)
-      if (!isProtectedDestination(reason)) throw Error(reason || 'navigation failed')
-    }
-    if (!paneId) throw Error('this session has no Herdr pane to open a Detail beside')
-    const resolved = await outliner(['resolve', uri])
-    if (resolved.exitCode !== 0) throw Error(failureReasonOf(resolved.stderr) || 'the target did not resolve')
-    const { id, fragmentId } = JSON.parse(resolved.stdout) as { id: string; fragmentId?: string }
-    const opened = await $.process.run(
-      detailSplitArgv({ paneId, workspace, blockId: id, ...(fragmentId ? { fragmentId } : {}) }),
-      { timeoutMs: 15_000 },
-    )
-    if (opened.exitCode !== 0) throw Error(failureReasonOf(opened.stderr) || 'Herdr could not open a Detail')
+    return { pane: scratchPaneOf(clients, paneTabs, sessionId), paneTabs }
+  }
+
+  let { pane, paneTabs } = await findScratchPane()
+  // A pane split moments ago may not have registered yet: wait for it rather
+  // than splitting a second one.
+  for (let wait = 0; !pane && splitScratchPane && paneTabs.has(splitScratchPane) && wait < 10; wait++) {
+    await $.clock.sleep(300)
+    ;({ pane, paneTabs } = await findScratchPane())
+  }
+  if (pane) {
+    const shown = await outliner(['link', uri, '--detail-client', pane.clientId, '--no-focus'])
+    if (shown.exitCode === 0) return String(JSON.parse(shown.stdout)?.title ?? '')
+    const reason = failureReasonOf(shown.stderr)
+    throw Error(isProtectedDestination(reason)
+      ? "Claude's Outliner pane is mid-edit; finish or cancel it there"
+      : reason || 'navigation failed')
+  }
+  const resolved = await outliner(['resolve', uri])
+  if (resolved.exitCode !== 0) throw Error(failureReasonOf(resolved.stderr) || 'the target did not resolve')
+  const { id, title, fragmentId } = JSON.parse(resolved.stdout) as { id: string; title?: string; fragmentId?: string }
+  const opened = await $.process.run(
+    detailSplitArgv({ paneId, workspace, sessionId, blockId: id, ...(fragmentId ? { fragmentId } : {}) }),
+    { timeoutMs: 15_000 },
+  )
+  if (opened.exitCode !== 0) throw Error(failureReasonOf(opened.stderr) || 'Herdr could not open a Detail')
+  try {
+    splitScratchPane = JSON.parse(opened.stdout)?.result?.plugin_pane?.pane?.pane_id
+  } catch {
+    splitScratchPane = undefined
+  }
+  return title ?? ''
+}
+
+/** A click on a reference: shown in Claude's pane, or a toast saying why not. */
+async function openReference($: EngineInterface, workspace: string, href: string): Promise<void> {
+  const uri = outlinerUriOf(href)
+  if (!uri) return
+  try {
+    await showInScratchPane($, workspace, uri)
   } catch (error) {
+    const target = decodeURIComponent(uri.slice(uri.indexOf('/', 'pi-outliner://'.length) + 1))
     const reason = error instanceof Error ? error.message : String(error)
     $.ui.toast(`Could not open ${target} in the Outliner: ${reason}`, { timeoutMs: 6000 })
   }

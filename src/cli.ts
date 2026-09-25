@@ -249,6 +249,7 @@ switch (command) {
         "source-region": { type: "string" },
         "detail-client": { type: "string" },
         "tree-client": { type: "string" },
+        "no-focus": { type: "boolean" },
       },
       allowPositionals: true,
       strict: true,
@@ -276,8 +277,11 @@ switch (command) {
     }
     const target = parseOutlinerLinkUri(url);
     const resourceTarget = target.kind === "resource" || target.kind === "reference";
-    if (detailClientId && !resourceTarget) {
-      throw new Error("--detail-client requires a Resource or reference URL; use --source-client for linked Open");
+    if (detailClientId && target.kind === "goto") {
+      throw new Error("goto URLs require --tree-client, not --detail-client");
+    }
+    if (values["no-focus"] && !detailClientId) {
+      throw new Error("--no-focus requires --detail-client");
     }
     if (treeClientId && resourceTarget) {
       throw new Error("Resource and reference URLs require --detail-client or --source-client");
@@ -287,6 +291,7 @@ switch (command) {
     }
     directResult = await navigateOutlinerLink(client, url, {
       sourceClientId, sourceRegion, detailClientId, treeClientId,
+      ...(values["no-focus"] ? { focus: false } : {}),
     });
     break;
   }

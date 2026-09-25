@@ -4595,6 +4595,23 @@ describe("detail controller completion, navigation, and focus", () => {
     expect(harness.calls.selfFocuses).toBe(0);
   });
 
+  test("an open with focus false navigates with history but leaves focus with its sender", async () => {
+    const initial = makeBlock({ id: "block-1", text: "Initial" });
+    const next = makeBlock({ id: "block-2", text: "Next" });
+    const harness = createHarness(initial);
+    await harness.controller.initialize();
+    harness.setSelection({ selected: next, ancestors: [], children: [] });
+
+    await harness.controller.onServiceEvent(
+      event("ui", { targetClientId: "detail-test", command: "open", target: { kind: "block", blockId: next.id }, focus: false }),
+      viewport,
+    );
+
+    expect(harness.controller.state.target).toEqual({ kind: "block", blockId: next.id });
+    expect(harness.controller.state.status).toBe("Opened here");
+    expect(harness.calls.selfFocuses).toBe(0);
+  });
+
   test("an ordinary open focuses its destination", async () => {
     const first = makeBlock();
     const second = makeBlock({ id: "block-2", text: "second", updatedAt: "version-2" });

@@ -4136,7 +4136,9 @@ export function createDetailController(
       if (navigationOutcome === "superseded") return;
     }
     if (command.command === "edit") await beginEdit(viewport);
-    if (command.command !== "preview") effects.focusSelf();
+    // `focus: false` navigates a Detail without taking focus from its sender.
+    const keepsFocus = "focus" in command && command.focus === false;
+    if (command.command !== "preview" && !keepsFocus) effects.focusSelf();
     if (navigationOutcome !== "cached" || command.command === "edit") emit();
     return;
   }

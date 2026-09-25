@@ -15,22 +15,29 @@ UUIDs in the answer then show up in Tree/Detail `?` → **Recent mentions**.
   and the mod calls the installed CLI's `mentions ingest`. It never starts a service.
   Failures show as one toast and leave the answer untouched.
 
-## Clickable references
+## Clickable references and Claude's Outliner pane
 
 In the same workspaces, Work IDs (the workspace's prefixes), `[[pages]]` and
 `((block references))` in Claude's replies are drawn as links. A plain click
-opens the target through the Outliner Tree in the same Herdr tab (else one in
-the same Herdr workspace), in that Tree's linked Detail, as a click inside the
-Tree would. References in code and existing links are left alone.
+shows the target in **Claude's own Outliner Detail**: a pane split below the
+Claude pane the first time, then reused for every later click in the session.
+It never navigates your Trees or Details and never takes focus; move or resize
+it as you like. References in code and existing links are left alone.
 
+Claude can put a note there too, with the `mcp__pi-outliner__show` tool (a Work
+ID, `[[page]]`, `((uuid))` or `pi-outliner://` URI).
+
+- The pane is recognized by its browsing context, which is the Claude session
+  id, so it survives plugin reloads and resumed sessions. Close it and the next
+  click splits a new one.
+- If you are editing in Claude's pane, a click or `show` is refused with a toast
+  (the Outliner protects active edits) rather than opening a second pane.
 - Clicks reach the mod in the fullscreen terminal (`"tui": "fullscreen"`).
 - Links carry `https://pi-outliner.invalid/...` stand-ins, because Claude Code only
   draws https, http and file links as links. Where it does not detect terminal
   hyperlink support (a Herdr pane), it prints each URL beside its text; set
   `FORCE_HYPERLINK=1` in the settings `env` block to draw the text alone.
-- With no Tree open, or one whose Detail is mid-edit (the Outliner protects it),
-  a new Detail splits below the Claude pane, unfocused, showing the target; move
-  it as you like. A target the Outliner cannot resolve is a toast, never a new page.
+- A target the Outliner cannot resolve is a toast, never a new page.
 
 ## Use
 

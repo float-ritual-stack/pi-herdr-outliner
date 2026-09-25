@@ -332,6 +332,8 @@ export async function navigateOutlinerLink(
     sourceRegion?: import("./types").OutlinerRegion;
     navigation?: Pick<TreeNavigation, "dispatch" | "resolve">;
     intent?: OutlinerNavigationIntent;
+    /** With `detailClientId`: false opens there without focusing that pane. */
+    focus?: boolean;
   } = {},
 ): Promise<OutlinerLinkNavigation> {
   const dispatch = targets.navigation?.dispatch ?? ((target, intent, options) =>
@@ -436,6 +438,23 @@ export async function navigateOutlinerLink(
       resolution: dispatched.resolution,
       ...(resolved.block.effectiveDeletedRootId ? { deleted: true } : {}),
       ...(resolved.created ? { created: true } : {}),
+    };
+  }
+
+  if (targets.detailClientId) {
+    // Open in exactly this Detail: resolve without creating pages, then let the
+    // Detail apply its own edit protection.
+    const resolved = await resolveOutlinerLinkTarget(requester, target, { followMissingPages: false });
+    await sendClientCommand(requester, targets.detailClientId, {
+      command: "open", targetRegion: "detail",
+      target: { kind: "block", blockId: resolved.block.id, ...(resolved.fragmentId ? { fragmentId: resolved.fragmentId } : {}) },
+      ...(targets.focus === false ? { focus: false } : {}),
+    });
+    return {
+      kind: target.kind,
+      id: resolved.block.id,
+      title: blockDisplayTitle(resolved.block),
+      targetClientId: targets.detailClientId,
     };
   }
 

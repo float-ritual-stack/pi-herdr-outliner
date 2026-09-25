@@ -137,7 +137,8 @@ test("CLI Tree targeting is exact and unsupported flag combinations fail explici
     [[uri, "--source-client", "tree-a", "--source-region", "observer"], "must be tree or detail"],
     [[uri, "--source-client", "tree-a", "--detail-client", "reader"], "Use only one"],
     [[uri, "--tree-client", "tree-a", "--detail-client", "reader"], "Use only one"],
-    [[uri, "--detail-client", "reader"], "requires a Resource or reference URL"],
+    [[uri, "--no-focus"], "--no-focus requires --detail-client"],
+    [[outlinerLinkUri("goto", "CLI"), "--detail-client", "reader"], "goto URLs require --tree-client"],
     [[resource, "--tree-client", "tree-a"], "require --detail-client or --source-client"],
     [[outlinerLinkUri("goto", "CLI"), "--source-client", "tree-a"], "goto URLs require --tree-client"],
     [[uri, "--source-client", ""], "requires a client ID"],
@@ -176,4 +177,38 @@ test("resolve answers a link's block without navigating or creating a page", asy
   expect(missing.exitCode).not.toBe(0);
   expect(missing.stderr).toContain("Page address did not resolve: Never written");
   expect(blocks().count).toBe(before);
+});
+
+test("CLI opens block, page and Work-ID links in exactly one Detail, optionally without focus", async () => {
+  const h = await setup();
+  await h.register({ clientId: "scratch", role: "detail", contextId: "scratch" });
+  await h.register({ clientId: "other", role: "detail", contextId: "other" });
+  const page = h.store.create("Daily notes [page::Daily notes]");
+  const block = h.store.create("Plain block");
+  const blocks = () => (h.store.database.query("SELECT count(*) AS count FROM blocks").get() as { count: number }).count;
+
+  const opened = await h.run([outlinerLinkUri("page", "Daily notes"), "--detail-client", "scratch", "--no-focus"]);
+  expect(opened).toMatchObject({ exitCode: 0, stderr: "" });
+  expect(JSON.parse(opened.stdout)).toMatchObject({ kind: "page", id: page.id, targetClientId: "scratch" });
+  expect(h.commands.at(-1)).toEqual(expect.objectContaining({
+    command: "open", targetClientId: "scratch", target: { kind: "block", blockId: page.id }, focus: false,
+  }));
+
+  expect((await h.run([outlinerLinkUri("block", block.id), "--detail-client", "scratch"])).exitCode).toBe(0);
+  expect(h.commands.at(-1)).toMatchObject({ command: "open", targetClientId: "scratch", target: { kind: "block", blockId: block.id } });
+  expect(h.commands.at(-1)).not.toHaveProperty("focus");
+  expect(h.commands.every(command => command.targetClientId === "scratch")).toBe(true);
+
+  const before = blocks();
+  const missing = await h.run([outlinerLinkUri("page", "Never written"), "--detail-client", "scratch"]);
+  expect(missing.exitCode).not.toBe(0);
+  expect(missing.stderr).toContain("Page address did not resolve");
+  expect(blocks()).toBe(before);
+
+  await h.client.request({ action: "clients.update", clientId: "scratch", navigationProtection: "active edit" });
+  const count = h.commands.length;
+  const guarded = await h.run([outlinerLinkUri("block", block.id), "--detail-client", "scratch", "--no-focus"]);
+  expect(guarded.exitCode).not.toBe(0);
+  expect(guarded.stderr).toContain("Destination is protected: active edit");
+  expect(h.commands).toHaveLength(count);
 });

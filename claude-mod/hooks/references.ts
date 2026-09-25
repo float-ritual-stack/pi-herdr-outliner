@@ -73,22 +73,38 @@ export type OutlinerClient = {
   clientId: string
   role: string
   paneId: string
+  contextId?: string
 }
 
 /**
- * The Outliner view a click opens through: a live Tree (or combined view) in
- * the caller's Herdr tab, else one elsewhere in its workspace. `paneTabs` maps
- * each live pane of the workspace to its tab, so a client whose pane is gone
- * never qualifies. Null when there is none.
+ * Claude's own Outliner Detail: the live Detail whose browsing context is this
+ * Claude session's id, which only a pane this session split carries. Null when
+ * there is none, or its pane is gone (`paneTabs` holds the workspace's live
+ * panes).
  */
-export function destinationOf(
+export function scratchPaneOf(
   clients: readonly OutlinerClient[],
   paneTabs: ReadonlyMap<string, string>,
-  tabId: string | undefined,
+  sessionId: string,
 ): OutlinerClient | null {
-  const live = clients.filter(client =>
-    (client.role === 'tree' || client.role === 'composed') && paneTabs.has(client.paneId))
-  return live.find(client => paneTabs.get(client.paneId) === tabId) ?? live[0] ?? null
+  return clients.find(client =>
+    client.role === 'detail' && client.contextId === sessionId && paneTabs.has(client.paneId)) ?? null
+}
+
+/**
+ * The `pi-outliner://` URI for a reference as the model writes it: a Work ID,
+ * `[[page]]`, `((uuid))`, a bare block UUID, a `pi-outliner://` URI, or else a
+ * page address as given. Null for an empty reference.
+ */
+export function outlinerUriFor(reference: string): string | null {
+  const text = reference.trim()
+  if (!text) return null
+  if (text.startsWith('pi-outliner://')) return text
+  if (new RegExp(`^${UUID}$`).test(text)) return `pi-outliner://block/${text.toLowerCase()}`
+  if (/^[A-Z][A-Z0-9]*-\d+$/.test(text)) return `pi-outliner://work/${text}`
+  const { hrefs } = linkifyReferences(text, [])
+  if (hrefs.length === 1 && /^(\[\[[^\]]+\]\]|\(\([^)]+\)\))$/.test(text)) return outlinerUriOf(hrefs[0]!)
+  return `pi-outliner://page/${encodeURIComponent(text)}`
 }
 
 /**
@@ -101,13 +117,14 @@ export function isProtectedDestination(reason: string): boolean {
 }
 
 /**
- * The Herdr command that splits a new Outliner Detail below `paneId` (the
- * Claude pane), unfocused, already showing the block: somewhere visible that
- * the person can move afterwards.
+ * The Herdr command that splits Claude's own Detail below `paneId` (the Claude
+ * pane), unfocused, already showing the block. Its browsing context is the
+ * session id, which is how `scratchPaneOf` finds it again.
  */
 export function detailSplitArgv(split: {
   paneId: string
   workspace: string
+  sessionId: string
   blockId: string
   fragmentId?: string
 }): string[] {
@@ -122,6 +139,7 @@ export function detailSplitArgv(split: {
     '--no-focus',
     '--cwd', split.workspace,
     '--env', `OUTLINER_WORKSPACE_ROOT=${split.workspace}`,
+    '--env', `OUTLINER_BROWSING_CONTEXT_ID=${split.sessionId}`,
     '--env', `OUTLINER_DETAIL_TARGET=${encodeURIComponent(JSON.stringify(target))}`,
   ]
 }
