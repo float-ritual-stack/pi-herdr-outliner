@@ -77,7 +77,8 @@ export function register(on: On, options: PluginOptions): void {
   })
 
   on('tool.call', { tool: 'mcp__pi-outliner__show' }, async ($, e) => {
-    const reference = (e.input as { reference?: unknown } | undefined)?.reference
+    // A plugin tool's arguments arrive flat on the event, beside `tool`.
+    const reference: unknown = e.reference
     const uri = typeof reference === 'string' ? outlinerUriFor(reference) : null
     if (!uri) return { deny: 'Give a Work ID, [[page]], ((block-uuid)) or pi-outliner:// URI to show.' }
     if (!references) await loadReferences($, option)

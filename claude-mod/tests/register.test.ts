@@ -312,7 +312,7 @@ describe('register', () => {
 
     await Promise.all([
       drawn.press({ key: 'outliner-references', link: { href: 'https://pi-outliner.invalid/work/PIE-7' } }),
-      $.tool.call({ tool: 'mcp__pi-outliner__show', input: { reference: 'PIE-8' } }),
+      $.tool.call({ tool: 'mcp__pi-outliner__show', reference: 'PIE-8' }),
     ])
     await session.clock.settle()
 
@@ -330,11 +330,11 @@ describe('register', () => {
     await session.begin(() => $.session.start(START))
     expect(registered).toEqual(['show'])
 
-    const shown = await $.tool.call({ tool: 'mcp__pi-outliner__show', input: { reference: '[[Daily notes]]' } })
+    const shown = await $.tool.call({ tool: 'mcp__pi-outliner__show', reference: '[[Daily notes]]' })
     expect(shown).toMatchObject({ result: "Showing Daily notes in Claude's Outliner pane." })
     expect(session.runs.find(run => run.argv.includes('link'))?.argv).toContain('claude-pane')
 
-    const empty = await $.tool.call({ tool: 'mcp__pi-outliner__show', input: { reference: ' ' } })
+    const empty = await $.tool.call({ tool: 'mcp__pi-outliner__show', reference: ' ' })
     expect(empty.deny).toContain('Give a Work ID')
   })
 
