@@ -287,6 +287,39 @@ describe('register', () => {
     expect(session.toasts).toEqual(["Could not open PIE-7 in the Outliner: Claude's Outliner pane is mid-edit; finish or cancel it there"])
   })
 
+  test("a click and a show call at once split one pane, then reuse it", async ($, on) => {
+    let split = false
+    const session = sessionIn(on, WORKSPACE, run => {
+      if (splitOf([run])) split = true
+      if (run.argv[1] === 'pane' && run.argv[2] === 'list' && split) {
+        return { exitCode: 0, stdout: PANES.replace('"w:p3"', '"w:p10"'), stderr: '' }
+      }
+      if (run.argv.includes('clients')) {
+        const clients = JSON.parse(CLIENTS_WITHOUT_SCRATCH)
+        if (split) clients.push({ clientId: 'new-pane', role: 'detail', contextId: 'session-1', runtime: { paneId: 'w:p10' } })
+        return { exitCode: 0, stdout: JSON.stringify(clients), stderr: '' }
+      }
+      return succeeding(run)
+    })
+    on('tool.register', ($, e) => ({ value: { tool: `mcp__pi-outliner__${e.name}` } }))
+    await session.begin(() => $.session.start(START))
+    const drawn = await $.ui.mount({
+      plugin: 'pi-outliner',
+      surface: 'terminal',
+      component: 'AssistantMessage',
+      props: { text: 'See PIE-7.', isFirstOfReply: true },
+    })
+
+    await Promise.all([
+      drawn.press({ key: 'outliner-references', link: { href: 'https://pi-outliner.invalid/work/PIE-7' } }),
+      $.tool.call({ tool: 'mcp__pi-outliner__show', input: { reference: 'PIE-8' } }),
+    ])
+    await session.clock.settle()
+
+    expect(session.runs.filter(run => splitOf([run]))).toHaveLength(1)
+    expect(session.runs.filter(run => run.argv.includes('link')).map(run => run.argv.at(-2))).toEqual(['new-pane'])
+  })
+
   test("the show tool puts a reference in Claude's pane and reports it", async ($, on) => {
     const session = sessionIn(on, WORKSPACE, succeeding)
     const registered: string[] = []

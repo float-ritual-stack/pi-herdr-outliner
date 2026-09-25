@@ -91,6 +91,9 @@ test("CLI Resource references require an available explicit Detail before regist
   const canonical = outlinerLinkUri("resource", receipt.id);
   expect((await h.run([canonical])).stderr).toContain("explicit Detail destination");
   expect((await h.run([canonical, "--detail-client", "reader"])).exitCode).toBe(0);
+  expect(h.commands.at(-1)).not.toHaveProperty("focus");
+  expect((await h.run([canonical, "--detail-client", "reader", "--no-focus"])).exitCode).toBe(0);
+  expect(h.commands.at(-1)).toMatchObject({ command: "open", targetClientId: "reader", focus: false });
   expect(h.resourceCount()).toBe(before + 1);
 });
 
