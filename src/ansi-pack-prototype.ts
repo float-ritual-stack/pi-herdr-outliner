@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { deflateSync, gunzipSync } from "node:zlib";
 import { Terminal } from "@xterm/headless";
+import { getCapabilities } from "@earendil-works/pi-tui";
 import type { ResourceDescription } from "./resources";
 import { sanitizeDynamicText } from "./terminal";
 
@@ -192,11 +193,12 @@ export class AnsiPackPrototype {
   private y = 0;
   private readonly kittyEnabled = process.env.OUTLINER_KITTY_GRAPHICS === "1" ||
     (process.env.OUTLINER_KITTY_GRAPHICS !== "0" &&
-      /ghostty|kitty/i.test(`${process.env.TERM ?? ""} ${process.env.TERM_PROGRAM ?? ""}`));
+      getCapabilities().images === "kitty");
   private mode: "kitty" | "cells" = this.kittyEnabled ? "kitty" : "cells";
   private imageId = 900_000_000 + Math.floor(Math.random() * 100_000_000);
   private placed = false;
   private generation = 0;
+  private graphicCache: { frame: ArtFrame; x: number; y: number; cols: number; rows: number; png: Buffer } | null = null;
 
   constructor(private readonly invalidate: () => void) {}
 
@@ -254,6 +256,7 @@ export class AnsiPackPrototype {
     const bodyRows = Math.max(1, height - bodyTop - 2);
     const cols = Math.max(1, Math.min(frame?.width ?? 80, width));
     const rows = Math.max(1, Math.min(frame?.height ?? 25, bodyRows));
+    const useCells = this.mode === "cells" || width < 8 || height < 8;
     const x = Math.min(this.x, Math.max(0, (frame?.width ?? 80) - cols));
     const y = Math.min(this.y, Math.max(0, (frame?.height ?? 25) - rows));
     const lines = [
@@ -264,14 +267,19 @@ export class AnsiPackPrototype {
       "─".repeat(Math.max(1, width)),
     ];
     if (frame) {
-      if (this.mode === "cells") lines.push(...textRows(frame, x, y, cols, rows));
+      if (useCells) lines.push(...textRows(frame, x, y, cols, rows));
       else for (let n = 0; n < rows; n++) lines.push("");
     }
     while (lines.length < height - 2) lines.push("");
     lines.push(`Archive Resource · original bytes retained · ${this.mode === "kitty" ? "Kitty" : "cells"} · ${width}×${height} cells / ${pixels.width}×${pixels.height} px`);
     lines.push("Esc normal Detail navigation · Alt+←/→ history · ? actions");
-    if (!frame || this.mode === "cells" || width < 8 || height < 8) return { lines };
-    try { return { lines, graphic: { png: png(frame, x, y, cols, rows), cols, rows, top: bodyTop + 1, left: 1 } }; }
+    if (!frame || useCells) return { lines };
+    try {
+      if (!this.graphicCache || this.graphicCache.frame !== frame || this.graphicCache.x !== x || this.graphicCache.y !== y || this.graphicCache.cols !== cols || this.graphicCache.rows !== rows) {
+        this.graphicCache = { frame, x, y, cols, rows, png: png(frame, x, y, cols, rows) };
+      }
+      return { lines, graphic: { png: this.graphicCache.png, cols, rows, top: bodyTop + 1, left: 1 } };
+    }
     catch (error) {
       lines[1] = `Kitty raster unavailable: ${sanitizeDynamicText(error instanceof Error ? error.message : String(error))}`;
       lines.splice(bodyTop, rows, ...textRows(frame, x, y, cols, rows));
@@ -297,5 +305,5 @@ export class AnsiPackPrototype {
     this.placed = false;
   }
 
-  close(): void { this.dispose(); this.generation++; this.frame = null; this.resourceId = null; this.revisionKey = ""; }
+  close(): void { this.dispose(); this.generation++; this.frame = null; this.graphicCache = null; this.resourceId = null; this.revisionKey = ""; }
 }

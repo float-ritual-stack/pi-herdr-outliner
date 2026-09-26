@@ -43,7 +43,7 @@ try {
   const target = encodeURIComponent(JSON.stringify({ kind: "resource", resourceId: resource.id }));
   console.error(`ANSI pack spike · ${basename(pack)} · private fixture ${root}`);
   const detail = spawn(process.execPath, ["run", code("detail-main.ts")], {
-    env: { ...env, OUTLINER_DETAIL_RENDERER: "ansi", OUTLINER_DETAIL_TARGET: target },
+    env: { ...env, OUTLINER_DETAIL_RENDERER: process.env.OUTLINER_DETAIL_RENDERER ?? "pi-tui", OUTLINER_DETAIL_TARGET: target },
     stdio: "inherit",
   });
   const exitCode = await new Promise<number>(done => {
