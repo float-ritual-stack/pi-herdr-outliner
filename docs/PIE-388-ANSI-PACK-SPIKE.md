@@ -1,5 +1,7 @@
 # PIE-388 · ANSI art pack in Detail
 
+For purpose, findings, challenges, and a keep/discard recommendation, see [the spike report](PIE-388-SPIKE-REPORT.md).
+
 Disposable practical spike from `3addd04`. This branch is separate from the graphical outliner spectacle (PIE-389). The archive remains a filesystem Resource; artwork is decoded only for this Detail view. No rendered pixels or coordinates are saved in blocks.
 
 ## Run
@@ -20,7 +22,8 @@ Kitty rasterization currently uses the Linux PSF VGA font at `/usr/share/console
 ## Evidence so far
 
 - `bun run check`: pass.
-- `bun test`: 1,585 pass, 0 fail.
+- `bun test`: 1,586 pass, 0 fail after the Herdr capability fix.
+- `bun run test:e2e:herdr`: startup interruption and Resource authoring passed in private sessions.
 - One-command launcher: opened the real archive in the default Pi TUI Detail and in the older ANSI Detail, showed `epoch · shypht / woe`, and removed each private fixture on close.
 - Private Pi TUI application journey: ordinary text block → ZIP Resource → different artwork → text block → Resource through history → resize → close. Keyboard input was injected into the running Detail client; navigation targets were sent through the production CLI. Raw capture: `/home/evan/pi-outliner-evidence/pie-388/pi-tui-navigation-capture.ansi`.
 - Simulated Ghostty capability in a PTY: the Pi TUI renderer emitted one initial image transmission, cleared placements on cells toggle and entry changes, redrew after resize, and freed all images on exit. Raw capture: `/home/evan/pi-outliner-evidence/pie-388/pi-tui-protocol-capture.ansi`. Explicit `OUTLINER_KITTY_GRAPHICS=1` also emits Kitty when terminal detection is unavailable.
