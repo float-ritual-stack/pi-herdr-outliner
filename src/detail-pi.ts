@@ -55,7 +55,7 @@ import {
   type DetailController,
   type DetailViewport,
 } from "./detail-controller";
-import { AnsiPackPrototype } from "./ansi-pack-prototype";
+import { AnsiPackPrototype, herdrKittyGraphicsConfigured } from "./ansi-pack-prototype";
 import { DetailReadingSurface, detailReaderGeometry } from "./detail-reading-surface";
 import { DetailEventScheduler } from "./detail-event-scheduler";
 import { layoutDetailEditor } from "./detail-editor-layout";
@@ -186,9 +186,10 @@ const hyperlinksEnabled = process.env.HERDR_ENV === "1";
 if (hyperlinksEnabled) {
   setCapabilities({ ...getCapabilities(), hyperlinks: true });
 }
-if (process.env.OUTLINER_KITTY_GRAPHICS === "1") {
+if (process.env.OUTLINER_KITTY_GRAPHICS === "1" ||
+    (process.env.OUTLINER_KITTY_GRAPHICS !== "0" && process.env.HERDR_ENV === "1" && herdrKittyGraphicsConfigured())) {
   setCapabilities({ ...getCapabilities(), images: "kitty" });
-} else if (process.env.OUTLINER_KITTY_GRAPHICS === "0") {
+} else if (process.env.OUTLINER_KITTY_GRAPHICS === "0" || process.env.HERDR_ENV === "1") {
   setCapabilities({ ...getCapabilities(), images: null });
 }
 const calloutThemeResolution = detailCalloutThemeFromEnvironment();

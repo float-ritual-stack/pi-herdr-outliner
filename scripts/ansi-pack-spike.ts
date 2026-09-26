@@ -19,15 +19,17 @@ const env: NodeJS.ProcessEnv = {
   OUTLINER_REMOTE: "0",
   OUTLINER_INBOX_AGENT: "0",
   OUTLINER_NOTE_ASSISTANCE: "0",
-  HERDR_ENV: "0",
 };
-delete env.HERDR_SOCKET_PATH;
+// Keep the fixture service independent of Herdr while letting Detail inherit
+// the actual pane environment when this launcher runs inside Herdr.
+const serviceEnv = { ...env, HERDR_ENV: "0" };
+delete serviceEnv.HERDR_SOCKET_PATH;
 const code = (name: string) => join(import.meta.dir, "..", "src", name);
 let service: ReturnType<typeof spawn> | null = null;
 try {
   await copyFile(pack, archive);
   service = spawn(process.execPath, ["run", code("server-main.ts")], {
-    env, stdio: ["ignore", "pipe", "inherit"],
+    env: serviceEnv, stdio: ["ignore", "pipe", "inherit"],
   });
   const client = createOutlinerClient(resolveClientPaths(env));
   let ready = false;

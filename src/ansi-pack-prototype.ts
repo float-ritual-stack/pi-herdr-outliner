@@ -1,7 +1,8 @@
 // Disposable PIE-388 spike: a ZIP Resource projected as one ANSI artwork in Detail.
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 import { deflateSync, gunzipSync } from "node:zlib";
 import { Terminal } from "@xterm/headless";
 import { getCapabilities } from "@earendil-works/pi-tui";
@@ -14,6 +15,20 @@ const ANSI_TO_VGA = [0, 4, 2, 6, 1, 5, 3, 7, 8, 12, 10, 14, 9, 13, 11, 15];
 const MAX_ENTRY_BYTES = 256_000;
 const MAX_ENTRIES = 1_000;
 const FONT_PATH = "/usr/share/consolefonts/Uni2-VGA16.psf.gz";
+
+// Herdr presents its own xterm-256color terminal to panes, even when its
+// experimental Kitty compositor is enabled. This config read is spike-only;
+// a permanent integration should use a capability advertised by Herdr.
+export function herdrKittyGraphicsConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (env.HERDR_ENV !== "1") return false;
+  const configHome = env.XDG_CONFIG_HOME?.trim() || join(homedir(), ".config");
+  try {
+    const config = Bun.TOML.parse(readFileSync(env.HERDR_CONFIG_PATH || join(configHome, "herdr", "config.toml"), "utf8")) as {
+      experimental?: { kitty_graphics?: unknown };
+    };
+    return config.experimental?.kitty_graphics === true;
+  } catch { return false; }
+}
 
 export interface ArtCell { char: string; fg: number; bg: number }
 export interface ArtFrame {
@@ -193,7 +208,7 @@ export class AnsiPackPrototype {
   private y = 0;
   private readonly kittyEnabled = process.env.OUTLINER_KITTY_GRAPHICS === "1" ||
     (process.env.OUTLINER_KITTY_GRAPHICS !== "0" &&
-      getCapabilities().images === "kitty");
+      (process.env.HERDR_ENV === "1" ? herdrKittyGraphicsConfigured() : getCapabilities().images === "kitty"));
   private mode: "kitty" | "cells" = this.kittyEnabled ? "kitty" : "cells";
   private imageId = 900_000_000 + Math.floor(Math.random() * 100_000_000);
   private placed = false;
