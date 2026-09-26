@@ -5,6 +5,7 @@ import type {EditRecovery} from "./edit-recovery";
 import type {ExternalEditorOptions} from "./external-editor";
 import {KeyInspector} from "./key-inspector";
 import {PassThrough} from "node:stream";
+import {spawnSync} from "node:child_process";
 import {createDetailDestination, type DetailDestinationPlacement} from "./detail-pane-placement";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
@@ -23,10 +24,12 @@ import {
 import { OutlinerActionKeymap, filterActionMenuItems, type OutlinerActionMenuItem } from "./outliner-actions";
 import {
   createDetailController,
+  detailResourceDescription,
   type DetailEffects,
   type DetailController,
   type DetailViewport,
 } from "./detail-controller";
+import { AnsiPackPrototype } from "./ansi-pack-prototype";
 import { projectDetailRead } from "./detail-embeds";
 import { DetailEventScheduler } from "./detail-event-scheduler";
 import { createDetailKeyHandler, detailActionScopes } from "./detail-keymap";
@@ -121,6 +124,24 @@ let watcher: OutlinerWatcher | null = null;
 let runtimeSync: ClientRuntimeSync | null = null;
 let workQueue = Promise.resolve();
 let pendingPaste: string | null = null;
+const ansiPack = new AnsiPackPrototype(draw);
+let measuredViewport: {cells: string; width: number; height: number} | null = null;
+function detailPixelViewport(columns: number, rows: number): {width: number; height: number} {
+  const cells = `${columns}x${rows}`;
+  if (measuredViewport?.cells === cells) return measuredViewport;
+  const result = spawnSync("python3", ["-c", "import fcntl,termios,struct,sys; r,c,h,w=struct.unpack('<HHHH',fcntl.ioctl(sys.stdin.fileno(),termios.TIOCGWINSZ,bytes(8))); print(w,h)"], {
+    stdio: ["inherit", "pipe", "ignore"], timeout: 500,
+  });
+  const [width, height] = result.status === 0
+    ? result.stdout.toString().trim().split(/\s+/).map(Number)
+    : [0, 0];
+  measuredViewport = {
+    cells,
+    width: width && width > 0 ? width : columns * 8,
+    height: height && height > 0 ? height : rows * 16,
+  };
+  return measuredViewport;
+}
 
 interface DetailDestinationPicker {
   state: NavigationLinkState; purpose: "link" | "open"; showOther: boolean;
@@ -540,11 +561,13 @@ function openActionMenu(items: readonly OutlinerActionMenuItem[], invoke: (id: s
 
 function draw(): void {
   if (recoveryReview) {
+    ansiPack.dispose();
     const lines=recoveryReview.render(process.stdout.columns??100,process.stdout.rows??30);
     process.stdout.write(`\x1b[H${lines.join("\r\n")}\x1b[J`);
     return;
   }
   if (actionMenu) {
+    ansiPack.dispose();
     const width = process.stdout.columns ?? 100;
     const height = process.stdout.rows ?? 30;
     const items = filterActionMenuItems(actionMenu.items, actionMenu.query);
@@ -562,10 +585,12 @@ function draw(): void {
   }
 
   if (keyInspector.active) {
+    ansiPack.dispose();
     process.stdout.write("\x1b[H\x1b[2J" + keyInspector.render(process.stdout.columns ?? 100, process.stdout.rows ?? 30).join("\n"));
     return;
   }
   if (destinationPicker) {
+    ansiPack.dispose();
     const picker = destinationPicker;
     const items = destinationItems(picker);
     const lines = renderDetailDestinationPicker({
@@ -584,6 +609,18 @@ function draw(): void {
     process.stdout.write("\x1b[H\x1b[2J" + lines.join("\n"));
     return;
   }
+  const packVisible = !readingSurface.previewVisible &&
+    readingSurface.active.state.mode === "preview" &&
+    ansiPack.sync(detailResourceDescription(readingSurface.active.state));
+  if (packVisible) {
+    const width = process.stdout.columns ?? 100;
+    const height = process.stdout.rows ?? 30;
+    const preview = ansiPack.render(width, height, detailPixelViewport(width, height));
+    process.stdout.write("\x1b[H\x1b[2J" + preview.lines.slice(0, height).map(line => truncateToWidth(line, width)).join("\n"));
+    if (preview.graphic) ansiPack.place(preview.graphic);
+    return;
+  }
+  ansiPack.sync(null);
   const geometry = detailReaderGeometry(process.stdout.columns ?? 100, process.stdout.rows ?? 30, readingSurface.previewVisible);
   const render = (reader: DetailController, label: string) => {
     reader.setPreviewRegions(detailPropertyInspectorRegions(reader.state));
@@ -721,6 +758,7 @@ function stop(): void {
   try {controller.checkpointRecovery();inspection.checkpointRecovery();}
   catch(error){controller.onServiceError(error);return;}
   destinationDisplay.dispose();
+  ansiPack.close();
   stopping = true;
   keyInspector.dispose();
   keyInput.destroy();
@@ -789,6 +827,18 @@ async function handleInput(str: string, key: TerminalKey): Promise<void> {
     return;
   }
   const active = readingSurface.active;
+  if (!readingSurface.previewVisible && ansiPack.active && active.state.mode === "preview" && inputAction !== "suppress" && !active.state.destinationChooser.active) {
+    let handled = true;
+    if (!key.ctrl && !key.meta && str === ",") ansiPack.next(-1);
+    else if (!key.ctrl && !key.meta && str === ".") ansiPack.next(1);
+    else if (!key.ctrl && !key.meta && str === "v") ansiPack.toggle();
+    else if (!key.ctrl && !key.meta && !key.shift && key.name === "up") ansiPack.move(0, -1);
+    else if (!key.ctrl && !key.meta && !key.shift && key.name === "down") ansiPack.move(0, 1);
+    else if (!key.ctrl && !key.meta && !key.shift && key.name === "left") ansiPack.move(-1, 0);
+    else if (!key.ctrl && !key.meta && !key.shift && key.name === "right") ansiPack.move(1, 0);
+    else handled = false;
+    if (handled) { draw(); return; }
+  }
   if (pendingPaste !== null) {
     const text = pendingPaste;
     pendingPaste = null;
@@ -826,6 +876,7 @@ keyInput.on("keypress", (str: string, key: TerminalKey) => {
 });
 
 process.stdout.on("resize", () => {
+  measuredViewport = null;
   serviceEventScheduler.scheduleWork(() =>
     controller.dispatch({ type: "viewport.changed" }, viewport())
   );
