@@ -14,17 +14,21 @@ import { getProperty } from "./properties";
 import { setTimeout as sleep } from "node:timers/promises";
 import { getMarkdownTheme, initTheme } from "@earendil-works/pi-coding-agent";
 import {
+  allocateImageId,
   decodeKittyPrintable,
   getCapabilities,
+  getCellDimensions,
   Key,
   KeybindingsManager,
   matchesKey,
   ProcessTerminal,
+  renderImage,
   SelectList,
   setKeybindings,
   setCapabilities,
   TUI_KEYBINDINGS,
   TuiAltScreen,
+  truncateToWidth,
   type Component,
   type SelectListTheme,
   type OverlayHandle,
@@ -45,11 +49,13 @@ import {
 } from "./outliner-actions";
 import {
   createDetailController,
+  detailResourceDescription,
   type DetailDirectSelectionCapture,
   type DetailEffects,
   type DetailController,
   type DetailViewport,
 } from "./detail-controller";
+import { AnsiPackPrototype, herdrKittyGraphicsConfigured } from "./ansi-pack-prototype";
 import { DetailReadingSurface, detailReaderGeometry } from "./detail-reading-surface";
 import { DetailEventScheduler } from "./detail-event-scheduler";
 import { layoutDetailEditor } from "./detail-editor-layout";
@@ -179,6 +185,12 @@ setKeybindings(
 const hyperlinksEnabled = process.env.HERDR_ENV === "1";
 if (hyperlinksEnabled) {
   setCapabilities({ ...getCapabilities(), hyperlinks: true });
+}
+if (process.env.OUTLINER_KITTY_GRAPHICS === "1" ||
+    (process.env.OUTLINER_KITTY_GRAPHICS !== "0" && process.env.HERDR_ENV === "1" && herdrKittyGraphicsConfigured())) {
+  setCapabilities({ ...getCapabilities(), images: "kitty" });
+} else if (process.env.OUTLINER_KITTY_GRAPHICS === "0" || process.env.HERDR_ENV === "1") {
+  setCapabilities({ ...getCapabilities(), images: null });
 }
 const calloutThemeResolution = detailCalloutThemeFromEnvironment();
 if (calloutThemeResolution.errors.length > 0) {
@@ -756,6 +768,7 @@ const inspection = createDetailController({
 const readingSurface = new DetailReadingSurface(controller, inspection, () => synchronizeLayout?.(), async () => {
   await client.request({action: "clients.update", clientId, previewTarget: null});
 }, () => effects.isSourceSelectionActive?.() ?? false);
+const ansiPack = new AnsiPackPrototype(() => synchronizeLayout?.());
 const focusedReader = () => readingSurface.active;
 const focusedPreviewLayout = () => readingSurface.focused === "preview" && readingSurface.previewVisible ? inspectionLayout : preview;
 const readingHelp = () => readingSurface.previewVisible ? `${actionKeymap.primaryBinding("detail.reading.focus")} Current/Preview  Alt+Enter Keep Preview  Esc close Preview  ` : "";
@@ -899,6 +912,7 @@ async function stop(exitCode = 0): Promise<void> {
   try {controller.checkpointRecovery();inspection.checkpointRecovery();}
   catch(error){controller.onServiceError(error);return;}
   destinationDisplay.dispose();
+  ansiPack.close();
   if (rightClickOwnership === "outliner") {
     try {
       configureCurrentPaneRightClick("herdr");
@@ -1446,6 +1460,19 @@ async function handleDecodedInput(input: PiDetailInput): Promise<void> {
     return;
   }
 
+  if (ansiPack.active && readingSurface.active === controller && controller.state.mode === "preview" && input.kind === "key" && input.inputAction !== "suppress" && !input.key.ctrl && !input.key.meta) {
+    let handled = true;
+    if (input.str === ",") ansiPack.next(-1);
+    else if (input.str === ".") ansiPack.next(1);
+    else if (input.str === "v") ansiPack.toggle();
+    else if (!input.key.shift && input.key.name === "up") ansiPack.move(0, -1);
+    else if (!input.key.shift && input.key.name === "down") ansiPack.move(0, 1);
+    else if (!input.key.shift && input.key.name === "left") ansiPack.move(-1, 0);
+    else if (!input.key.shift && input.key.name === "right") ansiPack.move(1, 0);
+    else handled = false;
+    if (handled) { synchronizeLayout?.(); return; }
+  }
+
   if (input.inputAction !== "suppress" && input.key.name === "escape" && await readingSurface.escapePreview()) return;
   const resolved = actionKeymap.resolve("detail", activeDetailActionScopes(), input.str, input.key);
   if (resolved.actionId && await readerAction(resolved.actionId)) return;
@@ -1509,6 +1536,27 @@ const customFrame = new DetailPiComponent({
   },
   helpText: () => `${readingHelp()}${composed ? "F6 Tree  " : ""}${actionKeymap.helpText("detail", activeDetailActionScopes())}`,
 });
+const ansiImageId = allocateImageId();
+let cachedAnsiImage: { png: Buffer; cellWidth: number; cellHeight: number; sequence: string } | null = null;
+const ansiPackView: Component = {
+  render(width: number): string[] {
+    const cell = getCellDimensions();
+    const preview = ansiPack.render(width, terminal.rows, { width: width * cell.widthPx, height: terminal.rows * cell.heightPx });
+    const lines = preview.lines.map(line => truncateToWidth(line, width));
+    const graphic = preview.graphic;
+    if (graphic && getCapabilities().images === "kitty") {
+      if (!cachedAnsiImage || cachedAnsiImage.png !== graphic.png || cachedAnsiImage.cellWidth !== cell.widthPx || cachedAnsiImage.cellHeight !== cell.heightPx) {
+        const rendered = renderImage(graphic.png.toString("base64"), { widthPx: graphic.cols * 8, heightPx: graphic.rows * 16 }, {
+          imageId: ansiImageId, maxWidthCells: graphic.cols, maxHeightCells: graphic.rows, moveCursor: false,
+        });
+        cachedAnsiImage = rendered ? { png: graphic.png, cellWidth: cell.widthPx, cellHeight: cell.heightPx, sequence: rendered.sequence } : null;
+      }
+      if (cachedAnsiImage) lines[graphic.top - 1] = cachedAnsiImage.sequence;
+    }
+    return lines;
+  },
+  invalidate() { cachedAnsiImage = null; },
+};
 const preview = new DetailPiPreviewLayout(
   controller.state,
   getMarkdownTheme(),
@@ -1634,6 +1682,11 @@ synchronizeLayout = () => {
   if (split) nextRoot = draftSplit;
   else if (previewActive) nextRoot = preview;
   else nextRoot = customFrame;
+
+  const packVisible = !split && !readingSurface.previewVisible && mode === "preview" &&
+    ansiPack.sync(detailResourceDescription(controller.state));
+  if (packVisible) nextRoot = ansiPackView;
+  else ansiPack.sync(null);
 
   inspectionLayout.setActive(readingSurface.previewVisible);
   if (readingSurface.previewVisible) {

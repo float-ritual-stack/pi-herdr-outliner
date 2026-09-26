@@ -10,6 +10,7 @@
   "type": "module",
   "scripts": {
     "outliner": "bun run src/outliner.ts",
+    "spike:ansi-pack": "bun run scripts/ansi-pack-spike.ts",
     "profile:tree": "bun run scripts/profile-tree.ts",
     "server": "bun run src/server-main.ts",
     "cli": "bun run src/cli.ts",
@@ -47,6 +48,7 @@
     "@earendil-works/pi-ai": "^0.84.2",
     "@earendil-works/pi-coding-agent": "^0.84.2",
     "@earendil-works/pi-tui": "^0.84.2",
+    "@xterm/headless": "6.0.0",
     "callscript": "^0.1.0",
     "diff": "8.0.4",
     "marked": "18.0.5",
@@ -55,7 +57,6 @@
   },
   "devDependencies": {
     "@types/bun": "latest",
-    "@xterm/headless": "6.0.0",
     "typescript": "^5.9.3"
   }
 }
