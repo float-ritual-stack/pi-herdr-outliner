@@ -3,8 +3,8 @@
 PIE-367 keeps a plan in one Markdown note while making its steps individually
 addressable. This document describes the service foundation on the feature
 branch, including agent tools and the editor's intentional-ID-removal flow.
-Reader status controls, item projections and item-attached comments remain in
-progress; the feature has not been delivered.
+Reader controls are being integrated; ANSI Detail, item projections and
+item-attached comments remain in progress. The feature has not been delivered.
 
 ## Canonical content
 
@@ -126,3 +126,24 @@ become unresolved. Confirmation applies only to that draft and revision; a
 changed draft must be reviewed again. The same guard and explicit declaration
 apply when committing retained writing. Writing history can restore the saved
 before-image, including its original addresses.
+
+## Reader controls (feature branch)
+
+Pi Detail and the shared Tree/Inbox Preview render canonical checklist marks as
+controls. Click a mark, or Tab to it and press Enter, to choose a status. Mark
+done comes first; Escape cancels. Space on a focused mark toggles to do/done.
+Ctrl+Z reverses the reader's last status change for that note, retaining an
+assigned item address. Undo checks item evidence too: a subsequently rewritten
+step needs a fresh decision, rather than restoring old words.
+
+Copy step link explicitly assigns an address if needed and copies the fragment
+reference. Ordinary rendering, including hidden/folded content, never writes.
+Code examples and legends have no task controls. List disclosures remain
+separate controls; folding children leaves the parent checkbox usable. Saved
+Inbox before-images remain read-only. Embedded/projected item controls are not
+yet implemented.
+
+Both hosts use `ChecklistSession` and the same service update. The rendered
+control carries canonical block/item identity and observed evidence; a wrapped
+screen row is never an edit target. A late response cannot replace a newer
+Preview destination. Menus and notices are local reader state, not authored text.

@@ -18,6 +18,7 @@ import type { InternResourceReceipt } from "./resources";
 interface InboxEffects extends OutlinerRequester {
   actionKeymap?:OutlinerActionKeymap;
   clientId?: string;
+  copyText?(text:string):void|Promise<void>;
   openExternal?(url:string):void|Promise<void>;
   openPreview?(target:OutlinerNavigationTarget):Promise<void>;
   invalidate(): void;
@@ -243,8 +244,8 @@ export class InboxController {
   }
   private previewKey = '';
   constructor(private readonly effects: InboxEffects) {
-    this.sourceReader = new DocumentPreview(effects, () => this.readerChanged(),effects.clientId,effects.openExternal,this.sourceInput,effects.actionKeymap);
-    this.outputReader = new DocumentPreview(effects, () => this.readerChanged(),effects.clientId,effects.openExternal,this.outputInput,effects.actionKeymap);
+    this.sourceReader = new DocumentPreview(effects, () => this.readerChanged(),effects.clientId,effects.openExternal,this.sourceInput,effects.actionKeymap,effects.copyText);
+    this.outputReader = new DocumentPreview(effects, () => this.readerChanged(),effects.clientId,effects.openExternal,this.outputInput,effects.actionKeymap,effects.copyText);
   }
   private async openPreview(target:OutlinerNavigationTarget):Promise<void>{
     if(this.effects.openPreview)return this.effects.openPreview(target);

@@ -1,5 +1,6 @@
 import {PaneDisplay} from "./pane-display";
-import {listItemRemovalMenu} from "./checklist-ui";
+import {listItemRemovalMenu, checklistStatusMenu} from "./checklist-ui";
+import type {ChecklistChoice} from "./checklist-session";
 import {ViewPreferences} from "./view-preferences";
 import {adjacentReaderMenu, readerMenuFromAction, readerMenuItems, type ReaderMenu} from "./reader-chrome";
 import {EditRecoveryInput} from "./edit-recovery-input";
@@ -403,8 +404,16 @@ const effects: DetailEffects = {
   },
   confirmListItemRemoval(ids) {
     return new Promise(resolve => {
-      openActionMenu(listItemRemovalMenu(ids), async id => {resolve(id === "remove");}, () => resolve(false));
+      openActionMenu(listItemRemovalMenu(ids), async id => {resolve(id === "remove");}, () => resolve(false), "Remove item addresses?");
     });
+  },
+  chooseChecklistAction() {
+    return new Promise(resolve => {
+      openActionMenu(checklistStatusMenu(), async id => {resolve(id as ChecklistChoice);}, () => resolve(undefined), "Checklist step");
+    });
+  },
+  updateChecklist(blockId, input) {
+    return client.request({action: "checklist.update", blockId, input, mutation: {author: "user", actorId: "detail"}});
   },
   async updateBlock(input) {
     return client.request<Block>({
@@ -545,11 +554,12 @@ let actionMenu: {
   index: number;
   category?: ReaderMenu;
   cancelled?: () => void;
+  title?: string;
 } | null = null;
 
-function openActionMenu(items: readonly OutlinerActionMenuItem[], invoke: (id: string) => Promise<void>, cancelled?: () => void): void {
+function openActionMenu(items: readonly OutlinerActionMenuItem[], invoke: (id: string) => Promise<void>, cancelled?: () => void, title?: string): void {
   actionMenu?.cancelled?.();
-  actionMenu = {items, invoke, query: "", index: 0, cancelled};
+  actionMenu = {items, invoke, query: "", index: 0, cancelled, title};
   draw();
 }
 
@@ -591,13 +601,13 @@ function draw(): void {
     const count = Math.max(1, height - 3);
     const start = Math.max(0, actionMenu.index - count + 1);
     const lines = [
-      actionMenu.cancelled ? "Remove item addresses?" : `Actions · ${actionMenu.query}`,
+      actionMenu.title ?? `Actions · ${actionMenu.query}`,
       ...items.slice(start, start + count).map((item, index) =>
         `${start + index === actionMenu!.index ? "▶" : " "} ${item.label} · ${item.binding}`),
     ];
     if (actionMenu.cancelled) lines.push("", ...wrapTextWithAnsi(sanitizeDynamicText(items[actionMenu.index]?.description ?? ""), Math.max(1, width)));
     while (lines.length < height - 1) lines.push("");
-    lines.push(actionMenu.cancelled ? "↑↓ choose · Enter confirms · Esc keeps editing" : "Type to filter · ↑↓ select · Enter invoke · Esc cancel");
+    lines.push(actionMenu.cancelled ? "↑↓ choose · Enter confirms · Esc cancels" : "Type to filter · ↑↓ select · Enter invoke · Esc cancel");
     process.stdout.write("\x1b[H\x1b[2J" + lines.slice(0, height).map(line => truncateToWidth(sanitizeDynamicText(line), width)).join("\n"));
     return;
   }
@@ -820,7 +830,7 @@ async function invokeReaderAction(actionId: string): Promise<void> {
     await readingSurface.activatePreviewAction({type: actionId === "detail.annotation.reply" ? "annotation.thread.reply" : "annotation.thread.lifecycle", annotationId}, viewport(controller));
     return;
   }
-  if (active === inspection && actionKeymap.action(actionId).menuGroup === "Edit" && actionId !== "detail.annotation.previous" && actionId !== "detail.annotation.next") {
+  if (active === inspection && !actionId.startsWith("detail.checklist.") && actionKeymap.action(actionId).menuGroup === "Edit" && actionId !== "detail.annotation.previous" && actionId !== "detail.annotation.next") {
     if (await readingSurface.keepPreview(viewport(controller))) await handleKeypress.invoke(actionId);
     return;
   }

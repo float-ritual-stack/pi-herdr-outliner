@@ -6,6 +6,7 @@ export interface PreviewSourceSpan {
 }
 
 export type PreviewRegionKind =
+  | "checklist"
   | "document-fold"
   | "body-link"
   | "annotation"
@@ -18,6 +19,7 @@ export type PreviewRegionKind =
   | "property-entry";
 
 export type PreviewRegionAction =
+  | { type: "checklist.open"; regionId: string }
   | { type: "document.disclosure.toggle"; regionId: string }
   | { type: "link.open"; uri: string }
   | { type: "preview.region.focus"; regionId: string }
@@ -62,6 +64,8 @@ const DETAIL_PREVIEW_SCHEME = "pi-outliner-detail:";
 
 export function previewRegionActionUri(action: PreviewRegionAction): string {
   switch (action.type) {
+    case "checklist.open":
+      return `${DETAIL_PREVIEW_SCHEME}//checklist/${encodeURIComponent(action.regionId)}`;
     case "document.disclosure.toggle":
       return `${DETAIL_PREVIEW_SCHEME}//document-toggle/${encodeURIComponent(action.regionId)}`;
     case "link.open":
@@ -116,6 +120,9 @@ export function parsePreviewRegionActionUri(uri: string): PreviewRegionAction | 
   }
 
   switch (parsed.hostname) {
+    case "checklist":
+      if (!value) throw new Error("Invalid checklist control");
+      return {type: "checklist.open", regionId: value};
     case "document-control":
     case "document-toggle":
       if (!value) throw new Error("Invalid document disclosure");

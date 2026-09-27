@@ -80,6 +80,7 @@ export function detailActionScopes(
   }
 
   const scopes: string[] = [];
+  if (state.previewRegions.regions.some(region => region.id === state.previewRegions.focusedRegionId && region.kind === "checklist")) scopes.push("checklist-focused");
   const propertyOccurrence = focusedPropertyOccurrence(state);
   const dedicatedProperty = state.propertyInspector.presentation === "dedicated";
   if (state.context.selected?.deletedAt) scopes.push("trash");
@@ -314,6 +315,12 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
         return true;
       case "detail.preview.activate":
         await dispatch({ type: "preview.activate" });
+        return true;
+      case "detail.checklist.toggle":
+        await dispatch({type: "checklist.toggle"});
+        return true;
+      case "detail.checklist.undo":
+        await dispatch({type: "checklist.undo"});
         return true;
       case "detail.property.edit.begin":
         await dispatch({ type: "property-inspector.edit.begin" });

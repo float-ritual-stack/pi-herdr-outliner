@@ -395,7 +395,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     ()=>["edit","add-child","add-sibling"].includes(mode),()=>quickEditSource?{blockId:quickEditSource.id,text:quickBuffer.text}:undefined);
 
 
-  const localReader = new DocumentPreview(effects, () => effects.invalidate(), effects.clientId,effects.openExternal,effects.previewSelectionInput,effects.actionKeymap);
+  const localReader = new DocumentPreview(effects, () => effects.invalidate(), effects.clientId,effects.openExternal,effects.previewSelectionInput,effects.actionKeymap,effects.copyText);
   let previewPreferences = defaultPreviewPreferences();
   let viewerLines: string[] = [];
   let viewerPath = "";
@@ -462,6 +462,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     clientId: effects.clientId,
     openPreview: openPreviewTarget,
     openExternal: effects.openExternal,
+    copyText: effects.copyText,
     request: input => effects.request(input),
     async openResource(resourceId) {
       if (!await dispatchRecoverable({ kind: "resource", resourceId }, "open")) return;
@@ -2795,7 +2796,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     }
     if (!treePointer && inputAction !== "suppress" && mode === "browse" && localReader.state?.focused) {
       cancelReadSequence();
-      if(localReader.hasDraft){
+      if(localReader.hasDraft||localReader.state?.checklistPicker){
         const frame=treePreviewFrame(localReader.state,effects.terminalWidth(),effects.terminalHeight(),"",previewPreferences,effects.density?.() ?? "compact");
         await localReader.key(key,frame.content.width,frame.content.height,openPreviewTarget,str);return;
       }

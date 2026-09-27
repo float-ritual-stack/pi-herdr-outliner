@@ -1,3 +1,5 @@
+import {CHECKLIST_CHOICES} from "./checklist-session";
+import {parsePreviewRegionActionUri} from "./detail-preview-regions";
 import {BufferComposer,BUFFER_COMPOSER_HEIGHT,bufferComposerEditorBody} from './buffer-composer';
 import {layoutDetailEditor} from './detail-editor-layout';
 import type {ReaderDensity} from "./reader-chrome";
@@ -75,6 +77,19 @@ export function documentPreviewLines(document:DetailReadPreviewDocument,width:nu
 }
 /** Render one allocated document rectangle. All input geometry comes from this frame. */
 export function renderDocumentPreview(preview:DocumentPreviewState,rect:PreviewRect,help:string,toolbar?:string, density: ReaderDensity = "expanded", menuAction?: string):DocumentPreviewFrame {
+  if(preview.checklistPicker){
+    const picker=preview.checklistPicker;
+    const room=Math.max(1,rect.height-2);
+    const start=Math.max(0,Math.min(picker.index-room+1,CHECKLIST_CHOICES.length-room));
+    const choices=CHECKLIST_CHOICES.slice(start,start+room);
+    const lines=['Checklist step',...choices.map((choice,index)=>`${start+index===picker.index?'>':' '} ${choice.label}`),'Enter choose · Esc cancel'];
+    const controls:NonNullable<DocumentPreviewFrame['controls']>=choices.map((choice,index)=>({
+      rect:{x:rect.x,y:rect.y+index+1,width:rect.width,height:1},action:`preview.checklist.choose:${choice.id}`,
+    })).filter(control=>control.rect.y<rect.y+rect.height);
+    if(lines.length<=rect.height)controls.push({rect:{x:rect.x,y:rect.y+lines.length-1,width:rect.width,height:1},action:'preview.checklist.cancel'});
+    return {rect,content:{...rect,height:0},lines:lines.slice(0,rect.height).map(line=>shade(line,rect.width)),
+      offset:preview.offset,totalRows:0,links:[],controls};
+  }
   if(preview.comment){
     const draft=preview.comment;
     const readerHeight=Math.max(0,rect.height-BUFFER_COMPOSER_HEIGHT);
@@ -110,7 +125,7 @@ export function renderDocumentPreview(preview:DocumentPreviewState,rect:PreviewR
   const commentPrompt=preview.document.commentTarget?` · ${commentKey} comment`:'';
   const lines=[preview.selecting?`Select passage · arrows move · Shift selects${commentPrompt} · Esc clear`:preview.passageSelected?`Passage selected${commentPrompt} · Esc clear`:`${preview.focused?'●':'○'} Preview · ${sanitizeDynamicText(preview.title)}`,navigation,...rendered.slice(offset,offset+content.height)];
   while(lines.length<rect.height-1)lines.push('');
-  lines.push(preview.notice ? sanitizeDynamicText(preview.notice) : preview.activeLink ? `Enter follow · ${sanitizeDynamicText(preview.activeLinkLabel??preview.activeLink)}` : `${preview.document.commentTarget?`${commentKey} comment · `:""}${selectKey} select · [/] threads · Tab links · ${help}`);
+  lines.push(preview.notice ? sanitizeDynamicText(preview.notice) : preview.activeLink ? parsePreviewRegionActionUri(preview.activeLink)?.type==='checklist.open'?'Enter status · Space toggle · Ctrl+Z undo':`Enter follow · ${sanitizeDynamicText(preview.activeLinkLabel??preview.activeLink)}` : `${preview.document.commentTarget?`${commentKey} comment · `:""}${selectKey} select · [/] threads · Tab links · ${help}`);
   return {rect,content,lines:lines.slice(0,rect.height).map(line=>shade(line,rect.width)),offset,totalRows:rendered.length,links,controls};
 }
 export function pointInPreview(rect:PreviewRect,column:number,row:number):boolean{return column>=rect.x&&column<rect.x+rect.width&&row>=rect.y&&row<rect.y+rect.height;}

@@ -1,5 +1,8 @@
 import {blockAnnotationRepresentation, resourceAnnotationRepresentation} from "./annotation-representations";
 import {removedListItemIds} from "./checklist-items";
+import {checklistControlId, findChecklistControl, type ChecklistControl} from "./checklist-controls";
+import {ChecklistSession, type ChecklistChoice} from "./checklist-session";
+import type {ChecklistUpdateInput, ChecklistUpdateReceipt} from "./types";
 import type {ChecklistIdentityChange} from "./types";
 import { COMPLETION_ROWS } from "./reference-completion-renderer";
 import { ReferenceCompletionSession, type ReferenceCompletionItem, type ReferenceCompletionState } from "./reference-completion";
@@ -500,6 +503,8 @@ export function detailResourceTarget(
 }
 
 export interface DetailEffects {
+  chooseChecklistAction?(): Promise<ChecklistChoice | undefined>;
+  updateChecklist?(blockId: string, input: ChecklistUpdateInput): Promise<ChecklistUpdateReceipt>;
   confirmListItemRemoval?(ids: readonly string[]): Promise<boolean>;
   recovery?: Pick<EditRecoveryClient,"retain"|"list"|"commit"|"separate"> & Partial<Pick<EditRecoveryClient,"checkpoint"|"warnings">>;
   reviewRecovery?(records:EditRecovery[]):Promise<RecoveryChoice>;
@@ -669,6 +674,8 @@ export type DetailIntent =
   | { type: "preview.focus.move"; delta: -1 | 1 }
   | { type: "preview.focus.set"; regionId: string }
   | { type: "preview.activate" }
+  | { type: "checklist.toggle" }
+  | { type: "checklist.undo" }
   | { type: "preview.action"; action: PreviewRegionAction; routing?: DetailOpenRouting }
   | { type: "property-inspector.disclosure.toggle" }
   | { type: "property-inspector.pane.open" }
@@ -1023,6 +1030,10 @@ export function createDetailController(
     destinationChooser: destinationChooserState,
   };
   const navigationHistory: DetailNavigationEntry[] = [];
+  const checklist = new ChecklistSession((blockId, input) => {
+    if (!effects.updateChecklist) throw Error("Checklist updates are unavailable in this reader");
+    return effects.updateChecklist(blockId, input);
+  });
   let navigationIndex = -1;
   let serviceConnected = false;
   let noticeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -1142,16 +1153,20 @@ export function createDetailController(
     state.readStatus = "ready";
   };
 
+  const applyBlockRead = ({projection, resolved}: DetailBlockRead): void => {
+    state.projectedSelectedText = projection.text;
+    state.embedStates = projection.embeds;
+    state.embedRanges = projection.embedRanges;
+    applyResolvedReferences(resolved);
+  };
+
   const applyReadProjection = async (
     text: string,
     hostBlockId?: string,
   ): Promise<DetailBlockRead> => {
     const projection = await effects.projectRead(text, hostBlockId);
     const resolved = await effects.resolveReferences(projection.text);
-    state.projectedSelectedText = projection.text;
-    state.embedStates = projection.embeds;
-    state.embedRanges = projection.embedRanges;
-    applyResolvedReferences(resolved);
+    applyBlockRead({projection, resolved});
     return { projection, resolved };
   };
 
@@ -3022,6 +3037,26 @@ export function createDetailController(
     ensureFileCursorVisible(viewport);
   };
 
+  const showChecklistReceipt = async (receipt: ChecklistUpdateReceipt, generation: number): Promise<void> => {
+    if (generation !== openGeneration || state.mode !== "preview" || state.context.selected?.id !== receipt.block.id) return;
+    const projection = await effects.projectRead(receipt.block.text, receipt.block.id);
+    const resolved = await effects.resolveReferences(projection.text);
+    if (generation !== openGeneration || state.mode !== "preview" || state.context.selected?.id !== receipt.block.id || state.context.selected.revision > receipt.block.revision) return;
+    const read = {projection, resolved};
+    replaceSelectedBlock(receipt.block);
+    applyBlockRead(read);
+    cacheCurrentBlockRead(read);
+    state.previewRegions.focusedRegionId = checklistControlId(receipt.block.id, receipt.item, receipt.block.revision);
+    state.status = `Step ${receipt.item.status} · Ctrl+Z undoes the last status change`;
+  };
+
+  const changeChecklist = async (control: ChecklistControl, choice: ChecklistChoice, generation: number): Promise<void> => {
+    const result = await checklist.choose(control, choice);
+    if (generation === openGeneration && result.link) effects.copyText(result.link);
+    await showChecklistReceipt(result.receipt, generation);
+    if (generation === openGeneration && result.link) state.status = "Step link copied";
+  };
+
   const dispatch = async (intent: DetailIntent, viewport: DetailViewport): Promise<void> => {
     completionViewport=viewport;
     const requestGeneration = ++openGeneration;
@@ -3465,8 +3500,40 @@ export function createDetailController(
         if (action) await dispatch({ type: "preview.action", action }, viewport);
         break;
       }
+      case "checklist.toggle": {
+        const control = findChecklistControl(state.previewRegions.regions, state.previewRegions.focusedRegionId ?? "");
+        if (!control || state.mode !== "preview" || state.busy) break;
+        state.busy = true;
+        try { await changeChecklist(control, control.item.status === "done" ? "todo" : "done", requestGeneration); }
+        finally { state.busy = false; }
+        break;
+      }
+      case "checklist.undo": {
+        const blockId = state.context.selected?.id;
+        if (!blockId || state.mode !== "preview" || state.busy) break;
+        state.busy = true;
+        try {
+          const receipt = await checklist.undo(blockId);
+          if (receipt) await showChecklistReceipt(receipt, requestGeneration);
+          else state.status = "No checklist status change to undo in this note";
+        } finally { state.busy = false; }
+        break;
+      }
       case "preview.action":
         switch (intent.action.type) {
+          case "checklist.open": {
+            const control = findChecklistControl(state.previewRegions.regions, intent.action.regionId);
+            if (!control || state.mode !== "preview" || state.busy) break;
+            state.previewRegions.focusedRegionId = control.id;
+            state.busy = true;
+            try {
+              const choice = await effects.chooseChecklistAction?.();
+              if (choice && requestGeneration === openGeneration && state.mode === "preview" && state.context.selected?.id === control.blockId) {
+                await changeChecklist(control, choice, requestGeneration);
+              }
+            } finally { state.busy = false; }
+            break;
+          }
           case "link.open": {
             const uri = intent.action.uri;
             if (uri.startsWith("http://") || uri.startsWith("https://")) {

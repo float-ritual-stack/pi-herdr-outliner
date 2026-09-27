@@ -1,4 +1,5 @@
 import type {ReaderDensity} from "./reader-chrome";
+import {checklistControls, type ChecklistControl} from "./checklist-controls";
 import { parsePropertyRecords } from "./properties";
 import {documentFolds, revealFoldedLine, type DocumentFold} from './document-folds';
 import type {Block} from "./types";
@@ -527,6 +528,8 @@ export function renderDetailReadPreview(
   );
   // Picker thumbnails have no disclosure input; retain their plain reading layout.
   const folds = linksEnabled ? documentFolds(projectedText, embedRanges) : [];
+  const checklists = linksEnabled && input.sourceBlock && !input.truncated
+    ? checklistControls(input.sourceBlock, renderedLineForAuthoredLine) : [];
   const previewRegions: PreviewRegionState = input.previewRegions ??= {
     regions: [],
     focusedRegionId: null,
@@ -536,7 +539,7 @@ export function renderDetailReadPreview(
     ? {...input.annotations, previewRegions, resolvedSelectedText:input.resolvedText} : undefined;
   const groups = annotationState ? detailAnnotationGroups(annotationState, renderedLineForAuthoredLine,
     projectedText.split(/\r?\n/).length, projectedText) : [];
-  reconcilePreviewRegions(previewRegions, [...folds, ...callouts, ...detailAnnotationRegions(groups)]);
+  reconcilePreviewRegions(previewRegions, [...folds, ...callouts, ...checklists, ...detailAnnotationRegions(groups)]);
   if (revealSourceLine !== undefined) revealFoldedLine(previewRegions, [...folds, ...callouts], renderedLineForAuthoredLine(revealSourceLine));
   const markdown = new SourceSpannedMarkdown(
     markdownTheme,
@@ -545,7 +548,7 @@ export function renderDetailReadPreview(
     linksEnabled,
     calloutTheme,
   );
-  markdown.setContent(document, embedRanges, true, callouts, folds);
+  markdown.setContent(document, embedRanges, true, callouts, folds, checklists);
   const metadataSpans = new Set(parsePropertyRecords(input.canonicalText).filter(record => record.scope === "block").map(record => record.start));
   const metadataLinks = input.preserveMetadata ? [] : authoredResourceReferenceOccurrences(input.canonicalText).flatMap(link => {
     if (link.kind !== "authored-resource") return [];
@@ -1156,6 +1159,7 @@ export class DetailPiPreviewLayout extends VStack {
   private authoredCallouts: AuthoredCalloutParse | undefined;
   private renderedCalloutRegions: DetailCalloutRegion[] = [];
   private documentFoldRegions: DocumentFold[] = [];
+  private checklistRegions: ChecklistControl[] = [];
   private readerAnchorCache: {key:string; lines:number[]; rows:Map<number,number>; renderedCount:number} | null = null;
   private renderedLineForSourceLine = (line: number) => line;
   private renderedFragmentSourceLine = 0;
@@ -1722,12 +1726,15 @@ export class DetailPiPreviewLayout extends VStack {
         this.options.calloutTheme,
       );
       this.documentFoldRegions = draftText === null && referencesReady ? documentFolds(rawText, embedRanges) : [];
+      this.checklistRegions = draftText === null && referencesReady && selected
+        ? checklistControls(selected, renderedLineForAuthoredLine) : [];
       this.markdown.setContent(
         renderedText,
         embedRanges,
         this.state.embedBackgroundEnabled,
         this.renderedCalloutRegions,
         this.documentFoldRegions,
+        this.checklistRegions,
       );
     }
     const annotationGroups = draftText === null
@@ -1759,6 +1766,7 @@ export class DetailPiPreviewLayout extends VStack {
           return parent ? {...region, parentId:parent.id} : region;
         }),
         ...this.bodyRegions,
+        ...this.checklistRegions,
         ...detailAnnotationRegions(annotationGroups),
         ...(this.showInspector() ? detailPropertyInspectorRegions(this.state) : []),
         ...(this.showBacklinks() ? detailBacklinkRegions(this.state) : []),
@@ -1856,6 +1864,11 @@ export class DetailPiPreviewLayout extends VStack {
           spans.push({...link,row:annotated.mapMarkdownRow(link.row),column:link.column+contentWidth-annotated.contentWidth});
           this.bodyLinks.set(action.regionId,spans);
         }
+        if (action?.type === "checklist.open") {
+          const spans = this.bodyLinks.get(action.regionId) ?? [];
+          spans.push({...link, row: annotated.mapMarkdownRow(link.row), column: link.column + contentWidth - annotated.contentWidth});
+          this.bodyLinks.set(action.regionId, spans);
+        }
       }
       if(!/^(pi-outliner:|https?:)/.test(link.uri))continue;
       const id=`body-link:${link.occurrenceId??`${link.uri}:${link.row}:${link.column}`}`;
@@ -1876,7 +1889,7 @@ export class DetailPiPreviewLayout extends VStack {
       const calloutRow=calloutRows.get(region.id);
       return calloutRow!==undefined?arrangement.mapAuthoredRow(calloutRow):0;
     };
-    const ordered=[...regions.filter(region=>region.kind!=="body-link"),...this.bodyRegions]
+    const ordered=[...regions.filter(region=>region.kind!=="body-link" && (region.kind !== "checklist" || this.bodyLinks.has(region.id))),...this.bodyRegions]
       .map(region=>({region,row:row(region)})).sort((a,b)=>a.row-b.row).map(entry=>entry.region);
     if(this.options.setRegions)this.options.setRegions(ordered);
     else reconcilePreviewRegions(this.state.previewRegions,ordered, this.state.document.kind === 'loading' || (this.state.document.kind === 'ready' && this.state.readStatus === 'pending'));

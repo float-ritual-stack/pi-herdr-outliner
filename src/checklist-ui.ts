@@ -1,4 +1,9 @@
 import type {OutlinerActionMenuItem} from "./outliner-actions";
+import {CHECKLIST_CHOICES} from "./checklist-session";
+
+export function checklistStatusMenu(): OutlinerActionMenuItem[] {
+  return CHECKLIST_CHOICES.map(choice => ({id: choice.id, label: choice.label, description: "", binding: "", group: "Edit"}));
+}
 
 export function listItemRemovalMenu(ids: readonly string[]): OutlinerActionMenuItem[] {
   return [

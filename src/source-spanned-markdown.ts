@@ -1,4 +1,5 @@
 import {LinkAwareMarkdown,stripLinkMarkers} from './link-aware-markdown';
+import {renderChecklistControls, type ChecklistControl} from './checklist-controls';
 import {withInternalLinks, stripRenderedLinks, measureRenderedLinks, type RenderedLink} from './rendered-links';
 import {
   Box,
@@ -445,6 +446,7 @@ function traverseCalloutRows(
 }
 
 export class SourceSpannedMarkdown implements Component {
+  private checklists: readonly ChecklistControl[] = [];
   private folds: readonly DocumentFold[] = [];
   private folded: {signature: string; projection: FoldedDocument; visible: ReadonlySet<number>; renderer: SourceSpannedMarkdown} | null = null;
   private segments: RenderSegment[] = [];
@@ -471,10 +473,14 @@ export class SourceSpannedMarkdown implements Component {
     decorationEnabled: boolean,
     callouts: readonly DetailCalloutRegion[] = [],
     folds: readonly DocumentFold[] = [],
+    checklists: readonly ChecklistControl[] = [],
   ): void {
+    this.checklists = checklists;
     this.folds = folds;
     this.folded = null;
     this.sourceText = text;
+    // Folded rendering decorates in its child after remapping source lines.
+    if (!folds.length) text = renderChecklistControls(text, checklists);
     this.ranges = ranges;
     this.decorationEnabled = decorationEnabled && ranges.length > 0;
     this.callouts = callouts;
@@ -628,7 +634,9 @@ export class SourceSpannedMarkdown implements Component {
       return {...region, headerLine: startLine, sourceSpan: {startLine, endLine, start: starts[startLine]!, end: starts[endLine + 1] ?? projection.text.length}};
     });
     const renderer = new SourceSpannedMarkdown(this.theme, this.decorate, this.previewRegions, this.linksEnabled, this.calloutTheme, this.trackLinks);
-    renderer.setContent(projection.text, this.ranges.map(range => ({startLine: mapLine(range.startLine), endLine: mapLine(range.endLine)})), this.decorationEnabled, callouts);
+    const checklists = this.checklists.filter(control => visible.has(control.sourceSpan!.startLine)).map(control => ({...control,
+      sourceSpan: {...control.sourceSpan!, startLine: mapLine(control.sourceSpan!.startLine), endLine: mapLine(control.sourceSpan!.endLine)}}));
+    renderer.setContent(projection.text, this.ranges.map(range => ({startLine: mapLine(range.startLine), endLine: mapLine(range.endLine)})), this.decorationEnabled, callouts, [], checklists);
     return this.folded = {signature, projection, visible, renderer};
   }
 

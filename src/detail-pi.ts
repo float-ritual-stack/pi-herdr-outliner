@@ -1,6 +1,7 @@
 import {PaneDisplay} from "./pane-display";
 import {sanitizeDynamicText} from "./terminal";
-import {listItemRemovalMenu} from "./checklist-ui";
+import {listItemRemovalMenu, checklistStatusMenu} from "./checklist-ui";
+import type {ChecklistChoice} from "./checklist-session";
 import {detailTitle} from "./detail-renderer";
 import {adjacentReaderMenu, readerMenuFromAction, readerMenuItems, type ReaderMenu} from "./reader-chrome";
 import {ViewPreferences} from "./view-preferences";
@@ -28,6 +29,7 @@ import {
   ProcessTerminal,
   SelectList,
   wrapTextWithAnsi,
+  truncateToWidth,
   setKeybindings,
   setCapabilities,
   TUI_KEYBINDINGS,
@@ -162,6 +164,13 @@ class DetailTuiAltScreen extends TuiAltScreen {
   override addInputListener(listener: TuiInputListener): () => void {
     this.viewportInputListener ??= listener;
     return super.addInputListener(listener);
+  }
+
+  releasePointerGesture(): void {
+    // A modal takes pointer ownership. Retire the viewport's click-count/drag
+    // state through its focus-out path, without discarding completed selection.
+    // Otherwise click → menu → Esc → click can become word selection.
+    this.viewportInputListener?.("\x1b[O");
   }
 
   addOutlinerInputListener(listener: TuiInputListener): () => void {
@@ -628,6 +637,14 @@ const effects: DetailEffects = {
       showActionMenu(listItemRemovalMenu(ids), async id => {resolve(id === "remove");}, undefined, () => resolve(false), undefined, undefined, "Remove item addresses?");
     });
   },
+  chooseChecklistAction() {
+    return new Promise(resolve => {
+      showActionMenu(checklistStatusMenu(), async id => {resolve(id as ChecklistChoice);}, undefined, () => resolve(undefined), undefined, undefined, "Checklist step");
+    });
+  },
+  updateChecklist(blockId, input) {
+    return client.request({action: "checklist.update", blockId, input, mutation: {author: "user", actorId: "detail"}});
+  },
   async updateBlock(input) {
     return client.request<Block>({
       action: "update",
@@ -1037,7 +1054,8 @@ class FuzzyActionMenu implements Component {
       const selected = this.items.find(item => item.id === this.list.getSelectedItem()?.value);
       return [this.decisionTitle, "", ...this.list.render(width), "",
         ...wrapTextWithAnsi(sanitizeDynamicText(selected?.description ?? ""), Math.max(1, width)), "",
-        ...wrapTextWithAnsi("↑↓ choose · Enter confirms · Esc keeps editing", Math.max(1, width))];
+        ...wrapTextWithAnsi("↑↓ choose · Enter confirms · Esc cancels", Math.max(1, width))]
+        .map(line => truncateToWidth(line, width, "", true));
     }
     return [
       `\x1b[2mFind: ${this.query}▏\x1b[0m`,
@@ -1118,6 +1136,7 @@ function showActionMenu(
   decisionTitle?: string,
 ): void {
   closeActionMenu();
+  tui.releasePointerGesture();
   actionMenuCancelled = cancelled;
   const menu = new FuzzyActionMenu(items, destination ? 7 : 13, destination, changeMenu, decisionTitle);
   menu.onSelect = (actionId) => {
@@ -1131,12 +1150,12 @@ function showActionMenu(
     tui.requestRender();
   };
   actionMenuHandle = tui.showOverlay(menu, {
-    width: destination || decisionTitle ? "95%" : "70%",
+    width: decisionTitle ? "100%" : destination ? "95%" : "70%",
     maxHeight: destination ? "90%" : "70%",
-    minWidth: 32,
+    minWidth: decisionTitle ? 1 : 32,
     anchor: "top-right",
     ...(origin ? { row: origin.row, col: origin.column } : {}),
-    margin: { top: 1, right: 1 },
+    margin: { top: 1, right: decisionTitle ? 0 : 1 },
   });
 }
 
