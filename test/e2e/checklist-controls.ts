@@ -3,7 +3,9 @@ import {visibleWidth} from '@earendil-works/pi-tui';
 import type {Block,ChecklistCollection} from '../../src/types';
 import {runHerdrScenario} from './herdr-runner';
 
-const result=await runHerdrScenario({name:'checklist-controls',async prepare(){},async run(s){
+const ansi=process.argv.includes('--ansi');
+const detailAnchor=ansi?'Current [Note]':'● Current';
+const result=await runHerdrScenario({name:`checklist-controls-${ansi?'ansi':'pi'}`,detailRenderer:ansi?'ansi':'pi-tui',async prepare(){},async run(s){
   const terminal=await s.attachClient();
   await terminal.resize(190,70);
   const source=await s.client.request<Block>({action:'create',text:[
@@ -35,14 +37,14 @@ const result=await runHerdrScenario({name:'checklist-controls',async prepare(){}
     await terminal.write(`\x1b[<0;${column+1};${row+1}M\x1b[<0;${column+1};${row+1}m`);
   };
   await s.checkpoint('01-readable-plan');
-  await click(s.panes.detail,'● Current','[ ]');
+  await click(s.panes.detail,detailAnchor,'[ ]');
   await s.waitVisible(s.panes.detail,'Checklist step');
   await s.waitVisible(s.panes.detail,'Mark done');
   await s.checkpoint('01b-status-menu');
   await s.keys(s.panes.detail,'escape');
   await s.waitFor('Detail picker dismissed',()=>s.visible(s.panes.detail),frame=>frame.includes('Prepare release')&&!frame.includes('Checklist step'));
   assert.equal((await canonical()).revision,source.revision);
-  await click(s.panes.detail,'● Current','[ ]');
+  await click(s.panes.detail,detailAnchor,'[ ]');
   await s.waitVisible(s.panes.detail,'Checklist step');
   await s.keys(s.panes.detail,'enter');
   const assigned=await s.waitFor('Detail done persists',status,item=>item.status==='done');
@@ -57,7 +59,7 @@ const result=await runHerdrScenario({name:'checklist-controls',async prepare(){}
   const wideRows=(await s.visible(s.panes.detail)).split('\n').length;
   await terminal.resize(130,55);
   await s.waitFor('resized Detail content',()=>s.visible(s.panes.detail),frame=>frame.includes('Prepare release')&&frame.split('\n').length<wideRows);
-  await click(s.panes.detail,'● Current','[x]');
+  await click(s.panes.detail,detailAnchor,'[x]');
   await s.waitVisible(s.panes.detail,'Checklist step');
   await s.keys(s.panes.detail,'escape');
   await s.waitFor('Detail picker dismissed',()=>s.visible(s.panes.detail),frame=>frame.includes('Prepare release')&&!frame.includes('Checklist step'));
@@ -87,6 +89,38 @@ const result=await runHerdrScenario({name:'checklist-controls',async prepare(){}
   assert.equal((await status()).itemId,assigned.itemId);
   await s.waitVisible(s.panes.detail,'[~]');
   await s.checkpoint('05-canonical-update-in-both-readers');
+  if (ansi) {
+    const longPlan=await s.client.request<Block>({action:'create',text:[
+      'OFFSCREEN CHECKLIST','',...Array.from({length:50},(_,i)=>`Context paragraph ${i+1}. ${"Supporting context remains part of the plan. ".repeat(6)}\n`),
+      '- [ ] Last destination ^last',
+    ].join('\n')});
+    await s.revealTree(s.panes.tree,longPlan.id);await s.keys(s.panes.tree,'alt+enter');
+    await s.waitVisible(s.panes.detail,'Context paragraph 1.');
+    assert.ok(!(await s.visible(s.panes.detail)).includes('Last destination'));
+    await s.focus(s.panes.detail);
+    // The only checkbox starts outside the viewport. Tab must reveal its real
+    // control before Space can change it, without scrolling source text by hand.
+    for(let i=0;i<8;i++) {
+      await s.keys(s.panes.detail,'tab');
+      if((await s.visible(s.panes.detail)).includes('Last destination'))break;
+    }
+    await s.waitVisible(s.panes.detail,'Last destination');
+    await s.keys(s.panes.detail,'space');
+    await s.waitFor('offscreen keyboard mutation',()=>s.client.request<Block>({action:'get',blockId:longPlan.id}),b=>b.text.includes('[x] Last destination'));
+    await s.waitVisible(s.panes.detail,'Last destination');
+    await s.waitVisible(s.panes.detail,'[x] Last destination');
+    await s.checkpoint('06-keyboard-focus-reveals-offscreen-task');
+    await s.keys(s.panes.detail,'ctrl+z');
+    await s.waitFor('offscreen Undo',()=>s.client.request<Block>({action:'get',blockId:longPlan.id}),b=>b.text===longPlan.text);
+    await s.waitVisible(s.panes.detail,'[ ] Last destination');
+    await s.revealTree(s.panes.tree,source.id);await s.keys(s.panes.tree,'alt+enter');
+    await s.waitVisible(s.panes.detail,'Prepare release');
+    const reader=(await s.registrations()).find(c=>c.runtime?.paneId===s.panes.detail)!;
+    await s.client.request({action:'ui.command.send',command:{command:'open',targetClientId:reader.clientId,
+      target:{kind:'block',blockId:longPlan.id,fragmentId:'last'}}});
+    await s.waitFor('resolved fragment is visible',()=>s.visible(s.panes.detail),frame=>frame.split('\n').some(row=>row.includes('[ ] Last destination')&&!row.includes('^last')));
+    await s.checkpoint('07-fragment-reveals-wrapped-item');
+  }
   await s.record('coverage',{input:'Attached-terminal pointer and injected keys',physicalKeyboard:false,
     current:await canonical(),item:await status()});
 }});

@@ -1,6 +1,11 @@
+import {getMarkdownTheme} from "@earendil-works/pi-coding-agent";
+import {renderDetailReadPreview} from "./detail-pi-preview";
+import {measureRenderedLinks, withInternalLinks} from "./rendered-links";
+import {parsePreviewRegionActionUri, type PreviewRegion} from "./detail-preview-regions";
 import {renderReaderMenu, type ReaderDensity} from "./reader-chrome";
 import {
   hyperlink,
+  sliceByColumn,
   truncateToWidth,
   visibleWidth,
   wrapTextWithAnsi,
@@ -300,7 +305,35 @@ export function buildDetailAnsiPreview(
   state: Readonly<DetailState>,
   width: number,
 ): NonNullable<DetailViewport["preview"]> {
-  const sourceLines = state.resolvedSelectedText.split(/\r?\n/);
+  let rich: Partial<NonNullable<DetailViewport["preview"]>> = {};
+  let sourceLines = state.resolvedSelectedText.split(/\r?\n/);
+  if (state.context.selected && state.readStatus === "ready" && state.projectedSelectedText) {
+    const previewRegions = {...state.previewRegions};
+    const rendered = withInternalLinks(() => renderDetailReadPreview({
+      canonicalText: state.context.selected!.text,
+      sourceBlock: state.context.selected!, resolvedText: state.resolvedSelectedText,
+      projectedText: state.projectedSelectedText, embedRanges: state.embedRanges,
+      workIdPrefix: state.workIdPrefix, previewRegions,
+    }, width, getMarkdownTheme(), undefined, true, state.previewSourceLine));
+    const links = measureRenderedLinks(rendered.lines);
+    const regions: PreviewRegion[] = [];
+    const rows = new Map<string, number>();
+    const columns = new Map<string, {column: number; width: number}>();
+    for (const link of links) {
+      const action = parsePreviewRegionActionUri(link.uri);
+      const existing = action && "regionId" in action
+        ? previewRegions.regions.find(region => region.id === action.regionId) : undefined;
+      const id = existing?.id ?? `ansi-link:${link.row}:${link.column}:${link.uri}`;
+      if (!rows.has(id)) {
+        regions.push(existing ?? {id,kind:"body-link",sourceSpan:null,parentId:null,childIds:[],
+          focusable:true,disclosure:null,activation:action ?? {type:"link.open",uri:link.uri}});
+        rows.set(id, link.row);
+        columns.set(id, {column: link.column, width: link.width});
+      }
+    }
+    sourceLines = rendered.lines;
+    rich = {rendered: true, regions, regionRows: rows, regionColumns: columns, sourceLineRow: rendered.sourceLineRow};
+  }
   const annotationLines: string[] = [];
   const threadRows = new Map<string, number>();
   const groups = detailAnnotationGroups(state, line => line, sourceLines.length, state.resolvedSelectedText);
@@ -333,7 +366,7 @@ export function buildDetailAnsiPreview(
       }
     }
   }
-  return { sourceLines, annotationLines, threadRows };
+  return { ...rich, sourceLines, annotationLines, threadRows };
 }
 
 export function renderDetailLines(
@@ -452,8 +485,13 @@ export function renderDetailLines(
     const lineCount = preview.sourceLines.length + preview.annotationLines.length;
     for (let row = state.previewOffset; row < Math.min(lineCount, state.previewOffset + bodyHeight); row += 1) {
       if (row < preview.sourceLines.length) {
-        const rendered = renderMarkdownLine(fitDynamicText(preview.sourceLines[row]!, width));
-        output.push(isEmbeddedLine(state, row) ? renderEmbedBackground(rendered, width) : rendered);
+        const rendered = preview.rendered ? preview.sourceLines[row]! : renderMarkdownLine(fitDynamicText(preview.sourceLines[row]!, width));
+        const focused = preview.regionRows?.get(state.previewRegions.focusedRegionId ?? "") === row;
+        const mark = focused ? preview.regionColumns?.get(state.previewRegions.focusedRegionId!) : undefined;
+        output.push(mark ? sliceByColumn(rendered, 0, mark.column, true) +
+          `\x1b[7m${sliceByColumn(rendered, mark.column, mark.width, true).replaceAll("\x1b[0m", "\x1b[0;7m")}\x1b[0m` +
+          sliceByColumn(rendered, mark.column + mark.width, Math.max(0, width - mark.column - mark.width), true) + "\x1b[0m"
+          : !preview.rendered && isEmbeddedLine(state, row) ? renderEmbedBackground(rendered, width) : rendered);
       } else {
         output.push(preview.annotationLines[row - preview.sourceLines.length]!);
       }

@@ -1,3 +1,5 @@
+import {initTheme} from "@earendil-works/pi-coding-agent";
+initTheme(undefined, false);
 import { buildDetailAnnotationView } from "../src/detail-annotations";
 import { getOsc8LinkAtColumn, stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "bun:test";

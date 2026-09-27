@@ -1,3 +1,5 @@
+import {initTheme} from "@earendil-works/pi-coding-agent";
+initTheme(undefined, false);
 import type {OutlinerNavigationTarget} from "../src/types";
 import { DetailReadingSurface } from "../src/detail-reading-surface";
 import { CURSOR_MARKER, stripTerminalSequences } from "@earendil-works/pi-tui";

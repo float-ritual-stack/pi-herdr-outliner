@@ -3,8 +3,8 @@
 PIE-367 keeps a plan in one Markdown note while making its steps individually
 addressable. This document describes the service foundation on the feature
 branch, including agent tools and the editor's intentional-ID-removal flow.
-Reader controls are being integrated; ANSI Detail, item projections and
-item-attached comments remain in progress. The feature has not been delivered.
+Reader controls are implemented in Pi and ANSI Detail and local Preview;
+item projections and item-attached comments remain in progress. The feature has not been delivered.
 
 ## Canonical content
 
@@ -129,7 +129,7 @@ before-image, including its original addresses.
 
 ## Reader controls (feature branch)
 
-Pi Detail and the shared Tree/Inbox Preview render canonical checklist marks as
+Pi and ANSI Detail and the shared Tree/Inbox Preview render canonical checklist marks as
 controls. Click a mark, or Tab to it and press Enter, to choose a status. Mark
 done comes first; Escape cancels. Space on a focused mark toggles to do/done.
 Ctrl+Z reverses the reader's last status change for that note, retaining an
@@ -143,7 +143,13 @@ separate controls; folding children leaves the parent checkbox usable. Saved
 Inbox before-images remain read-only. Embedded/projected item controls are not
 yet implemented.
 
-Both hosts use `ChecklistSession` and the same service update. The rendered
+All readers use `ChecklistSession` and the same service update. The rendered
 control carries canonical block/item identity and observed evidence; a wrapped
 screen row is never an edit target. A late response cannot replace a newer
 Preview destination. Menus and notices are local reader state, not authored text.
+
+ANSI Detail uses the shared document layout for checklist controls, folding and
+links, with keyboard focus revealing off-screen controls. Pointer coordinates
+come from the rendered frame. Fragment navigation maps canonical lines to
+rendered rows, including wrapped content. Its full comment evidence remains in the existing
+scrollable comments section. Mouse reporting is suspended around external editors.

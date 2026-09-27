@@ -145,6 +145,11 @@ export interface DetailViewport {
   height: number;
   editorBody?: Readonly<{ contentWidth: number; height: number }>;
   preview?: Readonly<{
+    rendered?: boolean;
+    regions?: readonly PreviewRegion[];
+    regionRows?: ReadonlyMap<string, number>;
+    regionColumns?: ReadonlyMap<string, {column: number; width: number}>;
+    sourceLineRow?: (line: number) => number;
     sourceLines: readonly string[];
     annotationLines: readonly string[];
     threadRows: ReadonlyMap<string, number>;
@@ -467,6 +472,7 @@ export interface DetailState {
   buffer: TextBuffer;
   referencedFile: ReferencedFile | null;
   previewOffset: number;
+  previewSourceLine?: number;
   editorVisualOffset: number;
   editorViewportManual?: boolean;
   draftPreviewLinked?: boolean;
@@ -738,7 +744,7 @@ export interface DetailController {
     anchor: TextBufferPoint,
     focus: TextBufferPoint,
   ): DetailResourceSelectionCapture | null;
-  setPreviewRegions(regions: readonly PreviewRegion[]): void;
+  setPreviewRegions(regions: readonly PreviewRegion[], viewport?: DetailViewport): void;
   handleUiCommand(command: OutlinerUiCommand, viewport: DetailViewport): Promise<void>;
   onServiceEvent(event: OutlinerEvent, viewport: DetailViewport): Promise<void>;
   supersedePassivePreview(): void;
@@ -1810,12 +1816,13 @@ export function createDetailController(
       clearDocumentPresentation();
     }
     refreshBreadcrumb();
-    if (!preserveAnnotationViewport) state.previewOffset = 0;
+    if (!preserveAnnotationViewport) { state.previewOffset = 0; state.previewSourceLine = undefined; }
     const fragmentId = document.target.fragmentId;
     if (!preserveAnnotationViewport && fragmentId && next.selected) {
       const fragment = resolveFragment(next.selected.text, fragmentId);
       if (fragment.status === "resolved") {
         state.previewOffset = fragment.anchor.lineIndex;
+        state.previewSourceLine = fragment.anchor.lineIndex;
       } else {
         state.status = fragment.status === "duplicate"
           ? `Duplicate fragment · ^${fragmentId}`
@@ -3001,6 +3008,7 @@ export function createDetailController(
     if(await completions.accept())state.status=item?.anchor?`Created fragment · ^${item.anchor.fragmentId}`:"";
   };
 
+  let measuredPreviewFocus = "";
   const navigatePreview = (
     direction: "up" | "down" | "pageup" | "pagedown" | "top" | "bottom",
     viewport: DetailViewport,
@@ -4271,8 +4279,24 @@ export function createDetailController(
     handleUiCommand,
     dispatch,
     captureResourcePointerSelection,
-    setPreviewRegions(regions) {
+    setPreviewRegions(regions, viewport) {
       reconcilePreviewRegions(state.previewRegions, regions, state.document.kind === 'loading' || (state.document.kind === 'ready' && state.readStatus === 'pending'));
+      if (viewport?.preview?.regionRows) {
+        const focused = state.previewRegions.focusedRegionId;
+        const key = `${focused}:${viewport.width}:${viewport.previewBodyHeight}`;
+        if (state.previewSourceLine !== undefined && viewport.preview.sourceLineRow) {
+          state.previewOffset = viewport.preview.sourceLineRow(state.previewSourceLine);
+          state.previewSourceLine = undefined;
+          measuredPreviewFocus = key;
+        } else if (key !== measuredPreviewFocus) {
+          const row = viewport.preview.regionRows.get(focused ?? "");
+          const height = viewport.previewBodyHeight ?? Math.max(1, viewport.height - 5);
+          if (row !== undefined && (row < state.previewOffset || row >= state.previewOffset + height)) {
+            state.previewOffset = Math.max(0, row - Math.floor(height / 2));
+          }
+          measuredPreviewFocus = key;
+        }
+      }
     },
     releaseDocument() {
       openGeneration++;destinationChooser!.dispose();
@@ -4334,6 +4358,7 @@ export function createDetailController(
               ? attentionSourceLine(selected.text, mark)
               : 0;
             state.previewOffset = state.attentionRevealSourceLine;
+            state.previewSourceLine = state.attentionRevealSourceLine;
             state.status = mark.target.anchor
               ? `Attention · source range ${mark.target.anchor.start}-${mark.target.anchor.end}`
               : `Attention · ${mark.target.sourceBlockId.slice(0, 8)}`;

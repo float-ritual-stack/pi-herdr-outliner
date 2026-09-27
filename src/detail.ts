@@ -1,3 +1,6 @@
+import {StdinBuffer, getOsc8LinkAtColumn} from "@earendil-works/pi-tui";
+import {isTreeMouseSequence, parseTreePlainClick, parseTreeWheelEvent} from "./tree-mouse";
+import {parsePreviewRegionActionUri} from "./detail-preview-regions";
 import {PaneDisplay} from "./pane-display";
 import {listItemRemovalMenu, checklistStatusMenu} from "./checklist-ui";
 import type {ChecklistChoice} from "./checklist-session";
@@ -362,11 +365,11 @@ const effects: DetailEffects = {
         });
         process.stdin.pause();
         if (process.stdin.isTTY) process.stdin.setRawMode(false);
-        process.stdout.write(`${BRACKETED_PASTE_DISABLE}\x1b[?25h\x1b[?1049l`);
+        process.stdout.write(`${disableMouse}${BRACKETED_PASTE_DISABLE}\x1b[?25h\x1b[?1049l`);
       },
       restoreTerminal() {
         try {
-          process.stdout.write(`\x1b[?1049h\x1b[?25l${BRACKETED_PASTE_ENABLE}`);
+          process.stdout.write(`\x1b[?1049h\x1b[?25l${BRACKETED_PASTE_ENABLE}${enableMouse}`);
           if (process.stdin.isTTY) process.stdin.setRawMode(true);
           process.stdin.resume();
           if (process.env.HERDR_ENV === "1") focusCurrentPane();
@@ -587,6 +590,7 @@ async function chromeAction(id: string): Promise<boolean> {
   return false;
 }
 
+let renderedFrameLines: string[] = [];
 function draw(): void {
   paneDisplay.update(detailTitle(controller.state));
   if (recoveryReview) {
@@ -637,8 +641,11 @@ function draw(): void {
   }
   const geometry = detailReaderGeometry(process.stdout.columns ?? 100, process.stdout.rows ?? 30, readingSurface.previewVisible);
   const render = (reader: DetailController, label: string) => {
-    reader.setPreviewRegions(detailPropertyInspectorRegions(reader.state));
-    return renderDetailLines(reader.state, viewport(reader), {
+    const view = viewport(reader);
+    const inspector = reader.state.propertyInspector;
+    const bodyRegions = inspector.expanded || inspector.presentation === "dedicated" ? [] : view.preview?.regions ?? [];
+    reader.setPreviewRegions([...detailPropertyInspectorRegions(reader.state), ...bodyRegions], view);
+    return renderDetailLines(reader.state, view, {
       header: {density: viewPreferences.density, titleInFrame: reader === controller && paneDisplay.inFrame, destinationLabel: destinationDisplay.text, surface: label === "Current" && geometry.arrangement === "switch" ? `Current · Preview ready (${actionKeymap.primaryBinding("detail.reading.focus")})` : label, focused: readingSurface.active === reader},
       helpPrefix: readingSurface.previewVisible ? `${actionKeymap.primaryBinding("detail.reading.focus")} Current/Preview · Alt+Enter Keep · Esc close Preview` : "",
       helpText: actionKeymap.helpText("detail", detailActionScopes(reader.state, {bufferMode: reader.isBufferMode()})),
@@ -657,7 +664,8 @@ function draw(): void {
   } else if (geometry.arrangement === "below") {
     lines = [...render(controller, "Current"), "─".repeat(geometry.current.width), ...render(inspection, "Preview")];
   } else lines = render(readingSurface.active, readingSurface.active === inspection ? "Preview" : "Current");
-  process.stdout.write("\x1b[H\x1b[2J" + lines.join("\n"));
+  renderedFrameLines = lines;
+  process.stdout.write("\x1b[0m\x1b[H\x1b[2J" + lines.map(line => line + "\x1b[0m").join("\n"));
 }
 
 const controller = createDetailController(
@@ -778,7 +786,8 @@ async function stop(): Promise<void> {
   watcher?.stop();
   void runtimeSync?.stop();
   if (process.stdin.isTTY) process.stdin.setRawMode(false);
-  process.stdout.write(`${BRACKETED_PASTE_DISABLE}\x1b[?25h\x1b[?1049l`);
+  pointerInput.destroy();
+  process.stdout.write(`${disableMouse}${BRACKETED_PASTE_DISABLE}\x1b[?25h\x1b[?1049l`);
   process.exit(0);
 }
 
@@ -805,12 +814,44 @@ try {
 // Keep inspected bytes out of readline without changing the terminal protocol.
 const keyInput = new PassThrough();
 emitKeypressEvents(keyInput);
+const pointerInput = new StdinBuffer();
+const mouseEnabled = process.env.HERDR_ENV === "1";
+const enableMouse = mouseEnabled ? "\x1b[?1000h\x1b[?1006h" : "";
+const disableMouse = mouseEnabled ? "\x1b[?1000l\x1b[?1006l" : "";
+pointerInput.on("paste", text => {
+  pendingPaste = text;
+  serviceEventScheduler.scheduleWork(() => handleInput("", {name:"paste"}));
+});
+pointerInput.on("data", sequence => {
+  if (!isTreeMouseSequence(sequence)) {
+    if (sequence === "\x1b") keyInput.emit("keypress", sequence, {name:"escape",sequence});
+    else keyInput.write(sequence);
+    return;
+  }
+  if (actionMenu || destinationPicker || recoveryReview || keyInspector.active) return;
+  const wheel = parseTreeWheelEvent(sequence);
+  const point = parseTreePlainClick(sequence) ?? wheel;
+  if (!point) return;
+  const geometry = detailReaderGeometry(process.stdout.columns ?? 100, process.stdout.rows ?? 30, readingSurface.previewVisible);
+  const reader = readingSurface.previewVisible && (geometry.arrangement === "beside" || geometry.arrangement === "below")
+    ? point.column >= geometry.preview.x && point.row >= geometry.preview.y ? inspection : controller
+    : readingSurface.active;
+  if (reader.isBufferMode() || reader.state.mode !== "preview") return;
+  const uri = getOsc8LinkAtColumn(renderedFrameLines[point.row] ?? "", point.column);
+  serviceEventScheduler.scheduleWork(async () => {
+    if (readingSurface.active !== reader) readingSurface.toggleFocus();
+    if (wheel) {
+      await reader.dispatch({type:"preview.navigate",direction:wheel.direction}, viewport(reader));
+    } else if (uri?.startsWith("pi-outliner-action:")) await invokeReaderAction(uri.slice("pi-outliner-action:".length));
+    else if (uri) await reader.dispatch({type:"preview.action",action:parsePreviewRegionActionUri(uri) ?? {type:"link.open",uri}},viewport(reader));
+  });
+});
 process.stdin.on("data", (data: string | Buffer) => {
   if(recoveryReview){recoveryInputDecoder.accept(typeof data==="string"?data:data.toString(),decoded=>recoveryReview?.key(decoded.str,decoded.key));return;}
-  if (!keyInspector.handle(data)) keyInput.write(data);
+  if (!keyInspector.handle(data)) pointerInput.process(typeof data === "string" ? data : data.toString());
 });
 if (process.stdin.isTTY) process.stdin.setRawMode(true);
-process.stdout.write(`\x1b[?1049h\x1b[?25l${BRACKETED_PASTE_ENABLE}`);
+process.stdout.write(`\x1b[?1049h\x1b[?25l${BRACKETED_PASTE_ENABLE}${enableMouse}`);
 
 process.on("SIGINT", () => {
   if (!externalEditorActive) stop();
