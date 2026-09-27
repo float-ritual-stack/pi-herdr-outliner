@@ -1,3 +1,4 @@
+import {TreeComments} from "./tree-comments";
 import {TreeBranchFilter} from "./tree-branch-filter";
 import {adjacentReaderMenu, readerMenuFromAction, readerMenuItems, type ReaderDensity, type ReaderMenu} from "./reader-chrome";
 import {wrapTextWithAnsi} from '@earendil-works/pi-tui';
@@ -371,6 +372,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   let visibleCompleteness: BlockCollectionCompleteness = { kind: "complete" };
   let branchStates = new Map<string, VirtualBranchState>();
   const collapsedBlockIds = new Set<string>();
+  const comments=new TreeComments();
   const connections=new TreeConnections(effects,()=>{recomposeAuthoredRows();effects.invalidate();});
   const collapsedOccurrenceRowIds = new Set<string>();
   const expandedOccurrenceRowIds = new Set<string>();
@@ -661,7 +663,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
           return selected?.kind === "authored-link" && authoredLinkCanOpen(selected);
         }
         if (item.id === "tree.disclosure.toggle") {
-          return selected?.kind === "authored-link-header" || !!connectionOwner(selected);
+          return (selected?.kind === "authored-link-header" || selected?.kind === "comment-group") || !!connectionOwner(selected);
         }
         return true;
       });
@@ -773,9 +775,14 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   function connectionCollapsed(row:TreeRow):boolean {
     return row.kind==='occurrence'?(row.collapsed || collapsedOccurrenceRowIds.has(row.rowId)):collapsedBlockIds.has(row.canonicalId);
   }
+  function composeRows(revealIdentity?: string | null): TreeDisplayRow[] {
+    const connected=connections.compose(baseRows,connectionCollapsed);
+    const target=revealIdentity ? connected[rowIndexForIdentity(connected,revealIdentity)] : undefined;
+    return comments.compose(connected,{revealRowId:target?.rowId,revealAll:Boolean(branchFilter)});
+  }
   function recomposeAuthoredRows(preferredRowId?: string): void {
     const previous = rows[selectedIndex];
-    rows = connections.compose(baseRows,connectionCollapsed);
+    rows = composeRows();
     let nextIndex = preferredRowId === undefined
       ? previous ? rows.findIndex((row) => row.rowId === previous.rowId) : -1
       : rows.findIndex((row) => row.rowId === preferredRowId);
@@ -879,7 +886,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     baseRows = scope;
     physicalBlocksById = new Map(physical.map((block) => [block.id, block]));
     connections.reconcile(physicalBlocksById);
-    const nextRows=connections.compose(baseRows,connectionCollapsed);
+    const nextRows=composeRows(preferredRowId ?? (!initialWorkspaceSelectionApplied ? snapshot.selectedBlockId : undefined));
     const serviceSelectedId = snapshot.selectedBlockId;
     let nextIndex = -1;
     if (preferredRowId !== undefined) {
@@ -941,7 +948,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     if (!branchFilter) return;
     branchFilter.query = quickInputText();
     baseRows = branchFilter.rows();
-    rows = connections.compose(baseRows, connectionCollapsed);
+    rows = composeRows();
     selectedIndex = 0;
     scrollStartEntryIndex = 0;
     effects.invalidate();
@@ -987,7 +994,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       expandedBlockOffset = 0;
       status = isBlockTreeRow(selected)
         ? "Expand the selected block before paging within it"
-        : "Authored-link rows are single-line";
+        : "Generated rows are single-line";
       return;
     }
     if (!expandedPage || expandedPage.rowId !== selected.rowId) {
@@ -1075,7 +1082,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       nextMode !== "filter" &&
       nextMode !== "goto"
     ) {
-      status = "Authored-link rows cannot enter block input modes";
+      status = "Generated rows cannot enter block input modes";
       return;
     }
     if (nextMode === "add-child" && selected?.kind === "physical" && selected.collapsed) {
@@ -1326,6 +1333,11 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       await publishBrowsingTarget(null, false);
       return;
     }
+    if (row.kind === "comment-group") {
+      status = `${row.threadCount} comment threads in this view · Enter expands or collapses`;
+      await publishBrowsingTarget(null, false);
+      return;
+    }
     if (row.kind === "authored-link-header") {
       status = headerSelectionStatus(row);
       await publishBrowsingTarget(null, false);
@@ -1473,6 +1485,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   async function focusDetailReader(routeOptions: NavigationRouteOptions = {}) {
     const selected = rows[selectedIndex];
     if (!selected) return;
+    if (selected.kind === "comment-group") { await handleDisclosure(selected.rowId); return; }
     if (selected.kind === "authored-link-header") {
       status = headerSelectionStatus(selected);
       effects.invalidate();
@@ -1535,7 +1548,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   const readOriginKey=()=>JSON.stringify([mode,rows[selectedIndex]?.rowId,mode==='inbox'?inbox.selected?.id:null,mode==='inbox'?inbox.targetIndex:null]);
   async function readSelected(focusImmediately = false): Promise<void> {
     const row = rows[selectedIndex];
-    if (row?.kind === "authored-link-header") { cancelReadSequence(); await handleDisclosure(row.rowId); return; }
+    if (row?.kind === "authored-link-header" || row?.kind === "comment-group") { cancelReadSequence(); await handleDisclosure(row.rowId); return; }
     const origin = readOriginKey(), at = Date.now(), sequence = readSequence;
     const previous = lastRead;
     lastRead = null;
@@ -2095,6 +2108,14 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     const row = rows[rowIndex];
     if (!row) return;
     selectedIndex = rowIndex;
+    if (row.kind === "comment-group") {
+      if (branchFilter) { status = "Clear the branch filter to change expansion"; effects.invalidate(); return; }
+      comments.toggle(row);
+      recomposeAuthoredRows(row.rowId);
+      await publishDisplayRowSelection(rows[selectedIndex]);
+      effects.invalidate();
+      return;
+    }
     if (row.kind === "authored-link-header") {
       connections.toggleGroup(row);
       recomposeAuthoredRows(row.rowId);
@@ -2956,11 +2977,11 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         else {selectedIndex=Math.min(rows.length-1,selectedIndex+1);await publishDisplayRowSelection(rows[selectedIndex]);}
       } else if (key.name === "left") {
         if(selected.kind==='authored-link' && connections.isOpen(selected.rowId)){await handleDisclosure(selected.rowId);return;}
-        if (selected.kind === "authored-link-header" && !selected.collapsed) {
+        if ((selected.kind === "authored-link-header" || selected.kind === "comment-group") && !selected.collapsed) {
           await handleDisclosure(selected.rowId);
           return;
         }
-        const targetRowId = selected.kind === "authored-link-header"
+        const targetRowId = selected.kind === "authored-link-header" || selected.kind === "comment-group"
           ? selected.owner.rowId
           : authoredLinkHeaderRowId(selected.owner.rowId, selected.group);
         const targetIndex = rows.findIndex((row) => row.rowId === targetRowId);
@@ -2969,7 +2990,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
           await publishDisplayRowSelection(rows[selectedIndex]);
         }
       } else if (
-        selected.kind === "authored-link-header" &&
+        (selected.kind === "authored-link-header" || selected.kind === "comment-group") &&
         (key.name === "right" || key.name === "space" || key.name === "return")
       ) {
         await handleDisclosure(selected.rowId);
@@ -2978,7 +2999,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         await readSelected(detailHandoffRequested);
         return;
       } else if (key.name === "pageup" || key.name === "pagedown" || isDetailToggle(str, key)) {
-        status = "Authored-link rows are single-line";
+        status = "Generated rows are single-line";
       } else if (str === "g") {
         await beginInput("goto");
         return;
@@ -2991,7 +3012,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         await publishDisplayRowSelection(rows[selectedIndex]);
 
       } else {
-        status = "Authored-link rows are read-only; Enter opens the target";
+        status = "Generated rows are read-only; Enter opens or expands";
       }
       effects.invalidate();
       return;
@@ -3029,7 +3050,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         } else {
           selectedIndex = Math.max(
             0,
-            rows.findIndex((row) => row.rowId === selected.parentRowId),
+            rows.findIndex((row) => row.rowId === (comments.parentGroup(selected.rowId) ?? selected.parentRowId)),
           );
         }
       } else if (!selected.collapsed && selected.hasChildren) {
@@ -3038,7 +3059,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       } else if (selected.block.parentId) {
         selectedIndex = Math.max(
           0,
-          rows.findIndex((row) => row.rowId === selected.block.parentId),
+          rows.findIndex((row) => row.rowId === (comments.parentGroup(selected.rowId) ?? selected.block.parentId)),
         );
       }
     } else if (key.name === "right" && selected) {
@@ -3048,12 +3069,8 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
           preferredRowId = selected.rowId;
           reloadRequired = true;
         } else if (selected.hasChildren) {
-          const childIndex = rows.findIndex((row) =>
-            isBlockTreeRow(row) &&
-            isVirtualBranchOccurrence(row) &&
-            row.parentRowId === selected.rowId
-          );
-          if (childIndex >= 0) selectedIndex = childIndex;
+          const child = rows[selectedIndex+1];
+          if (child && child.depth > selected.depth) selectedIndex++;
         }
       } else if (selected.collapsed) {
         collapsedBlockIds.delete(selected.canonicalId);

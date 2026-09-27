@@ -615,7 +615,9 @@ export function renderTreeFrame(
     const row = {...sourceRow,depth:displayDepth(sourceRow.depth)};
     const clippedLeft = sourceRow.depth < indentOffset;
     if (!isBlockTreeRow(row)) {
-      const result = row.kind === "authored-link-header"
+      const result = row.kind === "comment-group"
+        ? [truncateToWidth(`${"  ".repeat(row.depth)}${clippedLeft ? "‹" : row.collapsed ? "▸" : "▾"} Comments  \x1b[2m${row.threadCount} ${row.threadCount===1?'thread':'threads'}\x1b[0m`, width)]
+        : row.kind === "authored-link-header"
         ? [
             truncateToWidth(
               `${"  ".repeat(row.depth)}${clippedLeft ? "‹" : row.collapsed ? "▸" : "▾"} ${
@@ -826,7 +828,7 @@ export function renderTreeFrame(
         mouseTargets[output.length] = {
           rowId: row.rowId,
           disclosureColumn:
-            row.depth >= indentOffset && (row.kind === "authored-link-header" ||
+            row.depth >= indentOffset && (row.kind === "authored-link-header" || row.kind === "comment-group" ||
               (row.kind === "authored-link" && row.link.resolution.kind === "ready" && row.link.resolution.target.kind === "block") ||
               (isBlockTreeRow(row) && row.hasChildren && disclosureMarkerVisible))
               ? displayDepth(row.depth) * 2

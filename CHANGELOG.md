@@ -4,6 +4,12 @@ This file records notable user-facing changes. The project remains active dogfoo
 
 ## [Unreleased]
 
+- Tree groups root comment threads under one collapsed Comments row per displayed
+  note. Open it by mouse, Space or Enter; replies remain under their own thread,
+  ordinary children remain visible, and physical/virtual occurrences expand
+  independently. Direct reveal opens the comment path without copying or moving
+  discussion. Counts name projected root threads, excluding replies. PIE-383.
+
 - Detail Comment supports a whole-note target without selecting text. General
   comments appear under Note comments, separate from lost passage anchors.
   Detail's local Preview composes and replies in place, preserving Current and

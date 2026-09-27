@@ -983,6 +983,22 @@ explicit unpositioned status. Probable, unresolved,
 ambiguous, orphaned, unsupported, and rejected records remain valid, visible
 history rather than being coerced into a location.
 
+### Comments in the Tree
+
+A note's root comment threads appear beneath a **Comments** disclosure row.
+It starts collapsed; click its triangle or press Space/Enter to unfold it.
+Left collapses it, and Left again returns to the owning note. Ordinary child
+notes stay outside the group. The count describes root threads available in
+this projection, not replies or unseen results beyond a view's depth/row limit.
+
+Expansion is temporary and independent for each physical or virtual occurrence.
+New background comments do not unfold a closed group. Explicitly revealing a
+comment opens its path; temporary branch filtering exposes matching discussion
+without changing the saved disclosure state. Comments is a presentation row,
+so it cannot be edited, collected, moved or deleted as a block. Existing thread
+IDs, replies, anchors and lifecycle actions are unchanged; Preview shows the
+same discussion.
+
 ### Comments on individual Resource references
 
 The same file can appear several times in a block without becoming several

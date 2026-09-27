@@ -92,7 +92,18 @@ export interface AuthoredLinkRow {
   readonly connectionsOpen?: boolean;
 }
 
-export type TreeDisplayRow<T extends ProjectionBlock = VisibleBlock> = TreeRow<T> | AuthoredLinkHeaderRow | AuthoredLinkRow;
+export interface CommentGroupRow {
+  readonly kind: "comment-group";
+  readonly rowId: string;
+  readonly parentRowId: string;
+  readonly owner: AuthoredLinksOwnerOccurrence;
+  readonly depth: number;
+  readonly collapsed: boolean;
+  /** Root threads available in this projection; replies are not counted. */
+  readonly threadCount: number;
+}
+
+export type TreeDisplayRow<T extends ProjectionBlock = VisibleBlock> = TreeRow<T> | AuthoredLinkHeaderRow | AuthoredLinkRow | CommentGroupRow;
 
 export function isBlockTreeRow<T extends ProjectionBlock>(row: TreeDisplayRow<T> | undefined): row is TreeRow<T> {
   return row?.kind === "physical" || row?.kind === "occurrence";
@@ -269,6 +280,6 @@ export function authoredLinkFallbackRowIds<T extends ProjectionBlock>(row: TreeD
   if (row.kind === "authored-link") {
     return [authoredLinkHeaderRowId(row.owner.rowId, row.group), row.owner.rowId];
   }
-  if (row.kind === "authored-link-header") return [row.owner.rowId];
+  if (row.kind === "authored-link-header" || row.kind === "comment-group") return [row.owner.rowId];
   return [];
 }

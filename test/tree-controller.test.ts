@@ -4252,3 +4252,63 @@ test('failed Open and changed destinations never arm a focus transfer',async()=>
   await open();expect(last()).toMatchObject({focusTarget:false});
  }finally{clock.mockRestore();}
 });
+
+test('comment groups hide discussion without hiding ordinary children and disclose per occurrence', async () => {
+  const host = block('discussion-host', {hasChildren:true});
+  const ordinary = block('ordinary-child', {parentId:host.id,depth:1});
+  const comment = (id:string, parentId=host.id, reply=false) => block(id, {parentId,depth:reply?2:1,
+    properties:[{key:'type',value:reply?'annotation-reply':'annotation'},
+      {key:'annotation-status',value:'open'}, ...(reply?[{key:'parent-annotation',value:parentId}]:[])]});
+  const first = {...comment('first-comment'),hasChildren:true};
+  const reply = comment('reply',first.id,true);
+  const second = comment('second-comment');
+  const third = {...comment('third-comment'),author:'agent' as const};
+  const definition = block('discussion-view', {properties:[{key:'type',value:'virtual-branch'}, {key:'query',value:'fixture=discussion'}, {key:'child-depth',value:'2'}]});
+  let physical = [host,first,reply,ordinary,second,third,definition];
+  const fake = harness(input => {
+    if(input.action==='tree.index')return snapshot(physical,host);
+    if(input.action==='tree.query')return {blocks:[host],completeness:{kind:'complete'}};
+  });
+  const c=createTreeController(fake.effects); await c.initialize();
+  const groups=()=>c.view().rows.filter(row=>row.kind==='comment-group');
+  expect(groups()).toHaveLength(2);
+  expect(canonicalRowIds(c.view().rows).filter(id=>id==='ordinary-child')).toHaveLength(2);
+  expect(canonicalRowIds(c.view().rows)).not.toContain(first.id);
+  const physicalGroup=groups().find(row=>row.owner.rowId===host.id)!;
+  const virtualGroup=groups().find(row=>row.owner.rowId!==host.id)!;
+  expect(physicalGroup).toMatchObject({collapsed:true,threadCount:3});
+  await c.handleDisclosure(physicalGroup.rowId);
+  expect(groups().find(row=>row.rowId===virtualGroup.rowId)?.collapsed).toBe(true);
+  expect(canonicalRowIds(c.view().rows).filter(id=>id===first.id)).toHaveLength(1);
+  const shown=c.view().rows;
+  expect(shown.find(row=>row.rowId===reply.id)?.depth).toBe(3);
+  expect(shown.findIndex(row=>row.rowId===ordinary.id)).toBeLessThan(shown.findIndex(row=>row.rowId===physicalGroup.rowId));
+  await c.handleRowClick(second.id); await c.handleKeypress('',{name:'left'},'pass');
+  expect(c.view().rows[c.view().selectedIndex]?.rowId).toBe(physicalGroup.rowId);
+  await c.handleKeypress('',{name:'left'},'pass');
+  expect(canonicalRowIds(c.view().rows)).not.toContain(first.id);
+  await c.handleAction('tree.edit'); await c.handleAction('tree.delete');
+  expect(c.view().mode).toBe('browse');
+  expect(fake.calls.some(input=>['create','update','move','delete'].includes(input.action))).toBe(false);
+  const late=comment('background-comment'); physical=[...physical.slice(0,-1),late,definition];
+  await c.handleServiceEvent(event('content',late.id));
+  expect(groups().every(row=>row.collapsed)).toBe(true);
+  await c.revealBlock(reply.id);
+  expect(selectedBlockRow(c).canonicalId).toBe(reply.id);
+  expect(groups().find(row=>row.rowId===virtualGroup.rowId)?.collapsed).toBe(true);
+  await c.handleRowClick(virtualGroup.rowId); await c.handleKeypress('',{name:'return'},'pass');
+  expect(canonicalRowIds(c.view().rows).filter(id=>id===reply.id)).toHaveLength(2);
+  await c.handleDisclosure(physicalGroup.rowId);
+  expect(canonicalRowIds(c.view().rows).filter(id=>id===reply.id)).toHaveLength(1);
+  const rendered=renderTreeFrame(c.view(),60,30);
+  expect(rendered.frame).toContain('Comments'); expect(rendered.frame).toContain('4 threads');
+  expect(Object.values(rendered.mouseTargets).some(target=>target?.rowId===physicalGroup.rowId&&target.disclosureColumn>=0)).toBe(true);
+  await c.handleRowClick(physicalGroup.rowId); await c.handleAction('tree.selection.toggle');
+  expect(c.view().collectedIds?.size).toBe(0);
+  await c.handleRowClick(host.id); await c.handleAction('tree.filter');
+  await c.handlePaste('first-comment');
+  expect(canonicalRowIds(c.view().rows)).toContain(first.id);
+  await c.handleAction('tree.filter.clear');
+  expect(groups().find(row=>row.rowId===physicalGroup.rowId)?.collapsed).toBe(true);
+  expect(groups().find(row=>row.rowId===virtualGroup.rowId)?.collapsed).toBe(false);
+});
