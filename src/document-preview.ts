@@ -1,4 +1,5 @@
 import {annotationSourceHash} from './annotations';
+import {DEFAULT_OUTLINER_ACTION_KEYMAP,displayActionChord,type OutlinerActionKeymap} from './outliner-actions';
 import {blockAnnotationRepresentation,resourceAnnotationRepresentation} from './annotation-representations';
 import {TextBuffer} from './text-buffer';
 import {textBufferEditorCommand,applyTextBufferEditorCommand} from './text-buffer-editor';
@@ -21,6 +22,7 @@ import {resourceDescriptionLabel} from './resources';
 type SavedPreviewSource = Pick<Block,"id"|"text"|"revision"> & Partial<Pick<Block,"updatedAt">> & {inboxAttemptId?:string};
 
 export interface PreviewPassageCapture {
+  sourceAnchor?:Extract<AnnotationTarget['anchor'],{kind:'text-quote'}>|null;
   document:DetailReadPreviewDocument;
   input:"pointer"|"keyboard";
   quote:string;
@@ -44,6 +46,7 @@ export interface PreviewCommentDraft {
   saving:boolean;
 }
 export interface DocumentPreviewState {
+  readonly bindings?:{comment:string;select:string};
   readonly comment?:PreviewCommentDraft;
   readonly selecting?:boolean;
   readonly target: OutlinerNavigationTarget;
@@ -69,8 +72,10 @@ export class DocumentPreview {
   private history:DocumentPreviewState[]=[];
   private future:DocumentPreviewState[]=[];
   private value: DocumentPreviewState | null = null;
-  constructor(private client: OutlinerRequester, private changed: () => void, private clientId?: string, private openExternal?: (url:string)=>void|Promise<void>,private selectionInput?:PreviewSelectionInput) {}
-  get state(): DocumentPreviewState | null { return this.value ? {...this.value,selecting:this.selectionInput?.selecting??false,canBack:this.history.length>0,canForward:this.future.length>0} : null; }
+  constructor(private client: OutlinerRequester, private changed: () => void, private clientId?: string, private openExternal?: (url:string)=>void|Promise<void>,private selectionInput?:PreviewSelectionInput,private keymap:OutlinerActionKeymap=DEFAULT_OUTLINER_ACTION_KEYMAP) {}
+  get state(): DocumentPreviewState | null { return this.value ? {...this.value,
+    bindings:{comment:displayActionChord(this.keymap.primaryBinding('tree.reader.comment')),select:displayActionChord(this.keymap.primaryBinding('tree.reader.select'))},
+    selecting:this.selectionInput?.selecting??false,canBack:this.history.length>0,canForward:this.future.length>0} : null; }
   cancelLoad(): void { this.generation++; }
   get hasDraft():boolean { return !!this.value?.comment; }
   private protectDraft():boolean {
@@ -139,9 +144,10 @@ export class DocumentPreview {
       const projected=document.projectedText!==document.canonicalText,resolved=document.resolvedText!==document.projectedText;
       target={...target,representation:{...target.representation,observation:{
         validation:'preview-selection',input:capture.input,quote:capture.quote,capturedAt:capture.capturedAt,readerId:this.clientId,
+        ...(this.value.target.kind==='block'&&this.value.target.fragmentId?{fragmentId:this.value.target.fragmentId}:{}),
         renderRevision:capture.renderRevision,representationId:target.representation.id,snapshotHash:annotationSourceHash(capture.snapshotText),
         projection:projected&&resolved?'mixed':projected?'generated':resolved?'resolved':'canonical',
-      }},anchor:{kind:'text-quote',start:null,end:null,exact:capture.quote,prefix:'',suffix:''}};
+      }},anchor:capture.sourceAnchor??{kind:'text-quote',start:null,end:null,exact:capture.quote,prefix:'',suffix:''}};
     }
     if(annotationId&&!this.value.document.annotations?.annotationThreads.some(thread=>thread.block.id===annotationId))return;
     if(!annotationId&&!target){this.value={...this.value,notice:'No captured source available to comment on'};this.changed();return;}
@@ -318,7 +324,7 @@ export class DocumentPreview {
       let notice:string|undefined;
       if(typeof saved!=='string' && target.kind==='block' && saved.id===target.blockId && saved.updatedAt){
         document.commentTarget={representation:blockAnnotationRepresentation({...saved,updatedAt:saved.updatedAt},saved.inboxAttemptId),anchor:{kind:'whole-subject'}};
-        document.annotations={target,context:{selected:saved},annotationThreads:[],selectedAnnotationId:undefined,document:{kind:'empty'}};
+        document.annotations={target,context:{selected:saved},historical:true,annotationThreads:[],selectedAnnotationId:undefined,document:{kind:'empty'}};
         try {
           document.annotations.annotationThreads=await this.client.request<AnnotationThread[]>({action:'annotations.list',
             query:{subject:{kind:'block',blockId:saved.id},includeResolved:true}});

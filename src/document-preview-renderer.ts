@@ -3,7 +3,8 @@ import {layoutDetailEditor} from './detail-editor-layout';
 import type {ReaderDensity} from "./reader-chrome";
 import {withInternalLinks, stripRenderedLinks, measureRenderedLinks, type RenderedLink} from './rendered-links';
 import {getMarkdownTheme} from '@earendil-works/pi-coding-agent';
-import {truncateToWidth, visibleWidth} from '@earendil-works/pi-tui';
+import {truncateToWidth, visibleWidth,stripTerminalSequences,sliceByColumn} from '@earendil-works/pi-tui';
+import {annotationSourceHash,createTextQuoteAnchor} from './annotations';
 import {renderDetailReadPreview, type DetailReadPreviewDocument} from './detail-pi-preview';
 import type {DocumentPreviewState} from './document-preview';
 import {sanitizeDynamicText} from './terminal';
@@ -24,6 +25,24 @@ export interface DocumentPreviewFrame {
 }
 const cache=new WeakMap<DetailReadPreviewDocument,{width:number;disclosures:string;lines:string[];links:PreviewLink[];threadRows:Map<string,number>;selected:string|null}>();
 export type PreviewLink = RenderedLink;
+/** Exact identity proof for an untransformed, unwrapped source document.
+ * Rich layouts use rendered evidence until their renderer supplies a source map.
+ * Never locate a selection by searching for its quote in the source.
+ */
+export function documentPreviewSourceAnchor(document:DetailReadPreviewDocument,width:number,row:number,left:number,right:number,quote:string){
+  const snapshot=document.commentTarget?.representation.sourceSnapshot;
+  if(snapshot?.kind!=='block'||annotationSourceHash(document.canonicalText)!==snapshot.contentHash||
+    document.truncated||document.embedRanges.length||document.annotations?.annotationThreads.length||
+    document.resolvedText!==document.canonicalText||document.projectedText!==document.canonicalText)return null;
+  const source=document.canonicalText.split('\n');
+  const painted=documentPreviewLines(document,width).map(line=>stripTerminalSequences(line).trimEnd());
+  if(painted.length!==source.length||painted.some((line,index)=>line!==source[index]!.trimEnd()))return null;
+  const line=source[row];
+  if(line===undefined||left<0||right>visibleWidth(line.trimEnd()))return null;
+  const offset=source.slice(0,row).reduce((sum,line)=>sum+line.length+1,0);
+  const start=offset+sliceByColumn(line,0,left,true).length,end=offset+sliceByColumn(line,0,right,true).length;
+  return document.canonicalText.slice(start,end)===quote?createTextQuoteAnchor(document.canonicalText,start,end):null;
+}
 export function documentPreviewLinks(document:DetailReadPreviewDocument,width:number):PreviewLink[]{documentPreviewLines(document,width);return cache.get(document)!.links;}
 export function documentPreviewThreadRow(document:DetailReadPreviewDocument,id:string,width=cache.get(document)?.width ?? 80):number|undefined {
   documentPreviewLines(document,width);
@@ -60,11 +79,12 @@ export function renderDocumentPreview(preview:DocumentPreviewState,rect:PreviewR
     const draft=preview.comment;
     const readerHeight=Math.max(0,rect.height-BUFFER_COMPOSER_HEIGHT);
     const reader=readerHeight?renderDocumentPreview({...preview,comment:undefined},{...rect,height:readerHeight},help,toolbar,density,menuAction):null;
-    const body=bufferComposerEditorBody(rect.width);
+    const composerHeight=Math.min(BUFFER_COMPOSER_HEIGHT,Math.max(1,rect.height));
+    const body=bufferComposerEditorBody(rect.width,composerHeight);
     const layout=layoutDetailEditor(draft.buffer.lines,draft.buffer.row,draft.buffer.column,body);
     const composer=new BufferComposer(()=>({title:draft.annotationId?'Reply':draft.target?.anchor.kind==='text-quote'?'Comment on passage':'Comment on note',context:draft.target?.anchor.kind==='text-quote'?draft.target.anchor.exact:preview.title,buffer:draft.buffer,
       placeholder:'Write a comment',commitAction:'Ctrl+S',cancelAction:'Esc',viewportOffset:Math.max(0,layout.cursorRow-body.height+1),
-      status:draft.saving?'Saving…':preview.notice}));
+      height:composerHeight,status:draft.saving?'Saving…':preview.notice}));
     composer.focused=preview.focused;
     const rows=composer.render(rect.width);
     const lines=[...(reader?.lines??[]),...rows].slice(0,rect.height);
@@ -86,9 +106,10 @@ export function renderDocumentPreview(preview:DocumentPreviewState,rect:PreviewR
     navigation+=enabled?text:`\x1b[2m${text}\x1b[22m`;column+=text.length;
   }
   const links=documentPreviewLinks(preview.document,content.width).filter(link=>link.row>=offset&&link.row<offset+content.height).map(link=>({uri:link.uri,rect:{x:content.x+link.column,y:content.y+link.row-offset,width:link.width,height:1}}));
-  const lines=[preview.selecting?'Select passage · arrows move · Shift selects · c comment':`${preview.focused?'●':'○'} Preview · ${sanitizeDynamicText(preview.title)}`,navigation,...rendered.slice(offset,offset+content.height)];
+  const commentKey=preview.bindings?.comment??'c',selectKey=preview.bindings?.select??'v';
+  const lines=[preview.selecting?`Select passage · arrows move · Shift selects · ${commentKey} comment`:`${preview.focused?'●':'○'} Preview · ${sanitizeDynamicText(preview.title)}`,navigation,...rendered.slice(offset,offset+content.height)];
   while(lines.length<rect.height-1)lines.push('');
-  lines.push(preview.notice ? sanitizeDynamicText(preview.notice) : preview.activeLink ? `Enter follow · ${sanitizeDynamicText(preview.activeLinkLabel??preview.activeLink)}` : `c comment · v select · [/] threads · Tab links · ${help}`);
+  lines.push(preview.notice ? sanitizeDynamicText(preview.notice) : preview.activeLink ? `Enter follow · ${sanitizeDynamicText(preview.activeLinkLabel??preview.activeLink)}` : `${commentKey} comment · ${selectKey} select · [/] threads · Tab links · ${help}`);
   return {rect,content,lines:lines.slice(0,rect.height).map(line=>shade(line,rect.width)),offset,totalRows:rendered.length,links,controls};
 }
 export function pointInPreview(rect:PreviewRect,column:number,row:number):boolean{return column>=rect.x&&column<rect.x+rect.width&&row>=rect.y&&row<rect.y+rect.height;}
@@ -100,8 +121,9 @@ function renderCompactPreview(preview: DocumentPreviewState, rect: PreviewRect, 
   const offset = Math.max(0, Math.min(preview.offset, Math.max(0, rendered.length - content.height)));
   const controls: NonNullable<DocumentPreviewFrame["controls"]> = [];
   // Unavailable history controls are omitted so they never take title space.
-  const actions = (preview.selecting ? [["c","preview.comment",true],["Esc","preview.selection.cancel",true]] as const : [["‹", "preview.back", preview.canBack], ["›", "preview.forward", preview.canForward],
-    ["Open", "preview.open", true], ["c", "preview.comment", !!preview.document.commentTarget], ...(menuAction ? [["⋯", menuAction, true]] : [])] as const)
+  const commentKey=preview.bindings?.comment==='unbound'?'Comment':preview.bindings?.comment??'c';
+  const actions = (preview.selecting ? [[commentKey,"preview.comment",true],["Esc","preview.selection.cancel",true]] as const : [["‹", "preview.back", preview.canBack], ["›", "preview.forward", preview.canForward],
+    ["Open", "preview.open", true], [commentKey, "preview.comment", !!preview.document.commentTarget], ...(menuAction ? [["⋯", menuAction, true]] : [])] as const)
     .filter(([, , enabled]) => enabled);
   const controlWidth = actions.reduce((sum, [label]) => sum + String(label).length + 2, 0);
   const titleWidth = Math.max(0, rect.width - controlWidth - 1);

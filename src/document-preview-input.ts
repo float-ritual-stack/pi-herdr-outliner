@@ -1,7 +1,7 @@
 import type {TerminalKey} from './terminal';
 import {PreviewSelection} from './preview-selection';
 import {parseTreePrimaryPointer,parseTreeWheelEvent,parseTreeSecondaryClick} from './tree-mouse';
-import {pointInPreview,type DocumentPreviewFrame} from './document-preview-renderer';
+import {pointInPreview,documentPreviewSourceAnchor,type DocumentPreviewFrame} from './document-preview-renderer';
 import type {PreviewPassageCapture,DocumentPreviewState} from './document-preview';
 import {isCopyExcludedLink} from './rendered-links';
 
@@ -29,7 +29,10 @@ export class DocumentPreviewInput {
   private exclusions(){return this.frame?.links?.filter(link=>isCopyExcludedLink(link.uri)).map(link=>({row:link.rect.y,column:link.rect.x,width:link.rect.width}))??[];}
   private retainCapture(input:'pointer'|'keyboard'):void {
     const capture=this.selection.capture();
-    this.passage=capture && this.document?{...capture,input,document:this.document,renderRevision:this.renderRevision,capturedAt:new Date().toISOString()}:null;
+    const cell=capture?.cells.length===1?capture.cells[0]:undefined,frame=this.frame;
+    const sourceAnchor=capture&&cell&&frame&&this.document?documentPreviewSourceAnchor(this.document,frame.content.width,
+      cell.row-frame.content.y+frame.offset,cell.start-frame.content.x,cell.end-frame.content.x,capture.quote):null;
+    this.passage=capture && this.document?{...capture,sourceAnchor,input,document:this.document,renderRevision:this.renderRevision,capturedAt:new Date().toISOString()}:null;
   }
   selectionKey(key:TerminalKey,str=''):boolean {
     if(!this.frame || !this.document)return false;

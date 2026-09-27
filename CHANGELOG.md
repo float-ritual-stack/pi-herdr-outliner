@@ -16,6 +16,9 @@ This file records notable user-facing changes. The project remains active dogfoo
   Keyboard passage selection uses v, arrows and Shift+arrows in the visible
   Preview viewport. Preview comment actions appear in the shared action menu
   and have their own configurable shortcuts, separate from Tree browsing.
+  Short composers keep writing and save/cancel controls visible. Saved-version
+  readers preserve proven historical ranges; unchanged plain text can retain
+  exact coordinates while transformed layouts keep honest quoted evidence.
   Protocol 78 adds the whole-subject anchor and captured Preview/Inbox evidence.
   PIE-290.
 

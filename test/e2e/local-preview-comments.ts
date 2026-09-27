@@ -27,6 +27,9 @@ const result=await runHerdrScenario({
     await s.waitVisible(panes.tree,'Comment on note');
     await s.text(panes.tree,'LOCAL WHOLE NOTE FEEDBACK');
     await s.waitVisible(panes.tree,'LOCAL WHOLE NOTE FEEDBACK');
+    await terminal.resize(120,36);
+    await s.waitFor('short composer keeps writing and controls',()=>s.visible(panes.tree),text=>text.includes('LOCAL WHOLE NOTE FEEDBACK')&&text.includes('Ctrl+S')&&text.includes('Esc'));
+    await s.checkpoint('local-comment-draft-short');
     await terminal.resize(120,62);
     await s.waitFor('narrow composer remains readable',()=>s.visible(panes.tree),text=>text.includes('LOCAL WHOLE NOTE FEEDBACK')&&text.includes('Ctrl+S')&&Math.max(...text.split('\n').map(visibleWidth))<55);
     await s.checkpoint('local-comment-draft-narrow');
@@ -96,6 +99,23 @@ const result=await runHerdrScenario({
     await s.keys(panes.tree,']');
     await s.waitVisible(panes.tree,'KEYBOARD QUOTE FEEDBACK');
     await s.checkpoint('keyboard-preview-passage-saved');
+
+    const keyboardComments=()=>s.client.request<AnnotationThread[]>({action:'annotations.list',query:{subject:{kind:'block',blockId:keyboardNote.id},includeResolved:true}});
+    await s.keys(panes.tree,'D');
+    await s.waitFor('keyboard lifecycle resolves the selected thread',keyboardComments,threads=>threads.length===1&&threads[0]!.lifecycle==='resolved');
+    await s.keys(panes.tree,'D');
+    await s.waitFor('keyboard lifecycle reopens the same thread',keyboardComments,threads=>threads.length===1&&threads[0]!.lifecycle==='open');
+    const detail=(await s.registrations()).find(c=>c.runtime?.paneId===panes.detail)!;
+    await s.client.request({action:'navigation.link.set',source:{clientId:tree.clientId,region:'tree'},destination:{clientId:detail.clientId,region:'detail'}});
+    await s.keys(panes.tree,'esc');await s.waitVisible(panes.tree,'○ Preview');
+    await s.revealTree(panes.tree,note.id);await s.keys(panes.tree,'enter');
+    await s.waitVisible(panes.detail,'LOCAL COMMENT NOTE');
+    await s.focus(panes.detail);await s.keys(panes.detail,']');
+    await s.waitVisible(panes.detail,'LOCAL WHOLE NOTE FEEDBACK');
+    await s.waitVisible(panes.detail,'LOCAL PREVIEW REPLY');
+    assert.equal((await comments()).length,1);
+    assert.equal((await comments())[0]!.replies.length,1);
+    await s.checkpoint('same-thread-in-canonical-detail');
 
 
   },

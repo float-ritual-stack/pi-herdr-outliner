@@ -7,6 +7,7 @@ import type { RequestInput } from "./client";
 import type { OutlinerRequester } from "./client-target";
 import type { InboxResultSummary, InboxStatus } from "./inbox-types";
 import {DocumentPreview} from "./document-preview";
+import type {OutlinerActionKeymap} from './outliner-actions';
 import {pointInPreview,type DocumentPreviewFrame,type PreviewRect} from "./document-preview-renderer";
 import {parseTreeWheelEvent} from "./tree-mouse";
 import { TextBuffer } from "./text-buffer";
@@ -15,6 +16,7 @@ import type { OutlinerNavigationTarget, Block } from "./types";
 import type { InternResourceReceipt } from "./resources";
 
 interface InboxEffects extends OutlinerRequester {
+  actionKeymap?:OutlinerActionKeymap;
   clientId?: string;
   openExternal?(url:string):void|Promise<void>;
   openPreview?(target:OutlinerNavigationTarget):Promise<void>;
@@ -151,6 +153,14 @@ export class InboxController {
   private sourceKey = '';
   private outputKey = '';
   private outputIndex = 0;
+  private draftNotice: string | null = null;
+  private readerChanged():void {
+    if(!this.hasCommentDraft && this.draftNotice!==null){
+      if(this.notice===this.draftNotice)this.notice='';
+      this.draftNotice=null;
+    }
+    this.effects.invalidate();
+  }
   get outputTarget() { return this.targets.filter(target => target.role === 'output')[this.outputIndex]; }
   focusReader(focused = true, role: 'source' | 'output' = this.reader === this.outputReader ? 'output' : 'source'): void {
     const owner=this.draftReader;
@@ -233,8 +243,8 @@ export class InboxController {
   }
   private previewKey = '';
   constructor(private readonly effects: InboxEffects) {
-    this.sourceReader = new DocumentPreview(effects, () => effects.invalidate(),effects.clientId,effects.openExternal,this.sourceInput);
-    this.outputReader = new DocumentPreview(effects, () => effects.invalidate(),effects.clientId,effects.openExternal,this.outputInput);
+    this.sourceReader = new DocumentPreview(effects, () => this.readerChanged(),effects.clientId,effects.openExternal,this.sourceInput,effects.actionKeymap);
+    this.outputReader = new DocumentPreview(effects, () => this.readerChanged(),effects.clientId,effects.openExternal,this.outputInput,effects.actionKeymap);
   }
   private async openPreview(target:OutlinerNavigationTarget):Promise<void>{
     if(this.effects.openPreview)return this.effects.openPreview(target);
@@ -357,12 +367,12 @@ export class InboxController {
   get hasCommentDraft():boolean { return !!this.draftReader; }
   retainCommentDraft():boolean {
     if(!this.hasCommentDraft)return false;
-    this.notice='Comment draft retained here · Ctrl+S saves · Esc cancels';
+    this.notice=this.draftNotice='Comment draft retained here · Ctrl+S saves · Esc cancels';
     this.effects.invalidate();return true;
   }
 
   async close(): Promise<void> {
-    if(this.hasCommentDraft){this.notice="Comment draft retained · save or cancel before closing Inbox";this.effects.invalidate();return;}
+    if(this.retainCommentDraft())return;
     this.active = false;
     this.pendingSnapshot=null;
     this.searchGeneration++;clearTimeout(this.searchTimer);

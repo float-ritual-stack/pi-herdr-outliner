@@ -117,7 +117,7 @@ export class PreviewSelection {
   }
 
   /** Completed drag evidence stays in the original painted rectangle. */
-  capture():{quote:string;snapshotText:string}|null {
+  capture():{quote:string;snapshotText:string;cells:Array<{row:number;start:number;end:number}>}|null {
     if(this.claimed || !this.selection)return null;
     const {anchor,head,lines,rect}=this.selection;
     if(anchor.row===head.row && anchor.column===head.column)return null;
@@ -130,7 +130,8 @@ export class PreviewSelection {
     if(!quote.trim())return null;
     const snapshotText=lines.slice(rect.y,rect.y+rect.height).map((line,index)=>
       copyRenderedColumns(line,rect.x,rect.x+rect.width,this.selection!.excluded.filter(span=>span.row===rect.y+index))).join('\n');
-    return {quote,snapshotText};
+    const cells=lines.flatMap((line,row)=>{const span=graphemeRange(this.selection!,row,line);return span?[{row,start:span[0],end:span[1]}]:[];});
+    return {quote,snapshotText,cells};
   }
 
   /** Reverse only selected content; surrounding frame columns retain their existing ANSI. */

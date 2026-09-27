@@ -5,13 +5,14 @@ import {join} from 'node:path';
 import {initTheme} from '@earendil-works/pi-coding-agent';
 import {stripTerminalSequences} from '@earendil-works/pi-tui';
 import {annotationSourceHash, createTextQuoteAnchor} from '../src/annotations';
+import {blockAnnotationRepresentation} from '../src/annotation-representations';
 import {DocumentPreview} from '../src/document-preview';
 import {DocumentPreviewInput} from '../src/document-preview-input';
 import {documentPreviewLines, documentPreviewLinks, renderDocumentPreview} from '../src/document-preview-renderer';
 import {OutlinerStore} from '../src/store';
 import {InboxRepository} from '../src/inbox-repository';
 import type {RequestInput} from '../src/client';
-import type {AnnotationRepresentation} from '../src/types';
+import type {AnnotationRepresentation,Block} from '../src/types';
 
 test('local Preview reveals canonical passage and general threads without opening Detail', async () => {
   initTheme(undefined, false);
@@ -30,11 +31,16 @@ test('local Preview reveals canonical passage and general threads without openin
       anchor:createTextQuoteAnchor(block.text, start, start + 'A passage to discuss.'.length)}}).annotations[0]!;
     store.createAnnotation('general', {source:'user', body:'Overall feedback', target:{representation, anchor:{kind:'whole-subject'}}});
     const pointer=new DocumentPreviewInput();
+    let heldRead:Promise<Block>|undefined;
+    let failNextSave=false;
     const reader = new DocumentPreview({async request<T>(input:RequestInput):Promise<T> {
-      if(input.action==='get') return store.get(input.blockId) as T;
+      if(input.action==='get') return (heldRead?await heldRead:store.get(input.blockId)) as T;
       if(input.action==='references.resolve') return store.resolveBlockReferences(input.text) as T;
       if(input.action==='annotations.list') return store.listAnnotationThreads(input.query) as T;
-      if(input.action==='annotations.create') return store.createAnnotation(input.requestId,input.input,input.author) as T;
+      if(input.action==='annotations.create') {
+        if(failNextSave){failNextSave=false;throw Error('Temporary connection failure');}
+        return store.createAnnotation(input.requestId,input.input,input.author) as T;
+      }
       if(input.action==='annotations.reply') return store.replyToAnnotation(input.requestId,input.input,input.author) as T;
       if(input.action==='annotations.lifecycle') return store.setAnnotationLifecycle(input.input,input.mutation) as T;
       throw Error('Unexpected Preview request '+input.action);
@@ -55,12 +61,28 @@ test('local Preview reveals canonical passage and general threads without openin
     expect(paint(30)).toContain('Overall feedback');
     expect(reader.state!.offset).toBeGreaterThan(0);
     const offset=reader.state!.offset;
+    const late=Promise.withResolvers<Block>();heldRead=late.promise;
+    const refresh=reader.load({kind:'block',blockId:block.id},true);
     await reader.key({name:'c'},30,12,noDetail);
     expect(reader.state!.comment?.target?.anchor.kind).toBe('whole-subject');
     reader.paste('Another overall comment');
+    late.resolve({...block,text:'Delayed stale body'});await refresh;heldRead=undefined;
+    expect(reader.state!.document.canonicalText).toBe(block.text);
+    expect(reader.state!.comment!.buffer.text).toBe('Another overall comment');
+    for(const height of [3,4,6]) {
+      const short=renderDocumentPreview(reader.state!,{x:0,y:0,width:32,height},'help');
+      expect(short.lines).toHaveLength(height);
+      expect(short.lines.join('\n')).toContain('Ctrl+S');
+      expect(short.lines.join('\n')).toContain('Esc');
+      expect(short.lines.join('\n')).toContain('Another overall comment');
+    }
     expect(await reader.load({kind:'block',blockId:store.create('Another note').id})).toBe(false);
     expect(reader.clear()).toBe(false);
     expect(reader.state!.comment!.buffer.text).toBe('Another overall comment');
+    failNextSave=true;
+    await reader.key({name:'s',ctrl:true},30,12,noDetail);
+    expect(reader.state!.comment!.buffer.text).toBe('Another overall comment');
+    expect(reader.state!.notice).toContain('Temporary connection failure');
     await reader.key({name:'s',ctrl:true},30,12,noDetail);
     expect(reader.state!.comment).toBeUndefined();
     expect(reader.state!.target).toEqual({kind:'block',blockId:block.id});
@@ -76,6 +98,10 @@ test('local Preview reveals canonical passage and general threads without openin
     await reader.key({name:'s',ctrl:true},30,12,noDetail);
     expect(store.listAnnotationThreads({subject:{kind:'block',blockId:block.id}}).find(thread=>thread.block.id===replyTo)!.replies.map(reply=>reply.body)).toEqual(['Reply from Preview']);
     expect(paint(30)).toContain('Reply from Preview');
+    await reader.action('preview.lifecycle',noDetail);
+    expect(store.listAnnotationThreads({subject:{kind:'block',blockId:block.id},includeResolved:true}).find(thread=>thread.block.id===replyTo)!.lifecycle).toBe('resolved');
+    await reader.action('preview.lifecycle',noDetail);
+    expect(store.listAnnotationThreads({subject:{kind:'block',blockId:block.id}}).find(thread=>thread.block.id===replyTo)!.lifecycle).toBe('open');
     expect(reader.state!.canBack).toBe(false);
     expect(store.get(block.id)!.text).toBe(block.text);
     expect(store.listAnnotationThreads({subject:representation.subject as {kind:'block';blockId:string}})).toHaveLength(3);
@@ -167,7 +193,32 @@ test('local Preview reveals canonical passage and general threads without openin
     expect(keyboard.originalTarget.representation.observation).toMatchObject({input:'keyboard',quote:'Review'});
     expect(store.get(block.id)!.text).toBe(currentText);
 
+    const plainBlock=store.create('Unchanged plain text');
+    await reader.load({kind:'block',blockId:plainBlock.id});reader.focus();
+    const exactFrame=renderDocumentPreview(reader.state!,{x:0,y:0,width:40,height:12},'help');
+    pointer.render(exactFrame.lines,exactFrame,reader.state);
+    await reader.key({name:'v'},40,9,noDetail,'v');
+    await reader.key({name:'end',shift:true},40,9,noDetail);
+    await reader.key({name:'c'},40,9,noDetail,'c');
+    expect(reader.state!.comment?.target?.anchor).toMatchObject({start:0,end:20,exact:'Unchanged plain text'});
+    reader.paste('Positioned feedback');await reader.key({name:'s',ctrl:true},40,9,noDetail);
+    const exactThread=store.listAnnotationThreads({subject:{kind:'block',blockId:plainBlock.id}})[0]!;
+    expect(exactThread.currentResolution.status).toBe('resolved');
+    expect(documentPreviewLinks(reader.state!.document,40).some(link=>link.uri.includes('annotation-toggle')&&!link.uri.includes('unpositioned'))).toBe(true);
 
-
+    const fragmentBlock=store.create('## Section ^section\n\nExcerpt text.\n\n## Elsewhere\nOther text.');
+    await reader.load({kind:'block',blockId:fragmentBlock.id,fragmentId:'section'});reader.focus();
+    const fragmentFrame=renderDocumentPreview(reader.state!,{x:0,y:0,width:40,height:12},'help');
+    pointer.render(fragmentFrame.lines,fragmentFrame,reader.state);
+    await reader.key({name:'v'},40,9,noDetail,'v');await reader.key({name:'end',shift:true},40,9,noDetail);
+    await reader.key({name:'c'},40,9,noDetail,'c');
+    reader.paste('Fragment feedback');await reader.key({name:'s',ctrl:true},40,9,noDetail);
+    const fragmentThread=store.listAnnotationThreads({subject:{kind:'block',blockId:fragmentBlock.id}})[0]!;
+    expect(fragmentThread.originalTarget.representation.observation).toMatchObject({fragmentId:'section'});
+    expect(fragmentThread.originalTarget.representation.contentHash).toBe(annotationSourceHash(fragmentBlock.text));
+    const replaced=store.update(plainBlock.id,'Replaced source',plainBlock.revision);
+    store.reconcileAnnotationThreads({subject:{kind:'block',blockId:plainBlock.id},newRepresentation:blockAnnotationRepresentation(replaced)});
+    await reader.loadText({kind:'block',blockId:plainBlock.id},'Plain before',async()=>plainBlock);
+    expect(documentPreviewLinks(reader.state!.document,40).some(link=>link.uri.includes('annotation-toggle')&&!link.uri.includes('unpositioned'))).toBe(true);
   } finally { store.close(); rmSync(directory, {recursive:true, force:true}); }
 });

@@ -10,6 +10,7 @@ import type { Block, AnnotationRecord, AnnotationTarget, AnnotationThread } from
 export interface AnnotationReaderState extends Pick<DetailState,
   "target" | "resolvedSelectedText" | "annotationThreads" | "selectedAnnotationId" | "previewRegions"> {
   context: {selected: Pick<Block, "id" | "text"> | null};
+  historical?:boolean;
   document: {kind: "empty" | "loading" | "failed"} | {
     kind: "ready";
     document: {kind: "block"} | {kind: "resource"; description: import("./resources").ResourceDescription};
@@ -144,6 +145,15 @@ export function detailAnnotationGroups(
           candidate.representation.subject.resourceId === displayedResourceTargetId &&
           (!originalContext || annotationReferenceContextsEqual(candidate.referenceContext, currentContext))
         ) ?? null;
+    } else if(state.historical && selected && !originalContext) {
+      // A before-image is a real captured version. Match that version's range,
+      // not the latest resolution against a different canonical body.
+      target=[...thread.resolutionHistory].reverse().map(event=>event.resolvedTarget)
+        .concat(thread.originalTarget).find(candidate=>{
+          const snapshot=candidate?.representation.sourceSnapshot;
+          return snapshot?.kind==='block' && snapshot.blockId===selected.id && snapshot.contentHash===blockContentHash
+            && candidate?.representation.contentHash===blockContentHash;
+        })??null;
     } else if (thread.currentResolution.status !== "resolved") {
       target = null;
     } else if (selected && currentContext) {

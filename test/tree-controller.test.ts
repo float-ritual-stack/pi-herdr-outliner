@@ -529,6 +529,7 @@ describe("createTreeController", () => {
     expect(controller.view().mode).toBe('inbox');
     await controller.handleKeypress('',{name:'escape'},'pass');
     expect(inbox.hasCommentDraft).toBe(false);
+    expect(inbox.notice).not.toContain('draft retained');
     expect(inbox.reader.state!.target).toEqual({kind:'block',blockId:output.id});
     await controller.handleKeypress('',{name:'escape'},'pass');
     expect(inbox.reader.state!.focused).toBe(false);
@@ -3805,6 +3806,7 @@ test("Alt+L is available while local Preview owns focus, and Escape returns to T
  await controller.handleKeypress('c',{name:'c'},'pass');
  expect(controller.view().localPreview?.comment).toBeUndefined();
  const rendered=renderTreeFrame(controller.view(),80,30);
+ expect(rendered.frame).toContain('m comment');
  selection.render(rendered.frame.split('\n'),rendered.preview,controller.view().localPreview);
  await controller.handleKeypress('',{name:'v',meta:true},'pass');
  expect(controller.view().localPreview?.selecting).toBe(true);

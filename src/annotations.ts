@@ -287,6 +287,7 @@ export function normalizeAnnotationRepresentation(
       const representationId=identity(raw.representationId,'Preview source representation');
       if(representationId!==normalized.id)throw new Error('Preview observation does not belong to this representation');
       return {...normalized,observation:{validation:'preview-selection',input:raw.input,
+        ...(raw.fragmentId===undefined?{}:{fragmentId:identity(raw.fragmentId,'Preview fragment')}),
         quote:evidenceText(raw.quote,'Preview passage quote'),capturedAt:timestamp(raw.capturedAt,'Preview capture time'),
         readerId:identity(raw.readerId,'Preview reader'),renderRevision:integer(raw.renderRevision,'Preview render revision',1),
         representationId,snapshotHash:identity(raw.snapshotHash,'Preview snapshot hash'),

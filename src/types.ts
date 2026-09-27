@@ -346,6 +346,7 @@ export type AnnotationSourceSnapshot =
 
 /** Evidence captured by a local Preview, without asserting Markdown offsets. */
 export interface PreviewPassageObservation {
+  readonly fragmentId?:string;
   readonly validation:"preview-selection";
   readonly input:"pointer"|"keyboard";
   readonly quote:string;

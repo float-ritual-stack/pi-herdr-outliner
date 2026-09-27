@@ -1134,6 +1134,16 @@ source offsets. The reader action scope supplies remappable comment operations
 without colliding with Tree browsing or Inbox result shortcuts. Starting a
 composer consumes the transient selection after freezing its target evidence.
 
+`documentPreviewSourceAnchor` proves a narrow identity case by comparing the
+complete painted document to the captured block text and hash, with no embeds,
+transforms, annotations or truncation. It maps display cells to UTF-16 only in
+that case and verifies the exact selected bytes. It never searches for a quote
+to guess its position. Other layouts retain a null-offset rendered quote until
+their renderer supplies a source map. Fragment captures retain the fragment ID
+alongside the full source representation. Explicitly historical readers may
+select a matching range from resolution history; current readers preserve the
+current resolution status and never use this historical fallback.
+
 Reference-scoped annotations add `referenceContext` to the existing target JSON:
 a canonical host-block representation, the exact authored token's text-quote
 anchor, and the complete captured host text. That text is immutable evidence,

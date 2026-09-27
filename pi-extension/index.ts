@@ -337,6 +337,7 @@ const annotationRepresentationSchema = Type.Object({
   capturedAt: Type.String(),
   observation: Type.Optional(Type.Union([renderedPassageObservationSchema,Type.Object({
     validation:Type.Literal('preview-selection'),input:Type.Union([Type.Literal('pointer'),Type.Literal('keyboard')]),quote:Type.String(),capturedAt:Type.String(),readerId:Type.String(),
+    fragmentId:Type.Optional(Type.String()),
     renderRevision:Type.Integer({minimum:1}),representationId:Type.String(),snapshotHash:Type.String(),
     projection:Type.Union([Type.Literal('canonical'),Type.Literal('resolved'),Type.Literal('generated'),Type.Literal('mixed')]),
   })])),

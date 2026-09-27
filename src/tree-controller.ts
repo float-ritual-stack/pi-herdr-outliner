@@ -393,7 +393,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     ()=>["edit","add-child","add-sibling"].includes(mode),()=>quickEditSource?{blockId:quickEditSource.id,text:quickBuffer.text}:undefined);
 
 
-  const localReader = new DocumentPreview(effects, () => effects.invalidate(), effects.clientId,effects.openExternal,effects.previewSelectionInput);
+  const localReader = new DocumentPreview(effects, () => effects.invalidate(), effects.clientId,effects.openExternal,effects.previewSelectionInput,effects.actionKeymap);
   let previewPreferences = defaultPreviewPreferences();
   let viewerLines: string[] = [];
   let viewerPath = "";
@@ -456,6 +456,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   });
 
   const inbox = new InboxController({
+    actionKeymap,
     clientId: effects.clientId,
     openPreview: openPreviewTarget,
     openExternal: effects.openExternal,

@@ -12,8 +12,9 @@ import type { TextBuffer } from "./text-buffer";
 const BODY_HEIGHT = 3;
 export const BUFFER_COMPOSER_HEIGHT = BODY_HEIGHT + 4;
 
-export function bufferComposerEditorBody(width: number): { contentWidth: number; height: number } {
-  return { contentWidth: Math.max(1, Math.floor(width) - 4), height: BODY_HEIGHT };
+export function bufferComposerEditorBody(width: number, height = BUFFER_COMPOSER_HEIGHT): { contentWidth: number; height: number } {
+  const chrome = height >= 6 ? 4 : height >= 3 ? 2 : 1;
+  return { contentWidth: Math.max(1, Math.floor(width) - 4), height: Math.max(1, height - chrome) };
 }
 
 export interface BufferComposerModel {
@@ -25,6 +26,7 @@ export interface BufferComposerModel {
   cancelAction: string;
   viewportOffset?: number;
   status?: string;
+  height?: number;
 }
 
 function pad(value: string, width: number): string {
@@ -44,8 +46,9 @@ export class BufferComposer implements Component {
 
   render(width: number): string[] {
     const safeWidth = Math.max(1, Math.floor(width));
-    const editorBody = bufferComposerEditorBody(safeWidth);
     const model = this.model();
+    const height=Math.max(1,Math.floor(model.height??BUFFER_COMPOSER_HEIGHT));
+    const editorBody = bufferComposerEditorBody(safeWidth,height);
     const title = truncateToWidth(
       `─ ${sanitizeDynamicText(model.title)} `,
       Math.max(0, safeWidth - 2),
@@ -81,11 +84,14 @@ export class BufferComposer implements Component {
     const divider = safeWidth < 2 ? "─".repeat(safeWidth)
       : model.status ? `├${pad(` ${sanitizeDynamicText(model.status)} `, safeWidth - 2)}┤`
       : `├${"─".repeat(safeWidth - 2)}┤`;
-    const footer = ` ${model.cancelAction} cancel · ${model.commitAction} save `;
+    const fullFooter = ` ${model.cancelAction} cancel · ${model.commitAction} save `;
+    const footer = visibleWidth(fullFooter)<=safeWidth-2 ? fullFooter : ` ${model.cancelAction} · ${model.commitAction} `;
     const bottom = safeWidth < 2
       ? "─".repeat(safeWidth)
       : `└${pad(footer, safeWidth - 2)}┘`;
-    return [top, framed(context, safeWidth), divider, ...body, bottom];
+    if(height===1)return [bottom];
+    return height>=6 ? [top, framed(context, safeWidth), divider, ...body, bottom]
+      : [...(height>=3?[model.status?framed(sanitizeDynamicText(model.status),safeWidth):top]:[]),...body,bottom];
   }
 
   invalidate(): void {}
