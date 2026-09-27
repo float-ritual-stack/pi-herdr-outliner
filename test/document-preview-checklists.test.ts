@@ -168,6 +168,9 @@ test('Preview task controls preserve Markdown, folds, clipboard identity and key
   expect(links(reader).some(link=>link.uri==='https://example.test/guide')).toBe(true);
   expect((await client.request<Block>({action:'get',blockId:block.id})).revision).toBe(block.revision);
   const first=tasks(reader)[0]!;
+  const initialFold=links(reader).find(link=>link.uri.includes('document-control')&&link.row===first.row)!;
+  await click(reader,initialFold.uri);
+  expect(paint(reader)).not.toContain('Check dependency');
   await click(reader,first.uri);
   const menu=renderDocumentPreview(reader.state!,{x:4,y:2,width:28,height:10},'help');
   expect(menu.lines.map(stripTerminalSequences).join('\n')).toContain('> [x] Mark done');
@@ -182,6 +185,12 @@ test('Preview task controls preserve Markdown, folds, clipboard identity and key
   const id=items.items[0]!.itemId!;
   expect(id).toBeTruthy();
   expect(changed.text).toBe(source.replace('1. [ ] Prepare',`1. [x] Prepare ^${id}`));
+  expect(paint(reader)).not.toContain('Check dependency');
+  const assignedFold=links(reader).find(link=>link.uri.includes('document-control')&&link.row===tasks(reader)[0]!.row)!;
+  await click(reader,assignedFold.uri);
+  expect(paint(reader)).toContain('Check dependency');
+  await click(reader,tasks(reader)[0]!.uri);await reader.key({name:'escape'},44,10,noDetail);
+
   expect(reader.state!.offset).toBe(2);
   expect(reader.state!.activeLink).toContain(encodeURIComponent(`^${id}`));
   expect(paint(reader)).not.toContain(`^${id}`);
@@ -199,6 +208,14 @@ test('Preview task controls preserve Markdown, folds, clipboard identity and key
   expect(paint(reader)).not.toContain('Check dependency');
   expect(tasks(reader)).toHaveLength(8);
   expect(tasks(reader).some(link=>link.uri.includes(encodeURIComponent(`^${id}`)))).toBe(true);
+  await click(reader,tasks(reader)[0]!.uri);await reader.key({name:'escape'},44,10,noDetail);
+  await reader.key({name:'space'},44,10,noDetail);
+  expect(paint(reader)).not.toContain('Check dependency');
+  await reader.key({name:'z',ctrl:true},44,10,noDetail);
+  expect(paint(reader)).not.toContain('Check dependency');
+  await click(reader,fold.uri);
+  expect(paint(reader)).toContain('dependency');
+  await click(reader,fold.uri);
   // The wrapped lead paragraph remains readable; only its nested list folds.
   expect(links(reader).some(link=>link.uri==='https://example.test/guide')).toBe(true);
   await reader.key({name:'return'},22,6,noDetail);

@@ -38,6 +38,9 @@ const result=await runHerdrScenario({name:`checklist-controls-${ansi?'ansi':'pi'
     await terminal.write(`\x1b[<0;${column+1};${row+1}M\x1b[<0;${column+1};${row+1}m`);
   };
   await s.checkpoint('01-readable-plan');
+  await click(s.panes.detail,detailAnchor,'▾');
+  await s.waitFor('unassigned Detail children folded',()=>s.visible(s.panes.detail),frame=>frame.includes('Prepare release')&&!frame.includes('Check dependency'));
+  assert.equal((await canonical()).revision,source.revision);
   await click(s.panes.detail,detailAnchor,'[ ]');
   await s.waitVisible(s.panes.detail,'Checklist step');
   await s.waitVisible(s.panes.detail,'Mark done');
@@ -52,11 +55,28 @@ const result=await runHerdrScenario({name:`checklist-controls-${ansi?'ansi':'pi'
   assert.ok(assigned.itemId);
   assert.equal((await canonical()).text,source.text.replace('1. [ ] Prepare release',`1. [x] Prepare release ^${assigned.itemId}`));
   await s.waitVisible(s.panes.detail,'[x]');
+  await s.waitFor('first assignment preserves Detail fold',()=>s.visible(s.panes.detail),frame=>frame.includes('[x] ▸ Prepare release')&&!frame.includes('Check dependency'));
   await s.checkpoint('02-detail-done');
+  await click(s.panes.detail,detailAnchor,'▸');await s.waitVisible(s.panes.detail,'Check dependency');
+  await click(s.panes.detail,detailAnchor,'[x]');await s.waitVisible(s.panes.detail,'Checklist step');
+  await s.keys(s.panes.detail,'escape');
+  await s.waitFor('Detail checkbox refocused',()=>s.visible(s.panes.detail),frame=>frame.includes('Prepare release')&&!frame.includes('Checklist step'));
   await s.keys(s.panes.detail,'tab','shift+tab','space');
   await s.waitFor('focused Space toggles',status,item=>item.status==='todo');
   await s.keys(s.panes.detail,'ctrl+z');
   await s.waitFor('Detail Undo restores',status,item=>item.status==='done');
+  const beforeFold=await canonical();
+  await click(s.panes.detail,detailAnchor,'▾');
+  await s.waitFor('Detail children folded',()=>s.visible(s.panes.detail),frame=>frame.includes('Prepare release')&&!frame.includes('Check dependency'));
+  assert.equal((await canonical()).revision,beforeFold.revision);
+  await click(s.panes.detail,detailAnchor,'[x]');await s.waitVisible(s.panes.detail,'Checklist step');
+  await s.keys(s.panes.detail,'escape');
+  await s.waitFor('folded checkbox focused',()=>s.visible(s.panes.detail),frame=>frame.includes('Prepare release')&&!frame.includes('Checklist step'));
+  await s.keys(s.panes.detail,'space');await s.waitFor('folded checkbox changes status',status,item=>item.status==='todo');
+  await s.waitFor('status change keeps children folded',()=>s.visible(s.panes.detail),frame=>frame.includes('[ ] ▸ Prepare release')&&!frame.includes('Check dependency'));
+  await s.keys(s.panes.detail,'ctrl+z');await s.waitFor('folded checkbox Undo',status,item=>item.status==='done');
+  await s.checkpoint('02a-fold-and-checkbox-independent');
+  await click(s.panes.detail,detailAnchor,'▸');await s.waitVisible(s.panes.detail,'Check dependency');
   const wideRows=(await s.visible(s.panes.detail)).split('\n').length;
   await terminal.resize(130,55);
   await s.waitFor('resized Detail content',()=>s.visible(s.panes.detail),frame=>frame.includes('Prepare release')&&frame.split('\n').length<wideRows);
@@ -83,11 +103,22 @@ const result=await runHerdrScenario({name:`checklist-controls-${ansi?'ansi':'pi'
   await s.waitFor('Preview waiting persists',status,item=>item.status==='waiting');
   await s.waitVisible(s.panes.tree,'[~]');
   await s.checkpoint('04-preview-waiting');
+  const beforePreviewFold=await canonical();
+  await click(s.panes.tree,'● Preview ·','▾');
+  await s.waitFor('Preview children folded',()=>s.visible(s.panes.tree),frame=>frame.includes('Prepare release')&&!frame.includes('Check dependency'));
+  assert.equal((await canonical()).revision,beforePreviewFold.revision);
+  await click(s.panes.tree,'● Preview ·','[~]');await s.waitVisible(s.panes.tree,'Checklist step');await s.keys(s.panes.tree,'escape');
+  await s.waitFor('Preview checkbox focused after cancel',()=>s.visible(s.panes.tree),frame=>frame.includes('Prepare release')&&!frame.includes('Checklist step'));
+
   await s.keys(s.panes.tree,'tab','shift+tab','space');
   await s.waitFor('Preview Space toggles',status,item=>item.status==='done');
   await s.keys(s.panes.tree,'ctrl+z');
   await s.waitFor('Preview Undo restores',status,item=>item.status==='waiting');
   assert.equal((await status()).itemId,assigned.itemId);
+  await s.waitFor('Preview Undo keeps fold',()=>s.visible(s.panes.tree),frame=>frame.includes('[~] ▸ Prepare release')&&!frame.includes('Check dependency'));
+  await s.checkpoint('04a-preview-fold-and-checkbox-independent');
+  await s.keys(s.panes.tree,'tab','enter');await s.waitVisible(s.panes.tree,'Check dependency');
+
   await s.waitVisible(s.panes.detail,'[~]');
   await s.checkpoint('05-canonical-update-in-both-readers');
   const host=await s.client.request<Block>({action:'create',text:`# EMBEDDED PLAN\n\nKeep the original instructions available.\n\n!((${source.id}^${assigned.itemId}))\n\nSecond view:\n\n!((${source.id}^${assigned.itemId}))`});
@@ -100,7 +131,9 @@ const result=await runHerdrScenario({name:`checklist-controls-${ansi?'ansi':'pi'
   await s.keys(s.panes.detail,'ctrl+z');await s.waitFor('embedded Detail Undo',status,item=>item.status==='waiting');
   await s.waitFor('embedded Detail Undo paint',()=>s.visible(s.panes.detail),frame=>/\[~\][^\n]*Prepare release/.test(frame));
   await s.checkpoint('05a-embedded-detail-canonical-update');
-  await s.focus(s.panes.tree);await s.revealTree(s.panes.tree,host.id);
+  // The Tree already selects this host. Re-revealing it starts another read
+  // while an old same-title frame can still satisfy the visible wait.
+  await s.focus(s.panes.tree);
   await s.waitVisible(s.panes.tree,'● Preview · # EMBEDDED PLAN');
   await click(s.panes.tree,'● Preview · # EMBEDDED PLAN','[~]');await s.waitVisible(s.panes.tree,'Checklist step');
   await s.keys(s.panes.tree,'enter');await s.waitFor('embedded Preview update',status,item=>item.status==='done');

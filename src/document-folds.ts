@@ -12,8 +12,11 @@ export interface DocumentFold extends PreviewRegion {
   contentStartLine: number;
 }
 
+export const listItemFoldId = (identity: string): string => `fold:explicit:list-item:^${identity}`;
+
 /** Ranges belong to the supplied document occurrence, never to a different embedded note. */
-export function documentFolds(source: string, boundaries: readonly {startLine: number; endLine: number}[] = []): DocumentFold[] {
+export function documentFolds(source: string, boundaries: readonly {startLine: number; endLine: number}[] = [],
+  projectedIdentities: ReadonlyMap<number, string> = new Map()): DocumentFold[] {
   const nodes = markdownSourceTokens(source);
   const lines = source.split(/\r?\n/);
   const lineStarts = [0];
@@ -30,8 +33,9 @@ export function documentFolds(source: string, boundaries: readonly {startLine: n
     const contentStartLine = headerEndLine + 1;
     if (!lines.slice(contentStartLine, endLine + 1).some(line => line.trim())) return;
     const explicit = anchors.find(anchor => anchor.lineIndex >= node.span.startLine && anchor.lineIndex <= headerEndLine);
-    const identity = explicit && anchors.filter(anchor => anchor.id === explicit.id).length === 1 ? `^${explicit.id}` : String(node.span.startLine);
-    const id = `fold:${identity.startsWith('^') ? 'explicit' : revision}:${structure}:${identity}`;
+    const mappedIdentity = structure === 'list-item' ? projectedIdentities.get(node.span.startLine) : undefined;
+    const identity = mappedIdentity ? `^${mappedIdentity}` : explicit && anchors.filter(anchor => anchor.id === explicit.id).length === 1 ? `^${explicit.id}` : String(node.span.startLine);
+    const id = mappedIdentity ? listItemFoldId(mappedIdentity) : `fold:${identity.startsWith('^') ? 'explicit' : revision}:${structure}:${identity}`;
     folds.push({id, kind: 'document-fold', structure, headerEndLine, contentStartLine,
       sourceSpan: {...node.span, end: lineStarts[endLine + 1] ?? source.length, endLine}, parentId: null, childIds: [], focusable: true,
       disclosure: {defaultExpanded: true, expanded: true}, activation: {type: 'document.disclosure.toggle', regionId: id}});

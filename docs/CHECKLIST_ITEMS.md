@@ -189,8 +189,10 @@ step needs a fresh decision, rather than restoring old words.
 Copy step link explicitly assigns an address if needed and copies the fragment
 reference. Ordinary rendering, including hidden/folded content, never writes.
 Code examples and legends have no task controls. List disclosures remain
-separate controls; folding children leaves the parent checkbox usable. Saved
-Inbox before-images remain read-only.
+separate controls; folding children leaves the parent checkbox usable. Status
+changes preserve that local fold, including the first change that assigns an
+item address. Repeated embeds keep independent folds. Saved Inbox before-images
+remain read-only.
 
 Whole-note embeds, item-fragment embeds and fragment-only Preview use the same
 controls. Changing an embedded step updates its canonical plan; the embedding

@@ -1416,13 +1416,14 @@ export class OutlinerStore {
     const scope=normalizeBlockSearchQuery({...query.scope,limit:1000});
     return this.database.transaction(():ChecklistSearchCollection => {
       if(scope.subtreeRootId)this.requireActive(scope.subtreeRootId);
-      const plans=this.traverseLoadedGraph(this.loadGraph(),{
+      const graph=this.loadGraph();
+      const plans=this.traverseLoadedGraph(graph,{
         filters:scope.filters,text:scope.text,subtreeRootId:scope.subtreeRootId,propertyScope:scope.propertyScope,
       });
       if(scope.sort)sortQueriedBlocks(plans,scope.sort);
       const matches:ChecklistSearchCollection['matches']=[];
       for(const block of plans){
-        const result=this.queryChecklist(block.id,query.items);
+        const result=queryChecklistItems(block.text,query.items,graph.propertyRecordsByBlock.get(block.id)??[]);
         for(const item of result.items){
           if(matches.length===query.items.limit)return {matches,completeness:{kind:'truncated',limit:query.items.limit}};
           matches.push({block,item});

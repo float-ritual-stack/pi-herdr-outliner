@@ -1,6 +1,6 @@
 import {blockAnnotationRepresentation, resourceAnnotationRepresentation} from "./annotation-representations";
 import {removedListItemIds} from "./checklist-items";
-import {checklistControlId, checklistCommentRange, findChecklistControl, type ChecklistControl} from "./checklist-controls";
+import {checklistFoldState, restoreChecklistFold, checklistControlId, checklistCommentRange, findChecklistControl, type ChecklistControl} from "./checklist-controls";
 import {ChecklistSession, type ChecklistChoice, type ChecklistResult} from "./checklist-session";
 import type {ChecklistUpdateInput, ChecklistUpdateReceipt} from "./types";
 import type {ChecklistIdentityChange} from "./types";
@@ -3054,7 +3054,7 @@ export function createDetailController(
     ensureFileCursorVisible(viewport);
   };
 
-  const showChecklistReceipt = async (result: ChecklistResult, generation: number, hostId:string): Promise<void> => {
+  const showChecklistReceipt = async (result: ChecklistResult, generation: number, hostId:string, foldExpanded?:boolean): Promise<void> => {
     const receipt = result.receipt;
     const selected = state.context.selected;
     if (generation !== openGeneration || state.mode !== "preview" || selected?.id !== hostId) return;
@@ -3067,15 +3067,17 @@ export function createDetailController(
     applyBlockRead(read);
     cacheCurrentBlockRead(read);
     state.previewRegions.focusedRegionId = checklistControlId(receipt.block.id, receipt.item, receipt.block.revision, result.occurrenceId);
+    restoreChecklistFold(state.previewRegions, state.previewRegions.focusedRegionId, foldExpanded);
     state.status = `Step ${receipt.item.status} · Ctrl+Z undoes the last status change`;
   };
 
   const changeChecklist = async (control: ChecklistControl, choice: ChecklistChoice, generation: number): Promise<void> => {
     const hostId = state.context.selected?.id;
     if (!hostId) return;
+    const foldExpanded = checklistFoldState(state.previewRegions, control);
     const result = await checklist.choose(control, choice, hostId);
     if (generation === openGeneration && result.link) effects.copyText(result.link);
-    await showChecklistReceipt(result, generation, hostId);
+    await showChecklistReceipt(result, generation, hostId, foldExpanded);
     if (generation === openGeneration && result.link) state.status = "Step link copied";
   };
 

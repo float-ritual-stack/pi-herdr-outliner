@@ -1141,7 +1141,7 @@ describe("Pi Markdown detail preview", () => {
     const current = "# Plan\n\n- [x] Entirely new wording ^task\n- [ ] Neighbor";
     const original = {...textTarget(old, old.indexOf("Old wording"), old.indexOf(" ^task")), listItemId: "task"};
     const resolved: AnnotationTarget = {representation: textTarget(current, 0, 1).representation,
-      anchor: {kind: "list-item", itemId: "task"}, listItemId: "task"};
+      anchor: {kind: "list-item", itemId: "task"}};
     const detail = state(current, current);
     const thread = {...annotationThread("item-comment", resolved, "Keep the original context."), originalTarget: original};
     const exact = {...textTarget(current, current.indexOf("Entirely"), current.indexOf(" ^task")), listItemId: "task"};

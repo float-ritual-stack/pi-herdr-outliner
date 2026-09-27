@@ -1,4 +1,4 @@
-import {checklistControlId,checklistCommentRange,findChecklistControl,type ChecklistControl} from "./checklist-controls";
+import {checklistFoldState,restoreChecklistFold,checklistControlId,checklistCommentRange,findChecklistControl,type ChecklistControl} from "./checklist-controls";
 import {CHECKLIST_CHOICES,ChecklistSession,type ChecklistChoice} from "./checklist-session";
 import {annotationSourceHash,createTextQuoteAnchor} from './annotations';
 import {DEFAULT_OUTLINER_ACTION_KEYMAP,displayActionChord,type OutlinerActionKeymap} from './outliner-actions';
@@ -164,6 +164,7 @@ export class DocumentPreview {
     const contextId=value.target.kind==='block'?value.target.blockId:undefined;
     if(!contextId)return;
     const generation=this.generation;
+    const foldExpanded=control&&value.document.previewRegions?checklistFoldState(value.document.previewRegions,control):undefined;
     this.checklistBusy=true;
     this.value={...value,checklistPicker:undefined,checklistBusy:true,notice:'Updating step…'};this.changed();
     try {
@@ -177,6 +178,7 @@ export class DocumentPreview {
       const refreshed=await this.load(value.target,true);
       if(!refreshed||!this.value)return;
       const id=checklistControlId(result.receipt.block.id,result.receipt.item,result.receipt.block.revision,result.occurrenceId);
+      if(this.value.document.previewRegions)restoreChecklistFold(this.value.document.previewRegions,id,foldExpanded);
       this.value={...this.value,activeLink:previewRegionActionUri({type:'checklist.open',regionId:id}),
         activeLinkLabel:'Checklist step',notice:choice==='copy-link'?'Step link copied':choice==='undo'?'Checklist change undone':'Step updated · Ctrl+Z undo'};
     } catch(error){

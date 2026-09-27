@@ -1,5 +1,6 @@
+import {listItemFoldId} from "./document-folds";
 import {CHECKLIST_MARKS, checklistItems} from "./checklist-items";
-import {previewRegionActionUri, type PreviewRegion} from "./detail-preview-regions";
+import {previewRegionActionUri, type PreviewRegion, type PreviewRegionState} from "./detail-preview-regions";
 import type {Block, ChecklistItem} from "./types";
 import type {DetailEmbedRange} from "./detail-embeds";
 
@@ -42,6 +43,25 @@ export function checklistControls(block: Pick<Block, "id" | "text" | "revision">
       parentId: null, childIds: [], focusable: true, disclosure: null,
       activation: {type: "checklist.open", regionId: id}};
   });
+}
+
+/** Projected Markdown hides anchors; retain unique item/occurrence identity for folding. */
+export function checklistFoldIdentities(controls: readonly ChecklistControl[]): ReadonlyMap<number, string> {
+  return new Map(controls.filter(control => control.item.identity === "unique")
+    .map(control => [control.sourceSpan!.startLine, control.id]));
+}
+
+/** Capture only the admitted item's local disclosure, never infer an anonymous
+ * identity across arbitrary edits. The successful receipt supplies the new ID. */
+export function checklistFoldState(state: PreviewRegionState, control: ChecklistControl): boolean | undefined {
+  if (control.item.identity !== "unassigned") return undefined;
+  const fold = state.regions.find(region => region.kind === "document-fold" &&
+    region.sourceSpan?.startLine === control.sourceSpan?.startLine && region.id.includes(":list-item:"));
+  return fold ? state.disclosureOverrides.get(fold.id) ?? fold.disclosure?.expanded : undefined;
+}
+
+export function restoreChecklistFold(state: PreviewRegionState, controlId: string, expanded: boolean | undefined): void {
+  if (expanded !== undefined) state.disclosureOverrides.set(listItemFoldId(controlId), expanded);
 }
 
 export function findChecklistControl(regions: readonly PreviewRegion[], id: string): ChecklistControl | undefined {

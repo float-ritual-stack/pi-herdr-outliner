@@ -1,5 +1,5 @@
 import type {ReaderDensity} from "./reader-chrome";
-import {checklistControls, embeddedChecklistControls, type ChecklistControl} from "./checklist-controls";
+import {checklistFoldIdentities, checklistControls, embeddedChecklistControls, type ChecklistControl} from "./checklist-controls";
 import { parsePropertyRecords } from "./properties";
 import {documentFolds, revealFoldedLine, type DocumentFold} from './document-folds';
 import type {Block} from "./types";
@@ -529,11 +529,11 @@ export function renderDetailReadPreview(
     calloutTheme,
   );
   // Picker thumbnails have no disclosure input; retain their plain reading layout.
-  const folds = linksEnabled ? documentFolds(projectedText, embedRanges) : [];
   const checklists = linksEnabled && !input.truncated
     ? [...(input.sourceBlock ? checklistControls(input.sourceBlock, renderedLineForAuthoredLine) : []),
       ...(input.sourceSlice ? embeddedChecklistControls([{startLine:0,endLine:0,source:{...input.sourceSlice,contentStartLine:0}}], renderedLineForAuthoredLine) : []),
       ...embeddedChecklistControls(input.embedRanges, line => metadataRemoved ? lineAfterMetadataRemoval(input.projectedText, line) : line)] : [];
+  const folds = linksEnabled ? documentFolds(projectedText, embedRanges, checklistFoldIdentities(checklists)) : [];
   const previewRegions: PreviewRegionState = input.previewRegions ??= {
     regions: [],
     focusedRegionId: null,
@@ -1729,10 +1729,10 @@ export class DetailPiPreviewLayout extends VStack {
         renderedLineForAuthoredLine,
         this.options.calloutTheme,
       );
-      this.documentFoldRegions = draftText === null && referencesReady ? documentFolds(rawText, embedRanges) : [];
       this.checklistRegions = draftText === null && referencesReady && selected
         ? [...checklistControls(selected, renderedLineForAuthoredLine),
           ...embeddedChecklistControls(projectedEmbedRanges, line => metadataRemoved ? lineAfterMetadataRemoval(projectedTextBeforeMetadataRemoval, line) : line)] : [];
+      this.documentFoldRegions = draftText === null && referencesReady ? documentFolds(rawText, embedRanges, checklistFoldIdentities(this.checklistRegions)) : [];
       this.markdown.setContent(
         renderedText,
         embedRanges,
