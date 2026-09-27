@@ -41,6 +41,7 @@ export class DocumentPreviewInput {
       else {this.passage=null;this.keyboardSelecting=this.selection.beginKeyboard(this.frame.content,this.lines,this.exclusions());}
       return true;
     }
+    if(key.name==='escape'&&this.passage){this.clearSelection();return true;}
     if(!this.keyboardSelecting)return false;
     if(key.name==='escape'){this.clearSelection();return true;}
     if(!key.ctrl&&!key.meta&&['left','right','up','down','home','end'].includes(key.name??'')){
@@ -52,7 +53,11 @@ export class DocumentPreviewInput {
   render(lines:string[],frame:DocumentPreviewFrame|undefined,preview:DocumentPreviewState|null|undefined):string[]{
     const visible=frame && (frame.placement!=='compact'||preview?.focused)?frame:undefined;
     const geometry=visible?JSON.stringify([visible.content,visible.offset,[...(preview?.document.previewRegions?.disclosureOverrides ?? [])]]):'';
-    if(preview?.document!==this.document||geometry!==this.geometry){this.clearSelection();this.pressedLink=undefined;}
+    if(preview?.document!==this.document){this.clearSelection();this.pressedLink=undefined;}
+    else if(geometry!==this.geometry){
+      // Cell positions expire on reflow; the captured quote still belongs to this document.
+      this.keyboardSelecting=false;this.selection.clear();this.pressedLink=undefined;
+    }
     this.renderRevision++;
     this.document=preview?.document;this.geometry=geometry;this.frame=visible;this.lines=lines;
     return visible?this.selection.highlight(lines,visible.content,this.keyboardSelecting):lines;

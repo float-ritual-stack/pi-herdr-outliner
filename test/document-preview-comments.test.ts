@@ -155,9 +155,12 @@ test('local Preview reveals canonical passage and general threads without openin
     pointer.handle(`\x1b[<0;${frame.content.x+20};${row+2}m`,actions,text=>copied=text,()=>{});
     expect(copied).toContain('A passage to discuss.');
     expect(copied).toContain('\n');
+    const reflowed=renderDocumentPreview(reader.state!,{x:0,y:0,width:48,height:18},'help');
+    pointer.render(reflowed.lines,reflowed,reader.state);
     expect(await reader.key({},36,18,noDetail,'c')).toBe(true);
     expect(reader.state!.comment!.target!.anchor.kind).toBe('text-quote');
     await reader.key({name:'escape'},36,18,noDetail);
+    pointer.render(frame.lines,frame,reader.state);
     pointer.handle(`\x1b[<0;${frame.content.x+1};${row+1}M`,actions,()=>{},()=>{});
     pointer.handle(`\x1b[<0;${frame.content.x+20};${row+2}m`,actions,()=>{},()=>{});
     const commentControl=frame.controls!.find(control=>control.action==='preview.comment')!;
@@ -216,6 +219,22 @@ test('local Preview reveals canonical passage and general threads without openin
     const fragmentThread=store.listAnnotationThreads({subject:{kind:'block',blockId:fragmentBlock.id}})[0]!;
     expect(fragmentThread.originalTarget.representation.observation).toMatchObject({fragmentId:'section'});
     expect(fragmentThread.originalTarget.representation.contentHash).toBe(annotationSourceHash(fragmentBlock.text));
+    reader.beginComment();reader.paste('Whole fragment note feedback');
+    await reader.key({name:'s',ctrl:true},40,9,noDetail);
+    expect(paint(40)).toContain('Note comments (1)');
+    const orderedBlock=store.create('Upper passage.\n\nLower passage.');
+    const orderedRepresentation=blockAnnotationRepresentation(orderedBlock);
+    const lower=store.createAnnotation('lower-first',{source:'user',body:'Lower feedback',target:{representation:orderedRepresentation,
+      anchor:createTextQuoteAnchor(orderedBlock.text,16,30)}}).annotations[0]!;
+    const upper=store.createAnnotation('upper-second',{source:'user',body:'Upper feedback',target:{representation:orderedRepresentation,
+      anchor:createTextQuoteAnchor(orderedBlock.text,0,14)}}).annotations[0]!;
+    await reader.load({kind:'block',blockId:orderedBlock.id});reader.focus();
+    await reader.action('preview.next',noDetail);
+    expect(reader.state!.document.annotations!.selectedAnnotationId).toBe(upper.block.id);
+    await reader.action('preview.next',noDetail);
+    expect(reader.state!.document.annotations!.selectedAnnotationId).toBe(lower.block.id);
+    await reader.action('preview.previous',noDetail);
+    expect(reader.state!.document.annotations!.selectedAnnotationId).toBe(upper.block.id);
     const replaced=store.update(plainBlock.id,'Replaced source',plainBlock.revision);
     store.reconcileAnnotationThreads({subject:{kind:'block',blockId:plainBlock.id},newRepresentation:blockAnnotationRepresentation(replaced)});
     await reader.loadText({kind:'block',blockId:plainBlock.id},'Plain before',async()=>plainBlock);

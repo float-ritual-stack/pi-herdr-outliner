@@ -2779,7 +2779,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         await localReader.key(key,frame.content.width,frame.content.height,openPreviewTarget,str);return;
       }
       if(key.name==="escape"){
-        if(localReader.state.selecting){await localReader.key(key,0,0,openPreviewTarget,str);return;}
+        if(localReader.state.selecting||localReader.state.passageSelected){await localReader.key(key,0,0,openPreviewTarget,str);return;}
         localReader.focus(false);return;
       }
       const action=actionKeymap.canonicalize("tree","reader",str,key);

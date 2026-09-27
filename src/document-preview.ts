@@ -49,6 +49,7 @@ export interface DocumentPreviewState {
   readonly bindings?:{comment:string;select:string};
   readonly comment?:PreviewCommentDraft;
   readonly selecting?:boolean;
+  readonly passageSelected?:boolean;
   readonly target: OutlinerNavigationTarget;
   readonly title: string;
   readonly document: DetailReadPreviewDocument;
@@ -75,7 +76,7 @@ export class DocumentPreview {
   constructor(private client: OutlinerRequester, private changed: () => void, private clientId?: string, private openExternal?: (url:string)=>void|Promise<void>,private selectionInput?:PreviewSelectionInput,private keymap:OutlinerActionKeymap=DEFAULT_OUTLINER_ACTION_KEYMAP) {}
   get state(): DocumentPreviewState | null { return this.value ? {...this.value,
     bindings:{comment:displayActionChord(this.keymap.primaryBinding('tree.reader.comment')),select:displayActionChord(this.keymap.primaryBinding('tree.reader.select'))},
-    selecting:this.selectionInput?.selecting??false,canBack:this.history.length>0,canForward:this.future.length>0} : null; }
+    passageSelected:!!this.selectionInput?.captureSelection(),selecting:this.selectionInput?.selecting??false,canBack:this.history.length>0,canForward:this.future.length>0} : null; }
   cancelLoad(): void { this.generation++; }
   get hasDraft():boolean { return !!this.value?.comment; }
   private protectDraft():boolean {
@@ -203,9 +204,11 @@ export class DocumentPreview {
     this.changed();
   }
   private moveComment(delta:number,width?:number):void {
-    const annotations=this.value?.document.annotations;
-    if(!annotations?.annotationThreads.length)return;
-    const threads=annotations.annotationThreads;
+    const document=this.value?.document,annotations=document?.annotations;
+    if(!document||!annotations?.annotationThreads.length)return;
+    const threads=detailAnnotationGroups({...annotations,resolvedSelectedText:document.resolvedText,previewRegions:document.previewRegions!},
+      line=>line,document.projectedText.split(/\r?\n/).length,document.projectedText).flatMap(group=>group.threads);
+    if(!threads.length)return;
     const current=threads.findIndex(thread=>thread.block.id===annotations.selectedAnnotationId);
     const next=current<0?(delta>0?0:threads.length-1):(current+delta+threads.length)%threads.length;
     this.selectComment(threads[next]!.block.id,width);

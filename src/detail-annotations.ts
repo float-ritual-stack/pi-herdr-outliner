@@ -97,6 +97,7 @@ export function detailAnnotationGroups(
 ): DetailAnnotationGroup[] {
   if (state.annotationThreads.length === 0) return [];
   const selected = state.context.selected;
+  const displayedBlockId = state.target?.kind === "block" ? state.target.blockId : selected?.id;
   const blockContentHash = selected ? annotationSourceHash(selected.text) : null;
   const displayedResourceTargetId = state.target?.kind === "resource"
     ? state.target.resourceId
@@ -131,7 +132,7 @@ export function detailAnnotationGroups(
     const generalSubject = thread.originalTarget.representation.subject;
     if (thread.originalTarget.anchor.kind === "whole-subject" &&
       ((displayedResourceTargetId && generalSubject.kind === "resource" && generalSubject.resourceId === displayedResourceTargetId) ||
-        (!displayedResourceTargetId && selected && generalSubject.kind === "block" && generalSubject.blockId === selected.id))) {
+        (!displayedResourceTargetId && generalSubject.kind === "block" && generalSubject.blockId === displayedBlockId))) {
       general.push(thread);
       continue;
     }
@@ -273,7 +274,7 @@ export function detailAnnotationGroups(
   return [
     ...positioned,
     ...(general.length === 0 ? [] : [{
-      regionId: `annotation:${displayedResourceTargetId ?? selected?.id}:general`,
+      regionId: `annotation:${displayedResourceTargetId ?? displayedBlockId}:general`,
       placement: "general" as const,
       startLine: renderedSourceLineCount,
       endLine: renderedSourceLineCount,
@@ -282,7 +283,7 @@ export function detailAnnotationGroups(
       threads: general.sort(compareThreads),
     }]),
     ...(unpositioned.length === 0 ? [] : [{
-      regionId: `annotation:${displayedResourceTargetId ?? selected?.id}:unpositioned`,
+      regionId: `annotation:${displayedResourceTargetId ?? displayedBlockId}:unpositioned`,
       placement: "unpositioned" as const,
       startLine: renderedSourceLineCount,
       endLine: renderedSourceLineCount,

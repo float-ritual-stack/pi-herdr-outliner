@@ -107,7 +107,7 @@ export function renderDocumentPreview(preview:DocumentPreviewState,rect:PreviewR
   }
   const links=documentPreviewLinks(preview.document,content.width).filter(link=>link.row>=offset&&link.row<offset+content.height).map(link=>({uri:link.uri,rect:{x:content.x+link.column,y:content.y+link.row-offset,width:link.width,height:1}}));
   const commentKey=preview.bindings?.comment??'c',selectKey=preview.bindings?.select??'v';
-  const lines=[preview.selecting?`Select passage · arrows move · Shift selects · ${commentKey} comment`:`${preview.focused?'●':'○'} Preview · ${sanitizeDynamicText(preview.title)}`,navigation,...rendered.slice(offset,offset+content.height)];
+  const lines=[preview.selecting?`Select passage · arrows move · Shift selects · ${commentKey} comment`:preview.passageSelected?`Passage selected · ${commentKey} comment · Esc clear`:`${preview.focused?'●':'○'} Preview · ${sanitizeDynamicText(preview.title)}`,navigation,...rendered.slice(offset,offset+content.height)];
   while(lines.length<rect.height-1)lines.push('');
   lines.push(preview.notice ? sanitizeDynamicText(preview.notice) : preview.activeLink ? `Enter follow · ${sanitizeDynamicText(preview.activeLinkLabel??preview.activeLink)}` : `${commentKey} comment · ${selectKey} select · [/] threads · Tab links · ${help}`);
   return {rect,content,lines:lines.slice(0,rect.height).map(line=>shade(line,rect.width)),offset,totalRows:rendered.length,links,controls};
@@ -122,12 +122,12 @@ function renderCompactPreview(preview: DocumentPreviewState, rect: PreviewRect, 
   const controls: NonNullable<DocumentPreviewFrame["controls"]> = [];
   // Unavailable history controls are omitted so they never take title space.
   const commentKey=preview.bindings?.comment==='unbound'?'Comment':preview.bindings?.comment??'c';
-  const actions = (preview.selecting ? [[commentKey,"preview.comment",true],["Esc","preview.selection.cancel",true]] as const : [["‹", "preview.back", preview.canBack], ["›", "preview.forward", preview.canForward],
+  const actions = ((preview.selecting||preview.passageSelected) ? [[commentKey,"preview.comment",true],["Esc","preview.selection.cancel",true]] as const : [["‹", "preview.back", preview.canBack], ["›", "preview.forward", preview.canForward],
     ["Open", "preview.open", true], [commentKey, "preview.comment", !!preview.document.commentTarget], ...(menuAction ? [["⋯", menuAction, true]] : [])] as const)
     .filter(([, , enabled]) => enabled);
   const controlWidth = actions.reduce((sum, [label]) => sum + String(label).length + 2, 0);
   const titleWidth = Math.max(0, rect.width - controlWidth - 1);
-  let strip = titleWidth ? truncateToWidth(preview.selecting ? "Select passage · Shift+arrows" : `${preview.focused ? "●" : "○"} Preview · ${sanitizeDynamicText(preview.title)}`, titleWidth) + " " : "";
+  let strip = titleWidth ? truncateToWidth(preview.selecting ? "Select passage · Shift+arrows" : preview.passageSelected ? "Passage selected" : `${preview.focused ? "●" : "○"} Preview · ${sanitizeDynamicText(preview.title)}`, titleWidth) + " " : "";
   let column = visibleWidth(strip);
   for (const [label, action] of actions) {
     const text = `[${label}]`;

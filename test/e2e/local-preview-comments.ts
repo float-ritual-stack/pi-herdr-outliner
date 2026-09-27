@@ -61,7 +61,12 @@ const result=await runHerdrScenario({
     const passageLines=passageFrame.split('\n');
     const passageRow=passageLines.findIndex(line=>line.includes('Passage begins here'));
     const passageColumn=visibleWidth(passageLines[passageRow]!.slice(0,passageLines[passageRow]!.indexOf('Passage begins here')));
-    await terminal.write(`\x1b[<0;${passageColumn+1};${passageRow+1}M\x1b[<32;${passageColumn+22};${passageRow+2}M\x1b[<0;${passageColumn+22};${passageRow+2}mc`);
+    await terminal.write(`\x1b[<0;${passageColumn+1};${passageRow+1}M\x1b[<32;${passageColumn+22};${passageRow+2}M\x1b[<0;${passageColumn+22};${passageRow+2}m`);
+    await s.waitVisible(panes.tree,'Passage selected');
+    await terminal.resize(150,62);
+    await s.waitVisible(panes.tree,'Passage selected');
+    await s.checkpoint('wrapped-selection-retained-after-resize');
+    await terminal.write('c');
     await s.waitVisible(panes.tree,'Comment on passage');
     await s.text(panes.tree,'WRAPPED QUOTE FEEDBACK');
     await s.keys(panes.tree,'ctrl+s');
