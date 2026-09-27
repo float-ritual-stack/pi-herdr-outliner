@@ -335,7 +335,11 @@ const annotationRepresentationSchema = Type.Object({
   mediaType: Type.Union([Type.String(), Type.Null()]),
   contentHash: Type.Union([Type.String(), Type.Null()]),
   capturedAt: Type.String(),
-  observation: Type.Optional(renderedPassageObservationSchema),
+  observation: Type.Optional(Type.Union([renderedPassageObservationSchema,Type.Object({
+    validation:Type.Literal('preview-pointer'),quote:Type.String(),capturedAt:Type.String(),readerId:Type.String(),
+    renderRevision:Type.Integer({minimum:1}),representationId:Type.String(),snapshotHash:Type.String(),
+    projection:Type.Union([Type.Literal('canonical'),Type.Literal('resolved'),Type.Literal('generated'),Type.Literal('mixed')]),
+  })])),
 });
 
 const annotationTextQuoteAnchorSchema = Type.Object({

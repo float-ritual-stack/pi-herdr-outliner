@@ -10,7 +10,10 @@ This file records notable user-facing changes. The project remains active dogfoo
   protecting unsaved Preview drafts. Local Tree and Inbox readers share comment
   display and composition; Inbox Before comments retain their saved receipt and
   source identity. Comment typing takes precedence over Inbox shortcuts.
-  Protocol 78 adds the whole-subject anchor and Inbox snapshot evidence.
+  Drag-selected local Preview passages retain their quoted text without guessing
+  source offsets. Inbox navigation and receipt updates preserve active drafts;
+  completed Escape input no longer consumes the next Tree shortcut as Alt.
+  Protocol 78 adds the whole-subject anchor and captured Preview/Inbox evidence.
   PIE-290.
 
 - PIE-396: Tree `/` temporarily fuzzy-filters the selected occurrence's descendants,

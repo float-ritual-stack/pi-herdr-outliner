@@ -78,6 +78,10 @@ const result = await runHerdrScenario({
     await session.waitVisible(pane,'Comment on note');
     await session.text(pane,'FEEDBACK ON SAVED SOURCE');
     await session.waitVisible(pane,'FEEDBACK ON SAVED SOURCE');
+    await clickLabel('[Current');
+    await clickLabel('[Activity');
+    await session.waitVisible(pane,'Comment draft retained');
+    await session.waitVisible(pane,'FEEDBACK ON SAVED SOURCE');
     await session.keys(pane,'ctrl+s');
     const historical=await session.waitFor('saved-source comment persisted',()=>session.client.request<AnnotationThread[]>({
       action:'annotations.list',query:{subject:{kind:'block',blockId:receipt.sourceId},includeResolved:true},

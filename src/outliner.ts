@@ -130,6 +130,7 @@ if(initialRoot && ![initialRoot.rowId,initialRoot.canonicalId,initialRoot.label]
   throw new Error("OUTLINER_TREE_ROOT must identify a Tree occurrence");
 }
 const controller = createTreeController({
+  capturePreviewSelection:()=>previewInput.captureSelection(),
   inspectProperties: blockId => { openDetailPane({workspaceRoot: paths.workspaceRoot, browsingContextId: crypto.randomUUID(), propertyInspectorBlockId: blockId}); },
   density: () => viewPreferences.density,
   setDensity: value => viewPreferences.setDensity(value),
@@ -275,6 +276,9 @@ function handleMouseSequence(sequence: string): void {
 
 mouseInput?.on("data", (sequence) => {
   if (isTreeMouseSequence(sequence)) handleMouseSequence(sequence);
+  // StdinBuffer has already waited to distinguish Escape from an Alt chord.
+  // Feeding that completed frame to readline leaves Escape pending again.
+  else if (sequence === "\x1b") keypressInput.emit("keypress", sequence, {name:"escape",sequence});
   else keyboardInput?.write(sequence);
 });
 mouseInput?.on("paste", (text) => enqueueWork(() => controller.handlePaste(text)));

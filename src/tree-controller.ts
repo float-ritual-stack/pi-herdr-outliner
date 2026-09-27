@@ -187,6 +187,7 @@ export interface TreeView {
 }
 
 export interface TreeControllerEffects {
+  capturePreviewSelection?(): import('./document-preview').PreviewPassageCapture|null;
   density?(): ReaderDensity;
   inspectProperties?(blockId: string): void | Promise<void>;
   setDensity?(density: ReaderDensity): void;
@@ -392,7 +393,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     ()=>["edit","add-child","add-sibling"].includes(mode),()=>quickEditSource?{blockId:quickEditSource.id,text:quickBuffer.text}:undefined);
 
 
-  const localReader = new DocumentPreview(effects, () => effects.invalidate(), effects.clientId,effects.openExternal);
+  const localReader = new DocumentPreview(effects, () => effects.invalidate(), effects.clientId,effects.openExternal,effects.capturePreviewSelection);
   let previewPreferences = defaultPreviewPreferences();
   let viewerLines: string[] = [];
   let viewerPath = "";
@@ -2319,6 +2320,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     if(recovery){if(openRecovery.state.active&&recoveryOrigin===originKey())await openRecovery.handleKeypress(recovery.str,recovery.key);return;}
     navigationGeneration++;
     if(openRecovery.state.active)openRecovery.dismiss();
+    if(mode==='inbox' && inbox.retainCommentDraft())return;
     if(actionId.startsWith('preview.')){
       if(mode==='inbox')await inbox.previewAction(actionId);
       else await localReader.action(actionId,openPreviewTarget);

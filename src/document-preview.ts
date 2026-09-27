@@ -1,3 +1,4 @@
+import {annotationSourceHash} from './annotations';
 import {blockAnnotationRepresentation,resourceAnnotationRepresentation} from './annotation-representations';
 import {TextBuffer} from './text-buffer';
 import {textBufferEditorCommand,applyTextBufferEditorCommand} from './text-buffer-editor';
@@ -18,6 +19,14 @@ import type {ResourceDescription} from './resources';
 import {resourceDescriptionLabel} from './resources';
 
 type SavedPreviewSource = Pick<Block,"id"|"text"|"revision"> & Partial<Pick<Block,"updatedAt">> & {inboxAttemptId?:string};
+
+export interface PreviewPassageCapture {
+  document:DetailReadPreviewDocument;
+  quote:string;
+  snapshotText:string;
+  capturedAt:string;
+  renderRevision:number;
+}
 
 export interface PreviewCommentDraft {
   requestId:string;
@@ -51,7 +60,7 @@ export class DocumentPreview {
   private history:DocumentPreviewState[]=[];
   private future:DocumentPreviewState[]=[];
   private value: DocumentPreviewState | null = null;
-  constructor(private client: OutlinerRequester, private changed: () => void, private clientId?: string, private openExternal?: (url:string)=>void|Promise<void>) {}
+  constructor(private client: OutlinerRequester, private changed: () => void, private clientId?: string, private openExternal?: (url:string)=>void|Promise<void>,private captureSelection?:()=>PreviewPassageCapture|null) {}
   get state(): DocumentPreviewState | null { return this.value ? {...this.value,canBack:this.history.length>0,canForward:this.future.length>0} : null; }
   cancelLoad(): void { this.generation++; }
   get hasDraft():boolean { return !!this.value?.comment; }
@@ -94,8 +103,8 @@ export class DocumentPreview {
       else if(result==='cancel'){this.value={...this.value,comment:undefined,notice:'Comment cancelled'};}
       this.changed();return true;
     }
-    if(key.name==='c'&&!key.ctrl&&!key.meta){this.beginComment();return true;}
     const character=str||key.name;
+    if(character==='c'&&!key.ctrl&&!key.meta){this.beginComment();return true;}
     if(!key.ctrl&&!key.meta&&(character==='['||character===']')){this.moveComment(character===']'?1:-1,width);return true;}
     if(key.name==='tab'){this.cycleLink(key.shift?-1:1,width,height);return true;}
     if(key.meta&&(key.name==='left'||key.name==='right')){await this.action(key.name==='left'?'preview.back':'preview.forward',open);return true;}
@@ -110,7 +119,20 @@ export class DocumentPreview {
   }
   beginComment(annotationId?:string):void {
     if(!this.value||this.value.loading||this.value.comment)return;
-    const target=this.value.document.commentTarget;
+    let target=this.value.document.commentTarget;
+    const capture=annotationId?null:this.captureSelection?.();
+    if(capture){
+      if(capture.document!==this.value.document || !target || !this.clientId){
+        this.value={...this.value,notice:'The selected passage is no longer available here; select it again'};this.changed();return;
+      }
+      const document=this.value.document;
+      const projected=document.projectedText!==document.canonicalText,resolved=document.resolvedText!==document.projectedText;
+      target={...target,representation:{...target.representation,observation:{
+        validation:'preview-pointer',quote:capture.quote,capturedAt:capture.capturedAt,readerId:this.clientId,
+        renderRevision:capture.renderRevision,representationId:target.representation.id,snapshotHash:annotationSourceHash(capture.snapshotText),
+        projection:projected&&resolved?'mixed':projected?'generated':resolved?'resolved':'canonical',
+      }},anchor:{kind:'text-quote',start:null,end:null,exact:capture.quote,prefix:'',suffix:''}};
+    }
     if(annotationId&&!this.value.document.annotations?.annotationThreads.some(thread=>thread.block.id===annotationId))return;
     if(!annotationId&&!target){this.value={...this.value,notice:'No captured source available to comment on'};this.changed();return;}
     this.generation++;

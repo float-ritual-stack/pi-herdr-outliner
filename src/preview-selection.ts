@@ -78,15 +78,25 @@ export class PreviewSelection {
     if (event.phase !== "up") return {consumed: true};
     this.claimed = false;
     if (!this.selection) return {consumed: true};
-    const {anchor, head, lines} = this.selection;
-    if (anchor.row === head.row && anchor.column === head.column) return {consumed: true};
-    const selected: string[] = [];
-    for (let row = Math.min(anchor.row, head.row); row <= Math.max(anchor.row, head.row); row++) {
-      const columns = graphemeRange(this.selection, row, lines[row] ?? "");
-      selected.push(columns ? copyRenderedColumns(lines[row] ?? "", columns[0], columns[1], this.selection.excluded.filter(span=>span.row===row)) : "");
+    const capture=this.capture();
+    return capture?{consumed:true,copy:capture.quote}:{consumed:true};
+  }
+
+  /** Completed drag evidence stays in the original painted rectangle. */
+  capture():{quote:string;snapshotText:string}|null {
+    if(this.claimed || !this.selection)return null;
+    const {anchor,head,lines,rect}=this.selection;
+    if(anchor.row===head.row && anchor.column===head.column)return null;
+    const selected:string[]=[];
+    for(let row=Math.min(anchor.row,head.row);row<=Math.max(anchor.row,head.row);row++){
+      const columns=graphemeRange(this.selection,row,lines[row]??'');
+      selected.push(columns?copyRenderedColumns(lines[row]??'',columns[0],columns[1],this.selection.excluded.filter(span=>span.row===row)):'');
     }
-    const copy = selected.join("\n");
-    return copy.trim() ? {consumed: true, copy} : {consumed: true};
+    const quote=selected.join('\n');
+    if(!quote.trim())return null;
+    const snapshotText=lines.slice(rect.y,rect.y+rect.height).map((line,index)=>
+      copyRenderedColumns(line,rect.x,rect.x+rect.width,this.selection!.excluded.filter(span=>span.row===rect.y+index))).join('\n');
+    return {quote,snapshotText};
   }
 
   /** Reverse only selected content; surrounding frame columns retain their existing ANSI. */

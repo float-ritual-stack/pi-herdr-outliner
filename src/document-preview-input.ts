@@ -1,7 +1,7 @@
 import {PreviewSelection} from './preview-selection';
 import {parseTreePrimaryPointer,parseTreeWheelEvent,parseTreeSecondaryClick} from './tree-mouse';
 import {pointInPreview,type DocumentPreviewFrame} from './document-preview-renderer';
-import type {DocumentPreviewState} from './document-preview';
+import type {PreviewPassageCapture,DocumentPreviewState} from './document-preview';
 import {isCopyExcludedLink} from './rendered-links';
 
 /** Input is owned by the rendered Preview rectangle, never by rows underneath it. */
@@ -19,11 +19,15 @@ export class DocumentPreviewInput {
   private geometry='';
   private pressedLink: {uri:string;column:number;row:number}|undefined;
   private resizing: DocumentPreviewFrame | undefined;
+  private renderRevision=0;
+  private passage:PreviewPassageCapture|null=null;
+  captureSelection():PreviewPassageCapture|null{return this.passage;}
   get ownsPointer(): boolean { return this.selection.ownsPointer || !!this.resizing; }
   render(lines:string[],frame:DocumentPreviewFrame|undefined,preview:DocumentPreviewState|null|undefined):string[]{
     const visible=frame && (frame.placement!=='compact'||preview?.focused)?frame:undefined;
     const geometry=visible?JSON.stringify([visible.content,visible.offset,[...(preview?.document.previewRegions?.disclosureOverrides ?? [])]]):'';
-    if(preview?.document!==this.document||geometry!==this.geometry){this.selection.clear();this.pressedLink=undefined;}
+    if(preview?.document!==this.document||geometry!==this.geometry){this.selection.clear();this.pressedLink=undefined;this.passage=null;}
+    this.renderRevision++;
     this.document=preview?.document;this.geometry=geometry;this.frame=visible;this.lines=lines;
     return visible?this.selection.highlight(lines,visible.content):lines;
   }
@@ -49,7 +53,11 @@ export class DocumentPreviewInput {
         if (result.consumed) {
           const link=this.pressedLink;
           if(pointer.phase==='up')this.pressedLink=undefined;
-          if(result.copy)copy(result.copy);
+          if(result.copy){
+            const capture=this.selection.capture();
+            if(capture && this.document)this.passage={...capture,document:this.document,renderRevision:this.renderRevision,capturedAt:new Date().toISOString()};
+            copy(result.copy);
+          }
           else if(pointer.phase==='up'&&link)void controller.invoke(`preview.link:${encodeURIComponent(link.uri)}`);
           redraw(); return true;
         }
@@ -61,6 +69,7 @@ export class DocumentPreviewInput {
       }
 
       if(pointer.phase==='down'){
+        this.passage=null;
         const link=frame?.links?.find(link=>pointInPreview(link.rect,pointer.column,pointer.row));
         this.pressedLink=link?{uri:link.uri,column:pointer.column,row:pointer.row}:undefined;
       }

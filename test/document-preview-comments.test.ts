@@ -6,7 +6,8 @@ import {initTheme} from '@earendil-works/pi-coding-agent';
 import {stripTerminalSequences} from '@earendil-works/pi-tui';
 import {annotationSourceHash, createTextQuoteAnchor} from '../src/annotations';
 import {DocumentPreview} from '../src/document-preview';
-import {documentPreviewLines, documentPreviewLinks} from '../src/document-preview-renderer';
+import {DocumentPreviewInput} from '../src/document-preview-input';
+import {documentPreviewLines, documentPreviewLinks, renderDocumentPreview} from '../src/document-preview-renderer';
 import {OutlinerStore} from '../src/store';
 import {InboxRepository} from '../src/inbox-repository';
 import type {RequestInput} from '../src/client';
@@ -17,7 +18,7 @@ test('local Preview reveals canonical passage and general threads without openin
   const directory = mkdtempSync(join(tmpdir(), 'preview-comments-'));
   const store = new OutlinerStore(join(directory, 'outline.sqlite'));
   try {
-    const block = store.capture('source','Review\n\nA passage to discuss.\n\n## Next\nKeep reading.','cli').block;
+    const block = store.capture('source','Review\n\nA passage to discuss. More words make this sentence wrap in a narrow reader.\n\n## Next\nKeep reading.','cli').block;
     const contentHash = annotationSourceHash(block.text);
     const representation: AnnotationRepresentation = {
       id: `block:${block.id}:${contentHash}`, subject: {kind:'block', blockId:block.id},
@@ -28,6 +29,7 @@ test('local Preview reveals canonical passage and general threads without openin
     const passage = store.createAnnotation('passage', {source:'user', body:'Passage feedback', target:{representation,
       anchor:createTextQuoteAnchor(block.text, start, start + 'A passage to discuss.'.length)}}).annotations[0]!;
     store.createAnnotation('general', {source:'user', body:'Overall feedback', target:{representation, anchor:{kind:'whole-subject'}}});
+    const pointer=new DocumentPreviewInput();
     const reader = new DocumentPreview({async request<T>(input:RequestInput):Promise<T> {
       if(input.action==='get') return store.get(input.blockId) as T;
       if(input.action==='references.resolve') return store.resolveBlockReferences(input.text) as T;
@@ -36,7 +38,7 @@ test('local Preview reveals canonical passage and general threads without openin
       if(input.action==='annotations.reply') return store.replyToAnnotation(input.requestId,input.input,input.author) as T;
       if(input.action==='annotations.lifecycle') return store.setAnnotationLifecycle(input.input,input.mutation) as T;
       throw Error('Unexpected Preview request '+input.action);
-    }}, () => {});
+    }}, () => {}, 'preview-test', undefined, ()=>pointer.captureSelection());
     await reader.load({kind:'block', blockId:block.id});
     reader.focus();
     const paint = (width:number) => documentPreviewLines(reader.state!.document, width).map(stripTerminalSequences).join('\n');
@@ -115,6 +117,39 @@ test('local Preview reveals canonical passage and general threads without openin
     reader.beginComment();
     expect(reader.state!.comment).toBeUndefined();
     expect(reader.state!.notice).toContain('No captured source');
+    await reader.loadText({kind:'block',blockId:block.id},'Before',async()=>({...block,inboxAttemptId:attempt.id}));
+    const frame=renderDocumentPreview(reader.state!,{x:0,y:0,width:36,height:22},'help');
+    pointer.render(frame.lines,frame,reader.state);
+    const row=frame.lines.findIndex(line=>stripTerminalSequences(line).includes('A passage'));
+    expect(row).toBeGreaterThanOrEqual(frame.content.y);
+    let copied='';
+    const actions={focus:()=>reader.focus(),scroll:()=>{},resize:()=>{},invoke:(action:string)=>reader.action(action,noDetail)};
+    pointer.handle(`\x1b[<0;${frame.content.x+1};${row+1}M`,actions,text=>copied=text,()=>{});
+    pointer.handle(`\x1b[<32;${frame.content.x+20};${row+2}M`,actions,text=>copied=text,()=>{});
+    pointer.handle(`\x1b[<0;${frame.content.x+20};${row+2}m`,actions,text=>copied=text,()=>{});
+    expect(copied).toContain('A passage to discuss.');
+    expect(copied).toContain('\n');
+    expect(await reader.key({},36,18,noDetail,'c')).toBe(true);
+    expect(reader.state!.comment!.target!.anchor.kind).toBe('text-quote');
+    await reader.key({name:'escape'},36,18,noDetail);
+    const commentControl=frame.controls!.find(control=>control.action==='preview.comment')!;
+    pointer.handle(`\x1b[<0;${commentControl.rect.x+1};${commentControl.rect.y+1}M`,actions,()=>{},()=>{});
+    expect(reader.state!.comment!.target!.anchor).toEqual({kind:'text-quote',start:null,end:null,exact:copied,prefix:'',suffix:''});
+    expect(renderDocumentPreview(reader.state!,frame.rect,'help').lines.map(stripTerminalSequences).join('\n')).toContain('Comment on passage');
+    reader.paste('Wrapped passage feedback');
+    await reader.key({name:'s',ctrl:true},36,18,noDetail);
+    expect(reader.state!.comment).toBeUndefined();
+    const wrapped=store.listAnnotationThreads({subject:{kind:'block',blockId:block.id}}).find(thread=>thread.body==='Wrapped passage feedback')!;
+    expect(wrapped.originalTarget.anchor).toEqual({kind:'text-quote',start:null,end:null,exact:copied,prefix:'',suffix:''});
+    expect(wrapped.originalTarget.representation.observation).toMatchObject({validation:'preview-pointer',quote:copied,readerId:'preview-test',representationId:representation.id,projection:'canonical'});
+    expect(wrapped.originalTarget.representation.sourceSnapshot).toEqual(historicalRepresentation.sourceSnapshot);
+    expect(paint(36)).toContain('Unpositioned comments');
+    const observation=wrapped.originalTarget.representation.observation;
+    if(observation?.validation!=='preview-pointer')throw Error('Expected pointer observation');
+    expect(()=>store.createAnnotation('wrong-observation',{body:'Wrong source',source:'user',target:{...wrapped.originalTarget,
+      representation:{...wrapped.originalTarget.representation,observation:{...observation,representationId:'another-representation'}},
+    }})).toThrow('does not belong');
+
 
 
   } finally { store.close(); rmSync(directory, {recursive:true, force:true}); }

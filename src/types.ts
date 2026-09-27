@@ -344,6 +344,18 @@ export type AnnotationSourceSnapshot =
       readonly reason: string;
     };
 
+/** Evidence captured by a local Preview, without asserting Markdown offsets. */
+export interface PreviewPassageObservation {
+  readonly validation:"preview-pointer";
+  readonly quote:string;
+  readonly capturedAt:string;
+  readonly readerId:string;
+  readonly renderRevision:number;
+  readonly representationId:string;
+  readonly snapshotHash:string;
+  readonly projection:RenderedPassageProjection;
+}
+
 export interface AnnotationRepresentation {
   readonly id: string;
   readonly subject: AnnotationSubject;
@@ -352,7 +364,7 @@ export interface AnnotationRepresentation {
   readonly mediaType: string | null;
   readonly contentHash: string | null;
   readonly capturedAt: string;
-  readonly observation?: RenderedPassageObservation;
+  readonly observation?: RenderedPassageObservation | PreviewPassageObservation;
 }
 
 export type AnnotationAnchor =

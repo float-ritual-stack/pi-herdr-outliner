@@ -62,7 +62,7 @@ export function renderDocumentPreview(preview:DocumentPreviewState,rect:PreviewR
     const reader=readerHeight?renderDocumentPreview({...preview,comment:undefined},{...rect,height:readerHeight},help,toolbar,density,menuAction):null;
     const body=bufferComposerEditorBody(rect.width);
     const layout=layoutDetailEditor(draft.buffer.lines,draft.buffer.row,draft.buffer.column,body);
-    const composer=new BufferComposer(()=>({title:draft.annotationId?'Reply':'Comment on note',context:preview.title,buffer:draft.buffer,
+    const composer=new BufferComposer(()=>({title:draft.annotationId?'Reply':draft.target?.anchor.kind==='text-quote'?'Comment on passage':'Comment on note',context:draft.target?.anchor.kind==='text-quote'?draft.target.anchor.exact:preview.title,buffer:draft.buffer,
       placeholder:'Write a comment',commitAction:'Ctrl+S',cancelAction:'Esc',viewportOffset:Math.max(0,layout.cursorRow-body.height+1),
       status:draft.saving?'Saving…':preview.notice}));
     composer.focused=preview.focused;

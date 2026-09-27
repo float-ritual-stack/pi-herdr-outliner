@@ -477,10 +477,11 @@ describe("createTreeController", () => {
 
   test("Inbox Preview composer owns input before host shortcuts and follows the clicked reader", async () => {
     const source=block("comment-source"), output=block("comment-output");
+    let refreshed=false;
     const fake=harness(input=>{
       if(input.action==='tree.index')return snapshot([source,output],source);
       if(input.action==='inbox.status')return {enabled:true,paused:true,state:'paused',pending:0,resultsTruncated:false,
-        attentionCount:1,attentionOnly:input.attentionOnly===true,resultsOffset:0,results:[{
+        attentionCount:1,attentionOnly:input.attentionOnly===true,resultsOffset:0,results:refreshed?[{id:'later-result',sourceId:source.id,sourceTitle:'Later receipt',summary:'Updated',state:'held',outputIds:[],createdAt:'2026-01-02T00:00:00.000Z'}]:[{
           id:'comment-result',sourceId:source.id,sourceTitle:'Original capture',summary:'Filed',state:'held',
           outputIds:[output.id],createdAt:'2026-01-01T00:00:00.000Z',
         }]};
@@ -497,10 +498,40 @@ describe("createTreeController", () => {
     const writing='FEEDBACK ON SAVED SOURCE / ? p r s a';
     for(const char of writing)await controller.handleKeypress(char,{name:char.toLowerCase(),shift:char!==char.toLowerCase()},'pass');
     expect(inbox.outputReader.state!.comment!.buffer.text).toBe(writing);
+    for(const action of ['tree.inbox.preview.activity','tree.inbox.preview.before','tree.inbox.search','tree.menu.open']) {
+      await controller.handleAction(action);
+      expect(controller.view().mode).toBe('inbox');
+      expect(inbox.previewMode).toBe('content');
+      expect(inbox.sourceVersion).toBe('current');
+      expect(inbox.searching).toBe(false);
+      expect(inbox.reader.state!.comment!.buffer.text).toBe(writing);
+    }
+    inbox.focusReader(true,'source');
+    inbox.selectTarget(1);
+    inbox.showActivity();
+    expect(inbox.reader).toBe(inbox.outputReader);
+    expect(inbox.outputReader.state?.focused).toBe(true);
+    expect(inbox.sourceReader.state?.focused).toBe(false);
+
+    renderViewport(controller,120,40);
+    inbox.handlePreviewMouse('\x1b[<0;1;1M',()=>{});
+    expect(inbox.outputReader.state?.focused).toBe(true);
+    await controller.handleKeypress('!',{},'pass');
+    expect(inbox.reader.state!.comment!.buffer.text).toBe(writing+'!');
+
+    refreshed=true;
+    await controller.handleServiceEvent(event('inbox'));
+    await setImmediate();
+    expect(inbox.selected?.id).toBe('comment-result');
+    expect(inbox.outputTarget?.id).toBe(output.id);
+    expect(inbox.reader.state!.comment!.buffer.text).toBe(writing+'!');
     expect(inbox.previewMode).toBe('content');
     expect(controller.view().mode).toBe('inbox');
     await controller.handleKeypress('',{name:'escape'},'pass');
     expect(inbox.hasCommentDraft).toBe(false);
+    expect(inbox.reader.state!.target).toEqual({kind:'block',blockId:output.id});
+    inbox.move(1);
+    expect(inbox.selected?.id).toBe('later-result');
     expect(controller.view().mode).toBe('inbox');
   });
 

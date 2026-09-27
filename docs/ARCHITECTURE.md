@@ -1120,6 +1120,15 @@ representations and use text quotes rather than separate passage targets. All
 surfaces then call the same `annotations.create` action and query by block or
 Resource subject.
 
+Local Tree/Inbox pointer captures attach `preview-pointer` observation evidence
+to the displayed source representation: quote, reader, render generation,
+representation identity, viewport text hash and projection kind. A null-offset
+text-quote remains unpositioned; the service checks that its evidence belongs to
+the representation and retains the normal source-snapshot validation. This does
+not weaken the separate Herdr/rendered-snapshot observation contract. Inbox
+keeps the draft-owning reader focused, defers incoming receipts while writing,
+and applies pending receipts on subsequent result navigation or refresh.
+
 Reference-scoped annotations add `referenceContext` to the existing target JSON:
 a canonical host-block representation, the exact authored token's text-quote
 anchor, and the complete captured host text. That text is immutable evidence,

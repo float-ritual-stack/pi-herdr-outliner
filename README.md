@@ -1573,6 +1573,15 @@ comment still belongs to the canonical note, so it appears in ordinary readers
 as well. Historical captures without timestamp evidence remain readable but
 cannot create a comment from that preview.
 
+In local Tree and Inbox Preview, drag to select a passage, then use Comment or
+`c`. The composer shows the captured quote before saving. These pointer captures
+retain their rendered text and source identity as unpositioned passage comments;
+terminal wrapping is not treated as a Markdown character offset. Without a
+selection, Comment targets the whole note. Inbox source/version controls, result
+navigation and incoming receipt updates cannot displace an active comment draft.
+Save or cancel keeps the displayed source; deferred receipts apply on the next
+result navigation or refresh.
+
 
 For an occurrence-scoped comment, pass `target.referenceContext` with the containing block representation, exact authored-reference anchor, and original `sourceText`; omit it for a subject-wide comment. File-passage comments retain the Resource representation and passage anchor alongside that context.
 

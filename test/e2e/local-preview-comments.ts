@@ -50,6 +50,31 @@ const result=await runHerdrScenario({
     await s.waitVisible(panes.tree,'LOCAL PREVIEW REPLY');
     await s.checkpoint('local-comment-and-reply-saved');
     assert.equal((await s.client.request<Block>({action:'get',blockId:note.id})).text,note.text);
+    await s.keys(panes.tree,'esc');
+    await s.waitVisible(panes.tree,'○ Preview · LOCAL COMMENT');
+    const passageNote=await s.client.request<Block>({action:'create',text:'WRAPPED PASSAGE NOTE\n\nPassage begins here and continues with enough words to occupy several rendered lines in this narrow reader. Its source coordinates must never be guessed from screen columns.'});
+    await s.revealTree(panes.tree,passageNote.id);
+    const passageFrame=await s.waitFor('wrapped passage visible',terminal.visible,text=>text.includes('Passage begins here')&&text.includes('WRAPPED PASSAGE NOTE'));
+    const passageLines=passageFrame.split('\n');
+    const passageRow=passageLines.findIndex(line=>line.includes('Passage begins here'));
+    const passageColumn=visibleWidth(passageLines[passageRow]!.slice(0,passageLines[passageRow]!.indexOf('Passage begins here')));
+    await terminal.write(`\x1b[<0;${passageColumn+1};${passageRow+1}M\x1b[<32;${passageColumn+22};${passageRow+2}M\x1b[<0;${passageColumn+22};${passageRow+2}mc`);
+    await s.waitVisible(panes.tree,'Comment on passage');
+    await s.text(panes.tree,'WRAPPED QUOTE FEEDBACK');
+    await s.keys(panes.tree,'ctrl+s');
+    const savedPassages=await s.waitFor('wrapped comment persisted once',()=>s.client.request<AnnotationThread[]>({action:'annotations.list',query:{subject:{kind:'block',blockId:passageNote.id}}}),threads=>threads.length===1);
+    const passage=savedPassages[0]!.originalTarget;
+    assert.equal(passage.anchor.kind,'text-quote');
+    if(passage.anchor.kind!=='text-quote')throw Error('Expected captured passage');
+    assert.ok(passage.anchor.exact.startsWith('Passage begins here'));
+    assert.ok(passage.anchor.exact.includes('\n'));
+    assert.equal(passage.anchor.start,null);
+    assert.equal(passage.representation.observation?.validation,'preview-pointer');
+    assert.equal(passage.representation.observation?.quote,passage.anchor.exact);
+    await s.keys(panes.tree,']');
+    await s.waitVisible(panes.tree,'WRAPPED QUOTE FEEDBACK');
+    await s.checkpoint('wrapped-preview-passage-saved');
+
   },
 });
 console.log(JSON.stringify(result));
