@@ -167,6 +167,7 @@ function harness(
           for (const source of collection.blocks) documents.set(source.id, source);
           return { ...collection, blocks: collection.blocks.map(source => treeIndexFixture(source, id => documents.get(id) ?? null)) } as T;
         }
+        if (response === undefined && input.action === "annotations.list") return [] as T;
         if (response === undefined && input.action === "references.backlinks") return {targetBlockId:input.query.targetBlockId,sources:[],completeness:{kind:"complete"}} as T;
         if (response === undefined && input.action === "get") return (documents.get(input.blockId) ?? null) as T;
         if (response === undefined && input.action === "references.resolve") {

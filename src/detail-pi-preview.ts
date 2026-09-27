@@ -4,7 +4,7 @@ import {documentFolds, revealFoldedLine, type DocumentFold} from './document-fol
 import type {Block} from "./types";
 import {authoredResourceReferenceOccurrences} from "./resource-references";
 import type {RenderedLink} from './rendered-links';
-import { displayedResourceText, detailAnnotationGroups, sourceLineStarts, sourceLineAt, selectedAnnotationThread, annotationScopeLabel, type DetailAnnotationGroup } from "./detail-annotations";
+import { displayedResourceText, detailAnnotationGroups, sourceLineStarts, sourceLineAt, selectedAnnotationThread, annotationScopeLabel, type DetailAnnotationGroup, type AnnotationReaderState } from "./detail-annotations";
 import { detailPropertyInspectorRegions } from "./property-inspector";
 import {
   Key,
@@ -72,6 +72,8 @@ export interface DetailDraftProjection {
 }
 
 export interface DetailReadPreviewDocument {
+  commentTarget?: import("./types").AnnotationTarget;
+  annotations?: Omit<AnnotationReaderState, "previewRegions" | "resolvedSelectedText">;
   previewRegions?: PreviewRegionState;
   sourceBlock?: Pick<Block,"id"|"revision"|"text">;
   preserveMetadata?: boolean;
@@ -497,7 +499,7 @@ export function renderDetailReadPreview(
   calloutTheme?: DetailCalloutTheme,
   linksEnabled = false,
   revealSourceLine?: number,
-): {lines:string[]; sourceLineRow:(line:number)=>number} {
+): {lines:string[]; sourceLineRow:(line:number)=>number; threadRows:Map<string,number>} {
   const sourceText = input.preserveMetadata?input.resolvedText:propertyInspectorAuthoredText(input.resolvedText);
   const projectedText = input.preserveMetadata?input.projectedText:propertyInspectorAuthoredText(input.projectedText);
   const metadataRemoved = projectedText !== input.projectedText;
@@ -530,7 +532,11 @@ export function renderDetailReadPreview(
     focusedRegionId: null,
     disclosureOverrides: new Map(),
   };
-  reconcilePreviewRegions(previewRegions, [...folds, ...callouts]);
+  const annotationState: AnnotationReaderState | undefined = input.annotations
+    ? {...input.annotations, previewRegions, resolvedSelectedText:input.resolvedText} : undefined;
+  const groups = annotationState ? detailAnnotationGroups(annotationState, renderedLineForAuthoredLine,
+    projectedText.split(/\r?\n/).length, projectedText) : [];
+  reconcilePreviewRegions(previewRegions, [...folds, ...callouts, ...detailAnnotationRegions(groups)]);
   if (revealSourceLine !== undefined) revealFoldedLine(previewRegions, [...folds, ...callouts], renderedLineForAuthoredLine(revealSourceLine));
   const markdown = new SourceSpannedMarkdown(
     markdownTheme,
@@ -550,8 +556,17 @@ export function renderDetailReadPreview(
     return [`[File: ${label}](${outlinerLinkUri(target.kind, target.value, target)})`];
   });
   const metadataRows = metadataLinks.length ? new Markdown(metadataLinks.join(" · "), 0, 0, markdownTheme).render(Math.max(1, width)) : [];
-  return {lines:[...metadataRows, ...markdown.render(Math.max(1, width))],
-    sourceLineRow:line=>metadataRows.length+markdown.sourceLineRow(Math.max(1,width),renderedLineForAuthoredLine(line))};
+  const comments = annotationState ? new DetailAnnotationPreview(annotationState, markdown, markdownTheme) : null;
+  comments?.setGroups(groups);
+  const arrangement = comments?.renderArrangement(width);
+  const threadRows = new Map<string,number>();
+  for (const [id,row] of arrangement?.panelRows ?? []) {
+    if (id.startsWith("annotation-thread:")) threadRows.set(id.slice("annotation-thread:".length), metadataRows.length+row);
+  }
+  return {lines:[...metadataRows, ...(arrangement?.lines ?? markdown.render(Math.max(1, width)))], threadRows,
+    sourceLineRow:line=>metadataRows.length+(arrangement?.mapMarkdownRow(
+      markdown.sourceLineRow(arrangement.contentWidth,renderedLineForAuthoredLine(line)))
+      ?? markdown.sourceLineRow(Math.max(1,width),renderedLineForAuthoredLine(line)))};
 }
 
 /** Static thumbnails and interactive readers use the same document layout. */
@@ -829,7 +844,7 @@ class DetailAnnotationPreview implements Component {
   private groups: readonly DetailAnnotationGroup[] = [];
 
   constructor(
-    private readonly state: Readonly<DetailState>,
+    private readonly state: Readonly<AnnotationReaderState>,
     private readonly markdown: SourceSpannedMarkdown,
     private readonly theme: MarkdownTheme,
   ) {}

@@ -332,7 +332,10 @@ export class InboxController {
     }
   }
 
+  get hasCommentDraft():boolean { return this.sourceReader.hasDraft||this.outputReader.hasDraft; }
+
   async close(): Promise<void> {
+    if(this.hasCommentDraft){this.notice="Comment draft retained · save or cancel before closing Inbox";this.effects.invalidate();return;}
     this.active = false;
     this.searchGeneration++;clearTimeout(this.searchTimer);
     this.sourceReader.cancelLoad(); this.outputReader.cancelLoad();
@@ -404,6 +407,7 @@ export class InboxController {
   }
 
   paste(text: string): void {
+    if(this.reader.state?.focused&&this.reader.paste(text))return;
     if(this.searchEditing&&this.searchBuffer){this.searchBuffer.insert(boundedInstructions(text,Math.max(0,500-this.searchQuery.length)));this.searchChanged();return;}
     if (!this.steering || this.busy) return;
     this.buffer.insert(boundedInstructions(text, Math.max(0, 500 - this.instructions.length)));
@@ -412,6 +416,10 @@ export class InboxController {
 
   async input(str: string, key: TerminalKey): Promise<void> {
     if (!this.active) return;
+    if(!this.steering&&this.previewMode==='content'&&this.reader.state?.focused){
+      const frame=this.reader===this.outputReader?this.outputFrame:this.sourceFrame;
+      if(await this.reader.key(key,frame?.content.width??60,frame?.content.height??10,target=>this.openPreview(target),str))return;
+    }
     if(this.searching && await this.searchInput(str,key))return;
     if(!this.steering&&str==="/"){this.startSearch();return;}
     if (key.name === "escape") {
@@ -424,12 +432,6 @@ export class InboxController {
     if (!this.steering && key.meta && key.name === 'p') {this.focusReader(!this.reader.state?.focused);return;}
     if (!this.steering && this.previewMode === 'content' && this.reader.state?.focused && ['up','down','pageup','pagedown'].includes(key.name ?? '')) {
       this.scrollPreview((key.name === 'up' || key.name === 'pageup' ? -1 : 1) * (key.name?.startsWith('page') ? Math.max(1,this.previewFrame?.content.height ?? 5) : 1));return;
-    }
-    const state=this.reader.state;
-    if(!this.steering&&this.previewMode==='content'&&state?.focused&&['tab','return','left','right'].includes(key.name??'')
-      &&(key.name!=='return'||key.meta||state.activeLink)){
-      const frame=this.reader===this.outputReader?this.outputFrame:this.sourceFrame;
-      if(await this.reader.key(key,frame?.content.width??60,frame?.content.height??10,target=>this.openPreview(target)))return;
     }
     if (this.steering) {
       if (key.name === "return") {

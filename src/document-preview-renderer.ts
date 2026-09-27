@@ -1,8 +1,10 @@
+import {BufferComposer,BUFFER_COMPOSER_HEIGHT,bufferComposerEditorBody} from './buffer-composer';
+import {layoutDetailEditor} from './detail-editor-layout';
 import type {ReaderDensity} from "./reader-chrome";
 import {withInternalLinks, stripRenderedLinks, measureRenderedLinks, type RenderedLink} from './rendered-links';
 import {getMarkdownTheme} from '@earendil-works/pi-coding-agent';
 import {truncateToWidth, visibleWidth} from '@earendil-works/pi-tui';
-import {renderDetailReadPreview, renderDetailReadPreviewLines, type DetailReadPreviewDocument} from './detail-pi-preview';
+import {renderDetailReadPreview, type DetailReadPreviewDocument} from './detail-pi-preview';
 import type {DocumentPreviewState} from './document-preview';
 import {sanitizeDynamicText} from './terminal';
 
@@ -20,9 +22,13 @@ export interface DocumentPreviewFrame {
   divider?: PreviewRect;
   placement?: 'beside'|'below'|'compact';
 }
-const cache=new WeakMap<DetailReadPreviewDocument,{width:number;disclosures:string;lines:string[];links:PreviewLink[]}>();
+const cache=new WeakMap<DetailReadPreviewDocument,{width:number;disclosures:string;lines:string[];links:PreviewLink[];threadRows:Map<string,number>;selected:string|null}>();
 export type PreviewLink = RenderedLink;
 export function documentPreviewLinks(document:DetailReadPreviewDocument,width:number):PreviewLink[]{documentPreviewLines(document,width);return cache.get(document)!.links;}
+export function documentPreviewThreadRow(document:DetailReadPreviewDocument,id:string,width=cache.get(document)?.width ?? 80):number|undefined {
+  documentPreviewLines(document,width);
+  return cache.get(document)?.threadRows.get(id);
+}
 /** Reveal a canonical line using this reader's last measured width and shared source map. */
 export function revealDocumentPreviewSourceLine(document:DetailReadPreviewDocument,line:number,previous:DetailReadPreviewDocument):number {
   const width=cache.get(previous)?.width ?? 80;
@@ -38,17 +44,33 @@ function shade(line:string,width:number):string {
 export function documentPreviewLines(document:DetailReadPreviewDocument,width:number):string[] {
   let entry=cache.get(document);
   const disclosures=JSON.stringify([...(document.previewRegions?.disclosureOverrides ?? [])]);
-  if(entry?.width!==width || entry.disclosures!==disclosures){
+  const selected=document.annotations?.selectedAnnotationId ?? null;
+  if(entry?.width!==width || entry.disclosures!==disclosures || entry.selected!==selected){
     // OSC links are an internal geometry map; they never reach the terminal.
     // Render synchronously with links even when the host does not support OSC 8.
-    const rendered=withInternalLinks(()=>renderDetailReadPreviewLines(document,width,getMarkdownTheme(),undefined,true));
-    entry={width,disclosures,links:measureRenderedLinks(rendered),lines:rendered.map(stripRenderedLinks)};
+    const rendered=withInternalLinks(()=>renderDetailReadPreview(document,width,getMarkdownTheme(),undefined,true));
+    entry={width,disclosures,selected,threadRows:rendered.threadRows,links:measureRenderedLinks(rendered.lines),lines:rendered.lines.map(stripRenderedLinks)};
     cache.set(document,entry);
   }
   return entry.lines;
 }
 /** Render one allocated document rectangle. All input geometry comes from this frame. */
 export function renderDocumentPreview(preview:DocumentPreviewState,rect:PreviewRect,help:string,toolbar?:string, density: ReaderDensity = "expanded", menuAction?: string):DocumentPreviewFrame {
+  if(preview.comment){
+    const draft=preview.comment;
+    const readerHeight=Math.max(0,rect.height-BUFFER_COMPOSER_HEIGHT);
+    const reader=readerHeight?renderDocumentPreview({...preview,comment:undefined},{...rect,height:readerHeight},help,toolbar,density,menuAction):null;
+    const body=bufferComposerEditorBody(rect.width);
+    const layout=layoutDetailEditor(draft.buffer.lines,draft.buffer.row,draft.buffer.column,body);
+    const composer=new BufferComposer(()=>({title:draft.annotationId?'Reply':'Comment on note',context:preview.title,buffer:draft.buffer,
+      placeholder:'Write a comment',commitAction:'Ctrl+S',cancelAction:'Esc',viewportOffset:Math.max(0,layout.cursorRow-body.height+1),
+      status:draft.saving?'Saving…':preview.notice}));
+    composer.focused=preview.focused;
+    const rows=composer.render(rect.width);
+    const lines=[...(reader?.lines??[]),...rows].slice(0,rect.height);
+    return {rect,content:reader?.content??{...rect,height:0},lines,totalRows:reader?.totalRows??0,offset:reader?.offset??preview.offset,
+      links:[],controls:[]};
+  }
   if (density === "compact") return renderCompactPreview(preview, rect, menuAction);
   const content={...rect,y:rect.y+2,height:Math.max(1,rect.height-3)};
   const rendered=documentPreviewLines(preview.document,content.width);
@@ -56,17 +78,17 @@ export function renderDocumentPreview(preview:DocumentPreviewState,rect:PreviewR
   const controls:NonNullable<DocumentPreviewFrame['controls']>=[];
   let navigation=toolbar&&visibleWidth(toolbar)<=rect.width-PREVIEW_NAVIGATION_WIDTH?toolbar:'';
   let column=visibleWidth(navigation);
-  for(const [label,action] of [['‹','back'],['›','forward'],['Open','open']]){
+  for(const [label,action] of [['‹','back'],['›','forward'],['Open','open'],...(preview.document.commentTarget?[['Comment','comment']]:[])]){
     const text=`[${label}]`;
     if(column+text.length>rect.width)break;
-    const enabled=action==='open'||(action==='back'?preview.canBack:preview.canForward);
+    const enabled=action==='open'||action==='comment'||(action==='back'?preview.canBack:preview.canForward);
     if(enabled)controls.push({rect:{x:rect.x+column,y:rect.y+1,width:text.length,height:1},action:`preview.${action}`});
     navigation+=enabled?text:`\x1b[2m${text}\x1b[22m`;column+=text.length;
   }
   const links=documentPreviewLinks(preview.document,content.width).filter(link=>link.row>=offset&&link.row<offset+content.height).map(link=>({uri:link.uri,rect:{x:content.x+link.column,y:content.y+link.row-offset,width:link.width,height:1}}));
   const lines=[`${preview.focused?'●':'○'} Preview · ${sanitizeDynamicText(preview.title)}`,navigation,...rendered.slice(offset,offset+content.height)];
   while(lines.length<rect.height-1)lines.push('');
-  lines.push(preview.notice ? sanitizeDynamicText(preview.notice) : preview.activeLink ? `Enter follow · ${sanitizeDynamicText(preview.activeLinkLabel??preview.activeLink)}` : `Tab links · Alt+←/→ history · ${help}`);
+  lines.push(preview.notice ? sanitizeDynamicText(preview.notice) : preview.activeLink ? `Enter follow · ${sanitizeDynamicText(preview.activeLinkLabel??preview.activeLink)}` : `c comment · [/] threads · Tab links · ${help}`);
   return {rect,content,lines:lines.slice(0,rect.height).map(line=>shade(line,rect.width)),offset,totalRows:rendered.length,links,controls};
 }
 export function pointInPreview(rect:PreviewRect,column:number,row:number):boolean{return column>=rect.x&&column<rect.x+rect.width&&row>=rect.y&&row<rect.y+rect.height;}
@@ -79,7 +101,7 @@ function renderCompactPreview(preview: DocumentPreviewState, rect: PreviewRect, 
   const controls: NonNullable<DocumentPreviewFrame["controls"]> = [];
   // Unavailable history controls are omitted so they never take title space.
   const actions = ([["‹", "preview.back", preview.canBack], ["›", "preview.forward", preview.canForward],
-    ["Open", "preview.open", true], ...(menuAction ? [["⋯", menuAction, true]] : [])] as const)
+    ["Open", "preview.open", true], ["c", "preview.comment", !!preview.document.commentTarget], ...(menuAction ? [["⋯", menuAction, true]] : [])] as const)
     .filter(([, , enabled]) => enabled);
   const controlWidth = actions.reduce((sum, [label]) => sum + String(label).length + 2, 0);
   const titleWidth = Math.max(0, rect.width - controlWidth - 1);

@@ -1246,8 +1246,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
           if (desired.dispatchPreview && desired.target && publication.preview?.targetClientId === effects.clientId && publication.preview.targetRegion === "tree") {
             void inspectLocally(desired.target);
           } else if (localReader.state && publication.preview) {
-            localReader.clear();
-            await effects.request({action: "clients.update", clientId: effects.clientId, previewTarget: null});
+            if(localReader.clear())await effects.request({action: "clients.update", clientId: effects.clientId, previewTarget: null});
           }
           if (status === browsingPublicationStatus) {
             status = "";
@@ -2327,6 +2326,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     }
     if (mode === "action-menu" && actionId.startsWith("tree.preview.")) mode = actionMenuReturnMode;
     if (actionId === "tree.preview.close" || actionId === "tree.preview.toggle") {
+      if(localReader.hasDraft){localReader.clear();return;}
       const enabled = actionId === "tree.preview.toggle" && !previewPreferences.enabled;
       previewPreferences = {...previewPreferences, enabled};
       if (!enabled) {
@@ -2721,6 +2721,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   }
 
   async function handlePaste(text: string): Promise<void> {
+    if(mode === "browse" && localReader.state?.focused && localReader.paste(text))return;
     cancelReadSequence();
     if (mode === "goto") { goto.paste(text); return; }
     if (mode === "inbox") { inbox.paste(text); return; }
@@ -2757,12 +2758,16 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     }
     if (!treePointer && inputAction !== "suppress" && mode === "browse" && localReader.state?.focused) {
       cancelReadSequence();
+      if(localReader.hasDraft){
+        const frame=treePreviewFrame(localReader.state,effects.terminalWidth(),effects.terminalHeight(),"",previewPreferences,effects.density?.() ?? "compact");
+        await localReader.key(key,frame.content.width,frame.content.height,openPreviewTarget,str);return;
+      }
       if(key.name==="escape"){localReader.focus(false);return;}
       const action=actionKeymap.canonicalize("tree","browse",str,key);
       if(action.suppressed)return;
       if(action.actionId && (action.actionId.startsWith("tree.preview.") || ["tree.preview.focus","tree.preview.close","tree.pane.new","tree.navigation.link","tree.navigation.once","tree.menu.open"].includes(action.actionId))) return handleAction(action.actionId);
       const frame=treePreviewFrame(localReader.state,effects.terminalWidth(),effects.terminalHeight(),"",previewPreferences,effects.density?.() ?? "compact");
-      if(await localReader.key(key,frame.content.width,frame.content.height,openPreviewTarget))return;
+      if(await localReader.key(key,frame.content.width,frame.content.height,openPreviewTarget,str))return;
       const delta=key.name==="up"?-1:key.name==="down"?1:key.name==="pageup"?-frame.content.height:key.name==="pagedown"?frame.content.height:0;
       if(delta) scrollLocalPreview(delta);
       else if(key.name==="return") { try {await dispatchRecoverable(localReader.state.target,"open");} catch(error){status=errorMessage(error);} }
@@ -2783,6 +2788,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     if (inputAction === "suppress") return;
     if (key.name !== "return" || key.ctrl || key.meta || key.shift || mode !== "browse") cancelReadSequence();
     if (key.ctrl && key.name === "q") {
+      if(localReader.hasDraft||inbox.hasCommentDraft){status="Comment draft retained · save or cancel before closing";effects.invalidate();return;}
       closed=true;navigationGeneration++;openRecovery.dispose();
       effects.stop();
       return;

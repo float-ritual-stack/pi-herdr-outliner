@@ -4,7 +4,17 @@ import { annotationSourceHash, annotationReferenceContextsEqual, extractAnnotati
 import type { DetailState } from "./detail-controller";
 import type { PreviewRegion } from "./detail-preview-regions";
 import { renderMarkdownLine, sanitizeDynamicText } from "./terminal";
-import type { AnnotationRecord, AnnotationTarget, AnnotationThread } from "./types";
+import type { Block, AnnotationRecord, AnnotationTarget, AnnotationThread } from "./types";
+
+/** The displayed evidence needed by both Detail and local Preview comment readers. */
+export interface AnnotationReaderState extends Pick<DetailState,
+  "target" | "resolvedSelectedText" | "annotationThreads" | "selectedAnnotationId" | "previewRegions"> {
+  context: {selected: Pick<Block, "id" | "text"> | null};
+  document: {kind: "empty" | "loading" | "failed"} | {
+    kind: "ready";
+    document: {kind: "block"} | {kind: "resource"; description: import("./resources").ResourceDescription};
+  };
+}
 
 function fitDynamicText(value: string, width: number): string {
   return truncateToWidth(sanitizeDynamicText(value), Math.max(0, width), "…").replaceAll("\x1b[0m", "");
@@ -30,7 +40,7 @@ export function sourceLineAt(starts: readonly number[], offset: number): number 
 }
 
 export function displayedResourceText(
-  state: Pick<DetailState, "document" | "resolvedSelectedText">,
+  state: Pick<AnnotationReaderState, "document" | "resolvedSelectedText">,
 ): string | null {
   const description = state.document.kind === "ready" && state.document.document.kind === "resource"
     ? state.document.document.description : null;
@@ -54,7 +64,7 @@ export interface DetailAnnotationGroup {
   threads: AnnotationThread[];
 }
 
-function displayedResourceRepresentationId(state: Readonly<DetailState>): string | null {
+function displayedResourceRepresentationId(state: Readonly<AnnotationReaderState>): string | null {
   const description = state.document.kind === "ready" && state.document.document.kind === "resource"
     ? state.document.document.description : null;
   if (!description || displayedResourceText(state) === null) return null;
@@ -66,7 +76,7 @@ function displayedResourceRepresentationId(state: Readonly<DetailState>): string
   return `filesystem:${description.resource.id}:${revision.mtimeNs}:${revision.size}:${filesystem.contentHash}`;
 }
 
-export function annotationScopeLabel(thread: AnnotationThread, state: Readonly<DetailState>): string {
+export function annotationScopeLabel(thread: AnnotationThread, state: Pick<AnnotationReaderState, "target">): string {
   const original = thread.originalTarget.referenceContext;
   if (!original) return thread.originalTarget.representation.subject.kind === "resource" ? "Resource-wide" : "Block comment";
   const context = thread.resolvedTarget?.referenceContext ?? original;
@@ -79,7 +89,7 @@ export function annotationScopeLabel(thread: AnnotationThread, state: Readonly<D
 }
 
 export function detailAnnotationGroups(
-  state: Readonly<DetailState>,
+  state: Readonly<AnnotationReaderState>,
   renderedLineForAuthoredLine: (line: number) => number,
   renderedSourceLineCount: number,
   renderedAnchorText: string,
@@ -403,7 +413,7 @@ export function buildDetailAnnotationView(
   return output;
 }
 
-export function selectedAnnotationThread(state: Readonly<DetailState>): AnnotationThread | null {
+export function selectedAnnotationThread(state: Pick<AnnotationReaderState, "annotationThreads" | "selectedAnnotationId" | "context">): AnnotationThread | null {
   return state.annotationThreads.find(thread => thread.block.id === state.selectedAnnotationId)
     ?? state.annotationThreads.find(thread => thread.block.id === state.context.selected?.id ||
       thread.replies.some(reply => reply.block.id === state.context.selected?.id)) ?? null;
