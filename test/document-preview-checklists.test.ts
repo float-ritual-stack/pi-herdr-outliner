@@ -107,6 +107,34 @@ test('same-target background loads preserve an opened embedded status picker',as
   expect(await client.request<Block>({action:'get',blockId:plan.id})).toEqual(plan);
 }));
 
+test('a saved item comment cannot select its thread in a newly opened note',async()=>fixture(async client=>{
+  const source=await client.request<Block>({action:'create',text:'# Plan\n\n- [ ] Prepare ^prepare'});
+  const destination=await client.request<Block>({action:'create',text:'# Another note'});
+  const entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>();
+  let holdRefresh=false;
+  const reader=new DocumentPreview({async request<T>(input:RequestInput):Promise<T>{
+    if(input.action==='get'&&input.blockId===source.id&&holdRefresh){entered.resolve();await release.promise;}
+    const result=await client.request<T>(input);
+    if(input.action==='annotations.create')holdRefresh=true;
+    return result;
+  }},()=>{});
+  await reader.load({kind:'block',blockId:source.id});reader.focus();
+  await click(reader,tasks(reader)[0]!.uri);await reader.key({name:'escape'},44,12,noDetail);
+  await reader.key({name:'c'},44,12,noDetail);reader.paste('Keep this comment with the step');
+  const saving=reader.key({name:'s',ctrl:true},44,12,noDetail);
+  try {
+    await entered.promise;
+    expect(reader.state!.comment).toBeUndefined();
+    await reader.load({kind:'block',blockId:destination.id});
+  } finally {release.resolve();await saving;}
+  expect(reader.state!.target).toEqual({kind:'block',blockId:destination.id});
+  expect(reader.state!.document.annotations!.selectedAnnotationId).toBeUndefined();
+  const comments=await client.request<AnnotationThread[]>({action:'annotations.list',query:{subject:{kind:'block',blockId:source.id}}});
+  expect(comments).toHaveLength(1);
+  expect(comments[0]!.body).toBe('Keep this comment with the step');
+  expect(reader.state!.document.annotations!.annotationThreads).toHaveLength(0);
+}));
+
 test('embedded steps keep occurrence focus while edits, copy and undo reach the canonical plan',async()=>fixture(async client=>{
   const plan=await client.request<Block>({action:'create',text:'# Release [project::demo]\n\nRead the instructions first.\n\n- [ ] Prepare\n- [~] Verify ^verify'});
   const host=await client.request<Block>({action:'create',text:`# Dashboard [type::note]\n\n- [ ] Local task\n\n!((${plan.id}^verify))\n\n!((${plan.id}))\n\n!((${plan.id}^verify))`});

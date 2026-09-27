@@ -248,7 +248,10 @@ export class DocumentPreview {
       }
       catch(error){ if(this.value?.document===value.document)this.value={...this.value,notice:`Comment saved; refresh failed: ${error instanceof Error?error.message:String(error)}`}; }
       const annotationId=draft.annotationId??receipt.annotations[0]?.block.id;
-      if(annotationId&&this.value?.document.annotations)this.value.document.annotations.selectedAnnotationId=annotationId;
+      const annotations=this.value?.document.annotations;
+      if(annotationId&&annotations&&JSON.stringify(this.value?.target)===JSON.stringify(value.target)&&
+        annotations.annotationThreads.some(thread=>thread.block.id===annotationId))
+        annotations.selectedAnnotationId=annotationId;
     } catch(error){this.value={...this.value!,notice:error instanceof Error?error.message:String(error)};}
     finally {draft.saving=false;this.changed();}
   }
