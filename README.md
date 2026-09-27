@@ -1564,6 +1564,8 @@ The project Pi extension is auto-discovered through [`.pi/extensions/outliner.ts
 - `outliner_branch_rank`
 - `outliner_capture`
 - `outliner_update`
+- `outliner_checklist_query`
+- `outliner_checklist_update`
 - `outliner_property_patch`
 - `outliner_property_catalog`
 - `outliner_query`

@@ -1980,7 +1980,7 @@ export class OutlinerServer {
           result = {retained:true};
           break;
         case "edit-recovery.commit":
-          result = this.editRecovery.commit(request.recoveryId,request.expectedRevision,request.text,request.basedOnRevision,request.mutation);
+          result = this.editRecovery.commit(request.recoveryId,request.expectedRevision,request.text,request.basedOnRevision,request.mutation,request.identityChanges);
           break;
         case "edit-recovery.discard":
           result = this.editRecovery.discard(request.recoveryId,request.expectedRevision);

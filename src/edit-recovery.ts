@@ -1,7 +1,7 @@
 import {createHash} from "node:crypto";
 import {mergeEdits, type EditMerge} from "./edit-merge";
 import type {OutlinerStore} from "./store";
-import type {Block, MutationProvenance} from "./types";
+import type {Block, ChecklistIdentityChange, MutationProvenance} from "./types";
 
 export interface EditRecoveryStart {
   id: string;
@@ -120,13 +120,13 @@ export class EditRecoveryRepository {
     });
   }
 
-  commit(id: string, expectedRevision: number, text: string, basedOnRevision: number, mutation: MutationProvenance): Block {
+  commit(id: string, expectedRevision: number, text: string, basedOnRevision: number, mutation: MutationProvenance, identityChanges?:ChecklistIdentityChange[]): Block {
     content(text,"Reviewed draft");revision(basedOnRevision);
     return this.store.database.transaction(()=>{
       const record=this.retained(id,expectedRevision);
       if(record.latest.revision!==basedOnRevision)throw Error("Refresh the recovery comparison before saving");
       // The ordinary canonical guard remains authoritative even after review.
-      const updated=this.store.update(record.blockId,text,basedOnRevision,mutation);
+      const updated=this.store.update(record.blockId,text,basedOnRevision,mutation,"text",identityChanges);
       this.save({...record,state:"applied",appliedBlockId:updated.id},expectedRevision);
       return updated;
     })();

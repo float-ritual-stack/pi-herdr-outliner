@@ -1628,7 +1628,7 @@ export type OutlinerRequest =
   | { id: string; action: "edit-recovery.propose"; recoveryId: string; expectedRevision: number; proposal: import("./edit-recovery").EditRecoveryProposal }
   | { id: string; action: "edit-recovery.assist"; recoveryId: string; expectedRevision: number }
   | { id: string; action: "edit-recovery.cancel"; recoveryId: string }
-  | { id: string; action: "edit-recovery.commit"; recoveryId: string; expectedRevision: number; text: string; basedOnRevision: number; mutation: MutationProvenance }
+  | { id: string; action: "edit-recovery.commit"; recoveryId: string; expectedRevision: number; text: string; basedOnRevision: number; mutation: MutationProvenance; identityChanges?:ChecklistIdentityChange[] }
   | { id: string; action: "edit-recovery.discard"; recoveryId: string; expectedRevision: number }
   | { id: string; action: "edit-recovery.separate"; recoveryId: string; expectedRevision: number; mutation: MutationProvenance }
   | {

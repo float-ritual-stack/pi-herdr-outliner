@@ -1,4 +1,6 @@
 import {PaneDisplay} from "./pane-display";
+import {sanitizeDynamicText} from "./terminal";
+import {listItemRemovalMenu} from "./checklist-ui";
 import {detailTitle} from "./detail-renderer";
 import {adjacentReaderMenu, readerMenuFromAction, readerMenuItems, type ReaderMenu} from "./reader-chrome";
 import {ViewPreferences} from "./view-preferences";
@@ -25,6 +27,7 @@ import {
   matchesKey,
   ProcessTerminal,
   SelectList,
+  wrapTextWithAnsi,
   setKeybindings,
   setCapabilities,
   TUI_KEYBINDINGS,
@@ -620,6 +623,11 @@ const effects: DetailEffects = {
     });
   },
 
+  confirmListItemRemoval(ids) {
+    return new Promise(resolve => {
+      showActionMenu(listItemRemovalMenu(ids), async id => {resolve(id === "remove");}, undefined, () => resolve(false), undefined, undefined, "Remove item addresses?");
+    });
+  },
   async updateBlock(input) {
     return client.request<Block>({
       action: "update",
@@ -946,6 +954,7 @@ async function stop(exitCode = 0): Promise<void> {
 
 let actionMenuHandle: OverlayHandle | null = null;
 let actionMenuInvoke: ((id: string) => void) | null = null;
+let actionMenuCancelled: (() => void) | undefined;
 let composerHandle: OverlayHandle | null = null;
 let keyInspectorHandle: OverlayHandle | null = null;
 let keyInspectorGeometry = "";
@@ -971,10 +980,13 @@ function openKeyInspector(): void {
   keyInspector.open();
 }
 
-function closeActionMenu(): void {
+function closeActionMenu(cancel = true): void {
+  const cancelled = actionMenuCancelled;
+  actionMenuCancelled = undefined;
   actionMenuHandle?.hide();
   actionMenuHandle = null;
   actionMenuInvoke = null;
+  if (cancel) cancelled?.();
 }
 
 const actionMenuTheme: SelectListTheme = {
@@ -1001,6 +1013,7 @@ class FuzzyActionMenu implements Component {
     private readonly maxVisible: number,
     private readonly destination?: DetailDestinationMenuOptions,
     private readonly changeMenu?: (delta: number) => void,
+    private readonly decisionTitle?: string,
   ) {
     this.list = this.createList();
   }
@@ -1020,6 +1033,12 @@ class FuzzyActionMenu implements Component {
       },
       preview: (columns, rows) => renderNavigationDestinationPreview(this.destination!.preview, columns, rows),
     });
+    if (this.decisionTitle) {
+      const selected = this.items.find(item => item.id === this.list.getSelectedItem()?.value);
+      return [this.decisionTitle, "", ...this.list.render(width), "",
+        ...wrapTextWithAnsi(sanitizeDynamicText(selected?.description ?? ""), Math.max(1, width)), "",
+        ...wrapTextWithAnsi("↑↓ choose · Enter confirms · Esc keeps editing", Math.max(1, width))];
+    }
     return [
       `\x1b[2mFind: ${this.query}▏\x1b[0m`,
       ...this.list.render(width),
@@ -1036,7 +1055,7 @@ class FuzzyActionMenu implements Component {
     }
     const printable = decodeKittyPrintable(data) ??
       (data.length === 1 && data >= " " && data !== "\x7f" ? data : undefined);
-    if (printable !== undefined) {
+    if (printable !== undefined && !this.decisionTitle) {
       this.updateQuery(this.query + printable);
       return;
     }
@@ -1058,8 +1077,8 @@ class FuzzyActionMenu implements Component {
     const list = new SelectList(
       filtered.map((item) => ({
         value: item.id,
-        label: outlinerActionLink(item.id, this.destination ? item.label : actionMenuItemText(item)),
-        description: item.description,
+        label: outlinerActionLink(item.id, this.destination || this.decisionTitle ? item.label : actionMenuItemText(item)),
+        description: this.decisionTitle ? undefined : item.description,
       })),
       Math.min(this.visibleRows ?? this.maxVisible, Math.max(1, filtered.length)),
       actionMenuTheme,
@@ -1096,22 +1115,23 @@ function showActionMenu(
   cancelled?: () => void,
   destination?: DetailDestinationMenuOptions,
   changeMenu?: (delta: number) => void,
+  decisionTitle?: string,
 ): void {
   closeActionMenu();
-  const menu = new FuzzyActionMenu(items, destination ? 7 : 13, destination, changeMenu);
+  actionMenuCancelled = cancelled;
+  const menu = new FuzzyActionMenu(items, destination ? 7 : 13, destination, changeMenu, decisionTitle);
   menu.onSelect = (actionId) => {
-    closeActionMenu();
+    closeActionMenu(false);
     if (cancelled) void invoke(actionId);
     else serviceEventScheduler.scheduleWork(() => invoke(actionId));
   };
   actionMenuInvoke = menu.onSelect;
   menu.onCancel = () => {
-    cancelled?.();
     closeActionMenu();
     tui.requestRender();
   };
   actionMenuHandle = tui.showOverlay(menu, {
-    width: destination ? "95%" : "70%",
+    width: destination || decisionTitle ? "95%" : "70%",
     maxHeight: destination ? "90%" : "70%",
     minWidth: 32,
     anchor: "top-right",

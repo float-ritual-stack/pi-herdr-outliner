@@ -1,4 +1,5 @@
 import {PaneDisplay} from "./pane-display";
+import {listItemRemovalMenu} from "./checklist-ui";
 import {ViewPreferences} from "./view-preferences";
 import {adjacentReaderMenu, readerMenuFromAction, readerMenuItems, type ReaderMenu} from "./reader-chrome";
 import {EditRecoveryInput} from "./edit-recovery-input";
@@ -10,7 +11,7 @@ import {KeyInspector} from "./key-inspector";
 import {PassThrough} from "node:stream";
 import {createDetailDestination, type DetailDestinationPlacement} from "./detail-pane-placement";
 import { initTheme } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { DetailReadingSurface, detailReaderGeometry } from "./detail-reading-surface";
 import { renderDetailDestinationPicker } from "./detail-pi-renderer";
 import { navigationDestinationItems, navigationDestinationStatus, navigationPlacementItems, navigationPlacementStatus, NavigationDestinationDisplay, NavigationDestinationPreview, renderNavigationDestinationPreview } from "./navigation-destination-menu";
@@ -400,6 +401,11 @@ const effects: DetailEffects = {
       destinationClientId: clientId,
     });
   },
+  confirmListItemRemoval(ids) {
+    return new Promise(resolve => {
+      openActionMenu(listItemRemovalMenu(ids), async id => {resolve(id === "remove");}, () => resolve(false));
+    });
+  },
   async updateBlock(input) {
     return client.request<Block>({
       action: "update",
@@ -538,10 +544,12 @@ let actionMenu: {
   query: string;
   index: number;
   category?: ReaderMenu;
+  cancelled?: () => void;
 } | null = null;
 
-function openActionMenu(items: readonly OutlinerActionMenuItem[], invoke: (id: string) => Promise<void>): void {
-  actionMenu = {items, invoke, query: "", index: 0};
+function openActionMenu(items: readonly OutlinerActionMenuItem[], invoke: (id: string) => Promise<void>, cancelled?: () => void): void {
+  actionMenu?.cancelled?.();
+  actionMenu = {items, invoke, query: "", index: 0, cancelled};
   draw();
 }
 
@@ -583,12 +591,13 @@ function draw(): void {
     const count = Math.max(1, height - 3);
     const start = Math.max(0, actionMenu.index - count + 1);
     const lines = [
-      `Actions · ${actionMenu.query}`,
+      actionMenu.cancelled ? "Remove item addresses?" : `Actions · ${actionMenu.query}`,
       ...items.slice(start, start + count).map((item, index) =>
         `${start + index === actionMenu!.index ? "▶" : " "} ${item.label} · ${item.binding}`),
     ];
+    if (actionMenu.cancelled) lines.push("", ...wrapTextWithAnsi(sanitizeDynamicText(items[actionMenu.index]?.description ?? ""), Math.max(1, width)));
     while (lines.length < height - 1) lines.push("");
-    lines.push("Type to filter · ↑↓ select · Enter invoke · Esc cancel");
+    lines.push(actionMenu.cancelled ? "↑↓ choose · Enter confirms · Esc keeps editing" : "Type to filter · ↑↓ select · Enter invoke · Esc cancel");
     process.stdout.write("\x1b[H\x1b[2J" + lines.slice(0, height).map(line => truncateToWidth(sanitizeDynamicText(line), width)).join("\n"));
     return;
   }
@@ -825,7 +834,7 @@ async function handleInput(str: string, key: TerminalKey): Promise<void> {
     const menu = actionMenu;
     const items = filterActionMenuItems(menu.items, menu.query);
     if (menu.category && (key.name === "left" || key.name === "right")) showReaderMenu(adjacentReaderMenu(menu.category,key.name === "right" ? 1 : -1));
-    else if (key.name === "escape") actionMenu = null;
+    else if (key.name === "escape") { actionMenu = null; menu.cancelled?.(); }
     else if (key.name === "return") {
       const selected = items[menu.index];
       if (selected) { actionMenu = null; await menu.invoke(selected.id); }
@@ -862,13 +871,16 @@ keyInput.on("keypress", (str: string, key: TerminalKey) => {
   if (recoveryReview) {inputDecoder.consume(str,key);pendingPaste=null;return;}
   if (keyInspector.active) return;
   if (destinationPicker) { void handleDestinationInput(str, key).catch(error => controller.onServiceError(error)); return; }
+  // A confirmation resolves the controller's suspended save; do not queue its
+  // input behind that same save operation.
+  if (actionMenu?.cancelled) { void handleInput(str, key).catch(error => controller.onServiceError(error)); return; }
   serviceEventScheduler.scheduleWork(() => handleInput(str, key));
 });
 
 process.stdout.on("resize", () => {
   // Recovery keeps the controller operation open until the dialog closes.
   // Its screen must resize without waiting behind that suspended operation.
-  if (recoveryReview) draw();
+  if (recoveryReview || actionMenu?.cancelled) draw();
   serviceEventScheduler.scheduleWork(() =>
     controller.dispatch({ type: "viewport.changed" }, viewport())
   );

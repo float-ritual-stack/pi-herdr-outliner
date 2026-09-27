@@ -7,6 +7,30 @@ import {OutlinerServer} from "../src/server";
 import {OutlinerClient} from "../src/client";
 import type {EditRecovery} from "../src/edit-recovery";
 import type {Block} from "../src/types";
+import {EditRecoveryClient} from "../src/edit-recovery-client";
+
+test("retained writing requires an explicit current-revision item-ID removal and preserves undo history", async () => {
+  const root=mkdtempSync(join(tmpdir(),"checklist-recovery-rpc-"));
+  const store=new OutlinerStore(join(root,"db.sqlite"),{workspaceRoot:root}),server=new OutlinerServer(store,join(root,"rpc.sock"));
+  await server.start();const client=new OutlinerClient(join(root,"rpc.sock"));
+  const recovery=new EditRecoveryClient(client,root);
+  try {
+    const base=await client.request<Block>({action:"create",text:"# Plan\n\n- [ ] First ^first"});
+    const text="# Plan\n\nWork was cancelled.";
+    const record=await recovery.retain({id:crypto.randomUUID(),blockId:base.id,baseText:base.text,baseRevision:base.revision,
+      prelaunchText:base.text,draftText:text,source:"external-editor"});
+    await expect(recovery.commit(record,text)).rejects.toThrow("List-item IDs would be removed");
+    expect((await recovery.list(base.id))[0]!.draftText).toBe(text);
+    const saved=await recovery.commit(record,text,[{kind:"remove",itemId:"first"}]);
+    expect(saved.text).toBe(text);
+    const history=(await recovery.list(base.id,true))[0]!;
+    expect(history.state).toBe("applied");
+    const restored=await recovery.restore(history,"before-save");
+    expect(restored.draftText).toBe(base.text);
+    const undo=await recovery.commit(restored,restored.draftText);
+    expect(undo.text).toBe(base.text);
+  } finally {await server.close();store.close();rmSync(root,{recursive:true,force:true});}
+});
 
 test("recovery RPC retains writing, rejects stale saves and separates without copying Work-ID ownership",async()=>{
   const root=mkdtempSync(join(tmpdir(),"recovery-rpc-"));

@@ -1,4 +1,5 @@
 import { clientSupportsRole } from "../src/types";
+import {CHECKLIST_MARKS} from "../src/checklist-items";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { hostname } from "node:os";
 import { dirname, join } from "node:path";
@@ -70,6 +71,9 @@ import {
   type AttentionTargetInput,
   type AnnotationThread,
   type Block,
+  type ChecklistCollection,
+  type ChecklistStatus,
+  type ChecklistUpdateReceipt,
   type BlockEditActivityPage,
   type BlockProvenance,
   type BrowsingContextState,
@@ -221,6 +225,12 @@ async function selectedBlockId(): Promise<string | undefined> {
   const selection = await client.request<SelectionContext>({ action: "selection.get" });
   return selection.selected?.id;
 }
+
+const checklistStatusSchema = Type.Union(Object.keys(CHECKLIST_MARKS).map(status => Type.Literal(status as ChecklistStatus)));
+const checklistIdentityChangeSchema = Type.Union([
+  Type.Object({kind: Type.Literal("remove"), itemId: Type.String()}),
+  Type.Object({kind: Type.Literal("rename"), itemId: Type.String(), to: Type.String()}),
+]);
 
 const propertyPatchOperationSchema = Type.Union([
   Type.Object({
@@ -2954,12 +2964,13 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
     ...outlinerToolPresentation("Outliner Update"),
     name: "outliner_update",
     label: "Outliner Update",
-    description: "Update an existing outliner block only if it is still the version the agent read",
+    description: "Update the version of a block the agent read. Preserve list-item ^IDs; declare intentional removals/renames explicitly. Prefer outliner_checklist_update for a single step's status.",
     promptSnippet: "Optimistically update a shared outliner block using its integer edit revision",
     parameters: Type.Object({
       blockId: Type.String(),
       text: Type.String(),
       expectedRevision: Type.Integer({ minimum: 1 }),
+      identityChanges: Type.Optional(Type.Array(checklistIdentityChangeSchema)),
     }),
     async execute(toolCallId, params, _signal, _onUpdate, context) {
       await ensureService(false);
@@ -2969,9 +2980,58 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
           blockId: params.blockId,
           text: params.text,
           expectedRevision: params.expectedRevision,
+          ...(params.identityChanges ? {identityChanges: params.identityChanges} : {}),
           mutation: agentMutation(actorId, context, toolCallId),
         }),
       );
+    },
+  });
+
+  pi.registerTool({
+    ...outlinerToolPresentation("Outliner Checklist Query"),
+    name: "outliner_checklist_query",
+    label: "Outliner Checklist Query",
+    description: "Read marked checklist steps in one canonical note, in source order. Status and property filters match the same item. Returns parent-plan context, revision, evidence and completeness; never assigns IDs.",
+    promptSnippet: "Find steps without rewriting or splitting the plan",
+    parameters: Type.Object({
+      blockId: Type.String(),
+      statuses: Type.Optional(Type.Array(checklistStatusSchema)),
+      excludeStatuses: Type.Optional(Type.Array(checklistStatusSchema)),
+      filters: Type.Optional(Type.Array(Type.Object({key: Type.String(), value: Type.Optional(Type.String())}))),
+      nested: Type.Optional(Type.Union([Type.Literal("include"), Type.Literal("top-level")])),
+      limit: Type.Optional(Type.Integer({minimum: 1, maximum: 1000})),
+    }),
+    async execute(_id, params) {
+      await ensureService(false);
+      const {blockId, ...query} = params;
+      return toolResult(await client.request<ChecklistCollection>({action: "checklist.query", blockId,
+        query: {...query, limit: query.limit ?? 100}}));
+    },
+  });
+
+  pi.registerTool({
+    ...outlinerToolPresentation("Outliner Checklist Update"),
+    name: "outliner_checklist_update",
+    label: "Outliner Checklist Update",
+    description: "Change one checklist step's mark or explicitly assign its stable ID. Use the query's itemId and expectedEvidence, or start plus observed revision for an unassigned item. Preserves unrelated edits; changed/missing/ambiguous items require a fresh read. This does not change roadmap task stages.",
+    promptSnippet: "Update one checklist item with observed evidence, retaining the surrounding plan",
+    parameters: Type.Object({
+      blockId: Type.String(),
+      target: Type.Union([
+        Type.Object({itemId: Type.String()}),
+        Type.Object({start: Type.Integer({minimum: 0}), expectedRevision: Type.Integer({minimum: 1})}),
+      ]),
+      expectedEvidence: Type.String(),
+      change: Type.Union([
+        Type.Object({kind: Type.Literal("status"), status: checklistStatusSchema}),
+        Type.Object({kind: Type.Literal("ensure-id")}),
+      ]),
+    }),
+    async execute(toolCallId, params, _signal, _onUpdate, context) {
+      await ensureService(false);
+      const {blockId, ...input} = params;
+      return toolResult(await client.request<ChecklistUpdateReceipt>({action: "checklist.update", blockId, input,
+        mutation: agentMutation(actorId, context, toolCallId)}));
     },
   });
 

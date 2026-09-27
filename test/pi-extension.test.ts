@@ -22,17 +22,80 @@ import outlinerExtension, {
   selectCapturedResponseTree,
 } from "../pi-extension/index";
 import { OutlinerClient, type RequestInput } from "../src/client";
+import {OutlinerStore} from "../src/store";
+import {OutlinerServer} from "../src/server";
 import { parseProperties, parsePropertyRecords, patchPropertyText } from "../src/properties";
 import { OUTLINER_PROTOCOL_VERSION } from "../src/types";
 import type {
   AnnotationAgentPromptPackage,
   BlockEditActivityPage,
   Block,
+  ChecklistCollection,
+  ChecklistUpdateReceipt,
   OutlinerClientRegistration,
   RoadmapItemCreateInput,
   SelectionContext,
   VisibleBlockCollection,
 } from "../src/types";
+
+test("checklist tools preserve item evidence, caller provenance and explicit whole-note identity changes through the service", async () => {
+  const root = mkdtempSync(join(tmpdir(), "checklist-tools-"));
+  const store = new OutlinerStore(join(root, "outline.sqlite"), {workspaceRoot: root});
+  const server = new OutlinerServer(store, join(root, "service.sock"));
+  await server.start();
+  const fixture = new OutlinerClient(join(root, "service.sock"));
+  const originalRequest = OutlinerClient.prototype.request;
+  // Retarget the installed adapter's transport; requests still cross a real service.
+  const transport = spyOn(OutlinerClient.prototype, "request").mockImplementation(function<T>(input: RequestInput, timeout?: number): Promise<T> {
+    return originalRequest.call(fixture, input, timeout) as Promise<T>;
+  });
+  type Tool = {name: string; parameters: TSchema; execute(id: string, params: unknown, signal: undefined,
+    update: undefined, context: ExtensionContext): Promise<{details: unknown}>};
+  const tools = new Map<string, Tool>();
+  const context = {sessionManager: {getSessionId: () => "checklist-tool-session"}} as ExtensionContext;
+  const pi = {registerTool(tool: Tool) {tools.set(tool.name, tool);}, registerCommand() {},
+    registerEntryRenderer() {}, appendEntry() {}, on() {}} as unknown as ExtensionAPI;
+  const invoke = async <T>(name: string, params: unknown): Promise<T> => {
+    const tool = tools.get(name)!;
+    expect(Value.Check(tool.parameters, params)).toBe(true);
+    return (await tool.execute("checklist-call", params, undefined, undefined, context)).details as T;
+  };
+  try {
+    outlinerExtension(pi);
+    const base = await fixture.request<Block>({action: "create", text:
+      "# Plan\n\nKeep the experiment bounded.\n\n1. [~] Deployment [owner::alex] ^deploy\n2. [ ] Verify\n"});
+    const read = await invoke<ChecklistCollection>("outliner_checklist_query", {blockId: base.id,
+      statuses: ["waiting"], filters: [{key: "owner", value: "alex"}]});
+    expect(read.items.map(item => item.itemId)).toEqual(["deploy"]);
+    expect(read.completeness.kind).toBe("complete");
+    const input = {blockId: base.id, target: {itemId: "deploy"}, expectedEvidence: read.items[0]!.evidence,
+      change: {kind: "status", status: "problem"}};
+    const updated = await invoke<ChecklistUpdateReceipt>("outliner_checklist_update", input);
+    const saved = await fixture.request<Block>({action: "get", blockId: base.id});
+    expect(saved.text).toBe(base.text.replace("[~]", "[!]"));
+    const activity = await fixture.request<BlockEditActivityPage>({action: "activity.recent", author: "agent", limit: 10});
+    const edit = activity.entries.find(entry => entry.block.id === base.id)!;
+    expect([edit.author, edit.actorId, edit.sessionId, edit.taskId]).toEqual(["agent", "pi", "checklist-tool-session", "checklist-call"]);
+    expect(updated.block.revision).toBe(saved.revision);
+    await expect(invoke("outliner_checklist_update", input)).rejects.toThrow("Checklist item changed");
+    const remainder = await invoke<ChecklistCollection>("outliner_checklist_query", {blockId: base.id, statuses: ["todo"]});
+    const item = remainder.items[0]!;
+    const addressed = await invoke<ChecklistUpdateReceipt>("outliner_checklist_update", {blockId: base.id,
+      target: {start: item.span.start, expectedRevision: remainder.revision}, expectedEvidence: item.evidence, change: {kind: "ensure-id"}});
+    expect(addressed.item.identity).toBe("unique");
+    expect(addressed.item.status).toBe("todo");
+    const rewrite = {blockId: base.id, expectedRevision: addressed.block.revision,
+      text: addressed.block.text.replace("^deploy", "^deployment")};
+    await expect(invoke("outliner_update", rewrite)).rejects.toThrow("List-item IDs would be removed");
+    const renamed = await invoke<Block>("outliner_update", {...rewrite,
+      identityChanges: [{kind: "rename", itemId: "deploy", to: "deployment"}]});
+    expect((await fixture.request<Block>({action: "get", blockId: base.id})).text).toBe(renamed.text);
+    expect(renamed.text).toBe(rewrite.text);
+  } finally {
+    transport.mockRestore();
+    await server.close(); store.close(); rmSync(root, {recursive: true, force: true});
+  }
+});
 
 test("collects the user response without an advisor follow-up", () => {
   const entries = [
@@ -162,6 +225,8 @@ test("registers the workspace commands and annotation-aware tools", () => {
     "outliner_attention",
     "outliner_workflow",
     "outliner_update",
+    "outliner_checklist_query",
+    "outliner_checklist_update",
     "outliner_property_patch",
     "outliner_property_catalog",
     "outliner_page",

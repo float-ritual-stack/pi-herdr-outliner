@@ -1,4 +1,6 @@
 import {blockAnnotationRepresentation, resourceAnnotationRepresentation} from "./annotation-representations";
+import {removedListItemIds} from "./checklist-items";
+import type {ChecklistIdentityChange} from "./types";
 import { COMPLETION_ROWS } from "./reference-completion-renderer";
 import { ReferenceCompletionSession, type ReferenceCompletionItem, type ReferenceCompletionState } from "./reference-completion";
 import { buildDetailAnnotationView, displayedResourceText, detailAnnotationGroups, selectedAnnotationThread } from "./detail-annotations";
@@ -498,6 +500,7 @@ export function detailResourceTarget(
 }
 
 export interface DetailEffects {
+  confirmListItemRemoval?(ids: readonly string[]): Promise<boolean>;
   recovery?: Pick<EditRecoveryClient,"retain"|"list"|"commit"|"separate"> & Partial<Pick<EditRecoveryClient,"checkpoint"|"warnings">>;
   reviewRecovery?(records:EditRecovery[]):Promise<RecoveryChoice>;
   readonly clientId: string;
@@ -560,6 +563,7 @@ export interface DetailEffects {
     blockId: string;
     text: string;
     expectedRevision: number;
+    identityChanges?: ChecklistIdentityChange[];
   }): Promise<Block>;
   patchProperties(input: {
     blockId: string;
@@ -2845,10 +2849,28 @@ export function createDetailController(
       if (state.mode === "edit") {
         const selected = state.context.selected;
         if (selected) {
-          const updated = state.recovery && effects.recovery ? await effects.recovery.commit(state.recovery,state.buffer.text) : await effects.updateBlock({
+          const draftText = state.buffer.text;
+          const basis = state.recovery?.latest ?? selected;
+          const removed = removedListItemIds(basis.text, draftText);
+          let identityChanges: ChecklistIdentityChange[] | undefined;
+          if (removed.length) {
+            if (!await effects.confirmListItemRemoval?.(removed)) {
+              state.status = "Draft kept open · item addresses have not been removed";
+              return;
+            }
+            if (state.mode !== "edit" || state.context.selected?.id !== selected.id ||
+              state.context.selected.revision !== selected.revision || state.buffer.text !== draftText ||
+              (state.recovery?.latest.revision ?? selected.revision) !== basis.revision) {
+              state.status = "Writing changed during confirmation · review the draft and save again";
+              return;
+            }
+            identityChanges = removed.map(itemId => ({kind: "remove", itemId}));
+          }
+          const updated = state.recovery && effects.recovery ? await effects.recovery.commit(state.recovery,draftText,identityChanges) : await effects.updateBlock({
             blockId: selected.id,
-            text: state.buffer.text,
+            text: draftText,
             expectedRevision: selected.revision,
+            ...(identityChanges ? {identityChanges} : {}),
           });
           written = true;
           state.recovery=undefined;

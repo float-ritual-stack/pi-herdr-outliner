@@ -3574,6 +3574,36 @@ describe("detail controller saves and annotations", () => {
     });
   }
 
+  for (const choice of ["keep", "remove", "changed-draft"] as const) {
+    test(`item-address removal confirmation ${choice} preserves the intended draft and canonical note`, async () => {
+      const {OutlinerStore} = await import("../src/store");
+      const store = new OutlinerStore(":memory:");
+      try {
+        const block = store.create("# Plan\n\n- [ ] First ^first\n- [ ] Second ^second");
+        const draft = "# Plan\n\n- [ ] Second ^second";
+        const h = createHarness(block);
+        h.setUpdate(async input => store.update(input.blockId, input.text, input.expectedRevision, {author: "user"}, "text", input.identityChanges));
+        let asked = 0;
+        h.effects.confirmListItemRemoval = async ids => {
+          asked++;
+          expect(ids).toEqual(["first"]);
+          if (choice === "changed-draft") h.controller.state.buffer.insert(" new writing");
+          return choice !== "keep";
+        };
+        await h.controller.initialize();
+        await h.controller.dispatch({type: "edit.begin"}, viewport);
+        h.controller.state.buffer.replaceText(draft);
+        await h.controller.dispatch({type: "buffer.save"}, viewport);
+        expect(asked).toBe(1);
+        expect(store.require(block.id).text).toBe(choice === "remove" ? draft : block.text);
+        expect(h.controller.state.mode).toBe(choice === "remove" ? "preview" : "edit");
+        if (choice === "changed-draft") expect(h.controller.state.buffer.text).toContain("new writing");
+        else expect(h.controller.state.buffer.text).toBe(draft);
+        expect(h.controller.state.busy).toBe(false);
+      } finally {store.close();}
+    });
+  }
+
   test("sends the raw buffer with the selected optimistic version", async () => {
     const harness = createHarness(makeBlock({ text: "raw", updatedAt: "original-version" }));
     await harness.controller.initialize();

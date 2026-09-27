@@ -2,8 +2,9 @@
 
 PIE-367 keeps a plan in one Markdown note while making its steps individually
 addressable. This document describes the service foundation on the feature
-branch. Reader controls, item projections, item-attached comments and the editor's
-intentional-ID-removal flow are not yet delivered.
+branch, including agent tools and the editor's intentional-ID-removal flow.
+Reader status controls, item projections and item-attached comments remain in
+progress; the feature has not been delivered.
 
 ## Canonical content
 
@@ -87,6 +88,12 @@ The receipt contains the canonical block, updated item and `changed` flag.
 Successful changes use normal block revisions, edit provenance and content
 events; no separate canonical task store is introduced.
 
+Pi agents use `outliner_checklist_query` with `blockId` and the query fields above
+(default limit 100), then `outliner_checklist_update` with `blockId`, `target`,
+`expectedEvidence` and `change`. The adapter records the agent/session/tool-call
+provenance. These tools operate on steps, separately from the roadmap lifecycle
+tool `outliner_task`. Tool results include the structured service receipt.
+
 ## Whole-note rewrites
 
 All normal block-text writers preserve existing list-item IDs. Dropping one
@@ -109,5 +116,13 @@ or:
 
 Declarations must correspond to the submitted text. A rename requires a new,
 unique destination ID. They are not blanket permission for later rewrites and
-do not silently retarget links or comments elsewhere. The reader/editor still
-needs its intentional-removal and Undo interactions before this branch ships.
+do not silently retarget links or comments elsewhere. The agent's
+`outliner_update` accepts these same declarations.
+
+In Detail, saving a draft that removes addresses offers **Keep editing** first,
+or **Save and remove item addresses**. Escape keeps the draft. The removal
+choice names the affected IDs and warns that links, embeds and comments may
+become unresolved. Confirmation applies only to that draft and revision; a
+changed draft must be reviewed again. The same guard and explicit declaration
+apply when committing retained writing. Writing history can restore the saved
+before-image, including its original addresses.

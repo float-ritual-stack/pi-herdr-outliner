@@ -1,5 +1,5 @@
 import type { OutlinerClient } from "./client";
-import type { Block } from "./types";
+import type { Block, ChecklistIdentityChange } from "./types";
 import type { EditRecovery, EditRecoveryStart } from "./edit-recovery";
 import { EditRecoveryFiles } from "./edit-recovery-files";
 
@@ -52,9 +52,9 @@ export class EditRecoveryClient {
   discard(record:EditRecovery):Promise<EditRecovery> {
     return this.client.request({action:"edit-recovery.discard",recoveryId:record.id,expectedRevision:record.revision});
   }
-  commit(record:EditRecovery,text:string):Promise<Block> {
+  commit(record:EditRecovery,text:string,identityChanges?:ChecklistIdentityChange[]):Promise<Block> {
     return this.client.request({action:"edit-recovery.commit",recoveryId:record.id,expectedRevision:record.revision,
-      text,basedOnRevision:record.latest.revision,mutation:{author:"user",actorId:"detail"}});
+      text,basedOnRevision:record.latest.revision,mutation:{author:"user",actorId:"detail"},...(identityChanges?{identityChanges}:{})});
   }
   separate(record:EditRecovery):Promise<Block> {
     return this.client.request({action:"edit-recovery.separate",recoveryId:record.id,expectedRevision:record.revision,mutation:{author:"user",actorId:"detail"}});

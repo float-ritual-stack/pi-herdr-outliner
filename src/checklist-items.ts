@@ -110,6 +110,12 @@ export function updateChecklistText(text: string, revision: number, input: Check
 }
 
 /** Whole-note writes must not silently discard list-item addresses used by links and comments. */
+export function removedListItemIds(before: string, after: string): string[] {
+  if (!before.includes("^")) return [];
+  const next = new Set(fragmentAnchors(after).map(anchor => anchor.id));
+  return [...new Set(fragmentAnchors(before).filter(anchor => anchor.kind === "list-item" && !next.has(anchor.id)).map(anchor => anchor.id))];
+}
+
 export function validateChecklistIdentityChanges(before: string, after: string, changes: readonly ChecklistIdentityChange[] = []): void {
   if (!Array.isArray(changes)) throw new Error("identityChanges must be an array");
   if (!before.includes("^") && !after.includes("^") && changes.length === 0) return;
