@@ -39,6 +39,38 @@ import type {
   VisibleBlockCollection,
 } from "../src/types";
 
+test("saved-view tool reports branch identity and presentation omissions through the real service", async () => {
+  const root = mkdtempSync(join(tmpdir(), "saved-view-tool-"));
+  const store = new OutlinerStore(join(root, "outline.sqlite"), {workspaceRoot: root});
+  const server = new OutlinerServer(store, join(root, "service.sock"));
+  await server.start();
+  const fixture = new OutlinerClient(join(root, "service.sock"));
+  const original = OutlinerClient.prototype.request;
+  const transport = spyOn(OutlinerClient.prototype, "request").mockImplementation(function<T>(input: RequestInput, timeout?: number): Promise<T> {
+    return original.call(fixture, input, timeout) as Promise<T>;
+  });
+  type Tool = {name: string; parameters: TSchema; execute(id: string, params: unknown): Promise<{content: {text?: string}[]; details: any}>};
+  const tools = new Map<string, Tool>();
+  const pi = {registerTool(tool: Tool) {tools.set(tool.name, tool);}, registerCommand() {},
+    registerEntryRenderer() {}, appendEntry() {}, on() {}} as unknown as ExtensionAPI;
+  try {
+    outlinerExtension(pi);
+    const view = await fixture.request<Block>({action: "create", text: "Drafts [type::virtual-branch] [query::outbox=draft]"});
+    const item = await fixture.request<Block>({action: "create", text: "Draft [outbox::draft]"});
+    const tool = tools.get("outliner_view")!;
+    expect(Value.Check(tool.parameters, {viewId: view.id, limit: 1001})).toBe(false);
+    const read = await tool.execute("read-view", {viewId: view.id, expectedRevision: view.revision});
+    expect([read.details.status, read.details.revision, read.details.blocks[0].id]).toEqual(["ready", view.revision, item.id]);
+    await fixture.request({action: "update", blockId: item.id, expectedRevision: item.revision,
+      text: item.text + "\n\n" + "Long draft. ".repeat(2000), mutation: {author: "user"}});
+    const bounded = await tool.execute("read-large-view", {viewId: view.id});
+    const shown = JSON.parse(bounded.content[0]!.text!);
+    expect([shown.status, shown.viewId, shown.completeness]).toEqual(["ready", view.id, {kind: "complete"}]);
+    expect(shown.presentation).toEqual({returned: 1, presented: 0, omitted: 1});
+    expect(bounded.details).toEqual(shown);
+  } finally { transport.mockRestore(); await server.close(); store.close(); rmSync(root, {recursive: true, force: true}); }
+});
+
 test("checklist tools preserve item evidence, caller provenance and explicit whole-note identity changes through the service", async () => {
   const root = mkdtempSync(join(tmpdir(), "checklist-tools-"));
   const store = new OutlinerStore(join(root, "outline.sqlite"), {workspaceRoot: root});
@@ -236,6 +268,7 @@ test("registers the workspace commands and annotation-aware tools", () => {
     "outliner_property_catalog",
     "outliner_page",
     "outliner_work_id",
+    "outliner_view",
     "outliner_query",
     "outliner_move",
     "outliner_clients",

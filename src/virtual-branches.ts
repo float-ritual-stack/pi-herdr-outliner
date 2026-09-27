@@ -644,6 +644,40 @@ interface ProjectedVirtualBranch<T extends ProjectionBlock = VisibleBlock> {
   readonly state: VirtualBranchState;
 }
 
+/** Membership shared by Tree and agent reads; descendant layout is separate. */
+export async function evaluateVirtualBranchMatches<T extends ProjectionBlock>(
+  definition: T,
+  physicalBlocks: readonly T[],
+  queryBlocks: VirtualBranchQueryEffect<T>,
+  ranks: readonly VirtualOccurrenceRank[] = [],
+  limitOverride?: number,
+): Promise<{ roots: T[]; state: VirtualBranchState }> {
+  const parsed = parseVirtualBranchConfig(definition, physicalBlocks);
+  const state = initialBranchState(parsed);
+  if (!parsed.config) return { roots: [], state };
+  const limit = limitOverride ?? parsed.config.limit;
+  if (!Number.isInteger(limit) || limit < 1 || limit > MAX_VIRTUAL_BRANCH_LIMIT) {
+    throw new Error("View read limit must be an integer from 1 through 1000");
+  }
+  try {
+    const result = await queryBlocks({
+      filters: parsed.config.filters,
+      ...(parsed.config.sort ? { sort: parsed.config.sort } : { rankViewId: definition.id }),
+      limit: MAX_BLOCK_QUERY_LIMIT,
+    });
+    const eligible = rankedDeduplicatedRoots(definition.id, result.blocks, parsed.config.sort ? [] : ranks);
+    const roots = eligible.slice(0, limit);
+    const truncated = eligible.length > limit || result.completeness.kind === "truncated";
+    return { roots, state: {
+      ...state, count: roots.length, queried: true,
+      completeness: truncated ? { kind: "truncated", limit } : { kind: "complete" },
+      truncation: { rootQuery: truncated, depth: false, budget: false },
+    } };
+  } catch (error) {
+    return { roots: [], state: { ...state, queryError: errorMessage(error), queried: true } };
+  }
+}
+
 async function projectVirtualBranch<T extends ProjectionBlock>(
   definition: PhysicalTreeRow<T>,
   physicalBlocks: readonly T[],
@@ -652,63 +686,19 @@ async function projectVirtualBranch<T extends ProjectionBlock>(
   ranks: readonly VirtualOccurrenceRank[],
   presentation: TreePresentationState,
 ): Promise<ProjectedVirtualBranch<T>> {
+  const { roots, state } = await evaluateVirtualBranchMatches(definition.block, physicalBlocks, queryBlocks, ranks);
   const definitionId = definition.canonicalId;
-  const parsed = parseVirtualBranchConfig(definition.block, physicalBlocks);
-  const initialState = initialBranchState(parsed);
-  if (!parsed.config) return { definitionId, rows: [], state: initialState };
-
-  try {
-    const result = await queryBlocks({
-      filters: parsed.config.filters,
-      ...(parsed.config.sort
-        ? { sort: parsed.config.sort }
-        : { rankViewId: definitionId }),
-      limit: MAX_BLOCK_QUERY_LIMIT,
-    });
-    const eligibleRoots = rankedDeduplicatedRoots(
-      definitionId,
-      result.blocks,
-      parsed.config.sort ? [] : ranks,
-    );
-    const roots = eligibleRoots.slice(
-      0,
-      Math.min(parsed.config.limit, VIRTUAL_BRANCH_MAX_ROWS),
-    );
-    const rootQueryTruncated =
-      eligibleRoots.length > parsed.config.limit || result.completeness.kind === "truncated";
-    const allocated = allocateOccurrenceRows(definition, roots, adjacency, presentation, parsed.config);
-    const completeness: BlockCollectionCompleteness = rootQueryTruncated
-      ? { kind: "truncated", limit: parsed.config.limit }
-      : { kind: "complete" };
-    return {
-      definitionId,
-      rows: allocated.rows,
-      state: {
-        ...initialState,
-        count: roots.length,
-        descendantCount: allocated.descendantCount,
-        ...(parsed.config.expandWhen ? {attentionCount: allocated.rows.filter(row =>
-          matchesFilters(row.block.properties, parsed.config!.expandWhen!)).length} : {}),
-        completeness,
-        truncation: {
-          rootQuery: rootQueryTruncated,
-          depth: allocated.depthTruncated,
-          budget: allocated.budgetTruncated,
-        },
-        queried: true,
-      },
-    };
-  } catch (error) {
-    return {
-      definitionId,
-      rows: [],
-      state: {
-        ...initialState,
-        queryError: errorMessage(error),
-        queried: true,
-      },
-    };
-  }
+  if (!state.config || state.queryError) return { definitionId, rows: [], state };
+  const allocated = allocateOccurrenceRows(definition, roots, adjacency, presentation, state.config);
+  return {
+    definitionId, rows: allocated.rows,
+    state: {
+      ...state, descendantCount: allocated.descendantCount,
+      ...(state.config.expandWhen ? { attentionCount: allocated.rows.filter(row =>
+        matchesFilters(row.block.properties, state.config!.expandWhen!)).length } : {}),
+      truncation: { ...state.truncation, depth: allocated.depthTruncated, budget: allocated.budgetTruncated },
+    },
+  };
 }
 interface NestedOccurrenceComposition<T extends ProjectionBlock = VisibleBlock> {
   readonly rows: VirtualBranchOccurrenceRow<T>[];

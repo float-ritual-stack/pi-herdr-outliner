@@ -4,6 +4,12 @@ This file records notable user-facing changes. The project remains active dogfoo
 
 ## [Unreleased]
 
+- Agents and CLI users can read saved virtual-branch matches in branch order
+  without opening a pane or translating the query. Reads honor authored limits,
+  report incomplete/invalid/unsupported results and reject mixed reads after a
+  concurrent workspace change. Tree and agent reads share membership evaluation.
+  PIE-376.
+
 - Checklist steps keep stable fragment addresses through rewording and reordering.
   Pi/ANSI Detail and Preview offer monochrome status pickers, keyboard toggling,
   Copy step link and Undo, including embedded steps. Targeted agent updates

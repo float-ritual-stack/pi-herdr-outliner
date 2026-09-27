@@ -1,3 +1,4 @@
+import { readSavedView } from "./saved-view-read";
 import {inspectWorkspaceConnection} from './workspace-diagnostics';
 import { parseArgs } from "node:util";
 import { normalizePropertyQueryScope, parsePropertyFilterClause } from "./block-query";
@@ -45,6 +46,18 @@ switch (command) {
     else if(operation==="list") request={action:"mentions.list"};
     else if(operation==="clear") request={action:"mentions.clear"};
     else throw Error("mentions expects ingest (JSON stdin), list, or clear");
+    break;
+  }
+  case "view": {
+    const { values, positionals } = parseArgs({
+      args: rest, allowPositionals: true, strict: true,
+      options: { limit: { type: "string" }, expected: { type: "string" } },
+    });
+    if (positionals.length !== 1) throw new Error("view requires one saved virtual-branch block ID");
+    directResult = await readSavedView(client, positionals[0]!, {
+      ...(values.limit === undefined ? {} : { limit: parseLimit(values.limit, 200) }),
+      ...(values.expected === undefined ? {} : { expectedRevision: parseRevision(values.expected) }),
+    });
     break;
   }
   case "list": {

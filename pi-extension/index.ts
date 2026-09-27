@@ -1,3 +1,4 @@
+import { readSavedView, type SavedViewReadResult } from "../src/saved-view-read";
 import { clientSupportsRole } from "../src/types";
 import {CHECKLIST_MARKS} from "../src/checklist-items";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
@@ -559,10 +560,11 @@ function textualToolResult(content: readonly { type: string; text?: string }[]):
 }
 
 function queryDetails(
-  collection: VisibleBlockCollection,
+  collection: VisibleBlockCollection | SavedViewReadResult,
   blocks: VisibleBlockCollection["blocks"],
 ) {
   return {
+    ...collection,
     blocks,
     completeness: collection.completeness,
     presentation: {
@@ -574,13 +576,13 @@ function queryDetails(
 }
 
 function serializeQueryResult(
-  collection: VisibleBlockCollection,
+  collection: VisibleBlockCollection | SavedViewReadResult,
   blocks: VisibleBlockCollection["blocks"],
 ): string {
   return JSON.stringify(queryDetails(collection, blocks), null, 2);
 }
 
-function queryToolResult(collection: VisibleBlockCollection) {
+function queryToolResult(collection: VisibleBlockCollection | SavedViewReadResult) {
   const blocks: VisibleBlockCollection["blocks"] = [];
   let text = serializeQueryResult(collection, blocks);
   for (const block of collection.blocks) {
@@ -3220,6 +3222,23 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
         blockId: params.blockId,
         expectedRevision: params.expectedRevision,
       }));
+    },
+  });
+
+  pi.registerTool({
+    ...outlinerToolPresentation("Outliner View"),
+    name: "outliner_view",
+    label: "Outliner View",
+    description: "Read matching canonical items of a saved virtual branch in branch order, independent of pane expansion. Reports limits, invalid definitions and concurrent changes explicitly.",
+    promptSnippet: "Read the results of a saved virtual branch",
+    parameters: Type.Object({
+      viewId: Type.String(),
+      limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 1000 })),
+      expectedRevision: Type.Optional(Type.Integer({ minimum: 1 })),
+    }),
+    async execute(_id, params) {
+      await ensureService(false);
+      return queryToolResult(await readSavedView(client, params.viewId, params));
     },
   });
 
