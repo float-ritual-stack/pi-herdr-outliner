@@ -1595,6 +1595,7 @@ The project Pi extension is auto-discovered through [`.pi/extensions/outliner.ts
 - `outliner_selection`
 - `outliner_annotations`
 - `outliner_annotation_reconcile`
+- `outliner_comment` (revision-guarded block/quote convenience)
 - `outliner_annotate`
 - `outliner_annotation_reply`
 - `outliner_annotation_lifecycle`
@@ -1603,6 +1604,41 @@ The project Pi extension is auto-discovered through [`.pi/extensions/outliner.ts
 - `outliner_workflow`
 
 `outliner_query` accepts structured filters such as `{ key: "status", value: "in progress" }`, plus optional text and subtree fields. The service normalizes keys/values and applies the same bounded semantics used by human surfaces. `outliner_focus` targets an explicit or unique live Tree client and returns compact structural context.
+
+For a block comment, prefer `outliner_comment` with `blockId`, `expectedRevision`,
+`comment`, and `passage: {quote: "exact source text"}`. It creates the canonical
+representation and anchor inside the annotation transaction. Repeated quotes
+require a UTF-16 `start` offset, exact adjacent `prefix`/`suffix`, or a unique
+checklist `itemId` that bounds the search. Missing or ambiguous quotes fail without
+writing; omit `passage` only for an intentional whole-block comment. Source quote
+bytes are preserved, including Unicode and line endings. Reading the note first
+provides the required revision. Comments do not focus or navigate any pane.
+
+Provide a stable `requestId` when retrying across tool calls; the default is the
+session and tool-call identity. A retry with the same input returns the existing
+comment even if the first write assigned a checklist ID or the source later
+changed. Reusing that ID with different input fails. A new request with an old
+revision fails, even if the quote still exists. The receipt includes original
+and resolved targets and placement status. Existing reply/lifecycle and reader
+reconciliation apply unchanged; checklist comments follow stable item identity.
+
+CLI equivalent (quote is source text, not rendered text):
+
+```sh
+bun run cli comment --id <block-uuid> --expected <revision> \
+  --quote 'Review the release' --text 'Check the dependency first' \
+  --request-id <stable-request-id>
+bun run cli comment --id <block-uuid> --expected <revision> \
+  --whole --stdin --request-id <stable-request-id> < comment.md
+```
+
+The public `createBlockComment` helper in `src/block-comments.ts` accepts request
+identity, a `BlockCommentInput`, author and provenance. Protocol80 adds the
+`block-comment` operation to the existing `annotations.batch` transaction and
+ledger, alongside typed creates and replies. It does not add a second comment
+store. Existing `outliner_annotate` remains available for typed Resource and
+representation targets. Reader source selections share the same quote resolver
+while keeping their captured representation and source mapping.
 
 Annotation tools use the same ordinary comment and reply blocks as Detail and the same relational target sidecar. `outliner_annotations` queries a block or Resource subject.
 

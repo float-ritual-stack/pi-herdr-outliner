@@ -499,6 +499,24 @@ export interface AnnotationCreateInput {
   readonly source: AnnotationSource;
 }
 
+/** A quote is exact source text; optional context must identify one occurrence. */
+export interface BlockCommentPassage {
+  readonly quote: string;
+  readonly start?: number;
+  readonly prefix?: string;
+  readonly suffix?: string;
+  readonly itemId?: string;
+}
+
+export interface BlockCommentInput {
+  readonly blockId: string;
+  readonly expectedRevision: number;
+  readonly body: string;
+  readonly source: AnnotationSource;
+  /** Omit only for an intentional whole-block comment. */
+  readonly passage?: BlockCommentPassage;
+}
+
 export interface AnnotationReplyInput {
   readonly annotationId: string;
   readonly body: string;
@@ -506,6 +524,7 @@ export interface AnnotationReplyInput {
 }
 
 export type AnnotationBatchOperation =
+  | { readonly operationId: string; readonly type: "block-comment"; readonly input: BlockCommentInput }
   | { readonly operationId: string; readonly type: "create"; readonly input: AnnotationCreateInput }
   | { readonly operationId: string; readonly type: "reply"; readonly input: AnnotationReplyInput };
 
@@ -1373,7 +1392,7 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 79;
+export const OUTLINER_PROTOCOL_VERSION = 80;
 
 
 export interface OutlinerServiceStatus {

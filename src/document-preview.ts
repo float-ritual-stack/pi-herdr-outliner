@@ -1,6 +1,7 @@
+import { blockCommentSelection } from "./block-comments";
 import {checklistFoldState,restoreChecklistFold,checklistControlId,checklistCommentRange,findChecklistControl,type ChecklistControl} from "./checklist-controls";
 import {CHECKLIST_CHOICES,ChecklistSession,type ChecklistChoice} from "./checklist-session";
-import {annotationSourceHash,createTextQuoteAnchor} from './annotations';
+import {annotationSourceHash} from './annotations';
 import {DEFAULT_OUTLINER_ACTION_KEYMAP,displayActionChord,type OutlinerActionKeymap} from './outliner-actions';
 import {blockAnnotationRepresentation,resourceAnnotationRepresentation} from './annotation-representations';
 import {TextBuffer} from './text-buffer';
@@ -219,7 +220,7 @@ export class DocumentPreview {
       if(control&&source&&control.blockId===source.id&&control.revision===source.revision){
         const range=checklistCommentRange(control);
         target={representation:control.sourceBlock?blockAnnotationRepresentation(control.sourceBlock):target.representation,
-          anchor:createTextQuoteAnchor(source.text,range.start,range.end)};
+          ...blockCommentSelection(source.text,{quote:source.text.slice(range.start,range.end),start:range.start})};
       }
     }
     if(annotationId&&!this.value.document.annotations?.annotationThreads.some(thread=>thread.block.id===annotationId))return;

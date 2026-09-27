@@ -1,3 +1,4 @@
+import { blockCommentTarget } from "./block-comments";
 import {blockAnnotationRepresentation, resourceAnnotationRepresentation} from "./annotation-representations";
 import {removedListItemIds} from "./checklist-items";
 import {checklistFoldState, restoreChecklistFold, checklistControlId, checklistCommentRange, findChecklistControl, type ChecklistControl} from "./checklist-controls";
@@ -2574,10 +2575,7 @@ export function createDetailController(
         };
       } else {
         const source = selected!;
-        target = {
-          representation: blockAnnotationRepresentation(source),
-          anchor: createTextQuoteAnchor(source.text, offsets.start, offsets.end),
-        };
+        target = blockCommentTarget(source, { quote: source.text.slice(offsets.start, offsets.end), start: offsets.start });
         if (authoredResourceReferenceOccurrences(source.text).some(occurrence =>
           occurrence.kind === "authored-resource" && occurrence.start === offsets.start && occurrence.end === offsets.end
         )) {

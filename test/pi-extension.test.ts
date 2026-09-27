@@ -39,6 +39,31 @@ import type {
   VisibleBlockCollection,
 } from "../src/types";
 
+test("block-comment agent tool saves a quoted passage with caller identity and stable retries", async () => {
+  const root = mkdtempSync(join(tmpdir(), "block-comment-tool-"));
+  const store = new OutlinerStore(join(root, "outline.sqlite"), {workspaceRoot: root});
+  const server = new OutlinerServer(store, join(root, "service.sock")); await server.start();
+  const fixture = new OutlinerClient(join(root, "service.sock")), original = OutlinerClient.prototype.request;
+  const transport = spyOn(OutlinerClient.prototype, "request").mockImplementation(function<T>(input: RequestInput, timeout?: number): Promise<T> {
+    return original.call(fixture, input, timeout) as Promise<T>;
+  });
+  type Tool = {name: string; execute(id: string, params: unknown, signal: undefined, update: undefined, context: ExtensionContext): Promise<{details: any}>};
+  const tools = new Map<string, Tool>();
+  const pi = {registerTool(tool: Tool) {tools.set(tool.name, tool);}, registerCommand() {}, registerEntryRenderer() {}, appendEntry() {}, on() {}} as unknown as ExtensionAPI;
+  const context = {sessionManager: {getSessionId: () => "comment-session"}} as ExtensionContext;
+  try {
+    outlinerExtension(pi);
+    const block = await fixture.request<Block>({action: "create", text: "# Notes\n\nA bounded experiment."});
+    const tool = tools.get("outliner_comment")!, params = {blockId: block.id, expectedRevision: block.revision,
+      comment: "Useful distinction", passage: {quote: "bounded experiment"}};
+    const receipt = (await tool.execute("comment-call", params, undefined, undefined, context)).details;
+    const saved = receipt.annotations[0];
+    expect(saved.originalTarget.anchor).toMatchObject({kind: "text-quote", exact: params.passage.quote});
+    expect([saved.block.actorId, saved.block.sessionId, saved.block.taskId]).toEqual(["pi", "comment-session", "comment-call"]);
+    expect((await tool.execute("comment-call", params, undefined, undefined, context)).details.deduplicated).toBe(true);
+  } finally {transport.mockRestore(); await server.close(); store.close(); rmSync(root, {recursive: true, force: true});}
+});
+
 test("saved-view tool reports branch identity and presentation omissions through the real service", async () => {
   const root = mkdtempSync(join(tmpdir(), "saved-view-tool-"));
   const store = new OutlinerStore(join(root, "outline.sqlite"), {workspaceRoot: root});
@@ -255,6 +280,7 @@ test("registers the workspace commands and annotation-aware tools", () => {
     "outliner_capture",
     "outliner_annotations",
     "outliner_annotation_reconcile",
+    "outliner_comment",
     "outliner_annotate",
     "outliner_annotation_reply",
     "outliner_annotation_lifecycle",

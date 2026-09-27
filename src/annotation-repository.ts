@@ -1,3 +1,4 @@
+import { blockCommentTarget } from "./block-comments";
 import { blockAnnotationRepresentation } from "./annotation-representations";
 import { checklistItems, updateChecklistText } from "./checklist-items";
 import {readCaptureBefore} from "./capture-history";
@@ -377,8 +378,18 @@ export class AnnotationRepository {
           throw new Error(`Duplicate annotation operationId: ${operationId}`);
         }
         operationIds.add(operationId);
-        if (operation.type === "create") {
-          const input = normalizeAnnotationCreateInput(operation.input);
+        if (operation.type === "create" || operation.type === "block-comment") {
+          let raw: AnnotationCreateInput;
+          if (operation.type === "block-comment") {
+            const request = operation.input;
+            if (!request || !Number.isSafeInteger(request.expectedRevision) || request.expectedRevision < 1) {
+              throw new Error("Block comment requires a positive expectedRevision");
+            }
+            const block = this.blocks.requireActive(text(request.blockId, "Comment block ID"));
+            if (block.revision !== request.expectedRevision) throw new Error("Comment source revision is stale; read the current block before commenting");
+            raw = { target: blockCommentTarget(block, request.passage), body: request.body, source: request.source };
+          } else raw = operation.input;
+          const input = normalizeAnnotationCreateInput(raw);
           this.requireSubject(input.target.representation.subject);
           this.validateCapture(input.target);
           return { type: "create" as const, input };

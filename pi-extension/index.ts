@@ -1,3 +1,4 @@
+import { createBlockComment } from "../src/block-comments";
 import { readSavedView, type SavedViewReadResult } from "../src/saved-view-read";
 import { clientSupportsRole } from "../src/types";
 import {CHECKLIST_MARKS} from "../src/checklist-items";
@@ -2610,6 +2611,31 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
           modelId: generated.modelId,
           result: generated.result,
         },
+      }));
+    },
+  });
+
+  pi.registerTool({
+    ...outlinerToolPresentation("Outliner Comment"),
+    name: "outliner_comment",
+    label: "Outliner Comment",
+    description: "Comment on a block using its revision and exact source quote, without building representation internals. Omit passage only for a whole-block comment. Does not focus panes.",
+    promptSnippet: "Create a revision-guarded block comment; disambiguate repeated quotes with source context or a stable checklist item ID",
+    parameters: Type.Object({
+      blockId: Type.String(), expectedRevision: Type.Integer({minimum: 1}), comment: Type.String(),
+      requestId: Type.Optional(Type.String()),
+      passage: Type.Optional(Type.Object({
+        quote: Type.String({minLength: 1}), start: Type.Optional(Type.Integer({minimum: 0})),
+        prefix: Type.Optional(Type.String()), suffix: Type.Optional(Type.String()), itemId: Type.Optional(Type.String()),
+      })),
+    }),
+    async execute(toolCallId, params, _signal, _onUpdate, context) {
+      await ensureService(false);
+      return toolResult(await createBlockComment(client, {
+        requestId: params.requestId ?? `${context.sessionManager.getSessionId()}:${toolCallId}`,
+        input: {blockId: params.blockId, expectedRevision: params.expectedRevision, body: params.comment,
+          source: "agent", passage: params.passage},
+        author: "agent", provenance: toolProvenance(actorId, context, toolCallId),
       }));
     },
   });

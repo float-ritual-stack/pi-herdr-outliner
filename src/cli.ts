@@ -1,3 +1,4 @@
+import { createBlockComment } from "./block-comments";
 import { readSavedView } from "./saved-view-read";
 import {inspectWorkspaceConnection} from './workspace-diagnostics';
 import { parseArgs } from "node:util";
@@ -84,6 +85,31 @@ switch (command) {
       limit,
     };
     request = { action: "blocks.query", query };
+    break;
+  }
+  case "comment": {
+    const {values} = parseArgs({args: rest, strict: true, options: {
+      id: {type: "string"}, expected: {type: "string"}, text: {type: "string"}, stdin: {type: "boolean"},
+      "request-id": {type: "string"}, quote: {type: "string"}, start: {type: "string"},
+      prefix: {type: "string"}, suffix: {type: "string"}, item: {type: "string"}, whole: {type: "boolean"},
+    }});
+    if (!values.id || !values["request-id"]) throw new Error("comment requires --id and a stable --request-id");
+    if (values.whole === (values.quote !== undefined) || (!values.whole && values.quote === undefined)) {
+      throw new Error("Choose either --quote with exact source text or --whole for a whole-block comment");
+    }
+    if (values.whole && [values.start, values.prefix, values.suffix, values.item].some(value => value !== undefined)) {
+      throw new Error("Passage context cannot be used with --whole");
+    }
+    if ((values.text !== undefined) === Boolean(values.stdin)) throw new Error("comment requires either --text or --stdin");
+    const body = values.stdin ? await Bun.stdin.text() : values.text!;
+    const start = values.start === undefined ? undefined : Number(values.start);
+    if (start !== undefined && (!Number.isSafeInteger(start) || start < 0)) throw new Error("--start must be a non-negative UTF-16 source offset");
+    await client.requireCompatibleService();
+    directResult = await createBlockComment(client, {
+      requestId: values["request-id"], author: "user",
+      input: {blockId: values.id, expectedRevision: parseRevision(values.expected), body, source: "user",
+        ...(values.whole ? {} : {passage: {quote: values.quote!, start, prefix: values.prefix, suffix: values.suffix, itemId: values.item}})},
+    });
     break;
   }
   case "capture": {

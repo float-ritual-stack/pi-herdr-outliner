@@ -4,6 +4,13 @@ This file records notable user-facing changes. The project remains active dogfoo
 
 ## [Unreleased]
 
+- Create a quoted block comment through `outliner_comment` or CLI `comment`
+  without constructing annotation internals. Exact quotes require unique context,
+  stale revisions fail atomically, and retrying a saved request does not duplicate
+  comments even after checklist identity assignment. Source-aware readers share
+  quote resolution. Protocol80 adds the convenience operation to the existing
+  annotation batch ledger. PIE-377.
+
 - Agents and CLI users can read saved virtual-branch matches in branch order
   without opening a pane or translating the query. Reads honor authored limits,
   report incomplete/invalid/unsupported results and reject mixed reads after a
