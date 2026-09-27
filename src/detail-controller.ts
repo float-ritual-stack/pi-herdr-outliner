@@ -1,7 +1,7 @@
 import {blockAnnotationRepresentation, resourceAnnotationRepresentation} from "./annotation-representations";
 import {removedListItemIds} from "./checklist-items";
 import {checklistControlId, checklistCommentRange, findChecklistControl, type ChecklistControl} from "./checklist-controls";
-import {ChecklistSession, type ChecklistChoice} from "./checklist-session";
+import {ChecklistSession, type ChecklistChoice, type ChecklistResult} from "./checklist-session";
 import type {ChecklistUpdateInput, ChecklistUpdateReceipt} from "./types";
 import type {ChecklistIdentityChange} from "./types";
 import { COMPLETION_ROWS } from "./reference-completion-renderer";
@@ -376,7 +376,11 @@ function sameDisplayedBlockRead(
     const candidate = current.projection.embedRanges[index];
     return candidate !== undefined &&
       range.startLine === candidate.startLine &&
-      range.endLine === candidate.endLine;
+      range.endLine === candidate.endLine &&
+      range.source?.block.id === candidate.source?.block.id &&
+      range.source?.block.revision === candidate.source?.block.revision &&
+      range.source?.startLine === candidate.source?.startLine &&
+      range.source?.endLine === candidate.source?.endLine;
   });
   if (!sameRanges) return false;
   return state.embedStates.every((embed, index) => {
@@ -2536,11 +2540,12 @@ export function createDetailController(
 
   const beginComment = async (
     sourceRange?: { start: number; end: number },
+    sourceOverride?: Block,
   ): Promise<void> => {
-    const selected = state.context.selected;
-    const description = detailResourceDescription(state);
+    const selected = sourceOverride ?? state.context.selected;
+    const description = sourceOverride ? null : detailResourceDescription(state);
     const pdf = description?.pdf;
-    const resourceText = displayedResourceText(state);
+    const resourceText = sourceOverride ? null : displayedResourceText(state);
     if (!resourceText && (!selected || selected.effectiveDeletedRootId)) {
       state.status = selected
         ? "Block is in Trash; restore before adding annotations"
@@ -3048,23 +3053,28 @@ export function createDetailController(
     ensureFileCursorVisible(viewport);
   };
 
-  const showChecklistReceipt = async (receipt: ChecklistUpdateReceipt, generation: number): Promise<void> => {
-    if (generation !== openGeneration || state.mode !== "preview" || state.context.selected?.id !== receipt.block.id) return;
-    const projection = await effects.projectRead(receipt.block.text, receipt.block.id);
+  const showChecklistReceipt = async (result: ChecklistResult, generation: number, hostId:string): Promise<void> => {
+    const receipt = result.receipt;
+    const selected = state.context.selected;
+    if (generation !== openGeneration || state.mode !== "preview" || selected?.id !== hostId) return;
+    const source = selected.id === receipt.block.id ? receipt.block : selected;
+    const projection = await effects.projectRead(source.text, source.id);
     const resolved = await effects.resolveReferences(projection.text);
-    if (generation !== openGeneration || state.mode !== "preview" || state.context.selected?.id !== receipt.block.id || state.context.selected.revision > receipt.block.revision) return;
+    if (generation !== openGeneration || state.mode !== "preview" || state.context.selected?.id !== hostId || state.context.selected.revision > source.revision) return;
     const read = {projection, resolved};
-    replaceSelectedBlock(receipt.block);
+    replaceSelectedBlock(source);
     applyBlockRead(read);
     cacheCurrentBlockRead(read);
-    state.previewRegions.focusedRegionId = checklistControlId(receipt.block.id, receipt.item, receipt.block.revision);
+    state.previewRegions.focusedRegionId = checklistControlId(receipt.block.id, receipt.item, receipt.block.revision, result.occurrenceId);
     state.status = `Step ${receipt.item.status} · Ctrl+Z undoes the last status change`;
   };
 
   const changeChecklist = async (control: ChecklistControl, choice: ChecklistChoice, generation: number): Promise<void> => {
-    const result = await checklist.choose(control, choice);
+    const hostId = state.context.selected?.id;
+    if (!hostId) return;
+    const result = await checklist.choose(control, choice, hostId);
     if (generation === openGeneration && result.link) effects.copyText(result.link);
-    await showChecklistReceipt(result.receipt, generation);
+    await showChecklistReceipt(result, generation, hostId);
     if (generation === openGeneration && result.link) state.status = "Step link copied";
   };
 
@@ -3097,9 +3107,9 @@ export function createDetailController(
         } else if (!intent.capture) {
           const control = findChecklistControl(state.previewRegions.regions, state.previewRegions.focusedRegionId ?? "");
           const selected = state.context.selected;
-          if (control && (control.blockId !== selected?.id || control.revision !== selected.revision)) {
+          if (control && !control.sourceBlock && (control.blockId !== selected?.id || control.revision !== selected.revision)) {
             state.status = "The checklist changed; focus the current step before commenting";
-          } else await beginComment(control ? checklistCommentRange(control) : undefined);
+          } else await beginComment(control ? checklistCommentRange(control) : undefined, control?.sourceBlock);
         } else {
           await beginDirectComment(intent.capture);
         }
@@ -3528,8 +3538,8 @@ export function createDetailController(
         if (!blockId || state.mode !== "preview" || state.busy) break;
         state.busy = true;
         try {
-          const receipt = await checklist.undo(blockId);
-          if (receipt) await showChecklistReceipt(receipt, requestGeneration);
+          const result = await checklist.undo(blockId);
+          if (result) await showChecklistReceipt(result, requestGeneration, blockId);
           else state.status = "No checklist status change to undo in this note";
         } finally { state.busy = false; }
         break;
@@ -3543,7 +3553,7 @@ export function createDetailController(
             state.busy = true;
             try {
               const choice = await effects.chooseChecklistAction?.();
-              if (choice && requestGeneration === openGeneration && state.mode === "preview" && state.context.selected?.id === control.blockId) {
+              if (choice && requestGeneration === openGeneration && state.mode === "preview") {
                 await changeChecklist(control, choice, requestGeneration);
               }
             } finally { state.busy = false; }

@@ -34,6 +34,7 @@ const result=await runHerdrScenario({name:`checklist-controls-${ansi?'ansi':'pi'
     const lines=settled.screen.split('\n'),a=lines.findIndex(row=>row.includes(anchor));
     const row=lines.findIndex((text,index)=>index>a&&text.includes(label));
     const column=visibleWidth(lines[row]!.slice(0,lines[row]!.indexOf(label)));
+    await s.record('checklist-pointer',{pane,anchor,label,row,column,screen:settled.screen,paneText:settled.pane});
     await terminal.write(`\x1b[<0;${column+1};${row+1}M\x1b[<0;${column+1};${row+1}m`);
   };
   await s.checkpoint('01-readable-plan');
@@ -89,6 +90,24 @@ const result=await runHerdrScenario({name:`checklist-controls-${ansi?'ansi':'pi'
   assert.equal((await status()).itemId,assigned.itemId);
   await s.waitVisible(s.panes.detail,'[~]');
   await s.checkpoint('05-canonical-update-in-both-readers');
+  const host=await s.client.request<Block>({action:'create',text:`# EMBEDDED PLAN\n\nKeep the original instructions available.\n\n!((${source.id}^${assigned.itemId}))\n\nSecond view:\n\n!((${source.id}^${assigned.itemId}))`});
+  await s.revealTree(s.panes.tree,host.id);await s.keys(s.panes.tree,'alt+enter');
+  await s.waitVisible(s.panes.detail,'Second view:');
+  await click(s.panes.detail,detailAnchor,'[~]');await s.waitVisible(s.panes.detail,'Checklist step');
+  await s.keys(s.panes.detail,'enter');await s.waitFor('embedded Detail update',status,item=>item.status==='done');
+  await s.waitFor('both embedded copies refresh',()=>s.visible(s.panes.detail),frame=>(frame.match(/\[x\][^\n]*Prepare release/g)??[]).length===2);
+  assert.equal((await s.client.request<Block>({action:'get',blockId:host.id})).text,host.text);
+  await s.keys(s.panes.detail,'ctrl+z');await s.waitFor('embedded Detail Undo',status,item=>item.status==='waiting');
+  await s.waitFor('embedded Detail Undo paint',()=>s.visible(s.panes.detail),frame=>/\[~\][^\n]*Prepare release/.test(frame));
+  await s.checkpoint('05a-embedded-detail-canonical-update');
+  await s.focus(s.panes.tree);await s.revealTree(s.panes.tree,host.id);
+  await s.waitVisible(s.panes.tree,'● Preview · # EMBEDDED PLAN');
+  await click(s.panes.tree,'● Preview · # EMBEDDED PLAN','[~]');await s.waitVisible(s.panes.tree,'Checklist step');
+  await s.keys(s.panes.tree,'enter');await s.waitFor('embedded Preview update',status,item=>item.status==='done');
+  await s.waitFor('embedded Preview paint',()=>s.visible(s.panes.tree),frame=>/\[x\][^\n]*Prepare release/.test(frame));
+  await s.waitFor('embedded Detail subscription paint',()=>s.visible(s.panes.detail),frame=>/\[x\][^\n]*Prepare release/.test(frame));
+  assert.equal((await s.client.request<Block>({action:'get',blockId:host.id})).revision,host.revision);
+  await s.checkpoint('05b-embedded-preview-canonical-update');
   if (ansi) {
     const longPlan=await s.client.request<Block>({action:'create',text:[
       'OFFSCREEN CHECKLIST','',...Array.from({length:50},(_,i)=>`Context paragraph ${i+1}. ${"Supporting context remains part of the plan. ".repeat(6)}\n`),

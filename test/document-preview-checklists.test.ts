@@ -8,8 +8,9 @@ import {OutlinerStore} from '../src/store';
 import {OutlinerServer} from '../src/server';
 import {OutlinerClient,type RequestInput} from '../src/client';
 import {DocumentPreview} from '../src/document-preview';
+import {DocumentPreviewInput} from '../src/document-preview-input';
 import {documentPreviewLinks,documentPreviewLines,renderDocumentPreview} from '../src/document-preview-renderer';
-import type {Block,ChecklistCollection,ChecklistUpdateReceipt} from '../src/types';
+import type {AnnotationThread,Block,ChecklistCollection,ChecklistUpdateReceipt} from '../src/types';
 
 async function fixture(run:(client:OutlinerClient)=>Promise<void>){
   initTheme(undefined,false);
@@ -25,6 +26,77 @@ const links=(reader:DocumentPreview,width=44)=>documentPreviewLinks(reader.state
 const tasks=(reader:DocumentPreview,width=44)=>links(reader,width).filter(link=>link.uri.includes('/checklist/'));
 const paint=(reader:DocumentPreview,width=44)=>documentPreviewLines(reader.state!.document,width).map(stripTerminalSequences).join('\n');
 const click=async(reader:DocumentPreview,uri:string)=>reader.action('preview.link:'+encodeURIComponent(uri),noDetail);
+
+test('same-target background loads preserve an opened embedded status picker',async()=>fixture(async client=>{
+  const plan=await client.request<Block>({action:'create',text:'# Plan\n\n1. [~] Prepare ^prepare\n   - [~] Dependency ^dependency'});
+  const host=await client.request<Block>({action:'create',text:`# Dashboard\n\n!((${plan.id}^prepare))\n\nAgain\n\n!((${plan.id}^prepare))`});
+  const input=new DocumentPreviewInput();
+  let frame:ReturnType<typeof renderDocumentPreview>;
+  const draw=()=>{if(reader.state){frame=renderDocumentPreview(reader.state,{x:0,y:0,width:90,height:35},'',undefined,'compact');input.render(frame.lines,frame,reader.state);}};
+  const reader=new DocumentPreview(client,draw,undefined,undefined,input);
+  await reader.load({kind:'block',blockId:host.id});reader.focus();draw();
+  const rows=frame!.lines.map(stripTerminalSequences);
+  const row=rows.findIndex(line=>line.includes('Prepare')&&line.includes('[~]'));
+  const column=visibleWidth(rows[row]!.slice(0,rows[row]!.indexOf('[~]')));
+  const pending:Promise<void>[]=[];
+  const actions={focus:()=>reader.focus(),scroll:()=>{},resize:()=>{},invoke:(id:string)=>{const run=reader.action(id,noDetail);pending.push(run);return run;}};
+  for(const suffix of ['M','m'])input.handle(`\x1b[<0;${column+1};${row+1}${suffix}`,actions,()=>{},draw);
+  await Promise.all(pending);
+  expect(reader.state!.checklistPicker?.control.item.itemId).toBe('prepare');
+  await reader.load({kind:'block',blockId:host.id});
+  expect(reader.state!.checklistPicker?.control.item.itemId).toBe('prepare');
+  const refreshing=reader.load({kind:'block',blockId:host.id});
+  await reader.key({name:'down'},90,35,noDetail);
+  await refreshing;
+  expect(reader.state!.checklistPicker?.index).toBe(1);
+  const cancelling=reader.load({kind:'block',blockId:host.id});
+  await reader.key({name:'escape'},90,35,noDetail);
+  await cancelling;
+  expect(reader.state!.checklistPicker).toBeUndefined();
+  expect(await client.request<Block>({action:'get',blockId:plan.id})).toEqual(plan);
+}));
+
+test('embedded steps keep occurrence focus while edits, copy and undo reach the canonical plan',async()=>fixture(async client=>{
+  const plan=await client.request<Block>({action:'create',text:'# Release [project::demo]\n\nRead the instructions first.\n\n- [ ] Prepare\n- [~] Verify ^verify'});
+  const host=await client.request<Block>({action:'create',text:`# Dashboard [type::note]\n\n- [ ] Local task\n\n!((${plan.id}^verify))\n\n!((${plan.id}))\n\n!((${plan.id}^verify))`});
+  const copied:string[]=[];
+  const reader=new DocumentPreview(client,()=>{},undefined,undefined,undefined,undefined,text=>{copied.push(text);});
+  await reader.load({kind:'block',blockId:host.id});reader.focus();
+  expect(tasks(reader)).toHaveLength(5);
+  expect(new Set(tasks(reader).map(link=>link.uri)).size).toBe(5);
+  const last=tasks(reader).at(-1)!;
+  reader.restoreOffset(3);await click(reader,last.uri);await reader.key({name:'return'},44,10,noDetail);
+  expect((await client.request<Block>({action:'get',blockId:plan.id})).text).toContain('- [x] Verify ^verify');
+  expect(await client.request<Block>({action:'get',blockId:host.id})).toEqual(host);
+  expect(reader.state!.target).toEqual({kind:'block',blockId:host.id});
+  expect(reader.state!.offset).toBe(3);
+  expect(reader.state!.activeLink).toBe(tasks(reader).at(-1)!.uri);
+  expect(paint(reader).match(/\[x\] Verify/g)).toHaveLength(3);
+  await reader.key({name:'return'},44,10,noDetail);await reader.action('preview.checklist.choose:copy-link',noDetail);
+  expect(copied).toEqual([`((${plan.id}^verify))`]);
+  await reader.key({name:'c'},44,10,noDetail);reader.paste('Comment on the original step');
+  await reader.key({name:'s',ctrl:true},44,10,noDetail);
+  const comments=await client.request<AnnotationThread[]>({action:'annotations.list',query:{subject:{kind:'block',blockId:plan.id},includeResolved:true}});
+  expect(comments).toHaveLength(1);
+  expect(comments[0]!.originalTarget.listItemId).toBe('verify');
+  expect(await client.request<AnnotationThread[]>({action:'annotations.list',query:{subject:{kind:'block',blockId:host.id},includeResolved:true}})).toHaveLength(0);
+  await reader.key({name:'z',ctrl:true},44,10,noDetail);
+  expect((await client.request<Block>({action:'get',blockId:plan.id})).text).toContain('- [~] Verify ^verify');
+  expect(reader.state!.activeLink).toBe(tasks(reader).at(-1)!.uri);
+  await click(reader,tasks(reader)[2]!.uri);await reader.action('preview.checklist.choose:address',noDetail);
+  const addressed=await client.request<Block>({action:'get',blockId:plan.id});
+  expect(addressed.text).toMatch(/Prepare \^task-/);
+  expect(await client.request<Block>({action:'get',blockId:host.id})).toEqual(host);
+  expect(paint(reader)).not.toContain('^task-');
+  // A fragment-only Preview still edits the full source at the original offset.
+  await reader.load({kind:'block',blockId:plan.id,fragmentId:'verify'});reader.focus();
+  expect(tasks(reader)).toHaveLength(1);
+  expect(paint(reader)).not.toContain('Read the instructions');
+  await click(reader,tasks(reader)[0]!.uri);await reader.action('preview.checklist.choose:problem',noDetail);
+  expect((await client.request<Block>({action:'get',blockId:plan.id})).text).toBe(addressed.text.replace('[~] Verify','[!] Verify'));
+  await reader.key({name:'z',ctrl:true},44,10,noDetail);
+  expect((await client.request<Block>({action:'get',blockId:plan.id})).text).toBe(addressed.text);
+}));
 
 // Reader boundary: real rendered hit targets and keyboard selection must mutate the
 // canonical item through RPC. Parser/store tests cannot catch wrong painted targets.

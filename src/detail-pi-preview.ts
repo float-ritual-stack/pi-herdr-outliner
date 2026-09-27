@@ -1,5 +1,5 @@
 import type {ReaderDensity} from "./reader-chrome";
-import {checklistControls, type ChecklistControl} from "./checklist-controls";
+import {checklistControls, embeddedChecklistControls, type ChecklistControl} from "./checklist-controls";
 import { parsePropertyRecords } from "./properties";
 import {documentFolds, revealFoldedLine, type DocumentFold} from './document-folds';
 import type {Block} from "./types";
@@ -77,6 +77,7 @@ export interface DetailReadPreviewDocument {
   annotations?: Omit<AnnotationReaderState, "previewRegions" | "resolvedSelectedText">;
   previewRegions?: PreviewRegionState;
   sourceBlock?: Pick<Block,"id"|"revision"|"text">;
+  sourceSlice?: {block:Block;startLine:number;endLine:number};
   preserveMetadata?: boolean;
   truncated?: boolean;
   canonicalText: string;
@@ -138,6 +139,7 @@ function remapEmbedRangesAfterMetadataRemoval(
   ranges: DetailState["embedRanges"],
 ): DetailState["embedRanges"] {
   return ranges.map((range) => ({
+    ...range,
     startLine: lineAfterMetadataRemoval(text, range.startLine),
     endLine: lineAfterMetadataRemoval(text, range.endLine),
   }));
@@ -528,8 +530,10 @@ export function renderDetailReadPreview(
   );
   // Picker thumbnails have no disclosure input; retain their plain reading layout.
   const folds = linksEnabled ? documentFolds(projectedText, embedRanges) : [];
-  const checklists = linksEnabled && input.sourceBlock && !input.truncated
-    ? checklistControls(input.sourceBlock, renderedLineForAuthoredLine) : [];
+  const checklists = linksEnabled && !input.truncated
+    ? [...(input.sourceBlock ? checklistControls(input.sourceBlock, renderedLineForAuthoredLine) : []),
+      ...(input.sourceSlice ? embeddedChecklistControls([{startLine:0,endLine:0,source:{...input.sourceSlice,contentStartLine:0}}], renderedLineForAuthoredLine) : []),
+      ...embeddedChecklistControls(input.embedRanges, line => metadataRemoved ? lineAfterMetadataRemoval(input.projectedText, line) : line)] : [];
   const previewRegions: PreviewRegionState = input.previewRegions ??= {
     regions: [],
     focusedRegionId: null,
@@ -1665,7 +1669,7 @@ export class DetailPiPreviewLayout extends VStack {
       : renderedLineForAuthoredLine(this.state.attentionRevealSourceLine);
 
     const embedPresentation = `${this.state.embedBackgroundEnabled}:${
-      embedRanges.map((range) => `${range.startLine}-${range.endLine}`).join(",")
+      embedRanges.map((range) => `${range.startLine}-${range.endLine}:${range.source?.block.id}:${range.source?.block.revision}`).join(",")
     }`;
     const previousAuthoredCallouts = this.authoredCallouts;
     const authoredCallouts = previousAuthoredCallouts?.source === authoredCalloutSource
@@ -1727,7 +1731,8 @@ export class DetailPiPreviewLayout extends VStack {
       );
       this.documentFoldRegions = draftText === null && referencesReady ? documentFolds(rawText, embedRanges) : [];
       this.checklistRegions = draftText === null && referencesReady && selected
-        ? checklistControls(selected, renderedLineForAuthoredLine) : [];
+        ? [...checklistControls(selected, renderedLineForAuthoredLine),
+          ...embeddedChecklistControls(projectedEmbedRanges, line => metadataRemoved ? lineAfterMetadataRemoval(projectedTextBeforeMetadataRemoval, line) : line)] : [];
       this.markdown.setContent(
         renderedText,
         embedRanges,

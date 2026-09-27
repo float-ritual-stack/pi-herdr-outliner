@@ -141,8 +141,20 @@ Copy step link explicitly assigns an address if needed and copies the fragment
 reference. Ordinary rendering, including hidden/folded content, never writes.
 Code examples and legends have no task controls. List disclosures remain
 separate controls; folding children leaves the parent checkbox usable. Saved
-Inbox before-images remain read-only. Embedded/projected item controls are not
-yet implemented.
+Inbox before-images remain read-only.
+
+Whole-note embeds, item-fragment embeds and fragment-only Preview use the same
+controls. Changing an embedded step updates its canonical plan; the embedding
+note remains unchanged. Repeated copies retain distinct keyboard focus while
+sharing the same item identity and evidence. Copy link points to the original
+step, and Undo from the embedding note reverses that reader's latest change
+made there. A focused embedded checkbox also directs a comment to its source
+step. Live task-query projections remain in progress.
+
+A background refresh of the same Preview keeps an open status picker and its
+current choice. The pending command retains its originally observed evidence,
+so a concurrent change to that step is still detected by the service. Escape
+cancels the picker; navigating elsewhere replaces it normally.
 
 All readers use `ChecklistSession` and the same service update. The rendered
 control carries canonical block/item identity and observed evidence; a wrapped

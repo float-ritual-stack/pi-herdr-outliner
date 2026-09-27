@@ -138,7 +138,7 @@ export class DocumentPreview {
       else if(result==='cancel'){this.value={...this.value,comment:undefined,notice:'Comment cancelled'};}
       this.changed();return true;
     }
-    if(key.ctrl&&key.name==='z'&&this.value.document.sourceBlock){await this.changeChecklist('undo');return true;}
+    if(key.ctrl&&key.name==='z'&&(this.value.document.sourceBlock||this.value.document.sourceSlice)){await this.changeChecklist('undo');return true;}
     if(key.name==='space'||str===' '){
       const action=parsePreviewRegionActionUri(this.value.activeLink??'');
       const control=action?.type==='checklist.open'?findChecklistControl(this.value.document.previewRegions?.regions??[],action.regionId):undefined;
@@ -156,22 +156,22 @@ export class DocumentPreview {
   private async changeChecklist(choice:ChecklistChoice|'undo',control?:ChecklistControl):Promise<void> {
     const value=this.value;
     if(!value||value.loading||this.checklistBusy||value.comment)return;
-    const blockId=value.document.sourceBlock?.id;
-    if(!blockId||control&&control.blockId!==blockId)return;
+    const contextId=value.target.kind==='block'?value.target.blockId:undefined;
+    if(!contextId)return;
     const generation=this.generation;
     this.checklistBusy=true;
     this.value={...value,checklistPicker:undefined,checklistBusy:true,notice:'Updating step…'};this.changed();
     try {
       if(choice==='copy-link'&&!this.copyText)throw Error('Clipboard output is unavailable in this host');
-      const result=choice==='undo'?{receipt:await this.checklist.undo(blockId)}:await this.checklist.choose(control!,choice);
+      const result=choice==='undo'?await this.checklist.undo(contextId):await this.checklist.choose(control!,choice,contextId);
       if(generation!==this.generation||!this.value)return;
-      if(!result.receipt){this.value={...this.value,notice:'No checklist change to undo'};return;}
+      if(!result){this.value={...this.value,notice:'No checklist change to undo'};return;}
       if('link' in result&&result.link)await this.copyText!(result.link);
       if(generation!==this.generation)return;
       // Reload canonical content and comments, retaining local folds and reading position.
       const refreshed=await this.load(value.target,true);
       if(!refreshed||!this.value)return;
-      const id=checklistControlId(blockId,result.receipt.item,result.receipt.block.revision);
+      const id=checklistControlId(result.receipt.block.id,result.receipt.item,result.receipt.block.revision,result.occurrenceId);
       this.value={...this.value,activeLink:previewRegionActionUri({type:'checklist.open',regionId:id}),
         activeLinkLabel:'Checklist step',notice:choice==='copy-link'?'Step link copied':choice==='undo'?'Checklist change undone':'Step updated · Ctrl+Z undo'};
     } catch(error){
@@ -208,10 +208,11 @@ export class DocumentPreview {
     if(!annotationId&&!capture&&target){
       const active=parsePreviewRegionActionUri(this.value.activeLink??'');
       const control=active?.type==='checklist.open'?findChecklistControl(this.value.document.previewRegions?.regions??[],active.regionId):undefined;
-      const source=this.value.document.sourceBlock;
+      const source=control?.sourceBlock??this.value.document.sourceBlock;
       if(control&&source&&control.blockId===source.id&&control.revision===source.revision){
         const range=checklistCommentRange(control);
-        target={...target,anchor:createTextQuoteAnchor(source.text,range.start,range.end)};
+        target={representation:control.sourceBlock?blockAnnotationRepresentation(control.sourceBlock):target.representation,
+          anchor:createTextQuoteAnchor(source.text,range.start,range.end)};
       }
     }
     if(annotationId&&!this.value.document.annotations?.annotationThreads.some(thread=>thread.block.id===annotationId))return;
@@ -235,7 +236,7 @@ export class DocumentPreview {
       this.value={...this.value!,comment:undefined,notice:'Comment saved'};
       // Keep the displayed document and position: a refresh must not silently replace a before-image.
       try {
-        if(value.document.sourceBlock && receipt.annotations.some(record=>record.originalTarget.listItemId)) await this.load(value.target,true);
+        if((value.document.sourceBlock||value.document.sourceSlice) && receipt.annotations.some(record=>record.originalTarget.listItemId)) await this.load(value.target,true);
         else await this.refreshComments(value.document);
       }
       catch(error){ if(this.value?.document===value.document)this.value={...this.value,notice:`Comment saved; refresh failed: ${error instanceof Error?error.message:String(error)}`}; }
@@ -429,6 +430,10 @@ export class DocumentPreview {
 
   async load(target: OutlinerNavigationTarget, refresh = false, navigating = false): Promise<boolean> {
     if(this.protectDraft())return false;
+    // Tree publications may repeat this address while its menu is open. Refresh
+    // the read, but retain the user's choice and the evidence it was based on.
+    const picker = JSON.stringify(this.value?.target) === JSON.stringify(target) ? this.value?.checklistPicker : undefined;
+    if(picker)refresh=true;
     const generation = ++this.generation;
     const previousDocument = this.value?.document;
     const revealInDocument = target.kind === 'block' && !!target.fragmentId && previousDocument?.sourceBlock?.id === target.blockId;
@@ -454,7 +459,8 @@ export class DocumentPreview {
           if (revealInDocument) {
             document=await loadDetailReadPreview(this.client,block);
             if (!refresh) revealSourceLine=fragment.slice.anchor.lineIndex;
-          } else document={...await loadDetailReadPreview(this.client,{...block,text:fragment.slice.text}),sourceBlock:undefined};
+          } else document={...await loadDetailReadPreview(this.client,{...block,text:fragment.slice.text}),sourceBlock:undefined,
+            sourceSlice:{block,startLine:fragment.slice.startLine,endLine:fragment.slice.endLine}};
         }else document = await loadDetailReadPreview(this.client,block);
       } else {
         if (!this.clientId) throw new Error('Resource preview requires a registered reader');
@@ -488,7 +494,9 @@ export class DocumentPreview {
       // Anonymous identities change on edits; explicit stable IDs may survive.
       if (previous) document.previewRegions = {regions:[],focusedRegionId:previous.focusedRegionId,disclosureOverrides:new Map(previous.disclosureOverrides)};
       if(revealSourceLine!==undefined && previousDocument) offset=revealDocumentPreviewSourceLine(document,revealSourceLine,previousDocument);
-      this.value = {target,title,document,offset,notice,focused:this.value?.focused ?? false};
+      const currentPicker=picker ? this.value?.checklistPicker : undefined;
+      this.value = {target,title,document,offset,notice,focused:this.value?.focused ?? false,
+        ...(currentPicker ? {checklistPicker:currentPicker,activeLink:this.value?.activeLink,activeLinkLabel:'Checklist step'} : {})};
       this.changed(); return true;
     } catch (error) {
       if (generation !== this.generation) return false;

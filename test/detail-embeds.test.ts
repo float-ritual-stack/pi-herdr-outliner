@@ -245,7 +245,7 @@ test("renders ordinary block Markdown without loading a workspace snapshot or ne
     "Before\n!((ordinary-block))\nAfter",
   );
 
-  expect(projection).toEqual({
+  expect(projection).toMatchObject({
     text: [
       "Before",
       "Embedded block: ((ordinary-block))",
@@ -332,7 +332,7 @@ test("renders exact fragment slices with explicit fragment failures and no recur
       count: 0,
     },
   ]);
-  expect(projection.embedRanges).toEqual([
+  expect(projection.embedRanges.map(({startLine,endLine})=>({startLine,endLine}))).toEqual([
     { startLine: 0, endLine: 5 },
     { startLine: 6, endLine: 8 },
     { startLine: 9, endLine: 9 },

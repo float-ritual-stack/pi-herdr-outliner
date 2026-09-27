@@ -52,6 +52,8 @@ export interface DetailEmbedState {
 export interface DetailEmbedRange {
   startLine: number;
   endLine: number;
+  /** Observed canonical content rendered inside this occurrence. Never inferred from paint. */
+  source?: {block: Block; startLine: number; endLine: number; contentStartLine: number};
 }
 
 export interface DetailReadProjection {
@@ -63,6 +65,7 @@ export interface DetailReadProjection {
 interface ProjectedEmbed {
   text: string;
   state: DetailEmbedState;
+  source?: {block: Block; startLine: number; endLine: number};
 }
 
 function boundedError(error: unknown): string {
@@ -341,6 +344,7 @@ async function projectEmbed(
         resolution.slice.text
       }`,
       state: { blockId, fragmentId, status: "ready", count: 1 },
+      source: {block: target, startLine: resolution.slice.startLine, endLine: resolution.slice.endLine},
     };
   }
   if (isRelationViewDefinition(target)) {
@@ -348,8 +352,9 @@ async function projectEmbed(
   }
   if (!isVirtualBranchDefinition(target)) {
     return {
-      text: `Embedded block: ((${blockId}))\n${target.text}`,
+      text: `Embedded block: ((${blockId}))\n${stripFragmentAnchors(target.text)}`,
       state: { blockId, status: "ready", count: 1 },
+      source: {block: target, startLine: 0, endLine: target.text.split(/\r?\n/).length - 1},
     };
   }
   try {
@@ -441,7 +446,8 @@ export async function projectDetailRead(
     output += projected.text;
     outputLine += newlineCount(projected.text);
     embeds.push(projected.state);
-    embedRanges.push({ startLine, endLine: outputLine });
+    embedRanges.push({ startLine, endLine: outputLine,
+      ...(projected.source ? {source: {...projected.source, contentStartLine: startLine + 1}} : {}) });
     consumed = start + match[0].length;
   }
   output += projectedSource.slice(consumed);

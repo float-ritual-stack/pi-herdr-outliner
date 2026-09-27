@@ -13,14 +13,15 @@ export const CHECKLIST_CHOICES: readonly {id: ChecklistChoice; label: string}[] 
 ];
 
 type Update = (blockId: string, input: ChecklistUpdateInput) => Promise<ChecklistUpdateReceipt>;
-type Undo = {blockId: string; itemId: string; evidence: string; status: ChecklistStatus};
+type Undo = {blockId: string; itemId: string; evidence: string; status: ChecklistStatus; contextId:string; occurrenceId?:string};
+export type ChecklistResult = {receipt:ChecklistUpdateReceipt; occurrenceId?:string; link?:string};
 
 /** Reader-local command history; canonical content and conflict decisions remain service-owned. */
 export class ChecklistSession {
   private history: Undo[] = [];
   constructor(private update: Update) {}
 
-  async choose(control: ChecklistControl, choice: ChecklistChoice): Promise<{receipt: ChecklistUpdateReceipt; link?: string}> {
+  async choose(control: ChecklistControl, choice: ChecklistChoice, contextId=control.blockId): Promise<ChecklistResult> {
     if (!CHECKLIST_CHOICES.some(option => option.id === choice)) throw Error("Unknown checklist choice");
     const item = control.item;
     const change: ChecklistUpdateInput["change"] = choice === "address" || choice === "copy-link"
@@ -30,20 +31,20 @@ export class ChecklistSession {
       expectedEvidence: item.evidence, change,
     });
     if (change.kind === "status" && item.status !== change.status && receipt.changed) {
-      this.history.push({blockId: control.blockId, itemId: receipt.item.itemId!, evidence: receipt.item.evidence, status: item.status});
+      this.history.push({blockId: control.blockId, itemId: receipt.item.itemId!, evidence: receipt.item.evidence, status: item.status,contextId,occurrenceId:control.occurrenceId});
       if (this.history.length > 50) this.history.shift();
     }
-    return {receipt, ...(choice === "copy-link" ? {link: `((${control.blockId}^${receipt.item.itemId}))`} : {})};
+    return {receipt, occurrenceId:control.occurrenceId, ...(choice === "copy-link" ? {link: `((${control.blockId}^${receipt.item.itemId}))`} : {})};
   }
 
-  async undo(blockId: string): Promise<ChecklistUpdateReceipt | null> {
+  async undo(contextId: string): Promise<ChecklistResult | null> {
     let index = this.history.length - 1;
-    while (index >= 0 && this.history[index]!.blockId !== blockId) index--;
+    while (index >= 0 && this.history[index]!.contextId !== contextId) index--;
     const entry = this.history[index];
     if (!entry) return null;
-    const receipt = await this.update(blockId, {target: {itemId: entry.itemId}, expectedEvidence: entry.evidence,
+    const receipt = await this.update(entry.blockId, {target: {itemId: entry.itemId}, expectedEvidence: entry.evidence,
       change: {kind: "status", status: entry.status}});
     this.history.splice(index, 1);
-    return receipt;
+    return {receipt, occurrenceId:entry.occurrenceId};
   }
 }

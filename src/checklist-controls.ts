@@ -1,6 +1,7 @@
 import {CHECKLIST_MARKS, checklistItems} from "./checklist-items";
 import {previewRegionActionUri, type PreviewRegion} from "./detail-preview-regions";
 import type {Block, ChecklistItem} from "./types";
+import type {DetailEmbedRange} from "./detail-embeds";
 
 /** A rendered control retains its observed canonical item, not a painted row as an edit target. */
 export interface ChecklistControl extends PreviewRegion {
@@ -8,10 +9,27 @@ export interface ChecklistControl extends PreviewRegion {
   blockId: string;
   revision: number;
   item: ChecklistItem;
+  occurrenceId?: string;
+  sourceBlock?: Block;
 }
 
-export function checklistControlId(blockId: string, item: ChecklistItem, revision: number): string {
-  return `checklist:${blockId}:${item.identity === "unique" ? `^${item.itemId}` : `${revision}:${item.span.start}`}`;
+export function checklistControlId(blockId: string, item: ChecklistItem, revision: number, occurrenceId?: string): string {
+  return `checklist:${blockId}:${item.identity === "unique" ? `^${item.itemId}` : `${revision}:${item.span.start}`}${occurrenceId ? `:${occurrenceId}` : ""}`;
+}
+
+/** Separate visible occurrences share canonical item evidence, but retain local focus. */
+export function embeddedChecklistControls(ranges: readonly DetailEmbedRange[], lineForProjected: (line:number)=>number): ChecklistControl[] {
+  return ranges.flatMap((range, index) => {
+    const source = range.source;
+    if (!source) return [];
+    const occurrenceId = `embed-${index}`;
+    return checklistControls(source.block, line => lineForProjected(source.contentStartLine + line - source.startLine))
+      .filter(control => control.item.span.startLine >= source.startLine && control.item.span.endLine <= source.endLine)
+      .map(control => {
+        const id = checklistControlId(control.blockId, control.item, control.revision, occurrenceId);
+        return {...control, id, occurrenceId, sourceBlock:source.block, activation:{type:"checklist.open" as const,regionId:id}};
+      });
+  });
 }
 
 export function checklistControls(block: Pick<Block, "id" | "text" | "revision">,
