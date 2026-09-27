@@ -9,6 +9,27 @@ export interface MarkdownSourceToken {
   children: MarkdownSourceToken[];
 }
 
+export interface MarkdownListItem {
+  span: PreviewSourceSpan;
+  depth: number;
+  parentStart?: number;
+}
+
+/** Canonical list extents, including continuations and nested lists, in source order. */
+export function markdownListItems(source: string): MarkdownListItem[] {
+  const items: MarkdownListItem[] = [];
+  const visit = (nodes: MarkdownSourceToken[], depth: number, parentStart?: number): void => {
+    for (const node of nodes) {
+      if (node.token.type === 'list_item') {
+        items.push({span: node.span, depth, ...(parentStart === undefined ? {} : {parentStart})});
+        visit(node.children, depth + 1, node.span.start);
+      } else visit(node.children, depth, parentStart);
+    }
+  };
+  visit(markdownSourceTokens(source), 0);
+  return items;
+}
+
 /** One block-token tree for document layout and interactions, with original-source ranges. */
 export function markdownSourceTokens(source: string): MarkdownSourceToken[] {
   const starts = [0];

@@ -55,6 +55,43 @@ test("resolves missing and duplicate anchors explicitly", () => {
   });
 });
 
+test("list-item links isolate a step and retain its continuation and nested steps", () => {
+  const source = [
+    "**Run once, then restore the flag.**",
+    "1. [x] Prepare ^prepare",
+    "2. [~] Deploy ^deploy",
+    "   Keep the deployment receipt.",
+    "   - [ ] Verify service ^verify",
+    "     Include the response.",
+    "3. [ ] Restore ^restore",
+    "",
+    "Then:",
+    "- Ask about ownership ^ask",
+  ].join("\r\n");
+  expect(resolveFragmentSlice(source, "deploy")).toMatchObject({
+    status: "resolved",
+    slice: {
+      anchor: { kind: "list-item", label: "[~] Deploy" },
+      startLine: 2, endLine: 5,
+      text: "2. [~] Deploy\n   Keep the deployment receipt.\n   - [ ] Verify service\n     Include the response.",
+    },
+  });
+  expect(resolveFragmentSlice(source, "verify")).toMatchObject({
+    status: "resolved",
+    slice: { startLine: 4, endLine: 5, text: "   - [ ] Verify service\n     Include the response." },
+  });
+  expect(resolveFragmentSlice(source, "ask")).toMatchObject({
+    status: "resolved", slice: { text: "- Ask about ownership", startLine: 9, endLine: 9 },
+  });
+});
+
+test("literal example IDs do not make an authored item ambiguous", () => {
+  const source = "```markdown\n- [ ] Example ^step\n```\n\n> ```markdown\n> - [ ] Quoted example ^step\n> ```\n\n- [ ] Actual step ^step";
+  expect(resolveFragmentSlice(source, "step")).toMatchObject({
+    status: "resolved", slice: {text: "- [ ] Actual step"},
+  });
+});
+
 test("resolves deterministic heading-section and paragraph slices", () => {
   const sliced = [
     "# Document",

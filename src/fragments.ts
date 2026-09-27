@@ -1,8 +1,10 @@
+import { markdownListItems, markdownSourceTokens, type MarkdownSourceToken } from "./markdown-structure";
+
 const FRAGMENT_ID_SOURCE = String.raw`[A-Za-z0-9][A-Za-z0-9_-]{0,63}`;
 const FRAGMENT_ANCHOR_PATTERN = new RegExp(String.raw`(?:^|\s)\^(${FRAGMENT_ID_SOURCE})\s*$`);
 const HEADING_PATTERN = /^(#{1,6})\s+(.+?)\s*$/;
 
-export type FragmentKind = "heading" | "paragraph";
+export type FragmentKind = "heading" | "paragraph" | "list-item";
 
 export interface FragmentAnchor {
   id: string;
@@ -88,17 +90,31 @@ export function isFragmentId(value: string): boolean {
 export function fragmentAnchors(text: string): FragmentAnchor[] {
   const lines = text.split(/\r?\n/);
   const offsets = lineOffsets(text);
+  const items = new Map(markdownListItems(text).map(item => [item.span.startLine, item]));
+  const codeLines = new Set<number>();
+  const excludeCode = (nodes: MarkdownSourceToken[]): void => {
+    for (const node of nodes) {
+      if (node.token.type === "code") {
+        for (let line = node.span.startLine; line <= node.span.endLine; line++) codeLines.add(line);
+      } else excludeCode(node.children);
+    }
+  };
+  excludeCode(markdownSourceTokens(text));
   const anchors: FragmentAnchor[] = [];
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+    if (codeLines.has(lineIndex)) continue;
     const line = lines[lineIndex]!;
     const match = anchorMatch(line);
     if (!match) continue;
     const content = contentBeforeAnchor(line, match);
     const heading = content.match(HEADING_PATTERN);
+    const item = items.get(lineIndex);
     anchors.push({
       id: match[1]!,
-      kind: heading ? "heading" : "paragraph",
-      label: heading?.[2]?.trim() || paragraphLabel(lines, lineIndex, content),
+      kind: item ? "list-item" : heading ? "heading" : "paragraph",
+      label: item
+        ? content.slice(item.span.start - offsets[lineIndex]!).replace(/^\s*(?:[-+*]|\d+[.)])\s+/, "")
+        : heading?.[2]?.trim() || paragraphLabel(lines, lineIndex, content),
       lineIndex,
       markerStart: offsets[lineIndex]! + match.index!,
     });
@@ -124,7 +140,10 @@ export function resolveFragmentSlice(
   const anchor = resolution.anchor;
   let startLine = anchor.lineIndex;
   let endLine = anchor.lineIndex;
-  if (anchor.kind === "heading") {
+  if (anchor.kind === "list-item") {
+    const item = markdownListItems(text).find(item => item.span.startLine === anchor.lineIndex)!;
+    endLine = item.span.endLine;
+  } else if (anchor.kind === "heading") {
     const heading = contentBeforeAnchor(
       lines[anchor.lineIndex]!,
       anchorMatch(lines[anchor.lineIndex]!),

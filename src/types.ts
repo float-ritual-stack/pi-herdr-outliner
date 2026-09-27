@@ -1100,6 +1100,57 @@ export interface PropertyFilter {
   value?: string;
 }
 
+export type ChecklistStatus = "todo" | "done" | "waiting" | "problem";
+
+export interface ChecklistItem {
+  itemId?: string;
+  identity: "unassigned" | "unique" | "duplicate";
+  status: ChecklistStatus;
+  evidence: string;
+  /** Canonical UTF-16 positions; the extent includes continuation lines and nested items. */
+  span: { start: number; end: number; startLine: number; endLine: number };
+  markerStart: number;
+  depth: number;
+  parentStart?: number;
+  text: string;
+  /** Only this item's properties: descendants and the plan's metadata do not inherit. */
+  properties: PropertyRecord[];
+}
+
+export interface ChecklistQuery {
+  statuses?: ChecklistStatus[];
+  excludeStatuses?: ChecklistStatus[];
+  filters?: PropertyFilter[];
+  nested?: "include" | "top-level";
+  limit: number;
+}
+
+export interface ChecklistCollection {
+  blockId: string;
+  revision: number;
+  title: string;
+  items: ChecklistItem[];
+  completeness: BlockCollectionCompleteness;
+}
+
+export interface ChecklistUpdateInput {
+  /** Unassigned items are addressed only against an exact observed block revision. */
+  target: { itemId: string } | { start: number; expectedRevision: number };
+  expectedEvidence: string;
+  change: { kind: "status"; status: ChecklistStatus } | { kind: "ensure-id" };
+}
+
+export interface ChecklistUpdateReceipt {
+  block: Block;
+  item: ChecklistItem;
+  changed: boolean;
+}
+
+/** Explicit identity edits are authorized only with the enclosing block's expected revision. */
+export type ChecklistIdentityChange =
+  | { kind: "remove"; itemId: string }
+  | { kind: "rename"; itemId: string; to: string };
+
 export type BlockQuerySortField = "created" | "updated";
 export type BlockQuerySortDirection = "asc" | "desc";
 
@@ -1308,7 +1359,7 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 78;
+export const OUTLINER_PROTOCOL_VERSION = 79;
 
 
 export interface OutlinerServiceStatus {
@@ -1674,7 +1725,10 @@ export type OutlinerRequest =
       text: string;
       expectedRevision: number;
       mutation: MutationProvenance;
+      identityChanges?: ChecklistIdentityChange[];
     }
+  | { id: string; action: "checklist.query"; blockId: string; query: ChecklistQuery }
+  | { id: string; action: "checklist.update"; blockId: string; input: ChecklistUpdateInput; mutation: MutationProvenance }
   | { id: string; action: "move"; blockId: string; parentId: string | null; position?: number }
   | { id: string; action: "delete"; blockId: string }
   | { id: string; action: "trash.restore"; blockId: string }

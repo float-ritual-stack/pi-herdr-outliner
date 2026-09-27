@@ -1,6 +1,8 @@
 import {parseVirtualBranchConfig} from "./virtual-branches";
 import {placeOrderedItems} from "./virtual-placement";
 import {WorkingSelectionRepository} from "./working-selection";
+import { checklistItems, queryChecklistItems, updateChecklistText, validateChecklistIdentityChanges } from "./checklist-items";
+import type { ChecklistCollection, ChecklistIdentityChange, ChecklistQuery, ChecklistUpdateInput, ChecklistUpdateReceipt } from "./types";
 import type {VirtualBranchOrder, VirtualBranchPlacementInput} from "./types";
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
@@ -1394,17 +1396,44 @@ export class OutlinerStore {
     })();
   }
 
+  queryChecklist(id: string, query: ChecklistQuery): ChecklistCollection {
+    return this.database.transaction(() => {
+      const block = this.requireActive(id);
+      const rows = this.database.query(
+        "SELECT block_id, key, value, ordinal, raw, start, end, line, column, placement, scope, syntax FROM block_properties WHERE block_id = ? ORDER BY ordinal",
+      ).all(id) as PropertyRow[];
+      return {
+        blockId: id, revision: block.revision,
+        title: firstLineWithoutPropertyTokens(block.text)?.trim() || id,
+        ...queryChecklistItems(block.text, query, rows.map(propertyRecordFromRow)),
+      };
+    })();
+  }
+
+  updateChecklist(id: string, input: ChecklistUpdateInput, mutation: MutationProvenance): ChecklistUpdateReceipt {
+    normalizeMutationProvenance(mutation);
+    return this.database.transaction(() => {
+      const before = this.requireActive(id);
+      const edit = updateChecklistText(before.text, before.revision, input);
+      const changed = edit.text !== before.text;
+      const block = changed ? this.update(id, edit.text, before.revision, mutation) : before;
+      const item = checklistItems(block.text).find(candidate => candidate.itemId === edit.itemId)!;
+      return {block, item, changed};
+    })();
+  }
+
   update(
     id: string,
     text: string,
     expectedRevision: number,
     mutation: MutationProvenance = { author: "system" },
     kind: "text" | "properties" = "text",
+    identityChanges: readonly ChecklistIdentityChange[] = [],
   ): Block {
     const provenance = normalizeMutationProvenance(mutation);
     this.database.transaction(() => {
       this.requireActive(id);
-      const editedAt = this.writeBlockText(id, text, expectedRevision);
+      const editedAt = this.writeBlockText(id, text, expectedRevision, undefined, identityChanges);
       this.replaceProperties(id, parsePropertyRecords(text), provenance.author === "user");
       this.database.query(`
         INSERT INTO block_edit_activity
@@ -1429,7 +1458,14 @@ export class OutlinerStore {
     text: string,
     expectedRevision: number,
     editedAt = new Date().toISOString(),
+    identityChanges: readonly ChecklistIdentityChange[] = [],
   ): string {
+    if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) {
+      throw new Error("Block edit requires a positive integer revision");
+    }
+    const current = this.require(id);
+    if (current.revision !== expectedRevision) throw new Error(`Block changed since editing began: ${id}`);
+    validateChecklistIdentityChanges(current.text, text, identityChanges);
     this.validateRoadmapText(text);
     if (this.roadmapMembersOfBatches([id]).length) {
       const previous = this.require(id).properties;
@@ -1441,9 +1477,6 @@ export class OutlinerStore {
         oldProject[0]!.value.toLowerCase() !== newProject[0]!.value.toLowerCase()) {
         throw new Error("A batch with members must retain its type and project; reassign members first");
       }
-    }
-    if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) {
-      throw new Error("Block edit requires a positive integer revision");
     }
     const result = this.database.query(`
       UPDATE blocks SET text = ?, revision = revision + 1, updated_at = ?

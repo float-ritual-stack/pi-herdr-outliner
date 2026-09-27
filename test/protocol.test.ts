@@ -30,6 +30,8 @@ import type {
   BacklinkCollection,
   BlockEditActivityPage,
   Block,
+  ChecklistCollection,
+  ChecklistUpdateReceipt,
   GotoSearchCollection,
   SelectionContext,
   BookmarkRemoveReceipt,
@@ -70,6 +72,47 @@ import type {
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) await cleanup();
+});
+
+test("checklist RPC publishes canonical content changes and returns item evidence", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-outliner-checklist-protocol-"));
+  const store = new OutlinerStore(join(directory, "outliner.sqlite"));
+  const socket = join(directory, "outliner.sock");
+  const server = new OutlinerServer(store, socket);
+  await server.start();
+  const client = new OutlinerClient(socket);
+  const connected = Promise.withResolvers<void>();
+  const received = Promise.withResolvers<OutlinerEvent>();
+  const watcher = client.watch({
+    client: {clientId: "checklist-reader", role: "detail", contextId: "checklist-reader"},
+    onConnect: connected.resolve,
+    onEvent: event => {if (event.action === "checklist.update") received.resolve(event);},
+  });
+  cleanups.push(async () => {
+    await watcher.stop(); await server.close(); store.close();
+    rmSync(directory, {recursive: true, force: true});
+  });
+  await connected.promise;
+  const block = await client.request<Block>({action: "create", text: "# Plan\n\n- [ ] Review ^review"});
+  const observed = await client.request<ChecklistCollection>({action: "checklist.query", blockId: block.id, query: {limit: 10}});
+  const updated = await client.request<ChecklistUpdateReceipt>({
+    action: "checklist.update", blockId: block.id,
+    input: {target: {itemId: "review"}, expectedEvidence: observed.items[0]!.evidence, change: {kind: "status", status: "waiting"}},
+    mutation: {author: "agent", actorId: "checklist-client"},
+  });
+  expect(updated.item).toMatchObject({itemId: "review", status: "waiting"});
+  expect(await received.promise).toMatchObject({domain: "content", blockId: block.id});
+  const reopened = await new OutlinerClient(socket).request<ChecklistCollection>({action: "checklist.query", blockId: block.id, query: {limit: 10}});
+  expect(reopened.revision).toBe(updated.block.revision);
+  expect(reopened.items[0]!.evidence).toBe(updated.item.evidence);
+  const stripped = updated.block.text.replace(" ^review", "");
+  await expect(client.request({action: "update", blockId: block.id, text: stripped,
+    expectedRevision: updated.block.revision, mutation: {author: "agent", actorId: "checklist-client"}}))
+    .rejects.toThrow("List-item IDs would be removed");
+  const intentional = await client.request<Block>({action: "update", blockId: block.id, text: stripped,
+    expectedRevision: updated.block.revision, mutation: {author: "agent", actorId: "checklist-client"},
+    identityChanges: [{kind: "remove", itemId: "review"}]});
+  expect(intentional.text).toBe(stripped);
 });
 
 test("Goto searches canonical content and registered aliases without mutating navigation", async () => {

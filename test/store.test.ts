@@ -30,6 +30,122 @@ function makeStore(): OutlinerStore {
   stores.push({ store, directory });
   return store;
 }
+
+test("checklist queries correlate each mark and its own indexed properties without creating IDs", () => {
+  const store = makeStore();
+  const source = [
+    "# Release plan [owner::morgan]",
+    "",
+    "[x] done · [~] waiting · [!] problem · [ ] to do",
+    "",
+    "1. [x] Build, next: deploy [owner::alex] ^build",
+    "2. [~] Deploy [owner::sam] ^deploy",
+    "   - [!] Observe [owner::alex] ^observe",
+    "   - Plain child [owner::morgan]",
+    "3. [ ] Verify [owner::alex]",
+    "   Keep the receipt [channel::test].",
+    "4. Unmarked next step [owner::alex]",
+    "",
+    "```markdown",
+    "- [ ] Example, not work [owner::alex]",
+    "```",
+  ].join("\n");
+  const block = store.create(source);
+  const sequence = store.sequence;
+  const all = store.queryChecklist(block.id, {limit: 20});
+  expect(all).toMatchObject({blockId: block.id, revision: block.revision, completeness: {kind: "complete"}});
+  expect(all.items.map(item => [item.status, item.depth, item.identity])).toEqual([
+    ["done", 0, "unique"], ["waiting", 0, "unique"], ["problem", 1, "unique"], ["todo", 0, "unassigned"],
+  ]);
+  expect(store.queryChecklist(block.id, {limit: 20, filters: [{key: "status", value: "waiting"}, {key: "owner", value: "alex"}]}).items).toEqual([]);
+  expect(store.queryChecklist(block.id, {limit: 20, statuses: ["waiting"], filters: [{key: "owner", value: "morgan"}]}).items).toEqual([]);
+  expect(store.queryChecklist(block.id, {limit: 20, excludeStatuses: ["done"], nested: "top-level"}).items.map(item => item.status)).toEqual(["waiting", "todo"]);
+  expect(store.queryChecklist(block.id, {limit: 20, filters: [{key: "channel"}]}).items.map(item => item.status)).toEqual(["todo"]);
+  expect(store.queryChecklist(block.id, {limit: 1}).completeness).toEqual({kind: "truncated", limit: 1});
+  expect(store.require(block.id).text).toBe(source);
+  expect(store.sequence).toBe(sequence);
+});
+
+test("checklist changes preserve surrounding bytes, assign identity explicitly and tolerate unrelated edits", () => {
+  const store = makeStore();
+  const mutation = {author: "agent" as const, actorId: "checklist-test"};
+  const source = "# Plan\r\n\r\n1. [ ] Prepare  \r\n   Keep this detail.\r\n2. [~] Deploy ^deploy\r\n";
+  const block = store.create(source);
+  const observed = store.queryChecklist(block.id, {limit: 10});
+  const assigned = store.updateChecklist(block.id, {
+    target: {start: observed.items[0]!.span.start, expectedRevision: block.revision},
+    expectedEvidence: observed.items[0]!.evidence, change: {kind: "ensure-id"},
+  }, mutation);
+  const itemId = assigned.item.itemId!;
+  expect(assigned.block.text).toBe(source.replace("Prepare  \r\n", `Prepare ^${itemId}  \r\n`));
+  expect(assigned.item.status).toBe("todo");
+  const repeat = store.updateChecklist(block.id, {
+    target: {itemId}, expectedEvidence: assigned.item.evidence, change: {kind: "ensure-id"},
+  }, mutation);
+  expect(repeat.changed).toBe(false);
+  expect(repeat.block.revision).toBe(assigned.block.revision);
+  store.update(block.id, assigned.block.text.replace("# Plan", "# Revised plan"), assigned.block.revision, {author: "user"});
+  const changed = store.updateChecklist(block.id, {
+    target: {itemId}, expectedEvidence: assigned.item.evidence, change: {kind: "status", status: "problem"},
+  }, mutation);
+  expect(changed.block.text).toBe(assigned.block.text.replace("# Plan", "# Revised plan").replace("1. [ ]", "1. [!]"));
+  expect(changed.item).toMatchObject({itemId, status: "problem", identity: "unique"});
+  expect(store.recentEditActivity({author: "agent", limit: 10}).entries).toMatchObject([
+    {block: {id: block.id}, author: "agent", actorId: "checklist-test", kind: "text"},
+  ]);
+  expect(() => store.updateChecklist(block.id, {
+    target: {itemId}, expectedEvidence: assigned.item.evidence, change: {kind: "status", status: "done"},
+  }, mutation)).toThrow("Checklist item changed");
+  expect(() => store.updateChecklist(block.id, {
+    target: {start: observed.items[0]!.span.start, expectedRevision: block.revision},
+    expectedEvidence: observed.items[0]!.evidence, change: {kind: "status", status: "done"},
+  }, mutation)).toThrow("Checklist location changed");
+});
+
+test("checklist mutations reject missing or ambiguous identity and stale target wording", () => {
+  const store = makeStore();
+  const mutation = {author: "user" as const};
+  const block = store.create("- [ ] First ^step\n- [ ] Second ^step");
+  const observed = store.queryChecklist(block.id, {limit: 10});
+  expect(observed.items.map(item => item.identity)).toEqual(["duplicate", "duplicate"]);
+  expect(() => store.updateChecklist(block.id, {
+    target: {itemId: "step"}, expectedEvidence: observed.items[0]!.evidence,
+    change: {kind: "status", status: "done"},
+  }, mutation)).toThrow("Duplicate checklist item ID");
+  expect(() => store.updateChecklist(block.id, {
+    target: {itemId: "missing"}, expectedEvidence: observed.items[0]!.evidence,
+    change: {kind: "ensure-id"},
+  }, mutation)).toThrow("Checklist item is missing");
+  const unique = store.create("- [ ] First ^first\n- [ ] Second ^second");
+  const item = store.queryChecklist(unique.id, {limit: 10}).items[0]!;
+  const edited = store.update(unique.id, unique.text.replace("First", "Reworded first"), unique.revision);
+  expect(() => store.updateChecklist(unique.id, {
+    target: {itemId: "first"}, expectedEvidence: item.evidence, change: {kind: "status", status: "done"},
+  }, mutation)).toThrow("Checklist item changed");
+  expect(store.require(unique.id).text).toBe(edited.text);
+});
+
+test("whole-note writes preserve list addresses unless an exact-revision identity change is declared", () => {
+  const store = makeStore();
+  const agent = {author: "agent" as const, actorId: "formatter"};
+  const block = store.create("# Plan\n\n1. [ ] First ^first\n2. [ ] Second ^second");
+  expect(() => store.update(block.id, block.text.replace(" ^first", ""), block.revision, agent))
+    .toThrow("List-item IDs would be removed: ^first");
+  expect(store.require(block.id)).toEqual(block);
+  const reworded = store.update(block.id, "# Plan\n\n1. [ ] Reworded second ^second\n2. [ ] Reworded first ^first", block.revision, agent);
+  expect(() => store.update(block.id, reworded.text + "\n- [ ] Copied ^first", reworded.revision, agent))
+    .toThrow("Duplicate list-item IDs");
+  const removed = reworded.text.replace("\n2. [ ] Reworded first ^first", "");
+  expect(() => store.update(block.id, removed, block.revision, agent, "text", [{kind: "remove", itemId: "first"}]))
+    .toThrow("Block changed");
+  const deliberate = store.update(block.id, removed, reworded.revision, agent, "text", [{kind: "remove", itemId: "first"}]);
+  expect(deliberate.text).toBe(removed);
+  const renamed = store.update(block.id, removed.replace("^second", "^new-second"), deliberate.revision, agent, "text",
+    [{kind: "rename", itemId: "second", to: "new-second"}]);
+  expect(store.queryChecklist(block.id, {limit: 10}).items.map(item => item.itemId)).toEqual(["new-second"]);
+  expect(() => store.update(block.id, renamed.text, renamed.revision, agent, "text", [{kind: "remove", itemId: "new-second"}]))
+    .toThrow("still present");
+});
 function insertIndexedProperty(
   store: OutlinerStore,
   blockId: string,

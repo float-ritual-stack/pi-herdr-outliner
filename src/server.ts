@@ -2009,12 +2009,20 @@ export class OutlinerServer {
           this.requireCaptureOwner(request.ownerClientId);
           result = this.store.clearQuickCaptureDraft(request.expectedRevision);
           break;
+        case "checklist.query":
+          result = this.store.queryChecklist(request.blockId, request.query);
+          break;
+        case "checklist.update":
+          result = this.store.updateChecklist(request.blockId, request.input, request.mutation);
+          break;
         case "update":
           result = this.store.update(
             request.blockId,
             request.text,
             request.expectedRevision,
             request.mutation,
+            "text",
+            request.identityChanges,
           );
           break;
         case "move":
@@ -2375,6 +2383,11 @@ export class OutlinerServer {
         break;
       case "attention.get":
         return null;
+      case "checklist.update":
+        if (response.sequence === previousSequence) return null;
+        domain = "content";
+        blockId = request.blockId;
+        break;
       case "update":
       case "move":
       case "delete":

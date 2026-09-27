@@ -1144,13 +1144,19 @@ Exact references accept `((block-id))`, `((block-id|label))`, `((block-id^fragme
 
 Detail preview removes the authored `((…))` and `[[…]]` delimiters from valid links and applies one semantic link treatment to only the resolved title or label. Missing titled block targets render as an unlinked `label · Missing target`; invalid syntax stays raw. Keyboard follow, click navigation, edit mode, storage, and export continue to use the canonical authored target.
 
-Stable fragments are inline anchors attached to a heading or paragraph terminus:
+Stable fragments are inline anchors attached to a heading, paragraph terminus or list-item header:
 `## Description ^description`. Read mode hides the marker. Exact links use
 `((block-id^description))`; completion can resolve a heading name to its stable
 ID, and Detail navigation/history retain the fragment target. A heading fragment
 spans through the next equal-or-shallower heading; a paragraph fragment spans
 from its preceding blank line or heading through the anchored terminus. Missing
-and duplicate anchors remain explicit.
+and duplicate anchors remain explicit. A list-item fragment includes its
+continuation lines and nested items, never the preceding siblings or introduction.
+IDs inside fenced or indented code examples do not declare addresses.
+
+The checklist service operations and identity-preserving write contract are
+documented in [Checklist items](docs/CHECKLIST_ITEMS.md). Reader controls and
+item projections are still under development on the PIE-367 branch.
 
 Detail read mode projects `!((block-id))` without changing authored text.
 Ordinary targets render their full canonical Markdown once.
