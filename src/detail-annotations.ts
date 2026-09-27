@@ -1,3 +1,4 @@
+import { checklistItems } from "./checklist-items";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { outlinerActionLink } from "./outliner-actions";
 import { annotationSourceHash, annotationReferenceContextsEqual, extractAnnotationBody } from "./annotations";
@@ -78,6 +79,10 @@ function displayedResourceRepresentationId(state: Readonly<AnnotationReaderState
 }
 
 export function annotationScopeLabel(thread: AnnotationThread, state: Pick<AnnotationReaderState, "target">): string {
+  if (thread.originalTarget.listItemId) {
+    if (thread.resolvedTarget?.anchor.kind === "list-item") return "Item attachment · original passage changed";
+    return thread.resolvedTarget ? "Checklist passage" : "Checklist item · unresolved";
+  }
   const original = thread.originalTarget.referenceContext;
   if (!original) return thread.originalTarget.representation.subject.kind === "resource" ? "Resource-wide" : "Block comment";
   const context = thread.resolvedTarget?.referenceContext ?? original;
@@ -159,6 +164,33 @@ export function detailAnnotationGroups(
       target = null;
     } else if (selected && currentContext) {
       target = { representation: currentContext.representation, anchor: currentContext.anchor };
+    }
+    if (target?.anchor.kind === "list-item" && selected && !displayedResourceTargetId) {
+      const snapshot = target.representation.sourceSnapshot;
+      const matches = checklistItems(selected.text).filter(item => item.itemId === target!.listItemId);
+      if (snapshot.kind !== "block" || snapshot.blockId !== selected.id || snapshot.contentHash !== blockContentHash ||
+        target.representation.contentHash !== blockContentHash || matches.length !== 1 || matches[0]!.identity !== "unique") {
+        unpositioned.push(thread);
+        continue;
+      }
+      const item = matches[0]!;
+      const startLine = renderedLineForAuthoredLine(item.span.startLine);
+      displayedOffsets.set(thread.block.id, item.span.start);
+      const key = `source:${startLine}`;
+      const existing = groups.get(key);
+      if (existing) {
+        existing.endLine = Math.max(existing.endLine, renderedLineForAuthoredLine(item.span.endLine));
+        existing.sourceSpan!.start = Math.min(existing.sourceSpan!.start, item.span.start);
+        existing.sourceSpan!.end = Math.max(existing.sourceSpan!.end, item.span.end);
+        existing.sourceSpan!.startLine = Math.min(existing.sourceSpan!.startLine, item.span.startLine);
+        existing.sourceSpan!.endLine = Math.max(existing.sourceSpan!.endLine, item.span.endLine);
+        existing.threads.push(thread);
+      } else groups.set(key, {
+        regionId: `annotation:${selected.id}:${item.span.startLine}`, placement: "inline",
+        startLine, endLine: renderedLineForAuthoredLine(item.span.endLine),
+        sourceLineCount: renderedSourceLineCount, sourceSpan: {...item.span}, threads: [thread],
+      });
+      continue;
     }
     if (
       !target ||
@@ -316,6 +348,8 @@ export function annotationTargetText(target: AnnotationTarget): string {
   switch (anchor.kind) {
     case "whole-subject":
       return "Whole note";
+    case "list-item":
+      return `Checklist item ^${anchor.itemId}`;
     case "text-quote":
     case "dom-range":
       return anchor.exact;

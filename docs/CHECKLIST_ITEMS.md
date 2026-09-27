@@ -3,8 +3,9 @@
 PIE-367 keeps a plan in one Markdown note while making its steps individually
 addressable. This document describes the service foundation on the feature
 branch, including agent tools and the editor's intentional-ID-removal flow.
-Reader controls are implemented in Pi and ANSI Detail and local Preview;
-item projections and item-attached comments remain in progress. The feature has not been delivered.
+Reader controls and item-attached comments are implemented in Pi and ANSI Detail
+and local Preview. Item projections remain in progress. The feature has not been
+delivered.
 
 ## Canonical content
 
@@ -153,3 +154,31 @@ links, with keyboard focus revealing off-screen controls. Pointer coordinates
 come from the rendered frame. Fragment navigation maps canonical lines to
 rendered rows, including wrapped content. Its full comment evidence remains in the existing
 scrollable comments section. Mouse reporting is suspended around external editors.
+
+
+## Comments on steps (feature branch)
+
+Focus a checkbox and press `c` to comment on that step. A passage selection
+still takes precedence. Opening or cancelling the composer does not change the
+note; saving a canonical passage comment establishes the innermost containing
+checklist item's identity. Multiple comments saved together assign each needed
+ID once, in the same transaction as the comments. Failed creation rolls back
+both comments and addresses; request retries reuse the original receipt.
+
+The immutable original target retains its quote and representation. Its
+`listItemId` records the owning step. Reconciliation searches only that step:
+unchanged words retain exact passage placement; rewording produces a
+`list-item` resolved anchor and the visible label **Item attachment · original
+passage changed**, alongside the old quote. Restoring the old wording can
+restore exact passage placement. Another step containing the same words cannot
+take ownership. Missing IDs remain orphaned; duplicate IDs remain ambiguous.
+Revealing the source of a reworded comment opens the addressed step without
+pretending its original quote is still selected. Cancelling a comment preserves
+the focused checkbox, so another comment attempt still targets that step.
+
+This uses the existing annotation targets, resolution history and block history,
+not a separate comment store. Explicit human resolution preserves the owning
+item. Historical Inbox sources, rendered-only captures, ordinary prose and
+whole-note comments do not acquire task addresses. Detail and Preview reload
+canonical text after comment-created IDs so their next reconciliation uses the
+saved version. Saved before-images remain unchanged.

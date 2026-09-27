@@ -644,7 +644,9 @@ function draw(): void {
     const view = viewport(reader);
     const inspector = reader.state.propertyInspector;
     const bodyRegions = inspector.expanded || inspector.presentation === "dedicated" ? [] : view.preview?.regions ?? [];
-    reader.setPreviewRegions([...detailPropertyInspectorRegions(reader.state), ...bodyRegions], view);
+    if (!reader.isBufferMode()) {
+      reader.setPreviewRegions([...detailPropertyInspectorRegions(reader.state), ...bodyRegions], view);
+    }
     return renderDetailLines(reader.state, view, {
       header: {density: viewPreferences.density, titleInFrame: reader === controller && paneDisplay.inFrame, destinationLabel: destinationDisplay.text, surface: label === "Current" && geometry.arrangement === "switch" ? `Current · Preview ready (${actionKeymap.primaryBinding("detail.reading.focus")})` : label, focused: readingSurface.active === reader},
       helpPrefix: readingSurface.previewVisible ? `${actionKeymap.primaryBinding("detail.reading.focus")} Current/Preview · Alt+Enter Keep · Esc close Preview` : "",

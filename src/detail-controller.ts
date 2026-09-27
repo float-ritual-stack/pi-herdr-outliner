@@ -1,6 +1,6 @@
 import {blockAnnotationRepresentation, resourceAnnotationRepresentation} from "./annotation-representations";
 import {removedListItemIds} from "./checklist-items";
-import {checklistControlId, findChecklistControl, type ChecklistControl} from "./checklist-controls";
+import {checklistControlId, checklistCommentRange, findChecklistControl, type ChecklistControl} from "./checklist-controls";
 import {ChecklistSession, type ChecklistChoice} from "./checklist-session";
 import type {ChecklistUpdateInput, ChecklistUpdateReceipt} from "./types";
 import type {ChecklistIdentityChange} from "./types";
@@ -2939,7 +2939,7 @@ export function createDetailController(
         const draft = state.annotationDraft;
         const body = state.buffer.text.trim();
         if (!body) throw new Error("Annotation body cannot be empty");
-        await effects.createAnnotation({
+        const receipt = await effects.createAnnotation({
           requestId: draft.requestId,
           input: {
             target: draft.target,
@@ -2950,7 +2950,10 @@ export function createDetailController(
         state.mode = draft.returnMode;
         state.annotationDraft = undefined;
         state.selectionAnchor = null;
-        await loadAnnotations();
+        // Saving this comment may have assigned an item ID. Reconcile against the
+        // resulting source, never the pre-save reader snapshot.
+        if (receipt.annotations.some(record => record.originalTarget.listItemId)) await loadCurrentTarget(true);
+        else await loadAnnotations();
         const anchor = draft.target.anchor;
         const range = anchor.kind === "text-quote" &&
             anchor.start !== null &&
@@ -3092,7 +3095,11 @@ export function createDetailController(
         if (property?.target?.kind === "resource-reference" && state.mode === "preview") {
           await beginComment({ start: property.start, end: property.end });
         } else if (!intent.capture) {
-          await beginComment();
+          const control = findChecklistControl(state.previewRegions.regions, state.previewRegions.focusedRegionId ?? "");
+          const selected = state.context.selected;
+          if (control && (control.blockId !== selected?.id || control.revision !== selected.revision)) {
+            state.status = "The checklist changed; focus the current step before commenting";
+          } else await beginComment(control ? checklistCommentRange(control) : undefined);
         } else {
           await beginDirectComment(intent.capture);
         }
@@ -3927,6 +3934,13 @@ export function createDetailController(
         }
         annotation = await effects.getAnnotation(annotationId);
         target = annotation.resolvedTarget;
+        if (annotation.currentResolution.status === "resolved" && target?.anchor.kind === "list-item" &&
+          target.representation.subject.kind === "block") {
+          await loadBlock(target.representation.subject.blockId, true, false, target.anchor.itemId);
+          state.mode = "preview";
+          state.status = "Opened checklist step · original passage changed";
+          break;
+        }
         if (
           annotation.currentResolution.status !== "resolved" ||
           !target ||

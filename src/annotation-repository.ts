@@ -1,3 +1,5 @@
+import { blockAnnotationRepresentation } from "./annotation-representations";
+import { checklistItems, updateChecklistText } from "./checklist-items";
 import {readCaptureBefore} from "./capture-history";
 import { Database } from "bun:sqlite";
 import { isAbsolute, resolve } from "node:path";
@@ -244,6 +246,7 @@ function boundedSlice(value: string, maximum: number): { readonly text: string; 
 function targetPassage(target: AnnotationTarget): string {
   const anchor = target.anchor;
   if (anchor.kind === "whole-subject") return "Whole note";
+  if (anchor.kind === "list-item") return `Checklist item ^${anchor.itemId}`;
   if (anchor.kind === "text-quote" || anchor.kind === "dom-range") return anchor.exact;
   if (anchor.kind === "pdf-page-region") return anchor.exact ?? `PDF page ${anchor.page}`;
   if (anchor.kind === "structured-entity-field") return `${anchor.entityType}/${anchor.entityId}/${anchor.fieldPath.join(".")}`;
@@ -392,6 +395,9 @@ export class AnnotationRepository {
           },
         };
       });
+      const creates = prepared.filter(operation => operation.type === "create");
+      const attached = this.attachChecklistItems(creates.map(operation => operation.input), author, provenance);
+      for (let index = 0; index < creates.length; index++) creates[index]!.input = attached[index]!;
       const records = prepared.map((operation) => {
         if (operation.type === "create") return this.createFromCurrentWrite(operation.input, author, provenance);
         return this.replyFromCurrentWrite(operation.input, author, provenance);
@@ -510,6 +516,8 @@ export class AnnotationRepository {
     } else if (target.referenceContext) {
       throw new Error("Approval cannot change a global annotation into a contextual annotation");
     }
+    if (original.listItemId !== target.listItemId) throw new Error("Approval must preserve checklist item identity");
+    if (original.listItemId) this.validateCapture(target);
     this.requireSubject(target.representation.subject);
     return this.database.transaction(() => {
       const current = this.currentEvent(annotationId);
@@ -990,6 +998,49 @@ export class AnnotationRepository {
     return this.materialize(parseAnnotationBlockContent(updated), this.targetRow(annotationId));
   }
 
+  /** Assign IDs once per note, inside the same transaction as comment creation. */
+  private attachChecklistItems(inputs: AnnotationCreateInput[], author: BlockAuthor, provenance?: BlockProvenance): AnnotationCreateInput[] {
+    const result = [...inputs];
+    const groups = new Map<string, number[]>();
+    inputs.forEach((input, index) => {
+      const {representation, anchor, referenceContext} = input.target;
+      if (referenceContext || representation.subject.kind !== "block" || representation.sourceSnapshot.kind !== "block" ||
+        representation.sourceSnapshot.inboxAttemptId || anchor.kind !== "text-quote" || anchor.start === null) return;
+      const blockId = representation.subject.blockId;
+      groups.set(blockId, [...(groups.get(blockId) ?? []), index]);
+    });
+    for (const [blockId, indexes] of groups) {
+      const block = this.blocks.requireActive(blockId);
+      const items = checklistItems(block.text);
+      const selected = indexes.flatMap(index => {
+        const anchor = inputs[index]!.target.anchor;
+        if (anchor.kind !== "text-quote" || anchor.start === null || anchor.end === null) return [];
+        const item = items.filter(item => item.span.start <= anchor.start! && item.span.end >= anchor.end! &&
+          (!inputs[index]!.target.listItemId || item.itemId === inputs[index]!.target.listItemId))
+          .sort((left, right) => right.depth - left.depth)[0];
+        if (!item) return [];
+        if (item.identity === "duplicate") throw new Error(`Duplicate checklist item ID: ${item.itemId}`);
+        return [{index, item}];
+      });
+      let content = block.text;
+      const ids = new Map<number, string>();
+      // Insert from the bottom so earlier source coordinates remain meaningful.
+      for (const start of [...new Set(selected.map(entry => entry.item.span.start))].sort((a, b) => b - a)) {
+        const item = checklistItems(content).find(item => item.span.start === start)!;
+        const updated = updateChecklistText(content, block.revision, {
+          target: {start, expectedRevision: block.revision}, expectedEvidence: item.evidence, change: {kind: "ensure-id"},
+        });
+        content = updated.text;
+        ids.set(start, updated.itemId);
+      }
+      if (content !== block.text) this.blocks.update(blockId, content, block.revision, {author, ...provenance});
+      for (const {index, item} of selected) {
+        result[index] = {...inputs[index]!, target: {...inputs[index]!.target, listItemId: ids.get(item.span.start)!}};
+      }
+    }
+    return result;
+  }
+
   private createFromCurrentWrite(
     input: AnnotationCreateInput,
     author: BlockAuthor,
@@ -999,12 +1050,16 @@ export class AnnotationRepository {
     const parentId = subject.kind === "block" ? subject.blockId : this.ensureSystemRoot();
     const block = this.blocks.create(formatAnnotationBlock(input), parentId, author, provenance);
     this.insertTarget(block.id, input.target, block.createdAt);
+    const current = subject.kind === "block" && input.target.listItemId ? this.blocks.requireActive(subject.blockId) : null;
+    const representation = current ? blockAnnotationRepresentation(current) : input.target.representation;
+    const resolution = current ? reanchorAnnotationTarget(input.target, representation, current.text) : null;
+    if (resolution && !resolution.resolvedTarget) throw new Error("Checklist comment lost its item during creation");
     this.appendEvent({
       annotationId: block.id,
       sourceRepresentation: input.target.representation,
-      targetRepresentation: input.target.representation,
-      resolvedTarget: input.target,
-      method: { ...TEXT_CODEC, method: "capture" },
+      targetRepresentation: representation,
+      resolvedTarget: resolution?.resolvedTarget ?? input.target,
+      method: resolution?.method ?? { ...TEXT_CODEC, method: "capture" },
       reviewer: { kind: "system", id: "annotation-repository" },
       confidence: 1,
       candidates: [],
@@ -1049,7 +1104,9 @@ export class AnnotationRepository {
       representation.sourceSnapshot.kind !== "rendered"
     ) return false;
     const result = reanchorAnnotationTarget(
-      record.resolvedTarget ?? record.originalTarget,
+      record.originalTarget.listItemId
+        ? ([...record.resolutionHistory].reverse().find(event => event.appliesCurrent && event.method.kind === "human")?.resolvedTarget ?? record.originalTarget)
+        : record.resolvedTarget ?? record.originalTarget,
       representation,
       content,
       pdfPages,
@@ -1190,6 +1247,15 @@ export class AnnotationRepository {
       content !== null &&
       annotationSourceHash(content) !== representation.contentHash
     ) throw new Error("Annotation representation content hash does not match captured content");
+    if (target.listItemId) {
+      const matches = content === null ? [] : checklistItems(content).filter(item => item.itemId === target.listItemId);
+      if (matches.length !== 1 || matches[0]!.identity !== "unique") throw new Error("Checklist annotation item is missing or ambiguous");
+      const item = matches[0]!;
+      if (target.anchor.kind === "text-quote" && (target.anchor.start === null || target.anchor.end === null ||
+        target.anchor.start < item.span.start || target.anchor.end > item.span.end)) {
+        throw new Error("Checklist annotation quote is outside its item");
+      }
+    }
     if (
       (target.anchor.kind !== "text-quote" &&
         target.anchor.kind !== "pdf-page-region") ||

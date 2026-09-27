@@ -1136,6 +1136,34 @@ describe("Pi Markdown detail preview", () => {
     }
   });
 
+  test("item attachment places the comment at its step without claiming the old quote matches", () => {
+    const old = "# Plan\n\n- [ ] Old wording ^task";
+    const current = "# Plan\n\n- [x] Entirely new wording ^task\n- [ ] Neighbor";
+    const original = {...textTarget(old, old.indexOf("Old wording"), old.indexOf(" ^task")), listItemId: "task"};
+    const resolved: AnnotationTarget = {representation: textTarget(current, 0, 1).representation,
+      anchor: {kind: "list-item", itemId: "task"}, listItemId: "task"};
+    const detail = state(current, current);
+    const thread = {...annotationThread("item-comment", resolved, "Keep the original context."), originalTarget: original};
+    const exact = {...textTarget(current, current.indexOf("Entirely"), current.indexOf(" ^task")), listItemId: "task"};
+    detail.annotationThreads = [thread, annotationThread("current-passage", exact, "Comment on the current words.")];
+    const layout = previewLayout(detail);
+    for (const width of [36, 72]) {
+      const collapsed = layout.render(width).map(stripTerminalSequences).join("\n");
+      expect(collapsed).not.toContain("Unpositioned comments");
+      const region = detail.previewRegions.regions.find(region => region.kind === "annotation")!;
+      expect(detail.previewRegions.regions.filter(region => region.kind === "annotation")).toHaveLength(1);
+      expect(region.sourceSpan?.startLine).toBe(2);
+      togglePreviewRegionDisclosure(detail.previewRegions, region.id);
+      const expanded = layout.render(width).map(stripTerminalSequences).join("\n");
+      expect(expanded).toContain("Item attachment");
+      expect(expanded).toContain("Old wording");
+      expect(expanded).toContain("Keep the original context.");
+      expect(expanded).toContain("Comment on the current words.");
+      expect(annotationScopeLabel(thread, detail)).toContain("original passage changed");
+      togglePreviewRegionDisclosure(detail.previewRegions, region.id);
+    }
+  });
+
   test("keeps a stale source representation unpositioned even when its quote still exists", () => {
     const original = "Title\n\nTarget quote\n\nOriginal ending";
     const current = original.replace("Original ending", "Different ending");

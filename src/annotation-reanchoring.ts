@@ -1,3 +1,4 @@
+import { checklistItems } from "./checklist-items";
 import { createPdfPageRegionAnchor, createTextQuoteAnchor } from "./annotations";
 import type {
   AnnotationAnchor,
@@ -434,6 +435,10 @@ function fuzzyCandidates(
   return { candidates: distinct, exhaustive: search.exhaustive };
 }
 
+function sameBlock(left: AnnotationRepresentation, right: AnnotationRepresentation): boolean {
+  return left.subject.kind === "block" && right.subject.kind === "block" && left.subject.blockId === right.subject.blockId;
+}
+
 export function reanchorAnnotationTarget(
   target: AnnotationTarget,
   representation: AnnotationRepresentation,
@@ -441,6 +446,32 @@ export function reanchorAnnotationTarget(
   pdfPages: readonly PdfPageText[] = [],
 ): AnnotationReanchorResult {
   const anchor = target.anchor;
+  if (target.listItemId) {
+    const itemMethod = (name: string): AnnotationResolutionMethod => ({kind: "codec", codecId: "list-item", codecVersion: 1, method: name});
+    if (content === null || representation.subject.kind !== "block" ||
+      representation.sourceSnapshot.kind !== "block" ||
+      !sameBlock(target.representation, representation)) {
+      return unresolved(itemMethod("content-unavailable"), [], "unresolved");
+    }
+    const matches = checklistItems(content).filter(item => item.itemId === target.listItemId);
+    if (!matches.length) return unresolved(itemMethod("missing-item"), [], "orphaned");
+    if (matches.length !== 1 || matches[0]!.identity !== "unique") {
+      return unresolved(itemMethod("duplicate-item"), [], "ambiguous");
+    }
+    const item = matches[0]!;
+    if (anchor.kind === "text-quote") {
+      const body = content.slice(item.span.start, item.span.end);
+      const offset = body.indexOf(anchor.exact);
+      if (offset >= 0 && body.indexOf(anchor.exact, offset + 1) < 0) {
+        const start = item.span.start + offset;
+        return resolved(candidate({...textTarget(representation, content, start, start + anchor.exact.length),
+          listItemId: target.listItemId}, itemMethod("item-exact-quote"), 1));
+      }
+    }
+    // Ownership is known, but the original words are not a current passage.
+    return resolved(candidate({representation, listItemId: target.listItemId,
+      anchor: {kind: "list-item", itemId: target.listItemId}}, itemMethod("item-attachment"), 1));
+  }
   if (anchor.kind === "whole-subject") {
     return resolved(candidate(
       { representation, anchor },

@@ -332,7 +332,8 @@ export function buildDetailAnsiPreview(
       }
     }
     sourceLines = rendered.lines;
-    rich = {rendered: true, regions, regionRows: rows, regionColumns: columns, sourceLineRow: rendered.sourceLineRow};
+    rich = {rendered: true, regions, regionRows: rows, regionColumns: columns,
+      sourceLineRow: line => withInternalLinks(() => rendered.sourceLineRow(line))};
   }
   const annotationLines: string[] = [];
   const threadRows = new Map<string, number>();
@@ -353,7 +354,7 @@ export function buildDetailAnsiPreview(
         append(`C reply · D ${thread.lifecycle === "open" ? "resolve" : "reopen"}`);
         append(annotationScopeLabel(thread, state));
         append(`${group.placement} · ${thread.currentResolution.status}`);
-        if (group.placement === "unpositioned") {
+        if (group.placement === "unpositioned" || thread.resolvedTarget?.anchor.kind === "list-item") {
           append("Original quote:");
           append(annotationTargetText(thread.originalTarget), "│ ");
         }

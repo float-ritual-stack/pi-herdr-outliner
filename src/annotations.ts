@@ -308,6 +308,7 @@ export function normalizeAnnotationAnchor(value: unknown): AnnotationAnchor {
   if (!value || typeof value !== "object") throw new Error("Annotation anchor must be an object");
   const anchor = value as Record<string, unknown>;
   if (anchor.kind === "whole-subject") return { kind: "whole-subject" };
+  if (anchor.kind === "list-item") return {kind: "list-item", itemId: identity(anchor.itemId, "Checklist item ID")};
   if (anchor.kind === "text-quote") {
     const start = anchor.start === null ? null : integer(anchor.start, "Annotation start");
     const end = anchor.end === null ? null : integer(anchor.end, "Annotation end");
@@ -404,9 +405,22 @@ export function normalizeAnnotationAnchor(value: unknown): AnnotationAnchor {
 export function normalizeAnnotationTarget(value: unknown, allowLegacy = false): AnnotationTarget {
   if (!value || typeof value !== "object") throw new Error("Annotation target must be an object");
   const target = value as Record<string, unknown>;
+  const representation = normalizeAnnotationRepresentation(target.representation, allowLegacy);
+  const anchor = normalizeAnnotationAnchor(target.anchor);
+  const listItemId = target.listItemId === undefined
+    ? (anchor.kind === "list-item" ? anchor.itemId : undefined)
+    : identity(target.listItemId, "Checklist item ID");
+  if (listItemId !== undefined && (
+    !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(listItemId) ||
+    representation.subject.kind !== "block" || representation.sourceSnapshot.kind !== "block" ||
+    representation.sourceSnapshot.inboxAttemptId !== undefined || target.referenceContext !== undefined ||
+    (anchor.kind !== "text-quote" && anchor.kind !== "list-item") ||
+    (anchor.kind === "text-quote" && anchor.start === null) ||
+    (anchor.kind === "list-item" && anchor.itemId !== listItemId)
+  )) throw new Error("Checklist attachment requires one canonical block item and source evidence");
   return {
-    representation: normalizeAnnotationRepresentation(target.representation, allowLegacy),
-    anchor: normalizeAnnotationAnchor(target.anchor),
+    representation, anchor,
+    ...(listItemId === undefined ? {} : {listItemId}),
     ...(target.referenceContext === undefined ? {} : {
       referenceContext: normalizeAnnotationReferenceContext(target.referenceContext),
     }),
@@ -589,6 +603,7 @@ export function parseStoredResolutionEvent(json: string): AnnotationResolutionEv
 
 function quoteForHeading(target: AnnotationTarget): string {
   if (target.anchor.kind === "whole-subject") return "Whole note";
+  if (target.anchor.kind === "list-item") return `Checklist item ^${target.anchor.itemId}`;
   if (target.anchor.kind === "text-quote") return target.anchor.exact;
   if (target.anchor.kind === "dom-range") return target.anchor.exact;
   if (target.anchor.kind === "pdf-page-region") return target.anchor.exact ?? `page ${target.anchor.page}`;

@@ -45,3 +45,16 @@ export function renderChecklistControls(source: string, controls: readonly Check
   }
   return lines.join("");
 }
+
+/** Quote the focused step's authored header, excluding its mark and hidden address. */
+export function checklistCommentRange(control: ChecklistControl): {start: number; end: number} {
+  const item = control.item;
+  const header = item.text.split(/\r?\n/, 1)[0]!;
+  const markEnd = item.markerStart - item.span.start + 3;
+  let end = header.trimEnd().length;
+  if (item.itemId && header.slice(0, end).endsWith(`^${item.itemId}`)) end -= item.itemId.length + 1;
+  const body = header.slice(markEnd, end).trim();
+  if (!body) return {start: item.markerStart, end: item.markerStart + 3};
+  const start = header.indexOf(body, markEnd);
+  return {start: item.span.start + start, end: item.span.start + start + body.length};
+}

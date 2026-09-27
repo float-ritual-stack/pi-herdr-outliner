@@ -1,6 +1,6 @@
-import {checklistControlId,findChecklistControl,type ChecklistControl} from "./checklist-controls";
+import {checklistControlId,checklistCommentRange,findChecklistControl,type ChecklistControl} from "./checklist-controls";
 import {CHECKLIST_CHOICES,ChecklistSession,type ChecklistChoice} from "./checklist-session";
-import {annotationSourceHash} from './annotations';
+import {annotationSourceHash,createTextQuoteAnchor} from './annotations';
 import {DEFAULT_OUTLINER_ACTION_KEYMAP,displayActionChord,type OutlinerActionKeymap} from './outliner-actions';
 import {blockAnnotationRepresentation,resourceAnnotationRepresentation} from './annotation-representations';
 import {TextBuffer} from './text-buffer';
@@ -205,6 +205,15 @@ export class DocumentPreview {
         projection:projected&&resolved?'mixed':projected?'generated':resolved?'resolved':'canonical',
       }},anchor:capture.sourceAnchor??{kind:'text-quote',start:null,end:null,exact:capture.quote,prefix:'',suffix:''}};
     }
+    if(!annotationId&&!capture&&target){
+      const active=parsePreviewRegionActionUri(this.value.activeLink??'');
+      const control=active?.type==='checklist.open'?findChecklistControl(this.value.document.previewRegions?.regions??[],active.regionId):undefined;
+      const source=this.value.document.sourceBlock;
+      if(control&&source&&control.blockId===source.id&&control.revision===source.revision){
+        const range=checklistCommentRange(control);
+        target={...target,anchor:createTextQuoteAnchor(source.text,range.start,range.end)};
+      }
+    }
     if(annotationId&&!this.value.document.annotations?.annotationThreads.some(thread=>thread.block.id===annotationId))return;
     if(!annotationId&&!target){this.value={...this.value,notice:'No captured source available to comment on'};this.changed();return;}
     this.selectionInput?.clearSelection();
@@ -225,10 +234,13 @@ export class DocumentPreview {
         :{action:'annotations.create',requestId:draft.requestId,author:'user',input:{target:draft.target!,body:draft.buffer.text,source:'user'}});
       this.value={...this.value!,comment:undefined,notice:'Comment saved'};
       // Keep the displayed document and position: a refresh must not silently replace a before-image.
-      try { await this.refreshComments(value.document); }
+      try {
+        if(value.document.sourceBlock && receipt.annotations.some(record=>record.originalTarget.listItemId)) await this.load(value.target,true);
+        else await this.refreshComments(value.document);
+      }
       catch(error){ if(this.value?.document===value.document)this.value={...this.value,notice:`Comment saved; refresh failed: ${error instanceof Error?error.message:String(error)}`}; }
       const annotationId=draft.annotationId??receipt.annotations[0]?.block.id;
-      if(annotationId&&value.document.annotations)value.document.annotations.selectedAnnotationId=annotationId;
+      if(annotationId&&this.value?.document.annotations)this.value.document.annotations.selectedAnnotationId=annotationId;
     } catch(error){this.value={...this.value!,notice:error instanceof Error?error.message:String(error)};}
     finally {draft.saving=false;this.changed();}
   }
@@ -460,9 +472,14 @@ export class DocumentPreview {
         ...(target.kind==='resource'&&target.referenceContext?{referenceContext:target.referenceContext}:{})};
       let notice:string|undefined;
       try {
-        const annotationThreads=await this.client.request<AnnotationThread[]>({action:'annotations.list',query:{
+        let annotationThreads=await this.client.request<AnnotationThread[]>({action:'annotations.list',query:{
           subject:target.kind==='block'?{kind:'block',blockId:target.blockId}:{kind:'resource',resourceId:target.resourceId},includeResolved:true,
         }});
+        if(document.sourceBlock && selected && representation && annotationThreads.some(thread=>thread.originalTarget.listItemId)) {
+          annotationThreads=(await this.client.request<{threads:AnnotationThread[]}>({action:'annotations.reconcile',input:{
+            subject:{kind:'block',blockId:selected.id},newRepresentation:representation,content:selected.text,
+          }})).threads;
+        }
         document.annotations={target,context:{selected:document.sourceBlock?selected:null},selectedAnnotationId:undefined,annotationThreads,
           document:resourceDescription?{kind:'ready',document:{kind:'resource',description:resourceDescription}}:{kind:'empty'}};
       } catch(error) { notice=`Comments unavailable: ${error instanceof Error?error.message:String(error)}`; }

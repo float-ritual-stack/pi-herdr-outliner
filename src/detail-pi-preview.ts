@@ -819,7 +819,7 @@ function annotationPanelLines(
     "",
     ...thread.body.split(/\r?\n/).map(escapeGeneratedMarkdown),
   ];
-  if (placement === "unpositioned") {
+  if (placement === "unpositioned" || thread.resolvedTarget?.anchor.kind === "list-item") {
     const anchor = thread.originalTarget.anchor;
     if ("exact" in anchor && anchor.exact) {
       body.splice(3, 0, ...anchor.exact.split(/\r?\n/).map((line) => `> ${escapeGeneratedMarkdown(line)}`), "");

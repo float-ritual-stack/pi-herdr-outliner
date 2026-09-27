@@ -2867,6 +2867,71 @@ Second paragraph`;
     expect(store.sequence).toBe(sequence);
   });
 
+  test("checklist comments follow item identity without replacing captured passage evidence", () => {
+    const store = makeStore();
+    const source = store.create("# Plan\n\n1. [ ] Prepare package\n2. [ ] Ship package ^ship");
+    const start = source.text.indexOf("Prepare package");
+    const original = blockAnnotationTarget(source, start, start + "Prepare package".length, "checklist-original");
+    const input = {target: original, body: "Keep this step safe.", source: "user" as const};
+    const created = store.createAnnotation("checklist-comment", input).annotations[0]!;
+    const saved = store.require(source.id);
+    const itemId = store.queryChecklist(source.id, {limit: 10}).items[0]!.itemId;
+    expect(itemId).toBeString();
+    expect(saved.revision).toBe(source.revision + 1);
+    expect(created.originalTarget).toEqual({...original, listItemId: itemId});
+    expect(created.resolvedTarget).toMatchObject({listItemId: itemId, anchor: {kind: "text-quote", exact: "Prepare package"}});
+    expect(store.createAnnotation("checklist-comment", input).deduplicated).toBe(true);
+    expect(store.require(source.id).revision).toBe(saved.revision);
+    const reconcile = (block: Block) => store.reconcileAnnotationThreads({
+      subject: {kind: "block", blockId: source.id},
+      newRepresentation: blockAnnotationRepresentation(block, `checklist-${block.revision}`),
+    }).threads[0]!;
+    let current = store.update(source.id, saved.text.replace("Ship package", "Ship after review"), saved.revision);
+    expect(reconcile(current).resolvedTarget?.anchor).toMatchObject({kind: "text-quote", exact: "Prepare package"});
+    current = store.update(source.id, current.text.replace("1. [ ]", "1. [x]"), current.revision);
+    expect(reconcile(current).resolvedTarget?.anchor).toMatchObject({kind: "text-quote", exact: "Prepare package"});
+    current = store.update(source.id, `# Plan\n\n1. [ ] Prepare package ^ship\n7. [x] Assemble release ^${itemId}`, current.revision);
+    const reworded = reconcile(current);
+    expect(reworded.currentResolution.status).toBe("resolved");
+    expect(reworded.resolvedTarget?.anchor).toEqual({kind: "list-item", itemId: itemId!});
+    expect(reworded.originalTarget).toEqual(created.originalTarget);
+    expect(reworded.resolutionHistory[0]).toEqual(created.resolutionHistory[0]!);
+    // A matching quote in another step must never steal this comment.
+    current = store.update(source.id, current.text.replace("Assemble release", "Prepare package"), current.revision);
+    expect(reconcile(current).resolvedTarget?.anchor).toMatchObject({kind: "text-quote", start: current.text.lastIndexOf("Prepare package")});
+    current = store.update(source.id, "# Plan\n\n1. [ ] Prepare package ^ship", current.revision, undefined, "text", [{kind: "remove", itemId: itemId!}]);
+    const missing = reconcile(current);
+    expect(missing.currentResolution.status).toBe("orphaned");
+    expect(missing.resolvedTarget).toBeNull();
+    expect(missing.originalTarget).toEqual(created.originalTarget);
+  });
+
+  test("batch checklist comments assign each innermost item once and roll back with the batch", () => {
+    const store = makeStore();
+    const source = store.create("- [ ] Parent\n  - [ ] Child\n- [ ] Last");
+    const operations = ["Child", "Parent", "Last", "Child"].map((quote, index) => ({
+      operationId: String(index), type: "create" as const,
+      input: {target: blockAnnotationTarget(source, source.text.indexOf(quote), source.text.indexOf(quote) + quote.length, "batch-checklist"),
+        body: "Review this.", source: "user" as const},
+    }));
+    const sequence = store.sequence;
+    store.database.exec("CREATE TRIGGER reject_comment BEFORE INSERT ON blocks WHEN NEW.text LIKE 'Comment on%' BEGIN SELECT RAISE(ABORT, 'comment rejected'); END;");
+    expect(() => store.createAnnotationBatch("batch-checklist", operations)).toThrow("comment rejected");
+    expect(store.require(source.id)).toEqual(source);
+    expect(store.sequence).toBe(sequence);
+    store.database.exec("DROP TRIGGER reject_comment");
+    const result = store.createAnnotationBatch("batch-checklist", operations);
+    const items = store.queryChecklist(source.id, {limit: 10}).items;
+    expect(items.every(item => item.identity === "unique")).toBe(true);
+    expect(store.require(source.id).revision).toBe(source.revision + 1);
+    expect(result.annotations.map(record => record.originalTarget.listItemId)).toEqual([
+      items[1]!.itemId, items[0]!.itemId, items[2]!.itemId, items[1]!.itemId,
+    ]);
+    for (const record of result.annotations) expect(record.resolvedTarget?.anchor.kind).toBe("text-quote");
+    expect(store.createAnnotationBatch("batch-checklist", operations).deduplicated).toBe(true);
+    expect(store.require(source.id).revision).toBe(source.revision + 1);
+  });
+
   test("keeps annotation originals immutable while resolutions advance", () => {
     const store = makeStore();
     const source = store.create("alpha βeta gamma");

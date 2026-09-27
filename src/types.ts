@@ -371,6 +371,7 @@ export interface AnnotationRepresentation {
 
 export type AnnotationAnchor =
   | { readonly kind: "whole-subject" }
+  | { readonly kind: "list-item"; readonly itemId: string }
   | {
       readonly kind: "text-quote";
       readonly start: number | null;
@@ -429,6 +430,8 @@ export interface AnnotationReferenceContext {
 }
 
 export interface AnnotationTarget {
+  /** Stable checklist ownership, independent of the immutable captured quote. */
+  readonly listItemId?: string;
   readonly representation: AnnotationRepresentation;
   readonly anchor: AnnotationAnchor;
   readonly referenceContext?: AnnotationReferenceContext;
