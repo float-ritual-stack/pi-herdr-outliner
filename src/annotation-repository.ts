@@ -6,6 +6,7 @@ import { Database } from "bun:sqlite";
 import { isAbsolute, resolve } from "node:path";
 import {
   annotationSourceHash,
+  createTextQuoteAnchor,
   createAnnotationReferenceContext,
   formatAnnotationBlock,
   normalizeAnnotationCreateInput,
@@ -408,9 +409,12 @@ export class AnnotationRepository {
       });
       const creates = prepared.filter(operation => operation.type === "create");
       const attached = this.attachChecklistItems(creates.map(operation => operation.input), author, provenance);
-      for (let index = 0; index < creates.length; index++) creates[index]!.input = attached[index]!;
+      let createIndex = 0;
       const records = prepared.map((operation) => {
-        if (operation.type === "create") return this.createFromCurrentWrite(operation.input, author, provenance);
+        if (operation.type === "create") {
+          const capture = attached[createIndex++]!;
+          return this.createFromCurrentWrite(capture.input, author, provenance, capture.currentTarget);
+        }
         return this.replyFromCurrentWrite(operation.input, author, provenance);
       });
       this.database.query(
@@ -1010,8 +1014,8 @@ export class AnnotationRepository {
   }
 
   /** Assign IDs once per note, inside the same transaction as comment creation. */
-  private attachChecklistItems(inputs: AnnotationCreateInput[], author: BlockAuthor, provenance?: BlockProvenance): AnnotationCreateInput[] {
-    const result = [...inputs];
+  private attachChecklistItems(inputs: AnnotationCreateInput[], author: BlockAuthor, provenance?: BlockProvenance): {input: AnnotationCreateInput; currentTarget?: AnnotationTarget}[] {
+    const result: {input: AnnotationCreateInput; currentTarget?: AnnotationTarget}[] = inputs.map(input => ({input}));
     const groups = new Map<string, number[]>();
     inputs.forEach((input, index) => {
       const {representation, anchor, referenceContext} = input.target;
@@ -1033,6 +1037,13 @@ export class AnnotationRepository {
         if (item.identity === "duplicate") throw new Error(`Duplicate checklist item ID: ${item.itemId}`);
         return [{index, item}];
       });
+      // These are validated current-source captures. Replay only the ID insertions
+      // performed in this transaction; keep original targets as immutable evidence.
+      const ranges = new Map(selected.map(({index}) => {
+        const anchor = inputs[index]!.target.anchor;
+        if (anchor.kind !== "text-quote" || anchor.start === null || anchor.end === null) throw new Error("Missing capture range");
+        return [index, {start: anchor.start, end: anchor.end, exact: anchor.exact}];
+      }));
       let content = block.text;
       const ids = new Map<number, string>();
       // Insert from the bottom so earlier source coordinates remain meaningful.
@@ -1041,12 +1052,27 @@ export class AnnotationRepository {
         const updated = updateChecklistText(content, block.revision, {
           target: {start, expectedRevision: block.revision}, expectedEvidence: item.evidence, change: {kind: "ensure-id"},
         });
+        if (updated.text !== content) {
+          let insertion = 0;
+          while (content[insertion] === updated.text[insertion] && insertion < content.length) insertion++;
+          const delta = updated.text.length - content.length;
+          for (const range of ranges.values()) {
+            if (range.start >= insertion) range.start += delta;
+            if (range.end > insertion) range.end += delta;
+          }
+        }
         content = updated.text;
         ids.set(start, updated.itemId);
       }
       if (content !== block.text) this.blocks.update(blockId, content, block.revision, {author, ...provenance});
       for (const {index, item} of selected) {
-        result[index] = {...inputs[index]!, target: {...inputs[index]!.target, listItemId: ids.get(item.span.start)!}};
+        const listItemId = ids.get(item.span.start)!;
+        const input = {...inputs[index]!, target: {...inputs[index]!.target, listItemId}};
+        const range = ranges.get(index)!;
+        result[index] = {input, ...(content.slice(range.start, range.end) === range.exact ? {
+          currentTarget: {...input.target, representation: blockAnnotationRepresentation(this.blocks.requireActive(blockId)),
+            anchor: createTextQuoteAnchor(content, range.start, range.end)},
+        } : {})};
       }
     }
     return result;
@@ -1056,6 +1082,7 @@ export class AnnotationRepository {
     input: AnnotationCreateInput,
     author: BlockAuthor,
     provenance?: BlockProvenance,
+    currentTarget?: AnnotationTarget,
   ): AnnotationRecord {
     const subject = input.target.representation.subject;
     const parentId = subject.kind === "block" ? subject.blockId : this.ensureSystemRoot();
@@ -1063,13 +1090,13 @@ export class AnnotationRepository {
     this.insertTarget(block.id, input.target, block.createdAt);
     const current = subject.kind === "block" && input.target.listItemId ? this.blocks.requireActive(subject.blockId) : null;
     const representation = current ? blockAnnotationRepresentation(current) : input.target.representation;
-    const resolution = current ? reanchorAnnotationTarget(input.target, representation, current.text) : null;
+    const resolution = current && !currentTarget ? reanchorAnnotationTarget(input.target, representation, current.text) : null;
     if (resolution && !resolution.resolvedTarget) throw new Error("Checklist comment lost its item during creation");
     this.appendEvent({
       annotationId: block.id,
       sourceRepresentation: input.target.representation,
       targetRepresentation: representation,
-      resolvedTarget: resolution?.resolvedTarget ?? input.target,
+      resolvedTarget: currentTarget ?? resolution?.resolvedTarget ?? input.target,
       method: resolution?.method ?? { ...TEXT_CODEC, method: "capture" },
       reviewer: { kind: "system", id: "annotation-repository" },
       confidence: 1,
@@ -1114,9 +1141,15 @@ export class AnnotationRepository {
       sourceRepresentation.sourceSnapshot.kind === "rendered" &&
       representation.sourceSnapshot.kind !== "rendered"
     ) return false;
+    // Initial capture may have replayed ID insertions. It still quotes the original
+    // words, but its context belongs to the committed source rather than pre-ID text.
+    const captured = record.resolutionHistory[0]?.resolvedTarget;
+    const originalEvidence = captured?.anchor.kind === "text-quote" && record.originalTarget.anchor.kind === "text-quote" &&
+      captured.anchor.exact === record.originalTarget.anchor.exact && captured.listItemId === record.originalTarget.listItemId
+      ? captured : record.originalTarget;
     const result = reanchorAnnotationTarget(
       record.originalTarget.listItemId
-        ? ([...record.resolutionHistory].reverse().find(event => event.appliesCurrent && event.method.kind === "human")?.resolvedTarget ?? record.originalTarget)
+        ? ([...record.resolutionHistory].reverse().find(event => event.appliesCurrent && event.method.kind === "human")?.resolvedTarget ?? originalEvidence)
         : record.resolvedTarget ?? record.originalTarget,
       representation,
       content,

@@ -81,3 +81,30 @@ test("block-comment convenience remains atomic with other annotation operations"
   ]})).rejects.toThrow("revision is stale");
   expect(await c.request<WorkspaceSnapshot>({action:"workspace.snapshot"})).toEqual(before);
 }));
+
+// These failures crossed quote admission and checklist attachment; service proof
+// owns the regression rather than repeating it in every adapter.
+test("disambiguated checklist passages survive ID assignment and later movement",()=>fixture(async c=>{
+  for(const identified of [false,true]) {
+    const block=await c.request<Block>({action:"create",text:"- [ ] Earlier\n- [ ] Repeat then Repeat"+(identified?" ^task":"")});
+    const start=block.text.lastIndexOf("Repeat");
+    const result=await c.request<AnnotationBatchReceipt>({action:"annotations.batch",requestId:crypto.randomUUID(),operations:[
+      {operationId:"earlier",type:"block-comment",input:{blockId:block.id,expectedRevision:block.revision,body:"Earlier comment",source:"user",passage:{quote:"Earlier"}}},
+      {operationId:"repeat",type:"block-comment",input:{blockId:block.id,expectedRevision:block.revision,body:"Second occurrence",source:"user",passage:{quote:"Repeat",start}}},
+    ]});
+    const record=result.annotations[1]!, current=await c.request<Block>({action:"get",blockId:block.id});
+    expect(record.originalTarget.anchor).toMatchObject({kind:"text-quote",start,exact:"Repeat"});
+    expect(record.resolvedTarget?.anchor).toMatchObject({kind:"text-quote",start:current.text.lastIndexOf("Repeat"),exact:"Repeat"});
+    const changed=await c.request<Block>({action:"update",blockId:block.id,expectedRevision:current.revision,text:"# Changed heading\n\n"+current.text,mutation:{author:"user"}});
+    await c.request({action:"annotations.reconcile",input:{subject:{kind:"block",blockId:block.id},newRepresentation:blockAnnotationRepresentation(changed),content:changed.text}});
+    const moved=await c.request<AnnotationRecord>({action:"annotations.get",annotationId:record.block.id});
+    expect(moved.resolvedTarget?.anchor).toMatchObject({kind:"text-quote",start:changed.text.lastIndexOf("Repeat"),exact:"Repeat"});
+  }
+}));
+
+test("explicit parent checklist scope rejects child passages without writing",()=>fixture(async c=>{
+  const nested=await c.request<Block>({action:"create",text:"- [ ] Parent ^parent\n  - [ ] Child quote ^child"});
+  const before=await c.request<WorkspaceSnapshot>({action:"workspace.snapshot"});
+  await expect(createBlockComment(c,{requestId:"wrong-owner",input:{blockId:nested.id,expectedRevision:nested.revision,body:"Wrong parent",source:"user",passage:{quote:"Child quote",itemId:"parent"}}})).rejects.toThrow("not found");
+  expect(await c.request<WorkspaceSnapshot>({action:"workspace.snapshot"})).toEqual(before);
+}));

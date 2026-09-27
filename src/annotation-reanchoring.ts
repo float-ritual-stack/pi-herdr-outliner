@@ -468,8 +468,16 @@ export function reanchorAnnotationTarget(
         start = content.indexOf(anchor.exact, start + 1)) {
         if (!descendants.some(child => start < child.span.end && start + anchor.exact.length > child.span.start)) offsets.push(start);
       }
-      if (offsets.length === 1) {
-        const start = offsets[0]!;
+      // An unchanged snapshot retains the admitted occurrence, even when its words repeat.
+      // After an edit, require unique exact context rather than trusting stale offsets.
+      const unchanged = target.representation.contentHash !== null &&
+        target.representation.contentHash === representation.contentHash;
+      const contextual = offsets.filter(start =>
+        (anchor.prefix.length > 0 || anchor.suffix.length > 0) &&
+        content.endsWith(anchor.prefix, start) && content.startsWith(anchor.suffix, start + anchor.exact.length));
+      const captured = unchanged && anchor.start !== null && offsets.includes(anchor.start) ? anchor.start : null;
+      if (captured !== null || offsets.length === 1 || contextual.length === 1) {
+        const start = captured ?? (contextual.length === 1 ? contextual[0]! : offsets[0]!);
         return resolved(candidate({...textTarget(representation, content, start, start + anchor.exact.length),
           listItemId: target.listItemId}, itemMethod("item-exact-quote"), 1));
       }

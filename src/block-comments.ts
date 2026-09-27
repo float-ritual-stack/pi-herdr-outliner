@@ -1,6 +1,7 @@
 import type { OutlinerClient } from "./client";
 import { blockAnnotationRepresentation } from "./annotation-representations";
 import { createTextQuoteAnchor } from "./annotations";
+import { markdownListItems } from "./markdown-structure";
 import { checklistItems } from "./checklist-items";
 import type { AnnotationBatchReceipt, AnnotationTarget, Block, BlockAuthor, BlockCommentInput,
   BlockCommentPassage, BlockProvenance } from "./types";
@@ -26,15 +27,18 @@ export function blockCommentSelection(text: string, passage?: BlockCommentPassag
     if (passage[key] !== undefined && typeof passage[key] !== "string") throw new Error(`Comment ${key} must be text`);
   }
   let lower = 0, upper = text.length;
+  let descendants: ReturnType<typeof markdownListItems> = [];
   if (passage.itemId !== undefined) {
     const items = checklistItems(text).filter(item => item.itemId === passage.itemId);
     if (items.length !== 1 || items[0]!.identity !== "unique") throw new Error("Comment checklist item is missing or ambiguous");
     lower = items[0]!.span.start; upper = items[0]!.span.end;
+    descendants = markdownListItems(text).filter(child => child.parentStart === lower);
   }
   const matches: number[] = [];
   for (let start = text.indexOf(passage.quote, lower); start >= 0 && start + passage.quote.length <= upper;
     start = text.indexOf(passage.quote, start + 1)) {
     const end = start + passage.quote.length;
+    if (descendants.some(child => start < child.span.end && end > child.span.start)) continue;
     if (passage.start !== undefined && start !== passage.start) continue;
     if (passage.prefix !== undefined && !text.slice(0, start).endsWith(passage.prefix)) continue;
     if (passage.suffix !== undefined && !text.slice(end).startsWith(passage.suffix)) continue;
