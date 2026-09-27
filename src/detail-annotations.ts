@@ -167,7 +167,8 @@ export function detailAnnotationGroups(
     }
     if (target?.anchor.kind === "list-item" && selected && !displayedResourceTargetId) {
       const snapshot = target.representation.sourceSnapshot;
-      const matches = checklistItems(selected.text).filter(item => item.itemId === target!.listItemId);
+      const itemId = target.anchor.itemId;
+      const matches = checklistItems(selected.text).filter(item => item.itemId === itemId);
       if (snapshot.kind !== "block" || snapshot.blockId !== selected.id || snapshot.contentHash !== blockContentHash ||
         target.representation.contentHash !== blockContentHash || matches.length !== 1 || matches[0]!.identity !== "unique") {
         unpositioned.push(thread);
