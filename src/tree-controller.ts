@@ -2749,6 +2749,9 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         await openRecovery.handleKeypress(str,key);return;
       }else openRecovery.dismiss();
     }
+    if(inputAction!=='suppress' && mode==='inbox' && inbox.hasCommentDraft){
+      await inbox.input(str,key);return;
+    }
     if(inputAction!=='suppress')navigationGeneration++;
     if(resolveAction && inputAction !== "suppress" && mode !== "browse" && mode !== "action-menu" && (key.meta || key.ctrl)) {
       const browseAction=actionKeymap.canonicalize("tree","browse",str,key);

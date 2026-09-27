@@ -475,6 +475,35 @@ describe("createTreeController", () => {
     expect(controller.view().refreshPending).toBe(false);
   });
 
+  test("Inbox Preview composer owns input before host shortcuts and follows the clicked reader", async () => {
+    const source=block("comment-source"), output=block("comment-output");
+    const fake=harness(input=>{
+      if(input.action==='tree.index')return snapshot([source,output],source);
+      if(input.action==='inbox.status')return {enabled:true,paused:true,state:'paused',pending:0,resultsTruncated:false,
+        attentionCount:1,attentionOnly:input.attentionOnly===true,resultsOffset:0,results:[{
+          id:'comment-result',sourceId:source.id,sourceTitle:'Original capture',summary:'Filed',state:'held',
+          outputIds:[output.id],createdAt:'2026-01-01T00:00:00.000Z',
+        }]};
+    });
+    const controller=createTreeController(fake.effects);
+    await controller.initialize();
+    await controller.handleKeypress('I',{name:'i',shift:true},'pass');
+    await setImmediate();
+    const inbox=controller.view().inbox!;
+    inbox.focusReader(true,'source');
+    await inbox.previewAction('preview.comment',inbox.outputReader);
+    expect(inbox.reader).toBe(inbox.outputReader);
+    expect(inbox.sourceReader.state?.focused).toBe(false);
+    const writing='FEEDBACK ON SAVED SOURCE / ? p r s a';
+    for(const char of writing)await controller.handleKeypress(char,{name:char.toLowerCase(),shift:char!==char.toLowerCase()},'pass');
+    expect(inbox.outputReader.state!.comment!.buffer.text).toBe(writing);
+    expect(inbox.previewMode).toBe('content');
+    expect(controller.view().mode).toBe('inbox');
+    await controller.handleKeypress('',{name:'escape'},'pass');
+    expect(inbox.hasCommentDraft).toBe(false);
+    expect(controller.view().mode).toBe('inbox');
+  });
+
   test("edits the exact on-demand body with the revision from that read, not the compact preview", async () => {
     const original = block("exact-edit", { revision: 4 });
     const { text: _text, displayText: _displayText, ...metadata } = original;

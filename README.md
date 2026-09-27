@@ -1565,6 +1565,15 @@ Annotation tools use the same ordinary comment and reply blocks as Detail and th
 
 `outliner_annotate` accepts a representation plus one of `whole-subject`, `text-quote`, `dom-range`, `pdf-page-region`, `structured-entity-field`, or `provider-comment-id`; it does not treat a file path as identity or use a web-specific creation path. `whole-subject` deliberately comments on the note or Resource without a passage; its captured representation remains evidence, and it is displayed separately from lost passage anchors.
 
+Inbox Before previews comment on the saved source from that processing attempt,
+not the latest text. Their block snapshot includes `inboxAttemptId`; the service
+checks its block identity, timestamp and content hash against retained recovery
+bytes. Missing historical evidence does not fall back to current text. The
+comment still belongs to the canonical note, so it appears in ordinary readers
+as well. Historical captures without timestamp evidence remain readable but
+cannot create a comment from that preview.
+
+
 For an occurrence-scoped comment, pass `target.referenceContext` with the containing block representation, exact authored-reference anchor, and original `sourceText`; omit it for a subject-wide comment. File-passage comments retain the Resource representation and passage anchor alongside that context.
 
 Create and batch calls are idempotent, replies inherit the root target and history, and lifecycle changes can link promoted canonical blocks. The immutable original target is returned beside the current resolution and complete append-only history. Text and PDF quote anchors use deterministic unchanged, exact, contextual, and bounded local-fuzzy reconciliation; PDF results are mapped back to current page regions. Probable, unresolved, ambiguous, orphaned, unsupported, and rejected records remain preserved history rather than being coerced into a location.

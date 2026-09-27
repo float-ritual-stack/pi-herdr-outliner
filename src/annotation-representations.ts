@@ -2,7 +2,7 @@ import {annotationSourceHash} from "./annotations";
 import type {AnnotationRepresentation, Block} from "./types";
 import type {ResourceDescription} from "./resources";
 
-export function blockAnnotationRepresentation(block: Block): AnnotationRepresentation {
+export function blockAnnotationRepresentation(block: Pick<Block, "id" | "text" | "updatedAt">, inboxAttemptId?:string): AnnotationRepresentation {
   const contentHash = annotationSourceHash(block.text);
   return {
     id: `block:${block.id}:${contentHash}`,
@@ -10,6 +10,7 @@ export function blockAnnotationRepresentation(block: Block): AnnotationRepresent
     sourceSnapshot: {
       kind: "block",
       blockId: block.id,
+      ...(inboxAttemptId?{inboxAttemptId}:{}),
       updatedAt: block.updatedAt,
       contentHash,
     },

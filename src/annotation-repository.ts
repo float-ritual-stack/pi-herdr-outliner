@@ -1,3 +1,4 @@
+import {readCaptureBefore} from "./capture-history";
 import { Database } from "bun:sqlite";
 import { isAbsolute, resolve } from "node:path";
 import {
@@ -1168,7 +1169,12 @@ export class AnnotationRepository {
     this.validateReferenceContext(target);
     const representation = target.representation;
     if (representation.sourceSnapshot.kind === "block") {
-      const block = this.blocks.requireActive(representation.sourceSnapshot.blockId);
+      const snapshot=representation.sourceSnapshot;
+      const current=this.blocks.requireActive(snapshot.blockId);
+      const block=snapshot.inboxAttemptId ? readCaptureBefore(this.database,snapshot.inboxAttemptId,snapshot.blockId) : current;
+      if(!block || (snapshot.inboxAttemptId && block.updatedAt!==snapshot.updatedAt)) {
+        throw new Error("Annotation saved Inbox source is unavailable or mismatched");
+      }
       // Historical timestamps are observation metadata. Exact source bytes own
       // passage identity; moving the block cannot invalidate an annotation.
       if (annotationSourceHash(block.text) !== representation.sourceSnapshot.contentHash) {
@@ -1257,7 +1263,14 @@ export class AnnotationRepository {
     const subject = representation.subject;
     if (subject.kind === "block") {
       if (representation.sourceSnapshot.kind === "rendered") return null;
-      return this.blocks.requireActive(subject.blockId).text;
+      const current=this.blocks.requireActive(subject.blockId);
+      const snapshot=representation.sourceSnapshot;
+      if(snapshot.kind==='block' && snapshot.inboxAttemptId){
+        const before=readCaptureBefore(this.database,snapshot.inboxAttemptId,subject.blockId);
+        if(!before)throw new Error("Annotation saved Inbox source is unavailable");
+        return before.text;
+      }
+      return current.text;
     }
     if (subject.kind === "legacy-file") return null;
     const snapshot = representation.sourceSnapshot;

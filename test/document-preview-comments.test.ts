@@ -8,6 +8,7 @@ import {annotationSourceHash, createTextQuoteAnchor} from '../src/annotations';
 import {DocumentPreview} from '../src/document-preview';
 import {documentPreviewLines, documentPreviewLinks} from '../src/document-preview-renderer';
 import {OutlinerStore} from '../src/store';
+import {InboxRepository} from '../src/inbox-repository';
 import type {RequestInput} from '../src/client';
 import type {AnnotationRepresentation} from '../src/types';
 
@@ -16,7 +17,7 @@ test('local Preview reveals canonical passage and general threads without openin
   const directory = mkdtempSync(join(tmpdir(), 'preview-comments-'));
   const store = new OutlinerStore(join(directory, 'outline.sqlite'));
   try {
-    const block = store.create('Review\n\nA passage to discuss.\n\n## Next\nKeep reading.');
+    const block = store.capture('source','Review\n\nA passage to discuss.\n\n## Next\nKeep reading.','cli').block;
     const contentHash = annotationSourceHash(block.text);
     const representation: AnnotationRepresentation = {
       id: `block:${block.id}:${contentHash}`, subject: {kind:'block', blockId:block.id},
@@ -76,5 +77,45 @@ test('local Preview reveals canonical passage and general threads without openin
     expect(reader.state!.canBack).toBe(false);
     expect(store.get(block.id)!.text).toBe(block.text);
     expect(store.listAnnotationThreads({subject:representation.subject as {kind:'block';blockId:string}})).toHaveLength(3);
+
+    // Inbox before-images must keep their captured identity after the live note changes.
+    const inbox=new InboxRepository(store);
+    const attempt=inbox.apply('processed',block,{summary:'Filed note',source:{disposition:'file',text:'New current text'},notes:[],tasks:[],updates:[]});
+    const currentText=store.get(block.id)!.text;
+    const historicalRepresentation={...representation,sourceSnapshot:{...representation.sourceSnapshot,inboxAttemptId:attempt.id}};
+    await reader.loadText({kind:'block',blockId:block.id}, 'Before assistance', async () => ({
+      id:block.id, text:block.text, revision:block.revision, updatedAt:block.updatedAt, inboxAttemptId:attempt.id,
+    }));
+    expect(reader.state!.document.canonicalText).toBe(block.text);
+    await reader.key({name:'c'},64,12,noDetail);
+    expect(reader.state!.comment?.target?.representation.sourceSnapshot).toEqual(historicalRepresentation.sourceSnapshot);
+    let unwantedLoads=0;
+    expect(await reader.loadText({kind:'block',blockId:block.id},'Another attempt',async()=>{unwantedLoads++;return 'wrong';})).toBe(false);
+    expect(unwantedLoads).toBe(0);
+    reader.paste('Feedback on the saved original');
+    await reader.key({name:'s',ctrl:true},64,12,noDetail);
+    expect(reader.state!.comment).toBeUndefined();
+    const historical = store.listAnnotationThreads({subject:{kind:'block',blockId:block.id}})
+      .find(thread=>thread.body==='Feedback on the saved original')!;
+    expect(historical.originalTarget.representation).toEqual(historicalRepresentation);
+    expect(reader.state!.document.canonicalText).toBe(block.text);
+    expect(store.get(block.id)!.text).toBe(currentText);
+    for(const [inboxAttemptId,updatedAt,contentHash] of [
+      ['missing',block.updatedAt,representation.contentHash],
+      [attempt.id,'2000-01-01T00:00:00.000Z',representation.contentHash],
+      [attempt.id,block.updatedAt,annotationSourceHash('Not the original')],
+    ]) {
+      expect(()=>store.createAnnotation(crypto.randomUUID(),{body:'Invalid evidence',source:'user',target:{
+        representation:{...historicalRepresentation,sourceSnapshot:{kind:'block',blockId:block.id,inboxAttemptId:inboxAttemptId!,updatedAt:updatedAt!,contentHash:contentHash!}},
+        anchor:{kind:'whole-subject'},
+      }})).toThrow();
+    }
+    expect(()=>store.createAnnotation('stale-live',{body:'Must not bypass live checks',source:'user',target:{representation,anchor:{kind:'whole-subject'}}})).toThrow('snapshot is stale');
+    await reader.loadText({kind:'block',blockId:block.id},'Legacy before',async()=>({id:block.id,text:block.text,revision:block.revision}));
+    reader.beginComment();
+    expect(reader.state!.comment).toBeUndefined();
+    expect(reader.state!.notice).toContain('No captured source');
+
+
   } finally { store.close(); rmSync(directory, {recursive:true, force:true}); }
 });

@@ -773,7 +773,7 @@ describe("InboxRepository", () => {
 test('before source survives edits, restart and undo without creating a canonical copy',()=>{
  const {store,repository}=fixture();const source=capture(store);
  const saved=repository.apply('history-before',source,plan());
- expect(repository.beforeSource(saved.id)).toEqual({id:source.id,text:source.text,revision:source.revision});
+ expect(repository.beforeSource(saved.id)).toEqual({id:source.id,text:source.text,revision:source.revision,updatedAt:source.updatedAt});
  const restarted=restart(store);
  expect(restarted.repository.beforeSource(saved.id)?.text).toBe(source.text);
  restarted.repository.undo(saved.id);

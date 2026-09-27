@@ -560,6 +560,14 @@ project-documentation mutations.
 - `annotation_agent_requests` — idempotency receipts linking one bounded agent request payload to its append-only proposal event.
 - `annotation_migration_quarantine` — raw legacy root blocks that cannot be parsed safely, preserving block ID, text, failure reason, and timestamp without fabricating a target.
 
+Inbox before-image annotations retain a block snapshot with an explicit
+`inboxAttemptId`. The shared capture-history reader resolves the retained bytes
+by receipt and block ID. Annotation validation checks those bytes and their
+captured timestamp; ordinary block annotations retain the current-content check.
+This reuses Inbox recovery as evidence and the canonical annotation store for
+comments, without creating another copy of the original note. Saved-source
+Preview rendering never resolves current embeds into that historical text.
+
 Replies have no target row and materialize the root target and history when
 read. Ordinary blocks remain canonical for comment/reply content, outline
 placement, lifecycle, and promotion presentation. Their properties retain only

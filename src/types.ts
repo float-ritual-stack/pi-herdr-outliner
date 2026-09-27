@@ -325,6 +325,7 @@ export type AnnotationSourceSnapshot =
   | {
       readonly kind: "block";
       readonly blockId: string;
+      readonly inboxAttemptId?: string;
       readonly updatedAt: string;
       readonly contentHash: string;
     }

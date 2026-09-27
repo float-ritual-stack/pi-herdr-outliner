@@ -211,6 +211,7 @@ export function normalizeAnnotationSourceSnapshot(
     return {
       kind: "block",
       blockId: identity(snapshot.blockId, "Snapshot block"),
+      ...(snapshot.inboxAttemptId === undefined ? {} : {inboxAttemptId:identity(snapshot.inboxAttemptId,"Inbox capture attempt")}),
       updatedAt: timestamp(snapshot.updatedAt, "Snapshot update time"),
       contentHash: identity(snapshot.contentHash, "Snapshot content hash"),
     };

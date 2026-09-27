@@ -483,7 +483,7 @@ describe("shared Inbox document preview", () => {
     expect(h.controller.reader.state?.focused).toBe(false);
     expect(h.controller.reader.state?.target).toEqual({kind:"block",blockId:"source-result-two"});
     expect(h.opened).toHaveLength(0);
-    expect(h.requests.every(request=>['get','inbox.status','references.resolve'].includes(request.action))).toBe(true);
+    expect(h.requests.every(request=>['get','inbox.status','references.resolve','annotations.list'].includes(request.action))).toBe(true);
   });
 
   test("compact reading is explicit and all rendered hit regions remain inside the frame", async () => {

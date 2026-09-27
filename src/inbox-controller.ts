@@ -236,7 +236,10 @@ export class InboxController {
     const visited=await reader.visit(target);
     if (visited && this.selected?.id === receiptId && this.targetIndex === targetIndex && this.reader === reader) this.focusReader(true);
   }
-  async previewAction(action:string,reader=this.reader):Promise<void>{await reader.action(action,target=>this.openPreview(target));}
+  async previewAction(action:string,reader=this.reader):Promise<void>{
+    await reader.action(action,target=>this.openPreview(target));
+    if(reader.hasDraft){this.focusReader(true,reader===this.outputReader?'output':'source');this.effects.invalidate();}
+  }
   selectResult(index: number): void {
     if (!Number.isInteger(index) || !this.results[index]) return;
     this.searchEditing=false;
@@ -279,8 +282,8 @@ export class InboxController {
       this.sourceKey = sourceKey;
       jobs.push(this.sourceVersion === 'current'||(refreshing&&this.sourceReader.state?.canBack)
         ? this.sourceReader.load(target, refreshing)
-        : this.sourceReader.loadText(target, result.sourceTitle, this.effects.request<InboxResultDetail>({action: 'inbox.result', resultId: result.id}).then(detail =>
-          detail.beforeSource?.text ?? 'No saved source before this attempt. Current source is available separately.')));
+        : this.sourceReader.loadText(target, result.sourceTitle, () => this.effects.request<InboxResultDetail>({action: 'inbox.result', resultId: result.id}).then(detail =>
+          detail.beforeSource ? {...detail.beforeSource,inboxAttemptId:detail.id} : 'No saved source before this attempt. Current source is available separately.')));
     }
     const output = this.outputTarget;
     const outputKey = output ? `${result.id}/${output.id}` : '';
@@ -418,7 +421,8 @@ export class InboxController {
     if (!this.active) return;
     if(!this.steering&&this.previewMode==='content'&&this.reader.state?.focused){
       const frame=this.reader===this.outputReader?this.outputFrame:this.sourceFrame;
-      if(await this.reader.key(key,frame?.content.width??60,frame?.content.height??10,target=>this.openPreview(target),str))return;
+      if((this.reader.hasDraft||key.name!=='return'||key.meta||this.reader.state?.activeLink) &&
+        await this.reader.key(key,frame?.content.width??60,frame?.content.height??10,target=>this.openPreview(target),str))return;
     }
     if(this.searching && await this.searchInput(str,key))return;
     if(!this.steering&&str==="/"){this.startSearch();return;}

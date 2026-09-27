@@ -193,7 +193,7 @@ test("history and Undo remain available after restart without a configured model
   expect(status.results[0]?.id).toBe(saved.id);
   expect(status.results[0]?.usage?.promptRevisions).toEqual([{ path: prompt.path, sha256: prompt.sha256 }]);
   const complete = await client.request<import("../src/inbox-types").InboxResultDetail>({ action: "inbox.result", resultId: saved.id });
-  expect(complete.beforeSource).toEqual({id:source.id,text:source.text,revision:source.revision});
+  expect(complete.beforeSource).toEqual({id:source.id,text:source.text,revision:source.revision,updatedAt:source.updatedAt});
   expect(complete.usage?.promptRevisions).toEqual([prompt]);
   await expect(client.request({ action: "inbox.result", resultId: "missing" })).rejects.toThrow("Inbox result not found");
   const undone = await client.request<InboxStatus>({ action: "inbox.undo", resultId: saved.id });

@@ -1,4 +1,4 @@
-import {captureHistoryResource,captureOriginalResources} from "./capture-history";
+import {captureHistoryResource,captureOriginalResources,readCaptureBefore} from "./capture-history";
 import { InboxPlanValidationError } from "./inbox-attempts";
 import { createHash } from "node:crypto";
 import { prepareNoteEdit } from "./note-assistance-repository";
@@ -230,13 +230,11 @@ export class InboxRepository {
     return rows.map(row => JSON.parse(row.result_json) as InboxResult);
   }
 
-  beforeSource(id: string): Pick<Block, "id" | "text" | "revision"> | undefined {
+  beforeSource(id: string): Pick<Block, "id" | "text" | "revision" | "updatedAt"> | undefined {
     const result = this.getResult(id);
-    const row = this.row(id);
-    if (!row?.recovery_json) return undefined;
-    const before = (JSON.parse(row.recovery_json) as Recovery).before.find(block => block.id === result.sourceId);
+    const before = readCaptureBefore(this.store.database,id,result.sourceId);
     return before && before.id === result.sourceId
-      ? { id: before.id, text: before.text, revision: before.revision } : undefined;
+      ? { id: before.id, text: before.text, revision: before.revision, updatedAt: before.updatedAt } : undefined;
   }
 
   getResult(id: string): InboxResult {

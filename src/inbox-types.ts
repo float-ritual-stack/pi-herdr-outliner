@@ -33,7 +33,7 @@ export interface InboxUsage {
 
 /** Optional additive detail on inbox.result; absent on older services or attempts without recovery. */
 export interface InboxResultDetail extends InboxResult {
-  beforeSource?: { id: string; text: string; revision: number };
+  beforeSource?: { id: string; text: string; revision: number; updatedAt?: string };
 }
 
 export interface InboxResult {

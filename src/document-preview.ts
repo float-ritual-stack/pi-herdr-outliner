@@ -17,6 +17,8 @@ import type {Block, AnnotationThread, PageAddressResolution, OutlinerNavigationT
 import type {ResourceDescription} from './resources';
 import {resourceDescriptionLabel} from './resources';
 
+type SavedPreviewSource = Pick<Block,"id"|"text"|"revision"> & Partial<Pick<Block,"updatedAt">> & {inboxAttemptId?:string};
+
 export interface PreviewCommentDraft {
   requestId:string;
   target?:AnnotationTarget;
@@ -255,19 +257,32 @@ export class DocumentPreview {
     return this.load(target,false,true);
   }
   /** Historical text is rendered as saved: do not resolve live embeds into a before-image. */
-  async loadText(target: OutlinerNavigationTarget, title: string, content: Promise<string>): Promise<boolean> {
+  async loadText(target: OutlinerNavigationTarget, title: string,
+    content: Promise<string> | (() => Promise<string | SavedPreviewSource>)): Promise<boolean> {
     if(this.protectDraft())return false;
     this.history=[];this.future=[];
     const generation = ++this.generation;
-    this.value = {target, title, document: plain('Loading saved source…'), offset: 0, focused: this.value?.focused ?? false};
+    this.value = {target, title, document: plain('Loading saved source…'), loading:true, offset: 0, focused: this.value?.focused ?? false};
     this.changed();
     try {
-      const text = await content;
+      // The lazy source loader starts only after draft protection admits navigation.
+      const saved = await (typeof content === 'function' ? content() : content);
       if (generation !== this.generation) return false;
-      this.value = {...this.value!, document: plain(text)};
+      const document=plain(typeof saved==='string'?saved:saved.text);
+      let notice:string|undefined;
+      if(typeof saved!=='string' && target.kind==='block' && saved.id===target.blockId && saved.updatedAt){
+        document.commentTarget={representation:blockAnnotationRepresentation({...saved,updatedAt:saved.updatedAt},saved.inboxAttemptId),anchor:{kind:'whole-subject'}};
+        document.annotations={target,context:{selected:saved},annotationThreads:[],selectedAnnotationId:undefined,document:{kind:'empty'}};
+        try {
+          document.annotations.annotationThreads=await this.client.request<AnnotationThread[]>({action:'annotations.list',
+            query:{subject:{kind:'block',blockId:saved.id},includeResolved:true}});
+        } catch(error){notice=`Comments unavailable: ${error instanceof Error?error.message:String(error)}`;}
+      }
+      if (generation !== this.generation) return false;
+      this.value = {...this.value!, document, loading:false, notice};
     } catch (error) {
       if (generation !== this.generation) return false;
-      this.value = {...this.value!, document: plain(error instanceof Error ? error.message : String(error))};
+      this.value = {...this.value!, loading:false, document: plain(error instanceof Error ? error.message : String(error))};
     }
     this.changed();
     return true;

@@ -1,3 +1,5 @@
+import assert from 'node:assert/strict';
+import {annotationSourceHash} from '../../src/annotations';
 import {visibleWidth} from "@earendil-works/pi-tui";
 import {readFile} from "node:fs/promises";
 import {join} from "node:path";
@@ -5,8 +7,8 @@ import { mkdir } from "node:fs/promises";
 import { OutlinerClient } from "../../src/client";
 import { OutlinerServer } from "../../src/server";
 import { OutlinerStore } from "../../src/store";
-import type { InboxStatus } from "../../src/inbox-types";
-import type { CaptureReceipt } from "../../src/types";
+import type { InboxResultDetail, InboxStatus } from "../../src/inbox-types";
+import type { AnnotationThread, CaptureReceipt } from "../../src/types";
 import { runHerdrScenario } from "./herdr-runner";
 
 let failedSourceId = "";
@@ -67,13 +69,36 @@ const result = await runHerdrScenario({
     await session.waitVisible(pane,'Cleaned source after editorial pass');
     await clickLabel('[Before');await session.waitVisible(pane,'before this attempt');
     await session.waitVisible(pane,'PIE301 filed note');
+    const recent=await session.client.request<InboxStatus>({action:'inbox.status'});
+    const receipt=await session.client.request<InboxResultDetail>({action:'inbox.result',resultId:recent.results[0]!.id});
+    assert.ok(receipt.beforeSource?.updatedAt);
+    // Focus the saved Source reader and compose without a Detail destination.
+    await session.keys(pane,'alt+p');
+    await session.keys(pane,'c');
+    await session.waitVisible(pane,'Comment on note');
+    await session.text(pane,'FEEDBACK ON SAVED SOURCE');
+    await session.waitVisible(pane,'FEEDBACK ON SAVED SOURCE');
+    await session.keys(pane,'ctrl+s');
+    const historical=await session.waitFor('saved-source comment persisted',()=>session.client.request<AnnotationThread[]>({
+      action:'annotations.list',query:{subject:{kind:'block',blockId:receipt.sourceId},includeResolved:true},
+    }),threads=>threads.some(thread=>thread.body==='FEEDBACK ON SAVED SOURCE'));
+    const comment=historical.find(thread=>thread.body==='FEEDBACK ON SAVED SOURCE')!;
+    assert.deepEqual(comment.originalTarget.representation.sourceSnapshot,{
+      kind:'block',blockId:receipt.sourceId,inboxAttemptId:receipt.id,
+      updatedAt:receipt.beforeSource.updatedAt,contentHash:annotationSourceHash(receipt.beforeSource.text),
+    });
+    await session.keys(pane,']');
+    await session.waitVisible(pane,'FEEDBACK ON SAVED SOURCE');
+    await session.checkpoint('historical-source-comment');
+
     await clickLabel('[Current');await session.waitVisible(pane,'Current wording.');
     const layout=await terminal.visible();const layoutRows=layout.split('\n');
     const sourceRow=layoutRows.findIndex(line=>line.includes('Source · current'));
     const outputRow=layoutRows.findIndex(line=>line.includes('Output 1 · current'));
     if(sourceRow!==outputRow||sourceRow<10)throw Error('Expected side-by-side documents beneath activity');
-    await clickLabel('▸ Technical details');await session.waitVisible(pane,'fixture · fixture');
+    await clickLabel('▸ Technical details');await session.waitVisible(pane,'▾ Technical details');
     await clickLabel('[Activity');await terminal.write('\x1b[6~');
+    await session.waitVisible(pane,'fixture · fixture');
     await session.waitVisible(pane,'model work 135.0s');
     await terminal.write('\x1b[5~');
     await session.waitFor('native activity scroll restored',terminal.visible,text=>text.includes('│APPLIED ·'));
@@ -125,7 +150,7 @@ const result = await runHerdrScenario({
     await session.focus(pane);await terminal.resize(240,74);
     await session.waitVisible(pane,'Preview');
     if ((await session.visible(pane)).includes('● Preview')) {await session.keys(pane,'esc');await session.waitFor('reader releases focus',terminal.visible,text=>!text.includes('● Preview'));}
-    await session.keys(pane,'esc');await session.waitVisible(pane,'[Indent:');
+    await session.keys(pane,'esc');await session.waitVisible(pane,'Tree [Note] [View] [Links]');
     await session.record('preview-contract',{richSource:true,multipleOutputs:true,nativeRoleClicks:true,previewFocus:true,explicitOpen:true,fixtureModel:true});
   },
 });

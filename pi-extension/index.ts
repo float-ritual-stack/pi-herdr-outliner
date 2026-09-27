@@ -309,6 +309,7 @@ const annotationSourceSnapshotSchema = Type.Union([
     kind: Type.Literal("block"),
     blockId: Type.String(),
     updatedAt: Type.String(),
+    inboxAttemptId: Type.Optional(Type.String()),
     contentHash: Type.String(),
   }),
   Type.Object({
