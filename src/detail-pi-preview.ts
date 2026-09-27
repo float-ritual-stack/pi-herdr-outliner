@@ -785,7 +785,7 @@ function annotationPanelLines(
 ): string[] {
   const panelWidth = Math.max(1, width);
   const title =
-    ` ${selected ? "▶ " : ""}Comment ${index + 1} · ${thread.source} · ${placement === "unpositioned" ? "unpositioned" : thread.currentResolution.status} · ${thread.lifecycle} `;
+    ` ${selected ? "▶ " : ""}Comment ${index + 1} · ${thread.source} · ${placement === "inline" ? thread.currentResolution.status : placement} · ${thread.lifecycle} `;
   const top = truncateToWidth(
     `╭${title}${"─".repeat(Math.max(0, panelWidth - visibleWidth(title) - 1))}`,
     panelWidth,
@@ -796,7 +796,7 @@ function annotationPanelLines(
     `[${label}](${previewRegionActionUri({ type: "annotation.thread.move", delta })})`;
   const body = [
     `${navigation("‹", -1)} ${action("Select", "annotation.thread.select")} ${navigation("›", 1)} · ${action("Reply", "annotation.thread.reply")} · ${action(thread.lifecycle === "open" ? "Resolve" : "Reopen", "annotation.thread.lifecycle")}`,
-    `${thread.source} · ${placement === "unpositioned" ? "unpositioned" : thread.currentResolution.status} · ${thread.lifecycle}`,
+    `${thread.source} · ${placement === "inline" ? thread.currentResolution.status : placement} · ${thread.lifecycle}`,
     scope,
     "",
     ...thread.body.split(/\r?\n/).map(escapeGeneratedMarkdown),
@@ -865,7 +865,7 @@ class DetailAnnotationPreview implements Component {
       Array<{ regionId: string; groupId: string; lines: string[] }>
     >();
     for (const group of this.groups) {
-      if (group.placement === "unpositioned") continue;
+      if (group.placement !== "inline") continue;
       const startRow = this.markdown.sourceLineRow(
         contentWidth,
         group.startLine,
@@ -938,11 +938,11 @@ class DetailAnnotationPreview implements Component {
       lines.push(`${marker}${padding}${markdownLines[row]}`);
       markdownRows.push(row);
     }
-    for (const group of this.groups.filter((candidate) => candidate.placement === "unpositioned")) {
+    for (const group of this.groups.filter((candidate) => candidate.placement !== "inline")) {
       const region = this.state.previewRegions.regions.find((candidate) => candidate.id === group.regionId);
       const symbol = region?.disclosure?.expanded ? "−" : "+";
       const heading = new Markdown(
-        `[${symbol} Unpositioned comments (${group.threads.length})](${previewRegionActionUri({
+        `[${symbol} ${group.placement === "general" ? "Note comments" : "Unpositioned comments"} (${group.threads.length})](${previewRegionActionUri({
           type: "annotation.disclosure.toggle", regionId: group.regionId,
         })})`, 0, 0, this.theme,
       ).render(outerWidth);

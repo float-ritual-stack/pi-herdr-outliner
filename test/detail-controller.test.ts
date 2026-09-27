@@ -3377,6 +3377,34 @@ describe("detail controller projection and deferred refresh", () => {
 });
 
 describe("detail controller saves and annotations", () => {
+  test("Comment without a selection stays a general note comment and preserves its draft target", async () => {
+    const note = makeBlock({ text: "A note\n\nSome useful context" });
+    const { controller, calls } = createHarness(note, null, async text => ({ text, references: [] }));
+    await controller.initialize();
+    await controller.dispatch({ type: "annotation.comment.direct", capture: null }, viewport);
+    expect(controller.state.mode).toBe("comment");
+    expect(controller.state.annotationDraft?.target).toMatchObject({
+      representation: { subject: { kind: "block", blockId: note.id }, sourceSnapshot: { kind: "block", updatedAt: note.updatedAt } },
+      anchor: { kind: "whole-subject" },
+    });
+    await controller.dispatch({ type: "buffer.insert", text: "Looks ready" }, viewport);
+    await controller.handleUiCommand({ command: "preview", targetClientId: "detail-test", target: { kind: "block", blockId: "elsewhere" } }, viewport);
+    expect(controller.state.buffer.text).toBe("Looks ready");
+    expect(controller.state.target).toEqual({ kind: "block", blockId: note.id });
+    await controller.dispatch({ type: "buffer.save" }, viewport);
+    expect(calls.creates).toHaveLength(1);
+    expect(calls.creates[0]!.input).toMatchObject({ body: "Looks ready", target: { anchor: { kind: "whole-subject" } } });
+    const comments = buildDetailAnsiPreview(controller.state, 40).annotationLines.join("\n");
+    expect(comments).toContain("general");
+    expect(comments).not.toContain("unpositioned");
+    expect(comments).not.toContain("Original quote:");
+    await controller.dispatch({ type: "annotation.comment.direct", capture: null }, viewport);
+    await controller.dispatch({ type: "buffer.cancel" }, viewport);
+    expect(controller.state.mode).toBe("preview");
+    expect(calls.focuses).toBe(0);
+    expect(calls.creates).toHaveLength(1);
+  });
+
   test("external-editor return combines independent edits without a recovery modal",async()=>{
     const {OutlinerStore}=await import("../src/store");
     const {EditRecoveryRepository}=await import("../src/edit-recovery");
@@ -5544,7 +5572,7 @@ test("closing a Resource Preview releases the target across service reconnect", 
   expect(current.controller.state.target).toEqual({kind: "block", blockId: "retained"});
 });
 
-test("Preview native thread actions promote safely and save the exact reply buffer", async () => {
+test("Preview native thread actions stay in place and protect both reader drafts", async () => {
   const current = createHarness(makeBlock({id: "retained", text: "Retained document"}), null, async text => ({text, references: []}));
   const preview = createHarness(makeBlock({id: "inspected", text: "Target inspected"}), null, async text => ({text, references: []}));
   let thread: AnnotationThread;
@@ -5576,15 +5604,19 @@ test("Preview native thread actions promote safely and save the exact reply buff
   const draft = current.controller.state.buffer.text;
   await surface.activatePreviewAction({type: "annotation.thread.reply", annotationId: "annotation-1"}, viewport);
   expect(current.controller.state.buffer.text).toBe(draft);
-  expect(preview.controller.state.mode).toBe("preview");
-  expect(replied).toEqual([]);
-  await current.controller.dispatch({type: "buffer.cancel"}, viewport);
-  await surface.activatePreviewAction({type: "annotation.thread.reply", annotationId: "annotation-1"}, viewport);
-  expect(current.controller.state.target).toEqual({kind: "block", blockId: "inspected"});
-  expect(current.controller.state.annotationReplyDraft?.annotationId).toBe("annotation-1");
-  expect(preview.controller.state.mode).toBe("preview");
-  await current.controller.dispatch({type: "buffer.insert", text: "Exact native reply"}, viewport);
-  await current.controller.dispatch({type: "buffer.save"}, viewport);
+  expect(preview.controller.state.mode).toBe("comment");
+  expect(preview.controller.state.annotationReplyDraft?.annotationId).toBe("annotation-1");
+  await preview.controller.dispatch({type: "buffer.insert", text: "Exact native reply"}, viewport);
+  await surface.closePreview();
+  expect(surface.previewVisible).toBe(true);
+  expect(preview.controller.state.buffer.text).toBe("Exact native reply");
+  expect(await surface.keepPreview(viewport)).toBe(false);
+  await surface.receive({command: "preview", targetClientId: "detail-test", target: {kind: "block", blockId: "different"}}, viewport);
+  expect(preview.controller.state.target).toEqual({kind: "block", blockId: "inspected"});
+  expect(preview.controller.state.buffer.text).toBe("Exact native reply");
+  expect(current.controller.state.target).toEqual({kind: "block", blockId: "retained"});
+  await preview.controller.dispatch({type: "buffer.save"}, viewport);
+  expect(current.controller.state.buffer.text).toBe(draft);
   expect(replied).toEqual([{annotationId: "annotation-1", body: "Exact native reply", source: "user"}]);
   await surface.activatePreviewAction({type: "annotation.thread.lifecycle", annotationId: "annotation-1"}, viewport);
   expect(lifecycles).toEqual([{annotationId: "annotation-1", lifecycle: "resolved"}]);

@@ -23,7 +23,7 @@ export function detailReaderGeometry(width: number, height: number, previewVisib
   return {arrangement: "switch", current: full, preview: full};
 }
 
-/** One retained reader and one disposable, read-only inspection surface. */
+/** One retained reader and one inspection surface with its own comment draft. */
 export class DetailReadingSurface {
   previewVisible = false;
   focused: "current" | "preview" = "current";
@@ -60,6 +60,10 @@ export class DetailReadingSurface {
   }
 
   async closePreview(): Promise<void> {
+    if (this.preview.isBufferMode()) {
+      this.preview.onServiceError(new Error("Save or cancel the Preview draft before closing it"));
+      return;
+    }
     this.previewVisible = false;
     this.preview.releaseDocument();
     this.focused = "current";
@@ -92,9 +96,6 @@ export class DetailReadingSurface {
   }
 
   async activatePreviewAction(action: PreviewRegionAction, viewport: DetailViewport, routing?: DetailOpenRouting): Promise<void> {
-    if (this.active === this.preview && (action.type === "annotation.thread.reply" || action.type === "annotation.thread.lifecycle")) {
-      if (!await this.keepPreview(viewport)) return;
-    }
     await this.active.dispatch({type: "preview.action", action, ...(routing ? {routing} : {})}, viewport);
   }
 
@@ -105,6 +106,10 @@ export class DetailReadingSurface {
   }
 
   async openHere(target: OutlinerNavigationTarget, viewport: DetailViewport): Promise<boolean> {
+    if (this.preview.isBufferMode()) {
+      this.preview.onServiceError(new Error("Save or cancel the Preview draft before opening another target"));
+      return false;
+    }
     if (this.current.isBufferMode() || this.current.state.selectionAnchor !== null) {
       this.preview.onServiceError(new Error("Finish or cancel the Current draft or source selection before keeping Preview"));
       return false;

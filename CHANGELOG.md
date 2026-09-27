@@ -4,6 +4,12 @@ This file records notable user-facing changes. The project remains active dogfoo
 
 ## [Unreleased]
 
+- Detail Comment supports a whole-note target without selecting text. General
+  comments appear under Note comments, separate from lost passage anchors.
+  Detail's local Preview composes and replies in place, preserving Current and
+  protecting unsaved Preview drafts. Protocol 78 adds the whole-subject anchor.
+  PIE-290.
+
 - PIE-396: Tree `/` temporarily fuzzy-filters the selected occurrence's descendants,
   preserves rank and ancestry, searches collapsed content within projection limits,
   and restores the browsing context on Clear/Escape. The selected-items menu adds

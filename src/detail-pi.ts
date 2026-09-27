@@ -380,15 +380,15 @@ function viewport(reader: DetailController = controller): DetailViewport {
   const rectangle = reader === inspection ? readerGeometry().preview : readerGeometry().current;
   const width = rectangle.width;
   const editorUsesSplitWidth = width >= DETAIL_DRAFT_SPLIT_MIN_WIDTH &&
-    controller.state.mode !== "file" &&
-    controller.state.mode !== "comment";
+    reader.state.mode !== "file" &&
+    reader.state.mode !== "comment";
   return {
     width,
     editorWidth: editorUsesSplitWidth
       ? detailDraftSplitWidths(width).editor
       : width,
     height: rectangle.height,
-    editorBody: controller.state.mode === "comment"
+    editorBody: reader.state.mode === "comment"
       ? bufferComposerEditorBody(width)
       : undefined,
   };
@@ -1192,28 +1192,31 @@ function editorPointerLocation(
   );
 }
 async function handleRenderedSelectionMouse(data: string): Promise<boolean> {
-  if (controller.state.mode !== "select") {
+  const reader = focusedReader();
+  const layout = focusedPreviewLayout();
+  const rectangle = reader === inspection ? readerGeometry().preview : readerGeometry().current;
+  if (reader.state.mode !== "select") {
     renderedSelectionDragActive = false;
     return false;
   }
   const pointer = parseTreePrimaryPointer(data);
   if (!pointer || pointer.meta || pointer.ctrl) return false;
-  let row = pointer.row;
+  let row = pointer.row - rectangle.y;
   if (renderedSelectionDragActive && pointer.phase !== "down") {
-    const bodyTop = preview.headerHeight(terminal.columns);
-    const bodyBottom = terminal.rows - preview.footerHeight(terminal.columns) - 1;
+    const bodyTop = layout.headerHeight(rectangle.width);
+    const bodyBottom = rectangle.height - layout.footerHeight(rectangle.width) - 1;
     if (row < bodyTop) {
-      preview.navigate("up");
+      layout.navigate("up");
       row = bodyTop;
     } else if (row > bodyBottom) {
-      preview.navigate("down");
+      layout.navigate("down");
       row = bodyBottom;
     }
   }
-  const point = preview.sourcePointAtViewport(
+  const point = layout.sourcePointAtViewport(
     row,
-    pointer.column,
-    terminal.columns,
+    pointer.column - rectangle.x,
+    rectangle.width,
   );
   if (!point) {
     if (pointer.phase === "up") renderedSelectionDragActive = false;
@@ -1221,19 +1224,19 @@ async function handleRenderedSelectionMouse(data: string): Promise<boolean> {
   }
   if (pointer.phase === "down") {
     renderedSelectionDragActive = true;
-    await controller.dispatch({
+    await reader.dispatch({
       type: "annotation.selection.place",
       ...point,
       extend: false,
-    }, viewport());
+    }, viewport(reader));
     return true;
   }
   if (!renderedSelectionDragActive) return true;
-  await controller.dispatch({
+  await reader.dispatch({
     type: "annotation.selection.place",
     ...point,
     extend: true,
-  }, viewport());
+  }, viewport(reader));
   if (pointer.phase === "up") renderedSelectionDragActive = false;
   return true;
 }
@@ -1363,8 +1366,9 @@ function shouldPassDetailInputToTui(data: string): boolean {
     detailChooserOwnsPiInput(data)
   ) return false;
   if (actionMenuHandle) return true;
-  if (readingSurface.active === inspection && isTreeMouseSequence(data)) return true;
   if (composerHandle) return false;
+  if (focusedReader().state.mode === "select" && parseTreePrimaryPointer(data)) return false;
+  if (readingSurface.active === inspection && isTreeMouseSequence(data)) return true;
   if (tui.hasOverlay()) return true;
   if (!isTreeMouseSequence(data)) return false;
   if (parseTreeSecondaryClick(data) && rightClickOwnership === "outliner") return false;
@@ -1390,11 +1394,13 @@ async function directSelectionCapture(reader: DetailController): Promise<DetailD
   if (directSelectionDocument?.reader !== reader) return null;
   const capture = latestDirectSelection ?? await pendingDirectSelection;
   const target = reader.state.target;
-  if (generation !== directSelectionGeneration || !capture || !target) return null;
-  if (capture.kind === "rendered") {
-    return target.kind === "block" && target.blockId === capture.capture.hostBlockId ? capture : null;
+  if (generation !== directSelectionGeneration || !capture || !target) {
+    throw new Error("The selected passage could not be captured; select it again, or clear the selection to comment on the whole note");
   }
-  return target.kind === "resource" && target.resourceId === capture.resourceId ? capture : null;
+  if (capture.kind === "rendered") {
+    if (target.kind === "block" && target.blockId === capture.capture.hostBlockId) return capture;
+  } else if (target.kind === "resource" && target.resourceId === capture.resourceId) return capture;
+  throw new Error("The selection belongs to another document; select the passage again");
 }
 
 const handleKeypress = createDetailKeyHandler({openNewTree: () => { openTreePane({workspaceRoot: paths.workspaceRoot, root: null, direction: "right"}); },
@@ -1415,6 +1421,8 @@ const inspectionKeypress = createDetailKeyHandler({openNewTree: () => { openTree
   openActionMenu: items => showActionMenu(items, invokeDetailAction),
   openKeyInspector,
   navigatePreview: direction => inspectionLayout.navigate(direction),
+  annotationSelectionSourceLine: () => inspectionLayout.sourceLineAtScroll(viewport(inspection).width),
+  directSelectionCapture: () => directSelectionCapture(inspection),
 });
 function showReaderMenu(menu: ReaderMenu): void {
   const items = readerMenuItems(actionKeymap.menuItems("detail", activeDetailActionScopes()), menu).map(item =>
@@ -1454,17 +1462,12 @@ async function readerAction(actionId: string): Promise<boolean> {
   if (readingSurface.active === inspection && (actionId === "detail.annotation.reply" || actionId === "detail.annotation.lifecycle")) {
     const annotationId = inspection.state.selectedAnnotationId;
     if (!annotationId) { inspection.onServiceError(new Error("Select a comment before replying or resolving")); return true; }
-    await readingSurface.activatePreviewAction({type: actionId === "detail.annotation.reply" ? "annotation.thread.reply" : "annotation.thread.lifecycle", annotationId}, viewport());
+    await readingSurface.activatePreviewAction({type: actionId === "detail.annotation.reply" ? "annotation.thread.reply" : "annotation.thread.lifecycle", annotationId}, viewport(inspection));
     return true;
   }
-  if (readingSurface.active === inspection && actionKeymap.action(actionId).menuGroup === "Edit" && actionId !== "detail.annotation.previous" && actionId !== "detail.annotation.next") {
-    // Commenting promotes this same document. Carry the explicit command's
-    // immutable capture through promotion; ordinary navigation still retires it.
-    const capture = actionId === "detail.comment.begin" ? await directSelectionCapture(inspection) : null;
+  if (readingSurface.active === inspection && ["detail.edit.begin", "detail.edit.external", "detail.edit.recover"].includes(actionId)) {
     if (!await readingSurface.keepPreview(viewport())) return true;
-    if (actionId === "detail.comment.begin") {
-      await controller.dispatch({type: "annotation.comment.direct", capture}, viewport());
-    } else await handleKeypress.invoke(actionId);
+    await handleKeypress.invoke(actionId);
     return true;
   }
   return false;
@@ -1493,7 +1496,7 @@ async function handleDecodedInput(input: PiDetailInput): Promise<void> {
   }
   if (input.kind === "paste") {
     if (focusedReader().isBufferMode()) {
-      await focusedReader().dispatch({ type: "buffer.insert", text: input.text }, viewport());
+      await focusedReader().dispatch({ type: "buffer.insert", text: input.text }, viewport(focusedReader()));
     }
     return;
   }
@@ -1506,6 +1509,7 @@ async function handleDecodedInput(input: PiDetailInput): Promise<void> {
 
 async function handleInput(data: string): Promise<void> {
   if (readingSurface.active === inspection) {
+    if (await handleRenderedSelectionMouse(data)) return;
     for (const input of inputStream.push(data)) await handleDecodedInput(input);
     return;
   }
@@ -1609,9 +1613,10 @@ const readerSplit = new DetailReaderSplitLayout(preview, inspectionLayout);
 const readerVertical = new DetailReaderVerticalLayout(preview, inspectionLayout);
 
 const composer = new BufferComposer(() => {
-  const reply = controller.state.annotationReplyDraft;
-  const thread = reply ? controller.state.annotationThreads.find(thread => thread.block.id === reply.annotationId) : null;
-  const target = controller.state.annotationDraft?.target;
+  const reader = focusedReader();
+  const reply = reader.state.annotationReplyDraft;
+  const thread = reply ? reader.state.annotationThreads.find(thread => thread.block.id === reply.annotationId) : null;
+  const target = reader.state.annotationDraft?.target;
   const context = target?.anchor.kind === "text-quote"
     ? target.anchor.exact
     : target?.anchor.kind === "dom-range"
@@ -1622,23 +1627,24 @@ const composer = new BufferComposer(() => {
   return {
     title: reply ? "Reply to comment" : target?.referenceContext
       ? "Comment on this reference"
+      : target?.anchor.kind === "whole-subject"
+      ? "Comment on whole note"
       : target?.representation.subject.kind === "resource"
       ? "Comment on Resource selection"
       : "Comment on selection",
-    context: thread?.body ?? context,
-    buffer: controller.state.buffer,
+    context: thread?.body ?? (target?.anchor.kind === "whole-subject" ? detailTitle(reader.state) : context),
+    buffer: reader.state.buffer,
     placeholder: reply ? "Write a reply…" : "Write a comment…",
     commitAction: "Ctrl+S",
     cancelAction: "Esc",
-    viewportOffset: controller.state.editorVisualOffset,
-    status: controller.state.status,
+    viewportOffset: reader.state.editorVisualOffset,
+    status: reader.state.status,
   };
 });
 let layoutRoot: Component | undefined;
 let previousMode = controller.state.mode;
 const composedLayout = composedTree ? new ComposedLayout(composedTree, preview, () => processTerminal.columns) : null;
-let composerWidth = 0;
-let composerHeight = 0;
+let composerGeometry = "";
 
 synchronizeLayout = () => {
   paneDisplay.update(detailTitle(controller.state));
@@ -1676,21 +1682,25 @@ synchronizeLayout = () => {
   }
 
   composedLayout?.resize();
-  if (composerHandle && (composerWidth !== terminal.columns || composerHeight !== terminal.rows)) { composerHandle.hide(); composerHandle = null; }
-  if (mode === "comment" && readingSurface.active === controller && !composerHandle) {
-    composerWidth = terminal.columns;
-    composerHeight = terminal.rows;
+  const active = focusedReader();
+  const rectangle = active === inspection ? readerGeometry().preview : readerGeometry().current;
+  const composerCol = rectangle.x + (composed ? composedWidths(processTerminal.columns).detailX : 0);
+  const composerRow = rectangle.y + Math.max(0, rectangle.height - BUFFER_COMPOSER_HEIGHT);
+  const geometryKey = `${composerCol}:${composerRow}:${rectangle.width}:${rectangle.height}`;
+  if (composerHandle && (composerGeometry !== geometryKey || active.state.mode !== "comment")) {
+    composerHandle.hide();
+    composerHandle = null;
+  }
+  if (active.state.mode === "comment" && !composerHandle) {
+    composerGeometry = geometryKey;
     composerHandle = tui.showOverlay(composer, {
-      width: terminal.columns,
-      col: composed ? composedWidths(processTerminal.columns).detailX : 0,
-      maxHeight: BUFFER_COMPOSER_HEIGHT,
-      row: Math.max(0, terminal.rows - BUFFER_COMPOSER_HEIGHT),
+      width: rectangle.width,
+      col: composerCol,
+      maxHeight: Math.min(rectangle.height, BUFFER_COMPOSER_HEIGHT),
+      row: composerRow,
       anchor: "top-left",
       nonCapturing: true,
     });
-  } else if ((mode !== "comment" || readingSurface.active !== controller) && composerHandle) {
-    composerHandle.hide();
-    composerHandle = null;
   }
 
   let nextRoot: Component;
@@ -1796,9 +1806,10 @@ tui.addOutlinerInputListener(data => {
 
 function handleResize(): void {
   if (keyInspector.active) refreshKeyInspectorOverlay();
-  serviceEventScheduler.scheduleWork(() =>
-    controller.dispatch({ type: "viewport.changed" }, viewport())
-  );
+  serviceEventScheduler.scheduleWork(async () => {
+    await controller.dispatch({ type: "viewport.changed" }, viewport());
+    if (readingSurface.previewVisible) await inspection.dispatch({ type: "viewport.changed" }, viewport(inspection));
+  });
 }
 
 async function initialize(): Promise<void> {

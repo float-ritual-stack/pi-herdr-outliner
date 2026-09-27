@@ -347,6 +347,7 @@ const annotationTextQuoteAnchorSchema = Type.Object({
 });
 
 const annotationAnchorSchema = Type.Union([
+  Type.Object({ kind: Type.Literal("whole-subject") }),
   annotationTextQuoteAnchorSchema,
   Type.Object({
     kind: Type.Literal("dom-range"),

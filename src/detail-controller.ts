@@ -2632,10 +2632,13 @@ export function createDetailController(
         }
       }
       returnMode = "preview";
-    } else {
+    } else if (state.mode === "file") {
       const range = selectedDetailFileRange(state);
       const file = state.referencedFile;
-      if (!range || !file || !selected) return;
+      if (!range || !file || !selected) {
+        state.status = "Select file lines before commenting";
+        return;
+      }
       const sourceText = file.sourceText ?? file.lines.join("\n");
       const offsetRange = annotationOffsetsForLineRange(
         sourceText,
@@ -2649,6 +2652,21 @@ export function createDetailController(
       };
       returnMode = "file";
       state.annotationRange = range;
+    } else {
+      const representation = description
+        ? resourceAnnotationRepresentation(description)
+        : selected ? blockAnnotationRepresentation(selected) : null;
+      if (!representation) {
+        state.status = "This view has no captured representation to comment on";
+        return;
+      }
+      target = {
+        representation,
+        anchor: { kind: "whole-subject" },
+        ...(state.target?.kind === "resource" && state.target.referenceContext
+          ? { referenceContext: state.target.referenceContext } : {}),
+      };
+      returnMode = "preview";
     }
     state.annotationDraft = { requestId: crypto.randomUUID(), target, returnMode };
     state.buffer = new TextBuffer();
@@ -2660,7 +2678,9 @@ export function createDetailController(
     const range = anchor.kind === "text-quote" && anchor.start !== null && anchor.end !== null
       ? `${anchor.start}-${anchor.end}`
       : "unpositioned quote";
-    state.status = returnMode === "file" && state.annotationRange
+    state.status = anchor.kind === "whole-subject"
+      ? target.referenceContext ? "Commenting on this reference" : "Commenting on the whole note"
+      : returnMode === "file" && state.annotationRange
       ? `commenting on ${state.referencedFile?.sourcePath}:${state.annotationRange.startLine}-${state.annotationRange.endLine}`
       : target.referenceContext
         ? `commenting on this reference${target.representation.subject.kind === "resource" ? ` · Resource passage ${range}` : " occurrence"}`
@@ -2878,12 +2898,13 @@ export function createDetailController(
       return;
     }
     const cancelledMode = state.mode;
-    state.mode = detailDisplayMode(state.context.selected);
+    const commentReturnMode = state.annotationDraft?.returnMode;
+    state.mode = commentReturnMode ?? detailDisplayMode(state.context.selected);
     state.annotationDraft = undefined;
     state.status = cancelledMode === "comment" ? "Comment cancelled" : "Edit cancelled";
     if(cancelledMode==="edit"&&state.recovery)state.status="Writing retained · Writing history in the header or actions menu";
     const cancelStatus = state.status;
-    await focusOutliner(false);
+    if (cancelledMode !== "comment") await focusOutliner(false);
     if (retentionNotice) state.status = state.status === cancelStatus ? retentionNotice : `${retentionNotice} · ${state.status}`;
   };
 
@@ -2970,7 +2991,9 @@ export function createDetailController(
             anchor.end !== null
           ? `${anchor.start}-${anchor.end}`
           : "unpositioned quote";
-        state.status = draft.returnMode === "file" && state.annotationRange
+        state.status = anchor.kind === "whole-subject"
+          ? draft.target.referenceContext ? "Comment added for this reference" : "Comment added for the whole note"
+          : draft.returnMode === "file" && state.annotationRange
           ? `Annotation added for lines ${state.annotationRange.startLine}-${state.annotationRange.endLine}`
           : draft.target.referenceContext
             ? "Annotation added for this reference occurrence"
@@ -3082,7 +3105,7 @@ export function createDetailController(
         if (property?.target?.kind === "resource-reference" && state.mode === "preview") {
           await beginComment({ start: property.start, end: property.end });
         } else if (!intent.capture) {
-          state.status = "Drag across text before commenting";
+          await beginComment();
         } else {
           await beginDirectComment(intent.capture);
         }

@@ -13,7 +13,6 @@ const result = await runHerdrScenario({
   async run(s) {
     const terminal = await s.attachClient(); await terminal.resize(340, 62);
     const clients = await s.registrations();
-    const tree = clients.find(c => c.role === "tree")!;
     const detail = clients.find(c => c.role === "detail")!;
     const current = async () => (await s.registrations()).find(c => c.clientId === detail.clientId)!;
     const retained = await s.client.request<Block>({action: "create", text: "RETAINED UNRELATED DOCUMENT"});
@@ -31,7 +30,7 @@ const result = await runHerdrScenario({
     const annotationId = created.annotations[0]!.block.id;
     const thread = async () => (await s.client.request<AnnotationThread[]>({action: "annotations.list", query: {subject: {kind: "resource", resourceId: resource.id}, includeResolved: true}})).find(t => t.block.id === annotationId)!;
     const target = {kind: "resource" as const, resourceId: resource.id, revision: file.revision};
-    await s.client.request({action: "navigation.dispatch", sourceClientId: tree.clientId, intent: "preview", target});
+    await s.client.request({action: "navigation.dispatch", sourceClientId: detail.clientId, intent: "preview", target});
     await s.waitFor("Resource Preview ready", current, c => c.previewTarget?.kind === "resource");
     await s.focus(s.panes.detail); await s.keys(s.panes.detail, "f7");
     await s.waitFor("Preview comment marker rendered", () => s.visible(s.panes.detail), frame => frame.includes("+ EXACT PREVIEW PASSAGE"));
@@ -44,13 +43,34 @@ const result = await runHerdrScenario({
     await s.record("preview-native-reply-click", {row, column, frame, annotationId, target});
     await terminal.write(`\x1b[<0;${column + 1};${row + 1}M`); await terminal.write(`\x1b[<0;${column + 1};${row + 1}m`);
     await s.waitVisible(s.panes.detail, "Reply to comment");
-    await s.waitFor("clicked source promoted", current, c => c.currentTarget?.kind === "resource" && !c.previewTarget);
+    assert.deepEqual((await current()).currentTarget, {kind: "block", blockId: retained.id});
+    assert.deepEqual((await current()).previewTarget, target);
     await s.text(s.panes.detail, "EXACT PREVIEW NATIVE REPLY"); await s.keys(s.panes.detail, "ctrl+s");
     await s.waitFor("reply saved to clicked thread", thread, t => t.replies.some(r => r.body === "EXACT PREVIEW NATIVE REPLY"));
-    assert.deepEqual((await current()).currentTarget, target);
+    assert.deepEqual((await current()).currentTarget, {kind: "block", blockId: retained.id});
+    assert.deepEqual((await current()).previewTarget, target);
     assert.equal((await s.client.request<Block>({action: "get", blockId: retained.id})).text, retained.text);
     assert.equal((await s.client.request<ResourceDescription>({action: "resources.describe", destinationClientId: detail.clientId, target})).filesystem?.text, sourceText);
-    await s.checkpoint("native-reply-promotes-exact-source");
+    await s.waitVisible(s.panes.detail, "user: EXACT PREVIEW NATIVE REPLY");
+    await s.checkpoint("native-reply-stays-in-preview");
+    await s.keys(s.panes.detail, "c");
+    await s.waitVisible(s.panes.detail, "Comment on whole note");
+    await s.text(s.panes.detail, "WHOLE RESOURCE FEEDBACK");
+    await s.waitVisible(s.panes.detail, "WHOLE RESOURCE FEEDBACK");
+    await terminal.resize(150, 58);
+    await s.waitFor("narrow Preview composer rendered", () => s.visible(s.panes.detail), frame =>
+      frame.split("\n").some(line => line.startsWith("● Preview")) && frame.includes("WHOLE RESOURCE FEEDBACK"));
+    await s.checkpoint("preview-general-comment-draft");
+    await s.keys(s.panes.detail, "ctrl+s");
+    await s.waitFor("whole Resource comment saved", () => s.client.request<AnnotationThread[]>({
+      action: "annotations.list", query: {subject: {kind: "resource", resourceId: resource.id}, includeResolved: true},
+    }), threads => threads.some(t => t.body === "WHOLE RESOURCE FEEDBACK" && t.originalTarget.anchor.kind === "whole-subject"));
+    await s.keys(s.panes.detail, "]");
+    await s.waitVisible(s.panes.detail, "WHOLE RESOURCE FEEDBACK");
+    await s.checkpoint("preview-general-comment-saved");
+    assert.deepEqual((await current()).currentTarget, {kind: "block", blockId: retained.id});
+    assert.deepEqual((await current()).previewTarget, target);
+
   },
 });
 console.log(JSON.stringify(result)); if(result.status !== "passed") process.exitCode = 1;

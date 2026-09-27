@@ -1096,10 +1096,12 @@ An `AnnotationTarget` pairs one representation with one typed anchor.
 Representations identify their block or Resource subject, block/resource/
 rendered/unknown source snapshot evidence, adapter identity and version, media
 type, content hash, capture time, and optional rendered passage observation.
-Anchors are discriminated as `text-quote`, `dom-range`, `pdf-page-region`,
+Anchors are discriminated as `whole-subject`, `text-quote`, `dom-range`, `pdf-page-region`,
 `structured-entity-field`, or `provider-comment-id`. This is the codec seam:
 surfaces capture and display typed evidence without learning persistence or
-resolution-table details.
+resolution-table details. A `whole-subject` comment has no passage coordinates;
+reconciliation preserves its subject identity across text changes. Readers show
+these under Note comments, separately from unresolved passage comments.
 
 Block selection captures a block representation. File selection first calls
 `resources.intern-filesystem` and targets that filesystem Resource; the path is

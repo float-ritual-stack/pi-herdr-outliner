@@ -1110,6 +1110,32 @@ describe("Pi Markdown detail preview", () => {
     }
   });
 
+  test("general note comments have their own reachable group beside lost passages", () => {
+    const original = "Title\n\nOld passage";
+    const current = "Title\n\nRewritten body";
+    const detail = state(current, current);
+    const passage = textTarget(original, 7, original.length);
+    const whole = { ...passage, anchor: { kind: "whole-subject" as const } };
+    detail.annotationThreads = [
+      annotationThread("general-note", whole, "Overall feedback"),
+      annotationThread("lost-passage", passage, "Passage feedback"),
+    ];
+    const layout = previewLayout(detail);
+    for (const width of [32, 72]) {
+      const collapsed = layout.render(width).map(stripTerminalSequences).join("\n");
+      expect(collapsed).toContain("Note comments (1)");
+      expect(collapsed).toContain("Unpositioned comments (1)");
+      const group = detail.previewRegions.regions.find(region => region.id.endsWith(":general"))!;
+      expect(group.sourceSpan).toBeNull();
+      expect(togglePreviewRegionDisclosure(detail.previewRegions, group.id)).toBe(true);
+      const expanded = layout.render(width).map(stripTerminalSequences).join("\n");
+      expect(expanded).toContain("Overall feedback");
+      expect(expanded).not.toContain("Passage feedback");
+      expect(expanded).not.toContain("Original quote:");
+      togglePreviewRegionDisclosure(detail.previewRegions, group.id);
+    }
+  });
+
   test("keeps a stale source representation unpositioned even when its quote still exists", () => {
     const original = "Title\n\nTarget quote\n\nOriginal ending";
     const current = original.replace("Original ending", "Different ending");

@@ -319,6 +319,25 @@ test("comments on a directly dragged rendered selection from preview", async () 
   }]);
 });
 
+for (const outcome of ["changed", "failed"] as const) {
+  test(`Comment does not reinterpret a ${outcome} pending selection as a general comment`, async () => {
+    const previewState = state();
+    previewState.mode = "preview";
+    const pending = Promise.withResolvers<DetailDirectSelectionCapture | null>();
+    const detail = harness(previewState, false, { directSelectionCapture: () => pending.promise });
+    const action = detail.press({ name: "c" }, "c");
+    if (outcome === "changed") {
+      previewState.document = { kind: "empty" };
+      pending.resolve(null);
+    } else pending.reject(new Error("Selection capture unavailable"));
+    await action;
+    expect(detail.intents.some(intent => intent.type === "annotation.comment.direct")).toBe(false);
+    expect(detail.intents).toContainEqual({ type: "status.set", message: outcome === "changed"
+      ? "The document changed while capturing the comment; select the passage again"
+      : "Selection capture unavailable" });
+  });
+}
+
 test("invokes semantic actions directly regardless of bindings and reports invalid contexts", async () => {
   const previewState = state();
   previewState.mode = "preview";

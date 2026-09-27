@@ -46,7 +46,7 @@ export function displayedResourceText(
 
 export interface DetailAnnotationGroup {
   regionId: string;
-  placement: "inline" | "unpositioned";
+  placement: "inline" | "general" | "unpositioned";
   startLine: number;
   endLine: number;
   sourceLineCount: number;
@@ -96,6 +96,7 @@ export function detailAnnotationGroups(
   const renderedStarts = sourceLineStarts(renderedAnchorText);
   const groups = new Map<string, DetailAnnotationGroup>();
   const unpositioned: AnnotationThread[] = [];
+  const general: AnnotationThread[] = [];
   const displayedOffsets = new Map<string, number>();
   const compareThreads = (left: AnnotationThread, right: AnnotationThread): number =>
     (displayedOffsets.get(left.block.id) ?? Number.MAX_SAFE_INTEGER) -
@@ -112,6 +113,15 @@ export function detailAnnotationGroups(
     if (displayedResourceTargetId && originalContext &&
       !annotationReferenceContextsEqual(currentContext, state.target?.kind === "resource" ? state.target.referenceContext : undefined)) {
       unpositioned.push(thread);
+      continue;
+    }
+    // General comments belong to a subject, not to any particular source range.
+    // Contextual references still pass the occurrence-resolution guards above.
+    const generalSubject = thread.originalTarget.representation.subject;
+    if (thread.originalTarget.anchor.kind === "whole-subject" &&
+      ((displayedResourceTargetId && generalSubject.kind === "resource" && generalSubject.resourceId === displayedResourceTargetId) ||
+        (!displayedResourceTargetId && selected && generalSubject.kind === "block" && generalSubject.blockId === selected.id))) {
+      general.push(thread);
       continue;
     }
     if (displayedResourceTargetId) {
@@ -242,6 +252,15 @@ export function detailAnnotationGroups(
   for (const group of positioned) group.threads.sort(compareThreads);
   return [
     ...positioned,
+    ...(general.length === 0 ? [] : [{
+      regionId: `annotation:${displayedResourceTargetId ?? selected?.id}:general`,
+      placement: "general" as const,
+      startLine: renderedSourceLineCount,
+      endLine: renderedSourceLineCount,
+      sourceLineCount: renderedSourceLineCount,
+      sourceSpan: null,
+      threads: general.sort(compareThreads),
+    }]),
     ...(unpositioned.length === 0 ? [] : [{
       regionId: `annotation:${displayedResourceTargetId ?? selected?.id}:unpositioned`,
       placement: "unpositioned" as const,

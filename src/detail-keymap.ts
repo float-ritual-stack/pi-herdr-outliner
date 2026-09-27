@@ -354,8 +354,18 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
         return true;
       case "detail.comment.begin": {
         if (controller.state.mode === "preview") {
-          const capture = (await options.directSelectionCapture?.()) ?? null;
-          await dispatch({ type: "annotation.comment.direct", capture });
+          const document = controller.state.document;
+          const target = controller.state.target;
+          try {
+            const capture = (await options.directSelectionCapture?.()) ?? null;
+            if (controller.state.document !== document || controller.state.target !== target || controller.state.mode !== "preview") {
+              await setStatus("The document changed while capturing the comment; select the passage again");
+              return true;
+            }
+            await dispatch({ type: "annotation.comment.direct", capture });
+          } catch (error) {
+            await setStatus(error instanceof Error ? error.message : String(error));
+          }
         } else {
           await dispatch({ type: "comment.begin" });
         }
