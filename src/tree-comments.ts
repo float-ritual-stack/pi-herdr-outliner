@@ -55,7 +55,7 @@ export class TreeComments {
       ordinary.forEach(child=>emit(child,offset));
       if (!threads.length || !isBlockTreeRow(owner)) return;
       const rowId=`comments:${owner.rowId}`;
-      if (threads.some(thread=>revealPath.has(thread))) this.expanded.add(rowId);
+      if (!options.revealAll && threads.some(thread=>revealPath.has(thread))) this.expanded.add(rowId);
       const collapsed=!options.revealAll && !this.expanded.has(rowId);
       result.push({kind:'comment-group',rowId,parentRowId:owner.rowId,
         owner:{rowId:owner.rowId,blockId:owner.canonicalId},depth:depth+1,

@@ -4308,6 +4308,10 @@ test('comment groups hide discussion without hiding ordinary children and disclo
   await c.handleRowClick(host.id); await c.handleAction('tree.filter');
   await c.handlePaste('first-comment');
   expect(canonicalRowIds(c.view().rows)).toContain(first.id);
+  await c.handleKeypress('',{name:'return'},'pass');
+  await c.handleRowClick(first.id);
+  await c.handleKeypress('.',{name:'.'},'pass');
+  expect(selectedBlockRow(c).multilineExpanded).toBe(true);
   await c.handleAction('tree.filter.clear');
   expect(groups().find(row=>row.rowId===physicalGroup.rowId)?.collapsed).toBe(true);
   expect(groups().find(row=>row.rowId===virtualGroup.rowId)?.collapsed).toBe(false);

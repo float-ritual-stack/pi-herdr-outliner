@@ -45,6 +45,14 @@ const result=await runHerdrScenario({
     await s.checkpoint('02-mouse-opens-physical-group');
     await s.keys(tree,'left');
     await s.waitFor('keyboard closes group',treeText,text=>rootCommentLines(text).length===0);
+    await s.revealTree(tree,host.id);
+    await s.keys(tree,'/'); await s.text(tree,'BETA PASSAGE'); await s.keys(tree,'enter');
+    await s.waitVisible(tree,'Comment on “BETA PASSAGE”');
+    await s.keys(tree,'down','.');
+    await s.waitVisible(tree,'SECOND DISCUSSION');
+    await s.keys(tree,'?'); await s.text(tree,'Clear branch filter'); await s.keys(tree,'enter');
+    await s.waitFor('filter restores closed groups after expanding a match',treeText,text=>text.split('Comments  3 threads').length===3&&rootCommentLines(text).length===0);
+    await s.checkpoint('02a-filter-restores-disclosure');
     await clickGroup(1);
     await s.waitFor('virtual threads only',treeText,text=>rootCommentLines(text).length===4);
     await s.checkpoint('03-independent-virtual-group');
