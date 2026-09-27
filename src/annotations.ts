@@ -291,6 +291,7 @@ export function normalizeAnnotationRepresentation(
 export function normalizeAnnotationAnchor(value: unknown): AnnotationAnchor {
   if (!value || typeof value !== "object") throw new Error("Annotation anchor must be an object");
   const anchor = value as Record<string, unknown>;
+  if (anchor.kind === "whole-subject") return { kind: "whole-subject" };
   if (anchor.kind === "text-quote") {
     const start = anchor.start === null ? null : integer(anchor.start, "Annotation start");
     const end = anchor.end === null ? null : integer(anchor.end, "Annotation end");
@@ -571,6 +572,7 @@ export function parseStoredResolutionEvent(json: string): AnnotationResolutionEv
 }
 
 function quoteForHeading(target: AnnotationTarget): string {
+  if (target.anchor.kind === "whole-subject") return "Whole note";
   if (target.anchor.kind === "text-quote") return target.anchor.exact;
   if (target.anchor.kind === "dom-range") return target.anchor.exact;
   if (target.anchor.kind === "pdf-page-region") return target.anchor.exact ?? `page ${target.anchor.page}`;

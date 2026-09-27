@@ -441,6 +441,13 @@ export function reanchorAnnotationTarget(
   pdfPages: readonly PdfPageText[] = [],
 ): AnnotationReanchorResult {
   const anchor = target.anchor;
+  if (anchor.kind === "whole-subject") {
+    return resolved(candidate(
+      { representation, anchor },
+      method(TEXT_CODEC, "whole-subject"),
+      1,
+    ));
+  }
   if (
     target.representation.contentHash !== null &&
     target.representation.contentHash === representation.contentHash

@@ -355,6 +355,7 @@ export interface AnnotationRepresentation {
 }
 
 export type AnnotationAnchor =
+  | { readonly kind: "whole-subject" }
   | {
       readonly kind: "text-quote";
       readonly start: number | null;

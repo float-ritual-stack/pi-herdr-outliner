@@ -242,6 +242,7 @@ function boundedSlice(value: string, maximum: number): { readonly text: string; 
 
 function targetPassage(target: AnnotationTarget): string {
   const anchor = target.anchor;
+  if (anchor.kind === "whole-subject") return "Whole note";
   if (anchor.kind === "text-quote" || anchor.kind === "dom-range") return anchor.exact;
   if (anchor.kind === "pdf-page-region") return anchor.exact ?? `PDF page ${anchor.page}`;
   if (anchor.kind === "structured-entity-field") return `${anchor.entityType}/${anchor.entityId}/${anchor.fieldPath.join(".")}`;

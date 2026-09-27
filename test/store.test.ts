@@ -2903,6 +2903,31 @@ Second paragraph`;
     expect(replayedAfterSourceChange.annotations[0]!.block.id).toBe(annotation.block.id);
   });
 
+  test("whole-note comments survive rewritten text without becoming lost passages", () => {
+    const store = makeStore();
+    const source = store.create("Draft proposal");
+    const target: AnnotationTarget = {
+      representation: blockAnnotationRepresentation(source, "whole-note-v1"),
+      anchor: { kind: "whole-subject" },
+    };
+    const input = { target, body: "Ready for discussion", source: "user" as const };
+    const created = store.createAnnotation("general-comment", input).annotations[0]!;
+    expect(store.createAnnotation("general-comment", input).annotations[0]!.block.id).toBe(created.block.id);
+    store.replyToAnnotation("general-reply", { annotationId: created.block.id, body: "Agreed", source: "agent" });
+    const rewritten = store.update(source.id, "A completely different draft", source.revision);
+    const receipt = store.reconcileAnnotationThreads({
+      subject: { kind: "block", blockId: source.id },
+      newRepresentation: blockAnnotationRepresentation(rewritten, "whole-note-v2"),
+    });
+    const thread = receipt.threads.find(thread => thread.block.id === created.block.id)!;
+    expect(thread.originalTarget).toEqual(target);
+    expect(thread.currentResolution.status).toBe("resolved");
+    expect(thread.resolvedTarget?.anchor).toEqual({ kind: "whole-subject" });
+    expect(thread.resolvedTarget?.representation.contentHash).toBe(annotationSourceHash(rewritten.text));
+    expect(thread.replies.map(reply => reply.body)).toEqual(["Agreed"]);
+    expect(() => store.createAnnotation("stale-general-comment", input)).toThrow("snapshot is stale");
+  });
+
   test("a sibling move cannot make an unchanged annotation source stale", () => {
     const store = makeStore();
     try {

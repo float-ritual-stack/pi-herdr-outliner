@@ -274,6 +274,8 @@ export function annotationTargetLabel(target: AnnotationTarget): string {
 export function annotationTargetText(target: AnnotationTarget): string {
   const anchor = target.anchor;
   switch (anchor.kind) {
+    case "whole-subject":
+      return "Whole note";
     case "text-quote":
     case "dom-range":
       return anchor.exact;
