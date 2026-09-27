@@ -13,6 +13,9 @@ This file records notable user-facing changes. The project remains active dogfoo
   Drag-selected local Preview passages retain their quoted text without guessing
   source offsets. Inbox navigation and receipt updates preserve active drafts;
   completed Escape input no longer consumes the next Tree shortcut as Alt.
+  Keyboard passage selection uses v, arrows and Shift+arrows in the visible
+  Preview viewport. Preview comment actions appear in the shared action menu
+  and have their own configurable shortcuts, separate from Tree browsing.
   Protocol 78 adds the whole-subject anchor and captured Preview/Inbox evidence.
   PIE-290.
 

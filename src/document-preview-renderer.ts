@@ -86,9 +86,9 @@ export function renderDocumentPreview(preview:DocumentPreviewState,rect:PreviewR
     navigation+=enabled?text:`\x1b[2m${text}\x1b[22m`;column+=text.length;
   }
   const links=documentPreviewLinks(preview.document,content.width).filter(link=>link.row>=offset&&link.row<offset+content.height).map(link=>({uri:link.uri,rect:{x:content.x+link.column,y:content.y+link.row-offset,width:link.width,height:1}}));
-  const lines=[`${preview.focused?'●':'○'} Preview · ${sanitizeDynamicText(preview.title)}`,navigation,...rendered.slice(offset,offset+content.height)];
+  const lines=[preview.selecting?'Select passage · arrows move · Shift selects · c comment':`${preview.focused?'●':'○'} Preview · ${sanitizeDynamicText(preview.title)}`,navigation,...rendered.slice(offset,offset+content.height)];
   while(lines.length<rect.height-1)lines.push('');
-  lines.push(preview.notice ? sanitizeDynamicText(preview.notice) : preview.activeLink ? `Enter follow · ${sanitizeDynamicText(preview.activeLinkLabel??preview.activeLink)}` : `c comment · [/] threads · Tab links · ${help}`);
+  lines.push(preview.notice ? sanitizeDynamicText(preview.notice) : preview.activeLink ? `Enter follow · ${sanitizeDynamicText(preview.activeLinkLabel??preview.activeLink)}` : `c comment · v select · [/] threads · Tab links · ${help}`);
   return {rect,content,lines:lines.slice(0,rect.height).map(line=>shade(line,rect.width)),offset,totalRows:rendered.length,links,controls};
 }
 export function pointInPreview(rect:PreviewRect,column:number,row:number):boolean{return column>=rect.x&&column<rect.x+rect.width&&row>=rect.y&&row<rect.y+rect.height;}
@@ -100,12 +100,12 @@ function renderCompactPreview(preview: DocumentPreviewState, rect: PreviewRect, 
   const offset = Math.max(0, Math.min(preview.offset, Math.max(0, rendered.length - content.height)));
   const controls: NonNullable<DocumentPreviewFrame["controls"]> = [];
   // Unavailable history controls are omitted so they never take title space.
-  const actions = ([["‹", "preview.back", preview.canBack], ["›", "preview.forward", preview.canForward],
+  const actions = (preview.selecting ? [["c","preview.comment",true],["Esc","preview.selection.cancel",true]] as const : [["‹", "preview.back", preview.canBack], ["›", "preview.forward", preview.canForward],
     ["Open", "preview.open", true], ["c", "preview.comment", !!preview.document.commentTarget], ...(menuAction ? [["⋯", menuAction, true]] : [])] as const)
     .filter(([, , enabled]) => enabled);
   const controlWidth = actions.reduce((sum, [label]) => sum + String(label).length + 2, 0);
   const titleWidth = Math.max(0, rect.width - controlWidth - 1);
-  let strip = titleWidth ? truncateToWidth(`${preview.focused ? "●" : "○"} Preview · ${sanitizeDynamicText(preview.title)}`, titleWidth) + " " : "";
+  let strip = titleWidth ? truncateToWidth(preview.selecting ? "Select passage · Shift+arrows" : `${preview.focused ? "●" : "○"} Preview · ${sanitizeDynamicText(preview.title)}`, titleWidth) + " " : "";
   let column = visibleWidth(strip);
   for (const [label, action] of actions) {
     const text = `[${label}]`;

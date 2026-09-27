@@ -233,8 +233,8 @@ export class InboxController {
   }
   private previewKey = '';
   constructor(private readonly effects: InboxEffects) {
-    this.sourceReader = new DocumentPreview(effects, () => effects.invalidate(),effects.clientId,effects.openExternal,()=>this.sourceInput.captureSelection());
-    this.outputReader = new DocumentPreview(effects, () => effects.invalidate(),effects.clientId,effects.openExternal,()=>this.outputInput.captureSelection());
+    this.sourceReader = new DocumentPreview(effects, () => effects.invalidate(),effects.clientId,effects.openExternal,this.sourceInput);
+    this.outputReader = new DocumentPreview(effects, () => effects.invalidate(),effects.clientId,effects.openExternal,this.outputInput);
   }
   private async openPreview(target:OutlinerNavigationTarget):Promise<void>{
     if(this.effects.openPreview)return this.effects.openPreview(target);

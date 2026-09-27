@@ -69,11 +69,34 @@ const result=await runHerdrScenario({
     assert.ok(passage.anchor.exact.startsWith('Passage begins here'));
     assert.ok(passage.anchor.exact.includes('\n'));
     assert.equal(passage.anchor.start,null);
-    assert.equal(passage.representation.observation?.validation,'preview-pointer');
+    assert.equal(passage.representation.observation?.validation,'preview-selection');
     assert.equal(passage.representation.observation?.quote,passage.anchor.exact);
     await s.keys(panes.tree,']');
     await s.waitVisible(panes.tree,'WRAPPED QUOTE FEEDBACK');
     await s.checkpoint('wrapped-preview-passage-saved');
+    await s.keys(panes.tree,'esc');
+    await s.waitVisible(panes.tree,'○ Preview');
+    const keyboardNote=await s.client.request<Block>({action:'create',text:'KEYBOARD PASSAGE NOTE\n\nPreserve this source while selecting from its rich Preview.'});
+    await s.revealTree(panes.tree,keyboardNote.id);
+    await s.waitVisible(panes.tree,'Preserve this source');
+    await s.keys(panes.tree,'f7');
+    await s.waitVisible(panes.tree,'● Preview');
+    await s.keys(panes.tree,'v');
+    await s.waitVisible(panes.tree,'Select passage');
+    await terminal.write('\x1b[1;2Fc');
+    await s.waitVisible(panes.tree,'Comment on passage');
+    await s.waitVisible(panes.tree,'KEYBOARD PASSAGE NOTE');
+    await s.text(panes.tree,'KEYBOARD QUOTE FEEDBACK');
+    await s.keys(panes.tree,'ctrl+s');
+    const keyboardThreads=await s.waitFor('keyboard selection persisted once',()=>s.client.request<AnnotationThread[]>({action:'annotations.list',query:{subject:{kind:'block',blockId:keyboardNote.id}}}),threads=>threads.length===1);
+    assert.equal(keyboardThreads[0]!.originalTarget.anchor.kind,'text-quote');
+    assert.equal(keyboardThreads[0]!.originalTarget.representation.observation?.quote,'KEYBOARD PASSAGE NOTE');
+    assert.deepEqual((keyboardThreads[0]!.originalTarget.representation.observation as {input?:string})?.input,'keyboard');
+    assert.equal((await s.client.request<Block>({action:'get',blockId:keyboardNote.id})).text,keyboardNote.text);
+    await s.keys(panes.tree,']');
+    await s.waitVisible(panes.tree,'KEYBOARD QUOTE FEEDBACK');
+    await s.checkpoint('keyboard-preview-passage-saved');
+
 
   },
 });

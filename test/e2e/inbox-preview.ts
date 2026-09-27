@@ -94,7 +94,7 @@ const result = await runHerdrScenario({
     await session.focus(pane);await terminal.resize(240,74);
     await session.waitFor('wide geometry settled',()=>session.visible(pane),text=>text.includes('Preview') && Math.max(...text.split('\n').map(line=>line.length))>100);
     if ((await session.visible(pane)).includes('● Preview')) {await session.keys(pane,'esc');await session.waitFor('Preview focus released',()=>session.visible(pane),text=>text.includes('○ Preview') && !text.includes('● Preview'));}
-    await session.keys(pane,'esc');await session.waitVisible(pane,'[Indent:');
+    await session.keys(pane,'esc');await session.waitVisible(pane,'● Tree [Note]');
     await session.record('preview-contract',{richSource:true,multipleOutputs:true,nativeRoleClicks:true,previewFocus:true,explicitOpen:true,fixtureModel:true});
   },
 });

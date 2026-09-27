@@ -129,6 +129,7 @@ export class ComposedTree implements Component {
   }) {
     this.keyInspector=new KeyInspector({actionKeymap:options.actionKeymap,invalidate:options.invalidate});
     this.controller = createTreeController({
+      previewSelectionInput:this.previewInput,
       inspectProperties: blockId => { openDetailPane({workspaceRoot: options.workspaceRoot, browsingContextId: crypto.randomUUID(), propertyInspectorBlockId: blockId}); },
       density: () => options.viewPreferences.density,
       setDensity: value => options.viewPreferences.setDensity(value),

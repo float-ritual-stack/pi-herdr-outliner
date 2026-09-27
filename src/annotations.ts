@@ -280,12 +280,13 @@ export function normalizeAnnotationRepresentation(
   ) throw new Error("Resource snapshot does not belong to the annotation subject");
   if (representation.observation !== undefined) {
     const raw=representation.observation as Record<string,unknown>;
-    if(raw?.validation==='preview-pointer'){
+    if(raw?.validation==='preview-selection'){
+      if(raw.input!=='pointer' && raw.input!=='keyboard')throw Error('Invalid Preview input kind');
       const projection=raw.projection;
       if(!['canonical','resolved','generated','mixed'].includes(String(projection)))throw new Error('Invalid Preview projection');
       const representationId=identity(raw.representationId,'Preview source representation');
       if(representationId!==normalized.id)throw new Error('Preview observation does not belong to this representation');
-      return {...normalized,observation:{validation:'preview-pointer',
+      return {...normalized,observation:{validation:'preview-selection',input:raw.input,
         quote:evidenceText(raw.quote,'Preview passage quote'),capturedAt:timestamp(raw.capturedAt,'Preview capture time'),
         readerId:identity(raw.readerId,'Preview reader'),renderRevision:integer(raw.renderRevision,'Preview render revision',1),
         representationId,snapshotHash:identity(raw.snapshotHash,'Preview snapshot hash'),

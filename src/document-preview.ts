@@ -22,10 +22,18 @@ type SavedPreviewSource = Pick<Block,"id"|"text"|"revision"> & Partial<Pick<Bloc
 
 export interface PreviewPassageCapture {
   document:DetailReadPreviewDocument;
+  input:"pointer"|"keyboard";
   quote:string;
   snapshotText:string;
   capturedAt:string;
   renderRevision:number;
+}
+
+export interface PreviewSelectionInput {
+  readonly selecting:boolean;
+  captureSelection():PreviewPassageCapture|null;
+  selectionKey(key:TerminalKey,str?:string):boolean;
+  clearSelection():void;
 }
 
 export interface PreviewCommentDraft {
@@ -37,6 +45,7 @@ export interface PreviewCommentDraft {
 }
 export interface DocumentPreviewState {
   readonly comment?:PreviewCommentDraft;
+  readonly selecting?:boolean;
   readonly target: OutlinerNavigationTarget;
   readonly title: string;
   readonly document: DetailReadPreviewDocument;
@@ -60,8 +69,8 @@ export class DocumentPreview {
   private history:DocumentPreviewState[]=[];
   private future:DocumentPreviewState[]=[];
   private value: DocumentPreviewState | null = null;
-  constructor(private client: OutlinerRequester, private changed: () => void, private clientId?: string, private openExternal?: (url:string)=>void|Promise<void>,private captureSelection?:()=>PreviewPassageCapture|null) {}
-  get state(): DocumentPreviewState | null { return this.value ? {...this.value,canBack:this.history.length>0,canForward:this.future.length>0} : null; }
+  constructor(private client: OutlinerRequester, private changed: () => void, private clientId?: string, private openExternal?: (url:string)=>void|Promise<void>,private selectionInput?:PreviewSelectionInput) {}
+  get state(): DocumentPreviewState | null { return this.value ? {...this.value,selecting:this.selectionInput?.selecting??false,canBack:this.history.length>0,canForward:this.future.length>0} : null; }
   cancelLoad(): void { this.generation++; }
   get hasDraft():boolean { return !!this.value?.comment; }
   private protectDraft():boolean {
@@ -103,6 +112,7 @@ export class DocumentPreview {
       else if(result==='cancel'){this.value={...this.value,comment:undefined,notice:'Comment cancelled'};}
       this.changed();return true;
     }
+    if(this.selectionInput?.selectionKey(key,str)){this.changed();return true;}
     const character=str||key.name;
     if(character==='c'&&!key.ctrl&&!key.meta){this.beginComment();return true;}
     if(!key.ctrl&&!key.meta&&(character==='['||character===']')){this.moveComment(character===']'?1:-1,width);return true;}
@@ -120,7 +130,7 @@ export class DocumentPreview {
   beginComment(annotationId?:string):void {
     if(!this.value||this.value.loading||this.value.comment)return;
     let target=this.value.document.commentTarget;
-    const capture=annotationId?null:this.captureSelection?.();
+    const capture=annotationId?null:this.selectionInput?.captureSelection();
     if(capture){
       if(capture.document!==this.value.document || !target || !this.clientId){
         this.value={...this.value,notice:'The selected passage is no longer available here; select it again'};this.changed();return;
@@ -128,13 +138,14 @@ export class DocumentPreview {
       const document=this.value.document;
       const projected=document.projectedText!==document.canonicalText,resolved=document.resolvedText!==document.projectedText;
       target={...target,representation:{...target.representation,observation:{
-        validation:'preview-pointer',quote:capture.quote,capturedAt:capture.capturedAt,readerId:this.clientId,
+        validation:'preview-selection',input:capture.input,quote:capture.quote,capturedAt:capture.capturedAt,readerId:this.clientId,
         renderRevision:capture.renderRevision,representationId:target.representation.id,snapshotHash:annotationSourceHash(capture.snapshotText),
         projection:projected&&resolved?'mixed':projected?'generated':resolved?'resolved':'canonical',
       }},anchor:{kind:'text-quote',start:null,end:null,exact:capture.quote,prefix:'',suffix:''}};
     }
     if(annotationId&&!this.value.document.annotations?.annotationThreads.some(thread=>thread.block.id===annotationId))return;
     if(!annotationId&&!target){this.value={...this.value,notice:'No captured source available to comment on'};this.changed();return;}
+    this.selectionInput?.clearSelection();
     this.generation++;
     this.value={...this.value,focused:true,comment:{requestId:crypto.randomUUID(),buffer:new TextBuffer(),saving:false,
       ...(annotationId?{annotationId}:{target:structuredClone(target!)})},notice:undefined};
@@ -195,7 +206,20 @@ export class DocumentPreview {
   }
   async action(action:string,open:(target:OutlinerNavigationTarget)=>Promise<void>):Promise<void>{
     if(action==='preview.comment'){this.beginComment();return;}
+    if(action==='preview.selection.cancel'){this.selectionInput?.clearSelection();this.changed();return;}
     if(this.protectDraft())return;
+    if(action==='preview.select'){
+      this.focus();this.selectionInput?.selectionKey({name:'v'},'v');this.changed();return;
+    }
+    if(action==='preview.previous'||action==='preview.next'){this.moveComment(action==='preview.next'?1:-1);return;}
+    if(action==='preview.reply'||action==='preview.lifecycle'){
+      const annotationId=this.value?.document.annotations?.selectedAnnotationId;
+      if(annotationId){
+        if(action==='preview.reply')this.beginComment(annotationId);
+        else await this.action('preview.link:'+encodeURIComponent(previewRegionActionUri({type:'annotation.thread.lifecycle',annotationId})),open);
+      }
+      return;
+    }
     const following=action==='preview.follow'||action.startsWith('preview.link:');
     const generation=following?++this.generation:this.generation;
     try {

@@ -130,7 +130,7 @@ if(initialRoot && ![initialRoot.rowId,initialRoot.canonicalId,initialRoot.label]
   throw new Error("OUTLINER_TREE_ROOT must identify a Tree occurrence");
 }
 const controller = createTreeController({
-  capturePreviewSelection:()=>previewInput.captureSelection(),
+  previewSelectionInput:previewInput,
   inspectProperties: blockId => { openDetailPane({workspaceRoot: paths.workspaceRoot, browsingContextId: crypto.randomUUID(), propertyInspectorBlockId: blockId}); },
   density: () => viewPreferences.density,
   setDensity: value => viewPreferences.setDensity(value),

@@ -187,7 +187,7 @@ export interface TreeView {
 }
 
 export interface TreeControllerEffects {
-  capturePreviewSelection?(): import('./document-preview').PreviewPassageCapture|null;
+  previewSelectionInput?: import('./document-preview').PreviewSelectionInput;
   density?(): ReaderDensity;
   inspectProperties?(blockId: string): void | Promise<void>;
   setDensity?(density: ReaderDensity): void;
@@ -393,7 +393,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     ()=>["edit","add-child","add-sibling"].includes(mode),()=>quickEditSource?{blockId:quickEditSource.id,text:quickBuffer.text}:undefined);
 
 
-  const localReader = new DocumentPreview(effects, () => effects.invalidate(), effects.clientId,effects.openExternal,effects.capturePreviewSelection);
+  const localReader = new DocumentPreview(effects, () => effects.invalidate(), effects.clientId,effects.openExternal,effects.previewSelectionInput);
   let previewPreferences = defaultPreviewPreferences();
   let viewerLines: string[] = [];
   let viewerPath = "";
@@ -489,6 +489,8 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   });
 
   function actionScope(): string {
+    if(mode==='browse'&&localReader.state?.focused)return 'reader';
+    if(mode==='inbox'&&!inbox.searchEditing&&!inbox.steering&&inbox.previewMode==='content'&&inbox.reader.state?.focused)return 'inbox-reader';
     if(mode==="viewer"&&workspaceReport)return "workspace";
     return mode === "inbox" && inbox.searchEditing ? "inbox-search" : mode === "inbox" && inbox.steering ? "inbox-steer" : mode;
   }
@@ -682,6 +684,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
 
   function inboxHelpText(): string | null {
     if (mode !== "inbox") return null;
+    if(actionScope()==='inbox-reader')return actionKeymap.helpText("tree","inbox-reader");
     if(inbox.searchEditing)return "Esc cancel search · Enter browse results · Alt+Enter open Detail\nType to search all history · ↑↓ select";
     if (inbox.steering) return actionKeymap.helpText("tree", "inbox-steer", ["tree.cancel", "tree.inbox.retry.submit"]);
     const main = actionKeymap.helpText("tree", "inbox", [
@@ -2321,6 +2324,13 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     navigationGeneration++;
     if(openRecovery.state.active)openRecovery.dismiss();
     if(mode==='inbox' && inbox.retainCommentDraft())return;
+    if(actionId.startsWith('tree.reader.')){
+      if(mode==='action-menu')mode=actionMenuReturnMode;
+      const action='preview.'+actionId.slice('tree.reader.'.length);
+      if(mode==='inbox')await inbox.previewAction(action);
+      else await localReader.action(action,openPreviewTarget);
+      return;
+    }
     if(actionId.startsWith('preview.')){
       if(mode==='inbox')await inbox.previewAction(actionId);
       else await localReader.action(actionId,openPreviewTarget);
@@ -2767,9 +2777,13 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         const frame=treePreviewFrame(localReader.state,effects.terminalWidth(),effects.terminalHeight(),"",previewPreferences,effects.density?.() ?? "compact");
         await localReader.key(key,frame.content.width,frame.content.height,openPreviewTarget,str);return;
       }
-      if(key.name==="escape"){localReader.focus(false);return;}
-      const action=actionKeymap.canonicalize("tree","browse",str,key);
+      if(key.name==="escape"){
+        if(localReader.state.selecting){await localReader.key(key,0,0,openPreviewTarget,str);return;}
+        localReader.focus(false);return;
+      }
+      const action=actionKeymap.canonicalize("tree","reader",str,key);
       if(action.suppressed)return;
+      if(action.actionId?.startsWith("tree.reader."))return handleAction(action.actionId);
       if(action.actionId && (action.actionId.startsWith("tree.preview.") || ["tree.preview.focus","tree.preview.close","tree.pane.new","tree.navigation.link","tree.navigation.once","tree.menu.open"].includes(action.actionId))) return handleAction(action.actionId);
       const frame=treePreviewFrame(localReader.state,effects.terminalWidth(),effects.terminalHeight(),"",previewPreferences,effects.density?.() ?? "compact");
       if(await localReader.key(key,frame.content.width,frame.content.height,openPreviewTarget,str))return;

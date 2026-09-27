@@ -38,7 +38,7 @@ test('local Preview reveals canonical passage and general threads without openin
       if(input.action==='annotations.reply') return store.replyToAnnotation(input.requestId,input.input,input.author) as T;
       if(input.action==='annotations.lifecycle') return store.setAnnotationLifecycle(input.input,input.mutation) as T;
       throw Error('Unexpected Preview request '+input.action);
-    }}, () => {}, 'preview-test', undefined, ()=>pointer.captureSelection());
+    }}, () => {}, 'preview-test', undefined, pointer);
     await reader.load({kind:'block', blockId:block.id});
     reader.focus();
     const paint = (width:number) => documentPreviewLines(reader.state!.document, width).map(stripTerminalSequences).join('\n');
@@ -132,6 +132,8 @@ test('local Preview reveals canonical passage and general threads without openin
     expect(await reader.key({},36,18,noDetail,'c')).toBe(true);
     expect(reader.state!.comment!.target!.anchor.kind).toBe('text-quote');
     await reader.key({name:'escape'},36,18,noDetail);
+    pointer.handle(`\x1b[<0;${frame.content.x+1};${row+1}M`,actions,()=>{},()=>{});
+    pointer.handle(`\x1b[<0;${frame.content.x+20};${row+2}m`,actions,()=>{},()=>{});
     const commentControl=frame.controls!.find(control=>control.action==='preview.comment')!;
     pointer.handle(`\x1b[<0;${commentControl.rect.x+1};${commentControl.rect.y+1}M`,actions,()=>{},()=>{});
     expect(reader.state!.comment!.target!.anchor).toEqual({kind:'text-quote',start:null,end:null,exact:copied,prefix:'',suffix:''});
@@ -141,14 +143,29 @@ test('local Preview reveals canonical passage and general threads without openin
     expect(reader.state!.comment).toBeUndefined();
     const wrapped=store.listAnnotationThreads({subject:{kind:'block',blockId:block.id}}).find(thread=>thread.body==='Wrapped passage feedback')!;
     expect(wrapped.originalTarget.anchor).toEqual({kind:'text-quote',start:null,end:null,exact:copied,prefix:'',suffix:''});
-    expect(wrapped.originalTarget.representation.observation).toMatchObject({validation:'preview-pointer',quote:copied,readerId:'preview-test',representationId:representation.id,projection:'canonical'});
+    expect(wrapped.originalTarget.representation.observation).toMatchObject({validation:'preview-selection',quote:copied,readerId:'preview-test',representationId:representation.id,projection:'canonical'});
     expect(wrapped.originalTarget.representation.sourceSnapshot).toEqual(historicalRepresentation.sourceSnapshot);
     expect(paint(36)).toContain('Unpositioned comments');
     const observation=wrapped.originalTarget.representation.observation;
-    if(observation?.validation!=='preview-pointer')throw Error('Expected pointer observation');
+    if(observation?.validation!=='preview-selection')throw Error('Expected pointer observation');
     expect(()=>store.createAnnotation('wrong-observation',{body:'Wrong source',source:'user',target:{...wrapped.originalTarget,
       representation:{...wrapped.originalTarget.representation,observation:{...observation,representationId:'another-representation'}},
     }})).toThrow('does not belong');
+
+    await reader.loadText({kind:'block',blockId:block.id},'Before',async()=>({...block,inboxAttemptId:attempt.id}));
+    reader.focus();
+    const keyboardFrame=renderDocumentPreview(reader.state!,{x:0,y:0,width:36,height:22},'help');
+    pointer.render(keyboardFrame.lines,keyboardFrame,reader.state);
+    expect(await reader.key({name:'v'},36,18,noDetail,'v')).toBe(true);
+    await reader.key({name:'end',shift:true},36,18,noDetail);
+    await reader.key({name:'c'},36,18,noDetail,'c');
+    expect(reader.state!.comment?.target?.anchor).toMatchObject({kind:'text-quote',exact:'Review'});
+    reader.paste('Keyboard passage feedback');
+    await reader.key({name:'s',ctrl:true},36,18,noDetail);
+    const keyboard=store.listAnnotationThreads({subject:{kind:'block',blockId:block.id}}).find(thread=>thread.body==='Keyboard passage feedback')!;
+    expect(keyboard.originalTarget.anchor).toMatchObject({kind:'text-quote',exact:'Review'});
+    expect(keyboard.originalTarget.representation.observation).toMatchObject({input:'keyboard',quote:'Review'});
+    expect(store.get(block.id)!.text).toBe(currentText);
 
 
 

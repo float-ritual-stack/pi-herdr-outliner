@@ -1,3 +1,4 @@
+import type {TerminalKey} from './terminal';
 import {PreviewSelection} from './preview-selection';
 import {parseTreePrimaryPointer,parseTreeWheelEvent,parseTreeSecondaryClick} from './tree-mouse';
 import {pointInPreview,type DocumentPreviewFrame} from './document-preview-renderer';
@@ -21,15 +22,37 @@ export class DocumentPreviewInput {
   private resizing: DocumentPreviewFrame | undefined;
   private renderRevision=0;
   private passage:PreviewPassageCapture|null=null;
+  private keyboardSelecting=false;
+  get selecting():boolean{return this.keyboardSelecting;}
   captureSelection():PreviewPassageCapture|null{return this.passage;}
+  clearSelection():void {this.keyboardSelecting=false;this.selection.clear();this.passage=null;}
+  private exclusions(){return this.frame?.links?.filter(link=>isCopyExcludedLink(link.uri)).map(link=>({row:link.rect.y,column:link.rect.x,width:link.rect.width}))??[];}
+  private retainCapture(input:'pointer'|'keyboard'):void {
+    const capture=this.selection.capture();
+    this.passage=capture && this.document?{...capture,input,document:this.document,renderRevision:this.renderRevision,capturedAt:new Date().toISOString()}:null;
+  }
+  selectionKey(key:TerminalKey,str=''):boolean {
+    if(!this.frame || !this.document)return false;
+    if((str||key.name)==='v'&&!key.ctrl&&!key.meta){
+      if(this.keyboardSelecting)this.clearSelection();
+      else {this.passage=null;this.keyboardSelecting=this.selection.beginKeyboard(this.frame.content,this.lines,this.exclusions());}
+      return true;
+    }
+    if(!this.keyboardSelecting)return false;
+    if(key.name==='escape'){this.clearSelection();return true;}
+    if(!key.ctrl&&!key.meta&&['left','right','up','down','home','end'].includes(key.name??'')){
+      this.selection.moveKeyboard(key.name!,!!key.shift);this.retainCapture('keyboard');return true;
+    }
+    return false;
+  }
   get ownsPointer(): boolean { return this.selection.ownsPointer || !!this.resizing; }
   render(lines:string[],frame:DocumentPreviewFrame|undefined,preview:DocumentPreviewState|null|undefined):string[]{
     const visible=frame && (frame.placement!=='compact'||preview?.focused)?frame:undefined;
     const geometry=visible?JSON.stringify([visible.content,visible.offset,[...(preview?.document.previewRegions?.disclosureOverrides ?? [])]]):'';
-    if(preview?.document!==this.document||geometry!==this.geometry){this.selection.clear();this.pressedLink=undefined;this.passage=null;}
+    if(preview?.document!==this.document||geometry!==this.geometry){this.clearSelection();this.pressedLink=undefined;}
     this.renderRevision++;
     this.document=preview?.document;this.geometry=geometry;this.frame=visible;this.lines=lines;
-    return visible?this.selection.highlight(lines,visible.content):lines;
+    return visible?this.selection.highlight(lines,visible.content,this.keyboardSelecting):lines;
   }
   handle(sequence:string,controller:PreviewInputActions,copy:(text:string)=>void,redraw:()=>void):boolean{
     const frame=this.frame;
@@ -54,8 +77,7 @@ export class DocumentPreviewInput {
           const link=this.pressedLink;
           if(pointer.phase==='up')this.pressedLink=undefined;
           if(result.copy){
-            const capture=this.selection.capture();
-            if(capture && this.document)this.passage={...capture,document:this.document,renderRevision:this.renderRevision,capturedAt:new Date().toISOString()};
+            this.retainCapture('pointer');
             copy(result.copy);
           }
           else if(pointer.phase==='up'&&link)void controller.invoke(`preview.link:${encodeURIComponent(link.uri)}`);
@@ -69,11 +91,11 @@ export class DocumentPreviewInput {
       }
 
       if(pointer.phase==='down'){
-        this.passage=null;
+        this.keyboardSelecting=false;this.passage=null;
         const link=frame?.links?.find(link=>pointInPreview(link.rect,pointer.column,pointer.row));
         this.pressedLink=link?{uri:link.uri,column:pointer.column,row:pointer.row}:undefined;
       }
-      const excluded=frame?.links?.filter(link=>isCopyExcludedLink(link.uri)).map(link=>({row:link.rect.y,column:link.rect.x,width:link.rect.width}))??[];
+      const excluded=this.exclusions();
       const result=this.selection.pointer(pointer,frame?.content??{x:0,y:0,width:0,height:0},this.lines,excluded);
       if(result.consumed){controller.focus();if(result.copy)copy(result.copy);redraw();return true;}
       if(frame&&pointInPreview(frame.rect,pointer.column,pointer.row)){controller.focus();return true;}

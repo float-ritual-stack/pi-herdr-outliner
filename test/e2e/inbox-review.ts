@@ -138,9 +138,10 @@ const result = await runHerdrScenario({
     await session.checkpoint('native-preview-copy-and-wheel');
 
     // Native content click must focus the rich reader, then Escape returns to the list.
-    await session.keys(pane,'1');await session.keys(pane,'2');
-    await clickLabel('Paragraph 0');await session.waitFor('Output owns keyboard focus',terminal.visible,text=>text.includes('● Preview · Output'));
-    await session.keys(pane,'down');await session.keys(pane,'esc');await session.waitFor('reader releases focus',terminal.visible,text=>!text.includes('● Preview'));
+    await session.keys(pane,'1');await session.waitVisible(pane,'Source · current');
+    await session.keys(pane,'2');await session.waitFor('Output ready without stale focus',()=>session.visible(pane),text=>text.includes('○ Preview · Output')&&!text.includes('● Preview'));
+    await clickLabel('Paragraph 0');await session.waitFor('Output owns keyboard focus',()=>session.visible(pane),text=>text.includes('● Preview · Output'));
+    await session.keys(pane,'down');await session.keys(pane,'esc');await session.waitFor('reader releases focus',()=>session.visible(pane),text=>text.includes('Inbox agent')&&text.includes('○ Preview')&&!text.includes('● Preview'));
     await session.keys(pane,'down');await session.waitVisible(pane,'filed note');
     await session.checkpoint('03-reader-focus-list-navigation');
     await terminal.resize(90,34);
