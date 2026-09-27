@@ -108,9 +108,9 @@ export function renderDocumentPreview(preview:DocumentPreviewState,rect:PreviewR
   const links=documentPreviewLinks(preview.document,content.width).filter(link=>link.row>=offset&&link.row<offset+content.height).map(link=>({uri:link.uri,rect:{x:content.x+link.column,y:content.y+link.row-offset,width:link.width,height:1}}));
   const commentKey=preview.bindings?.comment??'c',selectKey=preview.bindings?.select??'v';
   const commentPrompt=preview.document.commentTarget?` · ${commentKey} comment`:'';
-  const lines=[preview.selecting?`Select passage · arrows move · Shift selects${commentPrompt}`:preview.passageSelected?`Passage selected${commentPrompt} · Esc clear`:`${preview.focused?'●':'○'} Preview · ${sanitizeDynamicText(preview.title)}`,navigation,...rendered.slice(offset,offset+content.height)];
+  const lines=[preview.selecting?`Select passage · arrows move · Shift selects${commentPrompt} · Esc clear`:preview.passageSelected?`Passage selected${commentPrompt} · Esc clear`:`${preview.focused?'●':'○'} Preview · ${sanitizeDynamicText(preview.title)}`,navigation,...rendered.slice(offset,offset+content.height)];
   while(lines.length<rect.height-1)lines.push('');
-  lines.push(preview.notice ? sanitizeDynamicText(preview.notice) : preview.activeLink ? `Enter follow · ${sanitizeDynamicText(preview.activeLinkLabel??preview.activeLink)}` : `${commentKey} comment · ${selectKey} select · [/] threads · Tab links · ${help}`);
+  lines.push(preview.notice ? sanitizeDynamicText(preview.notice) : preview.activeLink ? `Enter follow · ${sanitizeDynamicText(preview.activeLinkLabel??preview.activeLink)}` : `${preview.document.commentTarget?`${commentKey} comment · `:""}${selectKey} select · [/] threads · Tab links · ${help}`);
   return {rect,content,lines:lines.slice(0,rect.height).map(line=>shade(line,rect.width)),offset,totalRows:rendered.length,links,controls};
 }
 export function pointInPreview(rect:PreviewRect,column:number,row:number):boolean{return column>=rect.x&&column<rect.x+rect.width&&row>=rect.y&&row<rect.y+rect.height;}

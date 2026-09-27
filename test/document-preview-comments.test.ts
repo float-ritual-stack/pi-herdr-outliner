@@ -140,6 +140,15 @@ test('local Preview reveals canonical passage and general threads without openin
     }
     expect(()=>store.createAnnotation('stale-live',{body:'Must not bypass live checks',source:'user',target:{representation,anchor:{kind:'whole-subject'}}})).toThrow('snapshot is stale');
     await reader.loadText({kind:'block',blockId:block.id},'Legacy before',async()=>({id:block.id,text:block.text,revision:block.revision}));
+    const legacyFrame=renderDocumentPreview(reader.state!,{x:0,y:0,width:100,height:16},'help');
+    pointer.render(legacyFrame.lines,legacyFrame,reader.state);
+    await reader.key({name:'v'},100,13,noDetail,'v');
+    for(const density of ['compact','expanded'] as const){
+      const unavailable=renderDocumentPreview(reader.state!,{x:0,y:0,width:100,height:16},'help',undefined,density);
+      expect(unavailable.controls?.some(control=>control.action==='preview.comment')).not.toBe(true);
+      expect(unavailable.lines.join('\n')).not.toContain('c comment');
+    }
+    pointer.clearSelection();
     reader.beginComment();
     expect(reader.state!.comment).toBeUndefined();
     expect(reader.state!.notice).toContain('No captured source');
