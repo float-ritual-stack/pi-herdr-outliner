@@ -4,8 +4,8 @@ PIE-367 keeps a plan in one Markdown note while making its steps individually
 addressable. This document describes the service foundation on the feature
 branch, including agent tools and the editor's intentional-ID-removal flow.
 Reader controls and item-attached comments are implemented in Pi and ANSI Detail
-and local Preview. Item projections remain in progress. The feature has not been
-delivered.
+and local Preview, including live item-query views. The feature has not been
+reviewed or delivered.
 
 ## Canonical content
 
@@ -59,6 +59,56 @@ supply another item's properties. A `status` filter uses the checkbox mark.
 A filter without a value tests property presence. Results contain source spans,
 the item evidence hash and identity state: unassigned, unique or duplicate.
 Reading and querying never assign IDs or mutate the note.
+
+### Live views across plans
+
+Author a note like this, then open it in Detail or Preview:
+
+```markdown
+# My remaining steps
+[type::checklist-view]
+[plans::project=demo]
+[query::owner=alex]
+[exclude-status::done]
+[nested::include]
+[limit::100]
+```
+
+`plans` selects canonical notes using the existing property-filter grammar;
+omit it to consider the workspace. Optional `subtree` bounds those notes to one
+canonical block and its descendants. `query` applies the same filter grammar
+to each task's own properties and checkbox status, for example
+`status=waiting owner=alex` or just `owner` for property presence. It is required;
+`query::status` selects all marked tasks. `exclude-status` is a comma-separated
+list from the shared status vocabulary. `nested` and `limit` follow the query
+rules above. Unsupported syntax and unavailable reads display an error, not an
+empty result.
+
+The view links each result to its parent plan and, when addressed, directly to
+the step. An unaddressed result can still be changed against its observed source
+revision; Copy step link explicitly creates its ID. Nested text stays with its
+matching parent as context, but only matched steps get controls in the result.
+Results use canonical note order and then source order, independently of Tree
+collapse. Embedding the view elsewhere does not create extra tasks. Changing a
+status updates the original; results that no longer match leave the view, and
+reader Undo can bring them back. The view's own text is not rewritten.
+
+`checklist.search` exposes the same read through the service:
+
+```json
+{
+  "scope": {"filters": [{"key": "project", "value": "demo"}]},
+  "items": {"filters": [{"key": "owner", "value": "alex"}], "excludeStatuses": ["done"], "limit": 100}
+}
+```
+
+The optional scope also accepts `subtreeRootId`, `text`, `propertyScope` and
+the existing created/updated sort. The service searches active canonical notes,
+without a preliminary first-N-note cutoff. Results contain `matches` with the
+observed full `block` and `item`, plus explicit completeness for the item limit.
+Reads never assign IDs. For Pi, omit `blockId` from `outliner_checklist_query`
+and optionally supply `scope` with filters, subtreeRootId or text. Supplying
+both a blockId and scope is rejected.
 
 ## Changing one item
 
@@ -149,7 +199,7 @@ note remains unchanged. Repeated copies retain distinct keyboard focus while
 sharing the same item identity and evidence. Copy link points to the original
 step, and Undo from the embedding note reverses that reader's latest change
 made there. A focused embedded checkbox also directs a comment to its source
-step. Live task-query projections remain in progress.
+step. Live task-query projections reuse these controls and their source evidence.
 
 A background refresh of the same Preview keeps an open status picker and its
 current choice. The pending command retains its originally observed evidence,

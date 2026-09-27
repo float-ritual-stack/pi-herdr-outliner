@@ -20,15 +20,16 @@ export function checklistControlId(blockId: string, item: ChecklistItem, revisio
 /** Separate visible occurrences share canonical item evidence, but retain local focus. */
 export function embeddedChecklistControls(ranges: readonly DetailEmbedRange[], lineForProjected: (line:number)=>number): ChecklistControl[] {
   return ranges.flatMap((range, index) => {
-    const source = range.source;
-    if (!source) return [];
-    const occurrenceId = `embed-${index}`;
+    return [...(range.source?[range.source]:[]),...(range.sources??[])].flatMap((source,sourceIndex)=>{
+    const occurrenceId = `embed-${index}${range.sources?`-${sourceIndex}`:''}`;
     return checklistControls(source.block, line => lineForProjected(source.contentStartLine + line - source.startLine))
-      .filter(control => control.item.span.startLine >= source.startLine && control.item.span.endLine <= source.endLine)
+      .filter(control => control.item.span.startLine >= source.startLine && control.item.span.endLine <= source.endLine &&
+        (!source.itemStarts||source.itemStarts.includes(control.item.span.start)))
       .map(control => {
         const id = checklistControlId(control.blockId, control.item, control.revision, occurrenceId);
         return {...control, id, occurrenceId, sourceBlock:source.block, activation:{type:"checklist.open" as const,regionId:id}};
       });
+    });
   });
 }
 

@@ -2012,6 +2012,9 @@ export class OutlinerServer {
         case "checklist.query":
           result = this.store.queryChecklist(request.blockId, request.query);
           break;
+        case "checklist.search":
+          result = this.store.searchChecklist(request.query);
+          break;
         case "checklist.update":
           result = this.store.updateChecklist(request.blockId, request.input, request.mutation);
           break;

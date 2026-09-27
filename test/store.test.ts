@@ -66,6 +66,31 @@ test("checklist queries correlate each mark and its own indexed properties witho
   expect(store.sequence).toBe(sequence);
 });
 
+test("workspace checklist search correlates canonical items across plans with bounded, collapse-independent results", () => {
+  const store=makeStore();
+  const folder=store.create('Plans');
+  const a=store.create('# First [project::demo]\n\nKeep the full instructions.\n\n- [x] Done [owner::alex] ^done\n- [~] Someone else [owner::sam] ^other\n- [ ] Prepare [owner::alex]\n  - [!] Inspect [owner::alex] ^inspect',folder.id);
+  const b=store.create('# Second [project::demo]\n\n- [~] Deploy [owner::alex] ^deploy',folder.id);
+  store.create(`Dashboard\n\n!((${a.id}))\n!((${a.id}^inspect))`,folder.id);
+  store.create('# Other project [project::other]\n\n- [~] Ignore [owner::alex]',folder.id);
+  const deleted=store.create('# Deleted [project::demo]\n\n- [~] Ignore [owner::alex]',folder.id);store.delete(deleted.id);
+  const sequence=store.sequence;
+  const query={scope:{subtreeRootId:folder.id,filters:[{key:'project',value:'demo'}]},items:{limit:10,excludeStatuses:['done' as const],filters:[{key:'owner',value:'alex'}]}};
+  const all=store.searchChecklist(query);
+  expect(all.matches.map(match=>[match.block.id,match.item.status,match.item.itemId])).toEqual([[a.id,'todo',undefined],[a.id,'problem','inspect'],[b.id,'waiting','deploy']]);
+  expect(all.matches[0]!.block.text).toContain('Keep the full instructions.');
+  expect(all.matches[0]!.block.revision).toBe(a.revision);
+  expect(all.completeness).toEqual({kind:'complete'});
+  expect(store.searchChecklist({...query,items:{...query.items,limit:2}}).completeness).toEqual({kind:'truncated',limit:2});
+  expect(store.searchChecklist({...query,items:{...query.items,nested:'top-level'}}).matches.map(match=>match.item.status)).toEqual(['todo','waiting']);
+  expect(store.searchChecklist({...query,items:{limit:10,filters:[{key:'status',value:'waiting'},{key:'owner',value:'alex'}]}}).matches.map(match=>match.block.id)).toEqual([b.id]);
+  expect(store.sequence).toBe(sequence);
+  const task=all.matches[2]!;
+  store.updateChecklist(task.block.id,{target:{itemId:task.item.itemId!},expectedEvidence:task.item.evidence,change:{kind:'status',status:'done'}},{author:'user'});
+  expect(store.searchChecklist(query).matches.map(match=>match.item.status)).toEqual(['todo','problem']);
+  expect(()=>store.searchChecklist({items:{limit:0}})).toThrow('limit');
+});
+
 test("checklist changes preserve surrounding bytes, assign identity explicitly and tolerate unrelated edits", () => {
   const store = makeStore();
   const mutation = {author: "agent" as const, actorId: "checklist-test"};

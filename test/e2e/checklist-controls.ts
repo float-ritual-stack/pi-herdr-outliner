@@ -108,6 +108,25 @@ const result=await runHerdrScenario({name:`checklist-controls-${ansi?'ansi':'pi'
   await s.waitFor('embedded Detail subscription paint',()=>s.visible(s.panes.detail),frame=>/\[x\][^\n]*Prepare release/.test(frame));
   assert.equal((await s.client.request<Block>({action:'get',blockId:host.id})).revision,host.revision);
   await s.checkpoint('05b-embedded-preview-canonical-update');
+  const queryPlan=await s.client.request<Block>({action:'create',text:'# QUERY SOURCE [project::query-test]\n\nKeep this safety instruction with the plan.\n\n- [ ] Prepare sample [owner::alex] ^sample\n- [~] Wait on someone else [owner::sam]\n  - Context\n    - [!] Inspect sample [owner::alex] ^inspect'});
+  const queryView=await s.client.request<Block>({action:'create',text:'# QUERY VIEW\n[type::checklist-view] [plans::project=query-test] [query::owner=alex] [exclude-status::done] [limit::10]'});
+  await s.revealTree(s.panes.tree,queryView.id);await s.keys(s.panes.tree,'alt+enter');
+  await s.waitVisible(s.panes.detail,'2 matched steps');
+  await s.waitVisible(s.panes.detail,'Inspect sample');
+  await s.checkpoint('05c-live-query-results');
+  await click(s.panes.detail,detailAnchor,'[ ]');await s.waitVisible(s.panes.detail,'Checklist step');
+  await s.keys(s.panes.detail,'enter');
+  await s.waitFor('query control changes original',()=>s.client.request<Block>({action:'get',blockId:queryPlan.id}),b=>b.text.includes('[x] Prepare sample'));
+  await s.waitVisible(s.panes.detail,'1 matched step');
+  await s.waitVisible(s.panes.tree,'1 matched step');
+  assert.equal((await s.client.request<Block>({action:'get',blockId:queryView.id})).revision,queryView.revision);
+  await s.keys(s.panes.detail,'ctrl+z');await s.waitVisible(s.panes.detail,'2 matched steps');
+  await s.focus(s.panes.tree);
+  await click(s.panes.tree,'● Preview · # QUERY VIEW','[!]');await s.waitVisible(s.panes.tree,'Checklist step');
+  await s.keys(s.panes.tree,'enter');
+  await s.waitFor('nested projected status changes original',()=>s.client.request<Block>({action:'get',blockId:queryPlan.id}),b=>b.text.includes('    - [x] Inspect sample'));
+  await s.waitVisible(s.panes.tree,'1 matched step');await s.waitVisible(s.panes.detail,'1 matched step');
+  await s.checkpoint('05d-query-update-both-readers');
   if (ansi) {
     const longPlan=await s.client.request<Block>({action:'create',text:[
       'OFFSCREEN CHECKLIST','',...Array.from({length:50},(_,i)=>`Context paragraph ${i+1}. ${"Supporting context remains part of the plan. ".repeat(6)}\n`),

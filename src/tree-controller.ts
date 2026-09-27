@@ -1954,6 +1954,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     }
     const previousRow = rows[selectedIndex];
     await reload();
+    if(event.domain==='content')await localReader.refreshContent();
     if (previousRow && !rows.some((row) => row.rowId === previousRow.rowId)) {
       if (branchFilter) status = `${isBlockTreeRow(previousRow) ? previousRow.block.preview : "Previous item"} is no longer in these results; branch refreshed`;
       await publishDisplayRowSelection(rows[selectedIndex]);

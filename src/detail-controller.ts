@@ -380,7 +380,8 @@ function sameDisplayedBlockRead(
       range.source?.block.id === candidate.source?.block.id &&
       range.source?.block.revision === candidate.source?.block.revision &&
       range.source?.startLine === candidate.source?.startLine &&
-      range.source?.endLine === candidate.source?.endLine;
+      range.source?.endLine === candidate.source?.endLine &&
+      JSON.stringify(range.sources) === JSON.stringify(candidate.sources);
   });
   if (!sameRanges) return false;
   return state.embedStates.every((embed, index) => {

@@ -1669,7 +1669,7 @@ export class DetailPiPreviewLayout extends VStack {
       : renderedLineForAuthoredLine(this.state.attentionRevealSourceLine);
 
     const embedPresentation = `${this.state.embedBackgroundEnabled}:${
-      embedRanges.map((range) => `${range.startLine}-${range.endLine}:${range.source?.block.id}:${range.source?.block.revision}`).join(",")
+      embedRanges.map((range) => `${range.startLine}-${range.endLine}:${range.source?.block.id}:${range.source?.block.revision}:${range.sources?.map(source=>`${source.block.id}:${source.block.revision}:${source.contentStartLine}`).join(';')}`).join(",")
     }`;
     const previousAuthoredCallouts = this.authoredCallouts;
     const authoredCallouts = previousAuthoredCallouts?.source === authoredCalloutSource

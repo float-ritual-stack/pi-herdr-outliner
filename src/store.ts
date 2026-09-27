@@ -2,7 +2,7 @@ import {parseVirtualBranchConfig} from "./virtual-branches";
 import {placeOrderedItems} from "./virtual-placement";
 import {WorkingSelectionRepository} from "./working-selection";
 import { checklistItems, queryChecklistItems, updateChecklistText, validateChecklistIdentityChanges } from "./checklist-items";
-import type { ChecklistCollection, ChecklistIdentityChange, ChecklistQuery, ChecklistUpdateInput, ChecklistUpdateReceipt } from "./types";
+import type { ChecklistCollection, ChecklistIdentityChange, ChecklistQuery, ChecklistSearchQuery, ChecklistSearchCollection, ChecklistUpdateInput, ChecklistUpdateReceipt } from "./types";
 import type {VirtualBranchOrder, VirtualBranchPlacementInput} from "./types";
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
@@ -1407,6 +1407,29 @@ export class OutlinerStore {
         title: firstLineWithoutPropertyTokens(block.text)?.trim() || id,
         ...queryChecklistItems(block.text, query, rows.map(propertyRecordFromRow)),
       };
+    })();
+  }
+
+  searchChecklist(query: ChecklistSearchQuery): ChecklistSearchCollection {
+    // Validate even when the workspace or plan selection is empty.
+    queryChecklistItems('', query.items, []);
+    const scope=normalizeBlockSearchQuery({...query.scope,limit:1000});
+    return this.database.transaction(():ChecklistSearchCollection => {
+      if(scope.subtreeRootId)this.requireActive(scope.subtreeRootId);
+      const plans=this.traverseLoadedGraph(this.loadGraph(),{
+        filters:scope.filters,text:scope.text,subtreeRootId:scope.subtreeRootId,propertyScope:scope.propertyScope,
+      });
+      if(scope.sort)sortQueriedBlocks(plans,scope.sort);
+      const matches:ChecklistSearchCollection['matches']=[];
+      for(const block of plans){
+        const result=this.queryChecklist(block.id,query.items);
+        for(const item of result.items){
+          if(matches.length===query.items.limit)return {matches,completeness:{kind:'truncated',limit:query.items.limit}};
+          matches.push({block,item});
+        }
+        if(result.completeness.kind==='truncated')return {matches,completeness:{kind:'truncated',limit:query.items.limit}};
+      }
+      return {matches,completeness:{kind:'complete'}};
     })();
   }
 

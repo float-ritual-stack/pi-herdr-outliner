@@ -2991,10 +2991,15 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
     ...outlinerToolPresentation("Outliner Checklist Query"),
     name: "outliner_checklist_query",
     label: "Outliner Checklist Query",
-    description: "Read marked checklist steps in one canonical note, in source order. Status and property filters match the same item. Returns parent-plan context, revision, evidence and completeness; never assigns IDs.",
+    description: "Read marked steps in one note using blockId, or search canonical plans using scope (omit both for the workspace). Status and property filters match the same item. Returns parent-plan context, revision, evidence and completeness; never assigns IDs.",
     promptSnippet: "Find steps without rewriting or splitting the plan",
     parameters: Type.Object({
-      blockId: Type.String(),
+      blockId: Type.Optional(Type.String()),
+      scope: Type.Optional(Type.Object({
+        subtreeRootId: Type.Optional(Type.String()),
+        filters: Type.Optional(Type.Array(Type.Object({key:Type.String(),value:Type.Optional(Type.String())}))),
+        text: Type.Optional(Type.String()),
+      })),
       statuses: Type.Optional(Type.Array(checklistStatusSchema)),
       excludeStatuses: Type.Optional(Type.Array(checklistStatusSchema)),
       filters: Type.Optional(Type.Array(Type.Object({key: Type.String(), value: Type.Optional(Type.String())}))),
@@ -3003,7 +3008,9 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
     }),
     async execute(_id, params) {
       await ensureService(false);
-      const {blockId, ...query} = params;
+      const {blockId, scope, ...query} = params;
+      if(blockId&&scope)throw Error('Choose one blockId or a plan scope, not both');
+      if(!blockId)return toolResult(await client.request({action:'checklist.search',query:{scope,items:{...query,limit:query.limit??100}}}));
       return toolResult(await client.request<ChecklistCollection>({action: "checklist.query", blockId,
         query: {...query, limit: query.limit ?? 100}}));
     },

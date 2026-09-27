@@ -31,6 +31,7 @@ import type {
   BlockEditActivityPage,
   Block,
   ChecklistCollection,
+  ChecklistSearchCollection,
   ChecklistUpdateReceipt,
   OutlinerClientRegistration,
   RoadmapItemCreateInput,
@@ -68,6 +69,10 @@ test("checklist tools preserve item evidence, caller provenance and explicit who
       statuses: ["waiting"], filters: [{key: "owner", value: "alex"}]});
     expect(read.items.map(item => item.itemId)).toEqual(["deploy"]);
     expect(read.completeness.kind).toBe("complete");
+    const across=await invoke<ChecklistSearchCollection>('outliner_checklist_query',{
+      scope:{subtreeRootId:base.id},statuses:['waiting'],filters:[{key:'owner',value:'alex'}]});
+    expect(across.matches.map(match=>[match.block.id,match.item.itemId,match.item.evidence])).toEqual([[base.id,'deploy',read.items[0]!.evidence]]);
+    expect(across.completeness.kind).toBe('complete');
     const input = {blockId: base.id, target: {itemId: "deploy"}, expectedEvidence: read.items[0]!.evidence,
       change: {kind: "status", status: "problem"}};
     const updated = await invoke<ChecklistUpdateReceipt>("outliner_checklist_update", input);

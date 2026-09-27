@@ -86,6 +86,11 @@ export class DocumentPreview {
     bindings:{comment:displayActionChord(this.keymap.primaryBinding('tree.reader.comment')),select:displayActionChord(this.keymap.primaryBinding('tree.reader.select'))},
     passageSelected:!!this.selectionInput?.captureSelection(),selecting:this.selectionInput?.selecting??false,canBack:this.history.length>0,canForward:this.future.length>0} : null; }
   cancelLoad(): void { this.generation++; }
+  async refreshContent():Promise<void> {
+    // A checklist command reloads after its own receipt. An event arriving during
+    // that command must not invalidate its intent or its restored focus.
+    if(this.value&&!this.value.loading&&!this.checklistBusy)await this.load(this.value.target,true);
+  }
   get hasDraft():boolean { return !!this.value?.comment; }
   private protectDraft():boolean {
     if(!this.value?.comment)return false;
@@ -432,7 +437,8 @@ export class DocumentPreview {
     if(this.protectDraft())return false;
     // Tree publications may repeat this address while its menu is open. Refresh
     // the read, but retain the user's choice and the evidence it was based on.
-    const picker = JSON.stringify(this.value?.target) === JSON.stringify(target) ? this.value?.checklistPicker : undefined;
+    const sameTarget = JSON.stringify(this.value?.target) === JSON.stringify(target);
+    const picker = sameTarget ? this.value?.checklistPicker : undefined;
     if(picker)refresh=true;
     const generation = ++this.generation;
     const previousDocument = this.value?.document;
@@ -496,6 +502,7 @@ export class DocumentPreview {
       if(revealSourceLine!==undefined && previousDocument) offset=revealDocumentPreviewSourceLine(document,revealSourceLine,previousDocument);
       const currentPicker=picker ? this.value?.checklistPicker : undefined;
       this.value = {target,title,document,offset,notice,focused:this.value?.focused ?? false,
+        ...(refresh&&sameTarget?{activeLink:this.value?.activeLink,activeLinkLabel:this.value?.activeLinkLabel}:{}),
         ...(currentPicker ? {checklistPicker:currentPicker,activeLink:this.value?.activeLink,activeLinkLabel:'Checklist step'} : {})};
       this.changed(); return true;
     } catch (error) {

@@ -1136,6 +1136,17 @@ export interface ChecklistCollection {
   completeness: BlockCollectionCompleteness;
 }
 
+export interface ChecklistSearchQuery {
+  /** Select canonical plans, independently of the item predicates and pane expansion. */
+  scope?: Pick<BlockSearchQuery, "filters" | "text" | "subtreeRootId" | "propertyScope" | "sort">;
+  items: ChecklistQuery;
+}
+
+export interface ChecklistSearchCollection {
+  matches: {block: Block; item: ChecklistItem}[];
+  completeness: BlockCollectionCompleteness;
+}
+
 export interface ChecklistUpdateInput {
   /** Unassigned items are addressed only against an exact observed block revision. */
   target: { itemId: string } | { start: number; expectedRevision: number };
@@ -1731,6 +1742,7 @@ export type OutlinerRequest =
       identityChanges?: ChecklistIdentityChange[];
     }
   | { id: string; action: "checklist.query"; blockId: string; query: ChecklistQuery }
+  | { id: string; action: "checklist.search"; query: ChecklistSearchQuery }
   | { id: string; action: "checklist.update"; blockId: string; input: ChecklistUpdateInput; mutation: MutationProvenance }
   | { id: string; action: "move"; blockId: string; parentId: string | null; position?: number }
   | { id: string; action: "delete"; blockId: string }

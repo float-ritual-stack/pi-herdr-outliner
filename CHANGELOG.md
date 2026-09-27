@@ -4,6 +4,15 @@ This file records notable user-facing changes. The project remains active dogfoo
 
 ## [Unreleased]
 
+- Checklist steps keep stable fragment addresses through rewording and reordering.
+  Pi/ANSI Detail and Preview offer monochrome status pickers, keyboard toggling,
+  Copy step link and Undo, including embedded steps. Targeted agent updates
+  preserve neighboring text; whole-note rewrites require explicit intent to
+  remove task addresses. Comments follow item identity while retaining their
+  original quoted evidence. Live checklist views correlate status and properties
+  on the same step across canonical plans and update their originals. Protocol
+  79 adds checklist operations and item-attached annotation targets. PIE-367.
+
 - Tree groups root comment threads under one collapsed Comments row per displayed
   note. Open it by mouse, Space or Enter; replies remain under their own thread,
   ordinary children remain visible, and physical/virtual occurrences expand

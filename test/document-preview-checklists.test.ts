@@ -27,6 +27,41 @@ const tasks=(reader:DocumentPreview,width=44)=>links(reader,width).filter(link=>
 const paint=(reader:DocumentPreview,width=44)=>documentPreviewLines(reader.state!.document,width).map(stripTerminalSequences).join('\n');
 const click=async(reader:DocumentPreview,uri:string)=>reader.action('preview.link:'+encodeURIComponent(uri),noDetail);
 
+test('live checklist views use correlated canonical matches, shared controls and honest limits',async()=>fixture(async client=>{
+  const plan=await client.request<Block>({action:'create',text:'# Release [project::demo]\n\nRead these instructions first.\n\n- [ ] Prepare [owner::alex]\n- [~] Deploy [owner::sam] ^deploy\n  - Context\n    - [!] Check [owner::alex] ^check'});
+  const view=await client.request<Block>({action:'create',text:'# My steps\n[type::checklist-view] [plans::project=demo] [query::owner=alex] [exclude-status::done] [limit::10]'});
+  const host=await client.request<Block>({action:'create',text:`# Dashboard\n\n!((${view.id}))\n\nAfter the view\n\n- [ ] Local ^local`});
+  const reader=new DocumentPreview(client,()=>{});
+  await reader.load({kind:'block',blockId:view.id});reader.focus();
+  expect(tasks(reader)).toHaveLength(2);
+  expect(paint(reader)).toContain('2 matched steps');
+  expect(paint(reader)).not.toContain('Deploy');
+  expect(links(reader).some(link=>link.uri.includes(plan.id))).toBe(true);
+  expect(await client.request<Block>({action:'get',blockId:plan.id})).toEqual(plan);
+  await click(reader,tasks(reader)[0]!.uri);await reader.key({name:'return'},44,12,noDetail);
+  expect(paint(reader)).toContain('1 matched step');
+  expect(tasks(reader)).toHaveLength(1);
+  expect((await client.request<Block>({action:'get',blockId:plan.id})).text).toMatch(/- \[x\] Prepare \[owner::alex\] \^task-/);
+  expect(await client.request<Block>({action:'get',blockId:view.id})).toEqual(view);
+  await reader.key({name:'z',ctrl:true},44,12,noDetail);
+  expect(tasks(reader)).toHaveLength(2);
+  await reader.load({kind:'block',blockId:host.id});reader.focus();
+  expect(tasks(reader)).toHaveLength(3);
+  // An authored task after the generated results must still target its own source.
+  const local=tasks(reader).find(link=>link.uri.includes(host.id))!;
+  await click(reader,local.uri);await reader.key({name:'return'},44,12,noDetail);
+  expect((await client.request<Block>({action:'get',blockId:host.id})).text).toBe(host.text.replace('[ ] Local','[x] Local'));
+  const limited=await client.request<Block>({action:'update',mutation:{author:'user'},blockId:view.id,text:view.text.replace('limit::10','limit::1'),expectedRevision:view.revision});
+  await reader.load({kind:'block',blockId:view.id});
+  expect(paint(reader)).toContain('LIMITED');
+  expect(tasks(reader)).toHaveLength(1);
+  await client.request({action:'update',mutation:{author:'user'},blockId:view.id,text:limited.text.replace('limit::1','limit::oops'),expectedRevision:limited.revision});
+  await reader.load({kind:'block',blockId:view.id});
+  expect(paint(reader)).toContain('Checklist view unavailable');
+  expect(paint(reader)).not.toContain('No matching');
+  expect(tasks(reader)).toHaveLength(0);
+}));
+
 test('same-target background loads preserve an opened embedded status picker',async()=>fixture(async client=>{
   const plan=await client.request<Block>({action:'create',text:'# Plan\n\n1. [~] Prepare ^prepare\n   - [~] Dependency ^dependency'});
   const host=await client.request<Block>({action:'create',text:`# Dashboard\n\n!((${plan.id}^prepare))\n\nAgain\n\n!((${plan.id}^prepare))`});
@@ -70,6 +105,7 @@ test('embedded steps keep occurrence focus while edits, copy and undo reach the 
   expect(await client.request<Block>({action:'get',blockId:host.id})).toEqual(host);
   expect(reader.state!.target).toEqual({kind:'block',blockId:host.id});
   expect(reader.state!.offset).toBe(3);
+  await reader.refreshContent();
   expect(reader.state!.activeLink).toBe(tasks(reader).at(-1)!.uri);
   expect(paint(reader).match(/\[x\] Verify/g)).toHaveLength(3);
   await reader.key({name:'return'},44,10,noDetail);await reader.action('preview.checklist.choose:copy-link',noDetail);
