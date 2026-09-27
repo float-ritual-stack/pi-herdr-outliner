@@ -1,3 +1,4 @@
+import { markdownListItems } from "./markdown-structure";
 import { checklistItems } from "./checklist-items";
 import { createPdfPageRegionAnchor, createTextQuoteAnchor } from "./annotations";
 import type {
@@ -460,10 +461,15 @@ export function reanchorAnnotationTarget(
     }
     const item = matches[0]!;
     if (anchor.kind === "text-quote") {
-      const body = content.slice(item.span.start, item.span.end);
-      const offset = body.indexOf(anchor.exact);
-      if (offset >= 0 && body.indexOf(anchor.exact, offset + 1) < 0) {
-        const start = item.span.start + offset;
+      const descendants = markdownListItems(content).filter(child => child.parentStart === item.span.start);
+      const offsets: number[] = [];
+      if (anchor.exact) for (let start = content.indexOf(anchor.exact, item.span.start);
+        start >= 0 && start + anchor.exact.length <= item.span.end;
+        start = content.indexOf(anchor.exact, start + 1)) {
+        if (!descendants.some(child => start < child.span.end && start + anchor.exact.length > child.span.start)) offsets.push(start);
+      }
+      if (offsets.length === 1) {
+        const start = offsets[0]!;
         return resolved(candidate({...textTarget(representation, content, start, start + anchor.exact.length),
           listItemId: target.listItemId}, itemMethod("item-exact-quote"), 1));
       }

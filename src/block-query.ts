@@ -64,7 +64,10 @@ function normalizeFilterValue(value: string, key: string): string {
   return normalized;
 }
 
-function normalizeFilter(filter: PropertyFilter): PropertyFilter {
+export function normalizePropertyFilter(filter: PropertyFilter): PropertyFilter {
+  if (!filter || typeof filter.key !== "string" || (filter.value !== undefined && typeof filter.value !== "string")) {
+    throw new Error("Property filter requires a string key and optional string value");
+  }
   const key = normalizePropertyKey(filter.key);
   if (BOOLEAN_OPERATORS.has(key)) {
     throw new Error(
@@ -148,7 +151,7 @@ export function parsePropertyFilterClause(
       )
     : rawValue;
   try {
-    return normalizeFilter({ key, value });
+    return normalizePropertyFilter({ key, value });
   } catch (error) {
     syntaxError(
       error instanceof Error ? error.message : String(error),
@@ -221,7 +224,7 @@ export function serializePropertyFilters(
   filters: readonly PropertyFilter[],
 ): string {
   return filters
-    .map(normalizeFilter)
+    .map(normalizePropertyFilter)
     .map((filter) =>
       filter.value === undefined
         ? filter.key
@@ -292,7 +295,7 @@ export function normalizeBlockSearchQuery(
   const seen = new Set<string>();
   let includeDeleted = query.includeDeleted;
   for (const candidate of query.filters ?? []) {
-    const filter = normalizeFilter(candidate);
+    const filter = normalizePropertyFilter(candidate);
     if (filter.key === "deleted" && filter.value?.toLowerCase() === "true") {
       includeDeleted ??= "roots";
       continue;

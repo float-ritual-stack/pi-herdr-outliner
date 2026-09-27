@@ -1,7 +1,7 @@
 import type { RequestInput } from "./client";
 import {isChecklistView,projectChecklistView} from './checklist-views';
 import { MAX_BLOCK_QUERY_LIMIT } from "./block-query";
-import { resolveFragmentSlice, stripFragmentAnchors } from "./fragments";
+import { fragmentPresentationText, resolveFragmentSlice, stripFragmentAnchors } from "./fragments";
 import { propertyReferenceOccurrences } from "./reference-occurrences";
 import { blockDisplayTitle } from "./references";
 import { propertySummarySegments } from "./property-summary";
@@ -350,7 +350,7 @@ async function projectEmbed(
     }
     return {
       text: `Embedded fragment: ((${embedReference(blockId, fragmentId)}))\n${
-        resolution.slice.text
+        fragmentPresentationText(resolution.slice)
       }`,
       state: { blockId, fragmentId, status: "ready", count: 1 },
       source: {block: target, startLine: resolution.slice.startLine, endLine: resolution.slice.endLine},

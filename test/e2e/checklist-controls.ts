@@ -127,7 +127,7 @@ const result=await runHerdrScenario({name:`checklist-controls-${ansi?'ansi':'pi'
   await s.waitFor('nested projected status changes original',()=>s.client.request<Block>({action:'get',blockId:queryPlan.id}),b=>b.text.includes('    - [x] Inspect sample'));
   await s.waitVisible(s.panes.tree,'1 matched step');await s.waitVisible(s.panes.detail,'1 matched step');
   await s.checkpoint('05d-query-update-both-readers');
-  if (ansi) {
+  {
     const longPlan=await s.client.request<Block>({action:'create',text:[
       'OFFSCREEN CHECKLIST','',...Array.from({length:50},(_,i)=>`Context paragraph ${i+1}. ${"Supporting context remains part of the plan. ".repeat(6)}\n`),
       '- [ ] Last destination ^last',
@@ -148,6 +148,9 @@ const result=await runHerdrScenario({name:`checklist-controls-${ansi?'ansi':'pi'
     await s.waitVisible(s.panes.detail,'Last destination');
     await s.waitVisible(s.panes.detail,'[x] Last destination');
     await s.checkpoint('06-keyboard-focus-reveals-offscreen-task');
+    await terminal.resize(125,55);
+    await s.waitFor('focused task follows resize',()=>s.visible(s.panes.detail),frame=>frame.includes('[x] Last destination')&&Math.max(...frame.split('\n').map(visibleWidth))<60);
+    await s.checkpoint('06a-focused-task-after-resize');
     await s.keys(s.panes.detail,'ctrl+z');
     await s.waitFor('offscreen Undo',()=>s.client.request<Block>({action:'get',blockId:longPlan.id}),b=>b.text===longPlan.text);
     await s.waitVisible(s.panes.detail,'[ ] Last destination');

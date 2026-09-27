@@ -61,6 +61,8 @@ test("checklist queries correlate each mark and its own indexed properties witho
   expect(store.queryChecklist(block.id, {limit: 20, statuses: ["waiting"], filters: [{key: "owner", value: "morgan"}]}).items).toEqual([]);
   expect(store.queryChecklist(block.id, {limit: 20, excludeStatuses: ["done"], nested: "top-level"}).items.map(item => item.status)).toEqual(["waiting", "todo"]);
   expect(store.queryChecklist(block.id, {limit: 20, filters: [{key: "channel"}]}).items.map(item => item.status)).toEqual(["todo"]);
+  expect(store.queryChecklist(block.id, {limit: 20, filters: [{key: "OWNER", value: " alex "}]}).items.map(item => item.status)).toEqual(["done", "problem", "todo"]);
+  expect(() => store.queryChecklist(block.id, {limit: 20, filters: [{key: "owner", value: " "}]})).toThrow("empty");
   expect(store.queryChecklist(block.id, {limit: 1}).completeness).toEqual({kind: "truncated", limit: 1});
   expect(store.require(block.id).text).toBe(source);
   expect(store.sequence).toBe(sequence);
@@ -156,6 +158,9 @@ test("whole-note writes preserve list addresses unless an exact-revision identit
   const block = store.create("# Plan\n\n1. [ ] First ^first\n2. [ ] Second ^second");
   expect(() => store.update(block.id, block.text.replace(" ^first", ""), block.revision, agent))
     .toThrow("List-item IDs would be removed: ^first");
+  expect(store.require(block.id)).toEqual(block);
+  const relocated = block.text.replace(" ^first", "") + "\n\nUnrelated prose ^first";
+  expect(() => store.update(block.id, relocated, block.revision, agent)).toThrow("List-item IDs would be removed");
   expect(store.require(block.id)).toEqual(block);
   const reworded = store.update(block.id, "# Plan\n\n1. [ ] Reworded second ^second\n2. [ ] Reworded first ^first", block.revision, agent);
   expect(() => store.update(block.id, reworded.text + "\n- [ ] Copied ^first", reworded.revision, agent))

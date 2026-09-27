@@ -1,3 +1,4 @@
+import {standaloneListItemText} from "./markdown-structure";
 import {parsePropertyFilterExpression} from './block-query';
 import {queryChecklistItems} from './checklist-items';
 import {parseProperties} from './properties';
@@ -43,10 +44,7 @@ export async function projectChecklistView(requester:DetailEmbedRequester,text:s
     rows.push('',`Plan: ((${block.id})) · ${item.identity==='unique'?`((${block.id}^${item.itemId}|Open step))`:item.identity==='duplicate'?'Ambiguous step address · fix duplicate IDs in the plan':'Unaddressed step · Copy step link to assign an address'}`,'');
     const contentStartLine=rows.length;
     const lines=block.text.split(/\r?\n/).slice(item.span.startLine,item.span.endLine+1);
-    // A nested item rendered without its ancestors must not become an indented
-    // code block. Only presentation changes; controls retain canonical spans.
-    const indent=/^[ \t]*/.exec(lines[0]??'')![0];
-    rows.push(...stripFragmentAnchors(lines.map(line=>line.startsWith(indent)?line.slice(indent.length):line).join('\n')).split('\n'));
+    rows.push(...stripFragmentAnchors(standaloneListItemText(lines.join('\n'))).split('\n'));
     sources.push({block,startLine:item.span.startLine,endLine:item.span.endLine,contentStartLine,itemStarts:[item.span.start]});
   }
   return {text:rows.join('\n'),sources,collection};

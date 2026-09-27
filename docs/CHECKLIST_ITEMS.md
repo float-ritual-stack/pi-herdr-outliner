@@ -1,11 +1,10 @@
 # Checklist items
 
-PIE-367 keeps a plan in one Markdown note while making its steps individually
-addressable. This document describes the service foundation on the feature
-branch, including agent tools and the editor's intentional-ID-removal flow.
-Reader controls and item-attached comments are implemented in Pi and ANSI Detail
-and local Preview, including live item-query views. The feature has not been
-reviewed or delivered.
+Keep a plan in one Markdown note while making its steps individually
+addressable. Service operations, agent tools and the editor share the same
+identity guard. Pi and ANSI Detail and local Preview provide status controls,
+item-attached comments and live item-query views. These operations require
+service protocol 79.
 
 ## Canonical content
 
@@ -147,7 +146,7 @@ tool `outliner_task`. Tool results include the structured service receipt.
 
 ## Whole-note rewrites
 
-All normal block-text writers preserve existing list-item IDs. Dropping one
+All normal block-text writers preserve existing list-item IDs. Dropping one, or moving its ID onto a heading or paragraph,
 returns an error naming the ID and its link/comment impact. Creating duplicate
 list-item IDs is also rejected during an update. Keep IDs through formatting
 and reordering; never derive them anew from the current wording.
@@ -166,7 +165,7 @@ or:
 ```
 
 Declarations must correspond to the submitted text. A rename requires a new,
-unique destination ID. They are not blanket permission for later rewrites and
+unique list-item destination ID. They are not blanket permission for later rewrites and
 do not silently retarget links or comments elsewhere. The agent's
 `outliner_update` accepts these same declarations.
 
@@ -178,7 +177,7 @@ changed draft must be reviewed again. The same guard and explicit declaration
 apply when committing retained writing. Writing history can restore the saved
 before-image, including its original addresses.
 
-## Reader controls (feature branch)
+## Reader controls
 
 Pi and ANSI Detail and the shared Tree/Inbox Preview render canonical checklist marks as
 controls. Click a mark, or Tab to it and press Enter, to choose a status. Mark
@@ -218,7 +217,7 @@ rendered rows, including wrapped content. Its full comment evidence remains in t
 scrollable comments section. Mouse reporting is suspended around external editors.
 
 
-## Comments on steps (feature branch)
+## Comments on steps
 
 Focus a checkbox and press `c` to comment on that step. A passage selection
 still takes precedence. Opening or cancelling the composer does not change the
@@ -228,7 +227,7 @@ ID once, in the same transaction as the comments. Failed creation rolls back
 both comments and addresses; request retries reuse the original receipt.
 
 The immutable original target retains its quote and representation. Its
-`listItemId` records the owning step. Reconciliation searches only that step:
+`listItemId` records the owning step. Reconciliation searches only that step’s own text, excluding descendant items:
 unchanged words retain exact passage placement; rewording produces a
 `list-item` resolved anchor and the visible label **Item attachment · original
 passage changed**, alongside the old quote. Restoring the old wording can

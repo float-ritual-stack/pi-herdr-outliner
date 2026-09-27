@@ -62,6 +62,22 @@ test('live checklist views use correlated canonical matches, shared controls and
   expect(tasks(reader)).toHaveLength(0);
 }));
 
+test('nested fragment readers preserve interactive steps and continuation Markdown',async()=>fixture(async client=>{
+  const plan=await client.request<Block>({action:'create',text:'# Plan\n\n- [ ] Parent ^parent\n    - [~] Nested ^nested\n      Continued **instructions**'});
+  const host=await client.request<Block>({action:'create',text:`# Dashboard\n\n!((${plan.id}^nested))`});
+  const reader=new DocumentPreview(client,()=>{});
+  for(const target of [{kind:'block' as const,blockId:host.id},{kind:'block' as const,blockId:plan.id,fragmentId:'nested'}]){
+    await reader.load(target);reader.focus();
+    expect(tasks(reader)).toHaveLength(1);
+    expect(paint(reader)).not.toContain('**instructions**');
+    expect(paint(reader)).not.toContain('outliner-preview');
+    await click(reader,tasks(reader)[0]!.uri);await reader.action('preview.checklist.choose:done',noDetail);
+    expect((await client.request<Block>({action:'get',blockId:plan.id})).text).toBe(plan.text.replace('[~] Nested','[x] Nested'));
+    await reader.key({name:'z',ctrl:true},44,12,noDetail);
+  }
+  expect(await client.request<Block>({action:'get',blockId:host.id})).toEqual(host);
+}));
+
 test('same-target background loads preserve an opened embedded status picker',async()=>fixture(async client=>{
   const plan=await client.request<Block>({action:'create',text:'# Plan\n\n1. [~] Prepare ^prepare\n   - [~] Dependency ^dependency'});
   const host=await client.request<Block>({action:'create',text:`# Dashboard\n\n!((${plan.id}^prepare))\n\nAgain\n\n!((${plan.id}^prepare))`});

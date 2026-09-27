@@ -92,3 +92,11 @@ export function markdownSourceTokens(source: string): MarkdownSourceToken[] {
   };
   return visit(text, offsets, parser.lexer(text));
 }
+
+/** Present a selected list subtree without turning its original nesting into code.
+ * Line count stays unchanged so callers can retain canonical source spans. */
+export function standaloneListItemText(text: string): string {
+  const lines = text.split(/\r?\n/);
+  const indent = /^[ \t]*/.exec(lines[0] ?? "")![0];
+  return lines.map(line => line.startsWith(indent) ? line.slice(indent.length) : line).join("\n");
+}

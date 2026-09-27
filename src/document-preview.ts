@@ -15,7 +15,7 @@ import type {DetailReadPreviewDocument} from './detail-pi-preview';
 import {blockDisplayTitle} from './references';
 import {parseOutlinerLinkUri,followResourceOccurrence} from './outliner-links';
 import {isAuthoredFileOccurrence} from './resource-references';
-import {resolveFragmentSlice} from './fragments';
+import {fragmentPresentationText,resolveFragmentSlice} from './fragments';
 import type {TerminalKey} from './terminal';
 import type {Block, AnnotationThread, PageAddressResolution, OutlinerNavigationTarget} from './types';
 import type {ResourceDescription} from './resources';
@@ -465,7 +465,7 @@ export class DocumentPreview {
           if (revealInDocument) {
             document=await loadDetailReadPreview(this.client,block);
             if (!refresh) revealSourceLine=fragment.slice.anchor.lineIndex;
-          } else document={...await loadDetailReadPreview(this.client,{...block,text:fragment.slice.text}),sourceBlock:undefined,
+          } else document={...await loadDetailReadPreview(this.client,{...block,text:fragmentPresentationText(fragment.slice)}),sourceBlock:undefined,
             sourceSlice:{block,startLine:fragment.slice.startLine,endLine:fragment.slice.endLine}};
         }else document = await loadDetailReadPreview(this.client,block);
       } else {
@@ -496,6 +496,12 @@ export class DocumentPreview {
           document:resourceDescription?{kind:'ready',document:{kind:'resource',description:resourceDescription}}:{kind:'empty'}};
       } catch(error) { notice=`Comments unavailable: ${error instanceof Error?error.message:String(error)}`; }
       if(generation!==this.generation)return false;
+      // A background reload must not reset next/previous-thread navigation.
+      // Read the latest selection after awaits, since the user can move while loading.
+      const selectedAnnotationId = refresh && sameTarget ? this.value?.document.annotations?.selectedAnnotationId : undefined;
+      if (selectedAnnotationId && document.annotations?.annotationThreads.some(thread => thread.block.id === selectedAnnotationId)) {
+        document.annotations.selectedAnnotationId = selectedAnnotationId;
+      }
       // Reconcile the saved choices against the new document at its next render.
       // Anonymous identities change on edits; explicit stable IDs may survive.
       if (previous) document.previewRegions = {regions:[],focusedRegionId:previous.focusedRegionId,disclosureOverrides:new Map(previous.disclosureOverrides)};

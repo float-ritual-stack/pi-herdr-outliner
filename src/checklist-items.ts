@@ -1,3 +1,4 @@
+import { normalizePropertyFilter } from "./block-query";
 import { createHash, randomUUID } from "node:crypto";
 import { fragmentAnchors } from "./fragments";
 import { markdownListItems } from "./markdown-structure";
@@ -58,13 +59,15 @@ export function queryChecklistItems(text: string, query: ChecklistQuery, propert
     if (statuses !== undefined && !Array.isArray(statuses)) throw new Error("Checklist statuses must be an array");
     for (const status of statuses ?? []) requireStatus(status);
   }
+  if (query.filters !== undefined && !Array.isArray(query.filters)) throw new Error("Checklist filters must be an array");
+  const filters = (query.filters ?? []).map(normalizePropertyFilter);
   const matches = checklistItems(text, properties).filter(item =>
     (query.nested !== "top-level" || item.depth === 0) &&
     (!query.statuses || query.statuses.includes(item.status)) &&
     !query.excludeStatuses?.includes(item.status) &&
     // The marker owns status, even if the item contains conflicting status prose/metadata.
     matchesFilters([...item.properties.filter(property => property.key !== "status"),
-      {key: "status", value: item.status}], query.filters ?? [], "all"));
+      {key: "status", value: item.status}], filters, "all"));
   return {
     items: matches.slice(0, query.limit),
     completeness: matches.length > query.limit
@@ -112,7 +115,7 @@ export function updateChecklistText(text: string, revision: number, input: Check
 /** Whole-note writes must not silently discard list-item addresses used by links and comments. */
 export function removedListItemIds(before: string, after: string): string[] {
   if (!before.includes("^")) return [];
-  const next = new Set(fragmentAnchors(after).map(anchor => anchor.id));
+  const next = new Set(fragmentAnchors(after).filter(anchor => anchor.kind === "list-item").map(anchor => anchor.id));
   return [...new Set(fragmentAnchors(before).filter(anchor => anchor.kind === "list-item" && !next.has(anchor.id)).map(anchor => anchor.id))];
 }
 
@@ -121,6 +124,7 @@ export function validateChecklistIdentityChanges(before: string, after: string, 
   if (!before.includes("^") && !after.includes("^") && changes.length === 0) return;
   const previous = fragmentAnchors(before);
   const next = fragmentAnchors(after);
+  const nextListIds = new Set(next.filter(anchor => anchor.kind === "list-item").map(anchor => anchor.id));
   const previousIds = new Set(previous.filter(anchor => anchor.kind === "list-item").map(anchor => anchor.id));
   const nextCounts = new Map<string, number>();
   for (const anchor of next) nextCounts.set(anchor.id, (nextCounts.get(anchor.id) ?? 0) + 1);
@@ -134,16 +138,16 @@ export function validateChecklistIdentityChanges(before: string, after: string, 
       !previousIds.has(change.itemId) || declared.has(change.itemId)) {
       throw new Error("Each identityChanges entry must name one existing list-item ID exactly once");
     }
-    if (nextCounts.has(change.itemId)) throw new Error(`Identity change declared but ^${change.itemId} is still present`);
+    if (nextListIds.has(change.itemId)) throw new Error(`Identity change declared but ^${change.itemId} is still present`);
     if (change.kind === "rename") {
-      if (nextCounts.get(change.to) !== 1 || previous.some(anchor => anchor.id === change.to) || destinations.has(change.to)) {
+      if (!nextListIds.has(change.to) || nextCounts.get(change.to) !== 1 || previous.some(anchor => anchor.id === change.to) || destinations.has(change.to)) {
         throw new Error(`Identity rename for ^${change.itemId} must name one new, unique destination ID`);
       }
       destinations.add(change.to);
     }
     declared.add(change.itemId);
   }
-  const missing = [...previousIds].filter(id => !nextCounts.has(id) && !declared.has(id));
+  const missing = [...previousIds].filter(id => !nextListIds.has(id) && !declared.has(id));
   if (missing.length) throw new Error(
     `List-item IDs would be removed: ${missing.map(id => `^${id}`).join(", ")}. ` +
     "Links, embeds and comments using these addresses may become unresolved. Preserve the IDs, or declare each intentional remove/rename in identityChanges with the current block revision.",

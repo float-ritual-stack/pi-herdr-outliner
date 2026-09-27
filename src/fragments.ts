@@ -1,4 +1,4 @@
-import { markdownListItems, markdownSourceTokens, type MarkdownSourceToken } from "./markdown-structure";
+import { standaloneListItemText, markdownListItems, markdownSourceTokens, type MarkdownSourceToken } from "./markdown-structure";
 
 const FRAGMENT_ID_SOURCE = String.raw`[A-Za-z0-9][A-Za-z0-9_-]{0,63}`;
 const FRAGMENT_ANCHOR_PATTERN = new RegExp(String.raw`(?:^|\s)\^(${FRAGMENT_ID_SOURCE})\s*$`);
@@ -282,4 +282,8 @@ export function parseFragmentCompletionQuery(query: string): FragmentCompletionQ
     fragmentQuery: query.slice(delimiter + 1).trim(),
     mode: delimiter === headingDelimiter ? "heading" : "id",
   };
+}
+
+export function fragmentPresentationText(slice: FragmentSlice): string {
+  return slice.anchor.kind === "list-item" ? standaloneListItemText(slice.text) : slice.text;
 }

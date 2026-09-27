@@ -57,6 +57,8 @@ test('local Preview reveals canonical passage and general threads without openin
     expect(paint(64)).toContain('Passage feedback');
     expect(await reader.key({}, 30, 12, noDetail, ']')).toBe(true);
     expect(reader.state!.document.annotations?.selectedAnnotationId).toBe(passage.block.id);
+    await reader.refreshContent();
+    expect(reader.state!.document.annotations?.selectedAnnotationId).toBe(passage.block.id);
     await reader.key({}, 30, 12, noDetail, ']');
     expect(paint(30)).toContain('Overall feedback');
     expect(reader.state!.offset).toBeGreaterThan(0);

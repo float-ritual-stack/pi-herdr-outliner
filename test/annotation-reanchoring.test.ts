@@ -55,6 +55,19 @@ describe("deterministic annotation reanchoring", () => {
     expect(result.candidates).toEqual([]);
   });
 
+  test("item comments do not reclaim an obsolete quote from a descendant list", () => {
+    const original = "- [ ] Inspect release ^parent";
+    const current = "- [ ] Approve release ^parent\n  - Inspect release ^child";
+    const blockRepresentation = (content: string): AnnotationRepresentation => ({
+      ...representation("checklist", content), subject: {kind: "block", blockId: "plan"},
+      sourceSnapshot: {kind: "block", blockId: "plan", updatedAt: "2026-01-01T00:00:00.000Z", contentHash: annotationSourceHash(content)},
+    });
+    const result = reanchorAnnotationTarget({representation: blockRepresentation(original),
+      listItemId: "parent", anchor: createTextQuoteAnchor(original, 6, 21)}, blockRepresentation(current), current);
+    expect(result).toMatchObject({status: "resolved", method: {method: "item-attachment"},
+      resolvedTarget: {listItemId: "parent", anchor: {kind: "list-item", itemId: "parent"}}});
+  });
+
   test("stops at the first reliable deterministic pass", () => {
     const content = "Intro\nStable passage\nOutro";
     const original = target(content, "Stable passage");

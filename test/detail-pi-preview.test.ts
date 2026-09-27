@@ -3320,3 +3320,18 @@ test("compact Detail keeps authored content and source selection aligned when de
   detail.status = "Workspace service disconnected; reconnecting…";
   expect(layout.render(40).map(stripTerminalSequences).join("\n")).toContain("Workspace service disconnected");
 });
+
+
+test("focused checklist remains visible when narrower geometry reflows preceding prose", () => {
+  const raw=['# Plan','',...Array.from({length:20},(_,i)=>`Paragraph ${i}. ${'Context prose '.repeat(10)}\n`),'- [ ] Last destination ^last'].join('\n');
+  const detail=state(raw,raw);
+  const layout=new DetailPiPreviewLayout(detail,plainMarkdownTheme,false);
+  layout.syncState(80);renderLayoutFrame(layout,80,20,()=>{});
+  const region=detail.previewRegions.regions.find(r=>r.kind==='checklist')!;
+  detail.previewRegions.focusedRegionId=region.id;
+  layout.syncState(80);layout.ensureFocusVisible(80,20);
+  expect(renderLayoutFrame(layout,80,20,()=>{}).lines.map(stripTerminalSequences).join('\n')).toContain('Last destination');
+  layout.syncState(24);layout.ensureFocusVisible(24,10);
+  expect(renderLayoutFrame(layout,24,10,()=>{}).lines.map(stripTerminalSequences).join('\n')).toContain('Last destination');
+  expect(detail.previewRegions.focusedRegionId).toBe(region.id);
+});

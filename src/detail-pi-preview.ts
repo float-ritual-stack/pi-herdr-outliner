@@ -1946,6 +1946,7 @@ export class DetailPiPreviewLayout extends VStack {
       region => region.id === this.state.previewRegions.focusedRegionId,
     );
     switch (focused?.kind) {
+      case "checklist":
       case "document-fold":
       case "callout":
       case "body-link": this.pendingBodyFocusScroll = true; break;

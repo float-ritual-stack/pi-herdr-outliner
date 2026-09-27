@@ -26,6 +26,7 @@ const result=await runHerdrScenario({name:`checklist-comments-${ansi?'ansi':'pi'
   await s.waitVisible(s.panes.detail,'Checklist step');await s.keys(s.panes.detail,'escape');
   await s.waitFor('status picker closed',()=>s.visible(s.panes.detail),frame=>frame.includes('Prepare release')&&!frame.includes('Checklist step'));
   await s.keys(s.panes.detail,'c');await s.waitVisible(s.panes.detail,ansi?'⌃S save':'Ctrl+S');await s.keys(s.panes.detail,'escape');
+  await s.waitFor('comment cancellation painted',()=>s.visible(s.panes.detail),frame=>frame.includes('Comment cancelled')&&!frame.includes(ansi?'⌃S save':'Ctrl+S'));
   assert.equal((await read()).revision,note.revision,'Cancelling a comment must not assign an ID');
   await s.keys(s.panes.detail,'c');await s.waitVisible(s.panes.detail,ansi?'⌃S save':'Ctrl+S');
   await s.text(s.panes.detail,'CHECKLIST COMMENT EVIDENCE');await s.keys(s.panes.detail,'ctrl+s');
