@@ -572,6 +572,7 @@ bun run cli list --filter type=roadmap-item --limit 400 --fields title,propertie
 bun run cli read <block-uuid> <block-uuid> --fields title,properties
 bun run cli view <saved-virtual-branch-uuid>
 bun run cli view <saved-virtual-branch-uuid> --limit 500 --expected <revision>
+bun run cli view <saved-virtual-branch-uuid> --limit 50 --offset 50
 bun run cli create --text "A durable note [type::note]"
 bun run cli properties-preview --text "Draft title [stage::queued]"
 bun run cli update --id <block-uuid> --text "Revised note" --expected <revision>
@@ -592,21 +593,26 @@ bun run cli work-id-allocate --id <block-uuid> --expected <revision>
 Text updates require the integer `revision` returned by the read before editing. Omitting `--expected` or saving an old revision fails without replacing newer text. Sibling moves do not invalidate an unchanged text draft.
 
 `view` and the agent tool `outliner_view` read a saved virtual branch's matching
-canonical roots in branch order using the same evaluator as Tree. They do not
-inspect or change pane focus, disclosure or viewport. Context children and nested
-view expansions are presentation, not additional query matches. Block-scoped
-properties, authored sorting and manual ranks retain the existing Tree semantics.
+canonical roots in branch order through the service's `views.read`, the same
+evaluator Tree uses. They do not inspect or change pane focus, disclosure or
+viewport. Context children and nested view expansions are presentation, not
+additional query matches. Block-scoped properties, authored sorting and manual
+ranks retain the existing Tree semantics.
 
 The result includes `viewId`, `revision`, workspace `sequence`, configured/effective
-limits, `blocks`, `completeness` and `status`. Only `ready` is a valid result set;
-`invalid`, `unsupported`, `missing`, `failed` and `changed` carry errors and no
-matches. A concurrent workspace mutation discards the mixed read: retry explicitly.
-An optional expected revision guards the saved definition. The authored result
-limit applies by default; an explicit override from 1 through 1,000 changes only
-this read. Check completeness even with an override. Other kinds, including
-checklist views, are reported as unsupported rather than reinterpreted. Agent
-responses also report presentation omissions separately from query completeness;
-use the CLI or read individual blocks when large bodies exceed the tool budget.
+limits, `offset`, `total` (every eligible member), `blocks`, `completeness`,
+`nextOffset` when more members follow, and `status`. Only `ready` is a valid
+result set; `invalid`, `unsupported`, `missing`, `failed` and `changed` carry
+`errors` plus structured `problems` (`code`, and for query syntax the property
+and 0-based position) and no matches. The service evaluates the whole view in
+one read transaction, so a result never mixes two workspace states. An optional
+expected revision guards the saved definition. The authored result limit applies
+by default; an explicit override from 1 through 1,000 and `--offset` page through
+the view without changing it. Check completeness even with an override. Other
+kinds, including checklist views, are reported as unsupported rather than
+reinterpreted. Agent responses also report presentation omissions separately
+from query completeness; use the CLI or read individual blocks when large bodies
+exceed the tool budget. `views.read` requires protocol 82.
 
 The CLI resolves the same workspace-scoped socket and database as the service. `goto` accepts a full UUID, unique short prefix, or unambiguous fuzzy title/content query. Eight-character IDs are convenience labels, not a uniqueness guarantee; ambiguous queries return full-UUID candidates without changing selection. Work-ID configuration is normally one-time; allocation requires the exact block UUID and its latest integer `revision`, available in bounded `list` results. A successful allocation atomically persists both the immutable reservation and the block's `[work-id::…]` property/address; a failed request consumes neither the number nor a reservation.
 

@@ -1377,6 +1377,45 @@ export interface TreePreviewReference {
   target: Pick<BlockReferenceResolution, "blockId" | "fragmentId"> | null;
 }
 
+export interface SavedViewReadOptions {
+  /** An explicit bounded page size; the authored limit remains unchanged. */
+  limit?: number;
+  /** Number of eligible members to skip, in branch order. */
+  offset?: number;
+  expectedRevision?: number;
+}
+
+export type SavedViewReadStatus = "ready" | "invalid" | "unsupported" | "missing" | "changed" | "failed";
+
+export interface SavedViewReadProblem {
+  code: "view-missing" | "view-unsupported" | "view-changed" | "view-invalid" | "query-failed";
+  message: string;
+  /** Definition property that caused an invalid view, such as query. */
+  property?: string;
+  /** 0-based character position within that property value, for syntax errors. */
+  position?: number;
+}
+
+/** One saved view's members, evaluated atomically by the service (views.read). */
+export interface SavedViewReadResult<B = VisibleBlock> {
+  status: SavedViewReadStatus;
+  viewId: string;
+  revision?: number;
+  sequence: number;
+  configuredLimit?: number;
+  effectiveLimit?: number;
+  offset?: number;
+  /** Every eligible member of the view, beyond the authored limit and this page. */
+  total?: number;
+  /** Offset of the next page when this page does not reach the end. */
+  nextOffset?: number;
+  /** Matching canonical roots, in branch order. Context children are not matches. */
+  blocks: B[];
+  completeness: BlockCollectionCompleteness | null;
+  errors: string[];
+  problems?: SavedViewReadProblem[];
+}
+
 export interface TreeIndexCollection {
   blocks: TreeIndexBlock[];
   completeness: BlockCollectionCompleteness;
@@ -1547,6 +1586,7 @@ export const OUTLINER_MIN_CLIENT_PROTOCOL = 82;
 export const OUTLINER_CAPABILITIES = [
   "blocks.read",
   "properties.preview",
+  "views.read",
 ] as const;
 export type OutlinerCapability = (typeof OUTLINER_CAPABILITIES)[number];
 
@@ -1583,6 +1623,7 @@ export type OutlinerRequest =
   | { id: string; action: "ping" }
   | { id: string; action: "blocks.query"; query: BlockSearchQuery; fields?: BlockReadField[] }
   | { id: string; action: "blocks.read"; ids: string[]; fields?: BlockReadField[] }
+  | ({ id: string; action: "views.read"; viewId: string; format?: "full" | "tree" } & SavedViewReadOptions)
   | { id: string; action: "blocks.authored-links"; ownerBlockId: string }
   | { id: string; action: "get"; blockId: string }
   | { id: string; action: "children"; parentId: string | null }

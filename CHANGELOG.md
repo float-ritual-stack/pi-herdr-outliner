@@ -13,6 +13,14 @@ This file records notable user-facing changes. The project remains active dogfoo
   Protocol 82 introduces negotiation, so restart the service and clients once
   when upgrading. PIE-402.
 
+- The service evaluates saved virtual-branch views. `views.read` returns a
+  view's members in branch order with its authored limit, paging (`offset`,
+  `nextOffset`), an exact `total`, truncation and structured errors, from one
+  read transaction. Tree, the branch navigator, Detail view embeds, CLI `view`
+  and `outliner_view` now read membership through it instead of evaluating the
+  query themselves. Service capability `views.read`; restart the service to
+  use it. PIE-397.
+
 - Keep ticket-key autolinks outside complete Markdown URL spans. Plain and
   angle-bracket URLs, including Jira smart links, stay one destination through
   narrow wrapping; adjacent bare ticket keys still open local pages. PIE-392.

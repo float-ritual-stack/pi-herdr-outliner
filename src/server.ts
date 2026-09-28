@@ -1415,6 +1415,13 @@ export class OutlinerServer {
         case "blocks.read":
           result = this.store.readBlocks(request.ids, request.fields);
           break;
+        case "views.read": {
+          const options = { limit: request.limit, offset: request.offset, expectedRevision: request.expectedRevision };
+          result = request.format === "tree"
+            ? this.store.readSavedView(request.viewId, options, "tree")
+            : this.store.readSavedView(request.viewId, options);
+          break;
+        }
         case "blocks.authored-links":
           result = readAuthoredLinks(this.store, request.ownerBlockId);
           break;

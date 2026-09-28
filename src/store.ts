@@ -1,9 +1,9 @@
-import {parseVirtualBranchConfig} from "./virtual-branches";
+import {isVirtualBranchDefinition, parseVirtualBranchConfig, selectVirtualBranchMembers, virtualBranchMembershipQuery} from "./virtual-branches";
 import {placeOrderedItems} from "./virtual-placement";
 import {WorkingSelectionRepository} from "./working-selection";
 import { checklistItems, queryChecklistItems, updateChecklistText, validateChecklistIdentityChanges } from "./checklist-items";
 import type { ChecklistCollection, ChecklistIdentityChange, ChecklistQuery, ChecklistSearchQuery, ChecklistSearchCollection, ChecklistUpdateInput, ChecklistUpdateReceipt } from "./types";
-import type {VirtualBranchOrder, VirtualBranchPlacementInput} from "./types";
+import type {SavedViewReadOptions, SavedViewReadProblem, SavedViewReadResult, VirtualBranchOrder, VirtualBranchPlacementInput} from "./types";
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
@@ -454,6 +454,9 @@ function boundedTreeLabel(text: string): string {
   const boundary = treeLabelSegmenter.segment(text).containing(511)!.index;
   return `${text.slice(0, boundary)}…`;
 }
+
+/** Internal saved-view evaluation counts every member; public queries stay within 1..1000. */
+const UNBOUNDED_VIEW_MATCHES = 1_000_000_000;
 
 function compactTreeBlock(
   { text, displayText: _displayText, propertyMatches: _matches, ...metadata }: VisibleBlock,
@@ -2295,28 +2298,94 @@ export class OutlinerStore {
 
   queryBlocks(input: BlockSearchQuery): VisibleBlockCollection {
     const query = normalizeBlockSearchQuery(input);
+    return this.database.transaction(() => this.queryNormalizedBlocksFromCurrentRead(query))();
+  }
 
-    return this.database.transaction((): VisibleBlockCollection => {
-      if (query.subtreeRootId) this.require(query.subtreeRootId);
-      const deletedMode = query.includeDeleted ?? "active";
-      if (query.rankViewId && deletedMode === "active") {
-        return this.queryRankedBlocksFromCurrentRead(query, query.rankViewId);
+  /** `query.limit` is normally 1..1000; saved-view reads pass UNBOUNDED_VIEW_MATCHES to count every member. */
+  private queryNormalizedBlocksFromCurrentRead(query: BlockSearchQuery): VisibleBlockCollection {
+    if (query.subtreeRootId) this.require(query.subtreeRootId);
+    const deletedMode = query.includeDeleted ?? "active";
+    if (query.rankViewId && deletedMode === "active") {
+      return this.queryRankedBlocksFromCurrentRead(query, query.rankViewId);
+    }
+    const blocks = this.traverseLoadedGraph(this.loadGraph(), {
+      filters: query.filters,
+      propertyScope: query.propertyScope,
+      subtreeRootId: query.subtreeRootId,
+      text: query.text,
+      stopAfterMatches: query.sort ? undefined : query.limit + 1,
+      deletedMode,
+    });
+    if (query.sort) sortQueriedBlocks(blocks, query.sort);
+    if (blocks.length <= query.limit) {
+      return { blocks, completeness: { kind: "complete" } };
+    }
+    return {
+      blocks: blocks.slice(0, query.limit),
+      completeness: { kind: "truncated", limit: query.limit },
+    };
+  }
+
+  /**
+   * Evaluate a saved virtual branch in one read transaction: the same membership,
+   * order and limit Tree projects, plus the exact eligible total for paging.
+   */
+  readSavedView(viewId: string, options?: SavedViewReadOptions): SavedViewReadResult<VisibleBlock>;
+  readSavedView(viewId: string, options: SavedViewReadOptions, format: "tree"): SavedViewReadResult<TreeIndexBlock>;
+  readSavedView(
+    viewId: string,
+    options: SavedViewReadOptions = {},
+    format: "full" | "tree" = "full",
+  ): SavedViewReadResult<VisibleBlock | TreeIndexBlock> {
+    if (typeof viewId !== "string" || !viewId) throw new Error("View read requires a view block ID");
+    const { limit, offset = 0, expectedRevision } = options;
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 1000)) {
+      throw new Error("View read limit must be an integer from 1 through 1000");
+    }
+    if (!Number.isSafeInteger(offset) || offset < 0) throw new Error("View read offset must be a non-negative integer");
+    if (expectedRevision !== undefined && (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1)) {
+      throw new Error("Expected view revision must be a positive integer");
+    }
+    return this.database.transaction((): SavedViewReadResult<VisibleBlock | TreeIndexBlock> => {
+      const result: SavedViewReadResult<VisibleBlock | TreeIndexBlock> = {
+        status: "missing", viewId, sequence: this.sequence, blocks: [], completeness: null, errors: [], problems: [],
+      };
+      const fail = (status: SavedViewReadResult["status"], problems: SavedViewReadProblem[]) =>
+        ({ ...result, status, errors: problems.map(problem => problem.message), problems });
+      const definition = this.getFromCurrentRead(viewId);
+      if (!definition || definition.effectiveDeletedRootId) {
+        return fail("missing", [{ code: "view-missing", message: "Saved view not found in the active workspace" }]);
       }
-      const blocks = this.traverseLoadedGraph(this.loadGraph(), {
-        filters: query.filters,
-        propertyScope: query.propertyScope,
-        subtreeRootId: query.subtreeRootId,
-        text: query.text,
-        stopAfterMatches: query.sort ? undefined : query.limit + 1,
-        deletedMode,
-      });
-      if (query.sort) sortQueriedBlocks(blocks, query.sort);
-      if (blocks.length <= query.limit) {
-        return { blocks, completeness: { kind: "complete" } };
+      result.revision = definition.revision;
+      if (expectedRevision !== undefined && definition.revision !== expectedRevision) {
+        return fail("changed", [{ code: "view-changed", message: "Saved view revision changed; read the current definition before retrying" }]);
       }
+      if (!isVirtualBranchDefinition(definition)) {
+        return fail("unsupported", [{ code: "view-unsupported", message: "This reader supports type=virtual-branch; other view kinds are not substituted with a property query" }]);
+      }
+      // create-parent only affects creation, which a read never performs.
+      const parsed = parseVirtualBranchConfig(definition, []);
+      if (!parsed.config) {
+        return fail("invalid", (parsed.configurationProblems ?? parsed.configurationErrors.map(message => ({ message })))
+          .map(problem => ({ code: "view-invalid", ...problem })));
+      }
+      const effectiveLimit = limit ?? parsed.config.limit;
+      Object.assign(result, { configuredLimit: parsed.config.limit, effectiveLimit, offset });
+      let matches: VisibleBlockCollection;
+      try {
+        const query = normalizeBlockSearchQuery(virtualBranchMembershipQuery(viewId, parsed.config, 1));
+        matches = this.queryNormalizedBlocksFromCurrentRead({ ...query, limit: UNBOUNDED_VIEW_MATCHES });
+      } catch (error) {
+        return fail("failed", [{ code: "query-failed", message: error instanceof Error ? error.message : String(error) }]);
+      }
+      const selected = selectVirtualBranchMembers(viewId, parsed.config, matches, this.virtualOccurrenceRanksFromCurrentRead(), effectiveLimit, offset);
+      const blocks = format === "tree"
+        ? selected.members.map(block => compactTreeBlock(block, id => this.getFromCurrentRead(id)))
+        : selected.members;
       return {
-        blocks: blocks.slice(0, query.limit),
-        completeness: { kind: "truncated", limit: query.limit },
+        ...result, status: "ready", blocks, total: selected.eligible,
+        completeness: selected.truncated ? { kind: "truncated", limit: effectiveLimit } : { kind: "complete" },
+        ...(selected.truncated ? { nextOffset: offset + selected.members.length } : {}),
       };
     })();
   }

@@ -3257,11 +3257,12 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
     ...outlinerToolPresentation("Outliner View"),
     name: "outliner_view",
     label: "Outliner View",
-    description: "Read matching canonical items of a saved virtual branch in branch order, independent of pane expansion. Reports limits, invalid definitions and concurrent changes explicitly.",
+    description: "Read matching canonical items of a saved virtual branch in branch order, independent of pane expansion. The service evaluates the view; results report the total, paging, limits and invalid definitions explicitly.",
     promptSnippet: "Read the results of a saved virtual branch",
     parameters: Type.Object({
       viewId: Type.String(),
       limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 1000 })),
+      offset: Type.Optional(Type.Integer({ minimum: 0 })),
       expectedRevision: Type.Optional(Type.Integer({ minimum: 1 })),
     }),
     async execute(_id, params) {

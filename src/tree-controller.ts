@@ -76,6 +76,7 @@ import type {
   NavigationLinkState,
   OutlinerNavigationTarget,
   PropertyCatalogItem,
+  SavedViewReadResult,
   TreeIndexBlock,
   TreeIndexCollection,
   TreeIndexSnapshot,
@@ -87,6 +88,7 @@ import {
   isVirtualBranchRootOccurrence,
   projectVirtualBranches,
   planVirtualChild,
+  savedViewMembership,
   type PhysicalTreeRow as ProjectedPhysicalRow,
   type TreeRow as ProjectedTreeRow,
   type VirtualBranchOccurrenceRow as ProjectedOccurrenceRow,
@@ -840,7 +842,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     const projection = await projectVirtualBranches(
       visible,
       physical,
-      (query) => effects.request<TreeIndexCollection>({ action: "tree.query", query }),
+      { members: savedViewMembership(viewId => effects.request<SavedViewReadResult<TreeIndexBlock>>({ action: "views.read", viewId, format: "tree" })) },
       snapshot.virtualOccurrenceRanks,
       presentation,
     );

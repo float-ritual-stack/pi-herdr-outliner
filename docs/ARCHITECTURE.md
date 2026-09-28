@@ -594,6 +594,7 @@ Do not leave older editors running across this upgrade.
 - canonical reads: `get`, `blocks.read` (batch by ids with field projection and per-id missing/trashed reports), `children`, `blocks.context`, `workspace.snapshot`
 - compact Tree reads: `tree.index`
 - bounded search: `blocks.query` (optional `fields` projection), `tree.query`, `tree.focus`
+- saved-view evaluation: `views.read`
 - resource identity and documents: `resource-sources.create | list | get` and `resources.intern | intern-filesystem | get | relocate | describe | open | refresh`
 - resource retention: `resources.retention.get | configure | inspect | pin | unpin | reference | unreference` and explicit `resources.collect` eviction/purge passes
 - computed producers: `computed.invocations.create`, `computed.invocations.revise`, `computed.handlers.resolve`, `computed.executions.list`, and async `computed.execute`
@@ -949,6 +950,41 @@ Optional properties:
 - `[create-parent::<block-id>]` — physical parent for branch-created blocks.
 - `[summary-properties::key,key,…]` — ordered Tree summary allowlist for projected occurrences in this view.
 
+### Saved-view reads (`views.read`)
+
+Protocol 82 adds `views.read`, the one evaluator of saved-view membership:
+
+```ts
+{ action: "views.read"; viewId: string; limit?: number; offset?: number;
+  expectedRevision?: number; format?: "full" | "tree" }
+```
+
+The service reads the definition, its query, persisted occurrence ranks and the
+matching blocks in one SQLite read transaction. It excludes the definition,
+deduplicates, applies manual ranks to unsorted branches (timestamp sort
+otherwise), and returns the page `[offset, offset + limit)` of that branch order.
+`limit` defaults to the authored `[limit::N]`; an explicit 1–1,000 override
+affects only this read. `total` counts every eligible member, beyond the
+authored limit; `completeness` is `truncated` (with `nextOffset`) whenever
+members follow the page. `format: "tree"` returns compact `TreeIndexBlock`
+entries for Tree; the default returns full `VisibleBlock`s.
+
+Only `status: "ready"` is a result set. `invalid`, `unsupported`, `missing`,
+`changed` (an `expectedRevision` mismatch) and `failed` return no blocks, a null
+completeness, human `errors`, and structured `problems` with a `code`. Invalid
+query syntax also carries the definition `property` and the 0-based `position`
+inside that property's value. Invalid page options (limit, offset, revision) are
+request errors. The read has no side effects on selection, disclosure or panes.
+
+Tree, the virtual-branch navigator, Detail view embeds, CLI `view` and the
+`outliner_view` agent tool all read membership through `views.read`; they keep
+only presentation (descendant context, disclosure, attention) locally. Older
+clients that evaluate views from `workspace.snapshot` plus `blocks.query` keep
+working because those actions are unchanged. Two client paths still evaluate
+over `blocks.query`: the Tree's virtual-child admission check, which asks whether
+a not-yet-created child would appear, and bookmark navigators, which scope the
+query to the bookmark root.
+
 Tree builds canonical parent-to-children adjacency once from the complete physical
 snapshot, never from the collapse-pruned visible collection. It queries, ranks,
 deduplicates, and bounds matched roots first, then allocates read-only contextual
@@ -972,8 +1008,8 @@ target `canonicalId`. Projected indent/outdent and add operations remain disable
 Branch count, completeness, and truncation remain root-only. Root-query truncation
 is distinct from depth and 1,000-row budget truncation, and all three are surfaced.
 Unsorted branches use persisted ranks and `Option+Up` / `Option+Down` reorder through the action registry;
-`workspace.snapshot` carries every occurrence rank in the same transactional read
-as the block graph, and projection reapplies those ranks before the root limit.
+`views.read` applies every occurrence rank in the same transactional read as the
+matched blocks, before the root limit.
 Timestamp-sorted branches order all matched roots before the limit, ignore
 persisted ranks, and disable manual occurrence reorder. Rank rows survive
 temporary query mismatches and cascade when either the branch definition or

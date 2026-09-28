@@ -3,7 +3,6 @@ import {atomicDocument, concatDocuments, observeDocument, sourceDocument, sliceD
   generatedDocument, type MappedDocument, type SourceSlice} from './document-provenance';
 import type { RequestInput } from "./client";
 import {isChecklistView,projectChecklistView} from './checklist-views';
-import { MAX_BLOCK_QUERY_LIMIT } from "./block-query";
 import { resolveFragmentSlice, stripFragmentAnchors } from "./fragments";
 import { propertyReferenceOccurrences } from "./reference-occurrences";
 import { blockDisplayTitle } from "./references";
@@ -15,8 +14,7 @@ import {
 import type {
   Block,
   BlockCollectionCompleteness,
-  VisibleBlock,
-  VisibleBlockCollection,
+  SavedViewReadResult,
   WorkspaceSnapshot,
 } from "./types";
 import {
@@ -116,25 +114,6 @@ function explicitFallback(
   };
 }
 
-function eligibleResults(
-  definition: Block,
-  collection: VisibleBlockCollection,
-  limit: number,
-): { blocks: VisibleBlock[]; completeness: BlockCollectionCompleteness } {
-  const seen = new Set<string>([definition.id]);
-  const blocks: VisibleBlock[] = [];
-  for (const block of collection.blocks) {
-    if (seen.has(block.id)) continue;
-    seen.add(block.id);
-    blocks.push(block);
-  }
-  const truncated = blocks.length > limit || collection.completeness.kind === "truncated";
-  return {
-    blocks: blocks.slice(0, limit),
-    completeness: truncated ? { kind: "truncated", limit } : { kind: "complete" },
-  };
-}
-
 async function projectVirtualBranch(
   requester: DetailEmbedRequester,
   definition: Block,
@@ -150,17 +129,17 @@ async function projectVirtualBranch(
   }
 
   try {
-    const collection = await requester.request<VisibleBlockCollection>({
-      action: "blocks.query",
-      query: {
-        filters: parsed.config.filters,
-        ...(parsed.config.sort
-          ? { sort: parsed.config.sort }
-          : { rankViewId: definition.id }),
-        limit: Math.min(MAX_BLOCK_QUERY_LIMIT, parsed.config.limit + 2),
-      },
-    });
-    const projected = eligibleResults(definition, collection, parsed.config.limit);
+    // The service evaluates membership, order and bounds exactly as Tree shows them.
+    const projected = await requester.request<SavedViewReadResult>({ action: "views.read", viewId: definition.id });
+    if (projected.status === "invalid") {
+      return {
+        text: `${linkedHeading(definition.id, "CONFIG ERROR")}\n  ${boundedError(projected.errors.join("; "))}`,
+        state: { blockId: definition.id, status: "invalid", count: 0 },
+      };
+    }
+    if (projected.status !== "ready" || !projected.completeness) {
+      throw new Error(projected.errors.join("; ") || `View read ${projected.status}`);
+    }
     if (projected.blocks.length === 0) {
       return {
         text: linkedHeading(definition.id, "EMPTY"),

@@ -1,4 +1,5 @@
 import {
+  BlockQuerySyntaxError,
   MAX_BLOCK_QUERY_LIMIT,
   parsePropertyFilterClause,
   parsePropertyFilterExpression,
@@ -82,9 +83,18 @@ export interface VirtualBranchConfig {
   summaryPropertyKeys?: readonly string[];
 }
 
+/** A configuration error with its source property and 0-based syntax position when known. */
+export interface VirtualBranchConfigurationProblem {
+  message: string;
+  property?: string;
+  position?: number;
+}
+
 export interface VirtualBranchConfigResult {
   config: VirtualBranchConfig | null;
   configurationErrors: string[];
+  /** The same errors as configurationErrors, with structure for protocol callers. */
+  configurationProblems?: VirtualBranchConfigurationProblem[];
   creationErrors: string[];
 }
 
@@ -216,6 +226,7 @@ export function parseVirtualBranchConfig(
 ): VirtualBranchConfigResult {
   const configurationErrors: string[] = [];
   const creationErrors: string[] = [];
+  const syntaxProblems = new Map<string, { property: string; position: number }>();
 
   const typeProperties = propertiesNamed(definition, "type");
   if (
@@ -236,7 +247,9 @@ export function parseVirtualBranchConfig(
       filters = parsePropertyFilterExpression(query);
       if (filters.length === 0) configurationErrors.push("Virtual branch query cannot be empty");
     } catch (error) {
-      configurationErrors.push(`Invalid virtual branch query: ${errorMessage(error)}`);
+      const message = `Invalid virtual branch query: ${errorMessage(error)}`;
+      configurationErrors.push(message);
+      if (error instanceof BlockQuerySyntaxError) syntaxProblems.set(message, { property: "query", position: error.index });
     }
   }
 
@@ -291,7 +304,9 @@ export function parseVirtualBranchConfig(
       expandWhen = parsePropertyFilterExpression(expandWhenProperty.value);
       if (!expandWhen.length) configurationErrors.push("Virtual branch expand-when cannot be empty");
     } catch (error) {
-      configurationErrors.push(`Invalid virtual branch expand-when: ${errorMessage(error)}`);
+      const message = `Invalid virtual branch expand-when: ${errorMessage(error)}`;
+      configurationErrors.push(message);
+      if (error instanceof BlockQuerySyntaxError) syntaxProblems.set(message, { property: "expand-when", position: error.index });
     }
   }
 
@@ -339,7 +354,8 @@ export function parseVirtualBranchConfig(
   }
 
   if (configurationErrors.length > 0) {
-    return { config: null, configurationErrors, creationErrors };
+    const configurationProblems = configurationErrors.map(message => ({ message, ...syntaxProblems.get(message) }));
+    return { config: null, configurationErrors, configurationProblems, creationErrors };
   }
 
   return {
@@ -448,7 +464,7 @@ function descendantOccurrenceRowId(
   return `occurrence:${viewId}:${matchRootCanonicalId}:${canonicalId}`;
 }
 
-function rankedDeduplicatedRoots<T extends ProjectionBlock>(
+function rankedDeduplicatedRoots<T extends Pick<ProjectionBlock, "id">>(
   definitionId: string,
   matches: readonly T[],
   ranks: readonly VirtualOccurrenceRank[],
@@ -644,7 +660,55 @@ interface ProjectedVirtualBranch<T extends ProjectionBlock = VisibleBlock> {
   readonly state: VirtualBranchState;
 }
 
-/** Membership shared by Tree and agent reads; descendant layout is separate. */
+/** The canonical query whose results a saved view ranks, deduplicates and bounds. */
+export function virtualBranchMembershipQuery(
+  viewId: string,
+  config: Pick<VirtualBranchConfig, "filters" | "sort">,
+  limit: number = MAX_BLOCK_QUERY_LIMIT,
+): BlockSearchQuery {
+  return { filters: config.filters, ...(config.sort ? { sort: config.sort } : { rankViewId: viewId }), limit };
+}
+
+export interface VirtualBranchMembers<T> {
+  /** The requested page of eligible members, in branch order. */
+  readonly members: T[];
+  /** Eligible members known from the query; a lower bound when the query was truncated. */
+  readonly eligible: number;
+  /** More eligible members follow this page, or the query itself was truncated. */
+  readonly truncated: boolean;
+}
+
+/**
+ * Branch order over one query result: the definition is excluded, duplicates are
+ * removed, and unsorted branches place persisted manual ranks first.
+ */
+export function selectVirtualBranchMembers<T extends Pick<ProjectionBlock, "id">>(
+  definitionId: string,
+  config: Pick<VirtualBranchConfig, "sort">,
+  result: { blocks: readonly T[]; completeness: BlockCollectionCompleteness },
+  ranks: readonly VirtualOccurrenceRank[],
+  limit: number,
+  offset = 0,
+): VirtualBranchMembers<T> {
+  const eligible = rankedDeduplicatedRoots(definitionId, result.blocks, config.sort ? [] : ranks);
+  return {
+    members: eligible.slice(offset, offset + limit),
+    eligible: eligible.length,
+    truncated: eligible.length > offset + limit || result.completeness.kind === "truncated",
+  };
+}
+
+function assertViewReadLimit(limit: number): void {
+  if (!Number.isInteger(limit) || limit < 1 || limit > MAX_VIRTUAL_BRANCH_LIMIT) {
+    throw new Error("View read limit must be an integer from 1 through 1000");
+  }
+}
+
+/**
+ * Client-side membership over a query effect. Saved views are read through the
+ * service's views.read; this remains for hypothetical plans (virtual-child
+ * admission) and scoped adapters that alter the query.
+ */
 export async function evaluateVirtualBranchMatches<T extends ProjectionBlock>(
   definition: T,
   physicalBlocks: readonly T[],
@@ -656,37 +720,74 @@ export async function evaluateVirtualBranchMatches<T extends ProjectionBlock>(
   const state = initialBranchState(parsed);
   if (!parsed.config) return { roots: [], state };
   const limit = limitOverride ?? parsed.config.limit;
-  if (!Number.isInteger(limit) || limit < 1 || limit > MAX_VIRTUAL_BRANCH_LIMIT) {
-    throw new Error("View read limit must be an integer from 1 through 1000");
-  }
+  assertViewReadLimit(limit);
   try {
-    const result = await queryBlocks({
-      filters: parsed.config.filters,
-      ...(parsed.config.sort ? { sort: parsed.config.sort } : { rankViewId: definition.id }),
-      limit: MAX_BLOCK_QUERY_LIMIT,
-    });
-    const eligible = rankedDeduplicatedRoots(definition.id, result.blocks, parsed.config.sort ? [] : ranks);
-    const roots = eligible.slice(0, limit);
-    const truncated = eligible.length > limit || result.completeness.kind === "truncated";
-    return { roots, state: {
-      ...state, count: roots.length, queried: true,
-      completeness: truncated ? { kind: "truncated", limit } : { kind: "complete" },
-      truncation: { rootQuery: truncated, depth: false, budget: false },
-    } };
+    const result = await queryBlocks(virtualBranchMembershipQuery(definition.id, parsed.config));
+    const selected = selectVirtualBranchMembers(definition.id, parsed.config, result, ranks, limit);
+    return { roots: selected.members, state: membershipState(state, selected.members.length, selected.truncated, limit) };
   } catch (error) {
     return { roots: [], state: { ...state, queryError: errorMessage(error), queried: true } };
   }
+}
+
+function membershipState(state: VirtualBranchState, count: number, truncated: boolean, limit: number): VirtualBranchState {
+  return {
+    ...state, count, queried: true,
+    completeness: truncated ? { kind: "truncated", limit } : { kind: "complete" },
+    truncation: { rootQuery: truncated, depth: false, budget: false },
+  };
+}
+
+/** The part of a views.read result that membership needs; see SavedViewReadResult. */
+export interface SavedViewMembership<T> {
+  status: "ready" | "invalid" | "unsupported" | "missing" | "changed" | "failed";
+  blocks: T[];
+  completeness: BlockCollectionCompleteness | null;
+  errors: string[];
+}
+
+/** Membership effect backed by the service's saved-view read. */
+export type VirtualBranchMembershipEffect<T extends ProjectionBlock = VisibleBlock> = (
+  definition: T,
+  physicalBlocks: readonly T[],
+) => Promise<{ roots: T[]; state: VirtualBranchState }>;
+
+export function savedViewMembership<T extends ProjectionBlock>(
+  readView: (viewId: string) => Promise<SavedViewMembership<T>>,
+): VirtualBranchMembershipEffect<T> {
+  return async (definition, physicalBlocks) => {
+    // Local configuration still supplies presentation (depth, disclosure, attention).
+    const parsed = parseVirtualBranchConfig(definition, physicalBlocks);
+    const state = initialBranchState(parsed);
+    if (!parsed.config) return { roots: [], state };
+    try {
+      const read = await readView(definition.id);
+      if (read.status !== "ready" || !read.completeness) {
+        return { roots: [], state: { ...state, queryError: read.errors.join("; ") || `View read ${read.status}`, queried: true } };
+      }
+      return { roots: read.blocks, state: membershipState(state, read.blocks.length, read.completeness.kind === "truncated", parsed.config.limit) };
+    } catch (error) {
+      return { roots: [], state: { ...state, queryError: errorMessage(error), queried: true } };
+    }
+  };
+}
+
+function membershipEffect<T extends ProjectionBlock>(
+  source: VirtualBranchQueryEffect<T> | { readonly members: VirtualBranchMembershipEffect<T> },
+  ranks: readonly VirtualOccurrenceRank[],
+): VirtualBranchMembershipEffect<T> {
+  if (typeof source !== "function") return source.members;
+  return (definition, physicalBlocks) => evaluateVirtualBranchMatches(definition, physicalBlocks, source, ranks);
 }
 
 async function projectVirtualBranch<T extends ProjectionBlock>(
   definition: PhysicalTreeRow<T>,
   physicalBlocks: readonly T[],
   adjacency: CanonicalAdjacency<T>,
-  queryBlocks: VirtualBranchQueryEffect<T>,
-  ranks: readonly VirtualOccurrenceRank[],
+  members: VirtualBranchMembershipEffect<T>,
   presentation: TreePresentationState,
 ): Promise<ProjectedVirtualBranch<T>> {
-  const { roots, state } = await evaluateVirtualBranchMatches(definition.block, physicalBlocks, queryBlocks, ranks);
+  const { roots, state } = await members(definition.block, physicalBlocks);
   const definitionId = definition.canonicalId;
   if (!state.config || state.queryError) return { definitionId, rows: [], state };
   const allocated = allocateOccurrenceRows(definition, roots, adjacency, presentation, state.config);
@@ -832,10 +933,11 @@ function pruneCollapsedPhysicalBlocks<T extends ProjectionBlock>(
 export async function projectVirtualBranches<T extends ProjectionBlock>(
   visibleBlocks: readonly T[],
   physicalBlocks: readonly T[],
-  queryBlocks: VirtualBranchQueryEffect<T>,
+  source: VirtualBranchQueryEffect<T> | { readonly members: VirtualBranchMembershipEffect<T> },
   ranks: readonly VirtualOccurrenceRank[] = [],
   presentation: TreePresentationState = EMPTY_TREE_PRESENTATION_STATE,
 ): Promise<VirtualBranchProjection<T>> {
+  const members = membershipEffect(source, ranks);
   const physicalRows = buildPhysicalTreeRows(
     pruneCollapsedPhysicalBlocks(visibleBlocks, presentation.collapsedBlockIds),
     presentation,
@@ -851,7 +953,7 @@ export async function projectVirtualBranches<T extends ProjectionBlock>(
   // Each definition is queried once; composition retains its cycle/depth/row bounds.
   do {
     const projected = await Promise.all(pending.map(block => projectVirtualBranch(
-      physicalTreeRow(block, presentation), physicalBlocks, adjacency, queryBlocks, ranks, presentation,
+      physicalTreeRow(block, presentation), physicalBlocks, adjacency, members, presentation,
     )));
     for (const branch of projected) {
       branchStates.set(branch.definitionId, branch.state);

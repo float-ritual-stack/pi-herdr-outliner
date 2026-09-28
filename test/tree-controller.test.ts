@@ -30,12 +30,15 @@ import {
 import { layoutExpandedBlock } from "../src/tree-layout";
 import {
   decorateVirtualBranchDefinitionText,
+  evaluateVirtualBranchMatches,
   type TreeRow as ProjectedTreeRow,
+  type VirtualBranchQueryEffect,
 } from "../src/virtual-branches";
 import type {
   Block,
   BlockCollectionCompleteness,
   OutlinerEvent,
+  SavedViewReadResult,
   VisibleBlock,
   VirtualOccurrenceRank,
   TreeIndexBlock,
@@ -118,6 +121,27 @@ function publishedBlockId(
   return input.target?.kind === "block" ? input.target.blockId : null;
 }
 
+/**
+ * Stands in for the service's views.read: these fixtures describe each view's
+ * query result, so the shared client evaluator derives the view read from it.
+ * Service parity with that evaluator is owned by saved-view-read.test.ts.
+ */
+async function simulatedViewRead(
+  viewId: string,
+  index: TreeIndexSnapshot,
+  query: VirtualBranchQueryEffect<TreeIndexBlock>,
+): Promise<SavedViewReadResult<TreeIndexBlock>> {
+  const entries = new Map(index.blocks.map(block => [block.id, block]));
+  const physical = index.physicalBlockIds.map(id => entries.get(id)!);
+  const definition = entries.get(viewId);
+  const base = { viewId, sequence: 1, blocks: [], completeness: null };
+  if (!definition) return { ...base, status: "missing", errors: ["Saved view not found in the active workspace"] };
+  const { roots, state } = await evaluateVirtualBranchMatches(definition, physical, query, index.virtualOccurrenceRanks);
+  if (!state.config) return { ...base, status: "invalid", errors: state.configurationErrors };
+  if (state.queryError) return { ...base, status: "failed", errors: [state.queryError] };
+  return { ...base, status: "ready", blocks: roots, completeness: state.completeness, errors: [] };
+}
+
 interface Harness {
   readonly calls: RequestInput[];
   effects: TreeControllerEffects;
@@ -136,6 +160,7 @@ function harness(
   clientId = "tree-test",
 ): Harness {
   const documents = new Map<string, Block>();
+  let lastIndex: TreeIndexSnapshot | null = null;
   const result: Harness = {
     calls: [],
     focused: [],
@@ -155,7 +180,11 @@ function harness(
       request: async <T>(input: RequestInput): Promise<T> => {
         result.calls.push(input);
         const response = await respond(input);
+        if (input.action === "views.read" && response === undefined && lastIndex) {
+          return simulatedViewRead(input.viewId, lastIndex, query => result.effects.request({action: "tree.query", query})) as T;
+        }
         if (input.action === "tree.index" && response) {
+          lastIndex = response as TreeIndexSnapshot;
           documents.clear();
           for (const entry of (response as TreeIndexSnapshot).blocks) {
             const source = fixtureSources.get(entry);
@@ -2600,6 +2629,7 @@ describe("createTreeController", () => {
     expect(effectOrder).toEqual([
       "create",
       "tree.index",
+      "views.read",
       "tree.query",
       "browsing-context.publish",
     ]);
@@ -3309,6 +3339,7 @@ describe("createTreeController", () => {
       fake.effects.request = async <T>(input: RequestInput): Promise<T> => {
         if (input.action === "tree.index") return store.readTreeIndex(input.view) as T;
         if (input.action === "tree.query") return store.queryTree(input.query) as T;
+        if (input.action === "views.read") return store.readSavedView(input.viewId, input, "tree") as T;
         if (input.action === "get") return store.get(input.blockId) as T;
         return fallback(input);
       };
@@ -3327,6 +3358,36 @@ describe("createTreeController", () => {
     } finally { store.close(); }
   });
 
+  test("Tree projects saved-view membership from the service read, not a client query", async () => {
+    const store = new OutlinerStore(":memory:");
+    try {
+      const view = store.create("Queue [type::virtual-branch] [query::lane=next] [limit::2] [child-depth::0]");
+      const items = ["Alpha", "Beta", "Gamma"].map(name => store.create(`${name} [lane::next]`));
+      store.reorderVirtualOccurrences(view.id, [items[2]!.id, items[0]!.id, items[1]!.id]);
+      const calls: string[] = [];
+      const fake = harness(() => undefined);
+      const fallback = fake.effects.request;
+      fake.effects.request = async <T>(input: RequestInput): Promise<T> => {
+        calls.push(input.action);
+        if (input.action === "tree.index") return store.readTreeIndex(input.view) as T;
+        if (input.action === "views.read") return store.readSavedView(input.viewId, input, "tree") as T;
+        if (input.action === "tree.query" || input.action === "blocks.query") throw new Error("Tree must not evaluate views itself");
+        return fallback(input);
+      };
+      const controller = createTreeController(fake.effects);
+      await controller.initialize();
+      const roots = controller.view().rows.filter(isBlockTreeRow)
+        .filter(row => row.kind === "occurrence" && row.viewId === view.id && row.relativeDepth === 0);
+      expect(roots.map(row => row.canonicalId)).toEqual(store.readSavedView(view.id).blocks.map(block => block.id));
+      expect(roots.map(row => row.canonicalId)).toEqual([items[2]!.id, items[0]!.id]);
+      expect(controller.view().branchStates.get(view.id)).toEqual(expect.objectContaining({
+        count: 2, completeness: { kind: "truncated", limit: 2 },
+        truncation: expect.objectContaining({ rootQuery: true }),
+      }));
+      expect(calls).toContain("views.read");
+    } finally { store.close(); }
+  });
+
   test("projected definition creates its own child and retries a failed move without duplicating it", async () => {
     const store = new OutlinerStore(":memory:");
     try {
@@ -3339,6 +3400,7 @@ describe("createTreeController", () => {
       fake.effects.request = async <T>(input: RequestInput): Promise<T> => {
         if (input.action === "tree.index") return store.readTreeIndex(input.view) as T;
         if (input.action === "tree.query") return store.queryTree(input.query) as T;
+        if (input.action === "views.read") return store.readSavedView(input.viewId, input, "tree") as T;
         if (input.action === "get") return store.get(input.blockId) as T;
         if (input.action === "create") return store.create(input.text, input.parentId, input.author) as T;
         if (input.action === "update") return store.update(input.blockId, input.text, input.expectedRevision) as T;

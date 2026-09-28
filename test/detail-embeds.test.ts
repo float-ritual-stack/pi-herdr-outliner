@@ -6,6 +6,7 @@ import {
   type DetailEmbedRequester,
 } from "../src/detail-embeds";
 import { parseProperties } from "../src/properties";
+import { parseVirtualBranchConfig, selectVirtualBranchMembers } from "../src/virtual-branches";
 import type {
   Block,
   VisibleBlock,
@@ -67,12 +68,17 @@ class FakeRequester implements DetailEmbedRequester {
       if (!result) throw new Error(`Block not found: ${input.blockId}`);
       return result as T;
     }
-    if (input.action === "blocks.query") {
-      const viewId = input.query.rankViewId ?? "";
-      const result = this.collections.get(viewId);
+    if (input.action === "views.read") {
+      // Stands in for the service: the fixture collection is the view's query result.
+      const result = this.collections.get(input.viewId);
       if (result instanceof Error) throw result;
-      if (!result) throw new Error(`Unexpected query: ${viewId}`);
-      return result as T;
+      if (!result) throw new Error(`Unexpected view read: ${input.viewId}`);
+      const config = parseVirtualBranchConfig(this.blocks.get(input.viewId)!, []).config!;
+      const selected = selectVirtualBranchMembers(input.viewId, config, result, [], config.limit);
+      return {
+        status: "ready", viewId: input.viewId, sequence: 1, blocks: selected.members, errors: [],
+        completeness: selected.truncated ? { kind: "truncated", limit: config.limit } : { kind: "complete" },
+      } as T;
     }
     throw new Error(`Unexpected action: ${input.action}`);
   }
@@ -128,10 +134,7 @@ test("renders a bounded virtual-branch embed without changing authored source", 
   ]);
   expect(projectedSources.map(slice=>slice.document.text.slice(slice.start,slice.end))).toEqual(['First !((nested-target))','Second']);
 
-  expect(requester.calls).toContainEqual({
-    action: "blocks.query",
-    query: { filters: [{ key: "status", value: "next" }], rankViewId: definition.id, limit: 4 },
-  });
+  expect(requester.calls).toContainEqual({ action: "views.read", viewId: definition.id });
   expect(requester.calls).not.toContainEqual({ action: "get", blockId: "nested-target" });
 });
 
@@ -149,7 +152,7 @@ test("embedded batch rows retain the view's configured lifecycle summary", async
   expect(projection.text).not.toContain("planned");
 });
 
-test("requests timestamp ordering before bounding an embedded virtual branch", async () => {
+test("renders an embedded timestamp-sorted view in the service-evaluated order", async () => {
   const definitionText = [
     "Recent completions",
     "[type::virtual-branch]",
@@ -163,7 +166,7 @@ test("requests timestamp ordering before bounding an embedded virtual branch", a
   const older = block("result-older", "Older [status::done]");
   const requester = new FakeRequester(
     new Map([definition, newest, older].map((item) => [item.id, item])),
-    new Map([["", {
+    new Map([[definition.id, {
       blocks: [visible(newest), visible(older)],
       completeness: { kind: "complete" },
     }]]),
@@ -172,14 +175,7 @@ test("requests timestamp ordering before bounding an embedded virtual branch", a
   const projection = await projectDetailRead(requester, "!((view-recent))");
 
   expect(projection.text).toContain("- ((result-newest))\n- ((result-older))");
-  expect(requester.calls).toContainEqual({
-    action: "blocks.query",
-    query: {
-      filters: [{ key: "status", value: "done" }],
-      sort: { field: "updated", direction: "desc" },
-      limit: 4,
-    },
-  });
+  expect(requester.calls).toContainEqual({ action: "views.read", viewId: definition.id });
 });
 
 test("renders explicit empty, invalid, failed, missing, deleted, and ordinary states", async () => {
@@ -506,7 +502,7 @@ test("reuses a repeated target projection and bounds the embed count", async () 
   expect(projection.embeds.filter(({ status }) => status === "empty")).toHaveLength(16);
   expect(projection.embeds.filter(({ status }) => status === "limit")).toHaveLength(2);
   expect(requester.calls.filter(({ action }) => action === "get")).toHaveLength(1);
-  expect(requester.calls.filter(({ action }) => action === "blocks.query")).toHaveLength(1);
+  expect(requester.calls.filter(({ action }) => action === "views.read")).toHaveLength(1);
   expect(detailEmbedIds(source)).toHaveLength(18);
 });
 

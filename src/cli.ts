@@ -57,11 +57,16 @@ switch (command) {
   case "view": {
     const { values, positionals } = parseArgs({
       args: rest, allowPositionals: true, strict: true,
-      options: { limit: { type: "string" }, expected: { type: "string" } },
+      options: { limit: { type: "string" }, offset: { type: "string" }, expected: { type: "string" } },
     });
     if (positionals.length !== 1) throw new Error("view requires one saved virtual-branch block ID");
+    const offset = values.offset === undefined ? undefined : Number(values.offset);
+    if (offset !== undefined && (!/^\d+$/.test(values.offset!) || !Number.isSafeInteger(offset))) {
+      throw new Error("--offset must be a non-negative integer");
+    }
     directResult = await readSavedView(client, positionals[0]!, {
       ...(values.limit === undefined ? {} : { limit: parseLimit(values.limit, 200) }),
+      ...(offset === undefined ? {} : { offset }),
       ...(values.expected === undefined ? {} : { expectedRevision: parseRevision(values.expected) }),
     });
     break;
