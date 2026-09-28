@@ -1485,13 +1485,7 @@ src/herdr-registry.ts         ephemeral live Herdr runtime metadata
 pi-extension/index.ts         Pi/OMP commands, tools, context hook
 ```
 
-## Accepted designs not yet implemented
-
-The durable roadmap lives in the outliner workboard. The current accepted design not yet implemented is projected-child creation.
-
-Do not describe it as shipped behavior until its roadmap item is Complete on main.
-
-### Destination display and sidebar placement
+## Destination display and sidebar placement
 
 The service owns navigation links. `NavigationDestinationDisplay` derives the
 header label from those links and refreshes on targeted view-domain link/client
@@ -1507,3 +1501,10 @@ set and creates the reader. Link-picker creation waits for the exact fresh brows
 context and pane registration, then passes the resulting view through the existing
 link operation. Failure leaves the previous link intact; no reverse link or second
 routing owner is created. Ordinary split commands do not change links.
+
+## Designs not yet built
+
+The durable roadmap lives in the outliner workboard; accepted designs that aren't built yet are its
+open items, not sections here. Don't describe one as shipped behavior until its item is done on main.
+Projected-child creation shipped with PIE-148 (#204): see `[create::…]` and `[create-parent::…]`
+under virtual branches.
