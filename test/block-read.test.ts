@@ -8,6 +8,7 @@ import { OutlinerServer } from "../src/server";
 import { OutlinerStore } from "../src/store";
 import type {
   BlockReadCollection,
+  BlockSearchQuery,
   ProjectedBlockCollection,
   VisibleBlockCollection,
 } from "../src/types";
@@ -125,6 +126,47 @@ test("keeps property match context on projected blocks.query results", async () 
   expect(projected.blocks).toEqual([
     { id: block.id, depth: full.blocks[0]!.depth, title: "Scoped card", propertyMatches: full.blocks[0]!.propertyMatches },
   ]);
+});
+
+test("keeps Trash state on projected blocks.query results with includeDeleted", async () => {
+  const { store, client } = await startService();
+  const active = store.create("Active card [kind::trash-fixture]");
+  const trashedRoot = store.create("Trashed card [kind::trash-fixture]");
+  const trashedChild = store.create("Trashed child [kind::trash-fixture]", trashedRoot.id);
+  const emptyRoot = store.create("Empty trashed card [kind::trash-fixture]");
+  store.delete(trashedRoot.id);
+  store.delete(emptyRoot.id);
+  const trashFields = ["deletedAt", "effectiveDeletedRootId", "deletedDescendantCount"] as const;
+  const filters = [{ key: "kind", value: "trash-fixture" }];
+  const projectedFor = async (query: BlockSearchQuery) => {
+    const full = await client.request<VisibleBlockCollection>({ action: "blocks.query", query });
+    const projected = await client.request<ProjectedBlockCollection>({ action: "blocks.query", query, fields: ["title"] });
+    expect(projected.blocks).toEqual(full.blocks.map((block) => ({
+      id: block.id,
+      depth: block.depth,
+      title: block.text.split(" [")[0],
+      ...Object.fromEntries(trashFields.flatMap((key) => block[key] === undefined ? [] : [[key, block[key]]])),
+    })));
+    return new Map(projected.blocks.map((block) => [block.id, block]));
+  };
+
+  const activeOnly = await projectedFor({ filters, limit: 10 });
+  expect([...activeOnly.values()]).toEqual([{ id: active.id, depth: 0, title: "Active card" }]);
+
+  const roots = await projectedFor({ filters, includeDeleted: "roots", limit: 10 });
+  expect([...roots.keys()]).toEqual([trashedRoot.id, emptyRoot.id]);
+  expect(roots.get(trashedRoot.id)).toMatchObject({
+    effectiveDeletedRootId: trashedRoot.id, deletedAt: expect.any(String), deletedDescendantCount: 1,
+  });
+  expect(roots.get(emptyRoot.id)).toMatchObject({ effectiveDeletedRootId: emptyRoot.id, deletedDescendantCount: 0 });
+
+  const all = await projectedFor({ filters, includeDeleted: "all", limit: 10 });
+  expect(all.has(active.id)).toBe(false);
+  expect(all.get(trashedRoot.id)).toMatchObject({ effectiveDeletedRootId: trashedRoot.id, deletedDescendantCount: 1 });
+  const child = all.get(trashedChild.id);
+  expect(child?.effectiveDeletedRootId).toBe(trashedRoot.id);
+  expect(child?.deletedAt).toBeUndefined();
+  expect(child?.deletedDescendantCount).toBeUndefined();
 });
 
 test("rejects malformed batch reads before reading", async () => {

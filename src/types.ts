@@ -1325,6 +1325,15 @@ export interface ProjectedVisibleBlock extends ProjectedBlock {
   depth: number;
   /** Query metadata like `depth`: which property records matched, when the query scope attaches them. */
   propertyMatches?: PropertyMatchContext[];
+  /**
+   * Trash metadata, present only on trashed matches (queries with `includeDeleted`),
+   * as on full `blocks.query` results. `effectiveDeletedRootId` is the Trash root, the
+   * value `blocks.read` reports as `deletedRootId`; `deletedAt` and
+   * `deletedDescendantCount` mark that root itself.
+   */
+  deletedAt?: string;
+  effectiveDeletedRootId?: string;
+  deletedDescendantCount?: number;
 }
 
 export interface ProjectedBlockCollection {

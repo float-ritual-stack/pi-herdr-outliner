@@ -2372,6 +2372,13 @@ export class OutlinerStore {
         ...projectBlock(block, block.hasChildren, projection),
         depth: block.depth,
         ...(block.propertyMatches ? { propertyMatches: block.propertyMatches } : {}),
+        // Trash state rides along only on trashed matches (possible with `includeDeleted`),
+        // so active results keep their small shape and trashed ones stay distinguishable.
+        ...(block.deletedAt ? { deletedAt: block.deletedAt } : {}),
+        ...(block.effectiveDeletedRootId ? { effectiveDeletedRootId: block.effectiveDeletedRootId } : {}),
+        ...(block.deletedDescendantCount !== undefined
+          ? { deletedDescendantCount: block.deletedDescendantCount }
+          : {}),
       })),
       completeness,
       fields: projection,

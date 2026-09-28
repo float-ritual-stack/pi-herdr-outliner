@@ -1166,7 +1166,11 @@ actor/session/task provenance), `hasChildren` and opt-in `text`. Omitting
 id never fails the batch. Duplicate ids collapse to their first occurrence.
 `blocks.query` accepts the same optional `fields` and then returns
 `{ blocks, completeness, fields }`, each block carrying its query `depth` and,
-when the property scope attaches them, its `propertyMatches`; the
+when the property scope attaches them, its `propertyMatches`. Trashed
+matches (`includeDeleted: "roots"` or `"all"`) also carry the full query's Trash
+metadata, with no field to request: `effectiveDeletedRootId` (the
+`deletedRootId` that `blocks.read` reports) and, on each Trash root, `deletedAt`
+and `deletedDescendantCount`. Active matches never carry these keys. The
 matches, order and completeness are unchanged. Without `fields`, `blocks.query`
 keeps its full-block shape. Projected results echo `fields`; a response without
 it came from an older service that ignored the projection. Prefer one `blocks.read` to per-block `get`
