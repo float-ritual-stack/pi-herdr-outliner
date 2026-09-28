@@ -1,6 +1,7 @@
 import {isVirtualBranchDefinition, parseVirtualBranchConfig, selectVirtualBranchMembers, virtualBranchMembershipQuery, type VirtualBranchMembers} from "./virtual-branches";
 import {placeOrderedItems} from "./virtual-placement";
 import {WorkingSelectionRepository} from "./working-selection";
+import { ChangeFeed } from "./change-feed";
 import { checklistItems, queryChecklistItems, updateChecklistText, validateChecklistIdentityChanges } from "./checklist-items";
 import type { ChecklistCollection, ChecklistIdentityChange, ChecklistQuery, ChecklistSearchQuery, ChecklistSearchCollection, ChecklistUpdateInput, ChecklistUpdateReceipt } from "./types";
 import type {QueryExpression, SavedViewReadOptions, SavedViewReadProblem, SavedViewReadResult, VirtualBranchOrder, VirtualBranchPlacementInput} from "./types";
@@ -568,6 +569,7 @@ export class OutlinerStore {
   readonly resources: ResourceCatalog;
   readonly annotations: AnnotationRepository;
   readonly workingSelections: WorkingSelectionRepository;
+  readonly changes: ChangeFeed;
 
   constructor(path: string, resourceOptions: ResourceCatalogOptions = {}) {
     this.workspaceRoot = resolve(resourceOptions.workspaceRoot ?? dirname(path));
@@ -578,6 +580,7 @@ export class OutlinerStore {
       this.database = database = new Database(path, { create: true });
       this.database.exec("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;");
       this.migrate();
+      this.changes = new ChangeFeed(this.database, () => this.sequence);
       this.workingSelections = new WorkingSelectionRepository(this.database);
       this.resources = new ResourceCatalog(this.database, {
         workspaceRoot: dirname(path),
@@ -624,7 +627,7 @@ export class OutlinerStore {
 
   close(): void {
     try {
-      this.database.close();
+      try { this.changes.close(); } finally { this.database.close(); }
     } finally {
       this.releaseOwnership();
     }

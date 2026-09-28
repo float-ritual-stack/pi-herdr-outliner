@@ -9,7 +9,7 @@ import {TreeConnections} from "./tree-connections";
 import {TreeWorkingSelection} from "./tree-working-selection";
 import {OpenDestinationChooser, destinationRecoveryKey, missingNavigationDestination, type OpenDestinationTarget} from "./open-destination-chooser";
 import type {DetailDestinationPlacement} from "./detail-pane-placement";
-import type {OutlinerCapability, OutlinerViewAddress} from "./types";
+import type {ChangeFeedPage, OutlinerCapability, OutlinerViewAddress} from "./types";
 import {DocumentPreview, type DocumentPreviewState} from './document-preview';
 import {treePreviewFrame, defaultPreviewPreferences, type PreviewPreferences} from './tree-preview';
 import type { RequestInput } from "./client";
@@ -1958,6 +1958,18 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     if (event.domain === "selection" || event.domain === "mentions") return;
     inbox.contentChanged();
     if (connections.active) connections.invalidate();
+    // Every outline change advances the sequence. A change at or before the loaded
+    // index is already reflected, e.g. the echo of this Tree's own edit or the
+    // tail of a burst that an earlier reload already read.
+    const indexed = indexSequence !== null && event.sequence <= indexSequence;
+    if (indexed) {
+      if (mode === "browse" || mode === "branch-filter") {
+        if (connections.needsRefresh) await refreshAuthoredLinks(false);
+        if (event.domain === "content") await localReader.refreshContent();
+      }
+      effects.invalidate();
+      return;
+    }
     if (mode !== "browse" && mode !== "branch-filter") {
       refreshPending = true;
       return;
@@ -2020,8 +2032,10 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     });
     await inbox.refresh();
     if (mode === "browse") {
-      if (connections.active) connections.invalidate();
-      await reload();
+      if (await outlineChangedSince(indexSequence)) {
+        if (connections.active) connections.invalidate();
+        await reload();
+      }
       await publishDisplayRowSelection(rows[selectedIndex]);
     } else {
       refreshPending = true;
@@ -2029,6 +2043,17 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       if (connections.active) connections.invalidate();
     }
     effects.invalidate();
+  }
+
+  /** Asks the change feed whether a reconnect must reload; any doubt means yes. */
+  async function outlineChangedSince(sequence: number | null): Promise<boolean> {
+    if (sequence === null) return true;
+    try {
+      const page = await effects.request<ChangeFeedPage>({ action: "changes.since", sequence, limit: 1 });
+      return page.kind === "reset" || page.changes.length > 0;
+    } catch {
+      return true;
+    }
   }
 
   function handleDisconnect(): void {

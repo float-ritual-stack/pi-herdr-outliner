@@ -578,6 +578,7 @@ bun run cli create --text "A durable note [type::note]"
 bun run cli properties-preview --text "Draft title [stage::queued]"
 bun run cli update --id <block-uuid> --text "Revised note" --expected <revision>
 bun run cli selection
+bun run cli changes --since <sequence> --limit 50
 bun run cli clients --role tree
 bun run goto 40bd0864
 bun run goto --query "roadmap review"
@@ -615,6 +616,12 @@ reinterpreted. Agent responses also report presentation omissions separately
 from query completeness; use the CLI or read individual blocks when large bodies
 exceed the tool budget. `views.read` requires a service that reports the
 `views.read` capability.
+
+Clients that need to follow the outline subscribe with `events.subscribe`;
+content events carry the changed block's parent, revision, change kind and
+declared actor. After a disconnect, `changes.since` returns what was missed, in
+order, or an explicit reset when history is no longer retained. See
+[Change feed](docs/ARCHITECTURE.md#change-feed).
 
 The CLI resolves the same workspace-scoped socket and database as the service. `goto` accepts a full UUID, unique short prefix, or unambiguous fuzzy title/content query. Eight-character IDs are convenience labels, not a uniqueness guarantee; ambiguous queries return full-UUID candidates without changing selection. Work-ID configuration is normally one-time; allocation requires the exact block UUID and its latest integer `revision`, available in bounded `list` results. A successful allocation atomically persists both the immutable reservation and the block's `[work-id::…]` property/address; a failed request consumes neither the number nor a reservation.
 

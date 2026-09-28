@@ -94,7 +94,8 @@ test("Tree exposes explicit recovery and preserves unavailable targets until the
   const recover=c.view().actionMenuItems!.find(item=>item.id.startsWith("tree.selection.resume:"))!;
   await c.handleAction(recover.id);
   expect(c.view().selectionCue).toContain("Recovered · 1 selected");
-  f.store.delete(f.ids[0]!);
+  // A change made through the service while this Tree was disconnected.
+  await f.client.request({action:"delete",blockId:f.ids[0]!});
   await c.handleConnect();
   expect(c.view().selectionCue).toContain("1 outside this view");
   await c.handleAction("tree.selection.copy-ids");

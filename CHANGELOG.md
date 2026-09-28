@@ -4,6 +4,14 @@ This file records notable user-facing changes. The project remains active dogfoo
 
 ## [Unreleased]
 
+- Content events now say what changed: block, parent (and previous parent for
+  moves), revision, change kind and declared actor. A client that reconnects
+  can ask `changes.since` for exactly what it missed, in order, or get an
+  explicit reset when history is gone. Tree skips index reloads the feed shows
+  are already reflected and keeps its index across a reconnect with no changes.
+  The service advertises the `changes.since` capability; restart the service
+  to use it. PIE-399.
+
 - Clients negotiate with the service instead of requiring the same protocol
   number. `ping` reports `capabilities` (`blocks.read`, `properties.preview`)
   and the oldest client protocol it serves; a newer service is accepted, and a

@@ -2063,7 +2063,8 @@ export type OutlinerRequest =
       action: "work-ids.allocate";
       blockId: string;
       expectedRevision: number;
-    };
+    }
+  | { id: string; action: "changes.since"; sequence: number; limit?: number };
 
 /** Machine-readable detail for a rejected request, such as a query syntax position. */
 export interface OutlinerRequestProblem {
@@ -2194,7 +2195,77 @@ export interface OutlinerEvent {
   command?: OutlinerUiCommand;
   attention?: AttentionClientState;
   attentionInstruction?: AttentionInstruction;
+  /**
+   * Present on every `content` event and on `view` events that changed durable
+   * branch-local ranks; identical to the corresponding `changes.since` entry.
+   */
+  change?: OutlinerChange;
 }
+
+/**
+ * What a content change did. `reorder` changed branch-local ranks of the virtual
+ * branch named by `blockId`. `other` covers workspace-wide changes without one
+ * primary block (for example an Inbox transaction or Work-ID configuration);
+ * clients that cannot interpret a change should reload the affected projection.
+ */
+export type OutlinerChangeKind =
+  | "create"
+  | "edit"
+  | "move"
+  | "delete"
+  | "restore"
+  | "purge"
+  | "annotate"
+  | "draft"
+  | "reorder"
+  | "other";
+
+export interface OutlinerChange {
+  /** Service sequence after the change; changes are ordered by sequence, then `changeId`. */
+  sequence: number;
+  /** Monotonic feed position; unique even when two changes share a sequence. */
+  changeId: number;
+  /** The request (or internal) action that caused the change. */
+  action: string;
+  kind: OutlinerChangeKind;
+  /** Primary block. Other blocks (a moved subtree, reordered siblings) may change too. */
+  blockId?: string;
+  /** Parent after the change; `null` for a root. Absent without a readable block. */
+  parentId?: string | null;
+  /** Parent before a `move`. */
+  previousParentId?: string | null;
+  /** Block revision after the change. */
+  revision?: number;
+  /** True when the block is in Trash after the change. */
+  deleted?: boolean;
+  /** Declared provenance of the request; absent when the request carried none. */
+  actor?: MutationProvenance;
+  recordedAt: string;
+}
+
+export type ChangeFeedPage =
+  | {
+      kind: "changes";
+      /** Ordered by sequence then changeId; a page never splits one sequence. */
+      changes: OutlinerChange[];
+      /** Pass as the next `sequence`; covers every change returned. */
+      nextSequence: number;
+      completeness: BlockCollectionCompleteness;
+      /** Current service sequence when the page was read. */
+      sequence: number;
+    }
+  | {
+      kind: "reset";
+      /**
+       * `history-unavailable`: changes after the requested sequence are no longer
+       * retained. `sequence-ahead`: the cursor is newer than this workspace.
+       * Either way, reload the complete projection and resume from its sequence.
+       */
+      reason: "history-unavailable" | "sequence-ahead";
+      /** Oldest cursor the feed can still answer completely. */
+      oldestSequence: number;
+      sequence: number;
+    };
 
 export interface OutlinerEventEnvelope {
   event: OutlinerEvent;

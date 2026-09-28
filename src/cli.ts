@@ -412,6 +412,23 @@ switch (command) {
     };
     break;
   }
+  case "changes": {
+    const { values } = parseArgs({
+      args: rest,
+      options: { since: { type: "string" }, limit: { type: "string" } },
+      strict: true,
+    });
+    const sequence = Number(values.since);
+    if (values.since === undefined || !Number.isSafeInteger(sequence) || sequence < 0) {
+      throw new Error("changes requires --since <sequence>, a non-negative integer");
+    }
+    request = {
+      action: "changes.since",
+      sequence,
+      ...(values.limit === undefined ? {} : { limit: parseLimit(values.limit, 200) }),
+    };
+    break;
+  }
   case "selection":
     request = { action: "selection.get" };
     break;

@@ -530,7 +530,8 @@ project-documentation mutations.
 
 ### Other tables
 
-- `metadata` — service sequence, parser version, and legacy navigation cursor.
+- `metadata` — service sequence, parser version, legacy navigation cursor, and the change-feed floor and clean-shutdown sequence.
+- `change_feed` — bounded, append-only content-change history keyed by service sequence (see [Change feed](#change-feed)). It has no foreign keys, so purged blocks keep their entries.
 - `selection` — legacy workspace selection used by CLI/agent context and as an optional one-time seed for a new Tree; never live pane authority.
 - `navigation_history` — legacy workspace-selection history for compatibility clients; Tree and Detail panes maintain independent in-process histories.
 - `virtual_occurrence_ranks` — durable `(virtual-branch ID, canonical block ID) -> branch-local rank`; both foreign keys cascade on deletion.
@@ -609,7 +610,7 @@ Do not leave older editors running across this upgrade.
 - symbolic addresses: `pages.resolve`, `pages.follow`, `pages.complete`, `pages.rename`, `pages.alias`, `pages.remove`
 - Work IDs: `work-ids.status`, `work-ids.configure`, `work-ids.allocate`
 - legacy workspace selection/history: `selection.get`, `selection.set`, `navigation.state`, `navigation.back`, `navigation.forward`
-- reactive clients: `events.subscribe`, `clients.list`, `clients.update`
+- reactive clients: `events.subscribe`, `changes.since`, `clients.list`, `clients.update`
 - exact-client behavior: `ui.command.send`; document-changing commands respect destination operation protection, while pure focus preserves Current
 - targeted ephemeral attention: `attention.get`, `attention.mark`, `attention.advance`, `attention.clear`, and `attention.acknowledge`
 - typed workflows: `workflows.start`, `workflows.get`, `workflows.list`, `workflows.structure`, `workflows.plan`, `workflows.transition`, `workflows.cancel`, `workflows.promotion.preview`, and `workflows.promotion.commit`
@@ -754,6 +755,70 @@ The app registers `pi-outliner://`, accepts exact block, fuzzy goto, symbolic pa
 The default bridge targets `evan@float-box:/home/evan/test`, which resolves over Tailscale MagicDNS without exposing a public service. Warp activates it with Command-click; Ghostty uses Shift-Command-click to bypass mouse capture. This bridge is an immediate per-device workaround, not a replacement for the requested opt-in plain-click Herdr plugin-handler mode tracked upstream.
 
 Every response carries the service sequence. Every mutation increments it and emits an event.
+
+### Change feed
+
+Every `content` event, and every `view` event that changed durable branch-local
+ranks, carries a `change` record. The same record is stored in `change_feed`, so
+a live subscriber and a catching-up client see identical data:
+
+```ts
+interface OutlinerChange {
+  sequence: number;        // service sequence after the change
+  changeId: number;        // feed position; unique when changes share a sequence
+  action: string;          // request or internal action, e.g. "update", "inbox.changed"
+  kind: "create" | "edit" | "move" | "delete" | "restore" | "purge"
+      | "annotate" | "draft" | "reorder" | "other";
+  blockId?: string;        // primary block (the view for "reorder")
+  parentId?: string | null;         // after the change; absent without a readable block
+  previousParentId?: string | null; // "move" only
+  revision?: number;       // block revision after the change
+  deleted?: boolean;       // in Trash after the change
+  actor?: { author; actorId?; sessionId?; taskId? }; // declared by the request
+  recordedAt: string;
+}
+```
+
+Existing event fields are unchanged; `change` is additive. `actor` is the
+provenance a request declared (`mutation`, or `author`/`provenance`); a created
+block reports its stored provenance. Requests without provenance (`move`,
+`delete`, Trash operations) have no actor. Actors are self-declared, not
+authenticated. The primary block is not the only block a change may touch: a
+move reorders siblings and a delete carries its subtree. `other` has no single
+block (an Inbox transaction, Work-ID configuration); treat it as "reload the
+affected projection".
+
+`changes.since { sequence, limit? }` returns changes with a greater sequence:
+
+- `{ kind: "changes", changes, nextSequence, completeness, sequence }` ordered by
+  sequence, then `changeId`. `limit` defaults to 200 and must be 1–1000. A page
+  never splits one sequence, so it may exceed `limit` to finish the last one.
+  While `completeness` is `truncated`, request again from `nextSequence`.
+  `sequence` is the current service sequence.
+- `{ kind: "reset", reason, oldestSequence, sequence }` when the answer would be
+  incomplete: `history-unavailable` (the cursor is older than retained history)
+  or `sequence-ahead` (the cursor is newer than this workspace). Reload the
+  complete projection and resume from its sequence.
+
+Resume without gaps by subscribing first, then reading `changes.since` from the
+sequence of the last snapshot or event applied, and ignoring live events at or
+below the cursor you have applied.
+
+The service retains the newest 10,000 changes. The floor (`oldestSequence`) is the
+oldest cursor it can answer completely; pruning advances it. Only the serving
+process records changes, just after each transaction commits. A clean shutdown
+stores the sequence it stopped at; history survives a restart only when the next
+start finds that same sequence. After a crash (the last change may be unrecorded)
+or any write by another process in between, the start moves the floor to the
+current sequence, so older cursors get a reset rather than a silent gap. An
+existing workspace starts its feed at the sequence it had when upgraded. Only
+mutations that emit events enter the feed.
+
+Tree uses the feed to avoid redundant `tree.index` reloads: a change at or below
+the sequence of the index it already holds is skipped (its own edits' echoes and
+the tail of a queued burst), and a reconnect asks `changes.since` and keeps its
+index when nothing changed. Other changes still reload the index, because text
+and property edits can change filters and virtual-branch membership.
 
 ### Complete versus bounded collections
 
