@@ -1,6 +1,7 @@
 import { createBlockComment } from "../src/block-comments";
 import { readSavedView, type SavedViewReadResult } from "../src/saved-view-read";
 import { clientSupportsRole } from "../src/types";
+import { checkServiceCompatibility } from "../src/service-compatibility";
 import {CHECKLIST_MARKS} from "../src/checklist-items";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { hostname } from "node:os";
@@ -925,11 +926,12 @@ function outlinerToolPresentation(label: string) {
 }
 
 function assertCompatibleProtocol(service: OutlinerServiceStatus): void {
-  if (service.protocolVersion !== OUTLINER_PROTOCOL_VERSION) {
-    throw new Error(
-      `Outliner protocol ${service.protocolVersion} does not match this session's extension protocol ${OUTLINER_PROTOCOL_VERSION}. Run /reload, then retry.`,
-    );
-  }
+  const problem = checkServiceCompatibility(service);
+  if (!problem) return;
+  // A stale extension recovers with /reload; an old service needs a restart.
+  throw new Error(problem.reason === "client-too-old"
+    ? `Outliner protocol ${service.protocolVersion} no longer serves this session's extension protocol ${OUTLINER_PROTOCOL_VERSION}. Run /reload, then retry.`
+    : problem.message);
 }
 
 async function pingService(timeoutMs?: number): Promise<void> {

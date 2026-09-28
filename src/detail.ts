@@ -22,7 +22,7 @@ import { navigationDestinationItems, navigationDestinationStatus, navigationPlac
 import { getProperty } from "./properties";
 import { detailPropertyInspectorRegions } from "./property-inspector";
 import { emitKeypressEvents } from "node:readline";
-import { setTimeout as sleep } from "node:timers/promises";
+import { waitForCompatibleService } from "./service-compatibility";
 import { createOutlinerClient, type OutlinerWatcher } from "./client";
 import {
   startClientRuntimeSync,
@@ -72,7 +72,6 @@ import {
   type TerminalKey,
 } from "./terminal";
 import {
-  OUTLINER_PROTOCOL_VERSION,
   type AnnotationBatchReceipt,
   type AnnotationListQuery,
   type AnnotationReconcileInput,
@@ -90,7 +89,6 @@ import {
   type OutlinerNavigationTarget,
   type OutlinerViewAddress,
   type NavigationLinkState,
-  type OutlinerServiceStatus,
   type ResourceDescription,
   type ResolvedBlockReferences,
   type SelectionContext,
@@ -715,20 +713,14 @@ let inputDecoder = new TerminalInputDecoder((text) => {
 });
 
 async function waitForService(): Promise<void> {
-  const deadline = Date.now() + (paths.mode === "remote" ? 30_000 : 5_000);
-  while (Date.now() < deadline) {
-    try {
-      const service = await client.request<OutlinerServiceStatus>(
-        { action: "ping" },
-        paths.mode === "remote" ? 3_000 : 300,
-      );
-      if (service.protocolVersion === OUTLINER_PROTOCOL_VERSION) return;
-    } catch {
-      // Retry until the startup deadline.
-    }
-    await sleep(100);
+  try {
+    await waitForCompatibleService(client, {
+      timeoutMs: paths.mode === "remote" ? 30_000 : 5_000,
+      pingTimeoutMs: paths.mode === "remote" ? 3_000 : 300,
+    });
+  } catch (error) {
+    throw new Error(`Compatible outliner service is not available: ${error instanceof Error ? error.message : String(error)}`);
   }
-  throw new Error("Compatible outliner service is not available");
 }
 
 function startWatcher(): void {

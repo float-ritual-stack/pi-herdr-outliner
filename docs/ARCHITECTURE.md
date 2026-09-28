@@ -581,7 +581,7 @@ bytes and provenance remain unknown rather than being synthesized.
 
 ## Protocol
 
-The current protocol version is `OUTLINER_PROTOCOL_VERSION`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket.
+The current protocol version is `OUTLINER_PROTOCOL_VERSION`, defined in [`src/types.ts`](../src/types.ts). Requests and responses are newline-delimited JSON over the workspace Unix socket. Since protocol 82, `ping` also returns `minClientProtocol` and `capabilities` (`OUTLINER_CAPABILITIES`); clients accept a service at or above `OUTLINER_MIN_SERVICE_PROTOCOL` and check only the capabilities they use ([`src/service-compatibility.ts`](../src/service-compatibility.ts)). Additive features add a capability instead of a protocol bump.
 
 Protocol 64 includes hashtags in property records and their positional ordinals.
 Protocol 63 clients can address a different property for the same text and revision;

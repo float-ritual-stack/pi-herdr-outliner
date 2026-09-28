@@ -1403,6 +1403,7 @@ test("requires the current protocol, attributes agent creates and page follows, 
     completeness: { kind: "truncated", limit: 20 },
   };
   let protocolVersion: number = OUTLINER_PROTOCOL_VERSION;
+  let minClientProtocol: number | undefined;
   let queryCollection = collection;
   let queryError: Error | undefined;
   const requests: RequestInput[] = [];
@@ -1444,7 +1445,7 @@ test("requires the current protocol, attributes agent creates and page follows, 
         : clients) as T;
     }
     if (input.action === "ping") {
-      return { status: "ready", protocolVersion } as unknown as T;
+      return { status: "ready", protocolVersion, minClientProtocol } as unknown as T;
     }
     throw new Error(`Unexpected request: ${input.action}`);
   };
@@ -1755,9 +1756,16 @@ test("requires the current protocol, attributes agent creates and page follows, 
     expect(largeEnvelope.presentation.returned).toBe(100);
     expect(largeEnvelope.presentation.presented).toBe(largeEnvelope.blocks.length);
     expect(largeEnvelope.presentation.omitted).toBeGreaterThan(0);
+    protocolVersion = OUTLINER_PROTOCOL_VERSION + 1;
+    await tools.get("outliner_query")!.execute("newer-service-query", {});
+    minClientProtocol = OUTLINER_PROTOCOL_VERSION + 1;
+    await expect(tools.get("outliner_query")!.execute("stale-extension-query", {})).rejects.toThrow(
+      `Outliner protocol ${OUTLINER_PROTOCOL_VERSION + 1} no longer serves this session's extension protocol ${OUTLINER_PROTOCOL_VERSION}. Run /reload, then retry.`,
+    );
+    minClientProtocol = undefined;
     protocolVersion = 5;
     await expect(tools.get("outliner_query")!.execute("incompatible-query", {})).rejects.toThrow(
-      `Outliner protocol 5 does not match this session's extension protocol ${OUTLINER_PROTOCOL_VERSION}. Run /reload, then retry.`,
+      "Connected Outliner service uses protocol 5; this client requires at least",
     );
   } finally {
     OutlinerClient.prototype.request = originalRequest;

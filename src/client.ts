@@ -1,5 +1,6 @@
 import { createConnection, type Socket } from "node:net";
-import { OUTLINER_PROTOCOL_VERSION, type OutlinerServiceStatus } from "./types";
+import { requireCapabilities } from "./service-compatibility";
+import type { OutlinerCapability, OutlinerServiceStatus } from "./types";
 import type {
   OutlinerClientRegistration,
   OutlinerEvent,
@@ -153,11 +154,11 @@ export class OutlinerClient {
     private readonly requestTimeoutMs = LOCAL_REQUEST_TIMEOUT_MS,
   ) {}
 
-  async requireCompatibleService(): Promise<void> {
+  /** Rejects a service that is too old or lacks a capability the caller will use. */
+  async requireCompatibleService(needed: readonly OutlinerCapability[] = []): Promise<OutlinerServiceStatus> {
     const service = await this.request<OutlinerServiceStatus>({ action: "ping" });
-    if (service.protocolVersion !== OUTLINER_PROTOCOL_VERSION) {
-      throw new Error(`Connected service uses incompatible Outliner protocol ${service.protocolVersion}; restart the service and clients on the same version (${OUTLINER_PROTOCOL_VERSION})`);
-    }
+    requireCapabilities(service, needed);
+    return service;
   }
 
   request<T>(input: RequestInput, timeoutMs = this.requestTimeoutMs): Promise<T> {

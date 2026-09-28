@@ -1530,12 +1530,33 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 81;
+/**
+ * This checkout's wire protocol. Bump it only for incompatible changes, and
+ * raise the matching minimum below; additive features declare a capability.
+ */
+export const OUTLINER_PROTOCOL_VERSION = 82;
+/** Oldest service protocol this checkout's clients can use. */
+export const OUTLINER_MIN_SERVICE_PROTOCOL = 82;
+/** Oldest client protocol this checkout's service still serves. */
+export const OUTLINER_MIN_CLIENT_PROTOCOL = 82;
 
+/**
+ * Additive actions and request fields this service supports. A client that
+ * uses one checks for it with `requireCapabilities`; append new names here.
+ */
+export const OUTLINER_CAPABILITIES = [
+  "blocks.read",
+  "properties.preview",
+] as const;
+export type OutlinerCapability = (typeof OUTLINER_CAPABILITIES)[number];
 
 export interface OutlinerServiceStatus {
   status: "ready";
-  protocolVersion: typeof OUTLINER_PROTOCOL_VERSION;
+  protocolVersion: number;
+  /** Absent from services older than protocol 82. */
+  minClientProtocol?: number;
+  /** Absent from services older than protocol 82. */
+  capabilities?: readonly string[];
   location?: {hostname:string;workspaceRoot:string;database:string;stateDirectory:string};
 }
 

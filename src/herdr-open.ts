@@ -16,12 +16,11 @@ import {
   resolveServicePaneId,
 } from "./pane-control";
 import { resolveClientPaths } from "./paths";
+import { waitForCompatibleService } from "./service-compatibility";
 import {
-  OUTLINER_PROTOCOL_VERSION,
   clientSupportsRole,
   type OutlinerClientRegistration,
   type NavigationLinkState,
-  type OutlinerServiceStatus,
 } from "./types";
 
 import { reportStartupErrors } from "./startup-error";
@@ -168,26 +167,16 @@ await reportStartupErrors("open", async () => {
   }
 
   async function waitForService(): Promise<void> {
-    const client = createOutlinerClient(paths);
     const remote = paths.mode === "remote";
-    const deadline = Date.now() + (remote ? 60_000 : 15_000);
-    let lastResponse = "No service response";
-    while (Date.now() < deadline) {
-      try {
-        const service = await client.request<OutlinerServiceStatus>(
-          { action: "ping" },
-          paths.mode === "remote" ? undefined : 300,
-        );
-        if (service.protocolVersion === OUTLINER_PROTOCOL_VERSION) return;
-        lastResponse = `Protocol ${service.protocolVersion}; this client requires ${OUTLINER_PROTOCOL_VERSION}`;
-      } catch (error) {
-        lastResponse = error instanceof Error ? error.message : String(error);
-      }
-      await sleep(100);
-    }
-    throw new Error(`Compatible outliner service did not become ready at ${paths.socket}. ${lastResponse}. ${remote
-      ? "Check the configured SSH tunnel and remote service."
-      : `Service startup details: ${join(paths.stateDir, "service-startup-error.log")} (check its timestamp).`}`);
+    await waitForCompatibleService(createOutlinerClient(paths), {
+      timeoutMs: remote ? 60_000 : 15_000,
+      pingTimeoutMs: remote ? undefined : 300,
+    }).catch((error: unknown) => {
+      const lastResponse = (error instanceof Error ? error.message : String(error)).replace(/\.$/, "");
+      throw new Error(`Compatible outliner service did not become ready at ${paths.socket}. ${lastResponse}. ${remote
+        ? "Check the configured SSH tunnel and remote service."
+        : `Service startup details: ${join(paths.stateDir, "service-startup-error.log")} (check its timestamp).`}`);
+    });
   }
 
   const servicePane = paths.mode === "remote"

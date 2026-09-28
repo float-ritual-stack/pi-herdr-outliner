@@ -40,6 +40,8 @@ import {
 } from "./resource-presentation";
 import { WorkflowManager } from "./workflows";
 import {
+  OUTLINER_CAPABILITIES,
+  OUTLINER_MIN_CLIENT_PROTOCOL,
   OUTLINER_PROTOCOL_VERSION,
   type OutlinerViewAddress,
   type NavigationLinkState,
@@ -1403,7 +1405,7 @@ export class OutlinerServer {
           break;
         }
         case "ping":
-          result = { status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION, location:{hostname:this.hostname,workspaceRoot:this.store.workspaceRoot,database:this.store.database.filename,stateDirectory:dirname(this.store.database.filename)} };
+          result = { status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION, minClientProtocol: OUTLINER_MIN_CLIENT_PROTOCOL, capabilities: [...OUTLINER_CAPABILITIES], location:{hostname:this.hostname,workspaceRoot:this.store.workspaceRoot,database:this.store.database.filename,stateDirectory:dirname(this.store.database.filename)} };
           break;
         case "blocks.query":
           result = request.fields === undefined

@@ -11,7 +11,6 @@ import { initTheme } from "@earendil-works/pi-coding-agent";
 import { serviceTreeNavigation } from "./navigation-routes";
 import { emitKeypressEvents } from "node:readline";
 import { PassThrough } from "node:stream";
-import { setTimeout as sleep } from "node:timers/promises";
 import { StdinBuffer } from "@earendil-works/pi-tui";
 import { createOutlinerClient, type OutlinerWatcher, type RequestInput } from "./client";
 import {
@@ -46,7 +45,7 @@ import {
   parseTreeSecondaryClick,
 } from "./tree-mouse";
 import { renderTreeFrame } from "./tree-renderer";
-import { OUTLINER_PROTOCOL_VERSION, type OutlinerServiceStatus } from "./types";
+import { waitForCompatibleService } from "./service-compatibility";
 
 initTheme(undefined, false);
 const paths = resolveClientPaths();
@@ -197,20 +196,14 @@ const controller = createTreeController({
 });
 
 async function waitForService(): Promise<void> {
-  const deadline = Date.now() + (paths.mode === "remote" ? 30_000 : 5_000);
-  while (Date.now() < deadline) {
-    try {
-      const service = await client.request<OutlinerServiceStatus>(
-        { action: "ping" },
-        paths.mode === "remote" ? 3_000 : 300,
-      );
-      if (service.protocolVersion === OUTLINER_PROTOCOL_VERSION) return;
-    } catch {
-      // Retry until the startup deadline.
-    }
-    await sleep(100);
+  try {
+    await waitForCompatibleService(client, {
+      timeoutMs: paths.mode === "remote" ? 30_000 : 5_000,
+      pingTimeoutMs: paths.mode === "remote" ? 3_000 : 300,
+    });
+  } catch (error) {
+    throw new Error(`Compatible outliner service is not available: ${error instanceof Error ? error.message : String(error)}`);
   }
-  throw new Error("Compatible outliner service is not available");
 }
 
 function enqueueWork(task: () => void | Promise<void>): void {

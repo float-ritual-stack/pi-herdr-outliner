@@ -19,11 +19,11 @@ import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { OutlinerClient } from "../../src/client";
+import { checkServiceCompatibility } from "../../src/service-compatibility";
 import { resolvePaths, type OutlinerPaths } from "../../src/paths";
 import { readHerdrPaneSnapshot, type HerdrPaneSnapshot } from "../../src/herdr-comment-selection";
 import { forwardService, type ForwardedRequest, type OptionalResponseMatch, type ComposedResponseMatch, type ResponseBarrier } from "./service-forwarder";
 import {
-  OUTLINER_PROTOCOL_VERSION,
   type BrowsingContextState,
   type OutlinerClientRegistration,
   type OutlinerServiceStatus,
@@ -953,7 +953,7 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
         owned.add(pane.paneId);
         await poll({label: "private service ready after restart", signal: abort.signal, artifacts,
           read: () => client.request<OutlinerServiceStatus>({action: "ping"}, 500),
-          accept: status => status.status === "ready" && status.protocolVersion === OUTLINER_PROTOCOL_VERSION,
+          accept: status => status.status === "ready" && !checkServiceCompatibility(status),
         });
         processEvidence.push(await verifyProcess(pane.paneId, pluginRoot));
         await artifacts.record("service-restarted", {previous, current: pane.paneId});
@@ -1547,7 +1547,7 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
       artifacts,
       read: () => outliner.request<OutlinerServiceStatus>({ action: "ping" }, 500),
       accept: (value) =>
-        value.status === "ready" && value.protocolVersion === OUTLINER_PROTOCOL_VERSION,
+        value.status === "ready" && !checkServiceCompatibility(value),
     });
     const registrations = await poll({
       label: "unique Outliner Tree and Detail registrations",

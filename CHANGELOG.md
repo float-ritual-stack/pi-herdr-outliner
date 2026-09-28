@@ -4,6 +4,15 @@ This file records notable user-facing changes. The project remains active dogfoo
 
 ## [Unreleased]
 
+- Clients negotiate with the service instead of requiring the same protocol
+  number. `ping` reports `capabilities` (`blocks.read`, `properties.preview`)
+  and the oldest client protocol it serves; a newer service is accepted, and a
+  client fails with a restart instruction only when the service is too old or
+  lacks a capability it uses. `doctor` lists the service's capabilities.
+  Additive features now add a capability rather than bumping the protocol.
+  Protocol 82 introduces negotiation, so restart the service and clients once
+  when upgrading. PIE-402.
+
 - Keep ticket-key autolinks outside complete Markdown URL spans. Plain and
   angle-bracket URLs, including Jira smart links, stay one destination through
   narrow wrapping; adjacent bare ticket keys still open local pages. PIE-392.

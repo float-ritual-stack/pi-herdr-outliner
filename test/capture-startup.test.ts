@@ -38,7 +38,7 @@ test("changed write entrypoints reject an incompatible service before touching d
       });
       const [exitCode, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
       expect(exitCode).toBe(1);
-      expect(stderr).toContain("incompatible Outliner protocol");
+      expect(stderr).toContain("this client requires at least");
     }
     expect(actions).toEqual(["ping", "ping", "ping", "ping"]);
   } finally {
@@ -64,7 +64,7 @@ test.each([60, 63])("clients reject published protocol %i before using incompati
   });
   await new Promise<void>(resolve => server.listen(socketPath, resolve));
   try {
-    await expect(new OutlinerClient(socketPath).requireCompatibleService()).rejects.toThrow(`incompatible Outliner protocol ${protocolVersion}`);
+    await expect(new OutlinerClient(socketPath).requireCompatibleService()).rejects.toThrow(`Connected Outliner service uses protocol ${protocolVersion}; this client requires at least`);
     expect(actions).toEqual(["ping"]);
   } finally {
     await new Promise<void>(resolve => server.close(() => resolve()));

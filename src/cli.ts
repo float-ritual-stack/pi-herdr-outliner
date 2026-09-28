@@ -74,6 +74,7 @@ switch (command) {
     if ((values.text !== undefined) === Boolean(values.stdin)) {
       throw new Error("properties-preview requires either --text or --stdin");
     }
+    await client.requireCompatibleService(["properties.preview"]);
     request = { action: "properties.preview", text: values.stdin ? await Bun.stdin.text() : values.text! };
     break;
   }
@@ -114,6 +115,7 @@ switch (command) {
       options: { fields: { type: "string" } },
     });
     if (positionals.length === 0) throw new Error("read requires one or more block IDs");
+    await client.requireCompatibleService(["blocks.read"]);
     request = {
       action: "blocks.read",
       ids: positionals,

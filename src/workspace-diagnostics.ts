@@ -3,7 +3,8 @@ import {hostname} from 'node:os';
 import {join} from 'node:path';
 import {createOutlinerClient} from './client';
 import {resolveClientConfigPath,resolveClientPaths,resolvePaths} from './paths';
-import {OUTLINER_PROTOCOL_VERSION,type OutlinerServiceStatus} from './types';
+import {checkServiceCompatibility} from './service-compatibility';
+import {OUTLINER_MIN_SERVICE_PROTOCOL,OUTLINER_PROTOCOL_VERSION,type OutlinerServiceStatus} from './types';
 import {sanitizeDynamicText} from './terminal';
 
 export type WorkspaceReportEntry =
@@ -25,7 +26,7 @@ export async function inspectWorkspaceConnection(env:NodeJS.ProcessEnv=process.e
  const finish=(ok:boolean):WorkspaceReport=>({ok,entries,lines:entries.map(entry=>sanitizeDynamicText(entry.kind==='section'?`\n${entry.title}`:entry.kind==='note'?entry.text:`${entry.label}: ${entry.value}${entry.note?` (${entry.note})`:''}`))});
  section('Client');
  field('Workspace',resolvePaths(env).workspaceRoot);
- field('Client host',hostname());field('Bun',process.execPath);field('Client protocol',String(OUTLINER_PROTOCOL_VERSION));field('Config',resolveClientConfigPath(env));
+ field('Client host',hostname());field('Bun',process.execPath);field('Client protocol',`${OUTLINER_PROTOCOL_VERSION} (needs service ≥ ${OUTLINER_MIN_SERVICE_PROTOCOL})`);field('Config',resolveClientConfigPath(env));
  let paths;
  try{paths=resolveClientPaths(env);}catch(error){note(`Configuration error: ${error instanceof Error?error.message:String(error)}`);note('Fix the named configuration before launching; no state or database was created.');return finish(false);}
  section('Connection');
@@ -45,10 +46,12 @@ export async function inspectWorkspaceConnection(env:NodeJS.ProcessEnv=process.e
  try{
   const service=await createOutlinerClient(paths).request<OutlinerServiceStatus>({action:'ping'},1500);
   field('Service',`${service.status}; protocol ${service.protocolVersion}`);
+  field('Service capabilities',service.capabilities?.length?service.capabilities.join(', '):'none reported');
   if(service.location){
    field('Service host',service.location.hostname);field('Service workspace',service.location.workspaceRoot);field('Service database',service.location.database);field('Service state',service.location.stateDirectory);note('Service backup locations: not registered; manual copies may be elsewhere.');
   }else note('Service storage identity: not reported by this service version.');
-  if(service.protocolVersion!==OUTLINER_PROTOCOL_VERSION){note('Protocol mismatch: restart service and clients together from the same checkout. The endpoint is reachable; this is not a tunnel failure.');return finish(false);}
+  const problem=checkServiceCompatibility(service);
+  if(problem){note(`${problem.message} The endpoint is reachable; this is not a tunnel failure.`);return finish(false);}
   return finish(true);
  }catch(error){
   note(`Connection failed: ${error instanceof Error?error.message:String(error)}`);

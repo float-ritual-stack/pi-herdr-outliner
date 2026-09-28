@@ -21,7 +21,7 @@ import {createDetailDestination, type DetailDestinationPlacement} from "./detail
 import { ComposedLayout, ComposedTree, composedTreeNavigation, composedPointer, composedWidths } from "./composed-surface";
 import { navigationDestinationItems, navigationDestinationStatus, navigationPlacementItems, navigationPlacementStatus, NavigationDestinationDisplay, NavigationDestinationPreview, renderNavigationDestinationPreview } from "./navigation-destination-menu";
 import { getProperty } from "./properties";
-import { setTimeout as sleep } from "node:timers/promises";
+import { waitForCompatibleService } from "./service-compatibility";
 import { getMarkdownTheme, initTheme } from "@earendil-works/pi-coding-agent";
 import {
   decodeKittyPrintable,
@@ -134,7 +134,6 @@ import {
 } from "./tree-mouse";
 import { osc52ClipboardWrite } from "./terminal";
 import {
-  OUTLINER_PROTOCOL_VERSION,
   type AnnotationBatchReceipt,
   type AnnotationListQuery,
   type AnnotationReconcileInput,
@@ -153,7 +152,6 @@ import {
   type InternResourceReceipt,
   type PageAddressCollection,
   type OutlinerNavigationTarget,
-  type OutlinerServiceStatus,
   type ResourceDescription,
   type ResolvedBlockReferences,
   type SelectionContext,
@@ -875,20 +873,14 @@ const serviceEventScheduler = new DetailEventScheduler({
 });
 
 async function waitForService(): Promise<void> {
-  const deadline = Date.now() + (paths.mode === "remote" ? 30_000 : 5_000);
-  while (Date.now() < deadline) {
-    try {
-      const service = await client.request<OutlinerServiceStatus>(
-        { action: "ping" },
-        paths.mode === "remote" ? 3_000 : 300,
-      );
-      if (service.protocolVersion === OUTLINER_PROTOCOL_VERSION) return;
-    } catch {
-      // Retry until the startup deadline.
-    }
-    await sleep(100);
+  try {
+    await waitForCompatibleService(client, {
+      timeoutMs: paths.mode === "remote" ? 30_000 : 5_000,
+      pingTimeoutMs: paths.mode === "remote" ? 3_000 : 300,
+    });
+  } catch (error) {
+    throw new Error(`Compatible outliner service is not available: ${error instanceof Error ? error.message : String(error)}`);
   }
-  throw new Error("Compatible outliner service is not available");
 }
 
 function startWatcher(): void {

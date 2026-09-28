@@ -79,11 +79,12 @@ through the execution tool's approved host-access path. With Codex
 approval result. A successful host ping identifies an execution-boundary issue;
 use that approved path for subsequent service requests.
 
-If `OutlinerClient.requireCompatibleService()` reports an incompatible
-`protocolVersion`, the service is reachable but its protocol differs from the
-client's. Restart the service and all clients together on the same version,
-then retry. This is recovery from a confirmed protocol mismatch, not a
-connection probe.
+If `OutlinerClient.requireCompatibleService()` reports an incompatible service,
+the service is reachable but cannot serve this client: it is older than the
+client's minimum protocol, it no longer serves the client's protocol, or it lacks
+a capability the client is about to use. The error names which one; restart the
+named side from the current checkout, then retry. This is recovery from a
+confirmed incompatibility, not a connection probe.
 
 Use the running service's CLI/RPC for workboard writes. If access remains
 blocked, record the endpoint, execution context, and exact error. Service
@@ -284,15 +285,41 @@ CodeRabbit’s generic docstring warning is advisory in this repository. Add com
 
 ## Protocol and schema changes
 
-The current wire protocol is `OUTLINER_PROTOCOL_VERSION` in [src/types.ts](src/types.ts).
+Clients and the service negotiate compatibility instead of requiring the same
+number. `ping` returns the service's `protocolVersion`, its `minClientProtocol`,
+and `capabilities`. [src/types.ts](src/types.ts) owns the source of truth:
 
-If request/response semantics change:
+- `OUTLINER_PROTOCOL_VERSION`: this checkout's protocol.
+- `OUTLINER_MIN_SERVICE_PROTOCOL`: the oldest service its clients accept.
+- `OUTLINER_MIN_CLIENT_PROTOCOL`: the oldest client its service serves.
+- `OUTLINER_CAPABILITIES`: additive actions and request fields the service
+  supports.
+
+`checkServiceCompatibility` / `requireCapabilities` in
+[src/service-compatibility.ts](src/service-compatibility.ts) apply the rule; a
+newer service is accepted. The Herdr launcher and panes wait through
+`waitForCompatibleService`.
+
+For an additive change (a new action, or an optional request/response field):
 
 1. Update types and every client/server caller.
-2. Increment `OUTLINER_PROTOCOL_VERSION` when old and new processes are incompatible.
-3. Add round-trip protocol coverage.
-4. Confirm the plugin waits for the matching service version.
-5. Restart the complete topology.
+2. Append a capability name to `OUTLINER_CAPABILITIES`, usually the action name
+   or `action.field`. Do not bump the protocol.
+3. Before a client uses it, call
+   `client.requireCompatibleService(["<capability>"])` (or pass `needed` to
+   `waitForCompatibleService`). Only the clients that use the feature check it.
+4. An old service silently ignores an unknown optional request field. Either
+   echo the field in the response so the client can detect that it was honored
+   (as projected reads echo `fields`) or capability-gate it; never let an
+   ignored field silently change the result's meaning.
+5. Add round-trip coverage for a service with and without the capability.
+
+For an incompatible change (changed meaning or removal), increment
+`OUTLINER_PROTOCOL_VERSION` and raise the minimum that the change breaks:
+`OUTLINER_MIN_SERVICE_PROTOCOL` when new clients cannot use an old service,
+`OUTLINER_MIN_CLIENT_PROTOCOL` when the new service cannot serve old clients.
+Add round-trip coverage, confirm the launcher rejects the old side, and restart
+the complete topology.
 
 If SQLite schema or property-parser behavior changes:
 
