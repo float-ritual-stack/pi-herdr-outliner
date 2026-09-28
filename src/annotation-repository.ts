@@ -2,6 +2,7 @@ import {resolveAnnotationPassage, passageResolutionStatus, passageDocumentRepres
 import {observeDocument} from "./document-provenance";
 import {resourceDocumentObservation} from "./document-resources";
 import { blockCommentTarget } from "./block-comments";
+import type { SequenceChange } from "./change-feed";
 import { blockAnnotationRepresentation } from "./annotation-representations";
 import { checklistItems, updateChecklistText } from "./checklist-items";
 import {readCaptureBefore} from "./capture-history";
@@ -165,7 +166,8 @@ interface RepositoryBlocks {
     createdAt: string,
   ) => Block;
   readonly replaceCanonicalText: (blockId: string, text: string) => Block;
-  readonly markMutation: () => void;
+  /** Advances the sequence and records `change` in the caller's transaction. */
+  readonly markMutation: (change: SequenceChange) => void;
   readonly requireActive: (blockId: string) => Block;
   readonly get: (blockId: string) => Block | null;
   readonly listAnnotations: () => Block[];
@@ -524,7 +526,7 @@ export class AnnotationRepository {
       for (const thread of threads) {
         changed = this.reconcileOne(thread, representation, content, pdfPages) || changed;
       }
-      if (changed) this.blocks.markMutation();
+      if (changed) this.blocks.markMutation({ kind: "annotate" });
     })();
     return { threads: this.list({ subject, includeResolved: true }), changed };
   }
@@ -564,7 +566,7 @@ export class AnnotationRepository {
         status: "resolved",
         appliesCurrent: true,
       });
-      this.blocks.markMutation();
+      this.blocks.markMutation({ kind: "annotate", blockId: annotationId });
       return this.get(annotationId);
     })();
   }
@@ -837,7 +839,7 @@ export class AnnotationRepository {
       this.database.query(
         "INSERT INTO annotation_agent_requests (request_id, payload_hash, event_id, created_at) VALUES (?, ?, ?, ?)",
       ).run(requestId, hash, proposal.id, new Date().toISOString());
-      this.blocks.markMutation();
+      this.blocks.markMutation({ kind: "annotate", blockId: annotationId });
       return { annotation: this.get(annotationId), proposal, deduplicated: false };
     })();
   }
@@ -910,7 +912,7 @@ export class AnnotationRepository {
           appliesCurrent: true,
         });
       }
-      this.blocks.markMutation();
+      this.blocks.markMutation({ kind: "annotate", blockId: annotationId });
       return this.get(annotationId);
     })();
   }

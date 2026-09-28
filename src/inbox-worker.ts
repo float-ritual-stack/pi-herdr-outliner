@@ -299,7 +299,9 @@ export class InboxWorker {
             throw new InboxConflictError("A note used by this answer changed; assistance was not applied");
           }
         }
-        this.changed(this.store.database.transaction(()=>this.attempts.finish(answer.apply(),attempt,!!candidate))());
+        // Background writes: the service publishes them as inbox.changed events.
+        this.changed(this.store.changes.run(this.store.changes.attribution({ action: "inbox.changed" }),
+          ()=>this.store.database.transaction(()=>this.attempts.finish(answer.apply(),attempt,!!candidate))()));
       } catch (error) {
         const canceled = abort.signal.aborted || this.stopped;
         const detail = canceled ? "Assistant work canceled; the source is unchanged" : error instanceof Error ? error.message : "Assistant work failed";

@@ -531,7 +531,7 @@ project-documentation mutations.
 ### Other tables
 
 - `metadata` — service sequence, parser version, legacy navigation cursor, and the change-feed floor and clean-shutdown sequence.
-- `change_feed` — bounded, append-only content-change history keyed by service sequence (see [Change feed](#change-feed)). It has no foreign keys, so purged blocks keep their entries.
+- `change_feed` — bounded, append-only content-change history keyed by service sequence, written in the transaction that advances it (see [Change feed](#change-feed)). Hidden rows mark non-content sequence advances. It has no foreign keys, so purged blocks keep their entries.
 - `selection` — legacy workspace selection used by CLI/agent context and as an optional one-time seed for a new Tree; never live pane authority.
 - `navigation_history` — legacy workspace-selection history for compatibility clients; Tree and Detail panes maintain independent in-process histories.
 - `virtual_occurrence_ranks` — durable `(virtual-branch ID, canonical block ID) -> branch-local rank`; both foreign keys cascade on deletion.
@@ -758,15 +758,19 @@ Every response carries the service sequence. Every mutation increments it and em
 
 ### Change feed
 
-Every `content` event, and every `view` event that changed durable branch-local
-ranks, carries a `change` record. The same record is stored in `change_feed`, so
-a live subscriber and a catching-up client see identical data:
+The store records a change in the same SQLite transaction that advances the
+service sequence, so a committed content change always has a `change_feed` row.
+The service publishes each recorded change as one live event (`content`, or
+`view` for branch-local rank changes) carrying that `change` record, so a live
+subscriber and a catching-up client see identical data. A request that touches
+several blocks (an `annotations.batch`, an Inbox transaction) produces one change
+and one event per block.
 
 ```ts
 interface OutlinerChange {
   sequence: number;        // service sequence after the change
   changeId: number;        // feed position; unique when changes share a sequence
-  action: string;          // request or internal action, e.g. "update", "inbox.changed"
+  action: string;          // request action, "inbox.changed", or "background"
   kind: "create" | "edit" | "move" | "delete" | "restore" | "purge"
       | "annotate" | "draft" | "reorder" | "other";
   blockId?: string;        // primary block (the view for "reorder")
@@ -784,9 +788,13 @@ provenance a request declared (`mutation`, or `author`/`provenance`); a created
 block reports its stored provenance. Requests without provenance (`move`,
 `delete`, Trash operations) have no actor. Actors are self-declared, not
 authenticated. The primary block is not the only block a change may touch: a
-move reorders siblings and a delete carries its subtree. `other` has no single
-block (an Inbox transaction, Work-ID configuration); treat it as "reload the
-affected projection".
+move reorders siblings and a delete carries its subtree. Annotation requests
+report `annotate` for each created or edited block and draft saves `draft`;
+other changes report what the store did to the block. `other` has no single
+block (Work-ID configuration); treat it as "reload the affected projection".
+Writes outside a request (the Inbox worker, in-process jobs) are published as
+events with action `inbox.changed` or `background`. A content event without a
+`change` reports a request that committed nothing.
 
 `changes.since { sequence, limit? }` returns changes with a greater sequence:
 
@@ -804,15 +812,16 @@ Resume without gaps by subscribing first, then reading `changes.since` from the
 sequence of the last snapshot or event applied, and ignoring live events at or
 below the cursor you have applied.
 
-The service retains the newest 10,000 changes. The floor (`oldestSequence`) is the
-oldest cursor it can answer completely; pruning advances it. Only the serving
-process records changes, just after each transaction commits. A clean shutdown
-stores the sequence it stopped at; history survives a restart only when the next
-start finds that same sequence. After a crash (the last change may be unrecorded)
-or any write by another process in between, the start moves the floor to the
-current sequence, so older cursors get a reset rather than a silent gap. An
-existing workspace starts its feed at the sequence it had when upgraded. Only
-mutations that emit events enter the feed.
+The service retains the newest 10,000 feed rows. The floor (`oldestSequence`) is
+the oldest cursor it can answer completely; pruning advances it. Sequence
+advances that change no outline content (Resource catalog bookkeeping) write a
+hidden row that is never returned, so every committed sequence has a row. History
+therefore survives clean restarts, crashes and writes by another process running
+this code. `changes.since` verifies that coverage: a sequence with no row (written
+by an older build or raw SQL) moves the floor past it, so older cursors get a
+reset rather than a silent gap. A startup property-index rebuild, which changes
+derived data for every block, also moves the floor. An existing workspace starts
+its feed at the sequence it had when upgraded.
 
 Tree uses the feed to avoid redundant `tree.index` reloads: a change at or below
 the sequence of the index it already holds is skipped (its own edits' echoes and

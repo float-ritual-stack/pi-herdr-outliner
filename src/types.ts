@@ -2196,8 +2196,9 @@ export interface OutlinerEvent {
   attention?: AttentionClientState;
   attentionInstruction?: AttentionInstruction;
   /**
-   * Present on every `content` event and on `view` events that changed durable
-   * branch-local ranks; identical to the corresponding `changes.since` entry.
+   * The committed change this event reports, identical to its `changes.since`
+   * entry: one event per change (`view` for branch-local ranks). Absent on a
+   * `content` event for a request that committed nothing.
    */
   change?: OutlinerChange;
 }
@@ -2205,7 +2206,7 @@ export interface OutlinerEvent {
 /**
  * What a content change did. `reorder` changed branch-local ranks of the virtual
  * branch named by `blockId`. `other` covers workspace-wide changes without one
- * primary block (for example an Inbox transaction or Work-ID configuration);
+ * primary block (for example Work-ID configuration);
  * clients that cannot interpret a change should reload the affected projection.
  */
 export type OutlinerChangeKind =

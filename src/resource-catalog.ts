@@ -962,6 +962,8 @@ export class ResourceCatalog {
   constructor(
     private readonly database: Database,
     options: ResourceCatalogOptions = {},
+    /** Called in the bumping transaction; resource bookkeeping is not an outline change. */
+    private readonly sequenceAdvanced: (sequence: number) => void = () => {},
   ) {
     this.fetcher = options.fetch ?? globalThis.fetch;
     this.webExtractor = options.webExtractor ?? new BasicWebMarkdownExtractor();
@@ -4726,9 +4728,12 @@ export class ResourceCatalog {
   }
 
   private bumpSequence(): void {
-    this.database.query(
-      "UPDATE metadata SET value = CAST(value AS INTEGER) + 1 WHERE key = 'sequence'",
-    ).run();
+    this.database.transaction(() => {
+      const row = this.database.query(
+        "UPDATE metadata SET value = CAST(value AS INTEGER) + 1 WHERE key = 'sequence' RETURNING value",
+      ).get() as { value: string | number } | null;
+      if (row) this.sequenceAdvanced(Number(row.value));
+    })();
   }
 
   private upgradeResourceProviderConstraints(): void {

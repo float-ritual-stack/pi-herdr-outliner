@@ -232,7 +232,7 @@ test("retention answers too-old and future cursors with an explicit reset", asyn
   expect(ahead).toMatchObject({ kind: "reset", reason: "sequence-ahead", sequence: store.sequence });
 });
 
-test("history survives a clean restart, but not a crash, an offline write or a pre-feed workspace", async () => {
+test("history survives restarts and crashes; unrecorded writes and rebuilds reset it", async () => {
   const directory = workspace("pi-outliner-change-restart-");
   const database = join(directory, "outliner.sqlite");
   let running = await service(directory, database);
@@ -242,24 +242,52 @@ test("history survives a clean restart, but not a crash, an offline write or a p
 
   running = await service(directory, database);
   expect(await readAll(running.client, start, 10)).toMatchObject([{ kind: "create", blockId: note.id }]);
+  // The feed row commits with the change, so a crash cannot lose it.
   const beforeCrash = running.store.sequence;
-  await running.client.request<Block>({ action: "create", text: "Written before a crash" });
+  const crashed = await running.client.request<Block>({ action: "create", text: "Written before a crash" });
   await running.crash();
 
   running = await service(directory, database);
-  const afterCrash = running.store.sequence;
-  expect(await running.client.request<ChangeFeedPage>({ action: "changes.since", sequence: beforeCrash }))
-    .toMatchObject({ kind: "reset", reason: "history-unavailable", oldestSequence: afterCrash });
-  expect(await readAll(running.client, afterCrash, 10)).toEqual([]);
+  expect(await readAll(running.client, beforeCrash, 10)).toMatchObject([{ kind: "create", blockId: crashed.id }]);
+  const offlineStart = running.store.sequence;
   await running.stop();
 
-  // A process other than the service wrote without recording the change.
+  // Another process running this code records its writes too.
   const offline = new OutlinerStore(database);
-  offline.create("Written by a maintenance script");
+  const maintained = offline.create("Written by a maintenance script");
   offline.close();
   running = await service(directory, database);
-  expect(await running.client.request<ChangeFeedPage>({ action: "changes.since", sequence: afterCrash }))
-    .toMatchObject({ kind: "reset", reason: "history-unavailable", oldestSequence: running.store.sequence });
+  expect(await readAll(running.client, offlineStart, 10)).toMatchObject([
+    { kind: "create", blockId: maintained.id, action: "background" },
+  ]);
+  const beforeRaw = running.store.sequence;
+  await running.stop();
+
+  // A writer without the feed (an older build, raw SQL) leaves a sequence with no row.
+  const raw = new Database(database);
+  raw.exec(`
+    UPDATE metadata SET value = CAST(value AS INTEGER) + 1 WHERE key = 'sequence';
+    UPDATE blocks SET text = 'Edited without the feed' WHERE id = '${maintained.id}';
+  `);
+  raw.close();
+  running = await service(directory, database);
+  const rawSequence = running.store.sequence;
+  expect(rawSequence).toBe(beforeRaw + 1);
+  expect(await running.client.request<ChangeFeedPage>({ action: "changes.since", sequence: beforeRaw }))
+    .toMatchObject({ kind: "reset", reason: "history-unavailable", oldestSequence: rawSequence });
+  const later = await running.client.request<Block>({ action: "create", text: "Recorded after the gap" });
+  expect(await readAll(running.client, rawSequence, 10)).toMatchObject([{ blockId: later.id }]);
+  await running.stop();
+
+  // A property-index rebuild advances the sequence for every block at once.
+  const rebuild = new Database(database);
+  rebuild.exec("UPDATE metadata SET value = '0' WHERE key = 'property_parser_version'");
+  rebuild.close();
+  running = await service(directory, database);
+  const rebuilt = running.store.sequence;
+  expect(rebuilt).toBe(rawSequence + 2);
+  expect(await running.client.request<ChangeFeedPage>({ action: "changes.since", sequence: rawSequence }))
+    .toMatchObject({ kind: "reset", reason: "history-unavailable", oldestSequence: rebuilt });
   await running.stop();
 
   // An existing workspace from before the feed has no history to replay.
@@ -295,4 +323,255 @@ test("branch-local rank changes join the feed without changing their view event"
   });
   const page = await client.request<ChangeFeedPage>({ action: "changes.since", sequence: events[0]!.sequence - 1 });
   expect(page).toMatchObject({ kind: "changes", changes: [{ kind: "reorder", blockId: view.id }] });
+});
+
+/** Every sequence after `from` has a feed row (visible, or a hidden sequence-only row). */
+function uncoveredSequences(store: OutlinerStore, from: number): number[] {
+  const recorded = new Set((store.database.query(
+    "SELECT DISTINCT sequence FROM change_feed WHERE sequence > ?",
+  ).all(from) as Array<{ sequence: number }>).map(row => row.sequence));
+  const missing: number[] = [];
+  for (let sequence = from + 1; sequence <= store.sequence; sequence += 1) {
+    if (!recorded.has(sequence)) missing.push(sequence);
+  }
+  return missing;
+}
+
+test("every content mutation family is covered by the feed and matches its live events", async () => {
+  const { client, store } = await service(workspace("pi-outliner-change-coverage-"));
+  const { events } = await watch(client, "coverage-observer");
+  const start = store.sequence;
+  const expected: Array<{ action: string; from: number; to: number; blockIds: string[] }> = [];
+  async function step<T>(action: string, run: () => Promise<T>, blockIds: (result: T) => string[]): Promise<T> {
+    const from = store.sequence;
+    const result = await run();
+    const to = store.sequence;
+    expect(to).toBeGreaterThan(from);
+    expected.push({ action, from, to, blockIds: blockIds(result) });
+    return result;
+  }
+  const request = <T>(input: Record<string, unknown>) => client.request<T>(input as never);
+  const id = (block: Block) => [block.id];
+
+  const project = await step("create", () => request<Block>({ action: "create", text: "Fictional project" }), id);
+  const archive = await step("create", () => request<Block>({ action: "create", text: "Fictional archive" }), id);
+  let task = await step("create", () => request<Block>({
+    action: "create", parentId: project.id, text: "Draft the launch plan\n\n- [ ] Review ^review",
+  }), id);
+  task = await step("update", () => request<Block>({
+    action: "update", blockId: task.id, text: "Draft the launch plan [status::ready]\n\n- [ ] Review ^review",
+    expectedRevision: task.revision, mutation: { author: "user" },
+  }), id);
+  task = await step("properties.patch", () => request<Block>({
+    action: "properties.patch", blockId: task.id, expectedRevision: task.revision,
+    operations: [{ op: "append", key: "owner", value: "crew" }], mutation: { author: "user" },
+  }), id);
+  const checklist = await request<{ items: Array<{ evidence: string }> }>({
+    action: "checklist.query", blockId: task.id, query: { limit: 10 },
+  });
+  await step("checklist.update", () => request({
+    action: "checklist.update", blockId: task.id,
+    input: { target: { itemId: "review" }, expectedEvidence: checklist.items[0]!.evidence, change: { kind: "status", status: "done" } },
+    mutation: { author: "agent", actorId: "checklist-bot" },
+  }), () => [task.id]);
+  task = store.require(task.id);
+  await step("move", () => request({ action: "move", blockId: task.id, parentId: archive.id }), () => [task.id]);
+  const scratch = await step("create", () => request<Block>({ action: "create", text: "Scratch note" }), id);
+  await step("delete", () => request({ action: "delete", blockId: scratch.id }), () => [scratch.id]);
+  await step("trash.restore", () => request({ action: "trash.restore", blockId: scratch.id }), () => [scratch.id]);
+  await step("delete", () => request({ action: "delete", blockId: scratch.id }), () => [scratch.id]);
+  await step("trash.purge", () => request({
+    action: "trash.purge", blockId: scratch.id, confirmation: scratch.id.slice(0, 8),
+  }), () => [scratch.id]);
+
+  const comment = await step("annotations.create", () => request<{ annotations: Array<{ block: Block }> }>({
+    action: "annotations.batch", requestId: "coverage-comment",
+    operations: [{ operationId: "one", type: "block-comment", input: {
+      blockId: task.id, expectedRevision: store.require(task.id).revision, body: "Check the dates", source: "user",
+    } }],
+  }), receipt => receipt.annotations.map(record => record.block.id));
+  const rootId = comment.annotations[0]!.block.id;
+  await step("annotations.reply", () => request<{ annotations: Array<{ block: Block }> }>({
+    action: "annotations.reply", requestId: "coverage-reply",
+    input: { annotationId: rootId, body: "Dates confirmed", source: "user" },
+  }), receipt => receipt.annotations.map(record => record.block.id));
+  await step("annotations.lifecycle", () => request({
+    action: "annotations.lifecycle", input: { annotationId: rootId, lifecycle: "resolved" }, mutation: { author: "user" },
+  }), () => [rootId]);
+
+  const page = await step("pages.follow", () => request<{ block: Block }>({ action: "pages.follow", address: "Launch Page" }),
+    result => [result.block.id]);
+  const renamed = await step("pages.rename", () => request({
+    action: "pages.rename", blockId: page.block.id, address: "Renamed Launch Page", expectedRevision: page.block.revision,
+  }), () => [page.block.id]);
+  void renamed;
+  await step("pages.alias", () => request({ action: "pages.alias", blockId: page.block.id, address: "Launch Alias" }),
+    () => [page.block.id]);
+  await step("pages.remove", () => request({
+    action: "pages.remove", blockId: page.block.id, address: "Launch Alias",
+    expectedRevision: store.require(page.block.id).revision,
+  }), () => [page.block.id]);
+
+  await step("work-ids.configure", () => request({ action: "work-ids.configure", prefix: "FIC" }), () => []);
+  await step("work-ids.allocate", () => request({
+    action: "work-ids.allocate", blockId: project.id, expectedRevision: store.require(project.id).revision,
+  }), () => [project.id]);
+  await request<Block>({ action: "create", text: "Fictional work [type::work-queue] [project::orbit]" });
+  const roadmap = await step("roadmap.items.create", () => request<{ block: Block; workId: string }>({
+    action: "roadmap.items.create",
+    input: { title: "Chart the orbit", priority: "high", project: "orbit", arc: "launch", tracks: ["safety"] },
+  }), result => [result.block.id]);
+  const delivery = await step("deliveries.ensure", () => request<{ delivery: Block; task: Block }>({
+    action: "deliveries.ensure", input: {
+      taskBlockId: roadmap.block.id, deliveryKey: `${roadmap.workId}/launch`, repository: "example/orbit",
+      baseBranch: "main", workBranch: "feature/launch",
+    },
+  }), result => [result.delivery.id]);
+  await step("deliveries.sync", () => request({
+    action: "deliveries.sync", mutation: { author: "agent", actorId: "delivery-bot" }, input: {
+      taskBlockId: roadmap.block.id, deliveryBlockId: delivery.delivery.id,
+      expectedDeliveryRevision: delivery.delivery.revision, expectedTaskRevision: store.require(roadmap.block.id).revision,
+      pullRequest: { number: 7, url: "https://github.com/example/orbit/pull/7", state: "OPEN", mergeCommit: null },
+    },
+  }), () => [roadmap.block.id]);
+
+  const captured = await step("capture.create", () => request<{ block: Block }>({
+    action: "capture.create", requestId: "coverage-capture", text: "Captured idea", source: "cli",
+  }), result => [result.block.id]);
+  await step("bookmarks.toggle", () => request<{ record: Block }>({
+    action: "bookmarks.toggle", targetBlockId: captured.block.id, expectedRecordId: null,
+  }), result => [result.record.id]);
+
+  const base = store.require(archive.id);
+  const recovery = await request<{ id: string; revision: number }>({ action: "edit-recovery.start", input: {
+    id: crypto.randomUUID(), blockId: base.id, baseText: base.text, baseRevision: base.revision,
+    prelaunchText: base.text, draftText: `${base.text} revised`, source: "external-editor",
+  } });
+  await step("edit-recovery.commit", () => request({
+    action: "edit-recovery.commit", recoveryId: recovery.id, expectedRevision: recovery.revision,
+    text: `${base.text} revised`, basedOnRevision: base.revision, mutation: { author: "user" },
+  }), () => [base.id]);
+
+  const lane = await request<Block>({ action: "create", text: "Fictional lane [type::virtual-branch] [query::lane=next]" });
+  const alpha = await request<Block>({ action: "create", text: "Alpha [lane::next]" });
+  const beta = await request<Block>({ action: "create", text: "Beta [lane::next]" });
+  await step("virtual.occurrences.reorder", () => request({
+    action: "virtual.occurrences.reorder", viewId: lane.id, orderedBlockIds: [beta.id, alpha.id],
+  }), () => [lane.id]);
+
+  // Contiguous: no committed sequence lacks a row, and the page is complete, not a reset.
+  expect(uncoveredSequences(store, start)).toEqual([]);
+  const feed = await readAll(client, start, 1000);
+  for (const entry of expected) {
+    const inRange = feed.filter(change => change.sequence > entry.from && change.sequence <= entry.to);
+    expect({ action: entry.action, actions: [...new Set(inRange.map(change => change.action))] })
+      .toEqual({ action: entry.action, actions: [entry.action === "annotations.create" ? "annotations.batch" : entry.action] });
+    const blockIds = new Set(inRange.map(change => change.blockId));
+    for (const blockId of entry.blockIds) expect({ action: entry.action, has: blockIds.has(blockId) }).toEqual({ action: entry.action, has: true });
+  }
+  // The feed is exactly what live subscribers received.
+  await until(() => events.filter(event => event.change).length === feed.length);
+  expect(events.filter(event => event.change).map(event => event.change)).toEqual(feed);
+  for (const event of events.filter(event => event.change)) {
+    expect(event.sequence).toBe(event.change!.sequence);
+    if (event.change!.blockId) expect(event.blockId).toBe(event.change!.blockId);
+  }
+});
+
+test("annotations.batch records and publishes one change per affected block", async () => {
+  const { client, store } = await service(workspace("pi-outliner-change-batch-"));
+  const first = await client.request<Block>({ action: "create", text: "First source" });
+  const second = await client.request<Block>({ action: "create", text: "Second source" });
+  const root = await client.request<{ annotations: Array<{ block: Block }> }>({
+    action: "annotations.batch", requestId: "batch-root", operations: [{ operationId: "root", type: "block-comment",
+      input: { blockId: first.id, expectedRevision: first.revision, body: "Earlier thread", source: "user" } }],
+  });
+  const { events } = await watch(client, "batch-observer");
+  const start = store.sequence;
+  const receipt = await client.request<{ annotations: Array<{ block: Block }> }>({
+    action: "annotations.batch", requestId: "batch-many", operations: [
+      { operationId: "a", type: "block-comment", input: { blockId: first.id, expectedRevision: first.revision, body: "On the first", source: "user" } },
+      { operationId: "b", type: "block-comment", input: { blockId: second.id, expectedRevision: second.revision, body: "On the second", source: "agent" } },
+      { operationId: "c", type: "reply", input: { annotationId: root.annotations[0]!.block.id, body: "A reply", source: "user" } },
+    ], author: "agent", provenance: { actorId: "review-bot" },
+  });
+  const created = receipt.annotations.map(record => record.block);
+  expect(created).toHaveLength(3);
+  const feed = await readAll(client, start, 100);
+  expect(feed.map(change => [change.action, change.kind, change.blockId, change.parentId])).toEqual([
+    ["annotations.batch", "annotate", created[0]!.id, first.id],
+    ["annotations.batch", "annotate", created[1]!.id, second.id],
+    ["annotations.batch", "annotate", created[2]!.id, root.annotations[0]!.block.id],
+  ]);
+  expect(feed.every(change => change.actor?.actorId === "review-bot")).toBe(true);
+  await until(() => events.length === 3);
+  expect(events.map(event => [event.domain, event.action, event.blockId])).toEqual(
+    created.map(block => ["content", "annotations.batch", block.id]),
+  );
+  expect(events.map(event => event.change)).toEqual(feed);
+});
+
+test("a failure while recording rolls the change back, and a failure after commit keeps it in the feed", async () => {
+  const { client, store, server } = await service(workspace("pi-outliner-change-failure-"));
+  const { events } = await watch(client, "failure-observer");
+  const before = store.sequence;
+
+  // The recording step fails inside the mutation's transaction: nothing commits.
+  const record = store.changes.record.bind(store.changes);
+  store.changes.record = () => { throw new Error("injected feed failure"); };
+  await expect(client.request({ action: "create", text: "Never committed" })).rejects.toThrow("injected feed failure");
+  store.changes.record = record;
+  expect(store.sequence).toBe(before);
+  expect(store.database.query("SELECT COUNT(*) AS count FROM blocks WHERE text = 'Never committed'").get())
+    .toEqual({ count: 0 });
+  expect(await client.request<ChangeFeedPage>({ action: "changes.since", sequence: before }))
+    .toMatchObject({ kind: "changes", changes: [], completeness: { kind: "complete" } });
+
+  // Publishing fails after the commit: the live event is lost, the feed still has the change.
+  const internals = server as unknown as { eventFor(...args: unknown[]): unknown };
+  const eventFor = internals.eventFor;
+  internals.eventFor = () => { throw new Error("injected publish failure"); };
+  const committed = await client.request<Block>({ action: "create", text: "Committed before the failure" });
+  internals.eventFor = eventFor;
+  expect(await readAll(client, before, 10)).toMatchObject([{ action: "create", kind: "create", blockId: committed.id }]);
+  expect(events.some(event => event.blockId === committed.id)).toBe(false);
+
+  // A request that commits one transaction and then fails still publishes what it committed.
+  const handler = server as unknown as { handleAsync(...args: unknown[]): Promise<unknown> };
+  const handleAsync = handler.handleAsync;
+  let partial: Block | undefined;
+  handler.handleAsync = async () => {
+    partial = store.create("First step of a failing request");
+    throw new Error("injected second-step failure");
+  };
+  const afterPublishFailure = store.sequence;
+  await expect(client.request({ action: "create", text: "ignored" })).rejects.toThrow("injected second-step failure");
+  handler.handleAsync = handleAsync;
+  expect(await readAll(client, afterPublishFailure, 10)).toMatchObject([{ action: "create", blockId: partial!.id }]);
+  await until(() => events.some(event => event.blockId === partial!.id));
+  expect(events.find(event => event.blockId === partial!.id)).toMatchObject({ domain: "content", action: "create" });
+  expect(uncoveredSequences(store, before)).toEqual([]);
+});
+
+test("writes outside a request are recorded and published as background changes", async () => {
+  const { client, store } = await service(workspace("pi-outliner-change-background-"));
+  const { events } = await watch(client, "background-observer");
+  const before = store.sequence;
+  const written = store.create("Written by an in-process job");
+  await until(() => events.some(event => event.blockId === written.id));
+  const feed = await readAll(client, before, 10);
+  expect(feed).toMatchObject([{ action: "background", kind: "create", blockId: written.id }]);
+  expect(events.find(event => event.blockId === written.id)).toMatchObject({
+    domain: "content", action: "background", change: feed[0],
+  });
+
+  // Resource bookkeeping advances the sequence without an outline change: hidden, but covered.
+  const resourceStart = store.sequence;
+  await client.request({ action: "resources.retention.configure", input: {
+    retainNewestSourceSnapshots: 1, retainNewestRepresentationsPerAdapter: 1, minimumAgeMs: 0, purgeGraceMs: 0,
+  } });
+  expect(store.sequence).toBe(resourceStart + 1);
+  expect(uncoveredSequences(store, before)).toEqual([]);
+  const page = await client.request<ChangeFeedPage>({ action: "changes.since", sequence: resourceStart });
+  expect(page).toMatchObject({ kind: "changes", changes: [], completeness: { kind: "complete" } });
 });

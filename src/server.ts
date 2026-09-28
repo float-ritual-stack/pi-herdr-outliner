@@ -1,4 +1,5 @@
 import { queryRequestProblem } from "./block-query";
+import type { ChangeAttribution } from "./change-feed";
 import { MentionRepository } from "./mentions";
 import { EditRecoveryRepository } from "./edit-recovery";
 import { proposeEditMerge } from "./edit-merge-model";
@@ -123,6 +124,19 @@ function annotationReconcileChanged(value: unknown): boolean {
   return value.changed;
 }
 
+/**
+ * Request-level meanings that replace the store's per-block kind: an annotation
+ * request's source edit and created blocks are all `annotate`, a draft save is
+ * `draft`, and a bookmark toggle stays `other`.
+ */
+function requestChangeKind(action: unknown): OutlinerChangeKind | undefined {
+  if (typeof action !== "string") return undefined;
+  if (action.startsWith("annotations.")) return "annotate";
+  if (action === "capture.draft.save" || action === "capture.draft.clear") return "draft";
+  if (action === "bookmarks.toggle" || action === "bookmarks.remove") return "other";
+  return undefined;
+}
+
 /** Provenance the request declared for its mutation; self-reported by the client. */
 function declaredActor(request: OutlinerRequest): MutationProvenance | undefined {
   const mutation = "mutation" in request ? request.mutation : undefined;
@@ -186,7 +200,7 @@ export class OutlinerServer {
       if (await this.socketIsActive()) throw new Error(`Outliner service is already running at ${this.socketPath}`);
       unlinkSync(this.socketPath);
     }
-    this.store.changes.resume();
+    this.store.changes.onBackgroundChanges = changes => this.publishChanges(undefined, changes);
     const server = createServer((socket) => this.accept(socket));
     this.server = server;
     const started = Promise.withResolvers<void>();
@@ -208,6 +222,7 @@ export class OutlinerServer {
     await this.inbox?.stop();
     const server = this.server;
     if (!server) return;
+    this.store.changes.onBackgroundChanges = undefined;
     for (const subscriber of this.subscribers.keys()) subscriber.destroy();
     this.subscribers.clear();
     this.captureOwner = null;
@@ -233,11 +248,9 @@ export class OutlinerServer {
   }
 
   private inboxChanged(result?: InboxResult): void {
+    // The worker's writes were recorded as background changes; publish them before its status.
+    this.store.changes.flushBackground();
     if (result?.state === "applied" || result?.state === "undone") {
-      // One transaction can touch several blocks; clients refresh their content projection.
-      const sequence = this.store.sequence;
-      this.broadcast({ id: crypto.randomUUID(), domain: "content", action: "inbox.changed", sequence,
-        change: this.recordChange({ sequence, action: "inbox.changed", kind: "other" }) });
       for (const blockId of new Set([result.sourceId, ...result.outputIds])) this.refreshAttentionForBlock(blockId);
     }
     this.broadcast({ id: crypto.randomUUID(), domain: "inbox", action: "inbox.status", sequence: this.store.sequence });
@@ -2212,15 +2225,13 @@ export class OutlinerServer {
     }
   }
 
-  /** Builds the broadcast for a successful request; content events are also recorded in the change feed. */
+  /** Builds the broadcast for a successful request; `publishChanges` expands content events per recorded change. */
   private eventFor(
     request: OutlinerRequest,
     response: Extract<OutlinerResponse, { ok: true }>,
     previousSequence: number,
-    previousParentId?: string | null,
   ): OutlinerEvent | null {
     let domain: OutlinerEvent["domain"];
-    let changeKind: OutlinerChangeKind = "other";
     let blockId: string | undefined;
     let resourceId: string | undefined;
     let sourceId: string | undefined;
@@ -2334,12 +2345,10 @@ export class OutlinerServer {
       case "create":
       case "edit-recovery.separate":
         domain = "content";
-        changeKind = "create";
         blockId = (response.result as Block).id;
         break;
       case "edit-recovery.commit":
         domain = "content";
-        changeKind = "edit";
         blockId = (response.result as Block).id;
         break;
       case "bookmarks.toggle":
@@ -2352,14 +2361,12 @@ export class OutlinerServer {
         break;
       case "roadmap.items.create":
         domain = "content";
-        changeKind = "create";
         blockId = (response.result as RoadmapItemCreateReceipt).block.id;
         break;
       case "deliveries.sync": {
         const receipt = response.result as DeliverySyncReceipt;
         if (!receipt.changed) return null;
         domain = "content";
-        changeKind = "edit";
         blockId = receipt.task.id;
         break;
       }
@@ -2367,7 +2374,6 @@ export class OutlinerServer {
         const receipt = response.result as DeliveryReceipt;
         if (!receipt.created) return null;
         domain = "content";
-        changeKind = "create";
         blockId = receipt.delivery.id;
         break;
       }
@@ -2376,7 +2382,6 @@ export class OutlinerServer {
         const receipt = response.result as CaptureReceipt;
         if (receipt.deduplicated) return null;
         domain = "content";
-        changeKind = "create";
         blockId = receipt.block.id;
         break;
       }
@@ -2384,13 +2389,11 @@ export class OutlinerServer {
         const receipt = response.result as WorkflowPromotionReceipt;
         if (receipt.deduplicated) return null;
         domain = "content";
-        changeKind = "create";
         blockId = receipt.block.id;
         break;
       }
       case "capture.retitle":
         domain = "content";
-        changeKind = "edit";
         blockId = (response.result as Block).id;
         break;
       case "capture.draft.save":
@@ -2398,12 +2401,10 @@ export class OutlinerServer {
         blockId = (response.result as QuickCaptureDraft).blockId;
         if (!blockId) return null;
         domain = "content";
-        changeKind = "draft";
         break;
       case "capture.draft.clear":
         if (response.sequence === previousSequence) return null;
         domain = "content";
-        changeKind = "draft";
         break;
       case "annotations.create":
       case "annotations.reply":
@@ -2411,36 +2412,30 @@ export class OutlinerServer {
         const receipt = response.result as AnnotationBatchReceipt;
         if (receipt.deduplicated) return null;
         domain = "content";
-        changeKind = "annotate";
         blockId = receipt.annotations[0]?.block.id;
         break;
       }
       case "annotations.reconcile":
         if (!annotationReconcileChanged(response.result)) return null;
         domain = "content";
-        changeKind = "annotate";
         break;
       case "annotations.approve-resolution":
         domain = "content";
-        changeKind = "annotate";
         blockId = request.input.annotationId;
         break;
       case "annotations.propose-agent": {
         const receipt = response.result as AnnotationAgentProposalReceipt;
         if (receipt.deduplicated) return null;
         domain = "content";
-        changeKind = "annotate";
         blockId = request.input.annotationId;
         break;
       }
       case "annotations.review-agent":
         domain = "content";
-        changeKind = "annotate";
         blockId = request.input.annotationId;
         break;
       case "annotations.lifecycle":
         domain = "content";
-        changeKind = "annotate";
         blockId = request.input.annotationId;
         break;
       case "attention.mark":
@@ -2468,7 +2463,6 @@ export class OutlinerServer {
       case "checklist.update":
         if (response.sequence === previousSequence) return null;
         domain = "content";
-        changeKind = "edit";
         blockId = request.blockId;
         break;
       case "update":
@@ -2478,7 +2472,6 @@ export class OutlinerServer {
       case "pages.remove":
       case "work-ids.allocate":
         domain = "content";
-        changeKind = "edit";
         blockId = request.blockId;
         break;
       case "move":
@@ -2486,9 +2479,6 @@ export class OutlinerServer {
       case "trash.restore":
       case "trash.purge":
         domain = "content";
-        changeKind = ({
-          move: "move", delete: "delete", "trash.restore": "restore", "trash.purge": "purge",
-        } as const)[request.action];
         blockId = request.blockId;
         break;
       case "work-ids.configure":
@@ -2498,18 +2488,15 @@ export class OutlinerServer {
         const followed = response.result as PageAddressFollowResult;
         if (!followed.created) return null;
         domain = "content";
-        changeKind = "create";
         blockId = followed.block?.id;
         break;
       }
       case "virtual.occurrences.place":
         domain = "view";
-        changeKind = "reorder";
         blockId = request.input.expected.viewId;
         break;
       case "virtual.occurrences.reorder":
         domain = "view";
-        changeKind = "reorder";
         blockId = request.viewId;
         break;
       case "selection.set":
@@ -2556,26 +2543,11 @@ export class OutlinerServer {
         return null;
     }
 
-    // Branch-local ranks are durable outline order, so they join the feed while
-    // keeping their `view` domain for existing subscribers.
-    const recorded = domain === "content" ||
-      (changeKind === "reorder" && response.sequence !== previousSequence);
-    const change = recorded
-      ? this.recordChange({
-          sequence: response.sequence,
-          action: request.action,
-          kind: changeKind,
-          blockId,
-          previousParentId: changeKind === "move" ? previousParentId : undefined,
-          actor: declaredActor(request),
-        })
-      : undefined;
     return {
       id: crypto.randomUUID(),
       domain,
       action: request.action,
       sequence: response.sequence,
-      ...(change ? { change } : {}),
       blockId,
       resourceId,
       command,
@@ -2587,40 +2559,27 @@ export class OutlinerServer {
   }
 
   /**
-   * Content mutations dispatch synchronously, so a change is recorded before any
-   * later request can commit; feed order therefore matches sequence order.
+   * Publishes committed feed changes as live events, one per change, so the
+   * feed covers exactly what subscribers receive. `base` is the request's own
+   * event, whose fields (domain aside) the change events keep.
    */
-  private recordChange(input: {
-    sequence: number;
-    action: string;
-    kind: OutlinerChangeKind;
-    blockId?: string;
-    previousParentId?: string | null;
-    actor?: MutationProvenance;
-  }): OutlinerChange {
-    const block = input.blockId ? this.store.get(input.blockId) : null;
-    // A created block's stored provenance is authoritative, including defaults.
-    const actor = input.kind === "create" && block
-      ? {
-          author: block.author,
-          ...(block.actorId ? { actorId: block.actorId } : {}),
-          ...(block.sessionId ? { sessionId: block.sessionId } : {}),
-          ...(block.taskId ? { taskId: block.taskId } : {}),
-        }
-      : input.actor;
-    return this.store.changes.record({
-      sequence: input.sequence,
-      action: input.action,
-      kind: input.kind,
-      ...(input.blockId ? { blockId: input.blockId } : {}),
-      ...(block ? {
-        parentId: block.parentId,
-        revision: block.revision,
-        deleted: Boolean(block.effectiveDeletedRootId),
-      } : {}),
-      ...(input.previousParentId !== undefined ? { previousParentId: input.previousParentId } : {}),
-      ...(actor ? { actor } : {}),
-    });
+  private publishChanges(base: OutlinerEvent | undefined, changes: readonly OutlinerChange[]): OutlinerEvent[] {
+    const events: OutlinerEvent[] = changes.map(change => ({
+      ...(base ?? {}),
+      id: crypto.randomUUID(),
+      // Branch-local ranks keep their `view` domain for existing subscribers.
+      domain: change.kind === "reorder" ? "view" : "content",
+      action: base?.action ?? change.action,
+      sequence: change.sequence,
+      change,
+      blockId: change.blockId ?? base?.blockId,
+    }));
+    for (const event of events) this.broadcast(event);
+    for (const event of events) {
+      if (event.domain === "content" && event.blockId) this.refreshAttentionForBlock(event.blockId);
+    }
+    if (events.some(event => event.domain === "content")) this.inbox?.wake();
+    return events;
   }
 
   private broadcast(event: OutlinerEvent): void {
@@ -2659,18 +2618,21 @@ export class OutlinerServer {
   private async respond(socket: Socket, line: string): Promise<void> {
     let request: OutlinerRequest | undefined;
     let response: OutlinerResponse;
+    let attribution: ChangeAttribution | undefined;
     const previousSequence = this.store.sequence;
-    let previousParentId: string | null | undefined;
     try {
       request = JSON.parse(line) as OutlinerRequest;
-      if (request.action === "move" && typeof request.blockId === "string") {
-        const moved = this.store.get(request.blockId);
-        if (moved) previousParentId = moved.parentId;
-      }
       const subscribedClient = request.action === "events.subscribe"
         ? this.registerSubscriber(socket, request.client)
         : undefined;
-      response = await this.handleAsync(request, subscribedClient);
+      const current = request;
+      attribution = this.store.changes.attribution({
+        action: String(current.action),
+        actor: declaredActor(current),
+        kind: requestChangeKind(current.action),
+        collect: true,
+      });
+      response = await this.store.changes.run(attribution, () => this.handleAsync(current, subscribedClient));
     } catch (error) {
       const problem = queryRequestProblem(error);
       response = {
@@ -2681,14 +2643,36 @@ export class OutlinerServer {
         sequence: this.store.sequence,
       };
     }
+    // Changes are already durable in the feed; a failure below only costs the live event.
+    const changes = attribution ? this.store.changes.committed(attribution) : [];
     socket.write(`${JSON.stringify(response)}\n`);
-    if (!request || !response.ok) return;
-    const event = this.eventFor(request, response, previousSequence, previousParentId);
-    if (event) this.broadcast(event);
-    if (event?.domain === "content" && event.blockId) {
-      this.refreshAttentionForBlock(event.blockId);
+    try {
+      this.publish(request, response, previousSequence, changes);
+    } catch (error) {
+      // The changes are durable in the feed; subscribers recover them with changes.since.
+      process.stderr.write(`outliner: live event publication failed: ${error instanceof Error ? error.message : String(error)}\n`);
     }
-    if (event?.domain === "content") this.inbox?.wake();
+  }
+
+  private publish(
+    request: OutlinerRequest | undefined,
+    response: OutlinerResponse,
+    previousSequence: number,
+    changes: readonly OutlinerChange[],
+  ): void {
+    const base = request && response.ok ? this.eventFor(request, response, previousSequence) ?? undefined : undefined;
+    if (changes.length > 0) {
+      // A failed request can still have committed earlier transactions.
+      this.publishChanges(base?.domain === "content" || base?.domain === "view" ? base : request && {
+        id: "", domain: "content", action: String(request.action), sequence: response.sequence,
+      }, changes);
+      if (base && base.domain !== "content" && base.domain !== "view") this.broadcast(base);
+      return;
+    }
+    if (!base) return;
+    this.broadcast(base);
+    if (base.domain === "content" && base.blockId) this.refreshAttentionForBlock(base.blockId);
+    if (base.domain === "content") this.inbox?.wake();
   }
 
   private accept(socket: Socket): void {
