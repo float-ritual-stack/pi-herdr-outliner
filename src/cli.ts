@@ -64,6 +64,7 @@ switch (command) {
     if (offset !== undefined && (!/^\d+$/.test(values.offset!) || !Number.isSafeInteger(offset))) {
       throw new Error("--offset must be a non-negative integer");
     }
+    await client.requireCompatibleService(["views.read"]);
     directResult = await readSavedView(client, positionals[0]!, {
       ...(values.limit === undefined ? {} : { limit: parseLimit(values.limit, 200) }),
       ...(offset === undefined ? {} : { offset }),

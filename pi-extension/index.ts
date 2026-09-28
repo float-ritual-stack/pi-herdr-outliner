@@ -3267,6 +3267,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
     }),
     async execute(_id, params) {
       await ensureService(false);
+      await client.requireCompatibleService(["views.read"]);
       return queryToolResult(await readSavedView(client, params.viewId, params));
     },
   });

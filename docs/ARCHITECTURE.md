@@ -952,7 +952,7 @@ Optional properties:
 
 ### Saved-view reads (`views.read`)
 
-Protocol 82 adds `views.read`, the one evaluator of saved-view membership:
+The `views.read` capability adds the one evaluator of saved-view membership:
 
 ```ts
 { action: "views.read"; viewId: string; limit?: number; offset?: number;

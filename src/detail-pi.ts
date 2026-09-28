@@ -877,6 +877,7 @@ async function waitForService(): Promise<void> {
     await waitForCompatibleService(client, {
       timeoutMs: paths.mode === "remote" ? 30_000 : 5_000,
       pingTimeoutMs: paths.mode === "remote" ? 3_000 : 300,
+      needed: ["views.read"],
     });
   } catch (error) {
     throw new Error(`Compatible outliner service is not available: ${error instanceof Error ? error.message : String(error)}`);
