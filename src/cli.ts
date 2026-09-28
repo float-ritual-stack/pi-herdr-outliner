@@ -12,7 +12,7 @@ import { requireClientIdForRole } from "./client-target";
 import { resolveClientPaths } from "./paths";
 import { navigateOutlinerLink, parseOutlinerLinkUri, resolveOutlinerLinkTarget } from "./outliner-links";
 import { blockDisplayTitle } from "./references";
-import type { BlockReadField, BlockSearchQuery, CaptureReceipt, RoadmapItemCreateInput } from "./types";
+import type { BlockActivityKind, BlockReadField, BlockSearchQuery, CaptureReceipt, MutationProvenance, RoadmapItemCreateInput } from "./types";
 import {
   completeWorkItem,
   createWorkItem,
@@ -35,6 +35,15 @@ const paths = resolveClientPaths();
 function writerAuthor(value: string | undefined): "user" | "agent" | "system" {
   if (value === "user" || value === "agent" || value === "system") return value;
   throw new Error("--author must be user, agent, or system");
+}
+
+/** Who made a structural change: the person through the CLI unless --author/--actor say otherwise. */
+function writerMutation(values: { author?: string; actor?: string; session?: string }): MutationProvenance {
+  return {
+    author: writerAuthor(values.author),
+    actorId: values.actor ?? "cli",
+    ...(values.session ? { sessionId: values.session } : {}),
+  };
 }
 
 function parseRevision(value: string | undefined): number {
@@ -412,11 +421,7 @@ switch (command) {
       blockId: values.id,
       text: values.text,
       expectedRevision: parseRevision(values.expected),
-      mutation: {
-        author: writerAuthor(values.author),
-        actorId: values.actor ?? "cli",
-        ...(values.session ? { sessionId: values.session } : {}),
-      },
+      mutation: writerMutation(values),
     };
     break;
   }
@@ -427,6 +432,9 @@ switch (command) {
         id: { type: "string" },
         parent: { type: "string" },
         position: { type: "string" },
+        author: { type: "string", default: "user" },
+        actor: { type: "string" },
+        session: { type: "string" },
       },
       strict: true,
     });
@@ -436,6 +444,7 @@ switch (command) {
       blockId: values.id,
       parentId: values.parent === "root" ? null : values.parent,
       position: values.position ? Number(values.position) : undefined,
+      mutation: writerMutation(values),
     };
     break;
   }
@@ -447,11 +456,13 @@ switch (command) {
         since: { type: "string" },
         after: { type: "string" },
         author: { type: "string" },
+        kinds: { type: "string" },
       },
       strict: true,
     });
     request = {
       action: "activity.recent",
+      ...(values.kinds ? { kinds: values.kinds.split(",").map(kind => kind.trim()).filter(Boolean) as BlockActivityKind[] } : {}),
       ...(values.limit ? { limit: parseRevision(values.limit) } : {}),
       ...(values.since ? { since: values.since } : {}),
       ...(values.after ? { afterCursor: parseRevision(values.after) } : {}),
@@ -459,14 +470,20 @@ switch (command) {
     };
     break;
   }
-  case "delete": {
+  case "delete":
+  case "restore": {
     const { values } = parseArgs({
       args: rest,
-      options: { id: { type: "string" } },
+      options: {
+        id: { type: "string" },
+        author: { type: "string", default: "user" },
+        actor: { type: "string" },
+        session: { type: "string" },
+      },
       strict: true,
     });
-    if (!values.id) throw new Error("delete requires --id");
-    request = { action: "delete", blockId: values.id };
+    if (!values.id) throw new Error(`${command} requires --id`);
+    request = { action: command === "delete" ? "delete" : "trash.restore", blockId: values.id, mutation: writerMutation(values) };
     break;
   }
   case "select": {
@@ -672,6 +689,10 @@ switch (command) {
 // Older services treat an absent timestamp token as an unconditional update.
 // Never send the integer contract to one of those services.
 if (request && "expectedRevision" in request) await client.requireCompatibleService();
+// An older service would move or trash without recording who did it.
+if (request && (["move", "delete", "trash.restore"].includes(request.action) || "kinds" in request)) {
+  await client.requireCompatibleService(["mutations.provenance"]);
+}
 let result: unknown;
 try {
   result = request ? await client.request(request) : directResult;

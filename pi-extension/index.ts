@@ -3229,9 +3229,14 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
       parentId: Type.Union([Type.String(), Type.Null()]),
       position: Type.Optional(Type.Integer({ minimum: 0 })),
     }),
-    async execute(_id, params) {
+    async execute(toolCallId, params, _signal, _onUpdate, context) {
       await ensureService(false);
-      return toolResult(await client.request<Block>({ action: "move", ...params }));
+      await client.requireCompatibleService(["mutations.provenance"]);
+      return toolResult(await client.request<Block>({
+        action: "move",
+        ...params,
+        mutation: agentMutation(actorId, context, toolCallId),
+      }));
     },
   });
 

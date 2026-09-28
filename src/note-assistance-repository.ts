@@ -435,7 +435,7 @@ export class NoteAssistanceRepository {
   }
 
   private activityCursor(id: string): number {
-    return (this.store.database.query("SELECT COALESCE(MAX(activity_id), 0) AS cursor FROM block_edit_activity WHERE block_id = ?")
+    return (this.store.database.query("SELECT COALESCE(MAX(activity_id), 0) AS cursor FROM block_edit_activity WHERE block_id = ? AND kind IN ('text', 'properties')")
       .get(id) as { cursor: number }).cursor;
   }
 
@@ -448,9 +448,9 @@ export class NoteAssistanceRepository {
   private initialState(source: Block): State {
     const values = types(source);
     const automaticCapture = values.length === 1 && values[0] === "capture" && source.properties.some(property => property.key === "capture-source");
-    const latestEdit = this.store.database.query("SELECT author FROM block_edit_activity WHERE block_id = ? ORDER BY activity_id DESC LIMIT 1")
+    const latestEdit = this.store.database.query("SELECT author FROM block_edit_activity WHERE block_id = ? AND kind IN ('text', 'properties') ORDER BY activity_id DESC LIMIT 1")
       .get(source.id) as { author: string } | null;
-    const userEdited = !!this.store.database.query("SELECT 1 FROM block_edit_activity WHERE block_id = ? AND author = 'user' LIMIT 1").get(source.id);
+    const userEdited = !!this.store.database.query("SELECT 1 FROM block_edit_activity WHERE block_id = ? AND kind IN ('text', 'properties') AND author = 'user' LIMIT 1").get(source.id);
     const agentType = source.author !== "user" && !userEdited && (latestEdit?.author ?? source.author) === "agent";
     return {
       blockId: source.id, revision: source.revision, fingerprint: fingerprint(source), activityCursor: this.activityCursor(source.id),
@@ -469,11 +469,11 @@ export class NoteAssistanceRepository {
     const currentTypes = types(source);
     const changedType = JSON.stringify(currentTypes) !== JSON.stringify(previous.observedTypes);
     const latestEdit = changedType ? this.store.database.query(`
-      SELECT author FROM block_edit_activity WHERE block_id = ? AND activity_id > ? ORDER BY activity_id DESC LIMIT 1
+      SELECT author FROM block_edit_activity WHERE block_id = ? AND kind IN ('text', 'properties') AND activity_id > ? ORDER BY activity_id DESC LIMIT 1
     `).get(source.id, previous.activityCursor) as { author: string } | null : null;
     // Activity records do not isolate property authorship. A later agent prose edit cannot erase a human correction.
     const userEdited = changedType && !!this.store.database.query(`
-      SELECT 1 FROM block_edit_activity WHERE block_id = ? AND activity_id > ? AND author = 'user' LIMIT 1
+      SELECT 1 FROM block_edit_activity WHERE block_id = ? AND kind IN ('text', 'properties') AND activity_id > ? AND author = 'user' LIMIT 1
     `).get(source.id, previous.activityCursor);
     const agentType = changedType && !userEdited && latestEdit?.author === "agent";
     return {

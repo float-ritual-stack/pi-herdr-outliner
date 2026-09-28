@@ -614,7 +614,8 @@ Do not leave older editors running across this upgrade.
 - typed navigation: `navigation.resolve` preflight and `navigation.dispatch` with explicit block/resource targets and `preview | open | reveal`; resource targets cannot use block-Tree `reveal`
 - selection-neutral capture: `capture.create`
 - delivery identity: `deliveries.ensure`
-- mutations: `create`, `update`, `move`, `delete` (move to Trash), `trash.restore`, `trash.purge`
+- mutations: `create`, `update`, `move`, `delete` (move to Trash), `trash.restore`, `trash.purge`; `move`, `delete` and `trash.restore` take an optional `mutation` (capability `mutations.provenance`)
+- activity: `activity.recent` returns each block's latest recorded change by one author. Edits (`text`, `properties`) by default; `kinds` (capability `mutations.provenance`) adds `move`, `delete` and `restore`, which are recorded only when the request declared a `mutation`. A trashed block is listed only for the entry that trashed it
 - properties: `properties.patch`, `properties.catalog`, `properties.inventory`, read-only draft parsing `properties.preview`
 - virtual ordering: `virtual.occurrences.reorder`
 - references: `references.resolve`, `references.backlinks`
@@ -796,8 +797,9 @@ interface OutlinerChange {
 
 Existing event fields are unchanged; `change` is additive. `actor` is the
 provenance a request declared (`mutation`, or `author`/`provenance`); a created
-block reports its stored provenance. Requests without provenance (`move`,
-`delete`, Trash operations) have no actor. Actors are self-declared, not
+block reports its stored provenance. `move`, `delete` and `trash.restore` carry
+an optional `mutation` behind the `mutations.provenance` capability; without it
+(older clients, `trash.purge`, the Inbox worker) they have no actor. Actors are self-declared, not
 authenticated. The primary block is not the only block a change may touch: a
 move reorders siblings and a delete carries its subtree. Annotation requests
 report `annotate` for each created or edited block and draft saves `draft`;

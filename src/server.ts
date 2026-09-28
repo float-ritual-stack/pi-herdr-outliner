@@ -2094,13 +2094,13 @@ export class OutlinerServer {
           );
           break;
         case "move":
-          result = this.store.move(request.blockId, request.parentId, request.position);
+          result = this.store.move(request.blockId, request.parentId, request.position, request.mutation);
           break;
         case "delete":
-          result = this.store.delete(request.blockId);
+          result = this.store.delete(request.blockId, request.mutation);
           break;
         case "trash.restore":
-          result = this.store.restore(request.blockId);
+          result = this.store.restore(request.blockId, request.mutation);
           break;
         case "trash.purge":
           this.store.purge(request.blockId, request.confirmation);
@@ -2180,6 +2180,7 @@ export class OutlinerServer {
             since: request.since,
             limit: request.limit,
             author: request.author,
+            kinds: request.kinds,
           });
           break;
         case "properties.catalog":

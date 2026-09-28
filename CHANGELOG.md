@@ -4,6 +4,15 @@ This file records notable user-facing changes. The project remains active dogfoo
 
 ## [Unreleased]
 
+- Who moved, trashed or restored a block: `move`, `delete` and `trash.restore`
+  accept an optional `mutation` (capability `mutations.provenance`), recorded
+  like an update's in the change feed's `actor` and in activity, as `move`,
+  `delete` or `restore` entries. `activity.recent` returns them when asked with
+  `kinds`; by default it still returns edits only. Without `mutation` nothing
+  changes. The CLI's `move` and `delete`, the new `restore`, and Pi's
+  `outliner_move` say who made the change. The activity table is rebuilt once
+  on startup to allow the new kinds, keeping its rows and cursors. PIE-451.
+
 - Items with several deliveries: `work deliver --key <name>` records a PR as
   its own delivery (`PIE-123/<name>`); without a key, a PR in another
   repository than primary's is named after its repository instead of failing

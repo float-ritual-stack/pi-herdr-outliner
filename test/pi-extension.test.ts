@@ -108,6 +108,48 @@ test("saved-view tool reports branch identity and presentation omissions through
   } finally { transport.mockRestore(); await server.close(); store.close(); rmSync(root, {recursive: true, force: true}); }
 });
 
+test("outliner_move attributes the move to the agent, and an older service is refused before it moves", async () => {
+  const root = mkdtempSync(join(tmpdir(), "move-tool-"));
+  const store = new OutlinerStore(join(root, "outline.sqlite"), {workspaceRoot: root});
+  const server = new OutlinerServer(store, join(root, "service.sock"));
+  await server.start();
+  const fixture = new OutlinerClient(join(root, "service.sock"));
+  const original = OutlinerClient.prototype.request;
+  let withholdProvenance = false;
+  const requests: string[] = [];
+  const transport = spyOn(OutlinerClient.prototype, "request").mockImplementation(async function<T>(input: RequestInput, timeout?: number): Promise<T> {
+    requests.push(input.action);
+    const result = await original.call(fixture, input, timeout) as T;
+    if (input.action !== "ping" || !withholdProvenance) return result;
+    const status = result as OutlinerServiceStatus;
+    return {...status, capabilities: status.capabilities?.filter(capability => capability !== "mutations.provenance")} as T;
+  });
+  type Tool = {name: string; execute(id: string, params: unknown, signal: undefined, update: undefined,
+    context: ExtensionContext): Promise<{details: any}>};
+  const tools = new Map<string, Tool>();
+  const context = {sessionManager: {getSessionId: () => "move-session"}} as ExtensionContext;
+  const pi = {registerTool(tool: Tool) {tools.set(tool.name, tool);}, registerCommand() {},
+    registerEntryRenderer() {}, appendEntry() {}, on() {}} as unknown as ExtensionAPI;
+  try {
+    outlinerExtension(pi);
+    const bed = await fixture.request<Block>({action: "create", text: "Herb bed"});
+    const basil = await fixture.request<Block>({action: "create", text: "Basil"});
+    const tool = tools.get("outliner_move")!;
+    const moved = (await tool.execute("move-call", {blockId: basil.id, parentId: bed.id}, undefined, undefined, context)).details;
+    expect(moved.parentId).toBe(bed.id);
+    const activity = await fixture.request<BlockEditActivityPage>({action: "activity.recent", author: "agent", kinds: ["move"]});
+    expect(activity.entries.map(entry => [entry.block.id, entry.kind, entry.actorId, entry.sessionId, entry.taskId]))
+      .toEqual([[basil.id, "move", "pi", "move-session", "move-call"]]);
+
+    withholdProvenance = true;
+    requests.length = 0;
+    await expect(tool.execute("old-service-move", {blockId: basil.id, parentId: null}, undefined, undefined, context))
+      .rejects.toThrow("does not support mutations.provenance");
+    expect(requests).not.toContain("move");
+    expect(store.get(basil.id)!.parentId).toBe(bed.id);
+  } finally { transport.mockRestore(); await server.close(); store.close(); rmSync(root, {recursive: true, force: true}); }
+});
+
 test("checklist tools preserve item evidence, caller provenance and explicit whole-note identity changes through the service", async () => {
   const root = mkdtempSync(join(tmpdir(), "checklist-tools-"));
   const store = new OutlinerStore(join(root, "outline.sqlite"), {workspaceRoot: root});

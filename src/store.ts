@@ -5,6 +5,7 @@ import { ChangeFeed, raiseChangeFeedFloor, type SequenceChange } from "./change-
 import { checklistItems, queryChecklistItems, updateChecklistText, validateChecklistIdentityChanges } from "./checklist-items";
 import type { ChecklistCollection, ChecklistIdentityChange, ChecklistQuery, ChecklistSearchQuery, ChecklistSearchCollection, ChecklistUpdateInput, ChecklistUpdateReceipt } from "./types";
 import type {QueryExpression, SavedViewReadOptions, SavedViewReadProblem, SavedViewReadResult, VirtualBranchOrder, VirtualBranchPlacementInput} from "./types";
+import { BLOCK_EDIT_ACTIVITY_KINDS } from "./types";
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
@@ -89,6 +90,7 @@ import type {
   BlockAuthor,
   BlockProperty,
   BlockProvenance,
+  BlockActivityKind,
   BlockEditActivity,
   BlockEditActivityPage,
   BlockSearchQuery,
@@ -232,7 +234,7 @@ interface BlockEditActivityRow {
   actor_id: string | null;
   session_id: string | null;
   task_id: string | null;
-  kind: "text" | "properties";
+  kind: BlockActivityKind;
   edited_at: string;
 }
 
@@ -332,6 +334,8 @@ function normalizeCreatorProvenance(
     taskId: normalizeOptionalId(provenance.taskId, "Provenance taskId"),
   };
 }
+
+const BLOCK_ACTIVITY_KINDS: readonly BlockActivityKind[] = ["text", "properties", "move", "delete", "restore"];
 
 function normalizeMutationProvenance(
   mutation: MutationProvenance,
@@ -1498,22 +1502,24 @@ export class OutlinerStore {
       this.requireActive(id);
       const editedAt = this.writeBlockText(id, text, expectedRevision, undefined, identityChanges);
       this.replaceProperties(id, parsePropertyRecords(text), provenance.author === "user");
-      this.database.query(`
-        INSERT INTO block_edit_activity
-          (block_id, author, actor_id, session_id, task_id, kind, edited_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        id,
-        provenance.author,
-        provenance.actorId,
-        provenance.sessionId,
-        provenance.taskId,
-        kind,
-        editedAt,
-      );
+      this.recordActivity(id, provenance, kind, editedAt);
       this.bumpSequence({ kind: "edit", blockId: id });
     })();
     return this.require(id);
+  }
+
+  /** Records who changed a block, in the transaction that changes it. */
+  private recordActivity(
+    id: string,
+    provenance: ReturnType<typeof normalizeMutationProvenance>,
+    kind: BlockActivityKind,
+    at: string,
+  ): void {
+    this.database.query(`
+      INSERT INTO block_edit_activity
+        (block_id, author, actor_id, session_id, task_id, kind, edited_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(id, provenance.author, provenance.actorId, provenance.sessionId, provenance.taskId, kind, at);
   }
 
   private writeBlockText(
@@ -1614,6 +1620,7 @@ export class OutlinerStore {
     since?: string;
     limit?: number;
     author?: BlockAuthor;
+    kinds?: readonly BlockActivityKind[];
   } = {}): BlockEditActivityPage {
     const afterCursor = options.afterCursor ?? 0;
     if (!Number.isSafeInteger(afterCursor) || afterCursor < 0) {
@@ -1631,26 +1638,34 @@ export class OutlinerStore {
     if (options.since !== undefined && !Number.isFinite(Date.parse(options.since))) {
       throw new Error("Activity since must be an ISO timestamp");
     }
+    const kinds = [...new Set(options.kinds ?? BLOCK_EDIT_ACTIVITY_KINDS)];
+    if (kinds.length === 0 || kinds.some(kind => !BLOCK_ACTIVITY_KINDS.includes(kind))) {
+      throw new Error(`Activity kinds must be one or more of ${BLOCK_ACTIVITY_KINDS.join(", ")}`);
+    }
+    // Filtered before grouping, so a block's latest edit still shows after a later move.
+    const kindClause = `kind IN (${kinds.map(() => "?").join(", ")})`;
     const cursorRow = this.database.query(`
       SELECT COALESCE(MAX(activity_id), ?) AS cursor
       FROM block_edit_activity
-      WHERE activity_id > ? AND author = ? AND edited_at >= ?
-    `).get(afterCursor, afterCursor, author, since) as { cursor: number };
+      WHERE activity_id > ? AND author = ? AND edited_at >= ? AND ${kindClause}
+    `).get(afterCursor, afterCursor, author, since, ...kinds) as { cursor: number };
     const rows = this.database.query(`
       SELECT activity_id, block_id, author, actor_id, session_id, task_id, kind, edited_at
       FROM block_edit_activity
       WHERE activity_id IN (
         SELECT MAX(activity_id)
         FROM block_edit_activity
-        WHERE activity_id > ? AND author = ? AND edited_at >= ?
+        WHERE activity_id > ? AND author = ? AND edited_at >= ? AND ${kindClause}
         GROUP BY block_id
       )
       ORDER BY activity_id DESC, block_id ASC
       LIMIT ?
-    `).all(afterCursor, author, since, limit) as BlockEditActivityRow[];
+    `).all(afterCursor, author, since, ...kinds, limit) as BlockEditActivityRow[];
     const entries = rows.flatMap((row): BlockEditActivity[] => {
       const block = this.get(row.block_id);
-      if (!block || block.effectiveDeletedRootId) return [];
+      // A trashed block is listed only for the entry that trashed it.
+      if (!block) return [];
+      if (block.effectiveDeletedRootId && !(row.kind === "delete" && block.deletedAt)) return [];
       return [{
         cursor: row.activity_id,
         block,
@@ -1725,7 +1740,12 @@ export class OutlinerStore {
     })();
   }
 
-  move(id: string, parentId: string | null, requestedPosition?: number): Block {
+  /**
+   * Structural changes record activity only when `mutation` says who made them;
+   * without it (older clients, internal moves) they stay unattributed, as before.
+   */
+  move(id: string, parentId: string | null, requestedPosition?: number, mutation?: MutationProvenance): Block {
+    const provenance = mutation ? normalizeMutationProvenance(mutation) : undefined;
     const block = this.requireActive(id);
     if (parentId !== null) {
       this.requireActive(parentId);
@@ -1742,12 +1762,14 @@ export class OutlinerStore {
       const now = new Date().toISOString();
       siblings.forEach((sibling, index) => updatePosition.run(index, now, sibling.id));
       this.normalizePositions(block.parentId);
+      if (provenance) this.recordActivity(id, provenance, "move", now);
       this.bumpSequence({ kind: "move", blockId: id, previousParentId: block.parentId });
     })();
     return this.require(id);
   }
 
-  delete(id: string): Block {
+  delete(id: string, mutation?: MutationProvenance): Block {
+    const provenance = mutation ? normalizeMutationProvenance(mutation) : undefined;
     this.requireActive(id);
     const deletedAt = new Date().toISOString();
     this.database.transaction(() => {
@@ -1758,12 +1780,14 @@ export class OutlinerStore {
       this.database.query("UPDATE blocks SET deleted_at = ?, updated_at = ? WHERE id = ?")
         .run(deletedAt, deletedAt, id);
       this.recomputeEffectiveDeletion();
+      if (provenance) this.recordActivity(id, provenance, "delete", deletedAt);
       this.bumpSequence({ kind: "delete", blockId: id });
     })();
     return this.require(id);
   }
 
-  restore(id: string): Block {
+  restore(id: string, mutation?: MutationProvenance): Block {
+    const provenance = mutation ? normalizeMutationProvenance(mutation) : undefined;
     const block = this.require(id);
     if (!block.deletedAt) throw new Error(`Block is not a direct Trash root: ${id}`);
     let ancestorId = block.parentId;
@@ -1774,9 +1798,10 @@ export class OutlinerStore {
       }
       ancestorId = ancestor.parentId;
     }
+    const restoredAt = new Date().toISOString();
     this.database.transaction(() => {
       this.database.query("UPDATE blocks SET deleted_at = NULL, updated_at = ? WHERE id = ?")
-        .run(new Date().toISOString(), id);
+        .run(restoredAt, id);
       this.recomputeEffectiveDeletion();
       for (const blockId of this.subtreeIdsFromCurrentRead(id)) {
         const restored = this.getFromCurrentRead(blockId);
@@ -1795,6 +1820,7 @@ export class OutlinerStore {
           this.syncDeclaredPageAddresses(blockId, restored.properties);
         }
       }
+      if (provenance) this.recordActivity(id, provenance, "restore", restoredAt);
       this.bumpSequence({ kind: "restore", blockId: id });
     })();
     return this.require(id);
@@ -3206,9 +3232,12 @@ export class OutlinerStore {
         actor_id TEXT,
         session_id TEXT,
         task_id TEXT,
-        kind TEXT NOT NULL CHECK (kind IN ('text', 'properties')),
+        kind TEXT NOT NULL CHECK (kind IN ('text', 'properties', 'move', 'delete', 'restore')),
         edited_at TEXT NOT NULL
       );
+    `);
+    this.migrateActivityKinds();
+    this.database.exec(`
       CREATE INDEX IF NOT EXISTS block_edit_activity_author_cursor
         ON block_edit_activity(author, activity_id DESC);
       CREATE INDEX IF NOT EXISTS block_edit_activity_block_cursor
@@ -3239,6 +3268,49 @@ export class OutlinerStore {
     for (const [name, type] of [["block_id","TEXT"],["block_revision","INTEGER"],["selection_anchor","TEXT"]]) {
       if (!draftColumns.some(column => column.name === name)) this.database.exec(`ALTER TABLE quick_capture_draft ADD COLUMN ${name} ${type}`);
     }
+  }
+
+  /**
+   * Widens the activity kind check to structural changes (PIE-451). SQLite cannot
+   * alter a CHECK, so an older table is rebuilt with its rows and cursors intact.
+   */
+  private migrateActivityKinds(): void {
+    const table = this.database.query(
+      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'block_edit_activity'",
+    ).get() as { sql: string } | null;
+    if (!table || table.sql.includes("'restore'")) return;
+    this.database.transaction(() => {
+      // Keep AUTOINCREMENT past ids a client may already hold as a cursor.
+      const issued = this.database.query(
+        "SELECT seq FROM sqlite_sequence WHERE name = 'block_edit_activity'",
+      ).get() as { seq: number } | null;
+      this.database.exec(`
+        CREATE TABLE block_edit_activity_next (
+          activity_id INTEGER PRIMARY KEY AUTOINCREMENT,
+          block_id TEXT NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
+          author TEXT NOT NULL CHECK (author IN ('user', 'agent', 'system')),
+          actor_id TEXT,
+          session_id TEXT,
+          task_id TEXT,
+          kind TEXT NOT NULL CHECK (kind IN ('text', 'properties', 'move', 'delete', 'restore')),
+          edited_at TEXT NOT NULL
+        );
+        INSERT INTO block_edit_activity_next
+          (activity_id, block_id, author, actor_id, session_id, task_id, kind, edited_at)
+        SELECT activity_id, block_id, author, actor_id, session_id, task_id, kind, edited_at
+        FROM block_edit_activity;
+        DROP TABLE block_edit_activity;
+        ALTER TABLE block_edit_activity_next RENAME TO block_edit_activity;
+      `);
+      if (issued) {
+        const kept = this.database.query(
+          "UPDATE sqlite_sequence SET seq = MAX(seq, ?) WHERE name = 'block_edit_activity'",
+        ).run(issued.seq);
+        if (kept.changes === 0) {
+          this.database.query("INSERT INTO sqlite_sequence (name, seq) VALUES ('block_edit_activity', ?)").run(issued.seq);
+        }
+      }
+    })();
   }
 
   private migrateBlockStateColumns(): void {
