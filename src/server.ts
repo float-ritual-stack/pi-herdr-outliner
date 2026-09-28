@@ -1405,7 +1405,12 @@ export class OutlinerServer {
           result = { status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION, location:{hostname:this.hostname,workspaceRoot:this.store.workspaceRoot,database:this.store.database.filename,stateDirectory:dirname(this.store.database.filename)} };
           break;
         case "blocks.query":
-          result = this.store.queryBlocks(request.query);
+          result = request.fields === undefined
+            ? this.store.queryBlocks(request.query)
+            : this.store.queryProjectedBlocks(request.query, request.fields);
+          break;
+        case "blocks.read":
+          result = this.store.readBlocks(request.ids, request.fields);
           break;
         case "blocks.authored-links":
           result = readAuthoredLinks(this.store, request.ownerBlockId);

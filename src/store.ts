@@ -13,6 +13,7 @@ import { AnnotationRepository } from "./annotation-repository";
 import { authoredTextDigest } from "./authored-links";
 import { resolveBacklinkRelation } from "./backlinks";
 import { rankBlockFocusMatches } from "./block-focus";
+import { normalizeBlockReadFields, normalizeBlockReadIds, projectBlock } from "./block-projection";
 import { gotoCandidates } from "./goto-search";
 import {
   BOOKMARKS_SYSTEM_VIEW,
@@ -88,6 +89,10 @@ import type {
   BlockEditActivity,
   BlockEditActivityPage,
   BlockSearchQuery,
+  BlockReadCollection,
+  ProjectedBlock,
+  ProjectedBlockCollection,
+  UnavailableBlockRead,
   BlockTraversalOptions,
   BookmarkRemoveReceipt,
   BookmarkResolution,
@@ -2314,6 +2319,62 @@ export class OutlinerStore {
         completeness: { kind: "truncated", limit: query.limit },
       };
     })();
+  }
+
+  /** Reads many blocks in one consistent read, reduced to the requested fields. */
+  readBlocks(ids: unknown, fields?: unknown): BlockReadCollection {
+    const requestedIds = normalizeBlockReadIds(ids);
+    const projection = normalizeBlockReadFields(fields);
+    return this.database.transaction((): BlockReadCollection => {
+      const placeholders = requestedIds.map(() => "?").join(", ");
+      const rows = this.database.query(`
+        SELECT block.*, EXISTS (
+          SELECT 1 FROM blocks child
+          WHERE child.parent_id = block.id AND child.effective_deleted_root_id IS NULL
+        ) AS has_children
+        FROM blocks block WHERE block.id IN (${placeholders})
+      `).all(...requestedIds) as Array<BlockRow & { has_children: number }>;
+      const rowsById = new Map(rows.map((row) => [row.id, row]));
+      const propertiesById = new Map<string, BlockProperty[]>();
+      if (projection.includes("properties") && rows.length > 0) {
+        const propertyRows = this.database.query(
+          `SELECT block_id, key, value FROM block_properties WHERE scope = 'block' AND block_id IN (${rows.map(() => "?").join(", ")}) ORDER BY block_id, ordinal`,
+        ).all(...rows.map((row) => row.id)) as Array<{ block_id: string } & BlockProperty>;
+        for (const { block_id: blockId, key, value } of propertyRows) {
+          const properties = propertiesById.get(blockId);
+          if (properties) properties.push({ key, value });
+          else propertiesById.set(blockId, [{ key, value }]);
+        }
+      }
+      const blocks: ProjectedBlock[] = [];
+      const unavailable: UnavailableBlockRead[] = [];
+      for (const id of requestedIds) {
+        const row = rowsById.get(id);
+        if (!row) {
+          unavailable.push({ id, status: "missing" });
+        } else if (row.effective_deleted_root_id) {
+          unavailable.push({ id, status: "trashed", deletedRootId: row.effective_deleted_root_id });
+        } else {
+          const block = this.hydrate(row, propertiesById.get(id) ?? []);
+          blocks.push(projectBlock(block, row.has_children === 1, projection));
+        }
+      }
+      return { blocks, unavailable, fields: projection };
+    })();
+  }
+
+  /** `blocks.query` with a field projection: the same matches without unrequested payload. */
+  queryProjectedBlocks(input: BlockSearchQuery, fields: unknown): ProjectedBlockCollection {
+    const projection = normalizeBlockReadFields(fields);
+    const { blocks, completeness } = this.queryBlocks(input);
+    return {
+      blocks: blocks.map((block) => ({
+        ...projectBlock(block, block.hasChildren, projection),
+        depth: block.depth,
+      })),
+      completeness,
+      fields: projection,
+    };
   }
 
   readWorkspaceSnapshot(view: WorkspaceSnapshotView = {}): WorkspaceSnapshot {

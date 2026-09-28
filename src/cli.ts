@@ -12,7 +12,7 @@ import { requireClientIdForRole } from "./client-target";
 import { resolveClientPaths } from "./paths";
 import { navigateOutlinerLink, parseOutlinerLinkUri, resolveOutlinerLinkTarget } from "./outliner-links";
 import { blockDisplayTitle } from "./references";
-import type { BlockSearchQuery, CaptureReceipt } from "./types";
+import type { BlockReadField, BlockSearchQuery, CaptureReceipt } from "./types";
 
 if(process.argv[2]==='doctor'){
  const report=await inspectWorkspaceConnection();
@@ -33,6 +33,11 @@ function parseLimit(value: string | undefined, fallback: number): number {
     throw new Error("--limit must be a positive integer");
   }
   return limit;
+}
+
+/** Comma-separated block fields; the service validates the names. */
+function parseFields(value: string): BlockReadField[] {
+  return value.split(",").map((field) => field.trim()).filter(Boolean) as BlockReadField[];
 }
 
 const [command = "list", ...rest] = process.argv.slice(2);
@@ -70,6 +75,7 @@ switch (command) {
         limit: { type: "string" },
         subtree: { type: "string" },
         "property-scope": { type: "string" },
+        fields: { type: "string" },
       },
       strict: true,
     });
@@ -84,7 +90,24 @@ switch (command) {
         : normalizePropertyQueryScope(values["property-scope"]),
       limit,
     };
-    request = { action: "blocks.query", query };
+    request = {
+      action: "blocks.query",
+      query,
+      ...(values.fields === undefined ? {} : { fields: parseFields(values.fields) }),
+    };
+    break;
+  }
+  case "read": {
+    const { values, positionals } = parseArgs({
+      args: rest, allowPositionals: true, strict: true,
+      options: { fields: { type: "string" } },
+    });
+    if (positionals.length === 0) throw new Error("read requires one or more block IDs");
+    request = {
+      action: "blocks.read",
+      ids: positionals,
+      ...(values.fields === undefined ? {} : { fields: parseFields(values.fields) }),
+    };
     break;
   }
   case "comment": {

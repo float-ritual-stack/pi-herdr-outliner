@@ -568,6 +568,8 @@ bun run cli capture <<'EOF'
 Multiline capture with literal $VARIABLE and Unicode 🐢.
 EOF
 bun run cli list --subtree <block-uuid> --text "route snapshot" --limit 20
+bun run cli list --filter type=roadmap-item --limit 400 --fields title,properties,revision
+bun run cli read <block-uuid> <block-uuid> --fields title,properties
 bun run cli view <saved-virtual-branch-uuid>
 bun run cli view <saved-virtual-branch-uuid> --limit 500 --expected <revision>
 bun run cli create --text "A durable note [type::note]"
@@ -1150,6 +1152,25 @@ work-stage::review type::roadmap-item
 Whitespace separates clauses outside double quotes. `key` checks property presence; `key=value` and `key::value` check case-insensitive exact equality. Double-quoted values preserve spaces and support only `\\` and `\"` escapes. Invalid syntax reports a character position instead of becoming an accidental query. OR, NOT, ranges, grouping, aggregation, and reference traversal are intentionally not supported by the property expression.
 
 Property filters and catalogs default to `block` scope, so body examples and line-local annotations cannot silently change workflow semantics. Callers can explicitly request `block`, `line`, `inline`, or `all` through `propertyScope`; broader block-query results include each matching record’s scope, ordinal, line, column, and source span. Text substring, subtree root, deleted-content mode, projection rank context, timestamp sort, and limit remain explicit structured fields rather than reserved filter words. Timestamp sorting accepts `created` or `updated` with `asc` or `desc`, orders the full matched collection before applying the limit, and cannot be combined with manual projection ranks. Every query carries a limit from 1 through 1000 and returns `complete` or `truncated` metadata. Tree **Advanced property filter** uses the block-scoped property catalog for key/value completion; agents call `outliner_query` with structured filters and never parse the shorthand. CLI `list` exposes the same parser through repeatable `--filter` flags and accepts `--limit` (default 500).
+
+### Reading many blocks
+
+List views should not fetch full documents to show titles and metadata.
+`blocks.read` takes up to 1000 `ids` and returns the found blocks in request
+order, reduced to `fields`: `id` (always), `parent` (`parentId`, `position`),
+`title` (first content line without property tokens), `properties` (block
+scope), `revision`, `timestamps` (`createdAt`, `updatedAt`), `author` (with any
+actor/session/task provenance), `hasChildren` and opt-in `text`. Omitting
+`fields` returns everything except `text`. Every other id appears once in
+`unavailable` as `missing` or `trashed` (with its `deletedRootId`); one absent
+id never fails the batch. Duplicate ids collapse to their first occurrence.
+`blocks.query` accepts the same optional `fields` and then returns
+`{ blocks, completeness, fields }`, each block carrying its query `depth`; the
+matches, order and completeness are unchanged. Without `fields` both requests
+keep their full-block shapes. Prefer one `blocks.read` to per-block `get`
+calls: over a forwarded socket each request pays a network round trip.
+CLI: `bun run cli read <id>… --fields title,properties` and
+`bun run cli list … --fields title,properties`.
 
 ### References and transclusions
 

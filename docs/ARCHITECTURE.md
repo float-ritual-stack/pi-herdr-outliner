@@ -591,9 +591,9 @@ Do not leave older editors running across this upgrade.
 ### Important request families
 
 - health: `ping`
-- canonical reads: `get`, `children`, `blocks.context`, `workspace.snapshot`
+- canonical reads: `get`, `blocks.read` (batch by ids with field projection and per-id missing/trashed reports), `children`, `blocks.context`, `workspace.snapshot`
 - compact Tree reads: `tree.index`
-- bounded search: `blocks.query`, `tree.query`, `tree.focus`
+- bounded search: `blocks.query` (optional `fields` projection), `tree.query`, `tree.focus`
 - resource identity and documents: `resource-sources.create | list | get` and `resources.intern | intern-filesystem | get | relocate | describe | open | refresh`
 - resource retention: `resources.retention.get | configure | inspect | pin | unpin | reference | unreference` and explicit `resources.collect` eviction/purge passes
 - computed producers: `computed.invocations.create`, `computed.invocations.revise`, `computed.handlers.resolve`, `computed.executions.list`, and async `computed.execute`
