@@ -801,8 +801,10 @@ events with action `inbox.changed` or `background`. A content event without a
 - `{ kind: "changes", changes, nextSequence, completeness, sequence }` ordered by
   sequence, then `changeId`. `limit` defaults to 200 and must be 1–1000. A page
   never splits one sequence, so it may exceed `limit` to finish the last one.
-  While `completeness` is `truncated`, request again from `nextSequence`.
-  `sequence` is the current service sequence.
+  While `completeness` is `truncated`, request again from `nextSequence`, the
+  last whole sequence the page covers. A complete page's `nextSequence` is the
+  current sequence, even when hidden activity returned no changes, so a polling
+  client's cursor keeps up. `sequence` is the current service sequence.
 - `{ kind: "reset", reason, oldestSequence, sequence }` when the answer would be
   incomplete: `history-unavailable` (the cursor is older than retained history)
   or `sequence-ahead` (the cursor is newer than this workspace). Reload the
@@ -826,7 +828,8 @@ its feed at the sequence it had when upgraded.
 Tree uses the feed to avoid redundant `tree.index` reloads: a change at or below
 the sequence of the index it already holds is skipped (its own edits' echoes and
 the tail of a queued burst), and a reconnect asks `changes.since` and keeps its
-index when nothing changed. Other changes still reload the index, because text
+index when nothing changed. When the sequence advanced with no visible change
+(Resource catalog activity), the reconnect refreshes authored links instead. Other changes still reload the index, because text
 and property edits can change filters and virtual-branch membership.
 
 ### Complete versus bounded collections

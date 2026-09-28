@@ -232,6 +232,41 @@ test("retention answers too-old and future cursors with an explicit reset", asyn
   expect(ahead).toMatchObject({ kind: "reset", reason: "sequence-ahead", sequence: store.sequence });
 });
 
+test("a complete page advances the cursor past hidden activity, so pruning never resets an up-to-date client", async () => {
+  const { client, store } = await service(workspace("pi-outliner-change-hidden-"));
+  store.changes.retention = 3;
+  const stale = store.sequence;
+  let cursor = stale;
+  for (let round = 1; round <= 6; round += 1) {
+    await client.request({ action: "resources.retention.configure", input: {
+      retainNewestSourceSnapshots: round, retainNewestRepresentationsPerAdapter: 1, minimumAgeMs: 0, purgeGraceMs: 0,
+    } });
+    const page = await client.request<ChangeFeedPage>({ action: "changes.since", sequence: cursor });
+    expect(page).toEqual({
+      kind: "changes", changes: [], nextSequence: store.sequence,
+      completeness: { kind: "complete" }, sequence: store.sequence,
+    });
+    if (page.kind !== "changes") throw new Error("expected changes");
+    expect(page.nextSequence).toBeGreaterThan(cursor);
+    cursor = page.nextSequence;
+  }
+  // Pruning moved the floor past the hidden rows a stale cursor would still need.
+  expect(store.changes.floor).toBeGreaterThan(stale);
+  expect(await client.request<ChangeFeedPage>({ action: "changes.since", sequence: stale }))
+    .toMatchObject({ kind: "reset", reason: "history-unavailable" });
+
+  // A visible change after hidden activity is still returned, and the cursor lands on the current sequence.
+  const created = await client.request<Block>({ action: "create", text: "Fictional note after bookkeeping" });
+  await client.request({ action: "resources.retention.configure", input: {
+    retainNewestSourceSnapshots: 9, retainNewestRepresentationsPerAdapter: 1, minimumAgeMs: 0, purgeGraceMs: 0,
+  } });
+  const page = await client.request<ChangeFeedPage>({ action: "changes.since", sequence: cursor });
+  if (page.kind !== "changes") throw new Error("expected changes");
+  expect(page.changes.map(change => change.blockId)).toEqual([created.id]);
+  expect(page.nextSequence).toBe(store.sequence);
+  expect(page.nextSequence).toBeGreaterThan(page.changes[0]!.sequence);
+});
+
 test("history survives restarts and crashes; unrecorded writes and rebuilds reset it", async () => {
   const directory = workspace("pi-outliner-change-restart-");
   const database = join(directory, "outliner.sqlite");

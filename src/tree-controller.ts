@@ -2032,9 +2032,12 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     });
     await inbox.refresh();
     if (mode === "browse") {
-      if (await outlineChangedSince(indexSequence)) {
+      const missed = await changesSince(indexSequence);
+      if (missed === "outline") {
         if (connections.active) connections.invalidate();
         await reload();
+      } else if (missed === "resource-catalog" && connections.active) {
+        await refreshAuthoredLinks();
       }
       await publishDisplayRowSelection(rows[selectedIndex]);
     } else {
@@ -2045,14 +2048,19 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     effects.invalidate();
   }
 
-  /** Asks the change feed whether a reconnect must reload; any doubt means yes. */
-  async function outlineChangedSince(sequence: number | null): Promise<boolean> {
-    if (sequence === null) return true;
+  /**
+   * Asks the change feed what a reconnect missed; any doubt means `outline`.
+   * The feed hides sequence advances that change no outline content (Resource
+   * catalog bookkeeping), so a later sequence with no visible change is one.
+   */
+  async function changesSince(sequence: number | null): Promise<"outline" | "resource-catalog" | "none"> {
+    if (sequence === null) return "outline";
     try {
       const page = await effects.request<ChangeFeedPage>({ action: "changes.since", sequence, limit: 1 });
-      return page.kind === "reset" || page.changes.length > 0;
+      if (page.kind === "reset" || page.changes.length > 0) return "outline";
+      return page.sequence > sequence ? "resource-catalog" : "none";
     } catch {
-      return true;
+      return "outline";
     }
   }
 

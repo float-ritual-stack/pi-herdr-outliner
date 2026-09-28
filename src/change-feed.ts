@@ -293,10 +293,13 @@ export class ChangeFeed {
         SELECT * FROM change_feed WHERE sequence > ? AND visible = 1 ORDER BY sequence, change_id LIMIT ?
       `).all(sequence, limit + 1) as ChangeRow[];
       if (rows.length <= limit) {
+        // Every sequence through `current` was checked, including hidden rows, so
+        // the cursor advances to it. Stopping at the last visible row would leave
+        // a client behind hidden activity until pruning resets it.
         return {
           kind: "changes",
           changes: rows.map(change),
-          nextSequence: rows.at(-1)?.sequence ?? sequence,
+          nextSequence: current,
           completeness: { kind: "complete" },
           sequence: current,
         };

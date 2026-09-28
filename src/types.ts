@@ -2249,7 +2249,11 @@ export type ChangeFeedPage =
       kind: "changes";
       /** Ordered by sequence then changeId; a page never splits one sequence. */
       changes: OutlinerChange[];
-      /** Pass as the next `sequence`; covers every change returned. */
+      /**
+       * Pass as the next `sequence`. A complete page returns `sequence` (every
+       * change through it was checked, including activity the feed does not
+       * describe); a truncated page returns the last whole sequence it covers.
+       */
       nextSequence: number;
       completeness: BlockCollectionCompleteness;
       /** Current service sequence when the page was read. */

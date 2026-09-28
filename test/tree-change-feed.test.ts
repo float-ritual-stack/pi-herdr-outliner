@@ -91,3 +91,22 @@ test("Tree reconnects without reloading when the feed reports no outline change"
   expect(f.indexReads()-before).toBe(1);
   expect(created.id).toBeTruthy();
 });
+
+test("Tree refreshes authored links, without reloading, after Resource catalog activity while away",async()=>{
+  const f=await fixture();
+  await f.controller.handleAction("tree.authored-links.toggle");
+  const linkReads=()=>f.requests.filter(action=>action==="blocks.authored-links").length;
+  expect(linkReads()).toBe(1);
+
+  f.controller.handleDisconnect();
+  let before={index:f.indexReads(),links:linkReads()};
+  await f.controller.handleConnect();
+  expect({index:f.indexReads()-before.index,links:linkReads()-before.links}).toEqual({index:0,links:0});
+
+  f.controller.handleDisconnect();
+  await f.client.request({action:"resources.retention.configure",input:{
+    retainNewestSourceSnapshots:1,retainNewestRepresentationsPerAdapter:1,minimumAgeMs:0,purgeGraceMs:0}});
+  before={index:f.indexReads(),links:linkReads()};
+  await f.controller.handleConnect();
+  expect({index:f.indexReads()-before.index,links:linkReads()-before.links}).toEqual({index:0,links:1});
+});
