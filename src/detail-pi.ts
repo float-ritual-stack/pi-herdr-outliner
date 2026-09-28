@@ -18,7 +18,7 @@ import {destinationRecoveryKey} from "./open-destination-chooser";
 import {ProvenanceInspector} from "./provenance-inspector";
 import {KeyInspector} from "./key-inspector";
 import {createDetailDestination, type DetailDestinationPlacement} from "./detail-pane-placement";
-import { ComposedLayout, ComposedTree, composedTreeNavigation, composedPointer, composedWidths } from "./composed-surface";
+import { ComposedLayout, ComposedTree, composedTreeNavigation, composedPointer, composedWidths, detailServiceCapabilities } from "./composed-surface";
 import { navigationDestinationItems, navigationDestinationStatus, navigationPlacementItems, navigationPlacementStatus, NavigationDestinationDisplay, NavigationDestinationPreview, renderNavigationDestinationPreview } from "./navigation-destination-menu";
 import { getProperty } from "./properties";
 import { waitForCompatibleService } from "./service-compatibility";
@@ -877,7 +877,7 @@ async function waitForService(): Promise<void> {
     await waitForCompatibleService(client, {
       timeoutMs: paths.mode === "remote" ? 30_000 : 5_000,
       pingTimeoutMs: paths.mode === "remote" ? 3_000 : 300,
-      needed: ["views.read"],
+      needed: detailServiceCapabilities(composed),
     });
   } catch (error) {
     throw new Error(`Compatible outliner service is not available: ${error instanceof Error ? error.message : String(error)}`);

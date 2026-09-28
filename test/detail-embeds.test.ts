@@ -7,6 +7,7 @@ import {
 } from "../src/detail-embeds";
 import { parseProperties } from "../src/properties";
 import { parseVirtualBranchConfig, selectVirtualBranchMembers } from "../src/virtual-branches";
+import { OUTLINER_PROTOCOL_VERSION } from "../src/types";
 import type {
   Block,
   VisibleBlock,
@@ -47,6 +48,8 @@ function snapshot(blocks: readonly Block[]): WorkspaceSnapshot {
 
 class FakeRequester implements DetailEmbedRequester {
   readonly calls: RequestInput[] = [];
+  /** What the stand-in service advertises on ping. */
+  capabilities: string[] = ["views.read"];
 
   constructor(
     private readonly blocks: Map<string, Block>,
@@ -57,6 +60,9 @@ class FakeRequester implements DetailEmbedRequester {
 
   async request<T>(input: RequestInput): Promise<T> {
     this.calls.push(input);
+    if (input.action === "ping") {
+      return { status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION, capabilities: this.capabilities } as T;
+    }
     if (input.action === "workspace.snapshot") {
       if (this.snapshotFailure) throw this.snapshotFailure;
       return snapshot([...this.blocks.values()]) as T;
@@ -486,6 +492,36 @@ test("renders workspace projection failures instead of hiding the document", asy
   expect(projection.text).toBe(
     "Before\n!((view-next)) · PROJECTION FAILED · snapshot unavailable\nAfter",
   );
+});
+
+test("a service without views.read renders its restart instruction instead of sending the read", async () => {
+  const first = virtualBranch("view-first");
+  const second = virtualBranch("view-second");
+  const item = block("item-next", "Next item", [{ key: "status", value: "next" }]);
+  const collection: VisibleBlockCollection = { blocks: [visible(item)], completeness: { kind: "complete" } };
+  const requester = new FakeRequester(
+    new Map([first, second, item].map(entry => [entry.id, entry])),
+    new Map([[first.id, collection], [second.id, collection]]),
+  );
+  requester.capabilities = ["blocks.read"];
+
+  const old = await projectDetailRead(requester, "!((view-first))\n!((view-second))");
+  expect(old.embeds.map(({ status }) => status)).toEqual(["failed", "failed"]);
+  expect(old.text).toContain("Embedded view: ((view-first)) · SERVICE NEEDS RESTART");
+  expect(old.text).toContain("does not support views.read. Restart the service");
+  expect(old.text).not.toContain("Unknown action");
+  expect(requester.calls.some(({ action }) => action === "views.read")).toBe(false);
+  expect(requester.calls.filter(({ action }) => action === "ping")).toHaveLength(1);
+
+  // A restarted service is picked up on the next read, and one positive answer is kept.
+  requester.capabilities = ["views.read"];
+  requester.calls.length = 0;
+  const current = await projectDetailRead(requester, "!((view-first))\n!((view-second))");
+  expect(current.embeds.map(({ status }) => status)).toEqual(["ready", "ready"]);
+  const again = await projectDetailRead(requester, "!((view-first))");
+  expect(again.embeds.map(({ status }) => status)).toEqual(["ready"]);
+  expect(requester.calls.filter(({ action }) => action === "views.read")).toHaveLength(3);
+  expect(requester.calls.filter(({ action }) => action === "ping")).toHaveLength(1);
 });
 
 test("reuses a repeated target projection and bounds the embed count", async () => {

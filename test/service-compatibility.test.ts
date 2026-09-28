@@ -4,6 +4,8 @@ import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { OutlinerClient } from "../src/client";
+import { detailServiceCapabilities } from "../src/composed-surface";
+import { TREE_SERVICE_CAPABILITIES } from "../src/tree-controller";
 import { OutlinerServer } from "../src/server";
 import { checkServiceCompatibility, waitForCompatibleService } from "../src/service-compatibility";
 import { OutlinerStore } from "../src/store";
@@ -146,6 +148,20 @@ test("CLI list --query requires query.expression so an older service cannot igno
   expect(plain.actions).toEqual(["blocks.query"]);
   const withCapability = await run(["query.expression"], ["--query", "status=open OR status=review"]);
   expect(withCapability.actions).toEqual(["ping", "blocks.query"]);
+});
+
+test("every Tree host, including composed Detail, requires query.expression at startup", async () => {
+  // Virtual-child admission sends a saved view's parsed `where` with tree.query.
+  expect(TREE_SERVICE_CAPABILITIES).toEqual(["views.read", "query.expression"]);
+  expect(detailServiceCapabilities(true)).toEqual(TREE_SERVICE_CAPABILITIES);
+  expect(detailServiceCapabilities(false)).toEqual(["views.read"]);
+  const { socket, actions } = await fakeService({ protocolVersion: OUTLINER_PROTOCOL_VERSION, capabilities: ["views.read"] });
+  const client = new OutlinerClient(socket);
+  await expect(waitForCompatibleService(client, { timeoutMs: 150, needed: detailServiceCapabilities(true) })).rejects.toThrow(
+    "does not support query.expression. Restart the service",
+  );
+  await expect(waitForCompatibleService(client, { timeoutMs: 150, needed: detailServiceCapabilities(false) })).resolves.toBeDefined();
+  expect(new Set(actions)).toEqual(new Set(["ping"]));
 });
 
 test("a newer service is accepted; a service below the minimum is rejected", () => {

@@ -32,7 +32,7 @@ import { reportCurrentPaneWorkspace,
 import { parsePropertySummaryKeys } from "./property-summary";
 import { resolveClientPaths } from "./paths";
 import { TerminalInputDecoder, type TerminalKey } from "./terminal";
-import { createTreeController } from "./tree-controller";
+import { createTreeController, TREE_SERVICE_CAPABILITIES } from "./tree-controller";
 import {
   isTreeMouseSequence,
   parseTreePrimaryClick,
@@ -200,8 +200,7 @@ async function waitForService(): Promise<void> {
     await waitForCompatibleService(client, {
       timeoutMs: paths.mode === "remote" ? 30_000 : 5_000,
       pingTimeoutMs: paths.mode === "remote" ? 3_000 : 300,
-      // Virtual-child admission sends saved-view `where` expressions with tree.query.
-      needed: ["views.read", "query.expression"],
+      needed: TREE_SERVICE_CAPABILITIES,
     });
   } catch (error) {
     throw new Error(`Compatible outliner service is not available: ${error instanceof Error ? error.message : String(error)}`);

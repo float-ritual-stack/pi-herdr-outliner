@@ -11,9 +11,11 @@ import {
   isRelationViewDefinition,
   parseRelationViewConfig,
 } from "./relation-views";
+import { checkServiceCompatibility } from "./service-compatibility";
 import type {
   Block,
   BlockCollectionCompleteness,
+  OutlinerServiceStatus,
   SavedViewReadResult,
   WorkspaceSnapshot,
 } from "./types";
@@ -114,6 +116,29 @@ function explicitFallback(
   };
 }
 
+/** In-flight or positive capability checks per requester; a missing capability is not kept. */
+const viewReadChecks = new WeakMap<DetailEmbedRequester, Promise<string | undefined>>();
+
+/**
+ * Every surface that projects embeds (Detail, backlink peek, Goto and the other
+ * previews) reaches `views.read` here, so the capability is checked here before
+ * the first read: an older service yields its restart instruction, not an
+ * unknown-action error. A missing capability is re-checked on the next
+ * projection so a restarted service is picked up.
+ */
+function viewReadIncompatibility(requester: DetailEmbedRequester): Promise<string | undefined> {
+  let pending = viewReadChecks.get(requester);
+  if (!pending) {
+    pending = requester.request<OutlinerServiceStatus>({ action: "ping" })
+      .then(service => checkServiceCompatibility(service, ["views.read"])?.message);
+    viewReadChecks.set(requester, pending);
+    const check = pending;
+    const forget = () => { if (viewReadChecks.get(requester) === check) viewReadChecks.delete(requester); };
+    check.then(message => { if (message) forget(); }, forget);
+  }
+  return pending;
+}
+
 async function projectVirtualBranch(
   requester: DetailEmbedRequester,
   definition: Block,
@@ -129,6 +154,13 @@ async function projectVirtualBranch(
   }
 
   try {
+    const incompatibility = await viewReadIncompatibility(requester);
+    if (incompatibility) {
+      return {
+        text: `${linkedHeading(definition.id, "SERVICE NEEDS RESTART")}\n  ${boundedError(incompatibility)}`,
+        state: { blockId: definition.id, status: "failed", count: 0 },
+      };
+    }
     // The service evaluates membership, order and bounds exactly as Tree shows them.
     const projected = await requester.request<SavedViewReadResult>({ action: "views.read", viewId: definition.id });
     if (projected.status === "invalid") {
