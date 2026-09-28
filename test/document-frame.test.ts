@@ -7,6 +7,7 @@ import {parseDetailCallouts} from '../src/detail-callouts';
 import {documentFolds} from '../src/document-folds';
 import {checklistControls} from '../src/checklist-controls';
 import {reconcilePreviewRegions, type PreviewRegionState} from '../src/detail-preview-regions';
+import {AttributedMarkdown} from '../src/attributed-markdown';
 import {SourceSpannedMarkdown} from '../src/source-spanned-markdown';
 import {atomicDocument,concatDocuments,generatedDocument,observeDocument,sourceDocument,withDocumentOccurrence,type DocumentOrigin,type MappedDocument} from '../src/document-provenance';
 const plain=(s:string)=>s;
@@ -75,6 +76,19 @@ test('entity decoding consumes exact authored spans without decoding code or exe
   expect(safe.lines.join('')).not.toContain('\x1b');
   const d=safe.cells.find(cell=>cell.text==='d')!;
   expect(ranges(d.origins)).toEqual([[hostile.length-1,hostile.length]]);
+  // Raw code and HTML bypass entity decoding and must be safe at both renderer entries.
+  for (const text of ['```text\nleft\x1b]52;c;payload\x07right\n```', '<div>left\x1b[2Jright</div>']) {
+    const document=sourceDocument(observeDocument({kind:'block',blockId:'synthetic-raw-controls'},text));
+    for (const compiled of [AttributedMarkdown.compile(document,theme,false),AttributedMarkdown.compileInline(document,theme,false)]) {
+      expect(compiled).not.toBeNull();
+      const frame=compiled!.frame(80);
+      expect(frame.lines.join('')).not.toMatch(/[\x00-\x08\x1b]/);
+      expect(frame.lines.join('')).not.toContain('payload');
+      const right=frame.cells.find(cell=>cell.text==='r'&&ranges(cell.origins).some(([start])=>start===text.indexOf('right')));
+      expect(right).toBeDefined();
+      expect(ranges(right!.origins)).toEqual([[text.indexOf('right'),text.indexOf('right')+1]]);
+    }
+  }
   const split=reader(concatDocuments([
     sourceDocument(observeDocument({kind:'block',blockId:'synthetic-entity-left'},'&am')),
     sourceDocument(observeDocument({kind:'block',blockId:'synthetic-entity-right'},'p;')),

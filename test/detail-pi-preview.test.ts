@@ -3582,6 +3582,15 @@ test("compact Detail keeps authored content and source selection aligned when de
   const row = first.findIndex(line => line.includes("A selectable paragraph."));
   expect(row).toBeGreaterThan(0);
   expect(layout.sourcePointAtViewport(row, 4, 40)?.row).toBe(3);
+  // A blank separator at the viewport top should anchor to the next authored line.
+  const body=layout.scrollView.render(40).map(stripTerminalSequences);
+  const paragraph=body.findIndex(line=>line.includes("A selectable paragraph."));
+  const separator=body.findIndex((line,index)=>index>paragraph&&!line.trim());
+  expect(separator).toBeGreaterThan(paragraph);
+  layout.scrollView.updateLayout(body.length,1,()=>{});
+  layout.scrollView.scrollTo(separator);
+  expect(layout.sourceLineAtScroll(40)).toBe(5);
+  layout.scrollView.scrollTo(0);
   density = "expanded";
   const expanded = layout.render(40).map(stripTerminalSequences);
   expect(layout.headerHeight(40)).toBe(3);
