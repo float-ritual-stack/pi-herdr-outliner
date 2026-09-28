@@ -4,6 +4,10 @@ This file records notable user-facing changes. The project remains active dogfoo
 
 ## [Unreleased]
 
+- Keep ticket-key autolinks outside complete Markdown URL spans. Plain and
+  angle-bracket URLs, including Jira smart links, stay one destination through
+  narrow wrapping; adjacent bare ticket keys still open local pages. PIE-392.
+
 - Install the declarative status-summary renderer independently of the app.
   Detail, Tree Preview and Inbox Preview share responsive labelled counts,
   links, copying and comments. Disabled or missing installations preserve

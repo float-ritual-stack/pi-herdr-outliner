@@ -793,3 +793,23 @@ describe("outliner link rendering", () => {
     expect(linkOutlinerMarkdown(literal, literal)).toBe(literal);
   });
 });
+
+test('URL spans own embedded ticket keys while adjacent bare keys still resolve locally', async () => {
+  const {outlinerReferenceOccurrences} = await import('../src/reference-occurrences');
+  for (const url of [
+    'https://example.test/browse/DEMO-123',
+    'https://example.test/search?issue=DEMO-123#DEMO-124',
+    '<https://example.test/browse/DEMO-123>',
+    '**https://example.test/browse/DEMO-123**',
+    '[DEMO-123](https://example.test/browse/DEMO-123)',
+    'https://example.test/path_(DEMO-123)',
+    'www.example.test/DEMO-123',
+  ]) {
+    const text = `${url}, DEMO-456. [jira::DEMO-789] \`DEMO-999\``;
+    expect(outlinerReferenceOccurrences(text).map(r => r.kind === 'work-id' ? r.address : r.kind)).toEqual(['DEMO-456']);
+    const linked = linkOutlinerMarkdown(text, text, null);
+    expect(linked).toContain(url);
+    expect(linked).not.toContain('pi-outliner://work/DEMO-123');
+    expect(linked).toContain('pi-outliner://work/DEMO-456');
+  }
+});

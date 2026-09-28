@@ -1,3 +1,4 @@
+import {Lexer, type Token} from "marked";
 import { protectedCodeRanges } from "./markdown-code-ranges";
 import { pageAddressReferences } from "./page-addresses";
 import { parsePropertyRecords } from "./properties";
@@ -51,6 +52,20 @@ export function protectedMarkdownRanges(text: string): TextRange[] {
   for (const match of text.matchAll(/!?\[[^\]\n]*\]\([^)\n]*\)/g)) {
     ranges.push({ start: match.index, end: match.index + match[0].length });
   }
+  // Match the reader's Markdown URL boundaries, including punctuation and
+  // links nested in emphasis. Do not manufacture a second URL grammar.
+  const visit = (source:string, tokens:Token[], base:number):void => {
+    let cursor=0;
+    for(const token of tokens){
+      const start=source.indexOf(token.raw,cursor);
+      if(start<0)continue;
+      const end=start+token.raw.length;
+      if(token.type==='link' || token.type==='image')ranges.push({start:base+start,end:base+end});
+      else if('tokens' in token && Array.isArray(token.tokens))visit(token.raw,token.tokens,base+start);
+      cursor=end;
+    }
+  };
+  visit(text,Lexer.lexInline(text),0);
   return ranges;
 }
 
