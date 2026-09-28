@@ -1,8 +1,9 @@
+import {fragmentAnchors} from './fragments';
 import {presentedSource} from './document-source';
-import {observeDocument, concatDocuments, generatedDocument, type MappedDocument} from './document-provenance';
+import {observeDocument, concatDocuments, generatedDocument, withDocumentOccurrence, sliceDocument, type MappedDocument} from './document-provenance';
 import {parsePropertyFilterExpression} from './block-query';
 import {queryChecklistItems} from './checklist-items';
-import {parseProperties} from './properties';
+import {parseProperties,parsePropertyRecords} from './properties';
 import type {ChecklistSearchQuery, ChecklistSearchCollection} from './types';
 import type {DetailEmbedRequester, DetailEmbedRange} from './detail-embeds';
 
@@ -33,10 +34,13 @@ export function parseChecklistView(text:string):ChecklistSearchQuery {
   return {scope:{...(plans?{filters:parsePropertyFilterExpression(plans)}:{}),...(subtreeRootId?{subtreeRootId}:{})},items};
 }
 
-export async function projectChecklistView(requester:DetailEmbedRequester,text:string):Promise<{
+export async function projectChecklistView(requester:DetailEmbedRequester,text:string,view?:MappedDocument):Promise<{
   text:string; provenance:MappedDocument; sources:NonNullable<DetailEmbedRange['sources']>; collection:ChecklistSearchCollection;
 }> {
   const collection=await requester.request<ChecklistSearchCollection>({action:'checklist.search',query:parseChecklistView(text)});
+  const queryProperty=parsePropertyRecords(text).find(property=>property.key==='query')!;
+  const querySlices=view?sliceDocument(view,queryProperty.start,queryProperty.end).runs.flatMap(run=>run.origin.kind==='source'?run.origin.slices:[]):[];
+  const host=querySlices.length===1?querySlices[0]:undefined;
   const rows=[`Checklist results · ${collection.matches.length} matched ${collection.matches.length===1?'step':'steps'}${collection.completeness.kind==='truncated'?' · LIMITED':''}`];
   const parts:MappedDocument[]=[generatedDocument(rows[0]!, 'checklist result count')];
   const sources:NonNullable<DetailEmbedRange['sources']>=[];
@@ -44,7 +48,22 @@ export async function projectChecklistView(requester:DetailEmbedRequester,text:s
   for(const {block,item} of collection.matches){
     rows.push('',`Plan: ((${block.id})) · ${item.identity==='unique'?`((${block.id}^${item.itemId}|Open step))`:item.identity==='duplicate'?'Ambiguous step address · fix duplicate IDs in the plan':'Unaddressed step · Copy step link to assign an address'}`,'');
     const contentStartLine=rows.length;
-    const content=presentedSource(observeDocument({kind:'block',blockId:block.id},block.text,block.revision),item.span.startLine,item.span.endLine,true);
+    const document=observeDocument({kind:'block',blockId:block.id},block.text,block.revision);
+    const body=presentedSource(document,item.span.startLine,item.span.endLine,true);
+    // The same child can occur inside its parent result and as its own result.
+    // Keep the view query and the matched source item, not a result index that
+    // changes when another match is inserted or removed. Exclude the status
+    // mark and trailing ID so changing status or assigning an ID cannot move
+    // the result occurrence away from its captured source header.
+    const anchor=fragmentAnchors(block.text).find(anchor=>anchor.lineIndex===item.span.startLine);
+    const newline=block.text.indexOf('\n',item.span.start);
+    const headerEnd=anchor?.markerStart??(newline<0?block.text.length:newline);
+    const end=item.span.start+block.text.slice(item.span.start,headerEnd).trimEnd().length;
+    const token=end>item.markerStart+3?{document,start:item.markerStart+3,end}
+      :{document,start:item.span.start,end:item.markerStart};
+    const content=host?withDocumentOccurrence(body,{host,path:[{
+      token,target:`checklist-result:${block.id}`,
+    }]}):generatedDocument(body.text,'checklist view identity unavailable');
     parts.push(generatedDocument('\n'+rows.slice(contentStartLine-3).join('\n')+'\n','checklist result heading'), content);
     rows.push(...content.text.split('\n'));
     sources.push({block,startLine:item.span.startLine,endLine:item.span.endLine,contentStartLine,itemStarts:[item.span.start]});

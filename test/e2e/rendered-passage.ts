@@ -305,6 +305,40 @@ const result = await runHerdrScenario({
     await s.record('component-passage-evidence', {componentCopies, componentThread, componentSlices});
     assert.equal((await s.client.request<Block>({action:'get',blockId:component.id})).text,component.text);
 
+    const plan=await s.client.request<Block>({action:'create',text:'# Nested plan [project::result-proof]\n\n- [ ] Parent [owner::alex] ^parent\n  - [ ] Child [owner::alex] ^child'});
+    const view=await s.client.request<Block>({action:'create',text:'# Selected results\n[type::checklist-view] [plans::project=result-proof] [query::owner=alex]'});
+    await s.client.request({action:'navigation.dispatch',sourceClientId:tree.clientId,sourceRegion:'tree',intent:'open',
+      target:{kind:'block',blockId:view.id},destination:{clientId:detail.clientId,region:'detail'}});
+    const resultPoint=await s.waitFor('nested result appears twice',async()=>{
+      const screen=await terminal.visible(),pane=await s.visible(s.panes.detail);
+      const positions=(text:string)=>{
+        const lines=text.split('\n'),header=lines.findIndex(line=>line.includes('● Current'));
+        const row=lines.flatMap((line,row)=>row>header&&line.includes('Child')?[row]:[])[1];
+        return row===undefined?null:{row,header,column:visibleWidth(lines[row]!.slice(0,lines[row]!.indexOf('Child')))};
+      };
+      const point=positions(screen),local=positions(pane);
+      return point&&local&&point.row-point.header===local.row-local.header?point:null;
+    },point=>!!point);
+    await terminal.write(`\x1b[<0;${resultPoint!.column+1};${resultPoint!.row+1}M\x1b[<32;${resultPoint!.column+5};${resultPoint!.row+1}M\x1b[<0;${resultPoint!.column+5};${resultPoint!.row+1}m`);
+    await s.keys(s.panes.detail,'c');
+    await s.waitVisible(s.panes.detail,'Comment');
+    await s.text(s.panes.detail,'Discuss the independent child result');
+    await terminal.write('\x13');
+    const resultThreads=await s.waitFor('result comment persisted',()=>s.client.request<AnnotationThread[]>({
+      action:'annotations.list',query:{subject:{kind:'block',blockId:view.id}},
+    }),threads=>threads.some(thread=>thread.body==='Discuss the independent child result'));
+    for(const columns of [220,132]) {
+      await terminal.resize(columns,65);
+      await s.waitFor('only independent result marked after reflow',()=>s.visible(s.panes.detail),text=>{
+        const rows=text.split('\n').filter(line=>line.includes('Child'));
+        const width=visibleWidth(text.split('\n')[0]!);
+        return (columns===220?width>80:width<70)&&rows.length===2&&!/^[+−] /.test(rows[0]!)&&/^[+−] /.test(rows[1]!);
+      });
+      await s.checkpoint(`17-checklist-result-${columns}`);
+    }
+    assert.equal((await s.client.request<Block>({action:'get',blockId:plan.id})).text,plan.text);
+    await s.record('checklist-result-evidence',{resultThreads,input:'attached-terminal drag, comment save, wide/narrow independent result gutter'});
+
     await s.record('resource-passage-evidence',{resourceCopies,resourceThread,shiftedThread,
       input:'attached-terminal drag over bold/entity content, clipboard, composer save and comment navigation'});
     await s.record('passage-evidence', {copies, thread, marked, assigned, changed, attached,

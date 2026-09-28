@@ -1,5 +1,5 @@
 import {presentedSource, projectedBlockReference} from './document-source';
-import {atomicDocument, concatDocuments, observeDocument, sliceDocument, withDocumentOccurrence,
+import {atomicDocument, concatDocuments, observeDocument, sourceDocument, sliceDocument, withDocumentOccurrence,
   generatedDocument, type MappedDocument, type SourceSlice} from './document-provenance';
 import type { RequestInput } from "./client";
 import {isChecklistView,projectChecklistView} from './checklist-views';
@@ -388,7 +388,7 @@ async function projectEmbed(
   }
   if(isChecklistView(target.text)){
     try {
-      const projection=await projectChecklistView(requester,target.text);
+      const projection=await projectChecklistView(requester,target.text,sourceDocument(observeDocument({kind:'block',blockId:target.id},target.text,target.revision)));
       return {text:projection.text,provenance:projection.provenance,sources:projection.sources,state:{blockId,status:projection.collection.completeness.kind==='truncated'?'truncated':'ready',count:projection.collection.matches.length,completeness:projection.collection.completeness}};
     }catch(error){return explicitFallback(blockId,'failed',`CHECKLIST VIEW FAILED · ${boundedError(error)}`);}
   }
@@ -521,7 +521,7 @@ export async function projectDetailRead(
     mappedParts.push(generatedDocument('\n\n', 'checklist separator'));
     const startLine=newlineCount(output);
     try {
-      const projection=await projectChecklistView(requester,text);
+      const projection=await projectChecklistView(requester,source.text,source);
       output+=projection.text;
       mappedParts.push(projection.provenance);
       embedRanges.push({startLine,endLine:newlineCount(output),sources:projection.sources.map(source=>({...source,contentStartLine:source.contentStartLine+startLine}))});

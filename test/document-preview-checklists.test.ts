@@ -1,3 +1,6 @@
+import {loadDetailDraftPreview} from '../src/detail-read-preview';
+import {observeDocument} from '../src/document-provenance';
+import {annotationFrameCells} from '../src/annotation-frame';
 import {projectDetailRead} from '../src/detail-embeds';
 import {expect,test} from 'bun:test';
 import {mkdtempSync,rmSync} from 'node:fs';
@@ -184,6 +187,57 @@ test('live checklist views use correlated canonical matches, shared controls and
   expect(paint(reader)).toContain('Checklist view unavailable');
   expect(paint(reader)).not.toContain('No matching');
   expect(tasks(reader)).toHaveLength(0);
+}));
+
+test('comments distinguish nested checklist results from each other and canonical text',async()=>fixture(async client=>{
+  const plan=await client.request<Block>({action:'create',text:'# Plan [project::nested-results]\n\n- [ ] Parent [owner::alex]\n  - [ ] Child [owner::alex]'});
+  const view=await client.request<Block>({action:'create',text:'# Steps ^heading\n[type::checklist-view] [plans::project=nested-results] [query::owner=alex]'});
+  const host=await client.request<Block>({action:'create',text:`# Dashboard\n\n!((${view.id}))`});
+  const draft={...observeDocument({kind:'block' as const,blockId:view.id},view.text+'\nUnsaved',view.revision),draft:true as const};
+  const draftProjection=await loadDetailDraftPreview(client,draft);
+  const draftHosts=draftProjection.provenance.runs.flatMap(run=>run.origin.kind==='source'&&run.origin.occurrence?[run.origin.occurrence.host]:[]);
+  expect(draftHosts.length).toBeGreaterThan(0);
+  for(const host of draftHosts) {
+    expect(host.document).toEqual(draft);
+    expect(host.document.text.slice(host.start,host.end)).toBe('[query::owner=alex]');
+  }
+  for(const source of [view,host])for(const occurrence of [0,1]) {
+    const input=new DocumentPreviewInput();
+    const reader=new DocumentPreview(client,()=>{},'checklist-result-reader',undefined,input);
+    await reader.load({kind:'block',blockId:source.id});reader.focus();
+    const frame=renderDocumentPreview(reader.state!,{x:0,y:0,width:80,height:60},'');
+    input.render(frame.lines,frame,reader.state);
+    const rows=frame.lines.map(stripTerminalSequences);
+    const copies=rows.flatMap((line,row)=>line.includes('Child')?[row]:[]);
+    expect(copies).toHaveLength(2);
+    const row=copies[occurrence]!,column=rows[row]!.indexOf('Child');
+    const actions={focus(){},scroll(){},resize(){},async invoke(){}};
+    for(const [button,end,phase] of [[0,column,'M'],[32,column+5,'M'],[0,column+5,'m']] as const)
+      input.handle(`\x1b[<${button};${end+1};${row+1}${phase}`,actions,()=>{},()=>{});
+    expect(input.captureSelection()?.quote).toBe('Child');
+    reader.beginComment();
+    const body=`Discuss result ${occurrence} in ${source.id}`;
+    reader.paste(body);await reader.key({name:'s',ctrl:true},80,57,noDetail);
+    expect(reader.state!.comment).toBeUndefined();
+    const threads=await client.request<AnnotationThread[]>({action:'annotations.list',query:{subject:{kind:'block',blockId:source.id}}});
+    const thread=threads.find(thread=>thread.body===body)!;
+    expect(thread).toBeDefined();
+    // A fresh read and different wraps must keep the gutter on just this result.
+    await reader.load({kind:'block',blockId:source.id});
+    for(const width of [80,32]) {
+      const rendered=renderDocumentPreview(reader.state!,{x:0,y:0,width,height:80},'').documentFrame!;
+      const matches=annotationFrameCells(thread,rendered);
+      expect(matches.map(cell=>cell.text).join('')).toBe('Child');
+      const childRows=rendered.lines.flatMap((line,row)=>stripTerminalSequences(line).includes('Child')?[row]:[]);
+      expect(new Set(matches.map(cell=>cell.row))).toEqual(new Set([childRows[occurrence]]));
+    }
+    await reader.load({kind:'block',blockId:plan.id});
+    const canonical=renderDocumentPreview(reader.state!,{x:0,y:0,width:80,height:60},'').documentFrame!;
+    expect(annotationFrameCells(thread,canonical)).toHaveLength(0);
+  }
+  const updated=await client.request<Block>({action:'get',blockId:plan.id});
+  expect(updated.text.replace(/ \^task-[A-Za-z0-9_-]+/g,'')).toBe(plan.text);
+  expect(updated.revision).toBe(plan.revision+1);
 }));
 
 test('nested fragment readers preserve interactive steps and continuation Markdown',async()=>fixture(async client=>{

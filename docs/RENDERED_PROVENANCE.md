@@ -385,3 +385,5 @@ Reuse syntax recognition where it preserves explicit consumed positions. Never
 recover lost inline positions by searching the rendered result. Keep folding,
 checklist actions and annotation reconciliation in their existing domain owners;
 this change does not introduce a general UI framework or another document store.
+
+Checklist results retain their view query and matched source-item header (excluding status and fragment ID) in the occurrence path. A child displayed within its parent result stays distinct from the same child displayed as an independent result, including when the entire view is embedded. Edits to the matched header use the ordinary conservative quote reconciliation; result order is never an identity.
