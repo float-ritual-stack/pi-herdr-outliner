@@ -29,6 +29,9 @@ export function normalizePropertyQueryScope(value: unknown): PropertyQueryScope 
 
 
 export class BlockQuerySyntaxError extends Error {
+  /** Request field whose text was parsed, set where a request field is parsed; `index` is within it. */
+  field?: string;
+
   constructor(
     message: string,
     readonly index: number,
@@ -263,10 +266,17 @@ const MAX_QUERY_EXPRESSION_LEAVES = 200;
 const COMPARISONS = new Set<QueryComparison>(["<", "<=", ">", ">="]);
 const DAY_MS = 86_400_000;
 
-/** Structured detail for a rejected query; syntax positions refer to the expression text. */
+/**
+ * Structured detail for a rejected query. A syntax position is reported only with
+ * the request field it indexes; syntax errors from other text (for example a
+ * saved definition) carry just the message.
+ */
 export function queryRequestProblem(error: unknown): OutlinerRequestProblem | undefined {
   if (error instanceof BlockQuerySyntaxError) {
-    return { code: "query-syntax", message: error.message, field: "expression", position: error.index };
+    return {
+      code: "query-syntax", message: error.message,
+      ...(error.field ? { field: error.field, position: error.index } : {}),
+    };
   }
   if (error instanceof BlockQueryError) return { code: "query-invalid", message: error.message };
   return undefined;
@@ -298,10 +308,10 @@ function lexQueryExpression(input: string): { tokens: ExpressionToken[]; simple:
       text = text.slice(1);
       start += 1;
     }
-    // A trailing ")" closes a group only while one is open; at depth 0 it stays
-    // part of an unquoted value exactly as before.
-    let closing = 0;
-    while (closing < depth && text.length > closing && text[text.length - 1 - closing] === ")") closing += 1;
+    // A trailing ")" closes a group only while one is open and it does not
+    // balance a "(" earlier in the same unquoted value, so `(k=f(x))` keeps
+    // `f(x)`. At depth 0 it stays part of an unquoted value exactly as before.
+    const closing = Math.min(depth, trailingUnbalancedParens(text));
     text = text.slice(0, text.length - closing);
     if (text) {
       const lower = text.toLowerCase();
@@ -331,10 +341,32 @@ function lexQueryExpression(input: string): { tokens: ExpressionToken[]; simple:
   return { tokens, simple };
 }
 
+/** Count the trailing ")" in one clause that close no "(" of the clause itself (quotes excluded). */
+function trailingUnbalancedParens(text: string): number {
+  const unbalanced = new Set<number>();
+  let open = 0;
+  let quoted = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    if (quoted) {
+      if (character === "\\") index += 1;
+      else if (character === '"') quoted = false;
+    } else if (character === '"') quoted = true;
+    else if (character === "(") open += 1;
+    else if (character === ")") {
+      if (open > 0) open -= 1;
+      else unbalanced.add(index);
+    }
+  }
+  let count = 0;
+  while (unbalanced.has(text.length - 1 - count)) count += 1;
+  return count;
+}
+
 type ParsedTime = { kind: "instant"; at: (now: number) => number } | { kind: "day"; start: (now: number) => number };
 
 const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
-const ISO_DATETIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?(Z|[+-]\d{2}:\d{2})?$/;
+const ISO_DATETIME = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,3})?)?(Z|[+-](\d{2}):(\d{2}))?$/;
 
 function utcDay(year: number, month: number, day: number): number | null {
   const start = Date.UTC(year, month - 1, day);
@@ -355,9 +387,17 @@ export function parseQueryTime(value: string): ParsedTime {
     if (start === null) throw new BlockQueryError(`Invalid date: ${value}`);
     return { kind: "day", start: () => start };
   }
-  if (ISO_DATETIME.test(value.trim())) {
+  const datetime = ISO_DATETIME.exec(value.trim());
+  if (datetime) {
     const text = value.trim();
-    const at = Date.parse(/(Z|[+-]\d{2}:\d{2})$/.test(text) ? text : `${text}Z`);
+    // Date.parse rolls impossible fields over (2026-02-30 becomes March 2), so
+    // validate the calendar day and clock fields first.
+    const [, year, month, day, hour, minute, second = "0", zone, offsetHour = "0", offsetMinute = "0"] = datetime;
+    if (utcDay(Number(year), Number(month), Number(day)) === null) throw new BlockQueryError(`Invalid date: ${value}`);
+    if (Number(hour) > 23 || Number(minute) > 59 || Number(second) > 59 || Number(offsetHour) > 23 || Number(offsetMinute) > 59) {
+      throw new BlockQueryError(`Invalid time: ${value}`);
+    }
+    const at = Date.parse(zone ? text : `${text}Z`);
     if (!Number.isFinite(at)) throw new BlockQueryError(`Invalid datetime: ${value}`);
     return { kind: "instant", at: () => at };
   }
@@ -645,7 +685,13 @@ export function normalizeBlockSearchQuery(
   }
   const parts: QueryExpression[] = [];
   // Plain clause lists keep their filter meaning, including deleted=true.
-  const parsedExpression = query.expression?.trim() ? parseSearchExpression(query.expression) : null;
+  let parsedExpression: ReturnType<typeof parseSearchExpression> | null = null;
+  try {
+    parsedExpression = query.expression?.trim() ? parseSearchExpression(query.expression) : null;
+  } catch (error) {
+    if (error instanceof BlockQuerySyntaxError) error.field = "expression";
+    throw error;
+  }
   if (parsedExpression?.where) parts.push(parsedExpression.where);
   if (query.where !== undefined) parts.push(normalizeQueryExpression(query.where));
   const where = parts.length === 0 ? undefined

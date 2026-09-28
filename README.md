@@ -1186,8 +1186,10 @@ created < 2026-09-01T12:00Z
 
 - **Precedence:** `NOT` binds tightest, then `AND` (written or implied by
   whitespace), then `OR`. Keywords are case-insensitive. Parentheses group; a
-  clause may start with `(` and end with `)` (`(a=x OR b=y)`). Quote a value
-  that contains a space or ends with `)` inside a group.
+  clause may start with `(` and end with `)` (`(a=x OR b=y)`). A trailing `)`
+  that balances a `(` in the same value stays in the value, so `((k=f(x)))`
+  matches `f(x)`. Quote a value that contains a space or ends with an
+  unbalanced `)` inside a group (`(k=":)" OR a)`).
 - **NOT:** `NOT key=value` excludes blocks with that value; `NOT key` selects
   blocks without the property (in the query's property scope).
 - **Ranges:** `created` or `updated`, then `<`, `<=`, `>` or `>=`, then a time,
@@ -1195,15 +1197,18 @@ created < 2026-09-01T12:00Z
   `> 2026-09-20` starts on the 21st and `<= 2026-09-20` includes all of the
   20th. `today` and `yesterday` are UTC days too. ISO datetimes (UTC unless an
   offset is given), `now` and `-N` followed by `h`, `d` or `w` are instants;
-  relative values resolve each time the service evaluates the query, so a saved
-  `updated >= -7d` view keeps moving. Only `created` and `updated` compare;
-  `updated=…` is still a property equality clause.
+  an impossible date or time such as `2026-02-30T10:00Z` is an error. Relative
+  values resolve each time the service evaluates the query (every `views.read`
+  or `blocks.query`). Tree re-reads a saved view when the workspace changes, not
+  on a timer, so an open `updated >= -7d` view shows blocks aging out at the next
+  change or refresh. Only `created` and `updated` compare; `updated=…` is still
+  a property equality clause.
 - **Compatibility:** a query with no keywords, parentheses or ranges keeps its
   exact meaning, including the special `deleted=true` Trash query.
   `deleted=true` cannot be combined with the boolean grammar.
 - **Errors:** invalid queries fail, and are never treated as empty results.
-  `blocks.query` rejects them with a `problem` giving `code`, `field` and the
-  0-based `position`; `views.read` reports `status: "invalid"` with the
+  `blocks.query` rejects them with a `problem` giving `code`, the request
+  `field` (`expression`) and the 0-based `position` within it; `views.read` reports `status: "invalid"` with the
   `query` property and position.
 - **Service:** the grammar requires a service that reports the
   `query.expression` capability. CLI `list --query` and

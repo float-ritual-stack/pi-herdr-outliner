@@ -29,7 +29,6 @@ import { migrateRoadmapText } from "./roadmap-migration";
 import {
   compileQueryExpression,
   normalizeBlockSearchQuery,
-  parsePropertyFilterExpression,
   positivePropertyFilters,
 } from "./block-query";
 import {
@@ -2397,14 +2396,14 @@ export class OutlinerStore {
       try {
         const query = normalizeBlockSearchQuery(virtualBranchMembershipQuery(viewId, parsed.config, 1));
         const ranks = this.virtualOccurrenceRanksFromCurrentRead();
-        if (query.rankViewId && (query.includeDeleted ?? "active") === "active") {
+        if (query.rankViewId && (query.includeDeleted ?? "active") === "active" && !query.where) {
           // Same route as queryNormalizedBlocksFromCurrentRead. Rank and count lightweight id/depth pairs, then hydrate only the page:
           // Tree and embeds read small pages of views with many members.
           const candidates = this.rankedMatchIdsFromCurrentRead(query, query.rankViewId);
           const page = selectVirtualBranchMembers(viewId, parsed.config, { blocks: candidates, completeness: { kind: "complete" } }, ranks, effectiveLimit, offset);
           selected = { ...page, members: this.hydrateRankedPageFromCurrentRead(page.members, query) };
         } else {
-          // Sorted and Trash views are evaluated over the loaded graph, which is already hydrated.
+          // Sorted, Trash and expression views are evaluated over the loaded graph, which is already hydrated.
           const matches = this.queryNormalizedBlocksFromCurrentRead({ ...query, limit: UNBOUNDED_VIEW_MATCHES });
           selected = selectVirtualBranchMembers(viewId, parsed.config, matches, ranks, effectiveLimit, offset);
         }
@@ -4055,15 +4054,13 @@ export class OutlinerStore {
     for (const row of rows) {
       const branch = this.getFromCurrentRead(row.id);
       if (!branch) continue;
-      const queries = branch.properties.filter((property) => property.key === "query");
-      if (queries.length !== 1) continue;
-      let filters: PropertyFilter[];
-      try {
-        filters = parsePropertyFilterExpression(queries[0]!.value);
-      } catch {
-        continue;
-      }
-      if (!matchesFilters(block.properties, filters)) continue;
+      // Parse and evaluate exactly as views.read does, so a receipt names every
+      // view that would list the item, including OR/NOT/date grammar. Invalid
+      // views list nothing in views.read and are omitted here too.
+      const { config } = parseVirtualBranchConfig(branch, []);
+      if (!config) continue;
+      if (!matchesFilters(block.properties, config.filters)) continue;
+      if (config.where && !compileQueryExpression(config.where)(block, block.properties)) continue;
       const rank = this.database.query(
         "SELECT rank FROM virtual_occurrence_ranks WHERE view_id = ? AND block_id = ?",
       ).get(branch.id, block.id) as { rank: number } | null;

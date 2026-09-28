@@ -9,6 +9,7 @@ import {
   parsePropertyFilterExpression,
   parseQueryExpression,
   parseSearchExpression,
+  queryRequestProblem,
 } from "../src/block-query";
 import { OutlinerClient, OutlinerRequestError } from "../src/client";
 import { readSavedView } from "../src/saved-view-read";
@@ -56,6 +57,19 @@ describe("query grammar", () => {
     ] });
   });
 
+  test("a group's closing parens never take a paren that balances one inside the value", () => {
+    expect(parseQueryExpression("((k=f(x)))")).toEqual(p("k", "f(x)"));
+    expect(parseQueryExpression("(k=f(x) OR a)")).toEqual({ kind: "or", operands: [p("k", "f(x)"), p("a")] });
+    expect(parseQueryExpression("((k=f(x)) OR a) b")).toEqual({ kind: "and", operands: [{ kind: "or", operands: [p("k", "f(x)"), p("a")] }, p("b")] });
+    expect(parseQueryExpression("(a OR k=g(f(x)))")).toEqual({ kind: "or", operands: [p("a"), p("k", "g(f(x))")] });
+    // Quoted parens are value text; an unbalanced trailing ")" inside a group closes it.
+    expect(parseQueryExpression('(k="f(x" OR a)')).toEqual({ kind: "or", operands: [p("k", "f(x"), p("a")] });
+    expect(parseQueryExpression("(k=:) OR a")).toEqual({ kind: "or", operands: [p("k", ":"), p("a")] });
+    expect(parseQueryExpression('(k=":)" OR a)')).toEqual({ kind: "or", operands: [p("k", ":)"), p("a")] });
+    // Clause lists without grammar keep the whole unquoted value.
+    expect(parseSearchExpression("k=f(x))")).toEqual({ filters: [{ key: "k", value: "f(x))" }] });
+  });
+
   test("ranges accept created and updated with or without spaces", () => {
     const range = (field: "created" | "updated", op: "<" | "<=" | ">" | ">=", value: string): QueryExpression => ({ kind: "time", field, op, value });
     expect(parseQueryExpression("updated>2026-09-20")).toEqual(range("updated", ">", "2026-09-20"));
@@ -77,11 +91,26 @@ describe("query grammar", () => {
     expect(syntaxPosition("due < 2026-10-01")).toBe(0);
     expect(syntaxPosition("updated > soon")).toBe(10);
     expect(syntaxPosition("updated > 2026-02-30")).toBe(10);
+    // Impossible datetimes fail instead of rolling over (2026-02-30T10:00Z is not March 2).
+    expect(syntaxPosition("updated >= 2026-02-30T10:00Z")).toBe(11);
+    expect(syntaxPosition("a updated<2026-04-31T00:00")).toBe(10);
+    expect(syntaxPosition("updated > 2026-09-27T24:00Z")).toBe(10);
+    expect(syntaxPosition("updated > 2026-09-27T10:60")).toBe(10);
+    expect(() => parseSearchExpression("updated >= 2026-02-30T10:00Z")).toThrow("Invalid date");
+    expect(parseSearchExpression("updated >= 2026-02-28T23:59:59.999+05:30").where).toEqual({ kind: "time", field: "updated", op: ">=", value: "2026-02-28T23:59:59.999+05:30" });
     expect(syntaxPosition("updated >")).toBe(9);
     expect(syntaxPosition("a OR > 2026-01-01")).toBe(5);
     expect(syntaxPosition("deleted=true OR a")).toBe(0);
     expect(syntaxPosition("a OR b=")).toBe(7);
     expect(() => parseSearchExpression("a OR")).toThrow("at character 5");
+  });
+
+  test("request problems name the field only where the request's expression was parsed", () => {
+    const expressionError = (() => { try { normalizeBlockSearchQuery({ expression: "a OR", limit: 5 }); } catch (error) { return error; } })();
+    expect(queryRequestProblem(expressionError)).toEqual({ code: "query-syntax", field: "expression", position: 4, message: expect.stringContaining("at character 5") });
+    // Other parsers (a checklist view's [query::...], a saved definition) have no request field to index.
+    const otherError = (() => { try { parsePropertyFilterExpression('status="open'); } catch (error) { return error; } })();
+    expect(queryRequestProblem(otherError)).toEqual({ code: "query-syntax", message: expect.stringContaining("Unterminated quoted filter value") });
   });
 
   test("date values are whole UTC days; relative values resolve at evaluation time", () => {
@@ -198,6 +227,34 @@ describe("query expressions through the service", () => {
       const flat = store.queryBlocks({ filters: [{ key: "lane" }], rankViewId: view.id, limit: 10 });
       expect(read.blocks.map(block => block.id)).toEqual(flat.blocks.filter(block => block.id !== view.id).map(block => block.id));
       expect(store.virtualBranchOrder(view.id).blockIds).toEqual(read.blocks.map(block => block.id));
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("roadmap receipts list the same OR and NOT views that views.read lists", () => {
+    const root = mkdtempSync(join(tmpdir(), "query-expression-receipt-"));
+    const store = new OutlinerStore(join(root, "outline.sqlite"));
+    try {
+      store.configureWorkIdPrefix("DEMO");
+      store.create("Sample work [type::work-queue] [project::sample]");
+      const either = store.create("Triage [type::virtual-branch] [query::work-stage=unprioritized OR work-stage=review]");
+      const notDone = store.create("Open [type::virtual-branch] [query::type=roadmap-item NOT work-stage=done]");
+      const unowned = store.create("Unowned [type::virtual-branch] [query::type=roadmap-item NOT owner]");
+      const recent = store.create("Recent [type::virtual-branch] [query::type=roadmap-item updated >= -1d]");
+      const excluded = store.create("Done [type::virtual-branch] [query::type=roadmap-item NOT (work-stage=unprioritized OR work-stage=review)]");
+      const invalid = store.create("Broken [type::virtual-branch] [query::(work-stage=review]");
+      const receipt = store.createRoadmapItem({ title: "Sample item", priority: "medium", project: "sample", arc: "sample-arc", tracks: ["sample"] });
+      const expected = [either, notDone, unowned, recent].map(view => ({ viewId: view.id, title: view.text.split(" [")[0] }));
+      expect(receipt.memberships).toEqual(expected);
+      // Receipts and views.read agree for every view, including the excluded and invalid ones.
+      for (const view of [either, notDone, unowned, recent, excluded, invalid]) {
+        const read = store.readSavedView(view.id);
+        const listed = read.blocks.some(block => block.id === receipt.block.id);
+        expect([view.text, listed]).toEqual([view.text, receipt.memberships.some(entry => entry.viewId === view.id)]);
+      }
+      expect(store.readSavedView(invalid.id).status).toBe("invalid");
     } finally {
       store.close();
       rmSync(root, { recursive: true, force: true });
