@@ -31,6 +31,12 @@ if(process.argv[2]==='doctor'){
  process.exit(report.ok?0:1);
 }
 const paths = resolveClientPaths();
+/** `--author` for writes and filters: who made the change, as the service records it. */
+function writerAuthor(value: string | undefined): "user" | "agent" | "system" {
+  if (value === "user" || value === "agent" || value === "system") return value;
+  throw new Error("--author must be user, agent, or system");
+}
+
 function parseRevision(value: string | undefined): number {
   const revision = Number(value);
   if (!Number.isSafeInteger(revision) || revision < 1) {
@@ -371,18 +377,19 @@ switch (command) {
         text: { type: "string" },
         parent: { type: "string" },
         author: { type: "string", default: "user" },
+        actor: { type: "string" },
+        session: { type: "string" },
       },
       strict: true,
     });
     if (!values.text) throw new Error("create requires --text");
-    if (values.author !== "user" && values.author !== "agent" && values.author !== "system") {
-      throw new Error("--author must be user, agent, or system");
-    }
+    const author = writerAuthor(values.author);
     request = {
       action: "create",
       text: values.text,
       parentId: values.parent ?? null,
-      author: values.author,
+      author,
+      ...(values.actor ? { provenance: { actorId: values.actor, ...(values.session ? { sessionId: values.session } : {}) } } : {}),
     };
     break;
   }
@@ -393,6 +400,9 @@ switch (command) {
         id: { type: "string" },
         text: { type: "string" },
         expected: { type: "string" },
+        author: { type: "string", default: "user" },
+        actor: { type: "string" },
+        session: { type: "string" },
       },
       strict: true,
     });
@@ -402,7 +412,11 @@ switch (command) {
       blockId: values.id,
       text: values.text,
       expectedRevision: parseRevision(values.expected),
-      mutation: { author: "user", actorId: "cli" },
+      mutation: {
+        author: writerAuthor(values.author),
+        actorId: values.actor ?? "cli",
+        ...(values.session ? { sessionId: values.session } : {}),
+      },
     };
     break;
   }
@@ -422,6 +436,26 @@ switch (command) {
       blockId: values.id,
       parentId: values.parent === "root" ? null : values.parent,
       position: values.position ? Number(values.position) : undefined,
+    };
+    break;
+  }
+  case "activity": {
+    const { values } = parseArgs({
+      args: rest,
+      options: {
+        limit: { type: "string" },
+        since: { type: "string" },
+        after: { type: "string" },
+        author: { type: "string" },
+      },
+      strict: true,
+    });
+    request = {
+      action: "activity.recent",
+      ...(values.limit ? { limit: parseRevision(values.limit) } : {}),
+      ...(values.since ? { since: values.since } : {}),
+      ...(values.after ? { afterCursor: parseRevision(values.after) } : {}),
+      ...(values.author ? { author: writerAuthor(values.author) } : {}),
     };
     break;
   }

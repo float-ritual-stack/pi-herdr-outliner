@@ -596,6 +596,9 @@ bun run cli properties-preview --text "Draft title [stage::queued]"
 bun run cli ticket <block-uuid>
 bun run cli ticket <block-uuid> --line 3
 bun run cli update --id <block-uuid> --text "Revised note" --expected <revision>
+bun run cli update --id <block-uuid> --text "Revised note" --expected <revision> --author agent --actor claude-code
+bun run cli create --text "Agent's note" --author agent --actor claude-code [--session <id>]
+bun run cli activity --limit 50 [--since 2026-09-27T00:00:00Z] [--after <cursor>] [--author agent]
 bun run cli selection
 bun run cli changes --since <sequence> --limit 50
 bun run cli clients --role tree
@@ -612,6 +615,8 @@ bun run cli work-id-allocate --id <block-uuid> --expected <revision>
 ```
 
 Text updates require the integer `revision` returned by the read before editing. Omitting `--expected` or saving an old revision fails without replacing newer text. Sibling moves do not invalidate an unchanged text draft.
+
+`create` and `update` record who wrote: `--author user|agent|system` (default `user`), `--actor <id>` (default `cli` for updates) and `--session <id>`. An agent passes `--author agent --actor <its id>`, so the change feed, activity and Detail attribute the write to it, not to the person. `activity` reads the same record (`activity.recent`).
 
 `view` and the agent tool `outliner_view` read a saved virtual branch's matching
 canonical roots in branch order through the service's `views.read`, the same
