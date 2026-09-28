@@ -26,6 +26,7 @@ import {
 } from "./property-summary";
 import { layoutExpandedBlock } from "./tree-layout";
 import { renderMarkdownLine, sanitizeDynamicText, truncate } from "./terminal";
+import { hideLiteralMarkers } from "./document-presentation";
 import type { Block, TreeIndexBlock } from "./types";
 import type { TreeQuickCompletion, TreeView } from "./tree-controller";
 import {
@@ -694,7 +695,7 @@ export function renderTreeFrame(
       ];
     } else {
       const displayText = decorateVirtualBranchDefinitionText(
-        `${attentionLabel ? "! attention\n" : ""}${semanticText(document!.resolved.text, semanticTreatment)}${trashLabel}`,
+        `${attentionLabel ? "! attention\n" : ""}${semanticText(hideLiteralMarkers(document!.resolved.text), semanticTreatment)}${trashLabel}`,
         branchState,
       );
       const expandedRows = layoutExpandedBlock({

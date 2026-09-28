@@ -141,6 +141,11 @@ function inlineLiteralRanges(text: string, lines: SourceLine[], blockRanges: Sou
 const LITERAL_REGION_OPEN = /^ {0,3}<!--[ \t]*literal[ \t]*-->[ \t]*$/i;
 const LITERAL_REGION_CLOSE = /^ {0,3}<!--[ \t]*\/literal[ \t]*-->[ \t]*$/i;
 
+/** Whether a line, without its line break, has the form of an opening or closing marker. */
+export function isLiteralMarkerLine(line: string): boolean {
+  return LITERAL_REGION_OPEN.test(line) || LITERAL_REGION_CLOSE.test(line);
+}
+
 /** A closed `<!-- literal -->` ... `<!-- /literal -->` region, marker lines included. */
 export interface LiteralRegion {
   start: number;
@@ -188,6 +193,26 @@ function literalRegionsFromLines(text: string, lines: SourceLine[], fences: Sour
 export function scanLiteralRegions(text: string): LiteralRegionScan {
   const lines = sourceLines(text);
   return literalRegionsFromLines(text, lines, fencedRanges(text, lines));
+}
+
+/** Start offsets of matched marker lines. An unterminated opener is text, so it is not included. */
+export function literalMarkerLineStarts(text: string): Set<number> {
+  return new Set(scanLiteralRegions(text).regions.flatMap(region => [region.opener.start, region.closer.start]));
+}
+
+/**
+ * Matched marker lines with one adjoining line break each, for callers that
+ * drop them from single-line summaries. The last line takes its preceding break.
+ */
+export function literalMarkerLineRanges(text: string): SourceRange[] {
+  const lines = sourceLines(text);
+  const starts = new Set(literalRegionsFromLines(text, lines, fencedRanges(text, lines)).regions
+    .flatMap(region => [region.opener.start, region.closer.start]));
+  return lines.flatMap((line, index) => {
+    if (!starts.has(line.start)) return [];
+    if (line.end > line.contentEnd || index === 0) return [{ start: line.start, end: line.end }];
+    return [{ start: lines[index - 1]!.contentEnd, end: line.end }];
+  });
 }
 
 function mergeRanges(ranges: SourceRange[]): SourceRange[] {
@@ -503,10 +528,13 @@ export function stripPropertyTokens(text: string): string {
 
 export function firstLineWithoutPropertyTokens(text: string): string | undefined {
   const tokens = parsePropertyRecords(text).filter(property => property.syntax !== "hashtag");
+  // Matched literal-region markers are hidden in Detail, so they are never the title.
+  const markerStarts = literalMarkerLineStarts(text);
   let tokenIndex = 0;
   for (const line of sourceLines(text)) {
     const firstLineToken = tokenIndex;
     while (tokenIndex < tokens.length && tokens[tokenIndex].start < line.end) tokenIndex += 1;
+    if (markerStarts.has(line.start)) continue;
     const lineWithoutProperties = removeRanges(
       text,
       tokens.slice(firstLineToken, tokenIndex),
@@ -623,7 +651,11 @@ export function patchPropertyText(text: string, operations: PropertyPatchOperati
     end: firstNewline < 0 ? patched.length : firstNewline + 1,
     contentEnd: firstLineEnd,
   };
-  if (fenceMarker(patched, firstLine)) return `${appendedText}${lineBreak}${patched}`;
+  // A fence or a literal region on the first line would swallow a property
+  // appended after it, so the property goes on its own line before it instead.
+  if (fenceMarker(patched, firstLine) || scanLiteralRegions(patched).regions[0]?.start === 0) {
+    return `${appendedText}${lineBreak}${patched}`;
+  }
   if (firstNewline < 0) return `${patched}\n${appendedText}`;
   return `${patched.slice(0, firstLineEnd)}${lineBreak}${appendedText}${patched.slice(firstLineEnd)}`;
 }

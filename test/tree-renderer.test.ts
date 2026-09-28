@@ -567,6 +567,21 @@ describe("renderTreeFrame", () => {
     expect(rendered.at(-2)).toBe("ready");
   });
 
+  test("blanks matched literal-region markers in expanded rows and keeps the row count", () => {
+    const text = "Brief\n<!-- literal -->\nWrite stage:: doing\n<!-- /literal -->\nEnd";
+    const expanded = block("expanded", { text, displayText: text });
+    const frame = stripTerminalSequences(renderTreeFrame(
+      view([physical(expanded, { multilineExpanded: true })]),
+      40,
+      12,
+    ).frame);
+    expect(frame).not.toContain("literal -->");
+    const rows = frame.split("\n");
+    const first = rows.findIndex(line => line.includes("Brief"));
+    expect(rows.slice(first, first + 5).map(line => line.replace(/^\s*(?:•|│)\s?/, "").trim()))
+      .toEqual(["Brief", "", "Write stage:: doing", "", "End"]);
+  });
+
   test("renders a selected expanded block from its intra-block offset", () => {
     const text = Array.from({ length: 12 }, (_, index) => `line ${index + 1}`).join("\n");
     const expanded = block("expanded", {

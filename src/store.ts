@@ -34,6 +34,7 @@ import {
 } from "./block-query";
 import {
   firstLineWithoutPropertyTokens,
+  literalMarkerLineRanges,
   formatProperty,
   matchingPropertyRecords,
   matchesFilters,
@@ -526,8 +527,15 @@ function compactTreeBlock(
     });
     title = parts.join("");
   };
+  // Matched literal-region marker lines are hidden in Detail, so the label skips
+  // them too. They are removed with the property tokens in one pass: a region
+  // stops protecting its text once a marker is gone.
+  const markerLines = literalMarkerLineRanges(title);
   if (metadata.properties.length) {
-    replaceRanges(parsePropertyRecords(title).filter(record => record.syntax !== "hashtag"), "");
+    replaceRanges([
+      ...parsePropertyRecords(title).filter(record => record.syntax !== "hashtag"),
+      ...markerLines,
+    ].sort((left, right) => left.start - right.start), "");
     let lineStart = 0;
     for (const line of title.split("\n")) {
       if (line.trim()) {
@@ -543,6 +551,7 @@ function compactTreeBlock(
       spans = [];
     }
   } else {
+    if (markerLines.length) replaceRanges(markerLines, "");
     replaceRanges(Array.from(title.matchAll(/\r?\n/g), match => ({
       start: match.index, end: match.index + match[0].length,
     })), " ↵ ");

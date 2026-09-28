@@ -549,6 +549,18 @@ describe("virtual branch navigator", () => {
     expect(state.controller.notice()).toContain("ROOT TRUNCATED · DEPTH TRUNCATED · BUDGET TRUNCATED");
   });
 
+  test("hides matched literal-region markers in the preview context", async () => {
+    const state = harness([row("one")], async (item) => ({
+      ...preview(`Preview ${item.canonicalId}`, item.canonicalId),
+      context: "Assistant · session demo\n\n<!-- literal -->\nQuoted [stage::queued]\n<!-- /literal -->",
+    }));
+    await state.controller.initialize();
+    await settle();
+    const frame = renderVirtualBranchNavigatorFrame(state.controller, 100, 16, plainMarkdownTheme).frame;
+    expect(frame).toContain("Quoted [stage::queued]");
+    expect(frame).not.toContain("literal -->");
+  });
+
   test("renders a wide split and a usable narrow list/preview toggle", async () => {
     const state = harness();
     await state.controller.initialize();

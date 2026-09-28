@@ -1178,8 +1178,26 @@ inside fenced code are code, a fence inside a region keeps its contents
 marker ends the region. An opening marker without a closing line protects
 nothing, and Detail shows a warning. Detail hides matched marker lines (each
 reads as a paragraph break, as GitHub renders an HTML comment); Markdown
-renderers hide them too. Property parser version 4 introduced regions; startup
-re-indexes existing notes without changing their text.
+renderers hide them too. Titles in Tree, links, workflows and Inbox skip matched
+marker lines, so they show the note's first visible line, as Detail does. An
+embedded note's markers are judged by that note's own text, so an embedded slice
+that holds only one marker of a closed region hides it without a warning.
+
+A note may start with a region. The region then takes the subject position:
+its first line is the title, and because a marker line ends the property-only
+run, a property line after the closing marker is not block metadata. Block
+metadata for such a note goes on a property line before the opening marker:
+
+```text
+[type::note] [work-id::DEMO-1]
+<!-- literal -->
+Put [stage::queued] on the subject line.
+<!-- /literal -->
+```
+
+Appending a property (`properties.patch`, Work-ID allocation) to a note that
+starts with a region writes it there. Property parser version 4 introduced
+regions; startup re-indexes existing notes without changing their text.
 
 Clients that edit text should ask the service how a draft will parse rather than
 copying these rules. The read-only `properties.preview` request takes `text` and

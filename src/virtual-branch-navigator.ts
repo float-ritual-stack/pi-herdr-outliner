@@ -23,6 +23,7 @@ import {
 } from "./outliner-actions";
 import { blockDisplayTitle } from "./references";
 import { sanitizeDynamicText, type TerminalInputAction, type TerminalKey } from "./terminal";
+import { hideLiteralMarkers } from "./document-presentation";
 import {
   parseTreePrimaryClick,
   parseTreeWheelEvent,
@@ -648,7 +649,7 @@ export function renderVirtualBranchNavigatorFrame(
     : "No preview available.";
   const preview = controller.preview;
   const previewLines = previewStatus === null && preview
-    ? [...(controller.previewContext ? new Markdown(sanitizeMarkdownDocument(controller.previewContext),0,0,theme).render(previewWidth).concat([" "]) : []), ...renderDetailReadPreviewLines(preview, previewWidth, theme)]
+    ? [...(controller.previewContext ? new Markdown(hideLiteralMarkers(sanitizeMarkdownDocument(controller.previewContext)),0,0,theme).render(previewWidth).concat([" "]) : []), ...renderDetailReadPreviewLines(preview, previewWidth, theme)]
     : new Markdown(
       sanitizeMarkdownDocument(previewStatus ?? "No preview available."),
       0,

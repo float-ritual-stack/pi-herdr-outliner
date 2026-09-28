@@ -5,15 +5,18 @@ import { join } from "node:path";
 import { getMarkdownTheme, initTheme } from "@earendil-works/pi-coding-agent";
 import { OutlinerClient } from "../src/client";
 import { renderDetailReadPreviewLines } from "../src/detail-pi-preview";
-import { presentReaderHeadings } from "../src/document-presentation";
-import { generatedDocument, observeDocument, sliceDocument, sourceDocument } from "../src/document-provenance";
+import { hideLiteralMarkers, presentReaderHeadings } from "../src/document-presentation";
+import { concatDocuments, generatedDocument, observeDocument, sliceDocument, sourceDocument } from "../src/document-provenance";
 import {
+  firstLineWithoutPropertyTokens,
   parseProperties,
   parsePropertyRecords,
+  patchPropertyText,
   PROPERTY_PARSER_VERSION,
   scanLiteralRegions,
   stripPropertyTokens,
 } from "../src/properties";
+import { blockDisplayTitle } from "../src/references";
 import { readSavedView } from "../src/saved-view-read";
 import { OutlinerServer } from "../src/server";
 import { OutlinerStore } from "../src/store";
@@ -227,4 +230,113 @@ test("Detail warns about an unterminated region and leaves its marker visible", 
   const presented = presentReaderHeadings(generatedDocument("Title\n<!-- literal -->\n[a::1]", "test"));
   expect(presented.text.split("\n").slice(0, 3)).toEqual(["# Title", "<!-- literal -->", "[a::1]"]);
   expect(presented.text).toContain("> ⚠ A `<!-- literal -->` region has no closing `<!-- /literal -->` line");
+});
+
+// A note whose first line opens a region: the region takes the subject position.
+const regionFirst = [
+  "<!-- literal -->",
+  "Example brief with [stage::queued]",
+  "stage:: doing",
+  "<!-- /literal -->",
+  "Body",
+].join("\n");
+
+test("an appended property goes before a region that opens the note, where it is block metadata", () => {
+  const once = patchPropertyText(regionFirst, [{ op: "append", key: "type", value: "note" }]);
+  expect(once).toBe(`[type::note]\n${regionFirst}`);
+  expect(parseProperties(once)).toEqual([{ key: "type", value: "note" }]);
+  // The next append joins that metadata line instead of entering the region.
+  const twice = patchPropertyText(once, [{ op: "append", key: "owner", value: "sam" }]);
+  expect(twice).toBe(`[type::note] [owner::sam]\n${regionFirst}`);
+  expect(parseProperties(twice)).toEqual([{ key: "type", value: "note" }, { key: "owner", value: "sam" }]);
+
+  const crlf = regionFirst.replaceAll("\n", "\r\n");
+  expect(patchPropertyText(crlf, [{ op: "append", key: "type", value: "note" }])).toBe(`[type::note]\r\n${crlf}`);
+  // An unterminated opener is ordinary text, so it stays the subject line.
+  expect(patchPropertyText("<!-- literal -->\nBody", [{ op: "append", key: "type", value: "note" }]))
+    .toBe("<!-- literal -->\n[type::note]\nBody");
+  expect(parseProperties("<!-- literal -->\n[type::note]\nBody")).toEqual([{ key: "type", value: "note" }]);
+});
+
+test("properties.patch and Work-ID allocation index and reserve the value on a region-first note", () => {
+  const { store } = makeStore();
+  store.configureWorkIdPrefix("DEMO");
+  const note = store.create(regionFirst);
+  const patched = store.patchProperties(note.id, note.revision, [{ op: "append", key: "type", value: "note" }]);
+  expect(patched.properties).toEqual([{ key: "type", value: "note" }]);
+  expect(store.queryBlocks({ filters: [{ key: "type", value: "note" }], limit: 20 }).blocks.map(block => block.id))
+    .toEqual([note.id]);
+
+  const allocated = store.allocateWorkId(note.id, patched.revision);
+  expect(allocated.block.text).toBe(`[type::note] [work-id::${allocated.workId}]\n${regionFirst}`);
+  expect(allocated.block.properties).toContainEqual({ key: "work-id", value: allocated.workId });
+  const resolution = store.resolvePageAddress(allocated.workId);
+  expect(resolution).toMatchObject({ status: "resolved" });
+  expect(JSON.stringify(resolution)).toContain(note.id);
+  // The id is reserved, so the next allocation gets a different one.
+  const other = store.create("Another note");
+  expect(store.allocateWorkId(other.id, other.revision).workId).not.toBe(allocated.workId);
+
+  // A bare region-first note gets its Work ID on the same metadata line.
+  const bare = store.create(regionFirst);
+  const bareAllocated = store.allocateWorkId(bare.id, bare.revision);
+  expect(bareAllocated.block.text).toBe(`[work-id::${bareAllocated.workId}]\n${regionFirst}`);
+  expect(bareAllocated.block.properties).toEqual([{ key: "work-id", value: bareAllocated.workId }]);
+});
+
+test("titles skip matched marker lines, as Detail does", () => {
+  expect(firstLineWithoutPropertyTokens(regionFirst)).toBe("Example brief with [stage::queued]");
+  const withMetadata = `[type::note]\n${regionFirst}`;
+  expect(firstLineWithoutPropertyTokens(withMetadata)).toBe("Example brief with [stage::queued]");
+  // An unterminated opener is visible text in Detail, so it stays the title.
+  expect(firstLineWithoutPropertyTokens("<!-- literal -->\nBody")).toBe("<!-- literal -->");
+
+  const { store } = makeStore();
+  const bare = store.create(regionFirst);
+  const metadata = store.create(withMetadata);
+  const closerLast = store.create("Title\n<!-- literal -->\nx:: y\n<!-- /literal -->");
+  const previews = new Map(store.readTreeIndex().blocks.map(block => [block.id, block.preview]));
+  expect(previews.get(bare.id)).toBe("Example brief with [stage::queued] ↵ stage:: doing ↵ Body");
+  expect(previews.get(metadata.id)).toBe("Example brief with [stage::queued]");
+  expect(previews.get(closerLast.id)).toBe("Title ↵ x:: y");
+
+  // Tree, workflows and references use the same title Detail renders.
+  initTheme("dark");
+  const detailTitle = (text: string) => renderDetailReadPreviewLines({
+    canonicalText: text, resolvedText: text, projectedText: text, embedRanges: [], workIdPrefix: null,
+  }, 80, getMarkdownTheme()).map(line => sanitizeDynamicText(line).trim()).find(Boolean);
+  for (const block of [bare, store.require(metadata.id)]) {
+    expect(detailTitle(block.text)).toBe(blockDisplayTitle(block));
+  }
+});
+
+test("Detail judges embedded markers by the note that authored them", () => {
+  const observed = (blockId: string, text: string) => observeDocument({ kind: "block", blockId }, text, 1);
+  const host = sourceDocument(observed("host", "Host title\nEmbedded below:\n"));
+  const guestText = "Guest\n<!-- literal -->\nexample [a::1]\n<!-- /literal -->\nafter";
+  const guest = observed("guest", guestText);
+  const example = guestText.indexOf("example");
+
+  // A fragment holding only the closer hides it.
+  const closerOnly = presentReaderHeadings(concatDocuments([host, sourceDocument(guest, example)]));
+  expect(closerOnly.text).toBe("# Host title\nEmbedded below:\nexample [a::1]\n\nafter");
+  // A fragment holding only the opener hides it without a false warning.
+  const openerOnly = presentReaderHeadings(concatDocuments([host, sourceDocument(guest, 0, guestText.indexOf("<!-- /"))]));
+  expect(openerOnly.text).toBe("# Host title\nEmbedded below:\nGuest\n\nexample [a::1]\n");
+
+  // A host opener cannot pair with an embed's closer; each note warns for itself.
+  const hostOpener = sourceDocument(observed("open-host", "Host\n<!-- literal -->\n"));
+  const crossed = presentReaderHeadings(concatDocuments([hostOpener, sourceDocument(guest, example)]));
+  expect(crossed.text.split("\n").slice(0, 3)).toEqual(["# Host", "<!-- literal -->", "example [a::1]"]);
+  expect(crossed.text).toContain("> ⚠ A `<!-- literal -->` region has no closing");
+  const unterminatedGuest = observed("open-guest", "Guest\n<!-- literal -->\n[a::1]");
+  expect(presentReaderHeadings(concatDocuments([host, sourceDocument(unterminatedGuest)])).text)
+    .toContain("> ⚠ A `<!-- literal -->` region has no closing");
+});
+
+test("plain reader Markdown blanks matched markers and keeps unterminated ones", () => {
+  expect(hideLiteralMarkers("Context\n<!-- literal -->\n[a::1]\n<!-- /literal -->\nend"))
+    .toBe("Context\n\n[a::1]\n\nend");
+  expect(hideLiteralMarkers("A\r\n<!-- literal -->\r\nb\r\n<!-- /literal -->")).toBe("A\r\n\r\nb\r\n");
+  expect(hideLiteralMarkers("A\n<!-- literal -->\nb")).toBe("A\n<!-- literal -->\nb");
 });
