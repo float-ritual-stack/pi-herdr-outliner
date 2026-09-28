@@ -602,7 +602,7 @@ Do not leave older editors running across this upgrade.
 - selection-neutral capture: `capture.create`
 - delivery identity: `deliveries.ensure`
 - mutations: `create`, `update`, `move`, `delete` (move to Trash), `trash.restore`, `trash.purge`
-- properties: `properties.patch`, `properties.catalog`
+- properties: `properties.patch`, `properties.catalog`, `properties.inventory`, read-only draft parsing `properties.preview`
 - virtual ordering: `virtual.occurrences.reorder`
 - references: `references.resolve`, `references.backlinks`
 - symbolic addresses: `pages.resolve`, `pages.follow`, `pages.complete`, `pages.rename`, `pages.alias`, `pages.remove`

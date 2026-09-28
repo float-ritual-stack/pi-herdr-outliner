@@ -154,6 +154,18 @@ export interface PropertyRecord extends BlockProperty {
   syntax: PropertySyntax;
 }
 
+/**
+ * How the save-time parser reads a draft. Nothing is stored: a client compares
+ * `properties` with the block it read to see what a save would change.
+ */
+export interface PropertyParsePreview {
+  parserVersion: number;
+  /** Block-scoped properties, exactly as a save would index them. */
+  properties: BlockProperty[];
+  /** Every token, including inline and line-scoped ones, in source order. */
+  tokens: PropertyRecord[];
+}
+
 export interface PropertyMatchContext extends BlockProperty {
   ordinal: number;
   start: number;
@@ -1538,6 +1550,7 @@ export interface ComputedExecutionResult {
 }
 
 export type OutlinerRequest =
+  | { id: string; action: "properties.preview"; text: string }
   | { id: string; action: "properties.inventory"; key: string; propertyScope?: PropertyQueryScope; offset?: number; limit?: number }
   | { id: string; action: "inbox.search"; query: string; semantic?: boolean }
   | { id: string; action: "inbox.status"; attentionOnly?: boolean; resultsOffset?: number }

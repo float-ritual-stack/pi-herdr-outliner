@@ -4,6 +4,7 @@ import { proposeEditMerge } from "./edit-merge-model";
 import {searchInboxHistory,visibleInboxSearch} from './inbox-search';
 import {rankSearchWithJev} from './search-ranking';
 import { blockDisplayTitle } from "./references";
+import { previewPropertyParse } from "./properties";
 import { rankGotoWithJev, visibleGotoResults } from "./goto-search";
 import { InboxWorker, assistantActivity } from "./inbox-worker";
 import { InboxRepository, summarizeInboxResult } from "./inbox-repository";
@@ -2129,6 +2130,9 @@ export class OutlinerServer {
             request.limit,
             request.propertyScope,
           );
+          break;
+        case "properties.preview":
+          result = previewPropertyParse(request.text);
           break;
         case "properties.inventory":
           result = this.store.propertyInventory(request);

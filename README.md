@@ -573,6 +573,7 @@ bun run cli read <block-uuid> <block-uuid> --fields title,properties
 bun run cli view <saved-virtual-branch-uuid>
 bun run cli view <saved-virtual-branch-uuid> --limit 500 --expected <revision>
 bun run cli create --text "A durable note [type::note]"
+bun run cli properties-preview --text "Draft title [stage::queued]"
 bun run cli update --id <block-uuid> --text "Revised note" --expected <revision>
 bun run cli selection
 bun run cli clients --role tree
@@ -1138,6 +1139,17 @@ Investigate page navigation [type::roadmap-item] [work-stage::queued]
 ```
 
 Every deliberate non-literal property is indexed in `block_properties`; canonical `Block.text` remains the source of truth. The first contiguous property-only run after an optional subject line is block metadata, as is the trailing bracket-property run on the subject. Bare `key:: value` properties later in the body have `line` scope; later bracket tokens have `inline` scope. Literal examples inside inline/fenced code and escaped bracket syntax are not indexed.
+
+Clients that edit text should ask the service how a draft will parse rather than
+copying these rules. The read-only `properties.preview` request takes `text` and
+returns the block `properties` a save would index, plus every `tokens` record with
+its `scope` (`block`, `line`, `inline`), `placement` (`metadata-line`,
+`trailing-metadata`, `inline`), syntax, ordinal, line, column and source span, and
+the `parserVersion`. It uses the save-time parser, creates or changes nothing and
+emits no event. For example, `Card [stage::queued]` has block property `stage`,
+while `Card [stage::queued] more` has only an inline token: a client can compare
+the preview with the block it read and warn before a save drops a property.
+CLI: `bun run cli properties-preview --text '<draft>'` or `--stdin`.
 
 ### Bounded block queries
 

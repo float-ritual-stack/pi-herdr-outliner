@@ -66,6 +66,17 @@ switch (command) {
     });
     break;
   }
+  case "properties-preview": {
+    const { values } = parseArgs({
+      args: rest, strict: true,
+      options: { text: { type: "string" }, stdin: { type: "boolean" } },
+    });
+    if ((values.text !== undefined) === Boolean(values.stdin)) {
+      throw new Error("properties-preview requires either --text or --stdin");
+    }
+    request = { action: "properties.preview", text: values.stdin ? await Bun.stdin.text() : values.text! };
+    break;
+  }
   case "list": {
     const { values } = parseArgs({
       args: rest,

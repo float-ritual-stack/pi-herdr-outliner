@@ -2,6 +2,7 @@ import { protectedCodeRanges } from "./markdown-code-ranges";
 import type {
   BlockProperty,
   PropertyFilter,
+  PropertyParsePreview,
   PropertyPatchOperation,
   PropertyQueryScope,
   PropertyRecord,
@@ -418,6 +419,19 @@ export function parseProperties(text: string): BlockProperty[] {
     .filter((property) => property.scope === "block")
     .map(({ key, value }) => ({ key, value }));
 }
+/** Reads a draft with the save-time parser without storing or changing anything. */
+export function previewPropertyParse(text: unknown): PropertyParsePreview {
+  if (typeof text !== "string") throw new Error("properties.preview requires text");
+  const tokens = parsePropertyRecords(text);
+  return {
+    parserVersion: PROPERTY_PARSER_VERSION,
+    properties: tokens
+      .filter((property) => property.scope === "block")
+      .map(({ key, value }) => ({ key, value })),
+    tokens,
+  };
+}
+
 export function stripPropertyTokens(text: string): string {
   return removeRanges(text, parsePropertyRecords(text).filter(property => property.syntax !== "hashtag"));
 }
