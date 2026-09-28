@@ -1029,6 +1029,32 @@ describe("detail controller projection and deferred refresh", () => {
     expect(frames).toContain(1);
   });
 
+  test("resolves block-reference titles in comment and reply text", async () => {
+    const referenced = "30000000-0000-4000-8000-000000000003";
+    const harness = createHarness(makeBlock());
+    const resolveText = harness.effects.resolveReferences;
+    const resolved: string[] = [];
+    harness.effects.resolveReferences = async text => {
+      if (!text.includes(referenced)) return resolveText(text);
+      resolved.push(text);
+      return {text: text.replace(`((${referenced}))`, "((Referenced title))"), references: []};
+    };
+    harness.effects.reconcileAnnotations = async input => {
+      const thread = annotationRecord({
+        representation: input.newRepresentation,
+        anchor: { kind: "text-quote" as const, start: 0, end: 3, exact: "Raw", prefix: "", suffix: " block text" },
+      });
+      const body = `See ((${referenced}))`;
+      return { threads: [{ ...thread, body, replies: [{ ...thread, body: "Plain [[Page]] reply" }] }], changed: false };
+    };
+    await harness.controller.initialize();
+    await Bun.sleep(0);
+    expect(resolved).toEqual([`See ((${referenced}))`]);
+    expect([...harness.controller.state.annotationReferences ?? []]).toEqual([
+      [`See ((${referenced}))`, "See ((Referenced title))"],
+    ]);
+  });
+
   test("removes old annotation ranges before painting a changed block revision", async () => {
     const original = makeBlock({ text: "Original source\nOld document" });
     const annotations = Promise.withResolvers<Awaited<ReturnType<DetailEffects["reconcileAnnotations"]>>>();

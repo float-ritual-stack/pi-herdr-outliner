@@ -8,7 +8,7 @@ import {TextBuffer} from './text-buffer';
 import {textBufferEditorCommand,applyTextBufferEditorCommand} from './text-buffer-editor';
 import type {AnnotationTarget,AnnotationBatchReceipt,AnnotationRecord,AnnotationPassage} from './types';
 import {documentPreviewLines,documentPreviewLinks,documentPreviewThreadRow,revealDocumentPreviewSourceLine,revealDocumentPreviewComment} from './document-preview-renderer';
-import {detailAnnotationGroups} from './detail-annotations';
+import {detailAnnotationGroups, resolveAnnotationReferences} from './detail-annotations';
 import {parsePreviewRegionActionUri, previewRegionActionUri, togglePreviewRegionDisclosure} from './detail-preview-regions';
 import type {OutlinerRequester} from './client-target';
 import {loadDetailReadPreview} from './detail-read-preview';
@@ -18,7 +18,7 @@ import {parseOutlinerLinkUri,followResourceOccurrence} from './outliner-links';
 import {isAuthoredFileOccurrence} from './resource-references';
 import {resolveFragmentSlice} from './fragments';
 import type {TerminalKey} from './terminal';
-import type {Block, AnnotationThread, PageAddressResolution, OutlinerNavigationTarget} from './types';
+import type {Block, AnnotationThread, ResolvedBlockReferences, PageAddressResolution, OutlinerNavigationTarget} from './types';
 import type {ResourceDescription} from './resources';
 import {resourceDescriptionLabel} from './resources';
 import {resourceContentDocument} from './document-resources';
@@ -258,13 +258,16 @@ export class DocumentPreview {
     } catch(error){this.value={...this.value!,notice:error instanceof Error?error.message:String(error)};}
     finally {draft.saving=false;this.changed();}
   }
+  private commentReferences(threads:readonly AnnotationThread[]):Promise<Map<string,string>> {
+    return resolveAnnotationReferences(threads,text=>this.client.request<ResolvedBlockReferences>({action:'references.resolve',text}));
+  }
   private async refreshComments(document:DetailReadPreviewDocument):Promise<void> {
     const annotations=document.annotations;
     const target=annotations?.target;
     if(!annotations||!target)return;
     const threads=await this.client.request<AnnotationThread[]>({action:'annotations.list',query:{
       subject:target.kind==='block'?{kind:'block',blockId:target.blockId}:{kind:'resource',resourceId:target.resourceId},includeResolved:true}});
-    document.annotations={...annotations,annotationThreads:threads};
+    document.annotations={...annotations,annotationThreads:threads,annotationReferences:await this.commentReferences(threads)};
     // A new document identity invalidates the shared row/link cache while preserving disclosure choices.
     if(this.value?.document===document)this.value={...this.value,document:{...document}};
   }
@@ -502,6 +505,7 @@ export class DocumentPreview {
           }})).threads;
         }
         document.annotations={target,context:{selected:document.sourceBlock?selected:null},selectedAnnotationId:undefined,annotationThreads,
+          annotationReferences:await this.commentReferences(annotationThreads),
           document:resourceDescription?{kind:'ready',document:{kind:'resource',description:resourceDescription}}:{kind:'empty'}};
       } catch(error) { notice=`Comments unavailable: ${error instanceof Error?error.message:String(error)}`; }
       if(generation!==this.generation)return false;

@@ -1197,6 +1197,73 @@ describe("Pi Markdown detail preview", () => {
       layout.scrollView.render(72).map(stripTerminalSequences).join("\n"),
     ).toContain("Check this range.");
   });
+  test("comment threads render references and formatting like note text, reachable by keyboard", () => {
+    const raw = "Title\n\ntarget phrase\n\nafter";
+    const detail = state(raw, raw);
+    // A linked header needs a real block identity.
+    detail.context.selected = {...detail.context.selected!, id: "20000000-0000-4000-8000-000000000001"};
+    const target = textTarget(raw, raw.indexOf("target phrase"), raw.indexOf("\n\nafter"));
+    const blockId = "20000000-0000-4000-8000-000000000002";
+    const body = `See [[Launch plan]], ((${blockId})) and **bold** in PIE-420.`;
+    const root = annotationThread("comment-links", target, body);
+    const reply = annotationThread("reply-links", target, "Filed [[PIE-419]] with `code`.", "agent");
+    detail.annotationThreads = [{...root, replies: [{...reply, parentAnnotationId: root.block.id}]}];
+    detail.annotationReferences = new Map([[body, `See [[Launch plan]], ((Resolved title)) and **bold** in PIE-420.`]]);
+    const layout = expandedPreview(detail, plainMarkdownTheme, true);
+    withInternalLinks(() => layout.render(72));
+    const region = detail.previewRegions.regions.find(candidate => candidate.kind === "annotation")!;
+    togglePreviewRegionDisclosure(detail.previewRegions, region.id);
+    layout.scrollView.updateLayout(40, 40, () => {});
+    const lines = withInternalLinks(() => layout.render(72));
+    const text = lines.map(stripTerminalSequences).join("\n");
+    expect(text).toContain("See Launch plan, Resolved title and bold in PIE-420.");
+    expect(text).toContain("agent: Filed PIE-419 with code.");
+    expect(text).not.toContain("\\");
+    expect(text).not.toContain("**");
+    const uris = measureRenderedLinks(lines).map(link => link.uri);
+    for (const uri of [outlinerLinkUri("page", "Launch plan"), outlinerLinkUri("block", blockId),
+      outlinerLinkUri("work", "PIE-420"), outlinerLinkUri("page", "PIE-419")]) expect(uris).toContain(uri);
+
+    // Keyboard focus reaches the same links (and Open thread), after their thread, in reading order.
+    const ids = detail.previewRegions.regions.map(candidate => candidate.id);
+    const commentLinks = detail.previewRegions.regions.filter(candidate => candidate.id.startsWith("body-link:comment:"));
+    expect(commentLinks.map(candidate => candidate.activation)).toEqual([
+      outlinerLinkUri("page", "Launch plan"), outlinerLinkUri("block", blockId),
+      outlinerLinkUri("work", "PIE-420"), outlinerLinkUri("block", root.block.id), outlinerLinkUri("page", "PIE-419"),
+    ].map(uri => ({type: "link.open", uri})));
+    expect(ids.indexOf(commentLinks[0]!.id)).toBeGreaterThan(ids.indexOf(`annotation-thread:${root.block.id}`));
+    detail.previewRegions.focusedRegionId = commentLinks[1]!.id;
+    const titleLine = () => withInternalLinks(() => layout.render(72)).find(line => stripTerminalSequences(line).includes("Resolved title"))!;
+    const focused = titleLine();
+    const start = focused.indexOf("\x1b[1;97;48;5;24m");
+    expect(start).toBeGreaterThan(-1);
+    expect(stripTerminalSequences(focused.slice(start))).toStartWith("Resolved title");
+    detail.previewRegions.focusedRegionId = null;
+    expect(titleLine()).not.toContain("\x1b[1;97;48;5;24m");
+  });
+
+  test("comment block syntax that would break the thread box renders as plain lines", () => {
+    const raw = "Title\n\ntarget phrase\n\nafter";
+    const detail = state(raw, raw);
+    const target = textTarget(raw, raw.indexOf("target phrase"), raw.indexOf("\n\nafter"));
+    const body = ["# Heading", "```ts", "const x = 1;", "```", "| a | b |", "| - | - |", "| 1 | 2 |",
+      "<div>raw</div>", "Setext", "---", "- still a list with [[PIE-419]]"].join("\n");
+    detail.annotationThreads = [annotationThread("comment-structure", target, body)];
+    const layout = previewLayout(detail);
+    layout.render(60);
+    togglePreviewRegionDisclosure(detail.previewRegions,
+      detail.previewRegions.regions.find(candidate => candidate.kind === "annotation")!.id);
+    const lines = layout.render(60).map(stripTerminalSequences);
+    const top = lines.findIndex(line => line.includes("╭ Comment 1"));
+    const bottom = lines.findIndex((line, row) => row > top && line.includes("╰"));
+    expect(lines.slice(top + 1, bottom).every(line => line.trimStart().startsWith("│"))).toBe(true);
+    const panel = lines.slice(top + 1, bottom).join("\n");
+    for (const literal of ["# Heading", "```ts", "| - | - |", "<div>raw</div>", "---", "still a list with PIE-419"]) {
+      expect(panel).toContain(literal);
+    }
+    expect(panel).not.toContain("\\");
+  });
+
   test("keeps pane-capture annotations reachable without applying screen offsets to Markdown", () => {
     const rendered = "Hub\n\n[Generated result](outliner://block/target)\n\nUnrelated final paragraph";
     const detail = state(rendered, "Hub\n\n!((virtual-branch))");
@@ -2321,6 +2388,10 @@ describe("generated backlink preview", () => {
       stripTerminalSequences(line).includes("▶ ACTIVE")
     );
     expect(highlighted).toContain("\x1b[1;97;48;5;24m");
+    // Generated snippets escape without pi-tui reading `\\[…\\]` as LaTeX.
+    const backlinkText = layout.backlinkMarkdown.render(80).map(stripTerminalSequences).join("\n");
+    expect(backlinkText).toContain("[source-block::Canonical target]");
+    expect(backlinkText).not.toContain("\\[");
     expect(generated).toContain(detailBacklinkToggleUri("source-target"));
     expect(parseDetailPreviewActionUri(detailBacklinkToggleUri("source-target"))).toEqual({
       type: "backlink.source.disclosure.toggle",

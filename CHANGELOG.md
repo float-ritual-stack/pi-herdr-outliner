@@ -14,6 +14,13 @@ This file records notable user-facing changes. The project remains active dogfoo
   re-indexes existing notes on startup without changing their text, and
   `properties.preview` reports `parserVersion` 4. PIE-422.
 
+- Detail comment threads render comment and reply text like note text:
+  `[[pages]]`, `((blocks))` (with resolved titles) and Work IDs are links you
+  can click or reach with Tab and open with Enter, and bold, italics and code
+  render. Headings, fences, tables, rules and HTML blocks in a comment show as
+  plain lines so the thread box stays intact. Backlink titles and snippets
+  containing `[` no longer show stray backslashes. No service change. PIE-421.
+
 - Tree's **Advanced property filter** accepts the query grammar: `OR`, `NOT`,
   parentheses and `created`/`updated` ranges, for example
   `status=open OR status=review` or `NOT status=done updated >= -7d`. Clause

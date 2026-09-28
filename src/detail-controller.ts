@@ -9,7 +9,7 @@ import type {ChecklistUpdateInput, ChecklistUpdateReceipt} from "./types";
 import type {ChecklistIdentityChange} from "./types";
 import { COMPLETION_ROWS } from "./reference-completion-renderer";
 import { ReferenceCompletionSession, type ReferenceCompletionItem, type ReferenceCompletionState } from "./reference-completion";
-import { buildDetailAnnotationView, displayedResourceText, detailAnnotationGroups, selectedAnnotationThread } from "./detail-annotations";
+import { buildDetailAnnotationView, displayedResourceText, detailAnnotationGroups, annotationReferenceTexts, resolveAnnotationReferences, sameAnnotationReferences, selectedAnnotationThread } from "./detail-annotations";
 import type { BacklinkPeekLaunch } from "./backlink-peek";
 import type { EditRecovery, EditRecoveryStart } from "./edit-recovery";
 import { EditRecoveryRetainedLocallyError, type EditRecoveryClient } from "./edit-recovery-client";
@@ -494,6 +494,8 @@ export interface DetailState {
   fileCursor: number;
   selectionAnchor: number | null;
   annotationThreads: AnnotationThread[];
+  /** Comment and reply text with block-reference titles resolved, keyed by stored text. */
+  annotationReferences?: ReadonlyMap<string, string>;
   annotationRange: DetailLineRange | null;
   attention: AttentionClientState;
   attentionRevealSourceLine: number | null;
@@ -1260,15 +1262,20 @@ export function createDetailController(
     } catch {
       threads = [];
     }
+    // Resolve only when a title can change; otherwise apply in this turn as before.
+    const references = annotationReferenceTexts(threads).size
+      ? await resolveAnnotationReferences(threads, text => effects.resolveReferences(text)) : new Map<string, string>();
     const apply = () => {
       if (expectedGeneration !== loadGeneration || state.document !== documentAtStart ||
         state.referencedFile !== fileAtStart || !sameNavigationTarget(state.target, targetAtStart) ||
-        sameAnnotationThreads(state.annotationThreads, threads)) return;
+        (sameAnnotationThreads(state.annotationThreads, threads) &&
+          sameAnnotationReferences(state.annotationReferences, references))) return;
       if (isBufferMode() && !state.annotationReplyDraft) {
         state.refreshPending = true;
         return;
       }
       state.annotationThreads = threads;
+      state.annotationReferences = references;
       emit();
     };
     if (application === "current-turn") apply();

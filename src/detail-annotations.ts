@@ -8,13 +8,49 @@ import type { Block, AnnotationRecord, AnnotationTarget, AnnotationThread } from
 
 /** The displayed evidence needed by both Detail and local Preview comment readers. */
 export interface AnnotationReaderState extends Pick<DetailState,
-  "target" | "resolvedSelectedText" | "annotationThreads" | "selectedAnnotationId" | "previewRegions"> {
+  "target" | "resolvedSelectedText" | "annotationThreads" | "selectedAnnotationId" | "previewRegions" | "annotationReferences"> {
+  /** Work IDs in comment text link with the same prefix as the note they discuss. */
+  workIdPrefix?: string | null;
   context: {selected: Pick<Block, "id" | "text"> | null};
   historical?:boolean;
   document: {kind: "empty" | "loading" | "failed"} | {
     kind: "ready";
     document: {kind: "block"} | {kind: "resource"; description: import("./resources").ResourceDescription};
   };
+}
+
+/**
+ * Resolve block-reference titles in comment and reply text, keyed by the stored
+ * text. Only text that can contain `((…))` is resolved; failures keep the
+ * stored text, which still links pages, Work IDs and block IDs.
+ */
+export function annotationReferenceTexts(threads: readonly AnnotationThread[]): Set<string> {
+  return new Set(threads.flatMap(thread => [thread.body, ...thread.replies.map(reply => reply.body)])
+    .filter(body => body.includes("((")));
+}
+
+export async function resolveAnnotationReferences(
+  threads: readonly AnnotationThread[],
+  resolve: (text: string) => Promise<{ text: string }>,
+): Promise<Map<string, string>> {
+  const bodies = annotationReferenceTexts(threads);
+  const resolved = new Map<string, string>();
+  await Promise.all([...bodies].map(async body => {
+    try {
+      const result = await resolve(body);
+      if (result.text !== body) resolved.set(body, result.text);
+    } catch { /* The stored text remains readable and linkable. */ }
+  }));
+  return resolved;
+}
+
+export function sameAnnotationReferences(
+  left: ReadonlyMap<string, string> | undefined,
+  right: ReadonlyMap<string, string> | undefined,
+): boolean {
+  if ((left?.size ?? 0) !== (right?.size ?? 0)) return false;
+  for (const [body, text] of left ?? []) if (right?.get(body) !== text) return false;
+  return true;
 }
 
 function fitDynamicText(value: string, width: number): string {
