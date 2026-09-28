@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {visibleWidth} from '@earendil-works/pi-tui';
 import type {AnnotationThread, Block} from '../../src/types';
+import type {ObservedDocument} from '../../src/document-provenance';
 import {runHerdrScenario} from './herdr-runner';
 
 const result=await runHerdrScenario({
@@ -79,6 +80,15 @@ const result=await runHerdrScenario({
     assert.equal(passage.anchor.start,null);
     assert.equal(passage.representation.observation?.validation,'preview-selection');
     assert.equal(passage.representation.observation?.quote,passage.anchor.exact);
+    assert.equal(passage.passage?.quote,passage.anchor.exact);
+    const sources=passage.passage!.fragments.flatMap(fragment=>fragment.kind==='source'?fragment.slices:[]);
+    assert.ok(sources.length>=2,'Wrapped rows keep their separate canonical ranges');
+    for(const slice of sources){
+      const source:ObservedDocument=passage.passage!.documents[slice.document]!;
+      assert.deepEqual(source.subject,{kind:'block',blockId:passageNote.id});
+      assert.equal(source.text,passageNote.text);
+      assert.equal(source.text.slice(slice.anchor.start!,slice.anchor.end!),slice.anchor.exact);
+    }
     await s.keys(panes.tree,']');
     await s.waitVisible(panes.tree,'WRAPPED QUOTE FEEDBACK');
     await s.checkpoint('wrapped-preview-passage-saved');
@@ -100,6 +110,7 @@ const result=await runHerdrScenario({
     assert.equal(keyboardThreads[0]!.originalTarget.anchor.kind,'text-quote');
     assert.equal(keyboardThreads[0]!.originalTarget.representation.observation?.quote,'KEYBOARD PASSAGE NOTE');
     assert.deepEqual((keyboardThreads[0]!.originalTarget.representation.observation as {input?:string})?.input,'keyboard');
+    assert.equal(keyboardThreads[0]!.originalTarget.passage?.quote,'KEYBOARD PASSAGE NOTE');
     assert.equal((await s.client.request<Block>({action:'get',blockId:keyboardNote.id})).text,keyboardNote.text);
     await s.keys(panes.tree,']');
     await s.waitVisible(panes.tree,'KEYBOARD QUOTE FEEDBACK');

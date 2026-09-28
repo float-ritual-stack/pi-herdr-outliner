@@ -43,12 +43,15 @@ Pi/OMP users can invoke `/outliner`; supported coding clients can use the projec
 
 ## Source boundaries
 
-The pinned Pi TUI patch in `patches/` adds selected rendered lines as the second
-argument to `copySelection`. Outliner uses that provenance to omit generated
-disclosure controls while preserving authored text. Install through Bun with the
-lockfile so the patch is applied. When upgrading Pi, retain or replace this hook
-and run the document-folding application journey; plain-text copying cannot
-distinguish authored glyphs from controls.
+The pinned Pi TUI patch in `patches/` supplies rendered lines and exact normalized
+selection ranges to `copySelection`. Its third argument identifies the originating
+ScrollView, the exact layout output and a snapshot of its lines. Reader copy uses
+that identity to select from the corresponding immutable document frame; copied
+text is never searched to reconstruct source positions. Other surfaces retain
+ordinary rendered copying. Install through Bun with the lockfile so the patch is
+applied. When upgrading Pi, retain or replace this hook, run `reader-copy.test.ts`
+and the document-folding application journey. Plain-text copying cannot establish
+source evidence or distinguish authored glyphs from controls.
 
 - `src/store.ts` owns persistence and canonical graph invariants.
 - `src/server.ts` owns protocol dispatch, sequence, and subscriptions.

@@ -1,3 +1,4 @@
+import {projectDetailRead} from '../src/detail-embeds';
 import {expect,test} from 'bun:test';
 import {mkdtempSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
@@ -5,20 +6,22 @@ import {join} from 'node:path';
 import {initTheme} from '@earendil-works/pi-coding-agent';
 import {stripTerminalSequences,visibleWidth} from '@earendil-works/pi-tui';
 import {OutlinerStore} from '../src/store';
+import {InboxRepository} from '../src/inbox-repository';
 import {OutlinerServer} from '../src/server';
 import {OutlinerClient,type RequestInput} from '../src/client';
 import {DocumentPreview} from '../src/document-preview';
 import {DocumentPreviewInput} from '../src/document-preview-input';
+import {blockAnnotationRepresentation} from '../src/annotation-representations';
 import {documentPreviewLinks,documentPreviewLines,renderDocumentPreview} from '../src/document-preview-renderer';
 import type {AnnotationThread,Block,ChecklistCollection,ChecklistUpdateReceipt} from '../src/types';
 
-async function fixture(run:(client:OutlinerClient)=>Promise<void>){
+async function fixture(run:(client:OutlinerClient,store:OutlinerStore)=>Promise<void>){
   initTheme(undefined,false);
   const directory=mkdtempSync(join(tmpdir(),'preview-checklist-'));
   const store=new OutlinerStore(join(directory,'outline.sqlite'));
   const server=new OutlinerServer(store,join(directory,'outliner.sock'));
   await server.start();
-  try {await run(new OutlinerClient(join(directory,'outliner.sock')));}
+  try {await run(new OutlinerClient(join(directory,'outliner.sock')),store);}
   finally {await server.close();store.close();rmSync(directory,{recursive:true,force:true});}
 }
 const noDetail=async()=>{throw Error('Checklist interaction must stay in Preview');};
@@ -27,10 +30,131 @@ const tasks=(reader:DocumentPreview,width=44)=>links(reader,width).filter(link=>
 const paint=(reader:DocumentPreview,width=44)=>documentPreviewLines(reader.state!.document,width).map(stripTerminalSequences).join('\n');
 const click=async(reader:DocumentPreview,uri:string)=>reader.action('preview.link:'+encodeURIComponent(uri),noDetail);
 
+// Tree Preview owns viewport offsets and pointer geometry separately from Detail.
+// Exercise that boundary through its real renderer/input and the service, rather
+// than supplying preassembled selection evidence to the composer.
+test('Tree Preview captures transformed text in the selected transclusion occurrence',async()=>fixture(async client=>{
+  const source=await client.request<Block>({action:'create',text:'# Shared\n\n**Rock &amp; roll**'});
+  const host=await client.request<Block>({action:'create',text:`# Host\n\n!((${source.id}))\n\nBetween\n\n!((${source.id}))`});
+  const input=new DocumentPreviewInput(),copied:string[]=[];
+  const reader=new DocumentPreview(client,()=>{},'preview-reader',undefined,input);
+  await reader.load({kind:'block',blockId:host.id});reader.focus();
+  const frame=renderDocumentPreview(reader.state!,{x:8,y:3,width:48,height:30},'');
+  const lines=[...Array(3).fill(''),...frame.lines.map(line=>' '.repeat(8)+line)];
+  input.render(lines,frame,reader.state);
+  const row=lines.map((line,index)=>stripTerminalSequences(line).includes('Rock & roll')?index:-1).filter(index=>index>=0).at(-1)!;
+  const start=stripTerminalSequences(lines[row]!).indexOf('Rock & roll');
+  expect(row).toBeGreaterThan(frame.content.y);
+  const actions={focus(){reader.focus();},scroll(){},resize(){},async invoke(action:string){await reader.action(action,noDetail);}};
+  const send=(phase:'down'|'drag'|'up',column:number)=>input.handle(`\x1b[<${phase==='drag'?32:0};${column+1};${row+1}${phase==='up'?'m':'M'}`,actions,text=>copied.push(text),()=>{});
+  send('down',start);send('drag',start+11);send('up',start+11);
+  expect(copied).toEqual(['Rock & roll']);
+  reader.beginComment();
+  const target=reader.state!.comment!.target!;
+  expect(target.passage?.quote).toBe('Rock & roll');
+  const fragments=target.passage!.fragments.filter(fragment=>fragment.kind==='source');
+  expect(fragments.map(fragment=>fragment.slices.map(slice=>target.passage!.documents[slice.document]!.text.slice(slice.anchor.start!,slice.anchor.end!)).join('')).join('')).toBe('Rock &amp; roll');
+  expect(fragments.every(fragment=>fragment.occurrence?.host.anchor.start===host.text.lastIndexOf('!(('))).toBe(true);
+  reader.paste('Discuss this use');await reader.key({name:'s',ctrl:true},48,27,noDetail);
+  expect(reader.state!.notice).toBe('Comment saved');
+  expect(reader.state!.comment).toBeUndefined();
+  const threads=await client.request<AnnotationThread[]>({action:'annotations.list',query:{subject:{kind:'block',blockId:host.id},includeResolved:true}});
+  expect(threads).toHaveLength(1);
+  expect(threads[0]!.originalTarget.passage).toEqual(target.passage);
+  expect((await client.request<Block>({action:'get',blockId:source.id})).text).toBe(source.text);
+  // Collapse the two identical embedded sections, then navigate to the comment.
+  paint(reader,48);
+  const folds=reader.state!.document.previewRegions!.regions.filter(region=>region.kind==='document-fold'&&region.sourceSpan&&
+    reader.state!.document.projectedText.split('\n')[region.sourceSpan.startLine]?.includes('# Shared'));
+  expect(folds).toHaveLength(2);
+  for(const fold of folds)reader.state!.document.previewRegions!.disclosureOverrides.set(fold.id,false);
+  expect(paint(reader,48)).not.toContain('Rock & roll');
+  await reader.key({name:']'},48,27,noDetail);
+  expect(paint(reader,48).match(/Rock & roll/g)).toHaveLength(1);
+  expect(reader.state!.document.previewRegions!.disclosureOverrides.get(folds[0]!.id)).toBe(false);
+  expect(reader.state!.document.previewRegions!.disclosureOverrides.get(folds[1]!.id)).toBe(true);
+}));
+
+test('saved Preview versions place passage comments against their displayed observation',async()=>fixture(async client=>{
+  const before=await client.request<Block>({action:'create',text:'# Plan\n\nOriginal words'});
+  const input=new DocumentPreviewInput();
+  const reader=new DocumentPreview(client,()=>{},'history-reader',undefined,input);
+  await reader.load({kind:'block',blockId:before.id});reader.focus();
+  const frame=renderDocumentPreview(reader.state!,{x:0,y:0,width:48,height:20},'');
+  input.render(frame.lines,frame,reader.state);
+  const row=frame.lines.findIndex(line=>stripTerminalSequences(line).includes('Original words'));
+  const actions={focus(){},scroll(){},resize(){},async invoke(){}};
+  for(const [button,column,phase] of [[0,0,'M'],[32,14,'M'],[0,14,'m']] as const)
+    input.handle(`\x1b[<${button};${column+1};${row+1}${phase}`,actions,()=>{},()=>{});
+  reader.beginComment();reader.paste('Historical discussion');await reader.key({name:'s',ctrl:true},48,17,noDetail);
+  expect(reader.state!.comment).toBeUndefined();
+  const updated=await client.request<Block>({action:'update',blockId:before.id,expectedRevision:before.revision,text:'# Plan\n\nReplacement words',mutation:{author:'user'}});
+  await client.request({action:'annotations.reconcile',input:{subject:{kind:'block',blockId:before.id},newRepresentation:blockAnnotationRepresentation(updated)}});
+  await reader.load({kind:'block',blockId:before.id});
+  expect(paint(reader)).toContain('Unpositioned comments');
+  await reader.loadText({kind:'block',blockId:before.id},'Before editing',async()=>before);reader.focus();
+  await reader.key({name:']'},48,17,noDetail);
+  const historical=paint(reader,48);
+  expect(historical).not.toContain('Unpositioned comments');
+  expect(historical.split('\n').find(line=>line.includes('Original words'))).toStartWith('− ');
+  expect(historical).toContain('Historical discussion');
+  expect(reader.state!.document.canonicalText).toBe(before.text);
+}));
+
+test('commenting on an Inbox before-image preserves its attempt and never assigns live checklist IDs',async()=>fixture(async(client,store)=>{
+  const {block:before}=await client.request<{block:Block}>({action:'capture.create',requestId:'capture-plan',text:'# Plan\n\n- [ ] Prepare release',source:'cli'});
+  const attempt=new InboxRepository(store).apply('file-plan',before,{
+    summary:'Filed plan',source:{disposition:'file',text:'# Filed plan'},notes:[],tasks:[],updates:[],
+  });
+  const filed=await client.request<Block>({action:'get',blockId:before.id});
+  // Identical bytes are not permission to edit the live note from history.
+  const live=await client.request<Block>({action:'update',blockId:before.id,expectedRevision:filed.revision,
+    text:before.text,mutation:{author:'user'}});
+  const input=new DocumentPreviewInput();
+  const reader=new DocumentPreview(client,()=>{},'inbox-history-reader',undefined,input);
+  await reader.loadText({kind:'block',blockId:before.id},'Before assistance',async()=>({...before,inboxAttemptId:attempt.id}));
+  reader.focus();
+  const frame=renderDocumentPreview(reader.state!,{x:0,y:0,width:48,height:20},'');
+  input.render(frame.lines,frame,reader.state);
+  const row=frame.lines.findIndex(line=>stripTerminalSequences(line).includes('Prepare release'));
+  const column=stripTerminalSequences(frame.lines[row]!).indexOf('Prepare release');
+  const actions={focus(){},scroll(){},resize(){},async invoke(){}};
+  for(const [button,end,phase] of [[0,column,'M'],[32,column+15,'M'],[0,column+15,'m']] as const)
+    input.handle(`\x1b[<${button};${end+1};${row+1}${phase}`,actions,()=>{},()=>{});
+  reader.beginComment();reader.paste('Discuss the saved plan');
+  await reader.key({name:'s',ctrl:true},48,17,noDetail);
+  expect(reader.state!.notice).toBe('Comment saved');
+  expect(await client.request<Block>({action:'get',blockId:before.id})).toEqual(live);
+  const [thread]=await client.request<AnnotationThread[]>({action:'annotations.list',query:{subject:{kind:'block',blockId:before.id}}});
+  expect(thread!.originalTarget.passage!.documents[0]).toMatchObject({
+    text:before.text,revision:before.revision,inbox:{attemptId:attempt.id,updatedAt:before.updatedAt},
+  });
+  expect(thread!.originalTarget.passage!.fragments.filter(fragment=>fragment.kind==='source')
+    .flatMap(fragment=>fragment.slices).every(slice=>!slice.listItemId)).toBe(true);
+  for(const inbox of [{attemptId:'missing',updatedAt:before.updatedAt},
+    {attemptId:attempt.id,updatedAt:'2000-01-01T00:00:00.000Z'}]) {
+    const passage=thread!.originalTarget.passage!;
+    await expect(client.request({action:'annotations.create',requestId:crypto.randomUUID(),input:{source:'user',body:'Forged history',
+      target:{...thread!.originalTarget,passage:{...passage,documents:passage.documents.map(document=>({...document,inbox}))}},
+    }})).rejects.toThrow('saved Inbox passage is unavailable or mismatched');
+  }
+  expect((await client.request<AnnotationThread[]>({action:'annotations.list',query:{subject:{kind:'block',blockId:before.id}}}))).toHaveLength(1);
+  expect(await client.request<Block>({action:'get',blockId:before.id})).toEqual(live);
+}));
+
 test('live checklist views use correlated canonical matches, shared controls and honest limits',async()=>fixture(async client=>{
   const plan=await client.request<Block>({action:'create',text:'# Release [project::demo]\n\nRead these instructions first.\n\n- [ ] Prepare [owner::alex]\n- [~] Deploy [owner::sam] ^deploy\n  - Context\n    - [!] Check [owner::alex] ^check'});
   const view=await client.request<Block>({action:'create',text:'# My steps\n[type::checklist-view] [plans::project=demo] [query::owner=alex] [exclude-status::done] [limit::10]'});
   const host=await client.request<Block>({action:'create',text:`# Dashboard\n\n!((${view.id}))\n\nAfter the view\n\n- [ ] Local ^local`});
+  for(const source of [view,host]) {
+    const projected=await projectDetailRead(client,source.text,{hostBlockId:source.id});
+    expect(projected.provenance!.text).toBe(projected.text);
+    const canonical=projected.provenance!.runs.flatMap(run=>run.origin.kind==='source'?run.origin.slices:[])
+      .filter(slice=>slice.document.subject.kind==='block'&&slice.document.subject.blockId===plan.id);
+    expect(canonical.map(slice=>plan.text.slice(slice.start,slice.end)).filter(value=>value.trim())).toEqual([
+      '- [ ] Prepare [owner::alex]','- [!] Check [owner::alex]',
+    ]);
+  }
   const reader=new DocumentPreview(client,()=>{});
   await reader.load({kind:'block',blockId:view.id});reader.focus();
   expect(tasks(reader)).toHaveLength(2);

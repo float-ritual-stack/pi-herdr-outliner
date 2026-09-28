@@ -1,3 +1,4 @@
+import {generatedDocument} from '../src/document-provenance';
 import { expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -102,7 +103,7 @@ function computedDetailEffects(
       return { text, references: [] };
     },
     async projectRead(text) {
-      return { text, embeds: [], embedRanges: [] };
+      return { text, provenance: generatedDocument(text, "controlled test projection"), embeds: [], embedRanges: [] };
     },
     async queryBacklinks(query) {
       return {
@@ -405,6 +406,13 @@ test("computed protocol resolves exact handlers and keeps execution bounded, loc
     expect(detail.state.resolvedSelectedText.startsWith("# Computed title\n\nCached body"))
       .toBe(true);
     expect(detail.state.resolvedSelectedText).toContain("## Computed status");
+    const refreshed=await client.request<ResourceDescription>({action:'resources.open',target:detailTarget,destinationClientId:CAPABLE_DETAIL_ID});
+    expect(detail.state.resolvedProvenance?.runs[0]?.origin).toMatchObject({
+      kind:'derived',resultId:refreshed.computed!.representationId,
+      result:{subject:{kind:'resource',resourceId:opened.resource.id},text:'# Computed title\n\nCached body',resource:{revision:refreshed.computed!.revision}},
+      dependencies:[],resourceDependencies:[dependencyRevisionV1],
+    });
+    expect(detail.state.resolvedProvenance?.runs[1]?.origin).toEqual({kind:'generated',reason:'resource presentation and diagnostics'});
     expect(detail.state.resolvedSelectedText).toContain("## Selected immutable content");
     expect(detail.state.resolvedSelectedText).toContain(
       `- Dependency \`${dependency.id}\``,

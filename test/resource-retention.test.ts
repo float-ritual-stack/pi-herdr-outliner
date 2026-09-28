@@ -1,8 +1,10 @@
+import {captureAnnotationPassage} from "../src/document-annotation";
+import {resourceDocumentObservation} from "../src/document-resources";
 import { expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createTextQuoteAnchor } from "../src/annotations";
+import { annotationSourceHash, createTextQuoteAnchor } from "../src/annotations";
 import { BUILTIN_MARKDOWN_PRODUCER_ID } from "../src/computed-resources";
 import { OutlinerStore } from "../src/store";
 import {
@@ -413,5 +415,49 @@ test("computed dependencies retain their exact noncurrent source revision", asyn
   } finally {
     store.close();
     rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+
+test("a block-owned passage protects embedded Resource evidence from targeted collection", async () => {
+  const root = mkdtempSync(join(tmpdir(), "passage-retention-"));
+  let version = 1;
+  const store = new OutlinerStore(join(root, "outliner.sqlite"), {
+    fetch: (async (_input: string | URL | Request, _init?: RequestInit) => new Response(`<p>Observed revision ${version}</p>`, {
+      headers: {"content-type": "text/html", etag: `"revision-${version}"`},
+    })) as typeof fetch,
+  });
+  try {
+    const source = store.resources.createSource({name: "Passage fixture", provider: "web", boundary: {baseUrl: "https://example.com/"}});
+    const resource = store.resources.intern({sourceId: source.id, address: {kind: "web", url: "https://example.com/passage"}}).resource;
+    const first = await store.resources.refreshWeb(resource.id, true);
+    const document = resourceDocumentObservation(first)!;
+    const passage = captureAnnotationPassage({text: document.text, origins: [{kind: "source",
+      slices: [{document, start: 0, end: document.text.length}]}]});
+    const host = store.create("Host note");
+    const observation = {quote: document.text, capturedAt: "2026-01-02T03:04:05.000Z", hostBlockId: host.id,
+      paneId: "test:pane", contentRevision: 1, contextId: "test-context", detailClientId: "test-reader",
+      validation: "detail-pointer" as const, projection: "mixed" as const};
+    const created = store.annotations.create("embedded-resource", {source: "user", body: "Retain this source", target: {
+      representation: {id: "resource-frame", subject: {kind: "block", blockId: host.id},
+        sourceSnapshot: {kind: "rendered", observation}, adapter: null, mediaType: "text/plain",
+        capturedAt: observation.capturedAt, contentHash: annotationSourceHash(document.text), observation},
+      anchor: {kind: "text-quote", start: null, end: null, exact: document.text, prefix: "", suffix: ""}, passage,
+    }}).annotations[0]!;
+    expect(store.annotations.list({subject: {kind: "resource", resourceId: resource.id}}).map(thread => thread.block.id))
+      .toEqual([created.block.id]);
+    version = 2;
+    await store.resources.refreshWeb(resource.id, true);
+    store.resources.configureRetention({retainNewestSourceSnapshots: 1, retainNewestRepresentationsPerAdapter: 1,
+      minimumAgeMs: 0, purgeGraceMs: 0});
+    const report = store.resources.inspectRetention(resource.id);
+    expect(artifact(report.artifacts, "source-snapshot", first.web!.sourceSnapshot.id).states).toContain("referenced");
+    expect(artifact(report.artifacts, "representation", first.web!.representation.id).states).toContain("referenced");
+    store.resources.collectRetention("evict", resource.id);
+    store.resources.collectRetention("purge", resource.id);
+    expect(store.resources.describe(resource.id, true, first.web!.sourceSnapshot.revision).web?.markdown).toBe(document.text);
+  } finally {
+    store.close();
+    rmSync(root, {recursive: true, force: true});
   }
 });

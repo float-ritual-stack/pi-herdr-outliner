@@ -1,41 +1,65 @@
 diff --git a/dist/tui-alt-screen.d.ts b/dist/tui-alt-screen.d.ts
-index 848119411c1ff2885b8d1efe97f2f297bd4cd470..071a1f3448d202bdf2f9cbe48c6ec6ea6e4041e0 100644
+index 848119411c1ff2885b8d1efe97f2f297bd4cd470..f0cbbc02320e8d6e42a62371c31806fc65445897 100644
 --- a/dist/tui-alt-screen.d.ts
 +++ b/dist/tui-alt-screen.d.ts
-@@ -17,7 +17,7 @@ export interface TuiAltScreenOptions {
+@@ -1,5 +1,16 @@
++import type { ScrollView } from "./components/scroll-view.ts";
+ import type { Terminal } from "./terminal.ts";
+ import { type Component, TuiBase, type TuiStopOptions, VIEWPORT_TUI, type ViewportTUI } from "./tui.ts";
++/** Exact normalized columns used by the terminal's clipboard selection.
++ * Rows/columns address scrollContentLines when scrollView is present;
++ * otherwise they address the terminal screen. Bounds are half-open. */
++export interface TuiCopySelection {
++    readonly scrollView?: ScrollView;
++    /** Opaque identity of the exact layout output used for this selection. */
++    readonly sourceIdentity: object;
++    readonly sourceLines: readonly string[];
++    readonly ranges: readonly {readonly row:number;readonly start:number;readonly end:number}[];
++}
+ export interface TuiAltScreenOptions {
+     /** Number of logical lines moved for each mouse-wheel event. */
+     wheelScrollLines?: number;
+@@ -17,7 +28,7 @@ export interface TuiAltScreenOptions {
       * Copy selected text to the system clipboard. Return `true` on success; the caller flashes
       * an error otherwise. When omitted, the selection is copied via an OSC 52 write.
       */
 -    copySelection?: (text: string) => Promise<boolean>;
-+    copySelection?: (text: string, renderedLines: readonly string[]) => Promise<boolean>;
++    copySelection?: (text: string, renderedLines: readonly string[], selection: TuiCopySelection) => Promise<boolean>;
  }
  /** Alternate-screen TUI with a scrollable, application-owned viewport. */
  export declare class TuiAltScreen extends TuiBase implements ViewportTUI {
 diff --git a/dist/tui-alt-screen.js b/dist/tui-alt-screen.js
-index 4edcf845ba7866782a8ec7219508a2dce0073a91..905d53fce9fdd48b9c5f91eec55f89d55c1613f9 100644
+index 4edcf845ba7866782a8ec7219508a2dce0073a91..58d42afdce390565dd358e24efe555a890332a47 100644
 --- a/dist/tui-alt-screen.js
 +++ b/dist/tui-alt-screen.js
-@@ -901,10 +901,13 @@ export class TuiAltScreen extends TuiBase {
+@@ -901,10 +901,15 @@ export class TuiAltScreen extends TuiBase {
              sourceLines = box.scrollContentLines;
          }
          const lines = [];
 +        const renderedLines = [];
++        const ranges = [];
          for (let row = selection.start.row; row <= selection.end.row; row++) {
              const line = sourceLines[row] ?? "";
              const columns = this.getSelectionColumns(line, row, selection);
 -            lines.push(stripTerminalSequences(sliceByColumn(line, columns.start, Math.max(0, columns.end - columns.start), true)).trimEnd());
 +            const rendered = sliceByColumn(line, columns.start, Math.max(0, columns.end - columns.start), true);
++            ranges.push(Object.freeze({row, start: columns.start, end: columns.end}));
 +            renderedLines.push(rendered);
 +            lines.push(stripTerminalSequences(rendered).trimEnd());
          }
          const text = lines.join("\n");
          if (text.length === 0)
-@@ -914,7 +917,7 @@ export class TuiAltScreen extends TuiBase {
+@@ -914,7 +919,12 @@ export class TuiAltScreen extends TuiBase {
          // "Copied!" while leaving the system clipboard untouched (e.g. macOS Terminal.app, tmux
          // without OSC 52 clipboard passthrough), so only report success when it actually copies.
          if (this.copySelection) {
 -            const ok = await this.copySelection(text);
-+            const ok = await this.copySelection(text, renderedLines);
++            const ok = await this.copySelection(text, renderedLines, Object.freeze({
++                scrollView: selection.start.scrollView,
++                sourceIdentity: sourceLines,
++                sourceLines: Object.freeze([...sourceLines]),
++                ranges: Object.freeze(ranges),
++            }));
              this.flash(ok ? "Copied!" : "Copy failed");
              return;
          }

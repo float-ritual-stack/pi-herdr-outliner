@@ -62,12 +62,24 @@ function consumeEscapeSequence(value: string, start: number): number {
   return index;
 }
 
+export interface SanitizedTextPart { start: number; end: number; text: string }
+
 export function sanitizeDynamicText(value: string, preserveLineBreaks = false): string {
-  let sanitized = "";
+  return sanitizedTextParts(value, preserveLineBreaks).map(part => part.text).join("");
+}
+
+/** Positions are consumed by the document renderer before escape removal loses them. */
+export function sanitizedTextParts(value: string, preserveLineBreaks = false): SanitizedTextPart[] {
+  const parts: SanitizedTextPart[] = [];
+  let plainStart = 0;
+  const flush = (end: number) => {
+    if (plainStart < end) parts.push({start: plainStart, end, text: value.slice(plainStart, end)});
+  };
   for (let index = 0; index < value.length; ) {
     const code = value.charCodeAt(index);
 
     if (code === 0x1b) {
+      flush(index);
       const introducer = value.charCodeAt(index + 1);
       if (introducer === 0x5b) {
         index = consumeCsi(value, index + 2);
@@ -82,11 +94,14 @@ export function sanitizeDynamicText(value: string, preserveLineBreaks = false): 
       } else {
         index = consumeEscapeSequence(value, index + 1);
       }
+      plainStart = index;
       continue;
     }
 
     if (code === 0x9b) {
+      flush(index);
       index = consumeCsi(value, index + 1);
+      plainStart = index;
       continue;
     }
     if (
@@ -96,19 +111,23 @@ export function sanitizeDynamicText(value: string, preserveLineBreaks = false): 
       code === 0x9e ||
       code === 0x9f
     ) {
+      flush(index);
       index = consumeStringControl(value, index + 1, code === 0x9d);
+      plainStart = index;
       continue;
     }
     if (code === 0x09) {
-      sanitized += "    ";
-    } else if (code === 0x0a && preserveLineBreaks) {
-      sanitized += "\n";
-    } else if (code > 0x1f && (code < 0x7f || code > 0x9f)) {
-      sanitized += value[index];
+      flush(index);
+      parts.push({start:index,end:index + 1,text:"    "});
+      plainStart = index + 1;
+    } else if (!(code === 0x0a && preserveLineBreaks) && !(code > 0x1f && (code < 0x7f || code > 0x9f))) {
+      flush(index);
+      plainStart = index + 1;
     }
     index += 1;
   }
-  return sanitized;
+  flush(value.length);
+  return parts;
 }
 
 const MODIFIED_ENTER_SEQUENCES: Record<string, true> = {

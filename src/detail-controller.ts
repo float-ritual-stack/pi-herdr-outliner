@@ -1,3 +1,5 @@
+import {captureAnnotationPassage,renderedDocumentAnnotationTarget} from './document-annotation';
+import type {DocumentSelection} from './document-frame';
 import { blockCommentTarget } from "./block-comments";
 import {blockAnnotationRepresentation, resourceAnnotationRepresentation} from "./annotation-representations";
 import {removedListItemIds} from "./checklist-items";
@@ -35,6 +37,9 @@ import {
   layoutDetailEditor,
 } from "./detail-editor-layout";
 import type { DetailEmbedRange, DetailEmbedState, DetailReadProjection } from "./detail-embeds";
+import {concatDocuments, generatedDocument, documentProvenanceKey, observeDocument, sourceDocument, type MappedDocument} from './document-provenance';
+import {resourceContentDocument} from './document-resources';
+import {resolvedDocument} from './document-references';
 import {
   resolveFragment,
 } from "./fragments";
@@ -86,7 +91,7 @@ import {
   resourceAddressLabel,
   resourceDescriptionLabel,
 } from "./resources";
-import { TextBuffer, type TextBufferPoint, type TextBufferRange } from "./text-buffer";
+import { TextBuffer, type TextBufferRange } from "./text-buffer";
 import { sanitizeDynamicText, type TerminalKey } from "./terminal";
 import type {
   AnnotationBatchReceipt,
@@ -367,6 +372,8 @@ function sameDisplayedBlockRead(
   if (
     state.projectedSelectedText !== current.projection.text ||
     state.resolvedSelectedText !== current.resolved.text ||
+    state.resolvedProvenance === null ||
+    documentProvenanceKey(state.resolvedProvenance) !== documentProvenanceKey(resolvedDocument(current.projection.provenance,current.resolved)) ||
     state.workIdPrefix !== (current.resolved.workIdPrefix ?? null) ||
     state.embedRanges.length !== current.projection.embedRanges.length ||
     state.embedStates.length !== current.projection.embeds.length
@@ -467,6 +474,7 @@ export interface DetailState {
   canNavigateBack: boolean;
   canNavigateForward: boolean;
   resolvedSelectedText: string;
+  resolvedProvenance: MappedDocument | null;
   projectedSelectedText: string;
   readStatus: "pending" | "ready" | "failed";
   embedStates: DetailEmbedState[];
@@ -540,7 +548,7 @@ export interface DetailEffects {
     options?: { preserveSource?: boolean },
   ): Promise<OutlinerNavigationResolution>;
   resolveReferences(text: string): Promise<ResolvedBlockReferences>;
-  projectRead(text: string, hostBlockId?: string): Promise<DetailReadProjection>;
+  projectRead(text: string, hostBlockId?: string, hostRevision?: number): Promise<DetailReadProjection>;
   queryBacklinks(query: BacklinkQuery): Promise<BacklinkCollection>;
   openBacklinkPeek(input: BacklinkPeekLaunch): void;
   openDetailPane(
@@ -634,9 +642,7 @@ export interface DetailResourceSelectionCapture {
   readonly resourceId: string;
   readonly representationId: string;
   readonly referenceContext?: AnnotationReferenceContext;
-  readonly start: number;
-  readonly end: number;
-  readonly exact: string;
+  readonly target: AnnotationTarget;
 }
 
 export type DetailDirectSelectionCapture =
@@ -746,9 +752,10 @@ export interface DetailController {
   isBufferMode(): boolean;
   checkpointRecovery(): void;
   dispatch(intent: DetailIntent, viewport: DetailViewport): Promise<void>;
-  captureResourcePointerSelection(
-    anchor: TextBufferPoint,
-    focus: TextBufferPoint,
+  captureResourceSelection(
+    selection: DocumentSelection,
+    snapshotText: string,
+    renderRevision: number,
   ): DetailResourceSelectionCapture | null;
   setPreviewRegions(regions: readonly PreviewRegion[], viewport?: DetailViewport): void;
   handleUiCommand(command: OutlinerUiCommand, viewport: DetailViewport): Promise<void>;
@@ -884,17 +891,18 @@ export function renderedSelectionAnnotationTarget(
       : resolved
         ? "resolved"
         : "canonical";
-  const { snapshotText, ...evidence } = capture;
+  const { snapshotText, passage, ...evidence } = capture;
   const observation: RenderedPassageObservation = { ...evidence, projection };
-  const match = snapshotText.indexOf(capture.quote);
+  const match = passage ? -1 : snapshotText.indexOf(capture.quote);
   const unique = match >= 0 && snapshotText.indexOf(capture.quote, match + 1) < 0;
   const contentHash = annotationSourceHash(snapshotText);
   return {
+    ...(passage ? {passage} : {}),
     representation: {
-      id: `rendered:${capture.hostBlockId}:${capture.paneId}:${capture.contentRevision}:${contentHash}`,
+      id: `rendered:${capture.hostBlockId}:${capture.paneId}:${capture.contentRevision}:${contentHash}${passage ? `:${capture.detailClientId}` : ""}`,
       subject: { kind: "block", blockId: selected.id },
       sourceSnapshot: { kind: "rendered", observation },
-      adapter: { id: "herdr.rendered-passage", version: 1 },
+      adapter: { id: passage ? "outliner.document-frame" : "herdr.rendered-passage", version: 1 },
       mediaType: "text/plain",
       contentHash,
       capturedAt: capture.capturedAt,
@@ -988,6 +996,7 @@ export function createDetailController(
     annotationThreads: [],
     canNavigateForward: false,
     resolvedSelectedText: "",
+    resolvedProvenance: null,
     projectedSelectedText: "",
     readStatus: "pending",
     embedStates: [],
@@ -1159,8 +1168,9 @@ export function createDetailController(
     }
   };
 
-  const applyResolvedReferences = (resolved: ResolvedBlockReferences): void => {
+  const applyResolvedReferences = (resolved: ResolvedBlockReferences, projection: MappedDocument): void => {
     state.resolvedSelectedText = resolved.text;
+    state.resolvedProvenance = resolvedDocument(projection,resolved);
     state.workIdPrefix = resolved.workIdPrefix ?? null;
     state.readStatus = "ready";
   };
@@ -1169,14 +1179,15 @@ export function createDetailController(
     state.projectedSelectedText = projection.text;
     state.embedStates = projection.embeds;
     state.embedRanges = projection.embedRanges;
-    applyResolvedReferences(resolved);
+    applyResolvedReferences(resolved,projection.provenance);
   };
 
   const applyReadProjection = async (
     text: string,
     hostBlockId?: string,
+    hostRevision?: number,
   ): Promise<DetailBlockRead> => {
-    const projection = await effects.projectRead(text, hostBlockId);
+    const projection = await effects.projectRead(text, hostBlockId, hostRevision);
     const resolved = await effects.resolveReferences(projection.text);
     applyBlockRead({projection, resolved});
     return { projection, resolved };
@@ -1396,6 +1407,7 @@ export function createDetailController(
     state.recoveryCount = 0;
     state.recoveryNotice = undefined;
     state.resolvedSelectedText = "";
+    state.resolvedProvenance = null;
     state.projectedSelectedText = "";
     state.readStatus = "pending";
     state.embedStates = [];
@@ -1463,7 +1475,7 @@ export function createDetailController(
     }
   };
 
-  const resourceDocumentText = (description: ResourceDescription): string => {
+  const resourceDocument = (description: ResourceDescription): MappedDocument => {
     const {
       resource,
       source,
@@ -1480,7 +1492,8 @@ export function createDetailController(
     const representation = presentation?.selected?.representation;
     const renderLocalContent = representation === undefined ||
       representation === "cached-markdown";
-    if (description.filesystem && renderLocalContent) return description.filesystem.text;
+    const content=resourceContentDocument(description);
+    if (description.filesystem && renderLocalContent) return content!;
     const externalUrl = presentation?.selected?.externalUrl ?? null;
     const openExternal = presentation?.capabilities["open-external"];
     const unavailableExternalFactor = RESOURCE_CAPABILITY_FACTORS
@@ -1780,7 +1793,11 @@ export function createDetailController(
         }
       }
     }
-    return lines.join("\n");
+    // The content is inserted as the first element above. Split at this known
+    // construction boundary, not by searching a rendered string for a match.
+    return content
+      ? concatDocuments([content,generatedDocument(`\n${lines.slice(1).join('\n')}`,'resource presentation and diagnostics')])
+      : generatedDocument(lines.join('\n'),'resource presentation and diagnostics');
   };
 
   const applyReadyBlockPresentation = (
@@ -1816,7 +1833,11 @@ export function createDetailController(
       state.projectedSelectedText = read?.projection.text ?? next.selected.text;
       state.embedStates = read?.projection.embeds ?? [];
       state.embedRanges = read?.projection.embedRanges ?? [];
-      applyResolvedReferences(read?.resolved ?? { text: next.selected.text, references: [] });
+      if (read) applyResolvedReferences(read.resolved,read.projection.provenance);
+      else {
+        state.resolvedSelectedText = next.selected.text;
+        state.resolvedProvenance = sourceDocument(observeDocument({kind:'block',blockId:next.selected.id},next.selected.text,next.selected.revision));
+      }
       state.readStatus = read ? "ready" : "pending";
     } else {
       clearDocumentPresentation();
@@ -1871,7 +1892,8 @@ export function createDetailController(
       if (targetChanged) destinationChooser?.dispose();
       clearDocumentPresentation();
       state.status = "";
-      state.resolvedSelectedText = resourceDocumentText(document.description);
+      state.resolvedProvenance = resourceDocument(document.description);
+      state.resolvedSelectedText = state.resolvedProvenance.text;
       state.projectedSelectedText = state.resolvedSelectedText;
       state.readStatus = "ready";
       state.resolvedBreadcrumb = resourceDescriptionLabel(document.description);
@@ -1909,7 +1931,7 @@ export function createDetailController(
         // Waiting for optional reads here would stall every later keypress.
         void (async () => {
           try {
-            const projection = await effects.projectRead(selected.text, selected.id);
+            const projection = await effects.projectRead(selected.text, selected.id, selected.revision);
             if (!isCurrent()) return;
             const resolved = await effects.resolveReferences(projection.text);
             effects.enqueueViewUpdate(() => {
@@ -1921,10 +1943,7 @@ export function createDetailController(
                 return;
               }
               if (state.readStatus === "ready" && sameDisplayedBlockRead(state, read)) return;
-              state.projectedSelectedText = projection.text;
-              state.embedStates = projection.embeds;
-              state.embedRanges = projection.embedRanges;
-              applyResolvedReferences(resolved);
+              applyBlockRead(read);
               refreshBreadcrumb();
               emit();
             });
@@ -2497,7 +2516,7 @@ export function createDetailController(
       }
       replaceSelectedBlock(updated);
       syncPropertyInspector(updated, false);
-      const read = await applyReadProjection(updated.text, updated.id);
+      const read = await applyReadProjection(updated.text, updated.id, updated.revision);
       cacheCurrentBlockRead(read);
       refreshBreadcrumb();
       const editedEntry = state.propertyInspector.model?.entries[edit.ordinal];
@@ -2641,38 +2660,18 @@ export function createDetailController(
         : `commenting on source range ${range}`;
   };
 
-  const captureResourcePointerSelection = (
-    anchor: TextBufferPoint,
-    focus: TextBufferPoint,
-  ): DetailResourceSelectionCapture | null => {
-    if (anchor.row === focus.row && anchor.column === focus.column) return null;
-    const description = detailResourceDescription(state);
-    const text = displayedResourceText(state);
-    const representation = description ? resourceAnnotationRepresentation(description) : null;
-    if (!description || !text || !representation) return null;
-    const anchorBeforeFocus = anchor.row < focus.row ||
-      (anchor.row === focus.row && anchor.column <= focus.column);
-    const start = anchorBeforeFocus ? anchor : focus;
-    const inclusiveEnd = anchorBeforeFocus ? focus : anchor;
-    const buffer = new TextBuffer(text);
-    buffer.placeCursor(inclusiveEnd.row, inclusiveEnd.column);
-    if (buffer.column < buffer.lines[buffer.row]!.length) buffer.moveRight();
-    const range = {
-      start,
-      end: { row: buffer.row, column: buffer.column },
-    };
-    const offsets = textRangeOffsets(text, range);
-    if (!offsets) return null;
-    return {
-      kind: "resource",
-      resourceId: description.resource.id,
-      representationId: representation.id,
-      ...(state.target?.kind === "resource" && state.target.referenceContext
-        ? { referenceContext: state.target.referenceContext } : {}),
-      start: offsets.start,
-      end: offsets.end,
-      exact: text.slice(offsets.start, offsets.end),
-    };
+  const captureResourceSelection = (
+    selection:DocumentSelection, snapshotText:string, renderRevision:number,
+  ):DetailResourceSelectionCapture|null => {
+    const description=detailResourceDescription(state);
+    const representation=description?resourceAnnotationRepresentation(description):null;
+    if(!description||!representation||!selection.text)return null;
+    const referenceContext=state.target?.kind==='resource'?state.target.referenceContext:undefined;
+    return {kind:'resource',resourceId:description.resource.id,representationId:representation.id,
+      ...(referenceContext?{referenceContext}:{}),
+      target:renderedDocumentAnnotationTarget({subject:representation.subject,
+        passage:captureAnnotationPassage(selection),snapshotText,capturedAt:new Date().toISOString(),
+        readerId:effects.clientId,renderRevision,input:'pointer',projection:'resolved',referenceContext})};
   };
 
   const beginRenderedComment = async (
@@ -2734,8 +2733,7 @@ export function createDetailController(
       return;
     }
     if (
-      representation.id !== capture.representationId ||
-      text.slice(capture.start, capture.end) !== capture.exact
+      representation.id !== capture.representationId
     ) {
       state.status = "The Resource representation changed after the selection was captured";
       return;
@@ -2745,7 +2743,13 @@ export function createDetailController(
       state.status = "The reference context changed after the selection was captured; select the passage again";
       return;
     }
-    await beginComment({ start: capture.start, end: capture.end });
+    state.annotationDraft={requestId:crypto.randomUUID(),target:capture.target,returnMode:'preview'};
+    state.buffer=new TextBuffer();
+    state.editorVisualOffset=0;
+    state.draftPreviewLinked=false;
+    state.completion=null;
+    state.mode='comment';
+    state.status='Commenting on the captured Resource passage';
   };
 
   const focusOutliner = async (announce: boolean): Promise<void> => {
@@ -2758,9 +2762,7 @@ export function createDetailController(
     emit();
   };
 
-  const annotationGroups = () => detailAnnotationGroups(
-    state, line => line, state.resolvedSelectedText.split(/\r?\n/).length, state.resolvedSelectedText,
-  );
+  const annotationGroups = () => detailAnnotationGroups(state);
 
   const selectAnnotationThread = (annotationId: string, reveal: boolean, viewport?: DetailViewport): boolean => {
     const groups = annotationGroups();
@@ -2902,7 +2904,7 @@ export function createDetailController(
           state.recovery=undefined;
           state.status="Saved";
           replaceSelectedBlock(updated);
-          const read = await applyReadProjection(updated.text, updated.id);
+          const read = await applyReadProjection(updated.text, updated.id, updated.revision);
           cacheCurrentBlockRead(read);
           refreshBreadcrumb();
           state.mode = detailDisplayMode(updated);
@@ -3057,7 +3059,7 @@ export function createDetailController(
     const selected = state.context.selected;
     if (generation !== openGeneration || state.mode !== "preview" || selected?.id !== hostId) return;
     const source = selected.id === receipt.block.id ? receipt.block : selected;
-    const projection = await effects.projectRead(source.text, source.id);
+    const projection = await effects.projectRead(source.text, source.id, source.revision);
     const resolved = await effects.resolveReferences(projection.text);
     if (generation !== openGeneration || state.mode !== "preview" || state.context.selected?.id !== hostId || state.context.selected.revision > source.revision) return;
     const read = {projection, resolved};
@@ -4303,7 +4305,7 @@ export function createDetailController(
     },
     handleUiCommand,
     dispatch,
-    captureResourcePointerSelection,
+    captureResourceSelection,
     setPreviewRegions(regions, viewport) {
       reconcilePreviewRegions(state.previewRegions, regions, state.document.kind === 'loading' || (state.document.kind === 'ready' && state.readStatus === 'pending'));
       if (viewport?.preview?.regionRows) {

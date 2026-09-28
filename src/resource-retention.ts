@@ -908,11 +908,19 @@ export class ResourceRetentionRepository {
       SELECT evidence.source_snapshot_id, evidence.representation_id,
              evidence.pdf_source_snapshot_id, evidence.pdf_representation_id
       FROM annotation_resource_evidence_refs evidence
-      JOIN annotation_targets target
-        ON target.annotation_block_id = evidence.annotation_block_id
-      WHERE ? IS NULL OR target.resource_id = ?
+      WHERE ? IS NULL
+        OR evidence.source_snapshot_id IN (SELECT id FROM web_source_snapshots WHERE resource_id = ?)
+        OR evidence.representation_id IN (
+          SELECT representation.id FROM web_representations representation
+          JOIN web_source_snapshots snapshot ON snapshot.id = representation.source_snapshot_id
+          WHERE snapshot.resource_id = ?)
+        OR evidence.pdf_source_snapshot_id IN (SELECT id FROM pdf_source_snapshots WHERE resource_id = ?)
+        OR evidence.pdf_representation_id IN (
+          SELECT representation.id FROM pdf_representations representation
+          JOIN pdf_source_snapshots snapshot ON snapshot.id = representation.source_snapshot_id
+          WHERE snapshot.resource_id = ?)
       ORDER BY evidence.id
-    `).all(resourceId, resourceId) as EvidenceReferenceRow[];
+    `).all(resourceId, resourceId, resourceId, resourceId, resourceId) as EvidenceReferenceRow[];
   }
 
   private computedDependencyRevisionsFromCurrentRead(

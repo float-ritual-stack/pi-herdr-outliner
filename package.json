@@ -34,6 +34,7 @@
     "test:e2e:file-commit": "bun run test/e2e/file-commit.ts",
     "test:e2e:file-authority": "bun run test/e2e/file-authority.ts && bun run test/e2e/file-authority.ts --ansi",
     "test:e2e:annotation-threads": "bun run test/e2e/annotation-threads.ts",
+    "test:e2e:rendered-passage": "bun run test/e2e/rendered-passage.ts",
     "test:e2e:annotation-identity": "bun run test/e2e/annotation-identity.ts",
     "test:e2e:tree-breadcrumbs": "bun run test/e2e/tree-breadcrumbs.ts && bun run test/e2e/tree-breadcrumbs.ts --composed",
     "test:e2e:tree-open-focus": "bun run test/e2e/tree-open-focus.ts && bun run test/e2e/tree-open-focus.ts --ansi && bun run test/e2e/tree-open-focus.ts --composed",
@@ -50,6 +51,7 @@
     "@earendil-works/pi-tui": "0.84.2",
     "callscript": "^0.1.0",
     "diff": "8.0.4",
+    "entities": "8.1.0",
     "marked": "18.0.5",
     "pdfjs-dist": "^6.3.289",
     "typebox": "^1.0.44"

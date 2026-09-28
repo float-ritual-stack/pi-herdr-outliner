@@ -1,3 +1,4 @@
+import {atomicDocument, concatDocuments, generatedDocument, sliceDocument, type MappedDocument} from './document-provenance';
 import { hyperlink } from "@earendil-works/pi-tui";
 import { createAnnotationReferenceContext } from "./annotations";
 import {
@@ -624,10 +625,6 @@ function renderLinkSpans(
   return result + text.slice(cursor);
 }
 
-function markdownLink(visible: string, uri: string): string {
-  const label = visible.replaceAll("\\", "\\\\").replaceAll("]", "\\]");
-  return `[${label}](${uri})`;
-}
 
 function resolvedReferenceEnd(text: string, start: number): number {
   let depth = 1;
@@ -693,6 +690,18 @@ export function linkOutlinerMarkdown(
   linksEnabled = true,
   resourceLinks: ReadonlyMap<number, string> = new Map(),
 ): string {
+  return linkOutlinerDocument(generatedDocument(resolvedText, 'unobserved link presentation'), rawText,
+    workIdPrefix, linksEnabled, resourceLinks).text;
+}
+
+export function linkOutlinerDocument(
+  document: MappedDocument,
+  rawText: string,
+  workIdPrefix: string | null = null,
+  linksEnabled = true,
+  resourceLinks: ReadonlyMap<number, string> = new Map(),
+): MappedDocument {
+  const resolvedText = document.text;
   // Block-reference presentation changes lengths. Map only unchanged source
   // segments; an authored Resource token is never inferred from rendered labels.
   const resources: LinkSpan[] = [];
@@ -730,12 +739,34 @@ export function linkOutlinerMarkdown(
     () => true,
     workIdPrefix,
   );
-  return renderLinkSpans(
-    resolvedText,
-    spans,
-    linksEnabled ? markdownLink : (visible) => visible,
-    true,
-  );
+  const parts: MappedDocument[] = [];
+  let cursor = 0;
+  for (const span of spans) {
+    parts.push(sliceDocument(document, cursor, span.start));
+    let label = sliceDocument(document, span.start, span.end);
+    if (span.presentation !== undefined) {
+      const run = label.runs.length === 1 ? label.runs[0]! : null;
+      const origin = run?.origin;
+      label = origin ? atomicDocument(span.presentation,
+        run.mapping === 'linear' && origin.kind === 'source' && origin.slices.length === 1 && span.uri
+          ? {kind:'reference',token:origin.slices[0]!,destination:span.uri,...(origin.occurrence ? {occurrence:origin.occurrence} : {})}
+          : origin)
+        : generatedDocument(span.presentation, 'reference label spans multiple origins');
+    }
+    if (linksEnabled && span.uri) {
+      parts.push(generatedDocument('[', 'link syntax'));
+      let labelCursor = 0;
+      for (const match of label.text.matchAll(/[\\\]]/g)) {
+        parts.push(sliceDocument(label, labelCursor, match.index), generatedDocument('\\', 'link label escape'),
+          sliceDocument(label, match.index, match.index + 1));
+        labelCursor = match.index + 1;
+      }
+      parts.push(sliceDocument(label, labelCursor), generatedDocument(`](${span.uri})`, 'link destination'));
+    } else parts.push(label);
+    cursor = span.end;
+  }
+  parts.push(sliceDocument(document, cursor));
+  return concatDocuments(parts);
 }
 
 export interface OutlinerTextLinker {

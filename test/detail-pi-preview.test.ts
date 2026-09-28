@@ -1,3 +1,12 @@
+import {concatDocuments,generatedDocument,observeDocument,sourceDocument} from '../src/document-provenance';
+import {captureAnnotationPassage} from '../src/document-annotation';
+import {resolveAnnotationPassage, passageResolutionStatus} from '../src/annotation-passages';
+import {projectDetailRead} from '../src/detail-embeds';
+import {measureRenderedLinks, withInternalLinks} from '../src/rendered-links';
+import {resourceContentDocument} from '../src/document-resources';
+import {terminalFixture} from './terminal-fixture';
+import type {DocumentSelection} from '../src/document-frame';
+import type {TuiCopySelection} from '@earendil-works/pi-tui/dist/tui-alt-screen';
 import {renderLayoutFrame} from '@earendil-works/pi-tui/dist/layout.js';
 import { getMarkdownTheme, initTheme } from "@earendil-works/pi-coding-agent";
 import { annotationScopeLabel, detailAnnotationGroups } from "../src/detail-annotations";
@@ -6,6 +15,7 @@ import {
   getCapabilities,
   getOsc8LinkAtColumn,
   Markdown,
+  TuiAltScreen,
   setCapabilities,
   stripTerminalSequences,
   visibleWidth,
@@ -150,6 +160,124 @@ function annotationThread(
   };
 }
 
+function passageThread(detail: DetailState, selection: DocumentSelection, id: string, body: string): AnnotationThread {
+  const passage = captureAnnotationPassage(selection);
+  const target = renderedSelectionAnnotationTarget(detail, {
+    quote: selection.text, passage, capturedAt: "2026-01-02T03:04:05.000Z", hostBlockId: "block-1",
+    paneId: "w1:p2", contentRevision: 1, contextId: "fixture", detailClientId: "reader",
+    validation: "detail-pointer", snapshotText: selection.text,
+  });
+  const thread = annotationThread(id, target, body);
+  const resolution = {...thread.currentResolution, passageResolution: resolveAnnotationPassage(passage,
+    "2026-01-02T03:04:05.000Z", observed => observed)};
+  return {...thread, currentResolution: resolution, resolutionHistory: [resolution]};
+}
+
+test("passage comments follow the selected embed occurrence and host tail through resize", async () => {
+  const targetId = "10000000-0000-4000-8000-000000000001";
+  const raw = `# Reader\n\n!((${targetId}))\n\nBetween copies\n\n!((${targetId}))\n\nTail marker`;
+  const source = block(targetId, "# Shared\n\nRepeated passage for this reader");
+  const projection = await projectDetailRead({async request<T>(input: import('../src/client').RequestInput): Promise<T> {
+    if (input.action === "get" && input.blockId === targetId) return source as T;
+    throw new Error(`Unexpected projection request ${input.action}`);
+  }}, raw, {hostBlockId: "block-1", hostRevision: 1});
+  const detail = state(projection.text, raw);
+  detail.projectedSelectedText = projection.text;
+  detail.resolvedProvenance = projection.provenance;
+  detail.embedRanges = projection.embedRanges;
+  const layout = previewLayout(detail);
+  layout.render(64);
+  const frame = layout.markdown.renderedFrame!;
+  const rows = frame.lines.map(stripTerminalSequences);
+  const repeated = rows.flatMap((line, row) => line.includes("Repeated passage") ? [row] : []);
+  expect(repeated).toHaveLength(2);
+  const tail = rows.findIndex(line => line.includes("Tail marker"));
+  const selected = frame.selectRanges([
+    {row: repeated[1]!, start: 0, end: 64}, {row: tail, start: 0, end: 64},
+  ]);
+  const thread = passageThread(detail, selected, "passage-comment", "One discussion across two sources");
+  detail.annotationThreads = [thread];
+
+  for (const width of [64, 30, 64]) {
+    const lines = layout.render(width).map(stripTerminalSequences);
+    const copies = lines.filter(line => line.includes("Repeated passage"));
+    expect(copies).toHaveLength(2);
+    expect(copies[0]).not.toStartWith("+ ");
+    expect(copies[1]).toStartWith("+ ");
+    expect(lines.find(line => line.includes("Tail marker"))).toStartWith("+ ");
+    expect(lines.find(line => line.includes("Between copies"))).not.toStartWith("+ ");
+    expect(lines.join("\n")).not.toContain("Unpositioned comments");
+  }
+  const group = detail.previewRegions.regions.find(region => region.kind === "annotation")!;
+  expect(group.sourceSpan).toBeNull(); // Two sources must never become a broad host interval.
+  togglePreviewRegionDisclosure(detail.previewRegions, group.id);
+  const expanded = layout.render(64).map(stripTerminalSequences).join("\n");
+  expect(expanded.match(/One discussion across two sources/g)).toHaveLength(1);
+  expect(detail.previewRegions.regions.filter(region => region.kind === "annotation-thread")).toHaveLength(1);
+
+  // Navigating to a hidden occurrence opens its ancestors, not its identical sibling.
+  const sharedFolds=detail.previewRegions.regions.filter(region=>region.kind==='document-fold'&&
+    region.sourceSpan&&projection.text.split('\n')[region.sourceSpan.startLine]?.includes('# Shared'));
+  expect(sharedFolds).toHaveLength(2);
+  for(const fold of sharedFolds)detail.previewRegions.disclosureOverrides.set(fold.id,false);
+  expect(layout.render(64).map(stripTerminalSequences).join('\n')).not.toContain('Repeated passage');
+  detail.selectedAnnotationId=thread.block.id;
+  detail.previewRegions.focusedRegionId=`annotation-thread:${thread.block.id}`;
+  const revealed=layout.render(64).map(stripTerminalSequences).join('\n');
+  expect(revealed.match(/Repeated passage for this reader/g)).toHaveLength(1);
+  expect(detail.previewRegions.disclosureOverrides.get(sharedFolds[0]!.id)).toBe(false);
+  expect(detail.previewRegions.disclosureOverrides.get(sharedFolds[1]!.id)).toBe(true);
+  detail.previewRegions.disclosureOverrides.set(sharedFolds[0]!.id,true);
+
+  // Only the embedded source becomes ambiguous. The surviving host fragment
+  // stays positioned even though the aggregate thread is unresolved.
+  const changedSource = observeDocument({kind:"block", blockId:targetId},
+    "Repeated passage for this reader / Repeated passage for this reader", 2);
+  const passageResolution = resolveAnnotationPassage(thread.originalTarget.passage!, "2026-01-03T00:00:00.000Z",
+    observed => observed.subject.kind === "block" && observed.subject.blockId === targetId ? changedSource : observed);
+  expect(passageResolutionStatus(passageResolution)).toBe("unresolved");
+  detail.annotationThreads = [{...thread, resolvedTarget:null,
+    currentResolution:{...thread.currentResolution, status:"unresolved", resolvedTarget:null, passageResolution}}];
+  const partial = layout.render(64).map(stripTerminalSequences);
+  expect(partial.filter(line => line.includes("Repeated passage")).every(line => !line.startsWith("− "))).toBe(true);
+  expect(partial.find(line => line.includes("Tail marker"))).toStartWith("− ");
+  expect(partial.join("\n")).toContain("partly unresolved");
+});
+
+test("table comments keep independent controls when cell passages share a row or reflow to cards", () => {
+  const raw = "# Table\n\n| Left | Right |\n| --- | --- |\n| alpha | beta |\n| untouched | other |";
+  const detail = state(raw, raw);
+  const layout = previewLayout(detail);
+  layout.render(64);
+  const frame = layout.markdown.renderedFrame!;
+  const lines = frame.lines.map(stripTerminalSequences);
+  const row = lines.findIndex(line => line.includes("alpha"));
+  const threads = ["alpha", "beta"].map(word => {
+    const column = lines[row]!.indexOf(word);
+    return passageThread(detail, frame.selectRanges([{row, start:column, end:column + word.length}]), word, `Discuss ${word}`);
+  });
+  detail.annotationThreads = threads;
+  const closed = withInternalLinks(() => layout.render(64));
+  const regions = detail.previewRegions.regions.filter(region => region.kind === "annotation");
+  expect(regions).toHaveLength(2);
+  const links = measureRenderedLinks(closed).map(link => link.uri);
+  for (const region of regions) {
+    expect(links).toContain(previewRegionActionUri({type:"annotation.disclosure.toggle", regionId:region.id}));
+    togglePreviewRegionDisclosure(detail.previewRegions, region.id);
+  }
+  for (const width of [64, 20, 64]) {
+    const rendered = layout.render(width).map(stripTerminalSequences);
+    expect(rendered.join("\n").match(/Discuss alpha/g)).toHaveLength(1);
+    expect(rendered.join("\n").match(/Discuss beta/g)).toHaveLength(1);
+    expect(rendered.find(line => line.includes("untouched"))).not.toStartWith("− ");
+    expect(rendered.join("\n")).not.toContain("Unpositioned comments");
+  }
+  detail.selectedAnnotationId = "alpha";
+  const focused = layout.render(64).find(line => stripTerminalSequences(line).includes("alpha") && stripTerminalSequences(line).includes("beta"))!;
+  expect(focused).toContain("\x1b[1;97;48;5;24malpha\x1b[0m");
+  expect(focused).not.toContain("\x1b[1;97;48;5;24mbeta");
+});
+
 
 function state(text: string, rawText = "raw edit source"): DetailState {
   const selected = block("block-1", rawText);
@@ -168,6 +296,7 @@ function state(text: string, rawText = "raw edit source"): DetailState {
     
     canNavigateBack: false,
     canNavigateForward: false,
+    resolvedProvenance: text===rawText?sourceDocument(observeDocument({kind:"block",blockId:selected.id},rawText,selected.revision)):null,
     resolvedSelectedText: text,
     projectedSelectedText: rawText,
     readStatus: "ready",
@@ -285,7 +414,7 @@ function webState(markdown: string): DetailState {
     sourceSnapshotId: sourceSnapshot.id,
     mediaType: "text/markdown" as const,
     adapter: { id: "fixture", version: 1 },
-    contentHash: "a".repeat(64),
+    contentHash: annotationSourceHash(markdown),
     derivedAt: "2026-09-17T12:00:01.000Z",
     contentAvailable: true,
     evictedAt: null,
@@ -346,6 +475,7 @@ function webState(markdown: string): DetailState {
     target,
     resource,
   });
+  detail.resolvedProvenance=concatDocuments([resourceContentDocument(description)!,generatedDocument(renderedDocument.slice(markdown.length),"resource metadata")]);
   detail.resolvedSelectedText = renderedDocument;
   detail.projectedSelectedText = renderedDocument;
   detail.resolvedBreadcrumb = resource.address.url;
@@ -424,6 +554,7 @@ function filesystemState(markdown: string): DetailState {
     target,
     resource,
   });
+  detail.resolvedProvenance=concatDocuments([resourceContentDocument(description)!,generatedDocument(renderedDocument.slice(markdown.length),"resource metadata")]);
   detail.resolvedSelectedText = renderedDocument;
   detail.projectedSelectedText = renderedDocument;
   detail.resolvedBreadcrumb = resource.address.path;
@@ -1041,9 +1172,8 @@ describe("Pi Markdown detail preview", () => {
     const region = detail.previewRegions.regions.find((candidate) =>
       candidate.kind === "annotation"
     )!;
-    expect(detail.previewRegions.regions.filter((candidate) =>
-      candidate.kind === "annotation"
-    )).toHaveLength(1);
+    const commentRegions=detail.previewRegions.regions.filter(candidate=>candidate.kind==='annotation');
+    expect(commentRegions).toHaveLength(2);
     const collapsedTarget = collapsed.find((line) => line.includes("target phrase"))!;
     expect(collapsedTarget.startsWith("+ ")).toBe(true);
     expect(collapsed.join("\n")).not.toContain("Comments ·");
@@ -1051,7 +1181,7 @@ describe("Pi Markdown detail preview", () => {
 
     layout.scrollView.updateLayout(12, 6, () => {});
     detail.previewRegions.focusedRegionId = region.id;
-    expect(togglePreviewRegionDisclosure(detail.previewRegions, region.id)).toBe(true);
+    for(const comment of commentRegions)expect(togglePreviewRegionDisclosure(detail.previewRegions,comment.id)).toBe(true);
     const expanded = layout.render(72).map(stripTerminalSequences);
     const targetRow = expanded.findIndex((line) => line.includes("target phrase"));
     const commentRow = expanded.findIndex((line) => line.includes("Check this range."));
@@ -1151,16 +1281,17 @@ describe("Pi Markdown detail preview", () => {
       const collapsed = layout.render(width).map(stripTerminalSequences).join("\n");
       expect(collapsed).not.toContain("Unpositioned comments");
       const region = detail.previewRegions.regions.find(region => region.kind === "annotation")!;
-      expect(detail.previewRegions.regions.filter(region => region.kind === "annotation")).toHaveLength(1);
-      expect(region.sourceSpan?.startLine).toBe(2);
-      togglePreviewRegionDisclosure(detail.previewRegions, region.id);
+      const comments=detail.previewRegions.regions.filter(region=>region.kind==='annotation');
+      expect(comments).toHaveLength(2);
+      expect(region.sourceSpan).toBeNull();
+      for(const comment of comments)togglePreviewRegionDisclosure(detail.previewRegions,comment.id);
       const expanded = layout.render(width).map(stripTerminalSequences).join("\n");
       expect(expanded).toContain("Item attachment");
       expect(expanded).toContain("Old wording");
       expect(expanded).toContain("Keep the original context.");
       expect(expanded).toContain("Comment on the current words.");
       expect(annotationScopeLabel(thread, detail)).toContain("original passage changed");
-      togglePreviewRegionDisclosure(detail.previewRegions, region.id);
+      for(const comment of comments)togglePreviewRegionDisclosure(detail.previewRegions,comment.id);
     }
   });
 
@@ -1269,7 +1400,7 @@ describe("Pi Markdown detail preview", () => {
     resource.document = { kind: "ready", document: { ...document, target: { ...document.target, referenceContext: second } } };
     Object.defineProperty(resource, "target", { get: () => resource.document.kind === "ready" ? resource.document.document.target : null });
     resource.annotationThreads = [firstThread, secondThread, global, missing];
-    const groups = detailAnnotationGroups(resource, line => line, 1, text);
+    const groups = detailAnnotationGroups(resource);
     expect(groups.filter(group => group.placement === "inline").flatMap(group => group.threads.map(thread => thread.block.id))).toEqual(["annotation-global", "annotation-second"]);
     expect(groups.find(group => group.placement === "unpositioned")!.threads.map(thread => thread.block.id)).toEqual(["annotation-first", "annotation-missing"]);
     expect(annotationScopeLabel(global, resource)).toBe("Resource-wide");
@@ -1278,11 +1409,23 @@ describe("Pi Markdown detail preview", () => {
     expect(annotationScopeLabel(missing, resource)).toContain("original");
     const globalView = { ...resource, target: document.target };
     expect(annotationScopeLabel(missing, globalView)).toContain("Other reference");
+    // The newer passage representation must retain the same reference scoping.
+    const passage=captureAnnotationPassage({text,origins:[{kind:'source',slices:[{
+      document:{...observeDocument({kind:'resource',resourceId:document.description.resource.id},text),
+        resource:{revision:file.revision,adapter:{id:'filesystem.text',version:1},capturedAt:file.capturedAt}},start:0,end:text.length,
+    }]}]});
+    resource.annotationThreads=resource.annotationThreads.map(thread=>({...thread,
+      originalTarget:{...thread.originalTarget,passage}}));
+    const passageGroups=detailAnnotationGroups(resource);
+    expect(passageGroups.filter(group=>group.placement==='inline').flatMap(group=>group.threads.map(thread=>thread.block.id)).sort())
+      .toEqual(['annotation-global','annotation-second']);
+    expect(passageGroups.find(group=>group.placement==='unpositioned')!.threads.map(thread=>thread.block.id))
+      .toEqual(['annotation-first','annotation-missing']);
+    resource.annotationThreads=[firstThread,secondThread,global,missing];
     host.annotationThreads = [secondThread];
-    const hostGroup = detailAnnotationGroups(host, line => line, 4, raw)[0]!;
+    const hostGroup = detailAnnotationGroups(host)[0]!;
     expect(hostGroup.placement).toBe("inline");
-    expect(hostGroup.sourceSpan?.start).toBe(raw.lastIndexOf("[file::"));
-    expect(hostGroup.startLine).toBe(3);
+    expect(hostGroup.target?.anchor).toEqual(secondThread.resolvedTarget!.referenceContext!.anchor);
     const capabilities = getCapabilities();
     setCapabilities({ ...capabilities, hyperlinks: true });
     try {
@@ -1877,6 +2020,12 @@ describe("Pi Markdown detail preview", () => {
       );
       expect(draftLine).toBeDefined();
       const draftText = stripTerminalSequences(draftLine!);
+      const draftFrame=layout.markdown.renderedFrame!;
+      const firstSource=draftFrame.cells.find(cell=>cell.text==='U')!.origins.find(origin=>origin.kind==='source')!;
+      expect(firstSource.kind==='source'&&firstSource.slices[0]!.document).toMatchObject({
+        subject:{kind:'block',blockId:'block-1'},text:`Unsaved ((${targetId})) draft`,draft:true,
+      });
+      expect(firstSource.kind==='source'&&firstSource.slices[0]!.document.revision).toBeUndefined();
       expect(getOsc8LinkAtColumn(draftLine!, draftText.indexOf(targetId) + 2)).toBe(
         `pi-outliner://block/${targetId}`,
       );
@@ -1887,6 +2036,7 @@ describe("Pi Markdown detail preview", () => {
       const canonical = layout.markdown.render(80).map(stripTerminalSequences).join(" ");
       expect(canonical).toContain("Canonical preview");
       expect(canonical).not.toContain("Unsaved");
+      expect(draftFrame.cells.find(cell=>cell.text==='U')?.origins).toEqual([firstSource]);
     } finally {
       setCapabilities(capabilities);
     }
@@ -1905,10 +2055,11 @@ describe("Pi Markdown detail preview", () => {
       {
         draftText: () => detail.buffer.text,
         projectionDelayMs: 0,
-        async projectDraft(text) {
+        async projectDraft(source) {
+          const text=source.text;
           expect(text).toBe("!((view-next))");
           return {
-            sourceText: "Embedded draft result",
+            provenance: generatedDocument("Embedded draft result", "fixture projection"),
             rawText: text,
             embedRanges: [{ startLine: 0, endLine: 0 }],
             workIdPrefix: null,
@@ -1948,11 +2099,12 @@ describe("Pi Markdown detail preview", () => {
       {
         draftText: () => editing ? detail.buffer.text : null,
         projectionDelayMs: 0,
-        async projectDraft(text) {
+        async projectDraft(source) {
+          const text=source.text;
           attempts += 1;
           if (attempts === 1) throw new Error("temporary projection failure");
           return {
-            sourceText: "Recovered draft projection",
+            provenance: generatedDocument("Recovered draft projection", "fixture projection"),
             rawText: text,
             embedRanges: [],
             workIdPrefix: null,
@@ -2002,20 +2154,21 @@ describe("Pi Markdown detail preview", () => {
       {
         draftText: () => detail.buffer.text,
         projectionDelayMs: 0,
-        async projectDraft(text) {
+        async projectDraft(source) {
+          const text=source.text;
           attempts += 1;
           if (attempts === 1) {
             firstStarted.resolve();
             await firstResponse.promise;
             return {
-              sourceText: "Stale projection",
+              provenance: generatedDocument("Stale projection", "fixture projection"),
               rawText: text,
               embedRanges: [],
               workIdPrefix: null,
             };
           }
           return {
-            sourceText: "Restarted projection",
+            provenance: generatedDocument("Restarted projection", "fixture projection"),
             rawText: text,
             embedRanges: [],
             workIdPrefix: null,
@@ -2057,10 +2210,11 @@ describe("Pi Markdown detail preview", () => {
       {
         draftText: () => detail.buffer.text,
         projectionDelayMs: 0,
-        async projectDraft(text) {
+        async projectDraft(source) {
+          const text=source.text;
           attempts += 1;
           return {
-            sourceText: `Projection for ${detail.context.selected?.id}`,
+            provenance: generatedDocument(`Projection for ${detail.context.selected?.id}`, "fixture projection"),
             rawText: text,
             embedRanges: [],
             workIdPrefix: null,
@@ -2728,6 +2882,13 @@ test("keeps reader selection highlighted without changing preview scroll", () =>
     return visible.includes("▐ ") && visible.includes("selected phrase");
   })).toBe(true);
 
+  const highlightedRow=selecting.findIndex(line=>stripTerminalSequences(line).includes("selected phrase"));
+  const highlighted=stripTerminalSequences(selecting[highlightedRow]!);
+  const column=visibleWidth(highlighted.slice(0,highlighted.indexOf("selected phrase")));
+  // ScrollView.render returns its whole content; pointer coordinates are viewport-relative.
+  expect(layout.sourcePointAtViewport(highlightedRow-initialScroll+layout.headerHeight(48),column+3,48))
+    .toEqual({row:8,column:11});
+
   const start = raw.indexOf("selected phrase");
   detail.mode = "comment";
   detail.annotationDraft = {
@@ -2746,6 +2907,41 @@ test("keeps reader selection highlighted without changing preview scroll", () =>
   })).toBe(true);
 });
 
+test("selection highlights transformed source cells and rejects stale draft coordinates", () => {
+  const raw = "# Selection\n\nFirst &amp; echo. Second &amp; **echo**. [label](https://example.test/hidden)";
+  const start = raw.lastIndexOf("&amp;");
+  for (const width of [28, 60]) {
+    const detail = state(raw, raw);
+    const layout = previewLayout(detail);
+    layout.scrollView.setScrollbar("hidden");
+    detail.mode = "select";
+    detail.buffer = new TextBuffer(raw);
+    const line = raw.split("\n")[2]!;
+    const column = line.lastIndexOf("&amp;");
+    detail.buffer.placeCursor(2, column);
+    detail.buffer.placeCursor(2, column + 5, true);
+    layout.syncState(width);
+    const selecting = layout.scrollView.render(width);
+    expect(selecting.join("\n")).toContain("\x1b[1;4;97;48;5;24m&");
+    expect(selecting.join("\n").match(/\x1b\[1;4;97;48;5;24m&/g)?.length).toBe(1);
+
+    detail.mode = "comment";
+    detail.annotationDraft = {requestId: "transformed", returnMode: "preview", target: textTarget(raw, start, start + 5)};
+    detail.buffer = new TextBuffer("Comment draft");
+    layout.syncState(width);
+    expect(layout.scrollView.render(width).join("\n")).toContain("\x1b[1;4;97;48;5;24m&");
+
+    detail.annotationDraft.target = textTarget(raw + " stale", start, start + 5);
+    layout.syncState(width);
+    expect(layout.scrollView.render(width).join("\n")).not.toContain("\x1b[1;4;97;48;5;24m");
+
+    const hidden = raw.indexOf("https://");
+    detail.annotationDraft.target = textTarget(raw, hidden, hidden + 5);
+    layout.syncState(width);
+    expect(layout.scrollView.render(width).join("\n")).not.toContain("\x1b[1;4;97;48;5;24m");
+  }
+});
+
 test("maps rendered Markdown points back to UTF-16 source positions", () => {
   const raw = "1. Open the block in **Detail**.";
   const detail = state(raw, raw);
@@ -2756,6 +2952,75 @@ test("maps rendered Markdown points back to UTF-16 source positions", () => {
   const point = layout.sourcePointAtViewport(3, 25, 60);
 
   expect(point).toEqual({ row: 0, column: raw.indexOf("Detail") + 4 });
+});
+
+test("pointer coordinates follow graphemes, decoded entities and generated reader rows", () => {
+  for(const raw of [
+    "# Title\n[tag::fixture]\n\né 👩‍💻 **needleword** after",
+    "# Title\n[tag::fixture]\n\n&gt; &amp; **needleword** after",
+    "# Title\n[tag::fixture]\n\n> [!note] Read\n> **needleword** after",
+    "# Title\n[tag::fixture]\n\n| Name | Value |\n| --- | --- |\n| first | **needleword** |",
+  ]) for(const width of [28,60]) {
+    const detail=state(raw,raw);
+    detail.propertyInspector={...detail.propertyInspector,expanded:true,
+      model:createPropertyInspectorModel("block-1",raw)};
+    detail.annotationThreads=[annotationThread("title-comment",textTarget(raw,2,7),"Panel content")];
+    const layout=previewLayout(detail);
+    layout.scrollView.setScrollbar("hidden");
+    layout.syncState(width);
+    const comment=detail.previewRegions.regions.find(region=>region.kind==="annotation")!;
+    togglePreviewRegionDisclosure(detail.previewRegions,comment.id);
+    layout.syncState(width);
+    const lines=layout.scrollView.render(width).map(stripTerminalSequences);
+    expect(lines.join("\n")).toContain("Panel content");
+    const row=lines.findIndex(line=>line.includes("needleword"));
+    expect(row).toBeGreaterThanOrEqual(0);
+    const line=lines[row]!;
+    const column=visibleWidth(line.slice(0,line.indexOf("needleword")));
+    const offset=raw.indexOf("needleword");
+    const prefix=raw.slice(0,offset).split("\n");
+    expect(layout.sourcePointAtViewport(row+layout.headerHeight(width),column+2,width)).toEqual({
+      row:prefix.length-1,column:prefix.at(-1)!.length+2,
+    });
+    const propertyRow=lines.findIndex(line=>line.includes("fixture"));
+    if(propertyRow>=0)expect(layout.sourcePointAtViewport(propertyRow+layout.headerHeight(width),0,width)).toBeNull();
+  }
+});
+
+test.each([
+  {label:"formatted phrase",raw:"# Capture\n\nA界 **needle** after",needle:"needle",wholeRow:false,expected:"needle",ranges:[[16,22]]},
+  {label:"table row",raw:"# Capture\n\n| Name | State |\n| --- | --- |\n| item | **ready** |",needle:"item",wholeRow:true,expected:"item ready",ranges:[[44,48],[53,58]]},
+])("terminal mouse copy captures $label and rejects a later same-text render",({raw,needle,wholeRow,expected,ranges})=>{
+  const detail=state(raw,raw);
+  const layout=new DetailPiPreviewLayout(detail,plainMarkdownTheme,true,undefined,{density:()=>"compact"});
+  const {terminal,input}=terminalFixture();
+  layout.scrollView.setScrollbar('hidden');
+  layout.syncState(terminal.columns);
+  const screen=renderLayoutFrame(layout,terminal.columns,terminal.rows,()=>{}).lines.map(stripTerminalSequences);
+  const row=screen.findIndex(line=>line.includes(needle));
+  const column=wholeRow?0:visibleWidth(screen[row]!.slice(0,screen[row]!.indexOf(needle)));
+  const end=wholeRow?visibleWidth(screen[row]!.trimEnd()):column+needle.length;
+  let captured:DocumentSelection|null=null,selection:TuiCopySelection|undefined;
+  const tui=new TuiAltScreen(terminal,false,undefined,{mouse:true,async copySelection(_text,_lines,event){
+    selection=event;captured=layout.captureSelection(event);return true;
+  }});
+  tui.setLayoutRoot(layout);
+  try {
+    tui.start();tui.renderNow();
+    input(`\x1b[<0;${column+1};${row+1}M`);
+    input(`\x1b[<32;${end};${row+1}M`);
+    input(`\x1b[<0;${end};${row+1}m`);
+    expect(captured).not.toBeNull();
+    const snapshot=captured! as DocumentSelection;
+    expect(snapshot.text).toBe(expected);
+    expect(snapshot.origins.filter(origin=>origin.kind==='source').flatMap(origin=>origin.slices.map(slice=>[slice.document.subject,slice.start,slice.end])))
+      .toEqual(ranges.map(([start,end])=>[{kind:'block',blockId:'block-1'},start,end]));
+    // Same visible bytes do not prove the same render generation.
+    tui.renderNow();
+    expect(layout.captureSelection(selection!)).toBeNull();
+    expect(snapshot.text).toBe(expected);
+    expect(Object.isFrozen(snapshot.origins)).toBe(true);
+  } finally {tui.stop();}
 });
 
 test("maps cached web Markdown points without requiring a selected block", () => {
@@ -3092,6 +3357,11 @@ test("maps keyboard selection through cached PDF Markdown", () => {
     "PDF metadata",
   ].join("\n");
   detail.projectedSelectedText = detail.resolvedSelectedText;
+  if (detail.document.document.kind !== "resource") throw new Error("Expected PDF Resource");
+  detail.resolvedProvenance = concatDocuments([
+    resourceContentDocument(detail.document.document.description)!,
+    generatedDocument(detail.resolvedSelectedText.slice(markdown.length), "resource metadata"),
+  ]);
   const absoluteStart = markdown.indexOf("PDF phrase");
   const pdfTarget: AnnotationTarget = {
     representation: {
@@ -3252,7 +3522,7 @@ test("historical Resource thread navigation follows the displayed anchors within
     const current = annotationThread(`thread-${index}`, textTarget(latest, latest.indexOf(quote), latest.indexOf(quote) + quote.length, { ...representation, id: "newer-representation", contentHash: annotationSourceHash(latest) }), quote);
     return { ...current, originalTarget: original, resolutionHistory: [...historical.resolutionHistory, ...current.resolutionHistory] };
   });
-  const groups = detailAnnotationGroups(detail, line => line, 1, displayed);
+  const groups = detailAnnotationGroups(detail);
   expect(groups.flatMap(group => group.threads.map(thread => thread.block.id))).toEqual(["thread-0", "thread-1"]);
 });
 
@@ -3334,4 +3604,23 @@ test("focused checklist remains visible when narrower geometry reflows preceding
   layout.syncState(24);layout.ensureFocusVisible(24,10);
   expect(renderLayoutFrame(layout,24,10,()=>{}).lines.map(stripTerminalSequences).join('\n')).toContain('Last destination');
   expect(detail.previewRegions.focusedRegionId).toBe(region.id);
+});
+
+test('legacy exact comments follow the visible quote through wrapping and leave hidden URL syntax unpositioned',()=>{
+  const raw='Title\n\nSeveral ordinary words precede the TARGET phrase at the end of this paragraph.\n\n[Label](https://example.test/hidden)';
+  const detail=state(raw,raw);
+  const start=raw.indexOf('TARGET');
+  detail.annotationThreads=[annotationThread('legacy-visible',textTarget(raw,start,start+6),'Visible passage')];
+  const layout=previewLayout(detail);
+  for(const width of [30,45]){
+    const lines=layout.render(width).map(stripTerminalSequences);
+    expect(lines.find(line=>line.includes('TARGET'))).toStartWith('+ ');
+    const opening=lines.find(line=>line.includes('Several'))!;
+    if(!opening.includes('TARGET'))expect(opening).not.toStartWith('+ ');
+  }
+  const hidden=raw.indexOf('https://');
+  detail.annotationThreads=[annotationThread('legacy-hidden',textTarget(raw,hidden,hidden+'https://example.test/hidden'.length),'Hidden URL')];
+  const hiddenLines=layout.render(45).map(stripTerminalSequences);
+  expect(hiddenLines.join('\n')).toContain('Unpositioned comments (1)');
+  expect(hiddenLines.find(line=>line.trim()==='Label')).not.toStartWith('+ ');
 });

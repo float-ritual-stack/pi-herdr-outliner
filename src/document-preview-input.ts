@@ -1,7 +1,8 @@
 import type {TerminalKey} from './terminal';
 import {PreviewSelection} from './preview-selection';
 import {parseTreePrimaryPointer,parseTreeWheelEvent,parseTreeSecondaryClick} from './tree-mouse';
-import {pointInPreview,documentPreviewSourceAnchor,type DocumentPreviewFrame} from './document-preview-renderer';
+import {pointInPreview,type DocumentPreviewFrame} from './document-preview-renderer';
+import {captureAnnotationPassage} from './document-annotation';
 import type {PreviewPassageCapture,DocumentPreviewState} from './document-preview';
 import {isCopyExcludedLink} from './rendered-links';
 
@@ -29,10 +30,11 @@ export class DocumentPreviewInput {
   private exclusions(){return this.frame?.links?.filter(link=>isCopyExcludedLink(link.uri)).map(link=>({row:link.rect.y,column:link.rect.x,width:link.rect.width}))??[];}
   private retainCapture(input:'pointer'|'keyboard'):void {
     const capture=this.selection.capture();
-    const cell=capture?.cells.length===1?capture.cells[0]:undefined,frame=this.frame;
-    const sourceAnchor=capture&&cell&&frame&&this.document?documentPreviewSourceAnchor(this.document,frame.content.width,
-      cell.row-frame.content.y+frame.offset,cell.start-frame.content.x,cell.end-frame.content.x,capture.quote):null;
-    this.passage=capture && this.document?{...capture,sourceAnchor,input,document:this.document,renderRevision:this.renderRevision,capturedAt:new Date().toISOString()}:null;
+    const frame=this.frame;
+    const selected=capture&&frame?.documentFrame?frame.documentFrame.selectRanges(capture.cells.map(cell=>({
+      row:cell.row-frame.content.y+frame.offset,start:cell.start-frame.content.x,end:cell.end-frame.content.x,
+    }))):null;
+    this.passage=capture && selected?.text && this.document?{...capture,quote:selected.text,passage:captureAnnotationPassage(selected),input,document:this.document,renderRevision:this.renderRevision,capturedAt:new Date().toISOString()}:null;
   }
   selectionKey(key:TerminalKey,str=''):boolean {
     if(!this.frame || !this.document)return false;
@@ -54,7 +56,7 @@ export class DocumentPreviewInput {
     const visible=frame && (frame.placement!=='compact'||preview?.focused)?frame:undefined;
     const geometry=visible?JSON.stringify([visible.content,visible.offset,[...(preview?.document.previewRegions?.disclosureOverrides ?? [])]]):'';
     if(preview?.document!==this.document){this.clearSelection();this.pressedLink=undefined;}
-    else if(geometry!==this.geometry){
+    else if(geometry!==this.geometry || visible?.documentFrame!==this.frame?.documentFrame){
       // Cell positions expire on reflow; the captured quote still belongs to this document.
       this.keyboardSelecting=false;this.selection.clear();this.pressedLink=undefined;
     }
@@ -86,7 +88,7 @@ export class DocumentPreviewInput {
           if(pointer.phase==='up')this.pressedLink=undefined;
           if(result.copy){
             this.retainCapture('pointer');
-            copy(result.copy);
+            copy(this.passage?.quote??result.copy);
           }
           else if(pointer.phase==='up'&&link)void controller.invoke(`preview.link:${encodeURIComponent(link.uri)}`);
           redraw(); return true;

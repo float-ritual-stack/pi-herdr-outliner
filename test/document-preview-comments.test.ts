@@ -183,9 +183,12 @@ test('local Preview reveals canonical passage and general threads without openin
     expect(reader.state!.comment).toBeUndefined();
     const wrapped=store.listAnnotationThreads({subject:{kind:'block',blockId:block.id}}).find(thread=>thread.body==='Wrapped passage feedback')!;
     expect(wrapped.originalTarget.anchor).toEqual({kind:'text-quote',start:null,end:null,exact:copied,prefix:'',suffix:''});
-    expect(wrapped.originalTarget.representation.observation).toMatchObject({validation:'preview-selection',quote:copied,readerId:'preview-test',representationId:representation.id,projection:'canonical'});
-    expect(wrapped.originalTarget.representation.sourceSnapshot).toEqual(historicalRepresentation.sourceSnapshot);
-    expect(paint(36)).toContain('Unpositioned comments');
+    expect(wrapped.originalTarget.representation.observation).toMatchObject({validation:'preview-selection',quote:copied,readerId:'preview-test',projection:'canonical'});
+    expect(wrapped.originalTarget.passage!.documents[0]).toMatchObject({text:block.text,
+      inbox:{attemptId:attempt.id,updatedAt:block.updatedAt}});
+    const historicalSources=wrapped.originalTarget.passage!.fragments.flatMap(fragment=>fragment.kind==='source'?fragment.slices:[]);
+    expect(historicalSources.map(slice=>slice.anchor.exact).join('')).toContain('A passage to discuss.');
+    expect(paint(36).split('\n').find(line=>line.includes('A passage'))).toStartWith('+ ');
     const observation=wrapped.originalTarget.representation.observation;
     if(observation?.validation!=='preview-selection')throw Error('Expected pointer observation');
     expect(()=>store.createAnnotation('wrong-observation',{body:'Wrong source',source:'user',target:{...wrapped.originalTarget,
@@ -214,7 +217,9 @@ test('local Preview reveals canonical passage and general threads without openin
     await reader.key({name:'v'},40,9,noDetail,'v');
     await reader.key({name:'end',shift:true},40,9,noDetail);
     await reader.key({name:'c'},40,9,noDetail,'c');
-    expect(reader.state!.comment?.target?.anchor).toMatchObject({start:0,end:20,exact:'Unchanged plain text'});
+    expect(reader.state!.comment?.target?.passage?.fragments).toMatchObject([
+      {kind:'source',slices:[{anchor:{start:0,end:20,exact:'Unchanged plain text'}}]},
+    ]);
     reader.paste('Positioned feedback');await reader.key({name:'s',ctrl:true},40,9,noDetail);
     const exactThread=store.listAnnotationThreads({subject:{kind:'block',blockId:plainBlock.id}})[0]!;
     expect(exactThread.currentResolution.status).toBe('resolved');
@@ -229,7 +234,7 @@ test('local Preview reveals canonical passage and general threads without openin
     reader.paste('Fragment feedback');await reader.key({name:'s',ctrl:true},40,9,noDetail);
     const fragmentThread=store.listAnnotationThreads({subject:{kind:'block',blockId:fragmentBlock.id}})[0]!;
     expect(fragmentThread.originalTarget.representation.observation).toMatchObject({fragmentId:'section'});
-    expect(fragmentThread.originalTarget.representation.contentHash).toBe(annotationSourceHash(fragmentBlock.text));
+    expect(fragmentThread.originalTarget.passage!.documents[0]!.hash).toBe(annotationSourceHash(fragmentBlock.text));
     reader.beginComment();reader.paste('Whole fragment note feedback');
     await reader.key({name:'s',ctrl:true},40,9,noDetail);
     expect(paint(40)).toContain('Note comments (1)');

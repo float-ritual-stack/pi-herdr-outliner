@@ -1,4 +1,9 @@
-import {initTheme} from "@earendil-works/pi-coding-agent";
+import {observeDocument} from "../src/document-provenance";
+import {captureAnnotationPassage} from "../src/document-annotation";
+import {SourceSpannedMarkdown} from "../src/source-spanned-markdown";
+import {projectDetailRead} from '../src/detail-embeds';
+import {generatedDocument} from '../src/document-provenance';
+import {getMarkdownTheme,initTheme} from "@earendil-works/pi-coding-agent";
 initTheme(undefined, false);
 import type {OutlinerNavigationTarget} from "../src/types";
 import { DetailReadingSurface } from "../src/detail-reading-surface";
@@ -54,6 +59,14 @@ import type {
 } from "../src/types";
 
 const viewport: DetailViewport = { width: 60, height: 12 };
+
+function resourceFrame(controller:ReturnType<typeof createDetailController>) {
+  const reader=new SourceSpannedMarkdown(getMarkdownTheme(),text=>text,undefined,false,undefined,true);
+  expect(controller.state.resolvedProvenance).not.toBeNull();
+  reader.setContent(controller.state.resolvedProvenance!,[],false);
+  reader.render(60);
+  return reader.renderedFrame!;
+}
 
 function makeBlock(overrides: Partial<Block> = {}): Block {
   return {
@@ -200,6 +213,7 @@ function createHarness(
   }),
   projectRead: DetailEffects["projectRead"] = async (text) => ({
     text,
+    provenance: generatedDocument(text, "controlled test projection"),
     embeds: [],
     embedRanges: [],
   }),
@@ -361,10 +375,10 @@ function createHarness(
       };
     },
     resolveReferences,
-    async projectRead(text, hostBlockId) {
+    async projectRead(text, hostBlockId, hostRevision) {
       calls.projectedReads.push(text);
       calls.projectedReadHosts.push(hostBlockId);
-      return projectRead(text, hostBlockId);
+      return projectRead(text, hostBlockId, hostRevision);
     },
     async queryBacklinks(query) {
       calls.backlinkQueries.push(query);
@@ -745,7 +759,7 @@ describe("detail controller projection and deferred refresh", () => {
       expect(painted).toContain("Readable primary document");
       expect(harness.controller.state.context.selected?.id).toBe(block.id);
     } finally {
-      projection.resolve({ text: "Enriched document", embeds: [], embedRanges: [] });
+      projection.resolve({ text: "Enriched document", provenance: generatedDocument("Enriched document", "controlled test projection"), embeds: [], embedRanges: [] });
       await loading;
     }
     await enriched.promise;
@@ -782,7 +796,7 @@ describe("detail controller projection and deferred refresh", () => {
       expect(harness.controller.state.buffer.text).toBe("Exact editable source + draft");
     } finally {
       clearTimeout(deadline);
-      projection.resolve({ text: "Optional presentation", embeds: [], embedRanges: [] });
+      projection.resolve({ text: "Optional presentation", provenance: generatedDocument("Optional presentation", "controlled test projection"), embeds: [], embedRanges: [] });
       await input;
     }
     await deferredForDraft.promise;
@@ -1325,6 +1339,7 @@ describe("detail controller projection and deferred refresh", () => {
       async (text) => ({ text, references: [] }),
       async () => ({
         text: `Recommendation\nEmbedded view version ${version}\n- ((result-one))`,
+        provenance: generatedDocument(`Recommendation\nEmbedded view version ${version}\n- ((result-one))`, "controlled test projection"),
         embeds: [{
           blockId: "view-next",
           status: "ready",
@@ -1348,6 +1363,27 @@ describe("detail controller projection and deferred refresh", () => {
     expect(harness.calls.projectedReadHosts).toEqual([selected.id, selected.id]);
   });
 
+  test("Detail replaces source evidence when hidden anchors change without changing the displayed text", async () => {
+    const initial = makeBlock({text:'Plan ^before',revision:1});
+    const harness = createHarness(initial,null,async text=>({text,references:[]}),
+      (text,hostBlockId,hostRevision)=>projectDetailRead({async request(){throw Error('Plain note needs no projection reads');}},text,{hostBlockId,hostRevision}));
+    await harness.controller.initialize();
+    const observation = () => {
+      const run=harness.controller.state.resolvedProvenance!.runs[0]!;
+      if(run.origin.kind!=='source')throw Error('Expected canonical note evidence');
+      return run.origin.slices[0]!.document;
+    };
+    expect(harness.controller.state.resolvedSelectedText).toBe('Plan');
+    expect(observation()).toMatchObject({text:'Plan ^before',revision:1});
+    const beforeHash=observation().hash;
+    const updated={...initial,text:'Plan ^after',revision:2};
+    harness.setSelection({selected:updated,ancestors:[],children:[]});
+    await harness.controller.onServiceEvent(event('content'),viewport);
+    expect(harness.controller.state.resolvedSelectedText).toBe('Plan');
+    expect(observation()).toMatchObject({text:'Plan ^after',revision:2});
+    expect(observation().hash).not.toBe(beforeHash);
+  });
+
   test("force-refreshes a cached projection when a view event leaves block revisions unchanged", async () => {
     const selected = makeBlock({ text: "Embedded\n!((view-next))" });
     let projectionVersion = 1;
@@ -1357,6 +1393,7 @@ describe("detail controller projection and deferred refresh", () => {
       async (text) => ({ text, references: [] }),
       async () => ({
         text: `Embedded projection ${projectionVersion}`,
+        provenance: generatedDocument(`Embedded projection ${projectionVersion}`, "controlled test projection"),
         embeds: [],
         embedRanges: [],
       }),
@@ -1692,6 +1729,9 @@ describe("detail controller projection and deferred refresh", () => {
     expect(harness.controller.state.resolvedSelectedText).toContain(
       "10000000-0000-4000-8000-000000000001",
     );
+    expect(harness.controller.state.resolvedProvenance?.runs.map(run=>run.origin)).toEqual([
+      {kind:'generated',reason:'resource presentation and diagnostics'},
+    ]);
 
     await harness.controller.dispatch({ type: "navigation.back" }, viewport);
     expect(harness.controller.state.target).toEqual({
@@ -1768,6 +1808,11 @@ describe("detail controller projection and deferred refresh", () => {
       target: { kind: "resource", resourceId },
     }), viewport);
 
+    const contentEvidence=harness.controller.state.resolvedProvenance;
+    expect(contentEvidence?.text).toBe(text);
+    expect(contentEvidence?.runs).toMatchObject([{start:0,end:text.length,mapping:'linear',origin:{kind:'source',slices:[{
+      start:0,end:text.length,document:{subject:{kind:'resource',resourceId},text,resource:{revision:{resourceId,addressVersion:1,revision:{kind:'filesystem',mtimeNs:'1',size:String(text.length)}},adapter:{id:'filesystem.text',version:1}}},
+    }]}}]);
     await harness.controller.dispatch({ type: "edit.begin" }, viewport);
     expect(harness.controller.state.mode).toBe("edit");
     expect(harness.controller.state.status).toBe("Editing filesystem Resource");
@@ -2050,41 +2095,28 @@ describe("detail controller projection and deferred refresh", () => {
       );
       expect(harness.controller.state.resolvedSelectedText).toContain(guidance);
     }
-    current = description("# First\n\nStable quote", "a");
+    current = description("# First\n\nStable **quote**", "a");
     await harness.controller.onServiceEvent({
       ...event("resource-catalog"),
       resourceId: resource.id,
     }, viewport);
-    const directCapture = harness.controller.captureResourcePointerSelection(
-      { row: 2, column: 0 },
-      { row: 2, column: 11 },
-    );
-    expect(directCapture).toMatchObject({
-      kind: "resource",
-      resourceId: resource.id,
-      representationId: "representation-a",
-      exact: "Stable quote",
-    });
-    expect(harness.controller.captureResourcePointerSelection(
-      { row: 2, column: 11 },
-      { row: 2, column: 0 },
-    )).toEqual(directCapture);
+    const frame=resourceFrame(harness.controller);
+    const row=frame.lines.findIndex(line=>stripTerminalSequences(line).trimEnd()==='Stable quote');
+    expect(row).toBeGreaterThanOrEqual(0);
+    const directCapture=harness.controller.captureResourceSelection(
+      frame.select({row,column:0},{row,column:12}),frame.lines.join('\n'),1);
+    expect(directCapture).toMatchObject({kind:'resource',resourceId:resource.id,representationId:'representation-a'});
     await harness.controller.dispatch({
       type: "annotation.comment.direct",
       capture: directCapture,
     }, viewport);
     expect(harness.controller.state.mode).toBe("comment");
-    expect(harness.controller.state.annotationDraft?.target).toMatchObject({
-      representation: {
-        id: "representation-a",
-        subject: { kind: "resource", resourceId: resource.id },
-        sourceSnapshot: {
-          kind: "resource",
-          sourceSnapshotId: "source-snapshot-a",
-        },
-      },
-      anchor: { kind: "text-quote", exact: "Stable quote" },
-    });
+    const capturedTarget=harness.controller.state.annotationDraft!.target;
+    expect(capturedTarget).toMatchObject({representation:{subject:{kind:'resource',resourceId:resource.id},
+      sourceSnapshot:{kind:'rendered'}},anchor:{kind:'text-quote',exact:'Stable quote',start:null,end:null}});
+    expect(capturedTarget.passage?.documents[0]?.text).toBe('# First\n\nStable **quote**');
+    expect(capturedTarget.passage?.fragments.flatMap(fragment=>fragment.kind==='source'?fragment.slices.map(slice=>
+      [slice.anchor.start,slice.anchor.end,slice.anchor.exact]):[])).toEqual([[9,16,'Stable '],[18,23,'quote']]);
     await harness.controller.dispatch({ type: "buffer.cancel" }, viewport);
     current = description("# Changed\n\nNew representation", "b");
     await harness.controller.onServiceEvent({
@@ -2347,6 +2379,13 @@ describe("detail controller projection and deferred refresh", () => {
 
     const rendered = harness.controller.state.resolvedSelectedText;
     expect(rendered.startsWith("# Remote entities\n\nRetained Jira body.")).toBe(true);
+    expect(harness.controller.state.resolvedProvenance?.runs).toMatchObject([
+      {start:0,end:38,origin:{kind:'source',slices:[{start:0,end:38,document:{
+        subject:{kind:'resource',resourceId:target.resourceId},text:'# Remote entities\n\nRetained Jira body.',
+        resource:{revision:{revision:{kind:'jira',validator:{kind:'updated-at',value:'2026-09-17T12:00:00.000Z'}}},adapter:{id:'jira.issue-markdown',version:1}},
+      }}]}},
+      {start:38,origin:{kind:'generated',reason:'resource presentation and diagnostics'}},
+    ]);
     expect(rendered).toContain('"status": "In Progress"');
     expect(rendered).toContain('"labels": [');
     expect(rendered).toContain("- Provider revision: Jira updated-at 2026-09-17T12:00:00.000Z");
@@ -3189,7 +3228,7 @@ describe("detail controller projection and deferred refresh", () => {
       first,
       null,
       async (text) => ({ text, references: [] }),
-      async (text) => ({ text, embeds: [], embedRanges: [] }),
+      async (text) => ({ text, provenance: generatedDocument(text, "controlled test projection"), embeds: [], embedRanges: [] }),
       {},
       (state) => {
         paints.push({
@@ -3240,7 +3279,7 @@ describe("detail controller projection and deferred refresh", () => {
       first,
       null,
       async (text) => ({ text, references: [] }),
-      async (text) => ({ text: `projected:${text}`, embeds: [], embedRanges: [] }),
+      async (text) => ({ text: `projected:${text}`, provenance: generatedDocument(`projected:${text}`, "controlled test projection"), embeds: [], embedRanges: [] }),
       {},
       (state) => {
         paints.push({
@@ -3329,7 +3368,7 @@ describe("detail controller projection and deferred refresh", () => {
       first,
       null,
       async (text) => ({ text, references: [] }),
-      async (text) => ({ text, embeds: [], embedRanges: [] }),
+      async (text) => ({ text, provenance: generatedDocument(text, "controlled test projection"), embeds: [], embedRanges: [] }),
       {},
       (state) => {
         if (state.context.selected) {
@@ -4251,13 +4290,18 @@ describe("detail controller saves and annotations", () => {
       async (text) => ({ text, references: [] }),
     );
     await harness.controller.initialize();
+    const observed = observeDocument({kind: "block", blockId: block.id}, block.text, block.revision);
+    const passage = captureAnnotationPassage({text: "βeta gamma", origins: [
+      {kind: "source", slices: [{document: observed, start: 6, end: 10}, {document: observed, start: 11, end: 16}]},
+    ]});
 
     await harness.controller.dispatch({
       type: "annotation.comment.direct",
       capture: {
         kind: "rendered",
         capture: {
-          quote: "βeta",
+          quote: passage.quote,
+          passage,
           capturedAt: "2026-09-17T12:00:00.000Z",
           hostBlockId: block.id,
           paneId: "w1:p2",
@@ -4276,14 +4320,19 @@ describe("detail controller saves and annotations", () => {
         sourceSnapshot: {
           kind: "rendered",
           observation: {
-            quote: "βeta",
+            quote: passage.quote,
             contentRevision: 43,
             validation: "detail-pointer",
           },
         },
       },
-      anchor: { kind: "text-quote", exact: "βeta" },
+      anchor: { kind: "text-quote", exact: passage.quote, start: null, end: null },
+      passage,
     });
+    await harness.controller.dispatch({type: "buffer.insert", text: "Keep these separate slices"}, viewport);
+    await harness.controller.dispatch({type: "buffer.save"}, viewport);
+    expect(harness.calls.creates).toHaveLength(1);
+    expect(harness.calls.creates[0]!.input.target.passage).toEqual(passage);
   });
   test("does not invent a source anchor when chrome duplicates the rendered quote", async () => {
     const block = makeBlock({ text: "alpha βeta gamma" });
@@ -4363,6 +4412,7 @@ describe("detail controller saves and annotations", () => {
       async (text) => ({ text, references: [] }),
       async () => ({
         text: rendered,
+        provenance: generatedDocument(rendered, "controlled test projection"),
         embeds: [{ blockId: "next-items", status: "ready", count: 2 }],
         embedRanges: [{ startLine: 1, endLine: 2 }],
       }),
@@ -5277,7 +5327,7 @@ describe("Detail property inspector integration", () => {
         if (hostBlockId === sourceBlock.id && text.includes("[status::complete]")) {
           throw new Error("stale edited-target projection");
         }
-        return { text, embeds: [], embedRanges: [] };
+        return { text, provenance: generatedDocument(text, "controlled test projection"), embeds: [], embedRanges: [] };
       },
     );
     const controller = createDetailController(harness.effects, undefined, {
@@ -5505,7 +5555,8 @@ test("retained pointer selections preserve occurrence or global scope across nav
   const first = target(host.text.indexOf("[file::"));
   const second = target(host.text.lastIndexOf("[file::"));
   await harness.controller.onServiceEvent(event("ui", { targetClientId: "detail-test", command: "open", target: first }), viewport);
-  const capture = harness.controller.captureResourcePointerSelection({row: 0, column: 0}, {row: 0, column: 5});
+  const frame=resourceFrame(harness.controller);
+  const capture = harness.controller.captureResourceSelection(frame.select({row:0,column:0},{row:0,column:6}),frame.lines.join('\n'),1);
   expect(capture).not.toBeNull();
   await harness.controller.onServiceEvent(event("ui", { targetClientId: "detail-test", command: "open", target: second }), viewport);
   await harness.controller.dispatch({ type: "annotation.comment.direct", capture }, viewport);
@@ -5515,7 +5566,8 @@ test("retained pointer selections preserve occurrence or global scope across nav
   await harness.controller.onServiceEvent(event("ui", { targetClientId: "detail-test", command: "open", target: { kind: "resource", resourceId: resource.id } }), viewport);
   await harness.controller.dispatch({ type: "annotation.comment.direct", capture }, viewport);
   expect(harness.controller.state.annotationDraft).toBeUndefined();
-  const globalCapture = harness.controller.captureResourcePointerSelection({ row: 0, column: 0 }, { row: 0, column: 5 });
+  const globalFrame=resourceFrame(harness.controller);
+  const globalCapture = harness.controller.captureResourceSelection(globalFrame.select({row:0,column:0},{row:0,column:6}),globalFrame.lines.join('\n'),2);
   await harness.controller.onServiceEvent(event("ui", { targetClientId: "detail-test", command: "open", target: first }), viewport);
   await harness.controller.dispatch({ type: "annotation.comment.direct", capture: globalCapture }, viewport);
   expect(harness.controller.state.annotationDraft).toBeUndefined();

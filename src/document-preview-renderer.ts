@@ -5,8 +5,8 @@ import {layoutDetailEditor} from './detail-editor-layout';
 import type {ReaderDensity} from "./reader-chrome";
 import {withInternalLinks, stripRenderedLinks, measureRenderedLinks, type RenderedLink} from './rendered-links';
 import {getMarkdownTheme} from '@earendil-works/pi-coding-agent';
-import {truncateToWidth, visibleWidth,stripTerminalSequences,sliceByColumn} from '@earendil-works/pi-tui';
-import {annotationSourceHash,createTextQuoteAnchor} from './annotations';
+import {truncateToWidth, visibleWidth} from '@earendil-works/pi-tui';
+import type {DocumentFrame} from './document-frame';
 import {renderDetailReadPreview, type DetailReadPreviewDocument} from './detail-pi-preview';
 import type {DocumentPreviewState} from './document-preview';
 import {sanitizeDynamicText} from './terminal';
@@ -18,6 +18,7 @@ export interface DocumentPreviewFrame {
   rect: PreviewRect;
   content: PreviewRect;
   lines: string[];
+  documentFrame?: DocumentFrame;
   totalRows: number;
   offset: number;
   controls?: Array<{rect: PreviewRect; action: string}>;
@@ -25,30 +26,16 @@ export interface DocumentPreviewFrame {
   divider?: PreviewRect;
   placement?: 'beside'|'below'|'compact';
 }
-const cache=new WeakMap<DetailReadPreviewDocument,{width:number;disclosures:string;lines:string[];links:PreviewLink[];threadRows:Map<string,number>;selected:string|null}>();
+const cache=new WeakMap<DetailReadPreviewDocument,{width:number;disclosures:string;lines:string[];frame:DocumentFrame;links:PreviewLink[];threadRows:Map<string,number>;selected:string|null}>();
 export type PreviewLink = RenderedLink;
-/** Exact identity proof for an untransformed, unwrapped source document.
- * Rich layouts use rendered evidence until their renderer supplies a source map.
- * Never locate a selection by searching for its quote in the source.
- */
-export function documentPreviewSourceAnchor(document:DetailReadPreviewDocument,width:number,row:number,left:number,right:number,quote:string){
-  const snapshot=document.commentTarget?.representation.sourceSnapshot;
-  if(snapshot?.kind!=='block'||annotationSourceHash(document.canonicalText)!==snapshot.contentHash||
-    document.truncated||document.embedRanges.length||document.annotations?.annotationThreads.length||
-    document.resolvedText!==document.canonicalText||document.projectedText!==document.canonicalText)return null;
-  const source=document.canonicalText.split('\n');
-  const painted=documentPreviewLines(document,width).map(line=>stripTerminalSequences(line).trimEnd());
-  if(painted.length!==source.length||painted.some((line,index)=>line!==source[index]!.trimEnd()))return null;
-  const line=source[row];
-  if(line===undefined||left<0||right>visibleWidth(line.trimEnd()))return null;
-  const offset=source.slice(0,row).reduce((sum,line)=>sum+line.length+1,0);
-  const start=offset+sliceByColumn(line,0,left,true).length,end=offset+sliceByColumn(line,0,right,true).length;
-  return document.canonicalText.slice(start,end)===quote?createTextQuoteAnchor(document.canonicalText,start,end):null;
-}
 export function documentPreviewLinks(document:DetailReadPreviewDocument,width:number):PreviewLink[]{documentPreviewLines(document,width);return cache.get(document)!.links;}
 export function documentPreviewThreadRow(document:DetailReadPreviewDocument,id:string,width=cache.get(document)?.width ?? 80):number|undefined {
   documentPreviewLines(document,width);
   return cache.get(document)?.threadRows.get(id);
+}
+export function revealDocumentPreviewComment(document:DetailReadPreviewDocument,id:string,width=cache.get(document)?.width ?? 80):void {
+  withInternalLinks(()=>renderDetailReadPreview(document,width,getMarkdownTheme(),undefined,true,undefined,id));
+  cache.delete(document);
 }
 /** Reveal a canonical line using this reader's last measured width and shared source map. */
 export function revealDocumentPreviewSourceLine(document:DetailReadPreviewDocument,line:number,previous:DetailReadPreviewDocument):number {
@@ -70,7 +57,7 @@ export function documentPreviewLines(document:DetailReadPreviewDocument,width:nu
     // OSC links are an internal geometry map; they never reach the terminal.
     // Render synchronously with links even when the host does not support OSC 8.
     const rendered=withInternalLinks(()=>renderDetailReadPreview(document,width,getMarkdownTheme(),undefined,true));
-    entry={width,disclosures,selected,threadRows:rendered.threadRows,links:measureRenderedLinks(rendered.lines),lines:rendered.lines.map(stripRenderedLinks)};
+    entry={width,disclosures,selected,frame:rendered.frame,threadRows:rendered.threadRows,links:measureRenderedLinks(rendered.lines),lines:rendered.lines.map(stripRenderedLinks)};
     cache.set(document,entry);
   }
   return entry.lines;
@@ -126,7 +113,7 @@ export function renderDocumentPreview(preview:DocumentPreviewState,rect:PreviewR
   const lines=[preview.selecting?`Select passage · arrows move · Shift selects${commentPrompt} · Esc clear`:preview.passageSelected?`Passage selected${commentPrompt} · Esc clear`:`${preview.focused?'●':'○'} Preview · ${sanitizeDynamicText(preview.title)}`,navigation,...rendered.slice(offset,offset+content.height)];
   while(lines.length<rect.height-1)lines.push('');
   lines.push(preview.notice ? sanitizeDynamicText(preview.notice) : preview.activeLink ? parsePreviewRegionActionUri(preview.activeLink)?.type==='checklist.open'?'Enter status · Space toggle · Ctrl+Z undo':`Enter follow · ${sanitizeDynamicText(preview.activeLinkLabel??preview.activeLink)}` : `${preview.document.commentTarget?`${commentKey} comment · `:""}${selectKey} select · [/] threads · Tab links · ${help}`);
-  return {rect,content,lines:lines.slice(0,rect.height).map(line=>shade(line,rect.width)),offset,totalRows:rendered.length,links,controls};
+  return {rect,content,lines:lines.slice(0,rect.height).map(line=>shade(line,rect.width)),offset,totalRows:rendered.length,documentFrame:cache.get(preview.document)!.frame,links,controls};
 }
 export function pointInPreview(rect:PreviewRect,column:number,row:number):boolean{return column>=rect.x&&column<rect.x+rect.width&&row>=rect.y&&row<rect.y+rect.height;}
 
@@ -158,5 +145,5 @@ function renderCompactPreview(preview: DocumentPreviewState, rect: PreviewRect, 
   const lines = [strip, ...rendered.slice(offset, offset + content.height)];
   while (lines.length < rect.height - Number(Boolean(notice))) lines.push("");
   if (notice) lines.push(notice);
-  return {rect, content, lines: lines.slice(0,rect.height).map(line => shade(line,rect.width)), offset, totalRows: rendered.length, links, controls};
+  return {rect, content, lines: lines.slice(0,rect.height).map(line => shade(line,rect.width)), offset, totalRows: rendered.length, documentFrame:cache.get(preview.document)!.frame, links, controls};
 }

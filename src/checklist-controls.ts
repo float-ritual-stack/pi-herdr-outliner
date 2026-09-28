@@ -1,3 +1,4 @@
+import {atomicDocument, concatDocuments, generatedDocument, sliceDocument, type MappedDocument} from "./document-provenance";
 import {listItemFoldId} from "./document-folds";
 import {CHECKLIST_MARKS, checklistItems} from "./checklist-items";
 import {previewRegionActionUri, type PreviewRegion, type PreviewRegionState} from "./detail-preview-regions";
@@ -69,20 +70,27 @@ export function findChecklistControl(regions: readonly PreviewRegion[], id: stri
 }
 
 /** Decorate only mapped canonical item headers, after folding has placed its independent disclosure. */
-export function renderChecklistControls(source: string, controls: readonly ChecklistControl[]): string {
+export function renderChecklistControls(source: MappedDocument, controls: readonly ChecklistControl[]): MappedDocument {
   if (!controls.length) return source;
-  const lines = source.split(/(?<=\n)/);
+  let offset = 0;
+  const lines = source.text.split(/(?<=\n)/).map(text => {
+    const line = sliceDocument(source, offset, offset + text.length); offset += text.length; return line;
+  });
   for (const control of controls) {
-    const line = control.sourceSpan!.startLine, text = lines[line];
-    if (text === undefined) continue;
+    const line = control.sourceSpan!.startLine, mapped = lines[line];
+    if (!mapped) continue;
     // A note beginning with a list can acquire a presentation-only title prefix.
-    const match = /^(?:#{1,6}[ \t]+)?(?:[ \t]*>[ \t]?)*[ \t]*(?:[-+*]|\d+[.)])[ \t]+(\[[ xX~!]\])(?=[ \t\r\n]|$)/.exec(text);
+    const match = /^(?:#{1,6}[ \t]+)?(?:[ \t]*>[ \t]?)*[ \t]*(?:[-+*]|\d+[.)])[ \t]+(\[[ xX~!]\])(?=[ \t\r\n]|$)/.exec(mapped.text);
     if (!match || match[1]!.toLowerCase() !== CHECKLIST_MARKS[control.item.status]) continue;
     const start = match[0].length - 3;
-    const label = CHECKLIST_MARKS[control.item.status].replaceAll("[", "\\[").replaceAll("]", "\\]");
-    lines[line] = text.slice(0, start) + `[${label}](${previewRegionActionUri(control.activation!)})` + text.slice(start + 3);
+    let status = sliceDocument(mapped, start + 1, start + 2);
+    if (status.text === "X") status = concatDocuments(status.runs.map(run => atomicDocument("x", run.origin)));
+    const generated = (text: string) => generatedDocument(text, "checklist control syntax");
+    lines[line] = concatDocuments([sliceDocument(mapped, 0, start), generated("[\\"),
+      sliceDocument(mapped, start, start + 1), status, generated("\\"), sliceDocument(mapped, start + 2, start + 3),
+      generated(`](${previewRegionActionUri(control.activation!)})`), sliceDocument(mapped, start + 3)]);
   }
-  return lines.join("");
+  return concatDocuments(lines);
 }
 
 /** Quote the focused step's authored header, excluding its mark and hidden address. */

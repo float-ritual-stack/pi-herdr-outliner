@@ -113,6 +113,7 @@ function state(overrides: Partial<DetailState> = {}): DetailState {
     
     canNavigateBack: false,
     canNavigateForward: false,
+    resolvedProvenance: null,
     resolvedSelectedText: "",
     projectedSelectedText: "",
     readStatus: "ready",

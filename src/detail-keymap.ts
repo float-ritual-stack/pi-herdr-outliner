@@ -23,6 +23,7 @@ export interface DetailKeymapOptions {
   stop(): void;
   actionKeymap?: OutlinerActionKeymap;
   openKeyInspector?(): void;
+  openProvenanceInspector?(): void;
   openNewTree?(): void | Promise<void>;
   openActionMenu?(
     items: readonly OutlinerActionMenuItem[],
@@ -200,6 +201,10 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
     }
 
     switch (actionId) {
+      case "detail.debug.provenance":
+        if(options.openProvenanceInspector)options.openProvenanceInspector();
+        else await setStatus("Provenance inspection requires the Pi reader");
+        return true;
       case "detail.debug.keys":
         if (!options.openKeyInspector) return false;
         options.openKeyInspector();

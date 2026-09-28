@@ -1,7 +1,10 @@
+import {presentedSource, projectedBlockReference} from './document-source';
+import {atomicDocument, concatDocuments, observeDocument, sliceDocument, withDocumentOccurrence,
+  generatedDocument, type MappedDocument, type SourceSlice} from './document-provenance';
 import type { RequestInput } from "./client";
 import {isChecklistView,projectChecklistView} from './checklist-views';
 import { MAX_BLOCK_QUERY_LIMIT } from "./block-query";
-import { fragmentPresentationText, resolveFragmentSlice, stripFragmentAnchors } from "./fragments";
+import { resolveFragmentSlice, stripFragmentAnchors } from "./fragments";
 import { propertyReferenceOccurrences } from "./reference-occurrences";
 import { blockDisplayTitle } from "./references";
 import { propertySummarySegments } from "./property-summary";
@@ -66,12 +69,14 @@ export interface DetailEmbedRange {
 
 export interface DetailReadProjection {
   text: string;
+  provenance: MappedDocument;
   embeds: DetailEmbedState[];
   embedRanges: DetailEmbedRange[];
 }
 
 interface ProjectedEmbed {
   text: string;
+  provenance?: MappedDocument;
   state: DetailEmbedState;
   source?: {block: Block; startLine: number; endLine: number};
   sources?: DetailEmbedSource[];
@@ -172,15 +177,18 @@ async function projectVirtualBranch(
     const suffix = projected.completeness.kind === "truncated"
       ? `${resultLabel} · TRUNCATED at ${projected.completeness.limit}`
       : resultLabel;
+    const pieces: MappedDocument[] = [generatedDocument(linkedHeading(definition.id, suffix), 'view heading')];
+    for (const block of projected.blocks) {
+      const summary = propertySummarySegments(block.properties, parsed.config.summaryPropertyKeys ?? [])
+        .map(segment => segment.plain).join(" · ");
+      pieces.push(generatedDocument('\n- ', 'view list marker'), projectedBlockReference(block));
+      if (summary) pieces.push(atomicDocument(` · ${summary}`, {kind: 'derived', resultId: `view-summary:${definition.id}:${block.id}`,
+        dependencies: [{document: observeDocument({kind: 'block', blockId: block.id}, block.text, block.revision), start: 0, end: block.text.length}]}));
+    }
+    const provenance = concatDocuments(pieces);
     return {
-      text: [
-        linkedHeading(definition.id, suffix),
-        ...projected.blocks.map((block) => {
-          const summary = propertySummarySegments(block.properties, parsed.config!.summaryPropertyKeys ?? [])
-            .map(segment => segment.plain).join(" · ");
-          return `- ((${block.id}))${summary ? ` · ${summary}` : ""}`;
-        }),
-      ].join("\n"),
+      text: provenance.text,
+      provenance,
       state: {
         blockId: definition.id,
         status: projected.completeness.kind === "truncated" ? "truncated" : "ready",
@@ -243,10 +251,13 @@ async function projectRelationView(
   const allowedKeys = new Set(parsed.config.relationKeys);
   const seen = new Set<string>();
   const targetIds: string[] = [];
+  const relationTokens = new Map<string, SourceSlice>();
+  const observedSource = observeDocument({kind:'block',blockId:source.id}, source.text, source.revision);
   for (const occurrence of propertyReferenceOccurrences(source.text)) {
     if (!allowedKeys.has(occurrence.propertyKey) || seen.has(occurrence.blockId)) continue;
     seen.add(occurrence.blockId);
     targetIds.push(occurrence.blockId);
+    relationTokens.set(occurrence.blockId, {document:observedSource,start:occurrence.start,end:occurrence.end});
   }
   if (parsed.config.order === "target-id") targetIds.sort();
   const truncated = targetIds.length > parsed.config.limit;
@@ -263,34 +274,44 @@ async function projectRelationView(
     };
   }
 
-  const rows: string[] = [];
+  const rows: MappedDocument[] = [];
   for (const targetId of visibleIds) {
+    const token = relationTokens.get(targetId)!;
+    const occurrence = {host:token,path:[{token,target:targetId}]};
+    const relationReference = (text:string) => withDocumentOccurrence(atomicDocument(text,
+      {kind:'reference',token,destination:targetId}), occurrence);
     let target: Block;
     try {
       target = await loadBlock(targetId);
     } catch (error) {
       const message = boundedError(error);
-      rows.push(
+      rows.push(relationReference(
         message.startsWith(`Block not found: ${targetId}`)
           ? `- ((${targetId})) · MISSING TARGET`
           : `- ((${targetId})) · TARGET FAILED · ${message}`,
-      );
+      ));
       continue;
     }
     if (target.effectiveDeletedRootId) {
-      rows.push(`- ((${targetId})) · IN TRASH · ${blockDisplayTitle(target)}`);
+      rows.push(relationReference(`- ((${targetId})) · IN TRASH · ${blockDisplayTitle(target)}`));
       continue;
     }
-    rows.push(`- ((${targetId}))`);
+    rows.push(concatDocuments([generatedDocument('- ', 'relation list marker'), withDocumentOccurrence(projectedBlockReference(target), occurrence)]));
     for (const fragmentId of parsed.config.fragmentIds) {
       const resolution = resolveFragmentSlice(target.text, fragmentId);
       if (resolution.status === "missing") {
-        rows.push(`  - ((${targetId}^${fragmentId})) · MISSING FRAGMENT`);
+        rows.push(generatedDocument(`  - ((${targetId}^${fragmentId})) · MISSING FRAGMENT`, 'missing relation fragment'));
       } else if (resolution.status === "duplicate") {
-        rows.push(`  - ((${targetId}^${fragmentId})) · DUPLICATE FRAGMENT`);
+        rows.push(generatedDocument(`  - ((${targetId}^${fragmentId})) · DUPLICATE FRAGMENT`, 'ambiguous relation fragment'));
       } else {
-        rows.push(`  - ((${targetId}^${fragmentId}))`);
-        rows.push(...resolution.slice.text.split(/\r?\n/).map((line) => `    ${line}`));
+        rows.push(generatedDocument(`  - ((${targetId}^${fragmentId}))`, 'relation fragment heading'));
+        const body = presentedSource(observeDocument({kind:'block',blockId:target.id},target.text,target.revision), resolution.slice.startLine,resolution.slice.endLine);
+        const bounded = withDocumentOccurrence(sliceDocument(body,0,body.text.trimEnd().length), occurrence);
+        let offset = 0;
+        for (const line of bounded.text.split('\n')) {
+          rows.push(concatDocuments([generatedDocument('    ', 'relation fragment indentation'),sliceDocument(bounded,offset,offset+line.length)]));
+          offset += line.length + 1;
+        }
       }
     }
   }
@@ -302,8 +323,11 @@ async function projectRelationView(
   const suffix = truncated
     ? `RELATION · ${countLabel} · TRUNCATED at ${parsed.config.limit}`
     : `RELATION · ${countLabel}`;
+  const provenance = concatDocuments([generatedDocument(linkedHeading(definition.id,suffix), 'relation result heading'),
+    ...rows.flatMap(row=>[generatedDocument('\n','relation row separator'),row])]);
   return {
-    text: [linkedHeading(definition.id, suffix), ...rows].join("\n"),
+    text: provenance.text,
+    provenance,
     state: {
       blockId: definition.id,
       status: truncated ? "truncated" : "ready",
@@ -348,10 +372,13 @@ async function projectEmbed(
     if (resolution.status === "duplicate") {
       return explicitFallback(blockId, "fragment-duplicate", "DUPLICATE FRAGMENT", fragmentId);
     }
+    const header = `Embedded fragment: ((${embedReference(blockId, fragmentId)}))\n`;
+    const observed = observeDocument({kind: 'block', blockId: target.id}, target.text, target.revision);
+    const body = presentedSource(observed, resolution.slice.startLine, resolution.slice.endLine, resolution.slice.anchor.kind === 'list-item');
+    const provenance = concatDocuments([generatedDocument(header, 'embed heading'), sliceDocument(body, 0, body.text.trimEnd().length)]);
     return {
-      text: `Embedded fragment: ((${embedReference(blockId, fragmentId)}))\n${
-        fragmentPresentationText(resolution.slice)
-      }`,
+      text: provenance.text,
+      provenance,
       state: { blockId, fragmentId, status: "ready", count: 1 },
       source: {block: target, startLine: resolution.slice.startLine, endLine: resolution.slice.endLine},
     };
@@ -362,12 +389,17 @@ async function projectEmbed(
   if(isChecklistView(target.text)){
     try {
       const projection=await projectChecklistView(requester,target.text);
-      return {text:projection.text,sources:projection.sources,state:{blockId,status:projection.collection.completeness.kind==='truncated'?'truncated':'ready',count:projection.collection.matches.length,completeness:projection.collection.completeness}};
+      return {text:projection.text,provenance:projection.provenance,sources:projection.sources,state:{blockId,status:projection.collection.completeness.kind==='truncated'?'truncated':'ready',count:projection.collection.matches.length,completeness:projection.collection.completeness}};
     }catch(error){return explicitFallback(blockId,'failed',`CHECKLIST VIEW FAILED · ${boundedError(error)}`);}
   }
   if (!isVirtualBranchDefinition(target)) {
+    const provenance = concatDocuments([
+      generatedDocument(`Embedded block: ((${blockId}))\n`, 'embed heading'),
+      presentedSource(observeDocument({kind: 'block', blockId: target.id}, target.text, target.revision)),
+    ]);
     return {
-      text: `Embedded block: ((${blockId}))\n${stripFragmentAnchors(target.text)}`,
+      text: provenance.text,
+      provenance,
       state: { blockId, status: "ready", count: 1 },
       source: {block: target, startLine: 0, endLine: target.text.split(/\r?\n/).length - 1},
     };
@@ -390,11 +422,14 @@ export function detailEmbedIds(text: string): string[] {
 export async function projectDetailRead(
   requester: DetailEmbedRequester,
   text: string,
-  options: { hostBlockId?: string } = {},
+  options: { hostBlockId?: string; hostRevision?: number; source?: MappedDocument } = {},
 ): Promise<DetailReadProjection> {
-  const projectedSource = stripFragmentAnchors(text);
+  if (options.source && options.source.text !== text) throw new Error('Projection source must match its input text');
+  const host = options.hostBlockId ? observeDocument({kind: 'block', blockId: options.hostBlockId}, text, options.hostRevision) : null;
+  const source = options.source ?? (host ? presentedSource(host) : generatedDocument(stripFragmentAnchors(text), 'host identity unavailable'));
+  const projectedSource = source.text;
   const matches = [...projectedSource.matchAll(DETAIL_EMBED_PATTERN)];
-  if (matches.length === 0 && !isChecklistView(text)) return { text: projectedSource, embeds: [], embedRanges: [] };
+  if (matches.length === 0 && !isChecklistView(text)) return { text: projectedSource, provenance: source, embeds: [], embedRanges: [] };
 
   const targetCache = new Map<string, Promise<Block>>();
   const loadTarget = (blockId: string): Promise<Block> => {
@@ -433,6 +468,7 @@ export async function projectDetailRead(
   }
   let consumed = 0;
   let output = "";
+  const mappedParts: MappedDocument[] = [];
   let outputLine = 0;
   const embeds: DetailEmbedState[] = [];
   const embedRanges: DetailEmbedRange[] = [];
@@ -442,6 +478,7 @@ export async function projectDetailRead(
     const start = match.index;
     const sourceChunk = projectedSource.slice(consumed, start);
     output += sourceChunk;
+    mappedParts.push(sliceDocument(source, consumed, start));
     outputLine += newlineCount(sourceChunk);
     const blockId = match[1]!;
     const fragmentId = match[2];
@@ -459,6 +496,17 @@ export async function projectDetailRead(
     }
     const startLine = outputLine;
     output += projected.text;
+    const token = sliceDocument(source, start, start + match[0].length);
+    const slices = token.runs.flatMap(run => run.origin.kind === 'source' ? run.origin.slices : []);
+    const hostToken: SourceSlice | undefined = slices.length && slices[0]!.document === slices.at(-1)!.document
+      ? {...slices[0]!, end: slices.at(-1)!.end} : undefined;
+    const origin = hostToken ? {kind: 'reference' as const, token: hostToken, destination: embedReference(blockId, fragmentId)}
+      : {kind: 'generated' as const, reason: 'embed source identity unavailable'};
+    const fallback = ['missing', 'deleted', 'fragment-missing', 'fragment-duplicate', 'failed', 'limit'].includes(projected.state.status);
+    const mapped = projected.provenance ?? (fallback ? atomicDocument(projected.text, origin)
+      : generatedDocument(projected.text, 'view projection origin migration pending'));
+    mappedParts.push(hostToken ? withDocumentOccurrence(mapped, {host: hostToken,
+      path: [{token: hostToken, target: embedReference(blockId, fragmentId)}]}) : mapped);
     outputLine += newlineCount(projected.text);
     embeds.push(projected.state);
     embedRanges.push({ startLine, endLine: outputLine,
@@ -467,15 +515,18 @@ export async function projectDetailRead(
     consumed = start + match[0].length;
   }
   output += projectedSource.slice(consumed);
+  mappedParts.push(sliceDocument(source, consumed));
   if(isChecklistView(text)){
     output+='\n\n';
+    mappedParts.push(generatedDocument('\n\n', 'checklist separator'));
     const startLine=newlineCount(output);
     try {
       const projection=await projectChecklistView(requester,text);
       output+=projection.text;
+      mappedParts.push(projection.provenance);
       embedRanges.push({startLine,endLine:newlineCount(output),sources:projection.sources.map(source=>({...source,contentStartLine:source.contentStartLine+startLine}))});
       embeds.push({blockId:options.hostBlockId??'',status:projection.collection.completeness.kind==='truncated'?'truncated':'ready',count:projection.collection.matches.length,completeness:projection.collection.completeness});
-    }catch(error){output+=`Checklist view unavailable · ${boundedError(error)}`;}
+    }catch(error){const failure=`Checklist view unavailable · ${boundedError(error)}`;output+=failure;mappedParts.push(generatedDocument(failure, 'checklist query failure'));}
   }
-  return { text: output, embeds, embedRanges };
+  return { text: output, provenance: concatDocuments(mappedParts), embeds, embedRanges };
 }

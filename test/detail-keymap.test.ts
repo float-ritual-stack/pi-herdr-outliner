@@ -22,6 +22,7 @@ function state(): DetailState {
     
     canNavigateBack: false,
     canNavigateForward: false,
+    resolvedProvenance: null,
     resolvedSelectedText: "",
     projectedSelectedText: "",
     readStatus: "ready",
@@ -113,7 +114,7 @@ function harness(
     async dispatch(intent) {
       intents.push(intent);
     },
-    captureResourcePointerSelection() {
+    captureResourceSelection() {
       return null;
     },
     setPreviewRegions() {},

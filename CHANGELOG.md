@@ -4,6 +4,16 @@ This file records notable user-facing changes. The project remains active dogfoo
 
 ## [Unreleased]
 
+- Detail and Preview share cell-level source evidence for rendered copying and
+  comments, including formatted text, tables, Unicode and repeated embeds.
+  Comments retain immutable quotes and separate source fragments; ambiguous
+  edits stay unpositioned. Saved Inbox versions retain their processing attempt
+  and cannot assign IDs into live checklists. A developer provenance inspector
+  explains source ranges and generated cells. An optional declarative status
+  component uses the same responsive layout and evidence contract. Protocol 81
+  adds passage observations and fragment resolutions; restart service and
+  readers together when upgrading. PIE-350.
+
 - Create a quoted block comment through `outliner_comment` or CLI `comment`
   without constructing annotation internals. Exact quotes require unique context,
   stale revisions fail atomically, and retrying a saved request does not duplicate

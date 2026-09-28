@@ -337,7 +337,7 @@ export function buildDetailAnsiPreview(
   }
   const annotationLines: string[] = [];
   const threadRows = new Map<string, number>();
-  const groups = detailAnnotationGroups(state, line => line, sourceLines.length, state.resolvedSelectedText);
+  const groups = detailAnnotationGroups(state);
   const append = (text: string, prefix = "") => {
     for (const line of wrapTextWithAnsi(sanitizeDynamicText(text, true), Math.max(1, width - visibleWidth(prefix)))) {
       annotationLines.push(`${prefix}${line}`);

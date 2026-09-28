@@ -1,3 +1,6 @@
+import {resolveAnnotationPassage, passageResolutionStatus, passageDocumentRepresentation} from "./annotation-passages";
+import {observeDocument} from "./document-provenance";
+import {resourceDocumentObservation} from "./document-resources";
 import { blockCommentTarget } from "./block-comments";
 import { blockAnnotationRepresentation } from "./annotation-representations";
 import { checklistItems, updateChecklistText } from "./checklist-items";
@@ -10,6 +13,7 @@ import {
   createAnnotationReferenceContext,
   formatAnnotationBlock,
   normalizeAnnotationCreateInput,
+  normalizePassageResolution,
   normalizeAnnotationRepresentation,
   normalizeAnnotationSubject,
   normalizeAnnotationTarget,
@@ -43,6 +47,8 @@ import type {
   AnnotationLifecycleInput,
   AnnotationListQuery,
   AnnotationRecord,
+  AnnotationPassageResolution,
+  AnnotationPassageSlice,
   AnnotationReconcileInput,
   AnnotationReconcileReceipt,
   AnnotationRepresentation,
@@ -92,6 +98,7 @@ interface ResolutionRow {
   source_representation_json: string;
   target_representation_json: string;
   resolved_target_json: string | null;
+  passage_resolution_json?: string | null;
   method_json: string;
   reviewer_json: string;
   candidates_json: string;
@@ -310,6 +317,7 @@ function eventFromRow(row: ResolutionRow): AnnotationResolutionEvent {
     sourceRepresentation: parseStoredRepresentation(row.source_representation_json),
     targetRepresentation: parseStoredRepresentation(row.target_representation_json),
     resolvedTarget,
+    ...(row.passage_resolution_json ? {passageResolution: normalizePassageResolution(json(row.passage_resolution_json, "Passage resolution"))} : {}),
     method,
     reviewer,
     confidence: row.confidence,
@@ -413,7 +421,7 @@ export class AnnotationRepository {
       const records = prepared.map((operation) => {
         if (operation.type === "create") {
           const capture = attached[createIndex++]!;
-          return this.createFromCurrentWrite(capture.input, author, provenance, capture.currentTarget);
+          return this.createFromCurrentWrite(capture.input, author, provenance, capture.currentTarget, capture.currentPassageTargets);
         }
         return this.replyFromCurrentWrite(operation.input, author, provenance);
       });
@@ -439,8 +447,15 @@ export class AnnotationRepository {
     const rows = subject.kind === "block"
       ? this.database.query(`SELECT * FROM annotation_targets WHERE block_id = ?
           OR json_extract(original_target_json, '$.referenceContext.representation.subject.blockId') = ?
-          ORDER BY created_at, annotation_block_id`).all(subject.blockId, subject.blockId)
-      : this.database.query("SELECT * FROM annotation_targets WHERE resource_id = ? ORDER BY created_at, annotation_block_id").all(subject.resourceId);
+          OR EXISTS (SELECT 1 FROM json_each(json_extract(original_target_json, '$.passage.documents')) document
+            WHERE json_extract(document.value, '$.subject.kind') = 'block'
+              AND json_extract(document.value, '$.subject.blockId') = ?)
+          ORDER BY created_at, annotation_block_id`).all(subject.blockId, subject.blockId, subject.blockId)
+      : this.database.query(`SELECT * FROM annotation_targets WHERE resource_id = ?
+          OR EXISTS (SELECT 1 FROM json_each(json_extract(original_target_json, '$.passage.documents')) document
+            WHERE json_extract(document.value, '$.subject.kind') = 'resource'
+              AND json_extract(document.value, '$.subject.resourceId') = ?)
+          ORDER BY created_at, annotation_block_id`).all(subject.resourceId, subject.resourceId);
     const rootIds = new Set((rows as AnnotationTargetRow[]).map((row) => row.annotation_block_id));
     if (rootIds.size === 0) return [];
     const replyIds = this.database.query(`
@@ -520,6 +535,7 @@ export class AnnotationRepository {
     const target = normalizeAnnotationTarget(input.target, false);
     const root = this.requireRoot(annotationId);
     const original = parseStoredTarget(root.original_target_json);
+    if (original.passage) throw new Error("Rendered passage approval requires resolving its individual source fragments");
     if (!sameSubject(original.representation.subject, target.representation.subject)) {
       throw new Error("Approved target must belong to the annotation subject");
     }
@@ -1013,9 +1029,85 @@ export class AnnotationRepository {
     return this.materialize(parseAnnotationBlockContent(updated), this.targetRow(annotationId));
   }
 
+  /** Passage slices and ordinary comments share the same per-note ID transaction.
+   * Stale observations may retain an already observed ID, but cannot assign new
+   * identities into a changed note using old offsets. */
+  private attachChecklistItems(inputs: AnnotationCreateInput[], author: BlockAuthor, provenance?: BlockProvenance) {
+    const exactInputs = [...inputs];
+    const slices: Array<{input:number; slice:AnnotationPassageSlice; exactIndex?:number; itemId?:string}> = [];
+    for (const [index, input] of inputs.entries()) {
+      const passage = input.target.passage;
+      if (!passage) continue;
+      for (const fragment of passage.fragments) {
+        if (fragment.kind !== "source") continue;
+        for (const slice of fragment.slices) {
+          const document = passage.documents[slice.document]!;
+          if (document.subject.kind !== "block" || document.draft || document.inbox) continue;
+          const item = checklistItems(document.text).filter(item =>
+            item.span.start <= slice.anchor.start! && item.span.end >= slice.anchor.end!)
+            .sort((a, b) => b.depth - a.depth)[0];
+          if (slice.listItemId && (item?.itemId !== slice.listItemId || item.identity !== "unique")) {
+            throw new Error("Passage checklist ID does not belong to the observed item");
+          }
+          if (!item) continue;
+          if (item.identity === "duplicate") throw new Error(`Duplicate checklist item ID: ${item.itemId}`);
+          const current = this.blocks.get(document.subject.blockId);
+          const entry: typeof slices[number] = {input:index, slice, itemId:item.itemId};
+          if (current && !current.deletedAt && !current.effectiveDeletedRootId && annotationSourceHash(current.text) === document.hash) {
+            entry.exactIndex = exactInputs.length;
+            exactInputs.push({...input, target:{representation:blockAnnotationRepresentation(current), anchor:slice.anchor,
+              ...(item.itemId ? {listItemId:item.itemId} : {})}});
+          }
+          slices.push(entry);
+        }
+      }
+    }
+    const {captures:attached, edits} = this.attachExactChecklistItems(exactInputs, author, provenance);
+    return inputs.map((input, index) => {
+      if (!input.target.passage) return {...attached[index]!, currentPassageTargets:undefined};
+      const identities = new Map<AnnotationPassageSlice,string>();
+      const currentPassageTargets = new Map<string,AnnotationTarget>();
+      for (const entry of slices.filter(entry => entry.input === index)) {
+        const capture = entry.exactIndex === undefined ? undefined : attached[entry.exactIndex];
+        const itemId = capture?.input.target.listItemId ?? entry.itemId;
+        if (itemId) identities.set(entry.slice, itemId);
+        if (capture?.currentTarget) currentPassageTargets.set(JSON.stringify([entry.slice.document, entry.slice.anchor]), capture.currentTarget);
+      }
+      const passage = input.target.passage;
+      // ID insertions can move other captured text and repeated host tokens in
+      // this same note. Replay those known edits, not a search for similar text.
+      for (const fragment of passage.fragments) {
+        const sources = fragment.kind === 'source' ? fragment.slices : fragment.kind === 'reference' ? [fragment.token] : [];
+        const occurrence = fragment.kind === 'source' || fragment.kind === 'reference' ? fragment.occurrence : undefined;
+        for (const slice of [...sources, ...(occurrence ? [occurrence.host, ...occurrence.path.map(step=>step.token)] : [])]) {
+          const key = JSON.stringify([slice.document, slice.anchor]);
+          if (currentPassageTargets.has(key)) continue;
+          const observed = passage.documents[slice.document]!;
+          if (observed.subject.kind !== 'block' || observed.draft || observed.inbox) continue;
+          const edit = edits.get(observed.subject.blockId);
+          if (!edit || edit.beforeHash !== observed.hash) continue;
+          let start = slice.anchor.start!, end = slice.anchor.end!;
+          for (const insertion of edit.insertions) {
+            if (start >= insertion.at) start += insertion.length;
+            if (end > insertion.at) end += insertion.length;
+          }
+          const block = this.blocks.requireActive(observed.subject.blockId);
+          if (block.text.slice(start,end) !== slice.anchor.exact) continue;
+          currentPassageTargets.set(key, {representation:blockAnnotationRepresentation(block),
+            anchor:createTextQuoteAnchor(block.text,start,end)});
+        }
+      }
+      return {input:{...input, target:{...input.target, passage:{...passage,
+        fragments:passage.fragments.map(fragment => fragment.kind !== "source" ? fragment : {...fragment,
+          slices:fragment.slices.map(slice => identities.has(slice) ? {...slice, listItemId:identities.get(slice)!} : slice)}),
+      }}}, currentTarget:undefined, currentPassageTargets};
+    });
+  }
+
   /** Assign IDs once per note, inside the same transaction as comment creation. */
-  private attachChecklistItems(inputs: AnnotationCreateInput[], author: BlockAuthor, provenance?: BlockProvenance): {input: AnnotationCreateInput; currentTarget?: AnnotationTarget}[] {
+  private attachExactChecklistItems(inputs: AnnotationCreateInput[], author: BlockAuthor, provenance?: BlockProvenance) {
     const result: {input: AnnotationCreateInput; currentTarget?: AnnotationTarget}[] = inputs.map(input => ({input}));
+    const edits = new Map<string,{beforeHash:string;insertions:Array<{at:number;length:number}>}>();
     const groups = new Map<string, number[]>();
     inputs.forEach((input, index) => {
       const {representation, anchor, referenceContext} = input.target;
@@ -1045,6 +1137,7 @@ export class AnnotationRepository {
         return [index, {start: anchor.start, end: anchor.end, exact: anchor.exact}];
       }));
       let content = block.text;
+      const insertions:Array<{at:number;length:number}>=[];
       const ids = new Map<number, string>();
       // Insert from the bottom so earlier source coordinates remain meaningful.
       for (const start of [...new Set(selected.map(entry => entry.item.span.start))].sort((a, b) => b - a)) {
@@ -1056,6 +1149,7 @@ export class AnnotationRepository {
           let insertion = 0;
           while (content[insertion] === updated.text[insertion] && insertion < content.length) insertion++;
           const delta = updated.text.length - content.length;
+          insertions.push({at:insertion,length:delta});
           for (const range of ranges.values()) {
             if (range.start >= insertion) range.start += delta;
             if (range.end > insertion) range.end += delta;
@@ -1064,7 +1158,10 @@ export class AnnotationRepository {
         content = updated.text;
         ids.set(start, updated.itemId);
       }
-      if (content !== block.text) this.blocks.update(blockId, content, block.revision, {author, ...provenance});
+      if (content !== block.text) {
+        this.blocks.update(blockId, content, block.revision, {author, ...provenance});
+        edits.set(blockId,{beforeHash:annotationSourceHash(block.text),insertions});
+      }
       for (const {index, item} of selected) {
         const listItemId = ids.get(item.span.start)!;
         const input = {...inputs[index]!, target: {...inputs[index]!.target, listItemId}};
@@ -1075,7 +1172,7 @@ export class AnnotationRepository {
         } : {})};
       }
     }
-    return result;
+    return {captures:result,edits};
   }
 
   private createFromCurrentWrite(
@@ -1083,6 +1180,7 @@ export class AnnotationRepository {
     author: BlockAuthor,
     provenance?: BlockProvenance,
     currentTarget?: AnnotationTarget,
+    currentPassageTargets?: ReadonlyMap<string,AnnotationTarget>,
   ): AnnotationRecord {
     const subject = input.target.representation.subject;
     const parentId = subject.kind === "block" ? subject.blockId : this.ensureSystemRoot();
@@ -1092,16 +1190,20 @@ export class AnnotationRepository {
     const representation = current ? blockAnnotationRepresentation(current) : input.target.representation;
     const resolution = current && !currentTarget ? reanchorAnnotationTarget(input.target, representation, current.text) : null;
     if (resolution && !resolution.resolvedTarget) throw new Error("Checklist comment lost its item during creation");
+    const passageResolution = input.target.passage ? this.resolvePassage(input.target, undefined, currentPassageTargets) : undefined;
+    const status = passageResolution ? passageResolutionStatus(passageResolution) : "resolved";
     this.appendEvent({
+      ...(passageResolution ? {passageResolution} : {}),
       annotationId: block.id,
       sourceRepresentation: input.target.representation,
       targetRepresentation: representation,
-      resolvedTarget: currentTarget ?? resolution?.resolvedTarget ?? input.target,
-      method: resolution?.method ?? { ...TEXT_CODEC, method: "capture" },
+      resolvedTarget: status === "resolved" ? currentTarget ?? resolution?.resolvedTarget ?? input.target : null,
+      method: passageResolution ? {kind: "codec", codecId: "rendered-passage", codecVersion: 1, method: "capture"}
+        : resolution?.method ?? { ...TEXT_CODEC, method: "capture" },
       reviewer: { kind: "system", id: "annotation-repository" },
-      confidence: 1,
+      confidence: status === "resolved" ? 1 : null,
       candidates: [],
-      status: "resolved",
+      status,
       appliesCurrent: true,
       createdAt: block.createdAt,
     });
@@ -1128,12 +1230,63 @@ export class AnnotationRepository {
     return this.materialize(parseAnnotationBlockContent(block), this.targetRow(root.block.id));
   }
 
+  private resolvePassage(target: AnnotationTarget, initial?: AnnotationPassageResolution,
+    captures?: ReadonlyMap<string,AnnotationTarget>): AnnotationPassageResolution {
+    const admitted = new Map<string,AnnotationTarget>();
+    target.passage!.fragments.forEach((fragment,index)=>{
+      const position=initial?.fragments[index];
+      const retain=(slice:AnnotationPassageSlice,value:AnnotationTarget|null|undefined)=>{
+        if(value)admitted.set(JSON.stringify([slice.document,slice.anchor]),value);
+      };
+      const slices=fragment.kind==='source'?fragment.slices:fragment.kind==='reference'?[fragment.token]:[];
+      slices.forEach((slice,source)=>retain(slice,position?.sources[source]?.resolvedTarget));
+      if((fragment.kind==='source'||fragment.kind==='reference')&&fragment.occurrence){
+        retain(fragment.occurrence.host,position?.occurrence?.host.resolvedTarget);
+        fragment.occurrence.path.forEach((step,index)=>retain(step.token,position?.occurrence?.path[index]?.resolvedTarget));
+      }
+    });
+    return normalizePassageResolution(resolveAnnotationPassage(target.passage!, target.representation.capturedAt, observed => {
+      if (observed.subject.kind === "block") {
+        const block = this.blocks.get(observed.subject.blockId);
+        return block && !block.deletedAt && !block.effectiveDeletedRootId
+          ? observeDocument(observed.subject, block.text, block.revision) : null;
+      }
+      if (observed.subject.kind === "resource") {
+        try { return resourceDocumentObservation(this.resources.describe(observed.subject.resourceId, true)); }
+        catch { return null; }
+      }
+      return null;
+    }, slice => captures?.get(JSON.stringify([slice.document, slice.anchor])) ??
+      admitted.get(JSON.stringify([slice.document,slice.anchor]))));
+  }
+
   private reconcileOne(
     record: AnnotationRecord,
     representation: AnnotationRepresentation,
     content: string | null,
     pdfPages: readonly PdfPageText[],
   ): boolean {
+    if (record.originalTarget.passage) {
+      const passageResolution = this.resolvePassage(record.originalTarget, record.resolutionHistory[0]?.passageResolution);
+      const located=record.originalTarget.referenceContext?this.locateReferenceContext(record):undefined;
+      const status=located&&!located.context?located.status:passageResolutionStatus(passageResolution);
+      const resolvedTarget=status==='resolved'
+        ? {...record.originalTarget,...(located?.context?{referenceContext:located.context}:{})}:null;
+      // Reading a file can change capture time without changing its source.
+      const identity = (value: unknown) => JSON.stringify(value, (key, value) => key === "capturedAt" ? undefined : value);
+      if (identity(record.currentResolution.passageResolution) === identity(passageResolution) &&
+        record.currentResolution.status===status && identity(record.resolvedTarget)===identity(resolvedTarget)) return false;
+      this.appendEvent({annotationId: record.block.id, passageResolution,
+        sourceRepresentation: record.currentResolution.targetRepresentation,
+        targetRepresentation: record.originalTarget.representation,
+        resolvedTarget,
+        method: located&&!located.context
+          ? {...REFERENCE_CONTEXT_CODEC,method:'source-occurrence-unpositioned'}
+          : {kind: "codec", codecId: "rendered-passage", codecVersion: 1, method: "reconcile"},
+        reviewer: {kind: "system", id: "annotation-repository"}, confidence: status === "resolved" ? 1 : null,
+        candidates: [], status, appliesCurrent: true});
+      return true;
+    }
     if (record.originalTarget.referenceContext) return this.reconcileContextual(record, representation, content, pdfPages);
     const sourceRepresentation = record.currentResolution.targetRepresentation;
     if (sameRepresentation(sourceRepresentation, representation)) return false;
@@ -1170,12 +1323,7 @@ export class AnnotationRepository {
     return true;
   }
 
-  private reconcileContextual(
-    record: AnnotationRecord,
-    representation: AnnotationRepresentation,
-    content: string | null,
-    pdfPages: readonly PdfPageText[],
-  ): boolean {
+  private locateReferenceContext(record:AnnotationRecord) {
     const original = record.originalTarget;
     const lastApproval = [...record.resolutionHistory].reverse().find(event =>
       event.appliesCurrent && event.method.kind === "human" && event.resolvedTarget?.referenceContext);
@@ -1191,11 +1339,22 @@ export class AnnotationRepository {
       this.referenceContextResourceId(located.context) !== original.representation.subject.resourceId) {
       located = { context: null, status: "orphaned" };
     }
+    return {...located,blocked:!!blocked};
+  }
+
+  private reconcileContextual(
+    record: AnnotationRecord,
+    representation: AnnotationRepresentation,
+    content: string | null,
+    pdfPages: readonly PdfPageText[],
+  ): boolean {
+    const original = record.originalTarget;
+    const located=this.locateReferenceContext(record);
     const sourceRepresentation = record.currentResolution.targetRepresentation;
     const resourceReconciliation = representation.subject.kind === "resource";
     const targetRepresentation = resourceReconciliation ? representation : sourceRepresentation;
     if (!located.context) {
-      if (blocked && sameRepresentation(sourceRepresentation, targetRepresentation)) return false;
+      if (located.blocked && sameRepresentation(sourceRepresentation, targetRepresentation)) return false;
       this.appendEvent({
         annotationId: record.block.id, sourceRepresentation, targetRepresentation,
         resolvedTarget: null, method: { ...REFERENCE_CONTEXT_CODEC, method: "source-occurrence-unpositioned" },
@@ -1268,6 +1427,14 @@ export class AnnotationRepository {
 
   private validateCapture(target: AnnotationTarget): void {
     this.validateReferenceContext(target);
+    for (const observed of target.passage?.documents ?? []) {
+      if (!observed.inbox || observed.subject.kind !== "block") continue;
+      const saved = readCaptureBefore(this.database, observed.inbox.attemptId, observed.subject.blockId);
+      if (!saved || saved.updatedAt !== observed.inbox.updatedAt || annotationSourceHash(saved.text) !== observed.hash ||
+        (observed.revision !== undefined && saved.revision !== observed.revision)) {
+        throw new Error("Annotation saved Inbox passage is unavailable or mismatched");
+      }
+    }
     const representation = target.representation;
     if (representation.sourceSnapshot.kind === "block") {
       const snapshot=representation.sourceSnapshot;
@@ -1282,8 +1449,15 @@ export class AnnotationRepository {
         throw new Error("Annotation block snapshot is stale");
       }
     }
+    // Rendered Resource quotes are separate observations, just like rendered
+    // block quotes. Their source evidence lives in normalized passage fragments.
+    // A bare rendered snapshot cannot replace provider evidence for older targets.
+    if (representation.subject.kind === 'resource' && representation.sourceSnapshot.kind === 'rendered' &&
+      (!target.passage || representation.sourceSnapshot.observation.validation !== 'preview-selection')) {
+      throw new Error('Rendered Resource annotations require a captured passage');
+    }
     const content = this.representationContent(representation);
-    if (representation.subject.kind === "resource" && content === null) {
+    if (representation.subject.kind === "resource" && representation.sourceSnapshot.kind !== 'rendered' && content === null) {
       throw new Error("Annotation Resource representation evidence is unavailable");
     }
     if (
@@ -1371,8 +1545,8 @@ export class AnnotationRepository {
 
   private representationContent(representation: AnnotationRepresentation): string | null {
     const subject = representation.subject;
+    if (representation.sourceSnapshot.kind === 'rendered') return null;
     if (subject.kind === "block") {
-      if (representation.sourceSnapshot.kind === "rendered") return null;
       const current=this.blocks.requireActive(subject.blockId);
       const snapshot=representation.sourceSnapshot;
       if(snapshot.kind==='block' && snapshot.inboxAttemptId){
@@ -1466,6 +1640,7 @@ export class AnnotationRepository {
 
   private appendEvent(input: {
     readonly annotationId: string;
+    readonly passageResolution?: AnnotationPassageResolution;
     readonly sourceRepresentation: AnnotationRepresentation;
     readonly targetRepresentation: AnnotationRepresentation;
     readonly resolvedTarget: AnnotationTarget | null;
@@ -1484,6 +1659,7 @@ export class AnnotationRepository {
       id: crypto.randomUUID(),
       annotationId: input.annotationId,
       sequence: sequenceRow.sequence,
+      ...(input.passageResolution ? {passageResolution: normalizePassageResolution(input.passageResolution)} : {}),
       sourceRepresentation: normalizeAnnotationRepresentation(input.sourceRepresentation, true),
       targetRepresentation: normalizeAnnotationRepresentation(input.targetRepresentation, true),
       resolvedTarget: input.resolvedTarget === null ? null : normalizeAnnotationTarget(input.resolvedTarget, true),
@@ -1500,8 +1676,8 @@ export class AnnotationRepository {
       INSERT INTO annotation_resolution_events (
         id, annotation_block_id, sequence, source_representation_json,
         target_representation_json, resolved_target_json, method_json,
-        reviewer_json, confidence, candidates_json, status, applies_current, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        reviewer_json, confidence, candidates_json, status, applies_current, created_at, passage_resolution_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       event.id,
       event.annotationId,
@@ -1516,12 +1692,42 @@ export class AnnotationRepository {
       event.status,
       event.appliesCurrent ? 1 : 0,
       event.createdAt,
+      event.passageResolution ? JSON.stringify(event.passageResolution) : null,
     );
     this.insertEventResourceEvidenceRefs(event);
     return event;
   }
 
   private assertEvent(event: AnnotationResolutionEvent): void {
+    if (event.passageResolution) {
+      const passage = parseStoredTarget(this.targetRow(event.annotationId).original_target_json).passage;
+      if (!passage || passage.fragments.length !== event.passageResolution.fragments.length) {
+        throw new Error("Passage resolution must retain every captured fragment");
+      }
+      const check = (position: import("./types").AnnotationPassageSliceResolution,
+        slice: import("./types").AnnotationPassageSlice) => {
+        if (position.document !== slice.document ||
+          (position.resolvedTarget && (!sameSubject(position.resolvedTarget.representation.subject, passage.documents[slice.document]!.subject) ||
+            position.resolvedTarget.listItemId !== slice.listItemId))) {
+          throw new Error("Passage resolution cannot change source ownership");
+        }
+      };
+      for (const [index, original] of passage.fragments.entries()) {
+        const fragment = event.passageResolution.fragments[index]!;
+        const slices = original.kind === "source" ? original.slices : original.kind === "reference" ? [original.token] : [];
+        if (fragment.sources.length !== slices.length) throw new Error("Passage resolution must retain every source slice");
+        fragment.sources.forEach((position, index) => check(position, slices[index]!));
+        const occurrence = original.kind === "source" || original.kind === "reference" ? original.occurrence : undefined;
+        if (Boolean(occurrence) !== Boolean(fragment.occurrence) ||
+          (occurrence && fragment.occurrence?.path.length !== occurrence.path.length)) {
+          throw new Error("Passage resolution must retain its occurrence path");
+        }
+        if (occurrence && fragment.occurrence) {
+          check(fragment.occurrence.host, occurrence.host);
+          fragment.occurrence.path.forEach((position, index) => check(position, occurrence.path[index]!.token));
+        }
+      }
+    }
     if (event.status === "resolved") {
       if (!event.appliesCurrent || event.resolvedTarget === null || event.confidence === null) {
         throw new Error("Resolved event must apply a target with confidence");
@@ -1755,6 +1961,10 @@ export class AnnotationRepository {
         DROP TABLE annotation_resolution_events_legacy;
       `);
     }
+    if (!(this.database.query("PRAGMA table_info(annotation_resolution_events)").all() as Array<{name: string}>)
+      .some(column => column.name === "passage_resolution_json")) {
+      this.database.exec("ALTER TABLE annotation_resolution_events ADD COLUMN passage_resolution_json TEXT CHECK(passage_resolution_json IS NULL OR json_valid(passage_resolution_json))");
+    }
     this.database.exec(`
       CREATE INDEX IF NOT EXISTS annotation_resolution_history ON annotation_resolution_events(annotation_block_id, sequence);
       CREATE INDEX IF NOT EXISTS annotation_current_resolution ON annotation_resolution_events(annotation_block_id, applies_current, sequence DESC);
@@ -1860,6 +2070,12 @@ export class AnnotationRepository {
     readonly value: AnnotationRepresentation | AnnotationTarget;
     readonly createdAt: string;
   }): void {
+    if ("representation" in input.value && input.value.passage) {
+      for (const document of input.value.passage.documents) {
+        if (document.subject.kind === "resource") this.insertResourceEvidenceRef({...input,
+          value: passageDocumentRepresentation(document, input.value.representation.capturedAt)});
+      }
+    }
     const representation = "representation" in input.value
       ? input.value.representation
       : input.value;
@@ -1875,7 +2091,7 @@ export class AnnotationRepository {
         (
           SELECT id
           FROM web_source_snapshots
-          WHERE id = ? AND resource_id = target.resource_id
+          WHERE id = ? AND resource_id = target.id
         ) AS source_snapshot_id,
         (
           SELECT web_representation.id
@@ -1883,12 +2099,12 @@ export class AnnotationRepository {
           JOIN web_source_snapshots web_snapshot
             ON web_snapshot.id = web_representation.source_snapshot_id
           WHERE web_representation.id = ?
-            AND web_snapshot.resource_id = target.resource_id
+            AND web_snapshot.resource_id = target.id
         ) AS representation_id,
         (
           SELECT id
           FROM pdf_source_snapshots
-          WHERE id = ? AND resource_id = target.resource_id
+          WHERE id = ? AND resource_id = target.id
         ) AS pdf_source_snapshot_id,
         (
           SELECT pdf_representation.id
@@ -1896,16 +2112,15 @@ export class AnnotationRepository {
           JOIN pdf_source_snapshots pdf_snapshot
             ON pdf_snapshot.id = pdf_representation.source_snapshot_id
           WHERE pdf_representation.id = ?
-            AND pdf_snapshot.resource_id = target.resource_id
+            AND pdf_snapshot.resource_id = target.id
         ) AS pdf_representation_id
-      FROM annotation_targets target
-      WHERE target.annotation_block_id = ? AND target.resource_id = ?
+      FROM resources target
+      WHERE target.id = ?
     `).get(
       snapshot.sourceSnapshotId,
       representation.id,
       snapshot.sourceSnapshotId,
       representation.id,
-      input.annotationId,
       subject.resourceId,
     ) as {
       source_snapshot_id: string | null;
@@ -1942,6 +2157,15 @@ export class AnnotationRepository {
   }
 
   private insertEventResourceEvidenceRefs(event: AnnotationResolutionEvent): void {
+    for (const fragment of event.passageResolution?.fragments ?? []) {
+      for (const position of [...fragment.sources,
+        ...(fragment.occurrence ? [fragment.occurrence.host, ...fragment.occurrence.path] : [])]) {
+        if (position.resolvedTarget) this.insertResourceEvidenceRef({annotationId: event.annotationId,
+          resolutionEventId: event.id, role: "event-resolved", value: position.resolvedTarget, createdAt: event.createdAt});
+        for (const candidate of position.candidates) this.insertResourceEvidenceRef({annotationId: event.annotationId,
+          resolutionEventId: event.id, role: "event-candidate", value: candidate.target, createdAt: event.createdAt});
+      }
+    }
     this.insertResourceEvidenceRef({
       annotationId: event.annotationId,
       resolutionEventId: event.id,

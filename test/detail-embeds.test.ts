@@ -121,6 +121,13 @@ test("renders a bounded virtual-branch embed without changing authored source", 
     completeness: { kind: "truncated", limit: 2 },
   }]);
   expect(projection.embedRanges).toEqual([{ startLine: 1, endLine: 3 }]);
+  expect(projection.provenance!.text).toBe(projection.text);
+  const projectedSources=projection.provenance!.runs.flatMap(run=>run.origin.kind==='source'?run.origin.slices:[]);
+  expect(projectedSources.map(slice=>slice.document.subject)).toEqual([
+    {kind:'block',blockId:first.id},{kind:'block',blockId:second.id},
+  ]);
+  expect(projectedSources.map(slice=>slice.document.text.slice(slice.start,slice.end))).toEqual(['First !((nested-target))','Second']);
+
   expect(requester.calls).toContainEqual({
     action: "blocks.query",
     query: { filters: [{ key: "status", value: "next" }], rankViewId: definition.id, limit: 4 },
@@ -416,6 +423,19 @@ test("renders bounded one-hop relation views over selected stable fragments", as
     "- ((missing-target)) · MISSING TARGET",
   );
   expect(projection.text).not.toContain("Must not project.");
+  const betaHeadings = projection.provenance.runs.flatMap(run => run.origin.kind === 'source'
+    && run.origin.slices.some(slice => slice.document.subject.kind === 'block' && slice.document.subject.blockId === targetBeta.id
+      && targetBeta.text.slice(slice.start,slice.end) === '## Description') ? [run.origin] : []);
+  expect(betaHeadings).toHaveLength(2);
+  expect(betaHeadings.map(origin=>origin.slices.map(slice=>[slice.start,slice.end]))).toEqual([[[7,21]],[[7,21]]]);
+  expect(betaHeadings.map(origin=>origin.occurrence!.path.map(step=>step.target))).toEqual([
+    [embedded.id,targetBeta.id], [explicit.id,targetBeta.id],
+  ]);
+  for (const heading of betaHeadings) {
+    const relation = heading.occurrence!.path[1]!.token;
+    expect(relation.document.subject).toEqual({kind:'block',blockId:source.id});
+    expect(relation.document.text.slice(relation.start,relation.end)).toBe('[depends-on::target-beta]');
+  }
   expect(projection.embeds).toEqual([
     {
       blockId: embedded.id,
@@ -446,7 +466,7 @@ test("hides fragment anchor markers only in the generated read projection", asyn
 
   const projection = await projectDetailRead(requester, authored);
 
-  expect(projection).toEqual({
+  expect(projection).toMatchObject({
     text: "# Heading\n\nParagraph",
     embeds: [],
     embedRanges: [],
@@ -488,4 +508,38 @@ test("reuses a repeated target projection and bounds the embed count", async () 
   expect(requester.calls.filter(({ action }) => action === "get")).toHaveLength(1);
   expect(requester.calls.filter(({ action }) => action === "blocks.query")).toHaveLength(1);
   expect(detailEmbedIds(source)).toHaveLength(18);
+});
+
+// Projection is where canonical ownership used to disappear. These assertions
+// deliberately inspect the observed source, not an inferred match against paint.
+test("projection preserves exact UTF-16 origins and separates repeated embed occurrences", async () => {
+  const target=block("mapped-target", "# Résumé ^title\r\n\r\nCafé 🧭 and é.");
+  const host="Host ^host\r\n!((mapped-target))\r\nBetween\r\n!((mapped-target))";
+  const projection=await projectDetailRead(new FakeRequester(new Map([[target.id,target]]),new Map()),host,{hostBlockId:"mapped-host"});
+  const map=projection.provenance!;
+  expect(map.text).toBe(projection.text);
+  const sources=map.runs.flatMap(run=>run.origin.kind==='source'?run.origin.slices.map(slice=>({run,slice,occurrence:run.origin.kind==='source'?run.origin.occurrence:undefined})):[]);
+  const body=sources.filter(({slice})=>slice.document.subject.kind==='block'&&slice.document.subject.blockId===target.id&&slice.document.text.slice(slice.start,slice.end)==="Café 🧭 and é.");
+  expect(body.length).toBe(2);
+  expect(body.map(({slice})=>[slice.start,slice.end])).toEqual([[19,34],[19,34]]);
+  expect(body.map(({slice})=>slice.document.revision)).toEqual([1,1]);
+  expect(body.map(({occurrence})=>occurrence?.host.start)).toEqual([12,41]);
+  expect(body.map(({occurrence})=>occurrence?.host.document.subject)).toEqual([{kind:'block',blockId:'mapped-host'},{kind:'block',blockId:'mapped-host'}]);
+  const heading=sources.find(({slice})=>slice.document.subject.kind==='block'&&slice.document.subject.blockId===target.id&&slice.start===0)!;
+  expect(heading.slice.end).toBe(8); // Hidden ^title and whitespace have no display cells.
+  expect(map.runs.filter(run=>run.origin.kind==='generated').map(run=>run.origin.kind==='generated'?run.origin.reason:'')).toEqual(['embed heading','embed heading']);
+});
+
+test("fragment presentation retains canonical offsets after unindenting; missing embeds retain host tokens",async()=>{
+  const target=block('mapped-list','Intro\n- [ ] Parent\n  - [ ] Child ^child\n    continuation\n');
+  const requester=new FakeRequester(new Map([[target.id,target]]),new Map());
+  const host='!((mapped-list^child))\n!((absent-block))';
+  const projection=await projectDetailRead(requester,host,{hostBlockId:'mapped-host'});
+  const map=projection.provenance!;
+  expect(map.text).toBe('Embedded fragment: ((mapped-list^child))\n- [ ] Child\n  continuation\n!((absent-block)) · MISSING TARGET');
+  const slices=map.runs.flatMap(run=>run.origin.kind==='source'?run.origin.slices:[]).filter(slice=>slice.document.subject.kind==='block'&&slice.document.subject.blockId===target.id);
+  expect(slices.filter(slice=>slice.document.text.slice(slice.start,slice.end).trim()).map(slice=>[slice.start,slice.end])).toEqual([[21,32],[42,56]]);
+  const fallback=map.runs.find(run=>run.origin.kind==='reference')!.origin;
+  expect(fallback.kind).toBe('reference');
+  if(fallback.kind==='reference')expect(host.slice(fallback.token.start,fallback.token.end)).toBe('!((absent-block))');
 });

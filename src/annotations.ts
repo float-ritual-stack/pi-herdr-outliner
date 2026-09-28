@@ -4,6 +4,12 @@ import { getProperty, stripProperties } from "./properties";
 import { authoredResourceReferenceOccurrences } from "./resource-references";
 import type {
   AnnotationAnchor,
+  AnnotationPassage,
+  AnnotationPassageResolution,
+  AnnotationPassageSliceResolution,
+  AnnotationPassageSlice,
+  AnnotationPassageOccurrence,
+  AnnotationPassageFragment,
   AnnotationCreateInput,
   AnnotationLifecycle,
   AnnotationRepresentation,
@@ -201,6 +207,19 @@ export function normalizeAnnotationSubject(value: unknown, allowLegacy = false):
   throw new Error(`Unsupported annotation subject: ${String(subject.kind)}`);
 }
 
+function normalizePreviewObservation(raw: Record<string,unknown>): import('./types').PreviewPassageObservation {
+  if(raw.input!=='pointer' && raw.input!=='keyboard')throw Error('Invalid Preview input kind');
+  const projection=raw.projection;
+  if(!['canonical','resolved','generated','mixed'].includes(String(projection)))throw new Error('Invalid Preview projection');
+  return {validation:'preview-selection',input:raw.input,
+    ...(raw.fragmentId===undefined?{}:{fragmentId:identity(raw.fragmentId,'Preview fragment')}),
+    quote:evidenceText(raw.quote,'Preview passage quote'),capturedAt:timestamp(raw.capturedAt,'Preview capture time'),
+    readerId:identity(raw.readerId,'Preview reader'),renderRevision:integer(raw.renderRevision,'Preview render revision',1),
+    representationId:identity(raw.representationId,'Preview source representation'),snapshotHash:identity(raw.snapshotHash,'Preview snapshot hash'),
+    projection:projection as import('./types').RenderedPassageProjection,
+  };
+}
+
 export function normalizeAnnotationSourceSnapshot(
   value: unknown,
   allowLegacy = false,
@@ -229,7 +248,11 @@ export function normalizeAnnotationSourceSnapshot(
         : normalizeRetainedResourceRevisionRef(snapshot.revision),
     };
   }
-  if (snapshot.kind === "rendered") return { kind: "rendered", observation: normalizeObservation(snapshot.observation) };
+  if (snapshot.kind === "rendered") {
+    if(!snapshot.observation || typeof snapshot.observation!=="object" || Array.isArray(snapshot.observation))throw new Error("Rendered observation is required");
+    const raw=snapshot.observation as Record<string,unknown>;
+    return {kind:"rendered", observation:raw.validation==="preview-selection" ? normalizePreviewObservation(raw) : normalizeObservation(raw)};
+  }
   if (snapshot.kind === "unknown" && allowLegacy) {
     return { kind: "unknown", reason: identity(snapshot.reason, "Unknown snapshot reason") };
   }
@@ -270,6 +293,7 @@ export function normalizeAnnotationRepresentation(
     ) throw new Error("Block snapshot does not belong to the annotation subject");
     if (
       normalized.sourceSnapshot.kind === "rendered" &&
+      normalized.sourceSnapshot.observation.validation !== "preview-selection" &&
       normalized.sourceSnapshot.observation.hostBlockId !== normalized.subject.blockId
     ) throw new Error("Rendered snapshot does not belong to the annotation subject");
   }
@@ -278,21 +302,15 @@ export function normalizeAnnotationRepresentation(
     normalized.sourceSnapshot.kind === "resource" &&
     normalized.sourceSnapshot.resourceId !== normalized.subject.resourceId
   ) throw new Error("Resource snapshot does not belong to the annotation subject");
+  if(normalized.sourceSnapshot.kind==="rendered" && normalized.sourceSnapshot.observation.validation==="preview-selection" &&
+    (normalized.sourceSnapshot.observation.representationId!==normalized.id || normalized.sourceSnapshot.observation.snapshotHash!==normalized.contentHash))
+    throw new Error("Preview snapshot does not belong to this representation");
   if (representation.observation !== undefined) {
     const raw=representation.observation as Record<string,unknown>;
     if(raw?.validation==='preview-selection'){
-      if(raw.input!=='pointer' && raw.input!=='keyboard')throw Error('Invalid Preview input kind');
-      const projection=raw.projection;
-      if(!['canonical','resolved','generated','mixed'].includes(String(projection)))throw new Error('Invalid Preview projection');
-      const representationId=identity(raw.representationId,'Preview source representation');
-      if(representationId!==normalized.id)throw new Error('Preview observation does not belong to this representation');
-      return {...normalized,observation:{validation:'preview-selection',input:raw.input,
-        ...(raw.fragmentId===undefined?{}:{fragmentId:identity(raw.fragmentId,'Preview fragment')}),
-        quote:evidenceText(raw.quote,'Preview passage quote'),capturedAt:timestamp(raw.capturedAt,'Preview capture time'),
-        readerId:identity(raw.readerId,'Preview reader'),renderRevision:integer(raw.renderRevision,'Preview render revision',1),
-        representationId,snapshotHash:identity(raw.snapshotHash,'Preview snapshot hash'),
-        projection:projection as import('./types').RenderedPassageProjection,
-      }};
+      const observation=normalizePreviewObservation(raw);
+      if(observation.representationId!==normalized.id)throw new Error('Preview observation does not belong to this representation');
+      return {...normalized,observation};
     }
     const observation = normalizeObservation(representation.observation);
     if (
@@ -402,6 +420,146 @@ export function normalizeAnnotationAnchor(value: unknown): AnnotationAnchor {
   throw new Error(`Unsupported annotation anchor: ${String(anchor.kind)}`);
 }
 
+/** Decode persisted passage evidence without consulting mutable current content. */
+export function normalizeAnnotationPassage(value: unknown): AnnotationPassage {
+  const record = (raw: unknown, label: string): Record<string, unknown> => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error(`${label} must be an object`);
+    return raw as Record<string, unknown>;
+  };
+  const array = (raw: unknown, label: string): unknown[] => {
+    if (!Array.isArray(raw)) throw new Error(`${label} must be an array`);
+    return raw;
+  };
+  const input = record(value, "Annotation passage");
+  if (input.version !== 1) throw new Error("Unsupported annotation passage version");
+  const documents = array(input.documents, "Passage documents").map(raw => {
+    const document = record(raw, "Passage document");
+    const subject = normalizeAnnotationSubject(document.subject);
+    if (typeof document.text !== "string") throw new Error("Passage document text must be a string");
+    const hash = identity(document.hash, "Passage document hash");
+    if (hash !== annotationSourceHash(document.text)) throw new Error("Passage document hash does not match its observed text");
+    if (document.draft !== undefined && document.draft !== true) throw new Error("Invalid passage draft marker");
+    let inbox: import("./document-provenance").ObservedDocument["inbox"];
+    if (document.inbox !== undefined) {
+      if (subject.kind !== "block" || document.draft) throw new Error("Inbox passage observations require a saved block");
+      const saved = record(document.inbox, "Passage Inbox observation");
+      inbox = {attemptId: identity(saved.attemptId, "Passage Inbox attempt ID"),
+        updatedAt: timestamp(saved.updatedAt, "Passage Inbox source time")};
+    }
+    let resource: import("./document-provenance").ObservedDocument["resource"];
+    if (document.resource !== undefined) {
+      const rawResource = record(document.resource, "Passage Resource observation");
+      const revision = normalizeRetainedResourceRevisionRef(rawResource.revision);
+      if (subject.kind !== "resource" || subject.resourceId !== revision.resourceId) {
+        throw new Error("Passage Resource observation belongs to a different subject");
+      }
+      const adapter = record(rawResource.adapter, "Passage Resource adapter");
+      resource = {revision, adapter: {id: identity(adapter.id, "Passage adapter ID"), version: integer(adapter.version, "Passage adapter version", 1)},
+        capturedAt: timestamp(rawResource.capturedAt, "Passage Resource capture time"),
+        ...(rawResource.representationId === undefined ? {} : {representationId: identity(rawResource.representationId, "Passage representation ID")}),
+        ...(rawResource.sourceSnapshotId === undefined ? {} : {sourceSnapshotId: identity(rawResource.sourceSnapshotId, "Passage source snapshot ID")}),
+      };
+    }
+    return {subject, text: document.text, hash,
+      ...(document.revision === undefined ? {} : {revision: integer(document.revision, "Passage document revision", 1)}),
+      ...(document.draft === true ? {draft: true as const} : {}), ...(resource ? {resource} : {}), ...(inbox ? {inbox} : {}),
+    };
+  });
+  const documentIndex = (raw: unknown): number => {
+    const index = integer(raw, "Passage document index");
+    if (!documents[index]) throw new Error("Passage references an unknown document");
+    return index;
+  };
+  const slice = (raw: unknown, allowChecklist = false): AnnotationPassageSlice => {
+    const source = record(raw, "Passage source slice");
+    const document = documentIndex(source.document);
+    const anchor = normalizeAnnotationAnchor(source.anchor);
+    if (anchor.kind !== "text-quote" || anchor.start === null || anchor.end === null) {
+      throw new Error("Passage source slice requires an exact observed range");
+    }
+    const text = documents[document]!.text;
+    if (text.slice(anchor.start, anchor.end) !== anchor.exact ||
+      text.slice(Math.max(0, anchor.start - anchor.prefix.length), anchor.start) !== anchor.prefix ||
+      text.slice(anchor.end, anchor.end + anchor.suffix.length) !== anchor.suffix) {
+      throw new Error("Passage source slice does not match its observed document");
+    }
+    const listItemId = source.listItemId === undefined ? undefined : identity(source.listItemId, "Passage checklist item ID");
+    if (listItemId !== undefined && (!allowChecklist || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(listItemId) ||
+      documents[document]!.subject.kind !== "block" || documents[document]!.draft || documents[document]!.inbox)) {
+      throw new Error("Invalid passage checklist ownership");
+    }
+    return {document, anchor, ...(listItemId ? {listItemId} : {})};
+  };
+  const occurrence = (raw: unknown): AnnotationPassageOccurrence => {
+    const input = record(raw, "Passage occurrence");
+    const path = array(input.path, "Passage occurrence path").map(raw => {
+      const entry = record(raw, "Passage occurrence step");
+      return {token: slice(entry.token), target: identity(entry.target, "Passage occurrence target")};
+    });
+    if (!path.length) throw new Error("Passage occurrence path cannot be empty");
+    return {host: slice(input.host), path};
+  };
+  const fragments = array(input.fragments, "Passage fragments").map((raw): AnnotationPassageFragment => {
+    const fragment = record(raw, "Passage fragment");
+    if (fragment.kind === "source" || fragment.kind === "reference") {
+      const context = fragment.occurrence === undefined ? {} : {occurrence: occurrence(fragment.occurrence)};
+      if (fragment.kind === "reference") return {kind: "reference", token: slice(fragment.token),
+        destination: identity(fragment.destination, "Passage reference destination"), ...context};
+      const slices = array(fragment.slices, "Passage source slices").map(raw => slice(raw, true));
+      if (!slices.length) throw new Error("Passage source fragment cannot be empty");
+      return {kind: "source", slices, ...context};
+    }
+    if (fragment.kind === "generated") return {kind: "generated", reason: identity(fragment.reason, "Generated passage reason")};
+    if (fragment.kind === "derived") return {kind: "derived", resultId: identity(fragment.resultId, "Passage result ID"),
+      dependencies: array(fragment.dependencies, "Passage result dependencies").map(raw => slice(raw)),
+      ...(fragment.result === undefined ? {} : {result: documentIndex(fragment.result)}),
+      ...(fragment.resourceDependencies === undefined ? {} : {resourceDependencies:
+        array(fragment.resourceDependencies, "Passage Resource dependencies").map(normalizeRetainedResourceRevisionRef)}),
+    };
+    throw new Error(`Unsupported passage fragment: ${String(fragment.kind)}`);
+  });
+  return {version: 1, quote: evidenceText(input.quote, "Rendered passage quote"), documents, fragments};
+}
+
+export function normalizePassageResolution(value: unknown): AnnotationPassageResolution {
+  const object = (raw: unknown): Record<string, unknown> => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("Invalid passage resolution");
+    return raw as Record<string, unknown>;
+  };
+  const array = (raw: unknown): unknown[] => {
+    if (!Array.isArray(raw)) throw new Error("Passage resolution requires an array");
+    return raw;
+  };
+  const position = (raw: unknown): AnnotationPassageSliceResolution => {
+    const input = object(raw);
+    const status = input.status;
+    if (!["resolved", "probable", "unresolved", "ambiguous", "orphaned", "unsupported"].includes(String(status))) {
+      throw new Error("Invalid passage position status");
+    }
+    const resolvedTarget = input.resolvedTarget === null ? null : normalizeAnnotationTarget(input.resolvedTarget);
+    if ((status === "resolved") !== (resolvedTarget !== null) || resolvedTarget?.passage ||
+      (resolvedTarget && (resolvedTarget.representation.sourceSnapshot.kind === "rendered" ||
+        (resolvedTarget.anchor.kind !== "list-item" && (resolvedTarget.anchor.kind !== "text-quote" ||
+          resolvedTarget.anchor.start === null || resolvedTarget.anchor.end === null))))) {
+      throw new Error("Passage position must resolve one source passage or task attachment");
+    }
+    const confidence = input.confidence;
+    if (confidence !== null && (typeof confidence !== "number" || !Number.isFinite(confidence) || confidence < 0 || confidence > 1)) {
+      throw new Error("Passage confidence must be null or between zero and one");
+    }
+    if (status === "resolved" && confidence === null) throw new Error("Resolved passage position requires confidence");
+    return {document: integer(input.document, "Passage position document"), resolvedTarget,
+      status: status as AnnotationPassageSliceResolution["status"], confidence: confidence as number | null,
+      method: normalizeResolutionMethod(input.method), candidates: array(input.candidates).map(normalizeResolutionCandidate)};
+  };
+  return {fragments: array(object(value).fragments).map(raw => {
+    const fragment = object(raw);
+    const occurrence = fragment.occurrence === undefined ? null : object(fragment.occurrence);
+    return {sources: array(fragment.sources).map(position),
+      ...(occurrence ? {occurrence: {host: position(occurrence.host), path: array(occurrence.path).map(position)}} : {})};
+  })};
+}
+
 export function normalizeAnnotationTarget(value: unknown, allowLegacy = false): AnnotationTarget {
   if (!value || typeof value !== "object") throw new Error("Annotation target must be an object");
   const target = value as Record<string, unknown>;
@@ -418,8 +576,15 @@ export function normalizeAnnotationTarget(value: unknown, allowLegacy = false): 
     (anchor.kind === "text-quote" && anchor.start === null) ||
     (anchor.kind === "list-item" && anchor.itemId !== listItemId)
   )) throw new Error("Checklist attachment requires one canonical block item and source evidence");
+  const passage = target.passage === undefined ? undefined : normalizeAnnotationPassage(target.passage);
+  if (passage && (representation.sourceSnapshot.kind !== "rendered" ||
+    anchor.kind !== "text-quote" || anchor.start !== null || anchor.end !== null || anchor.exact !== passage.quote ||
+    representation.observation?.quote !== passage.quote)) {
+    throw new Error("Passage quote must match the comment's rendered evidence");
+  }
   return {
     representation, anchor,
+    ...(passage ? {passage} : {}),
     ...(listItemId === undefined ? {} : {listItemId}),
     ...(target.referenceContext === undefined ? {} : {
       referenceContext: normalizeAnnotationReferenceContext(target.referenceContext),

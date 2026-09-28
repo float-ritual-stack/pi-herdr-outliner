@@ -307,8 +307,8 @@ const effects: DetailEffects = {
   async resolveReferences(text) {
     return client.request<ResolvedBlockReferences>({ action: "references.resolve", text });
   },
-  projectRead(text, hostBlockId) {
-    return projectDetailRead(client, text, { hostBlockId });
+  projectRead(text, hostBlockId, hostRevision) {
+    return projectDetailRead(client, text, { hostBlockId, hostRevision });
   },
   async queryBacklinks(query) {
     return client.request<BacklinkCollection>({ action: "references.backlinks", query });

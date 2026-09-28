@@ -135,6 +135,7 @@ export function decorateAttentionLines(
   width?: number,
   sourceText?: string,
   sourcePrefix = "",
+  onRowShift?: (row:number,columns:number)=>void,
 ): string[] {
   if (!mark || mark.sourceState !== "active" || !mark.target.anchor) return [...lines];
   const style = TONE_STYLE[mark.tone];
@@ -149,7 +150,7 @@ export function decorateAttentionLines(
       ),
     ]),
   );
-  return lines.map((line) => {
+  return lines.map((line,row) => {
     let rendered = line;
     const visible = terminalVisibleOffsets(line).text;
     for (const term of terms) {
@@ -171,6 +172,7 @@ export function decorateAttentionLines(
       seen.set(term, prior + found);
     }
     if (rendered === line) return line;
+    onRowShift?.(row,2);
     const marked = `\x1b[1m▐${RESET} ${rendered}`;
     return width === undefined ? marked : truncateToWidth(marked, width, "…");
   });

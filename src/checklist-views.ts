@@ -1,8 +1,8 @@
-import {standaloneListItemText} from "./markdown-structure";
+import {presentedSource} from './document-source';
+import {observeDocument, concatDocuments, generatedDocument, type MappedDocument} from './document-provenance';
 import {parsePropertyFilterExpression} from './block-query';
 import {queryChecklistItems} from './checklist-items';
 import {parseProperties} from './properties';
-import {stripFragmentAnchors} from './fragments';
 import type {ChecklistSearchQuery, ChecklistSearchCollection} from './types';
 import type {DetailEmbedRequester, DetailEmbedRange} from './detail-embeds';
 
@@ -34,18 +34,20 @@ export function parseChecklistView(text:string):ChecklistSearchQuery {
 }
 
 export async function projectChecklistView(requester:DetailEmbedRequester,text:string):Promise<{
-  text:string; sources:NonNullable<DetailEmbedRange['sources']>; collection:ChecklistSearchCollection;
+  text:string; provenance:MappedDocument; sources:NonNullable<DetailEmbedRange['sources']>; collection:ChecklistSearchCollection;
 }> {
   const collection=await requester.request<ChecklistSearchCollection>({action:'checklist.search',query:parseChecklistView(text)});
   const rows=[`Checklist results · ${collection.matches.length} matched ${collection.matches.length===1?'step':'steps'}${collection.completeness.kind==='truncated'?' · LIMITED':''}`];
+  const parts:MappedDocument[]=[generatedDocument(rows[0]!, 'checklist result count')];
   const sources:NonNullable<DetailEmbedRange['sources']>=[];
-  if(!collection.matches.length)rows.push('No matching checklist steps.');
+  if(!collection.matches.length){rows.push('No matching checklist steps.');parts.push(generatedDocument('\nNo matching checklist steps.', 'empty checklist result'));}
   for(const {block,item} of collection.matches){
     rows.push('',`Plan: ((${block.id})) · ${item.identity==='unique'?`((${block.id}^${item.itemId}|Open step))`:item.identity==='duplicate'?'Ambiguous step address · fix duplicate IDs in the plan':'Unaddressed step · Copy step link to assign an address'}`,'');
     const contentStartLine=rows.length;
-    const lines=block.text.split(/\r?\n/).slice(item.span.startLine,item.span.endLine+1);
-    rows.push(...stripFragmentAnchors(standaloneListItemText(lines.join('\n'))).split('\n'));
+    const content=presentedSource(observeDocument({kind:'block',blockId:block.id},block.text,block.revision),item.span.startLine,item.span.endLine,true);
+    parts.push(generatedDocument('\n'+rows.slice(contentStartLine-3).join('\n')+'\n','checklist result heading'), content);
+    rows.push(...content.text.split('\n'));
     sources.push({block,startLine:item.span.startLine,endLine:item.span.endLine,contentStartLine,itemStarts:[item.span.start]});
   }
-  return {text:rows.join('\n'),sources,collection};
+  return {text:rows.join('\n'),provenance:concatDocuments(parts),sources,collection};
 }

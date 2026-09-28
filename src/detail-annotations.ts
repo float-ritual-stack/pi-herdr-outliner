@@ -3,7 +3,6 @@ import { truncateToWidth } from "@earendil-works/pi-tui";
 import { outlinerActionLink } from "./outliner-actions";
 import { annotationSourceHash, annotationReferenceContextsEqual, extractAnnotationBody } from "./annotations";
 import type { DetailState } from "./detail-controller";
-import type { PreviewRegion } from "./detail-preview-regions";
 import { renderMarkdownLine, sanitizeDynamicText } from "./terminal";
 import type { Block, AnnotationRecord, AnnotationTarget, AnnotationThread } from "./types";
 
@@ -59,11 +58,9 @@ export function displayedResourceText(
 export interface DetailAnnotationGroup {
   regionId: string;
   placement: "inline" | "general" | "unpositioned";
-  startLine: number;
-  endLine: number;
-  sourceLineCount: number;
-  sourceSpan: PreviewRegion["sourceSpan"];
   threads: AnnotationThread[];
+  /** Legacy exact evidence; newer captures carry their fragments on the thread. */
+  target?: AnnotationTarget;
 }
 
 function displayedResourceRepresentationId(state: Readonly<AnnotationReaderState>): string | null {
@@ -78,7 +75,15 @@ function displayedResourceRepresentationId(state: Readonly<AnnotationReaderState
   return `filesystem:${description.resource.id}:${revision.mtimeNs}:${revision.size}:${filesystem.contentHash}`;
 }
 
-export function annotationScopeLabel(thread: AnnotationThread, state: Pick<AnnotationReaderState, "target">): string {
+export function annotationScopeLabel(thread: AnnotationThread, state: Pick<AnnotationReaderState, "target" | "historical">): string {
+  if (thread.originalTarget.passage) {
+    const positions = thread.currentResolution.passageResolution?.fragments.flatMap(fragment => [
+      ...fragment.sources, ...(fragment.occurrence ? [fragment.occurrence.host, ...fragment.occurrence.path] : []),
+    ]) ?? [];
+    const missing = positions.filter(position => position.status !== "resolved").length;
+    const attached = positions.some(position => position.resolvedTarget?.anchor.kind === "list-item");
+    return `Rendered passage${state.historical ? " · saved version; current resolution recorded separately" : `${missing ? " · partly unresolved" : ""}${attached ? " · task attachment; quoted words changed" : ""}`}`;
+  }
   if (thread.originalTarget.listItemId) {
     if (thread.resolvedTarget?.anchor.kind === "list-item") return "Item attachment · original passage changed";
     return thread.resolvedTarget ? "Checklist passage" : "Checklist item · unresolved";
@@ -94,237 +99,66 @@ export function annotationScopeLabel(thread: AnnotationThread, state: Pick<Annot
   return `${scope} · ${blockId.slice(0, 8)}:L${line}${thread.resolvedTarget ? "" : " · original"}`;
 }
 
-export function detailAnnotationGroups(
-  state: Readonly<AnnotationReaderState>,
-  renderedLineForAuthoredLine: (line: number) => number,
-  renderedSourceLineCount: number,
-  renderedAnchorText: string,
-): DetailAnnotationGroup[] {
-  if (state.annotationThreads.length === 0) return [];
-  const selected = state.context.selected;
-  const displayedBlockId = state.target?.kind === "block" ? state.target.blockId : selected?.id;
-  const blockContentHash = selected ? annotationSourceHash(selected.text) : null;
-  const displayedResourceTargetId = state.target?.kind === "resource"
-    ? state.target.resourceId
-    : null;
-  const displayedResourceId = displayedResourceTargetId
-    ? displayedResourceRepresentationId(state)
-    : null;
-  const renderedStarts = sourceLineStarts(renderedAnchorText);
-  const groups = new Map<string, DetailAnnotationGroup>();
-  const unpositioned: AnnotationThread[] = [];
-  const general: AnnotationThread[] = [];
-  const displayedOffsets = new Map<string, number>();
-  const compareThreads = (left: AnnotationThread, right: AnnotationThread): number =>
-    (displayedOffsets.get(left.block.id) ?? Number.MAX_SAFE_INTEGER) -
-      (displayedOffsets.get(right.block.id) ?? Number.MAX_SAFE_INTEGER) ||
-    left.block.createdAt.localeCompare(right.block.createdAt) || left.block.id.localeCompare(right.block.id);
-  for (const thread of state.annotationThreads) {
-    let target = thread.resolvedTarget;
-    const originalContext = thread.originalTarget.referenceContext;
-    const currentContext = thread.resolvedTarget?.referenceContext;
-    if (originalContext && (thread.currentResolution.status !== "resolved" || !currentContext)) {
-      unpositioned.push(thread);
-      continue;
+export function detailAnnotationGroups(state:Readonly<AnnotationReaderState>):DetailAnnotationGroup[] {
+  const selected=state.context.selected;
+  const displayedBlockId=state.target?.kind==='block'?state.target.blockId:selected?.id;
+  const hash=selected?annotationSourceHash(selected.text):null;
+  const resourceId=state.target?.kind==='resource'?state.target.resourceId:null;
+  const representationId=resourceId?displayedResourceRepresentationId(state):null;
+  const groups:DetailAnnotationGroup[]=[];
+  const unpositioned:AnnotationThread[]=[],general:AnnotationThread[]=[];
+  const offsets=new Map<string,number>();
+  const compare=(a:AnnotationThread,b:AnnotationThread)=>(offsets.get(a.block.id)??Infinity)-(offsets.get(b.block.id)??Infinity)
+    ||a.block.createdAt.localeCompare(b.block.createdAt)||a.block.id.localeCompare(b.block.id);
+  for(const thread of state.annotationThreads){
+    const originalContext=thread.originalTarget.referenceContext,currentContext=thread.resolvedTarget?.referenceContext;
+    if(originalContext&&(thread.currentResolution.status!=='resolved'||!currentContext)||
+      resourceId&&originalContext&&!annotationReferenceContextsEqual(currentContext,state.target?.kind==='resource'?state.target.referenceContext:undefined)){
+      unpositioned.push(thread);continue;
     }
-    if (displayedResourceTargetId && originalContext &&
-      !annotationReferenceContextsEqual(currentContext, state.target?.kind === "resource" ? state.target.referenceContext : undefined)) {
-      unpositioned.push(thread);
-      continue;
+    if(thread.originalTarget.passage){
+      groups.push({regionId:`annotation:passage:${thread.block.id}`,placement:'inline',threads:[thread]});continue;
     }
-    // General comments belong to a subject, not to any particular source range.
-    // Contextual references still pass the occurrence-resolution guards above.
-    const generalSubject = thread.originalTarget.representation.subject;
-    if (thread.originalTarget.anchor.kind === "whole-subject" &&
-      ((displayedResourceTargetId && generalSubject.kind === "resource" && generalSubject.resourceId === displayedResourceTargetId) ||
-        (!displayedResourceTargetId && generalSubject.kind === "block" && generalSubject.blockId === displayedBlockId))) {
-      general.push(thread);
-      continue;
+    const subject=thread.originalTarget.representation.subject;
+    if(thread.originalTarget.anchor.kind==='whole-subject'&&
+      (resourceId?subject.kind==='resource'&&subject.resourceId===resourceId:subject.kind==='block'&&subject.blockId===displayedBlockId)){
+      general.push(thread);continue;
     }
-    if (displayedResourceTargetId) {
-      target = [...thread.resolutionHistory]
-        .reverse()
-        .map((event) => event.resolvedTarget)
-        .find((candidate) =>
-          candidate?.representation.id === displayedResourceId &&
-          candidate.representation.subject.kind === "resource" &&
-          candidate.representation.subject.resourceId === displayedResourceTargetId &&
-          (!originalContext || annotationReferenceContextsEqual(candidate.referenceContext, currentContext))
-        ) ?? null;
-    } else if(state.historical && selected && !originalContext) {
-      // A before-image is a real captured version. Match that version's range,
-      // not the latest resolution against a different canonical body.
-      target=[...thread.resolutionHistory].reverse().map(event=>event.resolvedTarget)
-        .concat(thread.originalTarget).find(candidate=>{
-          const snapshot=candidate?.representation.sourceSnapshot;
-          return snapshot?.kind==='block' && snapshot.blockId===selected.id && snapshot.contentHash===blockContentHash
-            && candidate?.representation.contentHash===blockContentHash;
-        })??null;
-    } else if (thread.currentResolution.status !== "resolved") {
-      target = null;
-    } else if (selected && currentContext) {
-      target = { representation: currentContext.representation, anchor: currentContext.anchor };
-    }
-    if (target?.anchor.kind === "list-item" && selected && !displayedResourceTargetId) {
-      const snapshot = target.representation.sourceSnapshot;
-      const itemId = target.anchor.itemId;
-      const matches = checklistItems(selected.text).filter(item => item.itemId === itemId);
-      if (snapshot.kind !== "block" || snapshot.blockId !== selected.id || snapshot.contentHash !== blockContentHash ||
-        target.representation.contentHash !== blockContentHash || matches.length !== 1 || matches[0]!.identity !== "unique") {
-        unpositioned.push(thread);
-        continue;
+    let target=thread.resolvedTarget;
+    if(resourceId){
+      target=[...thread.resolutionHistory].reverse().map(event=>event.resolvedTarget).find(candidate=>
+        candidate?.representation.id===representationId&&candidate.representation.subject.kind==='resource'&&
+        candidate.representation.subject.resourceId===resourceId&&
+        (!originalContext||annotationReferenceContextsEqual(candidate.referenceContext,currentContext)))??null;
+    }else if(state.historical&&selected&&!originalContext){
+      target=[...thread.resolutionHistory].reverse().map(event=>event.resolvedTarget).concat(thread.originalTarget).find(candidate=>{
+        const snapshot=candidate?.representation.sourceSnapshot;
+        return snapshot?.kind==='block'&&snapshot.blockId===selected.id&&snapshot.contentHash===hash&&candidate?.representation.contentHash===hash;
+      })??null;
+    }else if(thread.currentResolution.status!=='resolved')target=null;
+    else if(selected&&currentContext)target={representation:currentContext.representation,anchor:currentContext.anchor};
+    if(!target||target.representation.sourceSnapshot.kind==='rendered') {unpositioned.push(thread);continue;}
+    const anchor=target.anchor,targetSubject=target.representation.subject;
+    if(anchor.kind==='list-item'&&selected&&!resourceId){
+      const snapshot=target.representation.sourceSnapshot;
+      const items=checklistItems(selected.text).filter(item=>item.itemId===anchor.itemId);
+      if(snapshot.kind!=='block'||snapshot.blockId!==selected.id||snapshot.contentHash!==hash||target.representation.contentHash!==hash||items.length!==1||items[0]!.identity!=='unique'){
+        unpositioned.push(thread);continue;
       }
-      const item = matches[0]!;
-      const startLine = renderedLineForAuthoredLine(item.span.startLine);
-      displayedOffsets.set(thread.block.id, item.span.start);
-      const key = `source:${startLine}`;
-      const existing = groups.get(key);
-      if (existing) {
-        existing.endLine = Math.max(existing.endLine, renderedLineForAuthoredLine(item.span.endLine));
-        existing.sourceSpan!.start = Math.min(existing.sourceSpan!.start, item.span.start);
-        existing.sourceSpan!.end = Math.max(existing.sourceSpan!.end, item.span.end);
-        existing.sourceSpan!.startLine = Math.min(existing.sourceSpan!.startLine, item.span.startLine);
-        existing.sourceSpan!.endLine = Math.max(existing.sourceSpan!.endLine, item.span.endLine);
-        existing.threads.push(thread);
-      } else groups.set(key, {
-        regionId: `annotation:${selected.id}:${item.span.startLine}`, placement: "inline",
-        startLine, endLine: renderedLineForAuthoredLine(item.span.endLine),
-        sourceLineCount: renderedSourceLineCount, sourceSpan: {...item.span}, threads: [thread],
-      });
-      continue;
-    }
-    if (
-      !target ||
-      (target.anchor.kind !== "text-quote" &&
-        target.anchor.kind !== "pdf-page-region")
-    ) {
-      unpositioned.push(thread);
-      continue;
-    }
-    const subject = target.representation.subject;
-    const anchor = target.anchor;
-    if (anchor.start === null || anchor.end === null || anchor.exact === null ||
-      target.representation.sourceSnapshot.kind === "rendered") {
-      // Pane captures include chrome, wrapping and history. Their offsets are
-      // evidence in that capture, never coordinates in this Markdown document.
-      unpositioned.push(thread);
-      continue;
-    }
-    if (
-      state.target?.kind === "resource" &&
-      subject.kind === "resource" &&
-      subject.resourceId === state.target.resourceId
-    ) {
-      const content = displayedResourceText(state);
-      if (content === null || content.slice(anchor.start, anchor.end) !== anchor.exact) {
-        unpositioned.push(thread);
-        continue;
-      }
-      displayedOffsets.set(thread.block.id, anchor.start);
-      const startLine = sourceLineAt(renderedStarts, anchor.start);
-      const endLine = sourceLineAt(renderedStarts, Math.max(anchor.start, anchor.end - 1));
-      const key = `resource:${startLine}`;
-      const existing = groups.get(key);
-      if (existing) {
-        existing.endLine = Math.max(existing.endLine, endLine);
-        existing.threads.push(thread);
-      } else {
-        groups.set(key, {
-          regionId: `annotation:${subject.resourceId}:resource:${startLine}`,
-          placement: "inline",
-          startLine,
-          endLine,
-          sourceLineCount: renderedSourceLineCount,
-          threads: [thread],
-          sourceSpan: null,
-        });
-      }
-      continue;
-    }
-    if (
-      !selected ||
-      subject.kind !== "block" ||
-      subject.blockId !== selected.id
-    ) { unpositioned.push(thread); continue; }
-    const snapshot = target.representation.sourceSnapshot;
-    if (snapshot.kind !== "block" || snapshot.blockId !== selected.id || snapshot.contentHash !== blockContentHash ||
-      target.representation.contentHash !== blockContentHash ||
-      selected.text.slice(anchor.start, anchor.end) !== anchor.exact) {
-      unpositioned.push(thread);
-      continue;
-    }
-    displayedOffsets.set(thread.block.id, anchor.start);
-    const starts = sourceLineStarts(selected.text);
-    let markerOffset = anchor.start;
-    while (
-      markerOffset < anchor.end &&
-      /\s/.test(selected.text[markerOffset] ?? "")
-    ) markerOffset += 1;
-    const authoredStartLine = sourceLineAt(
-      starts,
-      markerOffset < anchor.end ? markerOffset : anchor.start,
-    );
-    const authoredEndLine = sourceLineAt(
-      starts,
-      Math.max(anchor.start, anchor.end - 1),
-    );
-    const startLine = renderedLineForAuthoredLine(authoredStartLine);
-    const endLine = renderedLineForAuthoredLine(authoredEndLine);
-    const key = `source:${startLine}`;
-    const existing = groups.get(key);
-    if (existing) {
-      existing.endLine = Math.max(existing.endLine, endLine);
-      existing.sourceSpan!.start = Math.min(existing.sourceSpan!.start, anchor.start);
-      existing.sourceSpan!.end = Math.max(existing.sourceSpan!.end, anchor.end);
-      existing.sourceSpan!.startLine = Math.min(
-        existing.sourceSpan!.startLine,
-        authoredStartLine,
-      );
-      existing.sourceSpan!.endLine = Math.max(
-        existing.sourceSpan!.endLine,
-        authoredEndLine,
-      );
-      existing.threads.push(thread);
-      continue;
-    }
-    groups.set(key, {
-      regionId: `annotation:${selected.id}:${authoredStartLine}`,
-      placement: "inline",
-      startLine,
-      endLine,
-      sourceLineCount: renderedSourceLineCount,
-      sourceSpan: {
-        start: anchor.start,
-        end: anchor.end,
-        startLine: authoredStartLine,
-        endLine: authoredEndLine,
-      },
-      threads: [thread],
-    });
+      offsets.set(thread.block.id,items[0]!.markerStart);
+    }else if((anchor.kind==='text-quote'||anchor.kind==='pdf-page-region')&&anchor.start!==null&&anchor.end!==null&&anchor.exact!==null){
+      const content=resourceId?displayedResourceText(state):selected?.text;
+      const snapshot=target.representation.sourceSnapshot;
+      const sameSubject=resourceId?targetSubject.kind==='resource'&&targetSubject.resourceId===resourceId
+        :targetSubject.kind==='block'&&targetSubject.blockId===selected?.id&&snapshot.kind==='block'&&snapshot.contentHash===hash&&target.representation.contentHash===hash;
+      if(!sameSubject||content==null||content.slice(anchor.start,anchor.end)!==anchor.exact){unpositioned.push(thread);continue;}
+      offsets.set(thread.block.id,anchor.start);
+    }else{unpositioned.push(thread);continue;}
+    groups.push({regionId:`annotation:exact:${thread.block.id}`,placement:'inline',target,threads:[thread]});
   }
-  const positioned = [...groups.values()].sort((left, right) => left.startLine - right.startLine);
-  for (const group of positioned) group.threads.sort(compareThreads);
-  return [
-    ...positioned,
-    ...(general.length === 0 ? [] : [{
-      regionId: `annotation:${displayedResourceTargetId ?? displayedBlockId}:general`,
-      placement: "general" as const,
-      startLine: renderedSourceLineCount,
-      endLine: renderedSourceLineCount,
-      sourceLineCount: renderedSourceLineCount,
-      sourceSpan: null,
-      threads: general.sort(compareThreads),
-    }]),
-    ...(unpositioned.length === 0 ? [] : [{
-      regionId: `annotation:${displayedResourceTargetId ?? displayedBlockId}:unpositioned`,
-      placement: "unpositioned" as const,
-      startLine: renderedSourceLineCount,
-      endLine: renderedSourceLineCount,
-      sourceLineCount: renderedSourceLineCount,
-      sourceSpan: null,
-      threads: unpositioned.sort(compareThreads),
-    }]),
-  ];
+  groups.sort((a,b)=>compare(a.threads[0]!,b.threads[0]!));
+  return [...groups,...(general.length?[{regionId:`annotation:${resourceId??displayedBlockId}:general`,placement:'general' as const,threads:general.sort(compare)}]:[]),
+    ...(unpositioned.length?[{regionId:`annotation:${resourceId??displayedBlockId}:unpositioned`,placement:'unpositioned' as const,threads:unpositioned.sort(compare)}]:[])];
 }
 
 export function annotationTargetLabel(target: AnnotationTarget): string {

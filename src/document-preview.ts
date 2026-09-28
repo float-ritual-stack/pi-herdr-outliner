@@ -1,13 +1,13 @@
 import { blockCommentSelection } from "./block-comments";
 import {checklistFoldState,restoreChecklistFold,checklistControlId,checklistCommentRange,findChecklistControl,type ChecklistControl} from "./checklist-controls";
 import {CHECKLIST_CHOICES,ChecklistSession,type ChecklistChoice} from "./checklist-session";
-import {annotationSourceHash} from './annotations';
+import {renderedDocumentAnnotationTarget} from './document-annotation';
 import {DEFAULT_OUTLINER_ACTION_KEYMAP,displayActionChord,type OutlinerActionKeymap} from './outliner-actions';
 import {blockAnnotationRepresentation,resourceAnnotationRepresentation} from './annotation-representations';
 import {TextBuffer} from './text-buffer';
 import {textBufferEditorCommand,applyTextBufferEditorCommand} from './text-buffer-editor';
-import type {AnnotationTarget,AnnotationBatchReceipt,AnnotationRecord} from './types';
-import {documentPreviewLines,documentPreviewLinks,documentPreviewThreadRow,revealDocumentPreviewSourceLine} from './document-preview-renderer';
+import type {AnnotationTarget,AnnotationBatchReceipt,AnnotationRecord,AnnotationPassage} from './types';
+import {documentPreviewLines,documentPreviewLinks,documentPreviewThreadRow,revealDocumentPreviewSourceLine,revealDocumentPreviewComment} from './document-preview-renderer';
 import {detailAnnotationGroups} from './detail-annotations';
 import {parsePreviewRegionActionUri, previewRegionActionUri, togglePreviewRegionDisclosure} from './detail-preview-regions';
 import type {OutlinerRequester} from './client-target';
@@ -16,16 +16,18 @@ import type {DetailReadPreviewDocument} from './detail-pi-preview';
 import {blockDisplayTitle} from './references';
 import {parseOutlinerLinkUri,followResourceOccurrence} from './outliner-links';
 import {isAuthoredFileOccurrence} from './resource-references';
-import {fragmentPresentationText,resolveFragmentSlice} from './fragments';
+import {resolveFragmentSlice} from './fragments';
 import type {TerminalKey} from './terminal';
 import type {Block, AnnotationThread, PageAddressResolution, OutlinerNavigationTarget} from './types';
 import type {ResourceDescription} from './resources';
 import {resourceDescriptionLabel} from './resources';
+import {resourceContentDocument} from './document-resources';
+import {observeDocument,sourceDocument} from './document-provenance';
 
 type SavedPreviewSource = Pick<Block,"id"|"text"|"revision"> & Partial<Pick<Block,"updatedAt">> & {inboxAttemptId?:string};
 
 export interface PreviewPassageCapture {
-  sourceAnchor?:Extract<AnnotationTarget['anchor'],{kind:'text-quote'}>|null;
+  passage:AnnotationPassage;
   document:DetailReadPreviewDocument;
   input:"pointer"|"keyboard";
   quote:string;
@@ -206,12 +208,11 @@ export class DocumentPreview {
       }
       const document=this.value.document;
       const projected=document.projectedText!==document.canonicalText,resolved=document.resolvedText!==document.projectedText;
-      target={...target,representation:{...target.representation,observation:{
-        validation:'preview-selection',input:capture.input,quote:capture.quote,capturedAt:capture.capturedAt,readerId:this.clientId,
+      target=renderedDocumentAnnotationTarget({subject:target.representation.subject,passage:capture.passage,
+        snapshotText:capture.snapshotText,capturedAt:capture.capturedAt,readerId:this.clientId,
+        renderRevision:capture.renderRevision,input:capture.input,referenceContext:target.referenceContext,
         ...(this.value.target.kind==='block'&&this.value.target.fragmentId?{fragmentId:this.value.target.fragmentId}:{}),
-        renderRevision:capture.renderRevision,representationId:target.representation.id,snapshotHash:annotationSourceHash(capture.snapshotText),
-        projection:projected&&resolved?'mixed':projected?'generated':resolved?'resolved':'canonical',
-      }},anchor:capture.sourceAnchor??{kind:'text-quote',start:null,end:null,exact:capture.quote,prefix:'',suffix:''}};
+        projection:projected&&resolved?'mixed':projected?'generated':resolved?'resolved':'canonical'});
     }
     if(!annotationId&&!capture&&target){
       const active=parsePreviewRegionActionUri(this.value.activeLink??'');
@@ -244,7 +245,8 @@ export class DocumentPreview {
       this.value={...this.value!,comment:undefined,notice:'Comment saved'};
       // Keep the displayed document and position: a refresh must not silently replace a before-image.
       try {
-        if((value.document.sourceBlock||value.document.sourceSlice) && receipt.annotations.some(record=>record.originalTarget.listItemId)) await this.load(value.target,true);
+        if((value.document.sourceBlock||value.document.sourceSlice) && receipt.annotations.some(record=>record.originalTarget.listItemId ||
+          record.originalTarget.passage?.fragments.some(fragment=>fragment.kind==='source'&&fragment.slices.some(slice=>slice.listItemId)))) await this.load(value.target,true);
         else await this.refreshComments(value.document);
       }
       catch(error){ if(this.value?.document===value.document)this.value={...this.value,notice:`Comment saved; refresh failed: ${error instanceof Error?error.message:String(error)}`}; }
@@ -271,13 +273,13 @@ export class DocumentPreview {
     const annotations=document?.annotations;
     if(!document||!annotations||!this.value)return;
     documentPreviewThreadRow(document,annotationId,width);
-    const groups=detailAnnotationGroups({...annotations,resolvedSelectedText:document.resolvedText,previewRegions:document.previewRegions!},
-      line=>line,document.projectedText.split(/\r?\n/).length,document.projectedText);
+    const groups=detailAnnotationGroups({...annotations,resolvedSelectedText:document.resolvedText,previewRegions:document.previewRegions!});
     const group=groups.find(group=>group.threads.some(thread=>thread.block.id===annotationId));
     if(!group)return;
     annotations.selectedAnnotationId=annotationId;
     document.previewRegions!.disclosureOverrides.set(group.regionId,true);
     document.previewRegions!.focusedRegionId=`annotation-thread:${annotationId}`;
+    revealDocumentPreviewComment(document,annotationId,width);
     const row=documentPreviewThreadRow(document,annotationId,width);
     this.value={...this.value,offset:row??this.value.offset,notice:undefined};
     this.changed();
@@ -285,8 +287,7 @@ export class DocumentPreview {
   private moveComment(delta:number,width?:number):void {
     const document=this.value?.document,annotations=document?.annotations;
     if(!document||!annotations?.annotationThreads.length)return;
-    const threads=detailAnnotationGroups({...annotations,resolvedSelectedText:document.resolvedText,previewRegions:document.previewRegions!},
-      line=>line,document.projectedText.split(/\r?\n/).length,document.projectedText).flatMap(group=>group.threads);
+    const threads=detailAnnotationGroups({...annotations,resolvedSelectedText:document.resolvedText,previewRegions:document.previewRegions!}).flatMap(group=>group.threads);
     if(!threads.length)return;
     const current=threads.findIndex(thread=>thread.block.id===annotations.selectedAnnotationId);
     const next=current<0?(delta>0?0:threads.length-1):(current+delta+threads.length)%threads.length;
@@ -422,6 +423,8 @@ export class DocumentPreview {
       const document=plain(typeof saved==='string'?saved:saved.text);
       let notice:string|undefined;
       if(typeof saved!=='string' && target.kind==='block' && saved.id===target.blockId && saved.updatedAt){
+        document.provenance=sourceDocument({...observeDocument({kind:'block',blockId:saved.id},saved.text,saved.revision),
+          ...(saved.inboxAttemptId?{inbox:{attemptId:saved.inboxAttemptId,updatedAt:saved.updatedAt}}:{})});
         document.commentTarget={representation:blockAnnotationRepresentation({...saved,updatedAt:saved.updatedAt},saved.inboxAttemptId),anchor:{kind:'whole-subject'}};
         document.annotations={target,context:{selected:saved},historical:true,annotationThreads:[],selectedAnnotationId:undefined,document:{kind:'empty'}};
         try {
@@ -471,8 +474,7 @@ export class DocumentPreview {
           if (revealInDocument) {
             document=await loadDetailReadPreview(this.client,block);
             if (!refresh) revealSourceLine=fragment.slice.anchor.lineIndex;
-          } else document={...await loadDetailReadPreview(this.client,{...block,text:fragmentPresentationText(fragment.slice)}),sourceBlock:undefined,
-            sourceSlice:{block,startLine:fragment.slice.startLine,endLine:fragment.slice.endLine}};
+          } else document=await loadDetailReadPreview(this.client,block,Infinity,fragment.slice);
         }else document = await loadDetailReadPreview(this.client,block);
       } else {
         if (!this.clientId) throw new Error('Resource preview requires a registered reader');
@@ -480,6 +482,7 @@ export class DocumentPreview {
         title = resourceDescriptionLabel(resource);
         resourceDescription=resource;
         document = plain(resource.filesystem?.text ?? resource.web?.markdown ?? resource.remoteEntity?.markdown ?? resource.pdf?.markdown ?? resource.computed?.markdown ?? resource.computedFailure?.message ?? 'No cached readable representation · Open explicitly to inspect this Resource');
+        document.provenance=resourceContentDocument(resource)??undefined;
         if(resource.source.provider==='computed'&&resource.source.boundary.registry==='outliner.capture-history'){
           document={...document,preserveMetadata:true};
         }

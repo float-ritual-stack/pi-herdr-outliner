@@ -1,3 +1,7 @@
+import {createHash} from 'node:crypto';
+import {AttributedMarkdown} from './attributed-markdown';
+import {DocumentFrame,generatedGlyphs,paintDocumentRows,type DocumentGlyph} from './document-frame';
+import {concatDocuments,documentProvenanceKey,generatedDocument,sliceDocument,type MappedDocument} from './document-provenance';
 import {LinkAwareMarkdown} from './link-aware-markdown';
 import {
   Box,
@@ -230,52 +234,60 @@ function lineIsDecorated(
   ) ?? false;
 }
 
+interface MappedComponent extends Component {
+  glyphRows(width:number):DocumentGlyph[][]|null;
+}
+
+class CalloutMarkdown implements MappedComponent {
+  private readonly attributed:AttributedMarkdown|null;
+  private readonly fallback:Component;
+  constructor(source:MappedDocument,theme:MarkdownTheme,trackLinks:boolean,private readonly paint?:((text:string)=>string),piece=0) {
+    const key=source.runs.some(run=>run.origin.kind!=='generated')?documentProvenanceKey(source):`${piece}:${source.text}`;
+    const path='callout-body:'+createHash('sha256').update(key).digest('hex').slice(0,20);
+    this.attributed=AttributedMarkdown.compile(source,theme,trackLinks,path);
+    const markdown=trackLinks?new LinkAwareMarkdown(source.text,theme):new Markdown(source.text,0,0,theme);
+    if(paint){const box=new Box(0,0,paint);box.addChild(markdown);this.fallback=box;}else this.fallback=markdown;
+  }
+  glyphRows(width:number):DocumentGlyph[][]|null {
+    const rows=this.attributed?.glyphRows(width);if(!rows)return null;
+    return this.paint?paintDocumentRows(rows,width,this.paint):rows;
+  }
+  render(width:number):string[]{return this.fallback.render(width);}
+  invalidate():void{this.attributed?.invalidate();this.fallback.invalidate();}
+}
+
 function markdownComponents(
+  source:MappedDocument,
   lines: readonly SourceLine[],
-  textForLine: (line: SourceLine) => string,
+  depth:number,
   theme: MarkdownTheme,
   decoration: DetailCalloutDecoration | undefined,
   trackLinks = false,
-): Component[] {
-  const components: Component[] = [];
-  let text = "";
-  let decorated = false;
-
-  function flush(): void {
-    if (!text) return;
-    const markdown = trackLinks ? new LinkAwareMarkdown(text,theme) : new Markdown(text, 0, 0, theme);
-    if (!decorated || !decoration) {
-      components.push(markdown);
-    } else {
-      const box = new Box(0, 0, decoration.decorate);
-      box.addChild(markdown);
-      components.push(box);
-    }
-    text = "";
+): MappedComponent[] {
+  const components:MappedComponent[]=[];
+  let parts:MappedDocument[]=[],decorated=false,pieceStart=0;
+  const flush=()=>{
+    const document=concatDocuments(parts);parts=[];
+    if(document.text)components.push(new CalloutMarkdown(document,theme,trackLinks,decorated?decoration?.decorate:undefined,pieceStart));
+  };
+  for(const line of lines) {
+    const next=lineIsDecorated(line.index,decoration);
+    if(parts.length&&next!==decorated)flush();decorated=next;
+    if(!parts.length)pieceStart=line.start;
+    const removed=line.text.length-stripQuoteDepth(line.text,depth).length;
+    parts.push(sliceDocument(source,line.start+removed,line.end));
   }
-
-  for (const line of lines) {
-    const nextDecorated = lineIsDecorated(line.index, decoration);
-    if (text && nextDecorated !== decorated) flush();
-    decorated = nextDecorated;
-    text += textForLine(line);
-  }
-  flush();
-  return components;
+  flush();return components;
 }
-
 
 interface RenderPiece {
-  component?: Component;
+  component?: MappedComponent;
   child?: CalloutNode;
 }
-class BlankRows implements Component {
+class BlankRows implements MappedComponent {
   constructor(private readonly count: number) {}
-
-  render(_width: number): string[] {
-    return Array.from({ length: this.count }, () => "");
-  }
-
+  render(_width: number): string[] {return Array.from({length:this.count},()=>"");}
+  glyphRows(_width:number):DocumentGlyph[][] {return Array.from({length:this.count},()=>[]);}
   invalidate(): void {}
 }
 
@@ -313,7 +325,8 @@ class CalloutNode {
 
   constructor(
     private readonly region: DetailCalloutRegion,
-    lines: readonly SourceLine[],
+    private readonly source:MappedDocument,
+    private readonly lines: readonly SourceLine[],
     children: readonly DetailCalloutRegion[],
     allRegions: readonly DetailCalloutRegion[],
     private readonly theme: MarkdownTheme,
@@ -330,6 +343,7 @@ class CalloutNode {
       this.pieces.push({
         child: new CalloutNode(
           child,
+          source,
           lines,
           allRegions.filter((candidate) => candidate.parentId === child.id),
           allRegions,
@@ -349,15 +363,58 @@ class CalloutNode {
   private appendMarkdown(lines: readonly SourceLine[], start: number, end: number): void {
     if (end <= start) return;
     const components = markdownComponents(
+      this.source,
       lines.slice(start, end),
-      (line) =>
-        `${stripQuoteDepth(line.text, this.region.depth)}${line.raw.endsWith("\n") ? "\n" : ""}`,
+      this.region.depth,
       this.theme,
       this.decoration,
       this.trackLinks,
     );
     this.pieces.push(...components.map((component) => ({ component })));
   }
+
+  glyphRows(width:number):DocumentGlyph[][]|null {
+    const live=this.state.regions.find(candidate=>candidate.id===this.region.id)??this.region;
+    const expanded=live.disclosure?.expanded??true,focused=this.state.focusedRegionId===this.region.id;
+    const style=detailCalloutStyle(this.calloutTheme,this.region.canonicalType);
+    const line=this.lines[this.region.headerLine]!;
+    const stripped=stripQuoteDepth(line.text,this.region.depth);
+    const marker=/^\[![^\]\r\n]+\][+-]?[ \t]*/.exec(stripped);
+    const remainder=marker?stripped.slice(marker[0].length):'';
+    const authored=remainder.trim();
+    const start=line.start+line.text.length-stripped.length+(marker?.[0].length??0)+remainder.length-remainder.trimStart().length;
+    const title=authored&&authored===this.region.title?sliceDocument(this.source,start,start+authored.length):
+      generatedDocument(this.region.title,'default callout title');
+    const titleRenderer=AttributedMarkdown.compileInline(title,this.theme,this.linksEnabled);if(!titleRenderer)return null;
+    const prefix=generatedGlyphs(`${live.disclosure?(expanded?'−':'+'):'•'} ${style.glyph} `,'callout disclosure');
+    const titleGlyphs=titleRenderer.glyphRows(Number.MAX_SAFE_INTEGER).flat().map(glyph=>glyph.link?
+      {...glyph,link:{...glyph.link,id:`${this.region.id}/title/${glyph.link.id}`}}:glyph);
+    const action=live.activation?{uri:previewRegionActionUri(live.activation),id:`callout:${this.region.id}`}:undefined;
+    const label=[...prefix,...titleGlyphs].map(glyph=>action&&!glyph.link?{...glyph,link:action}:glyph);
+    const wrap=(rows:DocumentGlyph[][],isHeader=false):DocumentGlyph[][]=>{
+      const rail=generatedGlyphs('│','callout rail').map(glyph=>({...glyph,painted:`${isHeader&&focused?'\x1b[1m':''}${trueColorSequence(38,style.accent)}│${RESET_STYLE}`}));
+      if(width<=1)return rows.map(()=>rail);
+      const base=`${trueColorSequence(48,style.background)}${trueColorSequence(38,style.foreground)}${isHeader&&focused?'\x1b[1;4m':''}`;
+      const paint=(text:string)=>base+text.replaceAll(RESET_STYLE,RESET_STYLE+base)+RESET_STYLE;
+      return paintDocumentRows(rows.map(row=>[...generatedGlyphs(' ','callout inset'),...(width===2?[]:row)]),width-1,paint).map(row=>[...rail,...row]);
+    };
+    const available=Math.max(0,width-2);
+    const fitted:DocumentGlyph[]=[];let columns=0;
+    const full=label.reduce((sum,glyph)=>sum+visibleWidth(glyph.text),0);
+    const limit=full>available?Math.max(0,available-1):available;
+    for(const glyph of label){const size=visibleWidth(glyph.text);if(columns+size>limit)break;fitted.push(glyph);columns+=size;}
+    if(full>available&&available>0)fitted.push(...generatedGlyphs('…','callout title truncation'));
+    const output=wrap([fitted],true);
+    if(!expanded)return output;
+    for(const piece of this.pieces) {
+      const rows=piece.child?piece.child.glyphRows(Math.max(1,width-2)):piece.component!.glyphRows(Math.max(1,width-2));
+      if(!rows)return null;
+      output.push(...wrap(rows));
+    }
+    return output;
+  }
+
+  invalidate():void {for(const piece of this.pieces){piece.component?.invalidate();piece.child?.invalidate();}}
 
   render(width: number): string[] {
     const live = this.state.regions.find((candidate) => candidate.id === this.region.id) ?? this.region;
@@ -384,18 +441,20 @@ class CalloutNode {
 
 export class DetailCalloutDocument implements Component {
   private readonly pieces: RenderPiece[] = [];
+  renderedFrame:DocumentFrame|null=null;
 
   constructor(
-    source: string,
+    input: string|MappedDocument,
     regions: readonly DetailCalloutRegion[],
-    theme: MarkdownTheme,
+    private readonly theme: MarkdownTheme,
     state: Readonly<PreviewRegionState>,
-    linksEnabled: boolean,
+    private readonly linksEnabled: boolean,
     decoration?: DetailCalloutDecoration,
     calloutTheme: DetailCalloutTheme = DEFAULT_DETAIL_CALLOUT_THEME,
     trackLinks = false,
   ) {
-    const lines = sourceLines(source);
+    const source=typeof input==='string'?generatedDocument(input,'unobserved callout document'):input;
+    const lines = sourceLines(source.text);
     const roots = regions.filter((region) => region.parentId === null);
     let cursor = 0;
     let hasPreviousRoot = false;
@@ -409,8 +468,9 @@ export class DetailCalloutDocument implements Component {
           this.pieces.push({ component: new BlankRows(between.length) });
         } else {
           this.pieces.push(...markdownComponents(
+            source,
             between,
-            (line) => line.raw,
+            0,
             theme,
             decoration,
             trackLinks,
@@ -420,6 +480,7 @@ export class DetailCalloutDocument implements Component {
       this.pieces.push({
         child: new CalloutNode(
           root,
+          source,
           lines,
           regions.filter((region) => region.parentId === root.id),
           regions,
@@ -436,8 +497,9 @@ export class DetailCalloutDocument implements Component {
     }
     if (cursor < lines.length) {
       this.pieces.push(...markdownComponents(
+        source,
         lines.slice(cursor),
-        (line) => line.raw,
+        0,
         theme,
         decoration,
         trackLinks,
@@ -446,12 +508,16 @@ export class DetailCalloutDocument implements Component {
   }
 
   render(width: number): string[] {
+    const rows=this.pieces.map(piece=>piece.child?piece.child.glyphRows(width):piece.component!.glyphRows(width));
+    this.renderedFrame=rows.every(row=>row!==null)?new DocumentFrame(rows.flat() as DocumentGlyph[][],width,this.theme,this.linksEnabled):null;
+    if(this.renderedFrame)return [...this.renderedFrame.lines];
     return this.pieces.flatMap((piece) =>
       piece.child ? piece.child.render(width) : piece.component!.render(width)
     );
   }
 
   invalidate(): void {
-    for (const piece of this.pieces) piece.component?.invalidate();
+    this.renderedFrame=null;
+    for (const piece of this.pieces) {piece.component?.invalidate();piece.child?.invalidate();}
   }
 }

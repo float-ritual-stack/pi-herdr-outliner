@@ -1,3 +1,5 @@
+import {captureAnnotationPassage} from "./document-annotation";
+import {loadDetailDraftPreview} from './detail-read-preview';
 import {PaneDisplay} from "./pane-display";
 import {sanitizeDynamicText} from "./terminal";
 import {listItemRemovalMenu, checklistStatusMenu} from "./checklist-ui";
@@ -13,6 +15,7 @@ import {EditRecoveryReview,type RecoveryChoice} from "./edit-recovery-review";
 import type {EditRecovery} from "./edit-recovery";
 import type {ExternalEditorOptions} from "./external-editor";
 import {destinationRecoveryKey} from "./open-destination-chooser";
+import {ProvenanceInspector} from "./provenance-inspector";
 import {KeyInspector} from "./key-inspector";
 import {createDetailDestination, type DetailDestinationPlacement} from "./detail-pane-placement";
 import { ComposedLayout, ComposedTree, composedTreeNavigation, composedPointer, composedWidths } from "./composed-surface";
@@ -156,7 +159,6 @@ import {
   type SelectionContext,
   type VisibleBlockCollection,
 } from "./types";
-import type { TextBufferRange } from "./text-buffer";
 
 class DetailTuiAltScreen extends TuiAltScreen {
   declare private viewportInputListener: TuiInputListener | undefined;
@@ -249,14 +251,12 @@ let directSelectionDocument: {
 } | null = null;
 let latestDirectSelection: DetailDirectSelectionCapture | null = null;
 let pendingDirectSelection: Promise<DetailDirectSelectionCapture | null> | null = null;
-let pendingResourceSelectionRange: TextBufferRange | null = null;
 let directSelectionGeneration = 0;
 function retireDirectSelection(): void {
   directSelectionGeneration++;
   directSelectionDocument = null;
   latestDirectSelection = null;
   pendingDirectSelection = null;
-  pendingResourceSelectionRange = null;
 }
 const composed = process.env.OUTLINER_COMPOSED_SURFACE === "1";
 let focusedRegion: OutlinerRegion = "tree";
@@ -278,25 +278,30 @@ let inputFlushTimer: ReturnType<typeof setTimeout> | undefined;
 let inputGeneration = 0;
 const tui = new DetailTuiAltScreen(processTerminal, false, undefined, {
   mouse: true,
-  async copySelection(quote, renderedLines?: readonly string[]) {
-    // Without the pinned Pi TUI hook, keep plain-text copy working.
-    const copied = renderedLines ? copyRenderedSelection(renderedLines) : quote;
+  async copySelection(quote, renderedLines, selection) {
+    const captured=focusedPreviewLayout().captureSelection(selection);
+    // Menus, editors and other non-reader surfaces retain ordinary copy.
+    const copied = captured?.text ?? copyRenderedSelection(renderedLines);
     if (copied) process.stdout.write(osc52ClipboardWrite(copied));
     const generation = ++directSelectionGeneration;
     const reader = focusedReader();
     directSelectionDocument = { reader, document: reader.state.document, text: reader.state.projectedSelectedText, file: reader.state.referencedFile };
     latestDirectSelection = null;
-    const resourceCapture = pendingResourceSelectionRange
-      ? focusedReader().captureResourcePointerSelection(
-        pendingResourceSelectionRange.start,
-        pendingResourceSelectionRange.end,
-      )
+    const resourceCapture = captured
+      ? reader.captureResourceSelection({...captured,text:copied},selection.sourceLines.join("\n"),generation)
       : null;
     const selected = focusedReader().state.context.selected;
     const socketPath = process.env.HERDR_SOCKET_PATH?.trim();
     const paneId = detailPaneId;
     const capturePromise = (async (): Promise<DetailDirectSelectionCapture | null> => {
       if (resourceCapture) return resourceCapture;
+      if (captured && selected && paneId && copied) return {
+        kind: "rendered",
+        capture: {quote: copied, passage: captureAnnotationPassage({...captured, text: copied}),
+          capturedAt: new Date().toISOString(), hostBlockId: selected.id, paneId,
+          contentRevision: generation, contextId: browsingContextId, detailClientId: clientId,
+          validation: "detail-pointer", snapshotText: selection.sourceLines.join("\n")},
+      };
       if (!selected || !socketPath || !paneId) return null;
       try {
         const snapshot = await readHerdrPaneSnapshot(socketPath, paneId);
@@ -324,7 +329,6 @@ const tui = new DetailTuiAltScreen(processTerminal, false, undefined, {
     if (generation === directSelectionGeneration) {
       latestDirectSelection = capture;
       pendingDirectSelection = null;
-      pendingResourceSelectionRange = null;
     }
     return Boolean(copied);
   },
@@ -535,8 +539,8 @@ const effects: DetailEffects = {
   async resolveReferences(text) {
     return client.request<ResolvedBlockReferences>({ action: "references.resolve", text });
   },
-  projectRead(text, hostBlockId) {
-    return projectDetailRead(client, text, { hostBlockId });
+  projectRead(text, hostBlockId, hostRevision) {
+    return projectDetailRead(client, text, { hostBlockId, hostRevision });
   },
   async queryBacklinks(query) {
     return client.request<BacklinkCollection>({ action: "references.backlinks", query });
@@ -953,6 +957,8 @@ async function stop(exitCode = 0): Promise<void> {
     }
   }
   stopping = true;
+  provenanceInspector.dispose();
+  provenanceInspectorHandle?.hide();
   keyInspector.dispose();
   keyInspectorHandle?.hide();
   composedTree?.dispose();
@@ -995,6 +1001,32 @@ function openKeyInspector(): void {
   inputGeneration++;
   if (inputFlushTimer) {clearTimeout(inputFlushTimer); inputFlushTimer = undefined;}
   keyInspector.open();
+}
+
+let provenanceInspectorHandle:OverlayHandle|null=null;
+let provenanceInspectorGeometry="";
+const provenanceInspector=new ProvenanceInspector(refreshProvenanceInspectorOverlay);
+function refreshProvenanceInspectorOverlay():void {
+  const width=readerWidth(),height=processTerminal.rows;
+  const column=composed?composedWidths(processTerminal.columns).detailX:0;
+  const geometry=`${width}/${height}/${column}`;
+  if(!provenanceInspector.active||geometry!==provenanceInspectorGeometry){
+    provenanceInspectorHandle?.hide();provenanceInspectorHandle=null;
+  }
+  if(provenanceInspector.active&&!provenanceInspectorHandle){
+    provenanceInspectorGeometry=geometry;
+    provenanceInspectorHandle=tui.showOverlay({render:columns=>provenanceInspector.render(columns,height),invalidate(){}},
+      {width,maxHeight:height,row:0,col:column,anchor:"top-left",margin:0});
+  }
+  tui.requestRender();
+}
+function openProvenanceInspector():void {
+  closeActionMenu();
+  const captured=focusedPreviewLayout().provenanceSnapshot();
+  if(!captured){void focusedReader().dispatch({type:"status.set",message:"No rendered document frame to inspect"},viewport(focusedReader()));return;}
+  inputGeneration++;
+  if(inputFlushTimer){clearTimeout(inputFlushTimer);inputFlushTimer=undefined;}
+  provenanceInspector.open(captured.frame,captured.row);
 }
 
 function closeActionMenu(cancel = true): void {
@@ -1381,24 +1413,7 @@ function shouldPassDetailInputToTui(data: string): boolean {
     if (pointer.phase === "down") {
       retireDirectSelection();
     }
-    if (
-      focusedReader().state.mode === "preview" &&
-      focusedReader().state.target?.kind === "resource"
-    ) {
-      const point = focusedPreviewLayout().sourcePointAtViewport(
-        pointer.row - (readingSurface.active === inspection ? readerGeometry().preview.y : 0),
-        pointer.column - (readingSurface.active === inspection ? readerGeometry().preview.x : 0),
-        viewport(focusedReader()).width,
-      );
-      if (pointer.phase === "down") {
-        pendingResourceSelectionRange = point ? { start: point, end: point } : null;
-      } else if (point && pendingResourceSelectionRange) {
-        pendingResourceSelectionRange = {
-          start: pendingResourceSelectionRange.start,
-          end: point,
-        };
-      }
-    }
+
   }
   if (
     focusedReader().state.destinationChooser.active &&
@@ -1449,6 +1464,7 @@ const handleKeypress = createDetailKeyHandler({openNewTree: () => { openTreePane
   actionKeymap,
   openActionMenu: items => showActionMenu(items, invokeDetailAction),
   openKeyInspector,
+  openProvenanceInspector,
   focusDraftSplit,
   navigatePreview,
   previewFocused: () => draftSplitActive() && draftSplitFocus === "preview",
@@ -1459,6 +1475,7 @@ const handleKeypress = createDetailKeyHandler({openNewTree: () => { openTreePane
 const inspectionKeypress = createDetailKeyHandler({openNewTree: () => { openTreePane({workspaceRoot: paths.workspaceRoot, root: null, direction: "right"}); },controller: inspection, viewport: () => viewport(inspection), stop: () => { void readingSurface.closePreview(); }, actionKeymap,
   openActionMenu: items => showActionMenu(items, invokeDetailAction),
   openKeyInspector,
+  openProvenanceInspector,
   navigatePreview: direction => inspectionLayout.navigate(direction),
   annotationSelectionSourceLine: () => inspectionLayout.sourceLineAtScroll(viewport(inspection).width),
   directSelectionCapture: () => directSelectionCapture(inspection),
@@ -1581,7 +1598,7 @@ function scheduleInputFlush(): void {
   inputFlushTimer = setTimeout(() => {
     inputFlushTimer = undefined;
     serviceEventScheduler.scheduleWork(() => {
-      if (generation === inputGeneration && !stopping && !keyInspector.active && !composedTree?.keyInspectorActive) return composedTree && focusedRegion === "tree" ? composedTree.flushInput() : flushInput();
+      if (generation === inputGeneration && !stopping && !keyInspector.active && !provenanceInspector.active && !composedTree?.keyInspectorActive) return composedTree && focusedRegion === "tree" ? composedTree.flushInput() : flushInput();
     });
   }, INPUT_IDLE_FLUSH_MS);
 }
@@ -1616,19 +1633,7 @@ const preview = new DetailPiPreviewLayout(
     headerPropertyKeys: detailHeaderPropertyKeys,
     destinationLabel: () => destinationDisplay.text,
     draftText: () => draftSplitActive() ? controller.state.buffer.text : null,
-    async projectDraft(text) {
-      const projection = await effects.projectRead(
-        text,
-        controller.state.context.selected?.id,
-      );
-      const resolved = await effects.resolveReferences(projection.text);
-      return {
-        sourceText: resolved.text,
-        rawText: projection.text,
-        embedRanges: projection.embedRanges,
-        workIdPrefix: resolved.workIdPrefix ?? null,
-      };
-    },
+    projectDraft(source) { return loadDetailDraftPreview(client,source); },
     ...(composed ? {primaryFocused: () => focusedRegion === "detail"} : {}),
     splitActive: draftSplitActive,
     focused: () => (!composed || focusedRegion === "detail") && draftSplitFocus === "preview",
@@ -1789,6 +1794,7 @@ tui.addOutlinerInputListener(data => {
   }
 
   // Inspect delivered bytes before focus routing, native overlays, or our decoders.
+  if(provenanceInspector.handle(data,composed?composedWidths(processTerminal.columns).detailX:0))return {consume:true};
   if (keyInspector.handle(data)) return {consume: true};
   if (composedTree?.keyInspectorActive) {
     serviceEventScheduler.scheduleWork(() => composedTree.handleInput(data));
@@ -1845,6 +1851,7 @@ tui.addOutlinerInputListener(data => {
 
 function handleResize(): void {
   if (keyInspector.active) refreshKeyInspectorOverlay();
+  if(provenanceInspector.active)refreshProvenanceInspectorOverlay();
   serviceEventScheduler.scheduleWork(async () => {
     await controller.dispatch({ type: "viewport.changed" }, viewport());
     if (readingSurface.previewVisible) await inspection.dispatch({ type: "viewport.changed" }, viewport(inspection));

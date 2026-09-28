@@ -1,3 +1,4 @@
+import {concatDocuments, generatedDocument, sliceDocument, type MappedDocument} from "./document-provenance";
 import {createHash} from 'node:crypto';
 import {marked, type Token} from 'marked';
 import {markdownSourceTokens, type MarkdownSourceToken} from './markdown-structure';
@@ -76,37 +77,45 @@ export function documentFolds(source: string, boundaries: readonly {startLine: n
 
 export interface FoldedDocument {
   text: string;
+  document: MappedDocument;
   /** Each source line maps to its visible line, or the disclosure hiding it. */
   lineMap: number[];
   visibleSourceLines: number[];
 }
 
-function headingLabel(tokens: Token[], uri: string): string {
-  return tokens.map(token => {
-    if (token.type === 'link' || token.type === 'image') return token.raw;
+function headingLabel(source: MappedDocument, tokens: Token[], uri: string): MappedDocument {
+  const parts: MappedDocument[] = []; let cursor = 0;
+  const generated = (text: string) => generatedDocument(text, 'heading disclosure syntax');
+  for (const token of tokens) {
+    if (!source.text.startsWith(token.raw, cursor)) return source;
+    const span = sliceDocument(source, cursor, cursor + token.raw.length); cursor += token.raw.length;
+    if (token.type === 'link' || token.type === 'image' || !token.raw.trim()) {parts.push(span); continue;}
     if ('tokens' in token && token.tokens?.some((child: Token) => child.type === 'link')) {
-      const delimiter = token.type === 'strong' ? '**' : token.type === 'em' ? '*' : token.type === 'del' ? '~~' : '';
-      return delimiter + headingLabel(token.tokens, uri) + delimiter;
-    }
-    return token.raw.trim() ? `[${token.raw}](${uri})` : token.raw;
-  }).join('');
+      const size = token.type === 'strong' ? 2 : token.type === 'em' ? 1 : token.type === 'del' ? (token.raw.startsWith('~~') ? 2 : 1) : 0;
+      parts.push(sliceDocument(span, 0, size), headingLabel(sliceDocument(span, size, span.text.length - size), token.tokens, uri),
+        sliceDocument(span, span.text.length - size));
+    } else parts.push(generated('['), span, generated(`](${uri})`));
+  }
+  return cursor === source.text.length ? concatDocuments(parts) : source;
 }
 
 /** Visibility is applied to source lines before Markdown layout and link measurement. */
-export function foldDocument(source: string, folds: readonly DocumentFold[], state: Readonly<PreviewRegionState>): FoldedDocument {
-  const lines = source.split(/(?<=\n)/), output: string[] = [], lineMap: number[] = [], visibleSourceLines: number[] = [];
+export function foldDocument(source: MappedDocument, folds: readonly DocumentFold[], state: Readonly<PreviewRegionState>): FoldedDocument {
+  const lines = source.text.split(/(?<=\n)/), output: MappedDocument[] = [], lineMap: number[] = [], visibleSourceLines: number[] = [];
   const expanded = (fold: DocumentFold) => state.disclosureOverrides.get(fold.id) ?? true;
+  let offset = 0;
   for (let line = 0; line < lines.length; line++) {
+    let mapped = sliceDocument(source, offset, offset + lines[line]!.length); offset += lines[line]!.length;
     const hidden = folds.find(fold => !expanded(fold) && line >= fold.contentStartLine && line <= fold.sourceSpan!.endLine);
     if (hidden) {lineMap.push(lineMap[hidden.sourceSpan!.startLine] ?? 0); continue;}
-    lineMap.push(output.length);visibleSourceLines.push(line);
-    let text = lines[line]!;
+    lineMap.push(output.length); visibleSourceLines.push(line);
+    const text = mapped.text;
     const leading = folds.filter(fold => fold.sourceSpan!.startLine === line);
     const heading = folds.find(fold => fold.structure === 'heading' && fold.sourceSpan!.startLine <= line && line <= fold.headerEndLine);
-    const controls = leading.map(fold => {
+    const controls = generatedDocument(leading.map(fold => {
       const uri = previewRegionActionUri(fold.activation!).replace('//document-toggle/', '//document-control/');
       return `[${expanded(fold) ? '▾' : '▸'} ](${uri})`;
-    }).join('');
+    }).join(''), 'fold disclosure control');
     if (heading) {
       // Preserve list/quote prefixes, closing ATX hashes and Setext underlines.
       // Every line of a multiline heading points to the same disclosure.
@@ -116,16 +125,19 @@ export function foldDocument(source: string, folds: readonly DocumentFold[], sta
       if (!underline) {
         const body = atx?.[2] ?? prefix[2]!;
         const closing = atx ? /[ \t]+#+[ \t]*$/.exec(body)?.[0] ?? '' : '';
-        const label = closing ? body.slice(0, -closing.length) : body;
-        text = prefix[1] + (atx?.[1] ?? '') + controls + headingLabel(marked.Lexer.lexInline(label), previewRegionActionUri(heading.activation!)) + closing + (prefix[3] ?? '');
+        const start = prefix[1]!.length + (atx?.[1].length ?? 0), end = start + body.length - closing.length;
+        const label = sliceDocument(mapped, start, end);
+        mapped = concatDocuments([sliceDocument(mapped, 0, start), controls,
+          headingLabel(label, marked.Lexer.lexInline(label.text), previewRegionActionUri(heading.activation!)), sliceDocument(mapped, end)]);
       }
     } else if (leading.length) {
       const marker = /^((?:[ \t]*>[ \t]?)*[ \t]*(?:[-+*]|\d+[.)])[ \t]+(?:\[[ xX~!]\][ \t]+)?)/.exec(text);
-      if (marker) text = marker[1] + controls + text.slice(marker[1].length);
+      if (marker) mapped = concatDocuments([sliceDocument(mapped, 0, marker[1]!.length), controls, sliceDocument(mapped, marker[1]!.length)]);
     }
-    output.push(text);
+    output.push(mapped);
   }
-  return {text: output.join(''), lineMap, visibleSourceLines};
+  const document = concatDocuments(output);
+  return {text: document.text, document, lineMap, visibleSourceLines};
 }
 
 export function revealFoldedLine(state: PreviewRegionState, folds: readonly (DocumentFold | DetailCalloutRegion)[], line: number): void {

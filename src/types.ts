@@ -315,6 +315,7 @@ export interface RenderedSelectionEvidence {
 
 export interface RenderedSelectionCapture extends RenderedSelectionEvidence {
   readonly snapshotText: string;
+  readonly passage?: AnnotationPassage;
 }
 
 export interface RenderedPassageObservation extends RenderedSelectionEvidence {
@@ -337,7 +338,7 @@ export type AnnotationSourceSnapshot =
     }
   | {
       readonly kind: "rendered";
-      readonly observation: RenderedPassageObservation;
+      readonly observation: RenderedPassageObservation | PreviewPassageObservation;
     }
   | {
       readonly kind: "unknown";
@@ -429,12 +430,41 @@ export interface AnnotationReferenceContext {
   readonly sourceText: string;
 }
 
+/** A rendered passage is one comment with zero or more independent source anchors.
+ * Documents are interned so repeated embeds do not duplicate whole note bodies. */
+export interface AnnotationPassageSlice {
+  readonly document: number;
+  readonly anchor: Extract<AnnotationAnchor, {readonly kind: "text-quote"}>;
+  /** Service-admitted task ownership; the observed words stay immutable. */
+  readonly listItemId?: string;
+}
+
+export interface AnnotationPassageOccurrence {
+  readonly host: AnnotationPassageSlice;
+  readonly path: readonly {readonly token: AnnotationPassageSlice; readonly target: string}[];
+}
+
+export type AnnotationPassageFragment =
+  | {readonly kind: "source"; readonly slices: readonly AnnotationPassageSlice[]; readonly occurrence?: AnnotationPassageOccurrence}
+  | {readonly kind: "reference"; readonly token: AnnotationPassageSlice; readonly destination: string; readonly occurrence?: AnnotationPassageOccurrence}
+  | {readonly kind: "derived"; readonly resultId: string; readonly dependencies: readonly AnnotationPassageSlice[];
+      readonly result?: number; readonly resourceDependencies?: readonly ResourceRevisionRef[]}
+  | {readonly kind: "generated"; readonly reason: string};
+
+export interface AnnotationPassage {
+  readonly version: 1;
+  readonly quote: string;
+  readonly documents: readonly import("./document-provenance").ObservedDocument[];
+  readonly fragments: readonly AnnotationPassageFragment[];
+}
+
 export interface AnnotationTarget {
   /** Stable checklist ownership, independent of the immutable captured quote. */
   readonly listItemId?: string;
   readonly representation: AnnotationRepresentation;
   readonly anchor: AnnotationAnchor;
   readonly referenceContext?: AnnotationReferenceContext;
+  readonly passage?: AnnotationPassage;
 }
 
 export type AnnotationResolutionStatus =
@@ -477,10 +507,32 @@ export type AnnotationResolutionReviewer =
   | { readonly kind: "user"; readonly id: string }
   | { readonly kind: "agent"; readonly id: string };
 
+/** Each position is an independent result; partially resolved passages retain
+ * their useful positions without pretending the whole quote is contiguous. */
+export interface AnnotationPassageSliceResolution {
+  readonly document: number;
+  readonly resolvedTarget: AnnotationTarget | null;
+  readonly status: AnnotationResolutionStatus;
+  readonly method: AnnotationResolutionMethod;
+  readonly confidence: number | null;
+  readonly candidates: readonly AnnotationResolutionCandidate[];
+}
+
+export interface AnnotationPassageResolution {
+  readonly fragments: readonly {
+    readonly sources: readonly AnnotationPassageSliceResolution[];
+    readonly occurrence?: {
+      readonly host: AnnotationPassageSliceResolution;
+      readonly path: readonly AnnotationPassageSliceResolution[];
+    };
+  }[];
+}
+
 export interface AnnotationResolutionEvent {
   readonly id: string;
   readonly annotationId: string;
   readonly sequence: number;
+  readonly passageResolution?: AnnotationPassageResolution;
   readonly sourceRepresentation: AnnotationRepresentation;
   readonly targetRepresentation: AnnotationRepresentation;
   readonly resolvedTarget: AnnotationTarget | null;
@@ -1392,7 +1444,7 @@ export interface ResolvedBlockReferences {
   workIdPrefix?: string;
 }
 
-export const OUTLINER_PROTOCOL_VERSION = 80;
+export const OUTLINER_PROTOCOL_VERSION = 81;
 
 
 export interface OutlinerServiceStatus {

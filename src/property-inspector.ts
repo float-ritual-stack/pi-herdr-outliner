@@ -1,3 +1,4 @@
+import {concatDocuments, generatedDocument, sliceDocument, type MappedDocument} from './document-provenance';
 import {marked, type Token} from "marked";
 import {linkOutlinerMarkdown, parseOutlinerLinkUri} from "./outliner-links";
 import type { DetailState } from "./detail-controller";
@@ -209,22 +210,39 @@ export function createPropertyInspectorModel(
  * Hashtags stay visible in prose even though they classify the whole block.
  */
 export function propertyInspectorAuthoredText(canonicalText: string): string {
-  const records = parsePropertyRecords(canonicalText).filter((record) => record.scope === "block" && record.syntax !== "hashtag");
-  if (records.length === 0) return canonicalText;
+  return propertyInspectorAuthoredDocument(generatedDocument(canonicalText, "unobserved property presentation")).text;
+}
 
-  let stripped = canonicalText;
-  for (const record of [...records].reverse()) {
-    stripped = stripped.slice(0, record.start) + stripped.slice(record.end);
+export function propertyInspectorAuthoredDocument(document: MappedDocument): MappedDocument {
+  const canonicalText = document.text;
+  const records = parsePropertyRecords(canonicalText).filter((record) => record.scope === "block" && record.syntax !== "hashtag");
+  if (records.length === 0) return document;
+
+  const parts: MappedDocument[] = [];
+  let cursor = 0;
+  for (const record of records) {
+    parts.push(sliceDocument(document, cursor, record.start));
+    cursor = record.end;
   }
+  parts.push(sliceDocument(document, cursor));
+  const stripped = concatDocuments(parts);
 
   const newline = canonicalText.includes("\r\n") ? "\r\n" : "\n";
   const touchedLines = new Set(records.map((record) => record.line));
-  const lines = stripped.split(/\r?\n/);
-  const output: string[] = [];
+  const lines = stripped.text.split(/\r?\n/);
+  const output: MappedDocument[] = [];
+  let offset = 0;
+  let previousNewline: MappedDocument | null = null;
   let removedMetadataLine = false;
   for (let index = 0; index < lines.length; index += 1) {
     const touched = touchedLines.has(index);
-    const line = touched ? lines[index]!.trimEnd() : lines[index]!;
+    const original = lines[index]!;
+    const line = touched ? original.trimEnd() : original;
+    const mappedLine = sliceDocument(stripped, offset, offset + line.length);
+    const newlineStart = offset + original.length;
+    const newlineLength = stripped.text.startsWith("\r\n", newlineStart) ? 2 : newlineStart < stripped.text.length ? 1 : 0;
+    const mappedNewline = sliceDocument(stripped, newlineStart, newlineStart + newlineLength);
+    offset = newlineStart + newlineLength;
     if (touched && line.trim().length === 0) {
       removedMetadataLine = true;
       continue;
@@ -232,15 +250,21 @@ export function propertyInspectorAuthoredText(canonicalText: string): string {
     if (
       removedMetadataLine &&
       line.trim().length === 0 &&
-      (output.length === 0 || output.at(-1)?.trim().length === 0)
+      (output.length === 0 || output.at(-1)?.text.trim().length === 0)
     ) {
       removedMetadataLine = false;
       continue;
     }
-    output.push(line);
+    if (output.length) {
+      // Mixed line endings normalize to the document convention. A synthetic
+      // separator must never acquire neighboring prose as its source.
+      output.push(previousNewline?.text === newline ? previousNewline : generatedDocument(newline, "metadata line separator"));
+    }
+    output.push(mappedLine);
+    previousNewline = mappedNewline;
     removedMetadataLine = false;
   }
-  return output.join(newline);
+  return concatDocuments(output);
 }
 
 export function filterPropertyInspectorEntries(
